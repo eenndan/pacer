@@ -58,43 +58,9 @@ static void glfw_error_callback(int error, const char *description) {
 using pacer::GPSSample;
 
 void ReadInput(pacer::Laps *plaps) {
-  const char *filenames[] = {
-      // SP
-      "/Users/denys/Documents/gokarting-ui/GH010219.MP4",
-      "/Users/denys/Documents/gokarting-ui/GH020219.MP4",
-      "/Users/denys/Documents/gokarting-ui/GH030219.MP4",
-      "/Users/denys/Documents/gokarting-ui/GH040219.MP4",
-      "/Users/denys/Documents/gokarting-ui/GH050219.MP4",
-      //// MK
-      // "/Users/denys/Downloads/GX010079.MP4",
-      // "/Users/denys/Downloads/GX020079.MP4",
-      // "/Users/denys/Downloads/GX030079.MP4",
-      //// MK
-      // "/Users/denys/Pictures/GH010251.MP4",
-      // "/Users/denys/Pictures/GH020251.MP4",
-      // "/Users/denys/Pictures/GH030251.MP4",
-  };
-
-  pacer::GPMFSource mm[] = {
-      pacer::GPMFSource(filenames[0]), pacer::GPMFSource(filenames[1]),
-      pacer::GPMFSource(filenames[2]),
-      // pacer::GPMFSource(filenames[3]),
-      // pacer::GPMFSource(filenames[4]),
-  };
-  pacer::SequentialGPSSource m12(&mm[0], &mm[1]), m(&m12, &mm[2]);
-  // m14(&m13, &mm[3]), m(&m14, &mm[4]);
-
-  // const char *filename = "/mnt/c/work/gokart-videos/GH010243.MP4";
-  // pacer::GPMFSource m(filename);
-
-  m.Seek(0);
+  pacer::GPMFSource m("/Users/daniil/Desktop/D24/GX010060.MP4");
 
   auto &laps = *plaps;
-
-  pacer::CoordinateSystem cs;
-  std::unordered_map<int, int> counts(20);
-
-  std::vector<pacer::PointInTime<GPSSample>> samples;
 
   for (m.Seek(0); !m.IsEnd(); m.Next()) {
     auto [start, end] = m.CurrentTimeSpan();
