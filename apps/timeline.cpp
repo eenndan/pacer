@@ -48,11 +48,8 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
-// This example can also compile and run with Emscripten! See
-// 'Makefile.emscripten' for details.
-#ifdef __EMSCRIPTEN__
-#include "../libs/emscripten/emscripten_mainloop_stub.h"
-#endif
+// Web/Emscripten: HelloImGui drives the emscripten main loop itself (no manual
+// emscripten_set_main_loop stub needed). Build with tools/build-web.sh.
 
 using pacer::GPSSample;
 

@@ -60,4 +60,7 @@ add_library(gpmf::gpmf ALIAS gpmf)
 #                                  nanobind                                   #
 ###############################################################################
 
-add_subdirectory(nanobind)
+# nanobind drives the Python bindings, which aren't part of the web build.
+if(NOT EMSCRIPTEN)
+  add_subdirectory(nanobind)
+endif()

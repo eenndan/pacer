@@ -27,6 +27,7 @@ gen-bindings = "python bindings/pacer/generate-bindings.py"
 timeline = { cmd = "./build/Release/apps/timeline.app/Contents/MacOS/timeline", depends-on = ["build"] }
 fmt = "git ls-files '*.cpp' '*.hpp' '*.h' '*.c' | xargs clang-format -i"
 lint = "ruff check ."
+web = "bash tools/build-web.sh"
 
 [tool.pixi.dependencies]
 cmake = ">=4.0.2,<5"
