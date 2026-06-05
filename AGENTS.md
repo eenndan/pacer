@@ -453,7 +453,9 @@ A tech-debt pass resolved most of the old gotchas:
    (that's where a newly-bound header's `#include` goes). Regenerate via `pixi run gen-bindings`.
 6. **`assert()`-guarded invariants vanish under `NDEBUG`/Release.** Don't rely on them at runtime.
 7. **Platform & CI.** `osx-arm64` only; no CI configured. Tests run locally via `pixi run test`.
-   (`pixi.lock` is v5; some pixi versions may try to rewrite it to v7 on `pixi add` — review that diff.)
+   `pixi.lock` is format **v7** (needs a recent pixi). `ninja` and `catch2` are now explicit deps —
+   the build's Ninja generator and `find_package(Catch2)` require them, but they used to be present
+   only implicitly (and an interrupted `pixi add` once pruned them, breaking the build mid-session).
 
 ---
 
