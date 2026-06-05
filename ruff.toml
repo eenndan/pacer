@@ -8,6 +8,8 @@ extend-exclude = [
     "build",
     "3rdparty",
     "bindings/*/*/__init__.pyi",
+    # imgui bindings are gated off and the generator is vendored litgen tooling
+    "bindings/imgui/generate-bindings.py",
 ]
 
 [lint]
@@ -18,5 +20,5 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-# notebooks: scratch imports / redefs / compact zips are fine
-"*.ipynb" = ["F401", "F811", "E402", "B905"]
+# notebooks: scratch imports / redefs / cross-cell names / compact zips are fine
+"*.ipynb" = ["F401", "F811", "F821", "F841", "E402", "B905"]

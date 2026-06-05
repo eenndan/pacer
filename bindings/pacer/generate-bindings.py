@@ -4,7 +4,6 @@ from pathlib import Path
 
 import litgen
 
-
 LITGEN_USE_NANOBIND = True
 
 
