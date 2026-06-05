@@ -62,11 +62,13 @@ def test_cpp_matches_torch():
     )
     t_torch, p_torch, f_torch = torch_interpolate(floor, ceil, di, rough_freq)
 
-    # Same loss, same Adam, same LR schedule + init => nearly identical fit.
-    assert abs(cpp.phase - p_torch) < 1e-2, (cpp.phase, p_torch)
-    assert abs(cpp.frequency - f_torch) < 1e-2, (cpp.frequency, f_torch)
+    # Same loss, same Adam, same LR schedule + init => near-identical fit.
+    # Thresholds are tight (close to the observed ~1e-15 agreement) so the test
+    # actually guards the hand-derived analytic gradient against regressions.
+    assert abs(cpp.phase - p_torch) < 1e-6, (cpp.phase, p_torch)
+    assert abs(cpp.frequency - f_torch) < 1e-6, (cpp.frequency, f_torch)
     max_dt = float(np.max(np.abs(np.array(cpp.timestamps) - t_torch)))
-    assert max_dt < 5e-3, max_dt
+    assert max_dt < 1e-9, max_dt
     print(
         f"parity OK: phase {cpp.phase:.5f} vs {p_torch:.5f}, "
         f"freq {cpp.frequency:.5f} vs {f_torch:.5f}, max |dt| {max_dt:.2e}"
