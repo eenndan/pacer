@@ -16,6 +16,8 @@ find_package(glfw3 REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(Catch2 REQUIRED)
 
+enable_testing()  # required for add_test() in tests/ to register with CTest
+
 add_subdirectory(3rdparty)
 add_subdirectory(pacer)
 add_subdirectory(apps)

@@ -85,13 +85,13 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::GPSSample * self, double lat = double(), double lon = double(), double altitude = double(), double full_speed = double(), double ground_speed = double(), int64_t timestamp_ms = int64_t())
       {
           new (self) pacer::GPSSample();  // placement new
-          auto r = self;
-          r->lat = lat;
-          r->lon = lon;
-          r->altitude = altitude;
-          r->full_speed = full_speed;
-          r->ground_speed = ground_speed;
-          r->timestamp_ms = timestamp_ms;
+          auto r_ctor_ = self;
+          r_ctor_->lat = lat;
+          r_ctor_->lon = lon;
+          r_ctor_->altitude = altitude;
+          r_ctor_->full_speed = full_speed;
+          r_ctor_->ground_speed = ground_speed;
+          r_ctor_->timestamp_ms = timestamp_ms;
       },
       nb::arg("lat") = double(), nb::arg("lon") = double(), nb::arg("altitude") = double(), nb::arg("full_speed") = double(), nb::arg("ground_speed") = double(), nb::arg("timestamp_ms") = int64_t()
       )
@@ -110,9 +110,9 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::PointInTime<GPSSample> * self, pacer::GPSSample point = pacer::GPSSample(), double time = double())
       {
           new (self) pacer::PointInTime<GPSSample>();  // placement new
-          auto r = self;
-          r->point = point;
-          r->time = time;
+          auto r_ctor_ = self;
+          r_ctor_->point = point;
+          r_ctor_->time = time;
       },
       nb::arg("point") = pacer::GPSSample(), nb::arg("time") = double()
       )
@@ -176,9 +176,9 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::Segment * self, pacer::Point first = pacer::Point(), pacer::Point second = pacer::Point())
       {
           new (self) pacer::Segment();  // placement new
-          auto r = self;
-          r->first = first;
-          r->second = second;
+          auto r_ctor_ = self;
+          r_ctor_->first = first;
+          r_ctor_->second = second;
       },
       nb::arg("first") = pacer::Point(), nb::arg("second") = pacer::Point()
       )
@@ -227,10 +227,10 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::Lap * self, float width = float(), std::vector<PointInTime<GPSSample>> points = std::vector<PointInTime<GPSSample>>(), std::vector<double> cum_distances = std::vector<double>())
       {
           new (self) pacer::Lap();  // placement new
-          auto r = self;
-          r->width = width;
-          r->points = points;
-          r->cum_distances = cum_distances;
+          auto r_ctor_ = self;
+          r_ctor_->width = width;
+          r_ctor_->points = points;
+          r_ctor_->cum_distances = cum_distances;
       },
       nb::arg("width") = float(), nb::arg("points") = std::vector<PointInTime<GPSSample>>(), nb::arg("cum_distances") = std::vector<double>()
       )
@@ -258,9 +258,9 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::Sectors * self, Segment start_line = Segment(), std::vector<Segment> sector_lines = std::vector<Segment>())
       {
           new (self) pacer::Sectors();  // placement new
-          auto r = self;
-          r->start_line = start_line;
-          r->sector_lines = sector_lines;
+          auto r_ctor_ = self;
+          r_ctor_->start_line = start_line;
+          r_ctor_->sector_lines = sector_lines;
       },
       nb::arg("start_line") = Segment(), nb::arg("sector_lines") = std::vector<Segment>()
       )
@@ -275,8 +275,8 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::Laps * self, pacer::Sectors sectors = pacer::Sectors())
       {
           new (self) pacer::Laps();  // placement new
-          auto r = self;
-          r->sectors = sectors;
+          auto r_ctor_ = self;
+          r_ctor_->sectors = sectors;
       },
       nb::arg("sectors") = pacer::Sectors()
       )
@@ -409,9 +409,9 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::LapsDisplay * self, int selected_lap = -1, CoordinateSystem cs = CoordinateSystem())
       {
           new (self) pacer::LapsDisplay();  // placement new
-          auto r = self;
-          r->selected_lap = selected_lap;
-          r->cs = cs;
+          auto r_ctor_ = self;
+          r_ctor_->selected_lap = selected_lap;
+          r_ctor_->cs = cs;
       },
       nb::arg("selected_lap") = -1, nb::arg("cs") = CoordinateSystem()
       )
@@ -438,10 +438,10 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("__init__", [](pacer::DeltaLapsComparision * self, Lap reference_lap = Lap(), CoordinateSystem cs = CoordinateSystem(), std::unordered_set<int> selected_laps = {})
       {
           new (self) pacer::DeltaLapsComparision();  // placement new
-          auto r = self;
-          r->reference_lap = reference_lap;
-          r->cs = cs;
-          r->selected_laps = selected_laps;
+          auto r_ctor_ = self;
+          r_ctor_->reference_lap = reference_lap;
+          r_ctor_->cs = cs;
+          r_ctor_->selected_laps = selected_laps;
       },
       nb::arg("reference_lap") = Lap(), nb::arg("cs") = CoordinateSystem(), nb::arg("selected_laps") = std::unordered_set<int>{}
       )

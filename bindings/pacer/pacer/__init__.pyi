@@ -49,11 +49,6 @@ class Vec3f:
     def __init__(self, x: float, y: float, z: float) -> None:
         pass
 
-    @overload
-    def __getitem__(self, index: int) -> float:
-        pass
-
-    @overload
     def __getitem__(self, index: int) -> float:
         pass
 
@@ -76,11 +71,6 @@ class Point:
     def __init__(self, x: float, y: float) -> None:
         pass
 
-    @overload
-    def __getitem__(self, index: int) -> float:
-        pass
-
-    @overload
     def __getitem__(self, index: int) -> float:
         pass
 
@@ -115,7 +105,7 @@ class Segment:
         """
         pass
 
-    def __eq__(self, other: Segment) -> bool:
+    def __eq__(self, other: object) -> bool:
         pass
 
     def __init__(self, first: Point = Point(), second: Point = Point()) -> None:
@@ -416,7 +406,7 @@ class SequentialGPSSource(RawGPSSource):
         """Returns current samples' time span."""
         pass
 
-class DatVersion(enum.Enum):
+class DatVersion(enum.IntEnum):
     just_data = enum.auto()  # (= 0)
     with_timestamp = enum.auto()  # (= 1)
 
