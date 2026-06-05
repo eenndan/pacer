@@ -1,0 +1,21 @@
+# Ruff config for pacer's Python: binding generators + notebook tooling.
+# Generated bindings and the conda env are excluded. Run: ruff check / ruff format
+line-length = 100
+target-version = "py311"
+
+extend-exclude = [
+    ".pixi",
+    "build",
+    "3rdparty",
+    "bindings/*/*/__init__.pyi",
+]
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501",  # line length handled by the formatter
+    "E402",  # notebooks legitimately import after path setup
+]
+
+[lint.per-file-ignores]
+"*.ipynb" = ["F401", "F811", "E402"]  # notebooks: scratch imports / redefs are fine

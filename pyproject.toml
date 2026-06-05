@@ -10,7 +10,7 @@ version = "0.1.0"
 requires = ["scikit-build-core >=0.10", "nanobind >=1.3.2", "litgen"]
 build-backend = "scikit_build_core.build"
 
-[tool.pixi.project]
+[tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["osx-arm64"]
 
@@ -19,6 +19,13 @@ imgui = { path = "bindings/imgui", editable = true }
 pacer = { path = "bindings/pacer", editable = true }
 
 [tool.pixi.tasks]
+configure = "cmake -S . -B build/Release -G Ninja"
+build = { cmd = "cmake --build build/Release", depends-on = ["configure"] }
+test = { cmd = "ctest --test-dir build/Release --output-on-failure", depends-on = ["build"] }
+gen-bindings = "python bindings/pacer/generate-bindings.py"
+timeline = { cmd = "./build/Release/apps/timeline.app/Contents/MacOS/timeline", depends-on = ["build"] }
+fmt = "git ls-files '*.cpp' '*.hpp' '*.h' '*.c' | xargs clang-format -i"
+lint = "ruff check ."
 
 [tool.pixi.dependencies]
 cmake = ">=4.0.2,<5"

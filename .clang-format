@@ -1,0 +1,6 @@
+# pacer C/C++ formatting. Matches the existing LLVM-style layout
+# (2-space indent, 80-col, right-aligned pointers). Run: clang-format -i <files>
+BasedOnStyle: LLVM
+Standard: c++20
+ColumnLimit: 80
+PointerAlignment: Right
