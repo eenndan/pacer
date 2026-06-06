@@ -185,8 +185,14 @@ uint32_t GPMFSource::Samples(void *data,
               int64_t ms_since_2000 = static_cast<int64_t>(
                   days_since_2000 * 86400000.0 + secs_since_midnight * 1000.0);
               gps.timestamp_ms = epoch_2000 + ms_since_2000;
-              // gps.dop = tmpbuffer[i * elements + 7];
-              // gps.fix = static_cast<int>(tmpbuffer[i * elements + 8]);
+              // GPS9 quality: DOP (element 7) and fix type (element 8, 0/2/3). Present only
+              // when the struct actually carries them; otherwise keep the sentinel defaults.
+              if (elements > 7) {
+                gps.dop = tmpbuffer[i * elements + 7];
+              }
+              if (elements > 8) {
+                gps.fix = static_cast<int>(tmpbuffer[i * elements + 8]);
+              }
               on_sample(data, gps, i, samples);
             }
           }
@@ -260,13 +266,22 @@ uint32_t GPMFSource::Samples(void *data,
           {
             ptr = tmpbuffer;
             int pos = 0;
+            // Initialize the `values` array member so the union is constructible: GPSSample
+            // gained defaulted quality fields (dop/fix), which deletes the union's implicit
+            // default constructor. We then write the 5 position doubles through `values` and
+            // the quality sentinels through `gps` (disjoint storage past the 5th double).
             union {
               GPSSample gps;
               double values[5];
-            } r;
+            } r{.values = {0, 0, 0, 0, 0}};
 
             for (i = 0; i < samples; i++) {
               r.gps.timestamp_ms = timestamp;
+              // GPS5 carries no DOP / fix-type. The union aliases only the first 5 doubles
+              // (lat..ground_speed), so set the quality fields to their "unknown" sentinels
+              // explicitly (the union member is never default-constructed).
+              r.gps.dop = -1.0;  // negative = "unknown" (real DOP is positive)
+              r.gps.fix = -1;
 
               // printf("  %c%c%c%c (%d,%d) ", PRINTF_4CC(key), samples,
               // elements);
