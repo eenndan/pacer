@@ -16,14 +16,34 @@ the `pacer-studio-app-direction` memory to resume in a fresh session.
 
 ## Open bugs (fix first)
 
-### B1 — start line mis-placed / over-long (regression)
-Was correct before P0. Two causes: `_clean` shifts `pick_random_start()`'s median point; the 3×
-`_widen` makes a ~30 m line that looks wrong / can cross adjacent track sections.
-**Fix:** decouple segmentation width from the displayed line. Options: place the start line at the
-data's first sustained lap crossing or near the start/finish; widen only enough to span the track
-(derive half-width from local track width, not a blanket 3×); keep the *displayed*/draggable line a
-sensible length. Verify visually on the real file. (`session._widen`, `Session.load`,
-`pick_random_start`.)
+### B1 — track-aware start/finish line (was: mis-placed/over-long regression)
+Per the user, the real goal: **detect the track from GPS coordinates and use a FIXED,
+track-correct start/finish line** instead of `pick_random_start` + 3× `_widen` (which regressed
+placement after `_clean` moved the median point and over-lengthened the line). Focus on **one
+track first: Daytona Milton Keynes** (lat ≈ 52.040, lon ≈ −0.785 — see the GPSSample in
+notebooks/interpolation.ipynb cell output).
+
+Reference layout/images: `/Users/daniil/Desktop/Tracks/MK/` →
+`Daytona-Milton-Keynes_Aerial.jpg`, `Link-Cliff-Plan.pdf` (official circuit plan),
+`gmaps_sat.png`, `gmaps_pict.png`. The aerial: the **main outdoor circuit** is centre/right;
+**start/finish is on the main straight by the paddock** (centre-left, near the white tent);
+a separate indoor/junior serpentine loop (far left) should be ignored.
+
+**Design:**
+- New `studio/tracks.py`: a tiny registry. One entry to start — MK Daytona — with a reference
+  centroid (for detection) and a **start/finish line as two absolute lat/lon points** (a track
+  property, not derived per-session).
+- `Session.load`: compute the trace centroid; if within ~1 km of a registry track, set the start
+  line from that track's lat/lon (via `cs.local`) instead of `pick_random_start`; else fall back.
+  This makes lap timing consistent and correct across any video of the same track.
+- Keep the line draggable to fine-tune; drop the blanket 3× `_widen` (or keep a modest
+  track-spanning width derived from local track width).
+
+**Pinning MK's start/finish lat/lon** (none hard-coded survive in git — checked C++ history):
+overlay the `GX010060.MP4` trace on the aerial/sat image and read off the two endpoints of the
+start/finish straight, or take the densest main-straight crossing; store the two lat/lon points in
+`tracks.py`. (`session.Session.load`, new `studio/tracks.py`, retire `_widen`/`pick_random_start`
+for known tracks.)
 
 ### B2 — speed/delta show only ~5% for non-best laps
 `pacer.Lap.resample` aborts at the first reference timing line the candidate lap misses (its inner
