@@ -49,11 +49,18 @@ class _TimingLine:
         self.on_changed()
 
     def _snap(self, handle):
-        """On release, snap `handle` to its own nearest trace point, redraw, re-segment."""
+        """On release, snap `handle` to its own nearest trace point, redraw, re-segment.
+
+        The snap target must NOT land on the other handle's point: a zero-length segment
+        crosses nothing (pacer Segment::Intersects returns false) and wipes out every lap.
+        So exclude the other handle's current point and snap to the nearest DISTINCT sample;
+        if none exists, skip the snap rather than collapse the line."""
         if self._snapping:
             return
         p = handle.pos()
-        i = self.session.nearest_index(p.x(), p.y())
+        other = self.h2 if handle is self.h1 else self.h1
+        op = other.pos()
+        i = self.session.nearest_index_excluding(p.x(), p.y(), op.x(), op.y())
         if i is None:
             return
         self._snapping = True

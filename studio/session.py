@@ -494,3 +494,18 @@ class Session:
         if len(self.tx) == 0:
             return None
         return int(np.argmin((self.tx - x) ** 2 + (self.ty - y) ** 2))
+
+    def nearest_index_excluding(self, x: float, y: float, ex: float, ey: float) -> int | None:
+        """Nearest trace sample to (x,y) whose coords differ from the excluded point (ex,ey).
+
+        Used so a timing line's two handles never snap to the SAME trace sample (a zero-length
+        segment crosses nothing — Segment::Intersects returns false — and wipes out every lap).
+        Masks out samples sitting on the excluded point, then returns the nearest of the rest."""
+        if len(self.tx) == 0:
+            return None
+        keep = (self.tx != ex) | (self.ty != ey)
+        if not keep.any():
+            return None
+        idx = np.flatnonzero(keep)
+        d2 = (self.tx[idx] - x) ** 2 + (self.ty[idx] - y) ** 2
+        return int(idx[np.argmin(d2)])
