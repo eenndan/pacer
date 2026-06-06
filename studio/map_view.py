@@ -24,9 +24,11 @@ MARKER_COLOR = "#ff5252"
 class _TimingLine:
     """Two draggable handles + a connecting segment, all in data (local-meter) coords."""
 
-    def __init__(self, plot, seg: Seg, color, on_changed):
+    def __init__(self, plot, seg: Seg, color, on_changed, session):
         self.plot = plot
         self.on_changed = on_changed
+        self.session = session
+        self._snapping = False  # guard so a snap's setPos doesn't recurse on Finished
         pen = pg.mkPen(color, width=2)
         self.line = pg.PlotDataItem([seg.x1, seg.x2], [seg.y1, seg.y2], pen=pen)
         self.h1 = pg.TargetItem((seg.x1, seg.y1), size=11, movable=True, pen=pen)
@@ -34,13 +36,32 @@ class _TimingLine:
         plot.addItem(self.line)
         plot.addItem(self.h1)
         plot.addItem(self.h2)
+        # Live: dragging either handle redraws the segment as it moves. On release each handle
+        # snaps to its own nearest trace point (and re-segments the laps).
         self.h1.sigPositionChanged.connect(self._moved)
         self.h2.sigPositionChanged.connect(self._moved)
+        self.h1.sigPositionChangeFinished.connect(lambda: self._snap(self.h1))
+        self.h2.sigPositionChangeFinished.connect(lambda: self._snap(self.h2))
 
     def _moved(self, *_):
         p1, p2 = self.h1.pos(), self.h2.pos()
         self.line.setData([p1.x(), p2.x()], [p1.y(), p2.y()])
         self.on_changed()
+
+    def _snap(self, handle):
+        """On release, snap `handle` to its own nearest trace point, redraw, re-segment."""
+        if self._snapping:
+            return
+        p = handle.pos()
+        i = self.session.nearest_index(p.x(), p.y())
+        if i is None:
+            return
+        self._snapping = True
+        # setPos fires sigPositionChanged -> _moved (redraws the line + on_changed); that's
+        # fine. The guard only prevents this snap from recursing via sigPositionChangeFinished.
+        handle.setPos(pg.Point(float(self.session.tx[i]), float(self.session.ty[i])))
+        self._snapping = False
+        self._moved()
 
     def seg(self) -> Seg:
         p1, p2 = self.h1.pos(), self.h2.pos()
@@ -118,8 +139,9 @@ class MapView(QWidget):
         for tl in [self._start, *self._sectors]:
             if tl:
                 tl.remove()
-        self._start = _TimingLine(self.plot, start, START_COLOR, self._emit)
-        self._sectors = [_TimingLine(self.plot, s, SECTOR_COLOR, self._emit) for s in sectors]
+        self._start = _TimingLine(self.plot, start, START_COLOR, self._emit, self.session)
+        self._sectors = [_TimingLine(self.plot, s, SECTOR_COLOR, self._emit, self.session)
+                         for s in sectors]
 
     def _current(self) -> tuple[Seg, list[Seg]]:
         return self._start.seg(), [s.seg() for s in self._sectors]
