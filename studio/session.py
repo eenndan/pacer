@@ -635,7 +635,10 @@ class Session:
         splits = [float(t_at[k + 1] - t_at[k]) for k in range(n_splits)]
         return splits
 
-    def distance_in_lap_at_time(self, lap_id: int, t: float) -> float | None:
+    def _lap_time_dist(self, lap_id: int):
+        """Cached (times, dists) for a lap: media-clock seconds + per-lap odometer (metres),
+        both monotonic and aligned. The single source the cursor↔video conversions interpolate
+        on — built once per lap, cleared on re-segment. Returns None if the lap is degenerate."""
         td = self._dist_cache.get(lap_id)
         if td is None:
             lap = self._get_lap(lap_id)
@@ -648,8 +651,71 @@ class Session:
             dists = np.array([cds[i] for i in range(m)])
             td = (times, dists)
             self._dist_cache[lap_id] = td
+        return td
+
+    def distance_in_lap_at_time(self, lap_id: int, t: float) -> float | None:
+        td = self._lap_time_dist(lap_id)
+        if td is None:
+            return None
         times, dists = td
         return float(np.interp(t, times, dists))
+
+    # ------------------------------------------------ cursor scrub: x <-> media time
+    # The plot cursors are DRAGGABLE; dragging seeks the video within the *current* lap.
+    # plots_view stays pacer-free, so the x<->time mapping for each plot/axis-mode lives here
+    # (pure numpy on the cached per-lap arrays). Two plots, one truth = the media time:
+    #   * speed plot, TIME mode:     t = lap_start + x         (x = t - lap_start)
+    #   * speed plot, DISTANCE mode: x = dist_in_lap(t);  t via interp(x; dists, times)
+    #   * delta plot:                x = s * best_total_dist;  s = x / best_total_dist;
+    #                                dist_in_lap = s * this lap's total distance; then interp.
+    # All clamp to the lap window so a drag can't escape the current lap.
+
+    def media_time_at_plot_x(self, lap_id: int, x: float, mode: str,
+                             best_distance: float | None = None) -> float | None:
+        """Absolute media-clock time (s) for a plot x-value within `lap_id`.
+
+        `mode` is one of 'time' (speed plot, time-into-lap x), 'distance' (speed plot,
+        distance-into-lap x), or 'delta' (delta plot, x = s × best_distance metres). For
+        'delta' pass the best lap's total distance as `best_distance`. The result is CLAMPED
+        to `lap_id`'s [start, end] media window so a drag can't leave the current lap. Returns
+        None if the lap is degenerate (so the caller can no-op)."""
+        td = self._lap_time_dist(lap_id)
+        if td is None:
+            return None
+        times, dists = td
+        t0, t1 = float(times[0]), float(times[-1])
+        if mode == "time":
+            t = t0 + float(x)
+        else:
+            if mode == "delta":
+                if not best_distance:
+                    return None
+                s = float(x) / float(best_distance)            # normalized fraction [0,1]
+                d = s * float(dists[-1])                        # → this lap's odometer (m)
+            else:  # 'distance'
+                d = float(x)
+            # Invert distance→time within the lap on the monotonic odometer.
+            t = float(np.interp(d, dists, times))
+        return min(max(t, t0), t1)
+
+    def plot_x_at_media_time(self, lap_id: int, t: float, mode: str,
+                             best_distance: float | None = None) -> float | None:
+        """Inverse of `media_time_at_plot_x`: the plot x-value for media-clock time `t` within
+        `lap_id`, in the given `mode`. Used to re-place a cursor from the shared media time.
+        Returns None if the lap is degenerate (or 'delta' with no best distance)."""
+        td = self._lap_time_dist(lap_id)
+        if td is None:
+            return None
+        times, dists = td
+        if mode == "time":
+            return float(t) - float(times[0])
+        d = float(np.interp(t, times, dists))  # distance-into-lap at t
+        if mode == "delta":
+            if not best_distance:
+                return None
+            s = d / float(dists[-1])            # normalized fraction [0,1]
+            return s * float(best_distance)
+        return d  # 'distance'
 
     def lap_speed_vs_time(self, lap_id: int):
         """(elapsed_s, speed_kmh) numpy arrays for a lap: time-into-lap on x, speed on y.
