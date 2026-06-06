@@ -423,18 +423,25 @@ class Session:
         elapsed = np.array([pts[i].time - t0 for i in range(m)])
         return dist, speed_kmh, elapsed
 
+    _DELTA_GRID_N = 400  # samples on the normalized-distance grid (smooth + cheap to render)
+
     def delta(self, lap_ids):
         """Returns (best_lap_id, speed_series, delta_series).
 
         Always references the GLOBAL best lap, so a single selected lap still shows a
-        meaningful delta-to-best (not a trivial flat zero). Uses ARC-LENGTH interpolation:
-        each lap is sampled onto a shared cumulative-distance grid via `np.interp`, so
-        every selected lap spans the FULL distance range (no dependence on the C++
-        `resample`, which truncated non-best laps at the first missed timing line).
+        meaningful delta-to-best (not a trivial flat zero).
 
-        The grid is uniform 0..max over the selected laps (NOT the best lap's odometer):
-        the best lap can be the SHORTEST by distance. Each lap is then masked to its OWN
-        distance so it never flat-clamps past its end; delta spans the overlap with best.
+        Laps are aligned by NORMALIZED distance fraction, not raw odometer: each lap's
+        total distance differs (slightly different racing lines), so equal raw distance is
+        a different point on the track. For each lap s = cum_distance/total_distance spans
+        [0,1] exactly; on a shared s-grid (np.linspace(0,1,N)) elapsed-time and speed are
+        interpolated for every selected lap AND the best lap. Then
+
+            delta_lap(s) = elapsed_lap(s) - elapsed_best(s)
+
+        and at s=1 (the finish line) this is exactly lap_total_time - best_total_time — the
+        laptime difference shown in the table. The x-axis is kept in metres by mapping the
+        grid back through the best lap's distance: x = s * best_total_distance.
         """
         ids = [i for i in lap_ids if 0 <= i < self.laps.laps_count()]
         best = self.best_lap_id()
@@ -444,29 +451,25 @@ class Session:
         arrays = {}
         for lid in set(ids) | {best}:
             dist, speed_kmh, elapsed = self._lap_arrays(lid)
-            if len(dist) >= 2:
+            if len(dist) >= 2 and dist[-1] > 0:
                 arrays[lid] = (dist, speed_kmh, elapsed)
         if best not in arrays:
             return None
 
-        # Shared grid up to the longest selected lap's distance so each lap spans its full
-        # own distance (best lap may be the shortest; np.interp clamps past the right edge).
-        max_dist = max(dist[-1] for dist, _, _ in arrays.values())
-        grid = np.linspace(0.0, float(max_dist), num=max(len(arrays[best][0]), 2))
-
+        # Common grid in normalized distance fraction [0,1]; the same fraction is the same
+        # track position on every lap, so the last point (s=1) is the finish line for all.
+        s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
         best_dist, _, best_elapsed = arrays[best]
+        # Keep the x-axis in metres: map the fraction through the best lap's distance.
+        x = s_grid * float(best_dist[-1])
+        best_elapsed_on_grid = np.interp(s_grid, best_dist / best_dist[-1], best_elapsed)
 
         speed, delta = {}, {}
         for lid, (dist, speed_kmh, elapsed) in arrays.items():
-            # Mask each lap to its OWN distance so a shorter lap doesn't flat-clamp across the
-            # grid (np.interp holds the last value past the right edge): speed spans the lap's
-            # own range; delta spans the overlap with the best lap (where both have data).
-            own = grid <= dist[-1]
-            speed[lid] = (grid[own], np.interp(grid[own], dist, speed_kmh))
-            both = grid <= min(dist[-1], best_dist[-1])
-            delta[lid] = (grid[both],
-                          np.interp(grid[both], dist, elapsed)
-                          - np.interp(grid[both], best_dist, best_elapsed))
+            s_lap = dist / dist[-1]  # this lap's own distance fraction, spans [0,1]
+            speed[lid] = (x, np.interp(s_grid, s_lap, speed_kmh))
+            # delta at s=1 == this lap's elapsed(1) - best elapsed(1) == laptime difference.
+            delta[lid] = (x, np.interp(s_grid, s_lap, elapsed) - best_elapsed_on_grid)
         return best, speed, delta
 
     # ------------------------------------------------------------ video sync

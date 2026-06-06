@@ -47,6 +47,9 @@ class PlotsView(QWidget):
         self.p_speed.addLegend(offset=(8, 8))
         self.p_delta.setLabel("left", "Δ to best (s)")
         self.p_delta.setLabel("bottom", "distance (m)")
+        # Sub-second deltas otherwise auto-scale to a "(x0.001)" SI prefix on the axis; keep
+        # the left axis in plain seconds so it reads e.g. 0.228 directly.
+        self.p_delta.getAxis("left").enableAutoSIPrefix(False)
         self.p_delta.showGrid(x=True, y=True, alpha=0.2)
         self.p_delta.setXLink(self.p_speed)
         self.p_delta.addLine(y=0, pen=pg.mkPen("#555", width=1))
