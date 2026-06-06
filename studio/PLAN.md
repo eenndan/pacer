@@ -11,8 +11,9 @@ the `pacer-studio-app-direction` memory to resume in a fresh session.
   proven by `spike_video_sync.py`).
 - **Debugged on real file `GX010060.MP4`** (see `diagnose.py`): default to naive timing (C++
   interpolation diverges on long sessions, auto-rejected via `--interp`), `_clean` trims the
-  stationary GPS-spike lead-in, start line widened for segmentation, adaptive (median-band) lap
-  validity. Result: 22 valid laps @ 63.3–70.75 s (was 8 garbage laps).
+  stationary GPS-spike lead-in, the track-aware start line (B1) widened MODESTLY only to catch a
+  pass the short exact segment missed, adaptive (median-band) lap validity. Result: 18 valid
+  flying laps @ ~68.4–70.8 s (was 8 garbage laps).
 
 ## Open bugs (fix first)
 

@@ -19,6 +19,8 @@ import numpy as np
 
 import pacer
 
+from . import tracks
+
 DEFAULT_SAMPLE = "3rdparty/gpmf-parser/samples/hero6.mp4"  # a clip with real motion
 
 # Data-cleaning thresholds (see studio/diagnose.py; validated on real sessions).
@@ -101,6 +103,47 @@ def _widen(seg, factor):
     return out
 
 
+def _band_lap_count(laps) -> int:
+    """How many laps land in a band around the median lap time — the same 'real lap' notion
+    as Session.valid_lap_ids, but a free function usable during load (no Session yet)."""
+    ts = [laps.lap_time(i) for i in range(laps.laps_count())
+          if laps.sample_count(i) >= 20 and laps.lap_time(i) >= MIN_LAP_TIME]
+    if not ts:
+        return 0
+    med = float(np.median(ts))
+    return sum(1 for t in ts if 0.5 * med <= t <= 1.6 * med)
+
+
+def _fit_start_line(laps, base):
+    """Choose the start/finish line for a known track. Prefer the EXACT track line (`base`)
+    — the goal is the line at the given coords, and `_widen` scales about the MIDPOINT so the
+    line stays centred on those coords regardless of factor. The short exact segment can miss
+    a pass (the GPS step over the line lands just past an endpoint), fusing a real flying lap
+    into the long out-lap; that under-segmentation is exactly when the PLAN says to widen.
+
+    So: probe modest factors from smallest up and adopt the SMALLEST one that recovers more
+    valid laps than the exact line — keeping the endpoints as close to A/B as possible (the
+    midpoint is unchanged) while still catching missed passes. Cap the factor well below the
+    point where the longer line double-crosses each flying lap and over-segments (~2.0+).
+    Returns the chosen Segment; leaves `laps.sectors` on it."""
+    laps.sectors = pacer.Sectors(start_line=base, sector_lines=[])
+    laps.update()
+    base_n = _band_lap_count(laps)
+    best_seg = base
+    # Smallest-first: take the first factor that recovers even one real (band) lap the exact
+    # short segment missed. Modest cap — wider drifts off the straight and over-segments.
+    for factor in (1.15, 1.3, 1.5):
+        seg = _widen(base, factor)
+        laps.sectors = pacer.Sectors(start_line=seg, sector_lines=[])
+        laps.update()
+        if _band_lap_count(laps) > base_n:
+            best_seg = seg
+            break
+    laps.sectors = pacer.Sectors(start_line=best_seg, sector_lines=[])
+    laps.update()
+    return best_seg
+
+
 def _clean(samples, spans, naive):
     """Trim the stationary lead-in/cool-down (where GPS spikes cluster), then drop lone
     teleport glitches (a fix far from BOTH neighbours while they stay close to each other).
@@ -177,13 +220,23 @@ class Session:
 
         # Coordinate system centred on the (now clean) track, then segment into laps.
         mn, mx = laps.min_max()
-        centroid = pacer.GPSSample(lat=(mn.y + mx.y) / 2, lon=(mn.x + mx.x) / 2, altitude=0)
-        cs = pacer.CoordinateSystem(centroid)
+        clat, clon = (mn.y + mx.y) / 2, (mn.x + mx.x) / 2
+        cs = pacer.CoordinateSystem(pacer.GPSSample(lat=clat, lon=clon, altitude=0))
         laps.set_coordinate_system(cs)
-        laps.sectors = pacer.Sectors(
-            start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]
-        )
-        laps.update()
+
+        track = tracks.detect_track(clat, clon)
+        if track is not None:
+            # Known track: use its FIXED start/finish line (a track property) instead of
+            # pick_random_start/_widen, which mis-placed the line after _clean shifted the
+            # median point. Keep the exact coords; widen modestly about the midpoint only
+            # if some passes miss the short segment.
+            base = tracks.start_line_segment(track, cs)
+            _fit_start_line(laps, base)  # sets laps.sectors + update() on the chosen line
+        else:
+            laps.sectors = pacer.Sectors(
+                start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]
+            )
+            laps.update()
         return cls(laps, cs, video_path)
 
     @staticmethod
