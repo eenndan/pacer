@@ -14,6 +14,12 @@ the `pacer-studio-app-direction` memory to resume in a fresh session.
   stationary GPS-spike lead-in, the track-aware start line (B1) widened MODESTLY only to catch a
   pass the short exact segment missed, adaptive (median-band) lap validity. Result: 18 valid
   flying laps @ ~68.4–70.8 s (was 8 garbage laps).
+- **Playback performance — RESOLVED** (verified by measurement, not just eyeball): the 4K HEVC
+  clip decodes at ~61 fps with VideoToolbox hardware decode, so lag was UI-bound. Fixes: UI sync
+  decoupled onto a ~30 Hz `QTimer` (off the video present path); the map draws only best + current
+  lap (no 16k-point trace, no `peak` downsampling); off-track GPS bbox-filtered; and the
+  speed/delta plot cursor was made ~51× cheaper (downsample+clip curves, antialias off, frozen
+  autorange, cached per-lap arrays) so fps holds with a lap selected. Cursor cost 56.5 → 1.1 ms.
 
 ## Bugs — FIXED (autonomous run, 2026-06-06; commits edecaf1, 416616b, 2492636)
 

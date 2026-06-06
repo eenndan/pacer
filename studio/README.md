@@ -40,8 +40,8 @@ pixi run python -m studio.diagnose -- /path/to/file.MP4 [--interp] [--clean]
 | [session.py](session.py) | Loads GPMF → `pacer.Laps`; exposes trace/lap/delta arrays + timing-line write-back. Owns the load/segmentation pipeline (primary `pacer` user). |
 | [tracks.py](tracks.py) | Registry of known tracks (Daytona MK); detects the track by centroid and gives its fixed start/finish line. The only other module that names `pacer` (geometry only). |
 | [video_view.py](video_view.py) | `QMediaPlayer` + `QVideoWidget`; emits `positionChanged(s)`, exposes `seek(s)`. |
-| [map_view.py](map_view.py) | Track trace + draggable `TargetItem` timing lines + the video marker. |
-| [plots_view.py](plots_view.py) | Speed-vs-distance + lap-vs-best delta for the selected laps; time cursor. |
+| [map_view.py](map_view.py) | Best lap (faint) + current/playing lap (highlighted) + draggable `TargetItem` timing lines + video marker. The full all-laps trace is intentionally not drawn (perf + clarity). |
+| [plots_view.py](plots_view.py) | Speed-vs-distance + lap-vs-best delta for the selected laps; downsampled/clipped curves + a time cursor. |
 | [lap_table.py](lap_table.py) | Lap times/distances; multi-select rows to choose laps to compare. |
 | [app.py](app.py) | Assembles panels in splitters and wires the cross-panel signals. |
 
