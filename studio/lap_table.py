@@ -1,8 +1,21 @@
-"""LapTable: lap times / distances / entry speed. Multi-select rows to compare laps."""
+"""LapTable: lap times / distances / entry speed. Multi-select rows to compare laps.
+
+Columns are click-to-sort by the UNDERLYING numeric value (F1): each cell carries its
+numeric key in Qt.UserRole and a `_NumItem` sorts on that, so "1:08.408" sorts as 68.408 s
+and "23.10" as 23.1 — not lexically. Clicking a header toggles asc/desc; the default order
+(by lap number) holds until the user clicks.
+
+Row/cell highlights are keyed by LAP ID, not row index, and re-applied after every sort so
+they always follow the right lap: the ▶ playing marker + bold (current lap), the green best
+lap (F-existing), the blue Qt selection, and the PURPLE per-sector session-best cells (F5 —
+the fastest split in each S-column across all valid laps, motorsport convention).
+"""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+import math
+
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -14,9 +27,40 @@ from PySide6.QtWidgets import (
 
 from .session import fmt_time
 
-BEST_COLOR = QColor("#06d6a0")
+BEST_COLOR = QColor("#06d6a0")          # green: the overall best lap (foreground on every cell)
+BEST_SECTOR_COLOR = QColor("#b388eb")   # purple: per-column session-best split (F5)
 CURRENT_PREFIX = "▶ "  # "▶ " marks the lap currently playing on the video
 COLUMNS = ["Lap", "Time", "Dist (m)", "Entry (km/h)"]
+NUM_ROLE = Qt.UserRole  # the numeric sort key stored on every cell
+LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the Lap cell
+
+
+def _best_split_per_sector_impl(splits_by_lap: dict[int, list[float]],
+                                n_splits: int) -> list[float | None]:
+    """F5: the fastest (minimum) split in EACH sector column across all valid laps, computed
+    independently per column. Returns one value per S-column (None if a column has no data).
+    Pure min over the per-lap splits — recomputed on refresh (i.e. after a sector edit changes
+    the splits). Module-level so it's unit-testable without a Session/Qt table."""
+    best: list[float | None] = []
+    for i in range(n_splits):
+        vals = [sp[i] for sp in splits_by_lap.values()
+                if i < len(sp) and math.isfinite(sp[i])]
+        best.append(min(vals) if vals else None)
+    return best
+
+
+class _NumItem(QTableWidgetItem):
+    """A table cell that sorts by a numeric key (Qt.UserRole) rather than its display text, so
+    e.g. lap times "1:08.408" sort as 68.408 s and blank cells sort to the end."""
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:  # noqa: D401 (Qt sort hook)
+        a = self.data(NUM_ROLE)
+        b = other.data(NUM_ROLE)
+        if a is None or (isinstance(a, float) and math.isnan(a)):
+            return False  # blanks/NaN sort to the bottom regardless of direction
+        if b is None or (isinstance(b, float) and math.isnan(b)):
+            return True
+        return float(a) < float(b)
 
 
 class LapTable(QWidget):
@@ -34,6 +78,17 @@ class LapTable(QWidget):
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
+        # F1: click any header to sort by the column's numeric key (asc/desc toggles). The
+        # highlights are re-applied after each sort (sortIndicatorChanged) so they follow laps.
+        # Default = lap number ascending (column 0) until the user clicks a different header;
+        # the chosen sort is remembered and re-applied across refreshes (sector edits etc.).
+        self._sort_col = 0
+        self._sort_order = Qt.AscendingOrder
+        self.table.setSortingEnabled(True)
+        hdr = self.table.horizontalHeader()
+        hdr.setSortIndicatorShown(True)
+        hdr.setSortIndicator(self._sort_col, self._sort_order)
+        hdr.sortIndicatorChanged.connect(self._on_sorted)
         self.table.itemSelectionChanged.connect(self._on_selection)
 
         lay = QVBoxLayout(self)
@@ -41,9 +96,9 @@ class LapTable(QWidget):
         lay.addWidget(self.table)
         self.refresh()
 
+    # ------------------------------------------------------------------ build
     def refresh(self):
         rows = self.session.lap_rows()
-        best = min(range(len(rows)), key=lambda i: rows[i]["time"]) if rows else -1
 
         # N sector lines split each lap into N+1 sub-sectors; show one split column per
         # sub-sector (none by default = today's 4 columns). Column count depends on this,
@@ -51,32 +106,50 @@ class LapTable(QWidget):
         n_splits = self.session.laps.sector_count() + 1 if self.session.laps.sector_count() else 0
         headers = COLUMNS + [f"S{i + 1}" for i in range(n_splits)]
 
+        # Per-lap splits (F5 input) and the per-column session-best split value (purple target).
+        splits_by_lap = {row["idx"]: self.session.lap_sector_splits(row["idx"]) for row in rows}
+        best_split = _best_split_per_sector_impl(splits_by_lap, n_splits)
+
+        # Sorting must be OFF while we populate (else rows reorder mid-fill and setItem(r,…)
+        # lands on the wrong row); re-enabled after, preserving the user's chosen sort.
+        self.table.setSortingEnabled(False)
         self.table.blockSignals(True)
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
-            cells = [
-                str(row["idx"]),
-                fmt_time(row["time"]),
-                f"{row['dist']:.0f}",
-                f"{row['entry']:.1f}",
+            lap_id = row["idx"]
+            splits = splits_by_lap[lap_id]
+            # (text, numeric-sort-key) per column.
+            cells: list[tuple[str, float]] = [
+                (str(lap_id), float(lap_id)),
+                (fmt_time(row["time"]), float(row["time"])),
+                (f"{row['dist']:.0f}", float(row["dist"])),
+                (f"{row['entry']:.1f}", float(row["entry"])),
             ]
-            if n_splits:
-                splits = self.session.lap_sector_splits(row["idx"])
-                # A partial lap may have fewer splits than columns — leave those cells blank.
-                cells += [f"{splits[i]:.2f}" if i < len(splits) else "" for i in range(n_splits)]
-            for c, text in enumerate(cells):
-                item = QTableWidgetItem(text)
-                if r == best:
-                    item.setForeground(BEST_COLOR)
+            for i in range(n_splits):
+                if i < len(splits):
+                    cells.append((f"{splits[i]:.2f}", float(splits[i])))
+                else:  # a partial lap may have fewer splits than columns — blank, sorts last
+                    cells.append(("", float("nan")))
+            for c, (text, key) in enumerate(cells):
+                item = _NumItem(text)
+                item.setData(NUM_ROLE, key)
                 self.table.setItem(r, c, item)
+            # Stash the lap id on the Lap cell so row<->lap stays correct across any sort.
+            self.table.item(r, 0).setData(LAP_ROLE, lap_id)
         self.table.blockSignals(False)
-        self._apply_current_lap()
+        # Re-apply the user's chosen sort (lap-ascending by default) on the freshly-filled rows.
+        self.table.setSortingEnabled(True)
+        self.table.sortByColumn(self._sort_col, self._sort_order)
+        self._best_split = best_split  # cached so re-highlight after a sort needn't recompute
+        self._apply_highlights()
 
+    # ------------------------------------------------------------- highlights
     def _lap_id(self, r: int) -> int:
-        # The Lap cell may carry the "▶ " current-lap prefix; strip it before parsing.
-        return int(self.table.item(r, 0).text().removeprefix(CURRENT_PREFIX))
+        # The lap id is stored in LAP_ROLE on the Lap cell — stable across sorts and the
+        # "▶ " current-lap prefix.
+        return int(self.table.item(r, 0).data(LAP_ROLE))
 
     def _row_for_lap(self, lap_id) -> int:
         if lap_id is None:
@@ -86,20 +159,76 @@ class LapTable(QWidget):
                 return r
         return -1
 
+    def _apply_highlights(self):
+        """Re-apply ALL row/cell highlights keyed by lap id, so they survive any sort:
+          * green foreground on every cell of the overall best lap,
+          * purple foreground+bold on each per-column session-best split cell (F5),
+          * the ▶ prefix + bold Lap cell for the current (playing) lap.
+        The blue selection is Qt's own row background and is left to the selection model."""
+        rows = self.table.rowCount()
+        if not rows:
+            return
+        # Overall best lap = the valid lap with the min time (foreground green on all cells).
+        best_lap = self.session.best_lap_id()
+        n_splits = self.session.laps.sector_count() + 1 if self.session.laps.sector_count() else 0
+        best_split = getattr(self, "_best_split", [])
+
+        self.table.blockSignals(True)
+        for r in range(rows):
+            lap_id = self._lap_id(r)
+            is_best = lap_id == best_lap
+            for c in range(self.table.columnCount()):
+                item = self.table.item(r, c)
+                if item is None:
+                    continue
+                # Default theme foreground unless overridden below.
+                item.setForeground(BEST_COLOR if is_best else QColor("#e6e6e6"))
+            # Purple per-sector session-best: a sector cell whose value equals that column's min
+            # reads purple+bold, overriding the green-best-lap foreground for THAT cell (F5 must
+            # coexist with green/blue/▶).
+            for i in range(n_splits):
+                c = len(COLUMNS) + i
+                item = self.table.item(r, c)
+                if item is None:
+                    continue
+                key = item.data(NUM_ROLE)
+                target = best_split[i] if i < len(best_split) else None
+                font = item.font()
+                if (target is not None and key is not None
+                        and math.isfinite(float(key))
+                        and abs(float(key) - target) < 1e-9):
+                    item.setForeground(BEST_SECTOR_COLOR)
+                    font.setBold(True)
+                else:
+                    font.setBold(False)
+                item.setFont(font)
+        self.table.blockSignals(False)
+        self._apply_current_lap()
+
     def _apply_current_lap(self):
         """Mark the current lap (F3) with a '▶ ' prefix + bold in the Lap column only — no
         row background, so the BLUE Qt selection stays the sole row-background cue."""
         target = self._row_for_lap(self._current_lap)
+        self.table.blockSignals(True)
         for r in range(self.table.rowCount()):
             item = self.table.item(r, 0)
             if item is None:
                 continue
             on = r == target
-            lap_id = item.text().removeprefix(CURRENT_PREFIX)
-            item.setText(f"{CURRENT_PREFIX}{lap_id}" if on else lap_id)
+            lap_id = self._lap_id(r)
+            item.setText(f"{CURRENT_PREFIX}{lap_id}" if on else str(lap_id))
             font = item.font()
             font.setBold(on)
             item.setFont(font)
+        self.table.blockSignals(False)
+
+    def _on_sorted(self, col, order):
+        # A header click re-ordered the rows; remember the chosen column/direction so a later
+        # refresh() (e.g. a sector edit) keeps the user's sort, and re-apply the highlights
+        # keyed by lap id so they follow the laps to their new rows.
+        self._sort_col = col
+        self._sort_order = order
+        self._apply_highlights()
 
     def set_current_lap(self, lap_id):
         """Mark the lap currently playing on the video; no effect on user selection."""
