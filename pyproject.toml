@@ -17,6 +17,9 @@ platforms = ["osx-arm64"]
 [tool.pixi.pypi-dependencies]
 imgui = { path = "bindings/imgui", editable = true }
 pacer = { path = "bindings/pacer", editable = true }
+# `studio` desktop app (PySide6 + pyqtgraph). See studio/.
+pyside6 = ">=6.8"
+pyqtgraph = ">=0.13"
 
 [tool.pixi.tasks]
 configure = "cmake -S . -B build/Release -G Ninja"
@@ -25,6 +28,7 @@ test = { cmd = "ctest --test-dir build/Release --output-on-failure", depends-on 
 test-py = { cmd = "python tests/test_interpolation_parity.py", depends-on = ["build"] }
 gen-bindings = "python bindings/pacer/generate-bindings.py"
 timeline = { cmd = "./build/Release/apps/timeline.app/Contents/MacOS/timeline", depends-on = ["build"] }
+studio = { cmd = "python -m studio", depends-on = ["build"] }
 fmt = "git ls-files '*.cpp' '*.hpp' '*.h' '*.c' | xargs clang-format -i"
 lint = "ruff check ."
 web = "bash tools/build-web.sh"
