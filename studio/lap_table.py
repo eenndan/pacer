@@ -45,7 +45,15 @@ class LapTable(QWidget):
         rows = self.session.lap_rows()
         best = min(range(len(rows)), key=lambda i: rows[i]["time"]) if rows else -1
 
+        # N sector lines split each lap into N+1 sub-sectors; show one split column per
+        # sub-sector (none by default = today's 4 columns). Column count depends on this,
+        # so set the headers here — refresh() runs on selection and after sectors change.
+        n_splits = self.session.laps.sector_count() + 1 if self.session.laps.sector_count() else 0
+        headers = COLUMNS + [f"S{i + 1}" for i in range(n_splits)]
+
         self.table.blockSignals(True)
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             cells = [
@@ -54,6 +62,10 @@ class LapTable(QWidget):
                 f"{row['dist']:.0f}",
                 f"{row['entry']:.1f}",
             ]
+            if n_splits:
+                splits = self.session.lap_sector_splits(row["idx"])
+                # A partial lap may have fewer splits than columns — leave those cells blank.
+                cells += [f"{splits[i]:.2f}" if i < len(splits) else "" for i in range(n_splits)]
             for c, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 if r == best:

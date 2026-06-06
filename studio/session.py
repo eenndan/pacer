@@ -361,6 +361,15 @@ class Session:
         t0 = self.laps.start_timestamp(lap_id)
         return (t0, t0 + self.laps.lap_time(lap_id))
 
+    def lap_sector_splits(self, lap_id: int) -> list[float]:
+        """Per-sub-sector split times (seconds) for a lap, in order. With N sector lines a
+        lap has N+1 sub-sectors and these sum to the lap time. Mapped by TIMESTAMP, not the
+        C++ flat sector index — the partial out-lap makes that index off-by-one."""
+        t0 = self.laps.start_timestamp(lap_id)
+        t1 = t0 + self.laps.lap_time(lap_id)
+        return [self.laps.sector_time(x) for x in range(self.laps.recorded_sectors())
+                if t0 - 1e-6 <= self.laps.sector_start_timestamp(x) < t1 - 1e-6]
+
     def distance_in_lap_at_time(self, lap_id: int, t: float) -> float | None:
         td = self._dist_cache.get(lap_id)
         if td is None:
