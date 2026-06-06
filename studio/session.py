@@ -675,22 +675,29 @@ class Session:
     # ------------------------------------------------ cursor scrub: x <-> media time
     # The plot cursors are DRAGGABLE; dragging seeks the video within the *current* lap.
     # plots_view stays pacer-free, so the x<->time mapping for each plot/axis-mode lives here
-    # (pure numpy on the cached per-lap arrays). Two plots, one truth = the media time:
-    #   * speed plot, TIME mode:     t = lap_start + x         (x = t - lap_start)
-    #   * speed plot, DISTANCE mode: x = dist_in_lap(t);  t via interp(x; dists, times)
-    #   * delta plot:                x = s * best_total_dist;  s = x / best_total_dist;
-    #                                dist_in_lap = s * this lap's total distance; then interp.
-    # All clamp to the lap window so a drag can't escape the current lap.
+    # (pure numpy on the cached per-lap arrays). The speed + delta plots SHARE one x-axis (the
+    # dist/time toggle drives both, and they're x-linked), so the same media moment lands at the
+    # same x on BOTH plots — the two cursors always coincide. Two plots, one truth = the media
+    # time:
+    #   * TIME mode (both plots):     x = t - lap_start            (t = lap_start + x)
+    #   * DISTANCE mode (both plots): x = s × best_total_dist, where s = dist_in_lap(t)/lap_total
+    #     is the NORMALIZED distance fraction. This is the SAME axis the curves are drawn on
+    #     (session.delta maps every lap's s∈[0,1] through the best lap's distance), so a cursor
+    #     placed here sits exactly on its curve AND coincides with the other plot's cursor.
+    #     Inverse: s = x / best_total_dist; dist_in_lap = s × this lap's total; then interp→time.
+    # 'distance' and 'delta' are the SAME shared-distance mode (delta is kept as a readable alias
+    # for the signal the delta-plot cursor emits). All clamp to the lap window so a drag can't
+    # escape the current lap.
 
     def media_time_at_plot_x(self, lap_id: int, x: float, mode: str,
                              best_distance: float | None = None) -> float | None:
         """Absolute media-clock time (s) for a plot x-value within `lap_id`.
 
-        `mode` is one of 'time' (speed plot, time-into-lap x), 'distance' (speed plot,
-        distance-into-lap x), or 'delta' (delta plot, x = s × best_distance metres). For
-        'delta' pass the best lap's total distance as `best_distance`. The result is CLAMPED
-        to `lap_id`'s [start, end] media window so a drag can't leave the current lap. Returns
-        None if the lap is degenerate (so the caller can no-op)."""
+        `mode` is 'time' (time-into-lap x, seconds) or 'distance'/'delta' (the SHARED distance
+        axis, x = s × best_distance metres — both plots use it, so the cursors coincide). For
+        the distance/delta modes pass the best lap's total distance as `best_distance`. The
+        result is CLAMPED to `lap_id`'s [start, end] media window so a drag can't leave the
+        current lap. Returns None if the lap is degenerate (so the caller can no-op)."""
         td = self._lap_time_dist(lap_id)
         if td is None:
             return None
@@ -698,14 +705,11 @@ class Session:
         t0, t1 = float(times[0]), float(times[-1])
         if mode == "time":
             t = t0 + float(x)
-        else:
-            if mode == "delta":
-                if not best_distance:
-                    return None
-                s = float(x) / float(best_distance)            # normalized fraction [0,1]
-                d = s * float(dists[-1])                        # → this lap's odometer (m)
-            else:  # 'distance'
-                d = float(x)
+        else:  # 'distance' / 'delta' — the shared normalized-distance × best_distance axis
+            if not best_distance:
+                return None
+            s = float(x) / float(best_distance)            # normalized fraction [0,1]
+            d = s * float(dists[-1])                        # → this lap's odometer (m)
             # Invert distance→time within the lap on the monotonic odometer.
             t = float(np.interp(d, dists, times))
         return min(max(t, t0), t1)
@@ -713,37 +717,21 @@ class Session:
     def plot_x_at_media_time(self, lap_id: int, t: float, mode: str,
                              best_distance: float | None = None) -> float | None:
         """Inverse of `media_time_at_plot_x`: the plot x-value for media-clock time `t` within
-        `lap_id`, in the given `mode`. Used to re-place a cursor from the shared media time.
-        Returns None if the lap is degenerate (or 'delta' with no best distance)."""
+        `lap_id`, in the given `mode` ('time', or the shared-distance 'distance'/'delta'). Used
+        to re-place a cursor from the shared media time. Returns None if the lap is degenerate
+        (or distance/delta with no best distance)."""
         td = self._lap_time_dist(lap_id)
         if td is None:
             return None
         times, dists = td
         if mode == "time":
             return float(t) - float(times[0])
+        # 'distance' / 'delta' — the shared normalized-distance × best_distance axis.
+        if not best_distance:
+            return None
         d = float(np.interp(t, times, dists))  # distance-into-lap at t
-        if mode == "delta":
-            if not best_distance:
-                return None
-            s = d / float(dists[-1])            # normalized fraction [0,1]
-            return s * float(best_distance)
-        return d  # 'distance'
-
-    def lap_speed_vs_time(self, lap_id: int):
-        """(elapsed_s, speed_kmh) numpy arrays for a lap: time-into-lap on x, speed on y.
-
-        For the speed plot's TIME x-mode (distance mode uses `delta`/`_lap_arrays`). elapsed is
-        seconds from the lap's first point; full_speed is m/s (→ km/h). Aligned to the shorter
-        of points/itself so a one-off length disagreement can't index out of range."""
-        lap = self._get_lap(lap_id)
-        pts = lap.points
-        m = len(pts)
-        if m < 2:
-            return np.empty(0), np.empty(0)
-        t0 = pts[0].time
-        elapsed = np.array([pts[i].time - t0 for i in range(m)])
-        speed_kmh = np.array([pts[i].point.full_speed * 3.6 for i in range(m)])
-        return elapsed, speed_kmh
+        s = d / float(dists[-1])               # normalized fraction [0,1]
+        return s * float(best_distance)
 
     # -------------------------------------------------------- plot series glue
     def _lap_arrays(self, lap_id):
@@ -765,8 +753,9 @@ class Session:
 
     _DELTA_GRID_N = 400  # samples on the normalized-distance grid (smooth + cheap to render)
 
-    def delta(self, lap_ids):
-        """Returns (best_lap_id, speed_series, delta_series).
+    def delta(self, lap_ids, x_mode: str = "distance"):
+        """Returns (best_lap_id, speed_series, delta_series) for the speed + delta plots, which
+        SHARE one x-axis (the dist/time toggle drives both, and they're x-linked).
 
         Always references the GLOBAL best lap, so a single selected lap still shows a
         meaningful delta-to-best (not a trivial flat zero).
@@ -780,8 +769,17 @@ class Session:
             delta_lap(s) = elapsed_lap(s) - elapsed_best(s)
 
         and at s=1 (the finish line) this is exactly lap_total_time - best_total_time — the
-        laptime difference shown in the table. The x-axis is kept in metres by mapping the
-        grid back through the best lap's distance: x = s * best_total_distance.
+        laptime difference shown in the table.
+
+        `x_mode` selects the SHARED x-axis used by BOTH plots:
+          * 'distance' — x = s × best_total_distance (metres). Identical for every lap, so the
+            curves and the (distance-mode) scrub cursors all live on one axis → x-link aligns
+            them. This is the axis `plot_x_at_media_time(..., 'distance'/'delta')` maps to.
+          * 'time' — x = elapsed_lap(s) (seconds into the lap). Each lap gets its OWN x (its
+            own time-into-lap), but all start at 0 on the same scale; delta-vs-time is the Δ at
+            each time-into-lap. Matches `plot_x_at_media_time(..., 'time')` (x = t − lap_start).
+        The delta y-values (and the laptime-diff endpoint) are identical in both modes — only
+        the x basis changes — so the delta endpoint still equals the laptime difference.
         """
         ids = [i for i in lap_ids if 0 <= i < self.laps.laps_count()]
         best = self.best_lap_id()
@@ -800,16 +798,21 @@ class Session:
         # track position on every lap, so the last point (s=1) is the finish line for all.
         s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
         best_dist, _, best_elapsed = arrays[best]
-        # Keep the x-axis in metres: map the fraction through the best lap's distance.
-        x = s_grid * float(best_dist[-1])
+        # Distance mode keeps the x-axis in metres via the best lap's distance (one shared x).
+        x_dist = s_grid * float(best_dist[-1])
         best_elapsed_on_grid = np.interp(s_grid, best_dist / best_dist[-1], best_elapsed)
 
         speed, delta = {}, {}
         for lid, (dist, speed_kmh, elapsed) in arrays.items():
             s_lap = dist / dist[-1]  # this lap's own distance fraction, spans [0,1]
-            speed[lid] = (x, np.interp(s_grid, s_lap, speed_kmh))
+            spd_on_grid = np.interp(s_grid, s_lap, speed_kmh)
+            elapsed_on_grid = np.interp(s_grid, s_lap, elapsed)
+            # Time mode: each lap's own elapsed time at each s (time-into-lap, starts at 0).
+            # Distance mode: the shared s × best_distance metres.
+            x = elapsed_on_grid if x_mode == "time" else x_dist
+            speed[lid] = (x, spd_on_grid)
             # delta at s=1 == this lap's elapsed(1) - best elapsed(1) == laptime difference.
-            delta[lid] = (x, np.interp(s_grid, s_lap, elapsed) - best_elapsed_on_grid)
+            delta[lid] = (x, elapsed_on_grid - best_elapsed_on_grid)
         return best, speed, delta
 
     # ------------------------------------------------------------ video sync
@@ -835,6 +838,41 @@ class Session:
         if i is None:
             return None
         return float(self.tv[i])
+
+    def delta_at_time(self, t: float) -> float | None:
+        """Δ-to-best (seconds) at media-clock time `t`: how far ahead (−) / behind (+) the lap
+        being driven at `t` is versus the GLOBAL best lap, AT THE SAME TRACK POSITION. None if
+        `t` isn't inside a valid lap (lead-in / between laps) or there's no best lap.
+
+        Consistent with the delta plot's curve (same normalized-distance alignment): find the
+        lap containing `t`, take its distance fraction s = dist_in_lap(t)/lap_total, then
+        Δ = elapsed_lap(s) − elapsed_best(s). At the lap finish (s=1) this equals the laptime
+        difference. Drives the always-on readout box, which reflects the current playback/scrub
+        moment — so the cursor on the delta curve and the boxed number always agree."""
+        lap_id = self.lap_at_time(t)
+        if lap_id is None:
+            return None
+        best = self.best_lap_id()
+        if best is None:
+            return None
+        td = self._lap_time_dist(lap_id)
+        best_td = self._lap_time_dist(best)
+        if td is None or best_td is None:
+            return None
+        times, dists = td
+        if float(dists[-1]) <= 0:
+            return None
+        s = float(np.interp(t, times, dists)) / float(dists[-1])  # normalized fraction [0,1]
+        elapsed_lap = float(np.interp(t, times, times - times[0]))  # = t − lap_start, clamped
+        best_times, best_dists = best_td
+        best_total = float(best_dists[-1])
+        if best_total <= 0:
+            return None
+        # Best lap's elapsed time at the SAME track fraction s (invert s→best distance→time).
+        best_elapsed_at_s = float(
+            np.interp(s * best_total, best_dists, best_times - best_times[0])
+        )
+        return elapsed_lap - best_elapsed_at_s
 
     def nearest_index(self, x: float, y: float) -> int | None:
         if len(self.tx) == 0:
