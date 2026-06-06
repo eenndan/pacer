@@ -19,7 +19,7 @@ import numpy as np
 
 import pacer
 
-from . import gapfill, tracks
+from . import chapters, gapfill, tracks
 
 DEFAULT_SAMPLE = "3rdparty/gpmf-parser/samples/hero6.mp4"  # a clip with real motion
 
@@ -119,12 +119,24 @@ def fmt_time(seconds: float) -> str:
 
 
 def _read_gpmf(paths):
-    """Iterate one or more GoPro files, returning (samples, spans, naive_times)."""
+    """Iterate one or more GoPro files, returning (samples, spans, naive_times, durations).
+
+    For multiple chapters the per-file GPMF sources are folded into a left-leaning chain of
+    `SequentialGPSSource`, whose `current_time_span()` already returns GLOBAL (cumulative)
+    times — chapter k+1's spans are shifted by the sum of the earlier chapters' durations
+    (see pacer/gps-source SequentialGPSSource). So the samples come out on ONE continuous,
+    monotonic global clock with no per-chapter reset, and lap segmentation / distances / delta
+    all span chapter boundaries automatically.
+
+    `durations` is each chapter's own 0-based media duration (from the GPMF/media), in the same
+    order as `paths` — the offset table the video layer uses for global<->chapter mapping."""
     owners = [pacer.GPMFSource(paths[0])]
+    durations = [owners[0].get_total_duration()]
     head = owners[0]
     for p in paths[1:]:
         nxt = pacer.GPMFSource(p)
         owners.append(nxt)
+        durations.append(nxt.get_total_duration())
         head = pacer.SequentialGPSSource(head, nxt)
         owners.append(head)  # keep the chain alive while we iterate
 
@@ -139,7 +151,7 @@ def _read_gpmf(paths):
             spans.append((a, b))
             naive.append(a + (b - a) * (i / n if n else 0.0))
         head.next()
-    return samples, spans, naive
+    return samples, spans, naive, durations
 
 
 def _sustained_moving(samples, lo, hi, run=5):
@@ -310,10 +322,16 @@ def _smooth_track(samples, times, w: int = SMOOTH_WINDOW):
 
 
 class Session:
-    def __init__(self, laps: pacer.Laps, cs, video_path: str | None):
+    def __init__(self, laps: pacer.Laps, cs, video_path: str | None,
+                 chapter_map: chapters.ChapterMap | None = None):
         self.laps = laps
         self.cs = cs
         self.video_path = video_path
+        # The ordered chapter list + cumulative offsets (global<->chapter time mapping). Always
+        # present for a real load (single chapter => a one-entry map). `None` only for an empty
+        # session. The telemetry trace already lives on the map's continuous global clock; this
+        # is what the VIDEO layer uses to switch sources / span the slider across chapters.
+        self.chapters = chapter_map
         self._lap_cache: dict[int, object] = {}
         # Per-lap (times, dists) arrays for distance_in_lap_at_time — rebuilding these from the
         # bound lap object every ~30 Hz cursor tick is wasteful; cache and clear on re-segment.
@@ -355,11 +373,13 @@ class Session:
         if not paths:
             return cls(laps, empty, None)
 
-        samples, spans, naive = _read_gpmf(paths)
+        samples, spans, naive, durations = _read_gpmf(paths)
+        # The offset table for the video layer: each chapter's media duration on one global axis.
+        chapter_map = chapters.ChapterMap(list(paths), durations)
         samples, spans, naive = _gate_quality(samples, spans, naive)
         samples, spans, naive = _clean(samples, spans, naive)
         if not samples:
-            return cls(laps, empty, video_path)
+            return cls(laps, empty, video_path, chapter_map)
 
         times = list(naive)
         if interpolate and len(samples) >= 8:
@@ -391,7 +411,7 @@ class Session:
                 start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]
             )
             laps.update()
-        return cls(laps, cs, video_path)
+        return cls(laps, cs, video_path, chapter_map)
 
     @staticmethod
     def _interpolated_or_naive(samples, spans, naive) -> list[float]:
