@@ -42,7 +42,8 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 │  VideoView   │   MapView (track + lines) │   video ⇄ telemetry sync:
 ├──────────────┼───────────────────────────┤   • video plays → red map marker sweeps
 │  LapTable    │   PlotsView (speed/delta) │   • drag the marker → video seeks
-└──────────────┴───────────────────────────┘   • drag start/sector lines → re-segment laps
+└──────────────┴───────────────────────────┘   • drag a plot cursor → scrub within the lap
+                                                • drag start/sector lines → re-segment laps
 ```
 
 ## Modules (one responsibility each)
@@ -51,11 +52,11 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 |------|------|
 | [session.py](session.py) | Loads GPMF → `pacer.Laps`; exposes trace/lap/delta arrays + timing-line write-back. Owns the load/segmentation pipeline (primary `pacer` user). |
 | [tracks.py](tracks.py) | Registry of known tracks (Daytona MK); detects the track by centroid and gives its fixed start/finish line. The only other module that names `pacer` (geometry only). |
-| [video_view.py](video_view.py) | `QMediaPlayer` + `QVideoWidget`; emits `positionChanged(s)`, exposes `seek(s)`. |
+| [video_view.py](video_view.py) | `QMediaPlayer` + `QVideoWidget`; emits `positionChanged(s)`, exposes `seek(s)` + `is_playing()`/`pause()`/`play()`. |
 | [map_view.py](map_view.py) | Best lap (faint) + current/playing lap (highlighted) + **freely-draggable** start/sector timing lines + video marker. Each lap is drawn as measured (solid) + reconstructed gap-fill (dashed/dimmed) segments. The full all-laps trace is intentionally not drawn (perf + clarity). |
 | [gapfill.py](gapfill.py) | **GPS-gap reconstruction (map only)** — pure numpy. Detects interior dropouts and fills them with cross-lap borrow (primary) / reference centerline (fallback) / spline, tagged measured-vs-inferred. No `pacer`. |
 | [reference.py](reference.py) + [mk_centerline.json](mk_centerline.json) | Georeferenced Daytona MK centerline (traced from `gmaps_pict.png`, similarity-ICP aligned to the GPS aggregate) — the gap-fill fallback for sections no lap covers. Rebuild via [build_reference.py](build_reference.py). |
-| [plots_view.py](plots_view.py) | Speed-vs-distance (x-axis toggle to time-into-lap) + lap-vs-best delta (aligned by **normalized distance** → endpoint = laptime diff). Downsampled/clipped curves + a synced cursor. |
+| [plots_view.py](plots_view.py) | Speed-vs-distance (x-axis toggle to time-into-lap) + lap-vs-best delta (aligned by **normalized distance** → endpoint = laptime diff). Downsampled/clipped curves + a synced cursor that is also a **draggable scrubber** — pacer-free, it only emits `scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded` (mode = `time`\|`distance`\|`delta`); app converts + seeks. |
 | [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best. |
 | [app.py](app.py) | Assembles panels in splitters and wires the cross-panel signals. |
 
@@ -106,6 +107,25 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
   (proven same JSON MD5 vs the base branch). Inspect via `denoise_check --gaps`.
 - **Timing lines are placed freely** (no snap-to-trace); dragging redraws live and re-segments the
   laps once on release.
+- **Draggable plot-cursor scrubber** (a fine, lap-scoped scrub; the full-video slider stays as-is):
+  the speed + delta cursors are `movable` `InfiniteLine`s. Dragging either seeks the video **within
+  the lap the playhead is currently in**, clamped to that lap's start/end. `plots_view` stays
+  pacer-free — it emits only the raw plot-x + which axis (`scrubMoved(x, mode)`); `app.py` (which
+  owns session + video) converts to a media time, seeks, and re-syncs both cursors + the slider +
+  the map marker. The x↔media-time mapping lives in `session` (pure numpy on cached per-lap
+  `(times, dists)`): `media_time_at_plot_x` / `plot_x_at_media_time`, with `mode`:
+  - **speed/time:**  `t = lap_start + x`
+  - **speed/distance:**  invert distance→time via `np.interp(x, lap_dists, lap_times)`
+  - **delta:**  `s = x / best_distance` → `dist_in_lap = s·lap_total` → `np.interp` → time
+  Source of truth is the media time; each plot renders its own cursor x for that time ("two lines,
+  one truth"), so the delta cursor uses normalized-distance×best so it sits **on** the lap's curve.
+  **Throttle + pause/resume:** seeks are coalesced to **≤1 per 30 Hz tick** (store latest target,
+  one seek/tick) so 4K HEVC stays responsive; on grab we pause if playing (remembering it), on
+  release we resume iff it was playing. **No feedback loop:** while dragging, the playback tick's
+  position-driven re-placement is ignored (`_user_dragging`) and the tick skips its normal apply
+  (only the coalesced seek runs); programmatic `setValue` is `_suppress`-guarded so it can never
+  masquerade as a user drag. Measured ~0.12 ms/move and ~0.12 ms/tick (vs the 33 ms frame budget),
+  so live seeking is kept (no fall-back to seek-on-release needed). See `tests/test_scrub_conversion.py`.
 - **Performance:** UI sync runs on a ~30 Hz `QTimer` off the video present path; plot curves are
   downsampled+clipped with antialias off and autorange frozen; the map draws ≤2 laps. 4K HEVC
   decodes ~61 fps via VideoToolbox hardware decode — playback stays smooth, incl. with a lap selected.

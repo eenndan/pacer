@@ -19,7 +19,9 @@ Panels (module map in README):
   delta. Delta is aligned by normalized distance so its endpoint equals the laptime difference.
 - **Lap table** — time / dist / entry speed, plus per-sector split columns S1…Sn once sectors are
   added. `▶` marks the playing lap; blue row = your selection; best lap shown in green.
-- **Video** — GoPro `.mp4` with play/pause + scrub; readout shows `t / speed / lap #`; synced both ways.
+- **Video** — GoPro `.mp4` with play/pause + a full-video scrub slider; readout shows
+  `t / speed / lap #`; synced both ways. The speed + delta **plot cursors are also draggable** — a
+  fine, lap-scoped scrubber that seeks the video within the current lap (complements the slider).
 
 How it works (key decisions, all done & verified):
 - **Load/clean** (`session._clean`): trims the stationary GPS-spike lead-in/cool-down and
@@ -52,6 +54,18 @@ How it works (key decisions, all done & verified):
   on fragile geometric crossing; no blanks/oversized values).
 - **Timing-line edit** — handles are placed **freely** (no snap); dragging redraws live and
   re-segments the laps **once on release**.
+- **Draggable plot-cursor scrub** (`plots_view` cursors → `session` conversion → `app` seek): both
+  plot cursors are `movable` `InfiniteLine`s; dragging either seeks the video **within the lap the
+  playhead is in**, clamped to that lap. `plots_view` stays pacer-free — it emits the raw plot-x +
+  axis (`scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded`, `mode` ∈ `time|distance|delta`); `app`
+  converts via `session.media_time_at_plot_x` / `plot_x_at_media_time` (pure numpy on cached per-lap
+  `(times, dists)`: time `t=lap_start+x`; distance `interp(x; dists,times)`; delta
+  `s=x/best_dist → dist_in_lap=s·lap_total → interp`). Source of truth is the media time; both
+  cursors + slider + map marker are placed from it ("two lines, one truth"). Seeks **coalesced to
+  ≤1/30 Hz tick** (latest target wins), **pause on grab / resume iff was playing**; the feedback
+  loop is gated (drag ignores the playback tick; `setValue` `_suppress`-guarded). Measured
+  ~0.12 ms/move + ~0.12 ms/tick → live seeking kept (no fall-back). Round-trip/clamp tests in
+  `tests/test_scrub_conversion.py`; analysis numbers proven byte-identical (UI-only).
 - **Performance** — 4K HEVC decodes ~61 fps (VideoToolbox HW). UI sync runs on a ~30 Hz `QTimer`
   off the video present path; plot curves are downsampled + clipped, antialias off, autorange
   frozen after refresh; the map draws ≤2 laps. Smooth incl. with a lap selected (cursor 56.5→1.1 ms).
@@ -96,19 +110,24 @@ How it works (key decisions, all done & verified):
 - **Perf invariants — do not regress:** the 30 Hz tick decouple (`app._on_position` only stores the
   time; `app._tick` applies); plot curves downsampled+clipped + antialias off + autorange frozen
   after `refresh`; map draws only best+current lap; clear per-lap caches in `set_timing_lines`.
+  **Plot-cursor scrub seeks are coalesced to ≤1 per tick** (latest target wins) — never seek
+  per-mouse-move; the drag↔`positionChanged` feedback loop is gated (`_user_dragging`/`_suppress`).
 - Module map: `session.py` (data/analysis — only pacer user) · `tracks.py` (track registry) ·
   `gapfill.py` (GPS-gap reconstruction, pure numpy) · `reference.py` + `mk_centerline.json` /
   `build_reference.py` (georeferenced fallback centerline) · `map_view.py` · `plots_view.py` ·
   `lap_table.py` · `video_view.py` · `app.py` (wiring) · `diagnose.py` / `denoise_check.py`
   (`--gaps` renders the filled map + prints gap metrics) / `_smoke.py` (tools). Tests:
-  `tests/test_gapfill.py` (pure-Python, fast). `_probe.py` / `_bench_cursor.py` are untracked scratch.
+  `tests/test_gapfill.py` + `tests/test_scrub_conversion.py` (both pure-Python, fast — the latter
+  round-trips the cursor x↔media-time conversions for every mode + clamping). `_probe.py` /
+  `_bench_cursor.py` are untracked scratch.
 
 ## Next steps / backlog (prioritized for a fresh agent)
 1. **More tracks** — `tracks.py` has only Daytona MK; add entries and/or real auto-detection
    (the user flagged other-track support as the planned next expansion).
 2. **Persist sector/start-line config per file** — a sidecar JSON so edits survive reloads.
-3. **Tests** — `tests/test_gapfill.py` exists (gap detection / borrow / spline / continuity). Still
-   TODO: pure-Python tests for `session.py` itself (`_clean`, `valid_lap_ids`, delta
+3. **Tests** — `tests/test_gapfill.py` (gap detection / borrow / spline / continuity) and
+   `tests/test_scrub_conversion.py` (cursor x↔media-time round-trip + clamp, every mode) exist.
+   Still TODO: pure-Python tests for the rest of `session.py` (`_clean`, `valid_lap_ids`, delta
    endpoint==laptime-diff, `lap_sector_splits` sum==lap-time). Fast, no GUI; a real regression guard.
 4. **Multi-file chaptered sessions** — verify `SequentialGPSSource` chaining + the combined time
    axis on a real chaptered GoPro recording.
