@@ -295,19 +295,37 @@ class Session:
         self._lap_cache.clear()
         self._dist_cache.clear()
 
-    def suggest_sector(self) -> Seg:
-        """A line perpendicular to the trace at ~1/4 of the way round. ±15 m (not ±5) so it
-        reliably registers a crossing every lap — a too-short line gets stepped over, which
-        fuses sub-sectors and makes the split times exceed the lap time. Draggable to adjust."""
-        n = len(self.tx)
-        if n < 4:
-            return Seg(0, 0, 0, 0)
-        i = n // 4
+    def suggest_sector(self, existing: int = 0) -> Seg:
+        """A line perpendicular to the track at a DISTINCT fraction of the way round, so each
+        added sector lands on a different track position. With `existing` sector lines already
+        placed, the new one is the (existing+1)-th of (existing+2) sub-sectors, so put it at
+        fraction (existing+1)/(existing+2) — 1/2, then 2/3, 3/4, … — evenly subdividing the
+        lap and never colliding with an earlier suggestion (which would collapse a split to 0).
+
+        The fraction is taken along a single representative lap's trace (the best lap), not the
+        full multi-lap trace: a fraction of the full trace lands on an arbitrary lap, so two
+        suggestions could still map to the same per-lap distance. ±15 m (not ±5) so the line
+        reliably registers a crossing every lap — a too-short line gets stepped over, fusing
+        sub-sectors and making split times exceed the lap time. Draggable to adjust."""
+        frac = (existing + 1) / (existing + 2)
+        best = self.best_lap_id()
+        xy = None
+        if best is not None:
+            xs, ys = self.lap_trace_xy(best)
+            if len(xs) >= 4:
+                xy = (np.asarray(xs), np.asarray(ys))
+        if xy is None:  # no valid lap yet — fall back to the full trace
+            if len(self.tx) < 4:
+                return Seg(0, 0, 0, 0)
+            xy = (self.tx, self.ty)
+        xs, ys = xy
+        n = len(xs)
+        i = min(int(n * frac), n - 2)
         j = min(i + 5, n - 1)
-        dx, dy = self.tx[j] - self.tx[i], self.ty[j] - self.ty[i]
+        dx, dy = xs[j] - xs[i], ys[j] - ys[i]
         length = math.hypot(dx, dy) or 1.0
         nx, ny = -dy / length, dx / length
-        cx, cy = self.tx[i], self.ty[i]
+        cx, cy = xs[i], ys[i]
         return Seg(cx - nx * 15, cy - ny * 15, cx + nx * 15, cy + ny * 15)
 
     # ------------------------------------------------------------- lap access
@@ -366,12 +384,44 @@ class Session:
 
     def lap_sector_splits(self, lap_id: int) -> list[float]:
         """Per-sub-sector split times (seconds) for a lap, in order. With N sector lines a
-        lap has N+1 sub-sectors and these sum to the lap time. Mapped by TIMESTAMP, not the
-        C++ flat sector index — the partial out-lap makes that index off-by-one."""
-        t0 = self.laps.start_timestamp(lap_id)
-        t1 = t0 + self.laps.lap_time(lap_id)
-        return [self.laps.sector_time(x) for x in range(self.laps.recorded_sectors())
-                if t0 - 1e-6 <= self.laps.sector_start_timestamp(x) < t1 - 1e-6]
+        lap has N+1 sub-sectors and these sum to the lap time.
+
+        Mapped by DISTANCE PROJECTION, not pacer's geometric crossing list: the short sector
+        lines miss a pass on many laps (the GPS step over the line lands just past an endpoint),
+        leaving blank columns and fusing sub-sectors into splits that exceed the lap time. So
+        instead project each sector line's MIDPOINT onto this lap's trace — the cum_distance of
+        the nearest trace point is that boundary's lap distance d_k — then read elapsed time at
+        each boundary by interpolating on (cum_distance, elapsed). With the lap start (d=0) and
+        finish (d=total) the N boundaries give N+1 splits that are all positive and SUM to the
+        lap time for every lap (no blanks, none exceeding the lap time)."""
+        lines = self.laps.sectors.sector_lines
+        n_splits = len(lines) + 1
+        lap = self._get_lap(lap_id)
+        pts = lap.points
+        cds = lap.cum_distances
+        m = min(len(pts), len(cds))
+        if m < 2:
+            return []
+        locs = [self.cs.local(pts[i].point) for i in range(m)]
+        xy = np.array([(v[0], v[1]) for v in locs])
+        cum_distance = np.asarray(cds[:m], dtype=float)
+        t0 = pts[0].time
+        elapsed = np.array([pts[i].time - t0 for i in range(m)])
+
+        # Each sector line's lap distance = cum_distance of the lap point nearest its midpoint.
+        bounds = []
+        for seg in lines:
+            mx = (seg.first.x + seg.second.x) / 2.0
+            my = (seg.first.y + seg.second.y) / 2.0
+            j = int(np.argmin((xy[:, 0] - mx) ** 2 + (xy[:, 1] - my) ** 2))
+            bounds.append(float(cum_distance[j]))
+
+        total = float(cum_distance[-1])
+        # Boundaries plus lap start/finish, sorted: N+1 sub-sectors. interp elapsed at each.
+        edges = [0.0] + sorted(bounds) + [total]
+        t_at = np.interp(edges, cum_distance, elapsed)
+        splits = [float(t_at[k + 1] - t_at[k]) for k in range(n_splits)]
+        return splits
 
     def distance_in_lap_at_time(self, lap_id: int, t: float) -> float | None:
         td = self._dist_cache.get(lap_id)
