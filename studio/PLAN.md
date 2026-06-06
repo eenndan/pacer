@@ -39,11 +39,12 @@ a separate indoor/junior serpentine loop (far left) should be ignored.
 - Keep the line draggable to fine-tune; drop the blanket 3× `_widen` (or keep a modest
   track-spanning width derived from local track width).
 
-**Pinning MK's start/finish lat/lon** (none hard-coded survive in git — checked C++ history):
-overlay the `GX010060.MP4` trace on the aerial/sat image and read off the two endpoints of the
-start/finish straight, or take the densest main-straight crossing; store the two lat/lon points in
-`tracks.py`. (`session.Session.load`, new `studio/tracks.py`, retire `_widen`/`pick_random_start`
-for known tracks.)
+**MK start/finish line — CONFIRMED (user, 2026-06-06; do not re-derive):**
+A = (lat 52.04031, lon −0.78487), B = (lat 52.04020, lon −0.78460). Store in `studio/tracks.py`
+as the Daytona MK entry; detect MK by trace centroid within ~1.5 km of (52.0403, −0.7847); convert
+both points via `cs.local` and set `sectors.start_line`; keep it draggable. Widen modestly only if
+some laps miss it. (`session.Session.load`, new `studio/tracks.py`; retire `_widen`/
+`pick_random_start` for known tracks.) Auto-detecting *other* tracks is a later expansion.
 
 ### B2 — speed/delta show only ~5% for non-best laps
 `pacer.Lap.resample` aborts at the first reference timing line the candidate lap misses (its inner
