@@ -127,6 +127,7 @@ class MapView(QWidget):
         super().__init__()
         self.session = session
         self._suppress_marker = False
+        self._current_lap: int | None = None  # F3: scope the marker drag to this lap
 
         self.widget = pg.PlotWidget()
         self.plot = self.widget.getPlotItem()
@@ -212,12 +213,22 @@ class MapView(QWidget):
 
     # --------------------------------------------------------------- video sync
     def _marker_dragged(self, *_):
+        # F3: constrain the drag to the CURRENT lap's trace so the marker can't snap to another
+        # lap where laps overlap spatially. The seek (and thus the marker's re-placement via
+        # set_marker_time) is clamped to that lap's time window, so the drag scrubs smoothly
+        # within the one lap and never jumps. Outside any valid lap (lead-in) there's no current
+        # lap — fall back to the whole-trace nearest so the marker is still draggable there.
         if self._suppress_marker:
             return
         p = self.marker.pos()
-        i = self.session.nearest_index(p.x(), p.y())
-        if i is not None:
-            self.seek_requested.emit(float(self.session.tt[i]))
+        t = None
+        if self._current_lap is not None:
+            t = self.session.nearest_time_in_lap(self._current_lap, p.x(), p.y())
+        if t is None:
+            i = self.session.nearest_index(p.x(), p.y())
+            t = float(self.session.tt[i]) if i is not None else None
+        if t is not None:
+            self.seek_requested.emit(t)
 
     def set_marker_time(self, t: float):
         i = self.session.index_at_time(t)
@@ -245,6 +256,7 @@ class MapView(QWidget):
         reference remains."""
         # The best lap can change when timing lines move; keep its reference line current.
         self._refresh_best()
+        self._current_lap = lap_id  # F3: the lap the marker drag is constrained to
         self._current_overlay.set_lap(self.session, lap_id)
 
     def refresh_overlays(self):

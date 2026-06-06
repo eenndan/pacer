@@ -878,3 +878,39 @@ class Session:
         if len(self.tx) == 0:
             return None
         return int(np.argmin((self.tx - x) ** 2 + (self.ty - y) ** 2))
+
+    # ----------------------------------------------- map marker: lap-scoped nearest (F3)
+    # The red map marker is draggable; dragging seeks the video. Searching the WHOLE trace for
+    # the nearest point makes the marker JUMP to another lap wherever the laps overlap
+    # spatially. So constrain the search to the CURRENT lap's own trace — the same lap-scoped
+    # behaviour as the scrub cursor. Pure numpy on the lap's cached local-metre points; no pacer.
+    def _lap_xy_t(self, lap_id: int):
+        """Cached (xs, ys, times) for one lap in local metres + media-clock seconds. Reuses the
+        per-lap cache so the marker drag is a cheap O(n_lap) nearest-point lookup, not a rebuild."""
+        td = self._lap_time_dist(lap_id)  # ensures the lap is segmented/usable
+        if td is None:
+            return None
+        xs, ys, ts = self._lap_trace_xyt(lap_id)
+        if len(xs) < 1:
+            return None
+        return xs, ys, ts
+
+    def nearest_index_in_lap(self, lap_id: int, x: float, y: float) -> int | None:
+        """Index (into `lap_id`'s OWN point array) of the trace point nearest (x, y), searching
+        ONLY within that lap. Returns None if the lap is degenerate. Pure numpy — used to keep
+        the dragged map marker on the current lap instead of snapping across spatial overlaps."""
+        got = self._lap_xy_t(lap_id)
+        if got is None:
+            return None
+        xs, ys, _ = got
+        return int(np.argmin((xs - x) ** 2 + (ys - y) ** 2))
+
+    def nearest_time_in_lap(self, lap_id: int, x: float, y: float) -> float | None:
+        """Media-clock time (s) of the point within `lap_id` nearest (x, y), CLAMPED to the lap's
+        [start, end] window. The map marker uses this so a drag scrubs smoothly inside the one
+        lap and never jumps to another lap. None if the lap is degenerate."""
+        i = self.nearest_index_in_lap(lap_id, x, y)
+        if i is None:
+            return None
+        _, _, ts = self._lap_xy_t(lap_id)
+        return float(min(max(ts[i], ts[0]), ts[-1]))
