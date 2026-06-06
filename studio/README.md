@@ -44,6 +44,9 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 │  LapTable    │   PlotsView (speed/delta) │   • drag the marker → video seeks
 └──────────────┴───────────────────────────┘   • drag a plot cursor → scrub within the lap
                                                 • drag start/sector lines → re-segment laps
+                                                  (sector lines also drawn on the charts)
+                                                • click a lap-table header → sort numerically
+                                                • 🔇/🔊 → mute/unmute the clip audio
 ```
 
 ## Modules (one responsibility each)
@@ -52,12 +55,12 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 |------|------|
 | [session.py](session.py) | Loads GPMF → `pacer.Laps`; exposes trace/lap/delta arrays + timing-line write-back. Owns the load/segmentation pipeline (primary `pacer` user). |
 | [tracks.py](tracks.py) | Registry of known tracks (Daytona MK); detects the track by centroid and gives its fixed start/finish line. The only other module that names `pacer` (geometry only). |
-| [video_view.py](video_view.py) | `QMediaPlayer` + `QVideoWidget`; emits `positionChanged(s)`, exposes `seek(s)` + `is_playing()`/`pause()`/`play()`. |
-| [map_view.py](map_view.py) | Best lap (faint) + current/playing lap (highlighted) + **freely-draggable** start/sector timing lines + video marker. Each lap is drawn as measured (solid) + reconstructed gap-fill (dashed/dimmed) segments. The full all-laps trace is intentionally not drawn (perf + clarity). |
+| [video_view.py](video_view.py) | `QMediaPlayer` + `QVideoWidget` + `QAudioOutput`; emits `positionChanged(s)`, exposes `seek(s)` + `is_playing()`/`pause()`/`play()` + a **mute/unmute toggle** (🔇/🔊, default muted). |
+| [map_view.py](map_view.py) | Best lap (faint) + current/playing lap (highlighted) + **freely-draggable** start/sector timing lines + video marker (drag **constrained to the current lap** so it never jumps laps). Each lap is drawn as measured (solid) + reconstructed gap-fill (dashed/dimmed) segments. The full all-laps trace is intentionally not drawn (perf + clarity). |
 | [gapfill.py](gapfill.py) | **GPS-gap reconstruction (map only)** — pure numpy. Detects interior dropouts and fills them with cross-lap borrow (primary) / reference centerline (fallback) / spline, tagged measured-vs-inferred. No `pacer`. |
 | [reference.py](reference.py) + [mk_centerline.json](mk_centerline.json) | Georeferenced Daytona MK centerline (traced from `gmaps_pict.png`, similarity-ICP aligned to the GPS aggregate) — the gap-fill fallback for sections no lap covers. Rebuild via [build_reference.py](build_reference.py). |
-| [plots_view.py](plots_view.py) | Speed (top) + lap-vs-best delta (bottom) on **one shared, x-linked x-axis** (dist/time toggle drives both; delta aligned by **normalized distance** → endpoint = laptime diff), so the two cursors always align. Downsampled/clipped curves + a synced cursor that is also a **draggable scrubber** + a **hover dot** on the delta curve — pacer-free, it only emits `scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded` (mode = `time`\|`distance`); app converts + seeks and owns the live Δ/speed readout box. |
-| [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best. |
+| [plots_view.py](plots_view.py) | Speed (top) + lap-vs-best delta (bottom) on **one shared, x-linked x-axis** (dist/time toggle drives both; delta aligned by **normalized distance** → endpoint = laptime diff), so the two cursors always align. Downsampled/clipped curves + a synced cursor that is also a **draggable scrubber** + a **hover dot** on the delta curve + subtle **sector boundary guide lines** (`set_sector_lines`, app-fed) — pacer-free, it only emits `scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded`/`modeChanged(mode)` (mode = `time`\|`distance`); app converts + seeks and owns the live Δ/speed readout box. |
+| [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best, **purple = per-sector session best**. **Every header is click-to-sort** by the underlying numeric value (asc/desc); highlights follow the laps across a sort. |
 | [app.py](app.py) | Assembles panels in splitters and wires the cross-panel signals. |
 
 ## Gotchas / notes
@@ -140,9 +143,33 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
   cursor, hidden on mouse-leave. The hover handler is a cheap nearest-index lookup on the cached
   curve arrays (no re-plot); `plots_view` stays pacer-free (the box's values come from `session`
   via `app`; the hover reads only the curve already drawn).
+- **Sortable lap table + purple session-best sectors (`lap_table.py`, UI-only):** cells carry a
+  numeric sort key in `Qt.UserRole` and a `_NumItem.__lt__` sorts on it, so `"1:08.408"` sorts as
+  68.408 s and splits by seconds (not lexically); blanks/NaN sort last; every header toggles
+  asc/desc and the chosen sort survives refreshes. The **purple** highlight is the per-column
+  MINIMUM split across valid laps (motorsport "session best sector"). All visual state (green best
+  lap, purple best-sector cells, the `▶` current-lap mark) is keyed by **lap id** and re-applied
+  after every sort, so it always follows the right lap and coexists (a purple cell inside the green
+  best-lap row still reads purple). Recomputed when sectors change.
+- **Sector boundaries on the charts (`session.sector_plot_positions`, UI-only):** the sector lines
+  (start/finish + each sector) draw as subtle dotted vertical guide lines on BOTH plots, labelled
+  `S/F`/`S1`/`S2`…; positions are computed in `session` (the same midpoint→best-lap-trace projection
+  the split times use), mapped to the shared axis (`s×best_distance` metres / time-into-lap seconds),
+  so `plots_view` stays pacer-free. They update live on sector add/move/reset and reposition on the
+  dist/time toggle (`plots_view.modeChanged` → `app._refresh_sector_lines`), drawn behind the curves
+  + cursor so they never obscure them. No sectors → no lines.
+- **Lap-scoped marker drag (`session.nearest_index_in_lap`, UI-only):** the red map marker resolves
+  to the nearest point **within the current lap** (pure numpy on the lap's cached points) and clamps
+  to that lap's time window, so dragging never snaps to another lap across a spatial overlap;
+  playback still moves the marker across laps normally. Lead-in (no current lap) falls back to the
+  whole-trace nearest.
+- **Audio mute (`video_view.py`, UI-only):** a `QAudioOutput` (volume 0.6) + a 🔇/🔊 toggle; **default
+  muted on launch** (telemetry tool), the button flips `QAudioOutput.setMuted`.
 - **Performance:** UI sync runs on a ~30 Hz `QTimer` off the video present path; plot curves are
   downsampled+clipped with antialias off and autorange frozen; the map draws ≤2 laps. 4K HEVC
   decodes ~61 fps via VideoToolbox hardware decode — playback stays smooth, incl. with a lap selected.
+  The new handlers are all cheap O(n) lookups (numeric sort, per-column min, lap-scoped nearest,
+  sector-line redraw), never per-frame work.
 - **Video sync** uses `QMediaPlayer.positionChanged`. For sub-frame precision, `QVideoSink.videoFrameChanged` / `QVideoFrame.startTime()` are available (the spike measured them frame-accurate, ~29 ms vs pacer's clock).
 - **Sources:** GPMF/GoPro `.MP4` only — the u-blox `.dat` reader isn't bound yet. pacer supplies the telemetry time axis; the app brings its own video player (pacer doesn't decode pixels).
 - `_smoke.py` is a headless self-test: `python -m studio._smoke`.
@@ -150,5 +177,6 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 ## Next ideas
 
 See [PLAN.md](PLAN.md) for the prioritized backlog. In short: more tracks in `tracks.py` (+ real
-auto-detection), persist sector/start-line config per file, pure-Python tests for `session.py`,
+auto-detection), persist sector/start-line config per file, more pure-Python tests for `session.py`
+(beyond the existing `tests/test_studio_features.py` F1/F3/F5 logic + `test_scrub_conversion.py`),
 verify multi-file chaptered sessions, and polish (keyboard shortcuts, optional snap toggle).
