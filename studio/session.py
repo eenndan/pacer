@@ -32,6 +32,62 @@ MIN_LAP_TIME = 5.0  # s — laps shorter than this are partial/phantom, not real
 MIN_LAP_SAMPLES = 20  # a real lap has at least this many GPS samples
 LAP_BAND_LO, LAP_BAND_HI = 0.5, 1.6  # "real lap" = lap_time within [lo, hi] x median lap time
 
+# --- GPS denoising (see notebooks/interpolation.ipynb + noise-investigation.ipynb) ---
+# Position smoothing window (samples). The notebook's gold-standard map smooths x/y/lat/lon
+# with a w=9 boxcar (~0.9 s @ 10 Hz) BEFORE measuring arc-length distance/delta; that cut the
+# delta jitter ~14% without erasing the real ~0.5 s lap-to-lap signal. We smooth the GPS
+# track ONCE at load (here), so every downstream quantity the C++ core derives — cum_distances,
+# lap segmentation, the delta resample, sector splits — uses the SAME smoothed coordinates.
+# w=13 (~1.3 s @ 10 Hz): tuned up from the notebook's w=9 baseline because the studio map
+# feeds the SMOOTHED track straight back into segmentation/distance, so a touch more smoothing
+# buys a much cleaner trace. Verified on the real session (studio/denoise_check.py): w=13 cuts
+# the high-frequency cross-track jitter ~39% and the point-to-point heading jitter ~91% while
+# the lap-to-lap racing-line signal is preserved and the corner APEXES are not clipped (a
+# close-up hairpin render shows w<=15 tracking the raw apex; w>=21 visibly cuts the corner).
+SMOOTH_WINDOW = 13  # boxcar width in samples; 1 disables smoothing
+# Don't smooth across large sample-time gaps (chaptered files / dropouts): a moving average
+# spanning a gap would drag points across a discontinuity. Split the trace at gaps > this.
+SMOOTH_GAP_S = 1.0  # s — a jump larger than ~10x the 10 Hz period starts a new smoothing run
+
+# --- GPS quality gating (uses the GPS9 DOP / fix fields exposed by the C++ core) ---
+# Reject obviously-bad fixes before smoothing/segmentation. Conservative defaults: drop only
+# samples that report NO 3D lock or an implausibly high dilution-of-precision. Sentinels
+# (fix<0 / non-finite dop, e.g. from the GPS5 stream which carries no DOP) mean "unknown" and
+# are KEPT — we never reject for missing quality info.
+MIN_FIX = 3  # GPS9 fix: 0=none, 2=2D, 3=3D. Require a 3D lock when the field is present.
+MAX_DOP = 10.0  # GPS9 DOP: dilution of precision; >~10 is a poor-geometry fix. Generous.
+
+
+def _smooth(a, w: int = SMOOTH_WINDOW):
+    """Edge-correct boxcar moving average — the notebook's `np.convolve(a, ones(w)/w, "same")`
+    in the interior, but normalized at the ends so the first/last w//2 points aren't dragged
+    toward zero by the convolution's implicit zero-padding (a raw `"same"` boxcar tapers the
+    edges; here those points are averaged over only the samples that actually exist).
+
+    A no-op for w<2 or arrays shorter than the window. Applied to the GPS track coordinates
+    (lat/lon/alt) once at load — never per frame.
+    """
+    a = np.asarray(a, float)
+    if w < 2 or len(a) < w:
+        return a
+    kernel = np.ones(w)
+    num = np.convolve(a, kernel, "same")          # windowed sum
+    den = np.convolve(np.ones(len(a)), kernel, "same")  # count of real samples in each window
+    return num / den
+
+
+def _smooth_segments(a, seg_bounds, w: int = SMOOTH_WINDOW):
+    """Apply `_smooth` independently within each contiguous run [lo, hi) so a boxcar never
+    averages across a time discontinuity (chaptered files / GPS dropouts)."""
+    a = np.asarray(a, float)
+    if w < 2:
+        return a
+    out = a.copy()
+    for lo, hi in seg_bounds:
+        if hi - lo >= 2:
+            out[lo:hi] = _smooth(a[lo:hi], w)
+    return out
+
 
 @dataclass
 class Seg:
@@ -147,6 +203,33 @@ def _fit_start_line(laps, base):
     return best_seg
 
 
+def _quality_ok(s) -> bool:
+    """True if a GPS sample's quality fields don't mark it as bad. Treats unknown/sentinel
+    quality (fix<0, or a non-positive/non-finite DOP — e.g. the GPS5 stream, which carries
+    neither) as "keep": we reject ONLY when the core actually reports a poor fix. `dop`/`fix`
+    come from the GPS9 stream (C++ core); sentinels are fix=-1 and dop=-1.0."""
+    fix = getattr(s, "fix", -1)
+    dop = getattr(s, "dop", -1.0)
+    if fix is not None and 0 <= fix < MIN_FIX:  # known, but no 3D lock
+        return False
+    # A known, positive, finite DOP above the threshold is poor geometry; anything else is kept.
+    if isinstance(dop, (int, float)) and math.isfinite(dop) and dop > 0 and dop > MAX_DOP:
+        return False
+    return True
+
+
+def _gate_quality(samples, spans, naive):
+    """Drop low-quality fixes (no 3D lock / high DOP) using the GPS9 quality fields. Reports
+    the count dropped. Conservative — sentinels (unknown quality) are kept."""
+    keep = [i for i, s in enumerate(samples) if _quality_ok(s)]
+    dropped = len(samples) - len(keep)
+    if dropped:
+        pct = 100.0 * dropped / max(len(samples), 1)
+        print(f"studio: quality gate dropped {dropped}/{len(samples)} fixes ({pct:.1f}%) "
+              f"(fix<{MIN_FIX} or dop>{MAX_DOP})", flush=True)
+    return [samples[i] for i in keep], [spans[i] for i in keep], [naive[i] for i in keep]
+
+
 def _clean(samples, spans, naive):
     """Trim the stationary lead-in/cool-down (where GPS spikes cluster), then drop lone
     teleport glitches (a fix far from BOTH neighbours while they stay close to each other).
@@ -189,6 +272,43 @@ def _clean(samples, spans, naive):
     return [s[i] for i in idx], [sp[i] for i in idx], [t[i] for i in idx]
 
 
+def _gap_segments(times, gap_s: float = SMOOTH_GAP_S):
+    """Contiguous runs [lo, hi) of `times` with no inter-sample gap larger than `gap_s`. Used
+    so the moving average never bridges a chapter break / GPS dropout."""
+    t = np.asarray(times, float)
+    n = len(t)
+    if n == 0:
+        return []
+    breaks = np.where(np.diff(t) > gap_s)[0] + 1
+    edges = [0, *breaks.tolist(), n]
+    return [(edges[k], edges[k + 1]) for k in range(len(edges) - 1)]
+
+
+def _smooth_track(samples, times, w: int = SMOOTH_WINDOW):
+    """Return NEW GPSSamples with lat/lon/altitude boxcar-smoothed in place, matching the
+    notebook's gold-standard map. Smoothing the SOURCE coordinates (not a render-time copy)
+    means every downstream quantity the C++ core derives — arc-length cum_distances, lap
+    segmentation, the lap-vs-best delta, sector splits — is computed from the SAME smoothed
+    track, so the trace and all metrics stay consistent. Speed fields are left untouched.
+
+    Smoothed independently within each gap-free run so the average never bridges a time
+    discontinuity. O(n) and run once at load — never per frame."""
+    if w < 2 or len(samples) < w:
+        return samples
+    segs = _gap_segments(times)
+    lat = _smooth_segments([s.lat for s in samples], segs, w)
+    lon = _smooth_segments([s.lon for s in samples], segs, w)
+    alt = _smooth_segments([s.altitude for s in samples], segs, w)
+    out = []
+    for i, s in enumerate(samples):
+        # Preserve every other field (speeds, timestamp) — only the position is smoothed.
+        out.append(pacer.GPSSample(
+            lat=float(lat[i]), lon=float(lon[i]), altitude=float(alt[i]),
+            full_speed=s.full_speed, ground_speed=s.ground_speed, timestamp_ms=s.timestamp_ms,
+        ))
+    return out
+
+
 class Session:
     def __init__(self, laps: pacer.Laps, cs, video_path: str | None):
         self.laps = laps
@@ -214,10 +334,16 @@ class Session:
 
     # ---------------------------------------------------------------- loading
     @classmethod
-    def load(cls, paths: list[str], interpolate: bool = False) -> "Session":
+    def load(cls, paths: list[str], interpolate: bool = False,
+             smooth_window: int = SMOOTH_WINDOW) -> "Session":
         """Naive timing by default — the C++ interpolation diverges on long/noisy sessions
         (see studio/diagnose.py); `interpolate=True` enables it but the result is validated
-        and falls back to naive if it's non-monotonic or runs past the video duration."""
+        and falls back to naive if it's non-monotonic or runs past the video duration.
+
+        The GPS track is quality-gated (drop no-3D-lock / high-DOP fixes) and boxcar-smoothed
+        (window `smooth_window`, default SMOOTH_WINDOW) BEFORE the points are handed to the
+        core, so the map trace and every distance/delta/sector derived from it match the smooth
+        notebook reference. `smooth_window=1` disables smoothing (raw trace, for baselines)."""
         laps = pacer.Laps()
         empty = pacer.CoordinateSystem(pacer.GPSSample())
         video_path = paths[0] if paths else None
@@ -225,6 +351,7 @@ class Session:
             return cls(laps, empty, None)
 
         samples, spans, naive = _read_gpmf(paths)
+        samples, spans, naive = _gate_quality(samples, spans, naive)
         samples, spans, naive = _clean(samples, spans, naive)
         if not samples:
             return cls(laps, empty, video_path)
@@ -232,6 +359,10 @@ class Session:
         times = list(naive)
         if interpolate and len(samples) >= 8:
             times = cls._interpolated_or_naive(samples, spans, naive)
+
+        # Smooth the GPS positions once, here — over the cleaned, time-ordered trace, guarded
+        # against averaging across chapter/dropout gaps. All downstream geometry follows.
+        samples = _smooth_track(samples, times, smooth_window)
 
         for s, t in zip(samples, times):
             laps.add_point(s, float(t))
