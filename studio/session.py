@@ -386,6 +386,22 @@ class Session:
         times, dists = td
         return float(np.interp(t, times, dists))
 
+    def lap_speed_vs_time(self, lap_id: int):
+        """(elapsed_s, speed_kmh) numpy arrays for a lap: time-into-lap on x, speed on y.
+
+        For the speed plot's TIME x-mode (distance mode uses `delta`/`_lap_arrays`). elapsed is
+        seconds from the lap's first point; full_speed is m/s (→ km/h). Aligned to the shorter
+        of points/itself so a one-off length disagreement can't index out of range."""
+        lap = self._get_lap(lap_id)
+        pts = lap.points
+        m = len(pts)
+        if m < 2:
+            return np.empty(0), np.empty(0)
+        t0 = pts[0].time
+        elapsed = np.array([pts[i].time - t0 for i in range(m)])
+        speed_kmh = np.array([pts[i].point.full_speed * 3.6 for i in range(m)])
+        return elapsed, speed_kmh
+
     # -------------------------------------------------------- plot series glue
     def _lap_arrays(self, lap_id):
         """(dist, speed_kmh, elapsed) numpy arrays for a lap, aligned to the min length.
