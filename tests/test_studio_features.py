@@ -6,6 +6,9 @@ These exercise the load-bearing pure logic directly on synthetic data:
   * F3 — `Session.nearest_index_in_lap` / `nearest_time_in_lap`: the marker drag is constrained
     to ONE lap's points and clamped to its time window (built on a bare Session, no pacer).
   * F5 — per-sector session-best = the per-column MINIMUM split across valid laps.
+  * Auto-follow — `StudioWindow._follow_current_lap`: the speed+delta charts switch to the
+    playhead's lap (vs best) only on a lap-change EDGE; None (lead-in) HOLDS the last lap; the
+    table re-select uses the programmatic (no-seek) path so it never fights playback.
 Run: python tests/test_studio_features.py
 """
 import math
@@ -121,10 +124,116 @@ def test_nearest_time_in_lap_clamps_to_window():
     print("test_nearest_time_in_lap_clamps_to_window OK")
 
 
+# ----------------------------------------------------------- auto-follow (lap-change edge)
+class _Recorder:
+    """A tiny stand-in for the table / plots / video collaborators, recording the calls the
+    follow logic makes so we can assert the EDGE semantics without pacer / a telemetry file."""
+
+    def __init__(self):
+        self.selected = []      # every table.select(ids)
+        self.lap_sets = []      # every plots.set_laps(ids)
+        self.seeks = []         # any video.seek(...) — must stay EMPTY (no playback fight)
+        self.placed = []        # plots.place_cursors_at_time(t) while dragging
+        self._dragging = False
+
+    # table
+    def select(self, ids):
+        self.selected.append(list(ids))
+
+    # plots
+    def set_laps(self, ids):
+        self.lap_sets.append(list(ids))
+
+    def is_dragging(self):
+        return self._dragging
+
+    def place_cursors_at_time(self, t):
+        self.placed.append(t)
+
+    # video
+    def seek(self, t):
+        self.seeks.append(t)
+
+
+def _follow_window(best_lap):
+    """A StudioWindow built without __init__ (no Qt/pacer), with the collaborators the
+    auto-follow logic touches stubbed by a recorder, so `_follow_current_lap` runs unchanged."""
+    from studio.app import StudioWindow  # local import: keeps the F1/F5 tests pacer-free
+
+    w = StudioWindow.__new__(StudioWindow)
+    rec = _Recorder()
+    w._followed_lap = None
+    w.table = rec
+    w.plots = rec
+    w.video = rec
+
+    class _Sess:
+        def best_lap_id(self):
+            return best_lap
+
+    w.session = _Sess()
+    return w, rec
+
+
+def test_follow_switches_only_on_lap_edge():
+    """Crossing into a new lap switches the charts to [current, best]; staying in the same lap
+    does NOT re-switch (edge only); the table re-select uses the no-seek programmatic path."""
+    w, rec = _follow_window(best_lap=9)
+    # Enter lap 0 → switch to [0, 9].
+    w._follow_current_lap(0, t=10.0)
+    assert w._followed_lap == 0
+    assert rec.lap_sets[-1] == [0, 9] and rec.selected[-1] == [0, 9]
+    # Same lap again (another tick) → NO new switch (edge only).
+    n_before = len(rec.lap_sets)
+    w._follow_current_lap(0, t=11.0)
+    assert len(rec.lap_sets) == n_before, "re-switched within the same lap (not an edge)"
+    # Cross into lap 1 → switch to [1, 9].
+    w._follow_current_lap(1, t=80.0)
+    assert w._followed_lap == 1 and rec.lap_sets[-1] == [1, 9]
+    # Cross 3 more boundaries → exactly 3 more switches (count == boundaries).
+    base = len(rec.lap_sets)
+    for lid in (2, 3, 4):
+        w._follow_current_lap(lid, t=100.0 + lid)
+    assert len(rec.lap_sets) - base == 3
+    # No seek was EVER emitted by the follow (it must not fight playback).
+    assert rec.seeks == [], rec.seeks
+    print("test_follow_switches_only_on_lap_edge OK")
+
+
+def test_follow_holds_last_lap_on_none_region():
+    """A None lap_at_time (lead-in / between laps / cool-down) HOLDS the last followed lap —
+    never blanks the charts — and the next valid lap is picked up."""
+    w, rec = _follow_window(best_lap=9)
+    w._follow_current_lap(5, t=50.0)
+    assert w._followed_lap == 5
+    n = len(rec.lap_sets)
+    # None region: hold — no set_laps, followed unchanged.
+    w._follow_current_lap(None, t=400.0)
+    assert w._followed_lap == 5 and len(rec.lap_sets) == n, "blanked/changed in a None region"
+    # Next valid lap is picked up on the edge out of the None region.
+    w._follow_current_lap(7, t=500.0)
+    assert w._followed_lap == 7 and rec.lap_sets[-1] == [7, 9]
+    print("test_follow_holds_last_lap_on_none_region OK")
+
+
+def test_follow_current_is_best_shows_single_lap():
+    """When the current lap IS the best lap, the charts show just [best] (no duplicate overlay),
+    and a drag in progress re-places the cursor in the followed lap (resolves the off-lap caveat)."""
+    w, rec = _follow_window(best_lap=9)
+    rec._dragging = True
+    w._follow_current_lap(9, t=1100.0)
+    assert w._followed_lap == 9 and rec.lap_sets[-1] == [9], rec.lap_sets[-1]
+    assert rec.placed == [1100.0], "cursor not re-placed mid-drag after the follow switch"
+    print("test_follow_current_is_best_shows_single_lap OK")
+
+
 if __name__ == "__main__":
     test_numeric_sort_key_orders_by_value_not_text()
     test_numeric_sort_key_blanks_sort_last()
     test_best_split_per_sector_is_column_min()
     test_nearest_index_in_lap_stays_in_lap()
     test_nearest_time_in_lap_clamps_to_window()
+    test_follow_switches_only_on_lap_edge()
+    test_follow_holds_last_lap_on_none_region()
+    test_follow_current_is_best_shows_single_lap()
     print("\nALL STUDIO FEATURE TESTS PASSED")

@@ -105,6 +105,13 @@ class StudioWindow(QMainWindow):
         self.plots.scrubStarted.connect(self._on_scrub_started)
         self.plots.scrubMoved.connect(self._on_scrub_moved)
         self.plots.scrubEnded.connect(self._on_scrub_ended)
+        # Auto-follow: the charts always show whichever lap the playhead is in (current vs best).
+        # When the playhead crosses into a NEW lap (playing OR scrubbing), the speed + delta
+        # charts switch to that lap, keeping the best lap as the reference overlay. We key off
+        # the playhead's lap, so a single O(1) edge check per tick (in _apply_readout) drives it;
+        # we only re-select on the actual lap CHANGE so it never thrashes. _followed_lap is the
+        # lap the charts are currently following; seeded from _select_default below.
+        self._followed_lap: int | None = None
         # F2: keep the sector boundary guide lines on the charts in sync. plots_view stays
         # pacer-free, so app computes the boundary x-positions via session for the current
         # axis mode and pushes them; recompute when the mode flips (the positions' units change).
@@ -114,7 +121,13 @@ class StudioWindow(QMainWindow):
         self._refresh_sector_lines()  # draw any sectors present on launch (none by default)
 
     def _select_default(self):
-        """Pre-select the two fastest laps so speed + a real delta-to-best show on launch."""
+        """Pre-select the two fastest laps so speed + a real delta-to-best show on launch.
+
+        Also clears the auto-follow state: on launch nothing is "current" yet, and after a
+        re-segmentation (_on_lines) the lap ids have shifted, so the next playhead movement must
+        be free to re-establish the follow on the now-current lap (a stale id would suppress the
+        edge). This multi-lap default overlay is simply replaced once the playhead enters a lap."""
+        self._followed_lap = None
         rows = sorted(self.session.lap_rows(), key=lambda r: r["time"])
         ids = [r["idx"] for r in rows[:2]]
         self.table.select(ids)
@@ -131,7 +144,14 @@ class StudioWindow(QMainWindow):
         # F1 seeks ONLY on user selection — not on programmatic re-select from
         # _select_default()/_on_lines(), or dragging a timing line would yank the video.
         if seek and ids:
-            self.video.seek(self.session.laps.start_timestamp(min(ids)))
+            target = self.session.laps.start_timestamp(min(ids))
+            self.video.seek(target)
+            # Don't let the auto-follow collapse a just-made (possibly multi-lap) comparison the
+            # instant the seek's positionChanged lands: seed _followed_lap to the lap the seek
+            # resolves into, so the immediate post-seek tick is NOT an edge. The user keeps the
+            # selected overlay while paused; once PLAYBACK MOVES ON into a different lap, the edge
+            # fires and the charts collapse to [current, best] (the locked behaviour).
+            self._followed_lap = self.session.lap_at_time(target)
 
     def _on_position(self, t: float):
         # Runs in the video event path — keep it trivial so frame presentation isn't starved.
@@ -159,6 +179,7 @@ class StudioWindow(QMainWindow):
 
     def _apply_readout(self, t: float):
         lap_id = self.session.lap_at_time(t)  # F3: which lap is on the video
+        self._follow_current_lap(lap_id, t)  # charts auto-follow the playhead's lap (vs best)
         self.table.set_current_lap(lap_id)
         self.map.set_current_lap(lap_id)  # highlight the current lap's trace on the map
         sp = self.session.speed_at_time(t)  # F2: time / speed / lap readout
@@ -166,6 +187,37 @@ class StudioWindow(QMainWindow):
         lap = lap_id if lap_id is not None else "-"
         self.video.set_readout(f"t = {fmt_time(t)}   speed = {speed} km/h   lap {lap}")
         self._update_diff_box(t, sp)
+
+    def _follow_current_lap(self, lap_id: int | None, t: float):
+        """Auto-follow the playhead's lap on the speed + delta charts (current lap vs best).
+
+        On a lap-change EDGE — `lap_id` is a valid lap that differs from the one the charts are
+        currently following — switch the charts to show [current lap, best] and update the lap
+        table highlight/selection to match, so the table ▶/selection, the map overlay and the
+        plots all agree on the current lap. Only acts on the actual edge (O(1) check per tick, a
+        refresh only on the change) so it never thrashes, and it works while PLAYING or SCRUBBING
+        (we key off the playhead's lap, not the play state).
+
+        Graceful edges:
+          * `lap_id is None` (lead-in / between laps / cool-down) → HOLD the last followed lap;
+            never blank the charts.
+          * The table selection is updated via the programmatic `select()` path (signals blocked),
+            so it does NOT emit `laps_selected` and therefore cannot trigger a user-seek that would
+            fight playback. (Select-lap→seek is gated to genuine user clicks via _on_user_select.)
+        """
+        if lap_id is None or lap_id == self._followed_lap:
+            return  # hold on no-lap regions; only act on a genuine change to a new valid lap
+        self._followed_lap = lap_id
+        # Keep the best lap as the reference overlay; current lap first so it's the primary curve.
+        best = self.session.best_lap_id()
+        ids = [lap_id] if best is None or best == lap_id else [lap_id, best]
+        self.table.select(ids)   # programmatic (signals blocked) → no seek, won't fight playback
+        self.plots.set_laps(ids)
+        # During a scrub-across-boundary, set_laps→refresh re-places the cursor via set_cursor_time
+        # which is a no-op mid-drag; re-place it from the dragged time so the cursor stays put in
+        # the now-current lap (resolving the old "scrub dead off the displayed lap" caveat too).
+        if self.plots.is_dragging():
+            self.plots.place_cursors_at_time(t)
 
     def _update_diff_box(self, t: float, sp: float | None):
         """Refresh the always-on Δ/speed box for the current moment (priority: Δ-to-best in

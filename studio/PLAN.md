@@ -19,9 +19,12 @@ Panels (module map in README):
   x-axis: the dist/time toggle drives BOTH plots (distance = normalized-distance × best-lap
   distance, in metres; time = time-into-lap), so the same moment lands at the same x on both and
   the two cursors always line up vertically. Delta is aligned by normalized distance so its
-  endpoint equals the laptime difference. An always-on **Δ/speed readout box** above the plots
-  shows the current-moment Δ-to-best (priority) + speed; the delta plot has a **hover dot** that
-  rides the curve under the mouse with its Δ value (independent of the playback cursor).
+  endpoint equals the laptime difference. The charts **auto-follow the current lap**: as playback
+  (or a main-slider scrub) crosses a lap boundary they switch to the now-current lap vs best
+  (the table `▶`/selection + map overlay stay coherent); a manual lap selection is preserved while
+  paused and replaced only once playback moves on. An always-on **Δ/speed readout box** above the
+  plots shows the current-moment Δ-to-best (priority) + speed; the delta plot has a **hover dot**
+  that rides the curve under the mouse with its Δ value (independent of the playback cursor).
 - **Lap table** — time / dist / entry speed, plus per-sector split columns S1…Sn once sectors are
   added. `▶` marks the playing lap; blue row = your selection; best lap shown in green; the
   **session-best split in each sector column is purple** (per-column min across valid laps). **Every
@@ -82,6 +85,21 @@ How it works (key decisions, all done & verified):
   was playing**; the feedback loop is gated (drag ignores the playback tick; `setValue`
   `_suppress`-guarded). Round-trip/clamp + cursor-coincide tests in `tests/test_scrub_conversion.py`;
   analysis numbers proven byte-identical (UI-only, same MD5 as the pre-change baseline).
+- **Charts auto-follow the current lap** (`app._follow_current_lap`, UI-only): the speed + delta
+  charts always show **whichever lap the playhead is in vs best**. The follow is an **edge check**
+  on `session.lap_at_time(t)` inside the existing 30 Hz position path (`_apply_readout`, which runs
+  on playback AND main-slider scrub) — it re-selects only on an **actual lap change** (O(1)/tick, a
+  plot refresh only on the edge → no thrash), **holds** the last lap through a lead-in/between-laps
+  `None` region (never blanks the charts), and re-selects through the **programmatic `table.select`**
+  (signals blocked) so it emits **no seek** and never fights playback (the genuine-click→seek gate
+  is untouched). A just-made manual selection (incl. a multi-lap comparison) is **preserved while
+  paused** (`_followed_lap` is seeded to the seek's landing lap, so the static jump isn't an edge)
+  and is replaced by `[current, best]` only **once playback moves on** into a different lap. Because
+  the current lap is now always among the displayed laps, the **scrub cursor / Δ box / hover work in
+  the followed lap** — superseding the earlier "scrub only works when the current lap is displayed"
+  caveat. Verified: switch-count == boundaries crossed, zero extra seeks, lead-in hold, real-GUI
+  play-through a boundary, two before/after PNGs; analysis MD5 byte-identical (UI-only). Pure-Python
+  edge tests in `tests/test_studio_features.py`.
 - **Live Δ/speed readout + hover dot**: an always-on box above the plots shows the
   **current-moment Δ-to-best (priority) + speed** (`app._update_diff_box` ← `session.delta_at_time`
   / `speed_at_time`), green when ahead of best / red when behind, updating live on playback and
@@ -170,7 +188,8 @@ How it works (key decisions, all done & verified):
   (dumps every analysis value + an MD5, the UI-only byte-identity proof) (tools). Tests:
   `tests/test_gapfill.py` + `tests/test_scrub_conversion.py` + `tests/test_studio_features.py` (all
   pure-Python, fast; the last covers the F1 numeric sort key, F3 lap-scoped nearest, F5 per-column
-  session-best min). The two studio Python tests are now also registered with CTest (`tests/
+  session-best min, and the **chart auto-follow lap-change edge** — switch only on the edge, hold on
+  a `None` region, no seek emitted). The two studio Python tests are now also registered with CTest (`tests/
   CMakeLists.txt`), so `pixi run test` runs them with the C++ suite. `_probe.py` / `_bench_cursor.py`
   are untracked scratch.
 

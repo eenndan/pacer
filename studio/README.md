@@ -134,6 +134,20 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
   position-driven re-placement is ignored (`_user_dragging`) and the tick skips its normal apply
   (only the coalesced seek runs); programmatic `setValue` is `_suppress`-guarded so it can never
   masquerade as a user drag. Round-trip/clamp + cursor-coincide tests in `tests/test_scrub_conversion.py`.
+- **Charts auto-follow the current lap (`app._follow_current_lap`, UI-only):** the speed + delta
+  charts always show **whichever lap the playhead is in vs the best lap** — as playback (or a
+  main-slider scrub) crosses a lap boundary, the charts **switch to the now-current lap**, keeping
+  the best lap as the reference overlay, and the table `▶`/selection + map overlay stay coherent
+  with it. Detection is a cheap **edge check** keyed off `session.lap_at_time(t)` in the existing
+  30 Hz position path (`_apply_readout`): it only re-selects on an **actual lap change** (never per
+  tick → no thrash), holds the last lap through a **lead-in / between-laps `None`** region (never
+  blanks the charts), and re-selects via the **programmatic `table.select`** (signals blocked) so it
+  emits **no seek** and never fights playback (the select-lap→seek gate stays for genuine clicks).
+  A just-made manual lap **selection (incl. a multi-lap comparison) is preserved while paused** —
+  `_followed_lap` is seeded to the seek's landing lap so the static seek isn't treated as an edge —
+  and is replaced by `[current, best]` only **once playback moves on** into a different lap. This
+  also keeps the current lap among the displayed laps, so the **scrub cursor / Δ box / hover now
+  work in the followed lap** (superseding the old "scrub dead off the displayed lap" caveat).
 - **Live Δ/speed readout + delta-plot hover dot:** an always-on box above the plots
   (`app._update_diff_box`) shows the **current-moment Δ-to-best (priority) + speed** from
   `session.delta_at_time` / `speed_at_time` — green when ahead of best, red when behind — updating
