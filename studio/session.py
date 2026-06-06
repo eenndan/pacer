@@ -492,6 +492,18 @@ class Session:
         valid = self.valid_lap_ids()
         return min(valid, key=self.laps.lap_time) if valid else None
 
+    def best_lap_total_distance(self) -> float | None:
+        """The best lap's total odometer distance (metres) — the basis the delta plot's x-axis is
+        scaled in (x = s × best_distance). Used to map the delta cursor's x to/from a media time.
+        Matches the `best_dist[-1]` used in `delta()`. None if there's no valid best lap."""
+        best = self.best_lap_id()
+        if best is None:
+            return None
+        td = self._lap_time_dist(best)
+        if td is None:
+            return None
+        return float(td[1][-1])
+
     def lap_rows(self) -> list[dict]:
         return [
             {
