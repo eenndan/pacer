@@ -5,7 +5,8 @@ analysing GoPro race telemetry. This is the handoff doc: current state, how to r
 architecture an agent must respect, and the prioritized backlog. Read it + [README.md](README.md)
 + the `pacer-studio-app-direction` memory to take over.
 
-**Branch:** `better-app` (local, not pushed). **Run:** `pixi run studio -- <file.MP4>`.
+**Branch:** `fill-gps-gaps` (off `removing-gps-noise`, off `better-app`; local, not pushed).
+**Run:** `pixi run studio -- <file.MP4>`.
 Validated end-to-end on `/Users/daniil/Desktop/D24/GX010060.MP4` (Daytona MK, ~28 min 4K HEVC →
 18 valid laps @ ~69 s), user-confirmed.
 
@@ -54,6 +55,25 @@ How it works (key decisions, all done & verified):
 - **Performance** — 4K HEVC decodes ~61 fps (VideoToolbox HW). UI sync runs on a ~30 Hz `QTimer`
   off the video present path; plot curves are downsampled + clipped, antialias off, autorange
   frozen after refresh; the map draws ≤2 laps. Smooth incl. with a lap selected (cursor 56.5→1.1 ms).
+- **GPS gap reconstruction (MAP ONLY)** (`session.lap_trace_segments` → `gapfill.py`): where a
+  lap's GPS has an interior DROPOUT (a run dropped by the quality gate, or a genuine outage), the
+  trace used to draw a straight CHORD across the hole. Now each lap is drawn as MEASURED runs +
+  reconstructed INFERRED fills. A gap is an interior point-to-point time jump > ~0.35 s (≥3 missing
+  samples @ 10 Hz); the lap's open start/finish ends are not gaps. Each gap is filled by, in order:
+  (1) **cross-lap borrow** (PRIMARY) — the track is identical every lap, so take a donor lap's
+  sub-polyline between the points nearest the two gap mouths and pin it with a similarity transform
+  (rotation+uniform scale, both endpoints exact) → the real corner shape, connected continuously;
+  the donor with the smallest endpoint error (and a sane arc-length ratio) wins. (2) **reference
+  centerline** (FALLBACK, only if NO lap covers the section) — a georeferenced Daytona MK centerline
+  (`reference.py` + `mk_centerline.json`, traced from `gmaps_pict.png`, similarity-ICP aligned to the
+  GPS aggregate; fit residual ~1 m mean). (3) **spline** for very short gaps / when borrow misses.
+  Inferred segments draw **dashed + dimmed** (`map_view._inferred_pen`) so real GPS vs reconstruction
+  is always distinguishable. Per-lap segments are cached (`_seg_cache`) — built once, never per frame,
+  cleared on re-segment. On `GX010060.MP4`: 7 gaps / 222 m of chord across 5 laps → 6 borrow + 1
+  spline, 0 reference needed, 0 unfilled. **MAP-ONLY guarantee proven byte-identical** (same JSON
+  MD5) for valid_lap_ids, lap times, delta endpoints, sector splits, cum-distances vs the base
+  branch — `gapfill`/`reference` are pure numpy and `lap_trace_segments` reads the unchanged
+  kept-point arrays; no analysis path is touched.
 
 ## Run & verify
 - `pixi run studio -- <file.MP4>` (or `python -m studio [files]`; `--interp` to try interpolation).
@@ -68,27 +88,35 @@ How it works (key decisions, all done & verified):
 - Trace + timing lines live in **local metres** (`cs.local`); `set_coordinate_system` precedes
   `pick_random_start`/`update`. Sectors write-back is wholesale: `laps.sectors = pacer.Sectors(...)`.
 - **`session.py` is the only module that drives the pacer pipeline; `tracks.py` is the only other
-  file that names `pacer` (pure geometry).** Keep `map_view`/`plots_view`/`lap_table`/`app` free of `pacer`.
+  file that names `pacer` (pure geometry).** Keep `map_view`/`plots_view`/`lap_table`/`app` free of
+  `pacer`. The gap-fill helpers `gapfill.py` and `reference.py` are **pure numpy** (no `pacer`) —
+  `session.lap_trace_segments` feeds them the cached per-lap arrays; `map_view` calls only that.
 - `pacer` is GPMF/GoPro `.MP4` only (`.dat` reader is not bound). It supplies the telemetry time
   axis; the app brings its own video player.
 - **Perf invariants — do not regress:** the 30 Hz tick decouple (`app._on_position` only stores the
   time; `app._tick` applies); plot curves downsampled+clipped + antialias off + autorange frozen
   after `refresh`; map draws only best+current lap; clear per-lap caches in `set_timing_lines`.
 - Module map: `session.py` (data/analysis — only pacer user) · `tracks.py` (track registry) ·
-  `map_view.py` · `plots_view.py` · `lap_table.py` · `video_view.py` · `app.py` (wiring) ·
-  `diagnose.py` / `denoise_check.py` / `_smoke.py` (tools). `_probe.py` / `_bench_cursor.py` are
-  untracked scratch.
+  `gapfill.py` (GPS-gap reconstruction, pure numpy) · `reference.py` + `mk_centerline.json` /
+  `build_reference.py` (georeferenced fallback centerline) · `map_view.py` · `plots_view.py` ·
+  `lap_table.py` · `video_view.py` · `app.py` (wiring) · `diagnose.py` / `denoise_check.py`
+  (`--gaps` renders the filled map + prints gap metrics) / `_smoke.py` (tools). Tests:
+  `tests/test_gapfill.py` (pure-Python, fast). `_probe.py` / `_bench_cursor.py` are untracked scratch.
 
 ## Next steps / backlog (prioritized for a fresh agent)
 1. **More tracks** — `tracks.py` has only Daytona MK; add entries and/or real auto-detection
    (the user flagged other-track support as the planned next expansion).
 2. **Persist sector/start-line config per file** — a sidecar JSON so edits survive reloads.
-3. **Tests** — pure-Python unit tests for `session.py`: `_clean`, `valid_lap_ids`, delta
-   endpoint==laptime-diff, `lap_sector_splits` sum==lap-time. Fast, no GUI; a real regression guard.
+3. **Tests** — `tests/test_gapfill.py` exists (gap detection / borrow / spline / continuity). Still
+   TODO: pure-Python tests for `session.py` itself (`_clean`, `valid_lap_ids`, delta
+   endpoint==laptime-diff, `lap_sector_splits` sum==lap-time). Fast, no GUI; a real regression guard.
 4. **Multi-file chaptered sessions** — verify `SequentialGPSSource` chaining + the combined time
    axis on a real chaptered GoPro recording.
 5. **Polish** — keyboard shortcuts (space=play, ←/→ step), theming/layout, an optional snap-to-track
    *toggle* (default is now free), trailing-cooldown trimming, expose `_clean` thresholds in UI.
+   Also: the MK reference centerline's INFIELD switchbacks (`mk_centerline.json`) are an approximate
+   hand-trace — fine for the fallback (outer-loop corners, where long gaps happen, fit ~1 m), but
+   tighten the infield if the reference is ever actually needed there (re-run `build_reference.py`).
 6. **Perf headroom (only if needed on longer sessions)** — a bulk `lap→numpy` accessor in the C++
    bindings to drop per-point Python loops; `useOpenGL` for the pyqtgraph views.
 7. **Housekeeping** — delete scratch `studio/_probe.py` + `studio/_bench_cursor.py` (`rm` is blocked
