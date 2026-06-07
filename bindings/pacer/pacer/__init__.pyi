@@ -61,6 +61,41 @@ class Vec3f:
     def __getitem__(self, index: int) -> float:
         pass
 
+class IMUSample:
+    """A timestamped 3-axis IMU sample (used for ACCL accelerometer m/s^2 and GRAV gravity
+    vector). `time` is on the MEDIA clock (seconds, same basis as the GPS payload spans, so
+    it syncs to the video; chapter offsets are applied by the SequentialGPSSource chain just
+    like GPS). The three axes are carried in the GoPro stream's native element order
+    (ACCL: Z,X,Y in m/s^2; GRAV: a unit gravity-direction vector). The studio layer resolves
+    the camera->kart frame transform on top of these raw axes.
+    """
+
+    x: float = 0
+    y: float = 0
+    z: float = 0
+    time: float = 0
+    def __init__(
+        self, x: float = 0, y: float = 0, z: float = 0, time: float = 0
+    ) -> None:
+        """Auto-generated default constructor with named params"""
+        pass
+
+class QuatSample:
+    """A timestamped orientation quaternion (used for CORI camera-orientation, w,x,y,z).
+    `time` is on the MEDIA clock (seconds), same basis as IMUSample / GPS.
+    """
+
+    w: float = 1
+    x: float = 0
+    y: float = 0
+    z: float = 0
+    time: float = 0
+    def __init__(
+        self, w: float = 1, x: float = 0, y: float = 0, z: float = 0, time: float = 0
+    ) -> None:
+        """Auto-generated default constructor with named params"""
+        pass
+
 ####################    </generated_from:datatypes.hpp>    ####################
 
 ####################    <generated_from:geometry.hpp>    ####################
@@ -438,6 +473,24 @@ class RawGPSSource:
 
     def read_samples(self, on_sample: Callable[[GPSSample, int, int], None]) -> int:
         pass
+    # Reads the timestamped IMU streams (accelerometer / gravity vector) for the WHOLE source.
+    # Each sample carries a `time` on the MEDIA clock (seconds), interpolated across the
+    # payload span like the research `dump_imu.c` does, so it lines up with the GPS payload
+    # spans and the video. Multi-chapter sources shift later chapters by the cumulative
+    # duration (see SequentialGPSSource), so the times come out on one continuous global clock.
+    # Default (RawGPSSource) is a no-op; GPMFSource / SequentialGPSSource override.
+    #
+    # ACCL: 3-axis accelerometer in m/s^2 (native order Z,X,Y).
+    # GRAV: gravity unit vector (native order; permuted vs ACCL — resolved in the studio layer).
+    def read_accl(self, param_0: Callable[[IMUSample], None]) -> None:  # overridable
+        pass
+
+    def read_grav(self, param_0: Callable[[IMUSample], None]) -> None:  # overridable
+        pass
+
+    def read_cori(self, param_0: Callable[[QuatSample], None]) -> None:  # overridable
+        """CORI: camera-orientation quaternion (w,x,y,z), ~60 Hz, media-clock time."""
+        pass
 
     def seek(self, target: float) -> int:  # overridable (pure virtual)
         """Seeks to data chunk covering target."""
@@ -477,6 +530,15 @@ class GPMFSource(RawGPSSource):
     def __init__(self, filename: str) -> None:
         pass
 
+    def read_accl(self, on_sample: Callable[[IMUSample], None]) -> None:
+        pass
+
+    def read_grav(self, on_sample: Callable[[IMUSample], None]) -> None:
+        pass
+
+    def read_cori(self, on_sample: Callable[[QuatSample], None]) -> None:
+        pass
+
     def seek(self, target: float) -> int:
         """Seeks to data chunk covering target."""
         pass
@@ -505,6 +567,15 @@ class SequentialGPSSource(RawGPSSource):
         pass
 
     def is_end(self) -> bool:
+        pass
+
+    def read_accl(self, on_sample: Callable[[IMUSample], None]) -> None:
+        pass
+
+    def read_grav(self, on_sample: Callable[[IMUSample], None]) -> None:
+        pass
+
+    def read_cori(self, on_sample: Callable[[QuatSample], None]) -> None:
         pass
 
     def seek(self, target: float) -> int:

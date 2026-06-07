@@ -325,6 +325,110 @@ uint32_t GPMFSource::Samples(void *data,
   return ret;
 }
 
+// Reads one GPMF stream (e.g. ACCL/GRAV/CORI) over EVERY payload of this MP4, emitting each
+// sample with a media-clock timestamp. The timing mirrors the research dump_imu.c: a payload
+// covers the media span [in,out] (from GetPayloadTime, the same clock as the GPS payload
+// spans), and the `samples` rows in it are spread evenly as in + (out-in)*(s/samples). This
+// keeps the IMU on the identical media clock the GPS / video sync uses. nelem is clamped to 4
+// (ACCL/GRAV are vec3, CORI is a quaternion).
+void GPMFSource::ReadStream(
+    uint32_t fourcc,
+    const std::function<void(const double *, uint32_t, double)> &emit) const {
+  uint32_t payloads = GetNumberPayloads(mp4handle_);
+  size_t payloadres = GetPayloadResource(mp4handle_, 0, 0);
+  for (uint32_t i = 0; i < payloads; ++i) {
+    uint32_t payloadsize = GetPayloadSize(mp4handle_, i);
+    uint32_t *payload = GetPayload(mp4handle_, payloadres, i);
+    if (payload == nullptr) {
+      continue;
+    }
+    double in = 0, out = 0;
+    if (GetPayloadTime(mp4handle_, i, &in, &out) != GPMF_OK) {
+      continue;
+    }
+    GPMF_stream metadata_stream, *ms = &metadata_stream;
+    if (GPMF_Init(ms, payload, payloadsize) != GPMF_OK) {
+      continue;
+    }
+    if (GPMF_OK == GPMF_FindNext(ms, fourcc,
+                                 GPMF_LEVELS(GPMF_RECURSE_LEVELS |
+                                             GPMF_TOLERANT))) {
+      uint32_t samples = GPMF_Repeat(ms);
+      uint32_t elements = GPMF_ElementsInStruct(ms);
+      if (samples == 0 || elements == 0) {
+        continue;
+      }
+      uint32_t buffersize = samples * elements * sizeof(double);
+      double *tmpbuffer = (double *)malloc(buffersize);
+      if (tmpbuffer == nullptr) {
+        continue;
+      }
+      if (GPMF_OK == GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples,
+                                     GPMF_TYPE_DOUBLE)) {
+        for (uint32_t s = 0; s < samples; ++s) {
+          double t = in + (out - in) * (static_cast<double>(s) / samples);
+          double vals[4] = {0, 0, 0, 0};
+          uint32_t nelem = elements > 4 ? 4 : elements;
+          for (uint32_t e = 0; e < nelem; ++e) {
+            vals[e] = tmpbuffer[s * elements + e];
+          }
+          emit(vals, nelem, t);
+        }
+      }
+      free(tmpbuffer);
+    }
+  }
+}
+
+void GPMFSource::ReadAccl(std::function<void(IMUSample)> on_sample) {
+  ReadStream(STR2FOURCC("ACCL"), [&](const double *v, uint32_t, double t) {
+    on_sample(IMUSample{.x = v[0], .y = v[1], .z = v[2], .time = t});
+  });
+}
+
+void GPMFSource::ReadGrav(std::function<void(IMUSample)> on_sample) {
+  ReadStream(STR2FOURCC("GRAV"), [&](const double *v, uint32_t, double t) {
+    on_sample(IMUSample{.x = v[0], .y = v[1], .z = v[2], .time = t});
+  });
+}
+
+void GPMFSource::ReadCori(std::function<void(QuatSample)> on_sample) {
+  ReadStream(STR2FOURCC("CORI"), [&](const double *v, uint32_t, double t) {
+    on_sample(QuatSample{.w = v[0], .x = v[1], .y = v[2], .z = v[3], .time = t});
+  });
+}
+
+// Multi-chapter: read each child's stream, shifting later chapters by the cumulative duration
+// of the earlier ones (the same global media clock the GPS spans use). left_ may itself be a
+// SequentialGPSSource (left-leaning chain), so delegating to it recurses correctly; right_ is
+// always a leaf chapter, shifted by the whole left subtree's duration.
+void SequentialGPSSource::ReadAccl(std::function<void(IMUSample)> on_sample) {
+  left_->ReadAccl(on_sample);
+  double off = left_->GetTotalDuration();
+  right_->ReadAccl([&](IMUSample s) {
+    s.time += off;
+    on_sample(s);
+  });
+}
+
+void SequentialGPSSource::ReadGrav(std::function<void(IMUSample)> on_sample) {
+  left_->ReadGrav(on_sample);
+  double off = left_->GetTotalDuration();
+  right_->ReadGrav([&](IMUSample s) {
+    s.time += off;
+    on_sample(s);
+  });
+}
+
+void SequentialGPSSource::ReadCori(std::function<void(QuatSample)> on_sample) {
+  left_->ReadCori(on_sample);
+  double off = left_->GetTotalDuration();
+  right_->ReadCori([&](QuatSample s) {
+    s.time += off;
+    on_sample(s);
+  });
+}
+
 uint32_t SequentialGPSSource::Samples(
     void *data,
     void (*on_sample)(void * /*data*/, GPSSample /*sample*/,

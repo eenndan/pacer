@@ -48,6 +48,20 @@ public:
   uint32_t
   ReadSamples(std::function<void(GPSSample, uint32_t, uint32_t)> on_sample);
 
+  // Reads the timestamped IMU streams (accelerometer / gravity vector) for the WHOLE source.
+  // Each sample carries a `time` on the MEDIA clock (seconds), interpolated across the
+  // payload span like the research `dump_imu.c` does, so it lines up with the GPS payload
+  // spans and the video. Multi-chapter sources shift later chapters by the cumulative
+  // duration (see SequentialGPSSource), so the times come out on one continuous global clock.
+  // Default (RawGPSSource) is a no-op; GPMFSource / SequentialGPSSource override.
+  //
+  // ACCL: 3-axis accelerometer in m/s^2 (native order Z,X,Y).
+  // GRAV: gravity unit vector (native order; permuted vs ACCL — resolved in the studio layer).
+  virtual void ReadAccl(std::function<void(IMUSample)> /*on_sample*/) {}
+  virtual void ReadGrav(std::function<void(IMUSample)> /*on_sample*/) {}
+  // CORI: camera-orientation quaternion (w,x,y,z), ~60 Hz, media-clock time.
+  virtual void ReadCori(std::function<void(QuatSample)> /*on_sample*/) {}
+
   // Seeks to data chunk covering target.
   virtual uint32_t Seek(double target) = 0;
 
@@ -92,6 +106,10 @@ public:
                                      size_t /*current_index*/,
                                      size_t /*total_records*/)) override;
 
+  void ReadAccl(std::function<void(IMUSample)> on_sample) override;
+  void ReadGrav(std::function<void(IMUSample)> on_sample) override;
+  void ReadCori(std::function<void(QuatSample)> on_sample) override;
+
   // Seeks to data chunk covering target.
   uint32_t Seek(double target) override;
 
@@ -108,6 +126,11 @@ public:
   double GetTotalDuration() const override;
 
 private:
+  // Reads one 4-element-or-fewer GPMF stream over all payloads, emitting per-sample
+  // media-clock-timestamped values. `emit(values[4], n_elems, time)` is called per sample.
+  void ReadStream(uint32_t fourcc,
+                  const std::function<void(const double * /*vals*/, uint32_t /*nelem*/,
+                                           double /*time*/)> &emit) const;
   uint32_t index_ = 0;
   size_t mp4handle_;
 };
@@ -127,6 +150,10 @@ public:
                    void (*on_sample)(void * /*data*/, GPSSample /*sample*/,
                                      size_t /*current_index*/,
                                      size_t /*total_records*/)) override;
+
+  void ReadAccl(std::function<void(IMUSample)> on_sample) override;
+  void ReadGrav(std::function<void(IMUSample)> on_sample) override;
+  void ReadCori(std::function<void(QuatSample)> on_sample) override;
 
   uint32_t Seek(double target) override;
 

@@ -31,8 +31,32 @@ namespace pacer {
 class RawGPSSource_trampoline : public RawGPSSource
 {
 public:
-    NB_TRAMPOLINE(RawGPSSource, 5);
+    NB_TRAMPOLINE(RawGPSSource, 8);
 
+    void ReadAccl(std::function<void(IMUSample)> param_0) override
+    {
+        NB_OVERRIDE_NAME(
+            "read_accl", // function name (python)
+            ReadAccl, // function name (c++)
+            param_0 // params
+        );
+    }
+    void ReadGrav(std::function<void(IMUSample)> param_0) override
+    {
+        NB_OVERRIDE_NAME(
+            "read_grav", // function name (python)
+            ReadGrav, // function name (c++)
+            param_0 // params
+        );
+    }
+    void ReadCori(std::function<void(QuatSample)> param_0) override
+    {
+        NB_OVERRIDE_NAME(
+            "read_cori", // function name (python)
+            ReadCori, // function name (c++)
+            param_0 // params
+        );
+    }
     uint32_t Seek(double target) override
     {
         NB_OVERRIDE_PURE_NAME(
@@ -139,6 +163,50 @@ void py_init_module_pacer(nb::module_ &m) {
           nb::overload_cast<size_t>(&pacer::Vec3f::operator[]), nb::arg("index"))
       .def("__getitem__",
           nb::overload_cast<size_t>(&pacer::Vec3f::operator[], nb::const_), nb::arg("index"))
+      ;
+
+
+  auto pyClassIMUSample =
+      nb::class_<pacer::IMUSample>
+          (m, "IMUSample", " A timestamped 3-axis IMU sample (used for ACCL accelerometer m/s^2 and GRAV gravity\n vector). `time` is on the MEDIA clock (seconds, same basis as the GPS payload spans, so\n it syncs to the video; chapter offsets are applied by the SequentialGPSSource chain just\n like GPS). The three axes are carried in the GoPro stream's native element order\n (ACCL: Z,X,Y in m/s^2; GRAV: a unit gravity-direction vector). The studio layer resolves\n the camera->kart frame transform on top of these raw axes.")
+      .def("__init__", [](pacer::IMUSample * self, double x = 0, double y = 0, double z = 0, double time = 0)
+      {
+          new (self) pacer::IMUSample();  // placement new
+          auto r_ctor_ = self;
+          r_ctor_->x = x;
+          r_ctor_->y = y;
+          r_ctor_->z = z;
+          r_ctor_->time = time;
+      },
+      nb::arg("x") = 0, nb::arg("y") = 0, nb::arg("z") = 0, nb::arg("time") = 0
+      )
+      .def_rw("x", &pacer::IMUSample::x, "")
+      .def_rw("y", &pacer::IMUSample::y, "")
+      .def_rw("z", &pacer::IMUSample::z, "")
+      .def_rw("time", &pacer::IMUSample::time, "")
+      ;
+
+
+  auto pyClassQuatSample =
+      nb::class_<pacer::QuatSample>
+          (m, "QuatSample", " A timestamped orientation quaternion (used for CORI camera-orientation, w,x,y,z).\n `time` is on the MEDIA clock (seconds), same basis as IMUSample / GPS.")
+      .def("__init__", [](pacer::QuatSample * self, double w = 1, double x = 0, double y = 0, double z = 0, double time = 0)
+      {
+          new (self) pacer::QuatSample();  // placement new
+          auto r_ctor_ = self;
+          r_ctor_->w = w;
+          r_ctor_->x = x;
+          r_ctor_->y = y;
+          r_ctor_->z = z;
+          r_ctor_->time = time;
+      },
+      nb::arg("w") = 1, nb::arg("x") = 0, nb::arg("y") = 0, nb::arg("z") = 0, nb::arg("time") = 0
+      )
+      .def_rw("w", &pacer::QuatSample::w, "")
+      .def_rw("x", &pacer::QuatSample::x, "")
+      .def_rw("y", &pacer::QuatSample::y, "")
+      .def_rw("z", &pacer::QuatSample::z, "")
+      .def_rw("time", &pacer::QuatSample::time, "")
       ;
   ////////////////////    </generated_from:datatypes.hpp>    ////////////////////
 
@@ -445,6 +513,14 @@ void py_init_module_pacer(nb::module_ &m) {
       .def(nb::init<>())
       .def("read_samples",
           &pacer::RawGPSSource::ReadSamples, nb::arg("on_sample"))
+      .def("read_accl",
+          &pacer::RawGPSSource::ReadAccl, nb::arg("param_0"))
+      .def("read_grav",
+          &pacer::RawGPSSource::ReadGrav, nb::arg("param_0"))
+      .def("read_cori",
+          &pacer::RawGPSSource::ReadCori,
+          nb::arg("param_0"),
+          "CORI: camera-orientation quaternion (w,x,y,z), ~60 Hz, media-clock time.")
       .def("seek",
           &pacer::RawGPSSource::Seek,
           nb::arg("target"),
@@ -467,6 +543,12 @@ void py_init_module_pacer(nb::module_ &m) {
           nb::arg("mp4handle"))
       .def(nb::init<const char *>(),
           nb::arg("filename"))
+      .def("read_accl",
+          &pacer::GPMFSource::ReadAccl, nb::arg("on_sample"))
+      .def("read_grav",
+          &pacer::GPMFSource::ReadGrav, nb::arg("on_sample"))
+      .def("read_cori",
+          &pacer::GPMFSource::ReadCori, nb::arg("on_sample"))
       .def("seek",
           &pacer::GPMFSource::Seek,
           nb::arg("target"),
@@ -491,6 +573,12 @@ void py_init_module_pacer(nb::module_ &m) {
           &pacer::SequentialGPSSource::GetTotalDuration)
       .def("is_end",
           &pacer::SequentialGPSSource::IsEnd)
+      .def("read_accl",
+          &pacer::SequentialGPSSource::ReadAccl, nb::arg("on_sample"))
+      .def("read_grav",
+          &pacer::SequentialGPSSource::ReadGrav, nb::arg("on_sample"))
+      .def("read_cori",
+          &pacer::SequentialGPSSource::ReadCori, nb::arg("on_sample"))
       .def("seek",
           &pacer::SequentialGPSSource::Seek, nb::arg("target"))
       .def("next",

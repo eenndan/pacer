@@ -50,4 +50,33 @@ struct Vec3f : public VectorOperators<Vec3f, double, 3> {
   }
 };
 
+// A timestamped 3-axis IMU sample (used for ACCL accelerometer m/s^2 and GRAV gravity
+// vector). `time` is on the MEDIA clock (seconds, same basis as the GPS payload spans, so
+// it syncs to the video; chapter offsets are applied by the SequentialGPSSource chain just
+// like GPS). The three axes are carried in the GoPro stream's native element order
+// (ACCL: Z,X,Y in m/s^2; GRAV: a unit gravity-direction vector). The studio layer resolves
+// the camera->kart frame transform on top of these raw axes.
+struct IMUSample {
+  double x = 0, y = 0, z = 0;
+  double time = 0;
+};
+
+inline std::ostream &operator<<(std::ostream &os, const IMUSample &s) {
+  return os << "IMU(t: " << std::setprecision(4) << std::fixed << s.time
+            << ", x: " << s.x << ", y: " << s.y << ", z: " << s.z << ")";
+}
+
+// A timestamped orientation quaternion (used for CORI camera-orientation, w,x,y,z).
+// `time` is on the MEDIA clock (seconds), same basis as IMUSample / GPS.
+struct QuatSample {
+  double w = 1, x = 0, y = 0, z = 0;
+  double time = 0;
+};
+
+inline std::ostream &operator<<(std::ostream &os, const QuatSample &s) {
+  return os << "Quat(t: " << std::setprecision(4) << std::fixed << s.time
+            << ", w: " << s.w << ", x: " << s.x << ", y: " << s.y
+            << ", z: " << s.z << ")";
+}
+
 } // namespace pacer
