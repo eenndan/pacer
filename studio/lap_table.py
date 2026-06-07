@@ -8,7 +8,8 @@ and "23.10" as 23.1 — not lexically. Clicking a header toggles asc/desc; the d
 Row/cell highlights are keyed by LAP ID, not row index, and re-applied after every sort so
 they always follow the right lap: the ▶ playing marker + bold (current lap), the green best
 lap (F-existing), the blue Qt selection, and the PURPLE per-sector session-best cells (F5 —
-the fastest split in each S-column across all valid laps, motorsport convention).
+the fastest split in each S-column across all valid laps, motorsport convention). Base row
+text is near-black for readability on the light table background.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from .session import fmt_time
 
+BASE_COLOR = QColor("#101010")          # near-black: default row text (the table is on a LIGHT bg)
 BEST_COLOR = QColor("#06d6a0")          # green: the overall best lap (foreground on every cell)
 BEST_SECTOR_COLOR = QColor("#b388eb")   # purple: per-column session-best split (F5)
 CURRENT_PREFIX = "▶ "  # "▶ " marks the lap currently playing on the video
@@ -181,8 +183,9 @@ class LapTable(QWidget):
                 item = self.table.item(r, c)
                 if item is None:
                     continue
-                # Default theme foreground unless overridden below.
-                item.setForeground(BEST_COLOR if is_best else QColor("#e6e6e6"))
+                # Base text is near-black for readability on the light table background; the
+                # green best-lap / purple best-sector foregrounds override it per cell below.
+                item.setForeground(BEST_COLOR if is_best else BASE_COLOR)
             # Purple per-sector session-best: a sector cell whose value equals that column's min
             # reads purple+bold, overriding the green-best-lap foreground for THAT cell (F5 must
             # coexist with green/blue/▶).
