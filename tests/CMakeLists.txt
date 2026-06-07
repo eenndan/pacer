@@ -34,4 +34,9 @@ if(Python_Interpreter_FOUND)
     # g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
     add_test(NAME test_gmeter
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter.py)
+    # g-meter OVERLAY display-layer tests (felt-force convention, shake filter, per-lap envelope).
+    add_test(NAME test_gmeter_overlay
+             COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter_overlay.py)
+    set_tests_properties(test_gmeter_overlay PROPERTIES
+                         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
