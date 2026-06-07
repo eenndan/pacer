@@ -5,6 +5,13 @@ It's still work-in-progress, but the worst of the early-days jank has been clean
 up: input paths are no longer baked into the binary, timestamp interpolation now
 runs in C++, there's a small test suite, and the build is green again.
 
+There are now **two front-ends** on the same C++ core:
+
+- **`studio/`** — the current focus: a local **PySide6 + pyqtgraph** desktop app (track map,
+  speed/Δ-to-best charts, lap table, synced GoPro video, accelerometer g-meter overlay), written
+  in pure Python on top of the core via its Python bindings. See [studio/README.md](studio/README.md).
+- `apps/timeline.cpp` — the original C++/ImGui GUI. Still builds; new feature work happens in `studio/`.
+
 ## getting started
 
 ### env
@@ -23,21 +30,24 @@ After that, there are pixi tasks for the common stuff (no need to memorize comma
 
 ```bash
 pixi run build      # configure + build everything (cmake + Ninja)
-pixi run test       # run the C++ (Catch2) tests via ctest
+pixi run test       # run the C++ (Catch2) + Python studio tests via ctest
 pixi run test-py    # C++ vs PyTorch interpolation parity check
-pixi run timeline   # build + launch the GUI app
+pixi run studio     # build + launch the studio app (PySide6); pass files: pixi run studio -- a.MP4
+pixi run timeline   # build + launch the C++/ImGui GUI app
 pixi run fmt        # clang-format the C/C++ sources
 pixi run web        # build the WASM/web app (needs an Emscripten SDK)
 ```
 
 ### what to do?
 
-There're two good places to get started:
+Good places to start:
 
-- `timeline` app — the GUI (map, lap table, delta plots). Point it at your files
-  via CLI args or a config: `pixi run timeline -- a.MP4 b.MP4` or copy
-  `pacer.example.json` to `pacer.json`. It uses the C++ gradient-descent timestamp
-  interpolation automatically;
+- the **studio app** — `pixi run studio -- /path/to/GX010060.MP4` (the GoPro chapter siblings can be
+  chained with `--full`). Map + speed/Δ charts + lap table + synced video + g-meter. The full
+  orientation doc is [studio/README.md](studio/README.md);
+- `apps/timeline.cpp` — the original C++ GUI (map, lap table, delta plots). Point it at your files via
+  CLI args or a config: `pixi run timeline -- a.MP4 b.MP4`, or copy `pacer.example.json` to
+  `pacer.json`. It uses the C++ gradient-descent timestamp interpolation automatically;
 - `notebooks/interpolation.ipynb` --- a tidied notebook walking through loading
   GoPro GPS, recovering timestamps with `pacer.interpolate_timestamps`, lap
   segmentation and lap-delta plots (set `PACER_DATA` to your video folder).
@@ -46,19 +56,21 @@ There're two good places to get started:
 
 Some components:
 
-- `pacer/`: bread and butter --- main library code, mixed C++ and Python stuff;
-- `apps/timeline.cpp`: main app: consists of bunch of different views on top of parsed data;
-- `examples/`: bunch of examples of usage of 3rd party dependencies (e.g. implot, imgui, gpmf-parser);
-- `notebooks/`: me hacking stuff and never tyding it up;
-- `libs/`: parser for telemetry data, laps mangling, some geometry utilities;
-- `bindings/`: python bindings that semi-automatically generated from C++ source code, not too stable.
+- `pacer/`: bread and butter --- the C++ core library (datatypes, geometry, gps-source,
+  interpolation, laps, laps-display);
+- `studio/`: the PySide6 + pyqtgraph desktop app (the current product) on top of the core;
+- `apps/timeline.cpp`: the original C++/ImGui GUI: a bunch of views on top of the parsed data;
+- `examples/`: examples of using the 3rd-party dependencies (implot, imgui, gpmf-parser, hello_imgui);
+- `notebooks/`: me hacking stuff and never tidying it up;
+- `bindings/`: Python bindings semi-automatically generated from the C++ source.
 
 ## future ideas
 
 Still in progress:
 
-- actual video-feed inside `timeline` app;
-- more on-line approach, e.g. to use live in session for comments like:
+- more tracks (the studio app currently hard-codes one) + real track auto-detection;
+- persisting sector / start-line edits per file;
+- a more on-line approach, e.g. to use live in session for comments like:
   - too much wheelspin on exit;
   - too little braking on entry;
   - shorter line is better;
@@ -68,15 +80,20 @@ Still in progress:
   loading still needs preloading into the emscripten FS);
 - keep chipping away at the code (it's much better, but still WIP).
 
+See [studio/PLAN.md](studio/PLAN.md) for the studio app's full state, shipped features, the
+empirically-rejected experiments, and the near-term backlog.
+
 Wow, something already done:
 
+- the **studio app** — map + speed/Δ charts + lap table + **synced GoPro video** + accelerometer
+  g-meter overlay, with GPS9 true-clock lap timing (validated unbiased vs a real transponder);
 - lap segmentation, comparison between laps with delta;
-- nanobind-based python bindings to rapidly experiment in python;
-- integration with 3rd party gps data, e.g. from sampled file, consider building ios app for capturing;
-- timestamp interpolation in C++ (gradient descent), exposed to Python and used
-  by the `timeline` app — verified to match the original PyTorch implementation;
+- nanobind-based Python bindings to rapidly experiment in Python;
+- integration with 3rd-party GPS data (GoPro GPMF + sampled `.dat` file);
+- timestamp interpolation in C++ (gradient descent), exposed to Python — verified to match the
+  original PyTorch implementation (now superseded by GPS9 in the studio app; kept opt-in);
 - config/CLI-driven inputs (no more hard-coded paths), formatting/lint config,
-  pixi tasks, and a Catch2 test suite (ops, geometry, laps, interpolation).
+  pixi tasks, and a test suite (C++ Catch2 + pure-Python studio tests).
 
 ## credits
 
