@@ -19,7 +19,7 @@ import numpy as np
 
 import pacer
 
-from . import chapters, gapfill, tracks
+from . import chapters, gapfill, gmeter, tracks
 
 DEFAULT_SAMPLE = "3rdparty/gpmf-parser/samples/hero6.mp4"  # a clip with real motion
 
@@ -152,6 +152,36 @@ def _read_gpmf(paths):
             naive.append(a + (b - a) * (i / n if n else 0.0))
         head.next()
     return samples, spans, naive, durations
+
+
+def _read_imu(paths):
+    """Read the GoPro IMU streams (ACCL accelerometer, GRAV gravity vector, CORI camera
+    orientation) for the whole recording, on the global MEDIA clock — the same basis as the GPS
+    trace and the video. Uses the identical left-leaning `SequentialGPSSource` chain as
+    `_read_gpmf`, whose C++ `read_accl/grav/cori` shift each later chapter by the cumulative
+    duration, so a multi-chapter recording comes out on one continuous clock with no per-chapter
+    reset (lining up with the telemetry trace's global axis used for video sync).
+
+    Returns (accl, grav, cori) as numpy arrays — accl/grav: (N,4) [t,x,y,z]; cori: (N,5)
+    [t,w,x,y,z] — or empty (0,4)/(0,5) arrays for an older camera that lacks a stream. The
+    studio gmeter module resolves the camera->kart frame transform on top of these raw axes.
+    """
+    owners = [pacer.GPMFSource(paths[0])]
+    head = owners[0]
+    for p in paths[1:]:
+        nxt = pacer.GPMFSource(p)
+        owners.append(nxt)
+        head = pacer.SequentialGPSSource(head, nxt)
+        owners.append(head)  # keep the chain alive while we iterate
+
+    accl, grav, cori = [], [], []
+    head.read_accl(lambda s: accl.append((s.time, s.x, s.y, s.z)))
+    head.read_grav(lambda s: grav.append((s.time, s.x, s.y, s.z)))
+    head.read_cori(lambda s: cori.append((s.time, s.w, s.x, s.y, s.z)))
+    a = np.asarray(accl, float).reshape(-1, 4)
+    g = np.asarray(grav, float).reshape(-1, 4)
+    c = np.asarray(cori, float).reshape(-1, 5)
+    return a, g, c
 
 
 # --- True-clock timing from the GPS9 per-sample timestamps -------------------------------
@@ -409,6 +439,10 @@ class Session:
         self._seg_cache: dict[int, list] = {}
         self._fills_cache: dict[int, list] = {}
         self._reference_xy = None  # lazily-built georeferenced track centerline (fallback donor)
+        # Vehicle-frame g (lateral/longitudinal in g) precomputed from the GoPro ACCL+GRAV+CORI,
+        # cross-checked against GPS-derived g. Built in load() (needs the trace arrays below);
+        # an empty meter until then, so a from-scratch Session() (no IMU) just has no g signal.
+        self._gmeter: gmeter.GMeter = gmeter._empty()
 
         # Full-trace arrays in local meters + the video-clock time + speed (km/h).
         n = laps.point_count()
@@ -487,7 +521,46 @@ class Session:
                 start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]
             )
             laps.update()
-        return cls(laps, cs, video_path, chapter_map)
+        session = cls(laps, cs, video_path, chapter_map)
+        # Vehicle-frame g from the real GoPro accelerometer, cross-checked vs GPS-derived g.
+        # Built here (the trace arrays now exist) and cached; never recomputed per frame.
+        session._build_gmeter(paths)
+        return session
+
+    def _build_gmeter(self, paths: list[str]) -> None:
+        """Read the GoPro IMU streams and precompute the vehicle-frame g(t) series, aligned to
+        the SAME smoothed GPS trace + media clock the rest of the session uses (so it syncs to
+        the video and respects chapter offsets). Reports the ACCL-vs-GPS cross-check once at
+        load. Degrades silently to an empty meter if the IMU is absent or reading fails — the
+        overlay just shows no data, and nothing else in the session is affected."""
+        try:
+            accl, grav, cori = _read_imu(paths)
+        except Exception as e:  # noqa: BLE001 — IMU is additive; never break a load over it
+            print(f"studio: IMU read failed ({e!r}); g-meter disabled.", flush=True)
+            return
+        # Per-chapter alignment spans: CORI is referenced to each chapter's own capture start,
+        # so the camera->ENU yaw must be fit independently per chapter. Build (start, end) global
+        # spans from the chapter offset table (single chapter => one full span).
+        seg_bounds = None
+        if self.chapters is not None and len(self.chapters.chapters) > 1:
+            chs = self.chapters.chapters
+            seg_bounds = [(c.offset, chs[i + 1].offset if i + 1 < len(chs) else c.offset + 1e9)
+                          for i, c in enumerate(chs)]
+        # The GPS trajectory for the cross-check + heading is the session's own smoothed trace:
+        # local-metre east/north (tx,ty), media time (tt), speed in m/s (tv is km/h).
+        self._gmeter = gmeter.compute(
+            accl, grav, cori,
+            gps_t=self.tt, gps_x=self.tx, gps_y=self.ty, gps_speed=self.tv / 3.6,
+            segment_bounds=seg_bounds)
+        gm = self._gmeter
+        if gm.cross is not None:
+            print(f"studio: {gm.cross.summary()}", flush=True)
+            if gm.source == "gps":
+                print("studio: ACCL g looked unreliable — using GPS-derived g for the meter.",
+                      flush=True)
+        elif gm.has_data:
+            print(f"studio: g-meter using {gm.source}-derived g "
+                  f"({len(gm)} samples, no cross-check).", flush=True)
 
     @staticmethod
     def _interpolated_or_naive(samples, spans, naive) -> list[float]:
@@ -1019,6 +1092,24 @@ class Session:
         if i is None:
             return None
         return float(self.tv[i])
+
+    def g_at_time(self, t: float) -> tuple[float, float, float] | None:
+        """Vehicle-frame g at media-clock time `t`: (lateral_g, longitudinal_g, total_g), or
+        None if no g signal is available. Signs: +lateral = turning left, +longitudinal =
+        accelerating (−longitudinal = braking). O(log n) lookup into the precomputed series —
+        cheap enough for the 30 Hz overlay tick. The g comes from the GoPro accelerometer
+        (ACCL+GRAV+CORI), transformed into the kart frame (see studio/gmeter.py)."""
+        return self._gmeter.at_time(t)
+
+    @property
+    def has_gmeter(self) -> bool:
+        """True if a vehicle-frame g signal was computed (IMU present and usable)."""
+        return self._gmeter.has_data
+
+    def gmeter_source(self) -> str:
+        """Which sensor drives the live g signal: "accl" (the GoPro accelerometer, the default)
+        or "gps" (the GPS-derived fallback, used if the IMU is absent or proved unreliable)."""
+        return self._gmeter.source
 
     def delta_at_time(self, t: float) -> float | None:
         """Δ-to-best (seconds) at media-clock time `t`: how far ahead (−) / behind (+) the lap
