@@ -535,15 +535,31 @@ QLabel.PanelHeader, QLabel[role="PanelHeader"] {{
     padding: 6px 12px;
     border-bottom: 1px solid {C.border};
 }}
-/* hero Δ/speed readout card */
-QLabel#DiffBox {{
+/* a header-strip container holding widgets (map header / charts' consolidated bar): same
+   surface bg + bottom hairline as a text PanelHeader, but it lays out child widgets itself. */
+QWidget[role="PanelHeader"] {{
     background-color: {C.surface};
+    border-bottom: 1px solid {C.border};
+}}
+/* section label that sits INSIDE a widget header bar — the dimmed small header type, but no
+   bg/border of its own (the parent bar already provides them). */
+QLabel[role="BarLabel"] {{
+    background: transparent;
+    color: {C.text_dim};
+    font-size: {PANEL_HEADER}px;
+    font-weight: 600;
+}}
+/* hero Δ/speed readout — emphasized centre element of the charts' consolidated header bar
+   (mono/tabular, hero size). No bg/border of its own: the bar provides them, so the readout
+   sits inline between the section label and the x-mode toggle. Only the Δ-value COLOUR is
+   driven per-tick (a merged `color:` rule); everything else is set once here. */
+QLabel#DiffBox {{
+    background: transparent;
     color: {C.text};
     font-family: {MONO_STACK};
     font-size: {HERO}px;
     font-weight: 600;
-    padding: 10px 12px;
-    border-bottom: 1px solid {C.border};
+    padding: 2px 8px;
 }}
 /* slim multi-chapter banner strip */
 QLabel#ChapterBanner {{

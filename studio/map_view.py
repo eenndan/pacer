@@ -12,7 +12,7 @@ from __future__ import annotations
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
 from .session import Seg
 from .theme import C
@@ -143,6 +143,10 @@ class MapView(QWidget):
         self.plot.showGrid(x=False, y=False)
         for side in ("left", "bottom", "top", "right"):
             self.plot.hideAxis(side)
+        # With the axes hidden, drop the PlotItem's default content margins so the (aspect-locked)
+        # track fills the panel edge-to-edge — no wasted chrome gutter around a shape-only map.
+        self.plot.layout.setContentsMargins(0, 0, 0, 0)
+        self.plot.setContentsMargins(0, 0, 0, 0)
         # The full ~16k-point trace is no longer drawn (jagged + slow). Instead we draw at most
         # the best lap (faint reference) and the current lap (highlighted) — a few hundred points.
         # Each lap is drawn as measured (solid) + reconstructed (dashed/dimmed) segments, so GPS
@@ -156,8 +160,12 @@ class MapView(QWidget):
         if len(session.tx) and len(session.ty):
             x_lo, x_hi = float(session.tx.min()), float(session.tx.max())
             y_lo, y_hi = float(session.ty.min()), float(session.ty.max())
-            px = max(x_hi - x_lo, 1.0) * 0.05
-            py = max(y_hi - y_lo, 1.0) * 0.05
+            # Tight padding (2%) so the aspect-locked track is drawn as LARGE as possible in the
+            # now-shorter map panel (the right column rebalanced to give the charts the majority).
+            # Aspect lock still letterboxes to the track's true shape; a small pad just keeps the
+            # start/sector handles from sitting flush against the panel edge.
+            px = max(x_hi - x_lo, 1.0) * 0.02
+            py = max(y_hi - y_lo, 1.0) * 0.02
             vb = self.plot.getViewBox()
             vb.setRange(xRange=(x_lo - px, x_hi + px), yRange=(y_lo - py, y_hi + py), padding=0)
             vb.disableAutoRange()
@@ -176,19 +184,17 @@ class MapView(QWidget):
         self._rebuild(session.start_line, session.sector_lines)
         self._refresh_best()
 
-        add_btn = QPushButton("Add sector")
-        reset_btn = QPushButton("Reset sectors")
-        add_btn.clicked.connect(self._add_sector)
-        reset_btn.clicked.connect(self._reset_sectors)
-        row = QHBoxLayout()
-        row.addWidget(add_btn)
-        row.addWidget(reset_btn)
-        row.addStretch(1)
+        # The sector controls are EXPOSED (not placed here) so app.py can mount them compactly,
+        # right-aligned, in the MAP panel's header row — reclaiming the full-width button row that
+        # used to sit between the map and the charts. Their handlers/signal wiring are unchanged.
+        self.add_sector_btn = QPushButton("Add sector")
+        self.reset_sectors_btn = QPushButton("Reset sectors")
+        self.add_sector_btn.clicked.connect(self._add_sector)
+        self.reset_sectors_btn.clicked.connect(self._reset_sectors)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.widget, 1)
-        lay.addLayout(row)
 
     # ----------------------------------------------------------- timing lines
     def _rebuild(self, start: Seg, sectors: list[Seg]):

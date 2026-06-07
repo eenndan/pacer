@@ -1,6 +1,10 @@
 """PlotsView: speed (top) and lap-vs-best delta (bottom) on ONE shared, x-linked x-axis.
 
-Shows the laps selected in the lap table. A vertical cursor on both plots follows the
+Shows the laps selected in the lap table PLUS the best lap as an always-on green reference
+(`SERIES_BEST`) — the panel is "Δ TO BEST", so the best lap is the baseline and is drawn even
+when the user selects other laps. The best is added to a DRAW set at refresh time only; the
+selection (`self._lap_ids`) is never mutated, so the cursor/scrub/hover-dot/auto-follow keep
+keying off the user's current lap, not the best. A vertical cursor on both plots follows the
 video position whenever the currently-playing lap is among those displayed.
 
 Both plots share a single x-axis driven by the dist/time toggle and kept x-linked, so the same
@@ -23,7 +27,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QVBoxLayout, QWidget
 
 from . import theme
 from .session import fmt_time
@@ -79,19 +83,31 @@ class PlotsView(QWidget):
 
         # x-axis toggle — drives BOTH plots together (distance ⇄ time-into-lap). The plots share
         # one x-axis and stay x-linked, so the speed + delta cursors always align in either mode.
+        # The combo is EXPOSED but NOT placed here: app.py mounts it (right-aligned) in the single
+        # consolidated bar above the charts — section label · Δ/speed readout · this toggle — so
+        # the toggle no longer eats its own full-width row. Its modeChanged wiring is unchanged.
         self.x_mode = QComboBox()
         self.x_mode.addItems(["x: distance", "x: time"])
         self.x_mode.currentIndexChanged.connect(self._on_mode_changed)
-        bar = QHBoxLayout()
-        bar.setContentsMargins(2, 2, 2, 0)
-        bar.addWidget(self.x_mode)
-        bar.addStretch(1)
 
         self.glw = pg.GraphicsLayoutWidget()
+        # Tight outer margins + inter-plot spacing so the plot area fills the panel — the charts
+        # are the analytical core and need every pixel. Set on the central GraphicsLayout.
+        self.glw.ci.layout.setContentsMargins(2, 2, 2, 2)
+        self.glw.ci.layout.setSpacing(4)
         self.p_speed = self.glw.addPlot(row=0, col=0)
         self.p_delta = self.glw.addPlot(row=1, col=0)
+        # Give the Δ plot more room — it was a cramped sliver. Row stretch ≈ speed 58 / Δ 42 so
+        # the delta curve (the priority readout) is comfortably legible while speed stays dominant.
+        self.glw.ci.layout.setRowStretchFactor(0, 58)
+        self.glw.ci.layout.setRowStretchFactor(1, 42)
         self.p_speed.setLabel("left", "speed (km/h)")
-        self.p_speed.setLabel("bottom", "distance (m)")
+        # The two plots are x-linked and share ONE x-axis, so the speed plot's bottom axis would
+        # just duplicate the Δ plot's "distance (m)"/"time (s)" labels+ticks — wasted vertical
+        # space. Hide the speed plot's bottom axis entirely; the SHARED x ticks/label live on the
+        # BOTTOM (Δ) plot only. The gridlines below still draw the vertical guides on the speed
+        # plot, so it reads cleanly against the same x.
+        self.p_speed.hideAxis("bottom")
         # Faint gridlines (alpha 0.10) so they read as a quiet backdrop, not a foreground grid.
         self.p_speed.showGrid(x=True, y=True, alpha=0.10)
         leg = self.p_speed.addLegend(offset=(8, 8))
@@ -108,13 +124,14 @@ class PlotsView(QWidget):
         self.p_delta.addLine(y=0, pen=ZERO_LINE_PEN)
 
         # Premium axis styling (Phase 2): dim axis lines + tick text to tokens, tabular numeric
-        # tick font, and reduced tick clutter. Set ONCE here — never on the 30 Hz tick.
-        for plot in (self.p_speed, self.p_delta):
-            for side in ("left", "bottom"):
+        # tick font, and reduced tick clutter. Set ONCE here — never on the 30 Hz tick. The speed
+        # plot's bottom axis is hidden (shared x lives on the Δ plot), so only style its LEFT axis.
+        for plot, sides in ((self.p_speed, ("left",)), (self.p_delta, ("left", "bottom"))):
+            for side in sides:
                 ax = plot.getAxis(side)
                 ax.setPen(C.border)            # dim axis line + ticks
                 ax.setTextPen(C.text_dim)      # tick labels + axis title
-                ax.setTickFont(theme.mono_font(10))  # tabular figures so digits column-align
+                ax.setTickFont(theme.mono_font(11))  # tabular figures so digits column-align
                 ax.setStyle(maxTickLevel=1, hideOverlappingLabels=True)  # fewer, cleaner ticks
         # Legend + per-plot title read dimmed (the title is rebuilt in refresh()).
         if leg is not None:
@@ -160,9 +177,9 @@ class PlotsView(QWidget):
         self.p_delta.addItem(self.hover_label)
         self.p_delta.scene().sigMouseMoved.connect(self._on_delta_hover)
 
+        # The view is now JUST the charts; the x-mode toggle lives in app.py's consolidated bar.
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addLayout(bar)
         lay.addWidget(self.glw)
 
     def _on_mode_changed(self, index):
@@ -270,10 +287,10 @@ class PlotsView(QWidget):
         self._clear_sectors()
 
         # Both plots share ONE x-axis (distance = s×best_dist, or time-into-lap), kept x-linked
-        # in BOTH modes so the two cursors always align. Just relabel the (shared) bottom axis.
+        # in BOTH modes so the two cursors always align. The shared x label/ticks live ONLY on the
+        # bottom (Δ) plot — the speed plot's bottom axis is hidden — so relabel just the Δ axis.
         x_mode = "time" if self._time_mode else "distance"
         label = "time (s)" if self._time_mode else "distance (m)"
-        self.p_speed.setLabel("bottom", label)
         self.p_delta.setLabel("bottom", label)
 
         # Hide the cursors before fitting: cur_speed still holds the PREVIOUS mode's x (a
@@ -287,23 +304,41 @@ class PlotsView(QWidget):
         self.p_speed.enableAutoRange()
         self.p_delta.enableAutoRange()
 
+        # The whole panel is "Δ TO BEST" — the best lap IS the reference curve, so it must ALWAYS
+        # be drawn (green) regardless of the user's selection, even when they picked other laps.
+        # Build a DRAW set = the selection plus the best lap (appended once if not already chosen),
+        # WITHOUT mutating self._lap_ids: the cursor/scrub/hover-dot/auto-follow all key off
+        # _lap_ids and the current lap, so the always-on best reference must not change which lap
+        # is "current". (session.delta already fetches the best lap's arrays internally, but we
+        # pass it explicitly so its speed/delta series come back in `speed`/`delta` to be drawn.)
+        best = self.session.best_lap_id()
+        draw_ids = list(self._lap_ids)
+        best_always_on = best is not None and best not in draw_ids
+        if best_always_on:
+            draw_ids.append(best)
+
         # One delta() call yields BOTH plots' series on the SAME x basis for `x_mode`, so the
         # speed and delta curves (and the cursors) share one axis and stay x-linked → aligned.
-        result = self.session.delta(self._lap_ids, x_mode=x_mode)
+        result = self.session.delta(draw_ids, x_mode=x_mode)
         if not result:
             self.p_speed.setTitle(None)
             return
         best, speed, delta = result
         labels = [f"lap {lid} {fmt_time(self.session.laps.lap_time(lid))}"
-                  + (" ★best" if lid == best else "") for lid in self._lap_ids]
+                  + (" ★best" if lid == best else "") for lid in draw_ids]
         self.p_speed.setTitle("   ".join(labels) or None)
-        for k, lid in enumerate(self._lap_ids):
+        for k, lid in enumerate(draw_ids):
             # Semantic colouring (Phase 2): the BEST lap is green (C.ahead) to match the lap
             # table; every other lap cycles through the categorical CHART_SERIES (amber accent
             # first → the primary/first-selected lap pops). width=2 solid keeps the fast path.
-            color = theme.SERIES_BEST if lid == best else PALETTE[k % len(PALETTE)]
-            pen = pg.mkPen(color, width=2)
-            name = f"lap {lid}" + (" (best)" if lid == best else "")
+            # The ALWAYS-ON best reference (drawn because it's the Δ baseline, not because the
+            # user selected it) is rendered slightly thinner so an explicitly-selected lap reads
+            # as primary — but it stays clearly green so "Δ to best" always has its green baseline.
+            is_best = lid == best
+            color = theme.SERIES_BEST if is_best else PALETTE[k % len(PALETTE)]
+            width = 1 if (is_best and best_always_on) else 2
+            pen = pg.mkPen(color, width=width)
+            name = f"lap {lid}" + (" (best)" if is_best else "")
             if lid in speed:
                 sx, spd = speed[lid]
                 c = self.p_speed.plot(sx, spd, pen=pen, name=name)
