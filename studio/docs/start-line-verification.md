@@ -127,9 +127,10 @@ both recordings, and sits at the robust per-lap-noise minimum. **Kept unchanged.
 here changes per-lap *noise* and *segmentation*, but **not the mean lap time** — so it is not the
 source of the residual, and the present placement is already the right one.
 
-Validation: `pixi run build` clean, `pixi run test` 10/10, `python -m studio._smoke` OK. No
-source files changed (the pre-existing `UP037` ruff hits in `studio/*.py` are unrelated tech
-debt). The transponder CSV and the `.startline_tmp/` scratch were **not** committed.
+Validation (at the time of this investigation): `pixi run build` clean, `pixi run test` all passing,
+`python -m studio._smoke` OK. No source files changed (the pre-existing `UP037` ruff hits in
+`studio/*.py` are unrelated tech debt). The transponder CSV and the `.startline_tmp/` scratch were
+**not** committed.
 
 Figures in `start-line-figures/`:
 * `satellite-trace-overlay-0060.png` — GPS trace (speed-coloured) on the georeferenced
