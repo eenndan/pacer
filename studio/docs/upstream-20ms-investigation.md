@@ -44,6 +44,17 @@ per-lap); what method produces it; and is THIS repo missing something the author
    burned by twice. **It never beats GPS9 on either recording.** We are not missing anything;
    dropping it from the default path was correct.
 
+6. **Ran the notebook's OWN lap-timing code (not just our port), lap-by-lap vs GPS9 vs the
+   transponder, on BOTH recordings (§4b).** Our C++ port is a **bit-faithful** copy of the
+   notebook's parametric **t2** fit (parity max |Δt| = 3.6e-15 s). With the lap segmentation held
+   constant so only the time axis varies, the notebook's t2 **matches GPS9 on 0062 (clean std
+   0.0527 s = GPS9's) and diverges on 0060 (std 0.264 s; breaks one lap to 64.4 s)** — identical to
+   the port, as it must be. The notebook's other variant, the free per-sample **t1** (which the
+   port never implemented), is more robust on 0060 (std 0.098 s) but is **still noisier than GPS9
+   (0.087 s)**. **Neither notebook method beats GPS9 on either recording.** The author's `GH010251`
+   is unavailable, so this is the notebook's *method* on our files — the only place transponder
+   truth exists.
+
 **Apples-to-apples:** our validated GPS9 timing is **mean +0.0015–0.0030 s (≈1–3 ms), median
 ≈+0.001 s, std 0.053–0.087 s** vs the real transponder. If "20 ms" were a *mean/median bias*
 claim, **we already beat it by ~10×** (we're at 1–3 ms). If it were a *per-lap* figure, no method
@@ -180,6 +191,100 @@ noisier stream's dropouts/gated fixes, where it warps the timeline. GPS9 true-cl
 **both**. (Same out-of-sample discipline that killed the clock-rate factor and the Doppler-RTS
 smoother in `gps-accuracy-research.md`.)
 
+## 4b. Side-by-side: the notebook's OWN lap-timing pipeline vs ours
+
+§4 tested *our C++ port* (`Session.load(interpolate=True)`). It did **not** run the notebook's
+own Python code. This section closes that gap: it runs the **notebook's literal PyTorch
+optimizers** and lines the notebook-generated lap times up against our GPS9 timing and the
+transponder, lap by lap, on **both** recordings.
+
+**Harness:** `studio/docs/gps_research_scripts/notebook_vs_gps9.py`. The `notebook_t1` (free
+per-sample Adam) and `notebook_t2` (parametric `{phase, frequency}` Adam) functions are copied
+**verbatim** from `notebooks/interpolation.ipynb` cells `4c1dba4b` and `31c96b74` — same loss
+(`spacing + [floor,ceil]` constraints), same `[1e-1,1e-2,1e-3]` LR schedule, fresh `torch.optim.Adam`
+per rate, same `di = max(round(dist/avg_speed·rough_freq), 1)` and the `floor/ceil = payload span`.
+GH010251 (the author's file) is unavailable, so we run the notebook's **method** on our
+recordings — the only place transponder truth exists anyway.
+
+**Apples-to-apples (only the time axis varies):** one common cleaned+smoothed sample set and one
+common shipping track-aware start/finish line are built once; the SAME samples are added to three
+`pacer.Laps` whose only difference is the per-sample TIME (notebook-t1 / notebook-t2 / GPS9). The
+script asserts the per-lap **sample membership is identical** across all three (it is —
+`pacer.Laps` segments by *geometry*, crossing the line, not by time), so `lap_time(i)` — a
+difference of two crossing instants — is the only thing that moves. The transponder alignment is
+the same duration-correlation lock as §4 (`corr 0.9917` on 0060 → CSV 302–358; `0.9965` on 0062 →
+CSV 856–920).
+
+### Faithfulness verdict: YES, our C++ port == the notebook's t2
+
+The C++ `pacer::InterpolateTimestamps` is a **bit-faithful** re-implementation of the notebook's
+**t2** parametric fit. `tests/test_interpolation_parity.py` (re-run here) reproduces the notebook's
+exact torch t2 in float64 and the C++ result agrees to **max |Δt| = 3.6e-15 s**, phase/frequency to
+< 1e-6. Same model `t[i]=phase+(cumsum(di)−1)/freq`, same loss, same per-rate Adam reset; the C++
+gradient is analytic (the spacing term is identically zero under this model, so only the
+`[floor,ceil]` term drives the fit). The one notebook detail — `di.long().cumsum()` truncates to
+int before the cumsum — is a **no-op** because `di` is already `round(...)≥1` (whole numbers), so
+parity holds on real data too. **Difference from the notebook: the C++ port implements only t2.**
+The notebook *also* has **t1** (the free per-sample optimiser), which the port never exposed; t1 is
+the more robust of the two but is not in the shipping path.
+
+### Per-lap residuals vs the transponder, SAME segmentation (clean racing laps)
+
+| recording | timing | clean n | mean | median | **std** | rms |
+|---|---|---:|---:|---:|---:|---:|
+| **0060** | notebook **t1** (free) | 48 | +0.0080 | −0.0086 | 0.0979 | 0.0982 |
+| **0060** | notebook **t2** (parametric ≡ our C++ port) | 48 | −0.1216 | −0.1963 | **0.2644** | 0.2911 |
+| **0060** | **our GPS9** (ship) | 48 | +0.0030 | +0.0009 | **0.0871** | 0.0872 |
+| **0062** | notebook **t1** (free) | 59 | +0.0024 | −0.0089 | 0.0645 | 0.0645 |
+| **0062** | notebook **t2** (parametric ≡ our C++ port) | 59 | −0.0071 | −0.0076 | **0.0527** | 0.0532 |
+| **0062** | **our GPS9** (ship) | 59 | +0.0015 | +0.0010 | **0.0527** | 0.0527 |
+
+Example rows (per-lap, seconds; `Δ = method − transponder`):
+
+```
+0060   csv  transp   nb_t1   nb_t2    gps9   t1-tr   t2-tr   g9-tr   flag
+       302  70.538  70.468  71.527  70.464  -0.070  +0.989  -0.074  clean
+       305  68.937  68.816  64.434  68.801  -0.121  -4.503  -0.136  dropout  <- t2 BREAKS this lap
+       314  69.743  69.920  69.808  69.938  +0.177  +0.065  +0.195  clean
+       358  76.832  76.794  76.564  76.817  -0.038  -0.268  -0.015  pit/slow
+
+0062   csv  transp   nb_t1   nb_t2    gps9   t1-tr   t2-tr   g9-tr   flag
+       856  69.726  69.697  69.718  69.727  -0.029  -0.008  +0.001  clean
+       861  71.406  71.487  71.407  71.416  +0.081  +0.001  +0.010  clean
+       877  68.789  68.848  69.305  68.877  +0.059  +0.516  +0.088  dropout
+       920  68.829  68.881  68.804  68.812  +0.052  -0.025  -0.017  clean
+```
+
+### Reading it — the decisive answers
+
+- **Do the notebook lap times differ from ours, and by how much?** On **0062 (clean GPS)** they
+  are **the same to ~1 ms**: notebook-t2 clean std 0.0527 s vs GPS9 0.0527 s (identical to 4 dp),
+  notebook-t1 0.0645 s; per-lap the three agree within a few ms on every racing lap. On **0060
+  (noisier GPS)** the notebook's **t2 diverges**: it compresses laps (fit frequency 10.03 vs the
+  true 10.0 Hz), pushing the clean median to −0.196 s and the std to **0.264 s (3× GPS9)**, and it
+  **breaks the lap at CSV 305 to 64.4 s** (transponder 68.94, GPS9 68.80) — a **−4.5 s** error.
+  This is the *same* divergence §4's C++ `--interp` showed, as it must be (t2 ≡ the C++ port).
+  The notebook's **t1** is far more robust on 0060 (clean std 0.0979 s) but is still **noisier
+  than GPS9** (0.0871 s).
+- **Is the notebook's method CLOSER to the transponder than our GPS9 timing?** **No — on neither
+  recording.** Best case (0062) t2 *ties* GPS9 (0.0527 = 0.0527); t1 is slightly worse. Worst case
+  (0060) both notebook axes are worse than GPS9 and t2 diverges. **GPS9 has the lowest std on both
+  recordings.** Out of sample, the notebook's own code never beats our shipping timing.
+- **What was actually executed, on what data:** the notebook's literal t1+t2 PyTorch optimizers,
+  on both `GX0060` and `GX0062` (`--full`, all 3 chapters each), with the lap segmentation held
+  constant. The author's `GH010251` is **unavailable**, so the author's exact 6-lap numbers cannot
+  be reproduced; this is the notebook's *method* on our files (where transponder truth exists). For
+  honesty the script also prints the notebook's **NATIVE** output (its own raw `full_speed>3`
+  preprocessing + its own `pick_random_start()`, no gate/clean/smooth) — it runs end-to-end on our
+  data and yields a plausible ~69-s lap list; that native t2 list is *not* transponder-aligned (a
+  short random start line mis-segments), which is exactly why we hold a good shipping segmentation
+  constant for the scored comparison.
+
+**Net:** running the notebook's own pipeline confirms §4 rather than overturning it. Because the
+notebook's t2 *is* our C++ port (parity 3.6e-15), the side-by-side is equivalent to the prior
+`--interp`-vs-GPS9 result — t2 matches GPS9 on 0062 and diverges on 0060. The notebook's *t1*
+variant (not ported) is more stable than t2 on 0060 but still does not beat GPS9 on either file.
+
 ## 5. Verdict
 
 - **Is the "20 ms vs transponder" claim true?** It is **not a real upstream statement** — the
@@ -221,19 +326,33 @@ python3 /tmp/claude/decode_figs.py /tmp/claude/upstream_interpolation.ipynb 11 1
 pixi run python -m studio._validate_wallclock -- /path/GX010060.MP4 "<transponder.csv>" \
     --race-start "2026-05-23 12:00:00Z" --dump /tmp/claude/baseline_0060.json
 
-# GPS9-vs-Adam-interpolation comparison, same alignment, BOTH recordings
-PYTHONPATH=. pixi run python /tmp/claude/validate_interp.py /path/GX010060.MP4 "<csv>" \
+# GPS9-vs-our-C++-port comparison (Session.load interpolate=True), same alignment, BOTH recordings
+PYTHONPATH=. pixi run python studio/docs/gps_research_scripts/validate_interp.py /path/GX010060.MP4 "<csv>" \
     --race-start "2026-05-23 12:00:00Z" --dump /tmp/claude/interp_cmp_0060.json
-PYTHONPATH=. pixi run python /tmp/claude/validate_interp.py /path/GX010062.MP4 "<csv>" \
+PYTHONPATH=. pixi run python studio/docs/gps_research_scripts/validate_interp.py /path/GX010062.MP4 "<csv>" \
     --race-start "2026-05-23 12:00:00Z" --dump /tmp/claude/interp_cmp_0062.json
+
+# §4b — the NOTEBOOK's OWN t1/t2 PyTorch pipeline vs GPS9 vs transponder, segmentation held
+# constant (only the time axis varies). OMP_NUM_THREADS=1 avoids a torch OpenMP tmp stall.
+OMP_NUM_THREADS=1 PYTHONPATH=. pixi run python -u \
+    studio/docs/gps_research_scripts/notebook_vs_gps9.py /path/GX010060.MP4 "<csv>" \
+    --race-start "2026-05-23 12:00:00Z" --dump /tmp/claude/notebook_vs_gps9_0060.json
+OMP_NUM_THREADS=1 PYTHONPATH=. pixi run python -u \
+    studio/docs/gps_research_scripts/notebook_vs_gps9.py /path/GX010062.MP4 "<csv>" \
+    --race-start "2026-05-23 12:00:00Z" --dump /tmp/claude/notebook_vs_gps9_0062.json
+
+# faithfulness: C++ port == the notebook's t2 (max |Δt| ~3.6e-15 s)
+pixi run python tests/test_interpolation_parity.py
 
 # GPS9-timestamp presence / rate sanity
 PYTHONPATH=. pixi run python -c "see §3"
 ```
 
-Scripts used (kept under `/tmp/claude`, not committed): `validate_interp.py` (the comparison
-harness), `decode_figs.py` (decodes the upstream plotly base64 typed-arrays). The transponder CSV
-and all `/tmp` dumps are **inputs/scratch only — never committed.**
+Scripts (committed under `studio/docs/gps_research_scripts/`): `validate_interp.py` (GPS9 vs our
+C++ port), **`notebook_vs_gps9.py`** (§4b — the notebook's own t1/t2 PyTorch optimizers vs GPS9 vs
+transponder, segmentation held constant). `decode_upstream_figs.py` decodes the upstream plotly
+base64 typed-arrays. The transponder CSV and all `/tmp` dumps are **inputs/scratch only — never
+committed.**
 
 ## Sources
 - [Upstream notebook (raw)](https://raw.githubusercontent.com/dendi239/pacer/main/notebooks/interpolation.ipynb)
