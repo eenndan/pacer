@@ -1,7 +1,41 @@
 #include "laps.hpp"
 
+#include <algorithm>
+
 #include <pacer/datatypes/datatypes.hpp>
 #include <pacer/geometry/geometry.hpp>
+
+namespace {
+
+// A normal GoPro GPS fix lands every ~0.1 s. An interior jump longer than this is a real
+// DROPOUT (a run of quality-gated / lost fixes), not jitter. Across such a hole the straight
+// GPS chord cuts the corner and UNDER-measures the lap by tens of metres (measured: a single
+// 6 s dropout cost ~100 m on the 0060 session). The vehicle's reported speed, however, is
+// still valid right up to each fix, so the distance actually travelled across the hole is well
+// approximated by the speed integral. We therefore measure each segment geometrically (the GPS
+// chord, which is the right thing for well-sampled track) EXCEPT across a gap, where we take
+// the trapezoidal speed integral 1/2 (v0+v1) * dt instead. Normal segments are untouched, so
+// only the dropout laps change — and they stop under-counting.
+constexpr double kGapSeconds = 0.35;
+
+// Distance attributed to the step prev -> curr: the GPS chord normally, the speed integral
+// when the time step is a dropout (so a chord across a hole no longer cuts the lap short).
+double SegmentDistance(const pacer::CoordinateSystem &cs,
+                       const pacer::PointInTime<pacer::GPSSample> &prev,
+                       const pacer::PointInTime<pacer::GPSSample> &curr) {
+  double chord = cs.Distance(prev.point, curr.point);
+  double dt = curr.time - prev.time;
+  if (dt > kGapSeconds) {
+    double speed_integral =
+        0.5 * (prev.point.full_speed + curr.point.full_speed) * dt;
+    // Never let the fill SHORTEN the measured chord (guards a bad speed reading); the gap arc
+    // is at least the straight-line distance between its mouths.
+    return std::max(chord, speed_integral);
+  }
+  return chord;
+}
+
+} // namespace
 
 void pacer::Laps::Update() {
   if (sectors.start_line == dirty_start_line_ &&
@@ -217,8 +251,9 @@ void pacer::Laps::ClearSectors() { sectors.sector_lines.clear(); }
 
 void pacer::Laps::AddPoint(GPSSample s, double t) {
   if (!points_.empty()) {
-    cum_point_dist_.push_back(cum_point_dist_.back() +
-                              cs_.Distance(points_.back().point, s));
+    cum_point_dist_.push_back(
+        cum_point_dist_.back() +
+        SegmentDistance(cs_, points_.back(), PointInTime<GPSSample>{s, t}));
   }
   points_.emplace_back(s, t);
 }
@@ -235,7 +270,7 @@ void pacer::Laps::SetCoordinateSystem(CoordinateSystem coordinate_system) {
   for (size_t i = 0; i + 1 < points_.size(); ++i) {
     cum_point_dist_[i + 1] =
         cum_point_dist_[i] +
-        cs_.Distance(points_[i].point, points_[i + 1].point);
+        SegmentDistance(cs_, points_[i], points_[i + 1]);
   }
 }
 size_t pacer::Laps::RecordedSectors() const { return sectors_.size(); }
@@ -298,8 +333,11 @@ pacer::Segment pacer::Lap::TimingLine(size_t i,
 void pacer::Lap::FillDistances(const CoordinateSystem &cs) {
   cum_distances = std::vector<double>{0};
   for (size_t i = 1; i < points.size(); ++i) {
+    // Gap-aware (see SegmentDistance in laps.cpp): a GPS chord across a dropout cuts the
+    // corner and under-counts, so a long time-step uses the speed integral instead. Keeps the
+    // per-lap odometer the Python delta/sector math reads consistent with GetLapDistance.
     cum_distances.push_back(cum_distances.back() +
-                            cs.Distance(points[i - 1].point, points[i].point));
+                            ::SegmentDistance(cs, points[i - 1], points[i]));
   }
 }
 double pacer::Lap::LapTime() const {

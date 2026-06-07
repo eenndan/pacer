@@ -10,6 +10,8 @@ extend-exclude = [
     "bindings/*/*/__init__.pyi",
     # imgui bindings are gated off and the generator is vendored litgen tooling
     "bindings/imgui/generate-bindings.py",
+    # one-off GPS-accuracy research prototypes / diagnostics (scratch tooling, kept for repro)
+    "studio/docs/gps_research_scripts",
 ]
 
 [lint]

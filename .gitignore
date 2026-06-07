@@ -24,3 +24,6 @@ pacer-ios/
 
 # studio gap-fill / denoise render scratch (denoise_check.py)
 .gap_pngs/
+
+# start-line verification scratch (extract/georef/sweep; see studio/docs/start-line-verification.md)
+.startline_tmp/
