@@ -18,6 +18,14 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# PlayerPane (Qt widget) needs a QApplication; offscreen so there's no display.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+_APP = QApplication.instance() or QApplication([])
+
+from studio.player_pane import PlayerPane  # noqa: E402
 from studio.session import Session  # noqa: E402
 
 
@@ -120,9 +128,103 @@ def test_outside_window_clamps_and_degenerate_none():
     print("test_outside_window_clamps_and_degenerate_none OK")
 
 
+# --------------------------------------------------------- P2: PlayerPane lap window
+class _FakePlayer:
+    """Minimal stand-in for the QMediaPlayer in a PlayerPane (source=None) so the lap-window
+    state machine can be driven without a real decoder: tracks play/pause + records pauses."""
+    def __init__(self):
+        self.playing = True
+        self.pause_calls = 0
+        self.positions = []
+
+    def playbackState(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        return (QMediaPlayer.PlaybackState.PlayingState if self.playing
+                else QMediaPlayer.PlaybackState.PausedState)
+
+    def pause(self):
+        self.playing = False
+        self.pause_calls += 1
+
+    def setPosition(self, ms):
+        self.positions.append(ms)
+
+
+def _pane_with_fake_player():
+    """A PlayerPane with no media (so _chapters is None -> _offset()==0, global==local) and its
+    QMediaPlayer swapped for a fake. Emitted positions are captured off positionChanged."""
+    pane = PlayerPane(None)
+    pane.player = _FakePlayer()
+    emitted = []
+    pane.positionChanged.connect(lambda g: emitted.append(g))
+    return pane, emitted
+
+
+def test_lap_window_stops_and_clamps_at_end():
+    """A set lap window pauses + clamps the EMITTED position at the lap end; before the end it
+    plays through untouched and never pauses."""
+    pane, emitted = _pane_with_fake_player()
+    pane.set_lap_window(10.0, 20.0)  # global [10, 20] s
+    # Inside the window: pass through, no pause, emitted == input.
+    for ms in (10_000, 12_500, 19_990):  # 10.0, 12.5, 19.99 s — all before the 20.0 end
+        pane._on_position(ms)
+    assert pane.player.pause_calls == 0, pane.player.pause_calls
+    assert abs(emitted[-1] - 19.990) < 1e-6, emitted[-1]
+    # Step to/just past the end: pause once, emit the clamped end (exactly 20.0).
+    pane._on_position(20_005)  # 20.005 s — a frame past the 20.0 end
+    assert pane.player.pause_calls == 1
+    assert abs(emitted[-1] - 20.0) < 1e-9, emitted[-1]
+    assert abs(pane.current_global_time() - 20.0) < 1e-9
+    # A stray late position after the stop re-clamps and doesn't re-pause (idempotent).
+    pane.player.playing = False
+    pane._on_position(20_100)
+    assert pane.player.pause_calls == 1
+    assert abs(emitted[-1] - 20.0) < 1e-9
+    print("test_lap_window_stops_and_clamps_at_end OK")
+
+
+def test_lap_window_tolerance_catches_sub_ms_short_fall():
+    """The end fires within _WINDOW_STOP_TOL_S so a position that lands a hair BELOW the end (ms
+    quantization / a 60 fps frame just shy of it) still stops — no under-resolved overshoot."""
+    pane, emitted = _pane_with_fake_player()
+    pane.set_lap_window(0.0, 5.0)
+    pane._on_position(4_999)  # 4.999 s — within the 2 ms tolerance of 5.0
+    assert pane.player.pause_calls == 1
+    assert abs(emitted[-1] - 5.0) < 1e-9
+    print("test_lap_window_tolerance_catches_sub_ms_short_fall OK")
+
+
+def test_clear_lap_window_restores_whole_session():
+    """clear_lap_window() drops the confinement: positions beyond the old end pass through and
+    nothing pauses — byte-identical to a pane that never had a window."""
+    pane, emitted = _pane_with_fake_player()
+    pane.set_lap_window(0.0, 5.0)
+    pane.clear_lap_window()
+    for ms in (4_000, 6_000, 9_000):  # well past the dropped 5.0 end
+        pane._on_position(ms)
+    assert pane.player.pause_calls == 0
+    assert abs(emitted[-1] - 9.0) < 1e-6, emitted[-1]
+    print("test_clear_lap_window_restores_whole_session OK")
+
+
+def test_normal_mode_no_window_unchanged():
+    """With NO window set (normal single-pane mode) _on_position is a pure local->global emit:
+    never pauses, emits the input position verbatim."""
+    pane, emitted = _pane_with_fake_player()
+    for ms in (0, 1_000, 50_000, 120_000):
+        pane._on_position(ms)
+    assert pane.player.pause_calls == 0
+    assert [round(e, 6) for e in emitted] == [0.0, 1.0, 50.0, 120.0]
+    print("test_normal_mode_no_window_unchanged OK")
+
+
 if __name__ == "__main__":
     test_finish_delta_equals_laptime_difference()
     test_self_delta_is_zero()
     test_cross_check_vs_delta_at_time()
     test_outside_window_clamps_and_degenerate_none()
+    test_lap_window_stops_and_clamps_at_end()
+    test_lap_window_tolerance_catches_sub_ms_short_fall()
+    test_clear_lap_window_restores_whole_session()
+    test_normal_mode_no_window_unchanged()
     print("\nALL COMPARE TESTS PASSED")

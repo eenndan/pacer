@@ -57,6 +57,13 @@ _OVERLAY_MIN_W = 120        # don't shrink below something legible
 _OVERLAY_MAX_W = 240        # don't grow huge on a very wide window
 _OVERLAY_PAD = 12           # px inset from the video corner
 
+# Lap-window stop tolerance (seconds). The emitted global position is quantized to whole ms
+# (QMediaPlayer.position() is ms) and frames land ~16 ms apart at 60 fps, so the playhead can
+# step from just-before to just-after the window end without ever reporting it exactly. We fire
+# the stop as soon as the position reaches within this tolerance of the end, so a lap end can't
+# be overshot by a frame nor under-resolved by the ms quantization. Far smaller than a frame.
+_WINDOW_STOP_TOL_S = 0.002
+
 
 class PlayerPane(QWidget):
     """One single-lap player: its own decoder + video surface + audio + g-meter overlay.
@@ -89,6 +96,14 @@ class PlayerPane(QWidget):
         # so a stale EndOfMedia from the old source while a switch is pending is safely ignored.
         self._pending: tuple[int, float, bool] | None = None
         self._latest_global = 0.0  # last emitted global time (for current_global_time())
+        # Compare-mode lap window: when set to (start_global, end_global) the pane plays "time
+        # into lap" — it pauses + clamps at `end_global` instead of running to the end of the
+        # session. None in normal mode (whole session, behaviour unchanged). The window spans
+        # GLOBAL time so a lap that STARTS in one chapter and ENDS in the next still stops at the
+        # right instant: cross-chapter auto-advance stays enabled WHILE inside the window, and the
+        # stop fires only when the emitted global position reaches `end_global` in whatever chapter
+        # that lands in. See _on_position.
+        self._lap_window: tuple[float, float] | None = None
 
         self.video = QVideoWidget()
         # Classic friction-circle g-meter, drawn ON the video. It is a frameless translucent
@@ -205,6 +220,21 @@ class PlayerPane(QWidget):
             self._pending = (index, local, self.is_playing())
             self._set_source(index)
 
+    # ------------------------------------------------------------- lap window (compare mode)
+    def set_lap_window(self, start_global: float, end_global: float):
+        """Confine playback to ONE lap's GLOBAL [start, end] window (compare mode's "time into
+        lap"): the pane plays at 1× from the lap start and pauses + clamps at the lap end instead
+        of running to the session's end. Cross-chapter auto-advance is UNAFFECTED — a lap that
+        spans a chapter seam still plays across it (the EndOfMedia handler keeps advancing while
+        inside the window); only the window END triggers the stop, in whatever chapter it lands in.
+        Caller seeks the pane to the lap start (a hair in) separately."""
+        self._lap_window = (float(start_global), float(end_global))
+
+    def clear_lap_window(self):
+        """Drop the lap window — back to whole-session playback (normal mode). Behaviour after
+        this is byte-identical to a pane that never had a window set."""
+        self._lap_window = None
+
     # ------------------------------------------------------------- g-meter overlay
     def set_gmeter_visible(self, on: bool):
         """Show/hide the friction-circle g-meter overlay (driven by the shell's toggle button)."""
@@ -315,8 +345,23 @@ class PlayerPane(QWidget):
     # ------------------------------------------------------------- player events
     def _on_position(self, ms: int):
         """Local media position -> global session time. The emitted position is global, so all
-        telemetry sync sees one continuous clock spanning every chapter."""
+        telemetry sync sees one continuous clock spanning every chapter.
+
+        Compare mode (a lap window is set): once the GLOBAL position reaches the window END
+        (within a sub-frame tolerance — the position is ms-quantized and frames land ~16 ms apart,
+        so it can step from just-before to just-after the end without reporting it exactly), pause
+        and clamp the EMITTED position to the end so the pane parks exactly on the lap's last frame
+        rather than overshooting. The cross-chapter machine is untouched: this only stops at the
+        window end, wherever that falls — auto-advance still carries a seam-straddling lap across
+        the chapter boundary up TO that end."""
         global_s = self._offset() + ms / 1000.0
+        win = self._lap_window
+        if win is not None and global_s >= win[1] - _WINDOW_STOP_TOL_S:
+            # Reached (or stepped just past) the lap end: stop here and report the clamped end so
+            # downstream sync never sees a time beyond the lap. Pausing is idempotent.
+            if self.is_playing():
+                self.player.pause()
+            global_s = win[1]
         self._latest_global = global_s
         self.positionChanged.emit(global_s)
 
