@@ -9,8 +9,9 @@ Row/cell highlights are keyed by LAP ID, not row index, and re-applied after eve
 they always follow the right lap: the ▶ playing marker + bold (current lap), the green best
 lap (F-existing), the blue Qt selection, the PURPLE per-sector session-best cells (F5 —
 the fastest split in each S-column across all valid laps, motorsport convention), and a
-trailing ⚠ low-confidence marker (+ row tooltip) on laps with a GPS dropout. Base row text
-is near-black for readability on the light table background.
+trailing ⚠ low-confidence marker (+ row tooltip) on laps with a GPS dropout. Colours,
+alignment and the tabular numeric font come from the design tokens in `theme`; base row text
+is the primary off-white on the dark table surface.
 """
 
 from __future__ import annotations
@@ -27,15 +28,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import theme
 from .session import fmt_time
 
-BASE_COLOR = QColor("#101010")          # near-black: default row text (the table is on a LIGHT bg)
-BEST_COLOR = QColor("#06d6a0")          # green: the overall best lap (foreground on every cell)
-BEST_SECTOR_COLOR = QColor("#b388eb")   # purple: per-column session-best split (F5)
+BASE_COLOR = QColor(theme.C.text)             # primary off-white: default row text (dark surface)
+BEST_COLOR = QColor(theme.C.ahead)            # green: the overall best lap (foreground every cell)
+BEST_SECTOR_COLOR = QColor(theme.C.best)      # purple: per-column session-best split (F5)
 CURRENT_PREFIX = "▶ "  # "▶ " marks the lap currently playing on the video
 DROPOUT_SUFFIX = " ⚠"  # low-confidence: this lap has a GPS dropout (time/distance less reliable)
 DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
 COLUMNS = ["Lap", "Time", "Dist (m)", "Entry (km/h)"]
+# Columns 1.. (everything but the Lap column) hold numerics: right-align + tabular font so the
+# digits column-align. The Lap column stays left/default.
+NUMERIC_COL_START = 1
 NUM_ROLE = Qt.UserRole  # the numeric sort key stored on every cell
 LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the Lap cell
 
@@ -83,6 +88,12 @@ class LapTable(QWidget):
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
+        # Dark theme: zebra striping (alternate row colour comes from the global QSS) + a
+        # comfortable row height so the table reads as a clean dark surface, not a cramped grid.
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setDefaultSectionSize(28)
+        # Tabular/mono numeric face shared by every numeric cell (digits column-align).
+        self._num_font = theme.mono_font(theme.TABLE)
         # F1: click any header to sort by the column's numeric key (asc/desc toggles). The
         # highlights are re-applied after each sort (sortIndicatorChanged) so they follow laps.
         # Default = lap number ascending (column 0) until the user clicks a different header;
@@ -140,6 +151,11 @@ class LapTable(QWidget):
             for c, (text, key) in enumerate(cells):
                 item = _NumItem(text)
                 item.setData(NUM_ROLE, key)
+                # Numeric columns (everything but Lap): right-align + tabular/mono font so the
+                # digits line up; the Lap column keeps the default left alignment.
+                if c >= NUMERIC_COL_START:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setFont(self._num_font)
                 self.table.setItem(r, c, item)
             # Stash the lap id on the Lap cell so row<->lap stays correct across any sort.
             self.table.item(r, 0).setData(LAP_ROLE, lap_id)
