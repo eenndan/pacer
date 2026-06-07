@@ -63,9 +63,9 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 | [session.py](session.py) | Loads GPMF → `pacer.Laps`; exposes trace/lap/delta arrays + timing-line write-back. Owns the load/segmentation pipeline (primary `pacer` user). |
 | [tracks.py](tracks.py) | Registry of known tracks (Daytona MK); detects the track by centroid and gives its fixed start/finish line. The only other module that names `pacer` (geometry only). |
 | [transponder.py](transponder.py) | Pure-Python (no `pacer`): defensive parser for a lap-timing **transponder CSV** (the ground truth the GPS9 timing is **validated** against, out of sample, by [`_validate_wallclock.py`](_validate_wallclock.py)). Reads only the `Lap` + `Lap Time` columns (the later columns embed commas/quotes). A reference **input** only — the CSV is never committed. |
-| [video_view.py](video_view.py) | `QMediaPlayer` + `QVideoWidget` + `QAudioOutput`; emits `positionChanged(s)` in **global session time**, exposes `seek(s)` (global) + `is_playing()`/`pause()`/`play()` + a **mute/unmute toggle** (🔇/🔊, default muted) + a **g-meter toggle** (`G`). Hosts the **g-meter overlay** as a frameless translucent **top-level window** pinned over the `QVideoWidget`'s corner (a plain child is painted behind the video's native surface on macOS and never shows; its own native window composites above it) and exposes `set_g(...)` (app-fed at the tick, which also re-pins the overlay). For a **chaptered** recording it holds the `ChapterMap`, switches source on a cross-chapter seek, and **auto-advances** to the next chapter at end-of-media — one source at a time, one continuous global slider. |
+| [video_view.py](video_view.py) | `QMediaPlayer` + `QVideoWidget` + `QAudioOutput`; emits `positionChanged(s)` in **global session time**, exposes `seek(s)` (global) + `is_playing()`/`pause()`/`play()` + a **mute/unmute toggle** (🔇/🔊, default muted) + a **g-meter toggle** (`G`). Hosts the **g-meter overlay** as a frameless translucent **top-level window** pinned over the `QVideoWidget`'s **top-right** corner and **scaled to a fraction of the video** (a plain child is painted behind the video's native surface on macOS and never shows; its own native window composites above it) and exposes `set_g(...)` / `set_gmeter_lap(...)` (app-fed at the tick, which also re-pins/re-scales the overlay). For a **chaptered** recording it holds the `ChapterMap`, switches source on a cross-chapter seek, and **auto-advances** to the next chapter at end-of-media — one source at a time, one continuous global slider. |
 | [gmeter.py](gmeter.py) | **Vehicle-frame g** from the GoPro **accelerometer** — pure numpy, pacer-free. Transforms `ACCL`/`GRAV`/`CORI` (camera frame) into kart-frame lateral/longitudinal g (gravity removed via GRAV; rotate by `conj(CORI)`; project horizontal; **per-chapter** align to GPS ENU). Cross-checks against **GPS-derived g** and falls back to it if the IMU is absent/unreliable. Precomputed at load; `at_time(t)` is a cheap lookup. See [docs/gmeter-validation.md](docs/gmeter-validation.md). |
-| [gmeter_overlay.py](gmeter_overlay.py) | The classic **friction-circle g-meter** widget (pacer-free Qt): rings (0.5/1.0/1.5 g) + ACCEL/BRAKE crosshair + a floating dot (**angle = direction, radius = magnitude**) + fading trail + peak-hold ring + numeric lat/long/total readout. A frameless translucent top-level window composited over the video (so it isn't hidden behind the native video surface); `set_g((lat,long,total))` each tick. |
+| [gmeter_overlay.py](gmeter_overlay.py) | The subtle **"G meter"** dial (pacer-free Qt): thin 0.5/1.0 g rings + a soft white dot (**no centre-to-dot line**) showing the **felt force** the driver's body feels (**brake→up, accel→down, right→left, left→right**) + a translucent **red max-G envelope** (convex hull) + **amber cardinal peak-g numbers**. The dot is **EMA-low-passed** (chin-mount shake filter) and the peaks/hull are **robust** (high-percentile + clamped) so a helmet shake can't blow them out; envelope/peaks accumulate **per lap** (`set_lap`). A frameless translucent top-level window composited over the video, pinned **top-right** and **scaled to the video**; `set_g((lat,long,total))` + `set_lap(id)` each tick. |
 | [chapters.py](chapters.py) | Pure-Python (no `pacer`): the GoPro chaptered-filename parser, sibling **discovery/grouping** (same recording number, same folder, ordered by chapter), and the **`ChapterMap`** global↔chapter time mapping (per-chapter offset table). Unit-tested in [`tests/test_chapters.py`](../tests/test_chapters.py). |
 | [map_view.py](map_view.py) | Best lap (faint) + current/playing lap (highlighted) + **freely-draggable** start/sector timing lines + video marker (drag **constrained to the current lap** so it never jumps laps). Each lap is drawn as measured (solid) + reconstructed gap-fill (dashed/dimmed) segments. The full all-laps trace is intentionally not drawn (perf + clarity). |
 | [gapfill.py](gapfill.py) | **GPS-gap reconstruction (map only)** — pure numpy. Detects interior dropouts and fills them with cross-lap borrow (primary) / reference centerline (fallback) / spline, tagged measured-vs-inferred. No `pacer`. |
@@ -305,15 +305,26 @@ accelerometer** (`ACCL`), synced to playback. Toggle with the **`G`** button und
   matched. If the lateral correlation is poor (e.g. a head-dominated **helmet cam**) or the IMU is
   absent (older GoPro), the meter **falls back to the GPS-derived g** (`source="gps"`) rather than
   shipping garbage. See [docs/gmeter-validation.md](docs/gmeter-validation.md) for the full numbers.
-- **The widget (`gmeter_overlay.py`).** Rings 0.5/1.0/1.5 g + ACCEL/BRAKE crosshair (lateral
-  horizontal, longitudinal vertical: braking down / accel up) + a floating dot whose **angle is
-  the force direction and radius is the magnitude (g)** + a fading trail + a peak-hold ring + a
-  numeric lat/long/total readout. Transparent, click-through, semi-transparent backdrop, pinned to
-  the video's bottom-right corner. Implemented as a **frameless translucent top-level window** (not
-  a child widget): macOS composites the `QVideoWidget`'s native video surface over ordinary child
-  widgets, so a child overlay is invisible on screen even though it renders in an offscreen
-  `widget.grab()`; its own native window composites above the video instead. Pacer-free — g values
-  come from `session` via `app`.
+- **The widget (`gmeter_overlay.py`).** A subtle **"G meter"** dial: a faint see-through backdrop,
+  thin 0.5/1.0 g rings, a soft white **dot (no centre-to-dot line)**, a translucent **red max-G
+  envelope** (convex hull of the grip used), and **amber peak-g numbers at the four cardinals**
+  (max felt-g forward/back/left/right). Two display-only conventions live here (the validated
+  `gmeter.py` g values are untouched):
+  - **Felt-force pointer** — the dot is the inertial reaction the *driver's body* feels, not the
+    acceleration vector: **braking → UP, accelerating → DOWN, turning right → LEFT, turning left →
+    RIGHT**. (Screen `dx = +lateral`, `dy = +longitudinal`.)
+  - **Chin-mount shake filter** — the GoPro is chin-mounted, so the accel carries helmet/mount
+    jitter. The dot is an **EMA low-pass** of the felt g (smooth but responsive); the cardinal
+    numbers track a **high percentile** of the recent magnitude and the hull points are **clamped
+    to those robust peaks**, so a lone shake spike can't blow out the numbers or balloon the blob.
+  The envelope + peaks accumulate over the **current lap** and reset at the lap boundary
+  (`set_lap`; change `_RESET_ON_LAP` for other scopes). The dial is pinned to the video's
+  **top-right** corner and **scaled to a fraction of the video** (re-pinned/re-scaled on
+  move/resize). Implemented as a **frameless translucent top-level window** (not a child widget):
+  macOS composites the `QVideoWidget`'s native video surface over ordinary child widgets, so a
+  child overlay is invisible on screen even though it renders in an offscreen `widget.grab()`; its
+  own native window composites above the video instead. Pacer-free — g values come from `session`
+  via `app` (which also feeds the current lap id for the per-lap envelope reset).
 
 ## Next ideas
 
