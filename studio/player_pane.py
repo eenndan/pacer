@@ -342,6 +342,25 @@ class PlayerPane(QWidget):
         self.player.stop()
         self.gmeter.close()
 
+    def dispose(self):
+        """Fully release this pane's decoder + audio + overlay for a compare teardown / reload.
+
+        The QMediaPlayer and QAudioOutput are plain attributes (NOT Qt children of the pane), so
+        deleting the pane alone does NOT free them — they would linger until Python GC, holding a
+        decoder open. So: stop the decoder, detach the video/audio sinks, close the overlay window,
+        and explicitly deleteLater() the player + audio so the FFmpeg decoder + the audio device
+        are released promptly. The pane widget itself is deleteLater'd by the caller. Idempotent."""
+        try:
+            self.player.stop()
+            self.player.setVideoOutput(None)
+            self.player.setAudioOutput(None)
+        except RuntimeError:
+            pass  # already torn down
+        self.gmeter.close()
+        self.gmeter.deleteLater()
+        self.player.deleteLater()
+        self.audio.deleteLater()
+
     # ------------------------------------------------------------- player events
     def _on_position(self, ms: int):
         """Local media position -> global session time. The emitted position is global, so all

@@ -579,6 +579,25 @@ QLabel#Readout {{
     font-size: {CAPTION}px;
     padding: 4px 8px;
 }}
+/* per-pane caption strip in compare mode: "lap N  m:ss.mmm" (tabular, dimmed, surface bg). */
+QLabel#PaneCaption {{
+    background-color: {C.surface};
+    color: {C.text_dim};
+    font-family: {MONO_STACK};
+    font-size: {CAPTION}px;
+    font-weight: 600;
+    padding: 3px 8px;
+}}
+/* per-pane "Δ vs other" badge in compare mode: tabular, transparent so it sits inline in the
+   caption strip; only its Δ-value COLOUR is driven per-tick (a merged `color:` rule). */
+QLabel#PaneBadge {{
+    background: transparent;
+    color: {C.text_dim};
+    font-family: {MONO_STACK};
+    font-size: {CAPTION}px;
+    font-weight: 600;
+    padding: 3px 8px;
+}}
 """
 
 
