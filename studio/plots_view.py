@@ -27,7 +27,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QVBoxLayout, QWidget
 
 from . import theme
 from .session import fmt_time
@@ -83,19 +83,31 @@ class PlotsView(QWidget):
 
         # x-axis toggle — drives BOTH plots together (distance ⇄ time-into-lap). The plots share
         # one x-axis and stay x-linked, so the speed + delta cursors always align in either mode.
+        # The combo is EXPOSED but NOT placed here: app.py mounts it (right-aligned) in the single
+        # consolidated bar above the charts — section label · Δ/speed readout · this toggle — so
+        # the toggle no longer eats its own full-width row. Its modeChanged wiring is unchanged.
         self.x_mode = QComboBox()
         self.x_mode.addItems(["x: distance", "x: time"])
         self.x_mode.currentIndexChanged.connect(self._on_mode_changed)
-        bar = QHBoxLayout()
-        bar.setContentsMargins(2, 2, 2, 0)
-        bar.addWidget(self.x_mode)
-        bar.addStretch(1)
 
         self.glw = pg.GraphicsLayoutWidget()
+        # Tight outer margins + inter-plot spacing so the plot area fills the panel — the charts
+        # are the analytical core and need every pixel. Set on the central GraphicsLayout.
+        self.glw.ci.layout.setContentsMargins(2, 2, 2, 2)
+        self.glw.ci.layout.setSpacing(4)
         self.p_speed = self.glw.addPlot(row=0, col=0)
         self.p_delta = self.glw.addPlot(row=1, col=0)
+        # Give the Δ plot more room — it was a cramped sliver. Row stretch ≈ speed 58 / Δ 42 so
+        # the delta curve (the priority readout) is comfortably legible while speed stays dominant.
+        self.glw.ci.layout.setRowStretchFactor(0, 58)
+        self.glw.ci.layout.setRowStretchFactor(1, 42)
         self.p_speed.setLabel("left", "speed (km/h)")
-        self.p_speed.setLabel("bottom", "distance (m)")
+        # The two plots are x-linked and share ONE x-axis, so the speed plot's bottom axis would
+        # just duplicate the Δ plot's "distance (m)"/"time (s)" labels+ticks — wasted vertical
+        # space. Hide the speed plot's bottom axis entirely; the SHARED x ticks/label live on the
+        # BOTTOM (Δ) plot only. The gridlines below still draw the vertical guides on the speed
+        # plot, so it reads cleanly against the same x.
+        self.p_speed.hideAxis("bottom")
         # Faint gridlines (alpha 0.10) so they read as a quiet backdrop, not a foreground grid.
         self.p_speed.showGrid(x=True, y=True, alpha=0.10)
         leg = self.p_speed.addLegend(offset=(8, 8))
@@ -112,13 +124,14 @@ class PlotsView(QWidget):
         self.p_delta.addLine(y=0, pen=ZERO_LINE_PEN)
 
         # Premium axis styling (Phase 2): dim axis lines + tick text to tokens, tabular numeric
-        # tick font, and reduced tick clutter. Set ONCE here — never on the 30 Hz tick.
-        for plot in (self.p_speed, self.p_delta):
-            for side in ("left", "bottom"):
+        # tick font, and reduced tick clutter. Set ONCE here — never on the 30 Hz tick. The speed
+        # plot's bottom axis is hidden (shared x lives on the Δ plot), so only style its LEFT axis.
+        for plot, sides in ((self.p_speed, ("left",)), (self.p_delta, ("left", "bottom"))):
+            for side in sides:
                 ax = plot.getAxis(side)
                 ax.setPen(C.border)            # dim axis line + ticks
                 ax.setTextPen(C.text_dim)      # tick labels + axis title
-                ax.setTickFont(theme.mono_font(10))  # tabular figures so digits column-align
+                ax.setTickFont(theme.mono_font(11))  # tabular figures so digits column-align
                 ax.setStyle(maxTickLevel=1, hideOverlappingLabels=True)  # fewer, cleaner ticks
         # Legend + per-plot title read dimmed (the title is rebuilt in refresh()).
         if leg is not None:
@@ -164,9 +177,9 @@ class PlotsView(QWidget):
         self.p_delta.addItem(self.hover_label)
         self.p_delta.scene().sigMouseMoved.connect(self._on_delta_hover)
 
+        # The view is now JUST the charts; the x-mode toggle lives in app.py's consolidated bar.
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addLayout(bar)
         lay.addWidget(self.glw)
 
     def _on_mode_changed(self, index):
@@ -274,10 +287,10 @@ class PlotsView(QWidget):
         self._clear_sectors()
 
         # Both plots share ONE x-axis (distance = s×best_dist, or time-into-lap), kept x-linked
-        # in BOTH modes so the two cursors always align. Just relabel the (shared) bottom axis.
+        # in BOTH modes so the two cursors always align. The shared x label/ticks live ONLY on the
+        # bottom (Δ) plot — the speed plot's bottom axis is hidden — so relabel just the Δ axis.
         x_mode = "time" if self._time_mode else "distance"
         label = "time (s)" if self._time_mode else "distance (m)"
-        self.p_speed.setLabel("bottom", label)
         self.p_delta.setLabel("bottom", label)
 
         # Hide the cursors before fitting: cur_speed still holds the PREVIOUS mode's x (a
