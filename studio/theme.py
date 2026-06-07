@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 
 from PySide6 import __version__ as PYSIDE_VERSION
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPalette
 
 
 # ====================================================================== tokens
@@ -54,6 +54,28 @@ class C:
     behind = "#E8746B"          # behind / danger red
     best = "#B794F6"            # best-sector purple
     caution = "#D9A441"         # ⚠ caution
+
+
+# --- chart series palette (Phase 2) ---------------------------------------------------------
+# A refined categorical list for lap curves on the dark surface — each is a bright, opaque hex
+# from the token philosophy (amber accent first, then a cyan/blue/purple/coral spread) so that
+# 2–6 compared laps stay distinguishable without muddying. Solid + width-2 + AA-off keeps the
+# fast segmented-line path (see plots_view), so these read crisp.
+CHART_SERIES = [
+    C.accent,    # amber  — primary / first lap (also the app accent)
+    "#5BC8E0",   # cyan
+    C.best,      # purple
+    "#7FA8F5",   # soft blue
+    "#E89B6B",   # coral / soft orange
+    "#9FD66B",   # lime-leaning green (distinct from the best-lap C.ahead green)
+]
+
+# Semantic mapping used by the plots (documented so it stays consistent with the lap table):
+#   BEST lap curve     -> C.ahead  (the same green the lap table marks the best lap with)
+#   primary / current  -> SERIES_PRIMARY (the amber accent — the first categorical entry)
+#   additional laps    -> CHART_SERIES in order (skipping the slot the best lap already owns)
+SERIES_PRIMARY = CHART_SERIES[0]   # amber accent — current/primary lap
+SERIES_BEST = C.ahead              # green — matches the lap table's best-lap colour
 
 
 # --- type scale (px) ---
@@ -180,6 +202,29 @@ def mono_font(size: int = TABLE, weight: QFont.Weight = W_REGULAR) -> QFont:
     f.setFamilies(["SF Mono", "JetBrains Mono", "Menlo", "monospace"])
     f.setPixelSize(size)
     return f
+
+
+# ====================================================================== icons
+def icon(name: str, color: str | None = None, active: str | None = None,
+         size: int | None = None) -> QIcon:
+    """A themed QIcon from an icon font (qtawesome bundles Phosphor under the `ph` prefix, e.g.
+    "ph.play-fill"). The glyph is tinted to `color` (default C.text) and to `active` (default
+    C.accent) for its active/on state, so e.g. a checkable toolbar button lights up amber.
+
+    qtawesome is imported LAZILY here so a missing dependency degrades gracefully — we log a clear
+    message and return an empty QIcon (the button still works, just without a glyph) rather than
+    crashing the whole app at import time.
+    """
+    try:
+        import qtawesome as qta
+    except Exception as exc:  # missing dep / font load failure — degrade, don't crash
+        print(f"theme: qtawesome unavailable ({exc}); icon '{name}' will be blank. "
+              "Install it via `pixi install` (the qtawesome pypi dependency).", flush=True)
+        return QIcon()
+    # `size` is accepted for call-site symmetry but a QIcon is resolution-independent — the actual
+    # render size is governed by the consuming widget (QAbstractButton.setIconSize), so it is not
+    # baked into the icon here.
+    return qta.icon(name, color=color or C.text, color_active=active or C.accent)
 
 
 # ====================================================================== palette

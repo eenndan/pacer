@@ -25,22 +25,30 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QVBoxLayout, QWidget
 
+from . import theme
 from .session import fmt_time
+from .theme import C
 
 # Antialiased path rendering is a major per-repaint cost; the cursor's InfiniteLine.setValue
 # re-renders every visible curve each ~30 Hz tick, so keep it OFF for smooth playback.
 pg.setConfigOptions(antialias=False)
 
-PALETTE = ["#39a0ed", "#ef476f", "#ffd166", "#06d6a0", "#b388eb", "#ff924c", "#118ab2"]
-CURSOR_PEN = pg.mkPen("#ffffff", width=1, style=Qt.DashLine)
-# Brighter/thicker pen while hovering so the user can tell the cursor is grabbable.
-CURSOR_HOVER_PEN = pg.mkPen("#ffd166", width=2, style=Qt.DashLine)
-HOVER_DOT_BRUSH = pg.mkBrush("#ffd166")
-HOVER_DOT_PEN = pg.mkPen("#000000", width=1)
-# F2: sector boundary guide lines — subtle (dimmed + dashed) vertical lines on BOTH charts so
-# they read as a backdrop and never obscure the curves or the (white/dashed) scrub cursor.
-SECTOR_LINE_PEN = pg.mkPen("#6b7280", width=1, style=Qt.DotLine)  # muted grey dotted
-SECTOR_LABEL_COLOR = "#9aa3b2"
+# Lap-curve palette (Phase 2): tokenized categorical series. The BEST lap is recoloured to
+# C.ahead (green) at draw time so it matches the lap table; the rest cycle through CHART_SERIES.
+PALETTE = theme.CHART_SERIES
+# Scrub cursor: a thin neutral dashed line (quiet by default); brighter accent + thicker on hover
+# so the user can tell it's grabbable. Pens are built ONCE here, never per-tick.
+CURSOR_PEN = pg.mkPen(C.text_dim, width=1, style=Qt.DashLine)
+CURSOR_HOVER_PEN = pg.mkPen(C.accent, width=2, style=Qt.DashLine)
+# Hover dot rides the delta curve: accent fill with a dark canvas outline so it pops on any curve.
+HOVER_DOT_BRUSH = pg.mkBrush(C.accent)
+HOVER_DOT_PEN = pg.mkPen(C.canvas, width=1)
+# F2: sector boundary guide lines — subtle (dimmed + dotted) vertical lines on BOTH charts so
+# they read as a backdrop and never obscure the curves or the scrub cursor.
+SECTOR_LINE_PEN = pg.mkPen(C.border, width=1, style=Qt.DotLine)
+SECTOR_LABEL_COLOR = C.text_dim
+# The delta plot's y=0 reference line — a faint hairline, same weight as the gridlines.
+ZERO_LINE_PEN = pg.mkPen(C.border, width=1)
 
 
 class PlotsView(QWidget):
@@ -84,19 +92,35 @@ class PlotsView(QWidget):
         self.p_delta = self.glw.addPlot(row=1, col=0)
         self.p_speed.setLabel("left", "speed (km/h)")
         self.p_speed.setLabel("bottom", "distance (m)")
-        self.p_speed.showGrid(x=True, y=True, alpha=0.2)
-        self.p_speed.addLegend(offset=(8, 8))
+        # Faint gridlines (alpha 0.10) so they read as a quiet backdrop, not a foreground grid.
+        self.p_speed.showGrid(x=True, y=True, alpha=0.10)
+        leg = self.p_speed.addLegend(offset=(8, 8))
         self.p_delta.setLabel("left", "Δ to best (s)")
         self.p_delta.setLabel("bottom", "distance (m)")
         # Sub-second deltas otherwise auto-scale to a "(x0.001)" SI prefix on the axis; keep
         # the left axis in plain seconds so it reads e.g. 0.228 directly.
         self.p_delta.getAxis("left").enableAutoSIPrefix(False)
-        self.p_delta.showGrid(x=True, y=True, alpha=0.2)
+        self.p_delta.showGrid(x=True, y=True, alpha=0.10)
         # Both plots now share ONE x basis in BOTH modes (distance = s×best_dist; time =
         # time-into-lap), so keep them permanently x-linked — same moment = same x on each, and
         # pan/zoom on one follows the other. (Previously unlinked in time mode.)
         self.p_delta.setXLink(self.p_speed)
-        self.p_delta.addLine(y=0, pen=pg.mkPen("#555", width=1))
+        self.p_delta.addLine(y=0, pen=ZERO_LINE_PEN)
+
+        # Premium axis styling (Phase 2): dim axis lines + tick text to tokens, tabular numeric
+        # tick font, and reduced tick clutter. Set ONCE here — never on the 30 Hz tick.
+        for plot in (self.p_speed, self.p_delta):
+            for side in ("left", "bottom"):
+                ax = plot.getAxis(side)
+                ax.setPen(C.border)            # dim axis line + ticks
+                ax.setTextPen(C.text_dim)      # tick labels + axis title
+                ax.setTickFont(theme.mono_font(10))  # tabular figures so digits column-align
+                ax.setStyle(maxTickLevel=1, hideOverlappingLabels=True)  # fewer, cleaner ticks
+        # Legend + per-plot title read dimmed (the title is rebuilt in refresh()).
+        if leg is not None:
+            leg.setLabelTextColor(C.text_dim)
+        for plot in (self.p_speed, self.p_delta):
+            plot.titleLabel.setAttr("color", C.text_dim)
 
         # Draggable scrub cursors. A generous hover region (hoverPen + a wider hover-detection
         # span) makes the thin dashed line easy to grab. movable=True; their drag signals are
@@ -129,7 +153,7 @@ class PlotsView(QWidget):
         self.hover_dot = pg.ScatterPlotItem(size=9, brush=HOVER_DOT_BRUSH, pen=HOVER_DOT_PEN)
         self.hover_dot.setZValue(20)
         self.hover_dot.setVisible(False)
-        self.hover_label = pg.TextItem(color="#ffd166", anchor=(0, 1))
+        self.hover_label = pg.TextItem(color=C.accent, anchor=(0, 1))
         self.hover_label.setZValue(21)
         self.hover_label.setVisible(False)
         self.p_delta.addItem(self.hover_dot)
@@ -274,7 +298,10 @@ class PlotsView(QWidget):
                   + (" ★best" if lid == best else "") for lid in self._lap_ids]
         self.p_speed.setTitle("   ".join(labels) or None)
         for k, lid in enumerate(self._lap_ids):
-            color = PALETTE[k % len(PALETTE)]
+            # Semantic colouring (Phase 2): the BEST lap is green (C.ahead) to match the lap
+            # table; every other lap cycles through the categorical CHART_SERIES (amber accent
+            # first → the primary/first-selected lap pops). width=2 solid keeps the fast path.
+            color = theme.SERIES_BEST if lid == best else PALETTE[k % len(PALETTE)]
             pen = pg.mkPen(color, width=2)
             name = f"lap {lid}" + (" (best)" if lid == best else "")
             if lid in speed:

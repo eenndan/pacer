@@ -11,15 +11,20 @@ from __future__ import annotations
 
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 from .session import Seg
+from .theme import C
 
-START_COLOR = "#ffd166"
-SECTOR_COLOR = "#06d6a0"
-BEST_COLOR = "#5a6068"  # faint reference line for the best lap
-CURRENT_COLOR = "#39a0ed"  # highlighted current-lap trace
-MARKER_COLOR = "#ff5252"
+# Tokenized track-map pens (Phase 2). The best lap is a quiet faint reference; the current lap
+# is the bright amber accent so the racing line pops. Timing lines + marker use distinct tokens.
+START_COLOR = C.accent              # start/finish line — accent so it's the clear anchor
+SECTOR_COLOR = C.text_dim           # sector lines — visible but quieter than the start line
+BEST_COLOR = C.text_muted           # quiet reference line for the best lap (legible, not loud)
+CURRENT_COLOR = C.accent            # highlighted current-lap trace (the racing line — pops)
+MARKER_COLOR = C.behind             # video position marker — warm coral, reads on the trace
+_MARKER_RGB = QColor(C.behind)      # for the translucent marker brush below
 # Reconstructed (inferred) gap-fill segments are drawn DASHED + DIMMED so they read as
 # clearly distinct from measured GPS — the user must always be able to tell them apart.
 INFERRED_DASH = [5, 5]  # on/off dash pattern (px)
@@ -132,9 +137,12 @@ class MapView(QWidget):
         self.widget = pg.PlotWidget()
         self.plot = self.widget.getPlotItem()
         self.plot.setAspectLocked(True)  # equal aspect -> a true-shape track map
-        self.plot.showGrid(x=True, y=True, alpha=0.2)
-        self.plot.setLabel("bottom", "x (m)")
-        self.plot.setLabel("left", "y (m)")
+        # A track map is a SHAPE, not a chart — the meter ticks/labels/grid add noise and carry no
+        # useful info for reading a racing line. Hide the axes entirely for the cleanest read; the
+        # trace + start/sector lines + marker are all that should show on the C.surface background.
+        self.plot.showGrid(x=False, y=False)
+        for side in ("left", "bottom", "top", "right"):
+            self.plot.hideAxis(side)
         # The full ~16k-point trace is no longer drawn (jagged + slow). Instead we draw at most
         # the best lap (faint reference) and the current lap (highlighted) — a few hundred points.
         # Each lap is drawn as measured (solid) + reconstructed (dashed/dimmed) segments, so GPS
@@ -157,7 +165,7 @@ class MapView(QWidget):
         self.marker = pg.TargetItem(
             (session.tx[0] if len(session.tx) else 0, session.ty[0] if len(session.ty) else 0),
             size=15, movable=True, pen=pg.mkPen(MARKER_COLOR, width=2),
-            brush=pg.mkBrush(255, 82, 82, 110),
+            brush=pg.mkBrush(_MARKER_RGB.red(), _MARKER_RGB.green(), _MARKER_RGB.blue(), 110),
         )
         self.plot.addItem(self.marker)
         self.marker.setZValue(10)  # keep the marker above the lap overlays

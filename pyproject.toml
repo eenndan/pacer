@@ -19,6 +19,8 @@ pacer = { path = "bindings/pacer", editable = true }
 # `studio` desktop app (PySide6 + pyqtgraph). See studio/.
 pyside6 = ">=6.8"
 pyqtgraph = ">=0.13"
+# Phosphor (+ other) icon fonts as QIcons; works with PySide6 via QtPy. See studio/theme.icon.
+qtawesome = ">=1.3"
 
 [tool.pixi.tasks]
 configure = "cmake -S . -B build/Release -G Ninja"

@@ -60,6 +60,17 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF, QRadialGradient
 from PySide6.QtWidgets import QWidget
 
+from .theme import C
+
+
+def _c(token: str, alpha: int | None = None) -> QColor:
+    """A QColor from a theme hex token, optionally overriding the alpha (0-255). Lets the overlay
+    paint with the design tokens while keeping its hand-tuned per-element translucency."""
+    col = QColor(token)
+    if alpha is not None:
+        col.setAlpha(alpha)
+    return col
+
 # Visual scale: the outer ring is this many g (so a 1.0 g corner sits well inside and a ~1.5 g
 # spike still lands within the dial). The labelled rings follow _RINGS.
 _FULL_SCALE_G = 1.6
@@ -232,13 +243,15 @@ class GMeterOverlay(QWidget):
         w = self.width()
 
         # --- faint, subtle backdrop (more see-through than a solid panel) ---
+        # C.canvas (the darkest neutral) at low alpha so the video shows through; a hairline
+        # border in C.border_strong (also dimmed) frames it without drawing attention.
         backdrop = QRectF(1, 1, w - 2, self.height() - 2)
-        p.setBrush(QColor(8, 10, 14, 96))
-        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        p.setBrush(_c(C.canvas, 150))
+        p.setPen(QPen(_c(C.border_strong, 90), 1))
         p.drawRoundedRect(backdrop, 12, 12)
 
         # --- title: "G meter" ---
-        p.setPen(QPen(QColor(228, 233, 240, 200)))
+        p.setPen(QPen(_c(C.text_dim, 220)))
         p.setFont(_font(8.5, bold=True))
         p.drawText(QRectF(0, 3, w, 14), Qt.AlignHCenter | Qt.AlignVCenter, "G meter")
 
@@ -246,18 +259,19 @@ class GMeterOverlay(QWidget):
         p.setBrush(Qt.NoBrush)
         for gval in _RINGS:
             rr = r * (gval / _FULL_SCALE_G)
-            p.setPen(QPen(QColor(210, 220, 235, 70), 1.0))
+            p.setPen(QPen(_c(C.border, 200), 1.0))   # inner grid circles — dim
             p.drawEllipse(QPointF(cx, cy), rr, rr)
-        # outer boundary ring
-        p.setPen(QPen(QColor(228, 236, 248, 120), 1.2))
+        # outer boundary ring — a touch stronger than the inner grid circles
+        p.setPen(QPen(_c(C.border_strong, 220), 1.2))
         p.drawEllipse(QPointF(cx, cy), r, r)
-        # faint crosshair guides
-        guide = QColor(210, 220, 235, 40)
-        p.setPen(QPen(guide, 0.8))
+        # faint crosshair guides (tick/axis marks) — muted
+        p.setPen(QPen(_c(C.text_muted, 90), 0.8))
         p.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
         p.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
 
-        # --- filled max-G envelope (translucent red blob = grip used this lap) ---
+        # --- filled max-G envelope (translucent blob = grip used this lap) ---
+        # Recoloured from red to the accent amber: outline C.accent, fill C.accent at low alpha so
+        # the grip envelope reads clearly over footage without dominating.
         if len(self._hull_pts) >= 3:
             hull = _convex_hull(self._hull_pts)
             if len(hull) >= 3:
@@ -266,13 +280,13 @@ class GMeterOverlay(QWidget):
                 path = QPainterPath()
                 path.addPolygon(poly)
                 path.closeSubpath()
-                p.setPen(QPen(QColor(239, 71, 111, 150), 1.2))
-                p.setBrush(QColor(239, 71, 111, 64))
+                p.setPen(QPen(_c(C.accent, 170), 1.2))
+                p.setBrush(_c(C.accent, 56))
                 p.drawPath(path)
 
         # --- cardinal peak-g numbers (robust max felt-g per direction) ---
         p.setFont(_font(8.0, bold=True))
-        p.setPen(QPen(QColor(255, 209, 102, 230)))   # amber/gold, like the reference
+        p.setPen(QPen(_c(C.text_dim, 230)))   # axis value labels — dimmed off-white
         off = 11
         # forward (braking) at top, back (accel) at bottom, left/right on the sides
         p.drawText(QRectF(cx - 22, cy - r - off - 6, 44, 12), Qt.AlignCenter,
@@ -285,19 +299,21 @@ class GMeterOverlay(QWidget):
                    f"{self._peak_right:.1f}")
 
         # --- the live dot (NO line from centre to the dot — just a soft glow + dot) ---
+        # An accent (amber) glow fading out, with a bright off-white (C.text) core so the felt-
+        # force pointer is clearly visible over the footage and reads as the live indicator.
         if self._have:
             dx, dy = self._to_screen(cx, cy, r, self._fx, self._fy)
             grad = QRadialGradient(QPointF(dx, dy), 8)
-            grad.setColorAt(0.0, QColor(255, 255, 255, 235))
-            grad.setColorAt(1.0, QColor(120, 200, 255, 0))
+            grad.setColorAt(0.0, _c(C.accent, 235))
+            grad.setColorAt(1.0, _c(C.accent, 0))
             p.setPen(Qt.NoPen)
             p.setBrush(grad)
             p.drawEllipse(QPointF(dx, dy), 7, 7)
-            p.setBrush(QColor(255, 255, 255, 245))
+            p.setBrush(_c(C.text, 245))
             p.drawEllipse(QPointF(dx, dy), 2.6, 2.6)
 
         # --- source tag (tiny, bottom-right) ---
-        p.setPen(QPen(QColor(150, 165, 185, 130)))
+        p.setPen(QPen(_c(C.text_muted, 150)))
         p.setFont(_font(6.0))
         p.drawText(QRectF(w - 44, self.height() - 13, 40, 11), Qt.AlignRight, self._source.upper())
 

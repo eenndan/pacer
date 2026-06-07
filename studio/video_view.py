@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -38,8 +38,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters
+from . import chapters, theme
 from .gmeter_overlay import GMeterOverlay
+
+# Phosphor (qtawesome `ph` prefix) glyphs for the transport bar, themed via theme.icon.
+_ICON_PX = 18                       # glyph render size inside the buttons
+_ICON_BTN = QSize(32, 30)           # compact square-ish icon button
 
 # The g-meter overlay sits in the TOP-RIGHT corner of the video, sized as a FRACTION of the
 # video widget (not a fixed size) so it scales with the window and never dominates the frame.
@@ -99,21 +103,32 @@ class VideoView(QWidget):
         self.player.setAudioOutput(self.audio)
         self.player.setVideoOutput(self.video)
 
-        self.play_btn = QPushButton("▶ Play")
-        self.play_btn.setFixedWidth(90)
+        # Compact Phosphor-icon transport buttons (no text). Icons are themed via theme.icon and
+        # set ONCE per state change in the existing handlers — never on the playback tick.
+        self.play_btn = QPushButton()
+        self.play_btn.setIcon(theme.icon("ph.play-fill"))
+        self.play_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
+        self.play_btn.setFixedSize(_ICON_BTN)
+        self.play_btn.setToolTip("Play / pause")
         self.play_btn.clicked.connect(self.toggle)
 
-        # F4: mute/unmute toggle. Shows 🔇 while muted (default), 🔊 while audible.
-        self.mute_btn = QPushButton("🔇")
-        self.mute_btn.setFixedWidth(44)
+        # F4: mute/unmute toggle. speaker-x while muted (default), speaker-high while audible.
+        self.mute_btn = QPushButton()
+        self.mute_btn.setIcon(theme.icon("ph.speaker-simple-x"))
+        self.mute_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
+        self.mute_btn.setFixedSize(_ICON_BTN)
         self.mute_btn.setToolTip("Audio muted — click to unmute")
         self.mute_btn.clicked.connect(self.toggle_mute)
 
-        # g-meter show/hide toggle (the friction-circle overlay on the video).
-        self.gmeter_btn = QPushButton("G")
+        # g-meter show/hide toggle (the friction-circle overlay on the video). Checkable: the QSS
+        # :checked rule tints the button accent; we also recolour the GLYPH to C.accent when on.
+        self.gmeter_btn = QPushButton()
+        self.gmeter_btn.setIcon(theme.icon("ph.gauge"))
+        self.gmeter_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
+        self.gmeter_btn.setFixedSize(_ICON_BTN)
         self.gmeter_btn.setCheckable(True)
-        self.gmeter_btn.setFixedWidth(36)
         self.gmeter_btn.setToolTip("Show/hide the g-meter overlay")
+        self.gmeter_btn.toggled.connect(self._on_gmeter_toggled)
         self.gmeter_btn.toggled.connect(self.set_gmeter_visible)
 
         # The slider spans the WHOLE session (global ms 0..total). For a multi-chapter recording
@@ -184,9 +199,17 @@ class VideoView(QWidget):
         """F4: flip the audio mute state and update the button icon/tooltip."""
         muted = not self.audio.isMuted()
         self.audio.setMuted(muted)
-        self.mute_btn.setText("🔇" if muted else "🔊")
+        self.mute_btn.setIcon(theme.icon("ph.speaker-simple-x" if muted
+                                         else "ph.speaker-simple-high"))
         self.mute_btn.setToolTip("Audio muted — click to unmute" if muted
                                  else "Audio on — click to mute")
+
+    def _on_gmeter_toggled(self, on: bool):
+        """Recolour the g-meter glyph to the accent when the overlay is active (the QSS already
+        tints the button background on :checked). Separate from set_gmeter_visible so the icon
+        recolour stays a pure visual concern."""
+        self.gmeter_btn.setIcon(theme.icon("ph.gauge", color=theme.C.accent if on
+                                           else theme.C.text))
 
     # ------------------------------------------------------------- g-meter overlay
     def set_gmeter_visible(self, on: bool):
@@ -371,4 +394,4 @@ class VideoView(QWidget):
 
     def _on_state(self, state):
         playing = state == QMediaPlayer.PlaybackState.PlayingState
-        self.play_btn.setText("⏸ Pause" if playing else "▶ Play")
+        self.play_btn.setIcon(theme.icon("ph.pause-fill" if playing else "ph.play-fill"))
