@@ -2,8 +2,8 @@
 
 Why this exists
 ---------------
-The studio map trace was visibly NOISY (raw ~3 m GPS jitter), while the original Jupyter
-notebook (`notebooks/interpolation.ipynb` / `noise-investigation.ipynb`) produced a SMOOTH,
+The studio map trace was visibly NOISY (raw ~3 m GPS jitter), while the upstream Jupyter
+notebooks (since removed) produced a SMOOTH,
 track-matching map by moving-average-smoothing x/y BEFORE measuring distance. This tool lets
 us SEE the map (render PNGs offscreen) and MEASURE both the jitter we want to kill and the
 real lap-to-lap signal we must NOT erase.
@@ -261,16 +261,16 @@ def _render_gaps(session: Session, out_dir: str, tag: str):
 
 
 def _render_notebook_reference(paths_in, out_dir, tag="notebook"):
-    """Render the notebook's gold-standard map: _smooth the per-lap local x/y and plot — the
-    SAME filter the notebook applies before computing distance/delta. Parity eyeball target."""
+    """Render the upstream notebook's gold-standard map: _smooth the per-lap local x/y and plot —
+    the SAME w=9 filter it applied before computing distance/delta. Parity eyeball target."""
     import pyqtgraph as pg
     import pyqtgraph.exporters
     from PySide6.QtWidgets import QApplication
 
     _app = QApplication.instance() or QApplication(sys.argv)
     os.makedirs(out_dir, exist_ok=True)
-    # Build laps the notebook way is heavy; reuse the Session (same cs/segmentation) but apply
-    # the notebook _smooth to the RAW per-lap trace independently, so this is a true reference.
+    # Reuse the Session (same cs/segmentation) but apply the w=9 _smooth to the RAW per-lap trace
+    # independently, reproducing the upstream notebook's reference render.
     sess = Session.load(paths_in, smooth_window=1)  # raw trace, no studio smoothing
     valid = sess.valid_lap_ids()
     if not valid:
@@ -279,7 +279,7 @@ def _render_notebook_reference(paths_in, out_dir, tag="notebook"):
     pi = w.getPlotItem()
     pi.setAspectLocked(True)
     pi.showGrid(x=True, y=True, alpha=0.2)
-    pi.setTitle(f"[{tag}] notebook _smooth(w=9) per-lap, {min(6, len(valid))} laps")
+    pi.setTitle(f"[{tag}] upstream-notebook _smooth(w=9) per-lap, {min(6, len(valid))} laps")
     w.resize(900, 900)
     colors = ["#39a0ed", "#ff5252", "#06d6a0", "#ffd166", "#b388ff", "#ff9f1c"]
     for k, lid in enumerate(valid[:6]):

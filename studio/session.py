@@ -32,13 +32,13 @@ MIN_LAP_TIME = 5.0  # s — laps shorter than this are partial/phantom, not real
 MIN_LAP_SAMPLES = 20  # a real lap has at least this many GPS samples
 LAP_BAND_LO, LAP_BAND_HI = 0.5, 1.6  # "real lap" = lap_time within [lo, hi] x median lap time
 
-# --- GPS denoising (see notebooks/interpolation.ipynb + noise-investigation.ipynb) ---
-# Position smoothing window (samples). The notebook's gold-standard map smooths x/y/lat/lon
+# --- GPS denoising (originally derived from the upstream interpolation/noise notebooks, since removed) ---
+# Position smoothing window (samples). The upstream notebook's gold-standard map smoothed x/y/lat/lon
 # with a w=9 boxcar (~0.9 s @ 10 Hz) BEFORE measuring arc-length distance/delta; that cut the
 # delta jitter ~14% without erasing the real ~0.5 s lap-to-lap signal. We smooth the GPS
 # track ONCE at load (here), so every downstream quantity the C++ core derives — cum_distances,
 # lap segmentation, the delta resample, sector splits — uses the SAME smoothed coordinates.
-# w=13 (~1.3 s @ 10 Hz): tuned up from the notebook's w=9 baseline because the studio map
+# w=13 (~1.3 s @ 10 Hz): tuned up from that w=9 baseline because the studio map
 # feeds the SMOOTHED track straight back into segmentation/distance, so a touch more smoothing
 # buys a much cleaner trace. Verified on the real session (studio/denoise_check.py): w=13 cuts
 # the high-frequency cross-track jitter ~39% and the point-to-point heading jitter ~91% while
@@ -59,7 +59,7 @@ MAX_DOP = 10.0  # GPS9 DOP: dilution of precision; >~10 is a poor-geometry fix. 
 
 
 def _smooth(a, w: int = SMOOTH_WINDOW):
-    """Edge-correct boxcar moving average — the notebook's `np.convolve(a, ones(w)/w, "same")`
+    """Edge-correct boxcar moving average — the upstream notebook's `np.convolve(a, ones(w)/w, "same")`
     in the interior, but normalized at the ends so the first/last w//2 points aren't dragged
     toward zero by the convolution's implicit zero-padding (a raw `"same"` boxcar tapers the
     edges; here those points are averaged over only the samples that actually exist).
@@ -396,7 +396,7 @@ def _gap_segments(times, gap_s: float = SMOOTH_GAP_S):
 
 def _smooth_track(samples, times, w: int = SMOOTH_WINDOW):
     """Return NEW GPSSamples with lat/lon/altitude boxcar-smoothed in place, matching the
-    notebook's gold-standard map. Smoothing the SOURCE coordinates (not a render-time copy)
+    upstream notebook's gold-standard map. Smoothing the SOURCE coordinates (not a render-time copy)
     means every downstream quantity the C++ core derives — arc-length cum_distances, lap
     segmentation, the lap-vs-best delta, sector splits — is computed from the SAME smoothed
     track, so the trace and all metrics stay consistent. Speed fields are left untouched.
@@ -474,7 +474,7 @@ class Session:
         The GPS track is quality-gated (drop no-3D-lock / high-DOP fixes) and boxcar-smoothed
         (window `smooth_window`, default SMOOTH_WINDOW) BEFORE the points are handed to the
         core, so the map trace and every distance/delta/sector derived from it match the smooth
-        notebook reference. `smooth_window=1` disables smoothing (raw trace, for baselines)."""
+        upstream-notebook reference. `smooth_window=1` disables smoothing (raw trace, for baselines)."""
         laps = pacer.Laps()
         empty = pacer.CoordinateSystem(pacer.GPSSample())
         video_path = paths[0] if paths else None
