@@ -63,6 +63,22 @@ How it works (key decisions, all done & verified):
   intact). Re-derive via `studio/_calib.py` if the camera changes. The session-best lap's ~−0.19 s
   residual is a GPS-noise outlier (it cannot reach the transponder value without overfitting that
   one lap → an implausible 9.978 Hz) and is the irreducible limit of 10 Hz GPS — NOT fudged.
+  - **OUT-OF-SAMPLE VALIDATION (recording 0062, report-only — `studio/_validate_wallclock.py`).**
+    The 0062 footage was matched to CSV laps **856–920** by four agreeing signals: GPS9 wall-clock
+    UTC start (2026-05-24 05:54:30 UTC, read straight from `GPSSample.timestamp_ms`, the absolute
+    UTC ms the core already computes), elapsed-time (17h54m after the 12:00 UTC race start), the
+    pit brackets (long lap 854 before / 921 after the stint), and a duration-correlation LOCK
+    (**corr 0.97** at offset 856, ≈0 elsewhere). Result: on the same basis the 0060 factor was fit
+    (clean racing laps), 0062's UNcalibrated GPS9 residual is mean **+0.029 s** — identical to 0060
+    — and the factor recenters it. BUT a re-run that EXCLUDES GPS-dropout laps (a single ~2 s hole
+    near S/F adds ~+0.85 s) shows the +0.029 s is **entirely dropout-tail skew, not a clock rate**:
+    dropout-excluded the uncalibrated mean is **+0.0015 s** (0060: +0.0030 s) and each recording's
+    own best-fit rate is **≈1.0** (0062 −22 ppm, 0060 −46 ppm — not the committed −486 ppm).
+    **VERDICT: GPS9 true-clock timing is unbiased and GENERALIZES (per-lap noise ±0.05–0.16 s); the
+    `GPS9_RATE_FACTOR` does NOT — it over-fits a 0060 dropout artifact and mildly HURTS the clean
+    laps on both recordings (shifts them to −0.032 s, RMS up).** Recommendation (orchestrator/user
+    decide; value left UNCHANGED here): make the factor opt-in / default 1.0 (or drop it) and use a
+    robust centre statistic for any future fit. Re-run for any recording with `_validate_wallclock`.
 - **Lap distance — gap-aware** (C++ `SegmentDistance` in `pacer/laps/laps.cpp`, feeding both
   `GetLapDistance` and the per-lap `cum_distances`): normal segments use the GPS chord; a segment
   spanning a DROPOUT (point-to-point Δt > 0.35 s) uses the trapezoidal speed integral
