@@ -100,9 +100,6 @@ class QuatSample:
 
 ####################    <generated_from:geometry.hpp>    ####################
 
-def to_im_plot_point(index: int, data: Any) -> ImPlotPoint:
-    pass
-
 class Point:
     x: float = 0
     y: float = 0
@@ -218,108 +215,6 @@ def interpolate(from_: GPSSample, to: GPSSample, ratio: float) -> GPSSample:
 # }
 
 ####################    </generated_from:geometry.hpp>    ####################
-
-####################    <generated_from:interpolation.hpp>    ####################
-
-class AdamOptions:
-    """Gradient-descent (Adam) options for timestamp interpolation."""
-
-    learning_rates: List[float] = List[float](1e-1, 1e-2, 1e-3)
-    iterations_per_rate: int = 100
-    beta1: float = 0.9
-    beta2: float = 0.999
-    epsilon: float = 1e-8
-    def __init__(
-        self,
-        learning_rates: List[float] = List[float](1e-1, 1e-2, 1e-3),
-        iterations_per_rate: int = 100,
-        beta1: float = 0.9,
-        beta2: float = 0.999,
-        epsilon: float = 1e-8,
-    ) -> None:
-        """Auto-generated default constructor with named params"""
-        pass
-
-class InterpolationInput:
-    """Per-sample inputs to the optimizer. All three vectors have the same length N.
-    floor[i], ceil[i] : the time interval the i-th sample must fall within
-                        (e.g. a video frame's [start, end] span).
-    di[i]             : expected number of sampling steps between sample i-1
-                        and i (di[0] == 1). Drives the spacing model.
-    """
-
-    floor: List[float]
-    ceil: List[float]
-    di: List[float]
-    def __init__(
-        self,
-        floor: List[float] = List[float](),
-        ceil: List[float] = List[float](),
-        di: List[float] = List[float](),
-    ) -> None:
-        """Auto-generated default constructor with named params"""
-        pass
-
-class InterpolationResult:
-    timestamps: List[float]  # recovered per-sample timestamps (length N)
-    phase: float = 0  # fitted t[0]
-    frequency: float = 0  # fitted sampling frequency
-    loss: float = 0  # final loss value
-    def __init__(
-        self,
-        timestamps: List[float] = List[float](),
-        phase: float = 0,
-        frequency: float = 0,
-        loss: float = 0,
-    ) -> None:
-        """Auto-generated default constructor with named params"""
-        pass
-
-def interpolation_loss(input: InterpolationInput, t: List[float]) -> float:
-    """The loss from the notebook: variance of di-normalized spacing plus the mean
-    squared violation of the [floor, ceil] bounds. Exposed for tests / parity.
-    """
-    pass
-
-@overload
-def interpolate_timestamps(
-    input: InterpolationInput,
-    initial_frequency: float,
-    opts: AdamOptions = AdamOptions(),
-) -> InterpolationResult:
-    pass
-
-@overload
-def interpolate_timestamps(
-    samples: List[GPSSample],
-    spans: List[Tuple[float, float]],
-    cs: CoordinateSystem,
-    opts: AdamOptions = AdamOptions(),
-) -> InterpolationResult:
-    pass
-
-class DiResult:
-    di: List[float]
-    rough_frequency: float = 1.0
-    def __init__(
-        self, di: List[float] = List[float](), rough_frequency: float = 1.0
-    ) -> None:
-        """Auto-generated default constructor with named params"""
-        pass
-
-def compute_di(
-    samples: List[GPSSample], spans: List[Tuple[float, float]], cs: CoordinateSystem
-) -> DiResult:
-    """Build the di vector and a rough sampling frequency from GPS samples and their
-    frame spans, matching the notebook:
-      rough_frequency = #samples / #distinct spans
-      di[i] = round(distance(s[i-1], s[i]) / avg_speed * rough_frequency)
-    di[0] is 1 and every di is clamped to >= 1 (a 0 would divide by zero in the
-    spacing term and collapse the parametric timeline).
-    """
-    pass
-
-####################    </generated_from:interpolation.hpp>    ####################
 
 ####################    <generated_from:laps.hpp>    ####################
 
@@ -593,63 +488,6 @@ class DatVersion(enum.IntEnum):
     with_timestamp = enum.auto()  # (= 1)
 
 ####################    </generated_from:gps-source.hpp>    ####################
-
-####################    <generated_from:laps-display.hpp>    ####################
-
-class LapsDisplay:
-    laps: Laps
-    selected_lap: int = -1
-
-    cs: CoordinateSystem
-
-    def to_im_plot_point(self, s: GPSSample) -> ImPlotPoint:
-        pass
-    bounds: Tuple[Point, Point] = Tuple[Point, Point]({1, 1}, {0, 0})
-
-    def drag_timing_line(self, s: Segment, name: str, drag_id: int) -> None:
-        pass
-
-    def display_map(self) -> None:
-        pass
-
-    def display_lap_telemetry(self) -> None:
-        pass
-
-    def display_table(self) -> bool:
-        pass
-
-    def __init__(
-        self, selected_lap: int = -1, cs: CoordinateSystem = CoordinateSystem()
-    ) -> None:
-        """Auto-generated default constructor with named params"""
-        pass
-
-class DeltaLapsComparison:
-    reference_lap: Lap
-    cs: CoordinateSystem
-
-    def plot_sticks(self) -> None:
-        pass
-
-    def draw_slider(self) -> None:
-        pass
-    selected_laps: std.unordered_set[int] = (
-        std.unordered_set < int > ()
-    )  # {19, 24, 28, 35, 36};
-
-    def display(self, laps: Laps) -> None:
-        pass
-
-    def __init__(
-        self,
-        reference_lap: Lap = Lap(),
-        cs: CoordinateSystem = CoordinateSystem(),
-        selected_laps: std.unordered_set[int] = std.unordered_set < int > (),
-    ) -> None:
-        """Auto-generated default constructor with named params"""
-        pass
-
-####################    </generated_from:laps-display.hpp>    ####################
 
 # // </litgen_stub> // Autogenerated code end
 # // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!  AUTOGENERATED CODE END !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
