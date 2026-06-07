@@ -1,6 +1,10 @@
 """PlotsView: speed (top) and lap-vs-best delta (bottom) on ONE shared, x-linked x-axis.
 
-Shows the laps selected in the lap table. A vertical cursor on both plots follows the
+Shows the laps selected in the lap table PLUS the best lap as an always-on green reference
+(`SERIES_BEST`) — the panel is "Δ TO BEST", so the best lap is the baseline and is drawn even
+when the user selects other laps. The best is added to a DRAW set at refresh time only; the
+selection (`self._lap_ids`) is never mutated, so the cursor/scrub/hover-dot/auto-follow keep
+keying off the user's current lap, not the best. A vertical cursor on both plots follows the
 video position whenever the currently-playing lap is among those displayed.
 
 Both plots share a single x-axis driven by the dist/time toggle and kept x-linked, so the same
@@ -287,23 +291,41 @@ class PlotsView(QWidget):
         self.p_speed.enableAutoRange()
         self.p_delta.enableAutoRange()
 
+        # The whole panel is "Δ TO BEST" — the best lap IS the reference curve, so it must ALWAYS
+        # be drawn (green) regardless of the user's selection, even when they picked other laps.
+        # Build a DRAW set = the selection plus the best lap (appended once if not already chosen),
+        # WITHOUT mutating self._lap_ids: the cursor/scrub/hover-dot/auto-follow all key off
+        # _lap_ids and the current lap, so the always-on best reference must not change which lap
+        # is "current". (session.delta already fetches the best lap's arrays internally, but we
+        # pass it explicitly so its speed/delta series come back in `speed`/`delta` to be drawn.)
+        best = self.session.best_lap_id()
+        draw_ids = list(self._lap_ids)
+        best_always_on = best is not None and best not in draw_ids
+        if best_always_on:
+            draw_ids.append(best)
+
         # One delta() call yields BOTH plots' series on the SAME x basis for `x_mode`, so the
         # speed and delta curves (and the cursors) share one axis and stay x-linked → aligned.
-        result = self.session.delta(self._lap_ids, x_mode=x_mode)
+        result = self.session.delta(draw_ids, x_mode=x_mode)
         if not result:
             self.p_speed.setTitle(None)
             return
         best, speed, delta = result
         labels = [f"lap {lid} {fmt_time(self.session.laps.lap_time(lid))}"
-                  + (" ★best" if lid == best else "") for lid in self._lap_ids]
+                  + (" ★best" if lid == best else "") for lid in draw_ids]
         self.p_speed.setTitle("   ".join(labels) or None)
-        for k, lid in enumerate(self._lap_ids):
+        for k, lid in enumerate(draw_ids):
             # Semantic colouring (Phase 2): the BEST lap is green (C.ahead) to match the lap
             # table; every other lap cycles through the categorical CHART_SERIES (amber accent
             # first → the primary/first-selected lap pops). width=2 solid keeps the fast path.
-            color = theme.SERIES_BEST if lid == best else PALETTE[k % len(PALETTE)]
-            pen = pg.mkPen(color, width=2)
-            name = f"lap {lid}" + (" (best)" if lid == best else "")
+            # The ALWAYS-ON best reference (drawn because it's the Δ baseline, not because the
+            # user selected it) is rendered slightly thinner so an explicitly-selected lap reads
+            # as primary — but it stays clearly green so "Δ to best" always has its green baseline.
+            is_best = lid == best
+            color = theme.SERIES_BEST if is_best else PALETTE[k % len(PALETTE)]
+            width = 1 if (is_best and best_always_on) else 2
+            pen = pg.mkPen(color, width=width)
+            name = f"lap {lid}" + (" (best)" if is_best else "")
             if lid in speed:
                 sx, spd = speed[lid]
                 c = self.p_speed.plot(sx, spd, pen=pen, name=name)
