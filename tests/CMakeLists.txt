@@ -21,6 +21,10 @@ if(Python_Interpreter_FOUND)
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_scrub_conversion.py)
     add_test(NAME test_lap_timing
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_timing.py)
+    add_test(NAME test_calibration
+             COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_calibration.py)
+    set_tests_properties(test_calibration PROPERTIES
+                         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_test(NAME test_chapters
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chapters.py)
     add_test(NAME test_studio_features

@@ -48,8 +48,21 @@ How it works (key decisions, all done & verified):
   **wall-clock** spacing (the transponder's clock), re-anchored per contiguous run to the media
   time so video sync / chapter offsets are unchanged; degrades to naive when no GPS9 timestamp is
   present. `--interp` still opts into the C++ gradient-descent fit, validated and auto-rejected
-  when it diverges on long sessions (it does — keep it opt-in). The remaining ~0.15 s
-  GPS-vs-transponder gap on lap 36 is the irreducible limit of 10 Hz GPS and is NOT fudged.
+  when it diverges on long sessions (it does — keep it opt-in).
+- **Lap timing — transponder-calibrated GPS9 clock rate** (`session.GPS9_RATE_FACTOR = 0.999514`).
+  The re-anchored gps9 axis was cross-checked against the kart's REAL lap-timing transponder
+  (Daytona 24h 2026, the 0060 recording = CSV stint laps 298–358, parsed by
+  `studio/transponder.py`). The app's 57 valid laps aligned 1:1 to the transponder (correlation
+  **0.995**, anchored on the mutual best lap + the in/out-lap endpoints; every other sequence
+  offset correlates ~0 ⇒ unambiguous). Residual app−transponder over 55 clean racing laps was
+  mean **+0.029 s** / median +0.004 s / **std 0.158 s** — a small, consistent ~+0.05 % too-long
+  rate on top of ±0.16 s irreducible GPS noise. Scaling the within-run GPS9 SPACING by this one
+  clock-rate factor recenters the residual to mean **−0.005 s** and GENERALIZES (10-fold CV
+  held-out mean **−0.0001 s**, RMS **0.161 s**). One cross-validated physical parameter, NOT a
+  per-lap fudge; applied to spacing only so each run keeps its media-clock anchor (video sync
+  intact). Re-derive via `studio/_calib.py` if the camera changes. The session-best lap's ~−0.19 s
+  residual is a GPS-noise outlier (it cannot reach the transponder value without overfitting that
+  one lap → an implausible 9.978 Hz) and is the irreducible limit of 10 Hz GPS — NOT fudged.
 - **Lap distance — gap-aware** (C++ `SegmentDistance` in `pacer/laps/laps.cpp`, feeding both
   `GetLapDistance` and the per-lap `cum_distances`): normal segments use the GPS chord; a segment
   spanning a DROPOUT (point-to-point Δt > 0.35 s) uses the trapezoidal speed integral
@@ -198,7 +211,8 @@ How it works (key decisions, all done & verified):
   **Plot-cursor scrub seeks are coalesced to ≤1 per tick** (latest target wins) — never seek
   per-mouse-move; the drag↔`positionChanged` feedback loop is gated (`_user_dragging`/`_suppress`).
 - Module map: `session.py` (data/analysis — only pacer user) · `tracks.py` (track registry) ·
-  `gapfill.py` (GPS-gap reconstruction, pure numpy) · `reference.py` + `mk_centerline.json` /
+  `transponder.py` (lap-timing-CSV parser, pure-Python, no pacer — the GPS9 rate calibration's
+  ground-truth) · `gapfill.py` (GPS-gap reconstruction, pure numpy) · `reference.py` + `mk_centerline.json` /
   `build_reference.py` (georeferenced fallback centerline) · `map_view.py` · `plots_view.py` ·
   `lap_table.py` · `video_view.py` · `app.py` (wiring) · `diagnose.py` / `denoise_check.py`
   (`--gaps` renders the filled map + prints gap metrics) / `_smoke.py` / `_analysis_dump.py`
