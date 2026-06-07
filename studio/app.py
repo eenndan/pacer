@@ -70,6 +70,13 @@ class StudioWindow(QMainWindow):
         # The VideoView is driven by the session's ChapterMap so the slider spans the whole
         # session and playback switches sources / auto-advances across chapters.
         self.video = VideoView(self.session.chapters or self.session.video_path)
+        # g-meter overlay: label its source (accl/gps) and only offer the toggle when a g signal
+        # was actually computed (IMU present). The overlay itself is pacer-free — g comes from
+        # session via self.video.set_g at the tick.
+        self.video.set_gmeter_source(self.session.gmeter_source())
+        self.video.gmeter_btn.setEnabled(self.session.has_gmeter)
+        if not self.session.has_gmeter:
+            self.video.gmeter_btn.setToolTip("No accelerometer data in this recording")
         self.map = MapView(self.session)
         self.plots = PlotsView(self.session)
         self.table = LapTable(self.session)
@@ -280,6 +287,9 @@ class StudioWindow(QMainWindow):
         lap = lap_id if lap_id is not None else "-"
         self.video.set_readout(f"t = {fmt_time(t)}   speed = {speed} km/h   lap {lap}")
         self._update_diff_box(t, sp)
+        # g-meter overlay: feed the vehicle-frame g at the current media time (a cheap lookup).
+        # A no-op when the overlay is hidden; None outside a usable region blanks the live dot.
+        self.video.set_g(self.session.g_at_time(t))
 
     def _follow_current_lap(self, lap_id: int | None, t: float):
         """Auto-follow the playhead's lap on the speed + delta charts (current lap vs best).
