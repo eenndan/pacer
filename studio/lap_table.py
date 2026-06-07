@@ -281,7 +281,11 @@ class LapTable(QWidget):
                 self.table.selectRow(r)
         self.table.blockSignals(False)
 
+    def selected_lap_ids(self) -> list[int]:
+        """The lap ids of the currently-selected rows (sorted). Read-only — used to restore the
+        chart overlay to the table's selection when compare mode is turned off."""
+        return sorted({self._lap_id(idx.row())
+                       for idx in self.table.selectionModel().selectedRows()})
+
     def _on_selection(self):
-        ids = sorted({self._lap_id(idx.row())
-                      for idx in self.table.selectionModel().selectedRows()})
-        self.laps_selected.emit(ids)
+        self.laps_selected.emit(self.selected_lap_ids())

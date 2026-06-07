@@ -237,6 +237,19 @@ class StudioWindow(QMainWindow):
         self.map.timing_lines_changed.connect(self._on_lines)
         self.table.laps_selected.connect(self._on_user_select)
 
+        # --- compare videos (Phase B) ---
+        # Two equal side-by-side video panes, behind the explicit "Compare videos" toggle.
+        # Compare is OFF by default and the toggle is enabled only when there are >=2 valid laps.
+        # The PRIMARY (left) pane keeps driving ALL telemetry exactly as today; the SECONDARY
+        # (right) pane is video-only. While compare is on, auto-follow's lap re-point is SUSPENDED
+        # so the pinned panes/charts don't thrash as the playhead crosses lap boundaries.
+        self._compare = False
+        self._compare_a: int | None = None  # primary (left) lap id
+        self._compare_b: int | None = None  # secondary (right) lap id
+        self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
+        self.video.compareToggled.connect(self._on_compare_toggled)
+        self.video.paneRepointRequested.connect(self._on_pane_repoint)
+
         # --- plot cursor scrub (a fine, lap-scoped scrubber; the full-video slider stays) ---
         # Dragging either plot cursor seeks the video WITHIN the current lap. plots_view emits
         # the raw plot-x + which axis it came from; we convert (session, pacer-side) to a media
@@ -246,6 +259,12 @@ class StudioWindow(QMainWindow):
         self._scrub_target: float | None = None  # latest requested media time (coalesced)
         self._scrub_pending = False              # a new target awaits the next tick's seek
         self._scrub_was_playing = False          # restore playback on release iff it was playing
+        # Compare-mode scrub: the drag is distance-locked, so it parks BOTH panes on the SAME
+        # track position. The same plot-x converts to each lap's own global media time; each
+        # pane's seek is coalesced to <=1/tick reusing the gate (the single-pane fields above are
+        # the PRIMARY pane's; these add the SECONDARY pane's). Only used while compare is on.
+        self._scrub_target_b: float | None = None
+        self._scrub_pending_b = False
         self.plots.scrubStarted.connect(self._on_scrub_started)
         self.plots.scrubMoved.connect(self._on_scrub_moved)
         self.plots.scrubEnded.connect(self._on_scrub_ended)
@@ -357,12 +376,47 @@ class StudioWindow(QMainWindow):
         if self._scrub_target is not None:
             if self._scrub_pending:
                 self._scrub_pending = False
-                self.video.seek(self._scrub_target)
+                self.video.seek(self._scrub_target)  # PRIMARY pane
+            # Compare mode: the same drag is distance-locked across both panes — fan the coalesced
+            # seek out to the SECONDARY pane too (its own lap's global time, computed in _moved).
+            if self._compare and self._scrub_pending_b:
+                self._scrub_pending_b = False
+                if self._scrub_target_b is not None:
+                    self.video.seek_pane(1, self._scrub_target_b)
+            self._compare_tick()  # keep the secondary g + Δ badges live while scrubbing
             return
         # Normal playback: apply an update only when the position actually advanced.
         if self._latest_t != self._applied_t:
             self._applied_t = self._latest_t
             self._apply_position(self._applied_t)
+        # Compare mode: the secondary pane is video-only (no _on_position), so feed its g + update
+        # both panes' Δ badges from its own current position here, every tick (O(1) np.interp).
+        if self._compare:
+            self._compare_tick()
+
+    def _compare_tick(self):
+        """Per-tick compare upkeep (O(1)): feed the SECONDARY pane its own-lap g, and refresh each
+        pane's "Δ vs other" badge at that pane's current track position. The PRIMARY pane's g and
+        telemetry are still driven by the single-valued _apply_readout path — this never touches
+        _latest_t/_applied_t, so the primary telemetry stays exactly as today."""
+        a, b = self._compare_a, self._compare_b
+        if a is None or b is None:
+            return
+        t_a = self.video.current_pane_time(0)  # primary pane's global time
+        t_b = self.video.current_pane_time(1)  # secondary pane's global time (read once)
+        # Secondary g (the primary's g comes from _apply_readout). A no-op if the overlay is off.
+        self.video.set_pane_g(1, self.session.g_at_time(t_b))
+        # Each pane's Δ vs the OTHER lap, at that pane's own current track position.
+        self._set_pane_badge(0, self.session.delta_between(a, b, t_a))
+        self._set_pane_badge(1, self.session.delta_between(b, a, t_b))
+
+    def _set_pane_badge(self, side: int, d: float | None):
+        """Format + colour a pane's "Δ vs other" badge (+behind / −ahead vs the other pane's lap)."""
+        if d is None:
+            self.video.set_pane_badge(side, "Δ —", None)
+        else:
+            colour = theme.C.ahead if d <= 0 else theme.C.behind
+            self.video.set_pane_badge(side, f"Δ {d:+.2f} s", colour)
 
     def _apply_position(self, t: float):
         self.map.set_marker_time(t)
@@ -402,6 +456,10 @@ class StudioWindow(QMainWindow):
             so it does NOT emit `laps_selected` and therefore cannot trigger a user-seek that would
             fight playback. (Select-lap→seek is gated to genuine user clicks via _on_user_select.)
         """
+        # Compare mode pins the panes + charts to the chosen pair, so SUSPEND the auto-follow
+        # re-point: the playhead crossing a lap boundary must not thrash the pinned [A,B] overlay.
+        if getattr(self, "_compare", False):
+            return
         if lap_id is None or lap_id == self._followed_lap:
             return  # hold on no-lap regions; only act on a genuine change to a new valid lap
         self._followed_lap = lap_id
@@ -439,14 +497,20 @@ class StudioWindow(QMainWindow):
 
     # ------------------------------------------------------------- plot scrub
     def _on_scrub_started(self):
-        """Grab: scope the scrub to the lap the playhead is currently in; pause playback,
-        remembering whether it was playing so we can resume on release."""
-        self._scrub_lap = self.session.lap_at_time(self._applied_t or 0.0)
+        """Grab: scope the scrub to the lap the playhead is currently in (compare mode: to the
+        pinned pair A/B); pause playback, remembering whether it was playing so we can resume on
+        release."""
+        # In compare mode the scrub is distance-locked to the pinned pair (the drag parks BOTH
+        # panes on the same track position), not to a single playhead lap.
+        self._scrub_lap = (self._compare_a if self._compare
+                           else self.session.lap_at_time(self._applied_t or 0.0))
         self._scrub_was_playing = self.video.is_playing()
         if self._scrub_was_playing:
             self.video.pause()
         self._scrub_target = None
         self._scrub_pending = False
+        self._scrub_target_b = None
+        self._scrub_pending_b = False
 
     def _on_scrub_moved(self, x: float, mode: str):
         """Drag: convert the raw plot-x (in `mode`'s axis) to a media time within the captured
@@ -463,7 +527,16 @@ class StudioWindow(QMainWindow):
             return
         self._scrub_target = t
         self._scrub_pending = True
+        if self._compare and self._compare_b is not None:
+            # Distance-locked: the SAME dragged plot-x is a track position; convert it to the
+            # SECONDARY lap's own global media time so both panes park on the same spot. Coalesced
+            # to <=1 seek/tick via _scrub_pending_b (the secondary's gate), exactly like the primary.
+            t_b = self.session.media_time_at_plot_x(self._compare_b, x, mode, best_distance=best_d)
+            if t_b is not None:
+                self._scrub_target_b = t_b
+                self._scrub_pending_b = True
         # Drive every view from the one clamped truth (plots ignore the playback tick mid-drag).
+        # The cursor on the charts follows the PRIMARY pane's lap position `t`.
         self.plots.place_cursors_at_time(t)
         self.map.set_marker_time(t)
         self._apply_readout(t)
@@ -473,15 +546,114 @@ class StudioWindow(QMainWindow):
         if the last move coalesced out), resume playback iff it was playing at grab, then clear
         the scrub state so the normal playback→cursor sync resumes."""
         target = self._scrub_target
+        target_b = self._scrub_target_b
         self._scrub_target = None
         self._scrub_pending = False
+        self._scrub_target_b = None
+        self._scrub_pending_b = False
         if target is not None:
-            self.video.seek(target)
+            self.video.seek(target)  # PRIMARY pane
             self._applied_t = target  # keep current-lap/readout consistent until the seek lands
+        if self._compare and target_b is not None:
+            self.video.seek_pane(1, target_b)  # SECONDARY pane (final distance-locked park)
         if self._scrub_was_playing:
-            self.video.play()
+            self.video.play()  # fans out to both panes in compare mode
         self._scrub_was_playing = False
         self._scrub_lap = None
+
+    # ------------------------------------------------------------- compare videos (Phase B)
+    def _lap_caption(self, lap_id: int) -> str:
+        """Per-pane caption "lap N  m:ss.mmm" for a lap id."""
+        return f"lap {lap_id}  {fmt_time(self.session.laps.lap_time(lap_id))}"
+
+    def _seek_pane_to_lap_start(self, side: int, lap_id: int):
+        """Seek one pane to a hair INTO its lap (the _LAP_SEEK_NUDGE_S nudge keeps the ms-quantized
+        position inside the lap, mirroring the lap-table seek), so it parks on the lap's start."""
+        window = self.session.lap_window(lap_id)
+        if window is not None:
+            self.video.seek_pane(side, window[0] + _LAP_SEEK_NUDGE_S)
+
+    def _on_compare_toggled(self, on: bool):
+        """The "Compare videos" toggle flipped. On enter: seed (A,B) = (current/primary lap, best)
+        — default current-vs-best (if they coincide, pick the next-fastest as B) — build the two
+        panes, seek each to its lap start, drive the chart overlay with [A,B], and SUSPEND
+        auto-follow's lap re-point. On exit: restore the single pane, re-enable auto-follow, and
+        restore the table-driven chart selection."""
+        if on:
+            self._enter_compare()
+        else:
+            self._exit_compare()
+
+    def _enter_compare(self):
+        valid = self.session.valid_lap_ids()
+        if len(valid) < 2:
+            return  # the toggle should be disabled, but guard anyway
+        best = self.session.best_lap_id()
+        # A = the lap the playhead is currently in, else the primary table selection, else best.
+        a = self.session.lap_at_time(self._applied_t or 0.0)
+        if a is None or a not in valid:
+            sel = [lid for lid in self.plots._lap_ids if lid in valid]
+            a = sel[0] if sel else (best if best in valid else valid[0])
+        # B = best; if A already is best, pick the next-fastest valid lap as B.
+        b = best if best is not None and best in valid else None
+        if b is None or b == a:
+            others = sorted((lid for lid in valid if lid != a),
+                            key=self.session.laps.lap_time)
+            b = others[0] if others else a
+        self._compare = True
+        self._compare_a, self._compare_b = a, b
+        wa, wb = self.session.lap_window(a), self.session.lap_window(b)
+        if wa is None or wb is None:
+            self._compare = False
+            return
+        self.video.set_compare(a, b, wa, wb, self._lap_caption(a), self._lap_caption(b), valid)
+        # Each pane plays "time into lap": park both on their lap starts.
+        self._seek_pane_to_lap_start(0, a)  # PRIMARY
+        self._seek_pane_to_lap_start(1, b)  # SECONDARY
+        # The pair drives the chart overlay (A primary curve, B reference) and each pane's g scope.
+        self.plots.set_laps([a, b])
+        self.video.set_pane_gmeter_lap(0, a)
+        self.video.set_pane_gmeter_lap(1, b)
+        # Suspend auto-follow: freeze _followed_lap on A so the per-tick edge check never re-points
+        # the charts while compare is on (also gated by self._compare in _follow_current_lap).
+        self._followed_lap = a
+
+    def _exit_compare(self):
+        self._compare = False
+        self._compare_a = self._compare_b = None
+        self.video.exit_compare()
+        # Restore the table-driven chart selection + re-enable auto-follow (a fresh edge will
+        # re-establish the followed lap on the next playhead movement).
+        self._followed_lap = None
+        ids = self.table.selected_lap_ids()
+        if ids:
+            self.plots.set_laps(ids)
+        else:
+            self._select_default()
+
+    def _on_pane_repoint(self, side: int, lap_id: int):
+        """A pane's lap picker repointed that side to `lap_id`: re-seed its lap window + caption,
+        re-seek it to the new lap start, and refresh the chart overlay + g scope. The OTHER pane is
+        untouched. Drives the [A,B] pair that feeds the charts + the per-tick Δ badges."""
+        if not self._compare:
+            return
+        valid = self.session.valid_lap_ids()
+        if lap_id not in valid:
+            return
+        if side == 0:
+            self._compare_a = lap_id
+        else:
+            self._compare_b = lap_id
+        window = self.session.lap_window(lap_id)
+        if window is None:
+            return
+        self.video.reseed_pane(side, lap_id, window, self._lap_caption(lap_id), valid)
+        self._seek_pane_to_lap_start(side, lap_id)
+        self.video.set_pane_gmeter_lap(side, lap_id)
+        # Refresh the chart overlay with the new pair; freeze auto-follow on the (new) primary lap.
+        if self._compare_a is not None and self._compare_b is not None:
+            self.plots.set_laps([self._compare_a, self._compare_b])
+            self._followed_lap = self._compare_a
 
     def _refresh_sector_lines(self, mode: str | None = None):
         """F2: push the sector boundary positions (start/finish + each sector line) to the charts
@@ -492,6 +664,10 @@ class StudioWindow(QMainWindow):
         self.plots.set_sector_lines(self.session.sector_plot_positions(mode))
 
     def _on_lines(self, start, sectors):
+        # Re-segmentation shifts lap ids, so any pinned compare pair is now stale — leave compare
+        # mode first (also tears the 2nd pane down), then re-segment and rebuild the default view.
+        if self._compare:
+            self.video.set_compare_enabled(False)  # un-checks -> compareToggled(False) -> exit
         self.session.set_timing_lines(start, sectors)
         self.table.refresh()
         # Re-segmentation shifted lap ids + cleared the per-lap gap-fill cache; redraw the map
@@ -500,6 +676,8 @@ class StudioWindow(QMainWindow):
         self._select_default()
         # F2: the sector lines changed — update the chart guide lines live.
         self._refresh_sector_lines()
+        # The valid-lap count may have changed — re-evaluate whether compare can be offered.
+        self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
 
 
 def main(argv: list[str] | None = None) -> int:
