@@ -1,268 +1,172 @@
-# pacer studio — status & handoff
+# pacer studio — project state & handoff
 
-`studio/` is a local **PySide6 + pyqtgraph** desktop app on the C++ `pacer` core (nanobind), for
-analysing GoPro race telemetry. This is the handoff doc: current state, how to run/verify, the
-architecture an agent must respect, and the prioritized backlog. Read it + [README.md](README.md)
-+ the `pacer-studio-app-direction` memory to take over.
+`studio/` is a local **PySide6 + pyqtgraph** desktop app on the C++ `pacer` core (via its nanobind
+bindings), for analysing GoPro race telemetry. This is the handoff doc; for the module map, run
+instructions, and per-feature implementation notes see [README.md](README.md), and for the detailed
+evidence behind the timing/g-meter/start-line claims see [`docs/`](docs/).
 
-**Branch:** `fill-gps-gaps` (off `removing-gps-noise`, off `better-app`; local, not pushed).
-**Run:** `pixi run studio -- <file.MP4>`.
-Validated end-to-end on `/Users/daniil/Desktop/D24/GX010060.MP4` (Daytona MK, ~28 min 4K HEVC →
-18 valid laps @ ~69 s), user-confirmed.
+---
 
-## Current state — feature-complete for the initial scope
+## 1. Current state / progress
 
-Panels (module map in README):
-- **Map** — best lap (faint) + current/playing lap (highlighted); freely-draggable start + sector
-  timing lines; red video marker. The full all-laps trace is intentionally not drawn.
-- **Speed + delta plots** — speed (top) and lap-vs-best delta (bottom) on ONE shared, x-linked
-  x-axis: the dist/time toggle drives BOTH plots (distance = normalized-distance × best-lap
-  distance, in metres; time = time-into-lap), so the same moment lands at the same x on both and
-  the two cursors always line up vertically. Delta is aligned by normalized distance so its
-  endpoint equals the laptime difference. The charts **auto-follow the current lap**: as playback
-  (or a main-slider scrub) crosses a lap boundary they switch to the now-current lap vs best
-  (the table `▶`/selection + map overlay stay coherent); a manual lap selection is preserved while
-  paused and replaced only once playback moves on. An always-on **Δ/speed readout box** above the
-  plots shows the current-moment Δ-to-best (priority) + speed; the delta plot has a **hover dot**
-  that rides the curve under the mouse with its Δ value (independent of the playback cursor).
-- **Lap table** — time / dist / entry speed, plus per-sector split columns S1…Sn once sectors are
-  added. `▶` marks the playing lap; blue row = your selection; best lap shown in green; the
-  **session-best split in each sector column is purple** (per-column min across valid laps). **Every
-  column header is click-to-sort** by the underlying numeric value (asc/desc toggle); all highlights
-  follow the laps across a sort. Default order is by lap number until you click a header.
-- **Video** — GoPro `.mp4` with play/pause + a full-video scrub slider + an **audio mute/unmute
-  toggle** (default muted); readout shows `t / speed / lap #`; synced both ways. The speed + delta
-  **plot cursors are also draggable** — a fine, lap-scoped scrubber that seeks the video within the
-  current lap (complements the slider). The map's red marker drag is **constrained to the current
-  lap** so it never jumps to another lap across a spatial overlap.
+**Merged and working.** The studio app is the current product on top of the C++ core; the whole
+effort is on `main`. Run it with `pixi run studio -- <file.MP4>` (or `python -m studio [files]`).
 
-How it works (key decisions, all done & verified):
-- **Load/clean** (`session._clean`): trims the stationary GPS-spike lead-in/cool-down and
-  bbox-filters off-track fixes.
-- **Lap timing — GPS9 true wall clock** (`session._gps9_times`, the load default): lap time is the
-  difference of two start/finish crossing instants, each already INTERPOLATED along the chord by
-  the C++ core (`pacer::Split`: `t = t0 + f·(t1−t0)`), so accuracy is set by the per-sample TIME
-  AXIS. The old `naive` axis spread each GPMF payload's MEDIA span over `i/n`; the GoPro media
-  clock for the GPS track runs ~0.1 % fast (9.990 Hz measured), which systematically compressed
-  every lap (~30 ms on the best lap). We now time off the GPS9 fix timestamps' true 10.000 Hz
-  **wall-clock** spacing (the transponder's clock), re-anchored per contiguous run to the media
-  time so video sync / chapter offsets are unchanged; degrades to naive when no GPS9 timestamp is
-  present. `--interp` still opts into the C++ gradient-descent fit, validated and auto-rejected
-  when it diverges on long sessions (it does — keep it opt-in).
-- **Lap timing — GPS9 true-clock axis is unbiased; VALIDATED OUT-OF-SAMPLE (no calibration).**
-  The re-anchored GPS9 wall-clock spacing (rate = 1.0, NO factor) is the default and was validated
-  against the kart's REAL lap-timing transponder (Daytona 24h 2026, parsed by
-  `studio/transponder.py`) on a SECOND, independent recording — **0062** — via
-  `studio/_validate_wallclock.py`. The 0062 footage was matched to CSV laps **856–920** by four
-  agreeing signals: GPS9 wall-clock UTC start (2026-05-24 05:54:30 UTC, read straight from
-  `GPSSample.timestamp_ms`, the absolute UTC ms the core already computes), elapsed-time (17h54m
-  after the 12:00 UTC race start), the pit brackets (long lap 854 before / 921 after the stint),
-  and a duration-correlation LOCK (**corr 0.97** at offset 856, ≈0 elsewhere). On the clean racing
-  laps (GPS-dropout laps excluded), the GPS9 residual app−transponder is mean **+0.0015 s** /
-  ±**0.053 s** (0060: +0.0030 s), and each recording's own best-fit clock rate is **≈1.0** (0062
-  −22 ppm, 0060 −46 ppm). So the timing GENERALIZES and needs no correction.
-  - **An earlier transponder-fit clock-rate factor (0.999514, −486 ppm) was REMOVED.** It was a
-    0060-specific OVERFIT to GPS-dropout-tail skew, not a real clock rate: the apparent ~+0.029 s
-    "bias" it was tuned to remove is **entirely dropout-tail skew** (a single ~2 s GPS hole near
-    S/F adds ~+0.85 s to that lap) — present identically on 0060 AND 0062 — and applying the factor
-    WORSENS the clean-lap RMS on both (0062 0.053→0.062 s, 0060 0.087→0.092 s). Both recordings'
-    true rate is ≈1.0, nowhere near −486 ppm. `_validate_wallclock.py --rate <k>` can re-probe any
-    explicit rate to reproduce this; the load path applies none.
-  - **GPS-dropout laps are a SEPARATE, already-tracked issue (future work).** Timing a lap whose
-    S/F crossing sits inside a ~2 s GPS hole is inherently ±0.85 s; such a lap is a candidate to
-    FLAG as low-confidence rather than to absorb into a global clock rate (the gap-aware distance
-    already handles the map side). Use a robust centre statistic for any future calibration.
-- **Lap distance — gap-aware** (C++ `SegmentDistance` in `pacer/laps/laps.cpp`, feeding both
-  `GetLapDistance` and the per-lap `cum_distances`): normal segments use the GPS chord; a segment
-  spanning a DROPOUT (point-to-point Δt > 0.35 s) uses the trapezoidal speed integral
-  `½(v0+v1)·Δt` instead, clamped to ≥ chord. Chords across dropouts were cutting corners and
-  under-counting (one 6 s hole = ~100 m short); this cut the valid-lap distance spread ~91 m → ~35 m
-  (std 12.3 → 7.6 m) on the 0060 session, changing only the dropout laps so delta/sectors stay
-  consistent.
-- **GPS quality gating** (`session._gate_quality`): the C++ core now surfaces the GoPro **GPS9
-  DOP + fix-type** on `GPSSample` (`pacer/datatypes/datatypes.hpp`, parsed in
-  `pacer/gps-source/gps-source.cpp`, bound as `.dop`/`.fix`). At load we drop fixes with no 3D
-  lock (`fix<3`) or poor geometry (`dop>10`) — on the real session ~12% of raw fixes, but ~69%
-  of those are the stationary lead-in trimmed anyway, so only ~4% of driving data. The GPS5
-  stream carries neither field → sentinels (`fix=-1`, `dop=-1.0`) mean "unknown" and are KEPT.
-- **GPS track smoothing** (`session._smooth_track`, window `SMOOTH_WINDOW=13`): an edge-correct
-  boxcar moving average on lat/lon/alt — the notebook's denoiser (`notebooks/interpolation.ipynb`
-  `_smooth`, proven in `noise-investigation.ipynb`), tuned up from w=9. Applied ONCE at load to
-  the SOURCE coordinates so the trace AND every C++-derived quantity (cum_distances, segmentation,
-  delta, sector splits) use the same smoothed track. Smoothed within gap-free runs only (never
-  across chapter/dropout gaps). Verified (`studio/denoise_check.py`): ~39% less HF cross-track
-  jitter, ~91% less heading jitter, lap-to-lap racing-line signal preserved, corner apexes not
-  clipped (`w>=21` starts cutting corners; w=13 tracks the raw apex). O(n), never per-frame.
-- **Track-aware start/finish** (`tracks.py`): detects the track by trace centroid and sets a fixed
-  start/finish line from absolute lat/lon. One entry — **Daytona Milton Keynes**
-  (A=52.04031,−0.78487 · B=52.04020,−0.78460 · centroid ≈52.0403,−0.7847). Unknown tracks fall
-  back to `pick_random_start`.
-- **Lap validity** — adaptive: a lap counts if its time is within [0.5, 1.6]× the median lap time
-  (drops partials / out-laps).
-- **Delta-to-best** (`session.delta`) — aligns laps by **normalized distance fraction** s∈[0,1] so
-  the delta endpoint == laptime diff; plotted vs s×best_distance (metres) in distance mode, or vs
-  time-into-lap in time mode (`delta(ids, x_mode=…)` — same Δ y-values, only the x basis changes).
-  The speed plot draws on the SAME x basis, so both plots share one x-axis and stay x-linked.
-  `session.delta_at_time(t)` gives the current-moment Δ-to-best for the readout box (same
-  normalized-distance alignment, so the box and the on-curve cursor agree).
-- **Per-sector splits** (`session.lap_sector_splits`) — projects each sector line to a cum-distance
-  on each lap and splits the lap time there → sums to the lap time for **every** lap (no dependence
-  on fragile geometric crossing; no blanks/oversized values).
-- **Timing-line edit** — handles are placed **freely** (no snap); dragging redraws live and
-  re-segments the laps **once on release**.
-- **Draggable plot-cursor scrub** (`plots_view` cursors → `session` conversion → `app` seek): both
-  plot cursors are `movable` `InfiniteLine`s; dragging either seeks the video **within the lap the
-  playhead is in**, clamped to that lap. `plots_view` stays pacer-free — it emits the raw plot-x +
-  the SHARED axis mode (`scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded`, `mode` ∈ `time|distance`;
-  `delta` is kept as a readable alias of `distance` in the conversion helpers — same math); `app`
-  converts via `session.media_time_at_plot_x` / `plot_x_at_media_time` (pure numpy on cached per-lap
-  `(times, dists)`: time `t=lap_start+x`; **shared distance** `s=x/best_dist → dist_in_lap=s·lap_total
-  → interp`). The two plots share ONE x-axis and are permanently x-linked, so the same media moment
-  maps to the SAME x on both → the cursors always coincide (verified `|x_speed−x_delta|≈0`). Source
-  of truth is the media time; both cursors + slider + map marker are placed from it ("two lines, one
-  truth"). Seeks **coalesced to ≤1/30 Hz tick** (latest target wins), **pause on grab / resume iff
-  was playing**; the feedback loop is gated (drag ignores the playback tick; `setValue`
-  `_suppress`-guarded). Round-trip/clamp + cursor-coincide tests in `tests/test_scrub_conversion.py`;
-  analysis numbers proven byte-identical (UI-only, same MD5 as the pre-change baseline).
-- **Charts auto-follow the current lap** (`app._follow_current_lap`, UI-only): the speed + delta
-  charts always show **whichever lap the playhead is in vs best**. The follow is an **edge check**
-  on `session.lap_at_time(t)` inside the existing 30 Hz position path (`_apply_readout`, which runs
-  on playback AND main-slider scrub) — it re-selects only on an **actual lap change** (O(1)/tick, a
-  plot refresh only on the edge → no thrash), **holds** the last lap through a lead-in/between-laps
-  `None` region (never blanks the charts), and re-selects through the **programmatic `table.select`**
-  (signals blocked) so it emits **no seek** and never fights playback (the genuine-click→seek gate
-  is untouched). A just-made manual selection (incl. a multi-lap comparison) is **preserved while
-  paused** (`_followed_lap` is seeded to the seek's landing lap, so the static jump isn't an edge)
-  and is replaced by `[current, best]` only **once playback moves on** into a different lap. Because
-  the current lap is now always among the displayed laps, the **scrub cursor / Δ box / hover work in
-  the followed lap** — superseding the earlier "scrub only works when the current lap is displayed"
-  caveat. Verified: switch-count == boundaries crossed, zero extra seeks, lead-in hold, real-GUI
-  play-through a boundary, two before/after PNGs; analysis MD5 byte-identical (UI-only). Pure-Python
-  edge tests in `tests/test_studio_features.py`.
-- **Live Δ/speed readout + hover dot**: an always-on box above the plots shows the
-  **current-moment Δ-to-best (priority) + speed** (`app._update_diff_box` ← `session.delta_at_time`
-  / `speed_at_time`), green when ahead of best / red when behind, updating live on playback and
-  scrub. The delta plot has a **hover dot** (`ScatterPlotItem` + `TextItem` driven by
-  `scene().sigMouseMoved`) that snaps to the nearest delta-curve sample under the mouse and labels
-  its Δ value (+ distance/time there) — independent of the playback cursor, hidden on mouse-leave.
-  The hover handler is a cheap nearest-index lookup on the cached curve arrays (no re-plot).
-- **Lap-table sorting + session-best sectors** (`lap_table.py`, UI-only): the table uses a numeric
-  sort key on every cell — a `_NumItem(QTableWidgetItem)` whose `__lt__` compares `Qt.UserRole`
-  floats (so `"1:08.408"` sorts as 68.408 s, splits by their seconds, blanks/NaN last), with
-  `setSortingEnabled(True)` and per-header asc/desc toggle; the chosen sort is remembered and
-  re-applied across refreshes. The **purple per-sector session-best** is the per-column MINIMUM
-  split across valid laps (`_best_split_per_sector_impl`); all visual state (green best lap, purple
-  best-sector cells, the `▶` current-lap marker + bold) is keyed by **lap id** and re-applied after
-  every sort/refresh, so highlights always follow the right lap and coexist (a purple cell inside the
-  green best-lap row still reads purple). The blue selection stays Qt's own row background.
-- **Sector lines on the charts** (`session.sector_plot_positions` → `plots_view.set_sector_lines` →
-  `app._refresh_sector_lines`, UI-only): the sector BOUNDARIES (start/finish + each sector line) draw
-  as subtle dotted vertical guide lines on BOTH the speed and delta plots, labelled `S/F`/`S1`/`S2`…
-  near the top of the speed plot. Positions come from `session` (so `plots_view` stays pacer-free):
-  each sector line's midpoint is projected onto the best lap's trace the SAME way the split times are
-  measured (`sector_boundary_distances`), then mapped to the shared axis — `s×best_distance` (metres)
-  in distance mode, time-into-best-lap (seconds) in time mode. They update LIVE as sectors are
-  added/moved/reset and reposition on the dist/time toggle (`plots_view.modeChanged` → app re-pushes);
-  drawn behind the curves + cursor (`zValue=-5`) so they never obscure them. No sectors → no lines.
-- **Lap-scoped marker drag** (`session.nearest_index_in_lap`/`nearest_time_in_lap` → `map_view`,
-  UI-only): the red map marker's drag resolves to the nearest point WITHIN the current lap (pure
-  numpy on the lap's cached local-metre points) and clamps to that lap's time window, so it scrubs
-  smoothly inside the one lap and never snaps to another lap where laps overlap spatially. Outside a
-  valid lap (lead-in) it falls back to the whole-trace nearest; playback-driven marker movement still
-  crosses laps normally.
-- **Audio mute toggle** (`video_view.py`, UI-only): a `QAudioOutput` (volume 0.6) with a mute/unmute
-  button (🔇/🔊). **Default = muted on launch** (telemetry tool — no surprise 4K audio); the button
-  flips `QAudioOutput.setMuted`.
-- **Performance** — 4K HEVC decodes ~61 fps (VideoToolbox HW). UI sync runs on a ~30 Hz `QTimer`
-  off the video present path; plot curves are downsampled + clipped, antialias off, autorange
-  frozen after refresh; the map draws ≤2 laps. Smooth incl. with a lap selected (cursor 56.5→1.1 ms).
-- **GPS gap reconstruction (MAP ONLY)** (`session.lap_trace_segments` → `gapfill.py`): where a
-  lap's GPS has an interior DROPOUT (a run dropped by the quality gate, or a genuine outage), the
-  trace used to draw a straight CHORD across the hole. Now each lap is drawn as MEASURED runs +
-  reconstructed INFERRED fills. A gap is an interior point-to-point time jump > ~0.35 s (≥3 missing
-  samples @ 10 Hz); the lap's open start/finish ends are not gaps. Each gap is filled by, in order:
-  (1) **cross-lap borrow** (PRIMARY) — the track is identical every lap, so take a donor lap's
-  sub-polyline between the points nearest the two gap mouths and pin it with a similarity transform
-  (rotation+uniform scale, both endpoints exact) → the real corner shape, connected continuously;
-  the donor with the smallest endpoint error (and a sane arc-length ratio) wins. (2) **reference
-  centerline** (FALLBACK, only if NO lap covers the section) — a georeferenced Daytona MK centerline
-  (`reference.py` + `mk_centerline.json`, traced from `gmaps_pict.png`, similarity-ICP aligned to the
-  GPS aggregate; fit residual ~1 m mean). (3) **spline** for very short gaps / when borrow misses.
-  Inferred segments draw **dashed + dimmed** (`map_view._inferred_pen`) so real GPS vs reconstruction
-  is always distinguishable. Per-lap segments are cached (`_seg_cache`) — built once, never per frame,
-  cleared on re-segment. On `GX010060.MP4`: 7 gaps / 222 m of chord across 5 laps → 6 borrow + 1
-  spline, 0 reference needed, 0 unfilled. **MAP-ONLY guarantee proven byte-identical** (same JSON
-  MD5) for valid_lap_ids, lap times, delta endpoints, sector splits, cum-distances vs the base
-  branch — `gapfill`/`reference` are pure numpy and `lap_trace_segments` reads the unchanged
-  kept-point arrays; no analysis path is touched.
+Validated end-to-end on two real recordings from the Daytona 24h 2026 (Daytona Milton Keynes), each a
+multi-chapter 4K HEVC GoPro recording: `GX0060` (~28 min/chapter, 57 valid laps full / 18 chapter-1)
+and `GX0062`. Lap timing is **validated unbiased vs a real lap-timing transponder, out of sample, on
+both recordings** (see §"Established conclusion").
 
-## Run & verify
-- `pixi run studio -- <file.MP4>` (or `python -m studio [files]`; `--interp` to try interpolation).
-- `pixi run python -m studio.diagnose -- <file.MP4> [--interp] [--clean]` — headless stats / root-causing.
-- `pixi run python -m studio.denoise_check -- <file.MP4> [--window N] [--tag T] [--notebook-ref]` —
-  offscreen render of the map (best / selected / overlaid laps) to PNG + numeric jitter/signal
-  metrics; the feedback loop for tuning `SMOOTH_WINDOW`. `--window 1` = raw baseline.
-- `pixi run python -m studio._smoke` — headless full-window build (offscreen); prints `SMOKE OK`.
-- The GUI needs a display / non-sandboxed run; use `QT_QPA_PLATFORM=offscreen` for headless checks.
+The four panels — **Map**, **Speed + Δ-to-best charts**, **Lap table**, **Video** — are wired
+together with two-way video↔telemetry sync. The headless self-test `python -m studio._smoke` prints
+`SMOKE OK`.
+
+---
+
+## 2. Features (introduced)
+
+All shipped and merged. Per-feature implementation notes live in [README.md](README.md).
+
+- **Track map** — best lap (faint) + current/playing lap (highlighted); **freely-draggable** start +
+  sector timing lines (re-segment on release); a red **video marker** whose drag is constrained to
+  the current lap. GPS dropouts in a lap draw as measured (solid) + reconstructed gap-fill (dashed).
+- **Speed + Δ-to-best charts** — speed (top) + lap-vs-best delta (bottom) on **one shared, x-linked
+  x-axis** with a **dist/time toggle**; a synced cursor that is also a **draggable scrubber**; a
+  **hover dot** on the delta curve; an always-on **Δ/speed readout box** (green ahead / red behind);
+  subtle **sector boundary** guide lines. Δ aligned by normalized distance so its endpoint = the
+  laptime diff.
+- **Charts auto-follow the current lap** during playback (switch to the now-current lap vs best at a
+  lap boundary; a manual selection is preserved while paused).
+- **Synced video** — GoPro `.mp4` with play/pause, a full-video scrub slider, two-way sync (video ⇄
+  map marker ⇄ plot cursors), and an **audio mute/unmute** toggle (default muted).
+- **Sortable lap table** (numeric, not lexical) — time / dist / entry speed + per-sector split
+  columns once sectors exist; **▶** playing marker, **green** best lap, **blue** selection, **purple**
+  per-sector session-best, **⚠** GPS-dropout low-confidence flag (with tooltip); highlights follow
+  the laps across a sort.
+- **GPS de-noise** — quality gating (drop `fix<3` / `dop>10` GPS9 fixes; GPS5 "unknown" kept) +
+  edge-corrected **boxcar smoothing** (`SMOOTH_WINDOW=13`) applied once at load to the source
+  lat/lon/alt, so every derived quantity stays consistent.
+- **Gap-aware lap distance** — across a GPS dropout the trapezoidal speed integral replaces the
+  corner-cutting chord (the C++ `SegmentDistance`).
+- **GPS gap reconstruction (map only)** — interior dropouts filled by cross-lap borrow → reference
+  centerline → spline, drawn dashed/dimmed; pure-numpy, byte-identical analysis values.
+- **Chaptered multi-file sessions** — opt-in (`--full`/`--chaptered` or *File ▸ Load full recording*):
+  discover + chain sibling chapters into one continuous global clock; video switches source on a
+  cross-chapter seek and auto-advances at end-of-media.
+- **GPS9 true-clock lap timing** (default) — times off the GPS9 fixes' true 10.000 Hz wall-clock
+  spacing, re-anchored per run to the media clock; sub-sample crossing interpolation in the core.
+  **Validated unbiased vs a transponder** (§"Established conclusion").
+- **Accelerometer g-meter overlay** — a felt-force friction-circle dial driven by the GoPro's real
+  accelerometer (`ACCL`/`GRAV`/`CORI`), with a per-lap max-G envelope and shake filter, composited
+  top-right over the video (toggle `G`). Falls back to GPS-derived g if the IMU is absent/unreliable.
+
+---
+
+## 3. Features tried but empirically REJECTED
+
+Captured here so the negative results aren't re-litigated. Evidence in [`docs/`](docs/).
+
+- **GPS9 clock-rate calibration** (factor 0.999514 / −486 ppm) — an **overfit** to GPS-dropout-tail
+  skew, *not* a real clock rate; applying it **worsened** the clean-lap RMS out-of-sample on **both**
+  recordings (0062 0.053→0.062 s, 0060 0.087→0.092 s). Removed; both true rates are ≈1.0.
+  ([docs/gps-accuracy-research.md](docs/gps-accuracy-research.md))
+- **GPS + IMU fusion for lap TIMING** — no leverage: the dropouts are **mid-lap, not at the S/F
+  crossing**, and the 10 Hz crossing is already sub-sample-interpolated, so dead-reckoning / Kalman /
+  EKF can't change the lap times. (The IMU *is* bound — but only for the g-meter display.)
+  ([docs/gps-accuracy-research.md](docs/gps-accuracy-research.md))
+- **C++ Adam `interpolate_timestamps`** (the notebook's parametric `t2` fit) — **diverges** on
+  long/noisy sessions (compresses lap times; broke a lap to ~64 s on 0060). Kept opt-in (`--interp`,
+  auto-rejected) with GPS9 the default, since GPS9 carries the true per-fix clock and supersedes it.
+  ([docs/upstream-20ms-investigation.md](docs/upstream-20ms-investigation.md))
+- **Doppler-aided position smoothing** (Doppler-velocity-pseudo-measurement RTS) — an overfit: best
+  on 0062, **worst** on 0060. Rejected on the same out-of-sample principle as the clock-rate factor.
+  ([docs/gps-accuracy-research.md](docs/gps-accuracy-research.md))
+- **Map-matching to a centerline** — would **erase the lap-to-lap racing-line signal** the app exists
+  to visualize, and a centerline carries no per-lap timing. ([docs/gps-accuracy-research.md](docs/gps-accuracy-research.md))
+- **Snap-to-trace timing lines** (an early version) — removed in favour of **free** placement (user
+  preference). An optional snap *toggle* remains a possible future nicety.
+
+---
+
+## 4. Tech debt / known limitations
+
+- **`mk_centerline.json` reference ICP is broken** — its similarity-ICP fit (in `reference.py`)
+  collapses onto an inner sub-loop and covers only ~30% of the real track footprint. It only feeds
+  the **rarely-used** gap-fill reference *fallback* (never timing/segmentation), so it's low-impact,
+  but it should be re-fit. ([docs/start-line-verification.md](docs/start-line-verification.md) §2 caveat)
+- **Pre-existing ruff warnings** in a few `studio/*.py` (`UP037` quoted annotations in `tracks.py` /
+  `session.py`, a `B905` zip-without-`strict` and a `B023` loop-binding in `spike_video_sync.py`) —
+  cosmetic, unrelated to the analysis path.
+- **nanobind shutdown "leaked function" warnings** on the GPS/IMU read callbacks at exit — harmless,
+  a codebase convention.
+- **G-meter longitudinal per-lap correlation is modest** (lateral r ≈ 0.90 / 96.5% sign agreement is
+  the headline; longitudinal r ≈ 0.37 — magnitudes match, but forward g is small and the 10 Hz GPS
+  reference is noisy). Expected, not a bug. ([docs/gmeter-validation.md](docs/gmeter-validation.md))
+- **G-meter full-scale ring is 1.6 g** (`_FULL_SCALE_G`) — the hardest corners clamp to the rim;
+  tunable.
+- **Multi-chapter g-meter sync** is verified by wiring (IMU rides the `SequentialGPSSource` chain like
+  GPS) but has not been separately live-captured across a seam.
+- **GPS-dropout laps are inherently ±noisy** — they are *flagged* low-confidence (⚠), not fixable:
+  no positional/gap-bridging method can change a lap time whose dropout is mid-lap.
+  ([docs/gps-accuracy-research.md](docs/gps-accuracy-research.md))
+
+---
+
+## 5. Future features (wishlist)
+
+- **More tracks** in `tracks.py` (only Daytona MK today) + **real track auto-detection**.
+- **Persist sector / start-line config per file** (a sidecar JSON so edits survive reloads).
+- **Fix the MK reference centerline ICP** (re-run `build_reference.py`; tighten the infield).
+- **Expose the `_clean` / quality-gate thresholds in the UI** (and an optional snap-to-track toggle).
+- **Tune the g-meter full-scale** and verify multi-chapter g-sync live.
+- **More pure-Python `session.py` tests** (`_clean`, `valid_lap_ids`, delta-endpoint == laptime-diff,
+  `lap_sector_splits` sum == lap-time, `sector_plot_positions`).
+- **Perf headroom (only if needed on longer sessions)** — a bulk `lap→numpy` accessor in the C++
+  bindings to drop per-point Python loops; `useOpenGL` for the pyqtgraph views.
+
+---
+
+## 6. Upcoming / near-term (most likely next steps)
+
+1. **More tracks + auto-detection** — the user flagged other-track support as the planned next
+   expansion.
+2. **Persist sector/start-line config per file** (sidecar JSON).
+3. **Keyboard shortcuts** (space = play/pause, ←/→ step) and small UX polish.
+
+---
 
 ## Architecture an agent MUST respect
-- Trace + timing lines live in **local metres** (`cs.local`); `set_coordinate_system` precedes
-  `pick_random_start`/`update`. Sectors write-back is wholesale: `laps.sectors = pacer.Sectors(...)`.
-- **`session.py` is the only module that drives the pacer pipeline; `tracks.py` is the only other
-  file that names `pacer` (pure geometry).** Keep `map_view`/`plots_view`/`lap_table`/`app` free of
-  `pacer`. The gap-fill helpers `gapfill.py` and `reference.py` are **pure numpy** (no `pacer`) —
-  `session.lap_trace_segments` feeds them the cached per-lap arrays; `map_view` calls only that.
-- `pacer` is GPMF/GoPro `.MP4` only (`.dat` reader is not bound). It supplies the telemetry time
-  axis; the app brings its own video player.
-- **Perf invariants — do not regress:** the 30 Hz tick decouple (`app._on_position` only stores the
-  time; `app._tick` applies); plot curves downsampled+clipped + antialias off + autorange frozen
-  after `refresh`; map draws only best+current lap; clear per-lap caches in `set_timing_lines`.
-  **Plot-cursor scrub seeks are coalesced to ≤1 per tick** (latest target wins) — never seek
-  per-mouse-move; the drag↔`positionChanged` feedback loop is gated (`_user_dragging`/`_suppress`).
-- Module map: `session.py` (data/analysis — only pacer user) · `tracks.py` (track registry) ·
-  `transponder.py` (lap-timing-CSV parser, pure-Python, no pacer — the ground-truth the GPS9 timing
-  is validated against by `_validate_wallclock.py`) · `gapfill.py` (GPS-gap reconstruction, pure numpy) · `reference.py` + `mk_centerline.json` /
-  `build_reference.py` (georeferenced fallback centerline) · `map_view.py` · `plots_view.py` ·
-  `lap_table.py` · `video_view.py` · `app.py` (wiring) · `diagnose.py` / `denoise_check.py`
-  (`--gaps` renders the filled map + prints gap metrics) / `_smoke.py` / `_analysis_dump.py`
-  (dumps every analysis value + an MD5, the UI-only byte-identity proof) (tools). Tests:
-  `tests/test_gapfill.py` + `tests/test_scrub_conversion.py` + `tests/test_studio_features.py` (all
-  pure-Python, fast; the last covers the F1 numeric sort key, F3 lap-scoped nearest, F5 per-column
-  session-best min, and the **chart auto-follow lap-change edge** — switch only on the edge, hold on
-  a `None` region, no seek emitted). The two studio Python tests are now also registered with CTest (`tests/
-  CMakeLists.txt`), so `pixi run test` runs them with the C++ suite. `_probe.py` / `_bench_cursor.py`
-  are untracked scratch.
 
-## Next steps / backlog (prioritized for a fresh agent)
-1. **More tracks** — `tracks.py` has only Daytona MK; add entries and/or real auto-detection
-   (the user flagged other-track support as the planned next expansion).
-2. **Persist sector/start-line config per file** — a sidecar JSON so edits survive reloads.
-3. **Tests** — `tests/test_gapfill.py` (gap detection / borrow / spline / continuity),
-   `tests/test_scrub_conversion.py` (cursor x↔media-time round-trip + clamp, every mode),
-   `tests/test_studio_features.py` (F1 sort key / F3 lap-scoped nearest / F5 per-column min) and
-   `tests/test_chapters.py` (GoPro filename parse, sibling grouping/ordering, global↔chapter map)
-   exist. Still TODO: pure-Python tests for the rest of `session.py` (`_clean`, `valid_lap_ids`,
-   delta endpoint==laptime-diff, `lap_sector_splits` sum==lap-time, `sector_plot_positions`).
-4. **Multi-file chaptered sessions — DONE.** Opt-in (`--full`/`--chaptered` + File ▸ Load full
-   recording) discovers + chains sibling chapters (`chapters.py`); telemetry rides one continuous
-   global clock via `SequentialGPSSource` (verified on recording 0060: 57 valid laps vs 18 for
-   chapter 1 alone, monotonic axis, the seam lap is one correct ~68.8 s / 1073 m lap); video
-   switches source on a cross-chapter seek and **auto-advances** at end-of-media (`video_view.py`),
-   with a global slider/position. Default single-file load stays byte-identical to main. Known
-   limitation: a brief reopen hitch when the video source switches at a seam.
-5. **Polish** — keyboard shortcuts (space=play, ←/→ step), theming/layout, an optional snap-to-track
-   *toggle* (default is now free), trailing-cooldown trimming, expose `_clean` thresholds in UI.
-   Also: the MK reference centerline's INFIELD switchbacks (`mk_centerline.json`) are an approximate
-   hand-trace — fine for the fallback (outer-loop corners, where long gaps happen, fit ~1 m), but
-   tighten the infield if the reference is ever actually needed there (re-run `build_reference.py`).
-6. **Perf headroom (only if needed on longer sessions)** — a bulk `lap→numpy` accessor in the C++
-   bindings to drop per-point Python loops; `useOpenGL` for the pyqtgraph views.
-7. **Housekeeping** — delete scratch `studio/_probe.py` + `studio/_bench_cursor.py` (`rm` is blocked
-   in the agent sandbox, so the user must); decide whether to push `better-app` / open a PR.
+- Trace + timing lines live in **local metres** (`cs.local`); `set_coordinate_system` precedes
+  `pick_random_start`/`update`. Sectors write-back is wholesale: `laps.sectors = pacer.Sectors(...)`,
+  then `laps.update()`.
+- **`session.py` is the only module that drives the pacer pipeline; `tracks.py` is the only other
+  file that names `pacer` (pure geometry).** Keep `map_view`/`plots_view`/`lap_table`/`video_view`/
+  `app`/`gapfill`/`reference`/`gmeter`/`gmeter_overlay`/`chapters`/`transponder` free of `pacer`.
+- `pacer` is GPMF/GoPro **`.MP4` only** (the `.dat` reader isn't bound to Python). It supplies the
+  telemetry time axis; the app brings its own video player (pacer doesn't decode pixels).
+- **Perf invariants — do not regress:** the 30 Hz tick decouple (`_on_position` only stores the time;
+  `_tick` applies); plot curves downsampled+clipped, antialias off, autorange frozen after refresh;
+  the map draws only best+current lap; clear per-lap caches in `set_timing_lines`; plot-cursor scrub
+  seeks coalesced to ≤1 per tick (the drag↔`positionChanged` feedback loop is gated).
 
 ## How work is done here
-Autonomous background **Workflows** (full-autonomy perms already in `.claude/settings.local.json`):
-each phase implements → verifies headlessly (often driving the app via handlers + measuring numbers)
-→ adversarially reviews → commits to `better-app`. Agents can launch the GUI (non-sandboxed) for a
-crash-smoke but cannot perceive smoothness/visuals — the final visual confirmation is the human's.
-Keep that loop: define numeric pass criteria so a fix isn't "done" until they hold.
+
+Autonomous background workflows (full-autonomy perms in `.claude/settings.local.json`): each phase
+implements → verifies **headlessly** (driving the app via handlers + measuring numbers) → adversarially
+reviews → commits. Agents can launch the GUI (non-sandboxed) for a crash-smoke but cannot perceive
+smoothness/visuals — the final visual confirmation is the human's. Define numeric pass criteria so a
+fix isn't "done" until they hold.
+
+## Established conclusion (timing accuracy)
+
+GPS lap timing is **unbiased and at the ~10 Hz GPS noise floor** — validated **out of sample** against
+a real lap-timing transponder on both recordings: clean-lap residual mean **+0.0015 s** (0062) /
+**+0.0030 s** (0060), std **0.053 s** / **0.087 s**, each recording's own best-fit clock rate ≈1.0
+(−22 / −46 ppm), no calibration factor. The start/finish line is verified correct (on the real pit
+straight, crossed once per lap, at the per-lap-noise minimum). The upstream "~20 ms" interpolation
+claim is **superseded by GPS9** (which is at 1–3 ms mean bias). Full evidence:
+- [docs/gps-accuracy-research.md](docs/gps-accuracy-research.md) — why we're at the floor; rejected techniques.
+- [docs/upstream-20ms-investigation.md](docs/upstream-20ms-investigation.md) — the "20 ms" claim + Adam-vs-GPS9.
+- [docs/start-line-verification.md](docs/start-line-verification.md) — start/finish line is correct.
+- [docs/gmeter-validation.md](docs/gmeter-validation.md) — ACCL→kart-frame transform + GPS cross-check.
