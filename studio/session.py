@@ -1129,6 +1129,40 @@ class Session:
         )
         return elapsed_lap - best_elapsed_at_s
 
+    def delta_between(self, lap_a: int, lap_b: int, t_in_a: float) -> float | None:
+        """Δ (seconds) of lap_a vs lap_b at the SAME track position lap_a is at time `t_in_a`:
+        how far ahead (−) / behind (+) lap_a is relative to lap_b at that normalized distance.
+        None if either lap is degenerate or `t_in_a` falls outside lap_a's window.
+
+        The compare-mode "Δ vs other" badge. Mirrors `delta_at_time`'s normalized-distance
+        alignment (s = distance_in_lap / lap_total_distance), but compares against an ARBITRARY
+        `lap_b` instead of the hardcoded GLOBAL best: take lap_a's distance fraction s at
+        `t_in_a`, then interpolate lap_b's elapsed-into-lap at the SAME fraction s and subtract.
+        For `lap_b == best_lap_id()` this equals `delta_at_time(t_in_a)` (cross-checked in the
+        unit test). At the finish (s=1) it is exactly lap_a's time minus lap_b's time.
+
+        O(1) on the cached per-lap (times, dists) arrays — cheap enough for the 30 Hz tick."""
+        td_a = self._lap_time_dist(lap_a)
+        td_b = self._lap_time_dist(lap_b)
+        if td_a is None or td_b is None:
+            return None
+        times_a, dists_a = td_a
+        total_a = float(dists_a[-1])
+        if total_a <= 0:
+            return None
+        # lap_a's normalized track fraction s and its own elapsed time at t_in_a (clamped to lap).
+        s = float(np.interp(t_in_a, times_a, dists_a)) / total_a  # [0,1]
+        elapsed_a = float(np.interp(t_in_a, times_a, times_a - times_a[0]))  # = t_in_a − start
+        times_b, dists_b = td_b
+        total_b = float(dists_b[-1])
+        if total_b <= 0:
+            return None
+        # lap_b's elapsed time at the SAME track fraction s (invert s → b's distance → time).
+        elapsed_b_at_s = float(
+            np.interp(s * total_b, dists_b, times_b - times_b[0])
+        )
+        return elapsed_a - elapsed_b_at_s
+
     def nearest_index(self, x: float, y: float) -> int | None:
         if len(self.tx) == 0:
             return None
