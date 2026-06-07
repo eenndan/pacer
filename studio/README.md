@@ -69,7 +69,7 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 | [gapfill.py](gapfill.py) | **GPS-gap reconstruction (map only)** — pure numpy. Detects interior dropouts and fills them with cross-lap borrow (primary) / reference centerline (fallback) / spline, tagged measured-vs-inferred. No `pacer`. |
 | [reference.py](reference.py) + [mk_centerline.json](mk_centerline.json) | Georeferenced Daytona MK centerline (traced from `gmaps_pict.png`, similarity-ICP aligned to the GPS aggregate) — the gap-fill fallback for sections no lap covers. Rebuild via [build_reference.py](build_reference.py). |
 | [plots_view.py](plots_view.py) | Speed (top) + lap-vs-best delta (bottom) on **one shared, x-linked x-axis** (dist/time toggle drives both; delta aligned by **normalized distance** → endpoint = laptime diff), so the two cursors always align. Downsampled/clipped curves + a synced cursor that is also a **draggable scrubber** + a **hover dot** on the delta curve + subtle **sector boundary guide lines** (`set_sector_lines`, app-fed) — pacer-free, it only emits `scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded`/`modeChanged(mode)` (mode = `time`\|`distance`); app converts + seeks and owns the live Δ/speed readout box. |
-| [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best, **purple = per-sector session best**. **Every header is click-to-sort** by the underlying numeric value (asc/desc); highlights follow the laps across a sort. |
+| [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best, **purple = per-sector session best**, **⚠ = GPS-dropout lap (low-confidence; time/distance/map less reliable, with a row tooltip)**. Base row text is near-black for readability on the light table. **Every header is click-to-sort** by the underlying numeric value (asc/desc); highlights and the ⚠ flag follow the laps across a sort. |
 | [app.py](app.py) | Assembles panels in splitters and wires the cross-panel signals. |
 
 ## Gotchas / notes
@@ -216,9 +216,16 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
   68.408 s and splits by seconds (not lexically); blanks/NaN sort last; every header toggles
   asc/desc and the chosen sort survives refreshes. The **purple** highlight is the per-column
   MINIMUM split across valid laps (motorsport "session best sector"). All visual state (green best
-  lap, purple best-sector cells, the `▶` current-lap mark) is keyed by **lap id** and re-applied
-  after every sort, so it always follows the right lap and coexists (a purple cell inside the green
-  best-lap row still reads purple). Recomputed when sectors change.
+  lap, purple best-sector cells, the `▶` current-lap mark, the **⚠ GPS-dropout** low-confidence
+  flag) is keyed by **lap id** and re-applied after every sort, so it always follows the right lap
+  and coexists (a purple cell inside the green best-lap row still reads purple; a ⚠ rides alongside
+  the ▶ on the same Lap cell). Recomputed when sectors change. The default/non-highlighted row text
+  is near-black (the table renders on a light background, so the old light-grey was hard to read).
+- **GPS-dropout low-confidence flag (`session.dropout_lap_ids`, UI-only):** a valid lap whose
+  kept-point times have an INTERIOR gap (a delta between consecutive GPS samples > `gapfill.GAP_TIME_S`
+  = 0.35 s — the same gap threshold the gap-aware draw logic uses) had a real dropout, so its time,
+  distance and map are less reliable. `Session.dropout_lap_ids()` is a pure, read-only helper (it
+  changes no analysis/timing/distance value); the table consumes it to show the ⚠ marker + tooltip.
 - **Sector boundaries on the charts (`session.sector_plot_positions`, UI-only):** the sector lines
   (start/finish + each sector) draw as subtle dotted vertical guide lines on BOTH plots, labelled
   `S/F`/`S1`/`S2`…; positions are computed in `session` (the same midpoint→best-lap-trace projection

@@ -611,6 +611,27 @@ class Session:
             for i in self.valid_lap_ids()
         ]
 
+    def _lap_point_times(self, lap_id: int) -> list[float]:
+        """The media-clock times of a lap's KEPT GPS points, in order. Quality-gated /
+        cleaned samples have already been removed at load, so a large delta between two
+        consecutive entries here is a real interior GPS dropout (not jitter)."""
+        lap = self._get_lap(lap_id)
+        return [p.time for p in lap.points]
+
+    def lap_has_dropout(self, lap_id: int) -> bool:
+        """True if a lap's kept-point times contain an INTERIOR gap — a delta between two
+        consecutive samples larger than the gap threshold (gapfill.GAP_TIME_S = 0.35 s, the
+        same threshold the gap-aware draw logic uses). Such a lap had a GPS dropout, so its
+        time / distance / map are less reliable. Read-only; alters no analysis value."""
+        return bool(gapfill.find_gaps(self._lap_point_times(lap_id)))
+
+    def dropout_lap_ids(self) -> set[int]:
+        """The set of VALID lap ids whose trace has an interior GPS dropout (see
+        `lap_has_dropout`). The lap table flags these as low-confidence so the user knows the
+        timing / distance / map for that lap is less reliable. Pure read-only helper —
+        session.py is the only studio pacer-driver, so views consume this flag via the app."""
+        return {lap_id for lap_id in self.valid_lap_ids() if self.lap_has_dropout(lap_id)}
+
     def lap_trace_xy(self, lap_id: int):
         """Local-meter (xs, ys) of a single lap's trace, for highlighting on the map."""
         lap = self._get_lap(lap_id)

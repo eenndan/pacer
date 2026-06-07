@@ -7,9 +7,10 @@ and "23.10" as 23.1 — not lexically. Clicking a header toggles asc/desc; the d
 
 Row/cell highlights are keyed by LAP ID, not row index, and re-applied after every sort so
 they always follow the right lap: the ▶ playing marker + bold (current lap), the green best
-lap (F-existing), the blue Qt selection, and the PURPLE per-sector session-best cells (F5 —
-the fastest split in each S-column across all valid laps, motorsport convention). Base row
-text is near-black for readability on the light table background.
+lap (F-existing), the blue Qt selection, the PURPLE per-sector session-best cells (F5 —
+the fastest split in each S-column across all valid laps, motorsport convention), and a
+trailing ⚠ low-confidence marker (+ row tooltip) on laps with a GPS dropout. Base row text
+is near-black for readability on the light table background.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ BASE_COLOR = QColor("#101010")          # near-black: default row text (the tabl
 BEST_COLOR = QColor("#06d6a0")          # green: the overall best lap (foreground on every cell)
 BEST_SECTOR_COLOR = QColor("#b388eb")   # purple: per-column session-best split (F5)
 CURRENT_PREFIX = "▶ "  # "▶ " marks the lap currently playing on the video
+DROPOUT_SUFFIX = " ⚠"  # low-confidence: this lap has a GPS dropout (time/distance less reliable)
+DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
 COLUMNS = ["Lap", "Time", "Dist (m)", "Entry (km/h)"]
 NUM_ROLE = Qt.UserRole  # the numeric sort key stored on every cell
 LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the Lap cell
@@ -145,6 +148,9 @@ class LapTable(QWidget):
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(self._sort_col, self._sort_order)
         self._best_split = best_split  # cached so re-highlight after a sort needn't recompute
+        # Laps with a GPS dropout (low-confidence). Keyed by lap id so the ⚠ flag + tooltip
+        # follow the lap across any sort, exactly like the green/purple/▶ highlights.
+        self._dropout_ids = self.session.dropout_lap_ids()
         self._apply_highlights()
 
     # ------------------------------------------------------------- highlights
@@ -175,10 +181,12 @@ class LapTable(QWidget):
         n_splits = self.session.laps.sector_count() + 1 if self.session.laps.sector_count() else 0
         best_split = getattr(self, "_best_split", [])
 
+        dropout_ids = getattr(self, "_dropout_ids", set())
         self.table.blockSignals(True)
         for r in range(rows):
             lap_id = self._lap_id(r)
             is_best = lap_id == best_lap
+            is_dropout = lap_id in dropout_ids
             for c in range(self.table.columnCount()):
                 item = self.table.item(r, c)
                 if item is None:
@@ -186,6 +194,9 @@ class LapTable(QWidget):
                 # Base text is near-black for readability on the light table background; the
                 # green best-lap / purple best-sector foregrounds override it per cell below.
                 item.setForeground(BEST_COLOR if is_best else BASE_COLOR)
+                # Low-confidence GPS-dropout laps carry a row-wide tooltip explaining the flag
+                # (the visible ⚠ marker on the Lap cell is set in _apply_current_lap).
+                item.setToolTip(DROPOUT_TOOLTIP if is_dropout else "")
             # Purple per-sector session-best: a sector cell whose value equals that column's min
             # reads purple+bold, overriding the green-best-lap foreground for THAT cell (F5 must
             # coexist with green/blue/▶).
@@ -209,9 +220,13 @@ class LapTable(QWidget):
         self._apply_current_lap()
 
     def _apply_current_lap(self):
-        """Mark the current lap (F3) with a '▶ ' prefix + bold in the Lap column only — no
-        row background, so the BLUE Qt selection stays the sole row-background cue."""
+        """Compose the Lap-cell text: a '▶ ' prefix + bold for the current (playing) lap (F3),
+        and a trailing ' ⚠' low-confidence marker for any lap with a GPS dropout. Lap-column
+        only — no row background, so the BLUE Qt selection stays the sole row-background cue.
+        Both cues are keyed by lap id, so they survive sorting and coexist with each other and
+        with the green/purple highlights."""
         target = self._row_for_lap(self._current_lap)
+        dropout_ids = getattr(self, "_dropout_ids", set())
         self.table.blockSignals(True)
         for r in range(self.table.rowCount()):
             item = self.table.item(r, 0)
@@ -219,7 +234,9 @@ class LapTable(QWidget):
                 continue
             on = r == target
             lap_id = self._lap_id(r)
-            item.setText(f"{CURRENT_PREFIX}{lap_id}" if on else str(lap_id))
+            prefix = CURRENT_PREFIX if on else ""
+            suffix = DROPOUT_SUFFIX if lap_id in dropout_ids else ""
+            item.setText(f"{prefix}{lap_id}{suffix}")
             font = item.font()
             font.setBold(on)
             item.setFont(font)

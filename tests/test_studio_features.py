@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
+from studio import gapfill  # noqa: E402
 from studio.lap_table import (  # noqa: E402
     NUM_ROLE,
     _best_split_per_sector_impl,
@@ -122,6 +123,40 @@ def test_nearest_time_in_lap_clamps_to_window():
     t_mid = s.nearest_time_in_lap(lid, 50.0, 25.0)
     assert t_lo <= t_mid <= t_hi
     print("test_nearest_time_in_lap_clamps_to_window OK")
+
+
+# ----------------------------------------------------- dropout-lap low-confidence flag
+def _bare_session_with_times(times_by_lap, valid):
+    """A bare Session whose per-lap kept-point times and valid-lap set are stubbed, so the
+    read-only dropout helpers run with no pacer / telemetry file."""
+    s = Session.__new__(Session)
+    s._lap_point_times = lambda lid: times_by_lap[lid]  # noqa: ARG005
+    s.valid_lap_ids = lambda: list(valid)
+    return s
+
+
+def test_dropout_detection_interior_gap_over_threshold():
+    """A lap is a dropout iff its KEPT-point times have an interior delta > 0.35 s (the gap
+    threshold). A steady ~10 Hz trace is clean; a >0.35 s hole flags it. The lap's open
+    start/finish ends are NOT interior gaps."""
+    clean = [round(0.1 * i, 3) for i in range(50)]         # steady 0.1 s steps — no dropout
+    # An interior 0.6 s hole after the 20th sample (last clean t=1.9; next jumps to 2.5) →
+    # one dropout gap of 0.6 s.
+    dropped = clean[:20] + [round(2.5 + 0.1 * i, 3) for i in range(20)]
+    # A delta just UNDER the threshold (0.3 s): last clean t=0.9; next is 1.2 (delta 0.3 s) →
+    # jitter, not a dropout.
+    jitter = clean[:10] + [round(1.2 + 0.1 * i, 3) for i in range(10)]
+    assert gapfill.find_gaps(clean) == []
+    assert len(gapfill.find_gaps(dropped)) == 1
+    assert gapfill.find_gaps(jitter) == []
+
+    s = _bare_session_with_times({0: clean, 1: dropped, 2: jitter, 3: clean},
+                                 valid=[0, 1, 2])  # lap 3 is INVALID — excluded from the flag
+    assert s.lap_has_dropout(1) is True
+    assert s.lap_has_dropout(0) is False and s.lap_has_dropout(2) is False
+    # Only the VALID dropout lap (1) is flagged; the invalid lap 3 is never considered.
+    assert s.dropout_lap_ids() == {1}
+    print("test_dropout_detection_interior_gap_over_threshold OK")
 
 
 # ----------------------------------------------------------- auto-follow (lap-change edge)
@@ -231,6 +266,7 @@ if __name__ == "__main__":
     test_numeric_sort_key_orders_by_value_not_text()
     test_numeric_sort_key_blanks_sort_last()
     test_best_split_per_sector_is_column_min()
+    test_dropout_detection_interior_gap_over_threshold()
     test_nearest_index_in_lap_stays_in_lap()
     test_nearest_time_in_lap_clamps_to_window()
     test_follow_switches_only_on_lap_edge()
