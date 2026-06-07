@@ -15,8 +15,10 @@ import sys
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -85,6 +87,45 @@ class StudioWindow(QMainWindow):
                 lay.addWidget(c)
         return panel
 
+    @staticmethod
+    def _header_bar(*segments) -> QWidget:
+        """A flush header strip styled like `.PanelHeader` (surface bg, bottom hairline) that holds
+        WIDGETS rather than plain text — used for the map header (title + right-aligned sector
+        buttons) and the charts' consolidated bar (label · readout · toggle). Each `segments` entry
+        is a widget, an int stretch (inserts `addStretch(n)`), or a `(widget, stretch)` tuple. The
+        bar carries the `PanelHeader` role so its background/border/typography match the plain
+        headers; child widgets keep their own QSS (buttons, combo, the #DiffBox)."""
+        bar = QWidget()
+        bar.setProperty("role", "PanelHeader")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.setSpacing(8)
+        for seg in segments:
+            if isinstance(seg, int):
+                row.addStretch(seg)
+            elif isinstance(seg, tuple):
+                row.addWidget(seg[0], seg[1])
+            else:
+                row.addWidget(seg)
+        return bar
+
+    @staticmethod
+    def _headered(header: QWidget, *contents) -> QWidget:
+        """Stack a custom `header` widget above panel `contents` (same tight container as `_panel`
+        but with a widget header instead of a text label). Each `contents` entry is a widget or a
+        `(widget, stretch)` tuple."""
+        panel = QWidget()
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(header)
+        for c in contents:
+            if isinstance(c, tuple):
+                lay.addWidget(c[0], c[1])
+            else:
+                lay.addWidget(c)
+        return panel
+
     def _build_ui(self):
         # On a reload ("Load full recording"), stop the previous VideoView's player so its decoder
         # doesn't linger after the old widget tree is replaced by setCentralWidget below.
@@ -105,11 +146,12 @@ class StudioWindow(QMainWindow):
         self.plots = PlotsView(self.session)
         self.table = LapTable(self.session)
 
-        # Always-on Δ/speed readout box for the CURRENT playback/scrub moment (Δ-to-best is the
-        # priority). Owned here (values come from session); placed ABOVE the plots so it never
-        # overlaps the curves. plots_view stays pacer-free — it knows nothing about this box.
-        # Hero readout card: base styling (surface bg, mono/tabular ~22px, bottom hairline) comes
-        # from the global QSS via objectName "DiffBox"; only the Δ-value COLOUR is driven per-tick.
+        # Always-on Δ/speed readout for the CURRENT playback/scrub moment (Δ-to-best is the
+        # priority). Owned here (values come from session); it's the EMPHASIZED centre element of
+        # the charts' consolidated header bar (built below), so it never overlaps the curves.
+        # plots_view stays pacer-free — it knows nothing about this readout. Base styling
+        # (mono/tabular ~22px, transparent on the bar's surface) comes from the global QSS via
+        # objectName "DiffBox"; only the Δ-value COLOUR is driven per-tick.
         self.diff_box = QLabel("Δ —    — km/h")
         self.diff_box.setObjectName("DiffBox")
         self.diff_box.setAlignment(Qt.AlignCenter)
@@ -129,22 +171,46 @@ class StudioWindow(QMainWindow):
         self.chapter_label.setVisible(self.video.is_multi)
 
         # Each panel gets a flush "section header" strip (uppercase, dimmed) above its content.
-        # The video/plots panels already stack an extra strip (chapter banner / diff card) under
-        # their header; the table & map are wrapped fresh. Behaviour/widgets are unchanged.
+        # The video panel stacks the chapter banner under its plain text header; the table is
+        # wrapped fresh. The MAP and PLOTS panels use WIDGET header bars (below) so the right
+        # column's chrome collapses into the headers instead of full-width rows between the panels.
         video_panel = self._panel("VIDEO", self.chapter_label, (self.video, 1))
         table_panel = self._panel("LAPS", (self.table, 1))
-        map_panel = self._panel("MAP", (self.map, 1))
-        plots_panel = self._panel("SPEED · Δ TO BEST", self.diff_box, (self.plots, 1))
+
+        # MAP header: title (left) + the sector buttons (right-aligned, compact) — moved OFF the
+        # full-width row that used to sit between the map and the charts. Their handlers/signal
+        # wiring (re-segmentation) are unchanged; only the mount point moved.
+        for b in (self.map.add_sector_btn, self.map.reset_sectors_btn):
+            b.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        map_label = QLabel("MAP")
+        map_label.setProperty("role", "BarLabel")
+        map_header = self._header_bar(map_label, 1,
+                                      self.map.add_sector_btn, self.map.reset_sectors_btn)
+        map_panel = self._headered(map_header, (self.map, 1))
+
+        # CHARTS consolidated bar (replaces the old separate panel-header row + full-width DiffBox
+        # row + the combo's own row): section label (left) · the emphasized Δ/speed readout
+        # (centre) · the x-mode toggle relocated from plots_view (right). The toggle keeps its
+        # modeChanged wiring; the readout keeps its per-tick recolor. ~2 rows of height reclaimed.
+        plots_label = QLabel("SPEED · Δ TO BEST")
+        plots_label.setProperty("role", "BarLabel")
+        self.plots.x_mode.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0), 1, self.plots.x_mode)
+        plots_panel = self._headered(plots_header, (self.plots, 1))
 
         left = QSplitter(Qt.Vertical)
         left.addWidget(video_panel)
         left.addWidget(table_panel)
         left.setSizes([540, 360])
 
+        # Rebalance the right column: the charts (the analytical core) get the MAJORITY — map ~40%
+        # / charts ~60%. The map only needs enough to read the (now-tighter) track clearly.
         right = QSplitter(Qt.Vertical)
         right.addWidget(map_panel)
         right.addWidget(plots_panel)
-        right.setSizes([520, 380])
+        right.setStretchFactor(0, 40)
+        right.setStretchFactor(1, 60)
+        right.setSizes([360, 540])
 
         main = QSplitter(Qt.Horizontal)
         main.addWidget(left)
