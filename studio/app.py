@@ -127,11 +127,12 @@ class StudioWindow(QMainWindow):
         return panel
 
     def _build_ui(self):
-        # On a reload ("Load full recording"), stop the previous VideoView's player so its decoder
-        # doesn't linger after the old widget tree is replaced by setCentralWidget below.
+        # On a reload ("Load full recording"), tear down the previous VideoView's pane(s) — stop
+        # the decoder AND close the g-meter overlay window — so neither lingers after the old
+        # widget tree is replaced by setCentralWidget below.
         old_video = getattr(self, "video", None)
         if old_video is not None:
-            old_video.player.stop()
+            old_video.stop_all()
         # The VideoView is driven by the session's ChapterMap so the slider spans the whole
         # session and playback switches sources / auto-advances across chapters.
         self.video = VideoView(self.session.chapters or self.session.video_path)
