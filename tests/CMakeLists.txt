@@ -31,4 +31,7 @@ if(Python_Interpreter_FOUND)
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_validate_wallclock.py)
     set_tests_properties(test_validate_wallclock PROPERTIES
                          ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    # g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
+    add_test(NAME test_gmeter
+             COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter.py)
 endif()
