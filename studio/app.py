@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters
+from . import chapters, theme
 from .lap_table import LapTable
 from .map_view import MapView
 from .plots_view import PlotsView
@@ -38,7 +38,7 @@ _LAP_SEEK_NUDGE_S = 0.010
 class StudioWindow(QMainWindow):
     def __init__(self, paths: list[str], full: bool = False):
         super().__init__()
-        self.resize(1340, 840)
+        self.resize(1440, 900)
         self._tick_timer = None  # created on the first _build_ui; reused across reloads
         self._build_menu()
         # If opt-in full-recording was requested on the CLI, discover the sibling chapters of the
@@ -65,6 +65,26 @@ class StudioWindow(QMainWindow):
         self.setWindowTitle(f"pacer studio — {label}" if label else "pacer studio")
         self._build_ui()
 
+    @staticmethod
+    def _panel(title: str, *contents) -> QWidget:
+        """Wrap panel content under a flush "section header" label (the `.PanelHeader` QSS role:
+        small uppercase dimmed strip). Each `contents` entry is either a widget (added with no
+        stretch) or a `(widget, stretch)` tuple. Purely a header + tight container — it changes
+        no behaviour and adds no per-tick cost."""
+        panel = QWidget()
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        header = QLabel(title)
+        header.setProperty("role", "PanelHeader")
+        lay.addWidget(header)
+        for c in contents:
+            if isinstance(c, tuple):
+                lay.addWidget(c[0], c[1])
+            else:
+                lay.addWidget(c)
+        return panel
+
     def _build_ui(self):
         # On a reload ("Load full recording"), stop the previous VideoView's player so its decoder
         # doesn't linger after the old widget tree is replaced by setCentralWidget below.
@@ -88,55 +108,48 @@ class StudioWindow(QMainWindow):
         # Always-on Δ/speed readout box for the CURRENT playback/scrub moment (Δ-to-best is the
         # priority). Owned here (values come from session); placed ABOVE the plots so it never
         # overlaps the curves. plots_view stays pacer-free — it knows nothing about this box.
+        # Hero readout card: base styling (surface bg, mono/tabular ~22px, bottom hairline) comes
+        # from the global QSS via objectName "DiffBox"; only the Δ-value COLOUR is driven per-tick.
         self.diff_box = QLabel("Δ —    — km/h")
+        self.diff_box.setObjectName("DiffBox")
         self.diff_box.setAlignment(Qt.AlignCenter)
-        self.diff_box.setStyleSheet(
-            "QLabel { background:#1b1b1b; color:#e6e6e6; font-size:18px; font-weight:600;"
-            " padding:6px; border-bottom:1px solid #333; }"
-        )
+        self.diff_box.setFont(theme.mono_font(theme.HERO, theme.W_SEMIBOLD))
+        self._diff_colour = None  # last applied Δ-value colour (per-tick recolor guard)
 
         # Multi-chapter status banner above the video: shows the recording label and, for a
         # chaptered session, which chapter is currently playing (updated via chapterChanged).
+        # Slim themed strip via objectName "ChapterBanner" (surface bg, dimmed, accent left rule).
         self.chapter_label = QLabel("")
+        self.chapter_label.setObjectName("ChapterBanner")
         self.chapter_label.setAlignment(Qt.AlignCenter)
-        self.chapter_label.setStyleSheet(
-            "QLabel { background:#15233b; color:#9ec5ff; font-size:13px; font-weight:600;"
-            " padding:4px; border-bottom:1px solid #2a3a55; }"
-        )
         self._update_chapter_label(self.video.current_chapter())
         self.video.chapterChanged.connect(self._update_chapter_label)
         # Only show the banner for a real (>1 chapter) chaptered session; a single file is
         # exactly as before (no banner clutter).
         self.chapter_label.setVisible(self.video.is_multi)
 
-        video_panel = QWidget()
-        video_lay = QVBoxLayout(video_panel)
-        video_lay.setContentsMargins(0, 0, 0, 0)
-        video_lay.setSpacing(0)
-        video_lay.addWidget(self.chapter_label)
-        video_lay.addWidget(self.video, 1)
+        # Each panel gets a flush "section header" strip (uppercase, dimmed) above its content.
+        # The video/plots panels already stack an extra strip (chapter banner / diff card) under
+        # their header; the table & map are wrapped fresh. Behaviour/widgets are unchanged.
+        video_panel = self._panel("VIDEO", self.chapter_label, (self.video, 1))
+        table_panel = self._panel("LAPS", (self.table, 1))
+        map_panel = self._panel("MAP", (self.map, 1))
+        plots_panel = self._panel("SPEED · Δ TO BEST", self.diff_box, (self.plots, 1))
 
         left = QSplitter(Qt.Vertical)
         left.addWidget(video_panel)
-        left.addWidget(self.table)
-        left.setSizes([460, 360])
-
-        plots_panel = QWidget()
-        plots_lay = QVBoxLayout(plots_panel)
-        plots_lay.setContentsMargins(0, 0, 0, 0)
-        plots_lay.setSpacing(0)
-        plots_lay.addWidget(self.diff_box)
-        plots_lay.addWidget(self.plots, 1)
+        left.addWidget(table_panel)
+        left.setSizes([540, 360])
 
         right = QSplitter(Qt.Vertical)
-        right.addWidget(self.map)
+        right.addWidget(map_panel)
         right.addWidget(plots_panel)
-        right.setSizes([460, 380])
+        right.setSizes([520, 380])
 
         main = QSplitter(Qt.Horizontal)
         main.addWidget(left)
         main.addWidget(right)
-        main.setSizes([520, 820])
+        main.setSizes([580, 860])
         self.setCentralWidget(main)
 
         # --- cross-panel wiring ---
@@ -347,13 +360,15 @@ class StudioWindow(QMainWindow):
             # +behind / −ahead vs best, at the same track position.
             delta_txt = f"Δ {d:+.2f} s"
         speed_txt = f"{sp:.0f} km/h" if sp is not None else "— km/h"
-        # Colour cue: green when up on best (ahead), red when down (behind).
-        colour = "#e6e6e6" if d is None else ("#06d6a0" if d <= 0 else "#ef476f")
+        # Colour cue: green when up on best (ahead), red when down (behind), primary text when no
+        # delta. The card's surface bg / font / border come from the global QSS (#DiffBox); a
+        # per-widget `color` rule merges over it and overrides ONLY the foreground (no per-tick
+        # background/border re-layout cost), and only when the colour actually changes.
+        colour = theme.C.text if d is None else (theme.C.ahead if d <= 0 else theme.C.behind)
         self.diff_box.setText(f"{delta_txt}     {speed_txt}")
-        self.diff_box.setStyleSheet(
-            f"QLabel {{ background:#1b1b1b; color:{colour}; font-size:18px; font-weight:600;"
-            " padding:6px; border-bottom:1px solid #333; }"
-        )
+        if colour != getattr(self, "_diff_colour", None):
+            self._diff_colour = colour
+            self.diff_box.setStyleSheet(f"QLabel#DiffBox {{ color: {colour}; }}")
 
     # ------------------------------------------------------------- plot scrub
     def _on_scrub_started(self):
@@ -428,6 +443,10 @@ def main(argv: list[str] | None = None) -> int:
     full = "--full" in argv or "--chaptered" in argv
     paths = [a for a in argv if not a.startswith("-")] or [DEFAULT_SAMPLE]
     app = QApplication(sys.argv)
+    # Apply the dark "Refined Minimal" design system BEFORE constructing any widgets, so the
+    # default font/palette and the pyqtgraph background are in place when the panels are built.
+    theme.register_fonts()
+    theme.apply_theme(app)
     window = StudioWindow(paths, full=full)
     window.show()
     return app.exec()

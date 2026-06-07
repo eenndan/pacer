@@ -132,6 +132,7 @@ class VideoView(QWidget):
         row.addWidget(self.slider, 1)
 
         self.readout = QLabel("")  # F2: time / speed / current lap, driven by app
+        self.readout.setObjectName("Readout")  # caption style, dimmed, tabular (global QSS)
         self.readout.setAlignment(Qt.AlignCenter)
 
         lay = QVBoxLayout(self)
