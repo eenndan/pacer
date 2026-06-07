@@ -4,13 +4,13 @@ ONLY variable is the per-sample TIME AXIS.
 
 WHY THIS SCRIPT EXISTS
 ----------------------
-The prior investigation (studio/docs/upstream-20ms-investigation.md) tested our C++ port
-`pacer.interpolate_timestamps` (via Session.load(interpolate=True)) against GPS9. It did NOT
+The prior investigation (studio/docs/upstream-20ms-investigation.md) tested our (since-removed)
+C++ Adam timestamp-fit port against GPS9. It did NOT
 run the *notebook's own PyTorch code*. This script does: the t1 (free) and t2 (parametric)
-Adam optimizers below are copied VERBATIM from notebooks/interpolation.ipynb (cells
-`4c1dba4b` and `31c96b74`), down to the loss, the [1e-1,1e-2,1e-3] LR schedule, the fresh
-optimizer per LR, and the di clamp. So the "notebook" lap times here are produced by the
-notebook's literal algorithm, not a paraphrase.
+Adam optimizers below are copied VERBATIM from the upstream interpolation notebook (since
+removed; cells `4c1dba4b` and `31c96b74`), down to the loss, the [1e-1,1e-2,1e-3] LR schedule,
+the fresh optimizer per LR, and the di clamp. So the "notebook" lap times here are produced by
+the notebook's literal algorithm, not a paraphrase.
 
 APPLES-TO-APPLES
 ----------------
@@ -31,10 +31,14 @@ full_speed>3, no gate/clean/smooth) + its own pick_random_start() — i.e. what 
 prints if you just swap the file. Those are NOT aligned to the transponder (different
 segmentation), they only show the notebook runs end to end on our data.
 
-The transponder alignment reuses studio._validate_wallclock's helpers verbatim.
+The transponder alignment reuses studio.dev._validate_wallclock's helpers verbatim.
 
-Run:
-  PYTHONPATH=. pixi run python studio/docs/gps_research_scripts/notebook_vs_gps9.py <REC.MP4> <CSV> \
+NOTE: this is a HISTORICAL evidence record (see studio/docs/upstream-20ms-investigation.md).
+The interpolation path it was written against has been removed; the script is kept for the
+verbatim notebook optimizers, not as a runnable tool.
+
+Run (historical):
+  PYTHONPATH=. python studio/dev/research/notebook_vs_gps9.py <REC.MP4> <CSV> \
       --race-start "2026-05-23 12:00:00Z" [--dump out.json]
 """
 from __future__ import annotations
@@ -49,7 +53,7 @@ import torch
 
 import pacer
 from studio import chapters, tracks, transponder
-from studio._validate_wallclock import (
+from studio.dev._validate_wallclock import (
     RACING_MAX_S,
     _parse_when,
     best_offset,
@@ -72,7 +76,7 @@ DROPOUT_GAP_S = 0.35
 
 
 # ===========================================================================================
-#  THE NOTEBOOK'S OWN INTERPOLATION (copied verbatim from notebooks/interpolation.ipynb)
+#  THE NOTEBOOK'S OWN INTERPOLATION (copied verbatim from the upstream interpolation notebook)
 # ===========================================================================================
 def notebook_build_di_floor_ceil(samples, spans, cs):
     """Notebook cells 6a0ff025 / 21ef2ee9 / 016d83d7, verbatim algorithm.

@@ -29,7 +29,7 @@ The matching CSV lap window is reconstructed from FOUR independent signals, whic
      so it is the authoritative signal; 1–3 corroborate and bound it.
 
 Run:
-  pixi run python -m studio._validate_wallclock -- <recording.MP4> <transponder.csv> \
+  pixi run python -m studio.dev._validate_wallclock -- <recording.MP4> <transponder.csv> \
       --race-start "2026-05-23 12:00:00Z" [--local-start "2026-05-24 06:54"] [--dump <path>]
 
 `--race-start` is the absolute UTC of CSV lap 1's timing start (the green flag / first line
@@ -303,7 +303,7 @@ def _has_dropout(sess: Session, lap_id: int) -> bool:
 
 
 def main(argv) -> int:
-    ap = argparse.ArgumentParser(prog="studio._validate_wallclock")
+    ap = argparse.ArgumentParser(prog="studio.dev._validate_wallclock")
     ap.add_argument("recording")
     ap.add_argument("csv")
     ap.add_argument("--race-start", required=True,

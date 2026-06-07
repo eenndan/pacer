@@ -23,7 +23,7 @@ from . import chapters, gapfill, gmeter, tracks
 
 DEFAULT_SAMPLE = "3rdparty/gpmf-parser/samples/hero6.mp4"  # a clip with real motion
 
-# Data-cleaning thresholds (see studio/diagnose.py; validated on real sessions).
+# Data-cleaning thresholds (see studio/dev/diagnose.py; validated on real sessions).
 MIN_START_SPEED = 3.0  # m/s — below this the car is stationary / GPS not yet locked
 SPIKE_STEP = 50.0  # m — a lone fix farther than this from BOTH neighbours is a glitch
 OFF_TRACK_MARGIN = 0.5  # drop points outside the inlier bbox (1-99 pct) expanded by this fraction
@@ -40,7 +40,7 @@ LAP_BAND_LO, LAP_BAND_HI = 0.5, 1.6  # "real lap" = lap_time within [lo, hi] x m
 # lap segmentation, the delta resample, sector splits — uses the SAME smoothed coordinates.
 # w=13 (~1.3 s @ 10 Hz): tuned up from that w=9 baseline because the studio map
 # feeds the SMOOTHED track straight back into segmentation/distance, so a touch more smoothing
-# buys a much cleaner trace. Verified on the real session (studio/denoise_check.py): w=13 cuts
+# buys a much cleaner trace. Verified on the real session (studio/dev/denoise_check.py): w=13 cuts
 # the high-frequency cross-track jitter ~39% and the point-to-point heading jitter ~91% while
 # the lap-to-lap racing-line signal is preserved and the corner APEXES are not clipped (a
 # close-up hairpin render shows w<=15 tracking the raw apex; w>=21 visibly cuts the corner).
@@ -203,7 +203,7 @@ GPS9_MIN_DT_S = 0.02    # an inter-sample GPS9 delta below this is a duplicate/g
 GPS9_MAX_DT_S = 0.40    # …above this, the run is broken (chapter break / dropout / rollover)
 
 # NOTE: an earlier transponder-fit GPS9 clock-rate multiplier was REMOVED. The out-of-sample
-# validation (recording 0062, see studio/_validate_wallclock.py) proved it a 0060-specific
+# validation (recording 0062, see studio/dev/_validate_wallclock.py) proved it a 0060-specific
 # OVERFIT to GPS-dropout-tail skew, NOT a real clock rate: both recordings' true rate is ≈1.0
 # (−22 / −46 ppm, not the fitted −486 ppm), and applying the factor WORSENS the clean-lap RMS on
 # both. The plain GPS9 true-clock spacing (rate = 1.0) is already unbiased out of sample (0062
@@ -343,7 +343,7 @@ def _gate_quality(samples, spans, naive):
 def _clean(samples, spans, naive):
     """Trim the stationary lead-in/cool-down (where GPS spikes cluster), then drop lone
     teleport glitches (a fix far from BOTH neighbours while they stay close to each other).
-    Returns cleaned (samples, spans, naive). See studio/diagnose.py for the evidence."""
+    Returns cleaned (samples, spans, naive). See studio/dev/diagnose.py for the evidence."""
     n = len(samples)
     if n < 10:
         return samples, spans, naive

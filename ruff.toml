@@ -1,4 +1,4 @@
-# Ruff config for pacer's Python: binding generators + notebook tooling.
+# Ruff config for pacer's Python: the studio app + binding generators.
 # Generated bindings and the conda env are excluded. Run: ruff check / ruff format
 line-length = 100
 target-version = "py311"
@@ -8,19 +8,13 @@ extend-exclude = [
     "build",
     "3rdparty",
     "bindings/*/*/__init__.pyi",
-    # imgui bindings are gated off and the generator is vendored litgen tooling
-    "bindings/imgui/generate-bindings.py",
-    # one-off GPS-accuracy research prototypes / diagnostics (scratch tooling, kept for repro)
-    "studio/docs/gps_research_scripts",
+    # frozen GPS-accuracy research evidence scripts (historical record, kept for repro)
+    "studio/dev/research",
 ]
 
 [lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = [
     "E501",  # line length handled by the formatter
-    "E402",  # notebooks legitimately import after path setup
+    "E402",  # scripts legitimately import after sys.path / env setup
 ]
-
-[lint.per-file-ignores]
-# notebooks: scratch imports / redefs / cross-cell names / compact zips are fine
-"*.ipynb" = ["F401", "F811", "F821", "F841", "E402", "B905"]

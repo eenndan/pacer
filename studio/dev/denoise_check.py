@@ -17,7 +17,7 @@ Metrics (all on the real session's valid laps)
   at matched normalized distance — the genuine racing-line difference that must be PRESERVED.
 
 Run (headless, offscreen):
-    pixi run python -m studio.denoise_check -- /path/to/file.MP4 [--out DIR] [--tag NAME]
+    pixi run python -m studio.dev.denoise_check -- /path/to/file.MP4 [--out DIR] [--tag NAME]
 
 Without a file it uses session.DEFAULT_SAMPLE. PNGs + a metrics line are written to --out
 (default $TMPDIR/denoise or ./denoise_out). Read the PNGs to judge smoothness/signal by eye.
@@ -34,7 +34,7 @@ import numpy as np
 
 import pacer  # noqa: F401 — ensure the module imports cleanly before Qt
 
-from .session import DEFAULT_SAMPLE, Session, _smooth
+from ..session import DEFAULT_SAMPLE, Session, _smooth
 
 
 # ----------------------------------------------------------------- metrics

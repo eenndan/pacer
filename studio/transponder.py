@@ -1,6 +1,6 @@
 """Parse a lap-timing transponder CSV (the ground-truth lap times) — pure Python, no pacer.
 
-Used by `studio/_validate_wallclock.py` to VALIDATE the GPS9 true-clock lap timing against real
+Used by `studio/dev/_validate_wallclock.py` to VALIDATE the GPS9 true-clock lap timing against real
 transponder data out of sample. The transponder CSV is a reference INPUT only (never committed to
 the repo).
 

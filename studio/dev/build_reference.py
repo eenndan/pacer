@@ -7,7 +7,7 @@ orientation matches the GPS aggregate). The image carries no embedded geo-coordi
 the polyline is stored in arbitrary normalized image coordinates; `studio/reference.py`
 best-fit aligns it to the aggregate GPS point cloud (similarity + reflection ICP) at load.
 
-Re-run to regenerate the JSON:  python -m studio.build_reference
+Re-run to regenerate the JSON:  python -m studio.dev.build_reference
 
 The waypoints below were digitized by eye from the thumbnail of gmaps_pict.png as an ordered
 closed loop following the track centerline (the kart track's single racing line down the
@@ -53,7 +53,10 @@ def build(out_path: str | None = None, validate_against: str | None = None):
     span = (mx - mn)
     span[span == 0] = 1.0
     norm = (pts - mn) / span
-    out_path = out_path or os.path.join(os.path.dirname(__file__), "mk_centerline.json")
+    # Canonical reference lives in studio/ (studio/reference.py loads it); this script now
+    # lives in studio/dev/, so write one directory up.
+    out_path = out_path or os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "mk_centerline.json")
     with open(out_path, "w") as fh:
         json.dump({"track": "Daytona Milton Keynes",
                    "source": "gmaps_pict.png (traced centerline, normalized image coords, y-down)",

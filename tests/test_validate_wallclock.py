@@ -1,4 +1,4 @@
-"""Pure-Python tests for studio._validate_wallclock — the reusable wall-clock auto-discovery
+"""Pure-Python tests for studio.dev._validate_wallclock — the reusable wall-clock auto-discovery
 helpers that reconstruct which transponder-CSV laps a recording covers (so a GPS9-timing
 validation can be re-run for any recording without hand-entering a lap range).
 
@@ -16,7 +16,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from studio import _validate_wallclock as vw  # noqa: E402
+from studio.dev import _validate_wallclock as vw  # noqa: E402
 
 
 def _make_log(seed=3):

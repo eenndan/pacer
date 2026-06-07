@@ -25,7 +25,7 @@ from studio.session import (_read_gpmf, _gate_quality, _clean, _gps9_times,
                             _gap_segments, tracks, _fit_start_line, _widen,
                             MIN_LAP_SAMPLES, MIN_LAP_TIME, LAP_BAND_LO, LAP_BAND_HI,
                             START_WIDEN)
-import studio._validate_wallclock as vw
+import studio.dev._validate_wallclock as vw
 
 
 # ----------------------------------------------------------------- smoothers

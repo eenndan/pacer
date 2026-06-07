@@ -14,7 +14,7 @@ import json, sys
 import numpy as np
 from studio import chapters, transponder
 from studio.session import Session
-import studio._validate_wallclock as vw
+import studio.dev._validate_wallclock as vw
 import datetime as dt
 
 def sf_chord_dt(sess, lid):

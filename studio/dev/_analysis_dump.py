@@ -3,7 +3,7 @@ byte-identity proof. Loads a session and prints (then MD5s) the lap times, dista
 entry speeds, per-sector splits (for a couple of sector configurations), and the full
 delta/speed series — i.e. every quantity F1–F5 touch the *display* of but must not change.
 
-Run: python -m studio._analysis_dump <video> [more videos]
+Run: python -m studio.dev._analysis_dump <video> [more videos]
 The MD5 must be identical on the branch base and after the UI features land.
 """
 import hashlib
@@ -70,7 +70,7 @@ def dump(paths: list[str]) -> str:
 def main():
     paths = sys.argv[1:]
     if not paths:
-        print("usage: python -m studio._analysis_dump <video> [...]", file=sys.stderr)
+        print("usage: python -m studio.dev._analysis_dump <video> [...]", file=sys.stderr)
         return 2
     text = dump(paths)
     digest = hashlib.md5(text.encode()).hexdigest()
