@@ -47,9 +47,11 @@ CURSOR_HOVER_PEN = pg.mkPen(C.accent, width=2, style=Qt.DashLine)
 # Hover dot rides the delta curve: accent fill with a dark canvas outline so it pops on any curve.
 HOVER_DOT_BRUSH = pg.mkBrush(C.accent)
 HOVER_DOT_PEN = pg.mkPen(C.canvas, width=1)
-# F2: sector boundary guide lines — subtle (dimmed + dotted) vertical lines on BOTH charts so
-# they read as a backdrop and never obscure the curves or the scrub cursor.
-SECTOR_LINE_PEN = pg.mkPen(C.border, width=1, style=Qt.DotLine)
+# F2: sector boundary guide lines — clearly-legible NEUTRAL grey dashed vertical lines on BOTH
+# charts. C.text_muted (#6B7280) reads cleanly against the surface and dashed reads better than
+# dotted at this scale; they stay NEUTRAL (not amber) so they never clash with the amber
+# current-lap curve, and behind everything (setZValue(-5)) so they remain a subordinate backdrop.
+SECTOR_LINE_PEN = pg.mkPen(C.text_muted, width=1, style=Qt.DashLine)
 SECTOR_LABEL_COLOR = C.text_dim
 # The delta plot's y=0 reference line — a faint hairline, same weight as the gridlines.
 ZERO_LINE_PEN = pg.mkPen(C.border, width=1)
@@ -256,8 +258,8 @@ class PlotsView(QWidget):
     def _draw_sectors(self):
         """(Re)draw the cached sector guide lines on both plots. A small label (S/F, S1, S2…)
         sits near the TOP of the speed plot so it doesn't collide with the delta curve. The lines
-        sit BELOW the scrub cursor (lower zValue) and use a muted dotted pen so they never obscure
-        the curves or the cursor."""
+        sit BELOW the scrub cursor (lower zValue) and use a neutral grey dashed pen so they read
+        clearly without obscuring the curves or the cursor."""
         self._clear_sectors()
         if not self._sector_positions:
             return
