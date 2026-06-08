@@ -91,6 +91,7 @@ class _PaneCell(QWidget):
         self.badge.setObjectName("PaneBadge")
         self.badge.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
         self._badge_colour: str | None = None
+        self._badge_text = "Δ —"   # last-applied badge text (guards the per-tick setText)
 
         strip = QHBoxLayout()
         strip.setContentsMargins(0, 0, 0, 0)
@@ -122,7 +123,7 @@ class _PaneCell(QWidget):
             self._lap_ids = ids
             self._labels = labels
             self.picker.clear()
-            for lid, text in zip(ids, labels):
+            for lid, text in zip(ids, labels, strict=True):  # parallel by construction
                 self.picker.addItem(text, lid)
         if current in self._lap_ids:
             idx = self._lap_ids.index(current)
@@ -134,9 +135,14 @@ class _PaneCell(QWidget):
         self.caption.setText(text)
 
     def set_badge(self, text: str, colour: str | None):
-        """Set the "Δ vs other" badge text + (only when it changes) its colour — driven per tick
-        by the app, so the colour re-apply is guarded to avoid a per-tick stylesheet churn."""
-        self.badge.setText(text)
+        """Set the "Δ vs other" badge text + (only when it changes) its colour — driven per tick by
+        the app. BOTH are guarded against a no-op re-apply: the colour re-apply (a QSS re-parse +
+        relayout) only fires when the colour FLIPS, and the text setText (which relays out the
+        label) only fires when the text actually changes — so a PAUSED / stable compare view does
+        zero label work per tick (the addressable interaction lag), mirroring #DiffBox's guard."""
+        if text != self._badge_text:
+            self._badge_text = text
+            self.badge.setText(text)
         if colour != self._badge_colour:
             self._badge_colour = colour
             if colour is None:
