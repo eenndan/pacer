@@ -582,6 +582,21 @@ class StudioWindow(QMainWindow):
         if window is not None:
             self.video.seek_pane(side, window[0] + _LAP_SEEK_NUDGE_S)
 
+    def _reset_pair_to_start(self):
+        """The user's main pain was getting both videos to start together. So EVERY change to the
+        compared pair (enter-compare, either picker repoint, any pair change) ends here: PAUSE BOTH
+        panes and re-seek BOTH to their lap's start line — not just the side that changed — so the
+        two videos are always realigned at S/F and ready to roll together on the next Play. This
+        clears any lingering mid-lap position on the untouched pane (the "one video mid-lap, the
+        other at start" state). Pausing first so the seek lands on a stopped decoder; the primary's
+        seek drives the chart cursor / map marker to the primary's S/F via the normal tick path."""
+        a, b = self._compare_a, self._compare_b
+        if a is None or b is None:
+            return
+        self.video.pause()  # fans out to BOTH panes; idempotent if already paused
+        self._seek_pane_to_lap_start(0, a)  # PRIMARY -> its lap S/F
+        self._seek_pane_to_lap_start(1, b)  # SECONDARY -> its lap S/F
+
     def _on_compare_toggled(self, on: bool):
         """The "Compare videos" toggle flipped. On enter: seed (A,B) = (current/primary lap, best)
         — default current-vs-best (if they coincide, pick the next-fastest as B) — build the two
@@ -617,9 +632,9 @@ class StudioWindow(QMainWindow):
             return
         self.video.set_compare(a, b, wa, wb, self._lap_caption(a), self._lap_caption(b),
                                 valid, self._lap_choice_labels(valid))
-        # Each pane plays "time into lap": park both on their lap starts.
-        self._seek_pane_to_lap_start(0, a)  # PRIMARY
-        self._seek_pane_to_lap_start(1, b)  # SECONDARY
+        # Each pane plays "time into lap": reset the pair to its lap starts, PAUSED, so both videos
+        # are aligned at S/F and roll together on the next Play (no auto-play on enter).
+        self._reset_pair_to_start()
         # The pair drives the chart overlay (A primary curve, B reference) and each pane's g scope.
         self.plots.set_laps([a, b])
         self.video.set_pane_gmeter_lap(0, a)
@@ -659,8 +674,11 @@ class StudioWindow(QMainWindow):
             return
         self.video.reseed_pane(side, lap_id, window, self._lap_caption(lap_id),
                                valid, self._lap_choice_labels(valid))
-        self._seek_pane_to_lap_start(side, lap_id)
         self.video.set_pane_gmeter_lap(side, lap_id)
+        # Realign the WHOLE pair at S/F, PAUSED — not just the side that changed — so the two
+        # videos never end up "one mid-lap, the other at start". This clears the other pane's
+        # lingering position too and leaves both ready to roll together on the next Play.
+        self._reset_pair_to_start()
         # Refresh the chart overlay with the new pair; freeze auto-follow on the (new) primary lap.
         if self._compare_a is not None and self._compare_b is not None:
             self.plots.set_laps([self._compare_a, self._compare_b])
