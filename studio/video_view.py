@@ -18,9 +18,14 @@ exactly as today — its `positionChanged` still feeds the app. The SECONDARY (r
 created LAZILY on toggle-on (its own source = the session ChapterMap), is VIDEO-ONLY (its
 `positionChanged` is NOT forwarded to the app), is always muted, and is torn down (stop +
 deleteLater the player+audio, .close() its g-meter overlay) on toggle-off and on any reload, so
-no decoder/overlay leaks. Each pane shows a caption ("lap N  m:ss.mmm"), a compact lap picker to
-repoint that side (emits `paneRepointRequested`), and a "Δ vs other" badge the app updates. Play/
-pause/mute fan out to BOTH panes; the g-meter toggle applies per-pane (both default off).
+no decoder/overlay leaks. Each pane shows a caption ("lap N · m:ss.mmm", ★ on the best lap), a
+compact lap picker to repoint that side (its items carry the lap time too; emits
+`paneRepointRequested`), and a "Δ vs other" badge the app updates. Play/pause/mute fan out to
+BOTH panes; the g-meter toggle applies per-pane (both default off).
+
+EVERY change to the compared pair (enter, either picker repoint) re-seeks BOTH panes to their
+lap's start line and PAUSES both, so the two videos are always realigned at S/F and ready to roll
+together on the next Play — the app owns this reset (see _reset_pair_to_start).
 
 A recording can be a single file OR a chaptered multi-file recording. The slider + the emitted
 position are in GLOBAL session time (0..sum-of-durations); the pane maps global<->chapter time and
@@ -68,6 +73,7 @@ class _PaneCell(QWidget):
         self.pane = pane
         self.side = side
         self._lap_ids: list[int] = []
+        self._labels: list[str] = []   # last-applied picker item labels (guards the repopulate)
 
         self.caption = QLabel("")
         self.caption.setObjectName("PaneCaption")
@@ -85,6 +91,7 @@ class _PaneCell(QWidget):
         self.badge.setObjectName("PaneBadge")
         self.badge.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
         self._badge_colour: str | None = None
+        self._badge_text = "Δ —"   # last-applied badge text (guards the per-tick setText)
 
         strip = QHBoxLayout()
         strip.setContentsMargins(0, 0, 0, 0)
@@ -100,25 +107,42 @@ class _PaneCell(QWidget):
         lay.addLayout(strip)
         lay.addWidget(self.pane, 1)
 
-    def set_lap_choices(self, lap_ids: list[int], current: int):
-        """(Re)populate the picker with `lap_ids` and select `current` WITHOUT emitting a repoint
-        (a programmatic re-seed must not look like a user pick)."""
-        self._lap_ids = list(lap_ids)
+    def set_lap_choices(self, lap_ids: list[int], current: int,
+                        labels: list[str] | None = None):
+        """(Re)populate the picker with `lap_ids` (shown with `labels` if given — the app builds
+        them with the lap time + a ★ on the best lap, e.g. "lap 25  (1:08.325)") and select
+        `current` WITHOUT emitting a repoint (a programmatic re-seed must not look like a user pick).
+
+        Skips the (expensive) clear+repopulate when the ids+labels are UNCHANGED: only the current
+        selection is re-pinned. A repoint re-seeds both panes' pickers each time, so guarding the
+        rebuild avoids a per-repoint QComboBox churn when the lap set hasn't actually changed."""
+        ids = list(lap_ids)
+        labels = list(labels) if labels is not None else [f"lap {lid}" for lid in ids]
         self.picker.blockSignals(True)
-        self.picker.clear()
-        for lid in self._lap_ids:
-            self.picker.addItem(f"lap {lid}", lid)
+        if ids != self._lap_ids or labels != self._labels:
+            self._lap_ids = ids
+            self._labels = labels
+            self.picker.clear()
+            for lid, text in zip(ids, labels, strict=True):  # parallel by construction
+                self.picker.addItem(text, lid)
         if current in self._lap_ids:
-            self.picker.setCurrentIndex(self._lap_ids.index(current))
+            idx = self._lap_ids.index(current)
+            if self.picker.currentIndex() != idx:
+                self.picker.setCurrentIndex(idx)
         self.picker.blockSignals(False)
 
     def set_caption(self, text: str):
         self.caption.setText(text)
 
     def set_badge(self, text: str, colour: str | None):
-        """Set the "Δ vs other" badge text + (only when it changes) its colour — driven per tick
-        by the app, so the colour re-apply is guarded to avoid a per-tick stylesheet churn."""
-        self.badge.setText(text)
+        """Set the "Δ vs other" badge text + (only when it changes) its colour — driven per tick by
+        the app. BOTH are guarded against a no-op re-apply: the colour re-apply (a QSS re-parse +
+        relayout) only fires when the colour FLIPS, and the text setText (which relays out the
+        label) only fires when the text actually changes — so a PAUSED / stable compare view does
+        zero label work per tick (the addressable interaction lag), mirroring #DiffBox's guard."""
+        if text != self._badge_text:
+            self._badge_text = text
+            self.badge.setText(text)
         if colour != self._badge_colour:
             self._badge_colour = colour
             if colour is None:
@@ -186,18 +210,19 @@ class VideoView(QWidget):
         self.gmeter_btn.toggled.connect(self._on_gmeter_toggled)
         self.gmeter_btn.toggled.connect(self.set_gmeter_visible)
 
-        # "Compare videos" toggle (Phase B): a checkable button that reveals a 2nd, equal video
-        # pane side-by-side. Off by default; enabled only when ≥2 valid laps (app drives the
-        # enable flag). The toggle itself only flips _compare + emits compareToggled — the app
-        # owns the lap-pair seeding and calls back into set_compare/exit_compare.
+        # "Compare videos" toggle (Phase B): a LABELED checkable button that reveals a 2nd, equal
+        # video pane side-by-side. Off by default; enabled only when ≥2 valid laps (app drives the
+        # enable flag). The toggle itself only flips _compare + emits compareToggled — the app owns
+        # the lap-pair seeding and calls back into set_compare/exit_compare. Its label + fill swap
+        # between states in _set_compare_btn_state so it's obvious both what it does (adds a 2nd
+        # comparison video) and whether it's currently on ("⧉ Compare" ghost → "Comparing ✕" amber).
         self.compare_btn = QPushButton()
-        self.compare_btn.setIcon(theme.icon("ph.columns"))
         self.compare_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
-        self.compare_btn.setFixedSize(_ICON_BTN)
+        self.compare_btn.setFixedHeight(_ICON_BTN.height())
         self.compare_btn.setCheckable(True)
         self.compare_btn.setEnabled(False)
-        self.compare_btn.setToolTip("Compare two laps' videos side-by-side (needs ≥2 valid laps)")
         self.compare_btn.toggled.connect(self._on_compare_toggled)
+        self._set_compare_btn_state(False)
 
         # The slider spans the WHOLE session (global ms 0..total). For a multi-chapter recording
         # its range is the summed duration; for a single file it's the file's own duration. The
@@ -256,6 +281,17 @@ class VideoView(QWidget):
         if self._compare and self.secondary is not None:
             self.secondary.pause()
 
+    def pause_if_playing(self):
+        """Pause each pane ONLY if it is actually playing. Pausing a freshly-loaded pane that has
+        never played leaves QMediaPlayer in StoppedState, and a subsequent play() from StoppedState
+        restarts from position 0 — discarding a seek-to-S/F. So the compare reset uses this instead
+        of pause(): it stops a playing pane (which then resumes from the seek on play) but never
+        disturbs an already-stopped/paused pane, keeping its seeked lap-start position intact."""
+        if self.pane.is_playing():
+            self.pane.pause()
+        if self._compare and self.secondary is not None and self.secondary.is_playing():
+            self.secondary.pause()
+
     def toggle(self):
         # Drive both panes from the PRIMARY's state so they stay in lockstep (a single source of
         # truth for the transport icon, which follows the primary).
@@ -309,18 +345,39 @@ class VideoView(QWidget):
     def is_compare(self) -> bool:
         return self._compare
 
+    def _set_compare_btn_state(self, on: bool):
+        """Drive the labeled compare toggle's appearance for its OFF/ON state. OFF: a ghost/neutral
+        "⧉ Compare" (columns glyph + text) that reads as "click to add a 2nd comparison video". ON:
+        an accent-FILLED "Comparing ✕" (the variant=primary amber fill via the QSS) with a small
+        close affordance so it's obviously active and reads as "click to exit". Only called on a
+        state change (enter/exit + the initial build) — never per tick."""
+        if on:
+            self.compare_btn.setIcon(theme.icon("ph.columns", color=theme.C.on_accent))
+            self.compare_btn.setText(" Comparing  ✕")
+            self.compare_btn.setToolTip("Comparing two laps' videos — click to exit")
+            self.compare_btn.setProperty("variant", "primary")
+        else:
+            self.compare_btn.setIcon(theme.icon("ph.columns"))
+            self.compare_btn.setText(" Compare")
+            self.compare_btn.setToolTip(
+                "Compare two laps' videos side-by-side (needs ≥2 valid laps)")
+            self.compare_btn.setProperty("variant", "")
+        # A dynamic-property change needs an explicit style re-polish to take effect (Qt caches
+        # the resolved QSS until the property is re-evaluated). Done only on the state flip.
+        self.compare_btn.style().unpolish(self.compare_btn)
+        self.compare_btn.style().polish(self.compare_btn)
+
     def _on_compare_toggled(self, on: bool):
-        """The toggle flipped: recolour the glyph and emit compareToggled so the app seeds the lap
-        pair (enter) or restores single-pane (exit). The actual pane build/teardown happens in
-        set_compare / exit_compare, which the app calls back. Guard against a redundant emit."""
-        self.compare_btn.setIcon(theme.icon("ph.columns", color=theme.C.accent if on
-                                            else theme.C.text))
+        """The toggle flipped: swap its labeled OFF/ON appearance and emit compareToggled so the app
+        seeds the lap pair (enter) or restores single-pane (exit). The actual pane build/teardown
+        happens in set_compare / exit_compare, which the app calls back."""
+        self._set_compare_btn_state(bool(on))
         self.compareToggled.emit(bool(on))
 
     def set_compare(self, lap_a: int, lap_b: int,
                     window_a: tuple[float, float], window_b: tuple[float, float],
                     caption_a: str, caption_b: str,
-                    lap_choices: list[int]):
+                    lap_choices: list[int], lap_choice_labels: list[str] | None = None):
         """Enter (or re-seed) compare mode: swap the single-pane stage for a horizontal QSplitter
         of TWO equal PlayerPanes. The PRIMARY pane is the existing self.pane (telemetry driver);
         the SECONDARY pane is created LAZILY here on first entry (its own source = the session
@@ -368,11 +425,12 @@ class VideoView(QWidget):
         self.secondary.set_lap_window(*window_b)
         self._cell_a.set_caption(caption_a)
         self._cell_b.set_caption(caption_b)
-        self._cell_a.set_lap_choices(lap_choices, lap_a)
-        self._cell_b.set_lap_choices(lap_choices, lap_b)
+        self._cell_a.set_lap_choices(lap_choices, lap_a, lap_choice_labels)
+        self._cell_b.set_lap_choices(lap_choices, lap_b, lap_choice_labels)
 
     def reseed_pane(self, side: int, lap_id: int, window: tuple[float, float],
-                    caption: str, lap_choices: list[int]):
+                    caption: str, lap_choices: list[int],
+                    lap_choice_labels: list[str] | None = None):
         """Repoint ONE pane (after its lap picker was used): update its lap window + caption +
         keep the picker selection in sync. The app re-seeks this pane to its new lap start and
         refreshes the chart overlay + Δ badge. Used so a repoint never disturbs the other pane."""
@@ -382,7 +440,7 @@ class VideoView(QWidget):
             return
         pane.set_lap_window(*window)
         cell.set_caption(caption)
-        cell.set_lap_choices(lap_choices, lap_id)
+        cell.set_lap_choices(lap_choices, lap_id, lap_choice_labels)
 
     def exit_compare(self):
         """Leave compare mode: tear the secondary pane down (stop + deleteLater player+audio,

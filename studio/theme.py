@@ -415,6 +415,18 @@ QPushButton[variant="primary"]:pressed {{
     background-color: {C.accent_press};
     border-color: {C.accent_press};
 }}
+/* a CHECKABLE primary button (the "Comparing" compare toggle) keeps the solid amber fill when
+   checked — the filled variant must win over the generic :checked tint above, so it reads as
+   clearly ACTIVE rather than the subtle tint used for the icon toggles. */
+QPushButton[variant="primary"]:checked {{
+    background-color: {C.accent};
+    color: {C.on_accent};
+    border: 1px solid {C.accent};
+}}
+QPushButton[variant="primary"]:checked:hover {{
+    background-color: {C.accent_hover};
+    border-color: {C.accent_hover};
+}}
 
 /* ---------------------------------------------------------------- combo box */
 QComboBox {{
