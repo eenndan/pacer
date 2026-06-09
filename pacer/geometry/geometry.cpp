@@ -60,12 +60,6 @@ pacer::GPSSample pacer::Interpolate(GPSSample from, GPSSample to,
   };
 }
 
-/*
-Note: The Earth is almost, but not quite, a perfect sphere.
-Its equatorial radius is 6378 km, but its polar radius is 6357 km - in other
-words, the Earth is slightly flattened. 22 Oct 2020
-*/
-
 auto pacer::CoordinateSystem::Global(Vec3f point) const -> GPSSample {
   point = local_origin + dx * point[0] + dy * point[1] + dz * point[2];
   auto lon = 180 * atan2(point[1], point[0]) / M_PI;

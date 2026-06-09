@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <optional>
+#include <ostream>
 #include <utility>
 
 #include <pacer/datatypes/datatypes.hpp>
@@ -28,12 +29,6 @@ struct Point : VectorOperators<Point, double, 2> {
 Point ToPoint(Point x);
 Point ToPoint(GPSSample s);
 Point ToPoint(Vec3f v);
-
-// template <typename Concrete, typename T, size_t N>
-// Point ToPoint(const LinearOperators<Concrete, T, N> &x) {
-//   return Point{static_cast<const Concrete &>(x)[0],
-//                static_cast<const Concrete &>(x)[1]};
-// }
 
 struct Segment {
   Point first, second;
@@ -91,15 +86,6 @@ private:
 
 Point Interpolate(Point from, Point to, double ratio);
 GPSSample Interpolate(GPSSample from, GPSSample to, double ratio);
-
-// template <typename Concrete, typename T, size_t N>
-// Concrete Interpolate(const LinearOperators<Concrete, T, N> &from,
-//                      const LinearOperators<Concrete, T, N> &to, double ratio)
-//                      {
-//   return static_cast<Concrete>(static_cast<const Concrete &>(from) *
-//                                    (1 - ratio) +
-//                                static_cast<const Concrete &>(to) * ratio);
-// }
 
 template <class P>
 std::optional<PointInTime<P>> Split(Segment start_line, PointInTime<P> first,

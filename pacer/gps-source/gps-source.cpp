@@ -1,11 +1,6 @@
 #include "gps-source.hpp"
 
-#include <__chrono/calendar.h>
-#include <chrono>
 #include <cstdint>
-#include <format>
-#include <iostream>
-#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <sys/types.h>
@@ -127,11 +122,6 @@ uint32_t GPMFSource::Samples(void *data,
          GPMF_FindNext(ms, STR2FOURCC("STRM"),
                        GPMF_LEVELS(GPMF_RECURSE_LEVELS | GPMF_TOLERANT))) {
 
-    if (ret != GPMF_OK) {
-      printf("No FindNext gps data\n");
-      return ret;
-    }
-
     ret = GPMF_SeekToSamples(ms);
     if (ret != GPMF_OK) {
       printf("No Seek to Samples\n");
@@ -144,8 +134,6 @@ uint32_t GPMFSource::Samples(void *data,
     uint32_t samples = GPMF_Repeat(ms);
     uint32_t elements = GPMF_ElementsInStruct(ms);
 
-    // printf("Key: %c%c%c%c, Samples: %d, Elements: %d\n", PRINTF_4CC(key),
-    //        samples, elements);
     // Extract GPSU data from GPS5 stream
     // To do this, you need to search for the GPSU key at the same level as
     // GPS5. Typically, GPSU contains a timestamp for each GPS5 sample. You can
@@ -155,7 +143,6 @@ uint32_t GPMFSource::Samples(void *data,
     GPMF_stream gpsu_stream;
 
     if (key == STR2FOURCC("GPS9")) {
-      // printf("Found GPS9 stream, skipping...\n");
       // lat, long, alt, 2D speed, 3D speed, days since 2000, secs since
       // midnight (ms precision), DOP, fix (0, 2D or 3D)
       //  Parse GPS9 data: lat, long, alt, 2D speed, 3D speed, days since 2000,
@@ -258,8 +245,6 @@ uint32_t GPMFSource::Samples(void *data,
             }
           }
 
-          // GPMF_FormattedData(ms, tmpbuffer, buffersize, 0, samples); //
-          // Output data in LittleEnd, but no scale
           if (GPMF_OK ==
               GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples,
                               GPMF_TYPE_DOUBLE)) // Output scaled data as floats
@@ -283,17 +268,12 @@ uint32_t GPMFSource::Samples(void *data,
               r.gps.dop = -1.0;  // negative = "unknown" (real DOP is positive)
               r.gps.fix = -1;
 
-              // printf("  %c%c%c%c (%d,%d) ", PRINTF_4CC(key), samples,
-              // elements);
-
               for (j = 0; j < elements; j++) {
                 if (type == GPMF_TYPE_STRING_ASCII) {
-                  // printf("%c", rawdata[pos]);
                   pos++;
                   ++ptr;
                 } else if (type_samples == 0) // no TYPE structure
                 {
-                  // printf("%.3f%s, ", *ptr, units[j % unit_samples]);
                   ++ptr;
                 } else if (complextype[j] != 'F') {
                   r.values[j % unit_samples] = *ptr;
@@ -301,19 +281,14 @@ uint32_t GPMFSource::Samples(void *data,
                     on_sample(data, r.gps, i, samples);
                   }
 
-                  // printf("%.3f%s, ", *ptr, units[j % unit_samples]);
                   ++ptr;
                   pos += GPMF_SizeofType((GPMF_SampleType)complextype[j]);
                 } else if (type_samples && complextype[j] == GPMF_TYPE_FOURCC) {
                   ptr++;
 
-                  // printf("%c%c%c%c, ", rawdata[pos], rawdata[pos + 1],
-                  //        rawdata[pos + 2], rawdata[pos + 3]);
                   pos += GPMF_SizeofType((GPMF_SampleType)complextype[j]);
                 }
               }
-
-              // printf("\n");
             }
           }
           free(tmpbuffer);

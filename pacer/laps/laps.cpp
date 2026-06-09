@@ -333,11 +333,11 @@ pacer::Segment pacer::Lap::TimingLine(size_t i,
 void pacer::Lap::FillDistances(const CoordinateSystem &cs) {
   cum_distances = std::vector<double>{0};
   for (size_t i = 1; i < points.size(); ++i) {
-    // Gap-aware (see SegmentDistance in laps.cpp): a GPS chord across a dropout cuts the
+    // Gap-aware (see SegmentDistance): a GPS chord across a dropout cuts the
     // corner and under-counts, so a long time-step uses the speed integral instead. Keeps the
     // per-lap odometer the Python delta/sector math reads consistent with GetLapDistance.
     cum_distances.push_back(cum_distances.back() +
-                            ::SegmentDistance(cs, points[i - 1], points[i]));
+                            SegmentDistance(cs, points[i - 1], points[i]));
   }
 }
 double pacer::Lap::LapTime() const {

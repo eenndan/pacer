@@ -91,16 +91,7 @@ public:
   explicit GPMFSource(const char *filename);
   ~GPMFSource() noexcept;
 
-  // Main interface to take samples from current handler.
-  //
-  // Args:
-  //   void *data:  associated data object with callback;
-  //   on_sample:  void (*)(void *, GPSSample, size_t, size_t) callback
-  //   function, takes following arguments:
-  //     - data provided earlier;
-  //     - sampled data;
-  //     - index of current data;
-  //     - total number of records in a batch.
+  // See RawGPSSource::Samples for the callback contract.
   uint32_t Samples(void *data,
                    void (*on_sample)(void * /*data*/, GPSSample /*sample*/,
                                      size_t /*current_index*/,

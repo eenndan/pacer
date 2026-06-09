@@ -83,7 +83,6 @@ private:
     size_t start_index, finish_index;
 
     double Time() const;
-    size_t Count() const { return finish_index - start_index; }
   };
 
   CoordinateSystem cs_;
