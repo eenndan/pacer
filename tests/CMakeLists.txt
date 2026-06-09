@@ -10,6 +10,9 @@ add_pacer_test(test_coordinate_system pacer::geometry)
 add_pacer_test(test_ops             pacer::datatypes)
 add_pacer_test(test_geometry        pacer::geometry)
 add_pacer_test(test_laps            pacer::laps)
+# SequentialGPSSource chapter-seam chaining (no payload dropped at the boundary) + the
+# Seek-before-first-payload clamp, driven through in-memory stub RawGPSSources.
+add_pacer_test(test_gps_source      pacer::gps-source)
 
 # Pure-Python tests for the studio app (no telemetry file / no pacer build dependency for the
 # logic they cover — scrub-conversion math + the F1/F3/F5 UI-feature logic). Registered with

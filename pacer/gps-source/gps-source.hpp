@@ -124,6 +124,10 @@ private:
                                            double /*time*/)> &emit) const;
   uint32_t index_ = 0;
   size_t mp4handle_;
+  // Owned GPMF payload resource (resObject+buffer): allocated lazily on first use and REUSED
+  // across Samples()/ReadStream() calls (GetPayloadResource grows it in place), then freed in
+  // the destructor. Previously each call leaked a fresh resource. 0 == not yet allocated.
+  mutable size_t payload_res_ = 0;
 };
 
 class SequentialGPSSource : public RawGPSSource {

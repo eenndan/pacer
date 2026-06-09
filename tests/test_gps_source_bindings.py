@@ -18,6 +18,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pacer  # noqa: E402
 
+# A bundled GoPro Hero6 clip carries a real GPS5 stream (the deprecated lat/lon/alt/2D/3D
+# format). Used by the GPS5 field-order + Seek-clamp regression tests below.
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_HERO6 = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero6.mp4")
+
 
 class _PySource(pacer.RawGPSSource):
     """A minimal in-Python RawGPSSource backed by lists of synthetic samples."""
@@ -127,6 +132,53 @@ def test_sequential_source_chains_cori_with_offset():
     seq.read_cori(lambda s: got.append((s.w, s.x, round(s.time, 6))))
     assert got == [(1.0, 0.0, 1.0), (0.0, 1.0, 10.0)], got  # right shifted by 8.0
     print("test_sequential_source_chains_cori_with_offset OK")
+
+
+def test_gps5_speed_field_order_2d_ground_3d_full():
+    """GPS5 element order is [lat, lon, alt, 2D ground speed, 3D speed] (GoPro spec). The C++
+    parser must land 2D speed -> ground_speed and 3D speed -> full_speed (matching the GPS9
+    branch and what the studio reads). It USED to write the 5 doubles via a union whose field
+    order aliased 2D into full_speed and 3D into ground_speed (swapped), so this asserts the
+    corrected mapping against the bundled hero6 GPS5 clip.
+
+    Golden values are the first GPS5 sample of hero6.mp4: ground_speed (2D) = 1.221,
+    full_speed (3D) = 1.23. Pre-fix these came out SWAPPED (ground=1.23, full=1.221), so the
+    exact-value assert below fails before fix #2 and passes after."""
+    if not os.path.exists(_HERO6):
+        print("test_gps5_speed_field_order_2d_ground_3d_full SKIP (no hero6.mp4 sample)")
+        return
+    src = pacer.GPMFSource(_HERO6)
+    rows = []
+    src.read_samples(lambda s, i, n: rows.append((s.ground_speed, s.full_speed)))
+    assert rows, "expected GPS5 samples from hero6.mp4"
+    ground0, full0 = rows[0]
+    # First sample: 2D ground speed = 1.221 m/s, 3D speed = 1.23 m/s (from the raw GPS5 stream).
+    assert round(ground0, 3) == 1.221, (ground0, full0)
+    assert round(full0, 3) == 1.23, (ground0, full0)
+    # They are NOT equal, so the swap would be observable (sanity: order is meaningful here).
+    assert ground0 != full0
+    print("test_gps5_speed_field_order_2d_ground_3d_full OK")
+
+
+def test_gps5_seek_before_first_payload_clamps_no_wrap():
+    """Seek to a target BEFORE the first payload must clamp to index 0 and NOT report EOF.
+    `index_` is uint32, so the old `--index_` at index 0 wrapped to UINT32_MAX (a bogus
+    EOF-looking index); after fix #1 it clamps. Drive it on the real hero6 GPMF source:
+    seek(-1.0) then read the current payload and assert it yields the first samples (not an
+    empty / past-the-end span)."""
+    if not os.path.exists(_HERO6):
+        print("test_gps5_seek_before_first_payload_clamps_no_wrap SKIP (no hero6.mp4 sample)")
+        return
+    src = pacer.GPMFSource(_HERO6)
+    src.seek(-1.0)  # before the first payload
+    assert not src.is_end(), "seek before the first payload wrapped to a false EOF"
+    a, b = src.current_time_span()
+    # A real, non-empty first payload span starting at (or near) 0 — not a {0,0} sentinel.
+    assert b > a, (a, b)
+    got = []
+    src.read_samples(lambda s, i, n: got.append(s))
+    assert got, "no samples after seek(before-first) — first payload was skipped/wrapped"
+    print("test_gps5_seek_before_first_payload_clamps_no_wrap OK")
 
 
 if __name__ == "__main__":
