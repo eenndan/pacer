@@ -362,16 +362,8 @@ def test_follow_current_is_best_shows_single_lap():
 
 
 if __name__ == "__main__":
-    test_numeric_sort_key_orders_by_value_not_text()
-    test_numeric_sort_key_blanks_sort_last()
-    test_best_split_per_sector_is_column_min()
-    test_dropout_detection_interior_gap_over_threshold()
-    test_lap_at_time_boundary_resolves_to_starting_lap()
-    test_lap_at_time_skips_invalid_lap_gap()
-    test_nearest_index_in_lap_stays_in_lap()
-    test_nearest_time_in_lap_clamps_to_window()
-    test_select_lap_seeks_into_lap_despite_ms_quantization()
-    test_follow_switches_only_on_lap_edge()
-    test_follow_holds_last_lap_on_none_region()
-    test_follow_current_is_best_shows_single_lap()
-    print("\nALL STUDIO FEATURE TESTS PASSED")
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for t in tests:
+        t()
+        print(f"ok  {t.__name__}")
+    print(f"\nALL {len(tests)} STUDIO FEATURE TESTS PASSED")

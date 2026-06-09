@@ -22,6 +22,13 @@ if(Python_Interpreter_FOUND)
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_timing.py)
     add_test(NAME test_chapters
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chapters.py)
+    # MAP-ONLY GPS-gap reconstruction (studio.gapfill): pure Python + numpy, no telemetry file.
+    add_test(NAME test_gapfill
+             COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gapfill.py)
+    # RawGPSSource binding surface: Python<->C++ trampoline (read_accl/grav/cori) + the
+    # SequentialGPSSource chapter-offset chaining. Imports pacer only (no Qt).
+    add_test(NAME test_gps_source_bindings
+             COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gps_source_bindings.py)
     add_test(NAME test_studio_features
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_studio_features.py)
     set_tests_properties(test_studio_features PROPERTIES

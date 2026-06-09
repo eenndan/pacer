@@ -219,12 +219,8 @@ def test_normal_mode_no_window_unchanged():
 
 
 if __name__ == "__main__":
-    test_finish_delta_equals_laptime_difference()
-    test_self_delta_is_zero()
-    test_cross_check_vs_delta_at_time()
-    test_outside_window_clamps_and_degenerate_none()
-    test_lap_window_stops_and_clamps_at_end()
-    test_lap_window_tolerance_catches_sub_ms_short_fall()
-    test_clear_lap_window_restores_whole_session()
-    test_normal_mode_no_window_unchanged()
-    print("\nALL COMPARE TESTS PASSED")
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for t in tests:
+        t()
+        print(f"ok  {t.__name__}")
+    print(f"\nALL {len(tests)} COMPARE TESTS PASSED")

@@ -96,9 +96,8 @@ def test_parse_when_handles_z_and_naive():
 
 
 if __name__ == "__main__":
-    test_cumulative_completion_and_lap_being_driven()
-    test_pit_brackets()
-    test_best_offset_locks_unique_alignment()
-    test_residual_stats()
-    test_parse_when_handles_z_and_naive()
-    print("\nALL WALLCLOCK-VALIDATION TESTS PASSED")
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for t in tests:
+        t()
+        print(f"ok  {t.__name__}")
+    print(f"\nALL {len(tests)} WALLCLOCK-VALIDATION TESTS PASSED")
