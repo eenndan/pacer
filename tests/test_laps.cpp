@@ -219,6 +219,116 @@ TEST_CASE("Gap-aware distance: speed integral fills a dropout chord", "[laps]") 
   }
 }
 
+TEST_CASE("GetLapDistance agrees with the GetLap/cum_distances model",
+          "[laps]") {
+  // Group 1 regression: the two distance code paths (the scalar GetLapDistance
+  // and the per-point GetLap().cum_distances) must AGREE, and GetLapDistance must
+  // no longer over-count the finish partial segment. The MakeThreeLapTrack laps
+  // run straight along x with 1 s steps and a vertical start line at x == 0, so
+  // each lap's geometry is hand-checkable.
+  GPSSample origin{.lat = 40.0, .lon = -74.0, .altitude = 0};
+  CoordinateSystem cs(origin);
+
+  Laps laps = MakeThreeLapTrack(cs);
+  laps.sectors.start_line = Segment{Point{0, -10}, Point{0, 10}};
+  laps.Update();
+
+  REQUIRE(laps.LapsCount() == 3);
+
+  for (size_t lap = 0; lap < laps.LapsCount(); ++lap) {
+    Lap l = laps.GetLap(lap);
+    REQUIRE(l.cum_distances.size() == l.points.size());
+    // The scalar lap distance equals the per-point odometer's last entry.
+    CHECK(laps.GetLapDistance(lap, cs) ==
+          Catch::Approx(l.cum_distances.back()).margin(1e-6));
+  }
+
+  SECTION("matches a direct geometric chord sum of the materialized lap") {
+    // GetLapDistance must equal the straight sum of chords over the points
+    // GetLap() materializes (these laps have 1 s steps, no dropouts, so every
+    // SegmentDistance is the plain chord).
+    Lap l = laps.GetLap(0);
+    double hand = 0.0;
+    for (size_t i = 1; i < l.points.size(); ++i) {
+      hand += cs.Distance(l.points[i - 1].point, l.points[i].point);
+    }
+    CHECK(laps.GetLapDistance(0, cs) == Catch::Approx(hand).margin(1e-3));
+  }
+}
+
+TEST_CASE("ClearPoints then re-adding points is safe (was UB)", "[laps]") {
+  // Group 1 regression: ClearPoints() used to .clear() cum_point_dist_ (size 0),
+  // so the {0} seed the class relies on (index [0] / .back()) was gone. A later
+  // AddPoint / SetCoordinateSystem then indexed cum_point_dist_[0] out of bounds.
+  GPSSample origin{.lat = 40.0, .lon = -74.0, .altitude = 0};
+  CoordinateSystem cs(origin);
+
+  Laps laps = MakeThreeLapTrack(cs);
+  REQUIRE(laps.PointCount() > 0);
+
+  laps.ClearPoints();
+  CHECK(laps.PointCount() == 0);
+  // These must not read out of bounds even immediately after a clear.
+  CHECK_NOTHROW(laps.SetCoordinateSystem(cs));
+
+  // Re-add a fresh straight track and verify distances are sane after re-add.
+  double t = 0;
+  auto add = [&](double x, double y) {
+    laps.AddPoint(cs.Global(Vec3f{x, y, 0}), t++);
+  };
+  add(-20, 0);
+  add(-5, 0);
+  add(5, 0);
+  add(20, 0);
+  CHECK_NOTHROW(laps.SetCoordinateSystem(cs));
+  REQUIRE(laps.PointCount() == 4);
+
+  // A vertical start line is crossed once -> at least the lap chunks exist and
+  // GetLap distances are finite and non-negative.
+  laps.sectors.start_line = Segment{Point{0, -10}, Point{0, 10}};
+  laps.Update();
+  for (size_t lap = 0; lap < laps.LapsCount(); ++lap) {
+    Lap l = laps.GetLap(lap);
+    CHECK(std::isfinite(l.cum_distances.back()));
+    CHECK(l.cum_distances.back() >= 0.0);
+    CHECK(laps.GetLapDistance(lap, cs) ==
+          Catch::Approx(l.cum_distances.back()).margin(1e-6));
+  }
+}
+
+TEST_CASE("GetLap cum_distances match FillDistances (Group-2 perf refactor)",
+          "[laps]") {
+  // Group 2 regression: GetLap() now builds cum_distances from the cached
+  // cum_point_dist_ instead of re-walking FillDistances. The result must equal
+  // what FillDistances(cs_) produces over the same materialized points. The two
+  // paths add the SAME per-segment SegmentDistance values but in a different
+  // summation ORDER (prefix-difference of a cached running sum vs a fresh
+  // segment-by-segment walk), so they agree to floating-point round-off
+  // (sub-nanometre) rather than bit-for-bit. A 1e-6 m margin (1 micron) is far
+  // tighter than any physically meaningful distance and proves the refactor did
+  // not change the result.
+  GPSSample origin{.lat = 40.0, .lon = -74.0, .altitude = 0};
+  CoordinateSystem cs(origin);
+
+  Laps laps = MakeThreeLapTrack(cs);
+  laps.sectors.start_line = Segment{Point{0, -10}, Point{0, 10}};
+  laps.Update();
+  REQUIRE(laps.LapsCount() == 3);
+
+  for (size_t lap = 0; lap < laps.LapsCount(); ++lap) {
+    Lap got = laps.GetLap(lap);
+    // Independently recompute the odometer over the SAME points via the original
+    // FillDistances code path.
+    Lap ref{.points = got.points};
+    ref.FillDistances(cs);
+    REQUIRE(got.cum_distances.size() == ref.cum_distances.size());
+    for (size_t i = 0; i < ref.cum_distances.size(); ++i) {
+      CHECK(got.cum_distances[i] ==
+            Catch::Approx(ref.cum_distances[i]).margin(1e-6));
+    }
+  }
+}
+
 TEST_CASE("Laps is safe on empty and tiny traces", "[laps]") {
   SECTION("empty trace") {
     Laps laps;

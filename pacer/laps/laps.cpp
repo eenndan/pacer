@@ -69,11 +69,23 @@ void pacer::Laps::Update() {
                    .second = {gps_second.lon, gps_second.lat}};
   };
 
+  // The start line is constant across the whole trace; hoist its (trig-heavy)
+  // global conversion out of the loop. The sector line only changes when
+  // sector_index advances, so cache it and recompute only on a sector switch.
+  const Segment global_start = to_global(sectors.start_line);
+  Segment global_sector = to_global(sector_line());
+  int cached_sector_index = sector_index;
+
   for (size_t i = 1; i < points_.size(); ++i) {
     PointInTime<GPSSample> current = points_[i];
 
-    auto lap_split = Split(to_global(sectors.start_line), previous, current);
-    auto sector_split = Split(to_global(sector_line()), previous, current);
+    if (sector_index != cached_sector_index) {
+      global_sector = to_global(sector_line());
+      cached_sector_index = sector_index;
+    }
+
+    auto lap_split = Split(global_start, previous, current);
+    auto sector_split = Split(global_sector, previous, current);
 
     previous = current;
 
@@ -103,7 +115,7 @@ void pacer::Laps::Update() {
       });
 
       sector_index += 1;
-      if (sector_index == sectors.sector_lines.size())
+      if (sector_index == static_cast<int>(sectors.sector_lines.size()))
         sector_index = -1;
     }
   }
@@ -140,7 +152,7 @@ auto pacer::Laps::MinMax() const -> std::pair<Point, Point> {
   if (points_.empty())
     return {{0, 0}, {0, 0}};
   Point min{points_[0].point.lon, points_[0].point.lat}, max = min;
-  for (auto [p, _] : points_) {
+  for (const auto &[p, _] : points_) {
     min.x = std::min(min.x, p.lon);
     max.x = std::max(max.x, p.lon);
     min.y = std::min(min.y, p.lat);
@@ -152,13 +164,36 @@ auto pacer::Laps::MinMax() const -> std::pair<Point, Point> {
 double pacer::Laps::LapChunk::Time() const { return finish.time - start.time; }
 
 double pacer::Laps::GetLapDistance(size_t lap,
-                                   const CoordinateSystem &cs) const {
-  double distance = cs.Distance(laps_[lap].start.point,
-                                points_[laps_[lap].start_index].point) +
-                    cs.Distance(laps_[lap].finish.point,
-                                points_[laps_[lap].finish_index].point) +
-                    cum_point_dist_[laps_[lap].finish_index] -
-                    cum_point_dist_[laps_[lap].start_index];
+                                   const CoordinateSystem & /*cs*/) const {
+  // NOTE: the `cs` param is VESTIGIAL and slated for removal (bindings batch).
+  // We deliberately use the member `cs_` for ALL terms so the result is coherent
+  // with cum_point_dist_ (which was built from cs_) regardless of what is passed.
+  //
+  // This must equal the lap's true traversed distance as modelled by
+  // GetLap()/FillDistances, whose materialized points are:
+  //   [start, points_[start_index], ..., points_[finish_index - 1], finish]
+  // i.e. the interior run is the HALF-OPEN range [start_index, finish_index).
+  // The previous implementation summed cum[finish_index] - cum[start_index] and
+  // joined points_[finish_index] -> finish, over-counting exactly one segment.
+  // Uses SegmentDistance (gap-aware, same as cum_point_dist_ and FillDistances)
+  // for the two partial chords so this AGREES exactly with GetLap().cum_distances.
+  const LapChunk &chunk = laps_[lap];
+  const size_t start_index = chunk.start_index;
+  const size_t finish_index = chunk.finish_index;
+
+  if (finish_index <= start_index) {
+    // Degenerate / tiny lap: start and finish crossings fall on the same
+    // segment, so GetLap() materializes just [start, finish] and the lap
+    // distance is the single chord between the two crossings.
+    return SegmentDistance(cs_, chunk.start, chunk.finish);
+  }
+
+  // start -> first interior point, then the bulk over the interior interpolation
+  // points [start_index, finish_index), then the partial chord from the last
+  // interior point to the finish crossing.
+  double distance = SegmentDistance(cs_, chunk.start, points_[start_index]);
+  distance += cum_point_dist_[finish_index - 1] - cum_point_dist_[start_index];
+  distance += SegmentDistance(cs_, points_[finish_index - 1], chunk.finish);
 
   return distance;
 }
@@ -218,13 +253,51 @@ double pacer::Laps::StartTimestamp(size_t lap) const {
 pacer::Lap pacer::Laps::GetLap(size_t lap) const {
   if (lap >= laps_.size())
     return {};
-  std::vector<PointInTime<GPSSample>> points{laps_[lap].start};
-  points.insert(points.end(), points_.begin() + laps_[lap].start_index,
-                points_.begin() + laps_[lap].finish_index);
-  points.push_back(laps_[lap].finish);
-  auto l = Lap{.points = points};
-  l.FillDistances(cs_);
-  return l;
+
+  const LapChunk &chunk = laps_[lap];
+  const size_t start_index = chunk.start_index;
+  const size_t finish_index = chunk.finish_index;
+
+  std::vector<PointInTime<GPSSample>> points{chunk.start};
+  points.insert(points.end(), points_.begin() + start_index,
+                points_.begin() + finish_index);
+  points.push_back(chunk.finish);
+
+  // Build cum_distances from the cached cum_point_dist_ instead of re-walking
+  // FillDistances. This matches what FillDistances(cs_) produces (to float
+  // round-off) over the same materialized points:
+  //   points = [start, points_[start_index .. finish_index), finish]
+  // cum_distances[0]      = 0
+  // cum_distances[1]      = cap0 = SegmentDistance(start, points_[start_index])
+  // cum_distances[1 + k]  = cap0 + (cum_point_dist_[start_index + k]
+  //                                 - cum_point_dist_[start_index])  (interior)
+  // cum_distances[last]   = prev + SegmentDistance(last interior point, finish)
+  // cum_point_dist_ already aggregates the interior steps with the same gap-aware
+  // SegmentDistance; the two partial (start/finish) chords are not covered by it
+  // and are added explicitly with the SAME SegmentDistance FillDistances used.
+  std::vector<double> cum_distances;
+  cum_distances.reserve(points.size());
+  cum_distances.push_back(0.0);
+
+  if (finish_index > start_index) {
+    const double cap0 =
+        SegmentDistance(cs_, chunk.start, points_[start_index]);
+    cum_distances.push_back(cap0);
+    for (size_t k = 1; k < finish_index - start_index; ++k) {
+      cum_distances.push_back(
+          cap0 + (cum_point_dist_[start_index + k] - cum_point_dist_[start_index]));
+    }
+    cum_distances.push_back(cum_distances.back() +
+                            SegmentDistance(cs_, points_[finish_index - 1],
+                                            chunk.finish));
+  } else {
+    // Degenerate lap: points == [start, finish]; single chord between them.
+    cum_distances.push_back(SegmentDistance(cs_, chunk.start, chunk.finish));
+  }
+
+  return Lap{.width = 0.0f,
+             .points = std::move(points),
+             .cum_distances = std::move(cum_distances)};
 }
 
 double pacer::Laps::SectorStartTimestamp(size_t sector) const {
@@ -250,11 +323,14 @@ size_t pacer::Laps::LapsCount() const { return laps_.size(); }
 void pacer::Laps::ClearSectors() { sectors.sector_lines.clear(); }
 
 void pacer::Laps::AddPoint(GPSSample s, double t) {
-  if (!points_.empty()) {
-    cum_point_dist_.push_back(
-        cum_point_dist_.back() +
-        SegmentDistance(cs_, points_.back(), PointInTime<GPSSample>{s, t}));
-  }
+  // Only grow points_ and push a placeholder so cum_point_dist_ stays the same
+  // length as points_ (the seed {0} covers the first point). The real cumulative
+  // distances are computed entirely in SetCoordinateSystem, which is the sole
+  // authority: filling them here would use the still-default cs_ (garbage that
+  // SetCoordinateSystem later overwrites) and waste a trig-heavy Distance call.
+  // cum_point_dist_ is only meaningful AFTER SetCoordinateSystem has run.
+  if (!points_.empty())
+    cum_point_dist_.push_back(0.0);
   points_.emplace_back(s, t);
 }
 
@@ -266,6 +342,13 @@ pacer::PointInTime<pacer::GPSSample> pacer::Laps::GetPoint(size_t row) const {
 
 void pacer::Laps::SetCoordinateSystem(CoordinateSystem coordinate_system) {
   cs_ = coordinate_system;
+  // Guard: with no points the {0} seed is the only element; writing
+  // cum_point_dist_[0] is fine, but ClearPoints could leave us empty if the
+  // invariant is ever broken, so bail before touching index [0].
+  if (points_.empty())
+    return;
+  // SetCoordinateSystem is the sole authority for cum_point_dist_ (AddPoint only
+  // reserves placeholders). cum_point_dist_.size() == points_.size() here.
   cum_point_dist_[0] = 0;
   for (size_t i = 0; i + 1 < points_.size(); ++i) {
     cum_point_dist_[i + 1] =
@@ -345,5 +428,8 @@ double pacer::Lap::LapTime() const {
 }
 void pacer::Laps::ClearPoints() {
   points_.clear();
-  cum_point_dist_.clear();
+  // Reseed the {0} sentinel that the class declares: index [0] / .back() must
+  // stay valid so a later AddPoint/SetCoordinateSystem is not UB. A bare
+  // .clear() (size 0) broke that invariant.
+  cum_point_dist_.assign(1, 0.0);
 }
