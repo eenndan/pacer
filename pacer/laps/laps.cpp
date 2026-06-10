@@ -198,43 +198,6 @@ double pacer::Laps::GetLapDistance(size_t lap,
   return distance;
 }
 
-pacer::PointInTime<pacer::GPSSample> pacer::Laps::At(size_t lap,
-                                                     size_t row) const {
-  if (row == 0) {
-    return laps_[lap].start;
-  }
-  if (row - 1 >= laps_[lap].finish_index - laps_[lap].start_index) {
-    return laps_[lap].finish;
-  }
-  return points_[laps_[lap].start_index + row - 1];
-}
-
-double pacer::Laps::Speed(size_t lap, size_t row) const {
-  return At(lap, row).point.full_speed;
-}
-
-double pacer::Laps::Distance(size_t lap, size_t row) const {
-  double distance = 0;
-
-  if (row <= 0)
-    return distance;
-
-  distance += cs_.Distance(laps_[lap].start.point,
-                           points_[laps_[lap].start_index].point);
-
-  size_t point_index = row - 1 + laps_[lap].start_index;
-  distance += cum_point_dist_[std::min(point_index, laps_[lap].finish_index)] -
-              cum_point_dist_[laps_[lap].start_index];
-
-  if (point_index <= laps_[lap].finish_index)
-    return distance;
-
-  distance += cs_.Distance(points_[laps_[lap].finish_index].point,
-                           laps_[lap].finish.point);
-
-  return distance;
-}
-
 double pacer::Laps::LapTime(size_t lap) const { return laps_[lap].Time(); }
 
 size_t pacer::Laps::SampleCount(size_t lap) const {
@@ -359,59 +322,6 @@ void pacer::Laps::SetCoordinateSystem(CoordinateSystem coordinate_system) {
 size_t pacer::Laps::RecordedSectors() const { return sectors_.size(); }
 
 size_t pacer::Lap::Count() const { return points.size(); }
-
-pacer::Lap pacer::Lap::Resample(const Lap &lap,
-                                const CoordinateSystem &cs) const {
-  if (lap.points.empty()) {
-    return lap;
-  }
-  Lap result{.width = lap.width,
-             .points = {lap.points.front()},
-             .cum_distances = cum_distances};
-
-  for (size_t i_timing_line = 0, i_lap = 1; i_timing_line < TimingLinesCount();
-       ++i_timing_line) {
-    if (i_lap >= lap.points.size()) {
-      break;
-    }
-    auto s = Segment{
-        ToPoint(cs.Local(lap.points[i_lap - 1].point)),
-        ToPoint(cs.Local(lap.points[i_lap].point)),
-    };
-    auto timing_line = TimingLine(i_timing_line, cs);
-
-    while (i_lap < lap.points.size()) {
-      auto split_point =
-          pacer::Split(timing_line, lap.points[i_lap - 1], lap.points[i_lap]);
-      if (split_point) {
-        result.points.push_back(*split_point);
-        break;
-      }
-
-      ++i_lap;
-    }
-  }
-
-  result.points.push_back(lap.points.back());
-  return result;
-}
-
-size_t pacer::Lap::TimingLinesCount() const { return points.size() - 2; }
-
-pacer::Segment pacer::Lap::TimingLine(size_t i,
-                                      const CoordinateSystem &cs) const {
-
-  i += 1;
-  Vec3f prev = cs.Local(points[i - 1].point), curr = cs.Local(points[i].point),
-        next = cs.Local(points[i + 1].point);
-
-  Vec3f dir = (next - prev);
-  dir /= dir.Norm();
-  Vec3f norm = Vec3f{dir[1], -dir[0], 0};
-
-  return Segment{ToPoint(cs.Global(curr - norm * width)),
-                 ToPoint(cs.Global(curr + norm * width))};
-}
 
 void pacer::Lap::FillDistances(const CoordinateSystem &cs) {
   cum_distances = std::vector<double>{0};

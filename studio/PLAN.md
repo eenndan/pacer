@@ -143,7 +143,7 @@ Captured here so the negative results aren't re-litigated. Evidence in [`docs/`]
 - **`session.py` is the only module that drives the pacer pipeline; `tracks.py` is the only other
   file that names `pacer` (pure geometry).** Keep `map_view`/`plots_view`/`lap_table`/`video_view`/
   `app`/`gapfill`/`reference`/`gmeter`/`gmeter_overlay`/`chapters`/`transponder` free of `pacer`.
-- `pacer` is GPMF/GoPro **`.MP4` only** (the `.dat` reader isn't bound to Python). It supplies the
+- `pacer` is GPMF/GoPro **`.MP4` only**. It supplies the
   telemetry time axis; the app brings its own video player (pacer doesn't decode pixels).
 - **Perf invariants — do not regress:** the 30 Hz tick decouple (`_on_position` only stores the time;
   `_tick` applies); plot curves downsampled+clipped, antialias off, autorange frozen after refresh;

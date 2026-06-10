@@ -33,71 +33,27 @@ def my_litgen_options() -> litgen.LitgenOptions:
     #   for structs that have no constructor defined in C++.
     #  - A class will publish only its public methods and members
 
-    # ///////////////////////////////////////////////////////////////////
-    #  Exclude functions and/or parameters from the bindings
-    # ///////////////////////////////////////////////////////////////////
-    # We want to exclude `inline void priv_SetOptions(bool v) {}` from the bindings
-    # priv_ is a prefix for private functions that we don't want to expose
-    options.fn_exclude_by_name__regex = "^priv_"
-
-    # Inside `inline void SetOptions(bool v, bool priv_param = false) {}`,
-    # we don't want to expose the private parameter priv_param
-    # (it is possible since it has a default value)
-    options.fn_params_exclude_names__regex = "^priv_"
-
     # ////////////////////////////////////////////////////////////////////
     # Override virtual methods in python
     # ////////////////////////////////////////////////////////////////////
-    # The virtual methods of this class can be overriden in python
+    # RawGPSSource is an abstract base whose virtual methods can be overridden
+    # from python (used to feed synthetic / test GPS sources into the engine).
     options.class_override_virtual_methods_in_python__regex = "^RawGPSSource$"
 
     # ////////////////////////////////////////////////////////////////////
-    # Publish bindings for template functions
+    # Template specializations / ignores for the real pacer types
     # ////////////////////////////////////////////////////////////////////
-    #  template<typename T> T MaxValue(const std::vector<T>& values);
-    # will be published as: max_value_int and max_value_float
-    options.fn_template_options.add_specialization(
-        "^MaxValue$", ["int", "float"], add_suffix_to_function_name=True
-    )
-    #  template<typename T> T MaxValue(const std::vector<T>& values);
-    # will be published as: max_value_int and max_value_float
-    options.fn_template_options.add_specialization(
-        "^MinValue$", ["int", "float"], add_suffix_to_function_name=False
-    )
-
+    # PointInTime<GPSSample> is the only instantiation we expose.
     options.class_template_options.add_specialization("PointInTime", ["GPSSample"])
 
+    # The CRTP operator-mixin bases (ops.hpp) are implementation detail, not API.
     options.class_template_options.add_ignore("VectorOperators")
     options.class_template_options.add_ignore("PointwiseOperators")
-    options.class_template_options.add_ignore("LinearOperations")
+    options.class_template_options.add_ignore("LinearOperators")
 
+    # Generic template helpers we don't want auto-specialized into the bindings.
     options.fn_template_options.add_ignore("Interpolate")
     options.fn_template_options.add_ignore("ToPoint")
-    # options.fn_template_options.add_ignore("Split")
-
-    # ////////////////////////////////////////////////////////////////////
-    # Return values policy
-    # ////////////////////////////////////////////////////////////////////
-    # `Widget& GetWidgetSingleton()` returns a reference, that python should not free,
-    # so we force the reference policy to be 'reference' instead of 'automatic'
-    options.fn_return_force_policy_reference_for_references__regex = "Singleton$"
-
-    # ////////////////////////////////////////////////////////////////////
-    #  Boxed types
-    # ////////////////////////////////////////////////////////////////////
-    # Adaptation for `inline void SwitchBoolValue(bool &v) { v = !v; }`
-    # SwitchBoolValue is a C++ function that takes a bool parameter by reference and changes its value
-    # Since bool are immutable in python, we can to use a BoxedBool instead
-    options.fn_params_replace_modifiable_immutable_by_boxed__regex = "^SwitchBoolValue$"
-
-    # ////////////////////////////////////////////////////////////////////
-    #  Published vectorized math functions and namespaces
-    # ////////////////////////////////////////////////////////////////////
-    # The functions in the MathFunctions namespace will be also published as vectorized functions
-    options.fn_namespace_vectorize__regex = (
-        r"^DaftLib::MathFunctions$"  # Do it in this namespace only
-    )
-    options.fn_vectorize__regex = r".*"  # For all functions
 
     # ////////////////////////////////////////////////////////////////////
     # Format the python stubs with black

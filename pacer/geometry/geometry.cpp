@@ -103,7 +103,7 @@ pacer::Vec3f pacer::CoordinateSystem::CanonicalLocal(GPSSample origin) {
 }
 
 pacer::CoordinateSystem::CoordinateSystem(GPSSample origin)
-    : origin(origin), local_origin(CanonicalLocal(origin)),
+    : local_origin(CanonicalLocal(origin)),
       dx(Vec3f{
           -R_equator * std::cos(origin.lat * M_PI / 180.) *
               std::sin(origin.lon * M_PI / 180.),

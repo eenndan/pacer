@@ -161,25 +161,4 @@ private:
   RawGPSSource *left_, *right_, *current_;
 };
 
-enum class DatVersion {
-  JUST_DATA = 0,
-  WITH_TIMESTAMP = 1,
-};
-
-void ReadDatFile(const char *filename, void *data,
-                 void (*on_sample)(GPSSample sample, double time, void *data),
-                 DatVersion version);
-
-template <typename F>
-void ReadDatFile(const char *filename, F on_sample,
-                 DatVersion version = DatVersion::JUST_DATA) {
-  ReadDatFile(
-      filename, &on_sample,
-      [](GPSSample sample, double time, void *data) {
-        auto &f = *reinterpret_cast<F *>(data);
-        f(sample, time);
-      },
-      version);
-}
-
 } // namespace pacer

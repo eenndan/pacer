@@ -80,7 +80,6 @@ private:
   constexpr static double R_pole = 6'357'000;
   static Vec3f CanonicalLocal(GPSSample point);
 
-  GPSSample origin;
   Vec3f local_origin, dx, dy, dz;
 };
 

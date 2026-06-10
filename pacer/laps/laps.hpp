@@ -18,10 +18,6 @@ struct Lap {
   double LapTime() const;
 
   size_t Count() const;
-  Lap Resample(const Lap &lap, const CoordinateSystem &cs) const;
-
-  size_t TimingLinesCount() const;
-  Segment TimingLine(size_t index, const CoordinateSystem &cs) const;
 };
 
 struct Sectors {
@@ -54,9 +50,6 @@ struct Laps {
   double LapTime(size_t lap) const;
   size_t SampleCount(size_t lap) const;
   double StartTimestamp(size_t lap) const;
-  PointInTime<GPSSample> At(size_t lap, size_t row) const;
-  double Speed(size_t lap, size_t row) const;
-  double Distance(size_t lap, size_t row) const;
   double GetLapDistance(size_t index, const CoordinateSystem &cs) const;
 
   Lap GetLap(size_t lap) const;
