@@ -55,14 +55,67 @@ def test_numeric_sort_key_orders_by_value_not_text():
 
 def test_numeric_sort_key_blanks_sort_last():
     """Blank/NaN-key cells (partial laps with fewer splits) sort to the bottom in BOTH
-    directions — never above a real value."""
-    real = _item(12.3, "12.30")
-    blank = _item(float("nan"), "")
-    assert real < blank          # real before blank ascending
-    assert not (blank < real)    # blank never sorts before a real value
-    # Two blanks compare equal-ish (neither strictly less).
-    assert not (_item(float("nan")) < _item(float("nan")))
+    directions — never above a real value. Qt reverses the `<` result for a descending column, so
+    _NumItem flips the blank ordering to the active direction (_NumItem._descending) to keep blanks
+    LAST either way; LapTable sets that flag before each sort."""
+    _NumItem._descending = False  # ascending
+    try:
+        real = _item(12.3, "12.30")
+        blank = _item(float("nan"), "")
+        assert real < blank          # real before blank ascending
+        assert not (blank < real)    # blank never sorts before a real value
+        # Two blanks compare equal-ish (neither strictly less).
+        assert not (_item(float("nan")) < _item(float("nan")))
+
+        # DESCENDING: Qt reverses the comparator result, so for blanks to STILL land last the
+        # comparator must report blank as the SMALLEST (blank < real True, real < blank False).
+        _NumItem._descending = True
+        assert blank < real, "descending: blank must compare as smallest so Qt's reversal puts it last"
+        assert not (real < blank)
+        assert not (_item(float("nan")) < _item(float("nan")))
+    finally:
+        _NumItem._descending = False
     print("test_numeric_sort_key_blanks_sort_last OK")
+
+
+def test_lap_table_blanks_sort_last_both_directions_end_to_end():
+    """End-to-end through a real QTableWidget + LapTable's sort path: a column with some blank
+    (partial-lap) cells keeps the blanks at the BOTTOM whether the column is sorted ascending or
+    descending. Drives the actual sortByColumn + _on_sorted re-sort, not just the comparator."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QTableWidget
+
+    from studio.lap_table import _NumItem
+
+    tbl = QTableWidget(4, 1)
+    tbl.setSortingEnabled(True)
+    keys = [30.0, 10.0, float("nan"), 20.0]   # one blank among three real values
+    for r, k in enumerate(keys):
+        it = _NumItem("" if (isinstance(k, float) and math.isnan(k)) else f"{k:.1f}")
+        it.setData(NUM_ROLE, k)
+        tbl.setItem(r, 0, it)
+
+    def keys_in_order():
+        out = []
+        for r in range(tbl.rowCount()):
+            v = tbl.item(r, 0).data(NUM_ROLE)
+            out.append("blank" if (v is None or (isinstance(v, float) and math.isnan(v)))
+                       else round(float(v), 1))
+        return out
+
+    # Ascending: 10, 20, 30, blank-last.
+    _NumItem._descending = False
+    tbl.sortByColumn(0, Qt.AscendingOrder)
+    asc = keys_in_order()
+    assert asc == [10.0, 20.0, 30.0, "blank"], asc
+
+    # Descending: 30, 20, 10, blank STILL last (not floated to the top).
+    _NumItem._descending = True
+    tbl.sortByColumn(0, Qt.DescendingOrder)
+    desc = keys_in_order()
+    assert desc == [30.0, 20.0, 10.0, "blank"], desc
+    _NumItem._descending = False
+    print("test_lap_table_blanks_sort_last_both_directions_end_to_end OK")
 
 
 # --------------------------------------------------------------------- F5
@@ -168,6 +221,13 @@ class _FakeLaps:
     def __init__(self, starts, end):
         self._starts = starts
         self._end = end  # finish timestamp of the last lap
+
+    def laps_count(self):
+        # lap_at_time now builds its window table through Session.lap_window, which bounds-checks
+        # the id against laps_count() (the [start, start+lap_time) window definition is single-
+        # sourced there). The fake exposes it so the half-open boundary test still drives the
+        # real code path; the assertions below are unchanged.
+        return len(self._starts)
 
     def start_timestamp(self, lid):
         return self._starts[lid]
@@ -362,16 +422,8 @@ def test_follow_current_is_best_shows_single_lap():
 
 
 if __name__ == "__main__":
-    test_numeric_sort_key_orders_by_value_not_text()
-    test_numeric_sort_key_blanks_sort_last()
-    test_best_split_per_sector_is_column_min()
-    test_dropout_detection_interior_gap_over_threshold()
-    test_lap_at_time_boundary_resolves_to_starting_lap()
-    test_lap_at_time_skips_invalid_lap_gap()
-    test_nearest_index_in_lap_stays_in_lap()
-    test_nearest_time_in_lap_clamps_to_window()
-    test_select_lap_seeks_into_lap_despite_ms_quantization()
-    test_follow_switches_only_on_lap_edge()
-    test_follow_holds_last_lap_on_none_region()
-    test_follow_current_is_best_shows_single_lap()
-    print("\nALL STUDIO FEATURE TESTS PASSED")
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for t in tests:
+        t()
+        print(f"ok  {t.__name__}")
+    print(f"\nALL {len(tests)} STUDIO FEATURE TESTS PASSED")

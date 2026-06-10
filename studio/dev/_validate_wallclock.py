@@ -45,7 +45,8 @@ import sys
 
 import numpy as np
 
-from studio import chapters, transponder
+from studio import chapters
+from studio.dev import transponder
 from studio.session import Session, _read_gpmf
 
 PIT_LAP_S = 120.0   # a lap at/above this is a pit / driver-change lap, not a racing lap

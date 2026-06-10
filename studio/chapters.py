@@ -188,6 +188,7 @@ class ChapterMap:
         return i, local
 
     def to_global(self, index: int, local_t: float) -> float:
-        """Global time for a local time within chapter `index`."""
+        """Global time for a local time within chapter `index`. The inverse of `to_local`; kept
+        for that symmetry, though it's currently exercised only by the tests."""
         c = self.chapters[index]
         return c.offset + local_t

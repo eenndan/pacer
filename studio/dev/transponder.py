@@ -48,11 +48,3 @@ def parse_csv(path: str) -> dict[int, float]:
             except (ValueError, IndexError):
                 continue
     return out
-
-
-def stint_times(laps: dict[int, float], lo: int, hi: int) -> list[tuple[int, float]]:
-    """The (lap_number, seconds) pairs for laps in the inclusive range [lo, hi], in order.
-
-    Used to slice the GoPro footage's stint out of the full-race transponder log (e.g. laps
-    298–358 for the D24 0060 recording)."""
-    return [(i, laps[i]) for i in range(lo, hi + 1) if i in laps]

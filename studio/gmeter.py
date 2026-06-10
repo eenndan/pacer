@@ -66,6 +66,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ._signal import _boxcar_core
+
 G = 9.80665  # m/s^2
 
 # Empirically resolved GoPro stream-frame conventions (see module docstring + validation doc).
@@ -91,15 +93,16 @@ def _norm_rows(a):
 
 
 def _boxcar(a, w):
-    """Edge-corrected boxcar moving average (no end taper). No-op for w < 2."""
+    """Edge-corrected boxcar moving average (no end taper). No-op for w < 2.
+
+    Clamps the window to the array length (so a short input still smooths over what it has),
+    then defers to the shared `_signal._boxcar_core` — the SAME edge-corrected boxcar that
+    backs `session._smooth`."""
     a = np.asarray(a, float)
     if w < 2 or len(a) < 2:
         return a
     w = min(w, len(a))
-    k = np.ones(w)
-    num = np.convolve(a, k, "same")
-    den = np.convolve(np.ones(len(a)), k, "same")
-    return num / den
+    return _boxcar_core(a, w)
 
 
 def _quat_rotate_world(qw, qx, qy, qz, v):

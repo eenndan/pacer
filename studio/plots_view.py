@@ -166,9 +166,7 @@ class PlotsView(QWidget):
         # Hover dot on the delta plot: a marker that rides the delta curve under the mouse, with
         # a small label showing the Δ value (and the distance/time there). Independent of the
         # playback cursor — lets the user inspect ANY point. Hidden until the mouse is over the
-        # plot. The handler does a cheap nearest-index lookup on the cached curve (no re-plot).
-        self._hover_xs = None   # x samples of the curve the hover dot snaps to (delta plot)
-        self._hover_ys = None   # matching Δ values
+        # plot. The handler does a cheap nearest-index lookup on `_delta_curves` (no re-plot).
         self.hover_dot = pg.ScatterPlotItem(size=9, brush=HOVER_DOT_BRUSH, pen=HOVER_DOT_PEN)
         self.hover_dot.setZValue(20)
         self.hover_dot.setVisible(False)
@@ -201,6 +199,16 @@ class PlotsView(QWidget):
         """The ONE shared x-axis mode driving both plots: 'time' or 'distance' (the latter is
         the s×best_distance axis the conversion helpers treat identically to 'delta')."""
         return "time" if self._time_mode else "distance"
+
+    def _axis_unit(self) -> str:
+        """The bare unit for the current x-axis mode ('s' for time, 'm' for distance) — the single
+        source for both the axis title (_axis_label) and the hover readout's "@ x <unit>"."""
+        return "s" if self._time_mode else "m"
+
+    def _axis_label(self) -> str:
+        """The Δ-plot bottom-axis title for the current mode, e.g. 'time (s)' / 'distance (m)'.
+        Built from _axis_mode + _axis_unit so the mode→label/unit mapping lives in one place."""
+        return f"{self._axis_mode()} ({self._axis_unit()})"
 
     def axis_mode(self) -> str:
         """Public read of the current shared-axis mode ('time'|'distance'), so app can compute
@@ -240,6 +248,11 @@ class PlotsView(QWidget):
     def set_laps(self, lap_ids):
         self._lap_ids = list(lap_ids)
         self.refresh()
+
+    def selected_lap_ids(self) -> list[int]:
+        """The lap ids currently overlaid on the charts (read-only copy). Mirrors
+        LapTable.selected_lap_ids so callers needn't reach into the private `_lap_ids`."""
+        return list(self._lap_ids)
 
     # ----------------------------------------------------------- sector lines (F2)
     def set_sector_lines(self, positions):
@@ -291,9 +304,8 @@ class PlotsView(QWidget):
         # Both plots share ONE x-axis (distance = s×best_dist, or time-into-lap), kept x-linked
         # in BOTH modes so the two cursors always align. The shared x label/ticks live ONLY on the
         # bottom (Δ) plot — the speed plot's bottom axis is hidden — so relabel just the Δ axis.
-        x_mode = "time" if self._time_mode else "distance"
-        label = "time (s)" if self._time_mode else "distance (m)"
-        self.p_delta.setLabel("bottom", label)
+        x_mode = self._axis_mode()
+        self.p_delta.setLabel("bottom", self._axis_label())
 
         # Hide the cursors before fitting: cur_speed still holds the PREVIOUS mode's x (a
         # distance value when toggling to time mode), and a visible InfiniteLine contributes
@@ -326,7 +338,7 @@ class PlotsView(QWidget):
             self.p_speed.setTitle(None)
             return
         best, speed, delta = result
-        labels = [f"lap {lid} {fmt_time(self.session.laps.lap_time(lid))}"
+        labels = [f"lap {lid} {fmt_time(self.session.lap_time(lid))}"
                   + (" ★best" if lid == best else "") for lid in draw_ids]
         self.p_speed.setTitle("   ".join(labels) or None)
         for k, lid in enumerate(draw_ids):
@@ -394,7 +406,9 @@ class PlotsView(QWidget):
         self._cursor_t = t
         x = None
         mode = self._axis_mode()  # the one shared axis mode (both plots)
-        best_d = self.session.best_lap_total_distance()
+        # best_lap_total_distance is only used by the distance/delta axis (time mode ignores it),
+        # so skip the lookup entirely in time mode.
+        best_d = None if mode == "time" else self.session.best_lap_total_distance()
         for lid in self._lap_ids:
             window = self.session.lap_window(lid)
             if window and window[0] <= t <= window[1]:
@@ -447,7 +461,7 @@ class PlotsView(QWidget):
             return
         _, lid, xi, yi = best
         self.hover_dot.setData([xi], [yi])
-        unit = "s" if self._time_mode else "m"
+        unit = self._axis_unit()
         self.hover_label.setText(f"lap {lid}  Δ {yi:+.3f} s\n@ {xi:.0f} {unit}")
         self.hover_label.setPos(xi, yi)
         self.hover_dot.setVisible(True)

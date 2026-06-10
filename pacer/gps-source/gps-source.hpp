@@ -91,16 +91,7 @@ public:
   explicit GPMFSource(const char *filename);
   ~GPMFSource() noexcept;
 
-  // Main interface to take samples from current handler.
-  //
-  // Args:
-  //   void *data:  associated data object with callback;
-  //   on_sample:  void (*)(void *, GPSSample, size_t, size_t) callback
-  //   function, takes following arguments:
-  //     - data provided earlier;
-  //     - sampled data;
-  //     - index of current data;
-  //     - total number of records in a batch.
+  // See RawGPSSource::Samples for the callback contract.
   uint32_t Samples(void *data,
                    void (*on_sample)(void * /*data*/, GPSSample /*sample*/,
                                      size_t /*current_index*/,
@@ -133,6 +124,10 @@ private:
                                            double /*time*/)> &emit) const;
   uint32_t index_ = 0;
   size_t mp4handle_;
+  // Owned GPMF payload resource (resObject+buffer): allocated lazily on first use and REUSED
+  // across Samples()/ReadStream() calls (GetPayloadResource grows it in place), then freed in
+  // the destructor. Previously each call leaked a fresh resource. 0 == not yet allocated.
+  mutable size_t payload_res_ = 0;
 };
 
 class SequentialGPSSource : public RawGPSSource {
@@ -163,28 +158,22 @@ public:
   std::pair<double, double> CurrentTimeSpan() const override;
 
 private:
+  // Reads one IMU stream across both children, shifting the right (later) chapter's samples by
+  // the left subtree's cumulative duration so everything lands on one continuous global media
+  // clock. `read` is the per-source reader verb (ReadAccl/ReadGrav/ReadCori); `S` is the sample
+  // type, which must carry a `.time` field. left_ may itself be a SequentialGPSSource, so
+  // delegating through `read` recurses correctly.
+  template <class S, class Read>
+  void ReadShifted(Read read, const std::function<void(S)> &on_sample) {
+    (left_->*read)(on_sample);
+    double off = left_->GetTotalDuration();
+    (right_->*read)([&](S s) {
+      s.time += off;
+      on_sample(s);
+    });
+  }
+
   RawGPSSource *left_, *right_, *current_;
 };
-
-enum class DatVersion {
-  JUST_DATA = 0,
-  WITH_TIMESTAMP = 1,
-};
-
-void ReadDatFile(const char *filename, void *data,
-                 void (*on_sample)(GPSSample sample, double time, void *data),
-                 DatVersion version);
-
-template <typename F>
-void ReadDatFile(const char *filename, F on_sample,
-                 DatVersion version = DatVersion::JUST_DATA) {
-  ReadDatFile(
-      filename, &on_sample,
-      [](GPSSample sample, double time, void *data) {
-        auto &f = *reinterpret_cast<F *>(data);
-        f(sample, time);
-      },
-      version);
-}
 
 } // namespace pacer

@@ -54,6 +54,22 @@ def _equirect_metres(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
     return math.hypot(dx, dy)
 
 
+def make_segment(x1: float, y1: float, x2: float, y2: float) -> "pacer.Segment":
+    """A `pacer.Segment` from two LOCAL-metre endpoints (x1,y1)-(x2,y2).
+
+    Single-sources the pacer.Segment write-pattern (set Point.x/.y by field assignment, then
+    assign Segment.first/.second wholesale — the binding round-trips through fresh objects) for
+    every construction site (Seg.to_pacer, _widen, start_line_segment). Lives here because
+    tracks.py — like session.py — is allowed to name `pacer`; the geometry types only, no I/O.
+    """
+    seg = pacer.Segment()
+    p1, p2 = pacer.Point(), pacer.Point()
+    p1.x, p1.y = float(x1), float(y1)
+    p2.x, p2.y = float(x2), float(y2)
+    seg.first, seg.second = p1, p2
+    return seg
+
+
 def detect_track(lat: float, lon: float) -> Track | None:
     """The registry track whose detection centroid is within DETECT_RADIUS_M of (lat, lon),
     or None. Picks the nearest if several match."""
@@ -68,14 +84,8 @@ def detect_track(lat: float, lon: float) -> Track | None:
 def start_line_segment(track: Track, cs) -> "pacer.Segment":
     """The track's start/finish line as a `pacer.Segment` in LOCAL meters (via cs.local).
 
-    Same write-pattern as session.Seg.to_pacer: set Point.x/.y by field assignment, then
-    assign Segment.first/.second wholesale (the binding round-trips through fresh objects).
+    Construction goes through `make_segment` so the Segment write-pattern lives in one place.
     """
     a = cs.local(pacer.GPSSample(lat=track.start_a[0], lon=track.start_a[1], altitude=0))
     b = cs.local(pacer.GPSSample(lat=track.start_b[0], lon=track.start_b[1], altitude=0))
-    seg = pacer.Segment()
-    p1, p2 = pacer.Point(), pacer.Point()
-    p1.x, p1.y = float(a[0]), float(a[1])
-    p2.x, p2.y = float(b[0]), float(b[1])
-    seg.first, seg.second = p1, p2
-    return seg
+    return make_segment(a[0], a[1], b[0], b[1])

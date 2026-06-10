@@ -17,7 +17,7 @@ TEST_CASE("London stays in London, high or low", "[london]") {
   auto cs = pacer::CoordinateSystem(london);
 
   auto local = cs.Local(london);
-  assert(std::abs(local.SquaredNorm()) < 1e-6);
+  CHECK(std::abs(local.SquaredNorm()) < 1e-6);
 
   auto global = cs.Global(local);
   CHECK_THAT(global.lat, Catch::Matchers::WithinRelMatcher(london.lat, 1e-6));

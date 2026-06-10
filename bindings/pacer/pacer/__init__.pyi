@@ -37,7 +37,6 @@ class GPSSample:
 class PointInTime_GPSSample:  # Python specialization for PointInTime<GPSSample>
     point: GPSSample
     time: float
-
     def __init__(self, point: GPSSample = GPSSample(), time: float = float()) -> None:
         """Auto-generated default constructor with named params"""
         pass
@@ -118,23 +117,21 @@ class Point:
     def rot(self) -> Point:
         pass
 
+# Local-metres -> Point (drops z for the Vec3 overload). Both inputs are already in the LOCAL
+# metric coordinate system, so the result is in metres.
 @overload
 def to_point(x: Point) -> Point:
-    pass
-
-@overload
-def to_point(s: GPSSample) -> Point:
     pass
 
 @overload
 def to_point(v: Vec3f) -> Point:
     pass
 
-# template <typename Concrete, typename T, size_t N>
-# Point ToPoint(const LinearOperators<Concrete, T, N> &x) {
-#   return Point{static_cast<const Concrete &>(x)[0],
-#                static_cast<const Concrete &>(x)[1]};
-# }
+def to_lon_lat(s: GPSSample) -> Point:
+    """GPS degrees -> Point{lon, lat}. Named distinctly from ToPoint so a degrees sample can never
+    be silently mixed with a local-metres Point behind one overloaded name at a call site.
+    """
+    pass
 
 class Segment:
     first: Point
@@ -205,15 +202,6 @@ def interpolate(from_: Point, to: Point, ratio: float) -> Point:
 def interpolate(from_: GPSSample, to: GPSSample, ratio: float) -> GPSSample:
     pass
 
-# template <typename Concrete, typename T, size_t N>
-# Concrete Interpolate(const LinearOperators<Concrete, T, N> &from,
-#                      const LinearOperators<Concrete, T, N> &to, double ratio)
-#                      {
-#   return static_cast<Concrete>(static_cast<const Concrete &>(from) *
-#                                    (1 - ratio) +
-#                                static_cast<const Concrete &>(to) * ratio);
-# }
-
 ####################    </generated_from:geometry.hpp>    ####################
 
 ####################    <generated_from:laps.hpp>    ####################
@@ -231,15 +219,6 @@ class Lap:
         pass
 
     def count(self) -> int:
-        pass
-
-    def resample(self, lap: Lap, cs: CoordinateSystem) -> Lap:
-        pass
-
-    def timing_lines_count(self) -> int:
-        pass
-
-    def timing_line(self, index: int, cs: CoordinateSystem) -> Segment:
         pass
 
     def __init__(
@@ -301,16 +280,7 @@ class Laps:
     def start_timestamp(self, lap: int) -> float:
         pass
 
-    def at(self, lap: int, row: int) -> PointInTime_GPSSample:
-        pass
-
-    def speed(self, lap: int, row: int) -> float:
-        pass
-
-    def distance(self, lap: int, row: int) -> float:
-        pass
-
-    def get_lap_distance(self, index: int, cs: CoordinateSystem) -> float:
+    def get_lap_distance(self, index: int) -> float:
         pass
 
     def get_lap(self, lap: int) -> Lap:
@@ -482,10 +452,6 @@ class SequentialGPSSource(RawGPSSource):
     def current_time_span(self) -> Tuple[float, float]:
         """Returns current samples' time span."""
         pass
-
-class DatVersion(enum.IntEnum):
-    just_data = enum.auto()  # (= 0)
-    with_timestamp = enum.auto()  # (= 1)
 
 ####################    </generated_from:gps-source.hpp>    ####################
 

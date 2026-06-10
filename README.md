@@ -79,7 +79,7 @@ Wow, something already done:
   g-meter overlay, with GPS9 true-clock lap timing (validated unbiased vs a real transponder);
 - lap segmentation, comparison between laps with delta;
 - nanobind-based Python bindings to rapidly experiment in Python;
-- integration with 3rd-party GPS data (GoPro GPMF + sampled `.dat` file);
+- integration with 3rd-party GPS data (GoPro GPMF GPS5/GPS9);
 - config/CLI-driven inputs (no more hard-coded paths), formatting/lint config,
   pixi tasks, and a test suite (C++ Catch2 + pure-Python studio tests).
 

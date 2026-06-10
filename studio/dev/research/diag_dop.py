@@ -21,7 +21,7 @@ def main(rec, dumpfile):
     samples, spans, naive, _ = _read_gpmf(paths)
     samples, spans, naive = _gate_quality(samples, spans, naive)
     samples, spans, naive = _clean(samples, spans, naive)
-    times = np.array(_gps9_times(samples, spans, naive))
+    times = np.array(_gps9_times(samples, naive))
     dop = np.array([getattr(s, "dop", np.nan) for s in samples], float)
     dop[dop <= 0] = np.nan
 

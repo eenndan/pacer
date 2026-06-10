@@ -6,8 +6,8 @@ best-fit aligned to the aggregate GPS point cloud via a similarity transform. Se
 `build_reference.py` for how the stored polyline was produced.
 
 This module is PURE PYTHON + numpy + a stored polyline; it has no `pacer` dependency for the
-fill itself. `centerline_local` takes the session's coordinate system + the GPS aggregate and
-returns the centerline in LOCAL metres, aligned to the data, as an (M,2) array (or empty).
+fill itself. `centerline_local` takes the GPS aggregate (local-metre points) and returns the
+centerline in LOCAL metres, aligned to the data, as an (M,2) array (or empty).
 """
 
 from __future__ import annotations
@@ -33,8 +33,8 @@ def _load_normalized():
     return pts
 
 
-def _similarity_fit(src, dst, allow_reflection=True):
-    """Best-fit similarity (rotation+uniform scale+translation, optional reflection) mapping
+def _similarity_fit(src, dst):
+    """Best-fit similarity (rotation+uniform scale+translation, reflection allowed) mapping
     `src` onto `dst` (both (K,2), point-correspondence assumed). Umeyama closed form."""
     src = np.asarray(src, float)
     dst = np.asarray(dst, float)
@@ -42,11 +42,7 @@ def _similarity_fit(src, dst, allow_reflection=True):
     xs, xd = src - mu_s, dst - mu_d
     cov = xd.T @ xs / len(src)
     u, s, vt = np.linalg.svd(cov)
-    d = np.sign(np.linalg.det(u @ vt))
-    if not allow_reflection:
-        S = np.diag([1, d])
-    else:
-        S = np.eye(2)
+    S = np.eye(2)
     R = u @ S @ vt
     var_s = (xs ** 2).sum() / len(src)
     scale = (s * np.diag(S)).sum() / var_s if var_s > 0 else 1.0
@@ -64,14 +60,14 @@ def _resample(xy, n=400):
     return np.column_stack([np.interp(g, s, xy[:, 0]), np.interp(g, s, xy[:, 1])])
 
 
-def centerline_local(cs, aggregate_xy):
+def centerline_local(aggregate_xy):
     """Return the reference centerline in LOCAL metres, best-fit aligned to `aggregate_xy`
     (the union of all laps' local-metre points), as an (M,2) array — empty if unavailable.
 
     The stored polyline is normalized/arbitrary-scaled; we align it to the GPS aggregate by an
     ICP-style similarity fit. A coarse rough alignment (centroid + bbox scale) seeds a few
     nearest-point similarity refinement iterations (allowing reflection — image axes may be
-    flipped vs the local-metre frame). `cs` is accepted for API symmetry / future use.
+    flipped vs the local-metre frame).
     """
     norm = _load_normalized()
     if norm is None or aggregate_xy is None or len(aggregate_xy) < 10:
@@ -92,7 +88,7 @@ def centerline_local(cs, aggregate_xy):
         d2 = ((cur[:, None, 0] - agg[None, :, 0]) ** 2
               + (cur[:, None, 1] - agg[None, :, 1]) ** 2)
         nn = agg[np.argmin(d2, axis=1)]
-        scale, R, t = _similarity_fit(ref, nn, allow_reflection=True)
+        scale, R, t = _similarity_fit(ref, nn)
         new = (scale * (ref @ R.T)) + t
         if np.max(np.hypot(*(new - cur).T)) < 1e-3:
             cur = new

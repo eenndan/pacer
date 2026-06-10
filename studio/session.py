@@ -21,72 +21,48 @@ import pacer
 
 from . import chapters, gapfill, gmeter, tracks
 
+# Pacer-free signal/clean helpers live in studio/_signal.py (numpy-only, shared with gmeter).
+# Re-imported here so every existing `session._smooth` / `session._gate_quality` / etc. call
+# site (incl. the dev scripts that import these names from studio.session) is unchanged.
+from ._signal import (  # noqa: F401  (re-exported for call sites + dev scripts)
+    LAP_BAND_HI,
+    LAP_BAND_LO,
+    MAX_DOP,
+    MIN_FIX,
+    MIN_LAP_SAMPLES,
+    MIN_LAP_TIME,
+    SMOOTH_GAP_S,
+    SMOOTH_WINDOW,
+    _band_lap_ids,
+    _gap_segments,
+    _gate_quality,
+    _quality_ok,
+    _smooth,
+    _smooth_segments,
+)
+
 DEFAULT_SAMPLE = "3rdparty/gpmf-parser/samples/hero6.mp4"  # a clip with real motion
+
+_UNSET = object()  # sentinel for "cache not yet computed" where None is a valid cached value
 
 # Data-cleaning thresholds (see studio/dev/diagnose.py; validated on real sessions).
 MIN_START_SPEED = 3.0  # m/s — below this the car is stationary / GPS not yet locked
 SPIKE_STEP = 50.0  # m — a lone fix farther than this from BOTH neighbours is a glitch
 OFF_TRACK_MARGIN = 0.5  # drop points outside the inlier bbox (1-99 pct) expanded by this fraction
 START_WIDEN = 3.0  # widen the auto start line so every lap pass crosses it
-MIN_LAP_TIME = 5.0  # s — laps shorter than this are partial/phantom, not real laps
-MIN_LAP_SAMPLES = 20  # a real lap has at least this many GPS samples
-LAP_BAND_LO, LAP_BAND_HI = 0.5, 1.6  # "real lap" = lap_time within [lo, hi] x median lap time
-
-# --- GPS denoising (originally derived from the upstream interpolation/noise notebooks, since removed) ---
-# Position smoothing window (samples). The upstream notebook's gold-standard map smoothed x/y/lat/lon
-# with a w=9 boxcar (~0.9 s @ 10 Hz) BEFORE measuring arc-length distance/delta; that cut the
-# delta jitter ~14% without erasing the real ~0.5 s lap-to-lap signal. We smooth the GPS
-# track ONCE at load (here), so every downstream quantity the C++ core derives — cum_distances,
-# lap segmentation, the delta resample, sector splits — uses the SAME smoothed coordinates.
-# w=13 (~1.3 s @ 10 Hz): tuned up from that w=9 baseline because the studio map
-# feeds the SMOOTHED track straight back into segmentation/distance, so a touch more smoothing
-# buys a much cleaner trace. Verified on the real session (studio/dev/denoise_check.py): w=13 cuts
-# the high-frequency cross-track jitter ~39% and the point-to-point heading jitter ~91% while
-# the lap-to-lap racing-line signal is preserved and the corner APEXES are not clipped (a
-# close-up hairpin render shows w<=15 tracking the raw apex; w>=21 visibly cuts the corner).
-SMOOTH_WINDOW = 13  # boxcar width in samples; 1 disables smoothing
-# Don't smooth across large sample-time gaps (chaptered files / dropouts): a moving average
-# spanning a gap would drag points across a discontinuity. Split the trace at gaps > this.
-SMOOTH_GAP_S = 1.0  # s — a jump larger than ~10x the 10 Hz period starts a new smoothing run
-
-# --- GPS quality gating (uses the GPS9 DOP / fix fields exposed by the C++ core) ---
-# Reject obviously-bad fixes before smoothing/segmentation. Conservative defaults: drop only
-# samples that report NO 3D lock or an implausibly high dilution-of-precision. Sentinels
-# (fix<0 / non-finite dop, e.g. from the GPS5 stream which carries no DOP) mean "unknown" and
-# are KEPT — we never reject for missing quality info.
-MIN_FIX = 3  # GPS9 fix: 0=none, 2=2D, 3=3D. Require a 3D lock when the field is present.
-MAX_DOP = 10.0  # GPS9 DOP: dilution of precision; >~10 is a poor-geometry fix. Generous.
-
-
-def _smooth(a, w: int = SMOOTH_WINDOW):
-    """Edge-correct boxcar moving average — the upstream notebook's `np.convolve(a, ones(w)/w, "same")`
-    in the interior, but normalized at the ends so the first/last w//2 points aren't dragged
-    toward zero by the convolution's implicit zero-padding (a raw `"same"` boxcar tapers the
-    edges; here those points are averaged over only the samples that actually exist).
-
-    A no-op for w<2 or arrays shorter than the window. Applied to the GPS track coordinates
-    (lat/lon/alt) once at load — never per frame.
-    """
-    a = np.asarray(a, float)
-    if w < 2 or len(a) < w:
-        return a
-    kernel = np.ones(w)
-    num = np.convolve(a, kernel, "same")          # windowed sum
-    den = np.convolve(np.ones(len(a)), kernel, "same")  # count of real samples in each window
-    return num / den
-
-
-def _smooth_segments(a, seg_bounds, w: int = SMOOTH_WINDOW):
-    """Apply `_smooth` independently within each contiguous run [lo, hi) so a boxcar never
-    averages across a time discontinuity (chaptered files / GPS dropouts)."""
-    a = np.asarray(a, float)
-    if w < 2:
-        return a
-    out = a.copy()
-    for lo, hi in seg_bounds:
-        if hi - lo >= 2:
-            out[lo:hi] = _smooth(a[lo:hi], w)
-    return out
+# The "real lap" band thresholds (MIN_LAP_TIME / MIN_LAP_SAMPLES / LAP_BAND_*), the GPS denoising
+# window (SMOOTH_WINDOW / SMOOTH_GAP_S), the quality-gate thresholds (MIN_FIX / MAX_DOP), and the
+# pacer-free signal/clean helpers (_smooth, _smooth_segments, _gap_segments, _quality_ok,
+# _gate_quality, _band_lap_ids) all live in studio/_signal.py now and are re-imported at the top.
+#
+# GPS denoising rationale: the upstream notebook smoothed x/y/lat/lon with a boxcar BEFORE
+# measuring arc-length distance/delta, cutting the delta jitter without erasing the real lap-to-lap
+# signal. We smooth the GPS track ONCE at load (in _smooth_track), so every downstream quantity the
+# C++ core derives — cum_distances, lap segmentation, the delta resample, sector splits — uses the
+# SAME smoothed coordinates. SMOOTH_WINDOW=13 (~1.3 s @ 10 Hz) was verified on the real session
+# (studio/dev/denoise_check.py) to cut the high-frequency jitter while preserving the racing-line
+# signal and the corner apexes; smoothing never bridges a >SMOOTH_GAP_S time gap (chaptered files /
+# dropouts). The quality gate drops only NO-3D-lock / high-DOP fixes; sentinels are kept.
 
 
 @dataclass
@@ -103,12 +79,7 @@ class Seg:
         return cls(s.first.x, s.first.y, s.second.x, s.second.y)
 
     def to_pacer(self):
-        seg = pacer.Segment()
-        p1, p2 = pacer.Point(), pacer.Point()
-        p1.x, p1.y = float(self.x1), float(self.y1)
-        p2.x, p2.y = float(self.x2), float(self.y2)
-        seg.first, seg.second = p1, p2
-        return seg
+        return tracks.make_segment(self.x1, self.y1, self.x2, self.y2)
 
 
 def fmt_time(seconds: float) -> str:
@@ -118,18 +89,18 @@ def fmt_time(seconds: float) -> str:
     return f"{int(m)}:{s:06.3f}"
 
 
-def _read_gpmf(paths):
-    """Iterate one or more GoPro files, returning (samples, spans, naive_times, durations).
+def _chain_sources(paths):
+    """Build the left-leaning `SequentialGPSSource` chain over one or more GoPro chapters and
+    return (head, owners, durations).
 
-    For multiple chapters the per-file GPMF sources are folded into a left-leaning chain of
-    `SequentialGPSSource`, whose `current_time_span()` already returns GLOBAL (cumulative)
-    times — chapter k+1's spans are shifted by the sum of the earlier chapters' durations
-    (see pacer/gps-source SequentialGPSSource). So the samples come out on ONE continuous,
-    monotonic global clock with no per-chapter reset, and lap segmentation / distances / delta
-    all span chapter boundaries automatically.
-
-    `durations` is each chapter's own 0-based media duration (from the GPMF/media), in the same
-    order as `paths` — the offset table the video layer uses for global<->chapter mapping."""
+    For multiple chapters the per-file GPMF sources are folded into a chain whose C++
+    `current_time_span()` / `read_accl/grav/cori` already return GLOBAL (cumulative) times —
+    chapter k+1 is shifted by the sum of the earlier chapters' durations (see pacer/gps-source
+    SequentialGPSSource) — so everything comes out on ONE continuous, monotonic global clock with
+    no per-chapter reset. `owners` keeps every intermediate source alive while the caller iterates
+    `head`. `durations` is each chapter's own 0-based media duration, in `paths` order — the
+    offset table the video layer uses for global<->chapter mapping. The single shared chain build
+    behind both `_read_gpmf` and `_read_imu` (pacer access stays here)."""
     owners = [pacer.GPMFSource(paths[0])]
     durations = [owners[0].get_total_duration()]
     head = owners[0]
@@ -139,6 +110,19 @@ def _read_gpmf(paths):
         durations.append(nxt.get_total_duration())
         head = pacer.SequentialGPSSource(head, nxt)
         owners.append(head)  # keep the chain alive while we iterate
+    return head, owners, durations
+
+
+def _read_gpmf(paths):
+    """Iterate one or more GoPro files, returning (samples, spans, naive_times, durations).
+
+    The per-file GPMF sources are folded into the shared `_chain_sources` chain, so the samples
+    come out on ONE continuous, monotonic global clock with no per-chapter reset, and lap
+    segmentation / distances / delta all span chapter boundaries automatically.
+
+    `durations` is each chapter's own 0-based media duration (from the GPMF/media), in the same
+    order as `paths` — the offset table the video layer uses for global<->chapter mapping."""
+    head, _owners, durations = _chain_sources(paths)
 
     samples, spans, naive = [], [], []
     head.seek(0)
@@ -158,21 +142,16 @@ def _read_imu(paths):
     """Read the GoPro IMU streams (ACCL accelerometer, GRAV gravity vector, CORI camera
     orientation) for the whole recording, on the global MEDIA clock — the same basis as the GPS
     trace and the video. Uses the identical left-leaning `SequentialGPSSource` chain as
-    `_read_gpmf`, whose C++ `read_accl/grav/cori` shift each later chapter by the cumulative
-    duration, so a multi-chapter recording comes out on one continuous clock with no per-chapter
-    reset (lining up with the telemetry trace's global axis used for video sync).
+    `_read_gpmf` (the shared `_chain_sources`), whose C++ `read_accl/grav/cori` shift each later
+    chapter by the cumulative duration, so a multi-chapter recording comes out on one continuous
+    clock with no per-chapter reset (lining up with the telemetry trace's global axis used for
+    video sync).
 
     Returns (accl, grav, cori) as numpy arrays — accl/grav: (N,4) [t,x,y,z]; cori: (N,5)
     [t,w,x,y,z] — or empty (0,4)/(0,5) arrays for an older camera that lacks a stream. The
     studio gmeter module resolves the camera->kart frame transform on top of these raw axes.
     """
-    owners = [pacer.GPMFSource(paths[0])]
-    head = owners[0]
-    for p in paths[1:]:
-        nxt = pacer.GPMFSource(p)
-        owners.append(nxt)
-        head = pacer.SequentialGPSSource(head, nxt)
-        owners.append(head)  # keep the chain alive while we iterate
+    head, _owners, _durations = _chain_sources(paths)
 
     accl, grav, cori = [], [], []
     head.read_accl(lambda s: accl.append((s.time, s.x, s.y, s.z)))
@@ -210,7 +189,7 @@ GPS9_MAX_DT_S = 0.40    # …above this, the run is broken (chapter break / drop
 # clean-lap mean +0.0015 s, ±0.053 s), so the timing below uses the GPS9 spacing verbatim.
 
 
-def _gps9_times(samples, spans, naive, rate_factor: float = 1.0):
+def _gps9_times(samples, naive, rate_factor: float = 1.0):
     """Per-sample times built from the GPS9 fix timestamps' true spacing, re-anchored per
     contiguous run to the media (naive) clock. Falls back to the naive time for any sample
     whose GPS9 timestamp is absent/sentinel or sits across a run break, so a GPS5-only stream
@@ -264,23 +243,17 @@ def _widen(seg, factor):
     """Scale a pacer.Segment about its midpoint (a longer timing line)."""
     mx = (seg.first.x + seg.second.x) / 2
     my = (seg.first.y + seg.second.y) / 2
-    out = pacer.Segment()
-    a, b = pacer.Point(), pacer.Point()
-    a.x, a.y = mx + (seg.first.x - mx) * factor, my + (seg.first.y - my) * factor
-    b.x, b.y = mx + (seg.second.x - mx) * factor, my + (seg.second.y - my) * factor
-    out.first, out.second = a, b
-    return out
+    return tracks.make_segment(
+        mx + (seg.first.x - mx) * factor, my + (seg.first.y - my) * factor,
+        mx + (seg.second.x - mx) * factor, my + (seg.second.y - my) * factor,
+    )
 
 
 def _band_lap_count(laps) -> int:
     """How many laps land in a band around the median lap time — the same 'real lap' notion
-    as Session.valid_lap_ids, but a free function usable during load (no Session yet)."""
-    ts = [laps.lap_time(i) for i in range(laps.laps_count())
-          if laps.sample_count(i) >= MIN_LAP_SAMPLES and laps.lap_time(i) >= MIN_LAP_TIME]
-    if not ts:
-        return 0
-    med = float(np.median(ts))
-    return sum(1 for t in ts if LAP_BAND_LO * med <= t <= LAP_BAND_HI * med)
+    as Session.valid_lap_ids, but a free function usable during load (no Session yet).
+    Single-sourced via `_signal._band_lap_ids` (the exact same gate+median+band filter)."""
+    return len(_band_lap_ids(laps))
 
 
 def _fit_start_line(laps, base):
@@ -311,33 +284,6 @@ def _fit_start_line(laps, base):
     laps.sectors = pacer.Sectors(start_line=best_seg, sector_lines=[])
     laps.update()
     return best_seg
-
-
-def _quality_ok(s) -> bool:
-    """True if a GPS sample's quality fields don't mark it as bad. Treats unknown/sentinel
-    quality (fix<0, or a non-positive/non-finite DOP — e.g. the GPS5 stream, which carries
-    neither) as "keep": we reject ONLY when the core actually reports a poor fix. `dop`/`fix`
-    come from the GPS9 stream (C++ core); sentinels are fix=-1 and dop=-1.0."""
-    fix = getattr(s, "fix", -1)
-    dop = getattr(s, "dop", -1.0)
-    if fix is not None and 0 <= fix < MIN_FIX:  # known, but no 3D lock
-        return False
-    # A known, positive, finite DOP above the threshold is poor geometry; anything else is kept.
-    if isinstance(dop, (int, float)) and math.isfinite(dop) and dop > 0 and dop > MAX_DOP:
-        return False
-    return True
-
-
-def _gate_quality(samples, spans, naive):
-    """Drop low-quality fixes (no 3D lock / high DOP) using the GPS9 quality fields. Reports
-    the count dropped. Conservative — sentinels (unknown quality) are kept."""
-    keep = [i for i, s in enumerate(samples) if _quality_ok(s)]
-    dropped = len(samples) - len(keep)
-    if dropped:
-        pct = 100.0 * dropped / max(len(samples), 1)
-        print(f"studio: quality gate dropped {dropped}/{len(samples)} fixes ({pct:.1f}%) "
-              f"(fix<{MIN_FIX} or dop>{MAX_DOP})", flush=True)
-    return [samples[i] for i in keep], [spans[i] for i in keep], [naive[i] for i in keep]
 
 
 def _clean(samples, spans, naive):
@@ -382,18 +328,6 @@ def _clean(samples, spans, naive):
     return [s[i] for i in idx], [sp[i] for i in idx], [t[i] for i in idx]
 
 
-def _gap_segments(times, gap_s: float = SMOOTH_GAP_S):
-    """Contiguous runs [lo, hi) of `times` with no inter-sample gap larger than `gap_s`. Used
-    so the moving average never bridges a chapter break / GPS dropout."""
-    t = np.asarray(times, float)
-    n = len(t)
-    if n == 0:
-        return []
-    breaks = np.where(np.diff(t) > gap_s)[0] + 1
-    edges = [0, *breaks.tolist(), n]
-    return [(edges[k], edges[k + 1]) for k in range(len(edges) - 1)]
-
-
 def _smooth_track(samples, times, w: int = SMOOTH_WINDOW):
     """Return NEW GPSSamples with lat/lon/altitude boxcar-smoothed in place, matching the
     upstream notebook's gold-standard map. Smoothing the SOURCE coordinates (not a render-time copy)
@@ -431,13 +365,26 @@ class Session:
         # is what the VIDEO layer uses to switch sources / span the slider across chapters.
         self.chapters = chapter_map
         self._lap_cache: dict[int, object] = {}
-        # Per-lap (times, dists) arrays for distance_in_lap_at_time — rebuilding these from the
-        # bound lap object every ~30 Hz cursor tick is wasteful; cache and clear on re-segment.
+        # Per-lap (times, dists, elapsed) arrays for _lap_time_dist (the cursor/video x<->time
+        # conversions) — rebuilding these from the bound lap object every ~30 Hz cursor tick is
+        # wasteful; cache and clear on re-segment. `elapsed` (= times - times[0]) is precomputed
+        # once so the per-tick delta math doesn't re-subtract every call.
         self._dist_cache: dict[int, tuple] = {}
+        # Per-lap (xs, ys, times) local-metre arrays (map highlight + marker-drag nearest). Built
+        # once per lap (an O(n_lap) cs.local pass); cleared on re-segment. Killing the double
+        # rebuild the marker drag used to do per mouse-move.
+        self._xyt_cache: dict[int, tuple] = {}
         # Per-lap gap-filled draw segments (measured + inferred runs). MAP RENDERING ONLY —
         # computed once per lap on first draw, never per frame; cleared on re-segment.
         self._seg_cache: dict[int, list] = {}
-        self._fills_cache: dict[int, list] = {}
+        # Memoized "real lap" sets — the 30 Hz tick resolves valid_lap_ids()/best_lap_id() many
+        # times each frame (lap_at_time, delta_at_time, the readout, the map/table highlights).
+        # Computed once and reused; cleared on re-segment (the only point they can change).
+        self._valid_cache: list[int] | None = None
+        self._best_cache: object = _UNSET   # sentinel: None is a legal "no best lap" result
+        # Cached lap [start, end) windows on the GLOBAL clock for the O(log n) lap_at_time binary
+        # search (parallel arrays over valid laps, in start order). Cleared on re-segment.
+        self._lap_windows: tuple | None = None
         self._reference_xy = None  # lazily-built georeferenced track centerline (fallback donor)
         # Vehicle-frame g (lateral/longitudinal in g) precomputed from the GoPro ACCL+GRAV+CORI,
         # cross-checked against GPS-derived g. Built in load() (needs the trace arrays below);
@@ -486,7 +433,7 @@ class Session:
             return cls(laps, empty, video_path, chapter_map)
 
         # GPS9 true-clock spacing (re-anchored to the media clock); naive otherwise.
-        times = _gps9_times(samples, spans, naive)
+        times = _gps9_times(samples, naive)
 
         # Smooth the GPS positions once, here — over the cleaned, time-ordered trace, guarded
         # against averaging across chapter/dropout gaps. All downstream geometry follows.
@@ -572,8 +519,13 @@ class Session:
         self.laps.update()
         self._lap_cache.clear()
         self._dist_cache.clear()
+        self._xyt_cache.clear()
         self._seg_cache.clear()
-        self._fills_cache.clear()
+        # The single re-segmentation point: every memoized "real lap" set + window table is now
+        # stale (lap ids / times shifted), so drop them. They lazily recompute on next access.
+        self._valid_cache = None
+        self._best_cache = _UNSET
+        self._lap_windows = None
 
     def suggest_sector(self, existing: int = 0) -> Seg:
         """A line perpendicular to the track at a DISTINCT fraction of the way round, so each
@@ -619,21 +571,43 @@ class Session:
     def lap_count(self) -> int:
         return self.laps.laps_count()
 
+    def lap_time(self, lap_id: int) -> float:
+        """Lap time (seconds) for a lap id — thin pacer-free accessor so view modules
+        (lap_table, app) read lap times through Session, not the pacer binding directly."""
+        return self.laps.lap_time(lap_id)
+
+    def sector_count(self) -> int:
+        """Number of sector lines on the laps (0 by default). Thin pacer-free accessor so
+        view modules read the sector count through Session, not the pacer binding."""
+        return self.laps.sector_count()
+
+    def point_count(self) -> int:
+        """Total GPS point count across the recording. Thin pacer-free accessor used by the
+        app's startup log so it needn't reach into the pacer binding."""
+        return self.laps.point_count()
+
     def valid_lap_ids(self) -> list[int]:
         """Real laps only. A fixed threshold is too crude (short double-crossings of the
         start line pass it and pollute the 'best' lap), so accept laps whose time is within
-        a band around the MEDIAN lap time — this adapts to any track length."""
-        basic = [(i, self.laps.lap_time(i)) for i in range(self.laps.laps_count())
-                 if self.laps.sample_count(i) >= MIN_LAP_SAMPLES and self.laps.lap_time(i) >= MIN_LAP_TIME]
-        if not basic:
-            return []
-        med = float(np.median([t for _, t in basic]))
-        lo, hi = LAP_BAND_LO * med, LAP_BAND_HI * med
-        return [i for i, t in basic if lo <= t <= hi]
+        a band around the MEDIAN lap time — this adapts to any track length.
+
+        Memoized — the 30 Hz tick (lap_at_time, the highlights, delta) hits this many times per
+        frame and the result only changes on re-segmentation (cleared in set_timing_lines). The
+        gate+median+band filter itself is single-sourced in `_signal._band_lap_ids` (shared with
+        the load-time `_band_lap_count`)."""
+        if self._valid_cache is not None:
+            return self._valid_cache
+        self._valid_cache = _band_lap_ids(self.laps)
+        return self._valid_cache
 
     def best_lap_id(self) -> int | None:
+        """The valid lap with the fastest time, else None. Memoized (same lifetime as
+        valid_lap_ids; cleared on re-segment) — resolved several times per tick."""
+        if self._best_cache is not _UNSET:
+            return self._best_cache
         valid = self.valid_lap_ids()
-        return min(valid, key=self.laps.lap_time) if valid else None
+        self._best_cache = min(valid, key=self.laps.lap_time) if valid else None
+        return self._best_cache
 
     def best_lap_total_distance(self) -> float | None:
         """The best lap's total odometer distance (metres) — the basis the delta plot's x-axis is
@@ -652,7 +626,7 @@ class Session:
             {
                 "idx": i,
                 "time": self.laps.lap_time(i),
-                "dist": self.laps.get_lap_distance(i, self.cs),
+                "dist": self.laps.get_lap_distance(i),
                 "entry": self.laps.lap_entry_speed(i) * 3.6,
             }
             for i in self.valid_lap_ids()
@@ -681,26 +655,27 @@ class Session:
 
     def lap_trace_xy(self, lap_id: int):
         """Local-meter (xs, ys) of a single lap's trace, for highlighting on the map."""
-        lap = self._get_lap(lap_id)
-        xs, ys = [], []
-        for p in lap.points:
-            v = self.cs.local(p.point)
-            xs.append(v[0])
-            ys.append(v[1])
+        xs, ys, _ = self._lap_trace_xyt(lap_id)
         return xs, ys
 
     # ------------------------------------------------- map gap-fill (rendering only)
     def _lap_trace_xyt(self, lap_id: int):
-        """Per-lap (xs, ys, times): local metres + media-clock seconds. Used only to build
-        the gap-filled DRAW segments — never feeds the analysis pipeline."""
-        lap = self._get_lap(lap_id)
-        xs, ys, ts = [], [], []
-        for p in lap.points:
-            v = self.cs.local(p.point)
-            xs.append(v[0])
-            ys.append(v[1])
-            ts.append(p.time)
-        return np.asarray(xs), np.asarray(ys), np.asarray(ts)
+        """Cached per-lap (xs, ys, times) as numpy arrays — local metres + media-clock seconds,
+        built once with a single cs.local pass over the lap's kept points (cleared on re-segment).
+        The single source the map highlight, the gap-fill draw, and the marker-drag nearest-point
+        lookup all slice from, so a marker drag no longer rebuilds these on every mouse-move."""
+        got = self._xyt_cache.get(lap_id)
+        if got is None:
+            lap = self._get_lap(lap_id)
+            xs, ys, ts = [], [], []
+            for p in lap.points:
+                v = self.cs.local(p.point)
+                xs.append(v[0])
+                ys.append(v[1])
+                ts.append(p.time)
+            got = (np.asarray(xs), np.asarray(ys), np.asarray(ts))
+            self._xyt_cache[lap_id] = got
+        return got
 
     def _median_sample_dt(self) -> float:
         """Median inter-sample interval over the whole trace (s) — used to size gaps."""
@@ -737,7 +712,7 @@ class Session:
             return self._reference_xy if len(self._reference_xy) else None
         from . import reference  # local import: optional, only on the fallback path
         agg = np.column_stack([self.tx, self.ty]) if len(self.tx) else None
-        self._reference_xy = reference.centerline_local(self.cs, agg)
+        self._reference_xy = reference.centerline_local(agg)
         return self._reference_xy if len(self._reference_xy) else None
 
     def lap_trace_segments(self, lap_id: int):
@@ -751,18 +726,9 @@ class Session:
             return cached
         xs, ys, ts = self._lap_trace_xyt(lap_id)
         donors = self._donors_for(lap_id)
-        segs, fills = gapfill.reconstruct_lap(xs, ys, ts, donors, med_dt=self._median_sample_dt())
+        segs, _fills = gapfill.reconstruct_lap(xs, ys, ts, donors, med_dt=self._median_sample_dt())
         self._seg_cache[lap_id] = segs
-        self._fills_cache[lap_id] = fills
         return segs
-
-    def lap_gap_report(self, lap_id: int) -> list[dict]:
-        """Per-gap fill report for a lap (for metrics/diagnostics): each dict has the gap's
-        chord length, dt, n_missing, fill source, filled length and endpoint error. Computed
-        as a side effect of `lap_trace_segments` (cached)."""
-        if lap_id not in self._fills_cache:
-            self.lap_trace_segments(lap_id)
-        return self._fills_cache.get(lap_id, [])
 
     def lap_window(self, lap_id: int) -> tuple[float, float] | None:
         if not (0 <= lap_id < self.laps.laps_count()):
@@ -790,23 +756,18 @@ class Session:
         m = min(len(pts), len(cds))
         if m < 2:
             return []
-        locs = [self.cs.local(pts[i].point) for i in range(m)]
-        xy = np.array([(v[0], v[1]) for v in locs])
         cum_distance = np.asarray(cds[:m], dtype=float)
         t0 = pts[0].time
         elapsed = np.array([pts[i].time - t0 for i in range(m)])
 
-        # Each sector line's lap distance = cum_distance of the lap point nearest its midpoint.
-        bounds = []
-        for seg in lines:
-            mx = (seg.first.x + seg.second.x) / 2.0
-            my = (seg.first.y + seg.second.y) / 2.0
-            j = int(np.argmin((xy[:, 0] - mx) ** 2 + (xy[:, 1] - my) ** 2))
-            bounds.append(float(cum_distance[j]))
+        # Each sector line's lap distance = cum_distance of the lap point nearest its midpoint —
+        # single-sourced (and already sorted ascending) via sector_boundary_distances, so the
+        # boundary guide lines (F2) sit exactly where these splits are measured.
+        bounds = self.sector_boundary_distances(lap_id)
 
         total = float(cum_distance[-1])
-        # Boundaries plus lap start/finish, sorted: N+1 sub-sectors. interp elapsed at each.
-        edges = [0.0] + sorted(bounds) + [total]
+        # Boundaries plus lap start/finish: N+1 sub-sectors. interp elapsed at each.
+        edges = [0.0, *bounds, total]
         t_at = np.interp(edges, cum_distance, elapsed)
         splits = [float(t_at[k + 1] - t_at[k]) for k in range(n_splits)]
         return splits
@@ -879,6 +840,16 @@ class Session:
         """Cached (times, dists) for a lap: media-clock seconds + per-lap odometer (metres),
         both monotonic and aligned. The single source the cursor↔video conversions interpolate
         on — built once per lap, cleared on re-segment. Returns None if the lap is degenerate."""
+        td = self._lap_time_dist_elapsed(lap_id)
+        if td is None:
+            return None
+        times, dists, _elapsed = td
+        return times, dists
+
+    def _lap_time_dist_elapsed(self, lap_id: int):
+        """Cached (times, dists, elapsed) for a lap. `elapsed` (= times - times[0]) is computed
+        ONCE here so the per-tick delta math (delta_at_time / delta_between, each ~30 Hz) reads it
+        instead of re-subtracting times[0] every call. Cleared on re-segment. None if degenerate."""
         td = self._dist_cache.get(lap_id)
         if td is None:
             lap = self._get_lap(lap_id)
@@ -889,16 +860,16 @@ class Session:
                 return None
             times = np.array([lap.points[i].time for i in range(m)])
             dists = np.array([cds[i] for i in range(m)])
-            td = (times, dists)
+            elapsed = times - times[0]
+            td = (times, dists, elapsed)
+            self._dist_cache[lap_id] = td
+        elif len(td) == 2:
+            # A pre-seeded (times, dists) entry (e.g. a unit test stubs the cache directly) — derive
+            # and memoize elapsed once so the rest of the code always sees the 3-tuple form.
+            times, dists = td
+            td = (times, dists, times - times[0])
             self._dist_cache[lap_id] = td
         return td
-
-    def distance_in_lap_at_time(self, lap_id: int, t: float) -> float | None:
-        td = self._lap_time_dist(lap_id)
-        if td is None:
-            return None
-        times, dists = td
-        return float(np.interp(t, times, dists))
 
     # ------------------------------------------------ cursor scrub: x <-> media time
     # The plot cursors are DRAGGABLE; dragging seeks the video within the *current* lap.
@@ -968,15 +939,25 @@ class Session:
         Arc-length basis: cum_distances is the per-lap odometer (monotonic), full_speed is
         m/s (→ km/h), elapsed is seconds from the lap's first point. Aligning to the shortest
         of the three guards against the C++ arrays disagreeing in length by one.
-        """
+
+        `dist`/`elapsed` are reused from the cached `_lap_time_dist_elapsed` (the same per-lap
+        odometer + seconds-from-start the cursor↔video conversions interpolate on), so they're
+        built once per lap. Only `speed_kmh` is computed here. A degenerate lap (<2 points, where
+        the shared cache returns None) falls back to the same short arrays as before — `delta()`,
+        the sole caller, filters those out with its `len(dist) >= 2` check."""
         lap = self._get_lap(lap_id)
         pts = lap.points
-        dist = np.array(lap.cum_distances)
-        m = min(len(dist), len(pts))
-        dist = dist[:m]
+        td = self._lap_time_dist_elapsed(lap_id)
+        if td is None:  # <2 points: reproduce the original short-array output exactly
+            m = min(len(lap.cum_distances), len(pts))
+            dist = np.array(lap.cum_distances)[:m]
+            speed_kmh = np.array([pts[i].point.full_speed * 3.6 for i in range(m)])
+            t0 = pts[0].time if m else 0.0
+            elapsed = np.array([pts[i].time - t0 for i in range(m)])
+            return dist, speed_kmh, elapsed
+        _times, dist, elapsed = td
+        m = len(dist)
         speed_kmh = np.array([pts[i].point.full_speed * 3.6 for i in range(m)])
-        t0 = pts[0].time if m else 0.0
-        elapsed = np.array([pts[i].time - t0 for i in range(m)])
         return dist, speed_kmh, elapsed
 
     _DELTA_GRID_N = 400  # samples on the normalized-distance grid (smooth + cheap to render)
@@ -1051,6 +1032,26 @@ class Session:
         i = int(np.searchsorted(self.tt, t))
         return min(max(i, 0), n - 1)
 
+    def _lap_window_table(self):
+        """Cached parallel arrays (starts, ends, lap_ids) over the VALID laps, sorted by start
+        time, for the O(log n) `lap_at_time` binary search. Built once per (re)segment and cleared
+        in set_timing_lines. `starts`/`ends` are the same [start_timestamp, start+lap_time) windows
+        the old linear scan tested, so the resolved lap id is identical."""
+        # getattr so a bare Session built via __new__ (unit tests) still resolves — it just
+        # recomputes each call instead of caching (no __init__ ran to create the slot).
+        if getattr(self, "_lap_windows", None) is None:
+            valid = self.valid_lap_ids()
+            # The [start, start+lap_time) window definition is single-sourced in lap_window (each
+            # valid id is in range, so it never returns None). lap_at_time's binary search runs on
+            # this cached table, so the window it tests against is exactly lap_window's.
+            rows = [(*self.lap_window(i), i) for i in valid]
+            rows.sort(key=lambda r: r[0])  # by start time (valid is already id-ascending => time-ascending)
+            starts = np.array([r[0] for r in rows], dtype=float)
+            ends = np.array([r[1] for r in rows], dtype=float)
+            ids = [r[2] for r in rows]
+            self._lap_windows = (starts, ends, ids)
+        return self._lap_windows
+
     def lap_at_time(self, t: float) -> int | None:
         """The valid lap whose [start_timestamp, start_timestamp+lap_time) window contains
         `t` (media-clock seconds), else None — for the readout + current-lap highlight.
@@ -1062,11 +1063,21 @@ class Session:
         select→seek→auto-follow chain would jump the highlight/charts back one lap. Half-open ties
         the shared boundary to the lap that STARTS at `t` (the one the user actually picked). The
         sole side-effect — the exact finish instant of the LAST lap resolving to None — is a
-        harmless between-laps moment that auto-follow simply HOLDS through."""
-        for lap_id in self.valid_lap_ids():
-            t0 = self.laps.start_timestamp(lap_id)
-            if t0 <= t < t0 + self.laps.lap_time(lap_id):
-                return lap_id
+        harmless between-laps moment that auto-follow simply HOLDS through.
+
+        O(log n) binary search on the cached, start-sorted window table (was a linear scan every
+        tick). `searchsorted(starts, t, "right") - 1` is the candidate window whose start is the
+        greatest start <= t; it contains `t` iff `t < end`. Identical result to the linear scan
+        (the windows are the same; half-open `t < end` keeps the on-a-start tie with the lap that
+        STARTS at t)."""
+        starts, ends, ids = self._lap_window_table()
+        if len(starts) == 0:
+            return None
+        k = int(np.searchsorted(starts, t, side="right")) - 1
+        if k < 0:
+            return None
+        if starts[k] <= t < ends[k]:
+            return ids[k]
         return None
 
     def speed_at_time(self, t: float) -> float | None:
@@ -1103,30 +1114,40 @@ class Session:
         lap containing `t`, take its distance fraction s = dist_in_lap(t)/lap_total, then
         Δ = elapsed_lap(s) − elapsed_best(s). At the lap finish (s=1) this equals the laptime
         difference. Drives the always-on readout box, which reflects the current playback/scrub
-        moment — so the cursor on the delta curve and the boxed number always agree."""
+        moment — so the cursor on the delta curve and the boxed number always agree.
+
+        Single-sourced through `delta_between`: vs-best is just vs an arbitrary lap where the
+        arbitrary lap is the GLOBAL best, so resolve the lap containing `t` and the best lap, then
+        delegate to the shared normalized-distance alignment (cross-checked equal in test_compare)."""
         lap_id = self.lap_at_time(t)
-        if lap_id is None:
+        best = self.best_lap_id()
+        if lap_id is None or best is None:
             return None
+        return self.delta_between(lap_id, best, t)
+
+    def delta_at_lap(self, lap_id: int, t: float) -> float | None:
+        """Δ-to-best (seconds) at media-clock time `t`, given the already-resolved `lap_id`
+        containing `t`. Splits the lap resolution out of `delta_at_time` so the tick can resolve
+        `lap_at_time(t)` ONCE per frame and reuse it for both the readout and the delta (the lap
+        lookup is no longer done twice). Same math/result as `delta_at_time`."""
         best = self.best_lap_id()
         if best is None:
             return None
-        td = self._lap_time_dist(lap_id)
-        best_td = self._lap_time_dist(best)
+        td = self._lap_time_dist_elapsed(lap_id)
+        best_td = self._lap_time_dist_elapsed(best)
         if td is None or best_td is None:
             return None
-        times, dists = td
+        times, dists, elapsed = td
         if float(dists[-1]) <= 0:
             return None
         s = float(np.interp(t, times, dists)) / float(dists[-1])  # normalized fraction [0,1]
-        elapsed_lap = float(np.interp(t, times, times - times[0]))  # = t − lap_start, clamped
-        best_times, best_dists = best_td
+        elapsed_lap = float(np.interp(t, times, elapsed))  # = t − lap_start, clamped
+        best_times, best_dists, best_elapsed = best_td
         best_total = float(best_dists[-1])
         if best_total <= 0:
             return None
         # Best lap's elapsed time at the SAME track fraction s (invert s→best distance→time).
-        best_elapsed_at_s = float(
-            np.interp(s * best_total, best_dists, best_times - best_times[0])
-        )
+        best_elapsed_at_s = float(np.interp(s * best_total, best_dists, best_elapsed))
         return elapsed_lap - best_elapsed_at_s
 
     def delta_between(self, lap_a: int, lap_b: int, t_in_a: float) -> float | None:
@@ -1142,25 +1163,23 @@ class Session:
         unit test). At the finish (s=1) it is exactly lap_a's time minus lap_b's time.
 
         O(1) on the cached per-lap (times, dists) arrays — cheap enough for the 30 Hz tick."""
-        td_a = self._lap_time_dist(lap_a)
-        td_b = self._lap_time_dist(lap_b)
+        td_a = self._lap_time_dist_elapsed(lap_a)
+        td_b = self._lap_time_dist_elapsed(lap_b)
         if td_a is None or td_b is None:
             return None
-        times_a, dists_a = td_a
+        times_a, dists_a, elapsed_arr_a = td_a
         total_a = float(dists_a[-1])
         if total_a <= 0:
             return None
         # lap_a's normalized track fraction s and its own elapsed time at t_in_a (clamped to lap).
         s = float(np.interp(t_in_a, times_a, dists_a)) / total_a  # [0,1]
-        elapsed_a = float(np.interp(t_in_a, times_a, times_a - times_a[0]))  # = t_in_a − start
-        times_b, dists_b = td_b
+        elapsed_a = float(np.interp(t_in_a, times_a, elapsed_arr_a))  # = t_in_a − start
+        times_b, dists_b, elapsed_arr_b = td_b
         total_b = float(dists_b[-1])
         if total_b <= 0:
             return None
         # lap_b's elapsed time at the SAME track fraction s (invert s → b's distance → time).
-        elapsed_b_at_s = float(
-            np.interp(s * total_b, dists_b, times_b - times_b[0])
-        )
+        elapsed_b_at_s = float(np.interp(s * total_b, dists_b, elapsed_arr_b))
         return elapsed_a - elapsed_b_at_s
 
     def nearest_index(self, x: float, y: float) -> int | None:
@@ -1172,10 +1191,11 @@ class Session:
     # The red map marker is draggable; dragging seeks the video. Searching the WHOLE trace for
     # the nearest point makes the marker JUMP to another lap wherever the laps overlap
     # spatially. So constrain the search to the CURRENT lap's own trace — the same lap-scoped
-    # behaviour as the scrub cursor. Pure numpy on the lap's cached local-metre points; no pacer.
+    # behaviour as the scrub cursor. Pure numpy on the lap's local-metre points; no pacer.
     def _lap_xy_t(self, lap_id: int):
-        """Cached (xs, ys, times) for one lap in local metres + media-clock seconds. Reuses the
-        per-lap cache so the marker drag is a cheap O(n_lap) nearest-point lookup, not a rebuild."""
+        """(xs, ys, times) for one lap in local metres + media-clock seconds. Reads the shared
+        per-lap cache (built once, cleared on re-segment), so a marker drag's nearest-point lookup
+        no longer rebuilds the arrays on every mouse-move. Returns None if the lap is degenerate."""
         td = self._lap_time_dist(lap_id)  # ensures the lap is segmented/usable
         if td is None:
             return None

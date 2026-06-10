@@ -18,7 +18,7 @@ and `GX0062`. Lap timing is **validated unbiased vs a real lap-timing transponde
 both recordings** (see §"Established conclusion").
 
 The four panels — **Map**, **Speed + Δ-to-best charts**, **Lap table**, **Video** — are wired
-together with two-way video↔telemetry sync. The headless self-test `python -m studio._smoke` prints
+together with two-way video↔telemetry sync. The headless self-test `python -m studio.dev._smoke` prints
 `SMOKE OK`.
 
 ---
@@ -143,7 +143,7 @@ Captured here so the negative results aren't re-litigated. Evidence in [`docs/`]
 - **`session.py` is the only module that drives the pacer pipeline; `tracks.py` is the only other
   file that names `pacer` (pure geometry).** Keep `map_view`/`plots_view`/`lap_table`/`video_view`/
   `app`/`gapfill`/`reference`/`gmeter`/`gmeter_overlay`/`chapters`/`transponder` free of `pacer`.
-- `pacer` is GPMF/GoPro **`.MP4` only** (the `.dat` reader isn't bound to Python). It supplies the
+- `pacer` is GPMF/GoPro **`.MP4` only**. It supplies the
   telemetry time axis; the app brings its own video player (pacer doesn't decode pixels).
 - **Perf invariants — do not regress:** the 30 Hz tick decouple (`_on_position` only stores the time;
   `_tick` applies); plot curves downsampled+clipped, antialias off, autorange frozen after refresh;

@@ -146,7 +146,7 @@ TEST_CASE("Interpolate GPSSample — all fields including timestamp_ms",
 // ---------------------------------------------------------------------------
 
 TEST_CASE("ToPoint overloads", "[geometry][topoint]") {
-  SECTION("ToPoint(GPSSample) returns Point{lon, lat}") {
+  SECTION("ToLonLat(GPSSample) returns Point{lon, lat}") {
     // geometry.cpp: return {s.lon, s.lat}  =>  x=lon, y=lat
     GPSSample s{.lat = 5,
                 .lon = 7,
@@ -154,7 +154,7 @@ TEST_CASE("ToPoint overloads", "[geometry][topoint]") {
                 .full_speed = 0,
                 .ground_speed = 0,
                 .timestamp_ms = 0};
-    auto p = ToPoint(s);
+    auto p = ToLonLat(s);
     CHECK(p.x == Catch::Approx(7.0));
     CHECK(p.y == Catch::Approx(5.0));
   }

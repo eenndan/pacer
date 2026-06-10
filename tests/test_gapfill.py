@@ -119,11 +119,8 @@ def test_endpoints_continuous():
 
 
 if __name__ == "__main__":
-    test_find_gaps()
-    test_no_gap_when_clean()
-    test_cross_lap_borrow_fills_arc()
-    test_short_gap_uses_spline()
-    test_reference_fallback_when_no_donor()
-    test_borrow_preferred_over_reference()
-    test_endpoints_continuous()
-    print("\nALL GAPFILL TESTS PASSED")
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for t in tests:
+        t()
+        print(f"ok  {t.__name__}")
+    print(f"\nALL {len(tests)} GAPFILL TESTS PASSED")

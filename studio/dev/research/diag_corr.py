@@ -12,7 +12,8 @@ The S/F finish crossing of lap k is the start crossing of lap k+1, so we look at
 from __future__ import annotations
 import json, sys
 import numpy as np
-from studio import chapters, transponder
+from studio import chapters
+from studio.dev import transponder
 from studio.session import Session
 import studio.dev._validate_wallclock as vw
 import datetime as dt

@@ -1,11 +1,6 @@
 #include "gps-source.hpp"
 
-#include <__chrono/calendar.h>
-#include <chrono>
 #include <cstdint>
-#include <format>
-#include <iostream>
-#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <sys/types.h>
@@ -27,6 +22,12 @@ GPMFSource::GPMFSource(const char *filename)
 }
 
 GPMFSource::~GPMFSource() noexcept {
+  // Free the GPMF payload resource we own (allocated lazily, reused across calls). Must happen
+  // before CloseSource. Previously every Samples()/ReadStream() call leaked a fresh resource.
+  if (payload_res_) {
+    FreePayloadResource(mp4handle_, payload_res_);
+    payload_res_ = 0;
+  }
   if (mp4handle_) {
     CloseSource(mp4handle_);
   }
@@ -35,18 +36,29 @@ GPMFSource::~GPMFSource() noexcept {
 GPMFSource::GPMFSource(size_t mp4handle) : mp4handle_(mp4handle) {}
 
 uint32_t GPMFSource::Seek(double target) {
-  double in, out;
+  // `index_` is unsigned, so a `--index_` at index 0 wraps to UINT32_MAX (a bogus, EOF-looking
+  // index). Initialise in/out so the post-loop guard never reads garbage when the very first
+  // GetPayloadTime fails, and only step `index_` back when the last lookup SUCCEEDED and we are
+  // not already at 0. Net effect: a seek to before the first payload clamps to index 0 instead
+  // of wrapping past the end.
+  double in = 0, out = 0;
   uint32_t ret = GPMF_OK;
   do {
     ret = GetPayloadTime(mp4handle_, index_, &in, &out);
     if (ret == GPMF_OK) {
       if (out <= target)
         ++index_;
-      if (target < in)
+      // Step back toward the covering payload, but never below 0. At index 0 we are already
+      // clamped, so stop the loop instead of spinning (the old code let `--index_` wrap to
+      // UINT32_MAX here, after which GetPayloadTime failed and broke the loop).
+      if (target < in) {
+        if (index_ == 0)
+          break;
         --index_;
+      }
     }
   } while (ret == GPMF_OK && in < out && ((target > out) || (target < in)));
-  if (!(in < out)) {
+  if (ret == GPMF_OK && index_ && !(in < out)) {
     --index_;
   }
 
@@ -56,7 +68,7 @@ uint32_t GPMFSource::Seek(double target) {
 void GPMFSource::Next() { ++index_; }
 
 bool GPMFSource::IsEnd() {
-  double in, out;
+  double in = 0, out = 0;
   if (GetPayloadTime(mp4handle_, index_, &in, &out) != GPMF_OK) {
     return true;
   }
@@ -64,8 +76,11 @@ bool GPMFSource::IsEnd() {
 }
 
 std::pair<double, double> GPMFSource::CurrentTimeSpan() const {
-  double in, out;
-  GetPayloadTime(mp4handle_, index_, &in, &out);
+  double in = 0, out = 0;
+  // No payload at index_ -> report an empty span rather than returning uninitialised stack.
+  if (GetPayloadTime(mp4handle_, index_, &in, &out) != GPMF_OK) {
+    return {0, 0};
+  }
   return {in, out};
 }
 
@@ -101,15 +116,115 @@ union GPSUData {
   }
 };
 
+namespace {
+
+// Callback contract identical to RawGPSSource::Samples: (data, sample, current_index,
+// total_records). Bundled with `data` so the per-codec parsers below can emit without
+// re-threading both through every call.
+struct SampleEmit {
+  void *data;
+  void (*on_sample)(void *, GPSSample, size_t, size_t);
+};
+
+// Parse one GPS9 STRM payload (already positioned at samples by GPMF_SeekToSamples) and emit
+// every fix. GPS9 element order: [lat, lon, alt, 2D speed, 3D speed, days since 2000, secs
+// since midnight (ms precision), DOP, fix (0/2/3)]. Indices 3-6 (speeds + timestamp) are read
+// unconditionally; a struct narrower than 7 elements would read past the row, so the caller
+// guards `elements >= 7`. DOP(7)/fix(8) are separately guarded and otherwise keep the
+// GPSSample sentinel defaults. Byte-identical to the former inline GPS9 branch.
+void ParseGPS9(GPMF_stream *ms, uint32_t samples, uint32_t elements,
+               const SampleEmit &emit) {
+  if (!(samples && elements >= 7)) {
+    return;
+  }
+  uint32_t buffersize = samples * elements * sizeof(double);
+  double *tmpbuffer = (double *)malloc(buffersize);
+  if (tmpbuffer) {
+    if (GPMF_OK == GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples,
+                                   GPMF_TYPE_DOUBLE)) {
+      for (uint32_t i = 0; i < samples; ++i) {
+        GPSSample gps{};
+        // GPS9: [lat, lon, alt, 2D speed, 3D speed, days since 2000, secs
+        // since midnight, DOP, fix]
+        gps.lat = tmpbuffer[i * elements + 0];
+        gps.lon = tmpbuffer[i * elements + 1];
+        gps.altitude = tmpbuffer[i * elements + 2];
+        gps.ground_speed = tmpbuffer[i * elements + 3];
+        gps.full_speed = tmpbuffer[i * elements + 4];
+        // Timestamp calculation from days since 2000 and seconds since
+        // midnight
+        double days_since_2000 = tmpbuffer[i * elements + 5];
+        double secs_since_midnight = tmpbuffer[i * elements + 6];
+        // Convert days since 2000-01-01 to ms since epoch
+        constexpr int64_t epoch_2000 =
+            946684800000LL; // ms since epoch for 2000-01-01T00:00:00Z
+        int64_t ms_since_2000 = static_cast<int64_t>(
+            days_since_2000 * 86400000.0 + secs_since_midnight * 1000.0);
+        gps.timestamp_ms = epoch_2000 + ms_since_2000;
+        // GPS9 quality: DOP (element 7) and fix type (element 8, 0/2/3). Present only
+        // when the struct actually carries them; otherwise keep the sentinel defaults.
+        if (elements > 7) {
+          gps.dop = tmpbuffer[i * elements + 7];
+        }
+        if (elements > 8) {
+          gps.fix = static_cast<int>(tmpbuffer[i * elements + 8]);
+        }
+        emit.on_sample(emit.data, gps, i, samples);
+      }
+    }
+    free(tmpbuffer);
+  }
+}
+
+// Parse one GPS5 STRM payload (already positioned at samples) and emit every fix. `ms` is the
+// GPS5 stream; `timestamp` is the (vestigial) GPSU time the caller resolved at the same level.
+// GPS5 element order: [lat, lon, alt, 2D speed, 3D speed]; carries no DOP/fix, so those keep
+// the GPSSample sentinels. Byte-identical to the former inline GPS5 branch.
+void ParseGPS5(GPMF_stream *ms, uint32_t samples, uint32_t elements,
+               int64_t timestamp, const SampleEmit &emit) {
+  // GPS5 element order is [lat, lon, alt, 2D speed, 3D speed]. Skip a malformed payload
+  // whose struct is too narrow to carry the five fields (guards the explicit reads below).
+  if (!(samples && elements >= 5)) {
+    return;
+  }
+  uint32_t buffersize = samples * elements * sizeof(double);
+  double *tmpbuffer = (double *)malloc(buffersize);
+  if (tmpbuffer) {
+    if (GPMF_OK == GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples,
+                                   GPMF_TYPE_DOUBLE)) {
+      for (uint32_t i = 0; i < samples; ++i) {
+        // Stride is the KNOWN element width (`elements`), not the UNITS-stream repeat:
+        // when no SI_UNITS/UNITS sibling exists the old code's stride collapsed to 1 and
+        // emitted 5 garbage samples per record. Write the fields EXPLICITLY (same as the
+        // GPS9 branch) so 2D speed -> ground_speed and 3D speed -> full_speed; the prior
+        // union field-order aliasing landed them swapped (2D in full_speed) versus GPS9.
+        GPSSample gps{};
+        gps.lat = tmpbuffer[i * elements + 0];
+        gps.lon = tmpbuffer[i * elements + 1];
+        gps.altitude = tmpbuffer[i * elements + 2];
+        gps.ground_speed = tmpbuffer[i * elements + 3]; // 2D speed
+        gps.full_speed = tmpbuffer[i * elements + 4];    // 3D speed
+        gps.timestamp_ms = timestamp;
+        // GPS5 carries no DOP / fix-type; leave the GPSSample "unknown" sentinels
+        // (dop = -1, fix = -1) as defaulted in the struct.
+        emit.on_sample(emit.data, gps, i, samples);
+      }
+    }
+    free(tmpbuffer);
+  }
+}
+
+} // namespace
+
 uint32_t GPMFSource::Samples(void *data,
                              void (*on_sample)(void * /*data*/,
                                                GPSSample /*sample*/,
                                                size_t /*current_index*/,
                                                size_t /*total_records*/)) {
   uint32_t payloadsize = GetPayloadSize(mp4handle_, index_);
-  size_t payloadres = 0;
-  payloadres = GetPayloadResource(mp4handle_, payloadres, payloadsize);
-  uint32_t *payload = GetPayload(mp4handle_, payloadres, index_);
+  // Reuse the owned payload resource (grows in place); freed once in the destructor.
+  payload_res_ = GetPayloadResource(mp4handle_, payload_res_, payloadsize);
+  uint32_t *payload = GetPayload(mp4handle_, payload_res_, index_);
 
   if (payload == nullptr) {
     printf("No payload\n");
@@ -127,11 +242,6 @@ uint32_t GPMFSource::Samples(void *data,
          GPMF_FindNext(ms, STR2FOURCC("STRM"),
                        GPMF_LEVELS(GPMF_RECURSE_LEVELS | GPMF_TOLERANT))) {
 
-    if (ret != GPMF_OK) {
-      printf("No FindNext gps data\n");
-      return ret;
-    }
-
     ret = GPMF_SeekToSamples(ms);
     if (ret != GPMF_OK) {
       printf("No Seek to Samples\n");
@@ -144,8 +254,6 @@ uint32_t GPMFSource::Samples(void *data,
     uint32_t samples = GPMF_Repeat(ms);
     uint32_t elements = GPMF_ElementsInStruct(ms);
 
-    // printf("Key: %c%c%c%c, Samples: %d, Elements: %d\n", PRINTF_4CC(key),
-    //        samples, elements);
     // Extract GPSU data from GPS5 stream
     // To do this, you need to search for the GPSU key at the same level as
     // GPS5. Typically, GPSU contains a timestamp for each GPS5 sample. You can
@@ -154,51 +262,12 @@ uint32_t GPMFSource::Samples(void *data,
     // Example: Find GPSU at the same level as GPS5
     GPMF_stream gpsu_stream;
 
+    const SampleEmit emit{data, on_sample};
+
     if (key == STR2FOURCC("GPS9")) {
-      // printf("Found GPS9 stream, skipping...\n");
       // lat, long, alt, 2D speed, 3D speed, days since 2000, secs since
       // midnight (ms precision), DOP, fix (0, 2D or 3D)
-      //  Parse GPS9 data: lat, long, alt, 2D speed, 3D speed, days since 2000,
-      //  secs since midnight (ms precision), DOP, fix
-      if (samples) {
-        uint32_t buffersize = samples * elements * sizeof(double);
-        double *tmpbuffer = (double *)malloc(buffersize);
-        if (tmpbuffer) {
-          if (GPMF_OK == GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples,
-                                         GPMF_TYPE_DOUBLE)) {
-            for (uint32_t i = 0; i < samples; ++i) {
-              GPSSample gps{};
-              // GPS9: [lat, lon, alt, 2D speed, 3D speed, days since 2000, secs
-              // since midnight, DOP, fix]
-              gps.lat = tmpbuffer[i * elements + 0];
-              gps.lon = tmpbuffer[i * elements + 1];
-              gps.altitude = tmpbuffer[i * elements + 2];
-              gps.ground_speed = tmpbuffer[i * elements + 3];
-              gps.full_speed = tmpbuffer[i * elements + 4];
-              // Timestamp calculation from days since 2000 and seconds since
-              // midnight
-              double days_since_2000 = tmpbuffer[i * elements + 5];
-              double secs_since_midnight = tmpbuffer[i * elements + 6];
-              // Convert days since 2000-01-01 to ms since epoch
-              constexpr int64_t epoch_2000 =
-                  946684800000LL; // ms since epoch for 2000-01-01T00:00:00Z
-              int64_t ms_since_2000 = static_cast<int64_t>(
-                  days_since_2000 * 86400000.0 + secs_since_midnight * 1000.0);
-              gps.timestamp_ms = epoch_2000 + ms_since_2000;
-              // GPS9 quality: DOP (element 7) and fix type (element 8, 0/2/3). Present only
-              // when the struct actually carries them; otherwise keep the sentinel defaults.
-              if (elements > 7) {
-                gps.dop = tmpbuffer[i * elements + 7];
-              }
-              if (elements > 8) {
-                gps.fix = static_cast<int>(tmpbuffer[i * elements + 8]);
-              }
-              on_sample(data, gps, i, samples);
-            }
-          }
-          free(tmpbuffer);
-        }
-      }
+      ParseGPS9(ms, samples, elements, emit);
     }
 
     if (key == STR2FOURCC("GPS5")) {
@@ -214,6 +283,9 @@ uint32_t GPMFSource::Samples(void *data,
         // GPSU is usually a 16-byte ASCII timestamp per sample, e.g.
         // "2017-01-01 12:34:56.000" If there are multiple samples, gpsu_data
         // contains concatenated timestamps.
+        // TODO: GPS5 per-sample timing is VESTIGIAL — this loop keeps only the LAST GPSU
+        // timestamp and stamps every sample in the payload with it. GPS9 (the live path)
+        // carries a true per-sample fix time; GPS5 timing is not reworked in this batch.
         for (uint32_t k = 0; k < gpsu_size; k += 16) {
           GPSUData t;
           memcpy(t.data, gpsu_data + k, 16);
@@ -221,104 +293,7 @@ uint32_t GPMFSource::Samples(void *data,
         }
       }
 
-      if (samples) {
-        uint32_t buffersize = samples * elements * sizeof(double);
-        GPMF_stream find_stream;
-        double *ptr, *tmpbuffer = (double *)malloc(buffersize);
-
-#define MAX_UNITS 64
-#define MAX_UNITLEN 8
-        char units[MAX_UNITS][MAX_UNITLEN] = {""};
-        uint32_t unit_samples = 1;
-
-        char complextype[MAX_UNITS] = {""};
-        uint32_t type_samples = 1;
-
-        if (tmpbuffer) {
-          uint32_t i, j;
-
-          // Search for any units to display
-          GPMF_CopyState(ms, &find_stream);
-          if (GPMF_OK == GPMF_FindPrev(
-                             &find_stream, GPMF_KEY_SI_UNITS,
-                             GPMF_LEVELS(GPMF_CURRENT_LEVEL | GPMF_TOLERANT)) ||
-              GPMF_OK == GPMF_FindPrev(
-                             &find_stream, GPMF_KEY_UNITS,
-                             GPMF_LEVELS(GPMF_CURRENT_LEVEL | GPMF_TOLERANT))) {
-            char *data = (char *)GPMF_RawData(&find_stream);
-            uint32_t ssize = GPMF_StructSize(&find_stream);
-            if (ssize > MAX_UNITLEN - 1)
-              ssize = MAX_UNITLEN - 1;
-            unit_samples = GPMF_Repeat(&find_stream);
-
-            for (i = 0; i < unit_samples && i < MAX_UNITS; i++) {
-              memcpy(units[i], data, ssize);
-              units[i][ssize] = 0;
-              data += ssize;
-            }
-          }
-
-          // GPMF_FormattedData(ms, tmpbuffer, buffersize, 0, samples); //
-          // Output data in LittleEnd, but no scale
-          if (GPMF_OK ==
-              GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples,
-                              GPMF_TYPE_DOUBLE)) // Output scaled data as floats
-          {
-            ptr = tmpbuffer;
-            int pos = 0;
-            // Initialize the `values` array member so the union is constructible: GPSSample
-            // gained defaulted quality fields (dop/fix), which deletes the union's implicit
-            // default constructor. We then write the 5 position doubles through `values` and
-            // the quality sentinels through `gps` (disjoint storage past the 5th double).
-            union {
-              GPSSample gps;
-              double values[5];
-            } r{.values = {0, 0, 0, 0, 0}};
-
-            for (i = 0; i < samples; i++) {
-              r.gps.timestamp_ms = timestamp;
-              // GPS5 carries no DOP / fix-type. The union aliases only the first 5 doubles
-              // (lat..ground_speed), so set the quality fields to their "unknown" sentinels
-              // explicitly (the union member is never default-constructed).
-              r.gps.dop = -1.0;  // negative = "unknown" (real DOP is positive)
-              r.gps.fix = -1;
-
-              // printf("  %c%c%c%c (%d,%d) ", PRINTF_4CC(key), samples,
-              // elements);
-
-              for (j = 0; j < elements; j++) {
-                if (type == GPMF_TYPE_STRING_ASCII) {
-                  // printf("%c", rawdata[pos]);
-                  pos++;
-                  ++ptr;
-                } else if (type_samples == 0) // no TYPE structure
-                {
-                  // printf("%.3f%s, ", *ptr, units[j % unit_samples]);
-                  ++ptr;
-                } else if (complextype[j] != 'F') {
-                  r.values[j % unit_samples] = *ptr;
-                  if ((j + 1) % unit_samples == 0) {
-                    on_sample(data, r.gps, i, samples);
-                  }
-
-                  // printf("%.3f%s, ", *ptr, units[j % unit_samples]);
-                  ++ptr;
-                  pos += GPMF_SizeofType((GPMF_SampleType)complextype[j]);
-                } else if (type_samples && complextype[j] == GPMF_TYPE_FOURCC) {
-                  ptr++;
-
-                  // printf("%c%c%c%c, ", rawdata[pos], rawdata[pos + 1],
-                  //        rawdata[pos + 2], rawdata[pos + 3]);
-                  pos += GPMF_SizeofType((GPMF_SampleType)complextype[j]);
-                }
-              }
-
-              // printf("\n");
-            }
-          }
-          free(tmpbuffer);
-        }
-      }
+      ParseGPS5(ms, samples, elements, timestamp, emit);
     }
   }
 
@@ -335,10 +310,11 @@ void GPMFSource::ReadStream(
     uint32_t fourcc,
     const std::function<void(const double *, uint32_t, double)> &emit) const {
   uint32_t payloads = GetNumberPayloads(mp4handle_);
-  size_t payloadres = GetPayloadResource(mp4handle_, 0, 0);
+  // Reuse the owned payload resource (shared with Samples(); grows in place); freed in dtor.
   for (uint32_t i = 0; i < payloads; ++i) {
     uint32_t payloadsize = GetPayloadSize(mp4handle_, i);
-    uint32_t *payload = GetPayload(mp4handle_, payloadres, i);
+    payload_res_ = GetPayloadResource(mp4handle_, payload_res_, payloadsize);
+    uint32_t *payload = GetPayload(mp4handle_, payload_res_, i);
     if (payload == nullptr) {
       continue;
     }
@@ -399,34 +375,18 @@ void GPMFSource::ReadCori(std::function<void(QuatSample)> on_sample) {
 }
 
 // Multi-chapter: read each child's stream, shifting later chapters by the cumulative duration
-// of the earlier ones (the same global media clock the GPS spans use). left_ may itself be a
-// SequentialGPSSource (left-leaning chain), so delegating to it recurses correctly; right_ is
-// always a leaf chapter, shifted by the whole left subtree's duration.
+// of the earlier ones (the same global media clock the GPS spans use). The shared per-stream
+// logic lives in the ReadShifted template; these three just bind the matching reader verb.
 void SequentialGPSSource::ReadAccl(std::function<void(IMUSample)> on_sample) {
-  left_->ReadAccl(on_sample);
-  double off = left_->GetTotalDuration();
-  right_->ReadAccl([&](IMUSample s) {
-    s.time += off;
-    on_sample(s);
-  });
+  ReadShifted<IMUSample>(&RawGPSSource::ReadAccl, on_sample);
 }
 
 void SequentialGPSSource::ReadGrav(std::function<void(IMUSample)> on_sample) {
-  left_->ReadGrav(on_sample);
-  double off = left_->GetTotalDuration();
-  right_->ReadGrav([&](IMUSample s) {
-    s.time += off;
-    on_sample(s);
-  });
+  ReadShifted<IMUSample>(&RawGPSSource::ReadGrav, on_sample);
 }
 
 void SequentialGPSSource::ReadCori(std::function<void(QuatSample)> on_sample) {
-  left_->ReadCori(on_sample);
-  double off = left_->GetTotalDuration();
-  right_->ReadCori([&](QuatSample s) {
-    s.time += off;
-    on_sample(s);
-  });
+  ReadShifted<QuatSample>(&RawGPSSource::ReadCori, on_sample);
 }
 
 uint32_t SequentialGPSSource::Samples(
@@ -452,8 +412,14 @@ uint32_t SequentialGPSSource::Seek(double target) {
   }
 }
 void SequentialGPSSource::Next() {
-  if (current_ == left_ && current_->IsEnd())
+  // At the left->right chapter seam, position `right_` AT its first payload and return without
+  // advancing. The old code switched to `right_` (fresh at index 0) and then immediately called
+  // Next() (++index_), silently dropping the first payload of every chapter after the first.
+  if (current_ == left_ && current_->IsEnd()) {
     current_ = right_;
+    current_->Seek(0);
+    return;
+  }
   return current_->Next();
 }
 auto SequentialGPSSource::CurrentTimeSpan() const -> std::pair<double, double> {

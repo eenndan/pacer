@@ -333,11 +333,8 @@ python3 /tmp/claude/decode_figs.py /tmp/claude/upstream_interpolation.ipynb 11 1
 pixi run python -m studio.dev._validate_wallclock -- /path/GX010060.MP4 "<transponder.csv>" \
     --race-start "2026-05-23 12:00:00Z" --dump /tmp/claude/baseline_0060.json
 
-# GPS9-vs-our-C++-port comparison (Session.load interpolate=True), same alignment, BOTH recordings
-PYTHONPATH=. pixi run python studio/dev/research/validate_interp.py /path/GX010060.MP4 "<csv>" \
-    --race-start "2026-05-23 12:00:00Z" --dump /tmp/claude/interp_cmp_0060.json
-PYTHONPATH=. pixi run python studio/dev/research/validate_interp.py /path/GX010062.MP4 "<csv>" \
-    --race-start "2026-05-23 12:00:00Z" --dump /tmp/claude/interp_cmp_0062.json
+# GPS9-vs-our-C++-port comparison (Session.load interpolate=True): the validate_interp.py validator
+# that produced §4's numbers was removed together with the C++ interpolation experiment (see AGENTS.md).
 
 # §4b — the NOTEBOOK's OWN t1/t2 PyTorch pipeline vs GPS9 vs transponder, segmentation held
 # constant (only the time axis varies). OMP_NUM_THREADS=1 avoids a torch OpenMP tmp stall.

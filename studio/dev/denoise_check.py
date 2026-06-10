@@ -34,7 +34,21 @@ import numpy as np
 
 import pacer  # noqa: F401 — ensure the module imports cleanly before Qt
 
+from .. import gapfill
 from ..session import DEFAULT_SAMPLE, Session, _smooth
+
+
+def _lap_fills(session: Session, lap_id: int) -> list[dict]:
+    """Per-gap fill report for a lap (chord/dt/n_missing/source/fill/endpoint-error dicts).
+
+    Rebuilds the gap-fill directly via `gapfill.reconstruct_lap` (the same trace + donor inputs
+    the map uses), so this dev metrics tool doesn't need Session to cache the fill report. The
+    segments are discarded; only the fills are returned."""
+    xs, ys, ts = session._lap_trace_xyt(lap_id)
+    donors = session._donors_for(lap_id)
+    _segs, fills = gapfill.reconstruct_lap(
+        xs, ys, ts, donors, med_dt=session._median_sample_dt())
+    return fills
 
 
 # ----------------------------------------------------------------- metrics
@@ -189,7 +203,7 @@ def gap_metrics(session: Session):
            "n_borrow": 0, "n_spline": 0, "n_reference": 0, "n_unfilled": 0}
     per_lap = {}
     for lid in valid:
-        rep = session.lap_gap_report(lid)
+        rep = _lap_fills(session, lid)
         if not rep:
             continue
         per_lap[lid] = rep
@@ -224,7 +238,7 @@ def _render_gaps(session: Session, out_dir: str, tag: str):
     os.makedirs(out_dir, exist_ok=True)
     valid = session.valid_lap_ids()
     best = session.best_lap_id()
-    gappy = [lid for lid in valid if session.lap_gap_report(lid)]
+    gappy = [lid for lid in valid if _lap_fills(session, lid)]
     out = []
 
     def draw(lids, name, title):

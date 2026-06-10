@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <optional>
+#include <ostream>
 #include <utility>
 
 #include <pacer/datatypes/datatypes.hpp>
@@ -25,15 +26,14 @@ struct Point : VectorOperators<Point, double, 2> {
   }
 };
 
+// Local-metres -> Point (drops z for the Vec3f overload). Both inputs are already in the LOCAL
+// metric coordinate system, so the result is in metres.
 Point ToPoint(Point x);
-Point ToPoint(GPSSample s);
 Point ToPoint(Vec3f v);
 
-// template <typename Concrete, typename T, size_t N>
-// Point ToPoint(const LinearOperators<Concrete, T, N> &x) {
-//   return Point{static_cast<const Concrete &>(x)[0],
-//                static_cast<const Concrete &>(x)[1]};
-// }
+// GPS degrees -> Point{lon, lat}. Named distinctly from ToPoint so a degrees sample can never
+// be silently mixed with a local-metres Point behind one overloaded name at a call site.
+Point ToLonLat(GPSSample s);
 
 struct Segment {
   Point first, second;
@@ -85,28 +85,18 @@ private:
   constexpr static double R_pole = 6'357'000;
   static Vec3f CanonicalLocal(GPSSample point);
 
-  GPSSample origin;
   Vec3f local_origin, dx, dy, dz;
 };
 
 Point Interpolate(Point from, Point to, double ratio);
 GPSSample Interpolate(GPSSample from, GPSSample to, double ratio);
 
-// template <typename Concrete, typename T, size_t N>
-// Concrete Interpolate(const LinearOperators<Concrete, T, N> &from,
-//                      const LinearOperators<Concrete, T, N> &to, double ratio)
-//                      {
-//   return static_cast<Concrete>(static_cast<const Concrete &>(from) *
-//                                    (1 - ratio) +
-//                                static_cast<const Concrete &>(to) * ratio);
-// }
-
 template <class P>
 std::optional<PointInTime<P>> Split(Segment start_line, PointInTime<P> first,
                                     PointInTime<P> second) {
 
   double ratio = 0.;
-  if (!start_line.Intersects(ToPoint(first.point), ToPoint(second.point),
+  if (!start_line.Intersects(ToLonLat(first.point), ToLonLat(second.point),
                              &ratio)) {
     return std::nullopt;
   }

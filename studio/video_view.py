@@ -82,8 +82,6 @@ class _PaneCell(QWidget):
         # Compact lap picker: lists valid laps; repoints this side without touching the other.
         self.picker = QComboBox()
         self.picker.setToolTip("Pick the lap shown in this pane")
-        self.picker.setSizePolicy(self.picker.sizePolicy().horizontalPolicy(),
-                                  self.picker.sizePolicy().verticalPolicy())
         self.picker.currentIndexChanged.connect(self._on_pick)
 
         # "Δ vs other" badge — app drives the text + colour per tick (transparent inline label).
@@ -180,6 +178,16 @@ class VideoView(QWidget):
 
         # Compare-mode state. The secondary pane + cells exist ONLY while compare is on (lazy).
         self._compare = False
+        # The PRIMARY pane's lap window (start_global, end_global) while in compare mode, or None
+        # in single-video mode. The global scrub slider is CONFINED to this window in compare mode
+        # so dragging it can't escape lap A or desync the pair (both panes step within lap A's
+        # window). None => the slider spans the whole session, exactly as before.
+        self._lap_window: tuple[float, float] | None = None
+        # Last g-meter source + visible state, captured so a LAZILY-created secondary pane can be
+        # seeded with them on entry (toggling g-meter ON then entering compare must show the overlay
+        # on BOTH panes with the right source). set by set_gmeter_source / set_gmeter_visible.
+        self._gmeter_source: str | None = None
+        self._gmeter_visible = False
         self.secondary: PlayerPane | None = None
         self._cell_a: _PaneCell | None = None   # primary cell wrapper (compare mode)
         self._cell_b: _PaneCell | None = None   # secondary cell wrapper (compare mode)
@@ -236,7 +244,7 @@ class VideoView(QWidget):
         self.slider.sliderMoved.connect(self._on_slider_moved)
         if self.pane.total_duration > 0:
             self.slider.setRange(0, int(self.pane.total_duration * 1000))
-        self.pane.player.durationChanged.connect(self._on_duration)
+        self.pane.durationChanged.connect(self._on_duration)
 
         row = QHBoxLayout()
         row.addWidget(self.play_btn)
@@ -326,12 +334,25 @@ class VideoView(QWidget):
             return self.pane
         return self.secondary
 
+    def _cell_for(self, side: int) -> "_PaneCell | None":
+        """The compare-mode cell wrapper for a side (mirrors _pane_for). None outside compare."""
+        return self._cell_a if side == PRIMARY else self._cell_b
+
+    def _panes(self) -> list[PlayerPane]:
+        """The live panes — always the primary, plus the secondary while in compare mode. Lets the
+        SIMPLE fan-outs (both panes treated identically) loop instead of repeating the
+        primary-then-if-secondary pattern; per-pane special cases (e.g. mute) stay explicit."""
+        return [p for p in (self.pane, self.secondary) if p is not None]
+
     def stop_all(self):
-        """Tear down the pane(s): stop the decoder AND close the g-meter overlay window. Called on
-        a reload ("Load full recording") before the old widget tree is replaced. Tears down BOTH
-        panes — the lazy secondary too (stop + deleteLater player+audio, .close() its overlay)."""
+        """Tear down the pane(s) for a reload ("Load full recording"): the whole VideoView is
+        replaced afterwards, so FULLY dispose both panes — stop the decoder, detach the video/audio
+        sinks, close the g-meter overlay window, and deleteLater the player+audio. The PRIMARY pane
+        must be disposed too (not just .stop()'d): its QMediaPlayer + QAudioOutput are plain
+        attributes, not Qt children of the discarded widget tree, so a bare stop() would leak the
+        FFmpeg decoder + the audio device until Python GC. dispose() mirrors the secondary teardown."""
         self._teardown_secondary()
-        self.pane.stop()
+        self.pane.dispose()
 
     def set_readout(self, text: str):
         self.readout.setText(text)
@@ -345,9 +366,6 @@ class VideoView(QWidget):
         self.compare_btn.setEnabled(self._compare_enabled)
         if not self._compare_enabled and self.compare_btn.isChecked():
             self.compare_btn.setChecked(False)  # -> _on_compare_toggled(False) tears down
-
-    def is_compare(self) -> bool:
-        return self._compare
 
     def _set_compare_btn_state(self, on: bool):
         """Drive the labeled compare toggle's appearance for its OFF/ON state. OFF: a ghost/neutral
@@ -396,6 +414,15 @@ class VideoView(QWidget):
             self.secondary.set_muted(True)  # secondary audio ALWAYS muted (telemetry tool)
             # IMPORTANT: do NOT connect the secondary's positionChanged to _on_pane_position —
             # it must NEVER reach the app's telemetry sync. It is video-only.
+            # Seed the fresh secondary with the ACTIVE g-meter source + visibility so toggling the
+            # g-meter ON *then* entering compare shows the overlay on BOTH panes with the right
+            # source (the secondary missed the earlier set_gmeter_source / set_gmeter_visible).
+            if self._gmeter_source is not None:
+                self.secondary.set_gmeter_source(self._gmeter_source)
+            self.secondary.set_gmeter_visible(self._gmeter_visible)
+            # Wire the secondary's playback state so the transport glyph reflects BOTH panes (they
+            # auto-pause at different lap ends; the glyph must not lie — see _on_state).
+            self.secondary.playbackStateChanged.connect(self._on_state)
         if self._splitter is None:
             self._cell_a = _PaneCell(self.pane, PRIMARY)
             self._cell_b = _PaneCell(self.secondary, SECONDARY)
@@ -431,6 +458,11 @@ class VideoView(QWidget):
         self._cell_b.set_caption(caption_b)
         self._cell_a.set_lap_choices(lap_choices, lap_a, lap_choice_labels)
         self._cell_b.set_lap_choices(lap_choices, lap_b, lap_choice_labels)
+        # Confine the global scrub slider to lap A's window: its value is GLOBAL ms, so range it to
+        # [start_a, end_a] so dragging it can never escape lap A or step the primary past the lap
+        # (both panes stay aligned within the window). Re-applied on every (re)seed so a primary
+        # repoint updates the slider bounds too.
+        self._set_slider_window(window_a)
 
     def reseed_pane(self, side: int, lap_id: int, window: tuple[float, float],
                     caption: str, lap_choices: list[int],
@@ -439,12 +471,16 @@ class VideoView(QWidget):
         keep the picker selection in sync. The app re-seeks this pane to its new lap start and
         refreshes the chart overlay + Δ badge. Used so a repoint never disturbs the other pane."""
         pane = self._pane_for(side)
-        cell = self._cell_a if side == PRIMARY else self._cell_b
+        cell = self._cell_for(side)
         if pane is None or cell is None:
             return
         pane.set_lap_window(*window)
         cell.set_caption(caption)
         cell.set_lap_choices(lap_choices, lap_id, lap_choice_labels)
+        # A PRIMARY repoint changes lap A's window — re-confine the global scrub to the new window
+        # so the slider keeps tracking the (telemetry-driving) primary pane within its lap.
+        if side == PRIMARY:
+            self._set_slider_window(window)
 
     def exit_compare(self):
         """Leave compare mode: tear the secondary pane down (stop + deleteLater player+audio,
@@ -462,6 +498,10 @@ class VideoView(QWidget):
         self._stage_lay.addWidget(self.pane, 1)
         self.pane.show()
         self.pane.clear_lap_window()  # whole session again — normal mode, behaviour unchanged
+        # Drop the slider's lap-A confinement and restore the whole-session range.
+        self._lap_window = None
+        if self.pane.total_duration > 0:
+            self.slider.setRange(0, int(self.pane.total_duration * 1000))
         self._teardown_secondary()
         # Drop the cell wrappers + splitter (the primary pane has been reparented out of _cell_a).
         for w in (self._cell_a, self._cell_b, self._splitter):
@@ -485,9 +525,8 @@ class VideoView(QWidget):
     def _on_splitter_moved(self, _pos: int, _index: int):
         """Re-pin BOTH g-meter overlays after a splitter-handle drag (each pane re-pins its own
         overlay to its video corner; cheap no-op when an overlay is hidden)."""
-        for pane in (self.pane, self.secondary):
-            if pane is not None:
-                pane._sync_gmeter()
+        for pane in self._panes():
+            pane.sync_gmeter()
 
     # ------------------------------------------------------------- audio (mute)
     def toggle_mute(self):
@@ -512,12 +551,17 @@ class VideoView(QWidget):
 
     def set_gmeter_visible(self, on: bool):
         """Show/hide the friction-circle g-meter overlay (the toggle button). Applies PER-PANE:
-        both panes' overlays toggle together (each defaults off); the secondary's stays muted."""
-        self.pane.set_gmeter_visible(on)
-        if self.secondary is not None:
-            self.secondary.set_gmeter_visible(on)
-        if self.gmeter_btn.isChecked() != self.pane.is_gmeter_visible():
-            self.gmeter_btn.setChecked(self.pane.is_gmeter_visible())
+        both panes' overlays toggle together (each defaults off); the secondary's stays muted.
+        The visible state is remembered so a LAZILY-created secondary (entering compare AFTER the
+        toggle was switched on) is seeded with it on creation (see set_compare)."""
+        self._gmeter_visible = bool(on)
+        for pane in self._panes():
+            pane.set_gmeter_visible(on)
+
+    def is_gmeter_visible(self) -> bool:
+        """True if the g-meter overlay is currently shown (the toggle is on). Lets the app SKIP the
+        per-tick g_at_time lookup entirely when nothing consumes it (the overlay is off by default)."""
+        return self._gmeter_visible
 
     def set_g(self, g):
         """Feed the current g to the PRIMARY pane's overlay (None blanks the dot). A no-op when the
@@ -532,9 +576,11 @@ class VideoView(QWidget):
             pane.set_g(g)
 
     def set_gmeter_source(self, source: str):
-        self.pane.set_gmeter_source(source)
-        if self.secondary is not None:
-            self.secondary.set_gmeter_source(source)
+        # Remember the source so a LAZILY-created secondary pane can be seeded with it on entry
+        # (set_compare), so the overlay reads the right sensor label on BOTH panes.
+        self._gmeter_source = source
+        for pane in self._panes():
+            pane.set_gmeter_source(source)
 
     def set_gmeter_lap(self, lap_id):
         """Tell the PRIMARY overlay which lap is being driven (per-lap max-G envelope scope). In
@@ -549,7 +595,7 @@ class VideoView(QWidget):
 
     def set_pane_badge(self, side: int, text: str, colour: str | None):
         """Set a pane's "Δ vs other" badge (compare mode, app-driven per tick)."""
-        cell = self._cell_a if side == PRIMARY else self._cell_b
+        cell = self._cell_for(side)
         if cell is not None:
             cell.set_badge(text, colour)
 
@@ -563,18 +609,44 @@ class VideoView(QWidget):
         self.slider.blockSignals(False)
         self.positionChanged.emit(global_s)
 
+    def _set_slider_window(self, window: tuple[float, float]):
+        """Confine the global scrub slider to a GLOBAL-time [start, end] window (compare mode's lap
+        A): the value is GLOBAL ms, so set the range to the window so a drag can't escape the lap.
+        Re-pin the current value into the new range. None range bug-guard: an empty/inverted window
+        falls back to a single point so the slider stays valid."""
+        self._lap_window = (float(window[0]), float(window[1]))
+        lo = int(window[0] * 1000)
+        hi = max(int(window[1] * 1000), lo)
+        self.slider.blockSignals(True)
+        self.slider.setRange(lo, hi)
+        self.slider.setValue(min(max(self.slider.value(), lo), hi))
+        self.slider.blockSignals(False)
+
     def _on_slider_moved(self, ms: int):
         # The slider value is GLOBAL ms — route it through the PRIMARY pane's chapter-aware seek.
+        # In compare mode clamp to lap A's window so a drag can't desync the pair or escape the lap.
+        if self._lap_window is not None:
+            lo, hi = self._lap_window
+            ms = min(max(ms, int(lo * 1000)), int(hi * 1000))
         self.seek(ms / 1000.0)
 
     def _on_duration(self, ms: int):
         """A per-chapter duration arrives as each source loads. Keep the slider spanning the WHOLE
-        session (the ChapterMap total when known, else this lone file's own duration)."""
+        session (the ChapterMap total when known, else this lone file's own duration). In compare
+        mode the slider is confined to lap A's window, so a per-chapter duration must NOT widen it."""
+        if self._lap_window is not None:
+            return  # compare mode: the range is pinned to lap A's window (see _set_slider_window)
         if self.pane.total_duration > 0:
             self.slider.setMaximum(int(self.pane.total_duration * 1000))
         else:
             self.slider.setMaximum(ms)
 
-    def _on_state(self, state):
-        playing = state == QMediaPlayer.PlaybackState.PlayingState
+    def _on_state(self, _state):
+        # The transport glyph reflects whether EITHER pane is playing: in compare mode the two panes
+        # auto-pause at their (different) lap ends, so following only the primary would let the glyph
+        # lie (show "pause" while the secondary still rolls, or vice versa). Recompute from both
+        # panes' live state — `_state` is ignored (it's only the trigger). Both panes' playbackState
+        # are observed (primary always; secondary when it exists, wired in set_compare).
+        playing = self.pane.is_playing() or (
+            self.secondary is not None and self.secondary.is_playing())
         self.play_btn.setIcon(theme.icon("ph.pause-fill" if playing else "ph.play-fill"))

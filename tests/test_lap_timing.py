@@ -35,11 +35,10 @@ def test_gps9_uses_true_spacing_reanchored_to_media():
     rng = np.random.default_rng(0)
     naive = list(1000.0 + np.cumsum(0.1001 + rng.normal(0, 0.003, n)))
     samples = [_sample(500_000 + i * 100) for i in range(n)]  # exact 10.000 Hz wall clock
-    spans = [(0.0, 0.0)] * n  # spans unused by _gps9_times
 
     # rate_factor=1.0 isolates the SPACING behaviour from the transponder clock-rate calibration
     # (the default factor, tested in tests/test_calibration.py, scales the spacing by ~0.9994).
-    out = np.asarray(_gps9_times(samples, spans, naive, rate_factor=1.0))
+    out = np.asarray(_gps9_times(samples, naive, rate_factor=1.0))
     assert len(out) == n
     # Anchored at the first naive time (so the axis stays on the media clock for video sync).
     assert abs(out[0] - naive[0]) < 1e-9
@@ -56,7 +55,7 @@ def test_gps9_falls_back_to_naive_without_timestamps():
     n = 50
     naive = [10.0 + i * 0.1 for i in range(n)]
     samples = [_sample(0) for _ in range(n)]  # no GPS9 timestamp
-    out = _gps9_times(samples, [(0.0, 0.0)] * n, naive)
+    out = _gps9_times(samples, naive)
     assert np.allclose(out, naive, atol=1e-12)
     print("test_gps9_falls_back_to_naive_without_timestamps OK")
 
@@ -74,7 +73,7 @@ def test_gps9_reanchors_after_a_run_break():
     tsB = [10_000 + i * 100 for i in range(20)]  # epoch jumped BACK by ~790 s
     samples = [_sample(t) for t in tsA + tsB]
     # rate_factor=1.0 to assert the raw 100 ms spacing (the calibration is tested separately).
-    out = np.asarray(_gps9_times(samples, [(0.0, 0.0)] * 40, naive, rate_factor=1.0))
+    out = np.asarray(_gps9_times(samples, naive, rate_factor=1.0))
     # Monotonic non-decreasing across the seam (no backwards jump from the epoch reset).
     assert np.all(np.diff(out) >= -1e-9), np.diff(out).min()
     # Run B re-anchored near its own naive start (not dragged back to run A's epoch).
@@ -83,6 +82,44 @@ def test_gps9_reanchors_after_a_run_break():
     assert np.allclose(np.diff(out[:20]), 0.1, atol=1e-6)
     assert np.allclose(np.diff(out[20:]), 0.1, atol=1e-6)
     print("test_gps9_reanchors_after_a_run_break OK")
+
+
+def test_gps9_lone_sample_run_keeps_naive_time():
+    """A single ISOLATED GPS9 sample (timestamp_ms>0) sandwiched between sentinel (==0) samples
+    can't form a run — the run-extension needs a sane single-step delta to a NEIGHBOURING timed
+    sample, and a lone fix has none. So it (like its sentinel neighbours) keeps its naive time
+    rather than being re-anchored. This is the `j == i` (no real run) branch."""
+    # idx 2 is the only timestamped fix; idx 0,1,3,4 are GPS5/sentinel (timestamp_ms == 0).
+    naive = [10.0, 10.1, 10.2, 10.3, 10.4]
+    samples = [_sample(0), _sample(0), _sample(700_000), _sample(0), _sample(0)]
+    out = np.asarray(_gps9_times(samples, naive, rate_factor=1.0))
+    # The lone fix keeps its exact naive time (no run to re-anchor it to).
+    assert abs(out[2] - naive[2]) < 1e-12, (out[2], naive[2])
+    # And nothing else moved either — the whole axis falls back to naive.
+    assert np.allclose(out, naive, atol=1e-12), out
+    print("test_gps9_lone_sample_run_keeps_naive_time OK")
+
+
+def test_gps9_monotonicity_clamp_pulls_up_a_dipping_run():
+    """The defensive `np.maximum.accumulate` clamp: if a later run's naive anchor sits BELOW the
+    GPS9-advanced end of the previous run, re-anchoring it there would step the axis backwards.
+    The clamp pulls those samples up to the running max so the time axis the video layer maps
+    against can never go back in time across a seam."""
+    # Run A (idx 0..4): naive anchored at 100.0, true GPS9 100 ms spacing -> 100.0 .. 100.4.
+    naiveA = [100.0 + i * 0.1 for i in range(5)]
+    # Run B (idx 5..9): its naive anchor (100.15) is BELOW A's end (100.4) -> would dip back.
+    naiveB = [100.15 + i * 0.1 for i in range(5)]
+    naive = naiveA + naiveB
+    tsA = [500_000 + i * 100 for i in range(5)]
+    tsB = [900_000 + i * 100 for i in range(5)]  # epoch jump -> a run break between A and B
+    samples = [_sample(t) for t in tsA + tsB]
+    out = np.asarray(_gps9_times(samples, naive, rate_factor=1.0))
+    # Never steps backwards across the seam.
+    assert np.all(np.diff(out) >= -1e-12), np.diff(out).min()
+    # The first sample of run B is clamped UP to run A's end (100.4), not left at its 100.15 anchor.
+    assert out[5] >= 100.4 - 1e-9, (out[5], naiveB[0])
+    assert out[5] > naiveB[0] + 1e-9, (out[5], naiveB[0])  # the clamp actually moved it
+    print("test_gps9_monotonicity_clamp_pulls_up_a_dipping_run OK")
 
 
 def test_crossing_instant_is_interpolated_not_nearest():
@@ -113,8 +150,8 @@ def test_crossing_instant_is_interpolated_not_nearest():
 
 
 if __name__ == "__main__":
-    test_gps9_uses_true_spacing_reanchored_to_media()
-    test_gps9_falls_back_to_naive_without_timestamps()
-    test_gps9_reanchors_after_a_run_break()
-    test_crossing_instant_is_interpolated_not_nearest()
-    print("\nALL LAP-TIMING TESTS PASSED")
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for t in tests:
+        t()
+        print(f"ok  {t.__name__}")
+    print(f"\nALL {len(tests)} LAP-TIMING TESTS PASSED")

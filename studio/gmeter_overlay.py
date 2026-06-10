@@ -168,12 +168,19 @@ class GMeterOverlay(QWidget):
             self._recent.pop(0)
         # Per-direction robust peak from the rolling window: the felt extent reached in each of
         # the four cardinals, taken at _PEAK_PERCENTILE so a single shake sample doesn't win.
-        xs = [p[0] for p in self._recent]
-        ys = [p[1] for p in self._recent]
-        right = [x for x in xs if x > 0]
-        left = [-x for x in xs if x < 0]
-        back = [y for y in ys if y > 0]     # accelerating (felt down)
-        fwd = [-y for y in ys if y < 0]     # braking (felt up)
+        # Single pass partitions the window into the four sign-split lists (was four separate
+        # comprehensions, each re-iterating _recent); the per-list _pct is unchanged so the peaks
+        # are byte-identical.
+        right, left, back, fwd = [], [], [], []
+        for px, py in self._recent:
+            if px > 0:
+                right.append(px)
+            elif px < 0:
+                left.append(-px)
+            if py > 0:
+                back.append(py)     # accelerating (felt down)
+            elif py < 0:
+                fwd.append(-py)     # braking (felt up)
         self._peak_right = max(self._peak_right, _pct(right, _PEAK_PERCENTILE))
         self._peak_left = max(self._peak_left, _pct(left, _PEAK_PERCENTILE))
         self._peak_back = max(self._peak_back, _pct(back, _PEAK_PERCENTILE))
@@ -203,10 +210,16 @@ class GMeterOverlay(QWidget):
         self.update()
 
     def reset_envelope(self) -> None:
-        """Clear the accumulated max-G envelope + cardinal peaks (new scope, e.g. a new lap)."""
+        """Clear the accumulated max-G envelope + cardinal peaks (new scope, e.g. a new lap), AND
+        re-seed the live-dot EMA so the filtered pointer starts fresh on the new scope's first
+        sample instead of carrying the previous lap's filtered value (which would make the dot drift
+        in from the old lap's position on a per-lap reset)."""
         self._hull_pts.clear()
         self._recent.clear()
         self._peak_fwd = self._peak_back = self._peak_left = self._peak_right = 0.0
+        # Re-seed the dot EMA: the next set_g seeds _fx/_fy from its own value (no carry-over).
+        self._ema_init = False
+        self._fx = self._fy = 0.0
         self.update()
 
     # ------------------------------------------------------------------ painting

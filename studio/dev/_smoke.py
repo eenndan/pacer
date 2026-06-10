@@ -1,5 +1,5 @@
 """Throwaway headless smoke test: build the full StudioWindow offscreen and exercise the
-wiring (default selection, marker/cursor, timing-line re-segment). Run: python -m studio._smoke"""
+wiring (default selection, marker/cursor, timing-line re-segment). Run: python -m studio.dev._smoke"""
 import os
 import sys
 

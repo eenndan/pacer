@@ -59,17 +59,39 @@ def _best_split_per_sector_impl(splits_by_lap: dict[int, list[float]],
     return best
 
 
+def _is_blank(v) -> bool:
+    """A cell key is "blank" when it's absent or NaN (a partial lap with fewer splits)."""
+    return v is None or (isinstance(v, float) and math.isnan(v))
+
+
 class _NumItem(QTableWidgetItem):
     """A table cell that sorts by a numeric key (Qt.UserRole) rather than its display text, so
-    e.g. lap times "1:08.408" sort as 68.408 s and blank cells sort to the end."""
+    e.g. lap times "1:08.408" sort as 68.408 s, and blank cells (partial laps) sort LAST in BOTH
+    directions — never above a real value.
+
+    Qt's view sort reverses the `<` result for a descending column, so a fixed `__lt__` that puts
+    blanks last ascending would float them to the TOP descending. To keep blanks last either way,
+    the blank ordering is flipped to match the active direction: LapTable sets `_descending` to the
+    column's sort order right before each sort (header click or programmatic), so `__lt__` makes
+    blanks compare as the extreme that lands them at the bottom after Qt's reversal."""
+
+    _descending = False  # active sort direction, set by LapTable before each sort
 
     def __lt__(self, other: QTableWidgetItem) -> bool:  # noqa: D401 (Qt sort hook)
         a = self.data(NUM_ROLE)
         b = other.data(NUM_ROLE)
-        if a is None or (isinstance(a, float) and math.isnan(a)):
-            return False  # blanks/NaN sort to the bottom regardless of direction
-        if b is None or (isinstance(b, float) and math.isnan(b)):
-            return True
+        a_blank = _is_blank(a)
+        b_blank = _is_blank(b)
+        if a_blank or b_blank:
+            if a_blank and b_blank:
+                return False  # two blanks: equal, stable order
+            # Exactly one is blank. Blanks must end up LAST after Qt's optional descending reversal:
+            #   ascending  -> blank is "greatest" (blank < x is False, x < blank is True);
+            #   descending -> Qt reverses the result, so blank must be "smallest" here (blank < x is
+            #                 True, x < blank is False) to STILL land at the bottom after reversal.
+            if a_blank:        # self is the blank
+                return self._descending
+            return not self._descending  # other is the blank, self is real
         return float(a) < float(b)
 
 
@@ -80,6 +102,11 @@ class LapTable(QWidget):
         super().__init__()
         self.session = session
         self._current_lap = None  # F3: the lap on the video (independent of selection)
+        # Highlight caches, populated by refresh(): the per-column session-best split values
+        # (F5 purple target) and the set of lap ids with a GPS dropout (⚠). Initialised here so
+        # _apply_highlights()/_lap_cell_text() can read them directly (no getattr defaults).
+        self._best_split: list = []
+        self._dropout_ids: set = set()
 
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)
@@ -113,13 +140,21 @@ class LapTable(QWidget):
         self.refresh()
 
     # ------------------------------------------------------------------ build
+    def _n_split_cols(self) -> int:
+        """How many S-split columns to show: N sector lines split a lap into N+1 sub-sectors,
+        so N+1 columns when there are any sector lines, else 0 (no default split columns).
+        Single-sourced (used by refresh() for the headers and _apply_highlights() for the
+        purple per-column best span)."""
+        n = self.session.sector_count()
+        return n + 1 if n else 0
+
     def refresh(self):
         rows = self.session.lap_rows()
 
         # N sector lines split each lap into N+1 sub-sectors; show one split column per
         # sub-sector (none by default = today's 4 columns). Column count depends on this,
         # so set the headers here — refresh() runs on selection and after sectors change.
-        n_splits = self.session.laps.sector_count() + 1 if self.session.laps.sector_count() else 0
+        n_splits = self._n_split_cols()
         headers = COLUMNS + [f"S{i + 1}" for i in range(n_splits)]
 
         # Per-lap splits (F5 input) and the per-column session-best split value (purple target).
@@ -146,8 +181,8 @@ class LapTable(QWidget):
             for i in range(n_splits):
                 if i < len(splits):
                     cells.append((f"{splits[i]:.2f}", float(splits[i])))
-                else:  # a partial lap may have fewer splits than columns — blank, sorts last
-                    cells.append(("", float("nan")))
+                else:  # a partial lap may have fewer splits than columns — blank (NaN key),
+                    cells.append(("", float("nan")))  # sorts LAST in both directions (_NumItem)
             for c, (text, key) in enumerate(cells):
                 item = _NumItem(text)
                 item.setData(NUM_ROLE, key)
@@ -161,6 +196,8 @@ class LapTable(QWidget):
             self.table.item(r, 0).setData(LAP_ROLE, lap_id)
         self.table.blockSignals(False)
         # Re-apply the user's chosen sort (lap-ascending by default) on the freshly-filled rows.
+        # Tell _NumItem the direction first so blanks land LAST after any descending reversal.
+        _NumItem._descending = self._sort_order == Qt.DescendingOrder
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(self._sort_col, self._sort_order)
         self._best_split = best_split  # cached so re-highlight after a sort needn't recompute
@@ -194,10 +231,10 @@ class LapTable(QWidget):
             return
         # Overall best lap = the valid lap with the min time (foreground green on all cells).
         best_lap = self.session.best_lap_id()
-        n_splits = self.session.laps.sector_count() + 1 if self.session.laps.sector_count() else 0
-        best_split = getattr(self, "_best_split", [])
+        n_splits = self._n_split_cols()
+        best_split = self._best_split
 
-        dropout_ids = getattr(self, "_dropout_ids", set())
+        dropout_ids = self._dropout_ids
         self.table.blockSignals(True)
         for r in range(rows):
             lap_id = self._lap_id(r)
@@ -235,27 +272,36 @@ class LapTable(QWidget):
         self.table.blockSignals(False)
         self._apply_current_lap()
 
+    def _lap_cell_text(self, lap_id, on: bool) -> str:
+        """The Lap-cell text for `lap_id`: a '▶ ' prefix when it's the current (playing) lap and a
+        trailing ' ⚠' low-confidence marker when it has a GPS dropout."""
+        prefix = CURRENT_PREFIX if on else ""
+        suffix = DROPOUT_SUFFIX if lap_id in self._dropout_ids else ""
+        return f"{prefix}{lap_id}{suffix}"
+
+    def _set_row_current(self, r: int, on: bool):
+        """Apply/clear the ▶ prefix + bold on ONE row's Lap cell (the only per-lap-change cue)."""
+        if r < 0:
+            return
+        item = self.table.item(r, 0)
+        if item is None:
+            return
+        item.setText(self._lap_cell_text(self._lap_id(r), on))
+        font = item.font()
+        font.setBold(on)
+        item.setFont(font)
+
     def _apply_current_lap(self):
-        """Compose the Lap-cell text: a '▶ ' prefix + bold for the current (playing) lap (F3),
-        and a trailing ' ⚠' low-confidence marker for any lap with a GPS dropout. Lap-column
-        only — no row background, so the BLUE Qt selection stays the sole row-background cue.
-        Both cues are keyed by lap id, so they survive sorting and coexist with each other and
-        with the green/purple highlights."""
+        """Compose every Lap-cell's text/bold: a '▶ ' prefix + bold for the current (playing) lap
+        (F3), and a trailing ' ⚠' low-confidence marker for any lap with a GPS dropout. Lap-column
+        only — no row background, so the BLUE Qt selection stays the sole row-background cue. Both
+        cues are keyed by lap id, so they survive sorting and coexist with the green/purple
+        highlights. FULL-REBUILD path: used after refresh()/sort (every row's identity may have
+        changed). The per-tick lap CHANGE uses set_current_lap's fast two-row path instead."""
         target = self._row_for_lap(self._current_lap)
-        dropout_ids = getattr(self, "_dropout_ids", set())
         self.table.blockSignals(True)
         for r in range(self.table.rowCount()):
-            item = self.table.item(r, 0)
-            if item is None:
-                continue
-            on = r == target
-            lap_id = self._lap_id(r)
-            prefix = CURRENT_PREFIX if on else ""
-            suffix = DROPOUT_SUFFIX if lap_id in dropout_ids else ""
-            item.setText(f"{prefix}{lap_id}{suffix}")
-            font = item.font()
-            font.setBold(on)
-            item.setFont(font)
+            self._set_row_current(r, r == target)
         self.table.blockSignals(False)
 
     def _on_sorted(self, col, order):
@@ -264,14 +310,33 @@ class LapTable(QWidget):
         # keyed by lap id so they follow the laps to their new rows.
         self._sort_col = col
         self._sort_order = order
+        # Qt's header-click sort ran with the PREVIOUS direction flag, which can mis-place blank
+        # cells (they must stay LAST in both directions). Set the flag to the new direction and
+        # re-sort so blanks land at the bottom whichever way the column is now ordered. Guarded so
+        # the re-sort's own sortIndicatorChanged (same col/order) doesn't recurse.
+        descending = order == Qt.DescendingOrder
+        if _NumItem._descending != descending:
+            _NumItem._descending = descending
+            self.table.sortByColumn(col, order)
         self._apply_highlights()
 
     def set_current_lap(self, lap_id):
-        """Mark the lap currently playing on the video; no effect on user selection."""
+        """Mark the lap currently playing on the video; no effect on user selection.
+
+        Per-tick fast path: only the OLD current-lap row (clear ▶/unbold) and the NEW one (add
+        ▶/bold) are touched — not every row's text+font rewritten each lap change. The full-row
+        path (_apply_current_lap) is reserved for the refresh()/sort case where row identities
+        shift. Identical on-screen result; far less per-change work."""
         if lap_id == self._current_lap:
             return
+        old_row = self._row_for_lap(self._current_lap)
         self._current_lap = lap_id
-        self._apply_current_lap()
+        new_row = self._row_for_lap(lap_id)
+        self.table.blockSignals(True)
+        if old_row != new_row:
+            self._set_row_current(old_row, False)  # clear the prefix/bold off the previous lap row
+        self._set_row_current(new_row, True)       # mark the new current lap row
+        self.table.blockSignals(False)
 
     def select(self, idxs: list[int]):
         self.table.blockSignals(True)

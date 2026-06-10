@@ -2,7 +2,7 @@
 chapter 0's end, play, and timestamp the ENTIRE media-status / playback-state / position
 sequence across the chapter seam (EndOfMedia -> reopen next chapter -> resume).
 
-Run: env -u VIRTUAL_ENV pixi run python -m studio._seam_diag [--near SECONDS_BEFORE_END]
+Run: env -u VIRTUAL_ENV pixi run python -m studio.dev._seam_diag [--near SECONDS_BEFORE_END]
 
 It runs OFFSCREEN but with the real GStreamer/FFmpeg decode (the offscreen platform still
 decodes; only the surface is headless), so the reopen latency it measures is the real one.

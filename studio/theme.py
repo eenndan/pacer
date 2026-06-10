@@ -53,7 +53,6 @@ class C:
     ahead = "#5DD6A0"           # ahead / success / best lap green
     behind = "#E8746B"          # behind / danger red
     best = "#B794F6"            # best-sector purple
-    caution = "#D9A441"         # ⚠ caution
 
 
 # --- chart series palette (Phase 2) ---------------------------------------------------------
@@ -72,9 +71,7 @@ CHART_SERIES = [
 
 # Semantic mapping used by the plots (documented so it stays consistent with the lap table):
 #   BEST lap curve     -> C.ahead  (the same green the lap table marks the best lap with)
-#   primary / current  -> SERIES_PRIMARY (the amber accent — the first categorical entry)
-#   additional laps    -> CHART_SERIES in order (skipping the slot the best lap already owns)
-SERIES_PRIMARY = CHART_SERIES[0]   # amber accent — current/primary lap
+#   additional laps    -> CHART_SERIES in order (the amber accent is the first categorical entry)
 SERIES_BEST = C.ahead              # green — matches the lap table's best-lap colour
 
 
@@ -205,11 +202,10 @@ def mono_font(size: int = TABLE, weight: QFont.Weight = W_REGULAR) -> QFont:
 
 
 # ====================================================================== icons
-def icon(name: str, color: str | None = None, active: str | None = None,
-         size: int | None = None) -> QIcon:
+def icon(name: str, color: str | None = None) -> QIcon:
     """A themed QIcon from an icon font (qtawesome bundles Phosphor under the `ph` prefix, e.g.
-    "ph.play-fill"). The glyph is tinted to `color` (default C.text) and to `active` (default
-    C.accent) for its active/on state, so e.g. a checkable toolbar button lights up amber.
+    "ph.play-fill"). The glyph is tinted to `color` (default C.text), and to C.accent for its
+    active/on state, so e.g. a checkable toolbar button lights up amber.
 
     qtawesome is imported LAZILY here so a missing dependency degrades gracefully — we log a clear
     message and return an empty QIcon (the button still works, just without a glyph) rather than
@@ -221,10 +217,7 @@ def icon(name: str, color: str | None = None, active: str | None = None,
         print(f"theme: qtawesome unavailable ({exc}); icon '{name}' will be blank. "
               "Install it via `pixi install` (the qtawesome pypi dependency).", flush=True)
         return QIcon()
-    # `size` is accepted for call-site symmetry but a QIcon is resolution-independent — the actual
-    # render size is governed by the consuming widget (QAbstractButton.setIconSize), so it is not
-    # baked into the icon here.
-    return qta.icon(name, color=color or C.text, color_active=active or C.accent)
+    return qta.icon(name, color=color or C.text, color_active=C.accent)
 
 
 # ====================================================================== palette

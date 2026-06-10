@@ -31,7 +31,7 @@ pacer::Point pacer::ToPoint(Vec3f v) { return {v.x, v.y}; }
 
 pacer::Point pacer::ToPoint(Point x) { return x; }
 
-pacer::Point pacer::ToPoint(GPSSample s) { return {s.lon, s.lat}; }
+pacer::Point pacer::ToLonLat(GPSSample s) { return {s.lon, s.lat}; }
 
 pacer::Point pacer::Interpolate(Point from, Point to, double ratio) {
   return from * (1 - ratio) + to * ratio;
@@ -59,12 +59,6 @@ pacer::GPSSample pacer::Interpolate(GPSSample from, GPSSample to,
       .timestamp_ms = timestamp_ms,
   };
 }
-
-/*
-Note: The Earth is almost, but not quite, a perfect sphere.
-Its equatorial radius is 6378 km, but its polar radius is 6357 km - in other
-words, the Earth is slightly flattened. 22 Oct 2020
-*/
 
 auto pacer::CoordinateSystem::Global(Vec3f point) const -> GPSSample {
   point = local_origin + dx * point[0] + dy * point[1] + dz * point[2];
@@ -109,7 +103,7 @@ pacer::Vec3f pacer::CoordinateSystem::CanonicalLocal(GPSSample origin) {
 }
 
 pacer::CoordinateSystem::CoordinateSystem(GPSSample origin)
-    : origin(origin), local_origin(CanonicalLocal(origin)),
+    : local_origin(CanonicalLocal(origin)),
       dx(Vec3f{
           -R_equator * std::cos(origin.lat * M_PI / 180.) *
               std::sin(origin.lon * M_PI / 180.),

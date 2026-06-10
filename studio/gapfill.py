@@ -250,7 +250,7 @@ def reconstruct_lap(xs, ys, times, donors,
             best = best_lap if best_lap is not None else best_ref
             if best is not None:
                 err, sub, name = best
-                is_ref = best is best_ref and best_lap is None
+                is_ref = best_lap is None
                 mapped = _similarity_map(sub, pa, pb)
                 fill_xy = mapped
                 report["source"] = ("reference" if is_ref else f"borrow:{name}")

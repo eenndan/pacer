@@ -20,7 +20,8 @@ from __future__ import annotations
 import argparse, datetime as dt, json, sys
 import numpy as np
 import pacer
-from studio import chapters, transponder
+from studio import chapters
+from studio.dev import transponder
 from studio.session import (_read_gpmf, _gate_quality, _clean, _gps9_times,
                             _gap_segments, tracks, _fit_start_line, _widen,
                             MIN_LAP_SAMPLES, MIN_LAP_TIME, LAP_BAND_LO, LAP_BAND_HI,
@@ -135,7 +136,7 @@ def build_laps(paths, method, **kw):
     samples, spans, naive, durations = _read_gpmf(paths)
     samples, spans, naive = _gate_quality(samples, spans, naive)
     samples, spans, naive = _clean(samples, spans, naive)
-    times = _gps9_times(samples, spans, naive)
+    times = _gps9_times(samples, naive)
     samples = smooth_track(samples, times, method, **kw)
     laps = pacer.Laps()
     for s, t in zip(samples, times):

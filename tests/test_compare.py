@@ -130,17 +130,27 @@ def test_outside_window_clamps_and_degenerate_none():
 
 # --------------------------------------------------------- P2: PlayerPane lap window
 class _FakePlayer:
-    """Minimal stand-in for the QMediaPlayer in a PlayerPane (source=None) so the lap-window
-    state machine can be driven without a real decoder: tracks play/pause + records pauses."""
+    """Minimal stand-in for the QMediaPlayer in a PlayerPane so the lap-window AND the chapter-seam
+    state machine can be driven without a real decoder: tracks play/pause/setSource + records calls.
+    `mediaStatus()`/`setSource()` let the seam tests drive the gate that the real Qt/FFmpeg backend
+    exercises (the spurious LoadedMedia/EndOfMedia burst + the genuine LoadingMedia transition)."""
     def __init__(self):
         self.playing = True
         self.pause_calls = 0
+        self.play_calls = 0
         self.positions = []
+        self.sources = []  # QUrls passed to setSource (seam-switch tracking)
+        from PySide6.QtMultimedia import QMediaPlayer
+        self._status = QMediaPlayer.MediaStatus.LoadedMedia
 
     def playbackState(self):
         from PySide6.QtMultimedia import QMediaPlayer
         return (QMediaPlayer.PlaybackState.PlayingState if self.playing
                 else QMediaPlayer.PlaybackState.PausedState)
+
+    def play(self):
+        self.playing = True
+        self.play_calls += 1
 
     def pause(self):
         self.playing = False
@@ -148,6 +158,12 @@ class _FakePlayer:
 
     def setPosition(self, ms):
         self.positions.append(ms)
+
+    def setSource(self, url):
+        self.sources.append(url)
+
+    def mediaStatus(self):
+        return self._status
 
 
 def _pane_with_fake_player():
@@ -218,13 +234,164 @@ def test_normal_mode_no_window_unchanged():
     print("test_normal_mode_no_window_unchanged OK")
 
 
+# ----------------------------------------------- P3: chapter-seam state machine (regression #1/#7)
+from PySide6.QtMultimedia import QMediaPlayer  # noqa: E402
+
+from studio import chapters  # noqa: E402
+
+_LOADING = QMediaPlayer.MediaStatus.LoadingMedia
+_LOADED = QMediaPlayer.MediaStatus.LoadedMedia
+_END = QMediaPlayer.MediaStatus.EndOfMedia
+
+
+def _two_chapter_pane():
+    """A PlayerPane over a TWO-chapter ChapterMap (each 100 s) with its player swapped for a fake,
+    parked in chapter 0. The fake player records setSource/setPosition/play/pause so the seam gate
+    can be driven with the exact status burst the real backend emits."""
+    cmap = chapters.ChapterMap(["GX010000.MP4", "GX020000.MP4"], [100.0, 100.0])
+    pane = PlayerPane(cmap)
+    pane.player = _FakePlayer()
+    # Land us in chapter 0, playing, nothing pending.
+    pane._current_chapter = 0
+    pane._switching = False
+    pane._pending = None
+    pane.player.playing = True
+    return pane
+
+
+def test_seam_same_chapter_seek_midswitch_preserves_pending():
+    """REGRESSION #1: a switch to chapter 1 is armed (deferred seek+resume). The backend emits the
+    SPURIOUS LoadedMedia+EndOfMedia burst (ignored by the gate). A same-chapter seek issued
+    mid-switch must FOLD into _pending (NOT clear it / fire setPosition immediately), so the
+    deferred seam seek is not clobbered and still resolves on the genuine load."""
+    pane = _two_chapter_pane()
+    # Arm a cross-chapter switch: seek into chapter 1 (global 150 -> chapter 1, local 50), playing.
+    pane.seek(150.0)
+    assert pane._switching is True, "switch should be armed"
+    assert pane._pending == (1, 50.0, True), pane._pending
+    assert len(pane.player.sources) == 1, "setSource called once for the switch"
+    setpos_before = len(pane.player.positions)
+
+    # The spurious burst the real backend re-emits synchronously inside setSource (old source's
+    # leftover statuses) — the gate must ignore both, _pending untouched.
+    pane._on_media_status(_LOADED)
+    pane._on_media_status(_END)
+    assert pane._pending == (1, 50.0, True), "spurious burst clobbered _pending"
+    assert pane._switching is True
+
+    # MID-SWITCH same-chapter seek (chapter 1 is current via _set_source): must fold into _pending,
+    # NOT clear it nor fire setPosition on the not-yet-loaded media.
+    pane.seek(170.0)  # global 170 -> chapter 1, local 70
+    assert pane._switching is True, "a same-chapter mid-switch seek must not open the gate"
+    assert pane._pending == (1, 70.0, True), f"seek mid-switch clobbered the deferred seek: {pane._pending}"
+    assert len(pane.player.positions) == setpos_before, "no setPosition fired on the in-flight media"
+
+    # The GENUINE load now begins (LoadingMedia opens the gate) then completes — the deferred seek
+    # (folded to local 70) + resume must fire exactly once.
+    pane._on_media_status(_LOADING)
+    assert pane._switching is False, "LoadingMedia opens the gate"
+    pane._on_media_status(_LOADED)
+    assert pane._pending is None, "deferred seek not applied on the genuine load"
+    assert pane.player.positions[-1] == 70_000, pane.player.positions
+    assert pane.player.play_calls == 1, "resume not fired on the genuine load"
+    assert pane.player.playing is True
+    print("test_seam_same_chapter_seek_midswitch_preserves_pending OK")
+
+
+def test_seam_pause_during_reopen_not_overridden_by_apply():
+    """REGRESSION #7: the user PAUSES during a seam reopen. The deferred resume captured the
+    play-state from BEFORE the pause, so honouring it on the genuine load would resume playback the
+    user deliberately stopped. The pane must skip the resume and stay paused."""
+    pane = _two_chapter_pane()
+    pane.seek(150.0)  # arm switch to chapter 1, resume=True (was playing)
+    assert pane._pending == (1, 50.0, True)
+    # User pauses mid-reopen.
+    pane.pause()
+    assert pane.player.playing is False
+    assert pane._user_paused_during_reopen is True
+    # Genuine load: gate opens, then completes — the resume must be SKIPPED (deliberate pause wins).
+    pane._on_media_status(_LOADING)
+    pane._on_media_status(_LOADED)
+    assert pane._pending is None
+    assert pane.player.positions[-1] == 50_000, "deferred seek must still apply"
+    assert pane.player.play_calls == 0, "watchdog/apply must NOT resume a deliberately-paused seam"
+    assert pane.player.playing is False, "the pause must survive the seam"
+    assert pane._user_paused_during_reopen is False, "the flag must clear after the reopen resolves"
+    print("test_seam_pause_during_reopen_not_overridden_by_apply OK")
+
+
+def test_seam_pause_during_reopen_not_overridden_by_watchdog():
+    """REGRESSION #7 (watchdog path): a pause during reopen also survives the bounded-resume
+    watchdog force-apply (a slow/hiccuping reopen) — it must not resume the deliberate pause."""
+    pane = _two_chapter_pane()
+    pane.seek(150.0)
+    pane.pause()
+    assert pane._user_paused_during_reopen is True
+    # The watchdog fires (reopen took too long) and force-applies the pending seek.
+    pane._on_seam_watchdog()
+    assert pane._pending is None
+    assert pane.player.positions[-1] == 50_000
+    assert pane.player.play_calls == 0, "the watchdog must not resume a deliberately-paused seam"
+    assert pane.player.playing is False
+    print("test_seam_pause_during_reopen_not_overridden_by_watchdog OK")
+
+
+def test_seam_normal_reopen_still_resumes():
+    """Control: with NO pause and NO mid-switch seek, a normal auto-advance reopen resumes playing
+    on the genuine load (the seam fix from main is intact)."""
+    pane = _two_chapter_pane()
+    # Simulate the auto-advance: end of chapter 0 -> load chapter 1 at local 0, keep playing.
+    pane._on_end_of_media()
+    assert pane._pending == (1, 0.0, True)
+    assert pane._switching is True
+    # Spurious burst ignored, then genuine load.
+    pane._on_media_status(_LOADED)
+    pane._on_media_status(_END)
+    assert pane._pending == (1, 0.0, True), "spurious burst clobbered the auto-advance"
+    pane._on_media_status(_LOADING)
+    pane._on_media_status(_LOADED)
+    assert pane._pending is None
+    assert pane.player.positions[-1] == 0
+    assert pane.player.play_calls == 1 and pane.player.playing is True
+    print("test_seam_normal_reopen_still_resumes OK")
+
+
+def test_play_at_window_end_seeks_to_start_first():
+    """FIX #4: a compare pane parked AT its lap-window end resumes from the window START on Play
+    (a bare play() there is a dead no-op — it re-pauses on the next tick)."""
+    cmap = chapters.ChapterMap(["GX010000.MP4", "GX020000.MP4"], [100.0, 100.0])
+    pane = PlayerPane(cmap)
+    pane.player = _FakePlayer()
+    pane.player.playing = False
+    pane.set_lap_window(120.0, 150.0)   # lap spans into chapter 1
+    pane._latest_global = 150.0          # parked exactly at the window end
+    pane._current_chapter = 1            # already in the chapter the end falls in
+    pane._switching = False
+    pane._pending = None
+    pane.play()
+    # Seek to the window start (global 120 -> chapter 1, local 20) THEN play.
+    assert pane.player.positions[-1] == 20_000, pane.player.positions
+    assert pane.player.play_calls == 1 and pane.player.playing is True
+    print("test_play_at_window_end_seeks_to_start_first OK")
+
+
+def test_play_mid_window_does_not_reseek():
+    """FIX #4 control: Play while mid-window (not parked at the end) must NOT reseek — it just
+    resumes from where it is."""
+    pane = PlayerPane(None)
+    pane.player = _FakePlayer()
+    pane.player.playing = False
+    pane.set_lap_window(10.0, 20.0)
+    pane._latest_global = 14.0  # mid-window
+    pane.play()
+    assert pane.player.positions == [], "must not reseek mid-window"
+    assert pane.player.play_calls == 1 and pane.player.playing is True
+    print("test_play_mid_window_does_not_reseek OK")
+
+
 if __name__ == "__main__":
-    test_finish_delta_equals_laptime_difference()
-    test_self_delta_is_zero()
-    test_cross_check_vs_delta_at_time()
-    test_outside_window_clamps_and_degenerate_none()
-    test_lap_window_stops_and_clamps_at_end()
-    test_lap_window_tolerance_catches_sub_ms_short_fall()
-    test_clear_lap_window_restores_whole_session()
-    test_normal_mode_no_window_unchanged()
-    print("\nALL COMPARE TESTS PASSED")
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for t in tests:
+        t()
+        print(f"ok  {t.__name__}")
+    print(f"\nALL {len(tests)} COMPARE TESTS PASSED")
