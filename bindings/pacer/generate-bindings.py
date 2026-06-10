@@ -55,6 +55,10 @@ def my_litgen_options() -> litgen.LitgenOptions:
     options.fn_template_options.add_ignore("Interpolate")
     options.fn_template_options.add_ignore("ToPoint")
 
+    # ApproxEqual is an internal geometry helper (the single epsilon-equality used by
+    # Segment::operator==), not part of the Python API — keep it off the binding surface.
+    options.fn_exclude_by_name__regex = "^ApproxEqual$"
+
     # ////////////////////////////////////////////////////////////////////
     # Format the python stubs with black
     # ////////////////////////////////////////////////////////////////////

@@ -11,12 +11,15 @@ macro(add_pacer_library name)
         ${ARGN}          # Input arguments (after `name`)
     )
 
-    # Validate required arguments
-    if(NOT DEFINED PACER_SOURCES)
-        message(FATAL_ERROR "SOURCES not provided for target ${name}")
-    endif()
+    # Validate required arguments. SOURCES is OPTIONAL: a module with no .cpp is header-only and
+    # is emitted as an INTERFACE library (no compiled artifact, just propagated include dirs).
     if(NOT DEFINED PACER_HEADERS)
         message(FATAL_ERROR "HEADERS not provided for target ${name}")
+    endif()
+    if(PACER_SOURCES)
+        set(_pacer_header_only FALSE)
+    else()
+        set(_pacer_header_only TRUE)
     endif()
 
     # Create isolated include directory in the build tree
@@ -44,25 +47,37 @@ macro(add_pacer_library name)
     # Ensure headers are copied before building the library
     add_custom_target(pacer_${name}_headers DEPENDS ${copied_headers})
 
-    # Create the library target
-    add_library(pacer_${name} STATIC ${PACER_SOURCES} ${PACER_HEADERS})
+    if(_pacer_header_only)
+        # Header-only module -> INTERFACE library: no compiled artifact, consumers just inherit
+        # its include dirs (and, via add_dependencies, the header-copy step) when they link it.
+        add_library(pacer_${name} INTERFACE)
+        add_dependencies(pacer_${name} pacer_${name}_headers)
+        target_include_directories(pacer_${name}
+            INTERFACE
+                $<BUILD_INTERFACE:${include_dir}>  # Public includes via build tree
+        )
+    else()
+        # Create the library target
+        add_library(pacer_${name} STATIC ${PACER_SOURCES} ${PACER_HEADERS})
 
-    # Link headers copying to the target
-    add_dependencies(pacer_${name} pacer_${name}_headers)
+        # Link headers copying to the target
+        add_dependencies(pacer_${name} pacer_${name}_headers)
 
-    # Set include directories
-    target_include_directories(pacer_${name}
-        # PRIVATE
-        #     ${CMAKE_CURRENT_SOURCE_DIR}  # For private includes in source tree
-        PUBLIC
-            $<BUILD_INTERFACE:${include_dir}>  # Public includes via build tree
-    )
+        # Set include directories
+        target_include_directories(pacer_${name}
+            # PRIVATE
+            #     ${CMAKE_CURRENT_SOURCE_DIR}  # For private includes in source tree
+            PUBLIC
+                $<BUILD_INTERFACE:${include_dir}>  # Public includes via build tree
+        )
+
+        # put to folder pacer (xcode)
+        set_property(TARGET pacer_${name} PROPERTY FOLDER "pacer")
+    endif()
 
     # Create namespaced alias
     add_library(pacer::${name} ALIAS pacer_${name})
 
-    # put to folder pacer (xcode)
-    set_property(TARGET pacer_${name} PROPERTY FOLDER "pacer")
     set_property(TARGET pacer_${name}_headers PROPERTY FOLDER "headers helpers")
 
 endmacro()

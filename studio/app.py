@@ -199,8 +199,8 @@ class StudioWindow(QMainWindow):
         # modeChanged wiring; the readout keeps its per-tick recolor. ~2 rows of height reclaimed.
         plots_label = QLabel("SPEED · Δ TO BEST")
         plots_label.setProperty("role", "BarLabel")
-        self.plots.x_mode.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0), 1, self.plots.x_mode)
+        self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0), 1, self.plots.x_mode_combo)
         plots_panel = self._headered(plots_header, (self.plots, 1))
 
         left = QSplitter(Qt.Vertical)
@@ -421,8 +421,8 @@ class StudioWindow(QMainWindow):
             if self._scrub_view_pending and self._scrub_view_t is not None:
                 self._scrub_view_pending = False
                 t = self._scrub_view_t
-                self.plots.place_cursors_at_time(t)
-                self.map.set_marker_time(t)
+                self.plots.set_playhead_time(t, force=True)
+                self.map.set_playhead_time(t)
                 self._apply_readout(t)
             self._compare_tick()  # keep the secondary g + Δ badges live while scrubbing
             return
@@ -466,17 +466,17 @@ class StudioWindow(QMainWindow):
             self.video.set_pane_badge(side, f"Δ {d:+.2f} s", colour)
 
     def _apply_position(self, t: float):
-        self.plots.set_cursor_time(t)
+        self.plots.set_playhead_time(t)
         self._apply_readout(t)
 
     def _apply_readout(self, t: float):
         # Resolve the two per-tick searches ONCE and reuse them everywhere below (the lap that
         # contains t, and the nearest trace index at t) — they used to be recomputed two more
-        # times each tick (delta_at_time re-ran lap_at_time; set_marker_time + speed_at_time each
+        # times each tick (delta_at_time re-ran lap_at_time; set_playhead_time + speed_at_time each
         # re-ran index_at_time).
         lap_id = self.session.lap_at_time(t)   # F3: which lap is on the video
         i = self.session.index_at_time(t)      # nearest trace sample (marker + speed)
-        self.map.set_marker_index(i)           # F3: red marker (same point set_marker_time chose)
+        self.map.set_marker_index(i)           # F3: red marker (same point set_playhead_time chose)
         self._follow_current_lap(lap_id, t)  # charts auto-follow the playhead's lap (vs best)
         self.table.set_current_lap(lap_id)
         self.map.set_current_lap(lap_id)  # highlight the current lap's trace on the map
@@ -528,11 +528,12 @@ class StudioWindow(QMainWindow):
         ids = [lap_id] if best is None or best == lap_id else [lap_id, best]
         self.table.select(ids)   # programmatic (signals blocked) → no seek, won't fight playback
         self.plots.set_laps(ids)
-        # During a scrub-across-boundary, set_laps→refresh re-places the cursor via set_cursor_time
-        # which is a no-op mid-drag; re-place it from the dragged time so the cursor stays put in
-        # the now-current lap (resolving the old "scrub dead off the displayed lap" caveat too).
+        # During a scrub-across-boundary, set_laps→refresh re-places the cursor via
+        # set_playhead_time (force=False), which is a no-op mid-drag; re-place it from the dragged
+        # time (force=True) so the cursor stays put in the now-current lap (resolving the old
+        # "scrub dead off the displayed lap" caveat too).
         if self.plots.is_dragging():
-            self.plots.place_cursors_at_time(t)
+            self.plots.set_playhead_time(t, force=True)
 
     def _update_diff_box(self, t: float, sp: float | None, lap_id: int | None):
         """Refresh the always-on Δ/speed box for the current moment (priority: Δ-to-best in
@@ -619,8 +620,8 @@ class StudioWindow(QMainWindow):
         # cursor/marker/readout end exactly on the released position (matches the pre-coalesce
         # behaviour where every move applied the views synchronously).
         if view_t is not None:
-            self.plots.place_cursors_at_time(view_t)
-            self.map.set_marker_time(view_t)
+            self.plots.set_playhead_time(view_t, force=True)
+            self.map.set_playhead_time(view_t)
             self._apply_readout(view_t)
         if target is not None:
             self.video.seek(target)  # PRIMARY pane

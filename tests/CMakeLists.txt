@@ -7,7 +7,7 @@ macro(add_pacer_test name)
 endmacro()
 
 add_pacer_test(test_coordinate_system pacer::geometry)
-add_pacer_test(test_ops             pacer::datatypes)
+add_pacer_test(test_ops             pacer::geometry)
 add_pacer_test(test_geometry        pacer::geometry)
 add_pacer_test(test_laps            pacer::laps)
 # SequentialGPSSource chapter-seam chaining (no payload dropped at the boundary) + the

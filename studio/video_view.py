@@ -176,8 +176,11 @@ class VideoView(QWidget):
         # chapter…" indicator. Only the primary drives chrome (the secondary is video-only).
         self.pane.seamLoading.connect(self.seamLoading)
 
-        # Compare-mode state. The secondary pane + cells exist ONLY while compare is on (lazy).
-        self._compare = False
+        # Compare-mode LAYOUT flag: True iff the two-pane (side-by-side) stage is mounted. This is
+        # the view's own layout state; the StudioWindow's semantic compare ownership lives in
+        # StudioWindow._compare (distinct concept, distinct name). The secondary pane + cells exist
+        # ONLY while this is on (lazy).
+        self._two_panes = False
         # The PRIMARY pane's lap window (start_global, end_global) while in compare mode, or None
         # in single-video mode. The global scrub slider is CONFINED to this window in compare mode
         # so dragging it can't escape lap A or desync the pair (both panes step within lap A's
@@ -224,7 +227,7 @@ class VideoView(QWidget):
 
         # "Compare videos" toggle (Phase B): a LABELED checkable button that reveals a 2nd, equal
         # video pane side-by-side. Off by default; enabled only when ≥2 valid laps (app drives the
-        # enable flag). The toggle itself only flips _compare + emits compareToggled — the app owns
+        # enable flag). The toggle itself only flips _two_panes + emits compareToggled — the app owns
         # the lap-pair seeding and calls back into set_compare/exit_compare. Its label + fill swap
         # between states in _set_compare_btn_state so it's obvious both what it does (adds a 2nd
         # comparison video) and whether it's currently on ("⧉ Compare" ghost → "Comparing ✕" amber).
@@ -285,12 +288,12 @@ class VideoView(QWidget):
     def play(self):
         """Play — fans out to BOTH panes in compare mode (each rolls from its own lap start)."""
         self.pane.play()
-        if self._compare and self.secondary is not None:
+        if self._two_panes and self.secondary is not None:
             self.secondary.play()
 
     def pause(self):
         self.pane.pause()
-        if self._compare and self.secondary is not None:
+        if self._two_panes and self.secondary is not None:
             self.secondary.pause()
 
     def pause_if_playing(self):
@@ -301,7 +304,7 @@ class VideoView(QWidget):
         disturbs an already-stopped/paused pane, keeping its seeked lap-start position intact."""
         if self.pane.is_playing():
             self.pane.pause()
-        if self._compare and self.secondary is not None and self.secondary.is_playing():
+        if self._two_panes and self.secondary is not None and self.secondary.is_playing():
             self.secondary.pause()
 
     def toggle(self):
@@ -442,14 +445,14 @@ class VideoView(QWidget):
             self._splitter.splitterMoved.connect(self._on_splitter_moved)
 
         # Swap the stage layout to the splitter (the primary pane re-parents into _cell_a).
-        if not self._compare:
+        if not self._two_panes:
             self._stage_lay.removeWidget(self.pane)
             self._stage_lay.addWidget(self._splitter, 1)
             self.secondary.show()
             self._splitter.show()
-        self._compare = True
-        if self.compare_btn.isChecked() != self._compare:
-            self.compare_btn.setChecked(self._compare)
+        self._two_panes = True
+        if self.compare_btn.isChecked() != self._two_panes:
+            self.compare_btn.setChecked(self._two_panes)
 
         # Seed each pane's lap window + caption + picker. The app seeks the panes to their starts.
         self.pane.set_lap_window(*window_a)
@@ -486,9 +489,9 @@ class VideoView(QWidget):
         """Leave compare mode: tear the secondary pane down (stop + deleteLater player+audio,
         .close() overlay) and restore the single-pane stage at the PRIMARY's current position.
         The primary pane keeps decoding the whole session again (its lap window is cleared)."""
-        if not self._compare:
+        if not self._two_panes:
             return
-        self._compare = False
+        self._two_panes = False
         if self.compare_btn.isChecked():
             self.compare_btn.setChecked(False)
         # Restore the single-pane stage: pull the primary pane out of its cell, drop the splitter.

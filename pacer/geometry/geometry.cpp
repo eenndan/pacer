@@ -137,9 +137,10 @@ double pacer::CoordinateSystem::Distance(const GPSSample &from,
                                          const GPSSample &to) const {
   return (Local(from) - Local(to)).Norm();
 }
+bool pacer::ApproxEqual(const Point &a, const Point &b, double eps) {
+  return std::abs(a.x - b.x) < eps && std::abs(a.y - b.y) < eps;
+}
+
 bool pacer::Segment::operator==(const Segment &other) const {
-  return (std::abs((first - other.first).x) < 1e-6) &&
-         (std::abs((second - other.second).x) < 1e-6) &&
-         (std::abs((first - other.first).y) < 1e-6) &&
-         (std::abs((second - other.second).y) < 1e-6);
+  return ApproxEqual(first, other.first) && ApproxEqual(second, other.second);
 }

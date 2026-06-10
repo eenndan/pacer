@@ -23,20 +23,6 @@ template <class P> struct PointInTime {
   double time;
 };
 
-struct Vec3f : public VectorOperators<Vec3f, double, 3> {
-  double x = 0, y = 0, z = 0;
-
-  Vec3f() = default;
-  Vec3f(double x, double y, double z) : x{x}, y{y}, z{z} {}
-
-  double &operator[](size_t index) {
-    return (index == 0) ? x : (index == 1) ? y : z;
-  }
-  double operator[](size_t index) const {
-    return (index == 0) ? x : (index == 1) ? y : z;
-  }
-};
-
 // A timestamped 3-axis IMU sample (used for ACCL accelerometer m/s^2 and GRAV gravity
 // vector). `time` is on the MEDIA clock (seconds, same basis as the GPS payload spans, so
 // it syncs to the video; chapter offsets are applied by the SequentialGPSSource chain just

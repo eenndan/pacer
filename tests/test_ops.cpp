@@ -2,7 +2,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
-#include <pacer/datatypes/datatypes.hpp>
+// Vec3f (the type exercising the ops.hpp operator mixins) now lives in geometry.hpp,
+// next to Point — it is a geometry/coordinate vector, not a telemetry sample type.
+#include <pacer/geometry/geometry.hpp>
 
 using pacer::Vec3f;
 

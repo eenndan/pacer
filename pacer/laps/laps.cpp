@@ -20,8 +20,8 @@ void pacer::Laps::Update() {
   dirty_start_line_ = sectors.start_line;
   dirty_sector_lines_ = sectors.sector_lines;
 
-  laps_.clear();
-  sectors_.clear();
+  lap_chunks_.clear();
+  sector_chunks_.clear();
 
   if (track_.PointCount() == 0)
     return;
@@ -67,24 +67,24 @@ void pacer::Laps::Update() {
     previous = current;
 
     if (lap_split) {
-      if (!laps_.empty()) {
-        laps_.back().finish = *lap_split;
-        laps_.back().finish_index = i;
+      if (!lap_chunks_.empty()) {
+        lap_chunks_.back().finish = *lap_split;
+        lap_chunks_.back().finish_index = i;
       }
 
-      laps_.push_back(LapChunk{.start = *lap_split,
+      lap_chunks_.push_back(LapChunk{.start = *lap_split,
                                .finish = *lap_split,
                                .start_index = i,
                                .finish_index = i});
     }
 
     if (sector_split) {
-      if (!sectors_.empty()) {
-        sectors_.back().finish = *sector_split;
-        sectors_.back().finish_index = i;
+      if (!sector_chunks_.empty()) {
+        sector_chunks_.back().finish = *sector_split;
+        sector_chunks_.back().finish_index = i;
       }
 
-      sectors_.push_back(LapChunk{
+      sector_chunks_.push_back(LapChunk{
           .start = *sector_split,
           .finish = *sector_split,
           .start_index = i,
@@ -155,7 +155,7 @@ double pacer::Laps::GetLapDistance(size_t lap) const {
   // joined points_[finish_index] -> finish, over-counting exactly one segment.
   // Uses SegmentDistance (gap-aware, same as cum_point_dist_ and FillDistances)
   // for the two partial chords so this AGREES exactly with GetLap().cum_distances.
-  const LapChunk &chunk = laps_[lap];
+  const LapChunk &chunk = lap_chunks_[lap];
   const size_t start_index = chunk.start_index;
   const size_t finish_index = chunk.finish_index;
 
@@ -176,26 +176,26 @@ double pacer::Laps::GetLapDistance(size_t lap) const {
   return distance;
 }
 
-double pacer::Laps::LapTime(size_t lap) const { return laps_[lap].Time(); }
+double pacer::Laps::LapTime(size_t lap) const { return lap_chunks_[lap].Time(); }
 
 size_t pacer::Laps::SampleCount(size_t lap) const {
-  if (lap >= laps_.size()) {
+  if (lap >= lap_chunks_.size()) {
     return 0;
   }
   // GetLap / At expose: interpolated start + interior points + interpolated
   // finish == (finish_index - start_index) + 2 rows.
-  return laps_[lap].finish_index - laps_[lap].start_index + 2;
+  return lap_chunks_[lap].finish_index - lap_chunks_[lap].start_index + 2;
 }
 
 double pacer::Laps::StartTimestamp(size_t lap) const {
-  return laps_[lap].start.time;
+  return lap_chunks_[lap].start.time;
 }
 
 pacer::Lap pacer::Laps::GetLap(size_t lap) const {
-  if (lap >= laps_.size())
+  if (lap >= lap_chunks_.size())
     return {};
 
-  const LapChunk &chunk = laps_[lap];
+  const LapChunk &chunk = lap_chunks_[lap];
   const size_t start_index = chunk.start_index;
   const size_t finish_index = chunk.finish_index;
 
@@ -243,24 +243,24 @@ pacer::Lap pacer::Laps::GetLap(size_t lap) const {
 }
 
 double pacer::Laps::SectorStartTimestamp(size_t sector) const {
-  return sectors_[sector].start.time;
+  return sector_chunks_[sector].start.time;
 }
 
 double pacer::Laps::SectorEntrySpeed(size_t sector) const {
-  return sectors_[sector].start.point.full_speed;
+  return sector_chunks_[sector].start.point.full_speed;
 }
 
 double pacer::Laps::SectorTime(size_t sector) const {
-  return sectors_[sector].finish.time - sectors_[sector].start.time;
+  return sector_chunks_[sector].finish.time - sector_chunks_[sector].start.time;
 }
 
 size_t pacer::Laps::SectorCount() const { return sectors.sector_lines.size(); }
 
 double pacer::Laps::LapEntrySpeed(size_t lap) const {
-  return laps_[lap].start.point.full_speed;
+  return lap_chunks_[lap].start.point.full_speed;
 }
 
-size_t pacer::Laps::LapsCount() const { return laps_.size(); }
+size_t pacer::Laps::LapsCount() const { return lap_chunks_.size(); }
 
 void pacer::Laps::ClearSectors() { sectors.sector_lines.clear(); }
 
@@ -277,7 +277,7 @@ pacer::PointInTime<pacer::GPSSample> pacer::Laps::GetPoint(size_t row) const {
 void pacer::Laps::SetCoordinateSystem(CoordinateSystem coordinate_system) {
   track_.SetCoordinateSystem(coordinate_system);
 }
-size_t pacer::Laps::RecordedSectors() const { return sectors_.size(); }
+size_t pacer::Laps::RecordedSectors() const { return sector_chunks_.size(); }
 
 size_t pacer::Lap::Count() const { return points.size(); }
 

@@ -221,18 +221,20 @@ class MapView(QWidget):
         # position (evenly subdividing the lap); two identical lines would collapse a split.
         sectors.append(self.session.suggest_sector(len(sectors)))
         self._rebuild(start, sectors)
-        self.timing_lines_changed.emit(start, sectors)
+        # Single-source the emit through _emit(), which re-reads the just-rebuilt timing
+        # lines as the authoritative source (identical to the start/sectors we rebuilt from).
+        self._emit()
 
     def _reset_sectors(self):
         start, _ = self._current()
         self._rebuild(start, [])
-        self.timing_lines_changed.emit(start, [])
+        self._emit()
 
     # --------------------------------------------------------------- video sync
     def _marker_dragged(self, *_):
         # F3: constrain the drag to the CURRENT lap's trace so the marker can't snap to another
         # lap where laps overlap spatially. The seek (and thus the marker's re-placement via
-        # set_marker_time) is clamped to that lap's time window, so the drag scrubs smoothly
+        # set_playhead_time) is clamped to that lap's time window, so the drag scrubs smoothly
         # within the one lap and never jumps. Outside any valid lap (lead-in) there's no current
         # lap — fall back to the whole-trace nearest so the marker is still draggable there.
         if self._suppress_marker:
@@ -258,15 +260,16 @@ class MapView(QWidget):
     def set_marker_index(self, i: int | None):
         """Place the marker at trace index `i` (None = no-op). The app resolves index_at_time(t)
         ONCE per tick and passes the index here, so the marker placement reuses the same search the
-        speed readout uses instead of re-running index_at_time inside set_marker_time."""
+        speed readout uses instead of re-running index_at_time inside set_playhead_time."""
         if i is None:
             return
         self._suppress_marker = True
         self.marker.setPos(pg.Point(float(self.session.tx[i]), float(self.session.ty[i])))
         self._suppress_marker = False
 
-    def set_marker_time(self, t: float):
+    def set_playhead_time(self, t: float):
         # Used by the scrub path (single drag-driven time); resolves the index itself.
+        # Shared playhead-setter verb with PlotsView.set_playhead_time.
         self.set_marker_index(self.session.index_at_time(t))
 
     # --------------------------------------------------------------- lap overlays

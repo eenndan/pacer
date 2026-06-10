@@ -288,7 +288,7 @@ class _Recorder:
         self.selected = []      # every table.select(ids)
         self.lap_sets = []      # every plots.set_laps(ids)
         self.seeks = []         # any video.seek(...) — must stay EMPTY (no playback fight)
-        self.placed = []        # plots.place_cursors_at_time(t) while dragging
+        self.placed = []        # plots.set_playhead_time(t, force=True) while dragging
         self._dragging = False
 
     # table
@@ -302,7 +302,7 @@ class _Recorder:
     def is_dragging(self):
         return self._dragging
 
-    def place_cursors_at_time(self, t):
+    def set_playhead_time(self, t, *, force=False):
         self.placed.append(t)
 
     # video

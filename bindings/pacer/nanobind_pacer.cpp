@@ -148,22 +148,6 @@ void py_init_module_pacer(nb::module_ &m) {
       ;
 
 
-  auto pyClassVec3f =
-      nb::class_<pacer::Vec3f>
-          (m, "Vec3f", "")
-      .def_rw("x", &pacer::Vec3f::x, "")
-      .def_rw("y", &pacer::Vec3f::y, "")
-      .def_rw("z", &pacer::Vec3f::z, "")
-      .def(nb::init<>())
-      .def(nb::init<double, double, double>(),
-          nb::arg("x"), nb::arg("y"), nb::arg("z"))
-      .def("__getitem__",
-          nb::overload_cast<size_t>(&pacer::Vec3f::operator[]), nb::arg("index"))
-      .def("__getitem__",
-          nb::overload_cast<size_t>(&pacer::Vec3f::operator[], nb::const_), nb::arg("index"))
-      ;
-
-
   auto pyClassIMUSample =
       nb::class_<pacer::IMUSample>
           (m, "IMUSample", " A timestamped 3-axis IMU sample (used for ACCL accelerometer m/s^2 and GRAV gravity\n vector). `time` is on the MEDIA clock (seconds, same basis as the GPS payload spans, so\n it syncs to the video; chapter offsets are applied by the SequentialGPSSource chain just\n like GPS). The three axes are carried in the GoPro stream's native element order\n (ACCL: Z,X,Y in m/s^2; GRAV: a unit gravity-direction vector). The studio layer resolves\n the camera->kart frame transform on top of these raw axes.")
@@ -210,6 +194,22 @@ void py_init_module_pacer(nb::module_ &m) {
 
 
   ////////////////////    <generated_from:geometry.hpp>    ////////////////////
+  auto pyClassVec3f =
+      nb::class_<pacer::Vec3f>
+          (m, "Vec3f", " A 3-axis geometry/coordinate vector (LOCAL metric space, used by CoordinateSystem and the\n local<->global conversions below). Lives here next to Point because it is a geometry vector,\n not a telemetry sample type. Keeps the full pointwise/linear vector algebra (Global() divides\n it element-wise by an axis-radius vector).")
+      .def_rw("x", &pacer::Vec3f::x, "")
+      .def_rw("y", &pacer::Vec3f::y, "")
+      .def_rw("z", &pacer::Vec3f::z, "")
+      .def(nb::init<>())
+      .def(nb::init<double, double, double>(),
+          nb::arg("x"), nb::arg("y"), nb::arg("z"))
+      .def("__getitem__",
+          nb::overload_cast<size_t>(&pacer::Vec3f::operator[]), nb::arg("index"))
+      .def("__getitem__",
+          nb::overload_cast<size_t>(&pacer::Vec3f::operator[], nb::const_), nb::arg("index"))
+      ;
+
+
   auto pyClassPoint =
       nb::class_<pacer::Point>
           (m, "Point", "")
@@ -231,7 +231,7 @@ void py_init_module_pacer(nb::module_ &m) {
       nb::overload_cast<pacer::Point>(pacer::ToPoint), nb::arg("x"));
 
   m.def("to_point",
-      nb::overload_cast<Vec3f>(pacer::ToPoint), nb::arg("v"));
+      nb::overload_cast<pacer::Vec3f>(pacer::ToPoint), nb::arg("v"));
 
   m.def("to_lon_lat",
       pacer::ToLonLat,

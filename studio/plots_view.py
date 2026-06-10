@@ -88,9 +88,9 @@ class PlotsView(QWidget):
         # The combo is EXPOSED but NOT placed here: app.py mounts it (right-aligned) in the single
         # consolidated bar above the charts — section label · Δ/speed readout · this toggle — so
         # the toggle no longer eats its own full-width row. Its modeChanged wiring is unchanged.
-        self.x_mode = QComboBox()
-        self.x_mode.addItems(["x: distance", "x: time"])
-        self.x_mode.currentIndexChanged.connect(self._on_mode_changed)
+        self.x_mode_combo = QComboBox()
+        self.x_mode_combo.addItems(["x: distance", "x: time"])
+        self.x_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
 
         self.glw = pg.GraphicsLayoutWidget()
         # Tight outer margins + inter-plot spacing so the plot area fills the panel — the charts
@@ -238,13 +238,6 @@ class PlotsView(QWidget):
             self._user_dragging = False
             self.scrubEnded.emit()
 
-    def place_cursors_at_time(self, t: float):
-        """Place BOTH cursors from a media time, even mid-drag (suppressed so it can't re-emit a
-        scrub). app calls this during a scrub with the CLAMPED/converted time so the dragged line
-        snaps to the lap boundary and the other plot's cursor stays in sync — 'two lines, one
-        truth'. Outside a drag, set_cursor_time is the normal entry point."""
-        self._place(t)
-
     def set_laps(self, lap_ids):
         self._lap_ids = list(lap_ids)
         self.refresh()
@@ -381,17 +374,24 @@ class PlotsView(QWidget):
         # Re-place the cursors on the now-frozen axes (in the new basis) so they're correct
         # immediately — including when paused, where no position tick follows the toggle.
         if self._cursor_t is not None:
-            self.set_cursor_time(self._cursor_t)
+            self.set_playhead_time(self._cursor_t)
         # Redraw the sector guide lines on the freshly-fit axes (positions are in the current
         # mode's units; app re-pushes them when the mode flips, but a selection-only refresh
         # keeps the same positions, so just redraw the cached ones here).
         self._draw_sectors()
 
-    def set_cursor_time(self, t: float):
-        # While the user is dragging, the source of truth is the drag, not playback — ignore
-        # position-driven re-placement so the tick can't fight the drag (app also pauses, but
-        # any in-flight positionChanged from the seek must not bounce the cursor either).
-        if self._user_dragging:
+    def set_playhead_time(self, t: float, *, force: bool = False):
+        """Place BOTH cursors from a single media time t (the shared playhead). Shared setter verb
+        with MapView.set_playhead_time.
+
+        Normally (force=False) this is a no-op while the user is dragging a cursor: the source of
+        truth is then the drag, not playback, so the tick can't fight the drag (app also pauses,
+        but any in-flight positionChanged from the seek must not bounce the cursor either).
+
+        force=True skips that mid-drag guard: app calls it during a scrub with the CLAMPED/converted
+        time so the dragged line snaps to the lap boundary and the other plot's cursor stays in
+        sync — 'two lines, one truth'."""
+        if self._user_dragging and not force:
             return
         self._place(t)
 

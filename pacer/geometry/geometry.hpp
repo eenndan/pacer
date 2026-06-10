@@ -10,7 +10,25 @@
 
 namespace pacer {
 
-struct Point : VectorOperators<Point, double, 2> {
+// A 3-axis geometry/coordinate vector (LOCAL metric space, used by CoordinateSystem and the
+// local<->global conversions below). Lives here next to Point because it is a geometry vector,
+// not a telemetry sample type. Keeps the full pointwise/linear vector algebra (Global() divides
+// it element-wise by an axis-radius vector).
+struct Vec3f : public VectorOperators<Vec3f, double, 3> {
+  double x = 0, y = 0, z = 0;
+
+  Vec3f() = default;
+  Vec3f(double x, double y, double z) : x{x}, y{y}, z{z} {}
+
+  double &operator[](size_t index) {
+    return (index == 0) ? x : (index == 1) ? y : z;
+  }
+  double operator[](size_t index) const {
+    return (index == 0) ? x : (index == 1) ? y : z;
+  }
+};
+
+struct Point : LinearOperators<Point, double, 2> {
   double x = 0, y = 0;
 
   Point() = default;
@@ -34,6 +52,12 @@ Point ToPoint(Vec3f v);
 // GPS degrees -> Point{lon, lat}. Named distinctly from ToPoint so a degrees sample can never
 // be silently mixed with a local-metres Point behind one overloaded name at a call site.
 Point ToLonLat(GPSSample s);
+
+// Epsilon comparison of two points (both coordinates within `eps`). The single source of the
+// "approximately equal" notion for geometry: Segment::operator== is implemented in terms of it.
+// (Point::operator== itself stays exact — it comes from the LinearOperators mixin and is not the
+// Python-bound equality; only Segment exposes __eq__.)
+bool ApproxEqual(const Point &a, const Point &b, double eps = 1e-6);
 
 struct Segment {
   Point first, second;

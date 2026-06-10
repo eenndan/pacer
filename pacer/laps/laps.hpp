@@ -84,8 +84,11 @@ private:
   // lap/sector segmentation on top.
   PointTrack track_;
 
-  std::vector<LapChunk> laps_;
-  std::vector<LapChunk> sectors_;
+  // Computed LapChunks (start/finish crossings) for the laps and the sectors. Named *_chunks_ to
+  // distinguish them from the INPUT geometry in the public `sectors` member (start_line +
+  // sector_lines), which is what gets segmented into these.
+  std::vector<LapChunk> lap_chunks_;
+  std::vector<LapChunk> sector_chunks_;
 
   Segment dirty_start_line_ = {};
   std::vector<Segment> dirty_sector_lines_ = {};

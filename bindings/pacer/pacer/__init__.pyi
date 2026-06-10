@@ -44,22 +44,6 @@ class PointInTime_GPSSample:  # Python specialization for PointInTime<GPSSample>
 #      </template specializations for class PointInTime>
 #  ------------------------------------------------------------------------
 
-class Vec3f:
-    x: float = 0
-    y: float = 0
-    z: float = 0
-
-    @overload
-    def __init__(self) -> None:
-        pass
-
-    @overload
-    def __init__(self, x: float, y: float, z: float) -> None:
-        pass
-
-    def __getitem__(self, index: int) -> float:
-        pass
-
 class IMUSample:
     """A timestamped 3-axis IMU sample (used for ACCL accelerometer m/s^2 and GRAV gravity
     vector). `time` is on the MEDIA clock (seconds, same basis as the GPS payload spans, so
@@ -98,6 +82,28 @@ class QuatSample:
 ####################    </generated_from:datatypes.hpp>    ####################
 
 ####################    <generated_from:geometry.hpp>    ####################
+
+class Vec3f:
+    """A 3-axis geometry/coordinate vector (LOCAL metric space, used by CoordinateSystem and the
+    local<->global conversions below). Lives here next to Point because it is a geometry vector,
+    not a telemetry sample type. Keeps the full pointwise/linear vector algebra (Global() divides
+    it element-wise by an axis-radius vector).
+    """
+
+    x: float = 0
+    y: float = 0
+    z: float = 0
+
+    @overload
+    def __init__(self) -> None:
+        pass
+
+    @overload
+    def __init__(self, x: float, y: float, z: float) -> None:
+        pass
+
+    def __getitem__(self, index: int) -> float:
+        pass
 
 class Point:
     x: float = 0
