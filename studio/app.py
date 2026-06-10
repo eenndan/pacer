@@ -10,11 +10,14 @@ Layout (resizable splitters):
 
 from __future__ import annotations
 
+import os
 import sys
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -341,10 +344,21 @@ class StudioWindow(QMainWindow):
         Disabled when there's nothing more to load (already multi-chapter, or no siblings on
         disk, or a non-GoPro clip)."""
         menu = self.menuBar().addMenu("&File")
+        self._open_action = menu.addAction("Open…")
+        self._open_action.setShortcut(QKeySequence.Open)
+        self._open_action.triggered.connect(self._open_file)
         self._full_action = menu.addAction("Load full recording")
         self._full_action.setToolTip(
             "Discover this recording's sibling chapters and load them as one continuous session")
         self._full_action.triggered.connect(self._load_full_recording)
+
+    def _open_file(self):
+        """File ▸ Open…: pick a GoPro MP4 and reload through the guarded _load path."""
+        start_dir = os.path.dirname(self._paths[0]) if getattr(self, "_paths", None) else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open recording", start_dir, "GoPro recordings (*.MP4 *.mp4)")
+        if path:
+            self._load([path])
 
     def _sync_full_recording_action(self):
         """Enable "Load full recording" only when the current session is a SINGLE opened chapter
