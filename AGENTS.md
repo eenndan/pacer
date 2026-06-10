@@ -28,6 +28,7 @@ pacer/                         # repo root
 ├── CMakeLists.txt             # root CMake (C++23): adds 3rdparty, pacer, tests, bindings
 ├── pyproject.toml             # project + pixi manifest (deps, tasks, editable binding package)
 ├── pixi.lock                  # pinned deps (osx-arm64 ONLY; lockfile format v7)
+├── .github/                   # CI workflow (build + test + lint on macos-14/arm64)
 │
 ├── pacer/                     # ── CORE C++ LIBRARY (one folder = one static lib pacer::<name>) ──
 │   ├── datatypes/             #   value types (GPSSample, IMUSample, QuatSample) + CRTP operator mixins
@@ -127,7 +128,9 @@ C++ headers → `bindings/<pkg>/generate-bindings.py` runs **litgen** (srcML) �
 
 ## Build, run & test
 
-> **Platform:** `osx-arm64` only (every pixi manifest + `pixi.lock` pin it). No CI; tests run locally.
+> **Platform:** `osx-arm64` only (every pixi manifest + `pixi.lock` pin it). CI
+> ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `pixi run build` + `pixi run test`
+> (ctest) + `pixi run lint` (ruff) on macos-14 (Apple-silicon arm64), on every push and PR.
 
 ```bash
 git submodule update --init --recursive   # 3rdparty/ (gpmf-parser, nanobind) are empty otherwise
@@ -148,11 +151,13 @@ Pixi tasks (`[tool.pixi.tasks]` in [pyproject.toml](pyproject.toml)):
 The C++ build also runs the binding codegen target and deploys the compiled `.so`.
 `CMAKE_EXPORT_COMPILE_COMMANDS` is on; [.clangd](.clangd) expects `build/Release/compile_commands.json`.
 
-**Tests** (wired in [tests/CMakeLists.txt](tests/CMakeLists.txt)):
-- C++ Catch2: `test_ops`, `test_geometry`, `test_coordinate_system`, `test_laps`.
-- Python studio (pure-Python, fast, registered with CTest): `test_scrub_conversion`,
-  `test_studio_features`, `test_chapters`, `test_lap_timing`, `test_validate_wallclock`, `test_gmeter`,
-  `test_gmeter_overlay`. (`tests/test_gapfill.py` also exists but is not CTest-registered.)
+**Tests** (wired in [tests/CMakeLists.txt](tests/CMakeLists.txt)) — 16 CTest entries:
+- C++ Catch2 (5): `test_ops`, `test_geometry`, `test_coordinate_system`, `test_laps`,
+  `test_gps_source`.
+- Python studio (11; pure-Python, fast, registered with CTest): `test_scrub_conversion`,
+  `test_lap_timing`, `test_chapters`, `test_gapfill`, `test_gps_source_bindings`,
+  `test_studio_features`, `test_compare`, `test_controllers`, `test_validate_wallclock`,
+  `test_gmeter`, `test_gmeter_overlay`.
 
 **Inputs:** the studio app takes file paths on the CLI (`pixi run studio -- a.MP4`).
 
@@ -183,6 +188,7 @@ The C++ build also runs the binding codegen target and deploys the compiled `.so
 | **gpmf-parser** | GoPro GPMF parsing (submodule) |
 | **Catch2** | C++ unit tests |
 | **PySide6 + pyqtgraph** | the studio app |
+| **qtawesome** | icon fonts (Phosphor glyphs) for the studio theme ([studio/theme.py](studio/theme.py)) |
 | Python 3.13, numpy | studio runtime |
 
 `ninja` and `catch2` are **explicit** pixi deps (the Ninja generator and `find_package(Catch2)` need
