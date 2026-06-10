@@ -60,6 +60,9 @@ class StudioWindow(QMainWindow):
         sibling chapters). Tearing the central widget down and rebuilding keeps the panels — each
         of which captures `session` at construction — simple and free of stale references."""
         print("studio: loading telemetry…", flush=True)
+        # Assign _paths BEFORE the guarded load: readers that stay reachable after a failed FIRST
+        # load (e.g. the still-enabled "Load full recording" action) must always find a value.
+        self._paths = list(paths)
         # Guard the load: a missing / corrupt / no-GPS file must NOT crash the app on launch. On
         # failure show a clear error (the offending path + reason) and leave the window open so the
         # user can act, rather than letting the exception propagate out of __init__ and kill the app.
@@ -68,7 +71,6 @@ class StudioWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001 - surface ANY load failure as a user-facing error
             self._on_load_failed(paths, exc)
             return
-        self._paths = list(paths)
         self.session = session
         n_ch = len(self.session.chapters) if self.session.chapters else 1
         print(f"studio: {self.session.point_count()} points, "
