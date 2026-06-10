@@ -204,8 +204,8 @@ them; an interrupted `pixi add` once pruned them and broke the build mid-session
    very top of that file is the one hand-kept region.
 
 For studio-specific architecture rules an agent must respect (local-meter coordinate space, the
-"only `session.py`, `tracks.py`, and `ingest.py` (the GoPro/GPMF data-loading layer) touch
-`pacer`; views stay pacer-free" rule, perf invariants), see
+"only `session.py`, `load.py` (the load pipeline), `tracks.py`, and `ingest.py` (the GoPro/GPMF
+data-loading layer) touch `pacer`; views stay pacer-free" rule, perf invariants), see
 [studio/PLAN.md](studio/PLAN.md) and [studio/README.md](studio/README.md).
 
 ---

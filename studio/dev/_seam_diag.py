@@ -20,7 +20,7 @@ from PySide6.QtMultimedia import QMediaPlayer, QVideoSink  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from studio import chapters  # noqa: E402
-from studio.session import _read_gpmf  # noqa: E402
+from studio.ingest import read_gpmf as _read_gpmf  # noqa: E402
 from studio.video_view import VideoView  # noqa: E402
 
 PATHS = [f"/Users/daniil/Desktop/D24/GX0{i}0060.MP4" for i in (1, 2, 3)]

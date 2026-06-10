@@ -1,11 +1,11 @@
 """Pure-numpy signal/clean helpers shared by the session pipeline and the g-meter.
 
-PACER-FREE BY CONTRACT. The studio architecture rule is that only session.py, tracks.py, and
-ingest.py touch the `pacer` bindings; this module is numpy-only so the boxcar smoother,
-the gap/quality cleaners, and the real-lap band filter can be shared without dragging a
-pacer (or Qt) import anywhere. Every function here is a behaviour-identical extraction of
-code that previously lived inline in session.py / gmeter.py — names and signatures match
-the originals so call sites are unchanged.
+PACER-FREE BY CONTRACT. The studio architecture rule is that only session.py, load.py,
+tracks.py, and ingest.py touch the `pacer` bindings; this module is numpy-only so the boxcar
+smoother, the gap/quality cleaners, the real-lap band filter, and the `fmt_time` lap-time
+formatter can be shared without dragging a pacer (or Qt) import anywhere. Every function here
+is a behaviour-identical extraction of code that previously lived inline in session.py /
+gmeter.py — names and signatures match the originals so call sites are unchanged.
 """
 from __future__ import annotations
 
@@ -27,12 +27,24 @@ MIN_LAP_SAMPLES = 20  # a real lap has at least this many GPS samples
 LAP_BAND_LO, LAP_BAND_HI = 0.5, 1.6  # "real lap" = lap_time within [lo, hi] x median lap time
 
 
+def fmt_time(seconds: float) -> str:
+    """`m:ss.mmm` lap/split-time formatting (em-dash for a non-finite input). Lives here —
+    the pacer-free numpy-helpers module — so the views (plots_view/lap_table/
+    compare_controller) can format times without importing session.py, which would drag the
+    compiled `pacer` module in transitively. Moved verbatim from session.py (which keeps a
+    compatibility re-export)."""
+    if not math.isfinite(seconds):
+        return "—"
+    m, s = divmod(seconds, 60)
+    return f"{int(m)}:{s:06.3f}"
+
+
 def _boxcar_core(a, w):
     """The edge-corrected boxcar moving average itself, given a float array `a` and a window
     `w` already known to be valid (2 <= w <= len(a)). Normalised at the ends so the first/last
     w//2 points aren't dragged toward zero by the convolution's implicit zero-padding (a raw
     `"same"` boxcar tapers the edges; here those points are averaged over only the samples that
-    actually exist). The single shared implementation behind session._smooth and gmeter._boxcar."""
+    actually exist). The single shared implementation behind _signal._smooth and gmeter._boxcar."""
     kernel = np.ones(w)
     num = np.convolve(a, kernel, "same")          # windowed sum
     den = np.convolve(np.ones(len(a)), kernel, "same")  # count of real samples in each window

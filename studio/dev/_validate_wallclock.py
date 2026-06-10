@@ -47,7 +47,8 @@ import numpy as np
 
 from studio import chapters
 from studio.dev import transponder
-from studio.session import Session, _read_gpmf
+from studio.ingest import read_gpmf as _read_gpmf
+from studio.session import Session
 
 PIT_LAP_S = 120.0   # a lap at/above this is a pit / driver-change lap, not a racing lap
 RACING_MAX_S = 72.0  # the "clean racing lap" cap used for residual stats

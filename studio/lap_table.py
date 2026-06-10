@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
-from .session import fmt_time
+from ._signal import fmt_time
 
 BASE_COLOR = QColor(theme.C.text)             # primary off-white: default row text (dark surface)
 BEST_COLOR = QColor(theme.C.ahead)            # green: the overall best lap (foreground every cell)

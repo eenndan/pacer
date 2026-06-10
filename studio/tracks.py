@@ -6,9 +6,10 @@ ABSOLUTE lat/lon points. `detect_track` matches a trace centroid to an entry wit
 small radius; `start_line_segment` converts the two points into a `pacer.Segment` in the
 LOCAL meters that the laps/timing lines live in (via `cs.local`).
 
-This is the only studio module besides session.py that names `pacer`; it touches only the
-pure geometry types (GPSSample/CoordinateSystem/Segment/Point), no I/O — kept here so
-session.py stays the single owner of the load/segmentation pipeline.
+One of the four studio modules that may name `pacer` (with session.py, load.py, and
+ingest.py); it touches only the pure geometry types (GPSSample/CoordinateSystem/Segment/
+Point), no I/O — kept here so load.py stays the single owner of the load/segmentation
+pipeline.
 """
 
 from __future__ import annotations

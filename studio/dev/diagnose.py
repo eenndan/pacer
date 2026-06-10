@@ -16,7 +16,8 @@ import numpy as np
 
 import pacer
 
-from ..session import DEFAULT_SAMPLE, _read_gpmf
+from ..ingest import read_gpmf as _read_gpmf
+from ..session import DEFAULT_SAMPLE
 
 
 def pct(a, ps):

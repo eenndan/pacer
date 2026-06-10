@@ -63,13 +63,12 @@ from studio.dev._validate_wallclock import (
     lap_being_driven,
     residual_stats,
 )
-from studio.session import (
-    SMOOTH_WINDOW,
+from studio._signal import SMOOTH_WINDOW, _gate_quality
+from studio.ingest import read_gpmf as _read_gpmf
+from studio.load import (
     _clean,
     _fit_start_line,
-    _gate_quality,
     _gps9_times,
-    _read_gpmf,
     _smooth_track,
 )
 

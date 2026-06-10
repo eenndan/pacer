@@ -97,7 +97,7 @@ def _boxcar(a, w):
 
     Clamps the window to the array length (so a short input still smooths over what it has),
     then defers to the shared `_signal._boxcar_core` — the SAME edge-corrected boxcar that
-    backs `session._smooth`."""
+    backs `_signal._smooth`."""
     a = np.asarray(a, float)
     if w < 2 or len(a) < 2:
         return a
