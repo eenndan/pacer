@@ -10,6 +10,7 @@
 using pacer::CoordinateSystem;
 using pacer::GPSSample;
 using pacer::Lap;
+using pacer::LapArrays;
 using pacer::Laps;
 using pacer::Point;
 using pacer::Segment;
@@ -481,5 +482,85 @@ TEST_CASE("Re-segmenting after a point/cs change recomputes (pass-2 #6)", "[laps
     CHECK(std::isfinite(l.cum_distances.back()));
     CHECK(laps.GetLapDistance(lap) ==
           Catch::Approx(l.cum_distances.back()).margin(1e-6));
+  }
+}
+
+TEST_CASE("LapColumns equals the per-point GetLap/Local path (PR #40)",
+          "[laps]") {
+  // PR #40 claim: LapColumns(lap) returns, in ONE binding crossing, exactly
+  // the five per-point columns the studio layer used to materialize
+  // element-by-element from GetLap(lap): times (points[i].time), local-metre
+  // xs/ys (cs.Local(points[i].point).x|y), full_speed
+  // (points[i].point.full_speed) and cum_distances. The contract (laps.hpp)
+  // and the implementation comment (laps.cpp: "Materialize the lap exactly as
+  // GetLap does") promise the SAME deterministic computation over the SAME
+  // data, so every element must be EXACTLY equal to the hand-materialized
+  // per-point path — not merely approximately.
+  GPSSample origin{.lat = 40.0, .lon = -74.0, .altitude = 0};
+  CoordinateSystem cs(origin);
+
+  // The per-lap column equivalence check, shared by the two synthetic tracks
+  // below. `cs` is the same coordinate system the laps own (the one set via
+  // SetCoordinateSystem), which is the cs LapColumns projects with.
+  auto check_columns_match = [&](const Laps &laps) {
+    for (size_t lap = 0; lap < laps.LapsCount(); ++lap) {
+      LapArrays cols = laps.LapColumns(lap);
+      Lap l = laps.GetLap(lap);
+
+      // All five columns are index-aligned with the materialized lap: length
+      // == SampleCount(lap) == GetLap(lap).Count().
+      const size_t n = laps.SampleCount(lap);
+      REQUIRE(n == l.points.size());
+      REQUIRE(cols.times.size() == n);
+      REQUIRE(cols.xs.size() == n);
+      REQUIRE(cols.ys.size() == n);
+      REQUIRE(cols.full_speed.size() == n);
+      REQUIRE(cols.cum_distances.size() == n);
+
+      // Element-wise EXACT equality against the per-point studio path:
+      // GetLap's points/times/cum_distances + the coordinate system's Local().
+      for (size_t i = 0; i < n; ++i) {
+        Vec3f loc = cs.Local(l.points[i].point);
+        CHECK(cols.times[i] == l.points[i].time);
+        CHECK(cols.xs[i] == loc.x);
+        CHECK(cols.ys[i] == loc.y);
+        CHECK(cols.full_speed[i] == l.points[i].point.full_speed);
+        CHECK(cols.cum_distances[i] == l.cum_distances[i]);
+      }
+    }
+  };
+
+  SECTION("three-lap alternating track (incl. the degenerate trailing lap)") {
+    Laps laps = MakeThreeLapTrack(cs);
+    laps.sectors.start_line = Segment{Point{0, -10}, Point{0, 10}};
+    laps.Update();
+    REQUIRE(laps.LapsCount() == 3);
+    check_columns_match(laps);
+  }
+
+  SECTION("sector loop with non-zero full_speed") {
+    // MakeSectorLoop sets full_speed = 20 (ground_speed stays 0), so the
+    // full_speed column is distinguishable from a wrong-field regression,
+    // unlike MakeThreeLapTrack's all-zero speeds.
+    Laps laps = MakeSectorLoop(cs);
+    laps.sectors.start_line = Segment{Point{0, -50}, Point{0, 50}};
+    laps.Update();
+    REQUIRE(laps.LapsCount() >= 1);
+    check_columns_match(laps);
+  }
+
+  SECTION("out-of-range lap ids return all-empty columns (not UB)") {
+    Laps laps = MakeThreeLapTrack(cs);
+    laps.sectors.start_line = Segment{Point{0, -10}, Point{0, 10}};
+    laps.Update();
+    REQUIRE(laps.LapsCount() == 3);
+    for (size_t bad : {laps.LapsCount(), size_t{9999}}) {
+      LapArrays cols = laps.LapColumns(bad);
+      CHECK(cols.times.empty());
+      CHECK(cols.xs.empty());
+      CHECK(cols.ys.empty());
+      CHECK(cols.full_speed.empty());
+      CHECK(cols.cum_distances.empty());
+    }
   }
 }
