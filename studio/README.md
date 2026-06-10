@@ -60,18 +60,23 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 | File | Role |
 |------|------|
 | [session.py](session.py) | Orchestrates the load (via `ingest.py`) into `pacer.Laps`; exposes trace/lap/delta arrays + timing-line write-back. Owns the segmentation/analysis pipeline (primary `pacer` user). |
-| [ingest.py](ingest.py) | The GoPro/GPMF **data-loading layer** (one of the three modules that may name `pacer`): builds the `SequentialGPSSource` chain over one or more chapters and reads the raw GPS/IMU streams (`read_gpmf`/`read_imu` + the shared `chain_sources`) on the continuous global clock. Returns raw samples + per-chapter durations; `session.py` cleans/smooths/segments on top. A data/control-layer module, not a view. |
+| [ingest.py](ingest.py) | The GoPro/GPMF **data-loading layer** (one of the three modules that may name `pacer`): builds the `SequentialGPSSource` chain over one or more chapters and reads the raw GPS+IMU streams on the continuous global clock. The load path is **`read_recording`** — single-pass: one shared chain, so each chapter MP4 is opened/GPMF-parsed ONCE for both GPS and IMU (`read_gpmf`/`read_imu` remain for dev scripts). Returns raw samples + per-chapter durations; `session.py` cleans/smooths/segments on top. A data/control-layer module, not a view. |
+| [_signal.py](_signal.py) | Pure-numpy **signal/clean helpers** shared by the session pipeline and the g-meter: the edge-corrected boxcar smoother, gap segmentation, the GPS quality gate, and the real-lap band filter. Pacer-free by contract (no `pacer`, no Qt). |
 | [tracks.py](tracks.py) | Registry of known tracks (Daytona MK); detects the track by centroid and gives its fixed start/finish line. One of the three modules that name `pacer` (geometry only). |
 | [dev/transponder.py](dev/transponder.py) | Pure-Python (no `pacer`), **dev/validation-only**: defensive parser for a lap-timing **transponder CSV** (the ground truth the GPS9 timing is **validated** against, out of sample, by [`dev/_validate_wallclock.py`](dev/_validate_wallclock.py)). Reads only the `Lap` + `Lap Time` columns (the later columns embed commas/quotes). A reference **input** only — the CSV is never committed. |
-| [video_view.py](video_view.py) | `QMediaPlayer` + `QVideoWidget` + `QAudioOutput`; emits `positionChanged(s)` in **global session time**, exposes `seek(s)` (global) + `is_playing()`/`pause()`/`play()` + a **mute/unmute toggle** (🔇/🔊, default muted) + a **g-meter toggle** (`G`). Hosts the **g-meter overlay** as a frameless translucent **top-level window** pinned over the `QVideoWidget`'s **top-right** corner and **scaled to a fraction of the video** (a plain child is painted behind the video's native surface on macOS and never shows; its own native window composites above it) and exposes `set_g(...)` / `set_gmeter_lap(...)` (app-fed at the tick, which also re-pins/re-scales the overlay). For a **chaptered** recording it holds the `ChapterMap`, switches source on a cross-chapter seek, and **auto-advances** to the next chapter at end-of-media — one source at a time, one continuous global slider. |
+| [video_view.py](video_view.py) | The player **shell**: the transport row (play/pause + the **mute/unmute toggle** (🔇/🔊, default muted) + the **g-meter toggle** (`G`) + the compare toggle) and the **global-time slider** around ONE [PlayerPane](player_pane.py) — or, in **compare mode**, TWO equal panes side-by-side (primary drives all telemetry; secondary is video-only, with per-pane lap pickers + Δ badges). Re-exposes the same `seek`/`play`/`positionChanged` API the app drives. |
+| [player_pane.py](player_pane.py) | One self-contained single-lap player (extracted from the old `video_view.py`): `QMediaPlayer` + `QVideoWidget` + `QAudioOutput`; emits `positionChanged(s)` in **global session time**, exposes `seek(s)` (global) + `is_playing()`/`pause()`/`play()`. Hosts the **g-meter overlay** as a frameless translucent **top-level window** pinned over the `QVideoWidget`'s **top-right** corner and **scaled to a fraction of the video** (a plain child is painted behind the video's native surface on macOS and never shows; its own native window composites above it) and exposes `set_g(...)` / `set_gmeter_lap(...)` (app-fed at the tick, which also re-pins/re-scales the overlay). For a **chaptered** recording it holds the `ChapterMap`, switches source on a cross-chapter seek, and **auto-advances** to the next chapter at end-of-media — one source at a time, one continuous global clock. |
+| [scrub_controller.py](scrub_controller.py) | **ScrubController** — the plot-cursor scrub cluster, extracted from `app.py`'s StudioWindow: owns the scrub state, scopes the drag to the lap captured at grab, and **coalesces** the seeks + cursor/marker/readout refresh to ≤1 per 30 Hz tick (`apply_tick`); in compare mode the drag is distance-locked across both panes. A Qt-free, pacer-free control-layer collaborator. |
+| [compare_controller.py](compare_controller.py) | **CompareController** — the dual-lap compare-mode cluster, extracted from StudioWindow: owns the on/off flag + the pinned (A,B) lap ids, the enter/exit orchestration (suspend/restore auto-follow, re-seek both panes to their lap's start line) and the per-tick upkeep (pane times, "Δ vs other" badges, secondary g). Qt-free, pacer-free. |
+| [theme.py](theme.py) | The **dark "Refined Minimal" design system** — single source of truth: the colour/scale tokens (`C`), Inter font registration, the dark `QPalette` + global QSS, the pyqtgraph background, and `icon(...)` (Phosphor glyphs via `qtawesome`, lazily imported). Pacer-free, LLM-editable. |
 | [gmeter.py](gmeter.py) | **Vehicle-frame g** from the GoPro **accelerometer** — pure numpy, pacer-free. Transforms `ACCL`/`GRAV`/`CORI` (camera frame) into kart-frame lateral/longitudinal g (gravity removed via GRAV; rotate by `conj(CORI)`; project horizontal; **per-chapter** align to GPS ENU). Cross-checks against **GPS-derived g** and falls back to it if the IMU is absent/unreliable. Precomputed at load; `at_time(t)` is a cheap lookup. See [docs/gmeter-validation.md](docs/gmeter-validation.md). |
 | [gmeter_overlay.py](gmeter_overlay.py) | The subtle **"G meter"** dial (pacer-free Qt): thin 0.5/1.0 g rings + a soft white dot (**no centre-to-dot line**) showing the **felt force** the driver's body feels (**brake→up, accel→down, right→left, left→right**) + a translucent **red max-G envelope** (convex hull) + **amber cardinal peak-g numbers**. The dot is **EMA-low-passed** (chin-mount shake filter) and the peaks/hull are **robust** (high-percentile + clamped) so a helmet shake can't blow them out; envelope/peaks accumulate **per lap** (`set_lap`). A frameless translucent top-level window composited over the video, pinned **top-right** and **scaled to the video**; `set_g((lat,long,total))` + `set_lap(id)` each tick. |
 | [chapters.py](chapters.py) | Pure-Python (no `pacer`): the GoPro chaptered-filename parser, sibling **discovery/grouping** (same recording number, same folder, ordered by chapter), and the **`ChapterMap`** global↔chapter time mapping (per-chapter offset table). Unit-tested in [`tests/test_chapters.py`](../tests/test_chapters.py). |
 | [map_view.py](map_view.py) | Best lap (faint) + current/playing lap (highlighted) + **freely-draggable** start/sector timing lines + video marker (drag **constrained to the current lap** so it never jumps laps). Each lap is drawn as measured (solid) + reconstructed gap-fill (dashed/dimmed) segments. The full all-laps trace is intentionally not drawn (perf + clarity). |
 | [gapfill.py](gapfill.py) | **GPS-gap reconstruction (map only)** — pure numpy. Detects interior dropouts and fills them with cross-lap borrow (primary) / reference centerline (fallback) / spline, tagged measured-vs-inferred. No `pacer`. |
-| [reference.py](reference.py) + [mk_centerline.json](mk_centerline.json) | Georeferenced Daytona MK centerline (traced from `gmaps_pict.png`, similarity-ICP aligned to the GPS aggregate) — the gap-fill fallback for sections no lap covers. Rebuild via [build_reference.py](build_reference.py). |
-| [plots_view.py](plots_view.py) | Speed (top) + lap-vs-best delta (bottom) on **one shared, x-linked x-axis** (dist/time toggle drives both; delta aligned by **normalized distance** → endpoint = laptime diff), so the two cursors always align. Downsampled/clipped curves + a synced cursor that is also a **draggable scrubber** + a **hover dot** on the delta curve + subtle **sector boundary guide lines** (`set_sector_lines`, app-fed) — pacer-free, it only emits `scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded`/`modeChanged(mode)` (mode = `time`\|`distance`); app converts + seeks and owns the live Δ/speed readout box. |
-| [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best, **purple = per-sector session best**, **⚠ = GPS-dropout lap (low-confidence; time/distance/map less reliable, with a row tooltip)**. Base row text is near-black for readability on the light table. **Every header is click-to-sort** by the underlying numeric value (asc/desc); highlights and the ⚠ flag follow the laps across a sort. |
+| [reference.py](reference.py) + [mk_centerline.json](mk_centerline.json) | Georeferenced Daytona MK centerline (traced from `gmaps_pict.png`, similarity-ICP aligned to the GPS aggregate) — the gap-fill fallback for sections no lap covers. Rebuild via [dev/build_reference.py](dev/build_reference.py). |
+| [plots_view.py](plots_view.py) | Speed (top) + lap-vs-best delta (bottom) on **one shared, x-linked x-axis** (dist/time toggle drives both; delta aligned by **normalized distance** → endpoint = laptime diff), so the two cursors always align. Downsampled/clipped curves + a synced cursor that is also a **draggable scrubber** + a **hover dot** on the delta curve + subtle **sector boundary guide lines** (`set_sector_lines`, app-fed) — pacer-free, it only emits `scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded`/`modeChanged(mode)` (mode = `time`\|`distance`); the `ScrubController` converts + seeks, and app owns the live Δ/speed readout box. |
+| [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best, **purple = per-sector session best**, **⚠ = GPS-dropout lap (low-confidence; time/distance/map less reliable, with a row tooltip)**. Base row text is the theme's primary off-white (dark table surface). **Every header is click-to-sort** by the underlying numeric value (asc/desc); highlights and the ⚠ flag follow the laps across a sort. |
 | [app.py](app.py) | Assembles panels in splitters and wires the cross-panel signals. |
 
 ## Gotchas / notes
@@ -154,15 +159,16 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 - **Draggable plot-cursor scrubber** (a fine, lap-scoped scrub; the full-video slider stays as-is):
   the speed + delta cursors are `movable` `InfiniteLine`s. Dragging either seeks the video **within
   the lap the playhead is currently in**, clamped to that lap. `plots_view` stays pacer-free — it
-  emits only the raw plot-x + the shared axis mode (`scrubMoved(x, mode)`); `app.py` converts to a
-  media time, seeks, and re-syncs both cursors + slider + map marker. The x↔media-time mapping lives
+  emits only the raw plot-x + the shared axis mode (`scrubMoved(x, mode)`); `ScrubController`
+  (`scrub_controller.py`, extracted from StudioWindow in PR #40) converts to a media time, seeks,
+  and re-syncs both cursors + slider + map marker. The x↔media-time mapping lives
   in `session` (pure numpy on cached per-lap `(times, dists)`): `media_time_at_plot_x` /
   `plot_x_at_media_time`. Both plots share ONE x-axis and are permanently **x-linked**, so a given
   moment maps to the **same x** on both and the cursors coincide vertically. Source of truth is the
   media time. **Throttle + pause/resume:** seeks coalesced to **≤1 per 30 Hz tick** (latest target
   wins) so 4K HEVC stays responsive; pause-on-grab / resume-iff-was-playing. **No feedback loop:**
   the drag ignores the playback tick (`_user_dragging`) and programmatic `setValue` is
-  `_suppress`-guarded. Tests in `tests/test_scrub_conversion.py`.
+  `_suppress`-guarded. Tests in `tests/test_scrub_conversion.py` + `tests/test_controllers.py`.
 - **Charts auto-follow the current lap (`app._follow_current_lap`, UI-only):** the charts always show
   **whichever lap the playhead is in vs the best lap** — as playback (or a main-slider scrub) crosses
   a lap boundary they switch to the now-current lap, keeping best as the reference overlay; the table
@@ -188,7 +194,8 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
   survives refreshes. The **purple** highlight is the per-column MINIMUM split across valid laps
   (motorsport "session best sector"). All visual state (green best lap, purple best-sector cells, the
   `▶` current-lap mark, the **⚠ GPS-dropout** flag) is keyed by **lap id** and re-applied after every
-  sort, so it follows the right lap and coexists. Base row text is near-black (light table background).
+  sort, so it follows the right lap and coexists. Base row text is the theme's primary off-white
+  (`theme.C.text`, dark table surface).
 - **GPS-dropout low-confidence flag (`session.dropout_lap_ids`, UI-only):** a valid lap whose
   kept-point times have an interior gap > `gapfill.GAP_TIME_S` (0.35 s) had a real dropout, so its
   time/distance/map are less reliable. A pure, read-only helper (changes no analysis value); the
@@ -234,9 +241,9 @@ not at a lap), so a lap can span a chapter boundary.
   give each chapter a global `offset` (cumulative prior durations); chapter *i* covers global
   `[offset_i, offset_i+dur_i)`. `to_local(global_t) → (i, local_t)` and `to_global(i, local_t)`
   are the global↔chapter mapping the video layer drives source-switching with.
-- **Video across files (`video_view.py`).** `QMediaPlayer` plays one source, so the view keeps
-  the ordered chapter list + offsets and: the **slider + emitted position are global** (span the
-  whole session); a `seek(global_t)` maps to (chapter, local) and **switches source** if the
+- **Video across files (`player_pane.py`).** `QMediaPlayer` plays one source, so the pane keeps
+  the ordered chapter list + offsets and: the **emitted position (and the shell's slider) is
+  global** (spans the whole session); a `seek(global_t)` maps to (chapter, local) and **switches source** if the
   target chapter isn't loaded (the deferred local seek applies on `LoadedMedia`); and at
   `EndOfMedia` it **auto-advances** to the next chapter and keeps playing from 0. **Known
   limitation:** switching source at a seam reopens the file, so a brief hitch there is expected.
@@ -292,9 +299,12 @@ accelerometer** (`ACCL`), synced to playback. Toggle with the **`G`** button und
 ## Tests
 
 Pure-Python studio tests live under [`tests/`](../tests/) and are registered with CTest (so
-`pixi run test` runs them with the C++ suite): `test_gapfill`, `test_scrub_conversion`,
-`test_studio_features` (the auto-follow edge + numeric sort / lap-scoped nearest / per-column min),
-`test_chapters`, `test_lap_timing`, `test_validate_wallclock`, `test_gmeter`, `test_gmeter_overlay`.
+`pixi run test` runs them with the C++ suite — 17 CTest entries total: 5 C++ + 12 Python):
+`test_gapfill`, `test_scrub_conversion`, `test_studio_features` (the auto-follow edge + numeric
+sort / lap-scoped nearest / per-column min), `test_chapters`, `test_lap_timing`,
+`test_gps_source_bindings`, `test_ingest_equivalence` (single-pass ingest == two-pass reads),
+`test_compare`, `test_controllers` (the extracted scrub/compare controllers on a bare Session +
+fake views), `test_validate_wallclock`, `test_gmeter`, `test_gmeter_overlay`.
 
 ## State & next ideas
 

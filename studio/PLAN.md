@@ -59,6 +59,13 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
 - **Accelerometer g-meter overlay** — a felt-force friction-circle dial driven by the GoPro's real
   accelerometer (`ACCL`/`GRAV`/`CORI`), with a per-lap max-G envelope and shake filter, composited
   top-right over the video (toggle `G`). Falls back to GPS-derived g if the IMU is absent/unreliable.
+- **Compare videos (dual-lap side-by-side)** — a toggle shows two equal video panes playing "time
+  into lap" from S/F at 1× (the faster pulls ahead); the primary (left) pane keeps driving all
+  telemetry, the secondary is video-only; per-pane lap pickers + "Δ vs other" badges; every repoint
+  re-aligns both panes at the start line.
+- **Dark "Refined Minimal" theme** (`theme.py`) — single-source design tokens + dark `QPalette` +
+  global QSS, Inter fonts, Phosphor icon buttons (`qtawesome`); charts, table, map and video chrome
+  all adopt the dark surface.
 
 ---
 
@@ -94,9 +101,6 @@ Captured here so the negative results aren't re-litigated. Evidence in [`docs/`]
   collapses onto an inner sub-loop and covers only ~30% of the real track footprint. It only feeds
   the **rarely-used** gap-fill reference *fallback* (never timing/segmentation), so it's low-impact,
   but it should be re-fit. ([docs/start-line-verification.md](docs/start-line-verification.md) §2 caveat)
-- **Pre-existing ruff warnings** in a few Python files (`UP037` quoted annotations in `tracks.py` /
-  `session.py`; `B905` zip-without-`strict` / `B023` loop-binding in `session.py` and the moved
-  `studio/dev/{diagnose,demo_sync,spike_video_sync}.py`) — cosmetic, unrelated to the analysis path.
 - **nanobind shutdown "leaked function" warnings** on the GPS/IMU read callbacks at exit — harmless,
   a codebase convention.
 - **G-meter longitudinal per-lap correlation is modest** (lateral r ≈ 0.90 / 96.5% sign agreement is
@@ -121,8 +125,9 @@ Captured here so the negative results aren't re-litigated. Evidence in [`docs/`]
 - **Tune the g-meter full-scale** and verify multi-chapter g-sync live.
 - **More pure-Python `session.py` tests** (`_clean`, `valid_lap_ids`, delta-endpoint == laptime-diff,
   `lap_sector_splits` sum == lap-time, `sector_plot_positions`).
-- **Perf headroom (only if needed on longer sessions)** — a bulk `lap→numpy` accessor in the C++
-  bindings to drop per-point Python loops; `useOpenGL` for the pyqtgraph views.
+- **Perf headroom (only if needed on longer sessions)** — `useOpenGL` for the pyqtgraph views:
+  evaluated and deliberately NOT adopted; revisit only with a measured >33 ms/tick paint time.
+  (The bulk `lap→numpy` accessor — `Laps::LapColumns`, bound as `lap_columns` — has shipped.)
 
 ---
 
@@ -143,8 +148,10 @@ Captured here so the negative results aren't re-litigated. Evidence in [`docs/`]
 - **`session.py`, `tracks.py`, and `ingest.py` are the only modules that may touch the `pacer`
   bindings.** `session.py` drives the load/segmentation pipeline; `tracks.py` is pure geometry;
   `ingest.py` is the GoPro/GPMF data-loading layer (the `SequentialGPSSource` chain build + the raw
-  GPS/IMU stream readers). Keep `map_view`/`plots_view`/`lap_table`/`video_view`/`app`/`gapfill`/
-  `reference`/`gmeter`/`gmeter_overlay`/`chapters`/`transponder` free of `pacer`.
+  GPS/IMU stream readers). **Every other studio module stays pacer-free** — the views
+  (`map_view`/`plots_view`/`lap_table`/`video_view`/`player_pane`/`gmeter_overlay`/`app`), the
+  controllers (`scrub_controller`/`compare_controller`), and the pure helpers
+  (`gapfill`/`reference`/`gmeter`/`chapters`/`theme`/`_signal`/`transponder`).
 - `pacer` is GPMF/GoPro **`.MP4` only**. It supplies the
   telemetry time axis; the app brings its own video player (pacer doesn't decode pixels).
 - **Perf invariants — do not regress:** the 30 Hz tick decouple (`_on_position` only stores the time;
@@ -158,7 +165,8 @@ Autonomous background workflows (full-autonomy perms in `.claude/settings.local.
 implements → verifies **headlessly** (driving the app via handlers + measuring numbers) → adversarially
 reviews → commits. Agents can launch the GUI (non-sandboxed) for a crash-smoke but cannot perceive
 smoothness/visuals — the final visual confirmation is the human's. Define numeric pass criteria so a
-fix isn't "done" until they hold.
+fix isn't "done" until they hold. CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml))
+gates every push/PR: pixi build + ctest + ruff on macos-14 (arm64).
 
 ## Established conclusion (timing accuracy)
 

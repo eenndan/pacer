@@ -1,7 +1,7 @@
 """Pure-numpy signal/clean helpers shared by the session pipeline and the g-meter.
 
-PACER-FREE BY CONTRACT. The studio architecture rule is that only session.py and
-tracks.py touch the `pacer` bindings; this module is numpy-only so the boxcar smoother,
+PACER-FREE BY CONTRACT. The studio architecture rule is that only session.py, tracks.py, and
+ingest.py touch the `pacer` bindings; this module is numpy-only so the boxcar smoother,
 the gap/quality cleaners, and the real-lap band filter can be shared without dragging a
 pacer (or Qt) import anywhere. Every function here is a behaviour-identical extraction of
 code that previously lived inline in session.py / gmeter.py — names and signatures match

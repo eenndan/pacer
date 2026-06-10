@@ -244,8 +244,8 @@ class LapTable(QWidget):
                 item = self.table.item(r, c)
                 if item is None:
                     continue
-                # Base text is near-black for readability on the light table background; the
-                # green best-lap / purple best-sector foregrounds override it per cell below.
+                # Base text is the theme's primary off-white (theme.C.text, dark table surface);
+                # the green best-lap / purple best-sector foregrounds override it per cell below.
                 item.setForeground(BEST_COLOR if is_best else BASE_COLOR)
                 # Low-confidence GPS-dropout laps carry a row-wide tooltip explaining the flag
                 # (the visible ⚠ marker on the Lap cell is set in _apply_current_lap).
