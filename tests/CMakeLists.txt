@@ -32,6 +32,11 @@ if(Python_Interpreter_FOUND)
     # SequentialGPSSource chapter-offset chaining. Imports pacer only (no Qt).
     add_test(NAME test_gps_source_bindings
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gps_source_bindings.py)
+    # Single-pass ingest (PR #40): read_recording's shared chain == the pre-#40 two-fresh-chains
+    # reads (bundled GoPro samples), + IMU-after-GPS-drain invariance on a Python stub source.
+    # Imports pacer + studio.ingest only (no Qt).
+    add_test(NAME test_ingest_equivalence
+             COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ingest_equivalence.py)
     add_test(NAME test_studio_features
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_studio_features.py)
     set_tests_properties(test_studio_features PROPERTIES
@@ -70,8 +75,8 @@ if(Python_Interpreter_FOUND)
     # AttributeError. PYTHONPATH makes the deployed package win deterministically in every
     # install state; APPEND keeps the per-test QT_QPA_PLATFORM settings above intact.
     foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_gapfill
-                            test_gps_source_bindings test_studio_features test_compare
-                            test_controllers test_validate_wallclock test_gmeter
+                            test_gps_source_bindings test_ingest_equivalence test_studio_features
+                            test_compare test_controllers test_validate_wallclock test_gmeter
                             test_gmeter_overlay)
         set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                      "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
