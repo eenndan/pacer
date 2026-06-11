@@ -2,9 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <functional>
 #include <utility>
 
@@ -16,6 +13,13 @@ namespace pacer {
 //
 // Being raw in this context means that it does not provide any meaningful
 // timestamps to work with.
+//
+// RETURN-CODE CONVENTION: every uint32_t-returning method (ReadSamples, Seek) uses GoPro
+// GPMF-parser error codes — 0 (GPMF_OK) is success, any nonzero value is a GPMF_ERROR_*
+// diagnostic (e.g. GPMFSource::ReadSamples returns GPMF_ERROR_MEMORY == 1 when the current
+// index has no payload). Callers only distinguish zero from nonzero — no caller branches on a
+// specific error code — so sources implemented outside the parser (tests, Python subclasses)
+// can simply return 0 for success and any nonzero value for "nothing here".
 class RawGPSSource {
 public:
   RawGPSSource() = default;

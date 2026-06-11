@@ -1,9 +1,11 @@
 #include "gps-source.hpp"
 
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <string>
-#include <sys/types.h>
+#include <vector>
 
 #include "GPMF_common.h"
 #include "GPMF_parser.h"
@@ -133,42 +135,44 @@ void ParseGPS9(GPMF_stream *ms, uint32_t samples, uint32_t elements,
   if (!(samples && elements >= 7)) {
     return;
   }
-  uint32_t buffersize = samples * elements * sizeof(double);
-  double *tmpbuffer = (double *)malloc(buffersize);
-  if (tmpbuffer) {
-    if (GPMF_OK == GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples,
-                                   GPMF_TYPE_DOUBLE)) {
-      for (uint32_t i = 0; i < samples; ++i) {
-        GPSSample gps{};
-        // GPS9: [lat, lon, alt, 2D speed, 3D speed, days since 2000, secs
-        // since midnight, DOP, fix]
-        gps.lat = tmpbuffer[i * elements + 0];
-        gps.lon = tmpbuffer[i * elements + 1];
-        gps.altitude = tmpbuffer[i * elements + 2];
-        gps.ground_speed = tmpbuffer[i * elements + 3];
-        gps.full_speed = tmpbuffer[i * elements + 4];
-        // Timestamp calculation from days since 2000 and seconds since
-        // midnight
-        double days_since_2000 = tmpbuffer[i * elements + 5];
-        double secs_since_midnight = tmpbuffer[i * elements + 6];
-        // Convert days since 2000-01-01 to ms since epoch
-        constexpr int64_t epoch_2000 =
-            946684800000LL; // ms since epoch for 2000-01-01T00:00:00Z
-        int64_t ms_since_2000 = static_cast<int64_t>(
-            days_since_2000 * 86400000.0 + secs_since_midnight * 1000.0);
-        gps.timestamp_ms = epoch_2000 + ms_since_2000;
-        // GPS9 quality: DOP (element 7) and fix type (element 8, 0/2/3). Present only
-        // when the struct actually carries them; otherwise keep the sentinel defaults.
-        if (elements > 7) {
-          gps.dop = tmpbuffer[i * elements + 7];
-        }
-        if (elements > 8) {
-          gps.fix = static_cast<int>(tmpbuffer[i * elements + 8]);
-        }
-        emit(gps, i, samples);
-      }
+  // RAII scratch buffer (was a malloc/free pair). The malloc version leaked whenever `emit`
+  // threw mid-loop (e.g. a Python callback raising through the binding trampoline) — the
+  // vector unwinds cleanly. Same size, same layout, same reads.
+  std::vector<double> tmpbuffer(static_cast<size_t>(samples) * elements);
+  uint32_t buffersize =
+      static_cast<uint32_t>(tmpbuffer.size() * sizeof(double));
+  if (GPMF_OK != GPMF_ScaledData(ms, tmpbuffer.data(), buffersize, 0, samples,
+                                 GPMF_TYPE_DOUBLE)) {
+    return;
+  }
+  for (uint32_t i = 0; i < samples; ++i) {
+    GPSSample gps{};
+    // GPS9: [lat, lon, alt, 2D speed, 3D speed, days since 2000, secs
+    // since midnight, DOP, fix]
+    gps.lat = tmpbuffer[i * elements + 0];
+    gps.lon = tmpbuffer[i * elements + 1];
+    gps.altitude = tmpbuffer[i * elements + 2];
+    gps.ground_speed = tmpbuffer[i * elements + 3];
+    gps.full_speed = tmpbuffer[i * elements + 4];
+    // Timestamp calculation from days since 2000 and seconds since
+    // midnight
+    double days_since_2000 = tmpbuffer[i * elements + 5];
+    double secs_since_midnight = tmpbuffer[i * elements + 6];
+    // Convert days since 2000-01-01 to ms since epoch
+    constexpr int64_t epoch_2000 =
+        946684800000LL; // ms since epoch for 2000-01-01T00:00:00Z
+    int64_t ms_since_2000 = static_cast<int64_t>(
+        days_since_2000 * 86400000.0 + secs_since_midnight * 1000.0);
+    gps.timestamp_ms = epoch_2000 + ms_since_2000;
+    // GPS9 quality: DOP (element 7) and fix type (element 8, 0/2/3). Present only
+    // when the struct actually carries them; otherwise keep the sentinel defaults.
+    if (elements > 7) {
+      gps.dop = tmpbuffer[i * elements + 7];
     }
-    free(tmpbuffer);
+    if (elements > 8) {
+      gps.fix = static_cast<int>(tmpbuffer[i * elements + 8]);
+    }
+    emit(gps, i, samples);
   }
 }
 
@@ -183,30 +187,31 @@ void ParseGPS5(GPMF_stream *ms, uint32_t samples, uint32_t elements,
   if (!(samples && elements >= 5)) {
     return;
   }
-  uint32_t buffersize = samples * elements * sizeof(double);
-  double *tmpbuffer = (double *)malloc(buffersize);
-  if (tmpbuffer) {
-    if (GPMF_OK == GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples,
-                                   GPMF_TYPE_DOUBLE)) {
-      for (uint32_t i = 0; i < samples; ++i) {
-        // Stride is the KNOWN element width (`elements`), not the UNITS-stream repeat:
-        // when no SI_UNITS/UNITS sibling exists the old code's stride collapsed to 1 and
-        // emitted 5 garbage samples per record. Write the fields EXPLICITLY (same as the
-        // GPS9 branch) so 2D speed -> ground_speed and 3D speed -> full_speed; the prior
-        // union field-order aliasing landed them swapped (2D in full_speed) versus GPS9.
-        GPSSample gps{};
-        gps.lat = tmpbuffer[i * elements + 0];
-        gps.lon = tmpbuffer[i * elements + 1];
-        gps.altitude = tmpbuffer[i * elements + 2];
-        gps.ground_speed = tmpbuffer[i * elements + 3]; // 2D speed
-        gps.full_speed = tmpbuffer[i * elements + 4];    // 3D speed
-        gps.timestamp_ms = timestamp;
-        // GPS5 carries no DOP / fix-type; leave the GPSSample "unknown" sentinels
-        // (dop = -1, fix = -1) as defaulted in the struct.
-        emit(gps, i, samples);
-      }
-    }
-    free(tmpbuffer);
+  // RAII scratch buffer (was a malloc/free pair) — see ParseGPS9; the malloc version leaked
+  // when `emit` threw mid-loop.
+  std::vector<double> tmpbuffer(static_cast<size_t>(samples) * elements);
+  uint32_t buffersize =
+      static_cast<uint32_t>(tmpbuffer.size() * sizeof(double));
+  if (GPMF_OK != GPMF_ScaledData(ms, tmpbuffer.data(), buffersize, 0, samples,
+                                 GPMF_TYPE_DOUBLE)) {
+    return;
+  }
+  for (uint32_t i = 0; i < samples; ++i) {
+    // Stride is the KNOWN element width (`elements`), not the UNITS-stream repeat:
+    // when no SI_UNITS/UNITS sibling exists the old code's stride collapsed to 1 and
+    // emitted 5 garbage samples per record. Write the fields EXPLICITLY (same as the
+    // GPS9 branch) so 2D speed -> ground_speed and 3D speed -> full_speed; the prior
+    // union field-order aliasing landed them swapped (2D in full_speed) versus GPS9.
+    GPSSample gps{};
+    gps.lat = tmpbuffer[i * elements + 0];
+    gps.lon = tmpbuffer[i * elements + 1];
+    gps.altitude = tmpbuffer[i * elements + 2];
+    gps.ground_speed = tmpbuffer[i * elements + 3]; // 2D speed
+    gps.full_speed = tmpbuffer[i * elements + 4];   // 3D speed
+    gps.timestamp_ms = timestamp;
+    // GPS5 carries no DOP / fix-type; leave the GPSSample "unknown" sentinels
+    // (dop = -1, fix = -1) as defaulted in the struct.
+    emit(gps, i, samples);
   }
 }
 
@@ -223,13 +228,19 @@ uint32_t GPMFSource::ReadSamples(
     // No payload for this index (empty/EOF chunk). Return the error code silently — the iteration
     // protocol (is_end()/next()) already handles the empty case, and this is on the chapter-seam
     // hot path where a per-seam "No payload" printf is pure console noise.
-    return 1;
+    // GPMF_ERROR_MEMORY (== 1, "NULL Pointer") is the parser's own code for GetPayload
+    // returning nullptr — same value the old literal `return 1` produced.
+    return GPMF_ERROR_MEMORY;
   }
 
   GPMF_stream metadata_stream, *ms = &metadata_stream;
   auto ret = GPMF_Init(ms, payload, payloadsize);
   if (ret != GPMF_OK) {
-    printf("No init\n");
+    // Genuinely diagnostic (a corrupt/unparsable GPMF payload is NOT part of normal
+    // iteration, unlike the empty-payload case above) — say what failed and where, on
+    // stderr so it never pollutes piped stdout.
+    fprintf(stderr, "pacer: GPMF_Init failed for payload %u (corrupt GPMF?)\n",
+            index_);
     return ret;
   }
 
@@ -239,7 +250,9 @@ uint32_t GPMFSource::ReadSamples(
 
     ret = GPMF_SeekToSamples(ms);
     if (ret != GPMF_OK) {
-      printf("No Seek to Samples\n");
+      // A sample-less STRM is unremarkable (the caller just sees the nonzero code); the old
+      // per-occurrence "No Seek to Samples" printf carried zero information and could spam
+      // the console once per payload on sources that hit it. Dropped, behavior unchanged.
       return ret;
     }
 
@@ -329,13 +342,13 @@ void GPMFSource::ReadStream(
       if (samples == 0 || elements == 0) {
         continue;
       }
-      uint32_t buffersize = samples * elements * sizeof(double);
-      double *tmpbuffer = (double *)malloc(buffersize);
-      if (tmpbuffer == nullptr) {
-        continue;
-      }
-      if (GPMF_OK == GPMF_ScaledData(ms, tmpbuffer, buffersize, 0, samples,
-                                     GPMF_TYPE_DOUBLE)) {
+      // RAII scratch buffer (was a malloc/free pair) — see ParseGPS9; the malloc version
+      // leaked when `emit` threw mid-loop.
+      std::vector<double> tmpbuffer(static_cast<size_t>(samples) * elements);
+      uint32_t buffersize =
+          static_cast<uint32_t>(tmpbuffer.size() * sizeof(double));
+      if (GPMF_OK == GPMF_ScaledData(ms, tmpbuffer.data(), buffersize, 0,
+                                     samples, GPMF_TYPE_DOUBLE)) {
         for (uint32_t s = 0; s < samples; ++s) {
           double t = in + (out - in) * (static_cast<double>(s) / samples);
           double vals[4] = {0, 0, 0, 0};
@@ -346,7 +359,6 @@ void GPMFSource::ReadStream(
           emit(vals, nelem, t);
         }
       }
-      free(tmpbuffer);
     }
   }
 }
@@ -400,7 +412,10 @@ uint32_t SequentialGPSSource::Seek(double target) {
       right_->Seek(0);
     return (current_ = left_)->Seek(target);
   } else {
-    target -= left_->GetTotalDuration();
+    // Reuse left_duration (in scope from the if-init) rather than recomputing
+    // left_->GetTotalDuration(); for a nested SequentialGPSSource that recomputation walked
+    // the whole left subtree again. Same value, one traversal.
+    target -= left_duration;
     return (current_ = right_)->Seek(target);
   }
 }

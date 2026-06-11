@@ -446,7 +446,7 @@ void py_init_module_pacer(nb::module_ &m) {
   ////////////////////    <generated_from:gps-source.hpp>    ////////////////////
   auto pyClassRawGPSSource =
       nb::class_<pacer::RawGPSSource, pacer::RawGPSSource_trampoline>
-          (m, "RawGPSSource", " Base class for raw GPS source.\n\n Being raw in this context means that it does not provide any meaningful\n timestamps to work with.")
+          (m, "RawGPSSource", " Base class for raw GPS source.\n\n Being raw in this context means that it does not provide any meaningful\n timestamps to work with.\n\n RETURN-CODE CONVENTION: every uint32_t-returning method (ReadSamples, Seek) uses GoPro\n GPMF-parser error codes — 0 (GPMF_OK) is success, any nonzero value is a GPMF_ERROR_*\n diagnostic (e.g. GPMFSource::ReadSamples returns GPMF_ERROR_MEMORY == 1 when the current\n index has no payload). Callers only distinguish zero from nonzero — no caller branches on a\n specific error code — so sources implemented outside the parser (tests, Python subclasses)\n can simply return 0 for success and any nonzero value for \"nothing here\".")
       .def(nb::init<>())
       .def("read_samples",
           &pacer::RawGPSSource::ReadSamples,
