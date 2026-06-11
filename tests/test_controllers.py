@@ -10,8 +10,8 @@ god-controller into injected, Qt-light objects:
     from the drag's own clamped targets while a distance-locked scrub is in flight.
 
 The payoff of the extraction is exactly this: we can now drive that logic DIRECTLY — a real (bare)
-Session for the genuine delta/odometer math (its per-lap (times,dists) cache seeded as the session
-explicitly supports for tests) + tiny fake view recorders for the side-effects — and assert:
+Session for the genuine delta/odometer math (its per-lap odometer cache seeded via the shared
+tests/_synthetic factory) + tiny fake view recorders for the side-effects — and assert:
   * a coalesced scrub issues at most ONE primary seek per tick and applies the cursor/marker/readout
     exactly once to the latest dragged time (not once per mouse-move);
   * the map marker-drag drain seeks once per tick;
@@ -35,43 +35,30 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
+from _synthetic import bare_session, odometer  # noqa: E402
+
 from studio.compare_controller import CompareController  # noqa: E402
 from studio.scrub_controller import ScrubController  # noqa: E402
-from studio.session import Session  # noqa: E402
 
 
 # --------------------------------------------------------------------- fakes / fixtures
-def _odometer(n, dt, t0, total_dist, profile):
-    """A monotonic (times, dists) lap from a positive speed `profile` integrated to total_dist."""
-    times = t0 + np.arange(n) * dt
-    speed = profile(np.linspace(0.0, np.pi, n))
-    cum = np.cumsum(speed)
-    dists = (cum - cum[0]) / (cum[-1] - cum[0]) * total_dist
-    return times, dists
-
-
 def _make_session():
-    """A bare Session with TWO laps cached so the REAL delta_between / media_time_at_plot_x /
-    odometer math runs (the session explicitly supports a test seeding _dist_cache with a (times,
-    dists) tuple). The pacer-backed lookups the controllers touch (lap_window / lap_at_time /
-    valid_lap_ids / best_lap_id / lap_time / g_at_time / index_at_time / delta_at_lap / tv) are
-    monkey-patched off the cached arrays — the same pattern as test_compare/test_studio_features.
+    """A bare Session (tests/_synthetic factory) with TWO laps cached so the REAL delta_between /
+    media_time_at_plot_x / odometer math runs; the factory also seeds the valid_lap_ids /
+    best_lap_id memos so the real methods serve them. The remaining pacer-backed lookups the
+    controllers touch (lap_window / lap_at_time / lap_time / g_at_time / index_at_time /
+    delta_at_lap / tv) are monkey-patched off the cached arrays — the same pattern as
+    test_compare/test_studio_features.
 
     Lap A (id 3): slower, 12.0 s span, 520 m. Lap B (id 7, the best): faster, 11.0 s, 508 m.
     Returns (session, lap_a, lap_b)."""
-    s = Session.__new__(Session)
-    s._dist_cache = {}
     a, b = 3, 7
-    ta, da = _odometer(121, 0.1, 100.0, 520.0, lambda u: 1.0 + np.sin(u) ** 2)  # ~12.0 s
-    tb, db = _odometer(111, 0.1, 300.0, 508.0, lambda u: 1.3 + 0.7 * np.sin(u) ** 2)  # ~11.0 s
-    s._dist_cache[a] = (ta, da)
-    s._dist_cache[b] = (tb, db)
-    s._best = b
+    ta, da = odometer(121, 0.1, 100.0, 520.0)  # ~12.0 s, slow-fast-slow default profile
+    tb, db = odometer(111, 0.1, 300.0, 508.0, lambda u: 1.3 + 0.7 * np.sin(u) ** 2)  # ~11.0 s
+    s = bare_session({a: (ta, da), b: (tb, db)}, best=b, valid=[a, b])
 
     windows = {a: (float(ta[0]), float(ta[-1])), b: (float(tb[0]), float(tb[-1]))}
     s.lap_window = lambda lid: windows.get(lid)
-    s.valid_lap_ids = lambda: [a, b]
-    s.best_lap_id = lambda: b
     s.lap_time = lambda lid: float(s._dist_cache[lid][0][-1] - s._dist_cache[lid][0][0])
     # lap_at_time: which lap's window contains t (None outside both — lead-in / between laps).
     def _lap_at_time(t):
@@ -218,9 +205,7 @@ class _FakeTable:
 
 
 def _lap_times(s, lid):
-    """The lap's media-clock times array from the seeded cache. Robust to the entry being upgraded
-    from (times, dists) to (times, dists, elapsed) the first time the real delta/odometer math
-    memoizes `elapsed` (session._lap_time_dist_elapsed does that on the seeded tuple)."""
+    """The lap's media-clock times array from the seeded (times, dists, elapsed) cache entry."""
     return s._dist_cache[lid][0]
 
 

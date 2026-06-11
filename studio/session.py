@@ -606,12 +606,6 @@ class Session:
             elapsed = times - times[0]
             td = (times, dists, elapsed)
             self._dist_cache[lap_id] = td
-        elif len(td) == 2:
-            # A pre-seeded (times, dists) entry (e.g. a unit test stubs the cache directly) — derive
-            # and memoize elapsed once so the rest of the code always sees the 3-tuple form.
-            times, dists = td
-            td = (times, dists, times - times[0])
-            self._dist_cache[lap_id] = td
         return td
 
     # ------------------------------------------------ cursor scrub: x <-> media time

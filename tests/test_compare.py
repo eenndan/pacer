@@ -3,7 +3,7 @@
 `Session.delta_between(lap_a, lap_b, t_in_a)` is the time delta of lap_a vs an ARBITRARY lap_b
 at the same normalized track position lap_a is at time `t_in_a`. It drives the per-pane
 "Δ vs other" badge in compare mode. These tests exercise it directly on synthetic cached per-lap
-(times, dists) arrays (built via Session.__new__, populating _dist_cache), checking:
+(times, dists) arrays (built via the shared tests/_synthetic bare_session factory), checking:
   * antisymmetry at the finish: delta_between(A,B, finish_A) == −delta_between(B,A, finish_B) and
     equals lap_a_time − lap_b_time;
   * a zero self-delta (delta_between(A,A,t) ≈ 0) at every point;
@@ -25,41 +25,30 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
+from _synthetic import bare_session, odometer, seed_lap  # noqa: E402
+
 from studio.player_pane import PlayerPane  # noqa: E402
-from studio.session import Session  # noqa: E402
-
-
-def _odometer(n, dt, t0, total_dist, profile):
-    """A monotonic (times, dists) lap from a positive speed `profile` integrated to total_dist."""
-    times = t0 + np.arange(n) * dt
-    speed = profile(np.linspace(0.0, np.pi, n))
-    cum = np.cumsum(speed)
-    dists = (cum - cum[0]) / (cum[-1] - cum[0]) * total_dist
-    return times, dists
 
 
 def make_two_lap_session(best_is_b=True):
     """A bare Session with TWO laps cached. Lap A is slower (longer time) than lap B by design,
     with DIFFERENT total distances (different racing lines) so the normalized-distance alignment
     is exercised non-trivially. Returns (session, lap_a, lap_b)."""
-    s = Session.__new__(Session)
-    s._dist_cache = {}
     lap_a, lap_b = 3, 7
     # Lap A: slow-fast-slow, 120 samples @ 0.1 s = 11.9 s span, 520 m.
-    ta, da = _odometer(120, 0.1, 100.0, 520.0, lambda u: 1.0 + np.sin(u) ** 2)
+    ta, da = odometer(120, 0.1, 100.0, 520.0)
     # Lap B: faster overall (shorter span) and a slightly different line/length (508 m).
-    tb, db = _odometer(110, 0.1, 300.0, 508.0, lambda u: 1.3 + 0.7 * np.sin(u) ** 2)
-    s._dist_cache[lap_a] = (ta, da)
-    s._dist_cache[lap_b] = (tb, db)
-    s._best = lap_b if best_is_b else lap_a
+    tb, db = odometer(110, 0.1, 300.0, 508.0, lambda u: 1.3 + 0.7 * np.sin(u) ** 2)
+    s = bare_session({lap_a: (ta, da), lap_b: (tb, db)},
+                     best=lap_b if best_is_b else lap_a)
     return s, lap_a, lap_b
 
 
 def test_finish_delta_equals_laptime_difference():
     """At each lap's finish (s=1) delta_between is exactly that lap's time minus the other's."""
     s, a, b = make_two_lap_session()
-    ta, _ = s._dist_cache[a]
-    tb, _ = s._dist_cache[b]
+    ta = s._dist_cache[a][0]
+    tb = s._dist_cache[b][0]
     a_time = float(ta[-1] - ta[0])
     b_time = float(tb[-1] - tb[0])
     d_ab = s.delta_between(a, b, float(ta[-1]))  # A vs B at A's finish
@@ -74,7 +63,7 @@ def test_finish_delta_equals_laptime_difference():
 def test_self_delta_is_zero():
     """A lap compared to ITSELF is 0 at every track position (s aligns to s exactly)."""
     s, a, _ = make_two_lap_session()
-    ta, _ = s._dist_cache[a]
+    ta = s._dist_cache[a][0]
     for t in np.linspace(ta[0], ta[-1], 25):
         d = s.delta_between(a, a, float(t))
         assert abs(d) < 1e-9, (t, d)
@@ -83,13 +72,12 @@ def test_self_delta_is_zero():
 
 def test_cross_check_vs_delta_at_time():
     """THE design cross-check: for lap_b == the GLOBAL best lap, delta_between(A, best, t) must
-    match the existing hardcoded-vs-best delta_at_time(t) at the same media time. We monkey-patch
-    the two best-lap entry points (best_lap_id + lap_at_time) on the bare session so delta_at_time
-    runs with no pacer, then compare across lap A."""
+    match the existing hardcoded-vs-best delta_at_time(t) at the same media time. The factory
+    seeds the best-lap memo (so the REAL best_lap_id() serves b); lap_at_time is monkey-patched
+    on the bare session so delta_at_time runs with no pacer, then compare across lap A."""
     s, a, b = make_two_lap_session(best_is_b=True)  # b is the best (fastest) lap
-    ta, da = s._dist_cache[a]
-    # delta_at_time needs: best_lap_id(), lap_at_time(t)->the lap containing t.
-    s.best_lap_id = lambda: b
+    ta = s._dist_cache[a][0]
+    # delta_at_time needs: best_lap_id() (factory-seeded), lap_at_time(t)->the lap containing t.
     s.lap_at_time = lambda t: a if ta[0] <= t <= ta[-1] else None
     pairs = []
     for t in np.linspace(ta[0] + 1e-6, ta[-1] - 1e-6, 31):
@@ -109,7 +97,7 @@ def test_outside_window_clamps_and_degenerate_none():
     """Times before/after lap_a's window clamp to its edge values (np.interp clamps), and a
     degenerate (uncached / <2-point) lap returns None rather than raising."""
     s, a, b = make_two_lap_session()
-    ta, _ = s._dist_cache[a]
+    ta = s._dist_cache[a][0]
     # A time well before the lap start clamps to the start fraction (s=0) -> delta == −b_at_0 == 0
     # only coincidentally; assert it simply returns a finite number equal to the start-clamped val.
     d_before = s.delta_between(a, b, float(ta[0]) - 100.0)
@@ -121,7 +109,7 @@ def test_outside_window_clamps_and_degenerate_none():
     # A degenerate (<2-point) lap -> _lap_time_dist returns None -> delta_between None (no crash),
     # whether it's the primary or the "other" side of the comparison.
     degen = 11
-    s._dist_cache[degen] = (np.array([ta[0]]), np.array([0.0]))
+    seed_lap(s, degen, np.array([ta[0]]), np.array([0.0]))
     assert s.delta_between(a, degen, float(ta[0])) is None
     assert s.delta_between(degen, b, float(ta[0])) is None
     print("test_outside_window_clamps_and_degenerate_none OK")

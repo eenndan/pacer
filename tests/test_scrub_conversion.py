@@ -3,7 +3,7 @@
 The draggable plot cursor seeks the video within the current lap; plots_view stays pacer-free,
 so the per-axis-mode x<->time mapping lives in Session. These tests exercise that math DIRECTLY
 on synthetic cached per-lap arrays (no pacer, no telemetry file, fast): they build a bare
-Session via __new__, populate its _dist_cache, and check that
+Session via the shared tests/_synthetic factory and check that
     media_time_at_plot_x(plot_x_at_media_time(t)) == t
 for both axis modes ('time', and the shared-distance 'distance'/'delta'), that clamping holds at
 the lap edges, and — crucially for the cursor-sync fix — that BOTH plots map a given media time
@@ -17,22 +17,16 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from studio.session import Session  # noqa: E402
+from _synthetic import bare_session, odometer  # noqa: E402
 
 
 def make_session(lap_id=3, t0=100.0, dt=0.1, n=120, total_dist=520.0):
-    """A bare Session carrying ONE lap's cached (times, dists). times start at t0; dists is a
-    deliberately NON-uniform monotonic odometer (so distance<->time is a real, non-linear interp
-    — a constant-speed lap would make distance mode trivially equal to a scaled time mode)."""
-    s = Session.__new__(Session)
-    s._dist_cache = {}
-    times = t0 + np.arange(n) * dt
-    # Non-uniform speed profile: slow-fast-slow, integrated to a monotonic odometer ending at
-    # total_dist. (sin^2 keeps every step positive -> strictly increasing cum-distance.)
-    speed = 1.0 + np.sin(np.linspace(0, np.pi, n)) ** 2
-    cum = np.cumsum(speed)
-    dists = (cum - cum[0]) / (cum[-1] - cum[0]) * total_dist
-    s._dist_cache[lap_id] = (times, dists)
+    """A bare Session carrying ONE lap's cached (times, dists). times start at t0; dists is the
+    factory's deliberately NON-uniform monotonic odometer (so distance<->time is a real,
+    non-linear interp — a constant-speed lap would make distance mode trivially equal to a
+    scaled time mode)."""
+    times, dists = odometer(n, dt, t0, total_dist)
+    s = bare_session({lap_id: (times, dists)})
     return s, lap_id, times, dists
 
 
@@ -135,11 +129,7 @@ def test_distance_delta_no_best_distance_returns_none():
 
 
 if __name__ == "__main__":
-    test_time_mode_roundtrip()
-    test_distance_mode_roundtrip()
-    test_delta_mode_roundtrip()
-    test_all_modes_agree_on_one_time()
-    test_speed_and_delta_cursors_coincide()
-    test_clamp_to_lap_window()
-    test_distance_delta_no_best_distance_returns_none()
-    print("\nALL SCRUB CONVERSION TESTS PASSED")
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for t in tests:
+        t()
+    print(f"\nALL {len(tests)} SCRUB CONVERSION TESTS PASSED")

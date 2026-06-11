@@ -25,13 +25,14 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
+from _synthetic import bare_session  # noqa: E402
+
 from studio import gapfill  # noqa: E402
 from studio.lap_table import (  # noqa: E402
     NUM_ROLE,
     _best_split_per_sector_impl,
     _NumItem,
 )
-from studio.session import Session  # noqa: E402
 
 
 # --------------------------------------------------------------------- F1
@@ -137,17 +138,17 @@ def test_best_split_per_sector_is_column_min():
 
 # --------------------------------------------------------------------- F3
 def _bare_session_with_lap(lap_id=2):
-    """A bare Session carrying ONE lap's cached xy + (times,dists), patched so the F3 helpers
-    run with no pacer. The lap is a simple curve; a far-away point must still resolve to the
-    NEAREST point WITHIN this lap (never escape it) and the time clamps to the lap window."""
-    s = Session.__new__(Session)
+    """A bare Session (tests/_synthetic factory) carrying ONE lap's cached xy + (times,dists),
+    patched so the F3 helpers run with no pacer. The lap is a simple curve; a far-away point must
+    still resolve to the NEAREST point WITHIN this lap (never escape it) and the time clamps to
+    the lap window."""
     n = 50
     t0 = 100.0
     xs = np.linspace(0.0, 100.0, n)
     ys = np.sin(np.linspace(0, math.pi, n)) * 20.0
     ts = t0 + np.arange(n) * 0.1
     dists = np.linspace(0.0, 250.0, n)
-    s._dist_cache = {lap_id: (ts, dists)}
+    s = bare_session({lap_id: (ts, dists)})
     # _lap_xy_t calls _lap_trace_xyt + _lap_time_dist; stub _lap_trace_xyt to our arrays.
     s._lap_trace_xyt = lambda lid: (xs, ys, ts)  # noqa: ARG005
     return s, lap_id, xs, ys, ts
@@ -180,11 +181,11 @@ def test_nearest_time_in_lap_clamps_to_window():
 
 # ----------------------------------------------------- dropout-lap low-confidence flag
 def _bare_session_with_times(times_by_lap, valid):
-    """A bare Session whose per-lap kept-point times and valid-lap set are stubbed, so the
-    read-only dropout helpers run with no pacer / telemetry file."""
-    s = Session.__new__(Session)
+    """A bare Session whose per-lap kept-point times are stubbed (the valid-lap set is seeded
+    through the factory's memo), so the read-only dropout helpers run with no pacer /
+    telemetry file."""
+    s = bare_session(valid=valid)
     s._lap_point_times = lambda lid: times_by_lap[lid]  # noqa: ARG005
-    s.valid_lap_ids = lambda: list(valid)
     return s
 
 
@@ -238,9 +239,8 @@ class _FakeLaps:
 
 
 def _bare_session_for_lap_at_time(starts, end, valid):
-    s = Session.__new__(Session)
+    s = bare_session(valid=valid)
     s.laps = _FakeLaps(starts, end)
-    s.valid_lap_ids = lambda: list(valid)
     return s
 
 
