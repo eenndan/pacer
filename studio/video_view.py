@@ -202,7 +202,7 @@ class VideoView(QWidget):
         self.play_btn.setIcon(theme.icon("ph.play-fill"))
         self.play_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
         self.play_btn.setFixedSize(_ICON_BTN)
-        self.play_btn.setToolTip("Play / pause")
+        self.play_btn.setToolTip("Play / pause (Space)")
         self.play_btn.clicked.connect(self.toggle)
 
         # F4: mute/unmute toggle. speaker-x while muted (default), speaker-high while audible.
@@ -210,7 +210,7 @@ class VideoView(QWidget):
         self.mute_btn.setIcon(theme.icon("ph.speaker-simple-x"))
         self.mute_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
         self.mute_btn.setFixedSize(_ICON_BTN)
-        self.mute_btn.setToolTip("Audio muted — click to unmute")
+        self.mute_btn.setToolTip("Audio muted — click to unmute (M)")
         self.mute_btn.clicked.connect(self.toggle_mute)
 
         # g-meter show/hide toggle (the friction-circle overlay on the video). Checkable: the QSS
@@ -220,7 +220,7 @@ class VideoView(QWidget):
         self.gmeter_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
         self.gmeter_btn.setFixedSize(_ICON_BTN)
         self.gmeter_btn.setCheckable(True)
-        self.gmeter_btn.setToolTip("Show/hide the g-meter overlay")
+        self.gmeter_btn.setToolTip("Show/hide the g-meter overlay (G)")
         self.gmeter_btn.toggled.connect(self._on_gmeter_toggled)
         self.gmeter_btn.toggled.connect(self.set_gmeter_visible)
 
@@ -243,10 +243,27 @@ class VideoView(QWidget):
         # value is always GLOBAL ms.
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(0, 0)
+        self.slider.setToolTip("Seek — click or drag · ←/→ step 1 s · Shift+←/→ 5 s")
+        # Useful step sizes (the value is GLOBAL ms; the defaults are 1/10 ms — imperceptible):
+        # a wheel notch steps 1 s (matching ←/→); a groove-click page on non-absolute-jump styles
+        # steps 5 s (the macOS style jumps the handle straight to the click instead).
+        self.slider.setSingleStep(1000)
+        self.slider.setPageStep(5000)
         self.slider.sliderMoved.connect(self._on_slider_moved)
+        # Click-to-seek: a groove click is an ACTION (absolute jump on macOS, page step on other
+        # styles), not a drag, so it never reaches sliderMoved — actionTriggered routes it through
+        # the same clamped seek path (see _on_slider_action), so clicking the groove actually seeks.
+        self.slider.actionTriggered.connect(self._on_slider_action)
         if self.pane.total_duration > 0:
             self.slider.setRange(0, int(self.pane.total_duration * 1000))
         self.pane.durationChanged.connect(self._on_duration)
+
+        # Keyboard UX: the transport controls + slider must NEVER take keyboard focus — once
+        # clicked they would swallow Space/arrows (button activation / slider single-steps) and
+        # break the window-level shortcuts. Mouse interaction (clicks, slider drags) needs no
+        # focus, so this costs nothing.
+        for w in (self.play_btn, self.mute_btn, self.gmeter_btn, self.compare_btn, self.slider):
+            w.setFocusPolicy(Qt.NoFocus)
 
         row = QHBoxLayout()
         row.addWidget(self.play_btn)
@@ -319,6 +336,14 @@ class VideoView(QWidget):
         (In compare mode the app seeks each pane to its own lap target via seek_pane.)"""
         self.pane.seek(seconds)
 
+    def step(self, seconds: float):
+        """Step the playhead by ±`seconds` (keyboard ←/→ = ±1 s, Shift = ±5 s). The target is
+        clamped to the slider's range — the whole session normally, lap A's window in compare
+        mode (see _set_slider_window) — and routed through the SAME path as a slider move, so
+        the compare-mode window confinement applies for free (one seek path, one clamp)."""
+        ms = int((self.pane.current_global_time() + seconds) * 1000)
+        self._on_slider_moved(min(max(ms, self.slider.minimum()), self.slider.maximum()))
+
     def seek_pane(self, side: int, seconds: float):
         """Seek ONE pane (PRIMARY/SECONDARY) to a global time — used by the distance-locked scrub
         and the picker repoint so each pane parks on its own lap's track position independently."""
@@ -378,13 +403,13 @@ class VideoView(QWidget):
         if on:
             self.compare_btn.setIcon(theme.icon("ph.columns", color=theme.C.on_accent))
             self.compare_btn.setText(" Comparing  ✕")
-            self.compare_btn.setToolTip("Comparing two laps' videos — click to exit")
+            self.compare_btn.setToolTip("Comparing two laps' videos — click to exit (C)")
             self.compare_btn.setProperty("variant", "primary")
         else:
             self.compare_btn.setIcon(theme.icon("ph.columns"))
             self.compare_btn.setText(" Compare")
             self.compare_btn.setToolTip(
-                "Compare two laps' videos side-by-side (needs ≥2 valid laps)")
+                "Compare two laps' videos side-by-side (C) — needs ≥2 valid laps")
             self.compare_btn.setProperty("variant", "")
         # A dynamic-property change needs an explicit style re-polish to take effect (Qt caches
         # the resolved QSS until the property is re-evaluated). Done only on the state flip.
@@ -541,8 +566,8 @@ class VideoView(QWidget):
             self.secondary.set_muted(True)
         self.mute_btn.setIcon(theme.icon("ph.speaker-simple-x" if muted
                                          else "ph.speaker-simple-high"))
-        self.mute_btn.setToolTip("Audio muted — click to unmute" if muted
-                                 else "Audio on — click to mute")
+        self.mute_btn.setToolTip("Audio muted — click to unmute (M)" if muted
+                                 else "Audio on — click to mute (M)")
 
     # ------------------------------------------------------------- g-meter overlay (drives pane)
     def _on_gmeter_toggled(self, on: bool):
@@ -631,6 +656,16 @@ class VideoView(QWidget):
             lo, hi = self._lap_window
             ms = min(max(ms, int(lo * 1000)), int(hi * 1000))
         self.seek(ms / 1000.0)
+
+    def _on_slider_action(self, _action: int):
+        """Click-to-seek: a groove click is an ACTION, not a drag, so it never reached sliderMoved
+        and only nudged the handle. Route the freshly-computed sliderPosition through the same
+        clamped seek path as a drag. EVERY action seeks, including SliderMove: on the macOS style a
+        groove click is an ABSOLUTE jump emitted as actionTriggered(SliderMove) with no sliderMoved
+        (the press isn't a drag yet — setSliderDown happens after), on Fusion-like styles it's a
+        page step, and a wheel scroll is a SliderMove too. No double-seek is possible: a handle
+        DRAG emits only sliderMoved (mouseMove never goes through triggerAction)."""
+        self._on_slider_moved(self.slider.sliderPosition())
 
     def _on_duration(self, ms: int):
         """A per-chapter duration arrives as each source loads. Keep the slider spanning the WHOLE

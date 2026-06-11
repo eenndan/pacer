@@ -14,7 +14,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -49,6 +49,7 @@ class StudioWindow(QMainWindow):
         self.resize(1440, 900)
         self._tick_timer = None  # created on the first _build_ui; reused across reloads
         self._build_menu()
+        self._build_shortcuts()
         # If opt-in full-recording was requested on the CLI, discover the sibling chapters of the
         # FIRST opened file up front. With explicit multiple paths the user already chose the
         # chain, so don't auto-discover; without the flag the DEFAULT is unchanged (just `paths`).
@@ -383,6 +384,60 @@ class StudioWindow(QMainWindow):
         self._full_action.setToolTip(
             "Discover this recording's sibling chapters and load them as one continuous session")
         self._full_action.triggered.connect(self._load_full_recording)
+
+    # ----------------------------------------------------- keyboard shortcuts
+    def _build_shortcuts(self):
+        """Window-level playback shortcuts: Space (play/pause), M (mute), G (g-meter overlay),
+        C (compare mode). Created ONCE in __init__ and parented to the WINDOW, so they survive
+        every central-widget rebuild.
+
+        Handlers dereference `self.video` DYNAMICALLY (via _video_do) — _build_ui replaces the
+        VideoView on every reload (File ▸ Open… / Load full recording), so capturing the widget
+        at shortcut-creation time would leave the shortcuts driving a disposed player.
+
+        The checkable toggles (G / C) go through their QPushButton's click() so the button's
+        checked state, icon and QSS stay in sync with the keyboard path, and a DISABLED button
+        (no IMU data / <2 valid laps) makes its shortcut a no-op for free (click() respects
+        the enabled state). Space / M call the same VideoView methods the buttons are wired to.
+
+        ←/→ stepping is deliberately NOT a QShortcut: a window-level shortcut CONSUMES the key
+        before the focus widget sees it (verified offscreen), which would break lap-table row
+        navigation. Arrows are handled in keyPressEvent instead, which only receives keys the
+        focus widget did not use."""
+        def shortcut(key, handler):
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(Qt.WindowShortcut)
+            sc.activated.connect(handler)
+
+        shortcut(Qt.Key_Space, lambda: self._video_do(lambda v: v.toggle()))
+        shortcut(Qt.Key_M, lambda: self._video_do(lambda v: v.toggle_mute()))
+        shortcut(Qt.Key_G, lambda: self._video_do(lambda v: v.gmeter_btn.click()))
+        shortcut(Qt.Key_C, lambda: self._video_do(lambda v: v.compare_btn.click()))
+
+    def _video_do(self, fn):
+        """Run `fn` against the CURRENT VideoView, resolved at ACTIVATION time (not capture
+        time): _build_ui swaps self.video on reload. No-op before the first successful load
+        (a failed first load leaves no `video` attribute — the shortcuts must not crash)."""
+        video = getattr(self, "video", None)
+        if video is not None:
+            fn(video)
+
+    def keyPressEvent(self, event):
+        """←/→ step the video ±1 s (Shift: ±5 s), clamped + compare-aware via VideoView.step.
+
+        Handled HERE rather than as QShortcuts: a window-level shortcut would consume the
+        arrows before the focus widget sees them, breaking lap-table navigation. A key event
+        reaches the main window only when the focus widget did NOT handle it — exactly the
+        wanted policy: the lap table (and any combo box) keeps its own arrow navigation;
+        everywhere else the arrows step the video. (The transport buttons + slider are
+        Qt.NoFocus, so clicking them can't capture the arrows either.)"""
+        if event.key() in (Qt.Key_Left, Qt.Key_Right):
+            step = 5.0 if event.modifiers() & Qt.ShiftModifier else 1.0
+            sign = 1.0 if event.key() == Qt.Key_Right else -1.0
+            self._video_do(lambda v: v.step(sign * step))
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _open_file(self):
         """File ▸ Open…: pick a GoPro MP4 and reload through the guarded _load path."""
