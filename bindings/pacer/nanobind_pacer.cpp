@@ -29,8 +29,16 @@ namespace pacer {
 class RawGPSSource_trampoline : public RawGPSSource
 {
 public:
-    NB_TRAMPOLINE(RawGPSSource, 8);
+    NB_TRAMPOLINE(RawGPSSource, 9);
 
+    uint32_t ReadSamples(std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) override
+    {
+        NB_OVERRIDE_NAME(
+            "read_samples", // function name (python)
+            ReadSamples, // function name (c++)
+            on_sample // params
+        );
+    }
     void ReadAccl(std::function<void(IMUSample)> param_0) override
     {
         NB_OVERRIDE_NAME(
@@ -441,7 +449,9 @@ void py_init_module_pacer(nb::module_ &m) {
           (m, "RawGPSSource", " Base class for raw GPS source.\n\n Being raw in this context means that it does not provide any meaningful\n timestamps to work with.")
       .def(nb::init<>())
       .def("read_samples",
-          &pacer::RawGPSSource::ReadSamples, nb::arg("on_sample"))
+          &pacer::RawGPSSource::ReadSamples,
+          nb::arg("on_sample"),
+          " Main interface to take samples from current GPS source.\n\n Invokes `on_sample(sample, current_index, total_records)` once per GPS fix decoded from\n the payload the cursor is currently on (Seek/Next position it). Returns 0 on success, a\n nonzero error code otherwise (e.g. no payload at the current index).\n\n Virtual via std::function — the same idiom as ReadAccl/ReadGrav/ReadCori — so a\n Python-implemented RawGPSSource can override it through the binding trampoline and feed\n GPS samples into the engine (e.g. as a child of a C++ SequentialGPSSource chain). The\n former raw data-pointer + function-pointer `Samples` virtual could not be trampolined, so\n Python overrides silently emitted nothing. Default (RawGPSSource) emits nothing and\n returns 0; GPMFSource / SequentialGPSSource override.")
       .def("read_accl",
           &pacer::RawGPSSource::ReadAccl, nb::arg("param_0"))
       .def("read_grav",
@@ -472,6 +482,10 @@ void py_init_module_pacer(nb::module_ &m) {
           nb::arg("mp4handle"))
       .def(nb::init<const char *>(),
           nb::arg("filename"))
+      .def("read_samples",
+          &pacer::GPMFSource::ReadSamples,
+          nb::arg("on_sample"),
+          "See RawGPSSource::ReadSamples for the callback contract.")
       .def("read_accl",
           &pacer::GPMFSource::ReadAccl, nb::arg("on_sample"))
       .def("read_grav",
@@ -503,6 +517,8 @@ void py_init_module_pacer(nb::module_ &m) {
           &pacer::SequentialGPSSource::GetTotalDuration)
       .def("is_end",
           &pacer::SequentialGPSSource::IsEnd)
+      .def("read_samples",
+          &pacer::SequentialGPSSource::ReadSamples, nb::arg("on_sample"))
       .def("read_accl",
           &pacer::SequentialGPSSource::ReadAccl, nb::arg("on_sample"))
       .def("read_grav",

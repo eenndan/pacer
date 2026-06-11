@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -21,7 +22,7 @@ namespace {
 //     src.Seek(0);
 //     while (!src.IsEnd()) {
 //       auto [a,b] = src.CurrentTimeSpan();
-//       src.Samples(...);            // emits the current payload's sample
+//       src.ReadSamples(...);        // emits the current payload's sample
 //       src.Next();
 //     }
 //
@@ -36,13 +37,12 @@ public:
   explicit StubSource(std::vector<Payload> payloads)
       : payloads_(std::move(payloads)) {}
 
-  uint32_t Samples(void *data,
-                   void (*on_sample)(void *, GPSSample, size_t,
-                                     size_t)) override {
+  uint32_t ReadSamples(
+      std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) override {
     if (index_ >= payloads_.size()) {
       return 1; // nothing at this index (matches GPMFSource "No payload")
     }
-    on_sample(data, payloads_[index_].sample, 0, 1);
+    on_sample(payloads_[index_].sample, 0, 1);
     return 0;
   }
 
@@ -86,16 +86,11 @@ private:
 std::vector<std::pair<std::pair<double, double>, GPSSample>>
 CollectAll(RawGPSSource &src) {
   std::vector<std::pair<std::pair<double, double>, GPSSample>> out;
-  struct Cap {
-    std::vector<std::pair<std::pair<double, double>, GPSSample>> *out;
-    std::pair<double, double> span;
-  };
   src.Seek(0);
   while (!src.IsEnd()) {
-    Cap cap{&out, src.CurrentTimeSpan()};
-    src.Samples(&cap, [](void *d, GPSSample s, size_t, size_t) {
-      auto *c = static_cast<Cap *>(d);
-      c->out->emplace_back(c->span, s);
+    auto span = src.CurrentTimeSpan();
+    src.ReadSamples([&](GPSSample s, uint32_t, uint32_t) {
+      out.emplace_back(span, s);
     });
     src.Next();
   }

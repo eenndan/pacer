@@ -16,10 +16,10 @@ output. Two pins:
    readers being independent of the GPS payload cursor (`_read_imu_over` runs AFTER
    `_read_gps_over` has seeked/walked the same source to its end). Drive ingest's internal GPS
    helper over a plain-Python `RawGPSSource` whose IMU readers honour that same contract, and
-   assert the IMU reads after the drain equal the reads before it. (The trampoline does NOT
-   cover the GPS `Samples` virtual, so the stub feeds GPS only through ingest's *Python-side*
-   helper, never through a C++ `SequentialGPSSource` — read_accl/grav/cori ARE covered, as
-   test_gps_source_bindings.py proves.)
+   assert the IMU reads after the drain equal the reads before it. (The trampoline covers the
+   GPS `ReadSamples` virtual too — test_gps_source_bindings.py proves a fully-Python source
+   feeds GPS through a C++ `SequentialGPSSource` — but this invariance pin only needs the stub
+   driven through ingest's Python-side helpers.)
 
 Imports pacer + studio.ingest only (no Qt). Run: python tests/test_ingest_equivalence.py
 """

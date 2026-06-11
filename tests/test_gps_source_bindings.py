@@ -1,14 +1,20 @@
 """Binding-surface round-trip for pacer.RawGPSSource.
 
-The IMU/CORI readers are Python<->C++ TRAMPOLINE methods: a Python subclass overrides
-`read_accl` / `read_grav` / `read_cori`, and the C++ side calls them back through the
-`std::function` interface (NB_OVERRIDE_NAME). The pure-virtual control methods
+The GPS/IMU/CORI readers are Python<->C++ TRAMPOLINE methods: a Python subclass overrides
+`read_samples` / `read_accl` / `read_grav` / `read_cori`, and the C++ side calls them back
+through the `std::function` interface (NB_OVERRIDE_NAME). The pure-virtual control methods
 (`seek` / `next` / `is_end` / `current_time_span` / `get_total_duration`) must also be
 overridden in Python. This suite drives a Python subclass both DIRECTLY and — the real
 test — THROUGH a C++ `SequentialGPSSource`, which holds two `RawGPSSource*` and dispatches
-`ReadAccl`/etc. through the C++ vtable into the Python overrides, applying the chapter
-offset to the right source. That exercises the full Python -> C++ -> Python round-trip plus
-the IMUSample / QuatSample marshalling that the studio g-meter / orientation layer relies on.
+`ReadSamples`/`ReadAccl`/etc. through the C++ vtable into the Python overrides, applying the
+chapter offset to the right source. That exercises the full Python -> C++ -> Python
+round-trip plus the GPSSample / IMUSample / QuatSample marshalling that the studio ingest /
+g-meter / orientation layers rely on.
+
+The GPS read used to be the raw `Samples(void*, fn-ptr)` virtual, which nanobind cannot
+trampoline — a Python-implemented source silently fed ZERO GPS samples through a C++ chain
+(the base returned 0). `ReadSamples(std::function)` is now the virtual, so the fully-Python
+GPS path below is the acceptance test for that inversion.
 
 Pure Python (no telemetry file). Run: python tests/test_gps_source_bindings.py
 """
@@ -132,6 +138,123 @@ def test_sequential_source_chains_cori_with_offset():
     seq.read_cori(lambda s: got.append((s.w, s.x, round(s.time, 6))))
     assert got == [(1.0, 0.0, 1.0), (0.0, 1.0, 10.0)], got  # right shifted by 8.0
     print("test_sequential_source_chains_cori_with_offset OK")
+
+
+class _PyPayloadSource(pacer.RawGPSSource):
+    """A fully-Python GPS source with a payload cursor, mirroring the in-memory C++ StubSource
+    in tests/test_gps_source.cpp: `payloads` is [(span_in, span_out, [GPSSample, ...]), ...] on
+    the chapter's OWN media clock, and seek/next/is_end/current_time_span/read_samples
+    reproduce the GPMFSource iteration protocol the studio ingest loop drives."""
+
+    def __init__(self, payloads):
+        super().__init__()
+        self._payloads = payloads
+        self._idx = 0
+
+    # --- the GPS reader: a trampoline override, like read_accl/grav/cori ---
+    def read_samples(self, on_sample):
+        if self._idx >= len(self._payloads):
+            return 1  # nothing at this index (matches GPMFSource "No payload")
+        _a, _b, samples = self._payloads[self._idx]
+        for i, s in enumerate(samples):
+            on_sample(s, i, len(samples))
+        return 0
+
+    # --- the payload-cursor control surface (pure virtuals) ---
+    def seek(self, target):
+        # Clamp to the first payload covering target (same contract as the C++ StubSource).
+        self._idx = 0
+        for i, (_a, b, _samples) in enumerate(self._payloads):
+            if target < b:
+                self._idx = i
+                return 0
+        if self._payloads:
+            self._idx = len(self._payloads) - 1  # past the end -> last payload
+        return 0
+
+    def next(self):
+        self._idx += 1
+
+    def is_end(self):
+        return self._idx >= len(self._payloads)
+
+    def current_time_span(self):
+        if self._idx >= len(self._payloads):
+            return (0.0, 0.0)
+        a, b, _samples = self._payloads[self._idx]
+        return (a, b)
+
+    def get_total_duration(self):
+        return self._payloads[-1][1] if self._payloads else 0.0
+
+
+def _drain_gps(src):
+    """Drive the studio's GPS iteration protocol (seek(0) + payload walk, as in
+    studio.ingest._read_gps_over), collecting (span, sample, index, total) rows."""
+    rows = []
+    src.seek(0)
+    while not src.is_end():
+        a, b = src.current_time_span()
+        src.read_samples(lambda s, i, n, _span=(a, b): rows.append((_span, s, i, n)))
+        src.next()
+    return rows
+
+
+def test_python_gps_source_feeds_samples_through_cpp_sequential_source():
+    """THE ACCEPTANCE TEST for the ReadSamples inversion: a fully-Python RawGPSSource feeds GPS
+    samples through a C++ `SequentialGPSSource`. The chain's `read_samples` dispatches through
+    the C++ vtable into the Python trampoline override — the exact path that SILENTLY YIELDED
+    ZERO SAMPLES when the GPS read was the untrampolinable raw `Samples(void*, fn-ptr)` virtual
+    (the C++ base returned 0). The chained source must yield exactly the stubs' samples, in
+    order, with the right chapter's spans shifted by the left chapter's duration."""
+    def gps(tag):
+        return pacer.GPSSample(lat=tag, lon=tag + 0.5, altitude=100.0 + tag,
+                               full_speed=tag / 10.0, ground_speed=tag / 20.0,
+                               timestamp_ms=int(1000 * tag), dop=1.5, fix=3)
+
+    left = _PyPayloadSource([
+        (0.0, 1.5, [gps(10)]),
+        (1.5, 3.0, [gps(11)]),
+    ])
+    right = _PyPayloadSource([
+        (0.0, 1.0, [gps(20), gps(21)]),  # 2 samples: pins the (index, total) pass-through
+        (1.0, 2.0, [gps(22)]),
+    ])
+    seq = pacer.SequentialGPSSource(left, right)
+    assert seq.get_total_duration() == 5.0  # 3.0 + 2.0
+
+    rows = _drain_gps(seq)
+    assert rows, ("the chained Python sources yielded NO GPS samples — the trampoline does "
+                  "not cover the GPS read virtual (pre-inversion behaviour)")
+
+    # Exactly the stubs' samples, in chapter order, none dropped at the seam.
+    tags = [s.lat for _span, s, _i, _n in rows]
+    assert tags == [10, 11, 20, 21, 22], tags
+
+    # Chapter offsets: the chain reports the LEFT spans unshifted and the RIGHT chapter's spans
+    # shifted by the left chapter's total duration (3.0) — continuous across the seam.
+    spans = [span for span, _s, _i, _n in rows]
+    assert spans == [(0.0, 1.5), (1.5, 3.0), (3.0, 4.0), (3.0, 4.0), (4.0, 5.0)], spans
+
+    # The (current_index, total_records) batch coordinates pass through intact.
+    pos = [(i, n) for _span, _s, i, n in rows]
+    assert pos == [(0, 1), (0, 1), (0, 2), (1, 2), (0, 1)], pos
+
+    # Every GPSSample field marshals Python -> C++ -> Python intact (spot-check one sample).
+    s20 = rows[2][1]
+    assert (s20.lat, s20.lon, s20.altitude, s20.full_speed, s20.ground_speed,
+            s20.timestamp_ms, s20.dop, s20.fix) == (20.0, 20.5, 120.0, 2.0, 1.0, 20000, 1.5, 3)
+    print("test_python_gps_source_feeds_samples_through_cpp_sequential_source OK")
+
+
+def test_base_read_samples_default_emits_nothing():
+    """A Python subclass that does NOT override read_samples inherits the C++ base default:
+    emit nothing, return 0 (the documented RawGPSSource contract)."""
+    src = _PySource(duration=1.0)
+    got = []
+    ret = src.read_samples(lambda s, i, n: got.append(s))
+    assert ret == 0 and got == [], (ret, got)
+    print("test_base_read_samples_default_emits_nothing OK")
 
 
 def test_gps5_speed_field_order_2d_ground_3d_full():

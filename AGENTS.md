@@ -171,7 +171,9 @@ The C++ build also runs the binding codegen target and deploys the compiled `.so
 - **Naming:** kebab-case folders/files; `PascalCase` C++ functions/types; trailing-underscore private
   members. Bindings map `PascalCase`→`snake_case`.
 - **CRTP operator mixins** instead of a concrete vector class (any indexable type with size `N`).
-- **Callback/pull I/O:** GPS sources expose `Samples(void*, fn)` wrapped by templated lambda adapters.
+- **Callback/pull I/O:** GPS sources expose `std::function` reader virtuals
+  (`ReadSamples`/`ReadAccl`/`ReadGrav`/`ReadCori`) — trampolinable, so Python subclasses can override
+  them and feed samples into the engine.
 - **Designated initializers** (`{.lat=…}`) used throughout the C++.
 - **Units:** angles in degrees; speeds in m/s (×3.6 → km/h only at display).
 

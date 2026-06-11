@@ -23,29 +23,17 @@ public:
 
   // Main interface to take samples from current GPS source.
   //
-  // Args:
-  //   void *data:  associated data object with callback;
-  //   on_sample:  void (*)(void *, GPSSample, size_t, size_t) callback
-  //   function, takes following arguments:
-  //     - data provided earlier;
-  //     - sampled data;
-  //     - index of current data;
-  //     - total number of records in a batch.
+  // Invokes `on_sample(sample, current_index, total_records)` once per GPS fix decoded from
+  // the payload the cursor is currently on (Seek/Next position it). Returns 0 on success, a
+  // nonzero error code otherwise (e.g. no payload at the current index).
+  //
+  // Virtual via std::function — the same idiom as ReadAccl/ReadGrav/ReadCori — so a
+  // Python-implemented RawGPSSource can override it through the binding trampoline and feed
+  // GPS samples into the engine (e.g. as a child of a C++ SequentialGPSSource chain). The
+  // former raw data-pointer + function-pointer `Samples` virtual could not be trampolined, so
+  // Python overrides silently emitted nothing. Default (RawGPSSource) emits nothing and
+  // returns 0; GPMFSource / SequentialGPSSource override.
   virtual uint32_t
-  Samples(void *data, void (*on_sample)(void * /*data*/, GPSSample /*sample*/,
-                                        size_t /*current_index*/,
-                                        size_t /*total_records*/));
-
-  // Convenient way of invoking Samples function: designed to be used with
-  // functional objects (e.g. lambdas).
-  template <class F> uint32_t Samples(F on_sample) {
-    return Samples(&on_sample, [](void *data, GPSSample s, size_t i, size_t n) {
-      auto &f = *reinterpret_cast<F *>(data);
-      return f(s, i, n);
-    });
-  }
-
-  uint32_t
   ReadSamples(std::function<void(GPSSample, uint32_t, uint32_t)> on_sample);
 
   // Reads the timestamped IMU streams (accelerometer / gravity vector) for the WHOLE source.
@@ -91,11 +79,9 @@ public:
   explicit GPMFSource(const char *filename);
   ~GPMFSource() noexcept;
 
-  // See RawGPSSource::Samples for the callback contract.
-  uint32_t Samples(void *data,
-                   void (*on_sample)(void * /*data*/, GPSSample /*sample*/,
-                                     size_t /*current_index*/,
-                                     size_t /*total_records*/)) override;
+  // See RawGPSSource::ReadSamples for the callback contract.
+  uint32_t ReadSamples(
+      std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) override;
 
   void ReadAccl(std::function<void(IMUSample)> on_sample) override;
   void ReadGrav(std::function<void(IMUSample)> on_sample) override;
@@ -125,8 +111,8 @@ private:
   uint32_t index_ = 0;
   size_t mp4handle_;
   // Owned GPMF payload resource (resObject+buffer): allocated lazily on first use and REUSED
-  // across Samples()/ReadStream() calls (GetPayloadResource grows it in place), then freed in
-  // the destructor. Previously each call leaked a fresh resource. 0 == not yet allocated.
+  // across ReadSamples()/ReadStream() calls (GetPayloadResource grows it in place), then freed
+  // in the destructor. Previously each call leaked a fresh resource. 0 == not yet allocated.
   mutable size_t payload_res_ = 0;
 };
 
@@ -141,10 +127,8 @@ public:
 
   bool IsEnd() override;
 
-  uint32_t Samples(void *data,
-                   void (*on_sample)(void * /*data*/, GPSSample /*sample*/,
-                                     size_t /*current_index*/,
-                                     size_t /*total_records*/)) override;
+  uint32_t ReadSamples(
+      std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) override;
 
   void ReadAccl(std::function<void(IMUSample)> on_sample) override;
   void ReadGrav(std::function<void(IMUSample)> on_sample) override;

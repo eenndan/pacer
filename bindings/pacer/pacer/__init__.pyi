@@ -411,7 +411,22 @@ class RawGPSSource:
     def __init__(self) -> None:
         pass
 
-    def read_samples(self, on_sample: Callable[[GPSSample, int, int], None]) -> int:
+    def read_samples(  # overridable
+        self, on_sample: Callable[[GPSSample, int, int], None]
+    ) -> int:
+        """Main interface to take samples from current GPS source.
+
+        Invokes `on_sample(sample, current_index, total_records)` once per GPS fix decoded from
+        the payload the cursor is currently on (Seek/Next position it). Returns 0 on success, a
+        nonzero error code otherwise (e.g. no payload at the current index).
+
+        Virtual via std::function — the same idiom as ReadAccl/ReadGrav/ReadCori — so a
+        Python-implemented RawGPSSource can override it through the binding trampoline and feed
+        GPS samples into the engine (e.g. as a child of a C++ SequentialGPSSource chain). The
+        former raw data-pointer + function-pointer `Samples` virtual could not be trampolined, so
+        Python overrides silently emitted nothing. Default (RawGPSSource) emits nothing and
+        returns 0; GPMFSource / SequentialGPSSource override.
+        """
         pass
     # Reads the timestamped IMU streams (accelerometer / gravity vector) for the WHOLE source.
     # Each sample carries a `time` on the MEDIA clock (seconds), interpolated across the
@@ -470,6 +485,10 @@ class GPMFSource(RawGPSSource):
     def __init__(self, filename: str) -> None:
         pass
 
+    def read_samples(self, on_sample: Callable[[GPSSample, int, int], None]) -> int:
+        """See RawGPSSource::ReadSamples for the callback contract."""
+        pass
+
     def read_accl(self, on_sample: Callable[[IMUSample], None]) -> None:
         pass
 
@@ -507,6 +526,9 @@ class SequentialGPSSource(RawGPSSource):
         pass
 
     def is_end(self) -> bool:
+        pass
+
+    def read_samples(self, on_sample: Callable[[GPSSample, int, int], None]) -> int:
         pass
 
     def read_accl(self, on_sample: Callable[[IMUSample], None]) -> None:

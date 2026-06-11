@@ -23,7 +23,7 @@ GPMFSource::GPMFSource(const char *filename)
 
 GPMFSource::~GPMFSource() noexcept {
   // Free the GPMF payload resource we own (allocated lazily, reused across calls). Must happen
-  // before CloseSource. Previously every Samples()/ReadStream() call leaked a fresh resource.
+  // before CloseSource. Previously every ReadSamples()/ReadStream() call leaked a fresh resource.
   if (payload_res_) {
     FreePayloadResource(mp4handle_, payload_res_);
     payload_res_ = 0;
@@ -118,13 +118,9 @@ union GPSUData {
 
 namespace {
 
-// Callback contract identical to RawGPSSource::Samples: (data, sample, current_index,
-// total_records). Bundled with `data` so the per-codec parsers below can emit without
-// re-threading both through every call.
-struct SampleEmit {
-  void *data;
-  void (*on_sample)(void *, GPSSample, size_t, size_t);
-};
+// Callback contract identical to RawGPSSource::ReadSamples: (sample, current_index,
+// total_records). Passed by reference into the per-codec parsers below.
+using SampleEmit = std::function<void(GPSSample, uint32_t, uint32_t)>;
 
 // Parse one GPS9 STRM payload (already positioned at samples by GPMF_SeekToSamples) and emit
 // every fix. GPS9 element order: [lat, lon, alt, 2D speed, 3D speed, days since 2000, secs
@@ -169,7 +165,7 @@ void ParseGPS9(GPMF_stream *ms, uint32_t samples, uint32_t elements,
         if (elements > 8) {
           gps.fix = static_cast<int>(tmpbuffer[i * elements + 8]);
         }
-        emit.on_sample(emit.data, gps, i, samples);
+        emit(gps, i, samples);
       }
     }
     free(tmpbuffer);
@@ -207,7 +203,7 @@ void ParseGPS5(GPMF_stream *ms, uint32_t samples, uint32_t elements,
         gps.timestamp_ms = timestamp;
         // GPS5 carries no DOP / fix-type; leave the GPSSample "unknown" sentinels
         // (dop = -1, fix = -1) as defaulted in the struct.
-        emit.on_sample(emit.data, gps, i, samples);
+        emit(gps, i, samples);
       }
     }
     free(tmpbuffer);
@@ -216,11 +212,8 @@ void ParseGPS5(GPMF_stream *ms, uint32_t samples, uint32_t elements,
 
 } // namespace
 
-uint32_t GPMFSource::Samples(void *data,
-                             void (*on_sample)(void * /*data*/,
-                                               GPSSample /*sample*/,
-                                               size_t /*current_index*/,
-                                               size_t /*total_records*/)) {
+uint32_t GPMFSource::ReadSamples(
+    std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) {
   uint32_t payloadsize = GetPayloadSize(mp4handle_, index_);
   // Reuse the owned payload resource (grows in place); freed once in the destructor.
   payload_res_ = GetPayloadResource(mp4handle_, payload_res_, payloadsize);
@@ -264,7 +257,7 @@ uint32_t GPMFSource::Samples(void *data,
     // Example: Find GPSU at the same level as GPS5
     GPMF_stream gpsu_stream;
 
-    const SampleEmit emit{data, on_sample};
+    const SampleEmit &emit = on_sample;
 
     if (key == STR2FOURCC("GPS9")) {
       // lat, long, alt, 2D speed, 3D speed, days since 2000, secs since
@@ -312,7 +305,7 @@ void GPMFSource::ReadStream(
     uint32_t fourcc,
     const std::function<void(const double *, uint32_t, double)> &emit) const {
   uint32_t payloads = GetNumberPayloads(mp4handle_);
-  // Reuse the owned payload resource (shared with Samples(); grows in place); freed in dtor.
+  // Reuse the owned payload resource (shared with ReadSamples(); grows in place); freed in dtor.
   for (uint32_t i = 0; i < payloads; ++i) {
     uint32_t payloadsize = GetPayloadSize(mp4handle_, i);
     payload_res_ = GetPayloadResource(mp4handle_, payload_res_, payloadsize);
@@ -391,11 +384,9 @@ void SequentialGPSSource::ReadCori(std::function<void(QuatSample)> on_sample) {
   ReadShifted<QuatSample>(&RawGPSSource::ReadCori, on_sample);
 }
 
-uint32_t SequentialGPSSource::Samples(
-    void *data,
-    void (*on_sample)(void * /*data*/, GPSSample /*sample*/,
-                      size_t /*current_index*/, size_t /*total_records*/)) {
-  return current_->Samples(data, on_sample);
+uint32_t SequentialGPSSource::ReadSamples(
+    std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) {
+  return current_->ReadSamples(std::move(on_sample));
 }
 bool SequentialGPSSource::IsEnd() {
   return current_ == right_ && current_->IsEnd();
@@ -432,22 +423,10 @@ auto SequentialGPSSource::CurrentTimeSpan() const -> std::pair<double, double> {
   }
   return {start, end};
 }
-uint32_t RawGPSSource::Samples(void *data,
-                               void (*on_sample)(void * /*data*/,
-                                                 GPSSample /*sample*/,
-                                                 size_t /*current_index*/,
-                                                 size_t /*total_records*/)) {
-  return 0;
-};
-
+// Base default: a source with no GPS payload emits nothing. Concrete sources (GPMFSource /
+// SequentialGPSSource — or a Python subclass via the binding trampoline) override.
 uint32_t RawGPSSource::ReadSamples(
-    std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) {
-  return Samples(&on_sample, [](void *data, GPSSample sample,
-                                size_t current_index, size_t total_records) {
-    auto &f =
-        *reinterpret_cast<std::function<void(GPSSample, uint32_t, uint32_t)> *>(
-            data);
-    f(sample, current_index, total_records);
-  });
+    std::function<void(GPSSample, uint32_t, uint32_t)> /*on_sample*/) {
+  return 0;
 }
 } // namespace pacer
