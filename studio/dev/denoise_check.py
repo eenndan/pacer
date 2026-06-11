@@ -35,7 +35,8 @@ import numpy as np
 import pacer  # noqa: F401 — ensure the module imports cleanly before Qt
 
 from .. import gapfill
-from ..session import DEFAULT_SAMPLE, Session, _smooth
+from .._signal import _smooth
+from ..session import DEFAULT_SAMPLE, Session
 
 
 def _lap_fills(session: Session, lap_id: int) -> list[dict]:

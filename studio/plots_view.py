@@ -30,7 +30,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QComboBox, QVBoxLayout, QWidget
 
 from . import theme
-from .session import fmt_time
+from ._signal import fmt_time
 from .theme import C
 
 # Antialiased path rendering is a major per-repaint cost; the cursor's InfiniteLine.setValue

@@ -7,7 +7,10 @@ from __future__ import annotations
 import json, sys
 import numpy as np
 from studio import chapters
-from studio.session import Session, _read_gpmf, _gate_quality, _clean, _gps9_times
+from studio._signal import _gate_quality
+from studio.ingest import read_gpmf as _read_gpmf
+from studio.load import _clean, _gps9_times
+from studio.session import Session
 
 def main(rec, dumpfile):
     d = json.load(open(dumpfile))

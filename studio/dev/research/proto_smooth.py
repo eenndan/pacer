@@ -20,12 +20,12 @@ from __future__ import annotations
 import argparse, datetime as dt, json, sys
 import numpy as np
 import pacer
-from studio import chapters
+from studio import chapters, tracks
 from studio.dev import transponder
-from studio.session import (_read_gpmf, _gate_quality, _clean, _gps9_times,
-                            _gap_segments, tracks, _fit_start_line, _widen,
-                            MIN_LAP_SAMPLES, MIN_LAP_TIME, LAP_BAND_LO, LAP_BAND_HI,
-                            START_WIDEN)
+from studio._signal import (_gate_quality, _gap_segments,
+                            MIN_LAP_SAMPLES, MIN_LAP_TIME, LAP_BAND_LO, LAP_BAND_HI)
+from studio.ingest import read_gpmf as _read_gpmf
+from studio.load import START_WIDEN, _clean, _fit_start_line, _gps9_times, _widen
 import studio.dev._validate_wallclock as vw
 
 

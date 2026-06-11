@@ -25,7 +25,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from . import theme
-from .session import fmt_time
+from ._signal import fmt_time
 
 if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported at runtime
     from .plots_view import PlotsView

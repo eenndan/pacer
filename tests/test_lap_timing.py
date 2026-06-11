@@ -1,4 +1,4 @@
-"""Tests for the GPS9 true-clock time axis (studio.session._gps9_times).
+"""Tests for the GPS9 true-clock time axis (studio.load._gps9_times).
 
 The lap timer compares two start/finish-line crossing instants. The C++ core already
 INTERPOLATES each crossing time along the chord (pacer::Split), so the accuracy of a lap time
@@ -17,7 +17,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pacer  # noqa: E402
-from studio.session import _gps9_times  # noqa: E402
+from studio.load import _gps9_times  # noqa: E402
 
 
 def _sample(ts_ms):

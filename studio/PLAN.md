@@ -123,8 +123,8 @@ Captured here so the negative results aren't re-litigated. Evidence in [`docs/`]
 - **Fix the MK reference centerline ICP** (re-run `studio/dev/build_reference.py`; tighten the infield).
 - **Expose the `_clean` / quality-gate thresholds in the UI** (and an optional snap-to-track toggle).
 - **Tune the g-meter full-scale** and verify multi-chapter g-sync live.
-- **More pure-Python `session.py` tests** (`_clean`, `valid_lap_ids`, delta-endpoint == laptime-diff,
-  `lap_sector_splits` sum == lap-time, `sector_plot_positions`).
+- **More pure-Python `session.py`/`load.py` tests** (`load._clean`, `valid_lap_ids`,
+  delta-endpoint == laptime-diff, `lap_sector_splits` sum == lap-time, `sector_plot_positions`).
 - **Perf headroom (only if needed on longer sessions)** — `useOpenGL` for the pyqtgraph views:
   evaluated and deliberately NOT adopted; revisit only with a measured >33 ms/tick paint time.
   (The bulk `lap→numpy` accessor — `Laps::LapColumns`, bound as `lap_columns` — has shipped.)
@@ -145,10 +145,12 @@ Captured here so the negative results aren't re-litigated. Evidence in [`docs/`]
 - Trace + timing lines live in **local metres** (`cs.local`); `set_coordinate_system` precedes
   `pick_random_start`/`update`. Sectors write-back is wholesale: `laps.sectors = pacer.Sectors(...)`,
   then `laps.update()`.
-- **`session.py`, `tracks.py`, and `ingest.py` are the only modules that may touch the `pacer`
-  bindings.** `session.py` drives the load/segmentation pipeline; `tracks.py` is pure geometry;
-  `ingest.py` is the GoPro/GPMF data-loading layer (the `SequentialGPSSource` chain build + the raw
-  GPS/IMU stream readers). **Every other studio module stays pacer-free** — the views
+- **`session.py`, `load.py`, `tracks.py`, and `ingest.py` are the only modules that may touch the
+  `pacer` bindings.** `session.py` owns the loaded session (lap/delta/sector accessors + timing-line
+  write-back); `load.py` is the load pipeline behind `Session.load` (GPS9 true-clock time axis,
+  trace clean/smooth, segmentation + start-line fit); `tracks.py` is pure geometry; `ingest.py` is
+  the GoPro/GPMF data-loading layer (the `SequentialGPSSource` chain build + the raw GPS/IMU stream
+  readers). **Every other studio module stays pacer-free** — the views
   (`map_view`/`plots_view`/`lap_table`/`video_view`/`player_pane`/`gmeter_overlay`/`app`), the
   controllers (`scrub_controller`/`compare_controller`), and the pure helpers
   (`gapfill`/`reference`/`gmeter`/`chapters`/`theme`/`_signal`/`transponder`).
