@@ -204,10 +204,18 @@ def _gps_derived_g(gt, gx, gy, gspeed):
     dt[dt <= 0] = np.median(dt[dt > 0]) if np.any(dt > 0) else 1.0
 
     def medfilt(a, k=5):
+        # Edge-shrinking running median: out[i] = median(a[max(0,i-h) : min(n,i+h+1)]).
+        # Vectorized — the full interior windows in one sliding_window_view + np.median(axis=1)
+        # (was a Python loop over all n samples); only the h shrinking windows at each end stay
+        # per-element. Identical slices to the loop, so the output is bit-for-bit the same.
         h = k // 2
-        out = a.copy()
-        for i in range(n):
-            out[i] = np.median(a[max(0, i - h):min(n, i + h + 1)])
+        if n < k:  # too short for any full window — every window shrinks; do them all directly
+            return np.array([np.median(a[max(0, i - h):min(n, i + h + 1)]) for i in range(n)])
+        out = np.empty_like(a)
+        out[h:n - h] = np.median(np.lib.stride_tricks.sliding_window_view(a, k), axis=1)
+        for i in range(h):
+            out[i] = np.median(a[:i + h + 1])          # left edge: window clipped at 0
+            out[n - 1 - i] = np.median(a[n - 1 - i - h:])  # right edge: window clipped at n
         return out
 
     xs = _boxcar(medfilt(gx), 11)
