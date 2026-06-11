@@ -69,7 +69,6 @@ class Session:
         # session. The telemetry trace already lives on the map's continuous global clock; this
         # is what the VIDEO layer uses to switch sources / span the slider across chapters.
         self.chapters = chapter_map
-        self._lap_cache: dict[int, object] = {}
         # Per-lap bulk columns (times, xs, ys, full_speed m/s, cum_distances) fetched in ONE
         # pacer.Laps.lap_columns crossing instead of a per-point cs.local/full_speed/time loop.
         # The single source _lap_trace_xyt / _lap_time_dist_elapsed / _lap_arrays /
@@ -186,7 +185,6 @@ class Session:
             sector_lines=[s.to_pacer() for s in sectors],
         )
         self.laps.update()
-        self._lap_cache.clear()
         self._cols_cache.clear()
         self._dist_cache.clear()
         self._xyt_cache.clear()
@@ -231,13 +229,6 @@ class Session:
         return Seg(cx - nx * 15, cy - ny * 15, cx + nx * 15, cy + ny * 15)
 
     # ------------------------------------------------------------- lap access
-    def _get_lap(self, lap_id: int):
-        lap = self._lap_cache.get(lap_id)
-        if lap is None:
-            lap = self.laps.get_lap(lap_id)
-            self._lap_cache[lap_id] = lap
-        return lap
-
     def _lap_columns(self, lap_id: int):
         """Cached per-lap (times, xs, ys, full_speed_mps, cum_distances) numpy arrays, fetched in
         a SINGLE pacer.Laps.lap_columns crossing (was a per-point cs.local/full_speed/time loop).
@@ -320,12 +311,15 @@ class Session:
             for i in self.valid_lap_ids()
         ]
 
-    def _lap_point_times(self, lap_id: int) -> list[float]:
+    def _lap_point_times(self, lap_id: int) -> np.ndarray:
         """The media-clock times of a lap's KEPT GPS points, in order. Quality-gated /
         cleaned samples have already been removed at load, so a large delta between two
-        consecutive entries here is a real interior GPS dropout (not jitter)."""
-        lap = self._get_lap(lap_id)
-        return [p.time for p in lap.points]
+        consecutive entries here is a real interior GPS dropout (not jitter).
+
+        The times column of the cached bulk `_lap_columns` fetch — index-identical to the
+        former per-point `lap.points` materialization (Laps::LapColumns reuses GetLap, see
+        laps.cpp), so no separate get_lap crossing/cache is needed."""
+        return self._lap_columns(lap_id)[0]
 
     def lap_has_dropout(self, lap_id: int) -> bool:
         """True if a lap's kept-point times contain an INTERIOR gap — a delta between two

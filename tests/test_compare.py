@@ -44,7 +44,6 @@ def make_two_lap_session(best_is_b=True):
     is exercised non-trivially. Returns (session, lap_a, lap_b)."""
     s = Session.__new__(Session)
     s._dist_cache = {}
-    s._lap_cache = {}
     lap_a, lap_b = 3, 7
     # Lap A: slow-fast-slow, 120 samples @ 0.1 s = 11.9 s span, 520 m.
     ta, da = _odometer(120, 0.1, 100.0, 520.0, lambda u: 1.0 + np.sin(u) ** 2)

@@ -61,7 +61,6 @@ def _make_session():
     Returns (session, lap_a, lap_b)."""
     s = Session.__new__(Session)
     s._dist_cache = {}
-    s._lap_cache = {}
     a, b = 3, 7
     ta, da = _odometer(121, 0.1, 100.0, 520.0, lambda u: 1.0 + np.sin(u) ** 2)  # ~12.0 s
     tb, db = _odometer(111, 0.1, 300.0, 508.0, lambda u: 1.3 + 0.7 * np.sin(u) ** 2)  # ~11.0 s
