@@ -49,6 +49,12 @@ add_test(NAME test_ingest_equivalence
 # (imports pacer only — Session's chain has no Qt — and needs no telemetry file).
 add_test(NAME test_sidecar
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_sidecar.py)
+# Pure-fake session analysis pack (PLAN §5): _signal._band_lap_ids on a local fake,
+# load._clean on synthetic GPSSample traces, and the sector-splits / sector-plot-positions /
+# delta()-endpoint invariants on bare Sessions seeded via tests/_synthetic. Imports pacer
+# only (session/load chain has no Qt, verified), no telemetry file.
+add_test(NAME test_session_pure
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_session_pure.py)
 add_test(NAME test_studio_features
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_studio_features.py)
 set_tests_properties(test_studio_features PROPERTIES
@@ -88,8 +94,9 @@ set_tests_properties(test_gmeter_overlay PROPERTIES
 # install state; APPEND keeps the per-test QT_QPA_PLATFORM settings above intact.
 foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_gapfill
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
-                        test_sidecar test_studio_features test_compare test_controllers
-                        test_validate_wallclock test_gmeter test_gmeter_overlay)
+                        test_sidecar test_session_pure test_studio_features test_compare
+                        test_controllers test_validate_wallclock test_gmeter
+                        test_gmeter_overlay)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
