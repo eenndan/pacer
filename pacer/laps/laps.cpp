@@ -1,6 +1,8 @@
 #include "laps.hpp"
 
 #include <algorithm>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <pacer/datatypes/datatypes.hpp>
@@ -11,6 +13,23 @@
 // (pacer/laps/point-track.hpp), which OWNS the point track and its coordinate system. Laps
 // delegates point/distance operations to track_ and uses its boundary-chord helper for the
 // start/finish partial segments, keeping lap/sector segmentation on top.
+
+namespace {
+// Bounds guard for the Python-bound scalar accessors (LapTime, StartTimestamp,
+// LapEntrySpeed, GetLapDistance, GetPoint, SectorTime, SectorStartTimestamp,
+// SectorEntrySpeed): a bad index arriving through the bindings must surface as
+// std::out_of_range — which nanobind translates to a Python IndexError — not
+// index the underlying vector unguarded (UB in a Release build). In-range
+// calls are bit-identical to before (this check is the only addition).
+// GetLap / SampleCount / LapColumns keep their separately documented empty/0
+// returns for an out-of-range lap and do NOT use this guard.
+void CheckIndex(const char *accessor, size_t index, size_t size) {
+  if (index >= size)
+    throw std::out_of_range(std::string(accessor) + ": index " +
+                            std::to_string(index) + " >= size " +
+                            std::to_string(size));
+}
+} // namespace
 
 void pacer::Laps::Update() {
   // Re-segment only when something that feeds the segmentation changed. The timing-line sentinels
@@ -172,6 +191,7 @@ double pacer::Laps::GetLapDistance(size_t lap) const {
   // joined points_[finish_index] -> finish, over-counting exactly one segment.
   // Uses SegmentDistance (gap-aware, same as cum_point_dist_ and FillDistances)
   // for the two partial chords so this AGREES exactly with GetLap().cum_distances.
+  CheckIndex("GetLapDistance", lap, lap_chunks_.size());
   const LapChunk &chunk = lap_chunks_[lap];
   const size_t start_index = chunk.start_index;
   const size_t finish_index = chunk.finish_index;
@@ -193,7 +213,10 @@ double pacer::Laps::GetLapDistance(size_t lap) const {
   return distance;
 }
 
-double pacer::Laps::LapTime(size_t lap) const { return lap_chunks_[lap].Time(); }
+double pacer::Laps::LapTime(size_t lap) const {
+  CheckIndex("LapTime", lap, lap_chunks_.size());
+  return lap_chunks_[lap].Time();
+}
 
 size_t pacer::Laps::SampleCount(size_t lap) const {
   if (lap >= lap_chunks_.size()) {
@@ -205,6 +228,7 @@ size_t pacer::Laps::SampleCount(size_t lap) const {
 }
 
 double pacer::Laps::StartTimestamp(size_t lap) const {
+  CheckIndex("StartTimestamp", lap, lap_chunks_.size());
   return lap_chunks_[lap].start.time;
 }
 
@@ -289,20 +313,24 @@ pacer::LapArrays pacer::Laps::LapColumns(size_t lap) const {
 }
 
 double pacer::Laps::SectorStartTimestamp(size_t sector) const {
+  CheckIndex("SectorStartTimestamp", sector, sector_chunks_.size());
   return sector_chunks_[sector].start.time;
 }
 
 double pacer::Laps::SectorEntrySpeed(size_t sector) const {
+  CheckIndex("SectorEntrySpeed", sector, sector_chunks_.size());
   return sector_chunks_[sector].start.point.full_speed;
 }
 
 double pacer::Laps::SectorTime(size_t sector) const {
+  CheckIndex("SectorTime", sector, sector_chunks_.size());
   return sector_chunks_[sector].finish.time - sector_chunks_[sector].start.time;
 }
 
 size_t pacer::Laps::SectorCount() const { return sectors.sector_lines.size(); }
 
 double pacer::Laps::LapEntrySpeed(size_t lap) const {
+  CheckIndex("LapEntrySpeed", lap, lap_chunks_.size());
   return lap_chunks_[lap].start.point.full_speed;
 }
 
@@ -322,6 +350,10 @@ void pacer::Laps::AddPoint(GPSSample s, double t) {
 size_t pacer::Laps::PointCount() const { return track_.PointCount(); }
 
 pacer::PointInTime<pacer::GPSSample> pacer::Laps::GetPoint(size_t row) const {
+  // Bounds-checked HERE, at the bound surface, not inside PointTrack::Point —
+  // the segmentation loop hits that accessor once per sample and stays
+  // unchecked-hot.
+  CheckIndex("GetPoint", row, track_.PointCount());
   return track_.Point(row);
 }
 

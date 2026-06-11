@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <stdexcept>
 
 #include <pacer/datatypes/datatypes.hpp>
 #include <pacer/geometry/geometry.hpp>
@@ -561,6 +562,86 @@ TEST_CASE("LapColumns equals the per-point GetLap/Local path (PR #40)",
       CHECK(cols.ys.empty());
       CHECK(cols.full_speed.empty());
       CHECK(cols.cum_distances.empty());
+    }
+  }
+}
+
+TEST_CASE("Out-of-range indices throw std::out_of_range on the bound scalar "
+          "accessors (P1.2)",
+          "[laps]") {
+  // The 8 Python-bound scalar accessors (LapTime / StartTimestamp /
+  // LapEntrySpeed / GetLapDistance / GetPoint / SectorTime /
+  // SectorStartTimestamp / SectorEntrySpeed) used to index their vectors
+  // unguarded — a bad index arriving through the bindings was UB in a Release
+  // build. They now throw std::out_of_range (nanobind translates it to a
+  // Python IndexError) for index == count and beyond, while every IN-RANGE
+  // call returns exactly what it did before (the bounds check is the only
+  // addition). The empty-return trio GetLap / SampleCount / LapColumns is
+  // intentionally NOT changed (pinned in the cases above).
+  GPSSample origin{.lat = 40.0, .lon = -74.0, .altitude = 0};
+  CoordinateSystem cs(origin);
+
+  Laps laps = MakeSectorLoop(cs);
+  laps.sectors.start_line = Segment{Point{0, -50}, Point{0, 50}};
+  laps.sectors.sector_lines = {Segment{Point{10, -5}, Point{10, 5}},
+                               Segment{Point{20, -5}, Point{20, 5}}};
+  laps.Update();
+  REQUIRE(laps.LapsCount() >= 1);
+  REQUIRE(laps.RecordedSectors() >= 3);
+  REQUIRE(laps.PointCount() > 0);
+
+  SECTION("lap accessors throw for index == LapsCount() and a huge index") {
+    for (size_t bad : {laps.LapsCount(), size_t{9999}}) {
+      CHECK_THROWS_AS(laps.LapTime(bad), std::out_of_range);
+      CHECK_THROWS_AS(laps.StartTimestamp(bad), std::out_of_range);
+      CHECK_THROWS_AS(laps.LapEntrySpeed(bad), std::out_of_range);
+      CHECK_THROWS_AS(laps.GetLapDistance(bad), std::out_of_range);
+    }
+  }
+
+  SECTION("sector accessors throw for index == RecordedSectors() and beyond") {
+    for (size_t bad : {laps.RecordedSectors(), size_t{9999}}) {
+      CHECK_THROWS_AS(laps.SectorTime(bad), std::out_of_range);
+      CHECK_THROWS_AS(laps.SectorStartTimestamp(bad), std::out_of_range);
+      CHECK_THROWS_AS(laps.SectorEntrySpeed(bad), std::out_of_range);
+    }
+  }
+
+  SECTION("GetPoint throws for row == PointCount() and a huge row") {
+    for (size_t bad : {laps.PointCount(), size_t{9999}}) {
+      CHECK_THROWS_AS(laps.GetPoint(bad), std::out_of_range);
+    }
+  }
+
+  SECTION("every valid index returns the same value as before the guard") {
+    // The accessors read the same chunk fields GetLap materializes as the
+    // first/last lap points (start == points.front(), finish == points.back()),
+    // so equality here is EXACT — the identical doubles flow through both
+    // paths. GetLapDistance keeps its separately pinned cum_distances
+    // agreement (margin as in the cases above).
+    for (size_t lap = 0; lap < laps.LapsCount(); ++lap) {
+      Lap l = laps.GetLap(lap);
+      CHECK(laps.LapTime(lap) ==
+            l.points.back().time - l.points.front().time);
+      CHECK(laps.StartTimestamp(lap) == l.points.front().time);
+      CHECK(laps.LapEntrySpeed(lap) == l.points.front().point.full_speed);
+      CHECK(laps.GetLapDistance(lap) ==
+            Catch::Approx(l.cum_distances.back()).margin(1e-6));
+    }
+    for (size_t s = 0; s < laps.RecordedSectors(); ++s) {
+      CHECK_NOTHROW(laps.SectorTime(s));
+      CHECK(std::isfinite(laps.SectorStartTimestamp(s)));
+      // MakeSectorLoop sets full_speed = 20 on every sample.
+      CHECK(laps.SectorEntrySpeed(s) == Catch::Approx(20.0).margin(1e-6));
+    }
+    // The first three recorded sectors still sum to lap 0's time (the
+    // pre-guard expectation pinned in the sector segmentation case).
+    CHECK(laps.SectorTime(0) + laps.SectorTime(1) + laps.SectorTime(2) ==
+          Catch::Approx(laps.LapTime(0)).margin(1e-6));
+    // GetPoint(row): MakeSectorLoop adds points with t = 0, 1, 2, ... — every
+    // valid row reads back its own timestamp.
+    for (size_t row = 0; row < laps.PointCount(); ++row) {
+      CHECK(laps.GetPoint(row).time == static_cast<double>(row));
     }
   }
 }

@@ -21,6 +21,11 @@ struct Lap {
   size_t Count() const;
 };
 
+// The INPUT timing-line geometry: the start line + the intermediate sector lines, in local
+// metres. NOTE (confusion trap): the studio does NOT compute per-lap sector SPLITS from the C++
+// crossing list these lines produce — it projects each sector line onto the lap's odometer by
+// DISTANCE in Python (studio/session.py, lap_sector_splits), because a short line can miss a
+// geometric crossing on some laps.
 struct Sectors {
   Segment start_line;
   std::vector<Segment> sector_lines;
@@ -66,10 +71,15 @@ struct Laps {
   Sectors sectors;
 
   size_t LapsCount() const;
+  /// Throws std::out_of_range (Python: IndexError) if lap >= LapsCount().
   double LapEntrySpeed(size_t lap) const;
+  /// Throws std::out_of_range (Python: IndexError) if lap >= LapsCount().
   double LapTime(size_t lap) const;
+  /// Out-of-range lap -> 0 (documented empty-return contract, like GetLap).
   size_t SampleCount(size_t lap) const;
+  /// Throws std::out_of_range (Python: IndexError) if lap >= LapsCount().
   double StartTimestamp(size_t lap) const;
+  /// Throws std::out_of_range (Python: IndexError) if index >= LapsCount().
   double GetLapDistance(size_t index) const;
 
   Lap GetLap(size_t lap) const;
@@ -86,14 +96,18 @@ struct Laps {
   size_t SectorCount() const;
   size_t RecordedSectors() const;
   void ClearSectors();
+  /// Throws std::out_of_range (Python: IndexError) if sector >= RecordedSectors().
   double SectorTime(size_t sector) const;
+  /// Throws std::out_of_range (Python: IndexError) if sector >= RecordedSectors().
   double SectorStartTimestamp(size_t sector) const;
+  /// Throws std::out_of_range (Python: IndexError) if sector >= RecordedSectors().
   double SectorEntrySpeed(size_t sector) const;
 
   //------------------------------ RAW POINTS -------------------------------//
 
   void AddPoint(GPSSample s, double t);
   size_t PointCount() const;
+  /// Throws std::out_of_range (Python: IndexError) if row >= PointCount().
   PointInTime<GPSSample> GetPoint(size_t row) const;
   void ClearPoints();
 
@@ -113,6 +127,10 @@ private:
   // Computed LapChunks (start/finish crossings) for the laps and the sectors. Named *_chunks_ to
   // distinguish them from the INPUT geometry in the public `sectors` member (start_line +
   // sector_lines), which is what gets segmented into these.
+  // NOTE: sector_chunks_ (read by SectorTime/SectorStartTimestamp/SectorEntrySpeed) is the raw
+  // GEOMETRIC crossing list. The studio's per-lap sector splits are NOT built from it — they are
+  // computed in Python by distance projection (studio/session.py, lap_sector_splits); see the
+  // `Sectors` comment above.
   std::vector<LapChunk> lap_chunks_;
   std::vector<LapChunk> sector_chunks_;
 

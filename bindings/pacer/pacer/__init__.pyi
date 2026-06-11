@@ -237,6 +237,13 @@ class Lap:
         pass
 
 class Sectors:
+    """The INPUT timing-line geometry: the start line + the intermediate sector lines, in local
+    metres. NOTE (confusion trap): the studio does NOT compute per-lap sector SPLITS from the C++
+    crossing list these lines produce — it projects each sector line onto the lap's odometer by
+    DISTANCE in Python (studio/session.py, lap_sector_splits), because a short line can miss a
+    geometric crossing on some laps.
+    """
+
     start_line: Segment
     sector_lines: List[Segment]
     def __init__(
@@ -305,18 +312,23 @@ class Laps:
         pass
 
     def lap_entry_speed(self, lap: int) -> float:
+        """/ Throws std::out_of_range (Python: IndexError) if lap >= LapsCount()."""
         pass
 
     def lap_time(self, lap: int) -> float:
+        """/ Throws std::out_of_range (Python: IndexError) if lap >= LapsCount()."""
         pass
 
     def sample_count(self, lap: int) -> int:
+        """/ Out-of-range lap -> 0 (documented empty-return contract, like GetLap)."""
         pass
 
     def start_timestamp(self, lap: int) -> float:
+        """/ Throws std::out_of_range (Python: IndexError) if lap >= LapsCount()."""
         pass
 
     def get_lap_distance(self, index: int) -> float:
+        """/ Throws std::out_of_range (Python: IndexError) if index >= LapsCount()."""
         pass
 
     def get_lap(self, lap: int) -> Lap:
@@ -342,12 +354,15 @@ class Laps:
         pass
 
     def sector_time(self, sector: int) -> float:
+        """/ Throws std::out_of_range (Python: IndexError) if sector >= RecordedSectors()."""
         pass
 
     def sector_start_timestamp(self, sector: int) -> float:
+        """/ Throws std::out_of_range (Python: IndexError) if sector >= RecordedSectors()."""
         pass
 
     def sector_entry_speed(self, sector: int) -> float:
+        """/ Throws std::out_of_range (Python: IndexError) if sector >= RecordedSectors()."""
         pass
     # ------------------------------ RAW POINTS -------------------------------//
 
@@ -356,7 +371,7 @@ class Laps:
 
     def point_count(self) -> int:
         pass
-
+    # / Throws std::out_of_range (Python: IndexError) if row >= PointCount().
     def get_point(self, row: int) -> PointInTime_GPSSample:
         pass
 

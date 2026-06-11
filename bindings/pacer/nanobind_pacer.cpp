@@ -317,7 +317,7 @@ void py_init_module_pacer(nb::module_ &m) {
 
   auto pyClassSectors =
       nb::class_<pacer::Sectors>
-          (m, "Sectors", "")
+          (m, "Sectors", " The INPUT timing-line geometry: the start line + the intermediate sector lines, in local\n metres. NOTE (confusion trap): the studio does NOT compute per-lap sector SPLITS from the C++\n crossing list these lines produce — it projects each sector line onto the lap's odometer by\n DISTANCE in Python (studio/session.py, lap_sector_splits), because a short line can miss a\n geometric crossing on some laps.")
       .def("__init__", [](pacer::Sectors * self, Segment start_line = Segment(), std::vector<Segment> sector_lines = std::vector<Segment>())
       {
           new (self) pacer::Sectors();  // placement new
@@ -378,15 +378,25 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("laps_count",
           &pacer::Laps::LapsCount)
       .def("lap_entry_speed",
-          &pacer::Laps::LapEntrySpeed, nb::arg("lap"))
+          &pacer::Laps::LapEntrySpeed,
+          nb::arg("lap"),
+          "/ Throws std::out_of_range (Python: IndexError) if lap >= LapsCount().")
       .def("lap_time",
-          &pacer::Laps::LapTime, nb::arg("lap"))
+          &pacer::Laps::LapTime,
+          nb::arg("lap"),
+          "/ Throws std::out_of_range (Python: IndexError) if lap >= LapsCount().")
       .def("sample_count",
-          &pacer::Laps::SampleCount, nb::arg("lap"))
+          &pacer::Laps::SampleCount,
+          nb::arg("lap"),
+          "/ Out-of-range lap -> 0 (documented empty-return contract, like GetLap).")
       .def("start_timestamp",
-          &pacer::Laps::StartTimestamp, nb::arg("lap"))
+          &pacer::Laps::StartTimestamp,
+          nb::arg("lap"),
+          "/ Throws std::out_of_range (Python: IndexError) if lap >= LapsCount().")
       .def("get_lap_distance",
-          &pacer::Laps::GetLapDistance, nb::arg("index"))
+          &pacer::Laps::GetLapDistance,
+          nb::arg("index"),
+          "/ Throws std::out_of_range (Python: IndexError) if index >= LapsCount().")
       .def("get_lap",
           &pacer::Laps::GetLap, nb::arg("lap"))
       .def("lap_columns",
@@ -400,11 +410,17 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("clear_sectors",
           &pacer::Laps::ClearSectors)
       .def("sector_time",
-          &pacer::Laps::SectorTime, nb::arg("sector"))
+          &pacer::Laps::SectorTime,
+          nb::arg("sector"),
+          "/ Throws std::out_of_range (Python: IndexError) if sector >= RecordedSectors().")
       .def("sector_start_timestamp",
-          &pacer::Laps::SectorStartTimestamp, nb::arg("sector"))
+          &pacer::Laps::SectorStartTimestamp,
+          nb::arg("sector"),
+          "/ Throws std::out_of_range (Python: IndexError) if sector >= RecordedSectors().")
       .def("sector_entry_speed",
-          &pacer::Laps::SectorEntrySpeed, nb::arg("sector"))
+          &pacer::Laps::SectorEntrySpeed,
+          nb::arg("sector"),
+          "/ Throws std::out_of_range (Python: IndexError) if sector >= RecordedSectors().")
       .def("add_point",
           &pacer::Laps::AddPoint, nb::arg("s"), nb::arg("t"))
       .def("point_count",
