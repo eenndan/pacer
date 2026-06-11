@@ -1,10 +1,12 @@
 """MapView: the track trace with draggable start/sector timing lines + a video marker.
 
 Timing lines are drawn in LOCAL meters (same space as the trace). Each line is two
-draggable pyqtgraph TargetItem handles joined by a segment; handles are placed FREELY
-(no snap to trace) and stay exactly where the user drops them — releasing a handle
-re-segments the laps once. The red marker tracks the video position and, when dragged,
-seeks the video to the nearest telemetry sample.
+draggable pyqtgraph TargetItem handles joined by a segment; by DEFAULT handles are placed
+FREELY (no snap to trace) and stay exactly where the user drops them — releasing a handle
+re-segments the laps once. An OPT-IN "Snap" toggle in the map header (default off) snaps
+just the RELEASED handle to the nearest trace point before that one re-segmentation; the
+other endpoint never moves (the user may deliberately anchor it off-track). The red marker
+tracks the video position and, when dragged, seeks the video to the nearest telemetry sample.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
 from .session import Seg
-from .theme import C
+from .theme import C, icon
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -40,9 +42,12 @@ INFERRED_DARKEN = 0.55  # blend the lap colour toward black for the fill pen
 class _TimingLine:
     """Two draggable handles + a connecting segment, all in data (local-meter) coords."""
 
-    def __init__(self, plot, seg: Seg, color, on_changed):
+    def __init__(self, plot, seg: Seg, color, on_changed, snap):
         self.plot = plot
         self.on_changed = on_changed
+        # `snap(x, y) -> (x, y) | None`: MapView's opt-in snap hook. None (the default —
+        # toggle off) means free placement; a point means "move the released handle here".
+        self.snap = snap
         pen = pg.mkPen(color, width=2)
         self.line = pg.PlotDataItem([seg.x1, seg.x2], [seg.y1, seg.y2], pen=pen)
         self.h1 = pg.TargetItem((seg.x1, seg.y1), size=11, movable=True, pen=pen)
@@ -51,15 +56,24 @@ class _TimingLine:
         plot.addItem(self.h1)
         plot.addItem(self.h2)
         # Free placement: dragging either handle redraws the segment as it moves; on release
-        # the laps are re-segmented ONCE. Handles are NOT snapped to a trace point — they stay
-        # exactly where the user drops them.
+        # the laps are re-segmented ONCE. Handles are NOT snapped to a trace point unless the
+        # Snap toggle is on — by default they stay exactly where the user drops them.
         self.h1.sigPositionChanged.connect(self._moved)
         self.h2.sigPositionChanged.connect(self._moved)
+        # TargetItem emits ITSELF on release, so _released knows which handle was dragged.
         self.h1.sigPositionChangeFinished.connect(self._released)
         self.h2.sigPositionChangeFinished.connect(self._released)
 
-    def _released(self, *_):
-        # On release: re-segment the laps ONCE, leaving the handle exactly where dropped.
+    def _released(self, handle):
+        # On release: optionally snap the DRAGGED handle to the nearest trace point (opt-in,
+        # default off — snap() returns None when the toggle is off), then re-segment the laps
+        # ONCE. Only the released handle moves; the other endpoint stays where the user
+        # anchored it. TargetItem.setPos fires sigPositionChanged only (a cheap segment
+        # redraw via _moved) — never sigPositionChangeFinished, so no recursion here.
+        p = handle.pos()
+        snapped = self.snap(p.x(), p.y())
+        if snapped is not None:
+            handle.setPos(pg.Point(snapped[0], snapped[1]))
         self.on_changed()
 
     def _moved(self, *_):
@@ -199,6 +213,21 @@ class MapView(QWidget):
         self.reset_sectors_btn = QPushButton("Reset sectors")
         self.add_sector_btn.clicked.connect(self._add_sector)
         self.reset_sectors_btn.clicked.connect(self._reset_sectors)
+        # OPT-IN snap-to-track toggle (default OFF = today's free placement, byte-identical).
+        # When checked, releasing a dragged timing-line handle snaps THAT handle to the nearest
+        # point on the track trace before the one re-segmentation. Exposed like the sector
+        # buttons so app.py mounts it in the map header. (The early snap-as-DEFAULT experiment
+        # was rejected — free placement stays the default; this is the PLAN-sanctioned toggle.)
+        self.snap_btn = QPushButton("Snap")
+        self.snap_btn.setIcon(icon("ph.magnet"))
+        self.snap_btn.setCheckable(True)
+        self.snap_btn.setToolTip(
+            "Snap to track: when on, a released timing-line handle jumps to the nearest point "
+            "on the track trace. Off (default) = handles stay exactly where you drop them.")
+        # Recolour the glyph to the accent while active (the QSS already tints the button
+        # background on :checked) — same idiom as the g-meter toggle.
+        self.snap_btn.toggled.connect(
+            lambda on: self.snap_btn.setIcon(icon("ph.magnet", color=C.accent if on else C.text)))
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -209,9 +238,21 @@ class MapView(QWidget):
         for tl in [self._start, *self._sectors]:
             if tl:
                 tl.remove()
-        self._start = _TimingLine(self.plot, start, START_COLOR, self._emit)
-        self._sectors = [_TimingLine(self.plot, s, SECTOR_COLOR, self._emit)
+        self._start = _TimingLine(self.plot, start, START_COLOR, self._emit, self._snap_to_trace)
+        self._sectors = [_TimingLine(self.plot, s, SECTOR_COLOR, self._emit, self._snap_to_trace)
                          for s in sectors]
+
+    def _snap_to_trace(self, x: float, y: float) -> tuple[float, float] | None:
+        """The snap hook handed to every _TimingLine. Toggle OFF (default): return None so the
+        released handle stays exactly where it was dropped. Toggle ON: the nearest point ON the
+        track trace (local meters) via session.nearest_index — pure numpy in session, so this
+        module stays pacer-free."""
+        if not self.snap_btn.isChecked():
+            return None
+        i = self.session.nearest_index(x, y)
+        if i is None:
+            return None
+        return float(self.session.tx[i]), float(self.session.ty[i])
 
     def _current(self) -> tuple[Seg, list[Seg]]:
         return self._start.seg(), [s.seg() for s in self._sectors]

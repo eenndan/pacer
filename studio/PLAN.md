@@ -91,7 +91,8 @@ Captured here so the negative results aren't re-litigated. Evidence in [`docs/`]
 - **Map-matching to a centerline** — would **erase the lap-to-lap racing-line signal** the app exists
   to visualize, and a centerline carries no per-lap timing. ([docs/gps-accuracy-research.md](docs/gps-accuracy-research.md))
 - **Snap-to-trace timing lines** (an early version) — removed in favour of **free** placement (user
-  preference). An optional snap *toggle* remains a possible future nicety.
+  preference). Only snap-as-DEFAULT stays rejected; the sanctioned *optional* form shipped as the
+  opt-in **Snap** toggle in the map header (default off — free placement is still the default).
 
 ---
 
@@ -125,7 +126,8 @@ Captured here so the negative results aren't re-litigated. Evidence in [`docs/`]
 - **More tracks** in `tracks.py` (only Daytona MK today) + **real track auto-detection**.
 - **Persist sector / start-line config per file** (a sidecar JSON so edits survive reloads).
 - **Fix the MK reference centerline ICP** (re-run `studio/dev/build_reference.py`; tighten the infield).
-- **Expose the `_clean` / quality-gate thresholds in the UI** (and an optional snap-to-track toggle).
+- **Expose the `_clean` / quality-gate thresholds in the UI** (the optional snap-to-track toggle
+  half of this wish shipped — the Snap button in the map header).
 - **Tune the g-meter full-scale** and verify multi-chapter g-sync live.
 - **More pure-Python `session.py`/`load.py` tests** (`load._clean`, `valid_lap_ids`,
   delta-endpoint == laptime-diff, `lap_sector_splits` sum == lap-time, `sector_plot_positions`).

@@ -250,14 +250,15 @@ class StudioWindow(QMainWindow):
         video_panel = self._panel("VIDEO", self.chapter_label, (self.video, 1))
         table_panel = self._panel("LAPS", (self.table, 1))
 
-        # MAP header: title (left) + the sector buttons (right-aligned, compact) — moved OFF the
-        # full-width row that used to sit between the map and the charts. Their handlers/signal
-        # wiring (re-segmentation) are unchanged; only the mount point moved.
-        for b in (self.map.add_sector_btn, self.map.reset_sectors_btn):
+        # MAP header: title (left) + the snap toggle and sector buttons (right-aligned,
+        # compact) — moved OFF the full-width row that used to sit between the map and the
+        # charts. Their handlers/signal wiring (re-segmentation, opt-in snap) live in MapView;
+        # this is just the mount point.
+        for b in (self.map.snap_btn, self.map.add_sector_btn, self.map.reset_sectors_btn):
             b.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         map_label = QLabel("MAP")
         map_label.setProperty("role", "BarLabel")
-        map_header = self._header_bar(map_label, 1,
+        map_header = self._header_bar(map_label, 1, self.map.snap_btn,
                                       self.map.add_sector_btn, self.map.reset_sectors_btn)
         map_panel = self._headered(map_header, (self.map, 1))
 
