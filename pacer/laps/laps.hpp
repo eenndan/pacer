@@ -37,10 +37,13 @@ struct Sectors {
 // materialized lap (Lap::Count(): the interpolated start crossing + the interior track points +
 // the interpolated finish crossing), so the columns are mutually index-aligned.
 //   times          media-clock seconds of each point (== Lap::points[i].time)
-//   xs, ys         LOCAL metres (CoordinateSystem::Local of each point, x/y) in the laps' OWN
-//                  coordinate system (the one set via SetCoordinateSystem)
-//   full_speed     raw 3D GPS speed (m/s) of each point (the studio layer scales to km/h)
-//   cum_distances  the lap's per-point odometer (== Lap::cum_distances), gap-aware
+//   xs, ys         LOCAL metres (CoordinateSystem::Local of each point, x/y)
+//                  in the laps' OWN coordinate system (the one set via
+//                  SetCoordinateSystem)
+//   full_speed     raw 3D GPS speed (m/s) of each point (the studio layer
+//                  scales to km/h)
+//   cum_distances  the lap's per-point odometer (== Lap::cum_distances),
+//                  gap-aware
 struct LapArrays {
   std::vector<double> times;
   std::vector<double> xs;

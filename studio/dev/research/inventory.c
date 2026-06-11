@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// Separate block: GPMF_mp4reader.h uses FILE without including <stdio.h>, so
+// these must come after the system headers (clang-format sorts per block).
 #include "GPMF_parser.h"
 #include "demo/GPMF_mp4reader.h"
 
