@@ -31,8 +31,12 @@ if len(s.tt):
     w._tick()
     print("marker/cursor OK, current lap:", w.map._current_overlay.lap_id)
 
-# timing-line drag re-segments and re-selects without error
+# timing-line drag re-segments and re-selects without error; the user edit also writes the
+# timing-line sidecar next to the sample clip — assert it appeared, then remove it so the
+# submodule working tree stays clean (the smoke run must leave no artifacts).
 w._on_lines(s.start_line, s.sector_lines + [s.suggest_sector()])
 print("after add-sector: laps", s.lap_count(), "valid", len(s.valid_lap_ids()))
+assert w._sidecar_path and os.path.exists(w._sidecar_path), "sidecar not written on user edit"
+os.remove(w._sidecar_path)
 
 print("SMOKE OK")

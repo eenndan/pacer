@@ -250,20 +250,24 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
     system on the clean track, and place/fit the start line (known track ⇒ its fixed line,
     else pick_random_start + widen).
 
-    Returns `(laps, cs, video_path, chapter_map, imu)`:
+    Returns `(laps, cs, video_path, chapter_map, imu, track_name)`:
       * `laps`/`cs` — the segmented `pacer.Laps` + its `pacer.CoordinateSystem` (an EMPTY laps
         and a default cs if `paths` is empty or no samples survive cleaning);
       * `video_path` — the first chapter path (None if no paths);
       * `chapter_map` — the `chapters.ChapterMap` offset table (None if no paths);
       * `imu` — the `(accl, grav, cori)` streams off the same single-pass chain, for
         `Session._build_gmeter` (which reads Session instance arrays, so it stays a Session
-        method); None when the trace is empty (the g-meter is skipped exactly as before).
+        method); None when the trace is empty (the g-meter is skipped exactly as before);
+      * `track_name` — the detected registry track's name (`tracks.detect_track` on the clean
+        trace's centroid), or None for an unknown track (where the start line above is the
+        pick_random_start auto-fit). Stored on the Session for the timing-line sidecar's
+        `track` field and the app's "unknown track" notice.
     """
     laps = pacer.Laps()
     empty = pacer.CoordinateSystem(pacer.GPSSample())
     video_path = paths[0] if paths else None
     if not paths:
-        return laps, empty, None, None, None
+        return laps, empty, None, None, None, None
 
     # Single-pass ingest: build the SequentialGPSSource chain ONCE and read BOTH the GPS
     # trace and the IMU (accl/grav/cori) streams off the same opened containers, so each
@@ -276,7 +280,7 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
     samples, spans, naive = _gate_quality(samples, spans, naive)
     samples, spans, naive = _clean(samples, spans, naive)
     if not samples:
-        return laps, empty, video_path, chapter_map, None
+        return laps, empty, video_path, chapter_map, None, None
 
     # GPS9 true-clock spacing (re-anchored to the media clock); naive otherwise.
     times = _gps9_times(samples, naive)
@@ -307,4 +311,5 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
             start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]
         )
         laps.update()
-    return laps, cs, video_path, chapter_map, (accl, grav, cori)
+    return laps, cs, video_path, chapter_map, (accl, grav, cori), (
+        track.name if track is not None else None)

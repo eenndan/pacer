@@ -96,6 +96,11 @@ class Session:
         # search (parallel arrays over valid laps, in start order). Cleared on re-segment.
         self._lap_windows: tuple | None = None
         self._reference_xy = None  # lazily-built georeferenced track centerline (fallback donor)
+        # The detected registry track's name (tracks.detect_track), or None for an unknown
+        # track (where the start line was auto-fitted via pick_random_start). Set by load();
+        # a from-scratch Session() has no detection, so it stays None. Persisted into the
+        # timing-line sidecar and used by the app's "unknown track" notice.
+        self.track_name: str | None = None
         # Vehicle-frame g (lateral/longitudinal in g) precomputed from the GoPro ACCL+GRAV+CORI,
         # cross-checked against GPS-derived g. Built in load() (needs the trace arrays below);
         # an empty meter until then, so a from-scratch Session() (no IMU) just has no g signal.
@@ -127,8 +132,11 @@ class Session:
         The GPS track is quality-gated and boxcar-smoothed (window `smooth_window`, default
         SMOOTH_WINDOW) BEFORE the points are handed to the core; `smooth_window=1` disables
         smoothing (raw trace, for baselines)."""
-        laps, cs, video_path, chapter_map, imu = load_recording(paths, smooth_window)
+        laps, cs, video_path, chapter_map, imu, track_name = load_recording(paths, smooth_window)
         session = cls(laps, cs, video_path, chapter_map)
+        # The registry track the pipeline detected (or None for an unknown track) — persisted
+        # into the timing-line sidecar and shown by the app's "unknown track" notice.
+        session.track_name = track_name
         if imu is not None:
             # Vehicle-frame g from the real GoPro accelerometer, cross-checked vs GPS-derived
             # g. The ACCL/GRAV/CORI were read off load_recording's single-pass chain (no second
@@ -196,6 +204,48 @@ class Session:
         self._valid_cache = None
         self._best_cache = _UNSET
         self._lap_windows = None
+
+    # ------------------------------------------ timing-line persistence (sidecar glue)
+    # The sidecar (studio/sidecar.py, pacer-free) stores the user's timing lines as ABSOLUTE
+    # (lat, lon) endpoints, because the LOCAL frame's origin is the cleaned-trace bbox centre
+    # (see load()) and shifts between loads — persisted local metres would drift. These two
+    # helpers own the lat/lon <-> local conversion via the bound CoordinateSystem, so the
+    # sidecar module (and app.py) never touch pacer.
+
+    def timing_lines_latlon(self) -> tuple[list, list]:
+        """The current start + sector lines as absolute (lat, lon) endpoint pairs — the
+        sidecar's persisted form: ``(start, sectors)`` where each line is
+        ``[[lat, lon], [lat, lon]]``. Endpoints map through ``cs.global_`` at z=0 (the
+        timing lines are 2D in the local plane; altitude is irrelevant to a crossing)."""
+        def line(seg: Seg) -> list:
+            out = []
+            for x, y in ((seg.x1, seg.y1), (seg.x2, seg.y2)):
+                g = self.cs.global_(pacer.Vec3f(float(x), float(y), 0.0))
+                out.append([float(g.lat), float(g.lon)])
+            return out
+        return line(self.start_line), [line(s) for s in self.sector_lines]
+
+    def apply_timing_lines_latlon(self, start, sectors) -> bool:
+        """Apply persisted absolute-lat/lon timing lines (the sidecar's form): convert each
+        endpoint to local metres via ``cs.local`` and re-segment through set_timing_lines.
+
+        REVERT GUARD: if the new segmentation yields NO valid laps — a corrupt sidecar, or
+        one written for a different recording/track whose lines never cross this trace —
+        the previous (auto-fitted) lines are restored and False is returned, so a bad
+        sidecar can never silently destroy the session's lap segmentation."""
+        prev_start, prev_sectors = self.start_line, self.sector_lines
+
+        def seg(pair) -> Seg:
+            (a_lat, a_lon), (b_lat, b_lon) = pair
+            a = self.cs.local(pacer.GPSSample(lat=float(a_lat), lon=float(a_lon), altitude=0))
+            b = self.cs.local(pacer.GPSSample(lat=float(b_lat), lon=float(b_lon), altitude=0))
+            return Seg(float(a[0]), float(a[1]), float(b[0]), float(b[1]))
+
+        self.set_timing_lines(seg(start), [seg(s) for s in sectors])
+        if self.valid_lap_ids():
+            return True
+        self.set_timing_lines(prev_start, prev_sectors)
+        return False
 
     def suggest_sector(self, existing: int = 0) -> Seg:
         """A line perpendicular to the track at a DISTINCT fraction of the way round, so each

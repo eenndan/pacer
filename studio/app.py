@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, theme
+from . import chapters, sidecar, theme
 from .compare_controller import CompareController
 from .lap_table import LapTable
 from .map_view import MapView
@@ -79,9 +79,41 @@ class StudioWindow(QMainWindow):
         print(f"studio: {self.session.point_count()} points, "
               f"{self.session.lap_count()} laps, {n_ch} chapter(s).", flush=True)
 
+        # Timing-line sidecar: restore the user's previously-saved start/sector lines (absolute
+        # lat/lon, written ONLY on a user edit — see _save_sidecar) before the UI is built, so
+        # every panel is constructed against the restored segmentation. A plain load never
+        # WRITES the sidecar. A corrupt/foreign sidecar (its lines segment to zero valid laps)
+        # is reverted to the auto-fitted lines with a non-fatal notice. The path is assigned
+        # only after a SUCCESSFUL load, so a failed reload leaves the old session writing to
+        # its own (old) sidecar.
+        self._sidecar_path = sidecar.sidecar_path(paths[0]) if paths else None
+        notice = None
+        data = sidecar.load(self._sidecar_path) if self._sidecar_path else None
+        if data is not None:
+            if session.apply_timing_lines_latlon(data["start"], data["sectors"]):
+                print(f"studio: restored saved timing lines from "
+                      f"{os.path.basename(self._sidecar_path)}", flush=True)
+            else:
+                notice = ("saved timing lines don't match this recording — "
+                          "reverted to the auto-fitted start line")
+        elif session.track_name is None and session.lap_count() > 0:
+            # Unknown track (no registry match): the start line was auto-fitted (the
+            # pick_random_start fallback in Session.load), not the real start/finish, so
+            # lap times are arbitrary until the user drags it into place. One line, non-
+            # fatal; suppressed when a sidecar restored the user's own lines above. To add
+            # the track to the registry: studio/dev/print_track_entry.py.
+            notice = ("unknown track — start/finish line was auto-fitted; "
+                      "drag it into place to fix lap timing")
+
         label = chapters.recording_label(paths)
         self.setWindowTitle(f"pacer studio — {label}" if label else "pacer studio")
         self._build_ui()
+        # One-line, non-fatal: the statusbar mirrors the console "studio:" notice style.
+        if notice:
+            print(f"studio: {notice}", flush=True)
+            self.statusBar().showMessage(notice)
+        else:
+            self.statusBar().clearMessage()
 
     def _on_load_failed(self, paths: list[str], exc: Exception):
         """A session load failed (missing / corrupt / no-GPS file). Show a clear, non-fatal error
@@ -616,6 +648,25 @@ class StudioWindow(QMainWindow):
         self._refresh_sector_lines()
         # The valid-lap count may have changed — re-evaluate whether compare can be offered.
         self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
+        # Persist the user's edit (this handler fires only on a drag release / sector add or
+        # reset — never on a plain load), so the hand-tuned lines survive an app restart.
+        self._save_sidecar()
+
+    def _save_sidecar(self):
+        """Write the current timing lines to the recording's sidecar JSON (absolute lat/lon
+        via session.timing_lines_latlon). Called ONLY from _on_lines — i.e. only on a genuine
+        user edit — so an untouched session never creates or rewrites the file. Best-effort:
+        an unwritable folder just logs and the lines still apply for this run."""
+        path = getattr(self, "_sidecar_path", None)
+        if not path:
+            return
+        start, sectors = self.session.timing_lines_latlon()
+        try:
+            sidecar.save(path, self.session.track_name, start, sectors)
+        except OSError as exc:
+            print(f"studio: could not write timing-line sidecar {path}: {exc}", flush=True)
+            return
+        print(f"studio: timing lines saved to {os.path.basename(path)}", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
