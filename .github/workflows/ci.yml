@@ -1,7 +1,10 @@
 name: CI
 
 on:
+  # main-only push trigger: PR branches are already covered by pull_request, so an
+  # unrestricted push trigger would run every PR's CI twice.
   push:
+    branches: [main]
   pull_request:
 
 # Cancel an in-progress run when a newer commit is pushed to the same ref.
@@ -32,8 +35,18 @@ jobs:
       - name: Build (cmake --build via pixi)
         run: pixi run build
 
+      - name: Bindings regen drift gate
+        # The build regenerates the bindings glue/stubs in-place (bindings/pacer/CMakeLists.txt),
+        # so the committed generated files must match what the locked litgen/black produce.
+        run: git diff --exit-code -- bindings/
+
       - name: Test (ctest via pixi)
         run: pixi run test
+
+      - name: E2E smoke (full StudioWindow offscreen on the bundled GoPro sample)
+        # Builds the whole app against 3rdparty/gpmf-parser/samples/hero6.mp4 (checked out with
+        # the submodules) — catches load-pipeline regressions the unit tests can't see.
+        run: QT_QPA_PLATFORM=offscreen pixi run python -m studio.dev._smoke
 
       - name: Lint (ruff check via pixi)
         run: pixi run lint
