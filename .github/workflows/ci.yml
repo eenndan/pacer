@@ -17,6 +17,9 @@ jobs:
     name: build + test + lint (macos-14 / arm64)
     # macos-14 is Apple-silicon (arm64) — matches the project's only pixi platform (osx-arm64).
     runs-on: macos-14
+    # Hard ceiling for the whole job: a clean run finishes in a few minutes (cold pixi cache
+    # included), so anything past this is a hang — fail fast, never burn the 6-hour default.
+    timeout-minutes: 20
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v5
@@ -46,7 +49,20 @@ jobs:
       - name: E2E smoke (full StudioWindow offscreen on the bundled GoPro sample)
         # Builds the whole app against 3rdparty/gpmf-parser/samples/hero6.mp4 (checked out with
         # the submodules) — catches load-pipeline regressions the unit tests can't see.
-        run: QT_QPA_PLATFORM=offscreen pixi run python -m studio.dev._smoke
+        # --no-video swaps PlayerPane's QMediaPlayer/QAudioOutput/QVideoWidget for inert
+        # stand-ins (the PACER_NO_MEDIA seam in studio/player_pane.py): the runner is a headless
+        # VM with no media/audio devices, where opening the real ffmpeg/AVFoundation pipeline
+        # blocks forever (a previous run hung 27+ min here). Everything the smoke gates — the
+        # full Session load, panel construction, sidecar write — still runs. Locally this
+        # finishes in seconds, so the 5-min step timeout is pure hang headroom.
+        timeout-minutes: 5
+        env:
+          # Same rationale as the ctest registration (tests/CMakeLists.txt): with no pip install
+          # of `pacer` in the fresh CI env, a bare `python -m` from the repo root resolves
+          # `import pacer` to the C++ source dir as an EMPTY namespace package. Point the
+          # interpreter at the cmake-deployed bindings package explicitly.
+          PYTHONPATH: ${{ github.workspace }}/bindings/pacer
+        run: QT_QPA_PLATFORM=offscreen pixi run python -m studio.dev._smoke --no-video
 
       - name: Lint (ruff check via pixi)
         run: pixi run lint

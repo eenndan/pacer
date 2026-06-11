@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import QVBoxLayout, QWidget
@@ -70,6 +70,70 @@ _WINDOW_STOP_TOL_S = 0.002
 # hasn't been applied within this budget after the source switch, the watchdog force-applies it
 # (seek + resume) regardless of the status sequence, so playback always resumes within a bound.
 _SEAM_RESUME_WATCHDOG_MS = 8000
+
+# ----------------------------------------------------------------- headless / CI seam
+# PACER_NO_MEDIA=1 swaps the pane's media triplet (QMediaPlayer + QAudioOutput + QVideoWidget)
+# for the inert stand-ins below, at CONSTRUCTION time. Everything else — the ChapterMap, the
+# deferred-seek/seam state machine, the lap-window clamp, the g-meter overlay, every signal the
+# shell wires — is built exactly as in production. Purpose: the CI E2E smoke
+# (`python -m studio.dev._smoke --no-video`) builds the full StudioWindow on a headless runner
+# with no media/audio devices, where opening the real ffmpeg/AVFoundation pipeline blocks
+# indefinitely. The flag is read once per pane construction (never on a playback path), and the
+# production path is byte-identical when the variable is unset.
+
+
+class _NullMediaPlayer(QObject):
+    """Inert QMediaPlayer stand-in (PACER_NO_MEDIA=1): exposes the same four signals PlayerPane
+    wires (they simply never fire), a no-op transport, and a permanent StoppedState — no decoder
+    or media pipeline is ever created. deleteLater comes from QObject."""
+
+    positionChanged = Signal("qlonglong")
+    playbackStateChanged = Signal(object)
+    mediaStatusChanged = Signal(object)
+    durationChanged = Signal("qlonglong")
+
+    def setSource(self, url):
+        pass
+
+    def setPosition(self, ms):
+        pass
+
+    def play(self):
+        pass
+
+    def pause(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def setVideoOutput(self, output):
+        pass
+
+    def setAudioOutput(self, output):
+        pass
+
+    def playbackState(self):
+        # Enum ACCESS on the real class is safe headless — only instantiating the backend isn't.
+        return QMediaPlayer.PlaybackState.StoppedState
+
+
+class _NullAudioOutput(QObject):
+    """Inert QAudioOutput stand-in (PACER_NO_MEDIA=1): remembers the muted flag (the shell's
+    mute toggle reads it back) and never opens an audio device. Starts muted, like production."""
+
+    def __init__(self):
+        super().__init__()
+        self._muted = True
+
+    def setVolume(self, volume):
+        pass
+
+    def setMuted(self, muted):
+        self._muted = bool(muted)
+
+    def isMuted(self):
+        return self._muted
 
 
 class PlayerPane(QWidget):
@@ -134,7 +198,11 @@ class PlayerPane(QWidget):
         # that lands in. See _on_position.
         self._lap_window: tuple[float, float] | None = None
 
-        self.video = QVideoWidget()
+        # Headless / CI seam (see the _Null* stand-ins above): PACER_NO_MEDIA=1 builds the pane
+        # with an inert media triplet instead of the decoder/audio/video-surface stack. Read once,
+        # here, at construction — no playback path ever re-checks it.
+        no_media = os.environ.get("PACER_NO_MEDIA") == "1"
+        self.video = QWidget() if no_media else QVideoWidget()
         # Classic friction-circle g-meter, drawn ON the video. It is a frameless translucent
         # TOP-LEVEL window (not a plain child) so the window-server composites it ABOVE the
         # QVideoWidget's native video surface — a child widget is painted behind that surface on
@@ -149,14 +217,18 @@ class PlayerPane(QWidget):
         # the video widget (resize/move) here; the pane's own move/resize are caught in our
         # moveEvent/resizeEvent (a top-level overlay doesn't follow the parent automatically).
         self.video.installEventFilter(self)
-        self.player = QMediaPlayer()
-        # F4: real audio output with a mute toggle. DEFAULT = muted (this is a telemetry tool —
-        # avoid a surprise blast of 4K clip audio on launch). A reasonable volume is set so the
-        # un-mute button is immediately audible; the toggle flips QAudioOutput.isMuted().
-        self.audio = QAudioOutput()
-        self.audio.setVolume(0.6)
-        self.audio.setMuted(True)
-        self.player.setAudioOutput(self.audio)
+        if no_media:
+            self.player = _NullMediaPlayer()
+            self.audio = _NullAudioOutput()
+        else:
+            self.player = QMediaPlayer()
+            # F4: real audio output with a mute toggle. DEFAULT = muted (this is a telemetry tool —
+            # avoid a surprise blast of 4K clip audio on launch). A reasonable volume is set so the
+            # un-mute button is immediately audible; the toggle flips QAudioOutput.isMuted().
+            self.audio = QAudioOutput()
+            self.audio.setVolume(0.6)
+            self.audio.setMuted(True)
+        self.player.setAudioOutput(self.audio)   # no-ops on the null player
         self.player.setVideoOutput(self.video)
 
         # The pane is JUST the video surface; the transport chrome lives in the shell.
