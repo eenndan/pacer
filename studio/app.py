@@ -22,15 +22,17 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from . import chapters, sidecar, theme
 from .compare_controller import CompareController
-from .lap_table import LapTable
+from .lap_table import CornerTable, LapTable
 from .map_view import MapView
 from .plots_view import PlotsView
 from .scrub_controller import ScrubController
@@ -212,8 +214,16 @@ class StudioWindow(QMainWindow):
         if not self.session.has_gmeter:
             self.video.gmeter_btn.setToolTip("No accelerometer data in this recording")
         self.map = MapView(self.session)
+        # Corner labels on the map (F-corner): pushed from here so MapView stays a pure
+        # consumer of (label, x, y, direction) tuples — the model lives in session/corners.
+        self.map.set_corners(self.session.corner_map_markers())
         self.plots = PlotsView(self.session)
         self.table = LapTable(self.session)
+        # Corners mode (F-corner): a second table stacked under the same panel — rows = the
+        # detected corners for the selected lap (time, Δ vs best, apex/entry/exit speeds).
+        # The header toggle below flips the stack; Laps mode itself is untouched.
+        self.corner_table = CornerTable(self.session)
+        self._corner_lap: int | None = None  # the lap the Corners view describes
 
         # Always-on Δ/speed readout for the CURRENT playback/scrub moment (Δ-to-best is the
         # priority). Owned here (values come from session); it's the EMPHASIZED centre element of
@@ -248,7 +258,25 @@ class StudioWindow(QMainWindow):
         # wrapped fresh. The MAP and PLOTS panels use WIDGET header bars (below) so the right
         # column's chrome collapses into the headers instead of full-width rows between the panels.
         video_panel = self._panel("VIDEO", self.chapter_label, (self.video, 1))
-        table_panel = self._panel("LAPS", (self.table, 1))
+
+        # TABLE panel: a widget header bar (like the map's) holding the LAPS/CORNERS mode
+        # label + the Corners toggle, above a QStackedWidget of the two tables. Laps mode
+        # (index 0, the default) is the untouched LapTable; toggling to Corners and back
+        # leaves it byte-identical (the stack only changes which page is visible).
+        self._table_label = QLabel("LAPS")
+        self._table_label.setProperty("role", "BarLabel")
+        self.corners_btn = QPushButton("Corners")
+        self.corners_btn.setCheckable(True)
+        self.corners_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.corners_btn.setToolTip(
+            "Per-corner analysis of the selected lap: time-in-corner, Δ vs the best lap, "
+            "apex/entry/exit speeds. Corners are detected from the track's own curvature.")
+        self.corners_btn.toggled.connect(self._on_corners_toggled)
+        self.table_stack = QStackedWidget()
+        self.table_stack.addWidget(self.table)         # index 0 — Laps (default)
+        self.table_stack.addWidget(self.corner_table)  # index 1 — Corners
+        table_header = self._header_bar(self._table_label, 1, self.corners_btn)
+        table_panel = self._headered(table_header, (self.table_stack, 1))
 
         # MAP header: title (left) + the rainbow-channel cycle, snap toggle and sector buttons
         # (right-aligned, compact) — moved OFF the full-width row that used to sit between the
@@ -503,10 +531,45 @@ class StudioWindow(QMainWindow):
         # A genuine user click in the lap table also jumps the video to that lap (F1).
         self._on_laps_selected(ids, seek=True)
 
+    # --------------------------------------------------------- corners view (F-corner)
+    def _on_corners_toggled(self, on: bool):
+        """Flip the table panel between Laps mode (the untouched LapTable) and Corners mode.
+        The corner table is (re)pointed at the current selection lazily on entry, so an
+        unused Corners view costs nothing."""
+        self.table_stack.setCurrentIndex(1 if on else 0)
+        if on:
+            self.corner_table.set_lap(self._corner_lap)
+        self._update_table_header()
+
+    def _set_corner_lap(self, lap_id: int | None):
+        """Track the lap the Corners view describes — the PRIMARY selected/followed lap.
+        Cheap when nothing changed; the table itself only refills on a real lap change.
+        Defensive getattrs: a StudioWindow.__new__'d for a unit test drives
+        _follow_current_lap without building the UI (the _comparing() idiom)."""
+        if lap_id == getattr(self, "_corner_lap", None):
+            return
+        self._corner_lap = lap_id
+        table = getattr(self, "corner_table", None)
+        if table is not None:
+            table.set_lap(lap_id)
+            self._update_table_header()
+
+    def _update_table_header(self):
+        """The table panel's mode label: "LAPS", or "CORNERS · LAP n" while in Corners mode
+        (so it is always explicit WHICH lap the per-corner rows describe)."""
+        if self.corners_btn.isChecked():
+            lap = self._corner_lap
+            self._table_label.setText(f"CORNERS · LAP {lap}" if lap is not None else "CORNERS")
+        else:
+            self._table_label.setText("LAPS")
+
     def _on_laps_selected(self, ids, seek=False):
         # The table multi-selection drives the PLOTS only; the map's current-lap overlay
         # follows the video position (and thus selection, since F1 seeks into the lap).
         self.plots.set_laps(ids)
+        # Corners view follows the primary selected lap (ids[0]: the lowest-id selection —
+        # the same lap a user-click seek jumps to — or the fastest from _select_default).
+        self._set_corner_lap(ids[0] if ids else None)
         # F1 seeks ONLY on user selection — not on programmatic re-select from
         # _select_default()/_on_lines(), or dragging a timing line would yank the video.
         if seek and ids:
@@ -629,6 +692,7 @@ class StudioWindow(QMainWindow):
         ids = [lap_id] if best is None or best == lap_id else [lap_id, best]
         self.table.select(ids)   # programmatic (signals blocked) → no seek, won't fight playback
         self.plots.set_laps(ids)
+        self._set_corner_lap(lap_id)  # the Corners view follows the playhead's lap too
         # During a scrub-across-boundary, set_laps→refresh re-places the cursor via
         # set_playhead_time (force=False), which is a no-op mid-drag; re-place it from the dragged
         # time (force=True) so the cursor stays put in the now-current lap (resolving the old
@@ -690,6 +754,11 @@ class StudioWindow(QMainWindow):
         # Re-segmentation shifted lap ids + cleared the per-lap gap-fill cache; redraw the map
         # overlays so their measured/inferred segments match the new segmentation.
         self.map.refresh_overlays()
+        # The corner model was invalidated with the per-lap caches: re-detect + re-push the
+        # map's corner labels and rebuild the Corners view (its lap id is range-guarded; the
+        # _select_default below re-points it at the new selection).
+        self.map.set_corners(self.session.corner_map_markers())
+        self.corner_table.refresh()
         self._select_default()
         # F2: the sector lines changed — update the chart guide lines live.
         self._refresh_sector_lines()

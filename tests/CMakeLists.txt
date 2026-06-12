@@ -87,6 +87,14 @@ add_test(NAME test_validate_wallclock
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_validate_wallclock.py)
 set_tests_properties(test_validate_wallclock PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Corner model (studio.corners, F-corner): synthetic stadium-loop detection (count/
+# positions/directions vs construction), distribution-derived threshold (+ noise
+# stability), the corner/straight partition identity, and the CornerTable + map
+# corner-marker overlay (offscreen Qt on stubs). Session wiring on a bare Session.
+add_test(NAME test_corners
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corners.py)
+set_tests_properties(test_corners PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
 add_test(NAME test_gmeter
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter.py)
@@ -108,7 +116,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
                         test_sidecar test_session_pure test_studio_features test_rainbow_map
                         test_compare
-                        test_controllers test_validate_wallclock test_gmeter
+                        test_controllers test_validate_wallclock test_corners test_gmeter
                         test_gmeter_overlay)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

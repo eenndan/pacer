@@ -73,6 +73,15 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
   into lap" from S/F at 1× (the faster pulls ahead); the primary (left) pane keeps driving all
   telemetry, the secondary is video-only; per-pane lap pickers + "Δ vs other" badges; every repoint
   re-aligns both panes at the start line.
+- **Corner model + per-corner analysis** (`corners.py`, pure numpy — NOT map-matching: everything
+  runs on our own trace) — corners detected from the **median curvature profile** of the session's
+  clean laps with a threshold **derived from the track's own κ distribution** (log-domain Otsu);
+  corner windows live in best-lap normalized-distance space and **partition** every lap with the
+  complementary straights (Σ segment Δ == lap Δ exactly). UI: **C1…Cn labels at the apexes on the
+  map** (direction-coloured dots) + a **"Corners" toggle** on the lap-table panel — rows = corners
+  for the selected lap: time-in-corner, Δ vs best, apex (min) speed + Δ, entry/exit speeds, with
+  the per-corner **session best in purple**. Cross-recording stability verified on 0060 vs 0062:
+  same 12 corners, apexes within 3.5 m.
 - **Dark "Refined Minimal" theme** (`theme.py`) — single-source design tokens + dark `QPalette` +
   global QSS, Inter fonts, Phosphor icon buttons (`qtawesome`); charts, table, map and video chrome
   all adopt the dark surface.

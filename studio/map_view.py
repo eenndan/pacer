@@ -19,6 +19,7 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from . import theme
 from .gapfill import GAP_TIME_S
 from .session import Seg
 from .theme import MAP_RAINBOW_N, C, icon, rainbow_colors
@@ -39,6 +40,14 @@ _MARKER_RGB = QColor(C.behind)      # for the translucent marker brush below
 INFERRED_DASH = [5, 5]  # on/off dash pattern (px)
 INFERRED_ALPHA = 130    # 0-255; dimmer than the measured pen
 INFERRED_DARKEN = 0.55  # blend the lap colour toward black for the fill pen
+# Corner labels (F-corner): a subtle direction-coloured apex dot under each C-label. The two
+# hues come from the theme's categorical chart spread (used here purely as hues — cyan for a
+# left-hander, coral for a right-hander), dimmed by alpha so the labels never compete with
+# the lap traces; the label text is the secondary text grey.
+CORNER_LEFT_COLOR = theme.CHART_SERIES[1]    # cyan — left-handers
+CORNER_RIGHT_COLOR = theme.CHART_SERIES[4]   # coral — right-handers
+CORNER_DOT_ALPHA = 170                       # 0-255: subtle, under the text label
+CORNER_LABEL_COLOR = C.text_dim
 
 
 class _TimingLine:
@@ -303,6 +312,47 @@ class _LapOverlay:
         self.set_lap(session, lap_id)
 
 
+class _CornerMarkers:
+    """Corner labels (F-corner): "C1…Cn" at each detected corner's apex position with a
+    subtle direction-coloured dot (cyan = left, coral = right). SELF-CONTAINED overlay —
+    it owns its plot items and rebuilds them wholesale from the (label, x, y, direction)
+    tuples Session.corner_map_markers provides, touching nothing else in the scene. Pure
+    display: rebuilt only when the corner set changes (load / re-segmentation), zero
+    per-tick cost."""
+
+    def __init__(self, plot):
+        self.plot = plot
+        self._items: list = []
+        self._font = theme.mono_font(theme.CAPTION)
+
+    def set_corners(self, markers):
+        """(Re)build the labels from `markers`: a list of (label, x, y, direction) with the
+        apex position in local metres and direction +1 = left / -1 = right. [] clears."""
+        for it in self._items:
+            self.plot.removeItem(it)
+        self._items = []
+        if not markers:
+            return
+        for direction, colour in ((1, CORNER_LEFT_COLOR), (-1, CORNER_RIGHT_COLOR)):
+            pts = [(x, y) for _label, x, y, d in markers if d == direction]
+            if not pts:
+                continue
+            qc = pg.mkColor(colour)
+            qc.setAlpha(CORNER_DOT_ALPHA)
+            dots = pg.ScatterPlotItem(
+                pos=pts, size=7, pen=None, brush=pg.mkBrush(qc), pxMode=True)
+            dots.setZValue(5)  # above the lap traces, below the red video marker (z=10)
+            self.plot.addItem(dots)
+            self._items.append(dots)
+        for label, x, y, _d in markers:
+            text = pg.TextItem(text=label, color=CORNER_LABEL_COLOR, anchor=(0.5, 1.25))
+            text.setFont(self._font)
+            text.setPos(float(x), float(y))
+            text.setZValue(6)
+            self.plot.addItem(text)
+            self._items.append(text)
+
+
 class MapView(QWidget):
     # (start: Seg, sectors: list[Seg]) whenever a handle moves or sectors change.
     timing_lines_changed = Signal(object, object)
@@ -362,6 +412,10 @@ class MapView(QWidget):
         self.plot.addItem(self.marker)
         self.marker.setZValue(10)  # keep the marker above the lap overlays
         self.marker.sigPositionChanged.connect(self._marker_dragged)
+
+        # Corner labels (F-corner): a self-contained overlay; the app pushes the apex
+        # markers via set_corners (on load and after a re-segmentation recomputes them).
+        self._corner_markers = _CornerMarkers(self.plot)
 
         self._start: _TimingLine | None = None
         self._sectors: list[_TimingLine] = []
@@ -587,3 +641,10 @@ class MapView(QWidget):
         # Re-segmentation invalidated the channel arrays too — rebuild the painted rainbow.
         if self._rainbow_mode != "off":
             self._apply_rainbow()
+
+    # ------------------------------------------------------------- corner labels (F-corner)
+    def set_corners(self, markers):
+        """Show corner labels at the given (label, x, y, direction) apex markers (from
+        Session.corner_map_markers; [] clears). Pushed by the app so this view stays a pure
+        consumer — on load and again after a timing-line edit recomputes the corner set."""
+        self._corner_markers.set_corners(markers)

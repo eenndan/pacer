@@ -418,3 +418,91 @@ class LapTable(QWidget):
 
     def _on_selection(self):
         self.laps_selected.emit(self.selected_lap_ids())
+
+
+# ===================================================================== Corners mode (F-corner)
+# The lap-table panel's SECOND mode: rows = the detected corners (C1… in track order), columns
+# = the selected lap's per-corner metrics vs the best lap (session.lap_corner_stats). A separate
+# widget stacked with LapTable (the header toggle in app.py flips between them) so Laps mode
+# stays byte-identical — this class shares only the module's display constants.
+CORNER_COLUMNS = ["Corner", "Time (s)", "Δ best", "Apex (km/h)", "Δ apex", "Entry", "Exit"]
+CORNER_DIR_GLYPH = {1: "⟲", -1: "⟳"}  # left / right (turn sense), shown after the C-label
+
+
+class CornerTable(QWidget):
+    """Corners-mode table: one row per detected corner for the SELECTED lap.
+
+    Time-in-corner, Δ vs the best lap's same corner, apex (min) speed + Δ, entry/exit
+    speeds — all from session.lap_corner_stats (pacer-free numpy in studio/corners.py).
+    The per-corner SESSION-best time is highlighted purple+bold exactly like the lap
+    table's per-sector session bests; the Δ columns use the shared three-way Δ colour
+    (green = better than best, red = worse; apex-speed Δ sign-flipped, faster = green).
+    Read-only and unsorted — track order IS the meaning of the rows."""
+
+    def __init__(self, session: Session):
+        super().__init__()
+        self.session = session
+        self._lap_id: int | None = None
+        self.table = QTableWidget(0, len(CORNER_COLUMNS))
+        self.table.setHorizontalHeaderLabels(CORNER_COLUMNS)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setDefaultSectionSize(28)
+        self._num_font = theme.mono_font(theme.TABLE)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.table)
+
+    def set_lap(self, lap_id: int | None):
+        """Show the corners of `lap_id` (None clears). No-op when unchanged — called per
+        selection change AND from the auto-follow edge, so it must be cheap when idle."""
+        if lap_id == self._lap_id:
+            return
+        self._lap_id = lap_id
+        self.refresh()
+
+    def refresh(self):
+        """Rebuild the rows from the session's corner model (e.g. after a timing-line edit
+        re-segmented the laps and the corner set/stats were recomputed)."""
+        # Range-guard the lap id: a re-segmentation can shrink the lap count while this view
+        # still holds the previous selection (app re-selects right after; until then, empty).
+        ok = self._lap_id is not None and 0 <= self._lap_id < self.session.lap_count()
+        stats = self.session.lap_corner_stats(self._lap_id) if ok else []
+        corner_list = self.session.corners() if stats else []
+        bests = self.session.corner_session_bests() if stats else []
+        self.table.setRowCount(len(stats))
+        for r, st in enumerate(stats):
+            c = corner_list[r]
+            cells: list[tuple[str, str | None]] = [
+                (f"{c.label} {CORNER_DIR_GLYPH.get(c.direction, '')}", None),
+                (f"{st.time:.2f}", None),
+                (f"{st.delta:+.2f}", theme.delta_colour(st.delta)),
+                (f"{st.apex_speed:.1f}", None),
+                # Apex-speed Δ: FASTER through the corner is better, so the shared Δ colour
+                # rule (negative = green) is applied to the NEGATED speed delta.
+                (f"{st.apex_speed_delta:+.1f}", theme.delta_colour(-st.apex_speed_delta)),
+                (f"{st.entry_speed:.1f}", None),
+                (f"{st.exit_speed:.1f}", None),
+            ]
+            is_best = bool(bests) and r < len(bests) and abs(st.time - bests[r]) < 1e-9
+            for col, (text, colour) in enumerate(cells):
+                item = QTableWidgetItem(text)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                if col >= NUMERIC_COL_START:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setFont(self._num_font)
+                # Session-best corner time: purple + bold (the lap table's purple-cell
+                # convention) on the Time cell; it outranks the Δ colour for that cell.
+                if col == 1 and is_best:
+                    item.setForeground(BEST_SECTOR_COLOR)
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                elif colour:
+                    item.setForeground(QColor(colour))
+                else:
+                    item.setForeground(BASE_COLOR)
+                self.table.setItem(r, col, item)
