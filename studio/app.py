@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from . import chapters, export_data, sidecar, theme
 from .compare_controller import CompareController
+from .consistency_panel import ConsistencyPanel
 from .lap_table import CornerTable, LapTable
 from .map_view import MapView
 from .plots_view import PlotsView
@@ -276,7 +277,14 @@ class StudioWindow(QMainWindow):
         self.table_stack.addWidget(self.table)         # index 0 — Laps (default)
         self.table_stack.addWidget(self.corner_table)  # index 1 — Corners
         table_header = self._header_bar(self._table_label, 1, self.corners_btn)
-        table_panel = self._headered(table_header, (self.table_stack, 1))
+        # F6: the compact collapsible CONSISTENCY strip under the lap table — lap-time trend
+        # sparkline + the top-5 inconsistent corners (ranked by σ × median loss). Clicking a
+        # corner row ring-highlights its apex on the map and does NOTHING else (read-only;
+        # no lap selection / seek). It owns its own header (with the collapse chevron), so
+        # it mounts as one widget below the table stack.
+        self.consistency = ConsistencyPanel(self.session)
+        self.consistency.corner_clicked.connect(self.map.highlight_corner)
+        table_panel = self._headered(table_header, (self.table_stack, 1), self.consistency)
 
         # MAP header: title (left) + the rainbow-channel cycle, snap toggle and sector buttons
         # (right-aligned, compact) — moved OFF the full-width row that used to sit between the
@@ -951,6 +959,9 @@ class StudioWindow(QMainWindow):
         # _select_default below re-points it at the new selection).
         self.map.set_corners(self.session.corner_map_markers())
         self.corner_table.refresh()
+        # F6: lap set / splits / corner stats all shifted with the segmentation — rebuild the
+        # consistency strip (set_corners above already cleared any stale corner highlight).
+        self.consistency.refresh()
         self._select_default()
         # F2: the sector lines changed — update the chart guide lines live.
         self._refresh_sector_lines()

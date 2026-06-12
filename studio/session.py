@@ -25,7 +25,7 @@ import numpy as np
 
 import pacer
 
-from . import chapters, corners, cross_reference, gapfill, gmeter, render_cache, tracks
+from . import chapters, consistency, corners, cross_reference, gapfill, gmeter, render_cache, tracks
 
 # Pacer-free helpers from studio/_signal.py (numpy-only, shared with gmeter): the band filter
 # behind valid_lap_ids and the default smoothing window `Session.load` forwards to the pipeline.
@@ -1098,6 +1098,51 @@ class Session:
             return None
         dt = datetime.datetime.fromtimestamp(ts / 1000.0, tz=datetime.UTC)
         return dt.strftime("%Y-%m-%d")
+
+    # ------------------------------------------------------------ consistency stats (F6)
+    # Thin assemblers over the cached per-lap values; the math (σ / median loss / ranking)
+    # lives pacer-free in studio/consistency.py. Not cached: the panel reads these only on
+    # load and after a re-segmentation (never on the 30 Hz tick), and the per-lap inputs
+    # (lap_corner_stats, _lap_columns) are already memoized above.
+
+    def consistency_lap_ids(self) -> list[int]:
+        """The lap set every consistency statistic runs over: VALID laps with no GPS
+        dropout, in session order — the ⚠ rule (a dropout lap's time/splits are
+        low-confidence, so it is excluded from σ/medians exactly as it is excluded from
+        the corner-detection profile in _corner_basis)."""
+        return [i for i in self.valid_lap_ids() if not self.lap_has_dropout(i)]
+
+    def lap_time_trend(self) -> list[tuple[int, float]]:
+        """(lap_id, lap_time s) per consistency lap, in session order — the panel's trend
+        sparkline series. The times are the same laps.lap_time values the lap table rows
+        show, so the trend and the table can never disagree."""
+        return [(i, self.lap_time(i)) for i in self.consistency_lap_ids()]
+
+    def sector_sigmas(self) -> list[float | None]:
+        """Per-sub-sector sample σ (s) of the split times over the consistency laps, one
+        per S-column (None where a column has <2 finite splits). [] when no sector lines
+        are placed (no split columns exist then — the lap table convention)."""
+        if not self.laps.sectors.sector_lines:
+            return []
+        return consistency.sector_sigmas(
+            [self.lap_sector_splits(i) for i in self.consistency_lap_ids()])
+
+    def corner_consistency(self) -> list[consistency.CornerSpread]:
+        """The "most inconsistent corners" ranking over the consistency laps: per corner,
+        the sample σ of time-in-corner and the median time lost vs the per-corner best,
+        ranked by σ × median_loss (corners that are BOTH inconsistent and slow first —
+        see studio/consistency.py for the weighting rationale). [] without corners."""
+        ids = self.consistency_lap_ids()
+        corner_list = self.corners()
+        if not corner_list or not ids:
+            return []
+        times_by_lap = []
+        for i in ids:
+            st = self.lap_corner_stats(i)
+            if len(st) == len(corner_list):  # degenerate laps project to [] — skip
+                times_by_lap.append([s.time for s in st])
+        return consistency.rank_corners(
+            consistency.corner_spreads([c.cid for c in corner_list], times_by_lap))
 
     def _lap_time_dist(self, lap_id: int):
         """Cached (times, dists) for a lap: media-clock seconds + per-lap odometer (metres),

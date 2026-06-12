@@ -116,6 +116,13 @@ set_tests_properties(test_corners PROPERTIES
 # Imports pacer transitively (the session chain), no Qt, no telemetry file.
 add_test(NAME test_export_data
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_data.py)
+# Consistency stats + panel (studio.consistency / consistency_panel, F6): σ / median-loss /
+# ranking exactness vs direct numpy, the ⚠ dropout-lap exclusion on a bare Session, and the
+# panel + map-highlight UI (offscreen Qt on stubs: populate, click→signal, collapse).
+add_test(NAME test_consistency
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_consistency.py)
+set_tests_properties(test_consistency PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
 add_test(NAME test_gmeter
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter.py)
@@ -137,8 +144,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
                         test_sidecar test_session_pure test_studio_features test_rainbow_map
                         test_compare test_map_ghost test_cross_reference
-                        test_controllers test_validate_wallclock test_corners test_gmeter
-                        test_gmeter_overlay test_export_data)
+                        test_controllers test_validate_wallclock test_corners
+                        test_consistency test_gmeter test_gmeter_overlay test_export_data)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

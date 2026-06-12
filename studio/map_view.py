@@ -56,6 +56,11 @@ CORNER_LEFT_COLOR = theme.CHART_SERIES[1]    # cyan — left-handers
 CORNER_RIGHT_COLOR = theme.CHART_SERIES[4]   # coral — right-handers
 CORNER_DOT_ALPHA = 170                       # 0-255: subtle, under the text label
 CORNER_LABEL_COLOR = C.text_dim
+# F6: the consistency panel's click-to-locate cue — an accent ring around ONE corner's apex
+# dot. Hollow (pen only) and slightly larger than the dot so it reads as a locator, not a
+# selection; accent amber so it pops without adding a new colour.
+CORNER_HIGHLIGHT_PEN_W = 2
+CORNER_HIGHLIGHT_SIZE = 18
 
 
 class _TimingLine:
@@ -350,10 +355,20 @@ class _CornerMarkers:
         self.plot = plot
         self._items: list = []
         self._font = theme.mono_font(theme.CAPTION)
+        # F6 click-to-locate highlight: the marker list (for the label -> apex lookup), the
+        # ring item, and the currently-highlighted label (None = no highlight) — exposed so
+        # the app/tests can assert the highlight state.
+        self._markers: list = []
+        self._highlight_item = None
+        self.highlighted: str | None = None
 
     def set_corners(self, markers):
         """(Re)build the labels from `markers`: a list of (label, x, y, direction) with the
-        apex position in local metres and direction +1 = left / -1 = right. [] clears."""
+        apex position in local metres and direction +1 = left / -1 = right. [] clears.
+        Any active highlight ring is cleared too — a new corner set means the old cid may
+        name a different corner (the consistency panel re-populates alongside)."""
+        self.set_highlight(None)
+        self._markers = list(markers)
         for it in self._items:
             self.plot.removeItem(it)
         self._items = []
@@ -377,6 +392,29 @@ class _CornerMarkers:
             text.setZValue(6)
             self.plot.addItem(text)
             self._items.append(text)
+
+    def set_highlight(self, label: str | None):
+        """Ring-highlight ONE corner's apex marker by label ("C3"; None clears) — the
+        consistency panel's click-to-locate cue. Pure display: adds/removes only the one
+        ring item, never touches the dots/labels, selects nothing, seeks nothing. An
+        unknown label (stale cid after a re-segment) just clears."""
+        if self._highlight_item is not None:
+            self.plot.removeItem(self._highlight_item)
+            self._highlight_item = None
+        self.highlighted = None
+        if label is None:
+            return
+        for lbl, x, y, _d in self._markers:
+            if lbl == label:
+                ring = pg.ScatterPlotItem(
+                    pos=[(float(x), float(y))], size=CORNER_HIGHLIGHT_SIZE,
+                    brush=pg.mkBrush(None),
+                    pen=pg.mkPen(C.accent, width=CORNER_HIGHLIGHT_PEN_W), pxMode=True)
+                ring.setZValue(7)  # above the corner dots (5) / labels (6), below the marker
+                self.plot.addItem(ring)
+                self._highlight_item = ring
+                self.highlighted = lbl
+                return
 
 
 class MapView(QWidget):
@@ -728,3 +766,8 @@ class MapView(QWidget):
         Session.corner_map_markers; [] clears). Pushed by the app so this view stays a pure
         consumer — on load and again after a timing-line edit recomputes the corner set."""
         self._corner_markers.set_corners(markers)
+
+    def highlight_corner(self, cid: int | None):
+        """Ring-highlight one corner's apex marker by 1-based cid (None clears) — driven by
+        the consistency panel's corner list (F6). Display-only: no selection, no seek."""
+        self._corner_markers.set_highlight(None if cid is None else f"C{int(cid)}")
