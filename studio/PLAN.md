@@ -30,6 +30,11 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
 - **Track map** — best lap (faint) + current/playing lap (highlighted); **freely-draggable** start +
   sector timing lines (re-segment on release); a red **video marker** whose drag is constrained to
   the current lap. GPS dropouts in a lap draw as measured (solid) + reconstructed gap-fill (dashed).
+- **Rainbow track map** — a map-header toggle (OFF → Speed → Δ-vs-best) paints the current lap's
+  line as a colour gradient (red = slow/losing → green = fast/gaining; 16-bucket polylines, theme
+  ramp, slim min/max legend). Δ reuses the existing 400-grid delta resampled onto the lap's points;
+  the buckets rebuild only on lap/channel change or re-segment (never on the 30 Hz tick) and OFF
+  restores the exact normal rendering.
 - **Speed + Δ-to-best charts** — speed (top) + lap-vs-best delta (bottom) on **one shared, x-linked
   x-axis** with a **dist/time toggle**; a synced cursor that is also a **draggable scrubber**; a
   **hover dot** on the delta curve; an always-on **Δ/speed readout box** (green ahead / red behind);

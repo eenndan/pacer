@@ -13,13 +13,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from .gapfill import GAP_TIME_S
 from .session import Seg
-from .theme import C, icon
+from .theme import MAP_RAINBOW_N, C, icon, rainbow_colors
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -104,6 +106,153 @@ def _inferred_pen(color, base_width):
     return pen
 
 
+# --------------------------------------------------------------- rainbow map (F3)
+# The current lap's line painted as a channel colour gradient (speed / Δ-vs-best). pyqtgraph has
+# no per-vertex pen on a single curve, so the channel is QUANTIZED into MAP_RAINBOW_N (16) levels
+# and each level's segments are drawn by ONE PlotCurveItem with that bucket's pen — NaN breaks +
+# connect='finite' let a single item hold all of its bucket's disjoint runs. ≤16 items total,
+# rebuilt ONLY on lap change / channel change / re-segment (never on the 30 Hz marker tick).
+RAINBOW_WIDTH = 3  # same width as the current-lap overlay, so the painted line reads identically
+# Header-button captions for the channel cycle (OFF → Speed → Δ-vs-best → OFF …).
+_RAINBOW_LABELS = {"off": "Color: off", "speed": "Color: speed", "delta": "Color: Δ"}
+
+
+def bucketize(values, n_buckets: int, lo: float | None = None, hi: float | None = None):
+    """Quantize `values` into integer bucket ids 0..n_buckets-1 over [lo, hi] (default: the
+    finite min/max of the values). Pure numpy. Index 0 is the LOW end (slow / losing → red),
+    n_buckets-1 the HIGH end (fast / gaining → green) — matching theme.rainbow_colors order.
+
+    Non-finite values map to -1 ("no bucket" — the renderer skips those segments: the NaN-break
+    mechanism for GPS dropout gaps). A degenerate range (hi <= lo, e.g. a perfectly flat channel)
+    puts every finite value in the MIDDLE bucket — when the channel carries no contrast, neither
+    the red nor the green extreme tells a true story."""
+    v = np.asarray(values, dtype=float)
+    out = np.full(v.shape, -1, dtype=np.int64)
+    finite = np.isfinite(v)
+    if not finite.any():
+        return out
+    lo = float(np.min(v[finite])) if lo is None else float(lo)
+    hi = float(np.max(v[finite])) if hi is None else float(hi)
+    if hi <= lo:
+        out[finite] = (n_buckets - 1) // 2
+        return out
+    idx = np.floor((v[finite] - lo) / (hi - lo) * n_buckets).astype(np.int64)
+    out[finite] = np.clip(idx, 0, n_buckets - 1)  # v == hi lands exactly on n_buckets → clamp
+    return out
+
+
+def bucket_polylines(xs, ys, seg_buckets, n_buckets: int):
+    """Group a polyline's SEGMENTS by bucket id into per-bucket draw arrays. Pure numpy.
+
+    `seg_buckets[i]` is the bucket of the segment joining point i to point i+1 (so it has
+    len(xs)-1 entries; -1 = skip that segment). Within a bucket, consecutive same-bucket
+    segments share their joint point, and non-adjacent runs are separated by a single NaN so
+    ONE PlotCurveItem(connect='finite') draws all of a bucket's disjoint runs without spurious
+    connecting chords. Returns n_buckets (xs, ys) pairs (empty arrays for unused buckets)."""
+    xs = np.asarray(xs, dtype=float)
+    ys = np.asarray(ys, dtype=float)
+    seg = np.asarray(seg_buckets)
+    out = []
+    for b in range(n_buckets):
+        idx = np.flatnonzero(seg == b)
+        if idx.size == 0:
+            out.append((np.empty(0), np.empty(0)))
+            continue
+        runs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+        bx: list = []
+        by: list = []
+        for r in runs:
+            bx.extend((xs[r[0]:r[-1] + 2], [np.nan]))  # segments i..j -> points i..j+1
+            by.extend((ys[r[0]:r[-1] + 2], [np.nan]))
+        out.append((np.concatenate(bx[:-1]), np.concatenate(by[:-1])))  # drop the trailing NaN
+    return out
+
+
+def resample_grid_to_points(cum_dist, grid_values):
+    """Resample a curve sampled on the UNIFORM normalized-distance grid [0, 1] (session.delta()'s
+    400-point grid) onto a lap's per-point odometer distances: s_i = cum_i / cum_total, then one
+    np.interp against the grid. Pure numpy — REUSES the already-computed grid values (the Δ is
+    never recomputed here). Caller guarantees cum_dist[-1] > 0."""
+    cum = np.asarray(cum_dist, dtype=float)
+    g = np.asarray(grid_values, dtype=float)
+    return np.interp(cum / cum[-1], np.linspace(0.0, 1.0, len(g)), g)
+
+
+class _RainbowOverlay:
+    """Owns the ≤MAP_RAINBOW_N PlotCurveItems of the rainbow (one per bucket, per-bucket pens
+    from theme.rainbow_colors). Items are created lazily on first use and re-FILLED in place
+    afterwards; `rebuilds` counts every fill so tests can assert the 30 Hz tick path never
+    touches the bucket items. Holds no `pacer` types — fed plain numpy arrays."""
+
+    def __init__(self, plot):
+        self.plot = plot
+        self._items: list | None = None  # created lazily on the first build (off by default)
+        self.rebuilds = 0  # instrumentation for the perf-invariant tests (no rebuild per tick)
+
+    def _ensure_items(self):
+        if self._items is None:
+            self._items = []
+            for color in rainbow_colors(MAP_RAINBOW_N):
+                it = pg.PlotCurveItem(pen=pg.mkPen(color, width=RAINBOW_WIDTH), connect="finite")
+                it.setZValue(5)  # above the lap overlays, below the video marker (z=10)
+                self.plot.addItem(it)
+                self._items.append(it)
+        return self._items
+
+    def set_data(self, xs, ys, seg_buckets):
+        """Fill every bucket item from the polyline + per-segment bucket ids (one rebuild)."""
+        items = self._ensure_items()
+        self.rebuilds += 1
+        polylines = bucket_polylines(xs, ys, seg_buckets, len(items))
+        for it, (bx, by) in zip(items, polylines, strict=True):
+            it.setData(bx, by)
+
+    def clear(self):
+        if self._items is None:
+            return
+        for it in self._items:
+            it.setData(np.empty(0), np.empty(0))
+
+
+class _GradientStrip(QWidget):
+    """The legend's colour bar: paints the EXACT bucket colours, low→high, edge to edge —
+    legend == rendering, pen-for-pen."""
+
+    def __init__(self, colors: list[QColor]):
+        super().__init__()
+        self._colors = colors
+        self.setFixedHeight(8)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        w = self.width() / len(self._colors)
+        for i, c in enumerate(self._colors):
+            p.fillRect(QRectF(i * w, 0.0, w + 1.0, float(self.height())), c)
+        p.end()
+
+
+class _RainbowLegend(QWidget):
+    """Slim legend shown ONLY while a rainbow is painted: min label · bucket-colour strip ·
+    max label (the channel's red/'slow-losing' and green/'fast-gaining' extremes)."""
+
+    def __init__(self):
+        super().__init__()
+        self.lo_label = QLabel("")
+        self.hi_label = QLabel("")
+        for lab in (self.lo_label, self.hi_label):
+            lab.setProperty("role", "BarLabel")  # the dimmed small header type from the QSS
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 2, 8, 2)
+        lay.setSpacing(8)
+        lay.addWidget(self.lo_label)
+        lay.addWidget(_GradientStrip([QColor(c) for c in rainbow_colors(MAP_RAINBOW_N)]), 1)
+        lay.addWidget(self.hi_label)
+
+    def set_labels(self, lo_text: str, hi_text: str):
+        self.lo_label.setText(lo_text)
+        self.hi_label.setText(hi_text)
+
+
 class _LapOverlay:
     """Draws ONE lap as a group of plot items: solid measured runs + dashed/dimmed inferred
     gap-fills (`session.lap_trace_segments`). Tracks its items so it can clear/redraw without
@@ -115,11 +264,21 @@ class _LapOverlay:
         self.base_width = base_width
         self.lap_id = None
         self._items: list = []
+        # F3: while the rainbow paints the lap, this overlay is HIDDEN in place (never rebuilt),
+        # so toggling the rainbow off restores the exact same items/pens, byte-identical.
+        self.visible = True
 
     def _clear(self):
         for it in self._items:
             self.plot.removeItem(it)
         self._items = []
+
+    def set_visible(self, on: bool):
+        """Show/hide the existing items IN PLACE — no rebuild, no pen change. Items created
+        later (a lap change while hidden) inherit the state via set_lap."""
+        self.visible = on
+        for it in self._items:
+            it.setVisible(on)
 
     def set_lap(self, session: Session, lap_id: int | None):
         """(Re)draw `lap_id` (or clear if None). No-op if unchanged."""
@@ -133,7 +292,10 @@ class _LapOverlay:
         dashed = _inferred_pen(self.color, self.base_width)
         for seg in session.lap_trace_segments(lap_id):
             pen = solid if seg.measured else dashed
-            self._items.append(self.plot.plot(seg.xs, seg.ys, pen=pen))
+            item = self.plot.plot(seg.xs, seg.ys, pen=pen)
+            if not self.visible:
+                item.setVisible(False)
+            self._items.append(item)
 
     def refresh(self, session: Session):
         """Force a redraw of the current lap (e.g. after re-segmentation invalidated caches)."""
@@ -229,9 +391,27 @@ class MapView(QWidget):
         self.snap_btn.toggled.connect(
             lambda on: self.snap_btn.setIcon(icon("ph.magnet", color=C.accent if on else C.text)))
 
+        # F3 rainbow track map: ONE header button cycling OFF → Speed → Δ-vs-best. Exposed like
+        # the sector buttons so app.py mounts it in the map header. While ON, the current lap's
+        # line is painted as a channel colour gradient (_RainbowOverlay) and the normal overlay is
+        # HIDDEN in place; OFF restores the exact pre-toggle items/pens (byte-identical — nothing
+        # was rebuilt). The bucket items rebuild only on lap/channel change or re-segment.
+        self._rainbow = _RainbowOverlay(self.plot)
+        self._rainbow_mode = "off"  # "off" | "speed" | "delta" (the cycle order below)
+        self.rainbow_btn = QPushButton(_RAINBOW_LABELS["off"])
+        self.rainbow_btn.setIcon(icon("ph.palette"))
+        self.rainbow_btn.setToolTip(
+            "Paint the current lap's line by a channel: off → speed (red = slow, green = fast) "
+            "→ Δ vs best (red = losing, green = gaining). The faint best-lap reference is "
+            "unchanged.")
+        self.rainbow_btn.clicked.connect(self._cycle_rainbow)
+        self._legend = _RainbowLegend()
+        self._legend.setVisible(False)
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.widget, 1)
+        lay.addWidget(self._legend)
 
     # ----------------------------------------------------------- timing lines
     def _rebuild(self, start: Seg, sectors: list[Seg]):
@@ -318,6 +498,59 @@ class MapView(QWidget):
         # Shared playhead-setter verb with PlotsView.set_playhead_time.
         self.set_marker_index(self.session.index_at_time(t))
 
+    # --------------------------------------------------------------- rainbow (F3)
+    def _cycle_rainbow(self):
+        """Header-button click: advance the channel cycle and re-apply the rendering."""
+        order = ("off", "speed", "delta")
+        self._rainbow_mode = order[(order.index(self._rainbow_mode) + 1) % len(order)]
+        self.rainbow_btn.setText(_RAINBOW_LABELS[self._rainbow_mode])
+        self._apply_rainbow()
+
+    def _apply_rainbow(self):
+        """(Re)build or clear the rainbow for the current lap + mode — the ONLY path that touches
+        the bucket items. Called on toggle, on a current-lap CHANGE, and after a re-segment; the
+        per-tick marker path never reaches it (set_current_lap gates on an actual lap change).
+        When nothing is painted (mode off / no current lap / channel unavailable) the normal
+        overlay is shown — its items were only hidden, so they return byte-identical."""
+        painted = False
+        if self._rainbow_mode != "off" and self._current_lap is not None:
+            painted = self._build_rainbow(self._current_lap, self._rainbow_mode)
+        if not painted:
+            self._rainbow.clear()
+        self._legend.setVisible(painted)
+        self._current_overlay.set_visible(not painted)
+
+    def _build_rainbow(self, lap_id: int, mode: str) -> bool:
+        """Fill the bucket items for `lap_id`'s channel. Returns False (nothing painted) when the
+        channel can't be computed (degenerate lap, no best lap for Δ). Data comes from the cached
+        bulk lap-columns fetch + the EXISTING 400-grid delta() — nothing is recomputed."""
+        times, xs, ys, speed_kmh, cum = self.session.lap_channels(lap_id)
+        if len(xs) < 2:
+            return False
+        if mode == "speed":
+            vals = speed_kmh
+            lo_txt = f"{float(np.min(vals)):.0f}"
+            hi_txt = f"{float(np.max(vals)):.0f} km/h"
+        else:  # Δ-vs-best, resampled from the 400-grid delta() onto this lap's point distances
+            got = self.session.delta([lap_id])
+            if got is None or lap_id not in got[2] or float(cum[-1]) <= 0:
+                return False
+            d_pts = resample_grid_to_points(cum, got[2][lap_id][1])
+            # NEGATED: ahead = negative Δ must land in the HIGH (green / 'gaining') buckets.
+            vals = -d_pts
+            # Legend shows the actual Δ at each end: red end = the most-behind Δ, green end =
+            # the most-ahead Δ (signed seconds, matching the Δ readout convention).
+            lo_txt = f"{-float(np.min(vals)):+.2f} s"
+            hi_txt = f"{-float(np.max(vals)):+.2f} s"
+        # Per-SEGMENT value = mean of its endpoints; segments spanning an interior GPS dropout
+        # (sample step > the gap threshold) get NaN → bucket -1 → not painted: the rainbow must
+        # not draw a corner-cutting chord across a hole as if it were measured.
+        seg_vals = 0.5 * (vals[:-1] + vals[1:])
+        seg_vals = np.where(np.diff(times) > GAP_TIME_S, np.nan, seg_vals)
+        self._rainbow.set_data(xs, ys, bucketize(seg_vals, MAP_RAINBOW_N))
+        self._legend.set_labels(lo_txt, hi_txt)
+        return True
+
     # --------------------------------------------------------------- lap overlays
     def _refresh_best(self):
         """Draw the best lap as a faint thin reference line (measured solid + inferred dashed).
@@ -336,8 +569,13 @@ class MapView(QWidget):
         reference remains."""
         # The best lap can change when timing lines move; keep its reference line current.
         self._refresh_best()
+        changed = lap_id != self._current_lap
         self._current_lap = lap_id  # F3: the lap the marker drag is constrained to
         self._current_overlay.set_lap(self.session, lap_id)
+        # Rainbow: rebuild the bucket items ONLY on an actual lap change. This method runs every
+        # 30 Hz tick with an unchanged lap — that path must not touch the rainbow.
+        if changed and self._rainbow_mode != "off":
+            self._apply_rainbow()
 
     def refresh_overlays(self):
         """Force both lap overlays to redraw from the session — call after the timing lines
@@ -346,3 +584,6 @@ class MapView(QWidget):
         self._best_lap_id = None
         self._refresh_best()
         self._current_overlay.refresh(self.session)
+        # Re-segmentation invalidated the channel arrays too — rebuild the painted rainbow.
+        if self._rainbow_mode != "off":
+            self._apply_rainbow()

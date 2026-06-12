@@ -79,6 +79,39 @@ CHART_SERIES = [
 SERIES_BEST = C.ahead              # green — matches the lap table's best-lap colour
 
 
+# --- track-map rainbow colormap (F3) ---------------------------------------------------------
+# The rainbow track map paints the current lap's line by a channel (speed / Δ-vs-best),
+# quantized into MAP_RAINBOW_N buckets. The ramp is anchored on the theme's own SEMANTIC
+# tokens — C.behind (red, "slow / losing") → C.accent (amber, mid) → C.ahead (green,
+# "fast / gaining") — so the map's colour language matches the Δ readout/badges exactly and
+# every colour already reads on the dark surface. The three anchors sit at comparable
+# lightness, so the red→amber→green hue sweep stays perceptually ORDERED (no bucket pops
+# brighter than its neighbours) without needing a heavyweight Lab-space colormap.
+MAP_RAINBOW_N = 16  # quantization levels — enough for a smooth-looking gradient, few enough
+                    # that one PlotCurveItem per bucket stays trivially cheap (≤16 items)
+
+
+def _hex_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def rainbow_colors(n: int = MAP_RAINBOW_N) -> list[str]:
+    """`n` (≥ 2) hex colours, low→high, piecewise-linearly interpolated through the
+    C.behind → C.accent → C.ahead semantic anchors (see the WHY block above). Index 0 is the
+    'slow / losing' red end; index n-1 the 'fast / gaining' green end."""
+    anchors = [_hex_rgb(C.behind), _hex_rgb(C.accent), _hex_rgb(C.ahead)]
+    out = []
+    for i in range(n):
+        t = i / (n - 1) * (len(anchors) - 1)  # position along the anchor chain [0, 2]
+        k = min(int(t), len(anchors) - 2)
+        f = t - k
+        a, b = anchors[k], anchors[k + 1]
+        rgb = (round(a[c] + (b[c] - a[c]) * f) for c in range(3))
+        out.append("#{:02X}{:02X}{:02X}".format(*rgb))
+    return out
+
+
 # --- shared Δ-readout semantics -------------------------------------------------------------
 # A Δ readout is displayed to 0.01 s, so a |Δ| at/below half a displayed centisecond is "even" —
 # neither ahead nor behind. Without the dead band an exact 0.00 coloured GREEN (the old `d <= 0`

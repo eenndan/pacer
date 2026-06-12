@@ -63,6 +63,13 @@ add_test(NAME test_studio_features
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_studio_features.py)
 set_tests_properties(test_studio_features PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# F3 rainbow track map: pure-numpy bucketization / NaN-break / Δ-resampling helpers + the
+# MapView toggle invariants (OFF restores byte-identical items; zero rebuilds on the tick
+# path) on a stub session. Imports map_view -> Qt, so run offscreen.
+add_test(NAME test_rainbow_map
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_rainbow_map.py)
+set_tests_properties(test_rainbow_map PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Compare-video Δ-badge math: session.delta_between (vs an arbitrary lap, cross-checked
 # against the hardcoded-vs-best delta_at_time). Imports Session -> Qt, so run offscreen.
 add_test(NAME test_compare
@@ -99,7 +106,8 @@ set_tests_properties(test_gmeter_overlay PROPERTIES
 foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_gapfill
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
-                        test_sidecar test_session_pure test_studio_features test_compare
+                        test_sidecar test_session_pure test_studio_features test_rainbow_map
+                        test_compare
                         test_controllers test_validate_wallclock test_gmeter
                         test_gmeter_overlay)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT

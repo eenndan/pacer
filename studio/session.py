@@ -416,6 +416,15 @@ class Session:
         xs, ys, _ = self._lap_trace_xyt(lap_id)
         return xs, ys
 
+    def lap_channels(self, lap_id: int):
+        """(times, xs, ys, speed_kmh, cum_distances) for a lap — a thin pacer-free view over the
+        CACHED bulk `_lap_columns` fetch (no new pacer crossing), for the map's rainbow channel
+        painting (F3): media-clock times (gap detection), local-metre xs/ys (the polyline), the
+        raw 3D speed scaled to km/h (the same basis the speed chart plots), and the gap-aware
+        odometer (the basis the Δ-grid is resampled onto). Index-aligned, same length."""
+        times, xs, ys, full_speed, cum = self._lap_columns(lap_id)
+        return times, xs, ys, full_speed * 3.6, cum
+
     # ------------------------------------------------- map gap-fill (rendering only)
     def _lap_trace_xyt(self, lap_id: int):
         """Cached per-lap (xs, ys, times) as numpy arrays — local metres + media-clock seconds,
