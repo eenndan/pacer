@@ -43,6 +43,11 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
   columns once sectors exist; **▶** playing marker, **green** best lap, **blue** selection, **purple**
   per-sector session-best, **⚠** GPS-dropout low-confidence flag (with tooltip); highlights follow
   the laps across a sort.
+- **Theoretical best + best rolling lap** — two footer rows under the lap table: the exact sum of
+  the purple session-best splits (== best lap time before any sectors exist) and the fastest
+  start-anywhere full loop (same-spatial-point windows across consecutive laps; ⚠-dropout
+  straddles excluded; complete laps always count, so rolling ≤ best). Styled like the purple
+  bests, outside the sortable rows, live across sorts and re-segmentation.
 - **GPS de-noise** — quality gating (drop `fix<3` / `dop>10` GPS9 fixes; GPS5 "unknown" kept) +
   edge-corrected **boxcar smoothing** (`SMOOTH_WINDOW=13`) applied once at load to the source
   lat/lon/alt, so every derived quantity stays consistent.

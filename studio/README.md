@@ -78,7 +78,7 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 | [render_cache.py](render_cache.py) | **LapRenderCache** — the per-lap MAP-RENDERING cache cluster extracted from `Session`: the gap-aware draw segments (`lap_trace_segments`, via `gapfill`) + the lazily-built reference-centerline fallback donor. Pacer-free (Session injects callables over its cached per-lap arrays); invalidated from `Session.set_timing_lines` on re-segment. Session keeps thin delegators, so callers are unchanged. |
 | [reference.py](reference.py) + [mk_centerline.json](mk_centerline.json) | Georeferenced Daytona MK centerline (traced from `gmaps_pict.png`, similarity-ICP aligned to the GPS aggregate) — the gap-fill fallback for sections no lap covers. Rebuild via [dev/build_reference.py](dev/build_reference.py). |
 | [plots_view.py](plots_view.py) | Speed (top) + lap-vs-best delta (bottom) on **one shared, x-linked x-axis** (dist/time toggle drives both; delta aligned by **normalized distance** → endpoint = laptime diff), so the two cursors always align. Downsampled/clipped curves + a synced cursor that is also a **draggable scrubber** + a **hover dot** on the delta curve + subtle **sector boundary guide lines** (`set_sector_lines`, app-fed) — pacer-free, it only emits `scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded`/`modeChanged(mode)` (mode = `time`\|`distance`); the `ScrubController` converts + seeks, and app owns the live Δ/speed readout box. |
-| [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best, **purple = per-sector session best**, **⚠ = GPS-dropout lap (low-confidence; time/distance/map less reliable, with a row tooltip)**. Base row text is the theme's primary off-white (dark table surface). **Every header is click-to-sort** by the underlying numeric value (asc/desc); highlights and the ⚠ flag follow the laps across a sort. |
+| [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best, **purple = per-sector session best**, **⚠ = GPS-dropout lap (low-confidence; time/distance/map less reliable, with a row tooltip)**. Base row text is the theme's primary off-white (dark table surface). **Every header is click-to-sort** by the underlying numeric value (asc/desc); highlights and the ⚠ flag follow the laps across a sort. Two summary **footer rows** under the table — **Theoretical best** (sum of the purple session-best splits) and **Best rolling** (fastest start-anywhere full loop) — styled like the purple bests with defining tooltips; they live OUTSIDE the sortable table (never sorted/selected) and update on every refresh, incl. re-segmentation. |
 | [app.py](app.py) | Assembles panels in splitters and wires the cross-panel signals. |
 
 ## Gotchas / notes
@@ -203,6 +203,17 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
   kept-point times have an interior gap > `gapfill.GAP_TIME_S` (0.35 s) had a real dropout, so its
   time/distance/map are less reliable. A pure, read-only helper (changes no analysis value); the
   table shows the ⚠ marker + tooltip.
+- **Theoretical best + best rolling lap (`session.theoretical_best` / `session.best_rolling_lap`,
+  footer rows in `lap_table.py`):** the theoretical best is the EXACT sum of the per-column
+  session-best splits (`session.session_best_splits` — hoisted from the table so the purple cells
+  and the footer share one computation; with no sector lines it degenerates to the best lap time).
+  The best rolling lap is the fastest start-ANYWHERE full loop (the MoTeC/RS3 "rolling lap"):
+  per consecutive valid-lap pair, every sample is an anchor whose window ends when the next lap
+  passes the **same spatial point** (nearest same-direction point within a narrow arc + chord
+  refinement — pure φ- and odometer-alignment were measured optimistically biased by the laps'
+  line-length differences and rejected; constants carry the measured WHYs). Windows straddling a
+  ⚠ dropout lap are excluded; complete laps always count, so rolling ≤ best lap time. The footer
+  rows live outside the sortable table and refresh on selection/sector/start-line changes.
 - **Sector boundaries on the charts (`session.sector_plot_positions`, UI-only):** the sector lines
   draw as subtle dotted vertical guide lines on BOTH plots, labelled `S/F`/`S1`/`S2`…; positions are
   computed in `session` (the same midpoint→best-lap-trace projection the split times use) and mapped

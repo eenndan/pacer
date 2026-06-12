@@ -12,6 +12,12 @@ the fastest split in each S-column across all valid laps, motorsport convention)
 trailing ⚠ low-confidence marker (+ row tooltip) on laps with a GPS dropout. Colours,
 alignment and the tabular numeric font come from the design tokens in `theme`; base row text
 is the primary off-white on the dark table surface.
+
+Under the table sit two summary FOOTER rows (F1-roadmap) — "Theoretical best" (sum of the
+purple session-best splits) and "Best rolling" (fastest start-anywhere full loop) — plain
+labels OUTSIDE the QTableWidget, so they can never participate in sorting/selection and
+survive any sort by construction; refresh() rewrites their values (session is the single
+source: `theoretical_best` / `best_rolling_lap`).
 """
 
 from __future__ import annotations
@@ -23,6 +29,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QGridLayout,
+    QLabel,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -48,19 +56,21 @@ NUMERIC_COL_START = 1
 NUM_ROLE = Qt.UserRole  # the numeric sort key stored on every cell
 LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the Lap cell
 
-
-def _best_split_per_sector_impl(splits_by_lap: dict[int, list[float]],
-                                n_splits: int) -> list[float | None]:
-    """F5: the fastest (minimum) split in EACH sector column across all valid laps, computed
-    independently per column. Returns one value per S-column (None if a column has no data).
-    Pure min over the per-lap splits — recomputed on refresh (i.e. after a sector edit changes
-    the splits). Module-level so it's unit-testable without a Session/Qt table."""
-    best: list[float | None] = []
-    for i in range(n_splits):
-        vals = [sp[i] for sp in splits_by_lap.values()
-                if i < len(sp) and math.isfinite(sp[i])]
-        best.append(min(vals) if vals else None)
-    return best
+# The summary footer rows under the table: (title, session accessor name, defining tooltip).
+# Both are styled like the purple per-sector session-best (they're composed FROM those bests /
+# from start-anywhere windows) and read from Session so the table cells and the footer can
+# never disagree. (The per-column session-best itself is `Session.session_best_splits` —
+# hoisted there from this module so both consumers share one computation.)
+FOOTER_ROWS = (
+    ("Theoretical best", "theoretical_best",
+     "Sum of the session-best sector splits (the purple cells): the lap you'd drive by "
+     "stitching every best sector together. With no sector lines this equals the best lap "
+     "time."),
+    ("Best rolling", "best_rolling_lap",
+     "The fastest single complete loop regardless of where it starts: the minimum time from "
+     "passing any track position to passing it again one lap later (windows spanning a "
+     "GPS-dropout ⚠ lap are excluded)."),
+)
 
 
 def _is_blank(v) -> bool:
@@ -140,10 +150,53 @@ class LapTable(QWidget):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
         lay.addWidget(self.table)
+        lay.addWidget(self._build_footer())
         self.refresh()
 
     # ------------------------------------------------------------------ build
+    def _build_footer(self) -> QWidget:
+        """The two session-summary footer rows ("Theoretical best" / "Best rolling").
+        Deliberately a separate widget BELOW the QTableWidget, not table rows: footer rows must
+        never participate in sorting or selection, so plain labels make that structural (they
+        survive any sort/refresh by construction). Values are styled like the purple per-sector
+        session-best cells (same colour + bold tabular font); each row carries its defining
+        tooltip. `_refresh_footer` rewrites the values on every refresh()."""
+        footer = QWidget()
+        footer.setObjectName("LapTableFooter")
+        # A hairline above the rows separates them from the table body (theme border token).
+        footer.setStyleSheet(
+            f"QWidget#LapTableFooter {{ border-top: 1px solid {theme.C.border}; }}")
+        grid = QGridLayout(footer)
+        grid.setContentsMargins(8, 4, 8, 4)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(2)
+        bold_num = theme.mono_font(theme.TABLE, theme.W_SEMIBOLD)
+        self._footer_values: list[QLabel] = []
+        for r, (title, _accessor, tip) in enumerate(FOOTER_ROWS):
+            name = QLabel(title)
+            name.setStyleSheet(f"color: {theme.C.text_dim};")
+            name.setToolTip(tip)
+            value = QLabel(fmt_time(float("nan")))  # "—" until refresh() fills it
+            value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            value.setFont(bold_num)
+            value.setStyleSheet(f"color: {theme.C.best};")  # the purple session-best style
+            value.setToolTip(tip)
+            grid.addWidget(name, r, 0)
+            grid.addWidget(value, r, 1)
+            self._footer_values.append(value)
+        grid.setColumnStretch(1, 1)
+        return footer
+
+    def _refresh_footer(self):
+        """Rewrite the footer values from Session (the accessor named per row in FOOTER_ROWS).
+        None (no valid laps / a sector column with no data) renders as the em-dash."""
+        for (_title, accessor, _tip), label in zip(FOOTER_ROWS, self._footer_values,
+                                                   strict=True):
+            v = getattr(self.session, accessor)()
+            label.setText(fmt_time(v if v is not None else float("nan")))
+
     def _n_split_cols(self) -> int:
         """How many S-split columns to show: N sector lines split a lap into N+1 sub-sectors,
         so N+1 columns when there are any sector lines, else 0 (no default split columns).
@@ -162,8 +215,12 @@ class LapTable(QWidget):
         headers = COLUMNS + [f"S{i + 1}" for i in range(n_splits)]
 
         # Per-lap splits (F5 input) and the per-column session-best split value (purple target).
+        # The session-best is computed in Session (session_best_splits) — the same accessor the
+        # theoretical-best footer sums — so the purple cells and the footer can never disagree.
+        # (It always returns sector_count()+1 entries; with no sectors the table shows 0 split
+        # columns, so the lone entry is simply unused here.)
         splits_by_lap = {row["idx"]: self.session.lap_sector_splits(row["idx"]) for row in rows}
-        best_split = _best_split_per_sector_impl(splits_by_lap, n_splits)
+        best_split = self.session.session_best_splits()
 
         # Sorting must be OFF while we populate (else rows reorder mid-fill and setItem(r,…)
         # lands on the wrong row); re-enabled after, preserving the user's chosen sort.
@@ -209,6 +266,9 @@ class LapTable(QWidget):
         # follow the lap across any sort, exactly like the green/purple/▶ highlights.
         self._dropout_ids = self.session.dropout_lap_ids()
         self._apply_highlights()
+        # The summary footer (theoretical best / best rolling) follows every refresh — i.e.
+        # also after a timing-line edit re-segments the laps.
+        self._refresh_footer()
 
     # ------------------------------------------------------------- highlights
     def _lap_id(self, r: int) -> int:

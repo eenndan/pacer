@@ -50,6 +50,17 @@ LapColumns = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 LapSeries = dict[int, tuple[np.ndarray, np.ndarray]]
 
 
+def _unit_tangents(xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-sample unit direction-of-travel of a trace (central differences, normalized;
+    a zero-length step keeps a zero vector, which any heading gate then rejects). Used by
+    `best_rolling_lap`'s same-direction match filter. Needs len ≥ 2 (guarded by callers)."""
+    tx = np.gradient(xs)
+    ty = np.gradient(ys)
+    norm = np.hypot(tx, ty)
+    norm[norm == 0] = 1.0
+    return tx / norm, ty / norm
+
+
 class LapRow(TypedDict):
     """One `lap_rows()` row — the lap id + the lap-level metrics the lap table shows."""
 
@@ -523,6 +534,161 @@ class Session:
             j = int(np.argmin((xs - mx) ** 2 + (ys - my) ** 2))
             bounds.append(float(cum[j]))
         return sorted(bounds)
+
+    # ------------------------------------- session summaries: theoretical + rolling best (F1)
+    def session_best_splits(self) -> list[float | None]:
+        """The session-best (minimum) split per sub-sector COLUMN, computed independently per
+        column across all VALID laps — exactly the values the lap table paints purple (F5).
+        N sector lines → N+1 columns; a column with no finite data → None. Hoisted here from
+        lap_table so the table's purple cells and the theoretical-best footer read ONE
+        computation and can never disagree. With NO sector lines a lap is a single sub-sector
+        whose split is its lap time, so the one column's best is the best lap time.
+
+        Recomputed per call (refresh-time only, never per-tick): the inputs are the cached
+        per-lap `lap_sector_splits`, so memoizing here would only add another slot to clear
+        on re-segment."""
+        n_splits = len(self.laps.sectors.sector_lines) + 1
+        all_splits = [self.lap_sector_splits(lap_id) for lap_id in self.valid_lap_ids()]
+        best: list[float | None] = []
+        for i in range(n_splits):
+            vals = [sp[i] for sp in all_splits if i < len(sp) and math.isfinite(sp[i])]
+            best.append(min(vals) if vals else None)
+        return best
+
+    def theoretical_best(self) -> float | None:
+        """The THEORETICAL BEST lap time (seconds): the sum of the session-best sector splits
+        (`session_best_splits` — the purple cells), i.e. the lap you'd drive by stitching every
+        best sector together. Always exactly the sum of the purple cells, because both read the
+        same accessor. With no sector lines a lap is one sub-sector, so this DEGENERATES to the
+        best lap time by definition (documented choice: the footer row stays meaningful before
+        any sectors are placed instead of reading '—'). None when no valid laps exist or some
+        column has no finite split (every lap partial there)."""
+        bests = self.session_best_splits()
+        if not bests or any(b is None for b in bests):
+            return None
+        return float(sum(bests))
+
+    # Best-rolling nearest-point search half-width, as a fraction of the next lap's samples.
+    # WHY 0.02: the anchor's matching point on lap k+1 sits near the SAME normalized fraction —
+    # the two parameterizations drift apart only by the laps' line-length difference, measured
+    # ≤ 4.5 m (0.4% of the ~1.06 km lap) across the real D24 sessions — so a ±2% (~21 m) search
+    # arc is an order of magnitude of headroom. Floor of 5 samples keeps short synthetic laps
+    # searchable.
+    _ROLLING_SEARCH_FRAC = 0.02
+    # Heading gate for the nearest-point match: the match must be travelled in (roughly) the
+    # SAME direction as the anchor — cos(heading difference) ≥ 0.5 (within 60°). WHY: inside
+    # the search arc a tight corner's legs can sit closer ACROSS the track than the two laps'
+    # line offset along it; on real 0060 the unfiltered winner snapped the anchor (pair (9,10),
+    # s_a 0.871) to a point 4 m away spatially but ~12 m of track EARLIER (s_b 0.860, heading
+    # cos ≈ +0.24), short-changing the loop by 1.2 s. Genuine same-point matches measure
+    # cos > 0.9 even with metres of lateral line offset; 0.5 splits the two decisively.
+    _ROLLING_HEADING_MIN_COS = 0.5
+    # Distance gate: the refined closest approach must be ≤ 3 m for the match to count as
+    # "passing the same point". WHY: across both real D24 sessions every genuine winner
+    # measures ≤ 1.6 m (two laps' racing lines through the same point), while the residual
+    # false matches — heading-compatible points on a NEARBY piece of track (e.g. a wide-radius
+    # leg the heading gate can't separate) — measure ≥ 4 m and short-change the loop by ~1 s.
+    # A rejected anchor only DROPS a candidate window (conservative: rolling can only get
+    # slower, never optimistic), so the gate cannot bias the minimum downwards.
+    _ROLLING_MATCH_MAX_M = 3.0
+
+    def best_rolling_lap(self) -> float | None:
+        """The BEST ROLLING lap time (seconds): the fastest single COMPLETE loop of the track
+        regardless of where it starts — the minimum, over every track position P, of the time
+        from passing P to passing P again one lap later (the MoTeC i2 "rolling lap" / AiM RS3
+        "best rolling": a contiguous lap not aligned to start/finish). None if no valid laps.
+
+        IMPLEMENTATION CHOICE — per-pair windows anchored to the same SPATIAL point: for each
+        consecutive valid-lap pair (k, k+1), every lap-k sample is an anchor P; the window ends
+        when lap k+1 passes CLOSEST to P (nearest SAME-DIRECTION sample within a narrow
+        normalized-distance arc — see the two gating constants above — refined by projecting P
+        onto the adjacent trace segments for a sub-sample crossing time). Two simpler variants
+        were measured and REJECTED on the real D24 data, because a min over thousands of
+        windows seeks out exactly their alignment error:
+          * pure normalized-distance phases (t_{k+1}(φ) − t_k(φ)): the laps' line lengths
+            differ (e.g. 1061.7 vs 1066.2 m on the 0062 winner pair), so equal φ is a different
+            physical point — the winning "window" measured 146 ms FASTER than the true spatial
+            loop (68.077 vs 68.223 s). Optimistically biased ⇒ rejected.
+          * a fixed odometer window over the full trace (searchsorted(cum, cum[i] + L)):
+            the same defect, worse — a ±4.5 m line-length spread is ±~0.3 s at lap speed,
+            and L itself depends on which lap it is taken from. Rejected.
+        Anchor resolution: one GPS sample (~1.5 m at speed). Between adjacent anchors the
+        window time changes by the PACE DIFFERENCE of the two laps over that metre-scale span
+        — far below the GPS noise floor — so a continuum search would add nothing.
+
+        Window admission (consistent with the ⚠ low-confidence rule): straddling windows are
+        taken only across pairs of CONSECUTIVE valid laps where NEITHER lap has a GPS dropout
+        (a straddling window would inherit the unreliable timing). Every complete valid lap is
+        always admitted as the S/F-aligned degenerate window — those are exactly the lap times
+        the table already shows (⚠-flagged where applicable) — which also guarantees
+        best_rolling ≤ best lap time."""
+        valid = self.valid_lap_ids()
+        if not valid:
+            return None
+        # Complete valid laps are themselves (S/F-aligned) rolling windows: rolling ≤ best.
+        best = min(self.laps.lap_time(i) for i in valid)
+        valid_set = set(valid)
+        for a in valid:
+            b = a + 1
+            if b not in valid_set or self.lap_has_dropout(a) or self.lap_has_dropout(b):
+                continue
+            times_a, xs_a, ys_a, _spd_a, cum_a = self._lap_columns(a)
+            times_b, xs_b, ys_b, _spd_b, cum_b = self._lap_columns(b)
+            n_a, n_b = len(times_a), len(times_b)
+            if n_a < 2 or n_b < 2:
+                continue
+            total_a, total_b = float(cum_a[-1]), float(cum_b[-1])
+            if total_a <= 0 or total_b <= 0:
+                continue
+            # Consecutive valid laps are time-contiguous by construction (lap a's interpolated
+            # finish crossing IS lap b's start crossing — one crossing instant computed once in
+            # the segmentation). Defensive: skip a pair with a real hole between the laps (only
+            # reachable on hand-seeded sessions), where the windows would not be one loop.
+            if abs(float(times_b[0]) - float(times_a[-1])) > 1e-3:
+                continue
+            # Nearest lap-b sample per anchor, searched only inside the ±_ROLLING_SEARCH_FRAC
+            # arc around the anchor's normalized fraction, and only among samples travelled in
+            # the same direction (the heading gate — see both constants' WHY above).
+            s_a = cum_a / total_a
+            s_b = cum_b / total_b
+            k = max(5, int(self._ROLLING_SEARCH_FRAC * n_b))
+            centers = np.clip(np.searchsorted(s_b, s_a), 0, n_b - 1)
+            idx = np.clip(centers[:, None] + np.arange(-k, k + 1)[None, :], 0, n_b - 1)
+            d2 = (xs_b[idx] - xs_a[:, None]) ** 2 + (ys_b[idx] - ys_a[:, None]) ** 2
+            tax, tay = _unit_tangents(xs_a, ys_a)
+            tbx, tby = _unit_tangents(xs_b, ys_b)
+            heading_cos = tax[:, None] * tbx[idx] + tay[:, None] * tby[idx]
+            d2 = np.where(heading_cos >= self._ROLLING_HEADING_MIN_COS, d2, np.inf)
+            rowmin = np.argmin(d2, axis=1)
+            anchors = np.arange(n_a)
+            j = idx[anchors, rowmin]
+            # An anchor whose whole search arc fails the heading gate (degenerate geometry)
+            # simply contributes no window.
+            usable = np.isfinite(d2[anchors, rowmin])
+
+            # Sub-sample refinement: project each anchor onto the two trace segments adjacent
+            # to its nearest sample; the closer projection's chord parameter interpolates the
+            # crossing time (the same chord idiom the C++ start-line crossing uses).
+            def _project(j0, j1, xs_b=xs_b, ys_b=ys_b, times_b=times_b,
+                         xs_a=xs_a, ys_a=ys_a):
+                vx, vy = xs_b[j1] - xs_b[j0], ys_b[j1] - ys_b[j0]
+                len2 = vx * vx + vy * vy
+                safe = np.where(len2 > 0, len2, 1.0)
+                u = ((xs_a - xs_b[j0]) * vx + (ys_a - ys_b[j0]) * vy) / safe
+                u = np.clip(np.where(len2 > 0, u, 0.0), 0.0, 1.0)
+                qx, qy = xs_b[j0] + u * vx, ys_b[j0] + u * vy
+                dist2 = (qx - xs_a) ** 2 + (qy - ys_a) ** 2
+                return dist2, times_b[j0] + u * (times_b[j1] - times_b[j0])
+
+            d2_lo, t_lo = _project(np.maximum(j - 1, 0), j)
+            d2_hi, t_hi = _project(j, np.minimum(j + 1, n_b - 1))
+            t_cross = np.where(d2_lo <= d2_hi, t_lo, t_hi)
+            # Distance gate on the REFINED closest approach (see _ROLLING_MATCH_MAX_M's WHY).
+            usable &= np.minimum(d2_lo, d2_hi) <= self._ROLLING_MATCH_MAX_M ** 2
+            w = np.where(usable, t_cross - times_a, np.inf)
+            if np.isfinite(w).any():
+                best = min(best, float(np.min(w)))
+        return float(best)
 
     def sector_plot_positions(self, mode: str) -> list[tuple[str, float]]:
         """(label, plot-x) for the sector BOUNDARIES on the speed+delta charts' SHARED axis (F2).

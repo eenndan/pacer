@@ -19,6 +19,10 @@ Pins five math-dense invariants that had no coverage, each driven on synthetic i
   * `delta()` endpoint: on the 400-point normalized-distance grid the delta curve's LAST
     value equals laptime_lap − laptime_best in BOTH x-modes (test_compare covers
     delta_between — a separate implementation; this pins delta() itself).
+  * theoretical / rolling best (F1-roadmap): `session_best_splits` is the per-column min and
+    `theoretical_best` its EXACT sum (with the documented no-sectors degenerate == best lap
+    time); `best_rolling_lap` finds a known faster straddling window on a two-lap session,
+    excludes windows spanning a GPS-dropout lap, and degrades to the best complete lap.
 Run: python tests/test_session_pure.py
 """
 import math
@@ -339,6 +343,105 @@ def test_delta_x_axis_endpoints_per_mode():
     # Only the x basis changes between modes — the delta y-values are identical.
     assert np.allclose(delta[lap_a][1], dy_dist, atol=1e-12)
     print("test_delta_x_axis_endpoints_per_mode OK")
+
+
+# ------------------------------------- 6) theoretical best + best rolling lap (F1-roadmap)
+
+def make_two_lap_sector_session():
+    """A bare Session with TWO straight-line laps (different totals/profiles, B faster = best)
+    and TWO sector lines both laps cross — the real `lap_sector_splits` projection feeds
+    `session_best_splits`, so the expected column minima come from the same per-lap splits."""
+    lap_a, lap_b = 3, 7
+    ta, da = odometer(120, 0.1, 100.0, 520.0)
+    tb, db = odometer(110, 0.1, 300.0, 508.0, lambda u: 1.3 + 0.7 * np.sin(u) ** 2)
+    s = bare_session({lap_a: (ta, da), lap_b: (tb, db)}, best=lap_b, valid=[lap_a, lap_b])
+    seed_cols(s, lap_a, ta, da)
+    seed_cols(s, lap_b, tb, db)
+    s.laps = SimpleNamespace(sectors=SimpleNamespace(sector_lines=[
+        _seg(350.0, -5.0, 350.0, 5.0),   # out of track order on purpose (sorted downstream)
+        _seg(150.0, -5.0, 150.0, 5.0),
+    ]))
+    return s, lap_a, lap_b
+
+
+def test_session_best_splits_is_column_min_of_lap_splits():
+    """`session_best_splits` == the per-column MINIMUM of the (already-pinned)
+    `lap_sector_splits` across the valid laps — the same values the table paints purple."""
+    s, lap_a, lap_b = make_two_lap_sector_session()
+    sp_a, sp_b = s.lap_sector_splits(lap_a), s.lap_sector_splits(lap_b)
+    assert len(sp_a) == len(sp_b) == 3
+    expected = [min(a, b) for a, b in zip(sp_a, sp_b, strict=True)]
+    assert s.session_best_splits() == expected, (s.session_best_splits(), expected)
+    print("test_session_best_splits_is_column_min_of_lap_splits OK")
+
+
+def test_theoretical_best_is_exact_sum_of_best_splits():
+    """`theoretical_best` is the EXACT float sum of `session_best_splits` (the purple cells),
+    and — both laps' splits being real sums to their lap times — it is ≤ the best lap time."""
+    s, lap_a, lap_b = make_two_lap_sector_session()
+    bests = s.session_best_splits()
+    th = s.theoretical_best()
+    assert th == float(sum(bests)), (th, bests)
+    best_laptime = float(min(sum(s.lap_sector_splits(lap_a)), sum(s.lap_sector_splits(lap_b))))
+    assert th <= best_laptime + 1e-12, (th, best_laptime)
+    print("test_theoretical_best_is_exact_sum_of_best_splits OK")
+
+
+def test_theoretical_best_no_sectors_degenerates_to_best_lap():
+    """The documented no-sector-lines choice: one sub-sector per lap (its lap time), so
+    `session_best_splits` is the one-column [best lap time] and theoretical == best lap time."""
+    s, lap_a, lap_b = make_two_lap_sector_session()
+    s.laps.sectors = SimpleNamespace(sector_lines=[])
+    laptimes = [float(sum(s.lap_sector_splits(lid))) for lid in (lap_a, lap_b)]
+    bests = s.session_best_splits()
+    assert len(bests) == 1 and abs(bests[0] - min(laptimes)) < 1e-9, (bests, laptimes)
+    assert abs(s.theoretical_best() - min(laptimes)) < 1e-9
+    print("test_theoretical_best_no_sectors_degenerates_to_best_lap OK")
+
+
+def make_rolling_session(n=401):
+    """TWO CONTIGUOUS laps with mirrored pace: lap 0 runs its first half-track in 35 s and its
+    second in 25 s; lap 1 the reverse (25 s then 35 s) — both 60 s laps. The loop from
+    half-track in lap 0 to half-track in lap 1 stitches the two FAST halves: 25 + 25 = 50 s,
+    the known best rolling window (the pair difference is V-shaped with its minimum exactly at
+    φ = 0.5, a knot of both laps). `seed_cols` also feeds `lap_has_dropout` (steady-enough
+    sample times, no interior gap)."""
+    phi = np.linspace(0.0, 1.0, n)
+    dists = phi * 1000.0
+    times_a = np.interp(phi, [0.0, 0.5, 1.0], [0.0, 35.0, 60.0])
+    times_b = 60.0 + np.interp(phi, [0.0, 0.5, 1.0], [0.0, 25.0, 60.0])
+    s = bare_session({0: (times_a, dists), 1: (times_b, dists)}, best=0, valid=[0, 1])
+    seed_cols(s, 0, times_a, dists)
+    seed_cols(s, 1, times_b, dists)
+    s.laps = SimpleNamespace(lap_time=lambda lid: 60.0,
+                             sectors=SimpleNamespace(sector_lines=[]))
+    return s
+
+
+def test_best_rolling_finds_straddling_window():
+    """The headline rolling-lap case: a start-anywhere loop straddling the S/F line beats both
+    complete laps — 50 s vs the 60 s laps — and the φ-knot evaluation finds it EXACTLY."""
+    s = make_rolling_session()
+    rolling = s.best_rolling_lap()
+    assert abs(rolling - 50.0) < 1e-9, rolling
+    assert rolling < 60.0  # strictly faster than the best complete lap
+    print("test_best_rolling_finds_straddling_window OK")
+
+
+def test_best_rolling_excludes_dropout_straddles():
+    """The ⚠ low-confidence rule: a straddling window touching a GPS-dropout lap is excluded,
+    so the best rolling falls back to the best COMPLETE lap (which is always admitted —
+    rolling ≤ best lap time stays guaranteed even when every straddle is excluded)."""
+    s = make_rolling_session()
+    s.lap_has_dropout = lambda lid: lid == 1  # lap 1 had a dropout
+    assert abs(s.best_rolling_lap() - 60.0) < 1e-9
+    # A single valid lap (no pair at all) likewise returns its own lap time; none → None.
+    lone = make_rolling_session()
+    lone._valid_cache = [0]
+    assert abs(lone.best_rolling_lap() - 60.0) < 1e-9
+    empty = bare_session(valid=[])
+    assert empty.best_rolling_lap() is None
+    print("test_best_rolling_excludes_dropout_straddles OK")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,13 @@ These exercise the load-bearing pure logic directly on synthetic data:
     their underlying float, blanks/NaN sort last.
   * F3 — `Session.nearest_index_in_lap` / `nearest_time_in_lap`: the marker drag is constrained
     to ONE lap's points and clamped to its time window (built on a bare Session, no pacer).
-  * F5 — per-sector session-best = the per-column MINIMUM split across valid laps.
+  * F5 — per-sector session-best = the per-column MINIMUM split across valid laps (now
+    `Session.session_best_splits`, hoisted from lap_table so the purple cells and the
+    theoretical-best footer share one computation).
+  * Theoretical/rolling footer (F1-roadmap) — a real offscreen LapTable on a fake session:
+    the two footer rows exist OUTSIDE the sortable table, carry the purple session-best
+    style + defining tooltips, show fmt_time'd session values, survive a sort, and update
+    on refresh() after a (simulated) timing-line move.
   * Auto-follow — `StudioWindow._follow_current_lap`: the speed+delta charts switch to the
     playhead's lap (vs best) only on a lap-change EDGE; None (lead-in) HOLDS the last lap; the
     table re-select uses the programmatic (no-seek) path so it never fights playback.
@@ -14,6 +20,7 @@ Run: python tests/test_studio_features.py
 import math
 import os
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -27,10 +34,11 @@ _APP = QApplication.instance() or QApplication([])
 
 from _synthetic import bare_session  # noqa: E402
 
-from studio import gapfill  # noqa: E402
+from studio import gapfill, theme  # noqa: E402
+from studio._signal import fmt_time  # noqa: E402
 from studio.lap_table import (  # noqa: E402
     NUM_ROLE,
-    _best_split_per_sector_impl,
+    LapTable,
     _NumItem,
 )
 
@@ -120,20 +128,123 @@ def test_lap_table_blanks_sort_last_both_directions_end_to_end():
 
 
 # --------------------------------------------------------------------- F5
+def _session_with_splits(splits, n_lines):
+    """A bare Session whose `lap_sector_splits` is stubbed per lap and whose sector-line
+    count is `n_lines` — the read surface `session_best_splits` touches (plus the seeded
+    valid-lap memo), so the hoisted per-column-min runs with no pacer."""
+    s = bare_session(valid=sorted(splits))
+    s.lap_sector_splits = lambda lid: splits[lid]
+    s.laps = SimpleNamespace(sectors=SimpleNamespace(sector_lines=[object()] * n_lines))
+    return s
+
+
 def test_best_split_per_sector_is_column_min():
-    """The purple per-sector session-best is the per-column MINIMUM across valid laps,
-    computed independently per column; a column with no data → None."""
+    """The purple per-sector session-best (`Session.session_best_splits`) is the per-column
+    MINIMUM across valid laps, computed independently per column; a no-data column → None."""
     splits = {
         0: [34.5, 11.0, 22.9],
         1: [34.2, 10.6, 23.1],  # min S1 (34.2) and min S2 (10.6) here
         2: [35.0, 11.2, 22.6],  # min S3 (22.6) here
         3: [34.9],              # partial lap: only S1 present
     }
-    best = _best_split_per_sector_impl(splits, n_splits=3)
+    s = _session_with_splits(splits, n_lines=2)  # 2 sector lines -> 3 columns
+    best = s.session_best_splits()
     assert best == [34.2, 10.6, 22.6], best
-    # No-data column -> None.
-    assert _best_split_per_sector_impl({0: []}, n_splits=2) == [None, None]
+    # No-data columns -> None (and theoretical_best is undefined there).
+    s2 = _session_with_splits({0: []}, n_lines=1)
+    assert s2.session_best_splits() == [None, None]
+    assert s2.theoretical_best() is None
     print("test_best_split_per_sector_is_column_min OK")
+
+
+# -------------------------------------- theoretical / rolling footer rows (F1-roadmap)
+class _FakeFooterSession:
+    """The full read surface LapTable touches, with adjustable summary values so a refresh()
+    after a (simulated) timing-line move shows new footer numbers. 1 sector line -> 2 S-columns;
+    lap 1 is the best lap; the seeded splits make the per-column minima [33.8, 34.4]."""
+
+    def __init__(self):
+        self.splits = {0: [33.8, 36.2], 1: [34.0, 34.4], 2: [35.5, 35.7]}
+        self.theo = 68.2     # = 33.8 + 34.4 (sum of the per-column minima)
+        self.rolling = 68.3  # theoretical <= rolling <= best lap (68.4)
+
+    def lap_rows(self):
+        return [{"idx": 0, "time": 70.0, "dist": 1001.0, "entry": 51.0},
+                {"idx": 1, "time": 68.4, "dist": 998.0, "entry": 52.5},
+                {"idx": 2, "time": 71.2, "dist": 1003.0, "entry": 49.0}]
+
+    def sector_count(self):
+        return 1
+
+    def lap_sector_splits(self, lap_id):
+        return self.splits[lap_id]
+
+    def session_best_splits(self):
+        return [min(sp[i] for sp in self.splits.values()) for i in range(2)]
+
+    def theoretical_best(self):
+        return self.theo
+
+    def best_rolling_lap(self):
+        return self.rolling
+
+    def best_lap_id(self):
+        return 1
+
+    def dropout_lap_ids(self):
+        return set()
+
+
+def _footer_texts(table):
+    return [label.text() for label in table._footer_values]
+
+
+def test_lap_table_footer_rows_present_styled_and_valued():
+    """The two footer rows exist BELOW the table (never as sortable table rows), read the
+    session's theoretical/rolling values through fmt_time, carry the purple session-best
+    styling + a defining tooltip each."""
+    from PySide6.QtWidgets import QLabel
+
+    sess = _FakeFooterSession()
+    table = LapTable(sess)
+    # Footer is NOT table rows: the table holds exactly the 3 laps.
+    assert table.table.rowCount() == 3
+    assert _footer_texts(table) == [fmt_time(68.2), fmt_time(68.3)]
+    # The purple session-best style + tooltips on both value labels.
+    for label in table._footer_values:
+        assert isinstance(label, QLabel)
+        assert theme.C.best in label.styleSheet(), label.styleSheet()
+        assert label.toolTip(), "footer row must carry its defining tooltip"
+    # The purple-cell target the table paints is the SAME accessor the footer sums.
+    assert table._best_split == sess.session_best_splits()
+    # And the fake's numbers respect the sandwich the real session guarantees.
+    assert sess.theoretical_best() <= sess.best_rolling_lap() <= 68.4
+    print("test_lap_table_footer_rows_present_styled_and_valued OK")
+
+
+def test_lap_table_footer_survives_sort_and_updates_on_refresh():
+    """Sorting any column must not move/change the footer (it lives outside the QTableWidget);
+    a refresh() after the session's values changed (what a start-line move triggers via
+    app._on_lines -> table.refresh()) rewrites the footer numbers."""
+    from PySide6.QtCore import Qt
+
+    sess = _FakeFooterSession()
+    table = LapTable(sess)
+    before = _footer_texts(table)
+    table.table.sortByColumn(1, Qt.DescendingOrder)  # sort by Time, descending
+    assert table.table.rowCount() == 3               # footer never became a table row
+    assert _footer_texts(table) == before, "sort must not disturb the footer"
+
+    # Simulate a start-line move: the re-segmentation changes the summary values; the app's
+    # _on_lines handler then calls table.refresh(), which must rewrite the footer.
+    sess.theo, sess.rolling = 67.9, 68.05
+    table.refresh()
+    assert _footer_texts(table) == [fmt_time(67.9), fmt_time(68.05)]
+    # None (e.g. no valid laps after a bad edit) renders as the em-dash.
+    sess.theo, sess.rolling = None, None
+    table.refresh()
+    assert _footer_texts(table) == ["—", "—"]
+    print("test_lap_table_footer_survives_sort_and_updates_on_refresh OK")
 
 
 # --------------------------------------------------------------------- F3
