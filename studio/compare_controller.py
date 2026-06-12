@@ -5,7 +5,8 @@ telemetry exactly as in single-video mode; the SECONDARY/right pane is video-onl
 "time into lap" — both roll from S/F at 1×, the faster pulls ahead, each shown as a per-pane
 "Δ vs other" badge. This object OWNS the compare state (the on/off flag + the pinned (A,B) lap ids)
 and the enter/exit-compare orchestration + the per-tick compare upkeep (`tick`: pane times, badges,
-secondary g, the (t_a,t_b) early-out incl. the scrub-bypass).
+secondary g, the (t_a,t_b) early-out incl. the scrub-bypass, and the F4 map GHOST — lap B's kart
+drawn on the track map at the secondary pane's own time, removed on exit).
 
 It is a plain control-layer collaborator: it talks to Session's public API and the view widgets it
 is handed, never to `pacer` directly (the views-stay-pacer-free boundary). It is Qt-free itself —
@@ -28,6 +29,7 @@ from . import theme
 from ._signal import fmt_time
 
 if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported at runtime
+    from .map_view import MapView
     from .plots_view import PlotsView
     from .scrub_controller import ScrubController
     from .session import Session
@@ -43,11 +45,16 @@ class CompareController:
         set_followed_lap: Callable[[int | None], None],
         select_default: Callable[[], None],
         get_applied_t: Callable[[], float | None],
+        map_view: MapView | None = None,
     ):
         self.session = session
         self.video = video
         self.plots = plots
         self.table = table
+        # F4: the map gets a GHOST marker — lap B's kart at the secondary pane's own time —
+        # while compare is on. Injected like the other view collaborators (optional so the
+        # controller stays drivable without a map in unit tests); cleared on exit.
+        self.map = map_view
         # Entering/leaving compare suspends/restores StudioWindow's auto-follow (freeze _followed_lap
         # on the primary lap while comparing; clear it on exit) and, on exit, restores the
         # table-driven chart selection (the `_select_default` fallback). Injected as callables so the
@@ -125,6 +132,12 @@ class CompareController:
         # Each pane's Δ vs the OTHER lap, at that pane's own current track position.
         self._set_pane_badge(0, self.session.delta_between(a, b, t_a))
         self._set_pane_badge(1, self.session.delta_between(b, a, t_b))
+        # F4 map ghost: lap B's kart at the SAME t_b the badge above used (the secondary pane's
+        # own clock — both panes play "time into lap" from S/F, so this is lap B's position at
+        # equal elapsed-into-lap; no second time-alignment is invented). index_at_time is the
+        # same O(log n) lookup the red marker's tick path resolves; the map does a setPos only.
+        if self.map is not None:
+            self.map.set_ghost_index(self.session.index_at_time(t_b))
 
     def _set_pane_badge(self, side: int, d: float | None) -> None:
         """Format + colour a pane's "Δ vs other" badge (+behind / −ahead vs the other pane's lap).
@@ -190,6 +203,10 @@ class CompareController:
         self._compare = False
         self._compare_a = self._compare_b = None
         self.video.exit_compare()
+        # F4: the ghost exists only while compare is on — remove it so the map's item state
+        # returns byte-identical to pre-compare.
+        if self.map is not None:
+            self.map.clear_ghost()
         # Restore the table-driven chart selection + re-enable auto-follow (a fresh edge will
         # re-establish the followed lap on the next playhead movement).
         self._set_followed_lap(None)

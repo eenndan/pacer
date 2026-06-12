@@ -7,6 +7,9 @@ re-segments the laps once. An OPT-IN "Snap" toggle in the map header (default of
 just the RELEASED handle to the nearest trace point before that one re-segmentation; the
 other endpoint never moves (the user may deliberately anchor it off-track). The red marker
 tracks the video position and, when dragged, seeks the video to the nearest telemetry sample.
+While compare mode is on, a second hollow GHOST marker (lap-B accent) shows where the other
+compared lap's kart is at equal elapsed-into-lap — the spatial gap between the two markers is
+the compare time gap made visible (F4). It exists only during compare.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWi
 from . import theme
 from .gapfill import GAP_TIME_S
 from .session import Seg
-from .theme import MAP_RAINBOW_N, C, icon, rainbow_colors
+from .theme import CHART_SERIES, MAP_RAINBOW_N, C, icon, rainbow_colors
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -35,6 +38,11 @@ BEST_COLOR = C.text_muted           # quiet reference line for the best lap (leg
 CURRENT_COLOR = C.accent            # highlighted current-lap trace (the racing line — pops)
 MARKER_COLOR = C.behind             # video position marker — warm coral, reads on the trace
 _MARKER_RGB = QColor(C.behind)      # for the translucent marker brush below
+# F4 compare ghost: the OTHER (lap-B) kart's position at equal elapsed-into-lap. The lap-B
+# accent is the SECOND categorical chart-series colour (cyan) — the canonical "other lap"
+# colour in the theme, clearly distinct from the filled coral video marker and from every
+# trace token on the map (amber current, green best, red/amber/green rainbow ramp).
+GHOST_COLOR = CHART_SERIES[1]
 # Reconstructed (inferred) gap-fill segments are drawn DASHED + DIMMED so they read as
 # clearly distinct from measured GPS — the user must always be able to tell them apart.
 INFERRED_DASH = [5, 5]  # on/off dash pattern (px)
@@ -417,6 +425,15 @@ class MapView(QWidget):
         # markers via set_corners (on load and after a re-segmentation recomputes them).
         self._corner_markers = _CornerMarkers(self.plot)
 
+        # F4 compare-mode ghost: a second, hollow marker showing where the OTHER compared lap's
+        # (lap B's) kart is at equal elapsed-into-lap — the spatial gap made visible. Created
+        # lazily on the first compare tick and REMOVED on compare exit, so outside compare the
+        # plot's item list is byte-identical to a map that never compared. `ghost_updates`
+        # instruments every placement (like _RainbowOverlay.rebuilds) so tests can assert the
+        # non-compare tick path adds exactly zero ghost work.
+        self._ghost: pg.TargetItem | None = None
+        self.ghost_updates = 0
+
         self._start: _TimingLine | None = None
         self._sectors: list[_TimingLine] = []
         self._rebuild(session.start_line, session.sector_lines)
@@ -551,6 +568,35 @@ class MapView(QWidget):
         # Used by the scrub path (single drag-driven time); resolves the index itself.
         # Shared playhead-setter verb with PlotsView.set_playhead_time.
         self.set_marker_index(self.session.index_at_time(t))
+
+    # --------------------------------------------------------------- compare ghost (F4)
+    def set_ghost_index(self, i: int | None):
+        """Place the compare ghost at trace index `i` (None = no-op): lap B's kart at the same
+        elapsed-into-lap as the primary marker. CompareController drives this from its per-tick
+        upkeep with the SAME t_b its Δ badge used, so marker↔ghost separation IS the time gap
+        made spatial. The item is created lazily on the first compare tick; every later update
+        is a bare setPos (exactly as cheap as the red marker's tick path — no item churn)."""
+        if i is None:
+            return
+        if self._ghost is None:
+            # A hollow ring (no fill), smaller than the 15 px video marker, in the lap-B accent
+            # — visually unmistakable next to the filled coral marker. NOT movable: it displays
+            # the other lap's position; the red marker stays the only drag-to-seek surface.
+            self._ghost = pg.TargetItem((0.0, 0.0), size=11, movable=False,
+                                        pen=pg.mkPen(GHOST_COLOR, width=2),
+                                        brush=pg.mkBrush(None))
+            self._ghost.setZValue(9)  # above lap overlays/rainbow (≤5), below the marker (10)
+            self.plot.addItem(self._ghost)
+        self.ghost_updates += 1
+        self._ghost.setPos(pg.Point(float(self.session.tx[i]), float(self.session.ty[i])))
+
+    def clear_ghost(self):
+        """Remove the ghost on compare exit. The item is deleted, not hidden, so the map's item
+        state returns byte-identical to pre-compare — the ghost exists ONLY while compare is on
+        (enter/exit are rare; the per-tick path above never creates or removes anything)."""
+        if self._ghost is not None:
+            self.plot.removeItem(self._ghost)
+            self._ghost = None
 
     # --------------------------------------------------------------- rainbow (F3)
     def _cycle_rainbow(self):

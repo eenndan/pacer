@@ -76,6 +76,13 @@ add_test(NAME test_compare
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_compare.py)
 set_tests_properties(test_compare PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# F4 compare-mode map ghost: CompareController places lap B's kart on a REAL MapView at
+# index_at_time(t_b) per tick (setPos-only, one lazy item); exit restores the item state
+# byte-identically; zero ghost work outside compare. Imports map_view -> Qt, so run offscreen.
+add_test(NAME test_map_ghost
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_map_ghost.py)
+set_tests_properties(test_map_ghost PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # The extracted StudioWindow collaborators (studio.scrub_controller / studio.compare_controller):
 # drive the scrub-coalescing + compare per-tick logic DIRECTLY on a bare Session + fake views
 # (no full window / event loop). Imports Session -> Qt, so run offscreen.
@@ -115,7 +122,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
                         test_sidecar test_session_pure test_studio_features test_rainbow_map
-                        test_compare
+                        test_compare test_map_ghost
                         test_controllers test_validate_wallclock test_corners test_gmeter
                         test_gmeter_overlay)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
