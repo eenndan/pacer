@@ -132,6 +132,16 @@ add_test(NAME test_driving
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_driving.py)
 set_tests_properties(test_driving PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Video-overlay export PURE LOGIC (studio.export_video, F9): the lap-window trim math, the
+# per-frame overlay-value lookup against a synthetic Session (same accessors the live readout
+# reads), the ffmpeg decode/encode command construction, and the Renderer pump + cancel with the
+# subprocess + ffprobe MOCKED — so NO ffmpeg is needed to run. The one real-render smoke is gated
+# behind ffmpeg_available() + the D24 media file (skipped, not failed, on CI without them).
+# Builds a QImage + a headless g-meter dial, so run offscreen.
+add_test(NAME test_export_video
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_video.py)
+set_tests_properties(test_export_video PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
 add_test(NAME test_gmeter
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter.py)
@@ -139,6 +149,15 @@ add_test(NAME test_gmeter
 add_test(NAME test_gmeter_overlay
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter_overlay.py)
 set_tests_properties(test_gmeter_overlay PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Session library (F8, studio.library + studio.library_dialog): the pacer-free index — schema
+# round-trip / float-repr exactness, the fingerprint upsert-not-duplicate rule, corruption →
+# safe-empty self-heal, pb_series extraction — plus the offscreen Library dialog (list/sort,
+# Open routes through a spy callback, missing-file greying, the PB best-vs-date mini-chart) on
+# synthetic index dicts. Imports library_dialog -> Qt, so run offscreen. No telemetry file.
+add_test(NAME test_library
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_library.py)
+set_tests_properties(test_library PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
@@ -155,7 +174,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_compare test_map_ghost test_cross_reference
                         test_controllers test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
-                        test_driving)
+                        test_driving test_library test_export_video)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

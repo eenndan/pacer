@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import math
+import os
 from dataclasses import dataclass
 from typing import TypedDict
 
@@ -33,6 +34,7 @@ from . import (
     driving,
     gapfill,
     gmeter,
+    library,
     render_cache,
     tracks,
 )
@@ -1353,6 +1355,41 @@ class Session:
             return []
         return [(s.start_dist / total_lap * best_total, s.end_dist / total_lap * best_total)
                 for s in spans]
+
+    def _total_duration(self) -> float:
+        """The recording's total media duration (seconds) for the library fingerprint: the
+        ChapterMap's summed per-chapter duration when present, else the trace's own time span
+        (last − first sample). Both are stable across reloads of the same path set, so the
+        fingerprint is idempotent. 0.0 for an empty session."""
+        if self.chapters is not None:
+            return float(self.chapters.total_duration)
+        if self.tt.size >= 2:
+            return float(self.tt[-1] - self.tt[0])
+        return 0.0
+
+    def library_entry(self, paths: list[str]) -> dict:
+        """Build this recording's session-library entry (F8) — a plain dict fed to the
+        pacer-free ``studio.library`` index. PACER stays on THIS side of the seam (the values
+        come from Session accessors); library.py never imports pacer.
+
+        Identity: the FIRST chapter's stem (via ``chapters.discover_siblings`` — the same
+        recording-not-file rule the timing-line sidecar uses, so a single-chapter open and a
+        full chaptered open of the same recording share one entry) + the total media duration.
+        `paths` are the file path(s) as opened, recorded for re-open from the dialog."""
+        first = chapters.discover_siblings(paths[0])[0] if paths else ""
+        stem = os.path.splitext(os.path.basename(first))[0] if first else ""
+        best_id = self.best_lap_id()
+        best = self.lap_time(best_id) if best_id is not None else None
+        return {
+            "fingerprint": library.fingerprint(stem, self._total_duration()),
+            "stem": stem,
+            "track": self.track_name,
+            "date": self.session_date(),
+            "lap_count": len(self.valid_lap_ids()),
+            "best": best,
+            "theoretical": self.theoretical_best(),
+            "paths": list(paths),
+        }
 
     def _lap_time_dist(self, lap_id: int):
         """Cached (times, dists) for a lap: media-clock seconds + per-lap odometer (metres),

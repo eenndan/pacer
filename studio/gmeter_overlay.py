@@ -55,6 +55,7 @@ convention flip + filtering are DISPLAY concerns and live here; the validated g 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF, QRadialGradient
@@ -96,6 +97,136 @@ def _font(pt: float, bold: bool = False) -> QFont:
     f.setPointSizeF(pt)
     f.setBold(bold)
     return f
+
+
+@dataclass
+class DialState:
+    """The pure DRAW state of the g-meter dial — everything `paint_dial` needs, decoupled from
+    the live QWidget. The live overlay snapshots its own fields into one of these per paint
+    (`GMeterOverlay._dial_state`); the OFFLINE video exporter (studio/export_video.py) drives a
+    headless `GMeterOverlay` exactly like the live tick and snapshots the same way, so the burned-
+    in dial is byte-identical to the on-screen one for the same g/lap history. Felt-force axes:
+    +fx = thrown right, +fy(down) = thrown back (accel), -fy(up) = thrown forward (brake)."""
+    fx: float = 0.0                    # filtered felt-force lateral (= +lateral g)
+    fy: float = 0.0                    # filtered felt-force longitudinal (= +longitudinal g)
+    have: bool = False                 # is there a live g reading to draw the dot for?
+    hull_pts: list[tuple[float, float]] = field(default_factory=list)  # filtered felt points
+    peak_fwd: float = 0.0              # braking  (felt UP)
+    peak_back: float = 0.0             # accel    (felt DOWN)
+    peak_left: float = 0.0             # turning right (felt LEFT)
+    peak_right: float = 0.0            # turning left  (felt RIGHT)
+    source: str = "accl"               # which sensor drives the meter ("accl"/"gps")
+
+
+def dial_geom(w: float, h: float):
+    """Centre + radius of the dial inside a (w, h) box. A slim title strip up top; the cardinal
+    numbers sit just outside the outer ring, so reserve a uniform margin for them. Shared by the
+    live widget (`GMeterOverlay._geom`) and the offline renderer so both lay out identically."""
+    title_h = 18
+    margin = 18                       # room for the cardinal peak numbers outside the ring
+    dial_top = title_h
+    dial_h = h - title_h
+    r = (min(w, dial_h) - 2 * margin) / 2.0
+    r = max(r, 8.0)
+    cx = w / 2.0
+    cy = dial_top + dial_h / 2.0
+    return cx, cy, r
+
+
+def dial_to_screen(cx, cy, r, fx, fy):
+    """Map a felt-force point (felt-x, felt-y in g) to a dial pixel. +felt-x -> RIGHT, +felt-y ->
+    DOWN (accelerating); braking (felt-y<0) -> UP. Clamped to the dial circle so a big value stays
+    on the rim with its direction preserved. Shared by the live widget + the offline renderer."""
+    scale = r / _FULL_SCALE_G
+    dx = fx * scale
+    dy = fy * scale
+    d = math.hypot(dx, dy)
+    if d > r:
+        dx, dy = dx / d * r, dy / d * r
+    return cx + dx, cy + dy
+
+
+def paint_dial(p: QPainter, w: float, h: float, st: DialState) -> None:
+    """Paint the g-meter dial (backdrop, rings, max-G envelope, cardinal peaks, live dot, source
+    tag) into the painter's current coordinate system, sized to a (w, h) box at the origin. This
+    is the EXTRACTED body of the live overlay's old paintEvent — the single source of the dial's
+    look, used by both `GMeterOverlay.paintEvent` (snapshotting `self`) and the offline video
+    exporter (snapshotting a headless overlay). No widget state is touched here."""
+    p.setRenderHint(QPainter.Antialiasing, True)
+    cx, cy, r = dial_geom(w, h)
+
+    # --- faint, subtle backdrop (more see-through than a solid panel) ---
+    # C.canvas (the darkest neutral) at low alpha so the video shows through; a hairline
+    # border in C.border_strong (also dimmed) frames it without drawing attention.
+    backdrop = QRectF(1, 1, w - 2, h - 2)
+    p.setBrush(_c(C.canvas, 150))
+    p.setPen(QPen(_c(C.border_strong, 90), 1))
+    p.drawRoundedRect(backdrop, 12, 12)
+
+    # --- title: "G meter" ---
+    p.setPen(QPen(_c(C.text_dim, 220)))
+    p.setFont(_font(8.5, bold=True))
+    p.drawText(QRectF(0, 3, w, 14), Qt.AlignHCenter | Qt.AlignVCenter, "G meter")
+
+    # --- concentric rings (thin, clean) ---
+    p.setBrush(Qt.NoBrush)
+    for gval in _RINGS:
+        rr = r * (gval / _FULL_SCALE_G)
+        p.setPen(QPen(_c(C.border, 200), 1.0))   # inner grid circles — dim
+        p.drawEllipse(QPointF(cx, cy), rr, rr)
+    # outer boundary ring — a touch stronger than the inner grid circles
+    p.setPen(QPen(_c(C.border_strong, 220), 1.2))
+    p.drawEllipse(QPointF(cx, cy), r, r)
+    # faint crosshair guides (tick/axis marks) — muted
+    p.setPen(QPen(_c(C.text_muted, 90), 0.8))
+    p.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
+    p.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
+
+    # --- filled max-G envelope (translucent blob = grip used this lap) ---
+    # Recoloured from red to the accent amber: outline C.accent, fill C.accent at low alpha so
+    # the grip envelope reads clearly over footage without dominating.
+    if len(st.hull_pts) >= 3:
+        hull = _convex_hull(st.hull_pts)
+        if len(hull) >= 3:
+            poly = QPolygonF([QPointF(*dial_to_screen(cx, cy, r, hx, hy))
+                              for (hx, hy) in hull])
+            path = QPainterPath()
+            path.addPolygon(poly)
+            path.closeSubpath()
+            p.setPen(QPen(_c(C.accent, 170), 1.2))
+            p.setBrush(_c(C.accent, 56))
+            p.drawPath(path)
+
+    # --- cardinal peak-g numbers (robust max felt-g per direction) ---
+    p.setFont(_font(8.0, bold=True))
+    p.setPen(QPen(_c(C.text_dim, 230)))   # axis value labels — dimmed off-white
+    off = 11
+    # forward (braking) at top, back (accel) at bottom, left/right on the sides
+    p.drawText(QRectF(cx - 22, cy - r - off - 6, 44, 12), Qt.AlignCenter, f"{st.peak_fwd:.1f}")
+    p.drawText(QRectF(cx - 22, cy + r + off - 6, 44, 12), Qt.AlignCenter, f"{st.peak_back:.1f}")
+    p.drawText(QRectF(cx - r - off - 22, cy - 6, 44, 12), Qt.AlignRight | Qt.AlignVCenter,
+               f"{st.peak_left:.1f}")
+    p.drawText(QRectF(cx + r + off - 22, cy - 6, 44, 12), Qt.AlignLeft | Qt.AlignVCenter,
+               f"{st.peak_right:.1f}")
+
+    # --- the live dot (NO line from centre to the dot — just a soft glow + dot) ---
+    # An accent (amber) glow fading out, with a bright off-white (C.text) core so the felt-
+    # force pointer is clearly visible over the footage and reads as the live indicator.
+    if st.have:
+        dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
+        grad = QRadialGradient(QPointF(dx, dy), 8)
+        grad.setColorAt(0.0, _c(C.accent, 235))
+        grad.setColorAt(1.0, _c(C.accent, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(grad)
+        p.drawEllipse(QPointF(dx, dy), 7, 7)
+        p.setBrush(_c(C.text, 245))
+        p.drawEllipse(QPointF(dx, dy), 2.6, 2.6)
+
+    # --- source tag (tiny, bottom-right) ---
+    p.setPen(QPen(_c(C.text_muted, 150)))
+    p.setFont(_font(6.0))
+    p.drawText(QRectF(w - 44, h - 13, 40, 11), Qt.AlignRight, st.source.upper())
 
 
 class GMeterOverlay(QWidget):
@@ -224,112 +355,27 @@ class GMeterOverlay(QWidget):
 
     # ------------------------------------------------------------------ painting
     def _geom(self):
-        """Centre + radius of the dial. A slim title strip up top; the cardinal numbers sit just
-        outside the outer ring, so reserve a uniform margin for them."""
-        w, h = self.width(), self.height()
-        title_h = 18
-        margin = 18                       # room for the cardinal peak numbers outside the ring
-        dial_top = title_h
-        dial_h = h - title_h
-        r = (min(w, dial_h) - 2 * margin) / 2.0
-        r = max(r, 8.0)
-        cx = w / 2.0
-        cy = dial_top + (dial_h) / 2.0
-        return cx, cy, r
+        """Centre + radius of the dial (delegates to the shared `dial_geom`). Kept as a thin
+        method so the existing offscreen tests that call `ov._geom()` / `ov._to_screen(...)`
+        keep working unchanged."""
+        return dial_geom(self.width(), self.height())
 
     def _to_screen(self, cx, cy, r, fx, fy):
-        """Map a felt-force point (felt-x, felt-y in g) to a dial pixel. +felt-x -> RIGHT,
-        +felt-y -> DOWN (accelerating); braking (felt-y<0) -> UP. Clamped to the dial circle so a
-        big value stays on the rim with its direction preserved."""
-        scale = r / _FULL_SCALE_G
-        dx = fx * scale
-        dy = fy * scale
-        d = math.hypot(dx, dy)
-        if d > r:
-            dx, dy = dx / d * r, dy / d * r
-        return cx + dx, cy + dy
+        """Felt-force point -> dial pixel (delegates to the shared `dial_to_screen`)."""
+        return dial_to_screen(cx, cy, r, fx, fy)
+
+    def _dial_state(self) -> DialState:
+        """Snapshot the live filtering state into a pure `DialState` for `paint_dial`. The live
+        paint path and the offline exporter both render through the same function from such a
+        snapshot, so what's burned into the video matches what's on screen."""
+        return DialState(
+            fx=self._fx, fy=self._fy, have=self._have, hull_pts=list(self._hull_pts),
+            peak_fwd=self._peak_fwd, peak_back=self._peak_back,
+            peak_left=self._peak_left, peak_right=self._peak_right, source=self._source)
 
     def paintEvent(self, _event):
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
-        cx, cy, r = self._geom()
-        w = self.width()
-
-        # --- faint, subtle backdrop (more see-through than a solid panel) ---
-        # C.canvas (the darkest neutral) at low alpha so the video shows through; a hairline
-        # border in C.border_strong (also dimmed) frames it without drawing attention.
-        backdrop = QRectF(1, 1, w - 2, self.height() - 2)
-        p.setBrush(_c(C.canvas, 150))
-        p.setPen(QPen(_c(C.border_strong, 90), 1))
-        p.drawRoundedRect(backdrop, 12, 12)
-
-        # --- title: "G meter" ---
-        p.setPen(QPen(_c(C.text_dim, 220)))
-        p.setFont(_font(8.5, bold=True))
-        p.drawText(QRectF(0, 3, w, 14), Qt.AlignHCenter | Qt.AlignVCenter, "G meter")
-
-        # --- concentric rings (thin, clean) ---
-        p.setBrush(Qt.NoBrush)
-        for gval in _RINGS:
-            rr = r * (gval / _FULL_SCALE_G)
-            p.setPen(QPen(_c(C.border, 200), 1.0))   # inner grid circles — dim
-            p.drawEllipse(QPointF(cx, cy), rr, rr)
-        # outer boundary ring — a touch stronger than the inner grid circles
-        p.setPen(QPen(_c(C.border_strong, 220), 1.2))
-        p.drawEllipse(QPointF(cx, cy), r, r)
-        # faint crosshair guides (tick/axis marks) — muted
-        p.setPen(QPen(_c(C.text_muted, 90), 0.8))
-        p.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
-        p.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
-
-        # --- filled max-G envelope (translucent blob = grip used this lap) ---
-        # Recoloured from red to the accent amber: outline C.accent, fill C.accent at low alpha so
-        # the grip envelope reads clearly over footage without dominating.
-        if len(self._hull_pts) >= 3:
-            hull = _convex_hull(self._hull_pts)
-            if len(hull) >= 3:
-                poly = QPolygonF([QPointF(*self._to_screen(cx, cy, r, hx, hy))
-                                  for (hx, hy) in hull])
-                path = QPainterPath()
-                path.addPolygon(poly)
-                path.closeSubpath()
-                p.setPen(QPen(_c(C.accent, 170), 1.2))
-                p.setBrush(_c(C.accent, 56))
-                p.drawPath(path)
-
-        # --- cardinal peak-g numbers (robust max felt-g per direction) ---
-        p.setFont(_font(8.0, bold=True))
-        p.setPen(QPen(_c(C.text_dim, 230)))   # axis value labels — dimmed off-white
-        off = 11
-        # forward (braking) at top, back (accel) at bottom, left/right on the sides
-        p.drawText(QRectF(cx - 22, cy - r - off - 6, 44, 12), Qt.AlignCenter,
-                   f"{self._peak_fwd:.1f}")
-        p.drawText(QRectF(cx - 22, cy + r + off - 6, 44, 12), Qt.AlignCenter,
-                   f"{self._peak_back:.1f}")
-        p.drawText(QRectF(cx - r - off - 22, cy - 6, 44, 12), Qt.AlignRight | Qt.AlignVCenter,
-                   f"{self._peak_left:.1f}")
-        p.drawText(QRectF(cx + r + off - 22, cy - 6, 44, 12), Qt.AlignLeft | Qt.AlignVCenter,
-                   f"{self._peak_right:.1f}")
-
-        # --- the live dot (NO line from centre to the dot — just a soft glow + dot) ---
-        # An accent (amber) glow fading out, with a bright off-white (C.text) core so the felt-
-        # force pointer is clearly visible over the footage and reads as the live indicator.
-        if self._have:
-            dx, dy = self._to_screen(cx, cy, r, self._fx, self._fy)
-            grad = QRadialGradient(QPointF(dx, dy), 8)
-            grad.setColorAt(0.0, _c(C.accent, 235))
-            grad.setColorAt(1.0, _c(C.accent, 0))
-            p.setPen(Qt.NoPen)
-            p.setBrush(grad)
-            p.drawEllipse(QPointF(dx, dy), 7, 7)
-            p.setBrush(_c(C.text, 245))
-            p.drawEllipse(QPointF(dx, dy), 2.6, 2.6)
-
-        # --- source tag (tiny, bottom-right) ---
-        p.setPen(QPen(_c(C.text_muted, 150)))
-        p.setFont(_font(6.0))
-        p.drawText(QRectF(w - 44, self.height() - 13, 40, 11), Qt.AlignRight, self._source.upper())
-
+        paint_dial(p, self.width(), self.height(), self._dial_state())
         p.end()
 
 

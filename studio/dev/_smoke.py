@@ -10,7 +10,9 @@ real ffmpeg/AVFoundation pipeline blocks indefinitely. Every check below — the
 load, the panel construction + wiring, the sidecar write/cleanup — runs identically in both
 modes; only the decoder/audio stack is absent."""
 import os
+import shutil
 import sys
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 if "--no-video" in sys.argv[1:]:
@@ -20,7 +22,15 @@ if "--no-video" in sys.argv[1:]:
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from studio import library
 from studio.app import StudioWindow
+
+# F8: the load now upserts the recording into the session-library index (~/Library/Application
+# Support/pacer/library.json). The smoke run "must leave no artifacts" and must never touch the
+# user's real library, so divert the index to a throwaway temp dir BEFORE any window is built
+# (the upsert reads this seam at load time). We assert the entry appeared there, then drop it.
+_LIB_DIR = tempfile.mkdtemp(prefix="pacer-smoke-lib-")
+library._app_support_dir = lambda: _LIB_DIR
 
 app = QApplication([a for a in sys.argv if a != "--no-video"])
 
@@ -64,5 +74,13 @@ w._on_lines(s.start_line, s.sector_lines + [s.suggest_sector()])
 print("after add-sector: laps", s.lap_count(), "valid", len(s.valid_lap_ids()))
 assert w._sidecar_path and os.path.exists(w._sidecar_path), "sidecar not written on user edit"
 os.remove(w._sidecar_path)
+
+# F8: the post-load upsert recorded this recording in the (temp-diverted) library index. Assert
+# it landed with the right lap count, then drop the temp dir so the run leaves no artifacts.
+_lib = library.load()
+assert len(_lib["entries"]) == 1, f"library upsert: expected 1 entry, got {len(_lib['entries'])}"
+assert _lib["entries"][0]["lap_count"] == len(s.valid_lap_ids()), "library lap_count mismatch"
+print("library entry:", _lib["entries"][0]["stem"], "laps", _lib["entries"][0]["lap_count"])
+shutil.rmtree(_LIB_DIR, ignore_errors=True)
 
 print("SMOKE OK" + (" (no-video)" if os.environ.get("PACER_NO_MEDIA") == "1" else ""))

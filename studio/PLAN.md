@@ -117,6 +117,19 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
   correlate **r≈1.00** in track position with the independent **GPS speed-derivative** method
   (~4–6 m median offset) and yield **zero** false onsets on the full-throttle straight (0060 +
   0062); θ_b stable across recordings (0.463 vs 0.452 g, 2.4% apart).
+- **Session library** (`library.py` + `library_dialog.py`, F8) — a versioned local index at
+  `~/Library/Application Support/pacer/library.json` (atomic write; pacer-free, the sidecar's twin).
+  **Every successful load** upserts the recording (track / date from the GPS9 wall clock / lap count /
+  best / theoretical / paths) **post-UI and fully guarded** — a library-write failure only logs a
+  warning, never disrupts or slows the load. One entry per **recording fingerprint** (`<first-chapter
+  stem>|<total duration>`), so re-opening the same recording — single chapter or the full chaptered
+  chain — **updates in place, no duplicate** (verified on the real pair: 0060 + the 3-chapter 0062 set
+  → 2 distinct entries; re-loading 0060 keeps the count at 2). **File ▸ "Library…"** opens a
+  self-contained dialog: a **sortable** list (date / track / best / theoretical), an **Open** button
+  that re-loads the selected recording through `_load`, **missing-file rows greyed + not openable**,
+  and a per-track **PB-progression mini-chart** (best-lap vs date — pyqtgraph). A corrupt/missing index
+  **self-heals to an empty library** (same load-guard philosophy as the sidecar revert). Dormant/safe:
+  with the dialog never opened, behavior is unchanged.
 - **Dark "Refined Minimal" theme** (`theme.py`) — single-source design tokens + dark `QPalette` +
   global QSS, Inter fonts, Phosphor icon buttons (`qtawesome`); charts, table, map and video chrome
   all adopt the dark surface.
@@ -126,6 +139,25 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
   that round-trip to the Session arrays **exactly**), and a self-contained one-page HTML report
   (session header + laps table + embedded map/chart PNG snapshots, no JS). Greyed out until a
   session loads; nothing is written without an explicit action + confirmed save dialog.
+- **Video-overlay export** (`export_video.py`, F9 — pacer-free + **event-loop-free**; `ffmpeg`
+  pixi dep) — **File ▸ "Export overlay video…"** burns the on-screen overlays onto the GoPro
+  footage → a shareable MP4. A Python compositing loop sits between two ffmpeg processes:
+  **decode** (rawvideo pipe, `-ss/-t` trim of the selected lap's media window + scale to 1080p) →
+  **paint** each frame into a `QImage` with QPainter (the **g-meter dial** via the shared
+  `gmeter_overlay.paint_dial`, the **Δ/speed box**, a **track-map inset + marker**, a **lap/sector
+  strip** — all from the SAME Session accessors the live readout reads, so a frame grab matches the
+  app) → **mux** (H.264 + the source **audio** trimmed to the same window). Runs on a worker
+  `QThread` behind a cancellable `QProgressDialog`; a **separate dormant File-menu entry** greyed
+  out until a session loads, so the feature can't touch the live app path (the one shared file,
+  `gmeter_overlay.py`, paints **pixel-identically** to before the dial-paint extraction). Verified
+  on the real D24 best lap (lap 9, 68.44 s): 4103 frames rendered in **~225 s** (1080p@59.94),
+  output `68.435 s` vs the lap window `68.440 s` (**5.1 ms ≤ 1 frame**), valid h264+aac 1920×1080,
+  and a 5-timestamp frame-grab cross-check where the burned-in speed/Δ/g-dot quadrant equal the
+  `Session`/`gmeter` accessors at that media time. **v1 = ONE selected lap.** **Phase 2:**
+  full-session export and compare-pair side-by-side export (the renderer + spec already abstract the
+  window; both are additive, no live-path change). Pure-logic parts unit-tested in
+  `tests/test_export_video.py` (subprocess mocked — CI needs no ffmpeg; a real render is gated
+  behind `ffmpeg_available()` + the media file).
 
 ---
 
