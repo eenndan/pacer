@@ -72,7 +72,9 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
 - **Compare videos (dual-lap side-by-side)** — a toggle shows two equal video panes playing "time
   into lap" from S/F at 1× (the faster pulls ahead); the primary (left) pane keeps driving all
   telemetry, the secondary is video-only; per-pane lap pickers + "Δ vs other" badges; every repoint
-  re-aligns both panes at the start line.
+  re-aligns both panes at the start line. While comparing, the track map shows a hollow **ghost
+  marker** (lap-B accent) at the other lap's position for the same elapsed-into-lap — the spatial
+  gap between marker and ghost is the time gap made visible; it exists only during compare.
 - **Corner model + per-corner analysis** (`corners.py`, pure numpy — NOT map-matching: everything
   runs on our own trace) — corners detected from the **median curvature profile** of the session's
   clean laps with a threshold **derived from the track's own κ distribution** (log-domain Otsu);

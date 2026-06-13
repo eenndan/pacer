@@ -356,6 +356,7 @@ class StudioWindow(QMainWindow):
             set_followed_lap=self._set_followed_lap,
             select_default=self._select_default,
             get_applied_t=lambda: self._applied_t,
+            map_view=self.map,  # F4: the compare ghost (lap B's kart) on the track map
         )
         # Scrub: a fine, lap-scoped scrubber (the full-video slider stays). Dragging either plot
         # cursor seeks the video WITHIN the current lap; plots_view emits the raw plot-x + which
