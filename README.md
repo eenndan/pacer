@@ -29,6 +29,11 @@ git submodule update --init --recursive  # 3rdparty/ deps (gpmf-parser, nanobind
 pixi install                              # env + editable python bindings
 ```
 
+External binary deps come from conda-forge via pixi (`[tool.pixi.dependencies]` in
+`pyproject.toml`): `cmake`/`ninja`/`clang-format` for the build, `catch2` for the C++ tests, and
+**`ffmpeg`** (the `ffmpeg`/`ffprobe` binaries) for the studio app's video-overlay export (F9 —
+[studio/export_video.py](studio/export_video.py)). The app shells out to nothing else.
+
 After that, there are pixi tasks for the common stuff (no need to memorize commands):
 
 ```bash

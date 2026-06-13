@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt, QTimer
+from PySide6.QtCore import QBuffer, QIODevice, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -30,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, export_data, library, sidecar, theme
+from . import chapters, export_data, export_video, library, sidecar, theme
 from .compare_controller import CompareController
 from .consistency_panel import ConsistencyPanel
 from .lap_table import CornerTable, LapTable
@@ -40,6 +41,52 @@ from .plots_view import PlotsView
 from .scrub_controller import ScrubController
 from .session import DEFAULT_SAMPLE, Session, fmt_time
 from .video_view import VideoView
+
+
+class _VideoExportWorker(QThread):
+    """Runs an export_video.Renderer to completion on a worker thread, reporting frame progress
+    and a final ok/message back to the GUI thread via queued signals (F9). Keeps the heavy
+    decode/composite/mux loop OFF the UI thread so the progress dialog stays responsive and
+    cancellable. The renderer is pacer-free + event-loop-free; this thin QThread is the only Qt
+    threading glue, and it lives in app.py (not the renderer) so export_video stays GUI-agnostic.
+
+    Cancellation: `cancel()` (called from the GUI thread when the dialog's Cancel is hit) flips a
+    flag the render loop polls via the `cancel` callback — a cooperative stop that tears the
+    ffmpeg pipes down cleanly. The partial output file is removed so a cancel leaves nothing
+    half-written."""
+
+    progress = Signal(int, int)              # (frames_done, frames_total)
+    finished_export = Signal(bool, str)      # (ok, message)  message="cancelled" / an error text
+
+    def __init__(self, session, spec):
+        super().__init__()
+        self._session = session
+        self._spec = spec
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            renderer = export_video.Renderer(self._session, self._spec)
+            renderer.run(progress=lambda d, t: self.progress.emit(d, t),
+                         cancel=lambda: self._cancelled)
+            self.finished_export.emit(True, "")
+        except export_video.CancelledError:
+            self._cleanup_partial()
+            self.finished_export.emit(False, "cancelled")
+        except Exception as exc:  # surfaced in a dialog by the GUI thread
+            self._cleanup_partial()
+            self.finished_export.emit(False, str(exc))
+
+    def _cleanup_partial(self):
+        """Best-effort: drop a partially-written output so a cancel/error leaves no broken MP4."""
+        try:
+            if os.path.exists(self._spec.out_path):
+                os.remove(self._spec.out_path)
+        except OSError:
+            pass
 
 
 class StudioWindow(QMainWindow):
@@ -459,6 +506,17 @@ class StudioWindow(QMainWindow):
         self._export_report_action.triggered.connect(self._export_report)
         self._export_menu.setEnabled(False)  # no session yet at construction time
         menu.aboutToShow.connect(self._sync_export_menu)
+        # F9 video-overlay export: a SEPARATE File-menu entry (not inside the data-export submenu)
+        # that burns the telemetry overlays onto the footage → a shareable MP4. Deliberately a
+        # dormant, additive menu entry — the whole renderer lives in studio/export_video.py and is
+        # only reached through this action, so the feature can't touch the live app path. Greyed
+        # out (and re-synced on aboutToShow) until a session is loaded.
+        self._export_video_action = menu.addAction("Export overlay video…")
+        self._export_video_action.setToolTip(
+            "Render the selected lap with the on-screen overlays burned in (g-meter, Δ/speed, "
+            "map inset, lap strip) to a shareable MP4")
+        self._export_video_action.triggered.connect(self._export_overlay_video)
+        self._export_video_action.setEnabled(False)
         # F7 cross-recording reference: load ANOTHER recording and overlay/compare against its
         # best lap (race a friend's GoPro file). Additive — kept separate from the actions above
         # so a merged File-menu PR (another agent may add more here) stays conflict-light.
@@ -587,10 +645,12 @@ class StudioWindow(QMainWindow):
     # nothing written), and the widget→PNG grabs for the report. Scoped to the File-menu
     # region: no other part of the app knows exports exist.
     def _sync_export_menu(self):
-        """Grey the Export submenu out until a session is loaded. Connected to the File
-        menu's aboutToShow (synced as the menu opens), so neither _load nor the failed-load
-        path needs to reach into the menu."""
-        self._export_menu.setEnabled(hasattr(self, "session"))
+        """Grey the Export submenu + the video-export action out until a session is loaded.
+        Connected to the File menu's aboutToShow (synced as the menu opens), so neither _load nor
+        the failed-load path needs to reach into the menu."""
+        has = hasattr(self, "session")
+        self._export_menu.setEnabled(has)
+        self._export_video_action.setEnabled(has)
 
     def _export_default(self, suffix: str) -> str:
         """Default save path: next to the recording, named `<stem><suffix>` (e.g.
@@ -661,6 +721,74 @@ class StudioWindow(QMainWindow):
         buf.open(QIODevice.WriteOnly)
         image.save(buf, "PNG")
         return bytes(buf.data())
+
+    # ------------------------------------------------- video-overlay export (F9)
+    # File ▸ "Export overlay video…": render the selected lap with the overlays burned onto the
+    # footage. The renderer (studio/export_video.py) is pacer-free and event-loop-free; this
+    # cluster owns the Qt side only — the save dialog, a QThread so the render runs OFF the UI
+    # thread, and a cancellable QProgressDialog. Nothing is written without the save dialog.
+    def _export_overlay_video(self):
+        if not hasattr(self, "session"):
+            return
+        if not export_video.ffmpeg_available():
+            QMessageBox.warning(self, "Export overlay video",
+                                "ffmpeg was not found. The video export needs ffmpeg/ffprobe on "
+                                "PATH (they ship with the pixi environment).")
+            return
+        src = self._paths[0] if getattr(self, "_paths", None) else ""
+        if not src or not os.path.exists(src):
+            QMessageBox.warning(self, "Export overlay video",
+                                "This session has no source video file to render onto.")
+            return
+        lap = self._export_lap_id()  # the primary/selected lap, falling back to the best lap
+        win = export_video.lap_window_for_export(self.session, lap) if lap is not None else None
+        if win is None:
+            self.statusBar().showMessage("no usable lap to export video for")
+            return
+        out = self._export_save_path(f"Export overlay video — lap {lap}",
+                                     f"_lap{lap}_overlay.mp4", "MP4 video (*.mp4)")
+        if not out:
+            return
+        spec = export_video.ExportSpec(src_path=src, out_path=out, lap_id=lap,
+                                       t0=win[0], t1=win[1])
+        self._run_video_export(spec, lap)
+
+    def _run_video_export(self, spec, lap: int):
+        """Run the render on a worker QThread behind a cancellable modal progress dialog. The
+        dialog's Cancel sets the worker's flag (polled by the render loop's `cancel` callback);
+        the worker reports (done, total) frames back to the dialog over a queued signal."""
+        dlg = QProgressDialog(f"Rendering lap {lap} overlay video…", "Cancel", 0, 100, self)
+        dlg.setWindowTitle("Export overlay video")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+
+        worker = _VideoExportWorker(self.session, spec)
+        self._video_worker = worker  # keep a ref so the thread isn't GC'd mid-render
+
+        def on_progress(done: int, total: int):
+            if total > 0:
+                dlg.setMaximum(total)
+                dlg.setValue(done)
+
+        def on_done(ok: bool, message: str):
+            dlg.reset()
+            worker.wait()
+            self._video_worker = None
+            if ok:
+                self.statusBar().showMessage(f"exported {os.path.basename(spec.out_path)}")
+            elif message == "cancelled":
+                self.statusBar().showMessage("video export cancelled")
+            else:
+                QMessageBox.warning(self, "Export overlay video",
+                                    f"The render failed:\n{message}")
+
+        worker.progress.connect(on_progress)
+        worker.finished_export.connect(on_done)
+        dlg.canceled.connect(worker.cancel)
+        worker.start()
+        dlg.exec()
 
     # ----------------------------------------------- cross-recording reference (F7)
     def _load_reference_file(self):
