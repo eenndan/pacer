@@ -395,6 +395,15 @@ class StudioWindow(QMainWindow):
         self._select_default()
         self._refresh_sector_lines()  # draw any sectors present on launch (none by default)
         self._sync_full_recording_action()
+        # F7: the permanent status-bar chip showing which cross-recording reference is active.
+        # Created ONCE (it lives on the persistent QMainWindow status bar, which _build_ui's
+        # central-widget teardown doesn't touch) and hidden until a reference is loaded. A
+        # primary reload builds a fresh Session with no reference, so re-sync (hide) it here.
+        if getattr(self, "_ref_chip", None) is None:
+            self._ref_chip = QLabel("")
+            self._ref_chip.setProperty("role", "BarLabel")
+            self.statusBar().addPermanentWidget(self._ref_chip)
+        self._update_reference_status()
 
     # ----------------------------------------------------- multi-chapter UI / opt-in
     def _build_menu(self):
@@ -430,6 +439,20 @@ class StudioWindow(QMainWindow):
         self._export_report_action.triggered.connect(self._export_report)
         self._export_menu.setEnabled(False)  # no session yet at construction time
         menu.aboutToShow.connect(self._sync_export_menu)
+        # F7 cross-recording reference: load ANOTHER recording and overlay/compare against its
+        # best lap (race a friend's GoPro file). Additive — kept separate from the actions above
+        # so a merged File-menu PR (another agent may add more here) stays conflict-light.
+        menu.addSeparator()
+        self._ref_action = menu.addAction("Load reference recording…")
+        self._ref_action.setToolTip(
+            "Pick another recording of the SAME track; its best lap becomes the Δ / map / table "
+            "reference (instead of this session's own best lap)")
+        self._ref_action.triggered.connect(self._load_reference_file)
+        self._clear_ref_action = menu.addAction("Clear reference")
+        self._clear_ref_action.setToolTip("Revert the Δ / map / table reference to this "
+                                          "session's own best lap")
+        self._clear_ref_action.triggered.connect(self._clear_reference)
+        self._clear_ref_action.setEnabled(False)
 
     # ----------------------------------------------------- keyboard shortcuts
     def _build_shortcuts(self):
@@ -591,6 +614,73 @@ class StudioWindow(QMainWindow):
         buf.open(QIODevice.WriteOnly)
         image.save(buf, "PNG")
         return bytes(buf.data())
+
+    # ----------------------------------------------- cross-recording reference (F7)
+    def _load_reference_file(self):
+        """File ▸ "Load reference recording…": pick another recording (same track) whose best lap
+        becomes the Δ / map / table reference. The chapters of the picked file are chained (like
+        "Load full recording") so the reference is the whole recording, then handed to
+        Session.load_reference. On a guard refusal (different track / no valid laps) the local best
+        lap is kept and the reason is shown — non-fatal."""
+        if not hasattr(self, "session"):
+            return
+        start_dir = os.path.dirname(self._paths[0]) if getattr(self, "_paths", None) else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load reference recording", start_dir, "GoPro recordings (*.MP4 *.mp4)")
+        if not path:
+            return
+        paths = chapters.discover_siblings(path)
+        print(f"studio: loading reference recording — {len(paths)} chapter(s)…", flush=True)
+        reason = self.session.load_reference(paths)
+        if reason is not None:
+            print(f"studio: reference not loaded — {reason}", flush=True)
+            QMessageBox.information(self, "pacer studio — reference not loaded", reason)
+            return
+        self._apply_reference_change()
+
+    def _clear_reference(self):
+        """File ▸ "Clear reference": drop the cross-recording reference; everything reverts to the
+        session's own best lap (the dormant state)."""
+        if not hasattr(self, "session") or not self.session.has_reference():
+            return
+        self.session.clear_reference()
+        self._apply_reference_change()
+
+    def _apply_reference_change(self):
+        """Refresh every "vs best" surface after the reference was loaded OR cleared, and update
+        the menu + status chip. The reference replaces the local best lap as the Δ / map-overlay /
+        sector-guide / per-corner-Δ baseline, so the same panels a re-segment refreshes are
+        rebuilt here (minus the actual re-segmentation — the PRIMARY laps are unchanged)."""
+        # The lap table's per-corner Δ columns + the Corners view read against the (now changed)
+        # baseline; the map's faint reference line switches to/from the reference racing line.
+        self.table.refresh()
+        self.corner_table.refresh()
+        self.map.refresh_overlays()
+        # Rebuild the delta/speed charts (the baseline curve + the x-axis scale changed) and the
+        # sector guide lines on the rescaled axis.
+        if self._comparing():
+            # Compare mode draws its own pinned [A,B] pair; just refresh its overlay in place.
+            self.plots.refresh()
+        else:
+            self._select_default()
+        self._refresh_sector_lines()
+        self._update_reference_status()
+
+    def _update_reference_status(self):
+        """Reflect the active reference in the menu (enable Clear) + the permanent status-bar chip
+        (the persistent which-reference-is-active indicator). Dormant: the chip is hidden and the
+        statusbar is exactly as before."""
+        active = hasattr(self, "session") and self.session.has_reference()
+        if hasattr(self, "_clear_ref_action"):
+            self._clear_ref_action.setEnabled(active)
+        chip = getattr(self, "_ref_chip", None)
+        if chip is None:
+            return
+        if active:
+            chip.setText(f"  ▶ reference: {self.session.reference_label()}  ")
+            chip.setVisible(True)
+        else:
+            chip.setVisible(False)
 
     def _update_chapter_label(self, chapter_index: int):
         """Banner text: the recording label plus, for a chaptered session, the current chapter.

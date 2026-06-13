@@ -314,6 +314,24 @@ class _LapOverlay:
                 item.setVisible(False)
             self._items.append(item)
 
+    def set_polyline(self, xs, ys, key):
+        """(Re)draw a single solid polyline (no gap-fill segments) — used for the cross-recording
+        REFERENCE racing line (F7), which arrives as one clean fitted (xs, ys) ring already in the
+        primary frame, not a per-lap segment list. `key` is a stable identity (the reference lap
+        id) so an unchanged reference is a no-op; it is stored in `lap_id` to share the change
+        gate. Honours the hidden-while-rainbow state like set_lap."""
+        if key == self.lap_id and self._items:
+            return
+        self._clear()
+        self.lap_id = key
+        if xs is None or len(xs) < 2:
+            return
+        item = self.plot.plot(np.asarray(xs), np.asarray(ys),
+                              pen=pg.mkPen(self.color, width=self.base_width))
+        if not self.visible:
+            item.setVisible(False)
+        self._items.append(item)
+
     def refresh(self, session: Session):
         """Force a redraw of the current lap (e.g. after re-segmentation invalidated caches)."""
         lap_id, self.lap_id = self.lap_id, None
@@ -655,10 +673,24 @@ class MapView(QWidget):
 
     # --------------------------------------------------------------- lap overlays
     def _refresh_best(self):
-        """Draw the best lap as a faint thin reference line (measured solid + inferred dashed).
-        Re-draws only when the best lap id actually changes (e.g. after the timing lines move).
-        When the best lap changes, its per-lap segment cache may also be stale, so force a
-        redraw of the current overlay too."""
+        """Draw the faint reference line on the map. Normally that's the local best lap (measured
+        solid + inferred dashed). When a CROSS-RECORDING reference is loaded (F7) and its racing
+        line could be aligned into this frame, draw THAT instead — the friend's lap as the
+        overlay, the same faint quiet-reference role the best lap plays.
+
+        Re-draws only when the drawn line's identity actually changes (best lap id, or the
+        reference toggling on/off). DORMANT: with no reference this is byte-identical — the local
+        best lap drawn exactly as before."""
+        ref_xy = self.session.reference_overlay_xy()
+        if ref_xy is not None:
+            # The reference is keyed distinctly from any lap id (negative sentinel) so switching
+            # between local-best and reference always rebuilds. One clean fitted ring, no gaps.
+            key = ("ref", self.session.reference_label())
+            if self._best_lap_id == key and self._best_overlay.lap_id is not None:
+                return
+            self._best_lap_id = key
+            self._best_overlay.set_polyline(ref_xy[:, 0], ref_xy[:, 1], key)
+            return
         best = self.session.best_lap_id()
         if best == self._best_lap_id and self._best_overlay.lap_id is not None:
             return

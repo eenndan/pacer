@@ -84,6 +84,19 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
   for the selected lap: time-in-corner, Δ vs best, apex (min) speed + Δ, entry/exit speeds, with
   the per-corner **session best in purple**. Cross-recording stability verified on 0060 vs 0062:
   same 12 corners, apexes within 3.5 m.
+- **Cross-recording reference lap** (`cross_reference.py`, F7 — "race a friend's GoPro file") —
+  **File ▸ "Load reference recording…"** loads ANOTHER recording of the **same track** headless and
+  adopts its best lap as the Δ / map-overlay / sector-guide / per-corner-Δ **baseline** in place of
+  this session's own best lap. Alignment is by **normalized distance** (the existing delta machinery
+  — the two recordings' differing lap lengths/start lines just work), so the Δ endpoint == the
+  cross-recording laptime difference (verified on 0060-vs-0062: **+0.027 s**, the 68.228 − 68.201 s
+  best-lap gap, to 0 error). The reference racing line is **fit into the primary's local frame**
+  (`reference.fit_loop_to_loop`; RMS 1.3 m on the real pair) and drawn as the faint map overlay; a
+  **status-bar chip** shows which reference is active, **"Clear reference"** reverts to own-best.
+  **Same-track guarded** (a foreign track is refused with a non-fatal notice, local best kept) and
+  **fully dormant when absent** — every "vs best" output is byte-identical to before. Phase B
+  (pane-B plays the other recording's VIDEO) deferred: the secondary pane + CompareController are
+  single-session/single-media; a second media source + time-map is a follow-up, seam left clean.
 - **Dark "Refined Minimal" theme** (`theme.py`) — single-source design tokens + dark `QPalette` +
   global QSS, Inter fonts, Phosphor icon buttons (`qtawesome`); charts, table, map and video chrome
   all adopt the dark surface.

@@ -77,7 +77,8 @@ Wow, something already done:
 
 - the **studio app** — map + speed/Δ charts + lap table + **synced GoPro video** + accelerometer
   g-meter overlay, with GPS9 true-clock lap timing (validated unbiased vs a real transponder);
-- lap segmentation, comparison between laps with delta;
+- lap segmentation, comparison between laps with delta — including against the best lap of
+  **another recording** of the same track (cross-recording reference, "race a friend's GoPro file");
 - nanobind-based Python bindings to rapidly experiment in Python;
 - integration with 3rd-party GPS data (GoPro GPMF GPS5/GPS9);
 - config/CLI-driven inputs (no more hard-coded paths), formatting/lint config,

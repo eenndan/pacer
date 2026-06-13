@@ -33,6 +33,7 @@ from PySide6.QtWidgets import QComboBox, QVBoxLayout, QWidget
 
 from . import theme
 from ._signal import fmt_time
+from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
 from .theme import C
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
@@ -316,18 +317,26 @@ class PlotsView(QWidget):
         self.p_speed.enableAutoRange()
         self.p_delta.enableAutoRange()
 
-        # The whole panel is "Δ TO BEST" — the best lap IS the reference curve, so it must ALWAYS
-        # be drawn (green) regardless of the user's selection, even when they picked other laps.
-        # Build a DRAW set = the selection plus the best lap (appended once if not already chosen),
-        # WITHOUT mutating self._lap_ids: the cursor/scrub/hover-dot/auto-follow all key off
-        # _lap_ids and the current lap, so the always-on best reference must not change which lap
-        # is "current". (session.delta already fetches the best lap's arrays internally, but we
-        # pass it explicitly so its speed/delta series come back in `speed`/`delta` to be drawn.)
-        best = self.session.best_lap_id()
+        # The whole panel is "Δ TO BEST" — the baseline lap IS the reference curve, so it must
+        # ALWAYS be drawn (green) regardless of the user's selection, even when they picked other
+        # laps. Build a DRAW set = the selection plus the baseline (appended once if not already
+        # chosen), WITHOUT mutating self._lap_ids: the cursor/scrub/hover-dot/auto-follow all key
+        # off _lap_ids and the current lap, so the always-on baseline must not change which lap is
+        # "current". (session.delta also fetches the baseline's arrays internally, but we pass it
+        # explicitly so its speed/delta series come back in `speed`/`delta` to be drawn.)
+        #
+        # CROSS-RECORDING REFERENCE (F7): when one is loaded, the always-on baseline is the
+        # REFERENCE lap (from another recording, id = REFERENCE_ID), not the local best — append
+        # that sentinel so its curve is drawn green. DORMANT: with no reference, baseline = the
+        # local best lap, byte-identical to before.
+        if self.session.has_reference():
+            baseline = REFERENCE_ID
+        else:
+            baseline = self.session.best_lap_id()
         draw_ids = list(self._lap_ids)
-        best_always_on = best is not None and best not in draw_ids
+        best_always_on = baseline is not None and baseline not in draw_ids
         if best_always_on:
-            draw_ids.append(best)
+            draw_ids.append(baseline)
 
         # One delta() call yields BOTH plots' series on the SAME x basis for `x_mode`, so the
         # speed and delta curves (and the cursors) share one axis and stay x-linked → aligned.
@@ -336,8 +345,7 @@ class PlotsView(QWidget):
             self.p_speed.setTitle(None)
             return
         best, speed, delta = result
-        labels = [f"lap {lid} {fmt_time(self.session.lap_time(lid))}"
-                  + (" ★best" if lid == best else "") for lid in draw_ids]
+        labels = [self._curve_label(lid, lid == best) for lid in draw_ids]
         self.p_speed.setTitle("   ".join(labels) or None)
         for k, lid in enumerate(draw_ids):
             # Semantic colouring (Phase 2): the BEST lap is green (C.ahead) to match the lap
@@ -350,7 +358,10 @@ class PlotsView(QWidget):
             color = theme.SERIES_BEST if is_best else PALETTE[k % len(PALETTE)]
             width = 1 if (is_best and best_always_on) else 2
             pen = pg.mkPen(color, width=width)
-            name = f"lap {lid}" + (" (best)" if is_best else "")
+            if lid == REFERENCE_ID:
+                name = "reference (best)"
+            else:
+                name = f"lap {lid}" + (" (best)" if is_best else "")
             if lid in speed:
                 sx, spd = speed[lid]
                 c = self.p_speed.plot(sx, spd, pen=pen, name=name)
@@ -384,6 +395,19 @@ class PlotsView(QWidget):
         # mode's units; app re-pushes them when the mode flips, but a selection-only refresh
         # keeps the same positions, so just redraw the cached ones here).
         self._draw_sectors()
+
+    def _curve_label(self, lid: int, is_baseline: bool) -> str:
+        """The chart-title label for one drawn curve. A local lap reads "lap N m:ss.mmm" (with a
+        trailing " ★best" when it's the baseline). The cross-recording REFERENCE curve (id
+        REFERENCE_ID, F7) reads "ref <label> m:ss.mmm ★" instead — it has no local lap id, so its
+        time comes from the session's reference accessor. DORMANT: never reaches the reference
+        branch, so local-lap labels are byte-identical to before."""
+        if lid == REFERENCE_ID:
+            t = self.session.reference_lap_time() or 0.0
+            tag = self.session.reference_label() or "reference"
+            return f"ref {tag} {fmt_time(t)} ★"
+        return (f"lap {lid} {fmt_time(self.session.lap_time(lid))}"
+                + (" ★best" if is_baseline else ""))
 
     def set_playhead_time(self, t: float, *, force: bool = False):
         """Place BOTH cursors from a single media time t (the shared playhead). Shared setter verb
