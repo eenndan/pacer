@@ -25,7 +25,17 @@ import numpy as np
 
 import pacer
 
-from . import chapters, consistency, corners, cross_reference, gapfill, gmeter, render_cache, tracks
+from . import (
+    chapters,
+    consistency,
+    corners,
+    cross_reference,
+    driving,
+    gapfill,
+    gmeter,
+    render_cache,
+    tracks,
+)
 
 # Pacer-free helpers from studio/_signal.py (numpy-only, shared with gmeter): the band filter
 # behind valid_lap_ids and the default smoothing window `Session.load` forwards to the pipeline.
@@ -146,6 +156,16 @@ class Session:
         self._corner_cache: object = _UNSET            # (list[Corner], total_ref) | None
         self._corner_stats_cache: dict[int, list[corners.CornerStat]] = {}
         self._corner_bests: object = _UNSET            # list[float] (min time per corner)
+        # Driving-channel caches (studio/driving.py, pacer-free): the brake/coast thresholds
+        # derived ONCE from this session's own g distribution, plus the per-lap brake events,
+        # coasting spans, and per-corner grip utilization. The thresholds depend only on the g
+        # series (constant for the recording), but the per-lap/per-corner results are projected
+        # through the segmentation, so all the per-lap caches clear together on a timing-line
+        # change (set_timing_lines), exactly like the corner caches above.
+        self._driving_thresholds_cache: object = _UNSET   # driving.Thresholds | None
+        self._brake_events_cache: dict[int, list[driving.BrakeEvent]] = {}
+        self._coasting_spans_cache: dict[int, list[driving.CoastSpan]] = {}
+        self._corner_grip_cache: dict[int, list[float]] = {}
 
         # Cross-recording reference lap (F7): a lap loaded from ANOTHER recording that REPLACES
         # the local best lap as the reference for the Δ charts, the map overlay, the chart
@@ -239,6 +259,15 @@ class Session:
         elif gm.has_data:
             print(f"studio: g-meter using {gm.source}-derived g "
                   f"({len(gm)} samples, no cross-check).", flush=True)
+        # Report the F5 driving-channel thresholds derived from THIS session's g distribution
+        # (the measured numbers that set the brake/coast detection — like the g cross-check, so
+        # they're always visible at load). Best-effort; never breaks a load.
+        try:
+            th = self.driving_thresholds()
+            if th is not None:
+                print(f"studio: {th.describe()}", flush=True)
+        except Exception as e:  # noqa: BLE001 — additive diagnostics only
+            print(f"studio: driving-channel thresholds unavailable ({e!r}).", flush=True)
 
     # ----------------------------------------- cross-recording reference lap (F7)
     # The reference is a SINGLE lap from a SEPARATE recording that replaces the local best lap
@@ -393,6 +422,13 @@ class Session:
         self._corner_cache = _UNSET
         self._corner_stats_cache.clear()
         self._corner_bests = _UNSET
+        # The per-lap driving channels (brake events / coasting spans / per-corner grip) are
+        # projected through the same segmentation — stale with the corner model. The derived
+        # thresholds depend only on the (unchanged) g series, so they're kept; only the per-lap
+        # results clear (recomputed lazily on next access).
+        self._brake_events_cache.clear()
+        self._coasting_spans_cache.clear()
+        self._corner_grip_cache.clear()
 
     # ------------------------------------------ timing-line persistence (sidecar glue)
     # The sidecar (studio/sidecar.py, pacer-free) stores the user's timing lines as ABSOLUTE
@@ -1143,6 +1179,180 @@ class Session:
                 times_by_lap.append([s.time for s in st])
         return consistency.rank_corners(
             consistency.corner_spreads([c.cid for c in corner_list], times_by_lap))
+
+    # ----------------------------------------------------- driving channels (F5)
+    # Brake events / coasting spans / per-corner grip, derived in studio/driving.py (pacer-free)
+    # off the VALIDATED vehicle-frame g (the gmeter ACCL->kart series, GPS-cross-checked at
+    # load). The brake/coast thresholds come from this session's OWN g distribution (no magic
+    # constants — see driving.derive_thresholds); all per-lap results cache per segmentation and
+    # clear with the corner caches in set_timing_lines.
+
+    def _lap_g_arrays(self, lap_id: int):
+        """(long_g, lat_g) for a lap, aligned 1:1 to the lap's cached (dist, elapsed) arrays.
+
+        The g series (self._gmeter) lives on the MEDIA clock — the SAME clock the lap's own
+        per-point `times` come from (both flow from self.tt) — so the per-lap g is just the
+        meter's long/lat g interpolated at the lap's media times. Returns (None, None) when
+        there's no g signal (no IMU and no GPS-fallback meter) or the lap is degenerate, so the
+        callers degrade to empty channels."""
+        gm = self._gmeter
+        if not gm.has_data:
+            return None, None
+        td = self._lap_time_dist_elapsed(lap_id)
+        if td is None:
+            return None, None
+        times, _dists, _elapsed = td
+        long_g = np.interp(times, gm.times, gm.long_g)
+        lat_g = np.interp(times, gm.times, gm.lat_g)
+        return long_g, lat_g
+
+    def driving_thresholds(self):
+        """The brake/coast thresholds (driving.Thresholds) derived ONCE from this session's
+        own full-session g distribution over its moving samples — no magic constants. None when
+        there's no g signal. Cached for the recording (the g series is constant); reported at
+        load via .describe(). Built from the WHOLE g series + the matching speed (resampled to
+        the g clock), so the distribution reflects the entire session, not one lap."""
+        if self._driving_thresholds_cache is not _UNSET:
+            return self._driving_thresholds_cache
+        gm = self._gmeter
+        if not gm.has_data:
+            self._driving_thresholds_cache = None
+            return None
+        # Speed (km/h) on the g clock: the full-trace speed tv (km/h) interpolated onto gm.times
+        # (the trace + the g series share the media clock).
+        speed_kmh = np.interp(gm.times, self.tt, self.tv)
+        self._driving_thresholds_cache = driving.derive_thresholds(
+            gm.long_g, gm.lat_g, speed_kmh)
+        return self._driving_thresholds_cache
+
+    def lap_brake_events(self, lap_id: int) -> list[driving.BrakeEvent]:
+        """Braking zones detected on one lap's longitudinal-g series (onset odometer/time,
+        peak decel, duration — see driving.BrakeEvent), in track order. [] when there's no g
+        signal or the lap is degenerate. Cached per lap; cleared on re-segment."""
+        got = self._brake_events_cache.get(lap_id)
+        if got is not None:
+            return got
+        th = self.driving_thresholds()
+        long_g, _lat_g = self._lap_g_arrays(lap_id)
+        td = self._lap_time_dist_elapsed(lap_id)
+        if th is None or long_g is None or td is None:
+            return []
+        _times, dists, elapsed = td
+        events = driving.brake_events(dists, elapsed, long_g, th.theta_b)
+        self._brake_events_cache[lap_id] = events
+        return events
+
+    def lap_coasting_spans(self, lap_id: int) -> list[driving.CoastSpan]:
+        """Coasting spans (neither braking/accelerating nor cornering) on one lap, in track
+        order — see driving.CoastSpan. [] when there's no g signal or the lap is degenerate.
+        Cached per lap; cleared on re-segment."""
+        got = self._coasting_spans_cache.get(lap_id)
+        if got is not None:
+            return got
+        th = self.driving_thresholds()
+        long_g, lat_g = self._lap_g_arrays(lap_id)
+        td = self._lap_time_dist_elapsed(lap_id)
+        if th is None or long_g is None or td is None:
+            return []
+        _times, dists, _elapsed = td
+        _d, speed_kmh, elapsed = self._lap_arrays(lap_id)
+        spans = driving.coasting_spans(dists, elapsed, speed_kmh[:len(dists)], long_g, lat_g,
+                                       th.theta_c, th.theta_lat)
+        self._coasting_spans_cache[lap_id] = spans
+        return spans
+
+    def lap_corner_grip(self, lap_id: int) -> list[float]:
+        """Per-corner friction-circle grip utilization for one lap (median |g| / lap-envelope
+        max inside each corner window, in (0,1]; higher in the hard corners — see
+        driving.corner_grip), one value per detected corner in track order. [] when there's no
+        g signal, no corners, or the lap is degenerate. Cached per lap; cleared on re-segment."""
+        got = self._corner_grip_cache.get(lap_id)
+        if got is not None:
+            return got
+        long_g, lat_g = self._lap_g_arrays(lap_id)
+        basis = self._corner_basis()
+        if long_g is None or basis is None or not basis[0]:
+            return []
+        corner_list, total_ref = basis
+        td = self._lap_time_dist_elapsed(lap_id)
+        if td is None:
+            return []
+        _times, dists, _elapsed = td
+        total_lap = float(dists[-1])
+        if total_lap <= 0:
+            return []
+        # Project each corner's reference-odometer window onto this lap by normalized distance
+        # (d_lap = d_ref / total_ref * total_lap) — the SAME projection lap_corner_stats uses.
+        windows = [(c.enter / total_ref * total_lap, c.exit / total_ref * total_lap)
+                   for c in corner_list]
+        grip = driving.corner_grip(dists, long_g, lat_g, windows)
+        self._corner_grip_cache[lap_id] = grip
+        return grip
+
+    def lap_brake_map_markers(self, lap_id: int) -> list[tuple[float, float, float]]:
+        """(x, y, peak_decel) per brake onset on one lap, in LOCAL metres on that lap's own
+        trace — for the map's brake glyphs. peak_decel (g) drives the glyph size. [] when no
+        brake events. The onset odometer is mapped to the lap's (x, y) via the lap's cached
+        columns (the same cum->xy interpolation corner_map_markers uses)."""
+        events = self.lap_brake_events(lap_id)
+        if not events:
+            return []
+        _t, xs, ys, _v, cum = self._lap_columns(lap_id)
+        onsets = np.asarray([e.onset_dist for e in events])
+        mx = np.interp(onsets, cum, xs)
+        my = np.interp(onsets, cum, ys)
+        return [(float(mx[i]), float(my[i]), e.peak_decel) for i, e in enumerate(events)]
+
+    def lap_brake_plot_positions(self, lap_id: int, mode: str) -> list[tuple[float, float]]:
+        """(plot-x, peak_decel) per brake onset on one lap, on the speed chart's SHARED axis
+        for `mode` ('distance' or 'time') — the SAME axis the curves/sector lines use, so the
+        glyphs sit on the speed trace. [] when no brake events / no best lap (distance mode).
+          * 'distance': x = (onset_dist / lap_total) * best_distance  (the s*best_distance axis)
+          * 'time':     x = onset_time (elapsed into the lap)
+        peak_decel (g) is returned alongside so the caller can size the glyph."""
+        events = self.lap_brake_events(lap_id)
+        if not events:
+            return []
+        if mode == "time":
+            return [(e.onset_time, e.peak_decel) for e in events]
+        # 'distance' — normalize by this lap's total, scale to the best lap's distance.
+        best = self.best_lap_id()
+        td = self._lap_time_dist(lap_id)
+        if best is None or td is None:
+            return []
+        _times, dists = td
+        total_lap = float(dists[-1])
+        best_total = self.best_lap_total_distance()
+        if total_lap <= 0 or not best_total:
+            return []
+        return [(e.onset_dist / total_lap * best_total, e.peak_decel) for e in events]
+
+    def lap_coasting_plot_spans(self, lap_id: int, mode: str) -> list[tuple[float, float]]:
+        """(plot-x0, plot-x1) per coasting span on one lap, on the speed chart's SHARED axis
+        for `mode` — for the shaded coast regions on the speed chart. Same projection as
+        lap_brake_plot_positions. [] when no spans / no best lap (distance mode)."""
+        spans = self.lap_coasting_spans(lap_id)
+        if not spans:
+            return []
+        if mode == "time":
+            # Elapsed at each span edge: interp the span's odometer edges into the lap's elapsed.
+            td = self._lap_time_dist_elapsed(lap_id)
+            if td is None:
+                return []
+            _times, dists, elapsed = td
+            return [(float(np.interp(s.start_dist, dists, elapsed)),
+                     float(np.interp(s.end_dist, dists, elapsed))) for s in spans]
+        best = self.best_lap_id()
+        td = self._lap_time_dist(lap_id)
+        if best is None or td is None:
+            return []
+        _times, dists = td
+        total_lap = float(dists[-1])
+        best_total = self.best_lap_total_distance()
+        if total_lap <= 0 or not best_total:
+            return []
+        return [(s.start_dist / total_lap * best_total, s.end_dist / total_lap * best_total)
+                for s in spans]
 
     def _lap_time_dist(self, lap_id: int):
         """Cached (times, dists) for a lap: media-clock seconds + per-lap odometer (metres),

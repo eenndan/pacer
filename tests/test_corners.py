@@ -272,6 +272,12 @@ class _StubSession:
     def corner_session_bests(self):
         return self._bests
 
+    def lap_corner_grip(self, lap_id):
+        # F5 added a Grip % column to CornerTable; the stub returns [] (no g) so the column
+        # shows a dash — this corner test pins the corner metrics, not the grip channel
+        # (driving.py's own grip is covered in tests/test_driving.py).
+        return []
+
 
 def test_corner_table_populates_and_highlights():
     _qapp()

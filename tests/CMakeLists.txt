@@ -123,6 +123,15 @@ add_test(NAME test_consistency
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_consistency.py)
 set_tests_properties(test_consistency PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Driving channels (studio.driving, F5): synthetic-g-trace brake-pulse detection (+ hysteresis
+# / short-blip rejection / flat-throttle zero false positives), coasting classification, the
+# per-corner grip math, the distribution-derived thresholds, the Session accessors + caching
+# (bare Session with a seeded g-meter), and the CornerTable Grip % column + map/plots brake
+# overlays (offscreen Qt on stubs).
+add_test(NAME test_driving
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_driving.py)
+set_tests_properties(test_driving PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
 add_test(NAME test_gmeter
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter.py)
@@ -145,7 +154,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_sidecar test_session_pure test_studio_features test_rainbow_map
                         test_compare test_map_ghost test_cross_reference
                         test_controllers test_validate_wallclock test_corners
-                        test_consistency test_gmeter test_gmeter_overlay test_export_data)
+                        test_consistency test_gmeter test_gmeter_overlay test_export_data
+                        test_driving)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
