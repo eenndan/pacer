@@ -184,7 +184,10 @@ def _stub_session(n=60):
                            second=SimpleNamespace(x=-40.0, y=0.0))
     s.laps = SimpleNamespace(sectors=SimpleNamespace(start_line=line, sector_lines=[]))
     s.lap_trace_segments = lambda lid: [SimpleNamespace(xs=xs, ys=ys, measured=True)]
-    s.lap_channels = lambda lid: (t, xs, ys, speed, cum)
+    # lap_channels is the unified per-sample dict (one accessor for the rainbow map AND the
+    # CSV export); the map reads t_media_s / x_m / y_m / speed_kmh / dist_m.
+    s.lap_channels = lambda lid: {
+        "t_media_s": t, "x_m": xs, "y_m": ys, "speed_kmh": speed, "dist_m": cum}
     s.delta = lambda ids, x_mode="distance": (
         0, {}, {lid: (np.linspace(0, 500.0, 400), dvals) for lid in ids})
     return s

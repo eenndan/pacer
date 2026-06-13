@@ -87,6 +87,12 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
 - **Dark "Refined Minimal" theme** (`theme.py`) — single-source design tokens + dark `QPalette` +
   global QSS, Inter fonts, Phosphor icon buttons (`qtawesome`); charts, table, map and video chrome
   all adopt the dark surface.
+- **CSV + session-report export** (`export_data.py`, pure Python — no `pacer`, no Qt) — **File ▸
+  Export**: lap-times CSV (splits + per-corner time/apex-speed + the ⚠ flag), per-sample channels
+  CSV for the selected lap (t/elapsed/lat/lon/x/y/dist/speed + kart-frame g; float-`repr` values
+  that round-trip to the Session arrays **exactly**), and a self-contained one-page HTML report
+  (session header + laps table + embedded map/chart PNG snapshots, no JS). Greyed out until a
+  session loads; nothing is written without an explicit action + confirmed save dialog.
 
 ---
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QBuffer, QIODevice, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, sidecar, theme
+from . import chapters, export_data, sidecar, theme
 from .compare_controller import CompareController
 from .lap_table import CornerTable, LapTable
 from .map_view import MapView
@@ -410,6 +410,26 @@ class StudioWindow(QMainWindow):
         self._full_action.setToolTip(
             "Discover this recording's sibling chapters and load them as one continuous session")
         self._full_action.triggered.connect(self._load_full_recording)
+        # F11: File ▸ Export — the three data-export actions (writers in studio/export_data.py,
+        # pacer-free; this menu owns the save dialogs + the report's widget grabs). Greyed out
+        # until a session is loaded — the enabled state is synced when the File menu opens, so
+        # the load path needn't know the menu exists. Nothing is EVER written without one of
+        # these actions plus a confirmed save dialog (a plain load writes no export files).
+        self._export_menu = menu.addMenu("Export")
+        self._export_laps_action = self._export_menu.addAction("Lap times (CSV)…")
+        self._export_laps_action.setToolTip(
+            "One row per lap: time, distance, entry speed, sector splits, per-corner metrics")
+        self._export_laps_action.triggered.connect(self._export_laps_csv)
+        self._export_channels_action = self._export_menu.addAction("Lap channels (CSV)…")
+        self._export_channels_action.setToolTip(
+            "Per-sample channels of the selected lap: time, position, distance, speed, g")
+        self._export_channels_action.triggered.connect(self._export_channels_csv)
+        self._export_report_action = self._export_menu.addAction("Session report (HTML)…")
+        self._export_report_action.setToolTip(
+            "A one-page self-contained report: session stats, lap table, map + chart snapshots")
+        self._export_report_action.triggered.connect(self._export_report)
+        self._export_menu.setEnabled(False)  # no session yet at construction time
+        menu.aboutToShow.connect(self._sync_export_menu)
 
     # ----------------------------------------------------- keyboard shortcuts
     def _build_shortcuts(self):
@@ -490,6 +510,87 @@ class StudioWindow(QMainWindow):
         if len(sibs) > 1:
             print(f"studio: loading full recording — {len(sibs)} chapters.", flush=True)
             self._load(sibs)
+
+    # ----------------------------------------------------------- data export (F11)
+    # File ▸ Export: the writers live in studio/export_data.py (pacer-free, Qt-free); this
+    # cluster owns the Qt side — enabled-state sync, the QFileDialog save prompts (cancel ⇒
+    # nothing written), and the widget→PNG grabs for the report. Scoped to the File-menu
+    # region: no other part of the app knows exports exist.
+    def _sync_export_menu(self):
+        """Grey the Export submenu out until a session is loaded. Connected to the File
+        menu's aboutToShow (synced as the menu opens), so neither _load nor the failed-load
+        path needs to reach into the menu."""
+        self._export_menu.setEnabled(hasattr(self, "session"))
+
+    def _export_default(self, suffix: str) -> str:
+        """Default save path: next to the recording, named `<stem><suffix>` (e.g.
+        `GX010060_laps.csv`). Falls back to just the suffix-derived name in the CWD when
+        nothing is loaded from a real path (the bundled sample)."""
+        first = self._paths[0] if getattr(self, "_paths", None) else ""
+        stem = os.path.splitext(os.path.basename(first))[0]
+        return os.path.join(os.path.dirname(first), f"{stem}{suffix}")
+
+    def _export_save_path(self, title: str, suffix: str, filt: str) -> str | None:
+        """One save prompt; None when the user cancels (⇒ the caller writes nothing)."""
+        path, _ = QFileDialog.getSaveFileName(self, title, self._export_default(suffix), filt)
+        return path or None
+
+    def _export_lap_id(self) -> int | None:
+        """The lap the channels CSV describes: the PRIMARY selected/followed lap (the same
+        lap the Corners view tracks), falling back to the best lap. None when the session
+        has no usable lap at all."""
+        lap = getattr(self, "_corner_lap", None)
+        return lap if lap is not None else self.session.best_lap_id()
+
+    def _export_laps_csv(self):
+        if not hasattr(self, "session"):  # defensive: action fired with nothing loaded
+            return
+        path = self._export_save_path("Export lap times", "_laps.csv", "CSV files (*.csv)")
+        if not path:
+            return
+        export_data.write_laps_csv(path, self.session)
+        self.statusBar().showMessage(f"exported {os.path.basename(path)}")
+
+    def _export_channels_csv(self):
+        if not hasattr(self, "session"):
+            return
+        lap = self._export_lap_id()
+        if lap is None:
+            self.statusBar().showMessage("no valid lap to export channels for")
+            return
+        path = self._export_save_path(f"Export lap {lap} channels",
+                                      f"_lap{lap}_channels.csv", "CSV files (*.csv)")
+        if not path:
+            return
+        export_data.write_channels_csv(path, self.session, lap)
+        self.statusBar().showMessage(f"exported {os.path.basename(path)}")
+
+    def _export_report(self):
+        if not hasattr(self, "session"):
+            return
+        path = self._export_save_path("Export session report", "_report.html",
+                                      "HTML files (*.html)")
+        if not path:
+            return
+        # Snapshot the map + charts as they are on screen right now (QWidget.grab) — the
+        # report writer itself stays Qt-free and just embeds the bytes.
+        images = [("Track map", self._grab_png(self.map)),
+                  ("Speed · Δ to best", self._grab_png(self.plots))]
+        export_data.write_report_html(
+            path, self.session,
+            source_label=chapters.recording_label(self._paths) or "session",
+            images=images)
+        self.statusBar().showMessage(f"exported {os.path.basename(path)}")
+
+    @staticmethod
+    def _grab_png(widget) -> bytes:
+        """Render a live widget to PNG bytes (QWidget.grab → QImage → in-memory PNG) for
+        the report's embedded snapshots."""
+        image = widget.grab().toImage()
+        buf = QBuffer()
+        buf.open(QIODevice.WriteOnly)
+        image.save(buf, "PNG")
+        return bytes(buf.data())
 
     def _update_chapter_label(self, chapter_index: int):
         """Banner text: the recording label plus, for a chaptered session, the current chapter.

@@ -16,6 +16,7 @@ AFTER `set_coordinate_system()`.
 
 from __future__ import annotations
 
+import datetime
 import math
 from dataclasses import dataclass
 from typing import TypedDict
@@ -440,15 +441,6 @@ class Session:
         xs, ys, _ = self._lap_trace_xyt(lap_id)
         return xs, ys
 
-    def lap_channels(self, lap_id: int):
-        """(times, xs, ys, speed_kmh, cum_distances) for a lap — a thin pacer-free view over the
-        CACHED bulk `_lap_columns` fetch (no new pacer crossing), for the map's rainbow channel
-        painting (F3): media-clock times (gap detection), local-metre xs/ys (the polyline), the
-        raw 3D speed scaled to km/h (the same basis the speed chart plots), and the gap-aware
-        odometer (the basis the Δ-grid is resampled onto). Index-aligned, same length."""
-        times, xs, ys, full_speed, cum = self._lap_columns(lap_id)
-        return times, xs, ys, full_speed * 3.6, cum
-
     # ------------------------------------------------- map gap-fill (rendering only)
     def _lap_trace_xyt(self, lap_id: int):
         """Cached per-lap (xs, ys, times) as numpy arrays — local metres + media-clock seconds,
@@ -841,6 +833,74 @@ class Session:
         my = np.interp(apexes, cum, ys)
         return [(c.label, float(mx[i]), float(my[i]), c.direction)
                 for i, c in enumerate(corner_list)]
+
+    # ------------------------------------------------------------- data export (F11)
+    # The export writers (studio/export_data.py) are pacer-free by contract, so the two
+    # accessors below own the export's only pacer crossings: the per-sample channel arrays
+    # for the channels CSV, and the GPS9 wall-clock date for the report header.
+
+    def lap_channels(self, lap_id: int) -> dict[str, np.ndarray]:
+        """Index-aligned per-sample channel arrays for ONE lap — the SINGLE pacer-free view
+        over the cached bulk `_lap_columns` fetch (no new pacer crossing) shared by BOTH
+        consumers: the channels-CSV export (all keys) and the map's rainbow channel painting
+        (F3 — `map_view._build_rainbow`, which reads t_media_s / x_m / y_m / speed_kmh /
+        dist_m). Keys, in CSV column order:
+
+          t_media_s            media-clock time of each kept sample (the video-sync clock;
+                               the rainbow's gap detection basis)
+          elapsed_s            t − lap start (s)
+          lat_deg / lon_deg    GPS position in degrees — the SAME smoothed samples every
+                               analysis uses, read off the lap's materialized points
+          x_m / y_m            LOCAL metres (the map/timing frame, cs.local — the rainbow
+                               polyline)
+          dist_m               the lap's gap-aware odometer (m — the rainbow Δ-grid resample
+                               basis)
+          speed_mps / speed_kmh   raw 3D GPS speed (km/h is the same basis the speed chart
+                               and the rainbow speed mode plot)
+          g_long / g_lat       kart-frame longitudinal/lateral acceleration (g), present
+                               only when the session has a g signal. The g-meter series
+                               (gmeter.GMeter: long_g/lat_g at its own 50 Hz `times`) is
+                               interpolated onto the lap's sample times; signs follow
+                               gmeter.py (+long = accelerating, +lat = turning left).
+
+        Arrays span the materialized lap (interpolated start crossing + interior points +
+        interpolated finish crossing), sliced defensively to the common length like the
+        other per-lap accessors. Read-only; nothing is cached (exports are one-shot, and the
+        rainbow is rebuilt only on a lap change / re-segment, not per tick)."""
+        times, xs, ys, speed_mps, cum = self._lap_columns(lap_id)
+        pts = self.laps.get_lap(lap_id).points
+        lat = np.asarray([p.point.lat for p in pts], dtype=float)
+        lon = np.asarray([p.point.lon for p in pts], dtype=float)
+        m = min(len(times), len(lat))
+        times, xs, ys, speed_mps, cum = (a[:m] for a in (times, xs, ys, speed_mps, cum))
+        out: dict[str, np.ndarray] = {
+            "t_media_s": times,
+            "elapsed_s": times - times[0] if m else times.copy(),
+            "lat_deg": lat[:m],
+            "lon_deg": lon[:m],
+            "x_m": xs,
+            "y_m": ys,
+            "dist_m": cum,
+            "speed_mps": speed_mps,
+            "speed_kmh": speed_mps * 3.6,
+        }
+        if self._gmeter.has_data:
+            out["g_long"] = np.interp(times, self._gmeter.times, self._gmeter.long_g)
+            out["g_lat"] = np.interp(times, self._gmeter.times, self._gmeter.lat_g)
+        return out
+
+    def session_date(self) -> str | None:
+        """The recording's UTC date ("YYYY-MM-DD") from the first kept GPS fix's GPS9
+        wall-clock timestamp (epoch ms — see pacer's ParseGPS9; preserved verbatim through
+        the clean/smooth pipeline). None when the stream carries no per-fix timestamp
+        (a GPS5-only camera) or the session is empty — the report shows a dash."""
+        if self.laps.point_count() == 0:
+            return None
+        ts = int(self.laps.get_point(0).point.timestamp_ms)
+        if ts <= 0:  # GPS5 / sentinel samples report 0 — no wall clock to read
+            return None
+        dt = datetime.datetime.fromtimestamp(ts / 1000.0, tz=datetime.UTC)
+        return dt.strftime("%Y-%m-%d")
 
     def _lap_time_dist(self, lap_id: int):
         """Cached (times, dists) for a lap: media-clock seconds + per-lap odometer (metres),

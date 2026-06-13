@@ -102,6 +102,12 @@ add_test(NAME test_corners
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corners.py)
 set_tests_properties(test_corners PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Data-export writers (studio.export_data, F11): laps/channels CSV schema + the
+# float-repr round-trip exactness + the self-contained HTML report (XML-parsed, embedded
+# PNGs decoded), on bare Sessions seeded via tests/_synthetic with a FakeLaps duck-type.
+# Imports pacer transitively (the session chain), no Qt, no telemetry file.
+add_test(NAME test_export_data
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_data.py)
 # g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
 add_test(NAME test_gmeter
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter.py)
@@ -124,7 +130,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_sidecar test_session_pure test_studio_features test_rainbow_map
                         test_compare test_map_ghost
                         test_controllers test_validate_wallclock test_corners test_gmeter
-                        test_gmeter_overlay)
+                        test_gmeter_overlay test_export_data)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

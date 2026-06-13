@@ -624,7 +624,9 @@ class MapView(QWidget):
         """Fill the bucket items for `lap_id`'s channel. Returns False (nothing painted) when the
         channel can't be computed (degenerate lap, no best lap for Δ). Data comes from the cached
         bulk lap-columns fetch + the EXISTING 400-grid delta() — nothing is recomputed."""
-        times, xs, ys, speed_kmh, cum = self.session.lap_channels(lap_id)
+        ch = self.session.lap_channels(lap_id)
+        times, xs, ys, speed_kmh, cum = (
+            ch["t_media_s"], ch["x_m"], ch["y_m"], ch["speed_kmh"], ch["dist_m"])
         if len(xs) < 2:
             return False
         if mode == "speed":
