@@ -365,6 +365,9 @@ class StudioWindow(QMainWindow):
             select_default=self._select_default,
             get_applied_t=lambda: self._applied_t,
             map_view=self.map,  # F4: the compare ghost (lap B's kart) on the track map
+            # F5: refresh the brake glyphs whenever the compared pair changes (both laps in
+            # compare; the current lap on exit) — reuses the compare machinery, no new sync.
+            on_pair_changed=self._refresh_driving_channels,
         )
         # Scrub: a fine, lap-scoped scrubber (the full-video slider stays). Dragging either plot
         # cursor seeks the video WITHIN the current lap; plots_view emits the raw plot-x + which
@@ -753,6 +756,11 @@ class StudioWindow(QMainWindow):
         if table is not None:
             table.set_lap(lap_id)
             self._update_table_header()
+        # F5: the primary lap changed → refresh its brake glyphs / coast bands. Skipped while
+        # comparing (the compare pair drives the glyphs via on_pair_changed, not the primary
+        # lap). Defensive: a __new__'d test window without the views has no map/plots to push to.
+        if getattr(self, "map", None) is not None and not self._comparing():
+            self._refresh_driving_channels()
 
     def _update_table_header(self):
         """The table panel's mode label: "LAPS", or "CORNERS · LAP n" while in Corners mode
@@ -943,6 +951,43 @@ class StudioWindow(QMainWindow):
         the dist/time mode flips (positions' units change)."""
         mode = mode or self.plots.axis_mode()
         self.plots.set_sector_lines(self.session.sector_plot_positions(mode))
+        # The chart x-axis units changed with the mode too, so the F5 brake glyphs / coast bands
+        # need re-pushing in the new mode's units (same reason as the sector lines).
+        self._refresh_driving_channels()
+
+    def _driving_lap_colour(self, lap_id: int, k: int):
+        """The glyph colour for a lap's brake points, matching the speed chart's curve colour:
+        the best lap is green (theme.SERIES_BEST), every other lap cycles theme.CHART_SERIES by
+        its draw-order index `k` — so a brake glyph always sits on its own lap's curve colour
+        (and compare's two laps stay distinguishable, like the curves)."""
+        if lap_id == self.session.best_lap_id():
+            return theme.SERIES_BEST
+        return theme.CHART_SERIES[k % len(theme.CHART_SERIES)]
+
+    def _refresh_driving_channels(self):
+        """F5: push the brake glyphs (map + speed chart) and shaded coasting spans (speed chart)
+        for the lap(s) currently shown — the current/selected lap normally, BOTH laps in compare
+        (the Circuit Tools braking-zone comparison). Pure consumer of session.lap_brake_* /
+        lap_coasting_* so the views stay pacer-free; cheap (the channels are cached per
+        segmentation). Called on load, lap-selection change, axis-mode flip, compare enter/exit/
+        repoint, and re-segmentation."""
+        # The laps to annotate, in the SAME order the charts draw them, so the colours line up.
+        if self._comparing() and self.compare.lap_a is not None and self.compare.lap_b is not None:
+            lap_ids = [self.compare.lap_a, self.compare.lap_b]
+        elif self._corner_lap is not None:
+            lap_ids = [self._corner_lap]
+        else:
+            lap_ids = []
+        mode = self.plots.axis_mode()
+        map_markers, brake_plot, coast_plot = [], [], []
+        for k, lid in enumerate(lap_ids):
+            colour = self._driving_lap_colour(lid, k)
+            map_markers.append((self.session.lap_brake_map_markers(lid), colour))
+            brake_plot.append((self.session.lap_brake_plot_positions(lid, mode), colour))
+            coast_plot.append((self.session.lap_coasting_plot_spans(lid, mode), colour))
+        self.map.set_brake_markers(map_markers)
+        self.plots.set_brake_markers(brake_plot)
+        self.plots.set_coasting_spans(coast_plot)
 
     def _on_lines(self, start, sectors):
         # Re-segmentation shifts lap ids, so any pinned compare pair is now stale — leave compare
@@ -962,6 +1007,11 @@ class StudioWindow(QMainWindow):
         # F6: lap set / splits / corner stats all shifted with the segmentation — rebuild the
         # consistency strip (set_corners above already cleared any stale corner highlight).
         self.consistency.refresh()
+        # F5: the driving channels were invalidated with the corner model; re-push the brake
+        # glyphs / coast bands. _select_default below re-points the primary lap, but its id may
+        # be unchanged across the re-segment (so _set_corner_lap would early-out) while the
+        # underlying channels DID change — so refresh explicitly here, mirroring corner_table.
+        self._refresh_driving_channels()
         self._select_default()
         # F2: the sector lines changed — update the chart guide lines live.
         self._refresh_sector_lines()

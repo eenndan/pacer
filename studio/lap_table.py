@@ -425,7 +425,8 @@ class LapTable(QWidget):
 # = the selected lap's per-corner metrics vs the best lap (session.lap_corner_stats). A separate
 # widget stacked with LapTable (the header toggle in app.py flips between them) so Laps mode
 # stays byte-identical — this class shares only the module's display constants.
-CORNER_COLUMNS = ["Corner", "Time (s)", "Δ best", "Apex (km/h)", "Δ apex", "Entry", "Exit"]
+CORNER_COLUMNS = ["Corner", "Time (s)", "Δ best", "Apex (km/h)", "Δ apex", "Entry", "Exit",
+                  "Grip %"]
 CORNER_DIR_GLYPH = {1: "⟲", -1: "⟳"}  # left / right (turn sense), shown after the C-label
 
 
@@ -473,9 +474,14 @@ class CornerTable(QWidget):
         stats = self.session.lap_corner_stats(self._lap_id) if ok else []
         corner_list = self.session.corners() if stats else []
         bests = self.session.corner_session_bests() if stats else []
+        # F5: per-corner friction-circle grip utilization (median |g| / lap-envelope max, as a
+        # %), aligned 1:1 with the corner rows. [] when there's no g signal (no IMU / GPS
+        # fallback) — the column then shows a neutral dash, so the view still works without g.
+        grip = self.session.lap_corner_grip(self._lap_id) if stats else []
         self.table.setRowCount(len(stats))
         for r, st in enumerate(stats):
             c = corner_list[r]
+            grip_pct = f"{grip[r] * 100:.0f}" if r < len(grip) else "–"
             cells: list[tuple[str, str | None]] = [
                 (f"{c.label} {CORNER_DIR_GLYPH.get(c.direction, '')}", None),
                 (f"{st.time:.2f}", None),
@@ -486,6 +492,7 @@ class CornerTable(QWidget):
                 (f"{st.apex_speed_delta:+.1f}", theme.delta_colour(-st.apex_speed_delta)),
                 (f"{st.entry_speed:.1f}", None),
                 (f"{st.exit_speed:.1f}", None),
+                (grip_pct, None),
             ]
             is_best = bool(bests) and r < len(bests) and abs(st.time - bests[r]) < 1e-9
             for col, (text, colour) in enumerate(cells):

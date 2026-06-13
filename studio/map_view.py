@@ -61,6 +61,25 @@ CORNER_LABEL_COLOR = C.text_dim
 # selection; accent amber so it pops without adding a new colour.
 CORNER_HIGHLIGHT_PEN_W = 2
 CORNER_HIGHLIGHT_SIZE = 18
+# Brake-point glyphs (F5): a downward triangle (▼) at each braking-zone ONSET, sized by the
+# peak decel so harder braking reads as a bigger marker. The glyph colour is the lap's own
+# accent (so in compare mode lap A vs lap B are distinguishable, matching the chart series),
+# defaulting to the warm "behind" coral on a single lap so it reads on the amber current-lap
+# line. Sizes map peak decel (g) linearly between a floor and a cap so a light dab and a hard
+# stomp are both visible but bounded.
+BRAKE_MARKER_MIN_PX = 9      # glyph size at/below BRAKE_DECEL_LO
+BRAKE_MARKER_MAX_PX = 18     # glyph size at/above BRAKE_DECEL_HI
+BRAKE_DECEL_LO = 0.10        # g: floor of the size ramp (a light brake)
+BRAKE_DECEL_HI = 0.45        # g: cap of the size ramp (a hard brake)
+
+
+def _brake_glyph_size(peak_decel: float) -> float:
+    """Map a brake event's peak decel (g) to a glyph size (px), clamped to the ramp ends so a
+    light dab and a hard stomp are both visible but bounded."""
+    lo, hi = BRAKE_DECEL_LO, BRAKE_DECEL_HI
+    frac = (float(peak_decel) - lo) / max(hi - lo, 1e-6)
+    frac = min(max(frac, 0.0), 1.0)
+    return BRAKE_MARKER_MIN_PX + frac * (BRAKE_MARKER_MAX_PX - BRAKE_MARKER_MIN_PX)
 
 
 class _TimingLine:
@@ -417,6 +436,41 @@ class _CornerMarkers:
                 return
 
 
+class _BrakeMarkers:
+    """Brake-point glyphs (F5): a downward triangle (▼) at each braking-zone ONSET, sized by
+    peak decel. SELF-CONTAINED overlay (same idiom as _CornerMarkers) — it owns its scatter
+    items and rebuilds them wholesale from the per-lap marker sets the app pushes, touching
+    nothing else in the scene. In COMPARE mode the app pushes BOTH laps' onsets (each with its
+    own lap accent colour), so the two laps' braking zones can be read side by side on the map
+    (the Circuit Tools braking-zone comparison). Rebuilt only on a lap/selection/compare change
+    — zero per-tick cost."""
+
+    def __init__(self, plot):
+        self.plot = plot
+        self._items: list = []
+
+    def set_markers(self, lap_markers):
+        """(Re)build the glyphs. `lap_markers` is a list of (markers, colour) where `markers`
+        is a list of (x, y, peak_decel) onsets in local metres and `colour` is that lap's glyph
+        colour. [] (or all-empty) clears. One ScatterPlotItem per lap, with per-point sizes from
+        the peak decel so harder braking reads bigger."""
+        for it in self._items:
+            self.plot.removeItem(it)
+        self._items = []
+        if not lap_markers:
+            return
+        for markers, colour in lap_markers:
+            if not markers:
+                continue
+            spots = [{"pos": (x, y), "size": _brake_glyph_size(d)} for x, y, d in markers]
+            dots = pg.ScatterPlotItem(
+                symbol="t", pen=None, brush=pg.mkBrush(colour), pxMode=True)
+            dots.addPoints(spots)
+            dots.setZValue(7)  # above the corner dots (5/6), below the red video marker (z=10)
+            self.plot.addItem(dots)
+            self._items.append(dots)
+
+
 class MapView(QWidget):
     # (start: Seg, sectors: list[Seg]) whenever a handle moves or sectors change.
     timing_lines_changed = Signal(object, object)
@@ -480,6 +534,10 @@ class MapView(QWidget):
         # Corner labels (F-corner): a self-contained overlay; the app pushes the apex
         # markers via set_corners (on load and after a re-segmentation recomputes them).
         self._corner_markers = _CornerMarkers(self.plot)
+        # Brake-point glyphs (F5): a self-contained overlay; the app pushes per-lap brake
+        # onsets via set_brake_markers (on lap change and on compare enter/exit — both laps
+        # in compare mode), the same pure-consumer pattern as the corner labels.
+        self._brake_markers = _BrakeMarkers(self.plot)
 
         # F4 compare-mode ghost: a second, hollow marker showing where the OTHER compared lap's
         # (lap B's) kart is at equal elapsed-into-lap — the spatial gap made visible. Created
@@ -771,3 +829,12 @@ class MapView(QWidget):
         """Ring-highlight one corner's apex marker by 1-based cid (None clears) — driven by
         the consistency panel's corner list (F6). Display-only: no selection, no seek."""
         self._corner_markers.set_highlight(None if cid is None else f"C{int(cid)}")
+
+    # ------------------------------------------------------------- brake glyphs (F5)
+    def set_brake_markers(self, lap_markers):
+        """Show brake-point glyphs from `lap_markers` — a list of (markers, colour) where
+        `markers` is a list of (x, y, peak_decel) onsets in local metres (from
+        Session.lap_brake_map_markers) and `colour` is that lap's glyph colour. One entry for
+        the current lap normally; BOTH laps in compare mode. [] clears. Pushed by the app so
+        this view stays a pure consumer."""
+        self._brake_markers.set_markers(lap_markers)

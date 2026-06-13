@@ -46,6 +46,7 @@ class CompareController:
         select_default: Callable[[], None],
         get_applied_t: Callable[[], float | None],
         map_view: MapView | None = None,
+        on_pair_changed: Callable[[], None] | None = None,
     ):
         self.session = session
         self.video = video
@@ -55,6 +56,11 @@ class CompareController:
         # while compare is on. Injected like the other view collaborators (optional so the
         # controller stays drivable without a map in unit tests); cleared on exit.
         self.map = map_view
+        # F5: fired whenever the compared pair changes (enter / exit / pane repoint) so the app
+        # can refresh the per-lap driving channels (brake glyphs) for the new pair — both laps in
+        # compare, the current lap on exit. Injected as a callable so the controller stays
+        # Qt-free and doesn't reach into the window. Optional (None = a no-op, e.g. in tests).
+        self._on_pair_changed = on_pair_changed or (lambda: None)
         # Entering/leaving compare suspends/restores StudioWindow's auto-follow (freeze _followed_lap
         # on the primary lap while comparing; clear it on exit) and, on exit, restores the
         # table-driven chart selection (the `_select_default` fallback). Injected as callables so the
@@ -198,6 +204,7 @@ class CompareController:
         # Force the next tick() to recompute the badges/g for the new pair (the pane times
         # may not have moved, but the COMPARED LAPS changed).
         self._compare_last_t = None
+        self._on_pair_changed()  # F5: refresh the brake glyphs to show BOTH compared laps
 
     def exit(self) -> None:
         self._compare = False
@@ -215,6 +222,7 @@ class CompareController:
             self.plots.set_laps(ids)
         else:
             self._select_default()
+        self._on_pair_changed()  # F5: restore the single-lap brake glyphs on exit
 
     def on_pane_repoint(self, side: int, lap_id: int) -> None:
         """A pane's lap picker repointed that side to `lap_id`: re-seed its lap window + caption,
@@ -245,6 +253,7 @@ class CompareController:
             self._set_followed_lap(self._compare_a)
         # The compared pair changed — force the next tick() to recompute the badges/g.
         self._compare_last_t = None
+        self._on_pair_changed()  # F5: refresh the brake glyphs to the new compared pair
 
     # ------------------------------------------------------------------ pane S/F realign
     def _seek_pane_to_lap_start(self, side: int, lap_id: int) -> None:

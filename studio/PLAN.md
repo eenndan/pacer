@@ -105,6 +105,18 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
   its apex on the map, read-only (no selection/seek). A compact collapsible strip under the lap
   table; every σ/median verified **exact vs direct numpy** on both real recordings (which
   independently rank the same corner, C11, top).
+- **Braking / coasting / grip channels (F5)** (`driving.py`, pure numpy) — off the **validated
+  vehicle-frame g** (`gmeter.py`): **brake events** (onset where smoothed `long_g < −θ_b` with
+  release hysteresis; peak decel + duration), **coasting spans** (`|long_g|` & `|lat_g|` both in
+  their low band AND ~flat speed), and **per-corner grip utilization** (median `|g|` / the lap's
+  own envelope-max inside each corner window, in (0,1]). **θ derived from the session's OWN g
+  distribution** (θ_b = the median of the *braking-only* decel — duty-cycle independent; documented
+  with the measured D24 distribution + a load-time print). UI: **brake-point ▼ glyphs on the map +
+  speed chart** (sized by peak decel, **both laps in compare**), **shaded coasting bands** on the
+  speed chart, and a **Grip %** column in the Corners view. **Validated**: ACCL brake onsets
+  correlate **r≈1.00** in track position with the independent **GPS speed-derivative** method
+  (~4–6 m median offset) and yield **zero** false onsets on the full-throttle straight (0060 +
+  0062); θ_b stable across recordings (0.463 vs 0.452 g, 2.4% apart).
 - **Dark "Refined Minimal" theme** (`theme.py`) — single-source design tokens + dark `QPalette` +
   global QSS, Inter fonts, Phosphor icon buttons (`qtawesome`); charts, table, map and video chrome
   all adopt the dark surface.

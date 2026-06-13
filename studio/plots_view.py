@@ -61,6 +61,25 @@ SECTOR_LINE_PEN = pg.mkPen(C.text_muted, width=1, style=Qt.DashLine)
 SECTOR_LABEL_COLOR = C.text_dim
 # The delta plot's y=0 reference line — a faint hairline, same weight as the gridlines.
 ZERO_LINE_PEN = pg.mkPen(C.border, width=1)
+# F5 driving channels on the speed chart: brake-point glyphs (▼) at each braking-zone onset,
+# riding the speed curve, sized by peak decel (same ramp as the map glyphs); and shaded
+# coasting spans (a translucent vertical band over each coast region). The brake glyph uses
+# the lap's own series colour (app passes it) so compare mode reads lap A vs lap B; the coast
+# band is a quiet neutral fill that never competes with the curves.
+BRAKE_MARKER_MIN_PX = 9
+BRAKE_MARKER_MAX_PX = 17
+BRAKE_DECEL_LO = 0.10   # g
+BRAKE_DECEL_HI = 0.45   # g
+COAST_FILL = pg.mkBrush(C.text_muted)  # alpha applied per-region below
+COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
+COAST_PEN = pg.mkPen(None)
+
+
+def _brake_glyph_size(peak_decel: float) -> float:
+    """Brake event peak decel (g) -> speed-chart glyph size (px), clamped to the ramp ends."""
+    frac = (float(peak_decel) - BRAKE_DECEL_LO) / max(BRAKE_DECEL_HI - BRAKE_DECEL_LO, 1e-6)
+    frac = min(max(frac, 0.0), 1.0)
+    return BRAKE_MARKER_MIN_PX + frac * (BRAKE_MARKER_MAX_PX - BRAKE_MARKER_MIN_PX)
 
 
 class PlotsView(QWidget):
@@ -79,6 +98,7 @@ class PlotsView(QWidget):
         self._lap_ids: list[int] = []
         self._curves: list[tuple[object, object]] = []
         self._delta_curves: list[tuple] = []  # [(lid, xs, ys)] cached for the hover-dot snap
+        self._speed_curves: dict = {}  # {lid: (sx, spd)} cached so F5 brake glyphs ride the curve
         self._time_mode = False  # shared x-axis: distance (default) vs time-into-lap (both plots)
         self._cursor_t: float | None = None  # last applied position; re-placed after refresh()
         self._user_dragging = False  # True between grab and release of either cursor
@@ -88,6 +108,16 @@ class PlotsView(QWidget):
         # (label, x) for the CURRENT axis mode, pushed by app via set_sector_lines.
         self._sector_items: list = []
         self._sector_positions: list[tuple[str, float]] = []
+        # F5 driving channels on the speed chart: brake glyphs + shaded coasting bands. The
+        # DATA is pushed by app (so this view stays pacer-free) as per-lap lists keyed by the
+        # SAME draw set the curves use; the items are tracked so refresh() clears/redraws them
+        # on the freshly-fit axes (positions are in the current mode's units, like the sectors).
+        #   _brake_data: list of (positions, colour) — positions = [(plot-x, peak_decel)]
+        #   _coast_data: list of (spans, colour)     — spans = [(plot-x0, plot-x1)]
+        self._brake_items: list = []
+        self._coast_items: list = []
+        self._brake_data: list = []
+        self._coast_data: list = []
 
         # x-axis toggle — drives BOTH plots together (distance ⇄ time-into-lap). The plots share
         # one x-axis and stay x-linked, so the speed + delta cursors always align in either mode.
@@ -289,16 +319,97 @@ class PlotsView(QWidget):
                 plot.addItem(ln)
                 self._sector_items.append((plot, ln))
 
+    # ----------------------------------------------------- driving channels (F5)
+    def set_brake_markers(self, brake_data):
+        """Show brake-point glyphs on the speed chart. `brake_data` is a list of
+        (positions, colour) where positions = [(plot-x, peak_decel)] on the CURRENT shared-axis
+        mode (app computes them via session, so this view stays pacer-free) and colour is that
+        lap's series colour. One entry for the current lap; BOTH laps in compare. [] clears."""
+        self._brake_data = list(brake_data or [])
+        self._draw_driving()
+
+    def set_coasting_spans(self, coast_data):
+        """Shade coasting spans on the speed chart. `coast_data` is a list of (spans, colour)
+        where spans = [(plot-x0, plot-x1)] on the CURRENT shared-axis mode. One entry for the
+        current lap; BOTH laps in compare. [] clears."""
+        self._coast_data = list(coast_data or [])
+        self._draw_driving()
+
+    def _clear_driving(self):
+        for item in self._brake_items:
+            self.p_speed.removeItem(item)
+        for item in self._coast_items:
+            self.p_speed.removeItem(item)
+        self._brake_items = []
+        self._coast_items = []
+
+    def _draw_driving(self):
+        """(Re)draw the brake glyphs + coast bands on the speed plot from the cached per-lap
+        data. Brake glyphs RIDE the lap's speed curve (their y = the speed at the onset x, from
+        the cached curve); the coast band is a translucent vertical LinearRegionItem. Both are
+        rebuilt wholesale (cheap; only on a selection/mode/compare change, never per tick)."""
+        self._clear_driving()
+        # Coast bands first so the brake glyphs draw above them.
+        for spans, _colour in self._coast_data:
+            fill = pg.mkColor(C.text_muted)
+            fill.setAlpha(COAST_FILL_ALPHA)
+            for x0, x1 in spans:
+                region = pg.LinearRegionItem(
+                    values=(float(x0), float(x1)), orientation="vertical",
+                    brush=pg.mkBrush(fill), pen=COAST_PEN, movable=False)
+                region.setZValue(-4)  # above the sector lines (-5), below the curves
+                self.p_speed.addItem(region)
+                self._coast_items.append(region)
+        for positions, colour in self._brake_data:
+            if not positions:
+                continue
+            spots = []
+            for x, decel in positions:
+                # Ride the speed curve: the glyph y is the speed at this x. Fall back to the
+                # nearest drawn-lap curve if this exact lap's curve isn't cached.
+                y = self._speed_at_x(float(x))
+                if y is None:
+                    continue
+                spots.append({"pos": (float(x), y), "size": _brake_glyph_size(decel)})
+            if not spots:
+                continue
+            dots = pg.ScatterPlotItem(symbol="t", pen=None, brush=pg.mkBrush(colour), pxMode=True)
+            dots.addPoints(spots)
+            dots.setZValue(8)  # above the curves + coast band, below the scrub cursor
+            self.p_speed.addItem(dots)
+            self._brake_items.append(dots)
+
+    def _speed_at_x(self, x: float):
+        """The speed-curve y at plot-x `x`, interpolated from the cached speed curves. When
+        several laps are drawn (compare), the nearest sample across all curves is used so a
+        glyph still lands on a sensible point. None if no speed curve is drawn."""
+        best_y = None
+        best_dx = None
+        for sx, spd in self._speed_curves.values():
+            if len(sx) < 2:
+                continue
+            # x is monotonic; np.interp clamps to the ends (a glyph just past the last sample
+            # rides the endpoint). Track the curve whose x-range is closest to x.
+            dx = 0.0 if sx[0] <= x <= sx[-1] else min(abs(x - sx[0]), abs(x - sx[-1]))
+            if best_dx is None or dx < best_dx:
+                best_dx = dx
+                best_y = float(np.interp(x, sx, spd))
+        return best_y
+
     def refresh(self):
         for plot, curve in self._curves:
             plot.removeItem(curve)
         self._curves = []
         self._hide_hover()
         self._delta_curves = []  # [(lid, xs, ys)] for the hover-dot nearest-sample snap
+        self._speed_curves = {}  # {lid: (sx, spd)} rebuilt below; F5 brake glyphs ride these
         # Clear the sector guide lines too: a stale vertical InfiniteLine would otherwise be
         # caught by the autoRange fit below (like the cursor) and stretch the frozen range.
         # They're redrawn at the end on the freshly-fit axes (and re-pushed by app on a mode flip).
         self._clear_sectors()
+        # F5 brake glyphs / coast bands: clear them up front for the same reason (a stale
+        # scatter/region would skew the autoRange fit); redrawn at the end on the fitted axes.
+        self._clear_driving()
 
         # Both plots share ONE x-axis (distance = s×best_dist, or time-into-lap), kept x-linked
         # in BOTH modes so the two cursors always align. The shared x label/ticks live ONLY on the
@@ -370,6 +481,7 @@ class PlotsView(QWidget):
                 c.setDownsampling(auto=True)
                 c.setClipToView(True)
                 self._curves.append((self.p_speed, c))
+                self._speed_curves[lid] = (sx, spd)  # F5: so brake glyphs can ride this curve
             if lid in delta:
                 dd, dl = delta[lid]
                 c = self.p_delta.plot(dd, dl, pen=pen)
@@ -395,6 +507,9 @@ class PlotsView(QWidget):
         # mode's units; app re-pushes them when the mode flips, but a selection-only refresh
         # keeps the same positions, so just redraw the cached ones here).
         self._draw_sectors()
+        # F5: redraw the brake glyphs / coast bands on the fitted axes (cached per-lap data in
+        # the current mode's units; app re-pushes on a mode flip / selection change).
+        self._draw_driving()
 
     def _curve_label(self, lid: int, is_baseline: bool) -> str:
         """The chart-title label for one drawn curve. A local lap reads "lap N m:ss.mmm" (with a
