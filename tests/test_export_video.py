@@ -225,6 +225,92 @@ def test_encode_window_matches_decode_window():
     assert enc[enc.index("-t") + 1] == f"{67.5:.6f}"
 
 
+# ----------------------------------------------------------- encoder selection / GPU offload (F9)
+def test_encode_cmd_videotoolbox_uses_hw_codec_and_bitrate():
+    """With the VideoToolbox encoder the encode argv carries `h264_videotoolbox` + a bitrate
+    target (it's bitrate-driven, no CRF) + yuv420p/+faststart; libx264 (the fallback) stays
+    CRF-driven."""
+    vt = ev.build_encode_cmd(_spec(), 1920, 1080, 30.0, encoder=ev.VT_H264)
+    assert "h264_videotoolbox" in vt and "libx264" not in vt
+    assert "-b:v" in vt                                   # bitrate target, not -crf
+    assert "-crf" not in vt
+    assert "yuv420p" in vt and "+faststart" in vt
+    assert vt[-1] == "/out/clip.mp4"
+    sw = ev.build_encode_cmd(_spec(), 1920, 1080, 30.0, encoder=ev.SW_H264)
+    assert "libx264" in sw and "-crf" in sw and "h264_videotoolbox" not in sw
+
+
+def test_vt_target_bitrate_scales_and_floors():
+    """The VideoToolbox target bitrate scales with pixels*fps (bits-per-pixel) and never drops
+    below the floor (so a tiny test size still encodes cleanly)."""
+    big = ev.vt_target_bitrate(1920, 1080, 60.0)
+    small = ev.vt_target_bitrate(1920, 1080, 30.0)
+    assert big > small                                    # more fps -> more bitrate
+    assert ev.vt_target_bitrate(64, 64, 2.0) == ev._MIN_VT_BITRATE   # floored
+
+
+def test_decode_cmd_hwaccel_placement():
+    """`-hwaccel videotoolbox` (hardware decode) is inserted BEFORE the input so ffmpeg decodes the
+    source on the media engine; without it the decode argv is unchanged."""
+    hw = ev.build_decode_cmd(_spec(), 1920, 1080, 30.0, hwaccel=True)
+    assert "-hwaccel" in hw and hw[hw.index("-hwaccel") + 1] == "videotoolbox"
+    assert hw.index("-hwaccel") < hw.index("-i")          # before the input
+    sw = ev.build_decode_cmd(_spec(), 1920, 1080, 30.0, hwaccel=False)
+    assert "-hwaccel" not in sw
+
+
+def test_resolve_encoder_choices(monkeypatch_restore):
+    """resolve_encoder maps the choice to a concrete -c:v: explicit libx264 always SW; an explicit
+    GPU/vt request uses VT when COMPILED IN; auto uses VT only when a real session opens."""
+    ev.videotoolbox_encoder_available = lambda: True      # type: ignore[assignment]
+    ev.videotoolbox_usable = lambda: True                 # type: ignore[assignment]
+    assert ev.resolve_encoder("libx264") == ev.SW_H264
+    assert ev.resolve_encoder("cpu") == ev.SW_H264
+    assert ev.resolve_encoder("videotoolbox") == ev.VT_H264
+    assert ev.resolve_encoder("gpu") == ev.VT_H264
+    assert ev.resolve_encoder("auto") == ev.VT_H264
+    # auto falls back to libx264 when no real VT session opens, even if the encoder is compiled in
+    ev.videotoolbox_usable = lambda: False                # type: ignore[assignment]
+    assert ev.resolve_encoder("auto") == ev.SW_H264
+    # an explicit gpu request with NO VT compiled in also degrades to libx264 (never errors)
+    ev.videotoolbox_encoder_available = lambda: False     # type: ignore[assignment]
+    assert ev.resolve_encoder("gpu") == ev.SW_H264
+
+
+def test_resolve_hwaccel_decode_auto_pairs_with_vt_encoder(monkeypatch_restore):
+    """hwaccel-decode "auto" turns ON only when the VT encoder is used AND the hwaccel is available
+    (so decode+encode both run on the media engine); explicit True/False force it."""
+    ev.videotoolbox_decode_available = lambda: True       # type: ignore[assignment]
+    assert ev.resolve_hwaccel_decode("auto", ev.VT_H264) is True
+    assert ev.resolve_hwaccel_decode("auto", ev.SW_H264) is False   # SW encoder -> no auto hwdec
+    assert ev.resolve_hwaccel_decode(True, ev.SW_H264) is True      # forced on
+    assert ev.resolve_hwaccel_decode(False, ev.VT_H264) is False    # forced off
+    # forcing on when the hwaccel isn't available degrades to software decode (never errors)
+    ev.videotoolbox_decode_available = lambda: False      # type: ignore[assignment]
+    assert ev.resolve_hwaccel_decode(True, ev.VT_H264) is False
+    assert ev.resolve_hwaccel_decode("auto", ev.VT_H264) is False
+
+
+def test_resolve_fps_cap_and_explicit():
+    """resolve_fps: an explicit fps wins; otherwise the source rate capped by fps_cap (so 59.94 ->
+    30 by default); never exceeds the source; a non-positive source falls back to the cap."""
+    Cfg = ev.OverlayConfig
+    assert ev.resolve_fps(Cfg(fps=24.0, fps_cap=30.0), 59.94) == 24.0       # explicit wins
+    assert ev.resolve_fps(Cfg(fps=None, fps_cap=30.0), 59.94) == 30.0       # capped
+    assert ev.resolve_fps(Cfg(fps=None, fps_cap=None), 59.94) == 59.94      # uncapped -> source
+    assert ev.resolve_fps(Cfg(fps=None, fps_cap=30.0), 24.0) == 24.0        # source below cap kept
+    assert ev.resolve_fps(Cfg(fps=None, fps_cap=30.0), 0.0) == 30.0         # bad source -> cap
+
+
+def test_default_config_offloads_to_gpu_and_caps_fps():
+    """The DEFAULT export config opts into the GPU offload + the 30 fps cap (the new fast defaults
+    the brief asked for) — a regression guard so the defaults don't silently revert."""
+    cfg = ev.OverlayConfig()
+    assert cfg.encoder == "auto"
+    assert cfg.hwaccel_decode == "auto"
+    assert cfg.fps_cap == 30.0
+
+
 # --------------------------------------------------------------------------- mocked render loop
 class _FakeProc:
     """A stand-in subprocess.Popen: the decoder serves `nframes` of zeroed rgb24 bytes then EOF;
@@ -277,18 +363,23 @@ def _patch_pipeline(monkeypatch_targets, frame_bytes, nframes):
 
     ev.subprocess.Popen = fake_popen                      # type: ignore[assignment]
     ev.probe_video_size = lambda _p: (3840, 2160, 60.0)   # type: ignore[assignment]
+    # Never shell out to real ffmpeg for the encoder probe in a mocked render — keep these tests
+    # ffmpeg-free + deterministic regardless of which encoder the spec asked for.
+    ev.resolve_encoder = lambda _choice: ev.SW_H264       # type: ignore[assignment]
     return state
 
 
 def test_renderer_pumps_frames_and_reports_progress(monkeypatch_restore):
     """The Renderer reads one frame's bytes per loop, paints it, writes it to the encoder, and
     reports progress — all with ffmpeg mocked. The encoder must receive exactly
-    nframes * frame_bytes bytes."""
+    nframes * frame_bytes bytes. Pinned to the single-threaded pump (workers=1) + libx264 +
+    fps_cap off so the count is deterministic and no real ffmpeg is touched."""
     s = StubSession(lap_id=2, t0=0.0, dur=1.0, n=200)
-    out_w, out_h = ev.output_size(3840, 2160, ev.OverlayConfig(out_height=120))
+    cfg = ev.OverlayConfig(out_height=120, fps_cap=None, encoder="libx264", workers=1)
+    out_w, out_h = ev.output_size(3840, 2160, cfg)
     fb = out_w * out_h * 3
     spec = ev.ExportSpec(src_path="/in.MP4", out_path="/out.mp4", lap_id=2, t0=0.0, t1=1.0,
-                         config=ev.OverlayConfig(out_height=120))
+                         config=cfg)
     # at 60 fps over 1.0 s -> 60 frames expected; serve exactly that many
     state = _patch_pipeline(None, fb, nframes=60)
     r = ev.Renderer(s, spec)
@@ -307,9 +398,10 @@ def test_renderer_cancel_raises_and_kills(monkeypatch_restore):
     """A cancel() that returns True mid-render raises CancelledError; both fake procs are killed
     (cooperative teardown)."""
     s = StubSession(lap_id=2, t0=0.0, dur=2.0, n=200)
+    cfg = ev.OverlayConfig(out_height=120, fps_cap=None, encoder="libx264", workers=1)
     spec = ev.ExportSpec(src_path="/in.MP4", out_path="/out.mp4", lap_id=2, t0=0.0, t1=2.0,
-                         config=ev.OverlayConfig(out_height=120))
-    out_w, out_h = ev.output_size(3840, 2160, ev.OverlayConfig(out_height=120))
+                         config=cfg)
+    out_w, out_h = ev.output_size(3840, 2160, cfg)
     fb = out_w * out_h * 3
     state = _patch_pipeline(None, fb, nframes=200)
     r = ev.Renderer(s, spec)
@@ -441,19 +533,165 @@ def test_real_synthetic_pipe_render_if_ffmpeg(monkeypatch_restore):
     print("real_synthetic_pipe_render OK")
 
 
+def _make_syn_clip(path, dur=1.5):
+    """Build a tiny test clip (video + audio tone) at `path`. Shared by the GPU/fallback tests."""
+    if os.path.exists(path):
+        os.remove(path)
+    subprocess.run(
+        [ev.FFMPEG, "-nostdin", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", f"testsrc=size=640x360:rate=30:duration={dur}",
+         "-f", "lavfi", "-i", f"sine=frequency=440:duration={dur}",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", path],
+        check=True, capture_output=True)
+    assert os.path.getsize(path) > 0
+
+
+def _stream_encoder_tag(path):
+    """The VIDEO stream's `encoder` tag (e.g. 'Lavc61.19.101 h264_videotoolbox' / '... libx264') —
+    this is where the concrete encoder name lands (the format/muxer tag is just libavformat)."""
+    return subprocess.run(
+        [ev.FFPROBE, "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream_tags=encoder",
+         "-of", "default=noprint_wrappers=1:nokey=1", path],
+        capture_output=True, text=True).stdout.strip()
+
+
+def test_real_videotoolbox_render_if_available(monkeypatch_restore):
+    """END-TO-END GPU offload: if a VideoToolbox H.264 session actually opens on this machine, a
+    render forced to the VT encoder must produce a valid H.264 file whose stream encoder tag names
+    h264_videotoolbox (proof the Apple media engine, not libx264, produced it). Skipped (not
+    failed) where VT isn't usable or ffmpeg is absent — so CI without the hardware still passes."""
+    if not ev.ffmpeg_available() or not ev.videotoolbox_usable():
+        print("skip real_videotoolbox_render (no ffmpeg or no VT session)")
+        return
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    src, out = os.path.join(tmp, "f9_vt_src.mp4"), os.path.join(tmp, "f9_vt_out.mp4")
+    _make_syn_clip(src)
+    s = StubSession(lap_id=1, t0=0.0, dur=1.5, n=90)
+    # Force the VT encoder + software decode (keep the probe surface small); fps uncapped so the
+    # frame count is the full clip.
+    spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=0.0, t1=1.5,
+                         config=ev.OverlayConfig(out_height=360, encoder="videotoolbox",
+                                                 hwaccel_decode=False, fps_cap=None))
+    r = ev.Renderer(s, spec)
+    assert r.encoder == ev.VT_H264                          # selected the GPU encoder
+    res = r.run()
+    assert res.frames >= 40 and os.path.getsize(out) > 0
+    tag = _stream_encoder_tag(out)
+    assert "videotoolbox" in tag.lower(), f"expected a VideoToolbox stream encoder tag, got {tag!r}"
+    for p in (src, out):
+        os.remove(p)
+    print(f"real_videotoolbox_render OK (encoder tag: {tag})")
+
+
+def test_real_fallback_to_libx264_if_ffmpeg(monkeypatch_restore):
+    """ROBUSTNESS: a VideoToolbox encode that fails at runtime must transparently fall back to
+    libx264 so the export never breaks. We FORCE VT selection, then break its codec args so the VT
+    encode exits non-zero; the render must retry on libx264 and still produce a valid H.264 file
+    (encoder tag = libx264). Gated on ffmpeg; needs no hardware (VT is made to fail on purpose)."""
+    if not ev.ffmpeg_available():
+        print("skip real_fallback_to_libx264 (no ffmpeg)")
+        return
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    src, out = os.path.join(tmp, "f9_fb_src.mp4"), os.path.join(tmp, "f9_fb_out.mp4")
+    _make_syn_clip(src)
+    # Force VT for the first attempt but honour the retry's libx264 choice; keep decode in software.
+    ev.resolve_encoder = lambda c: (                        # type: ignore[assignment]
+        ev.VT_H264 if str(c).lower() in ("videotoolbox", "auto") else ev.SW_H264)
+    ev.videotoolbox_decode_available = lambda: False        # type: ignore[assignment]
+    _orig_codec = ev._video_codec_args
+
+    def broken_vt(encoder, w, h, fps):
+        if encoder == ev.VT_H264:
+            return ["-c:v", ev.VT_H264, "-b:v", "-5"]       # invalid bitrate -> VT exits non-zero
+        return _orig_codec(encoder, w, h, fps)
+    ev._video_codec_args = broken_vt                        # type: ignore[assignment]
+    try:
+        s = StubSession(lap_id=1, t0=0.0, dur=1.5, n=90)
+        spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=0.0, t1=1.5,
+                             config=ev.OverlayConfig(out_height=360, encoder="videotoolbox",
+                                                     hwaccel_decode=False, fps_cap=None))
+        r = ev.Renderer(s, spec)
+        assert r.encoder == ev.VT_H264                       # the (doomed) first attempt is VT
+        res = r.run()                                        # must NOT raise — falls back to libx264
+        assert res.frames >= 40 and os.path.getsize(out) > 0
+        info = subprocess.run(
+            [ev.FFPROBE, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", out],
+            check=True, capture_output=True, text=True).stdout.strip()
+        assert info == "h264", f"fallback output must be h264, got {info!r}"
+        tag = _stream_encoder_tag(out)
+        assert "libx264" in tag.lower(), f"fallback must be libx264, got tag {tag!r}"
+    finally:
+        ev._video_codec_args = _orig_codec
+        for p in (src, out):
+            if os.path.exists(p):
+                os.remove(p)
+    print("real_fallback_to_libx264 OK")
+
+
+def test_parallel_composite_is_deterministic_if_ffmpeg(monkeypatch_restore):
+    """PARALLEL CORRECTNESS: the multi-worker paint pool must produce BYTE-IDENTICAL frames to the
+    single-threaded pump — the g-meter dial's order-dependent state is advanced sequentially up
+    front, so only the (independent) drawing is parallelized. Render the same synthetic clip with
+    workers=1 and workers=4 (libx264 so the encoder itself is deterministic) and assert the decoded
+    RGB frames hash equal. Gated on ffmpeg; no media file. (Guards against a future change that
+    parallelizes something stateful and silently desyncs the dial/envelope between frames.)"""
+    if not ev.ffmpeg_available():
+        print("skip parallel_composite_is_deterministic (no ffmpeg)")
+        return
+    import hashlib
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    src = os.path.join(tmp, "f9_det_src.mp4")
+    o1 = os.path.join(tmp, "f9_det_w1.mp4")
+    o4 = os.path.join(tmp, "f9_det_w4.mp4")
+    _make_syn_clip(src, dur=2.0)
+
+    def render(out, workers):
+        s = StubSession(lap_id=1, t0=0.0, dur=2.0, n=120)
+        spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=0.0, t1=2.0,
+                             config=ev.OverlayConfig(out_height=360, encoder="libx264",
+                                                     hwaccel_decode=False, fps_cap=None,
+                                                     workers=workers))
+        ev.Renderer(s, spec).run()
+
+    def frames_hash(path):
+        raw = subprocess.run(
+            [ev.FFMPEG, "-hide_banner", "-loglevel", "error", "-i", path,
+             "-map", "0:v", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+            check=True, capture_output=True).stdout
+        return hashlib.md5(raw).hexdigest()
+
+    try:
+        render(o1, 1)
+        render(o4, 4)
+        h1, h4 = frames_hash(o1), frames_hash(o4)
+        assert h1 == h4, f"parallel composite differs from single-thread: {h1} != {h4}"
+    finally:
+        for p in (src, o1, o4):
+            if os.path.exists(p):
+                os.remove(p)
+    print("parallel_composite_is_deterministic OK")
+
+
 # --------------------------------------------------------------------------- restore fixture
 class _Restore:
     """Save/restore the module globals the pipeline mocks clobber, so tests don't bleed into each
     other (no pytest here — a tiny manual fixture run around each mocked test)."""
 
+    _SAVED = ("subprocess", "probe_video_size", "resolve_encoder", "videotoolbox_encoder_available",
+              "videotoolbox_usable", "videotoolbox_decode_available")
+
     def __enter__(self):
+        # snapshot subprocess.Popen separately (it lives on the subprocess module, not ev)
         self._popen = ev.subprocess.Popen
-        self._probe = ev.probe_video_size
+        self._saved = {name: getattr(ev, name) for name in self._SAVED if name != "subprocess"}
         return self
 
     def __exit__(self, *a):
         ev.subprocess.Popen = self._popen
-        ev.probe_video_size = self._probe
+        for name, val in self._saved.items():
+            setattr(ev, name, val)
 
 
 # the mocked tests take a `monkeypatch_restore` arg purely as a marker; the runner wraps them.

@@ -149,15 +149,28 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
   app) → **mux** (H.264 + the source **audio** trimmed to the same window). Runs on a worker
   `QThread` behind a cancellable `QProgressDialog`; a **separate dormant File-menu entry** greyed
   out until a session loads, so the feature can't touch the live app path (the one shared file,
-  `gmeter_overlay.py`, paints **pixel-identically** to before the dial-paint extraction). Verified
-  on the real D24 best lap (lap 9, 68.44 s): 4103 frames rendered in **~225 s** (1080p@59.94),
-  output `68.435 s` vs the lap window `68.440 s` (**5.1 ms ≤ 1 frame**), valid h264+aac 1920×1080,
-  and a 5-timestamp frame-grab cross-check where the burned-in speed/Δ/g-dot quadrant equal the
-  `Session`/`gmeter` accessors at that media time. **v1 = ONE selected lap.** **Phase 2:**
-  full-session export and compare-pair side-by-side export (the renderer + spec already abstract the
-  window; both are additive, no live-path change). Pure-logic parts unit-tested in
-  `tests/test_export_video.py` (subprocess mocked — CI needs no ffmpeg; a real render is gated
-  behind `ffmpeg_available()` + the media file).
+  `gmeter_overlay.py`, paints **pixel-identically** to before the dial-paint extraction).
+
+  **GPU / media-engine offload (the perf path).** On Apple Silicon the export defaults to the
+  Apple media engine for BOTH heavy stages: the H.264 **encode** uses `h264_videotoolbox`
+  (bitrate-driven, ~0.10 bpp) and the **decode** runs on it too (`-hwaccel videotoolbox`), so the
+  CPU is left almost entirely for compositing. A runtime **probe** picks VideoToolbox only when a
+  real session opens; otherwise (and if a VT encode fails mid-render) it transparently falls back to
+  software **libx264** (CRF 20) — the feature never breaks. A **pipelined engine** (reader thread →
+  a small **paint-worker pool** → an ordered writer) overlaps decode/composite/encode (the
+  order-dependent g-meter dial state is advanced sequentially up front; only the drawing is
+  parallel), and the default **30 fps cap** halves the frame count of 59.94 fps footage with no
+  perceptible loss for a telemetry overlay. All knobs (`encoder`, `hwaccel_decode`, `fps`/`fps_cap`,
+  `workers`) live on `OverlayConfig` and are overridable. Measured on the real D24 best lap (lap 9,
+  68.44 s, 1080p): the old serial libx264 path ran **~70 s / ~488 s CPU**; the new defaults render
+  in **~37 s** (2053 frames @ 30 fps) using **~100 s CPU** — ~**2× faster wall-time, ~5× less CPU**;
+  at the SAME 60 fps the GPU offload alone is ~**40 s** (vs 70 s) at ~3× less CPU. Output `68.433 s`
+  vs the lap window `68.440 s` (**≤ 1 frame**), valid h264(High)+aac 1920×1080, encoder tag
+  confirms `h264_videotoolbox`, and frame-grabs show the burned-in overlays clean. **v1 = ONE
+  selected lap.** **Phase 2:** full-session export and compare-pair side-by-side export (the
+  renderer + spec already abstract the window; both are additive, no live-path change). Pure-logic
+  parts unit-tested in `tests/test_export_video.py` (subprocess mocked — CI needs no ffmpeg; real
+  VideoToolbox + libx264-fallback renders gated behind `ffmpeg_available()`).
 
 ---
 

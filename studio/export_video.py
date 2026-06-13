@@ -42,10 +42,12 @@ at media time t shows what the app shows at t.
 
 from __future__ import annotations
 
+import os
+import queue
 import shutil
 import subprocess
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -69,6 +71,134 @@ def ffmpeg_available() -> bool:
     return shutil.which(FFMPEG) is not None and shutil.which(FFPROBE) is not None
 
 
+# --------------------------------------------------------------------------- encoder selection
+# The headline GPU offload: on Apple Silicon, ffmpeg's `h264_videotoolbox` encoder runs the H.264
+# encode on the Apple media engine (the dedicated video hardware) instead of the CPU. That both
+# makes the encode itself faster AND — crucially for this composite pipeline — frees the CPU cores
+# the software libx264 encoder was contending for with our QPainter loop. It is quality-via-BITRATE
+# (no CRF), so we target a generous bitrate that stays visually clean at 1080p. We KEEP libx264 as a
+# robust fallback: a VideoToolbox encode session can fail at runtime on some pixel-format / size
+# combinations, so we (a) probe it once at startup and (b) if the probe or a real encode fails,
+# transparently fall back to libx264 so the feature never breaks.
+VT_H264 = "h264_videotoolbox"
+SW_H264 = "libx264"
+
+# Target H.264 bitrate (bits/s) as bits-per-pixel-per-frame so the VideoToolbox stream stays clean
+# at any size/fps. ~0.10 bpp is a comfortably high 1080p60 setting (~12.4 Mbit/s) that keeps the
+# burned-in overlay text + the footage crisp; VideoToolbox is bitrate-driven so we err generous
+# (storage is cheap — it's a shareable clip, not an archive master). Floor keeps tiny test sizes
+# from getting a starved bitrate.
+_BITS_PER_PIXEL = 0.10
+_MIN_VT_BITRATE = 2_000_000
+
+
+def vt_target_bitrate(out_w: int, out_h: int, fps: float) -> int:
+    """A sensible VideoToolbox target bitrate (bits/s) for an out_w x out_h @ fps stream — bits per
+    pixel per frame, floored. Used only for the hardware encoder (libx264 stays CRF-driven)."""
+    bits = int(out_w * out_h * max(fps, 1.0) * _BITS_PER_PIXEL)
+    return max(bits, _MIN_VT_BITRATE)
+
+
+def videotoolbox_encoder_available() -> bool:
+    """True iff ffmpeg lists the `h264_videotoolbox` encoder (it's compiled in). A cheap static
+    capability check — NOT proof a hardware session will open, which `videotoolbox_usable` confirms
+    with a real tiny encode. Cached so repeated exports don't re-shell ffmpeg."""
+    cached = getattr(videotoolbox_encoder_available, "_cached", None)
+    if cached is not None:
+        return cached
+    ok = False
+    if shutil.which(FFMPEG) is not None:
+        try:
+            out = subprocess.run([FFMPEG, "-hide_banner", "-encoders"],
+                                 capture_output=True, text=True, timeout=20).stdout
+            ok = VT_H264 in out
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+    videotoolbox_encoder_available._cached = ok  # type: ignore[attr-defined]
+    return ok
+
+
+def videotoolbox_usable() -> bool:
+    """Confirm a VideoToolbox H.264 hardware session ACTUALLY opens on this machine by running a
+    tiny real encode of a synthetic clip through `h264_videotoolbox`. Static encoder presence
+    (videotoolbox_encoder_available) does not guarantee a session opens — it can fail on pixel
+    format / size / a busy media engine — so this runtime probe gates auto-selection. Cached (a
+    fixed machine capability)."""
+    cached = getattr(videotoolbox_usable, "_cached", None)
+    if cached is not None:
+        return cached
+    ok = False
+    if videotoolbox_encoder_available():
+        try:
+            # 64x64, 2 frames — minimal but real; -f null discards the muxed output.
+            r = subprocess.run(
+                [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
+                 "-f", "lavfi", "-i", "testsrc=size=64x64:rate=2:duration=1",
+                 "-c:v", VT_H264, "-pix_fmt", "yuv420p", "-frames:v", "2",
+                 "-f", "null", "-"],
+                capture_output=True, timeout=30)
+            ok = r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+    videotoolbox_usable._cached = ok  # type: ignore[attr-defined]
+    return ok
+
+
+def resolve_encoder(choice: str) -> str:
+    """Resolve an encoder `choice` to a concrete ffmpeg `-c:v` name. The ONE place encoder policy
+    lives, so the app/tests can reason about (and override) the choice:
+
+      * "auto"  -> h264_videotoolbox if a real VT session opens here, else libx264 (the safe SW path)
+      * "videotoolbox"/"h264_videotoolbox"/"gpu"/"hw"/"vt" -> the VT encoder if merely COMPILED IN
+        (caller forced it; the render's libx264 fallback still covers a session that won't open)
+      * "libx264"/"software"/"x264"/"cpu"/"sw" -> always libx264
+
+    Anything unrecognized falls back to "auto" semantics."""
+    c = (choice or "auto").lower()
+    if c in ("libx264", "software", "sw", "x264", "cpu"):
+        return SW_H264
+    if c in ("videotoolbox", "h264_videotoolbox", "vt", "hw", "gpu"):
+        return VT_H264 if videotoolbox_encoder_available() else SW_H264
+    return VT_H264 if videotoolbox_usable() else SW_H264
+
+
+def videotoolbox_decode_available() -> bool:
+    """True iff ffmpeg lists `videotoolbox` as a hardware-acceleration method (so `-hwaccel
+    videotoolbox` is accepted). Cached; cheap (`ffmpeg -hwaccels`)."""
+    cached = getattr(videotoolbox_decode_available, "_cached", None)
+    if cached is not None:
+        return cached
+    ok = False
+    if shutil.which(FFMPEG) is not None:
+        try:
+            out = subprocess.run([FFMPEG, "-hide_banner", "-hwaccels"],
+                                 capture_output=True, text=True, timeout=20).stdout
+            ok = "videotoolbox" in out
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+    videotoolbox_decode_available._cached = ok  # type: ignore[attr-defined]
+    return ok
+
+
+def resolve_hwaccel_decode(choice: str | bool, encoder: str) -> bool:
+    """Whether to add `-hwaccel videotoolbox` to the decode. `True`/`False` force it; "auto" turns
+    it ON when the export is ALSO using the VideoToolbox encoder (so the whole decode+encode runs on
+    the media engine, freeing the CPU for the parallel composite — the configuration that unblocks a
+    core-starved machine) AND ffmpeg advertises the videotoolbox hwaccel. Forcing True still checks
+    availability so an env without it just decodes in software rather than erroring."""
+    if choice is True:
+        return videotoolbox_decode_available()
+    if choice is False:
+        return False
+    c = str(choice or "auto").lower()
+    if c in ("0", "false", "no", "off", "software", "sw", "cpu", "none"):
+        return False
+    if c in ("1", "true", "yes", "on", "videotoolbox", "vt", "hw", "gpu"):
+        return videotoolbox_decode_available()
+    # "auto": pair the hw decode with the hw encoder.
+    return encoder == VT_H264 and videotoolbox_decode_available()
+
+
 # --------------------------------------------------------------------------- configuration
 # Output presets. 1080p default (the brief): a shareable size that re-encodes fast enough while
 # staying crisp. Width is derived from the source aspect at render time (so a 16:9 4K source maps
@@ -79,7 +209,26 @@ class OverlayConfig:
     the composition scales with `out_height`. The defaults reproduce the app's corner placements
     (g-meter top-right, readout bottom-left, map inset bottom-right, lap strip top-left)."""
     out_height: int = 1080            # controlling output dimension (width follows source aspect)
-    fps: float | None = None          # output fps; None = keep the source frame rate
+    fps: float | None = None          # explicit output fps; None = source fps, then fps_cap applies
+    # Cap the output fps. A telemetry overlay reads identically at 30 fps as at 59.94 — the dial,
+    # Δ box and map move smoothly — but 30 fps HALVES the frame count, so it ~halves every per-frame
+    # cost (decode + composite + encode). GoPro footage is typically 59.94/60; capping to 30 is the
+    # single cheapest large speed-up with negligible perceived loss for an overlay clip. Set to None
+    # to keep the full source rate. (If `fps` is set explicitly, that wins and the cap is ignored.)
+    fps_cap: float | None = 30.0
+    # Video encoder: "auto" picks the Apple media-engine encoder (h264_videotoolbox) when a real
+    # hardware session opens on this machine, else libx264; force "libx264" / "videotoolbox" to
+    # override. VideoToolbox offloads the H.264 encode to the GPU/media engine (frees CPU cores).
+    encoder: str = "auto"
+    # Hardware-accelerated DECODE via VideoToolbox. "auto" enables it whenever VideoToolbox is the
+    # encoder too (so BOTH the decode and the encode run on the media engine, leaving the CPU for the
+    # parallel composite — the configuration that rescues a core-starved machine); True/False force
+    # it. Neutral on wall-time on a fast box; a big CPU relief on a slow one.
+    hwaccel_decode: str | bool = "auto"
+    # Number of parallel COMPOSITE (QPainter) workers. 0/None = auto (a small pool sized to the
+    # machine). 1 forces the in-line single-threaded paint. The g-meter dial STATE is always
+    # advanced sequentially (it's order-dependent); only the per-frame drawing is parallelized.
+    workers: int | None = None
     # g-meter dial: a square pinned to the TOP-RIGHT, side = this fraction of frame height.
     gmeter_frac: float = 0.26
     margin_frac: float = 0.022        # uniform inset from the frame edge for all elements
@@ -142,6 +291,30 @@ def frame_times(t0: float, t1: float, fps: float) -> np.ndarray:
     return t0 + np.arange(n) / fps
 
 
+def resolve_fps(cfg: OverlayConfig, src_fps: float) -> float:
+    """The output fps for the render: an explicit `cfg.fps` wins; otherwise the source rate, then
+    `cfg.fps_cap` caps it (so a 59.94 fps GoPro exports at 30 by default — half the frames, half the
+    work, no perceptible loss for a telemetry overlay). Never exceeds the source rate (capping up
+    would only duplicate frames). Guards a non-positive source by falling back to the cap/30."""
+    if cfg.fps:
+        return float(cfg.fps)
+    fps = float(src_fps) if src_fps and src_fps > 0 else (cfg.fps_cap or 30.0)
+    if cfg.fps_cap:
+        fps = min(fps, float(cfg.fps_cap))
+    return fps
+
+
+def resolve_workers(workers: int | None) -> int:
+    """How many parallel COMPOSITE (paint) worker threads to use. None/0 = auto: a small pool sized
+    to the machine (cpu_count-1, clamped to [1, 4]) — enough to overlap painting with decode+encode
+    without oversubscribing the cores VideoToolbox/ffmpeg also want. An explicit positive value is
+    honoured (1 = the in-line single-threaded paint)."""
+    if workers and workers > 0:
+        return int(workers)
+    cpu = os.cpu_count() or 2
+    return max(1, min(4, cpu - 1))
+
+
 # --------------------------------------------------------------------------- per-frame values
 @dataclass
 class OverlayValues:
@@ -189,12 +362,22 @@ def output_size(src_w: int, src_h: int, cfg: OverlayConfig) -> tuple[int, int]:
     return max(w, 2), max(h, 2)
 
 
-def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float) -> list[str]:
+def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
+                     hwaccel: bool = False) -> list[str]:
     """The DECODE ffmpeg argv: seek to t0 BEFORE the input (fast keyframe seek) and AGAIN trim by
     duration, scale to (out_w, out_h), force the constant output `fps`, emit rgb24 rawvideo to
-    stdout. `-an`/`-sn`/`-dn` drop audio/subs/data — we only want the video frames here."""
+    stdout. `-an`/`-sn`/`-dn` drop audio/subs/data — we only want the video frames here.
+
+    `hwaccel` adds `-hwaccel videotoolbox` BEFORE the input so the Apple media engine decodes the
+    (HEVC/H.264) source instead of the CPU. On GoPro HEVC that moves the decode — a ~6-core software
+    job — onto the hardware, freeing those cores for the parallel composite + (if used) leaving the
+    encode untouched. It barely changes wall-time on a fast multi-core machine (software HEVC decode
+    is already threaded) but is a large CPU relief on a core-starved one, which is exactly where the
+    export was 'too slow to use'."""
+    hw = ["-hwaccel", "videotoolbox"] if hwaccel else []
     return [
         FFMPEG, "-nostdin", "-loglevel", "error",
+        *hw,
         "-ss", f"{spec.t0:.6f}", "-i", spec.src_path, "-t", f"{spec.duration:.6f}",
         "-vf", f"scale={out_w}:{out_h},fps={fps:.6f}",
         "-an", "-sn", "-dn",
@@ -202,11 +385,38 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float) -> li
     ]
 
 
-def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float) -> list[str]:
+def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float) -> list[str]:
+    """The `-c:v ...` portion of the encode argv for the resolved `encoder`:
+
+      * h264_videotoolbox — the Apple media-engine (GPU) encoder. Quality is bitrate-driven, so we
+        pass a generous target (vt_target_bitrate) + a matching cap; `-allow_sw 1` lets ffmpeg fall
+        back to VideoToolbox's own software path rather than erroring if a HW session can't open;
+        `-realtime 0` favours quality over latency (this is an offline export, not a live stream).
+        `-color_range tv` silences the "range not set" note and pins MPEG/limited range.
+      * libx264 — the software fallback: veryfast/CRF 20, the original visually-lossless setting.
+
+    Both end yuv420p + faststart so the MP4 is broadly playable and streams (moov atom up front)."""
+    if encoder == VT_H264:
+        br = vt_target_bitrate(out_w, out_h, fps)
+        return [
+            "-c:v", VT_H264,
+            "-b:v", str(br), "-maxrate", str(br), "-bufsize", str(br * 2),
+            "-allow_sw", "1", "-realtime", "0",
+            "-pix_fmt", "yuv420p", "-color_range", "tv", "-movflags", "+faststart",
+        ]
+    return [
+        "-c:v", SW_H264, "-preset", "veryfast", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+    ]
+
+
+def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
+                     encoder: str = SW_H264) -> list[str]:
     """The MUX/ENCODE ffmpeg argv: input 0 is our composited rgb24 rawvideo on stdin (we declare
     its size + rate); input 1 is the SOURCE again, seek-trimmed to the same [t0, t0+dur) window for
-    its AUDIO. Map our video + the source audio, encode H.264 (yuv420p, +faststart for streaming)
-    and AAC. `-shortest` guards against a fractional-frame audio overrun."""
+    its AUDIO. Map our video + the source audio, encode H.264 with the chosen `encoder`
+    (h264_videotoolbox GPU offload or libx264) and AAC. `-shortest` guards against a fractional-frame
+    audio overrun."""
     return [
         FFMPEG, "-nostdin", "-loglevel", "error", "-y",
         # input 0: raw composited video from our pipe
@@ -215,8 +425,7 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float) -> li
         # input 1: source audio, same window
         "-ss", f"{spec.t0:.6f}", "-i", spec.src_path, "-t", f"{spec.duration:.6f}",
         "-map", "0:v:0", "-map", "1:a:0?",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        *_video_codec_args(encoder, out_w, out_h, fps),
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         spec.out_path,
@@ -437,29 +646,74 @@ class OverlayPainter:
             self._dial.set_lap(vals.lap_id)
         self._dial.set_g(vals.g)
 
-    def paint_frame(self, img: QImage, vals: OverlayValues) -> None:
-        """Paint all overlay elements onto `img` (an RGB frame at the output size). Advances the
-        g-meter dial state first (so its dot/envelope reflect this frame), then draws."""
+    def advance_and_snapshot(self, vals: OverlayValues):
+        """Advance the dial ONE tick (sequential, order-dependent — the EMA/envelope accumulate)
+        and return an immutable `DialState` snapshot of the resulting filtering state. This is the
+        only part of the per-frame overlay that MUST run in frame order; it's pure numeric work (no
+        drawing), so doing it sequentially up front lets the actual painting be parallelized: each
+        frame's paint just needs its own snapshot + values, with no cross-frame state."""
         self.feed_g(vals)
+        return self._dial._dial_state()
+
+    def paint_frame_with_state(self, img: QImage, vals: OverlayValues, dial_state) -> None:
+        """Paint all overlay elements onto `img` (an RGB frame at the output size) from a PRECOMPUTED
+        `dial_state` — no shared mutable state is touched, so this is safe to run on a worker thread
+        for a different frame than the one currently advancing the dial. `img` is mutated in place."""
         p = QPainter(img)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.TextAntialiasing, True)
-        # g-meter dial: paint into its rect via the SHARED paint routine + a snapshot of the
+        # g-meter dial: paint into its rect via the SHARED paint routine + the snapshot of the
         # headless dial's filtering state (identical to the on-screen widget).
         p.save()
         p.translate(self._g_rect.topLeft())
-        gmeter_overlay.paint_dial(p, self._g_rect.width(), self._g_rect.height(),
-                                  self._dial._dial_state())
+        gmeter_overlay.paint_dial(p, self._g_rect.width(), self._g_rect.height(), dial_state)
         p.restore()
         self._map.paint(p, vals.marker_index)
         _paint_readout(p, self._readout_rect, vals)
         _paint_strip(p, self._strip_rect, self._session, vals, self._spec.t0)
         p.end()
 
+    def paint_frame(self, img: QImage, vals: OverlayValues) -> None:
+        """Paint all overlay elements onto `img`, advancing the g-meter dial first (so its
+        dot/envelope reflect this frame). The simple sequential path — kept for the single-threaded
+        render + callers that drive one frame at a time."""
+        self.paint_frame_with_state(img, vals, self.advance_and_snapshot(vals))
+
+
+def _paint_packed_frame(painter: OverlayPainter, out_w: int, out_h: int, raw: bytes,
+                        vals: OverlayValues, dial) -> bytes:
+    """Composite one decoded rgb24 frame and return the painted bytes PACKED at out_w*3.
+
+    `raw` is one frame PACKED at out_w*3 as ffmpeg emits it; we own a writable copy, wrap it in a
+    QImage and paint the overlays from the PRECOMPUTED `dial` snapshot. QImage scanlines are
+    4-byte-aligned, so when out_w*3 isn't a multiple of 4 the image carries per-row padding — we
+    view the (h, bytesPerLine) buffer and keep the first 3*out_w columns so the bytes handed to the
+    encoder are tightly packed (without this a non-4-aligned width would shear every row + desync
+    the stream). Free of shared mutable state, so a pool of threads can run it on distinct frames
+    concurrently (Qt releases the GIL during rasterization, so the paints actually overlap)."""
+    buf = bytearray(raw)
+    img = QImage(buf, out_w, out_h, 3 * out_w, QImage.Format_RGB888)
+    painter.paint_frame_with_state(img, vals, dial)
+    bpl = img.bytesPerLine()
+    if bpl == 3 * out_w:
+        return bytes(buf)                            # already packed — no padding to strip
+    arr = np.frombuffer(img.constBits(), dtype=np.uint8, count=bpl * out_h).reshape(out_h, bpl)
+    return arr[:, : 3 * out_w].tobytes()
+
 
 # --------------------------------------------------------------------------- the renderer
 class CancelledError(Exception):
     """Raised inside the render loop when the caller's cancel callback returns True."""
+
+
+class _EncodeError(RuntimeError):
+    """Internal: a non-zero ENCODE exit, carrying the encoder name + stderr tail. `run` catches it
+    to decide whether to fall back from h264_videotoolbox to libx264; if it escapes (no fallback) it
+    is surfaced as a plain RuntimeError, so callers still see a clear 'ffmpeg encode failed' error."""
+
+    def __init__(self, encoder: str, message: str):
+        super().__init__(message)
+        self.encoder = encoder
 
 
 @dataclass
@@ -519,9 +773,15 @@ class Renderer:
         self._spec = spec
         src_w, src_h, src_fps = probe_video_size(spec.src_path)
         self._out_w, self._out_h = output_size(src_w, src_h, spec.config)
-        self._fps = float(spec.config.fps or src_fps)
+        self._fps = resolve_fps(spec.config, src_fps)
         self._times = frame_times(spec.t0, spec.t1, self._fps)
         self._painter = OverlayPainter(session, spec, self._out_w, self._out_h)
+        # Resolve the encoder ONCE (probes VideoToolbox). `_encoder` is the concrete ffmpeg -c:v
+        # name actually used; `_fallback_allowed` lets a failed VT encode retry on libx264.
+        self._encoder = resolve_encoder(spec.config.encoder)
+        self._fallback_allowed = self._encoder == VT_H264
+        self._hwaccel = resolve_hwaccel_decode(spec.config.hwaccel_decode, self._encoder)
+        self._workers = resolve_workers(spec.config.workers)
         self._dec: subprocess.Popen | None = None
         self._enc: subprocess.Popen | None = None
         self._dec_err: _StderrDrainer | None = None
@@ -549,13 +809,13 @@ class Renderer:
 
     def _start(self) -> None:
         self._dec = subprocess.Popen(
-            build_decode_cmd(self._spec, self._out_w, self._out_h, self._fps),
+            build_decode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._hwaccel),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self._enc = subprocess.Popen(
-            build_encode_cmd(self._spec, self._out_w, self._out_h, self._fps),
+            build_encode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._encoder),
             stdin=subprocess.PIPE, stderr=subprocess.PIPE)
         # Drain BOTH ffmpeg stderrs off-thread so neither can ever block on a full stderr pipe while
-        # the single-threaded loop is busy on the decode-stdout / encode-stdin pipes (deadlock guard).
+        # the loop is busy on the decode-stdout / encode-stdin pipes (deadlock guard).
         # (getattr-guarded so a mock Popen without a stderr attribute is simply not drained.)
         dec_se = getattr(self._dec, "stderr", None)
         enc_se = getattr(self._enc, "stderr", None)
@@ -563,11 +823,18 @@ class Renderer:
         self._enc_err = _StderrDrainer(enc_se) if enc_se is not None else None
         self._started = True
 
+    @property
+    def encoder(self) -> str:
+        """The concrete ffmpeg video encoder this render resolved to (h264_videotoolbox or
+        libx264). Useful for tests / a status line that wants to report the GPU offload."""
+        return self._encoder
+
     def run_chunk(self, n: int = 24) -> bool:
-        """Composite up to `n` frames; return True when the whole render is COMPLETE (and the
-        outputs are finalized). The caller loops calling this until it returns True (or cancels via
-        `cancel`). Reads exactly one frame's bytes per iteration from the decoder, paints it, and
-        writes it to the encoder's stdin."""
+        """SINGLE-THREADED pump: composite up to `n` frames in order; return True when the render is
+        COMPLETE (outputs finalized). Reads one frame's bytes per iteration from the decoder, paints
+        it (advancing the dial sequentially), and writes it to the encoder's stdin. `run()` uses the
+        faster pipelined engine by default; this path is kept for a chunked GUI driver / workers==1
+        and as the simplest correct reference."""
         if self._done:
             return True
         if not self._started:
@@ -585,35 +852,57 @@ class Renderer:
                 # Decoder ran dry (it may emit one fewer frame than our ceil estimate at the tail).
                 self._finish()
                 return True
-            img = self._composite(float(self._times[self._i]), raw)
-            stdin.write(img)
+            vals = overlay_values_at(self._session, float(self._times[self._i]))
+            dial = self._painter.advance_and_snapshot(vals)
+            try:
+                stdin.write(self._paint_packed(raw, vals, dial))
+            except (BrokenPipeError, OSError):
+                # Encoder died mid-stream — reap it so its non-zero exit surfaces as _EncodeError
+                # (which `run` can fall back from), instead of a bare BrokenPipeError.
+                self._finish()
+                raise _EncodeError(self._encoder, "ffmpeg encode pipe broke") from None
             self._i += 1
         return False
 
-    def _composite(self, t: float, raw: bytes) -> bytes:
-        """Paint the overlays for media time `t` onto one decoded rgb24 frame (`raw`, PACKED at
-        out_w*3 as ffmpeg emits it) and return the painted frame's bytes, again PACKED at out_w*3
-        for the encoder. QImage scanlines are 4-byte-aligned, so when out_w*3 isn't a multiple of
-        4 the image carries per-row padding — we build a row-strided ndarray over the buffer and
-        slice the padding off, so the bytes written back are tightly packed (without this, a
-        non-4-aligned width would shear every row and desync the stream)."""
-        w, h = self._out_w, self._out_h
-        # Own a writable, packed copy of the decoded bytes for the painter to draw over.
-        buf = bytearray(raw)
-        img = QImage(buf, w, h, 3 * w, QImage.Format_RGB888)
-        vals = overlay_values_at(self._session, t)
-        self._painter.paint_frame(img, vals)
-        bpl = img.bytesPerLine()
-        if bpl == 3 * w:
-            return bytes(buf)                       # already packed — no padding to strip
-        # strided -> packed: view (h, bpl) bytes, keep the first 3*w columns of each row.
-        arr = np.frombuffer(img.constBits(), dtype=np.uint8, count=bpl * h).reshape(h, bpl)
-        return arr[:, : 3 * w].tobytes()
+    def _paint_packed(self, raw: bytes, vals: OverlayValues, dial) -> bytes:
+        """Paint the overlays for one decoded rgb24 frame (`raw`, PACKED at out_w*3) from a
+        precomputed dial snapshot, and return the painted bytes PACKED at out_w*3 for the encoder.
+        Pure given its args (no shared mutable state) — safe to call from a paint worker thread."""
+        return _paint_packed_frame(self._painter, self._out_w, self._out_h, raw, vals, dial)
 
     def run(self, progress=None, cancel=None, chunk: int = 48) -> RenderResult:
-        """Pump `run_chunk` to completion. `progress(done, total)` is called after each chunk;
-        `cancel()` -> True aborts (raises CancelledError after tearing the pipes down). Returns a
-        RenderResult on success."""
+        """Render to completion. `progress(done, total)` is called as frames finish; `cancel()` ->
+        True aborts (raises CancelledError after tearing the pipes down). Returns a RenderResult.
+
+        Uses the PIPELINED engine (a reader thread + a small paint-worker pool + an ordered writer)
+        so decode, composite and encode overlap instead of running in series; pass workers==1 (or a
+        mock subprocess, which the pool path also handles) for the simple single-threaded pump.
+
+        ROBUSTNESS — VideoToolbox fallback: if the GPU/media-engine encode (`h264_videotoolbox`)
+        fails to produce output, the whole render is retried ONCE on software libx264 so the feature
+        never breaks on a machine where a hardware session won't open. The retry re-runs from a
+        fresh, libx264-forced Renderer (the simplest correct reset of the decode/encode pipes)."""
+        try:
+            return self._run_engine(progress, cancel, chunk)
+        except _EncodeError as exc:
+            if not (self._fallback_allowed and exc.encoder == VT_H264):
+                raise RuntimeError(str(exc)) from exc
+            # VideoToolbox encode failed → retry once on libx264 with an otherwise-identical spec.
+            self.cancel()
+            sw_cfg = replace(self._spec.config, encoder="libx264")
+            sw_spec = replace(self._spec, config=sw_cfg)
+            return Renderer(self._session, sw_spec)._run_engine(progress, cancel, chunk)
+
+    def _run_engine(self, progress, cancel, chunk: int) -> RenderResult:
+        """Dispatch to the parallel pipeline (default) or the single-threaded chunk pump. Both honour
+        `progress`/`cancel` and finalize the same way; a non-zero ENCODE exit surfaces as
+        `_EncodeError` so `run` can decide whether to fall back to libx264."""
+        if self._workers <= 1:
+            return self._run_chunked(progress, cancel, chunk)
+        return self._run_pipelined(progress, cancel)
+
+    def _run_chunked(self, progress, cancel, chunk: int) -> RenderResult:
+        """The simple single-threaded pump (decode→paint→encode in series, one frame at a time)."""
         try:
             while not self.run_chunk(chunk):
                 if cancel is not None and cancel():
@@ -625,9 +914,170 @@ class Renderer:
                 progress(self._i, len(self._times))
         except CancelledError:
             raise
+        except _EncodeError:
+            raise
         except Exception:
             self.cancel()
             raise
+        return RenderResult(self._spec.out_path, self._i, self._out_w, self._out_h,
+                            self._fps, self._spec.duration)
+
+    def _run_pipelined(self, progress, cancel) -> RenderResult:
+        """The PIPELINED engine — overlap decode, composite and encode so the wall-time approaches
+        the SLOWEST single stage rather than their sum.
+
+          * a READER thread pulls raw rgb24 frames off the decoder and, in frame order, advances the
+            g-meter dial (the one order-dependent step — cheap numeric work) and enqueues
+            (idx, raw, vals, dial_snapshot) to a bounded work queue;
+          * a small pool of PAINT workers composite frames concurrently (Qt releases the GIL during
+            rasterization, so they truly parallelize) into a results dict;
+          * THIS thread is the ordered WRITER: it pops results in index order and writes them to the
+            encoder's stdin, so the encoded stream is in order + byte-exact.
+
+        Bounded queues give back-pressure (we never buffer the whole lap in RAM). Any worker/reader
+        exception is funnelled here and triggers a clean teardown; cancel is polled by the writer."""
+        if not self._started:
+            self._start()
+        assert self._dec is not None and self._enc is not None
+        stdout = self._dec.stdout
+        stdin = self._enc.stdin
+        assert stdout is not None and stdin is not None
+        total = len(self._times)
+        depth = max(8, self._workers * 4)            # bounded buffering for back-pressure
+        work: queue.Queue = queue.Queue(maxsize=depth)
+        results: dict[int, bytes] = {}
+        results_lock = threading.Lock()
+        results_ready = threading.Condition(results_lock)
+        err: list[BaseException] = []
+        stop = threading.Event()                     # set on cancel / error / decoder-dry
+        produced = [0]                               # frames the reader actually enqueued (<= total)
+
+        def fail(exc: BaseException) -> None:
+            if not err:
+                err.append(exc)
+            stop.set()
+            with results_ready:
+                results_ready.notify_all()
+
+        def reader() -> None:
+            try:
+                for i in range(total):
+                    if stop.is_set():
+                        break
+                    raw = stdout.read(self._frame_bytes)
+                    if not raw or len(raw) < self._frame_bytes:
+                        break                        # decoder ran dry at the ceil-estimate tail
+                    vals = overlay_values_at(self._session, float(self._times[i]))
+                    dial = self._painter.advance_and_snapshot(vals)   # sequential, in order
+                    while not stop.is_set():
+                        try:
+                            work.put((i, raw, vals, dial), timeout=0.2)
+                            produced[0] = i + 1
+                            break
+                        except queue.Full:
+                            continue
+            except BaseException as exc:             # noqa: BLE001 - funnel to the writer
+                fail(exc)
+            finally:
+                for _ in range(self._workers):       # sentinels so painters drain + exit
+                    try:
+                        work.put(None, timeout=0.2)
+                    except queue.Full:
+                        pass
+
+        def painter_worker() -> None:
+            while True:
+                try:
+                    item = work.get(timeout=0.2)
+                except queue.Empty:
+                    if stop.is_set():
+                        return
+                    continue
+                if item is None:
+                    return
+                idx, raw, vals, dial = item
+                try:
+                    packed = _paint_packed_frame(self._painter, self._out_w, self._out_h,
+                                                 raw, vals, dial)
+                except BaseException as exc:         # noqa: BLE001
+                    fail(exc)
+                    return
+                with results_ready:
+                    results[idx] = packed
+                    results_ready.notify_all()
+
+        threads = [threading.Thread(target=reader, daemon=True)]
+        threads += [threading.Thread(target=painter_worker, daemon=True)
+                    for _ in range(self._workers)]
+        for th in threads:
+            th.start()
+
+        # Ordered writer (this thread): write frame 0, 1, 2 … as each becomes available.
+        try:
+            nxt = 0
+            while True:
+                with results_ready:
+                    while nxt not in results and not stop.is_set():
+                        # Stop waiting once the reader is done AND we've drained everything it made.
+                        if produced[0] is not None and nxt >= produced[0] and work.empty() \
+                                and not any(t.is_alive() for t in threads[1:]):
+                            break
+                        results_ready.wait(timeout=0.2)
+                    packed = results.pop(nxt, None)
+                if err:
+                    break
+                if packed is None:
+                    # Nothing more is coming (reader hit the decoder-dry tail, all painted+written).
+                    if stop.is_set() or (produced[0] is not None and nxt >= produced[0]):
+                        break
+                    continue
+                try:
+                    stdin.write(packed)
+                except (BrokenPipeError, OSError):
+                    # The encoder died mid-stream (e.g. a VideoToolbox session that wouldn't open) —
+                    # reap it to surface the REAL non-zero exit + stderr as an _EncodeError so `run`
+                    # can fall back to libx264. _finish closes stdin (already broken — guarded) and
+                    # waits; its non-zero-exit branch raises the _EncodeError.
+                    stop.set()
+                    for th in threads:
+                        th.join(timeout=2.0)
+                    self._finish()                   # raises _EncodeError on the encoder's bad exit
+                    raise _EncodeError(self._encoder,
+                                       "ffmpeg encode pipe broke") from None    # if it didn't
+                self._i = nxt + 1
+                if progress is not None:
+                    progress(self._i, total)
+                if cancel is not None and cancel():
+                    stop.set()
+                    raise CancelledError("export cancelled")
+                nxt += 1
+        except CancelledError:
+            stop.set()
+            self.cancel()
+            for th in threads:
+                th.join(timeout=2.0)
+            raise
+        except _EncodeError:
+            stop.set()
+            for th in threads:
+                th.join(timeout=2.0)
+            raise
+        except BaseException:
+            stop.set()
+            self.cancel()
+            for th in threads:
+                th.join(timeout=2.0)
+            raise
+
+        stop.set()                                   # let any blocked worker/reader unwind
+        for th in threads:
+            th.join(timeout=5.0)
+        if err:
+            self.cancel()
+            raise err[0]
+        self._finish()                               # flush + reap; may raise _EncodeError
+        if progress is not None:
+            progress(self._i, total)
         return RenderResult(self._spec.out_path, self._i, self._out_w, self._out_h,
                             self._fps, self._spec.duration)
 
@@ -677,7 +1127,8 @@ class Renderer:
             self._enc_err.join()
         if enc is not None and enc.returncode not in (0, None):
             enc_err = self._enc_err.tail() if self._enc_err is not None else b""
-            raise RuntimeError(f"ffmpeg encode failed ({enc.returncode}): "
+            raise _EncodeError(self._encoder,
+                               f"ffmpeg encode failed ({self._encoder}, rc={enc.returncode}): "
                                f"{enc_err.decode('utf-8', 'replace')[-800:]}")
 
     def cancel(self) -> None:
