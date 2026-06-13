@@ -97,6 +97,14 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
   **fully dormant when absent** — every "vs best" output is byte-identical to before. Phase B
   (pane-B plays the other recording's VIDEO) deferred: the secondary pane + CompareController are
   single-session/single-media; a second media source + time-map is a follow-up, seam left clean.
+- **Consistency panel** (`consistency.py` + `consistency_panel.py`, F6) — per-sector and
+  per-corner sample σ over the **valid, dropout-free laps** (the ⚠ rule), a lap-time **trend
+  sparkline** (running session-best/PB laps marked) and the **top-5 most inconsistent corners**,
+  ranked by **σ × median time lost** vs that corner's session best (the product = BOTH erratic
+  AND slow first — where consistency practice pays the most). Clicking a corner ring-highlights
+  its apex on the map, read-only (no selection/seek). A compact collapsible strip under the lap
+  table; every σ/median verified **exact vs direct numpy** on both real recordings (which
+  independently rank the same corner, C11, top).
 - **Dark "Refined Minimal" theme** (`theme.py`) — single-source design tokens + dark `QPalette` +
   global QSS, Inter fonts, Phosphor icon buttons (`qtawesome`); charts, table, map and video chrome
   all adopt the dark surface.
