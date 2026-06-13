@@ -18,6 +18,7 @@ Headless offscreen Qt (the painter builds a QImage + a headless g-meter dial); f
 Run: python tests/test_export_video.py
 """
 import os
+import subprocess
 import sys
 import types
 
@@ -359,6 +360,85 @@ def test_real_render_smoke_if_ffmpeg_and_media():
     assert h == 360
     os.remove(out)
     print("real_render_smoke OK")
+
+
+# ------------------------------------------------ stderr-drain unit (no ffmpeg, runs everywhere)
+def test_stderr_drainer_drains_large_output_and_keeps_tail():
+    """REGRESSION (deadlock guard): the _StderrDrainer must keep reading a stderr stream no matter
+    how much it emits — far past an OS pipe's ~64 KB — so an ffmpeg that gets chatty can never block
+    on write(stderr) while the render loop is busy on the stdout/stdin pipes. Feeds a stream that
+    serves WAY more than a pipe buffer and asserts (a) it all drained without blocking and (b) only
+    a bounded TAIL is retained (for error reporting). Uses a real OS pipe, no ffmpeg."""
+    import threading as _th
+    r_fd, w_fd = os.pipe()
+    total = 512 * 1024  # 512 KB — 8x a typical 64 KB pipe buffer; would deadlock a non-draining read
+    payload = (b"ffmpeg noise line %05d\n" % 0).ljust(64) * (total // 64)
+
+    drainer = ev._StderrDrainer(os.fdopen(r_fd, "rb"), tail_bytes=4096)
+
+    def feed():
+        with os.fdopen(w_fd, "wb") as w:
+            w.write(payload)            # blocks unless the drainer is actively reading -> proves it
+    t = _th.Thread(target=feed)
+    t.start()
+    t.join(timeout=10)
+    assert not t.is_alive(), "writer blocked -> stderr was NOT being drained (deadlock!)"
+    drainer.join(timeout=5)
+    tail = drainer.tail()
+    assert 0 < len(tail) <= 4096, f"tail must be bounded, got {len(tail)} bytes"
+    assert tail == payload[-len(tail):], "tail must be the END of the stream (last bytes kept)"
+
+
+# --------------------------------- real tiny synthetic render (no media file; gated on ffmpeg only)
+def test_real_synthetic_pipe_render_if_ffmpeg(monkeypatch_restore):
+    """REGRESSION (real pipe path, NO mocks): build a tiny 1.5 s synthetic clip with ffmpeg, then
+    run the REAL Renderer over it — real decode pipe → real QPainter composite → real encode pipe →
+    real stderr drain. This is the test the mocked suite can't be: a pipe/stderr/threading deadlock
+    or a short-read bug HANGS here (the runner's outer time budget catches it) instead of passing.
+    Gated on ffmpeg_available() so CI without ffmpeg skips it; needs NO 11 GB media file.
+
+    It also guards the PERF root cause indirectly: the map inset's static art is baked once and
+    blitted, so even this little render returns promptly rather than re-rasterizing the trace per
+    frame."""
+    if not ev.ffmpeg_available():
+        print("skip real_synthetic_pipe_render (no ffmpeg)")
+        return
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    src = os.path.join(tmp, "f9_syn_src.mp4")
+    out = os.path.join(tmp, "f9_syn_out.mp4")
+    for p in (src, out):
+        if os.path.exists(p):
+            os.remove(p)
+    # a 1.5 s, 640x360, 30 fps test pattern WITH an audio tone (so the 1:a:0? audio map exercises
+    # too); -loglevel error keeps it quiet, matching production.
+    subprocess.run(
+        [ev.FFMPEG, "-nostdin", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=1.5",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=1.5",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", src],
+        check=True, capture_output=True)
+    assert os.path.getsize(src) > 0
+
+    # A synthetic Session whose lap window spans the whole clip [0, 1.5).
+    s = StubSession(lap_id=1, t0=0.0, dur=1.5, n=90)
+    spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=0.0, t1=1.5,
+                         config=ev.OverlayConfig(out_height=360))
+    res = ev.Renderer(s, spec).run()
+    # the real pipeline completed (didn't deadlock) and wrote real frames
+    assert res.frames >= 40, f"expected ~45 frames, got {res.frames}"
+    assert os.path.getsize(out) > 0
+    w, h, _ = ev.probe_video_size(out)
+    assert h == 360 and w == 640
+    # the output is a real, decodable H.264 stream: ffprobe reports its codec + frame count.
+    info = subprocess.run(
+        [ev.FFPROBE, "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=codec_name,nb_read_frames", "-count_frames",
+         "-of", "default=noprint_wrappers=1:nokey=1", out],
+        check=True, capture_output=True, text=True).stdout.split()
+    assert info and info[0] == "h264", f"expected h264, got {info}"
+    for p in (src, out):
+        os.remove(p)
+    print("real_synthetic_pipe_render OK")
 
 
 # --------------------------------------------------------------------------- restore fixture

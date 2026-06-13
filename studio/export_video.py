@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -256,9 +257,17 @@ def _font(px: float, bold: bool = False) -> QFont:
 
 
 class _MapInset:
-    """Precomputed track-map inset geometry: the whole-session trace projected into a fixed inset
-    box ONCE (the track shape doesn't change), so each frame only has to place the marker. Mirrors
-    MapView's look at a glance — faint full trace + the selected lap's line + a coral marker dot."""
+    """Precomputed track-map inset: the whole-session trace + the selected lap's line projected
+    into a fixed inset box ONCE (the track shape doesn't change) and BAKED into a cached RGBA layer
+    so each frame only has to blit that layer + place the moving marker. Mirrors MapView's look at a
+    glance — faint full trace + the selected lap's line + a coral marker dot.
+
+    Why the cache matters: the full-session trace is tens of thousands of points; antialiased
+    `drawPolyline` over it costs ~20 ms PER call, and it (plus the lap line) was being re-rasterized
+    on EVERY exported frame — ~40 ms/frame, which alone dominated the render (a 4 K-source 1080p lap
+    export ran at ~18 fps, several minutes for one lap). The static art never changes between frames;
+    baking it once and blitting (a sub-millisecond copy) drops the map cost to ~nothing and makes the
+    render decode-bound instead. The marker dot is the only per-frame draw left."""
 
     def __init__(self, session, box: QRectF, lap_id: int):
         self._box = box
@@ -284,33 +293,56 @@ class _MapInset:
             return QPointF(cx_off + scale * px, cy_off - scale * py)
 
         self._proj = proj
-        self._trace = QPolygonF([proj(px, py) for px, py in zip(xs, ys, strict=True)])
+        trace = QPolygonF([proj(px, py) for px, py in zip(xs, ys, strict=True)])
         # the selected lap's own line (drawn brighter); fall back to the full trace if degenerate.
-        self._lap_poly = None
+        lap_poly = None
         got = session._lap_trace_xyt(lap_id) if hasattr(session, "_lap_trace_xyt") else None
         if got is not None:
             lx, ly, _ = got
             if len(lx) >= 2:
-                self._lap_poly = QPolygonF([proj(px, py)
-                                            for px, py in zip(lx, ly, strict=True)])
+                lap_poly = QPolygonF([proj(px, py) for px, py in zip(lx, ly, strict=True)])
         self._xs, self._ys = xs, ys
+        # --- bake the static layers (backdrop + full trace + lap line) into a cached RGBA image,
+        # sized to the WHOLE frame so we can blit it at (0, 0) each frame with the box-coordinate
+        # projection already correct. Painted ONCE here; `paint` only copies it + draws the marker.
+        self._layer = self._bake_layer(box, trace, lap_poly)
+
+    @staticmethod
+    def _bake_layer(box: QRectF, trace: QPolygonF, lap_poly) -> QImage:
+        """Render the unchanging map art (box backdrop + faint full trace + selected-lap line) once
+        into a transparent full-frame-sized ARGB32 image. The polylines are drawn in the same frame
+        coordinates the projection produced, so a plain (0, 0) blit lands them exactly where the old
+        per-frame draws did — pixel-identical, minus the ~40 ms/frame cost."""
+        # The image only needs to span up to the inset box's bottom-right corner; size it to that so
+        # a 4 K-aspect frame doesn't allocate a needlessly huge buffer when the inset sits mid-frame.
+        w = max(1, int(np.ceil(box.right())) + 2)
+        h = max(1, int(np.ceil(box.bottom())) + 2)
+        layer = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        layer.fill(Qt.transparent)
+        p = QPainter(layer)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        # box backdrop
+        p.setBrush(_c(C.surface, 180))
+        p.setPen(QPen(_c(C.border_strong, 160), 1.2))
+        p.drawRoundedRect(box, 8, 8)
+        # faint full trace
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(_c(C.text_muted, 120), 1.4))
+        p.drawPolyline(trace)
+        # selected lap line (amber accent)
+        if lap_poly is not None:
+            p.setPen(QPen(_c(C.accent, 235), 2.2))
+            p.drawPolyline(lap_poly)
+        p.end()
+        return layer
 
     def paint(self, p: QPainter, marker_index: int | None) -> None:
         if not self._ok:
             return
-        # box backdrop
-        p.setBrush(_c(C.surface, 180))
-        p.setPen(QPen(_c(C.border_strong, 160), 1.2))
-        p.drawRoundedRect(self._box, 8, 8)
-        # faint full trace
-        p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(_c(C.text_muted, 120), 1.4))
-        p.drawPolyline(self._trace)
-        # selected lap line (amber accent)
-        if self._lap_poly is not None:
-            p.setPen(QPen(_c(C.accent, 235), 2.2))
-            p.drawPolyline(self._lap_poly)
-        # marker dot (warm coral, matches MapView.MARKER_COLOR = C.behind)
+        # blit the baked static layer (backdrop + full trace + lap line) — a sub-ms copy that
+        # replaces the per-frame re-rasterization of the (huge) trace polyline.
+        p.drawImage(0, 0, self._layer)
+        # marker dot (warm coral, matches MapView.MARKER_COLOR = C.behind) — the only moving element.
         if marker_index is not None and 0 <= marker_index < len(self._xs):
             m = self._proj(float(self._xs[marker_index]), float(self._ys[marker_index]))
             p.setPen(Qt.NoPen)
@@ -440,6 +472,42 @@ class RenderResult:
     duration: float
 
 
+class _StderrDrainer:
+    """Continuously drain an ffmpeg process's stderr on a daemon thread, keeping only the TAIL.
+
+    Why this exists: ffmpeg writes progress/warnings/errors to stderr, and an OS pipe buffer is
+    only ~64 KB. The render loop blocks reading the DECODER's stdout and writing the ENCODER's
+    stdin; if either ffmpeg fills its stderr pipe in the meantime and nothing is draining it, that
+    ffmpeg BLOCKS on write(stderr) → the whole pipeline deadlocks (and no test that mocks the
+    subprocess can catch it). Draining stderr off-thread makes that impossible regardless of how
+    chatty ffmpeg gets. We retain a bounded tail so a non-zero exit can still be explained."""
+
+    def __init__(self, stream, tail_bytes: int = 8192):
+        self._stream = stream
+        self._tail_bytes = tail_bytes
+        self._buf = bytearray()
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._pump, daemon=True)
+        self._thread.start()
+
+    def _pump(self) -> None:
+        try:
+            for chunk in iter(lambda: self._stream.read(4096), b""):
+                with self._lock:
+                    self._buf.extend(chunk)
+                    if len(self._buf) > self._tail_bytes:
+                        del self._buf[: len(self._buf) - self._tail_bytes]
+        except (OSError, ValueError):
+            pass  # pipe closed underneath us during teardown — fine
+
+    def tail(self) -> bytes:
+        with self._lock:
+            return bytes(self._buf)
+
+    def join(self, timeout: float = 5.0) -> None:
+        self._thread.join(timeout)
+
+
 class Renderer:
     """Drives the decode → composite → mux pipeline frame by frame. The caller pumps `run_chunk`
     (e.g. from a QThread, or a chunked QTimer on the GUI thread) so the work can be cancelled and a
@@ -456,6 +524,8 @@ class Renderer:
         self._painter = OverlayPainter(session, spec, self._out_w, self._out_h)
         self._dec: subprocess.Popen | None = None
         self._enc: subprocess.Popen | None = None
+        self._dec_err: _StderrDrainer | None = None
+        self._enc_err: _StderrDrainer | None = None
         self._i = 0
         self._frame_bytes = self._out_w * self._out_h * 3
         self._started = False
@@ -484,6 +554,13 @@ class Renderer:
         self._enc = subprocess.Popen(
             build_encode_cmd(self._spec, self._out_w, self._out_h, self._fps),
             stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Drain BOTH ffmpeg stderrs off-thread so neither can ever block on a full stderr pipe while
+        # the single-threaded loop is busy on the decode-stdout / encode-stdin pipes (deadlock guard).
+        # (getattr-guarded so a mock Popen without a stderr attribute is simply not drained.)
+        dec_se = getattr(self._dec, "stderr", None)
+        enc_se = getattr(self._enc, "stderr", None)
+        self._dec_err = _StderrDrainer(dec_se) if dec_se is not None else None
+        self._enc_err = _StderrDrainer(enc_se) if enc_se is not None else None
         self._started = True
 
     def run_chunk(self, n: int = 24) -> bool:
@@ -555,37 +632,58 @@ class Renderer:
                             self._fps, self._spec.duration)
 
     def _finish(self) -> None:
-        """Drain + close the encoder's stdin via communicate() (which flushes, closes stdin, and
-        waits), then reap the decoder, surfacing a non-zero encode exit with its stderr tail. The
-        decoder's stdout is closed first so a decoder still emitting frames (we stopped early at the
-        ceil-estimate tail) gets a SIGPIPE/EOF and exits instead of blocking. Idempotent."""
+        """Finalize: flush + close the encoder's stdin (signals EOF so it writes the trailer), then
+        reap both processes, surfacing a non-zero encode exit with its stderr tail. The decoder's
+        stdout is closed first so a decoder still emitting frames (we stopped early at the
+        ceil-estimate tail) gets a SIGPIPE/EOF and exits instead of blocking. stderr is drained by
+        the background drainers (started in `_start`), so we just `wait()` here — NOT communicate(),
+        which would fight the drainer for the stderr pipe. Idempotent."""
         if self._done:
             return
         self._done = True
         enc, dec = self._enc, self._dec
-        # Stop reading the decoder so it unblocks; communicate() then finalizes the encoder.
+        # Stop reading the decoder so it unblocks and exits (it may still be mid-stream at our tail).
         if dec is not None and dec.stdout is not None:
             try:
                 dec.stdout.close()
             except OSError:
                 pass
-        enc_err = b""
+        # Close the encoder's stdin → EOF → it finishes muxing and exits. (Flush first so the last
+        # frame isn't stranded in Python's buffer.)
+        if enc is not None and enc.stdin is not None:
+            try:
+                enc.stdin.flush()
+            except OSError:
+                pass
+            try:
+                enc.stdin.close()
+            except OSError:
+                pass
         if enc is not None:
-            # communicate() flushes + closes our stdin, reads stderr, and waits — no manual close
-            # first (that would make communicate() flush an already-closed pipe and raise).
-            enc_err = enc.communicate()[1] or b""
+            try:
+                enc.wait(timeout=30)
+            except Exception:
+                enc.kill()
+                enc.wait()
         if dec is not None:
             try:
                 dec.wait(timeout=10)
             except Exception:
                 dec.kill()
+        # Let the stderr drainers finish so their tails are complete before we read them.
+        if self._dec_err is not None:
+            self._dec_err.join()
+        if self._enc_err is not None:
+            self._enc_err.join()
         if enc is not None and enc.returncode not in (0, None):
+            enc_err = self._enc_err.tail() if self._enc_err is not None else b""
             raise RuntimeError(f"ffmpeg encode failed ({enc.returncode}): "
                                f"{enc_err.decode('utf-8', 'replace')[-800:]}")
 
     def cancel(self) -> None:
         """Kill both ffmpeg processes and mark the render done (best-effort teardown for the
-        cancel path / an error). Safe to call more than once."""
+        cancel path / an error). Safe to call more than once. The stderr drainers are daemon
+        threads draining pipes that close when the processes die, so they wind down on their own."""
         self._done = True
         for proc in (self._enc, self._dec):
             if proc is None:
@@ -595,9 +693,12 @@ class Renderer:
             except OSError:
                 pass
             try:
-                proc.communicate(timeout=5)
+                proc.wait(timeout=5)
             except Exception:
                 pass
+        for drainer in (self._enc_err, self._dec_err):
+            if drainer is not None:
+                drainer.join(timeout=1.0)
 
 
 def render_lap(session, src_path: str, out_path: str, lap_id: int,
