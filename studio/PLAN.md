@@ -170,6 +170,34 @@ All shipped and merged. Per-feature implementation notes live in [README.md](REA
   out until a session loads, so the feature can't touch the live app path (the one shared file,
   `gmeter_overlay.py`, paints **pixel-identically** to before the dial-paint extraction).
 
+  **Export-tuned overlay restyle (burns over BRIGHT footage).** The burned overlays were washed-out
+  over sunlit kart footage because they borrowed the dim dark-app theme. The export now uses its OWN
+  vivid, opaque palette (`export_video.EXPORT` — pure-white text, fully-saturated green-ahead /
+  red-behind, a brighter amber accent) and gives **every** text/line/dial element a dark
+  **outline + drop-shadow** (`_draw_text` / `_stroke_polyline`), the single biggest legibility win —
+  it reads over bright sky AND dark tarmac. Element changes: the **map inset** drops its backdrop box
+  AND the full-session trace, drawing ONLY the exported lap's racing line (a haloed white line with a
+  soft dark underglow) + a **glowing hot-coral marker with a short comet tail** (degenerate-lap
+  fallback to the full trace); the **g-meter** drops its box, with white high-contrast rings and
+  **substantially larger outlined cardinal-g numbers** (a dedicated `export=True` path in
+  `gmeter_overlay.paint_dial` + `_export_dial_geom`, so the **live on-screen overlay is byte-identical
+  to before** — guarded by tests); the **Δ/speed readout** is a hero speed number + a punchy vivid Δ
+  cue, and the **lap strip** a bold outlined label with an amber progress fill, both on a slim dark
+  HUD pill (not the grey card). All sizes scale with `out_height` (`OverlayPainter._k`). It stays a
+  clean telemetry HUD, and `export_video.py` stays pacer-free. Verified with before/after frame-grabs
+  of a real lap over bright + dark backgrounds; the burned values still equal the Session/gmeter
+  accessors at that media time.
+
+  **Selectable export quality.** The File ▸ "Export overlay video…" flow now opens a small picker
+  (`StudioWindow._ask_export_options`, two combos) before the save dialog: **resolution**
+  (720p / 1080p / 1440p / Source) → `OverlayConfig.out_height` (`output_size` never upscales and
+  clamps "Source" to the source height), and a **quality** level (Standard / High) →
+  `OverlayConfig.quality`, resolved by `quality_params` to BOTH encoder knobs (the VideoToolbox
+  bits-per-pixel target AND the libx264 CRF) so the choice means the same on either encoder. "High"
+  keeps the original visually-lossless numbers (0.10 bpp / CRF 20); "Standard" is leaner (~0.06 bpp /
+  CRF 23). The last choice is remembered on the window. Verified by rendering 720p-Standard vs
+  1080p-High and ffprobe-confirming the resolution + bitrate differ and both play.
+
   **GPU / media-engine offload (the perf path).** On Apple Silicon the export defaults to the
   Apple media engine for BOTH heavy stages: the H.264 **encode** uses `h264_videotoolbox`
   (bitrate-driven, ~0.10 bpp) and the **decode** runs on it too (`-hwaccel videotoolbox`), so the

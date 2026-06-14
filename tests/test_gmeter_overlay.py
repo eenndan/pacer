@@ -146,6 +146,80 @@ def test_lap_change_reseeds_dot_ema():
     print("test_lap_change_reseeds_dot_ema OK")
 
 
+def _render_dial(export: bool, w=280, h=280):
+    """Render paint_dial into an opaque magenta QImage and return the numpy RGB array — so the
+    EXPORT vs LIVE look can be compared pixel-wise (no widget, no video)."""
+    import numpy as np
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    from studio import gmeter_overlay as g
+    st = g.DialState(fx=0.6, fy=-0.4, have=True,
+                     hull_pts=[(0.5, 0.3), (-0.4, 0.2), (0.1, -0.5), (0.3, 0.4)],
+                     peak_fwd=0.9, peak_back=0.5, peak_left=1.0, peak_right=1.1, source="accl")
+    img = QImage(w, h, QImage.Format_RGB888)
+    img.fill(QColor("#FF00FF"))
+    p = QPainter(img)
+    g.paint_dial(p, w, h, st, export=export)
+    p.end()
+    # .copy() — constBits() is a VIEW into the QImage buffer; the image is local and would be freed
+    # on return, leaving the numpy array dangling. Copy detaches it.
+    return np.array(np.frombuffer(img.constBits(), np.uint8, count=3 * w * h).reshape(h, w, 3))
+
+
+def test_export_dial_has_no_backdrop_box():
+    """The EXPORT g-dial drops the live overlay's translucent backdrop box. The live render fills a
+    big rounded rect (dimming most of the box), so it has FAR less of the magenta background left
+    than the export render, which paints only the rings/numbers/dot over an otherwise clear box.
+    Proof the export removed the backdrop panel."""
+    import numpy as np
+    live = _render_dial(export=False)
+    exp = _render_dial(export=True)
+    magenta = np.array([255, 0, 255])
+    live_bg = int((live == magenta).all(axis=2).sum())
+    exp_bg = int((exp == magenta).all(axis=2).sum())
+    # the live backdrop covers most of the box; the export leaves most of it transparent (magenta).
+    assert exp_bg > live_bg * 2, f"export must drop the backdrop box: live_bg {live_bg} exp_bg {exp_bg}"
+    # and the export keeps a clearly-transparent region near a mid-edge the live box would dim.
+    assert np.array_equal(exp[140, 4], magenta), "export box edge must stay background (no panel)"
+
+
+def test_export_dial_numbers_are_bigger():
+    """The EXPORT dial is far more vivid than the live dial — checked by the count of near-WHITE
+    pixels (export draws big white outlined numbers + white rings + a bright dot; the live ones are
+    small + dim). The export render must have many more bright pixels."""
+    live = _render_dial(export=False)
+    exp = _render_dial(export=True)
+    live_white = int((live > 235).all(axis=2).sum())
+    exp_white = int((exp > 235).all(axis=2).sum())
+    assert exp_white > live_white * 2, f"export should be far brighter: live {live_white} exp {exp_white}"
+
+
+def test_export_dial_geom_reserves_bigger_number_margin():
+    """`_export_dial_geom` reserves a larger margin for the (bigger) cardinal numbers than the live
+    `dial_geom`, so the radius is smaller relative to the box — the numbers sit clearly outside."""
+    from studio.gmeter_overlay import _export_dial_geom, dial_geom
+    _, _, r_live = dial_geom(280, 280)
+    _, _, r_exp = _export_dial_geom(280, 280)
+    assert r_exp < r_live, f"export dial radius {r_exp:.0f} should be < live {r_live:.0f} (bigger margin)"
+
+
+def test_live_paint_dial_default_is_unchanged():
+    """The new `export`/`scale_k` params default to the original LIVE behaviour, so the on-screen
+    overlay is byte-identical to before. Guards the defaults + that the live render still paints
+    its backdrop box."""
+    import inspect
+
+    import numpy as np
+
+    from studio import gmeter_overlay as g
+    sig = inspect.signature(g.paint_dial)
+    assert sig.parameters["export"].default is False
+    assert sig.parameters["scale_k"].default == 1.0
+    default = _render_dial(export=False)
+    # the live render still paints its backdrop box (a mid-edge inside the box is dimmed, not bg).
+    assert not np.array_equal(default[140, 4], np.array([255, 0, 255]))  # live box still drawn
+
+
 def test_pct_and_hull_helpers():
     assert _pct([], 90) == 0.0
     assert _pct([1.0], 90) == 1.0

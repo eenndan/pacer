@@ -810,10 +810,10 @@ def test_real_fallback_to_libx264_if_ffmpeg(monkeypatch_restore):
     ev.videotoolbox_decode_available = lambda: False        # type: ignore[assignment]
     _orig_codec = ev._video_codec_args
 
-    def broken_vt(encoder, w, h, fps):
+    def broken_vt(encoder, w, h, fps, quality=ev._DEFAULT_QUALITY):
         if encoder == ev.VT_H264:
             return ["-c:v", ev.VT_H264, "-b:v", "-5"]       # invalid bitrate -> VT exits non-zero
-        return _orig_codec(encoder, w, h, fps)
+        return _orig_codec(encoder, w, h, fps, quality)
     ev._video_codec_args = broken_vt                        # type: ignore[assignment]
     try:
         s = StubSession(lap_id=1, t0=0.0, dur=1.5, n=90)
@@ -1051,6 +1051,163 @@ def test_cancel_mid_write_does_not_hang_if_ffmpeg(monkeypatch_restore):
         f"a mid-write cancel must raise CancelledError, got {type(raised).__name__}: {raised}"
     assert dt < 20, f"cancel took too long to take effect ({dt:.1f}s)"
     print(f"cancel_mid_write_does_not_hang OK (cancelled in {dt:.1f}s)")
+
+
+# --------------------------------------------------------------------------- export restyle: palette
+def test_export_palette_is_vivid_and_opaque():
+    """The EXPORT palette (used to burn overlays over BRIGHT footage) is distinct from the dim live
+    theme: pure-white text, fully-opaque vivid colours. A regression guard so the export doesn't
+    silently revert to the washed-out theme tokens."""
+    from studio.theme import C
+    assert ev.EXPORT.text == "#FFFFFF"                       # pure white, not the dim theme off-white
+    assert ev.EXPORT.text != C.text
+    # the export ahead/behind are punchier than the theme's softer pair
+    assert ev.EXPORT.ahead != C.ahead and ev.EXPORT.behind != C.behind
+
+
+def test_export_delta_colour_three_way():
+    """export_delta_colour follows the SAME ahead/behind/neutral rule as theme.delta_colour (shared
+    dead band) but always returns a concrete EXPORT colour (neutral white for no/even Δ), since the
+    burned text is never a widget's neutral foreground."""
+    from studio.theme import DELTA_EVEN_EPS_S
+    assert ev.export_delta_colour(-0.20) == ev.EXPORT.ahead   # ahead -> vivid green
+    assert ev.export_delta_colour(+0.20) == ev.EXPORT.behind  # behind -> vivid red
+    assert ev.export_delta_colour(None) == ev.EXPORT.neutral  # no Δ -> neutral white
+    assert ev.export_delta_colour(DELTA_EVEN_EPS_S / 2) == ev.EXPORT.neutral  # dead-even -> neutral
+
+
+# --------------------------------------------------------------------------- export restyle: quality
+def test_quality_params_high_vs_standard():
+    """quality_params maps the picker level to (bpp, crf): high keeps the original 0.10 bpp / CRF 20
+    (visually-lossless), standard is leaner (lower bpp, higher CRF); unknown -> the high default."""
+    hi_bpp, hi_crf = ev.quality_params("high")
+    st_bpp, st_crf = ev.quality_params("standard")
+    assert hi_bpp == ev._BITS_PER_PIXEL and hi_crf == 20
+    assert st_bpp < hi_bpp                                    # standard = smaller files
+    assert st_crf > hi_crf                                    # higher CRF = lower quality
+    assert ev.quality_params("nonsense") == ev.quality_params("high")  # default
+    assert ev.quality_params(None) == ev.quality_params("high")
+
+
+def test_vt_target_bitrate_honours_quality_bpp():
+    """vt_target_bitrate scales with the quality level's bits-per-pixel, so standard < high at the
+    same size/fps (and the floor still applies for tiny sizes)."""
+    hi = ev.vt_target_bitrate(1920, 1080, 30.0, ev.quality_params("high")[0])
+    st = ev.vt_target_bitrate(1920, 1080, 30.0, ev.quality_params("standard")[0])
+    assert hi > st
+    assert ev.vt_target_bitrate(64, 64, 2.0, 0.06) == ev._MIN_VT_BITRATE   # floored
+
+
+def test_encode_cmd_reflects_quality_level():
+    """build_encode_cmd carries the chosen quality through to BOTH encoders: a different VideoToolbox
+    -b:v bitrate, and a different libx264 -crf, for standard vs high. The default config stays at the
+    high (original) numbers so existing exports are unchanged."""
+    def spec(q):
+        return ev.ExportSpec(src_path="/in/src.MP4", out_path="/out/clip.mp4", lap_id=1,
+                             t0=0.0, t1=10.0, config=ev.OverlayConfig(quality=q))
+    vt_hi = ev.build_encode_cmd(spec("high"), 1920, 1080, 30.0, encoder=ev.VT_H264)
+    vt_st = ev.build_encode_cmd(spec("standard"), 1920, 1080, 30.0, encoder=ev.VT_H264)
+    assert vt_hi[vt_hi.index("-b:v") + 1] != vt_st[vt_st.index("-b:v") + 1]
+    sw_hi = ev.build_encode_cmd(spec("high"), 1920, 1080, 30.0, encoder=ev.SW_H264)
+    sw_st = ev.build_encode_cmd(spec("standard"), 1920, 1080, 30.0, encoder=ev.SW_H264)
+    assert sw_hi[sw_hi.index("-crf") + 1] == "20"
+    assert sw_st[sw_st.index("-crf") + 1] == "23"
+    # default OverlayConfig -> high (no silent regression)
+    assert ev.OverlayConfig().quality == "high"
+    vt_def = ev.build_encode_cmd(_spec(), 1920, 1080, 30.0, encoder=ev.VT_H264)
+    assert vt_def[vt_def.index("-b:v") + 1] == vt_hi[vt_hi.index("-b:v") + 1]
+
+
+# --------------------------------------------------------------------------- export restyle: map inset
+def test_map_inset_draws_only_lap_line_no_box():
+    """The export map inset draws ONLY the selected lap's racing line with NO backdrop box and NO
+    full-session trace. Asserted on the baked layer: the four CORNERS of the inset box (where a box
+    backdrop would paint) stay fully transparent, while the lap line leaves bright pixels inside."""
+    from PySide6.QtCore import QRectF
+    s = StubSession(lap_id=2, t0=0.0, dur=60.0, n=600)
+    # give the stub a curved lap trace so the lap line isn't degenerate
+    import numpy as _np
+    th = _np.linspace(0, 2 * _np.pi, 600)
+    s.tx = 50 + 40 * _np.cos(th)
+    s.ty = 50 + 30 * _np.sin(th)
+    box = QRectF(100, 100, 200, 160)
+    mi = ev._MapInset(s, box, 2, scale_k=1.0)
+    assert mi._ok
+    layer = mi._layer
+    import numpy as np
+    arr = np.frombuffer(layer.constBits(), np.uint8,
+                        count=layer.bytesPerLine() * layer.height()).reshape(layer.height(), -1)
+    alpha_plane = arr[:, 3::4]   # ARGB32 premultiplied: alpha is every 4th byte
+
+    # the box corners must be transparent — proof there's no rounded-rect backdrop drawn.
+    for cx, cy in [(box.x() + 3, box.y() + 3), (box.right() - 4, box.y() + 3),
+                   (box.x() + 3, box.bottom() - 4), (box.right() - 4, box.bottom() - 4)]:
+        assert alpha_plane[int(cy), int(cx)] == 0, \
+            f"box corner ({cx:.0f},{cy:.0f}) must be transparent (no box backdrop)"
+    # but SOME pixels inside the box are painted (the lap line)
+    assert int((alpha_plane > 0).sum()) > 50, "the lap line must paint some pixels"
+
+
+def test_map_inset_degenerate_lap_falls_back_gracefully():
+    """If the selected lap's own trace is unusable, the inset falls back to the full-session trace
+    line (still no box) rather than being empty or raising."""
+    from PySide6.QtCore import QRectF
+
+    class NoLapTrace(StubSession):
+        def _lap_trace_xyt(self, lap_id):
+            return None                                      # degenerate: no lap line
+    s = NoLapTrace(lap_id=2, t0=0.0, dur=60.0, n=400)
+    mi = ev._MapInset(s, QRectF(0, 0, 200, 160), 2, scale_k=1.0)
+    assert mi._ok                                            # built from the full trace fallback
+    assert mi._lap_pts is None                               # no lap line -> no comet tail
+
+
+def test_overlay_painter_size_scale_tracks_height():
+    """OverlayPainter computes a size scale `_k` from the output height (1.0 at 1080p) so the
+    overlays scale with resolution — 720p < 1080p < 1440p."""
+    s = StubSession()
+    spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=100.0, t1=160.0)
+    p720 = ev.OverlayPainter(s, spec, 1280, 720)
+    p1080 = ev.OverlayPainter(s, spec, 1920, 1080)
+    p1440 = ev.OverlayPainter(s, spec, 2560, 1440)
+    assert p720._k < p1080._k < p1440._k
+    assert abs(p1080._k - 1.0) < 1e-9                        # 1.0 at 1080p
+
+
+def test_real_render_quality_levels_if_media():
+    """The quality picker end-to-end — GATED on ffmpeg + media (skipped, not failed, without them).
+    Renders the SAME short window at 720p-standard and 1080p-high and asserts both are valid files
+    whose resolution differs and whose bitrate differs (the picker actually changes the encode)."""
+    if not ev.ffmpeg_available() or not os.path.exists(REAL_MP4):
+        print("skip real_render_quality_levels (no ffmpeg or media)")
+        return
+    from studio.session import Session
+    s = Session.load(chapters.discover_siblings(REAL_MP4))
+    best = s.best_lap_id()
+    t0, _ = s.lap_window(best)
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    out_lo = os.path.join(tmp, "f9_q_720_std.mp4")
+    out_hi = os.path.join(tmp, "f9_q_1080_high.mp4")
+    for out, cfg in [(out_lo, ev.OverlayConfig(out_height=720, quality="standard")),
+                     (out_hi, ev.OverlayConfig(out_height=1080, quality="high"))]:
+        ev.render_lap(s, REAL_MP4, out, best, config=cfg)
+        assert os.path.getsize(out) > 0
+
+    def probe_bitrate(path):
+        import subprocess as sp
+        r = sp.run([ev.FFPROBE, "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=bit_rate", "-of",
+                    "default=noprint_wrappers=1:nokey=1", path], capture_output=True, text=True)
+        return int(r.stdout.strip() or 0)
+
+    w_lo, h_lo, _ = ev.probe_video_size(out_lo)
+    w_hi, h_hi, _ = ev.probe_video_size(out_hi)
+    assert h_lo == 720 and h_hi == 1080                      # resolution picker took effect
+    br_lo, br_hi = probe_bitrate(out_lo), probe_bitrate(out_hi)
+    assert br_hi > br_lo > 0, f"high bitrate {br_hi} must exceed standard {br_lo}"
+    for out in (out_lo, out_hi):
+        os.remove(out)
+    print(f"real_render_quality_levels OK (720/std {br_lo} < 1080/high {br_hi} bps)")
 
 
 # --------------------------------------------------------------------------- restore fixture
