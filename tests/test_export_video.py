@@ -630,15 +630,13 @@ def test_real_fallback_to_libx264_if_ffmpeg(monkeypatch_restore):
     print("real_fallback_to_libx264 OK")
 
 
-def test_parallel_composite_is_deterministic_if_ffmpeg(monkeypatch_restore):
-    """PARALLEL CORRECTNESS: the multi-worker paint pool must produce BYTE-IDENTICAL frames to the
-    single-threaded pump — the g-meter dial's order-dependent state is advanced sequentially up
-    front, so only the (independent) drawing is parallelized. Render the same synthetic clip with
-    workers=1 and workers=4 (libx264 so the encoder itself is deterministic) and assert the decoded
-    RGB frames hash equal. Gated on ffmpeg; no media file. (Guards against a future change that
-    parallelizes something stateful and silently desyncs the dial/envelope between frames.)"""
+def test_composite_is_deterministic_across_workers_if_ffmpeg(monkeypatch_restore):
+    """DETERMINISM: the render is single-threaded by design now (the parallel paint pool was removed
+    because it could wedge the GUI export), and the legacy `workers` knob is a no-op. Rendering the
+    same clip with workers=1 and workers=4 must therefore produce BYTE-IDENTICAL frames. Gated on
+    ffmpeg; no media file. (Guards the composite stays stable + frame-exact regardless of the knob.)"""
     if not ev.ffmpeg_available():
-        print("skip parallel_composite_is_deterministic (no ffmpeg)")
+        print("skip composite_is_deterministic_across_workers (no ffmpeg)")
         return
     import hashlib
     tmp = os.environ.get("TMPDIR", "/tmp")
@@ -666,12 +664,184 @@ def test_parallel_composite_is_deterministic_if_ffmpeg(monkeypatch_restore):
         render(o1, 1)
         render(o4, 4)
         h1, h4 = frames_hash(o1), frames_hash(o4)
-        assert h1 == h4, f"parallel composite differs from single-thread: {h1} != {h4}"
+        assert h1 == h4, f"composite differs across the workers knob: {h1} != {h4}"
     finally:
         for p in (src, o1, o4):
             if os.path.exists(p):
                 os.remove(p)
-    print("parallel_composite_is_deterministic OK")
+    print("composite_is_deterministic_across_workers OK")
+
+
+# ----------------------------------- GUI-worker path + watchdog/cancel regression (the missed gap)
+def test_gui_worker_drives_render_to_completion_if_ffmpeg():
+    """REGRESSION — the test gap that let the GUI hang slip past three fixes: drive the ACTUAL GUI
+    export worker (studio.app._VideoExportWorker, a QThread) end-to-end on a tiny real clip and
+    assert it COMPLETES (the dialog would reach 100%) without hanging. The worker calls
+    Renderer.run(progress=…, cancel=…) — the exact path File ▸ 'Export overlay video…' triggers —
+    which the mocked suite and the headless `run()` benchmarks never exercised to completion. A
+    deadlock/wedge HANGS here and the runner's outer time budget catches it. Gated on ffmpeg; no
+    media file."""
+    if not ev.ffmpeg_available():
+        print("skip gui_worker_drives_render_to_completion (no ffmpeg)")
+        return
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    from studio.app import _VideoExportWorker
+
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    src, out = os.path.join(tmp, "f9_gui_src.mp4"), os.path.join(tmp, "f9_gui_out.mp4")
+    _make_syn_clip(src, dur=1.5)
+    if os.path.exists(out):
+        os.remove(out)
+    s = StubSession(lap_id=1, t0=0.0, dur=1.5, n=90)
+    # Force libx264 so this regression is DETERMINISTIC (no media-engine session churn / contention
+    # flakiness across the suite's many real renders). The VideoToolbox path is covered separately
+    # by test_real_videotoolbox_render; what THIS test guards is the GUI worker → Renderer.run →
+    # run_chunk → watchdog/supervisor wiring driving an export to completion without hanging.
+    spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=0.0, t1=1.5,
+                         config=ev.OverlayConfig(out_height=360, encoder="libx264",
+                                                 hwaccel_decode=False))
+    worker = _VideoExportWorker(s, spec)
+    result = {"ok": None, "msg": None, "last": (0, 0)}
+    loop = QEventLoop()
+    worker.progress.connect(lambda d, t: result.update(last=(d, t)))
+
+    def done(ok, msg):
+        result.update(ok=ok, msg=msg)
+        loop.quit()
+    worker.finished_export.connect(done)
+    # Hard safety net: if the worker HANGS, quit the loop after 90 s so the test FAILS (not hangs).
+    QTimer.singleShot(90_000, loop.quit)
+    worker.start()
+    loop.exec()
+    worker.wait(5000)
+    assert result["ok"] is True, f"GUI worker did not finish OK: ok={result['ok']} msg={result['msg']}"
+    d, t = result["last"]
+    assert t > 0 and d == t, f"progress did not reach 100%: {d}/{t}"
+    assert os.path.getsize(out) > 0
+    w, h, _ = ev.probe_video_size(out)
+    assert h == 360 and w == 640
+    for p in (src, out):
+        if os.path.exists(p):
+            os.remove(p)
+    print(f"gui_worker_drives_render_to_completion OK ({d}/{t} frames)")
+
+
+def test_watchdog_aborts_a_wedged_encoder_if_ffmpeg(monkeypatch_restore):
+    """REGRESSION — the no-progress WATCHDOG makes an infinite hang impossible: a render whose
+    encoder WEDGES (stops draining our pipe but never exits, like a stuck VideoToolbox session)
+    must be ABORTED within the watchdog window, not hang forever. We force libx264 (so there is no
+    VT retry to a *second* wedge) with a SHORT watchdog, then swap the real encoder for a process
+    that never reads stdin; the writer blocks, the supervisor kills it, and run() raises a clear
+    RuntimeError (wrapping RenderTimeoutError) well inside the test budget. Gated on ffmpeg."""
+    if not ev.ffmpeg_available():
+        print("skip watchdog_aborts_a_wedged_encoder (no ffmpeg)")
+        return
+    import time as _time
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    src, out = os.path.join(tmp, "f9_wd_src.mp4"), os.path.join(tmp, "f9_wd_out.mp4")
+    _make_syn_clip(src, dur=2.0)
+    s = StubSession(lap_id=1, t0=0.0, dur=2.0, n=120)
+    # libx264 + a 3 s watchdog; the wedge has to trip the stall guard, not a fallback.
+    spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=0.0, t1=2.0,
+                         config=ev.OverlayConfig(out_height=240, encoder="libx264",
+                                                 hwaccel_decode=False, fps_cap=None,
+                                                 watchdog_timeout=3.0))
+    r = ev.Renderer(s, spec)
+    real_start = r._start
+
+    def wedge_start():
+        real_start()
+        # Replace the encoder with a process that NEVER reads its stdin -> the pipe fills and the
+        # writer blocks forever (a stand-in for a wedged encode session).
+        try:
+            r._enc.terminate()
+            r._enc.wait(timeout=2)
+        except Exception:
+            pass
+        r._enc = ev.subprocess.Popen(["sleep", "120"], stdin=ev.subprocess.PIPE,
+                                     stderr=ev.subprocess.DEVNULL)
+    r._start = wedge_start
+    t0 = _time.monotonic()
+    raised = None
+    try:
+        r.run(progress=lambda d, t: None)
+    except BaseException as e:  # noqa: BLE001
+        raised = e
+    dt = _time.monotonic() - t0
+    try:
+        if r._enc is not None:
+            r._enc.kill()
+    except Exception:
+        pass
+    if os.path.exists(src):
+        os.remove(src)
+    if os.path.exists(out):
+        os.remove(out)
+    assert raised is not None, "a wedged encoder must NOT hang — run() should have raised"
+    assert isinstance(raised, RuntimeError), f"expected RuntimeError, got {type(raised).__name__}"
+    assert "stall" in str(raised).lower() or "no frame" in str(raised).lower(), \
+        f"error should explain the stall, got: {raised}"
+    assert dt < 30, f"watchdog took too long to fire ({dt:.1f}s > 30s)"
+    print(f"watchdog_aborts_a_wedged_encoder OK (aborted in {dt:.1f}s)")
+
+
+def test_cancel_mid_write_does_not_hang_if_ffmpeg(monkeypatch_restore):
+    """REGRESSION — cancel must work even when the loop is blocked on a pipe write: a cancel() that
+    flips True while the writer is stuck on stdin.write (encoder not draining) is detected by the
+    supervisor, which kills the processes so the blocked write returns and CancelledError is raised
+    promptly. (The old code only polled cancel BETWEEN frames, so a cancel during a wedged write
+    could not stop it.) Gated on ffmpeg."""
+    if not ev.ffmpeg_available():
+        print("skip cancel_mid_write_does_not_hang (no ffmpeg)")
+        return
+    import time as _time
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    src, out = os.path.join(tmp, "f9_cm_src.mp4"), os.path.join(tmp, "f9_cm_out.mp4")
+    _make_syn_clip(src, dur=2.0)
+    s = StubSession(lap_id=1, t0=0.0, dur=2.0, n=120)
+    # Long watchdog so the CANCEL (not the stall) is what stops it; libx264 to avoid VT retry.
+    spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=0.0, t1=2.0,
+                         config=ev.OverlayConfig(out_height=240, encoder="libx264",
+                                                 hwaccel_decode=False, fps_cap=None,
+                                                 watchdog_timeout=60.0))
+    r = ev.Renderer(s, spec)
+    real_start = r._start
+
+    def wedge_start():
+        real_start()
+        try:
+            r._enc.terminate()
+            r._enc.wait(timeout=2)
+        except Exception:
+            pass
+        r._enc = ev.subprocess.Popen(["sleep", "120"], stdin=ev.subprocess.PIPE,
+                                     stderr=ev.subprocess.DEVNULL)
+    r._start = wedge_start
+    flag = {"cancel": False}
+    # flip cancel True shortly after the render starts (it will already be blocked on the write)
+    import threading as _th
+    _th.Timer(2.0, lambda: flag.update(cancel=True)).start()
+    t0 = _time.monotonic()
+    raised = None
+    try:
+        r.run(cancel=lambda: flag["cancel"])
+    except BaseException as e:  # noqa: BLE001
+        raised = e
+    dt = _time.monotonic() - t0
+    try:
+        if r._enc is not None:
+            r._enc.kill()
+    except Exception:
+        pass
+    if os.path.exists(src):
+        os.remove(src)
+    if os.path.exists(out):
+        os.remove(out)
+    assert isinstance(raised, ev.CancelledError), \
+        f"a mid-write cancel must raise CancelledError, got {type(raised).__name__}: {raised}"
+    assert dt < 20, f"cancel took too long to take effect ({dt:.1f}s)"
+    print(f"cancel_mid_write_does_not_hang OK (cancelled in {dt:.1f}s)")
 
 
 # --------------------------------------------------------------------------- restore fixture

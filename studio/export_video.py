@@ -43,10 +43,10 @@ at media time t shows what the app shows at t.
 from __future__ import annotations
 
 import os
-import queue
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -225,10 +225,18 @@ class OverlayConfig:
     # parallel composite — the configuration that rescues a core-starved machine); True/False force
     # it. Neutral on wall-time on a fast box; a big CPU relief on a slow one.
     hwaccel_decode: str | bool = "auto"
-    # Number of parallel COMPOSITE (QPainter) workers. 0/None = auto (a small pool sized to the
-    # machine). 1 forces the in-line single-threaded paint. The g-meter dial STATE is always
-    # advanced sequentially (it's order-dependent); only the per-frame drawing is parallelized.
+    # Retained for backward compatibility / explicit API, but the renderer is now SINGLE-THREADED
+    # by design (see Renderer): VideoToolbox is process-isolated and frees the CPU, so an in-line
+    # paint keeps up at 30 fps and we avoid the fragile parallel-pipeline deadlock surface that
+    # could hang the GUI export. This field is accepted but does not spin up a paint pool.
     workers: int | None = None
+    # No-progress WATCHDOG (seconds). If the frame counter does not advance for this long, the
+    # render is presumed WEDGED (a hung VideoToolbox session / stuck pipe) and is aborted cleanly
+    # (ffmpeg killed, threads joined, a RenderTimeoutError surfaced) — then retried ONCE on the
+    # software encoder. This is what makes an infinite hang structurally impossible. Generous
+    # enough that a merely-slow machine never trips it (a 1080p frame composites in tens of ms;
+    # even a stalled-then-recovering encoder gets 30 s of grace).
+    watchdog_timeout: float = 30.0
     # g-meter dial: a square pinned to the TOP-RIGHT, side = this fraction of frame height.
     gmeter_frac: float = 0.26
     margin_frac: float = 0.022        # uniform inset from the frame edge for all elements
@@ -648,17 +656,17 @@ class OverlayPainter:
 
     def advance_and_snapshot(self, vals: OverlayValues):
         """Advance the dial ONE tick (sequential, order-dependent — the EMA/envelope accumulate)
-        and return an immutable `DialState` snapshot of the resulting filtering state. This is the
-        only part of the per-frame overlay that MUST run in frame order; it's pure numeric work (no
-        drawing), so doing it sequentially up front lets the actual painting be parallelized: each
-        frame's paint just needs its own snapshot + values, with no cross-frame state."""
+        and return an immutable `DialState` snapshot of the resulting filtering state. The render is
+        single-threaded, so this just runs in line with the paint; the snapshot split (advance →
+        paint-from-snapshot) is kept because it cleanly separates the order-dependent numeric step
+        from the stateless drawing and keeps the paint a pure function of its args."""
         self.feed_g(vals)
         return self._dial._dial_state()
 
     def paint_frame_with_state(self, img: QImage, vals: OverlayValues, dial_state) -> None:
         """Paint all overlay elements onto `img` (an RGB frame at the output size) from a PRECOMPUTED
-        `dial_state` — no shared mutable state is touched, so this is safe to run on a worker thread
-        for a different frame than the one currently advancing the dial. `img` is mutated in place."""
+        `dial_state`. Touches no shared mutable state — a pure function of (img, vals, dial_state).
+        `img` is mutated in place."""
         p = QPainter(img)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.TextAntialiasing, True)
@@ -704,6 +712,15 @@ def _paint_packed_frame(painter: OverlayPainter, out_w: int, out_h: int, raw: by
 # --------------------------------------------------------------------------- the renderer
 class CancelledError(Exception):
     """Raised inside the render loop when the caller's cancel callback returns True."""
+
+
+class RenderTimeoutError(RuntimeError):
+    """Raised when the render makes NO frame progress for `watchdog_timeout` seconds — i.e. a
+    stage WEDGED (a VideoToolbox session that hangs instead of exiting, a stuck pipe, a decoder
+    that stopped emitting). Unlike `_EncodeError` (a process that *failed* with a non-zero exit),
+    a wedge never "fails", so without this watchdog the export would hang forever (the user's
+    symptom). `run` catches it to retry ONCE on the software encoder, then surfaces it as a clear
+    error rather than hanging."""
 
 
 class _EncodeError(RuntimeError):
@@ -781,7 +798,6 @@ class Renderer:
         self._encoder = resolve_encoder(spec.config.encoder)
         self._fallback_allowed = self._encoder == VT_H264
         self._hwaccel = resolve_hwaccel_decode(spec.config.hwaccel_decode, self._encoder)
-        self._workers = resolve_workers(spec.config.workers)
         self._dec: subprocess.Popen | None = None
         self._enc: subprocess.Popen | None = None
         self._dec_err: _StderrDrainer | None = None
@@ -790,6 +806,12 @@ class Renderer:
         self._frame_bytes = self._out_w * self._out_h * 3
         self._started = False
         self._done = False
+        # --- watchdog / abort plumbing (a supervisor thread can break a wedged blocking I/O) ---
+        self._watchdog_timeout = float(getattr(spec.config, "watchdog_timeout", 30.0) or 0.0)
+        self._last_progress_t = 0.0            # monotonic time of the last frame written
+        self._aborted: str | None = None       # set by the supervisor: "cancel" | "timeout"
+        self._supervisor: threading.Thread | None = None
+        self._supervisor_stop = threading.Event()
 
     @property
     def total_frames(self) -> int:
@@ -832,9 +854,19 @@ class Renderer:
     def run_chunk(self, n: int = 24) -> bool:
         """SINGLE-THREADED pump: composite up to `n` frames in order; return True when the render is
         COMPLETE (outputs finalized). Reads one frame's bytes per iteration from the decoder, paints
-        it (advancing the dial sequentially), and writes it to the encoder's stdin. `run()` uses the
-        faster pipelined engine by default; this path is kept for a chunked GUI driver / workers==1
-        and as the simplest correct reference."""
+        it (advancing the dial sequentially), and writes it to the encoder's stdin.
+
+        This is THE render engine — `run()` simply pumps it to completion (under a no-progress
+        watchdog). It is deliberately single-threaded: VideoToolbox runs the H.264 encode on the
+        Apple media engine (process-isolated, off the CPU), so an in-line QPainter composite keeps
+        up comfortably at the 30 fps default while avoiding the parallel-pipeline deadlock surface
+        that could wedge the GUI export. The caller (a QThread) can drive this in chunks for a
+        responsive, cancellable progress dialog.
+
+        On a wedge: if the supervisor (see `_start_supervisor`) killed the ffmpeg processes because
+        the export stalled or the user cancelled, the blocked `stdout.read`/`stdin.write` returns a
+        short read / raises BrokenPipe; we then translate that into the right exception
+        (RenderTimeoutError / CancelledError / _EncodeError) so the render never hangs."""
         if self._done:
             return True
         if not self._started:
@@ -849,7 +881,9 @@ class Renderer:
                 return True
             raw = stdout.read(self._frame_bytes)
             if not raw or len(raw) < self._frame_bytes:
-                # Decoder ran dry (it may emit one fewer frame than our ceil estimate at the tail).
+                # A short read means EITHER the decoder reached the ceil-estimate tail (normal,
+                # finish cleanly) OR the supervisor killed it on a stall/cancel (abort loudly).
+                self._raise_if_aborted()
                 self._finish()
                 return True
             vals = overlay_values_at(self._session, float(self._times[self._i]))
@@ -857,54 +891,126 @@ class Renderer:
             try:
                 stdin.write(self._paint_packed(raw, vals, dial))
             except (BrokenPipeError, OSError):
-                # Encoder died mid-stream — reap it so its non-zero exit surfaces as _EncodeError
-                # (which `run` can fall back from), instead of a bare BrokenPipeError.
-                self._finish()
+                # The encoder stopped accepting input. Distinguish a watchdog/cancel kill (the
+                # supervisor broke the pipe to escape a wedge) from a genuine encoder failure.
+                self._raise_if_aborted()
+                self._finish()              # reap; its non-zero-exit branch raises _EncodeError
                 raise _EncodeError(self._encoder, "ffmpeg encode pipe broke") from None
             self._i += 1
+            self._last_progress_t = time.monotonic()   # fed the watchdog: a frame made it out
         return False
+
+    def _raise_if_aborted(self) -> None:
+        """If the supervisor aborted the render (stall watchdog or cancel), raise the matching
+        exception so a killed-pipe read/write becomes a clear, typed failure instead of a silent
+        early finish or a bare BrokenPipeError."""
+        if self._aborted == "timeout":
+            raise RenderTimeoutError(
+                f"video export stalled: no frame written for {self._watchdog_timeout:.0f}s "
+                f"(encoder={self._encoder}) — the render was aborted to avoid hanging")
+        if self._aborted == "cancel":
+            raise CancelledError("export cancelled")
 
     def _paint_packed(self, raw: bytes, vals: OverlayValues, dial) -> bytes:
         """Paint the overlays for one decoded rgb24 frame (`raw`, PACKED at out_w*3) from a
-        precomputed dial snapshot, and return the painted bytes PACKED at out_w*3 for the encoder.
-        Pure given its args (no shared mutable state) — safe to call from a paint worker thread."""
+        precomputed dial snapshot, and return the painted bytes PACKED at out_w*3 for the encoder."""
         return _paint_packed_frame(self._painter, self._out_w, self._out_h, raw, vals, dial)
 
+    def _start_supervisor(self, cancel) -> None:
+        """Spawn the daemon SUPERVISOR thread that makes an infinite hang structurally impossible.
+
+        The render loop blocks on pipe I/O (`stdout.read` / `stdin.write`); a wedged stage (a
+        VideoToolbox session that hangs instead of exiting, a stuck pipe, a decoder that stopped)
+        would block it FOREVER — there is no timeout on a pipe read/write, and a cancel flag the
+        loop only polls *between* frames can't interrupt a write that never returns. The supervisor
+        runs alongside and, the instant it sees either condition, KILLS the ffmpeg processes:
+
+          * NO-PROGRESS WATCHDOG: `frames_done` hasn't advanced for `watchdog_timeout` seconds →
+            abort "timeout" (then `run` retries once on the software encoder);
+          * CANCEL: the caller's `cancel()` returned True → abort "cancel".
+
+        Killing the processes unblocks the loop's read/write at the OS level (EOF / SIGPIPE), and
+        `_raise_if_aborted` turns that into a typed exception. A zero/none `watchdog_timeout`
+        disables only the stall check (cancel still works)."""
+        if self._supervisor is not None:
+            return
+        self._last_progress_t = time.monotonic()
+        self._supervisor_stop.clear()
+
+        def supervise() -> None:
+            while not self._supervisor_stop.wait(0.5):
+                if self._done:
+                    return
+                if cancel is not None:
+                    try:
+                        if cancel():
+                            self._abort("cancel")
+                            return
+                    except Exception:  # noqa: BLE001 - a bad cancel cb must not crash the guard
+                        pass
+                if self._watchdog_timeout > 0 and self._started and not self._done:
+                    if time.monotonic() - self._last_progress_t > self._watchdog_timeout:
+                        self._abort("timeout")
+                        return
+
+        self._supervisor = threading.Thread(target=supervise, daemon=True,
+                                            name="f9-export-supervisor")
+        self._supervisor.start()
+
+    def _abort(self, reason: str) -> None:
+        """Record why the render is being aborted and KILL the ffmpeg processes so any blocked pipe
+        read/write in the render loop returns at once. Called only from the supervisor."""
+        if self._aborted is None:
+            self._aborted = reason
+        for proc in (self._enc, self._dec):
+            if proc is None:
+                continue
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    def _stop_supervisor(self) -> None:
+        self._supervisor_stop.set()
+        sup = self._supervisor
+        if sup is not None and sup is not threading.current_thread():
+            sup.join(timeout=2.0)
+        self._supervisor = None
+
     def run(self, progress=None, cancel=None, chunk: int = 48) -> RenderResult:
-        """Render to completion. `progress(done, total)` is called as frames finish; `cancel()` ->
-        True aborts (raises CancelledError after tearing the pipes down). Returns a RenderResult.
+        """Render to completion (the call the GUI worker makes). `progress(done, total)` is invoked
+        as frames are written; `cancel()` -> True aborts cleanly (raises CancelledError after the
+        pipes are torn down). Returns a RenderResult.
 
-        Uses the PIPELINED engine (a reader thread + a small paint-worker pool + an ordered writer)
-        so decode, composite and encode overlap instead of running in series; pass workers==1 (or a
-        mock subprocess, which the pool path also handles) for the simple single-threaded pump.
-
-        ROBUSTNESS — VideoToolbox fallback: if the GPU/media-engine encode (`h264_videotoolbox`)
-        fails to produce output, the whole render is retried ONCE on software libx264 so the feature
-        never breaks on a machine where a hardware session won't open. The retry re-runs from a
-        fresh, libx264-forced Renderer (the simplest correct reset of the decode/encode pipes)."""
+        ROBUSTNESS — two independent guards so the export NEVER hangs and NEVER silently breaks:
+          * a no-progress WATCHDOG (the supervisor) aborts a WEDGED render (a hung VideoToolbox
+            session / stuck pipe makes no progress and never "fails", so only a watchdog catches
+            it) — then we retry ONCE on the software encoder;
+          * a VideoToolbox encode that *fails* with a non-zero exit (`_EncodeError`) also retries
+            ONCE on libx264, for a machine where a hardware session won't open.
+        Either retry re-runs from a fresh, libx264-forced Renderer (a clean reset of the pipes)."""
         try:
-            return self._run_engine(progress, cancel, chunk)
-        except _EncodeError as exc:
-            if not (self._fallback_allowed and exc.encoder == VT_H264):
+            return self._run_chunked(progress, cancel, chunk)
+        except (_EncodeError, RenderTimeoutError) as exc:
+            is_encode_fail = isinstance(exc, _EncodeError) and exc.encoder == VT_H264
+            is_vt_wedge = isinstance(exc, RenderTimeoutError) and self._encoder == VT_H264
+            if not (self._fallback_allowed and (is_encode_fail or is_vt_wedge)):
+                # Not a VT-recoverable case → surface a clear error (never a hang).
                 raise RuntimeError(str(exc)) from exc
-            # VideoToolbox encode failed → retry once on libx264 with an otherwise-identical spec.
+            # VideoToolbox failed OR wedged → retry once on libx264 with an identical spec.
             self.cancel()
             sw_cfg = replace(self._spec.config, encoder="libx264")
             sw_spec = replace(self._spec, config=sw_cfg)
-            return Renderer(self._session, sw_spec)._run_engine(progress, cancel, chunk)
-
-    def _run_engine(self, progress, cancel, chunk: int) -> RenderResult:
-        """Dispatch to the parallel pipeline (default) or the single-threaded chunk pump. Both honour
-        `progress`/`cancel` and finalize the same way; a non-zero ENCODE exit surfaces as
-        `_EncodeError` so `run` can decide whether to fall back to libx264."""
-        if self._workers <= 1:
-            return self._run_chunked(progress, cancel, chunk)
-        return self._run_pipelined(progress, cancel)
+            return Renderer(self._session, sw_spec)._run_chunked(progress, cancel, chunk)
 
     def _run_chunked(self, progress, cancel, chunk: int) -> RenderResult:
-        """The simple single-threaded pump (decode→paint→encode in series, one frame at a time)."""
+        """Pump `run_chunk` to completion under the supervisor (watchdog + cancel). Single-threaded:
+        decode → paint → encode in series, one chunk at a time, with progress reported after each."""
+        self._start_supervisor(cancel)
         try:
             while not self.run_chunk(chunk):
+                # Cooperative cancel between chunks too (fast path for a non-blocked loop / mocks);
+                # a cancel that lands mid-write is handled by the supervisor killing the pipe.
                 if cancel is not None and cancel():
                     self.cancel()
                     raise CancelledError("export cancelled")
@@ -912,172 +1018,14 @@ class Renderer:
                     progress(self._i, len(self._times))
             if progress is not None:
                 progress(self._i, len(self._times))
-        except CancelledError:
-            raise
-        except _EncodeError:
+        except (CancelledError, _EncodeError, RenderTimeoutError):
+            self.cancel()
             raise
         except Exception:
             self.cancel()
             raise
-        return RenderResult(self._spec.out_path, self._i, self._out_w, self._out_h,
-                            self._fps, self._spec.duration)
-
-    def _run_pipelined(self, progress, cancel) -> RenderResult:
-        """The PIPELINED engine — overlap decode, composite and encode so the wall-time approaches
-        the SLOWEST single stage rather than their sum.
-
-          * a READER thread pulls raw rgb24 frames off the decoder and, in frame order, advances the
-            g-meter dial (the one order-dependent step — cheap numeric work) and enqueues
-            (idx, raw, vals, dial_snapshot) to a bounded work queue;
-          * a small pool of PAINT workers composite frames concurrently (Qt releases the GIL during
-            rasterization, so they truly parallelize) into a results dict;
-          * THIS thread is the ordered WRITER: it pops results in index order and writes them to the
-            encoder's stdin, so the encoded stream is in order + byte-exact.
-
-        Bounded queues give back-pressure (we never buffer the whole lap in RAM). Any worker/reader
-        exception is funnelled here and triggers a clean teardown; cancel is polled by the writer."""
-        if not self._started:
-            self._start()
-        assert self._dec is not None and self._enc is not None
-        stdout = self._dec.stdout
-        stdin = self._enc.stdin
-        assert stdout is not None and stdin is not None
-        total = len(self._times)
-        depth = max(8, self._workers * 4)            # bounded buffering for back-pressure
-        work: queue.Queue = queue.Queue(maxsize=depth)
-        results: dict[int, bytes] = {}
-        results_lock = threading.Lock()
-        results_ready = threading.Condition(results_lock)
-        err: list[BaseException] = []
-        stop = threading.Event()                     # set on cancel / error / decoder-dry
-        produced = [0]                               # frames the reader actually enqueued (<= total)
-
-        def fail(exc: BaseException) -> None:
-            if not err:
-                err.append(exc)
-            stop.set()
-            with results_ready:
-                results_ready.notify_all()
-
-        def reader() -> None:
-            try:
-                for i in range(total):
-                    if stop.is_set():
-                        break
-                    raw = stdout.read(self._frame_bytes)
-                    if not raw or len(raw) < self._frame_bytes:
-                        break                        # decoder ran dry at the ceil-estimate tail
-                    vals = overlay_values_at(self._session, float(self._times[i]))
-                    dial = self._painter.advance_and_snapshot(vals)   # sequential, in order
-                    while not stop.is_set():
-                        try:
-                            work.put((i, raw, vals, dial), timeout=0.2)
-                            produced[0] = i + 1
-                            break
-                        except queue.Full:
-                            continue
-            except BaseException as exc:             # noqa: BLE001 - funnel to the writer
-                fail(exc)
-            finally:
-                for _ in range(self._workers):       # sentinels so painters drain + exit
-                    try:
-                        work.put(None, timeout=0.2)
-                    except queue.Full:
-                        pass
-
-        def painter_worker() -> None:
-            while True:
-                try:
-                    item = work.get(timeout=0.2)
-                except queue.Empty:
-                    if stop.is_set():
-                        return
-                    continue
-                if item is None:
-                    return
-                idx, raw, vals, dial = item
-                try:
-                    packed = _paint_packed_frame(self._painter, self._out_w, self._out_h,
-                                                 raw, vals, dial)
-                except BaseException as exc:         # noqa: BLE001
-                    fail(exc)
-                    return
-                with results_ready:
-                    results[idx] = packed
-                    results_ready.notify_all()
-
-        threads = [threading.Thread(target=reader, daemon=True)]
-        threads += [threading.Thread(target=painter_worker, daemon=True)
-                    for _ in range(self._workers)]
-        for th in threads:
-            th.start()
-
-        # Ordered writer (this thread): write frame 0, 1, 2 … as each becomes available.
-        try:
-            nxt = 0
-            while True:
-                with results_ready:
-                    while nxt not in results and not stop.is_set():
-                        # Stop waiting once the reader is done AND we've drained everything it made.
-                        if produced[0] is not None and nxt >= produced[0] and work.empty() \
-                                and not any(t.is_alive() for t in threads[1:]):
-                            break
-                        results_ready.wait(timeout=0.2)
-                    packed = results.pop(nxt, None)
-                if err:
-                    break
-                if packed is None:
-                    # Nothing more is coming (reader hit the decoder-dry tail, all painted+written).
-                    if stop.is_set() or (produced[0] is not None and nxt >= produced[0]):
-                        break
-                    continue
-                try:
-                    stdin.write(packed)
-                except (BrokenPipeError, OSError):
-                    # The encoder died mid-stream (e.g. a VideoToolbox session that wouldn't open) —
-                    # reap it to surface the REAL non-zero exit + stderr as an _EncodeError so `run`
-                    # can fall back to libx264. _finish closes stdin (already broken — guarded) and
-                    # waits; its non-zero-exit branch raises the _EncodeError.
-                    stop.set()
-                    for th in threads:
-                        th.join(timeout=2.0)
-                    self._finish()                   # raises _EncodeError on the encoder's bad exit
-                    raise _EncodeError(self._encoder,
-                                       "ffmpeg encode pipe broke") from None    # if it didn't
-                self._i = nxt + 1
-                if progress is not None:
-                    progress(self._i, total)
-                if cancel is not None and cancel():
-                    stop.set()
-                    raise CancelledError("export cancelled")
-                nxt += 1
-        except CancelledError:
-            stop.set()
-            self.cancel()
-            for th in threads:
-                th.join(timeout=2.0)
-            raise
-        except _EncodeError:
-            stop.set()
-            for th in threads:
-                th.join(timeout=2.0)
-            raise
-        except BaseException:
-            stop.set()
-            self.cancel()
-            for th in threads:
-                th.join(timeout=2.0)
-            raise
-
-        stop.set()                                   # let any blocked worker/reader unwind
-        for th in threads:
-            th.join(timeout=5.0)
-        if err:
-            self.cancel()
-            raise err[0]
-        self._finish()                               # flush + reap; may raise _EncodeError
-        if progress is not None:
-            progress(self._i, total)
+        finally:
+            self._stop_supervisor()
         return RenderResult(self._spec.out_path, self._i, self._out_w, self._out_h,
                             self._fps, self._spec.duration)
 
@@ -1133,9 +1081,11 @@ class Renderer:
 
     def cancel(self) -> None:
         """Kill both ffmpeg processes and mark the render done (best-effort teardown for the
-        cancel path / an error). Safe to call more than once. The stderr drainers are daemon
-        threads draining pipes that close when the processes die, so they wind down on their own."""
+        cancel path / an error). Safe to call more than once. Also stops the supervisor thread.
+        The stderr drainers are daemon threads draining pipes that close when the processes die,
+        so they wind down on their own."""
         self._done = True
+        self._stop_supervisor()
         for proc in (self._enc, self._dec):
             if proc is None:
                 continue

@@ -51,9 +51,14 @@ class _VideoExportWorker(QThread):
     threading glue, and it lives in app.py (not the renderer) so export_video stays GUI-agnostic.
 
     Cancellation: `cancel()` (called from the GUI thread when the dialog's Cancel is hit) flips a
-    flag the render loop polls via the `cancel` callback — a cooperative stop that tears the
-    ffmpeg pipes down cleanly. The partial output file is removed so a cancel leaves nothing
-    half-written."""
+    flag the render loop + its supervisor poll — a cooperative stop that tears the ffmpeg pipes
+    down cleanly even if the loop is blocked mid-write (the supervisor kills the pipes to unblock
+    it). The partial output file is removed so a cancel leaves nothing half-written.
+
+    Never hangs: the renderer runs a no-progress WATCHDOG (see export_video.Renderer) — if a stage
+    wedges (a stuck VideoToolbox session / pipe) and no frame is written for ~30 s, the export is
+    aborted and surfaced as an error here, then retried once on the software encoder, rather than
+    hanging the dialog forever."""
 
     progress = Signal(int, int)              # (frames_done, frames_total)
     finished_export = Signal(bool, str)      # (ok, message)  message="cancelled" / an error text
