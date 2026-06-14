@@ -754,26 +754,47 @@ class StudioWindow(QMainWindow):
                                      f"_lap{lap}_overlay.mp4", "MP4 video (*.mp4)")
         if not out:
             return
-        spec = export_video.ExportSpec(src_path=src, out_path=out, lap_id=lap,
-                                       t0=win[0], t1=win[1])
+        # Build the spec with the VIDEO SOURCE resolved from the session's chapters: a lap's GLOBAL
+        # window is mapped to the correct chapter file (or a concat over the chapters a seam-crossing
+        # lap spans) + the file-LOCAL seek, the SAME global<->local mapping the player seeks with. A
+        # bad/empty/past-end window is refused here with a clear message rather than launching a
+        # doomed ffmpeg (the chaptered-export 'empty bar' fix). The worker owns the spec's source
+        # lifecycle (it cleans up any temp concat list when the render ends).
+        try:
+            spec = export_video.build_lap_spec(self.session, out, lap)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Export overlay video",
+                                f"This lap can't be exported:\n{exc}")
+            return
         self._run_video_export(spec, lap)
 
     def _run_video_export(self, spec, lap: int):
         """Run the render on a worker QThread behind a cancellable modal progress dialog. The
         dialog's Cancel sets the worker's flag (polled by the render loop's `cancel` callback);
-        the worker reports (done, total) frames back to the dialog over a queued signal."""
-        dlg = QProgressDialog(f"Rendering lap {lap} overlay video…", "Cancel", 0, 100, self)
+        the worker reports (done, total) frames back to the dialog over a queued signal.
+
+        The dialog starts in a "Preparing…" BUSY state (an indeterminate 0/0 bar + a label) so the
+        setup phase — ffprobe, the encoder probe, ffmpeg launch, the first decoded frame — never
+        reads as a silent, stuck empty bar; it flips to a real 0→total determinate bar the moment
+        the first frame's progress arrives."""
+        dlg = QProgressDialog(f"Preparing lap {lap} overlay video…", "Cancel", 0, 0, self)
         dlg.setWindowTitle("Export overlay video")
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
         dlg.setAutoClose(False)
         dlg.setAutoReset(False)
+        dlg.setValue(0)  # with max=0 too, Qt renders an indeterminate "busy" bar
 
         worker = _VideoExportWorker(self.session, spec)
         self._video_worker = worker  # keep a ref so the thread isn't GC'd mid-render
+        started = {"first": False}
 
         def on_progress(done: int, total: int):
             if total > 0:
+                if not started["first"]:
+                    # First real frame: switch from the busy "Preparing…" bar to a determinate one.
+                    started["first"] = True
+                    dlg.setLabelText(f"Rendering lap {lap} overlay video…")
                 dlg.setMaximum(total)
                 dlg.setValue(done)
 
@@ -781,6 +802,7 @@ class StudioWindow(QMainWindow):
             dlg.reset()
             worker.wait()
             self._video_worker = None
+            spec.source.cleanup()  # free any temp concat-list file the chapter resolution wrote
             if ok:
                 self.statusBar().showMessage(f"exported {os.path.basename(spec.out_path)}")
             elif message == "cancelled":

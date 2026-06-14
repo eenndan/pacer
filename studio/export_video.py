@@ -249,25 +249,179 @@ class OverlayConfig:
     strip_h_frac: float = 0.040
 
 
+# --------------------------------------------------------------------------- chaptered source
+# A long GoPro recording is split (at a file-SIZE limit, not at a lap) into CHAPTERS that are
+# contiguous on ONE global media clock — chapter i covers global [offset_i, offset_i+dur_i). The
+# rest of the app treats the recording as one session by laying the chapters on that global axis
+# (studio/chapters.ChapterMap) and the video player seeks across them by mapping a global time to
+# (chapter file, local time). The EXPORT must do the SAME: a lap's window is a GLOBAL window, but
+# ffmpeg can only `-ss` INTO A SINGLE FILE's own (local) clock. Seeking with a global t0 into the
+# FIRST chapter file (the old bug) lands PAST that file's end for any lap outside chapter 1, so
+# ffmpeg decodes ZERO frames and the export produces nothing (an empty progress bar / a 0-byte
+# clip). `VideoSource` is the resolved, file-local source ffmpeg actually reads.
+#
+# Two shapes, both reusing the ChapterMap's global<->local arithmetic (we never reinvent it):
+#   * a SINGLE chapter file when the whole window lies inside one chapter — ffmpeg `-i file` with
+#     `local = global - chapter.offset` for the seek;
+#   * a CONCAT of the spanned chapter files when the window crosses a chapter SEAM (a lap can
+#     straddle a boundary) — ffmpeg's concat demuxer plays them back-to-back as one continuous
+#     stream so frames + audio flow across the seam. The first spanned chapter carries a concat
+#     `inpoint` at the window's local start within it, so the concatenated stream BEGINS at the lap
+#     start (a fast keyframe seek, not a decode-from-file-0 scan, and — unlike a plain `-ss` before
+#     a concat input, which does not seek reliably — it actually lands there); the stream's local
+#     clock is then 0 at the global t0.
+#
+# `time_offset` is the global->local shift: a frame's GLOBAL media time t maps to this source's own
+# clock as `t - time_offset`. For a single-chapter source it is the chapter's global offset; for a
+# seam/concat source it is t0 (the inpoint put the lap start at the concatenation's t=0). For a
+# plain single-file recording the offset is 0 and global == local, so the legacy single-file path is
+# exactly preserved.
+@dataclass(frozen=True)
+class VideoSource:
+    """The file-local ffmpeg source for an export, resolved from the global window via a
+    ChapterMap. `input_args()` is the ffmpeg `-i ...` portion (a single `-i file`, or the concat
+    demuxer over a written list file); `probe_path` is the concrete file ffprobe reads for the
+    stream size/fps; `time_offset` converts a GLOBAL media time to this source's own clock
+    (`local = global - time_offset`). `cleanup()` removes any temp concat-list file."""
+    probe_path: str                 # the concrete file ffprobe reads (size/fps)
+    time_offset: float              # global -> local shift: local = global - time_offset
+    concat_list_path: str | None = None   # set iff this is a concat-demuxer source (seam case)
+
+    def input_args(self) -> list[str]:
+        """The ffmpeg input portion: a concat-demuxer input when spanning a seam, else a plain
+        `-i <file>`. Placed where the old `-i src_path` was in the decode/encode argv."""
+        if self.concat_list_path is not None:
+            # `-safe 0` allows absolute paths in the list; the concat demuxer presents the listed
+            # chapter files as ONE continuous stream so a seam-crossing window decodes unbroken.
+            return ["-f", "concat", "-safe", "0", "-i", self.concat_list_path]
+        return ["-i", self.probe_path]
+
+    def cleanup(self) -> None:
+        """Remove the temp concat-list file (best-effort), if this source wrote one."""
+        if self.concat_list_path is not None:
+            try:
+                os.remove(self.concat_list_path)
+            except OSError:
+                pass
+
+
+def single_file_source(path: str) -> VideoSource:
+    """A VideoSource for a plain single file (no chapters): global == local, offset 0. Used to
+    synthesize a source from a bare `src_path` so the legacy single-file export path is unchanged."""
+    return VideoSource(probe_path=path, time_offset=0.0)
+
+
+def resolve_video_source(chapter_map, t0: float, t1: float,
+                         tmp_dir: str | None = None) -> VideoSource:
+    """Resolve the GLOBAL window [t0, t1) to the file-local ffmpeg source via a `ChapterMap`
+    (studio/chapters.ChapterMap) — the SAME global<->local mapping the video player seeks with, so
+    the export reads the EXACT footage the player shows for that window. `chapter_map` may be None
+    or a single-chapter map (a plain recording): then there's one file and global == local.
+
+    Single chapter  -> `-i <that chapter file>`, time_offset = the chapter's global offset.
+    Spans a seam    -> a concat demuxer over every chapter from the start chapter through the end
+                       chapter, with an `inpoint` on the first one at the window's local start so
+                       the concatenation BEGINS at the lap (a fast keyframe seek into the seam);
+                       time_offset = t0 (the lap start is the concatenation's t=0). The concat list
+                       is written under `tmp_dir` (default the system temp dir); the caller frees it
+                       via `VideoSource.cleanup()`.
+
+    Raises ValueError if `chapter_map` has no chapters."""
+    chs = list(getattr(chapter_map, "chapters", []) or [])
+    if not chs:
+        raise ValueError("resolve_video_source needs a ChapterMap with at least one chapter")
+    i0 = chapter_map.chapter_at(t0)
+    # The end is half-open; nudge a window that ends exactly on a seam back into the chapter it
+    # actually played, so a lap ending at offset_{k+1} doesn't pull in a needless extra chapter.
+    i1 = chapter_map.chapter_at(max(t0, t1 - 1e-6))
+    start = chs[i0]
+    if i1 <= i0:
+        # Whole window inside ONE chapter: seek that file at local = global - chapter.offset.
+        return VideoSource(probe_path=start.path, time_offset=float(start.offset))
+    # Spans a seam: concat the chapters [i0 .. i1] so frames/audio flow across the boundary. The
+    # FIRST spanned chapter gets a concat `inpoint` at the window's local start within it, so the
+    # concatenated stream BEGINS at the lap start (a fast keyframe seek, NOT a decode-from-file-0
+    # scan) and runs continuously into the next chapter — `inpoint` is what makes the seam seek both
+    # correct AND fast (a plain `-ss` before a concat input does not seek reliably). With the stream
+    # starting at the lap, the source's local clock is 0 at the global t0, so time_offset = t0 and
+    # the decode/encode seek with `-ss 0`.
+    span = chs[i0:i1 + 1]
+    inpoint = max(0.0, t0 - start.offset)        # local start within the first spanned chapter
+    tmp = tmp_dir or os.environ.get("TMPDIR") or "/tmp"
+    _fd, list_path = _mk_concat_list(span, tmp, first_inpoint=inpoint)
+    return VideoSource(probe_path=start.path, time_offset=float(t0),
+                       concat_list_path=list_path)
+
+
+def _mk_concat_list(chapters_span, tmp_dir: str,
+                    first_inpoint: float | None = None) -> tuple[int, str]:
+    """Write an ffmpeg concat-demuxer list file for `chapters_span` (each `file '<abspath>'`,
+    single-quotes in the path escaped per the concat syntax) into `tmp_dir`, returning (fd, path).
+    The chapters are listed in order so the demuxer presents them as one stream. `first_inpoint`
+    (seconds) adds a concat `inpoint` directive after the FIRST file so the concatenated stream
+    starts at that local time within the first chapter (the lap start) — a fast keyframe seek into
+    the seam rather than a decode-from-zero scan."""
+    import tempfile
+    fd, list_path = tempfile.mkstemp(prefix="pacer_export_concat_", suffix=".txt", dir=tmp_dir)
+    lines = []
+    for idx, c in enumerate(chapters_span):
+        ap = os.path.abspath(c.path)
+        # The concat demuxer's quoting: a literal ' inside a single-quoted token is '\''.
+        esc = ap.replace("'", "'\\''")
+        lines.append(f"file '{esc}'\n")
+        if idx == 0 and first_inpoint and first_inpoint > 0:
+            # inpoint trims the FIRST file's start so the concatenation begins at the lap (the next
+            # chapters play from their own start, so frames flow across the seam unbroken).
+            lines.append(f"inpoint {first_inpoint:.6f}\n")
+    with os.fdopen(fd, "w") as f:
+        f.write("".join(lines))
+    return fd, list_path
+
+
 # --------------------------------------------------------------------------- export spec
 @dataclass
 class ExportSpec:
     """Everything a render needs, resolved up front so the render loop is pure mechanism.
 
-    `t0`/`t1` are the MEDIA-clock window (seconds) to export — normally a lap's window from
+    `t0`/`t1` are the GLOBAL media-clock window (seconds) to export — normally a lap's window from
     `lap_window_for_export`. `lap_id` is the lap whose Δ baseline + sector strip are shown (and
-    whose g-meter envelope scope is pinned). `src_path` is the source MP4; `out_path` the MP4 to
-    write. `config` carries the layout/output knobs."""
-    src_path: str
+    whose g-meter envelope scope is pinned). `out_path` the MP4 to write; `config` the
+    layout/output knobs.
+
+    The VIDEO SOURCE is `source` — a `VideoSource` that resolves the global window to the correct
+    chapter file(s) + the file-local seek offset (see VideoSource / resolve_video_source). For a
+    chaptered recording app.py builds it from `session.chapters`; for a plain single file it is the
+    file with offset 0. `src_path` is retained for backward compatibility / a single-file caller:
+    if `source` is omitted it is synthesized from `src_path` (offset 0). All ffmpeg seeking uses
+    the source-LOCAL time (`t0/t1 - source.time_offset`), never the global t0, which is what fixes
+    the chaptered-export 'past EOF, zero frames' hang."""
     out_path: str
     lap_id: int
     t0: float
     t1: float
+    src_path: str = ""
     config: OverlayConfig = field(default_factory=OverlayConfig)
+    source: VideoSource | None = None
+
+    def __post_init__(self):
+        # Back-compat: a caller that passed only `src_path` (the legacy single-file API + the
+        # mocked/real tests) gets a single-file source at offset 0 (global == local, unchanged).
+        if self.source is None:
+            if not self.src_path:
+                raise ValueError("ExportSpec needs either a `source` or a `src_path`")
+            self.source = single_file_source(self.src_path)
+        elif not self.src_path:
+            self.src_path = self.source.probe_path
 
     @property
     def duration(self) -> float:
         return max(0.0, self.t1 - self.t0)
+
+    @property
+    def local_t0(self) -> float:
+        """The file-LOCAL seek time (what ffmpeg `-ss` gets): the global t0 shifted into the
+        resolved source's own clock. For a single-file/offset-0 source this equals `t0`."""
+        return self.t0 - self.source.time_offset
 
 
 # --------------------------------------------------------------------------- trim math
@@ -372,9 +526,15 @@ def output_size(src_w: int, src_h: int, cfg: OverlayConfig) -> tuple[int, int]:
 
 def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
                      hwaccel: bool = False) -> list[str]:
-    """The DECODE ffmpeg argv: seek to t0 BEFORE the input (fast keyframe seek) and AGAIN trim by
-    duration, scale to (out_w, out_h), force the constant output `fps`, emit rgb24 rawvideo to
-    stdout. `-an`/`-sn`/`-dn` drop audio/subs/data — we only want the video frames here.
+    """The DECODE ffmpeg argv: seek to the source-LOCAL t0 BEFORE the input (fast keyframe seek)
+    and AGAIN trim by duration, scale to (out_w, out_h), force the constant output `fps`, emit
+    rgb24 rawvideo to stdout. `-an`/`-sn`/`-dn` drop audio/subs/data — we only want the video here.
+
+    The seek uses `spec.local_t0` (the global t0 shifted into the resolved source's own clock), and
+    the input is `spec.source.input_args()` — a single chapter file, or the concat demuxer over the
+    chapters a seam-crossing lap spans. This is what makes a chaptered export read the RIGHT footage
+    (the old code seeked a GLOBAL t0 into the first chapter file, landing past its end for any lap
+    outside chapter 1 -> zero frames).
 
     `hwaccel` adds `-hwaccel videotoolbox` BEFORE the input so the Apple media engine decodes the
     (HEVC/H.264) source instead of the CPU. On GoPro HEVC that moves the decode — a ~6-core software
@@ -386,7 +546,7 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     return [
         FFMPEG, "-nostdin", "-loglevel", "error",
         *hw,
-        "-ss", f"{spec.t0:.6f}", "-i", spec.src_path, "-t", f"{spec.duration:.6f}",
+        "-ss", f"{spec.local_t0:.6f}", *spec.source.input_args(), "-t", f"{spec.duration:.6f}",
         "-vf", f"scale={out_w}:{out_h},fps={fps:.6f}",
         "-an", "-sn", "-dn",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
@@ -421,17 +581,21 @@ def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float) -> list[
 def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
                      encoder: str = SW_H264) -> list[str]:
     """The MUX/ENCODE ffmpeg argv: input 0 is our composited rgb24 rawvideo on stdin (we declare
-    its size + rate); input 1 is the SOURCE again, seek-trimmed to the same [t0, t0+dur) window for
+    its size + rate); input 1 is the SOURCE again, seek-trimmed to the same source-LOCAL window for
     its AUDIO. Map our video + the source audio, encode H.264 with the chosen `encoder`
     (h264_videotoolbox GPU offload or libx264) and AAC. `-shortest` guards against a fractional-frame
-    audio overrun."""
+    audio overrun.
+
+    The audio seek/input MIRROR the decode's: `spec.local_t0` + the same `spec.source.input_args()`
+    (single file or concat list), so the audio is the SAME chapter span as the video and stays in
+    sync across a seam — not a global t0 into the first chapter (the old chaptered-export bug)."""
     return [
         FFMPEG, "-nostdin", "-loglevel", "error", "-y",
         # input 0: raw composited video from our pipe
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{out_w}x{out_h}", "-r", f"{fps:.6f}",
         "-i", "pipe:0",
-        # input 1: source audio, same window
-        "-ss", f"{spec.t0:.6f}", "-i", spec.src_path, "-t", f"{spec.duration:.6f}",
+        # input 1: source audio, same source-LOCAL window (mirrors the decode's input + seek)
+        "-ss", f"{spec.local_t0:.6f}", *spec.source.input_args(), "-t", f"{spec.duration:.6f}",
         "-map", "0:v:0", "-map", "1:a:0?",
         *_video_codec_args(encoder, out_w, out_h, fps),
         "-c:a", "aac", "-b:a", "192k",
@@ -456,6 +620,57 @@ def probe_video_size(src_path: str) -> tuple[int, int, float]:
     num, _, den = out[2].partition("/")
     fps = float(num) / float(den) if den else float(num)
     return w, h, fps
+
+
+def probe_source_duration(source: VideoSource) -> float | None:
+    """The total media duration (seconds) of a resolved `VideoSource` — the single chapter file's
+    duration, or the SUM across a concat span (the concat demuxer plays them as one stream, so its
+    length is the sum). Returns None if ffprobe can't read it (then the window guard is skipped
+    rather than refusing a render over an unreadable duration). Used only by the up-front
+    window-sanity guard, so a failure here is non-fatal."""
+    args = (["-f", "concat", "-safe", "0", "-i", source.concat_list_path]
+            if source.concat_list_path is not None else ["-i", source.probe_path])
+    try:
+        out = subprocess.run(
+            [FFPROBE, "-v", "error", *args,
+             "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        return float(out) if out and out.lower() != "n/a" else None
+    except Exception:  # noqa: BLE001 - a non-fatal best-effort probe: any failure -> skip the guard
+        # ffprobe missing/failed/blank, or (in a mocked render) subprocess is stubbed: don't block a
+        # render on an unreadable duration — the watchdog + NoFramesError still backstop a bad window.
+        return None
+
+
+def guard_validate_window(spec: ExportSpec) -> None:
+    """Refuse an obviously-invalid export window BEFORE launching ffmpeg, so a doomed render can
+    never sit on an empty progress bar for minutes (the chaptered-export symptom: a global t0
+    mapped past the resolved chapter's end -> zero frames).
+
+    Raises ValueError when:
+      * the window is empty (duration <= 0), or
+      * the source-LOCAL seek time is negative (a window before the source's start), or
+      * the source-LOCAL seek time lands at/after the probed source duration (with a small
+        epsilon) — i.e. the seek is past the end of the file(s), which decodes nothing.
+
+    The duration check is skipped silently if ffprobe couldn't read a duration (we don't block a
+    render on an unreadable probe). This is a FAST, message-bearing failure — distinct from the
+    no-progress watchdog, which catches a render that launches but then wedges."""
+    if spec.duration <= 0:
+        raise ValueError(
+            f"export window is empty (t0={spec.t0:.3f}, t1={spec.t1:.3f}); nothing to render")
+    local = spec.local_t0
+    if local < -1e-3:
+        raise ValueError(
+            f"export window starts before the source (local t0={local:.3f}s < 0) — "
+            f"the lap window does not map into the resolved video source")
+    dur = probe_source_duration(spec.source)
+    if dur is not None and local >= dur - 1e-3:
+        raise ValueError(
+            f"export window is past the end of the video source "
+            f"(local seek {local:.1f}s >= source duration {dur:.1f}s) — the lap/window does not "
+            f"map onto any footage in the resolved chapter(s); nothing would be rendered")
 
 
 # --------------------------------------------------------------------------- compositing
@@ -723,6 +938,17 @@ class RenderTimeoutError(RuntimeError):
     error rather than hanging."""
 
 
+class NoFramesError(RuntimeError):
+    """Raised when the decode produced ZERO usable frames — the render "finished" without ever
+    advancing the bar. This is the chaptered-export failure mode: a seek that lands past the
+    resolved source's end emits no frames, so the loop hits an immediate short read and would
+    otherwise report a SILENT 0-frame 'success' (an empty MP4, a dialog that never moved). Treating
+    it as a clear error — rather than success or a 30 s watchdog wait — is the defense-in-depth that
+    makes 'nothing happened for 2 minutes' impossible even if a bad window slips past the up-front
+    guard. The up-front `guard_validate_window` normally catches this first; this is the backstop
+    for a source whose duration ffprobe couldn't read."""
+
+
 class _EncodeError(RuntimeError):
     """Internal: a non-zero ENCODE exit, carrying the encoder name + stderr tail. `run` catches it
     to decide whether to fall back from h264_videotoolbox to libx264; if it escapes (no fallback) it
@@ -788,7 +1014,13 @@ class Renderer:
     def __init__(self, session, spec: ExportSpec):
         self._session = session
         self._spec = spec
-        src_w, src_h, src_fps = probe_video_size(spec.src_path)
+        # Probe the RESOLVED source file (a single chapter, or the first chapter of a concat span)
+        # — never a bare global src_path. Then REFUSE an obviously-doomed window up front: if the
+        # source-local seek time lands at/after the probed source duration, ffmpeg would decode zero
+        # frames and the export would sit on an empty bar (the chaptered-export bug). Failing fast
+        # with a clear message beats launching a render that can only produce nothing.
+        src_w, src_h, src_fps = probe_video_size(spec.source.probe_path)
+        guard_validate_window(spec)
         self._out_w, self._out_h = output_size(src_w, src_h, spec.config)
         self._fps = resolve_fps(spec.config, src_fps)
         self._times = frame_times(spec.t0, spec.t1, self._fps)
@@ -881,10 +1113,20 @@ class Renderer:
                 return True
             raw = stdout.read(self._frame_bytes)
             if not raw or len(raw) < self._frame_bytes:
-                # A short read means EITHER the decoder reached the ceil-estimate tail (normal,
-                # finish cleanly) OR the supervisor killed it on a stall/cancel (abort loudly).
+                # A short read means ONE of three things:
+                #   * the supervisor killed the decoder on a stall/cancel -> abort loudly;
+                #   * the decoder reached the ceil-estimate tail AFTER emitting frames -> finish
+                #     cleanly (the normal end of a render);
+                #   * the decoder emitted ZERO frames (an empty/past-EOF seek) -> that's not a
+                #     success, it's the chaptered-export failure: surface NoFramesError so the user
+                #     gets a clear message instead of an empty clip + a dialog that never moved.
                 self._raise_if_aborted()
+                produced = self._i
                 self._finish()
+                if produced == 0:
+                    raise NoFramesError(
+                        "the video export produced no frames — the source/lap window may be "
+                        "invalid (it does not map onto any footage). Nothing was written.")
                 return True
             vals = overlay_values_at(self._session, float(self._times[self._i]))
             dial = self._painter.advance_and_snapshot(vals)
@@ -948,7 +1190,14 @@ class Renderer:
                             return
                     except Exception:  # noqa: BLE001 - a bad cancel cb must not crash the guard
                         pass
-                if self._watchdog_timeout > 0 and self._started and not self._done:
+                # No-progress watchdog. Armed from render START (here), NOT from the first frame,
+                # and deliberately NOT gated on `self._started`: a render that wedges during SETUP
+                # (ffmpeg launch) or on the FIRST decode read — e.g. a seek that yields zero frames
+                # while ffmpeg slowly demuxes a huge file — would otherwise sit on an empty bar with
+                # nothing to catch it (the chaptered-export symptom). `_last_progress_t` is reset
+                # only when a real frame is written, so "N s elapsed with 0 frames produced" trips
+                # the abort just like a mid-render stall.
+                if self._watchdog_timeout > 0 and not self._done:
                     if time.monotonic() - self._last_progress_t > self._watchdog_timeout:
                         self._abort("timeout")
                         return
@@ -1102,15 +1351,47 @@ class Renderer:
                 drainer.join(timeout=1.0)
 
 
-def render_lap(session, src_path: str, out_path: str, lap_id: int,
-               config: OverlayConfig | None = None,
-               progress=None, cancel=None) -> RenderResult:
-    """Convenience: build the ExportSpec for `lap_id`'s window and render it to completion. Raises
-    ValueError if the lap has no usable window. Used by the headless render path + tests; the app
-    builds the spec itself so it can run the Renderer off the UI thread with a progress dialog."""
+def build_lap_spec(session, out_path: str, lap_id: int,
+                   config: OverlayConfig | None = None,
+                   src_path: str | None = None) -> ExportSpec:
+    """Build the `ExportSpec` for `lap_id`, resolving the VIDEO SOURCE from the session's chapters
+    so the export reads the RIGHT footage regardless of which chapter(s) the lap's GLOBAL window
+    lands in. Raises ValueError if the lap has no usable window.
+
+    Source resolution (the chaptered-export fix), reusing the player's global<->local mapping:
+      * `session.chapters` (a ChapterMap) present -> map the global window to a single chapter file
+        (or a concat of the chapters a seam-crossing lap spans) via `resolve_video_source`;
+      * no ChapterMap -> the plain single file (`src_path`, else `session.video_path`), offset 0.
+
+    The caller OWNS the returned spec's `source` lifecycle and must call `spec.source.cleanup()`
+    when done (it may have written a temp concat-list file). app.py builds the spec this way so it
+    can run the Renderer off the UI thread behind a progress dialog."""
     win = lap_window_for_export(session, lap_id)
     if win is None:
         raise ValueError(f"lap {lap_id} has no usable export window")
-    spec = ExportSpec(src_path=src_path, out_path=out_path, lap_id=lap_id,
-                      t0=win[0], t1=win[1], config=config or OverlayConfig())
-    return Renderer(session, spec).run(progress=progress, cancel=cancel)
+    t0, t1 = win
+    chapter_map = getattr(session, "chapters", None)
+    if chapter_map is not None and getattr(chapter_map, "chapters", None):
+        source = resolve_video_source(chapter_map, t0, t1)
+    else:
+        path = src_path or getattr(session, "video_path", None)
+        if not path:
+            raise ValueError("session has no video source to export")
+        source = single_file_source(path)
+    return ExportSpec(out_path=out_path, lap_id=lap_id, t0=t0, t1=t1,
+                      source=source, config=config or OverlayConfig())
+
+
+def render_lap(session, src_path: str, out_path: str, lap_id: int,
+               config: OverlayConfig | None = None,
+               progress=None, cancel=None) -> RenderResult:
+    """Convenience: build the chapter-aware ExportSpec for `lap_id`'s window and render it to
+    completion. Raises ValueError if the lap has no usable window. Used by the headless render path
+    + tests; the app builds the spec itself (via `build_lap_spec`) so it can run the Renderer off
+    the UI thread with a progress dialog. `src_path` is the fallback single-file source when the
+    session has no ChapterMap."""
+    spec = build_lap_spec(session, out_path, lap_id, config=config, src_path=src_path)
+    try:
+        return Renderer(session, spec).run(progress=progress, cancel=cancel)
+    finally:
+        spec.source.cleanup()

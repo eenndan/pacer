@@ -31,9 +31,12 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
+from studio import chapters  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 
 REAL_MP4 = "/Users/daniil/Desktop/D24/GX010060.MP4"
+# The chaptered D24 recording (GX010060 + GX020060 + GX030060) for the gated real chaptered render.
+REAL_CHAPTER_DIR = os.path.dirname(REAL_MP4)
 
 
 # --------------------------------------------------------------------------- a synthetic Session
@@ -225,6 +228,150 @@ def test_encode_window_matches_decode_window():
     assert enc[enc.index("-t") + 1] == f"{67.5:.6f}"
 
 
+# --------------------------------------------------------- chaptered source resolution (the F9 bug)
+# A chaptered recording lays N files on ONE global media clock — chapter i covers
+# [offset_i, offset_i+dur_i). A lap's window is a GLOBAL window, but ffmpeg `-ss` seeks into a
+# SINGLE file's LOCAL clock. The bug these tests pin: the export used to seek a GLOBAL t0 into the
+# FIRST chapter file, which lands PAST that file's end for any lap outside chapter 1 -> zero frames
+# -> an empty progress bar. The fix resolves the global window to the correct chapter file + local
+# offset (or a concat over a seam), reusing the ChapterMap the video player seeks with.
+def _chapter_map_3x(d=1000.0):
+    """A synthetic 3-chapter map: ch0 [0,d), ch1 [d,2d), ch2 [2d,3d) — the D24 shape in miniature."""
+    return chapters.ChapterMap(["/v/GX010001.MP4", "/v/GX020001.MP4", "/v/GX030001.MP4"],
+                               [d, d, d])
+
+
+def test_resolve_source_non_first_chapter_picks_right_file_and_offset():
+    """THE REGRESSION (the user's lap 36): a window wholly inside the SECOND chapter must resolve to
+    the SECOND chapter file with time_offset = that chapter's global offset, so the file-LOCAL seek
+    is `global - offset` (NOT the global t0 into chapter 1, which decoded zero frames)."""
+    cm = _chapter_map_3x(1000.0)
+    # a window at global 1500..1560 -> chapter 1 (the 2nd file), local 500..560
+    src = ev.resolve_video_source(cm, 1500.0, 1560.0)
+    assert src.probe_path == "/v/GX020001.MP4", "must point at the chapter the window falls in"
+    assert src.time_offset == 1000.0, "offset must be the chapter's global start"
+    assert src.concat_list_path is None, "a single-chapter window is NOT a concat source"
+    assert src.input_args() == ["-i", "/v/GX020001.MP4"]
+    # and a window deep in the THIRD chapter:
+    src3 = ev.resolve_video_source(cm, 2500.0, 2560.0)
+    assert src3.probe_path == "/v/GX030001.MP4" and src3.time_offset == 2000.0
+
+
+def test_spec_local_t0_is_global_minus_offset():
+    """ExportSpec.local_t0 (what ffmpeg `-ss` gets) is the global t0 shifted into the resolved
+    source's own clock — the crux of the fix. A global window of 1500..1560 in chapter 1 (offset
+    1000) seeks the file at LOCAL 500, and the decode/encode argv carry that local seek (not 1500)."""
+    cm = _chapter_map_3x(1000.0)
+    src = ev.resolve_video_source(cm, 1500.0, 1560.0)
+    spec = ev.ExportSpec(out_path="/out.mp4", lap_id=7, t0=1500.0, t1=1560.0, source=src)
+    assert spec.local_t0 == 500.0
+    assert spec.duration == 60.0
+    dec = ev.build_decode_cmd(spec, 640, 360, 30.0)
+    enc = ev.build_encode_cmd(spec, 640, 360, 30.0)
+    # the seek is the LOCAL time, and BOTH commands read the SECOND chapter file
+    assert dec[dec.index("-ss") + 1] == f"{500.0:.6f}"
+    assert enc[enc.index("-ss") + 1] == f"{500.0:.6f}"
+    assert "/v/GX020001.MP4" in dec and "/v/GX020001.MP4" in enc
+    # and crucially NOT the first chapter file with the global t0 (the old bug)
+    assert "/v/GX010001.MP4" not in dec
+    assert f"{1500.0:.6f}" not in dec
+
+
+def test_resolve_source_seam_uses_concat_over_spanned_chapters():
+    """A lap that crosses a chapter SEAM resolves to a CONCAT demuxer over exactly the spanned
+    chapters, with time_offset = the FIRST spanned chapter's offset (so the seek is local within the
+    concatenation). The concat list lists those chapters in order (with per-file inpoint/outpoint so
+    a deep input-seek is reliable) so frames/audio flow across the boundary."""
+    cm = _chapter_map_3x(1000.0)
+    # window 980..1040 spans ch0 (ends at 1000) into ch1 -> concat [ch0, ch1] with an inpoint at
+    # 980 on ch0, so the stream STARTS at the lap; time_offset = t0 (=> local seek 0).
+    src = ev.resolve_video_source(cm, 980.0, 1040.0)
+    try:
+        assert src.concat_list_path is not None, "a seam-crossing window must be a concat source"
+        assert src.time_offset == 980.0, "stream starts at the lap (inpoint) -> offset = t0"
+        ia = src.input_args()
+        assert ia[:5] == ["-f", "concat", "-safe", "0", "-i"] and ia[5] == src.concat_list_path
+        listing = open(src.concat_list_path).read()
+        assert "GX010001.MP4" in listing and "GX020001.MP4" in listing, "lists the 2 spanned chapters"
+        assert "GX030001.MP4" not in listing, "does NOT list the un-spanned 3rd chapter"
+        assert "inpoint 980" in listing, "the first spanned chapter is trimmed to the lap start"
+        # with the stream starting at the lap, the file-local seek is 0 (a fast keyframe seek)
+        spec = ev.ExportSpec(out_path="/out.mp4", lap_id=9, t0=980.0, t1=1040.0, source=src)
+        assert spec.local_t0 == 0.0
+    finally:
+        src.cleanup()
+
+
+def test_resolve_source_window_ending_exactly_on_seam_stays_one_chapter():
+    """A window that ENDS exactly on a chapter boundary (half-open) must NOT pull in the next
+    chapter: the end is nudged back so a lap ending at offset_{k+1} resolves to a single file."""
+    cm = _chapter_map_3x(1000.0)
+    src = ev.resolve_video_source(cm, 940.0, 1000.0)  # ends exactly at the ch0/ch1 seam
+    try:
+        assert src.concat_list_path is None, "ending on the seam should stay within chapter 0"
+        assert src.probe_path == "/v/GX010001.MP4" and src.time_offset == 0.0
+    finally:
+        src.cleanup()
+
+
+def test_build_lap_spec_resolves_chaptered_source_from_session():
+    """app.py builds the export spec via build_lap_spec, which reads `session.chapters` (a
+    ChapterMap) to resolve the source. A StubSession carrying a 3-chapter map + a non-first-chapter
+    lap window must yield a spec whose source is the right chapter file + local offset — the exact
+    path the GUI takes for the user's lap 36."""
+    s = StubSession(lap_id=42, t0=1500.0, dur=60.0, n=120)
+    s.chapters = _chapter_map_3x(1000.0)           # lap 42 window 1500..1560 -> chapter 1
+    spec = ev.build_lap_spec(s, "/out.mp4", 42, config=ev.OverlayConfig(out_height=360))
+    try:
+        assert spec.source.probe_path == "/v/GX020001.MP4"
+        assert spec.source.time_offset == 1000.0
+        assert spec.local_t0 == 500.0
+        assert spec.t0 == 1500.0 and spec.t1 == 1560.0   # the spec keeps the GLOBAL window
+    finally:
+        spec.source.cleanup()
+
+
+def test_build_lap_spec_single_file_session_unchanged():
+    """A plain single-file session (no ChapterMap) still resolves to that one file at offset 0, so
+    the legacy single-file export is byte-for-byte unchanged (global == local)."""
+    s = StubSession(lap_id=2, t0=100.0, dur=60.0, n=120)
+    s.video_path = "/v/hero6.mp4"                   # no .chapters attr set -> single-file path
+    spec = ev.build_lap_spec(s, "/out.mp4", 2)
+    assert spec.source.probe_path == "/v/hero6.mp4"
+    assert spec.source.time_offset == 0.0 and spec.local_t0 == 100.0
+    assert spec.source.concat_list_path is None
+
+
+def test_guard_refuses_window_past_source_end(monkeypatch_restore):
+    """The up-front window guard REFUSES a window whose source-local seek lands at/after the source
+    duration (a window that would decode zero frames) with a clear ValueError — instead of launching
+    a doomed ffmpeg that sits on an empty bar (the exact 2-minute-hang failure mode). Stubs the
+    duration probe so no real ffprobe runs."""
+    ev.probe_source_duration = lambda _s: 1000.0          # type: ignore[assignment]
+    src = ev.single_file_source("/v/GX010001.MP4")
+    spec = ev.ExportSpec(out_path="/out.mp4", lap_id=1, t0=1500.0, t1=1560.0, source=src)
+    try:
+        ev.guard_validate_window(spec)
+        raise AssertionError("expected ValueError for a past-end window")
+    except ValueError as e:
+        assert "past the end" in str(e).lower() or "duration" in str(e).lower()
+    # a window comfortably inside the duration passes
+    ok = ev.ExportSpec(out_path="/out.mp4", lap_id=1, t0=100.0, t1=160.0, source=src)
+    ev.guard_validate_window(ok)   # must not raise
+
+
+def test_guard_refuses_empty_window():
+    """A degenerate (empty) window is refused before any ffmpeg — duration <= 0 means nothing to
+    render."""
+    src = ev.single_file_source("/v/x.MP4")
+    spec = ev.ExportSpec(out_path="/out.mp4", lap_id=1, t0=50.0, t1=50.0, source=src)
+    try:
+        ev.guard_validate_window(spec)
+        raise AssertionError("expected ValueError for an empty window")
+    except ValueError as e:
+        assert "empty" in str(e).lower()
+
+
 # ----------------------------------------------------------- encoder selection / GPU offload (F9)
 def test_encode_cmd_videotoolbox_uses_hw_codec_and_bitrate():
     """With the VideoToolbox encoder the encode argv carries `h264_videotoolbox` + a bitrate
@@ -363,6 +510,9 @@ def _patch_pipeline(monkeypatch_targets, frame_bytes, nframes):
 
     ev.subprocess.Popen = fake_popen                      # type: ignore[assignment]
     ev.probe_video_size = lambda _p: (3840, 2160, 60.0)   # type: ignore[assignment]
+    # The up-front window guard ffprobes the source DURATION; stub it (a generous duration) so the
+    # mocked render never shells out to real ffprobe and the guard passes for these in-window specs.
+    ev.probe_source_duration = lambda _s: 1.0e9           # type: ignore[assignment]
     # Never shell out to real ffmpeg for the encoder probe in a mocked render — keep these tests
     # ffmpeg-free + deterministic regardless of which encoder the spec asked for.
     ev.resolve_encoder = lambda _choice: ev.SW_H264       # type: ignore[assignment]
@@ -452,6 +602,65 @@ def test_real_render_smoke_if_ffmpeg_and_media():
     assert h == 360
     os.remove(out)
     print("real_render_smoke OK")
+
+
+def test_real_chaptered_non_first_chapter_render_if_media():
+    """THE BUG, end-to-end — GATED on ffmpeg + the chaptered D24 recording (skipped, not failed,
+    without them). Loads the FULL chaptered recording (GX010060 + siblings), finds a lap whose
+    GLOBAL window falls OUTSIDE the first chapter, and renders a SHORT window of it.
+
+    This is the exact case the old code broke: it seeked the global t0 into the FIRST chapter file,
+    which is past that file's end for a non-first-chapter lap -> zero frames -> an empty progress
+    bar. The fix resolves the window to the right chapter file at the file-LOCAL offset, so this
+    must produce REAL frames. We ALSO assert the resolved source is NOT the first chapter file +
+    that its local seek is the global-minus-offset (the precise gap)."""
+    if not ev.ffmpeg_available() or not os.path.exists(REAL_MP4):
+        print("skip real_chaptered_non_first_chapter_render (no ffmpeg or media)")
+        return
+    sibs = chapters.discover_siblings(REAL_MP4)
+    if len(sibs) < 2:
+        print("skip real_chaptered_non_first_chapter_render (recording is single-chapter)")
+        return
+    from studio.session import Session
+    s = Session.load(sibs)
+    cm = s.chapters
+    assert cm is not None and cm.is_multi
+    first_ch_end = cm.chapters[0].offset + cm.chapters[0].duration
+    # pick a valid lap whose window lies wholly inside a LATER chapter (not the first, not a seam)
+    target = None
+    for lap in s.valid_lap_ids():
+        win = s.lap_window(lap)
+        if win is None:
+            continue
+        t0, t1 = win
+        i0 = cm.chapter_at(t0)
+        i1 = cm.chapter_at(max(t0, t1 - 1e-6))
+        if i0 == i1 and i0 >= 1 and t0 > first_ch_end:
+            target = (lap, t0, t1, i0)
+            break
+    assert target is not None, "expected at least one lap inside a non-first chapter"
+    lap, t0, t1, ci = target
+    # resolve the source and assert the precise gap: right chapter file + file-local seek offset
+    src = ev.resolve_video_source(cm, t0, t1)
+    assert src.probe_path == cm.chapters[ci].path, "must point at the chapter the lap falls in"
+    assert src.probe_path != cm.chapters[0].path, "must NOT be the first chapter file (the old bug)"
+    assert abs(src.time_offset - cm.chapters[ci].offset) < 1e-6
+    out = os.path.join(os.environ.get("TMPDIR", "/tmp"), "f9_chaptered_smoke.mp4")
+    spec = ev.ExportSpec(out_path=out, lap_id=lap, t0=t0, t1=min(t1, t0 + 2.0),
+                         source=src, config=ev.OverlayConfig(out_height=360))
+    # the file-local seek lands inside the chapter (well before its end), not past EOF
+    assert spec.local_t0 < cm.chapters[ci].duration
+    try:
+        res = ev.Renderer(s, spec).run()
+        assert res.frames > 30, f"a non-first-chapter lap must render REAL frames, got {res.frames}"
+        assert os.path.getsize(out) > 0
+        w, h, _ = ev.probe_video_size(out)
+        assert h == 360
+    finally:
+        src.cleanup()
+        if os.path.exists(out):
+            os.remove(out)
+    print(f"real_chaptered_non_first_chapter_render OK (lap {lap} in chapter {ci}, {res.frames} frames)")
 
 
 # ------------------------------------------------ stderr-drain unit (no ffmpeg, runs everywhere)
@@ -849,8 +1058,8 @@ class _Restore:
     """Save/restore the module globals the pipeline mocks clobber, so tests don't bleed into each
     other (no pytest here — a tiny manual fixture run around each mocked test)."""
 
-    _SAVED = ("subprocess", "probe_video_size", "resolve_encoder", "videotoolbox_encoder_available",
-              "videotoolbox_usable", "videotoolbox_decode_available")
+    _SAVED = ("subprocess", "probe_video_size", "probe_source_duration", "resolve_encoder",
+              "videotoolbox_encoder_available", "videotoolbox_usable", "videotoolbox_decode_available")
 
     def __enter__(self):
         # snapshot subprocess.Popen separately (it lives on the subprocess module, not ev)
