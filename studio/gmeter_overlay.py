@@ -58,7 +58,16 @@ import math
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF, QRadialGradient
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetricsF,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QRadialGradient,
+)
 from PySide6.QtWidgets import QWidget
 
 from .theme import C
@@ -146,13 +155,79 @@ def dial_to_screen(cx, cy, r, fx, fy):
     return cx + dx, cy + dy
 
 
-def paint_dial(p: QPainter, w: float, h: float, st: DialState) -> None:
+# --------------------------------------------------------------------------- export palette
+# Vivid, opaque colours for the EXPORT render of the dial (burned over BRIGHT outdoor footage),
+# kept separate from the dim-on-dark live theme tokens (class C). Mirrors studio.export_video.EXPORT
+# so the burned g-meter matches the rest of the burned HUD; defined locally so this shared,
+# pacer-free module needs no import from the exporter. The LIVE overlay never uses these — it keeps
+# the C.* tokens — so its on-screen look is byte-identical to before.
+_EX_TEXT = "#FFFFFF"
+_EX_HALO = "#0A0C10"          # dark outline/shadow under every bright element
+_EX_ACCENT = "#FFB21E"        # envelope amber (brighter + saturated vs C.accent)
+_EX_ACCENT_HI = "#FFD34D"     # dot glow highlight
+_EX_GRID = "#FFFFFF"          # rings / crosshair (white at moderate alpha)
+
+
+def _draw_text_outlined(p: QPainter, rect: QRectF, flags, text: str, font: QFont,
+                        colour: str, halo: float = 2.2) -> None:
+    """Draw `text` aligned within `rect` (Qt alignment flags) with a dark OUTLINE under a bright
+    fill — the EXPORT legibility treatment so a burned label reads over bright sky AND dark tarmac.
+    Used only by the export branch of `paint_dial`; the live widget draws plain text as before."""
+    fm = QFontMetricsF(font)
+    w = fm.horizontalAdvance(text)
+    if flags & Qt.AlignHCenter:
+        x = rect.x() + (rect.width() - w) / 2.0
+    elif flags & Qt.AlignRight:
+        x = rect.right() - w
+    else:
+        x = rect.x()
+    if flags & Qt.AlignVCenter:
+        y = rect.y() + (rect.height() + fm.ascent() - fm.descent()) / 2.0
+    else:
+        y = rect.y() + fm.ascent()
+    path = QPainterPath()
+    path.addText(QPointF(x, y), font, text)
+    p.save()
+    pen = QPen(_c(_EX_HALO, 235), halo * 2.0)
+    pen.setJoinStyle(Qt.RoundJoin)
+    pen.setCapStyle(Qt.RoundCap)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    p.drawPath(path)
+    p.setPen(Qt.NoPen)
+    p.setBrush(_c(colour))
+    p.drawPath(path)
+    p.restore()
+
+
+def _export_dial_geom(w: float, h: float):
+    """Dial centre + radius for the EXPORT render. Like `dial_geom` but reserves a LARGER margin so
+    the (much bigger) cardinal peak numbers sit clearly outside the ring, and drops the live widget's
+    title strip so the dial fills more of the box (the export has no 'G meter' caption-bar look).
+    Separate from `dial_geom` so the LIVE widget's geometry — and its tests — are unchanged."""
+    margin = 0.20 * min(w, h)          # room for the larger outlined cardinal numbers
+    r = max((min(w, h) - 2 * margin) / 2.0, 8.0)
+    return w / 2.0, h / 2.0, r
+
+
+def paint_dial(p: QPainter, w: float, h: float, st: DialState,
+               export: bool = False, scale_k: float = 1.0) -> None:
     """Paint the g-meter dial (backdrop, rings, max-G envelope, cardinal peaks, live dot, source
     tag) into the painter's current coordinate system, sized to a (w, h) box at the origin. This
     is the EXTRACTED body of the live overlay's old paintEvent — the single source of the dial's
     look, used by both `GMeterOverlay.paintEvent` (snapshotting `self`) and the offline video
-    exporter (snapshotting a headless overlay). No widget state is touched here."""
+    exporter (snapshotting a headless overlay). No widget state is touched here.
+
+    `export=False` (the default — what the LIVE widget passes) renders EXACTLY as before, so the
+    on-screen overlay is byte-identical. `export=True` renders the EXPORT variant for burning over
+    bright footage: NO backdrop box, white high-contrast rings/crosshair, a brighter envelope, a
+    bigger glowing dot, and SUBSTANTIALLY larger outlined cardinal-g numbers (the roadmap's
+    "bigger g-meter numbers, no box, more vivid"). `scale_k` scales the export's line widths/dot/
+    glyphs so the dial looks right at any `out_height` (1.0 ≈ a ~280 px dial at 1080p)."""
     p.setRenderHint(QPainter.Antialiasing, True)
+    if export:
+        _paint_dial_export(p, w, h, st, scale_k)
+        return
     cx, cy, r = dial_geom(w, h)
 
     # --- faint, subtle backdrop (more see-through than a solid panel) ---
@@ -227,6 +302,85 @@ def paint_dial(p: QPainter, w: float, h: float, st: DialState) -> None:
     p.setPen(QPen(_c(C.text_muted, 150)))
     p.setFont(_font(6.0))
     p.drawText(QRectF(w - 44, h - 13, 40, 11), Qt.AlignRight, st.source.upper())
+
+
+def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float) -> None:
+    """The EXPORT g-dial: no backdrop box, vivid white high-contrast rings, a brighter amber grip
+    envelope, BIG outlined cardinal-g numbers, and a bigger glowing felt-force dot — all carrying a
+    dark halo so they read over bright sky AND dark tarmac. Layout uses `_export_dial_geom` (bigger
+    number margin, no title strip). `k` scales strokes/glyphs with the output height."""
+    k = max(0.5, float(k))
+    cx, cy, r = _export_dial_geom(w, h)
+
+    # --- rings (white, high-contrast) with a dark halo so they read on bright sky too ---
+    p.setBrush(Qt.NoBrush)
+    for gval in _RINGS:
+        rr = r * (gval / _FULL_SCALE_G)
+        p.setPen(QPen(_c(_EX_HALO, 150), 3.0 * k))
+        p.drawEllipse(QPointF(cx, cy), rr, rr)
+        p.setPen(QPen(_c(_EX_GRID, 150), 1.4 * k))   # inner grid circles
+        p.drawEllipse(QPointF(cx, cy), rr, rr)
+    # outer boundary ring — brightest
+    p.setPen(QPen(_c(_EX_HALO, 170), 4.2 * k))
+    p.drawEllipse(QPointF(cx, cy), r, r)
+    p.setPen(QPen(_c(_EX_GRID, 235), 2.2 * k))
+    p.drawEllipse(QPointF(cx, cy), r, r)
+    # crosshair guides (haloed white, subtle)
+    p.setPen(QPen(_c(_EX_HALO, 130), 2.6 * k))
+    p.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
+    p.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
+    p.setPen(QPen(_c(_EX_GRID, 130), 1.1 * k))
+    p.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
+    p.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
+
+    # --- filled max-G envelope (grip used this lap): brighter amber, haloed outline ---
+    if len(st.hull_pts) >= 3:
+        hull = _convex_hull(st.hull_pts)
+        if len(hull) >= 3:
+            poly = QPolygonF([QPointF(*dial_to_screen(cx, cy, r, hx, hy))
+                              for (hx, hy) in hull])
+            path = QPainterPath()
+            path.addPolygon(poly)
+            path.closeSubpath()
+            p.setPen(QPen(_c(_EX_HALO, 150), 3.4 * k))   # dark halo under the envelope edge
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path)
+            p.setPen(QPen(_c(_EX_ACCENT, 235), 2.0 * k))
+            p.setBrush(_c(_EX_ACCENT, 70))
+            p.drawPath(path)
+
+    # --- BIG cardinal peak-g numbers (robust max felt-g per direction), outlined ---
+    fnt = _font(max(8.0, 13.0 * k), bold=True)
+    off = 16 * k
+    bw, bh = 56 * k, 22 * k
+    _draw_text_outlined(p, QRectF(cx - bw / 2, cy - r - off - bh, bw, bh),
+                        Qt.AlignCenter, f"{st.peak_fwd:.1f}", fnt, _EX_TEXT, halo=2.2 * k)
+    _draw_text_outlined(p, QRectF(cx - bw / 2, cy + r + off, bw, bh),
+                        Qt.AlignCenter, f"{st.peak_back:.1f}", fnt, _EX_TEXT, halo=2.2 * k)
+    _draw_text_outlined(p, QRectF(cx - r - off - bw, cy - bh / 2, bw, bh),
+                        Qt.AlignRight | Qt.AlignVCenter, f"{st.peak_left:.1f}", fnt, _EX_TEXT,
+                        halo=2.2 * k)
+    _draw_text_outlined(p, QRectF(cx + r + off, cy - bh / 2, bw, bh),
+                        Qt.AlignLeft | Qt.AlignVCenter, f"{st.peak_right:.1f}", fnt, _EX_TEXT,
+                        halo=2.2 * k)
+
+    # --- the live felt-force dot: a bigger soft glow + a dark-haloed bright core ---
+    if st.have:
+        dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
+        gr = 13.0 * k
+        grad = QRadialGradient(QPointF(dx, dy), gr)
+        grad.setColorAt(0.0, _c(_EX_ACCENT_HI, 235))
+        grad.setColorAt(0.6, _c(_EX_ACCENT, 150))
+        grad.setColorAt(1.0, _c(_EX_ACCENT, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(grad)
+        p.drawEllipse(QPointF(dx, dy), gr, gr)
+        p.setPen(QPen(_c(_EX_HALO, 220), 1.8 * k))   # dark ring so the dot reads on bright sky
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QPointF(dx, dy), 4.6 * k, 4.6 * k)
+        p.setPen(Qt.NoPen)
+        p.setBrush(_c(_EX_TEXT, 250))
+        p.drawEllipse(QPointF(dx, dy), 4.0 * k, 4.0 * k)
 
 
 class GMeterOverlay(QWidget):

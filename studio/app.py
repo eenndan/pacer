@@ -17,7 +17,11 @@ from PySide6.QtCore import QBuffer, QIODevice, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -788,8 +792,50 @@ class StudioWindow(QMainWindow):
     # ------------------------------------------------- video-overlay export (F9)
     # File ▸ "Export overlay video…": render the selected lap with the overlays burned onto the
     # footage. The renderer (studio/export_video.py) is pacer-free and event-loop-free; this
-    # cluster owns the Qt side only — the save dialog, a QThread so the render runs OFF the UI
-    # thread, and a cancellable QProgressDialog. Nothing is written without the save dialog.
+    # cluster owns the Qt side only — the quality picker, the save dialog, a QThread so the render
+    # runs OFF the UI thread, and a cancellable QProgressDialog. Nothing is written without the save
+    # dialog.
+
+    # Export-quality picker options. RESOLUTION maps to OverlayConfig.out_height (output_size never
+    # upscales past the source, and clamps "Source" — a huge sentinel — back to the source height);
+    # QUALITY maps to OverlayConfig.quality (the encoder bitrate/CRF knob). "Source" resolution +
+    # "High" quality is the default (== the prior fixed behaviour at 1080p, but source-res aware).
+    _EXPORT_RES_OPTIONS = [
+        ("720p", 720), ("1080p", 1080), ("1440p", 1440), ("Source (no downscale)", 99999),
+    ]
+    _EXPORT_QUALITY_OPTIONS = [("High", "high"), ("Standard", "standard")]
+
+    def _ask_export_options(self, lap: int):
+        """A small modal picker (resolution + quality) shown before the save dialog; returns an
+        `export_video.OverlayConfig`, or None if the user cancels. The last choice is remembered on
+        the window (`self._export_res_idx` / `self._export_quality_idx`) so a repeat export defaults
+        to it. Two combos in a QDialog — lighter than a custom widget, and the only export-specific
+        UI this feature adds."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Export overlay video — lap {lap}")
+        form = QFormLayout(dlg)
+        res_combo = QComboBox(dlg)
+        for label, _h in self._EXPORT_RES_OPTIONS:
+            res_combo.addItem(label)
+        res_combo.setCurrentIndex(getattr(self, "_export_res_idx", 1))   # default 1080p
+        q_combo = QComboBox(dlg)
+        for label, _q in self._EXPORT_QUALITY_OPTIONS:
+            q_combo.addItem(label)
+        q_combo.setCurrentIndex(getattr(self, "_export_quality_idx", 0))  # default High
+        form.addRow("Resolution", res_combo)
+        form.addRow("Quality", q_combo)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dlg)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        ri, qi = res_combo.currentIndex(), q_combo.currentIndex()
+        self._export_res_idx, self._export_quality_idx = ri, qi   # remember for next time
+        out_height = self._EXPORT_RES_OPTIONS[ri][1]
+        quality = self._EXPORT_QUALITY_OPTIONS[qi][1]
+        return export_video.OverlayConfig(out_height=out_height, quality=quality)
+
     def _export_overlay_video(self):
         if not hasattr(self, "session"):
             return
@@ -808,6 +854,10 @@ class StudioWindow(QMainWindow):
         if win is None:
             self.statusBar().showMessage("no usable lap to export video for")
             return
+        # Pick resolution + quality FIRST (so a cancel here writes nothing), then the save path.
+        config = self._ask_export_options(lap)
+        if config is None:
+            return
         out = self._export_save_path(f"Export overlay video — lap {lap}",
                                      f"_lap{lap}_overlay.mp4", "MP4 video (*.mp4)")
         if not out:
@@ -817,9 +867,10 @@ class StudioWindow(QMainWindow):
         # lap spans) + the file-LOCAL seek, the SAME global<->local mapping the player seeks with. A
         # bad/empty/past-end window is refused here with a clear message rather than launching a
         # doomed ffmpeg (the chaptered-export 'empty bar' fix). The worker owns the spec's source
-        # lifecycle (it cleans up any temp concat list when the render ends).
+        # lifecycle (it cleans up any temp concat list when the render ends). The picked
+        # `config` carries the chosen out_height + quality.
         try:
-            spec = export_video.build_lap_spec(self.session, out, lap)
+            spec = export_video.build_lap_spec(self.session, out, lap, config=config)
         except ValueError as exc:
             QMessageBox.warning(self, "Export overlay video",
                                 f"This lap can't be exported:\n{exc}")

@@ -51,11 +51,20 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPolygonF
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetricsF,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QRadialGradient,
+)
 
 from . import gmeter_overlay
 from ._signal import fmt_time
-from .theme import C
 
 # --------------------------------------------------------------------------- ffmpeg discovery
 # Resolved lazily so importing this module never requires ffmpeg (the unit tests mock the
@@ -91,11 +100,34 @@ SW_H264 = "libx264"
 _BITS_PER_PIXEL = 0.10
 _MIN_VT_BITRATE = 2_000_000
 
+# Selectable QUALITY presets (the export-quality picker). A quality level maps to BOTH encoder
+# knobs so the choice has the same effect regardless of which encoder resolves: a bits-per-pixel
+# target for the bitrate-driven VideoToolbox encoder, and a matching CRF for the libx264 fallback.
+# "high" keeps the original visually-lossless defaults (0.10 bpp / CRF 20); "standard" is a leaner,
+# smaller-file setting (~0.06 bpp / CRF 23) that still looks clean for a shareable overlay clip.
+# Lower CRF = higher quality; higher bpp = higher quality (so high > standard on both).
+_QUALITY_PRESETS = {
+    "standard": {"bpp": 0.060, "crf": 23},
+    "high": {"bpp": _BITS_PER_PIXEL, "crf": 20},
+}
+_DEFAULT_QUALITY = "high"
 
-def vt_target_bitrate(out_w: int, out_h: int, fps: float) -> int:
-    """A sensible VideoToolbox target bitrate (bits/s) for an out_w x out_h @ fps stream — bits per
-    pixel per frame, floored. Used only for the hardware encoder (libx264 stays CRF-driven)."""
-    bits = int(out_w * out_h * max(fps, 1.0) * _BITS_PER_PIXEL)
+
+def quality_params(quality: str | None) -> tuple[float, int]:
+    """(bits-per-pixel, crf) for a quality level ("standard"/"high"); unknown -> the "high" default.
+    The ONE place the quality picker's level becomes concrete encoder numbers, so both encoder
+    paths (VideoToolbox bitrate / libx264 CRF) and the tests reason about it in one spot."""
+    preset = _QUALITY_PRESETS.get((quality or _DEFAULT_QUALITY).lower(),
+                                  _QUALITY_PRESETS[_DEFAULT_QUALITY])
+    return preset["bpp"], preset["crf"]
+
+
+def vt_target_bitrate(out_w: int, out_h: int, fps: float, bpp: float = _BITS_PER_PIXEL) -> int:
+    """A sensible VideoToolbox target bitrate (bits/s) for an out_w x out_h @ fps stream — `bpp`
+    bits per pixel per frame, floored. `bpp` comes from the chosen quality level (quality_params);
+    the default preserves the original 0.10-bpp 'high' bitrate. Used only for the hardware encoder
+    (libx264 is CRF-driven — see quality_params for its matching CRF)."""
+    bits = int(out_w * out_h * max(fps, 1.0) * bpp)
     return max(bits, _MIN_VT_BITRATE)
 
 
@@ -209,6 +241,12 @@ class OverlayConfig:
     the composition scales with `out_height`. The defaults reproduce the app's corner placements
     (g-meter top-right, readout bottom-left, map inset bottom-right, lap strip top-left)."""
     out_height: int = 1080            # controlling output dimension (width follows source aspect)
+    # Output QUALITY level for the encode — the export-quality picker's bitrate knob. "high" (the
+    # default) keeps the original visually-lossless target (0.10 bpp VideoToolbox / CRF 20 libx264);
+    # "standard" is a leaner, smaller-file setting (~0.06 bpp / CRF 23) that still looks clean for a
+    # shareable clip. Resolved to concrete encoder numbers by `quality_params`; affects BOTH the
+    # VideoToolbox bitrate and the libx264 CRF so the choice means the same on either encoder.
+    quality: str = "high"
     fps: float | None = None          # explicit output fps; None = source fps, then fps_cap applies
     # Cap the output fps. A telemetry overlay reads identically at 30 fps as at 59.94 — the dial,
     # Δ box and map move smoothly — but 30 fps HALVES the frame count, so it ~halves every per-frame
@@ -553,19 +591,22 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     ]
 
 
-def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float) -> list[str]:
-    """The `-c:v ...` portion of the encode argv for the resolved `encoder`:
+def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float,
+                      quality: str = _DEFAULT_QUALITY) -> list[str]:
+    """The `-c:v ...` portion of the encode argv for the resolved `encoder`, at the chosen `quality`
+    level (the export-quality picker's bitrate knob; quality_params -> (bpp, crf)):
 
       * h264_videotoolbox — the Apple media-engine (GPU) encoder. Quality is bitrate-driven, so we
-        pass a generous target (vt_target_bitrate) + a matching cap; `-allow_sw 1` lets ffmpeg fall
-        back to VideoToolbox's own software path rather than erroring if a HW session can't open;
-        `-realtime 0` favours quality over latency (this is an offline export, not a live stream).
-        `-color_range tv` silences the "range not set" note and pins MPEG/limited range.
-      * libx264 — the software fallback: veryfast/CRF 20, the original visually-lossless setting.
+        pass the quality level's bpp target (vt_target_bitrate) + a matching cap; `-allow_sw 1` lets
+        ffmpeg fall back to VideoToolbox's own software path rather than erroring if a HW session
+        can't open; `-realtime 0` favours quality over latency (this is an offline export, not a
+        live stream). `-color_range tv` silences the "range not set" note and pins MPEG/limited.
+      * libx264 — the software fallback: veryfast + the quality level's CRF (20 high / 23 standard).
 
     Both end yuv420p + faststart so the MP4 is broadly playable and streams (moov atom up front)."""
+    bpp, crf = quality_params(quality)
     if encoder == VT_H264:
-        br = vt_target_bitrate(out_w, out_h, fps)
+        br = vt_target_bitrate(out_w, out_h, fps, bpp)
         return [
             "-c:v", VT_H264,
             "-b:v", str(br), "-maxrate", str(br), "-bufsize", str(br * 2),
@@ -573,7 +614,7 @@ def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float) -> list[
             "-pix_fmt", "yuv420p", "-color_range", "tv", "-movflags", "+faststart",
         ]
     return [
-        "-c:v", SW_H264, "-preset", "veryfast", "-crf", "20",
+        "-c:v", SW_H264, "-preset", "veryfast", "-crf", str(crf),
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
     ]
 
@@ -597,7 +638,7 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
         # input 1: source audio, same source-LOCAL window (mirrors the decode's input + seek)
         "-ss", f"{spec.local_t0:.6f}", *spec.source.input_args(), "-t", f"{spec.duration:.6f}",
         "-map", "0:v:0", "-map", "1:a:0?",
-        *_video_codec_args(encoder, out_w, out_h, fps),
+        *_video_codec_args(encoder, out_w, out_h, fps, spec.config.quality),
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         spec.out_path,
@@ -688,36 +729,174 @@ def _font(px: float, bold: bool = False) -> QFont:
     return f
 
 
+# --------------------------------------------------------------------------- export palette
+# The live app theme (studio/theme.C) is tuned to read on a DARK ~#15-#21 surface: its text is a
+# dim off-white (#DDE1E8 / #9AA1AD), its accent a mid amber (#F5A623), its lines low-alpha. Burned
+# over BRIGHT outdoor kart footage (sky, sunlit tarmac) those wash out — the exact complaint that
+# drove this restyle. So the EXPORT uses its OWN palette: pure/near-pure whites for text, FULLY
+# saturated semantic colours (a punchier green-ahead / red-behind than the theme's muted pair), and
+# a brighter amber accent — every value below is OPAQUE and high-contrast. It does NOT touch the
+# live app theme (the on-screen overlays keep theme.C); only the offline composite reads EXPORT.
+#
+# Legibility over a frame that swings from bright sky to dark tarmac comes from a per-element
+# OUTLINE/SHADOW (see `_draw_text` / `_stroke_polyline`): a dark halo under every bright glyph and
+# line makes it read on a light background, and the bright fill makes it read on a dark one. That
+# halo — not a translucent box — is what lets the g-meter and map drop their grey backdrops.
+class EXPORT:
+    """Vivid, opaque, export-tuned colours for burning overlays onto BRIGHT footage. Separate from
+    the live theme tokens (which are dim-on-dark). Hex strings; use these in the composite only."""
+
+    # text / structure
+    text = "#FFFFFF"            # primary readout text — pure white (max contrast over footage)
+    text_dim = "#E6EAF0"        # secondary text (units / labels) — near-white, still bright
+    halo = "#0A0C10"            # the dark outline/shadow colour under every bright element
+    # accent (amber) — brighter + fully saturated vs the theme's #F5A623
+    accent = "#FFB21E"          # primary accent: lap line, g-dial envelope, lap-strip fill
+    accent_bright = "#FFD34D"   # highlight (g dot glow, marker ring)
+    # semantics — PUNCHY, fully-saturated ahead/behind (theme's #5DD6A0/#E8746B are too soft here)
+    ahead = "#26E07A"           # ahead / gaining — vivid green
+    behind = "#FF4D4D"          # behind / losing — vivid red
+    neutral = "#FFFFFF"         # dead-even Δ — white (no semantic colour)
+    marker = "#FF5A36"          # map current-position marker — hot coral (pops on green/grey)
+    grid = "#FFFFFF"            # g-dial rings / crosshair — white at moderate alpha (set per use)
+
+
+def export_delta_colour(d: float | None) -> str:
+    """The export's three-way Δ colour — the SAME ahead/behind/neutral *rule* as theme.delta_colour
+    (with the shared dead band) but mapped to the EXPORT palette's punchier, fully-saturated green/
+    red so the cue reads vividly over footage. Always returns a colour (neutral white for no/even
+    Δ) since the burned text is never the widget's neutral foreground."""
+    from .theme import DELTA_EVEN_EPS_S
+    if d is None or abs(d) <= DELTA_EVEN_EPS_S:
+        return EXPORT.neutral
+    return EXPORT.ahead if d < 0 else EXPORT.behind
+
+
+def _draw_text(p: QPainter, pos, text: str, font: QFont, colour: str,
+               *, halo: float = 2.2, halo_alpha: int = 235,
+               shadow: tuple[float, float] | None = (1.5, 1.5)) -> None:
+    """Draw `text` at baseline `pos` (a QPointF) with a dark OUTLINE (and an optional offset drop
+    SHADOW) under a bright fill, so it reads over BOTH a bright and a dark background — the single
+    biggest legibility win for a burned overlay (the roadmap's headline ask).
+
+    Implementation: build the glyph outline as a QPainterPath and stroke it with a wide dark pen
+    (the halo) before filling it with `colour`. Stroking the path (vs re-drawing the text offset in
+    N directions) gives a clean even outline at any size and is cheap (a handful of glyphs/frame).
+    `halo` is the outline half-width in px; `shadow`, if given, lays a soft dark copy down-right
+    first so the text also lifts off a busy mid-tone background."""
+    path = QPainterPath()
+    path.addText(pos, font, text)
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing, True)
+    if shadow is not None:
+        sp = QPainterPath()
+        sp.addText(QPointF(pos.x() + shadow[0], pos.y() + shadow[1]), font, text)
+        p.setPen(Qt.NoPen)
+        p.setBrush(_c(EXPORT.halo, 150))
+        p.drawPath(sp)
+    if halo > 0:
+        pen = QPen(_c(EXPORT.halo, halo_alpha), halo * 2.0)
+        pen.setJoinStyle(Qt.RoundJoin)
+        pen.setCapStyle(Qt.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(path)
+    p.setPen(Qt.NoPen)
+    p.setBrush(_c(colour))
+    p.drawPath(path)
+    p.restore()
+
+
+def _text_at(p: QPainter, rect: QRectF, flags, text: str, font: QFont, colour: str,
+             **kw) -> float:
+    """Lay out `text` within `rect` honouring `flags` (Qt alignment) and draw it OUTLINED via
+    `_draw_text`. Returns the advance width of the text (so callers can place a following run).
+    A thin wrapper that turns the boundingRect/alignment math into the baseline point `_draw_text`
+    wants, so the rest of the code reads like ordinary `drawText` calls but gets the halo."""
+    fm = QFontMetricsF(font)
+    br = fm.boundingRect(text)
+    w = fm.horizontalAdvance(text)
+    if flags & Qt.AlignHCenter:
+        x = rect.x() + (rect.width() - w) / 2.0
+    elif flags & Qt.AlignRight:
+        x = rect.right() - w
+    else:
+        x = rect.x()
+    if flags & Qt.AlignVCenter:
+        y = rect.y() + (rect.height() + fm.ascent() - fm.descent()) / 2.0
+    elif flags & Qt.AlignBottom:
+        y = rect.bottom() - fm.descent()
+    else:
+        y = rect.y() + fm.ascent()
+    # boundingRect can carry a small left bearing; nudge so left-aligned text starts at rect.x().
+    _draw_text(p, QPointF(x - br.x() if (flags & Qt.AlignLeft) else x, y), text, font, colour, **kw)
+    return w
+
+
+def _stroke_polyline(p: QPainter, poly: QPolygonF, colour: str, width: float,
+                     *, halo: float = 2.0, halo_alpha: int = 200) -> None:
+    """Draw a polyline as a bright `colour` stroke over a wider dark HALO, so the racing line reads
+    over both bright and dark ground without a backing box (the map-inset restyle). Two passes: the
+    dark halo (width + 2*halo) first, then the bright line."""
+    if poly.size() < 2:
+        return
+    p.setBrush(Qt.NoBrush)
+    if halo > 0:
+        hp = QPen(_c(EXPORT.halo, halo_alpha), width + 2 * halo)
+        hp.setJoinStyle(Qt.RoundJoin)
+        hp.setCapStyle(Qt.RoundCap)
+        p.setPen(hp)
+        p.drawPolyline(poly)
+    lp = QPen(_c(colour), width)
+    lp.setJoinStyle(Qt.RoundJoin)
+    lp.setCapStyle(Qt.RoundCap)
+    p.setPen(lp)
+    p.drawPolyline(poly)
+
+
 class _MapInset:
-    """Precomputed track-map inset: the whole-session trace + the selected lap's line projected
-    into a fixed inset box ONCE (the track shape doesn't change) and BAKED into a cached RGBA layer
-    so each frame only has to blit that layer + place the moving marker. Mirrors MapView's look at a
-    glance — faint full trace + the selected lap's line + a coral marker dot.
+    """Precomputed track-map inset for the EXPORT: the EXPORTED LAP's racing line projected into a
+    fixed inset box ONCE and BAKED into a cached RGBA layer, so each frame only blits that layer +
+    places a glowing moving marker (with a short comet tail). No backdrop box and NO full-session
+    trace — for a single exported lap the lap line IS the track shape, and a vivid haloed line +
+    glow marker reads over bright footage without a grey panel (the restyle's map asks).
 
-    Why the cache matters: the full-session trace is tens of thousands of points; antialiased
-    `drawPolyline` over it costs ~20 ms PER call, and it (plus the lap line) was being re-rasterized
-    on EVERY exported frame — ~40 ms/frame, which alone dominated the render (a 4 K-source 1080p lap
-    export ran at ~18 fps, several minutes for one lap). The static art never changes between frames;
-    baking it once and blitting (a sub-millisecond copy) drops the map cost to ~nothing and makes the
-    render decode-bound instead. The marker dot is the only per-frame draw left."""
+    Why the cache still matters: the lap line is a few thousand antialiased points; re-rasterizing
+    it every frame cost tens of ms/frame and dominated the render. The line never changes between
+    frames, so it is baked once here and blitted (a sub-ms copy); only the marker + its short tail
+    are drawn per frame. (Same caching as before — only WHAT is baked changed.)
 
-    def __init__(self, session, box: QRectF, lap_id: int):
+    Degenerate-lap fallback: if the lap's own trace is unusable (too few points), the inset falls
+    back to the full-session trace line (still vivid, still no box) so it is never empty."""
+
+    def __init__(self, session, box: QRectF, lap_id: int, scale_k: float = 1.0):
         self._box = box
+        self._k = max(0.5, float(scale_k))   # size scale (1.0 at 1080p; see OverlayPainter)
         xs = np.asarray(session.tx, dtype=float)
         ys = np.asarray(session.ty, dtype=float)
         self._ok = len(xs) >= 2 and len(ys) >= 2
         if not self._ok:
             return
-        # Fit the trace bbox into the box with a small pad, preserving aspect; flip Y (screen down).
-        pad = 0.10
-        x0, x1 = float(xs.min()), float(xs.max())
-        y0, y1 = float(ys.min()), float(ys.max())
+        # The exported lap's own line — the ONLY line drawn. We project it (and find the marker's
+        # position along it for the tail). The full-session arrays are kept only as a fallback line
+        # and to map a marker_index (which indexes the full trace) to a frame point.
+        lx = ly = None
+        got = session._lap_trace_xyt(lap_id) if hasattr(session, "_lap_trace_xyt") else None
+        if got is not None:
+            glx, gly, _ = got
+            if len(glx) >= 2:
+                lx, ly = np.asarray(glx, dtype=float), np.asarray(gly, dtype=float)
+        # Fit the LAP's bbox (not the whole session) into the box so a single lap fills the inset;
+        # fall back to the full-trace bbox when the lap line is degenerate.
+        fitx, fity = (lx, ly) if lx is not None else (xs, ys)
+        pad = 0.12
+        x0, x1 = float(fitx.min()), float(fitx.max())
+        y0, y1 = float(fity.min()), float(fity.max())
         sx = (x1 - x0) or 1.0
         sy = (y1 - y0) or 1.0
         bw = box.width() * (1 - 2 * pad)
         bh = box.height() * (1 - 2 * pad)
         scale = min(bw / sx, bh / sy)
-        # centre the scaled track in the box
         cx_off = box.x() + box.width() / 2 - scale * (x0 + x1) / 2
         cy_off = box.y() + box.height() / 2 + scale * (y0 + y1) / 2  # +: undo the Y flip below
 
@@ -725,112 +904,176 @@ class _MapInset:
             return QPointF(cx_off + scale * px, cy_off - scale * py)
 
         self._proj = proj
-        trace = QPolygonF([proj(px, py) for px, py in zip(xs, ys, strict=True)])
-        # the selected lap's own line (drawn brighter); fall back to the full trace if degenerate.
-        lap_poly = None
-        got = session._lap_trace_xyt(lap_id) if hasattr(session, "_lap_trace_xyt") else None
-        if got is not None:
-            lx, ly, _ = got
-            if len(lx) >= 2:
-                lap_poly = QPolygonF([proj(px, py) for px, py in zip(lx, ly, strict=True)])
         self._xs, self._ys = xs, ys
-        # --- bake the static layers (backdrop + full trace + lap line) into a cached RGBA image,
-        # sized to the WHOLE frame so we can blit it at (0, 0) each frame with the box-coordinate
-        # projection already correct. Painted ONCE here; `paint` only copies it + draws the marker.
-        self._layer = self._bake_layer(box, trace, lap_poly)
+        if lx is not None:
+            line_poly = QPolygonF([proj(px, py) for px, py in zip(lx, ly, strict=True)])
+            self._lap_pts = line_poly                       # for the comet tail
+        else:
+            line_poly = QPolygonF([proj(px, py) for px, py in zip(xs, ys, strict=True)])
+            self._lap_pts = None
+        # --- bake the static lap line into a cached RGBA image (no box, no full trace), sized to
+        # the inset's bottom-right corner. Painted ONCE; `paint` only blits it + draws the marker.
+        self._layer = self._bake_layer(box, line_poly, self._k)
 
     @staticmethod
-    def _bake_layer(box: QRectF, trace: QPolygonF, lap_poly) -> QImage:
-        """Render the unchanging map art (box backdrop + faint full trace + selected-lap line) once
-        into a transparent full-frame-sized ARGB32 image. The polylines are drawn in the same frame
-        coordinates the projection produced, so a plain (0, 0) blit lands them exactly where the old
-        per-frame draws did — pixel-identical, minus the ~40 ms/frame cost."""
-        # The image only needs to span up to the inset box's bottom-right corner; size it to that so
-        # a 4 K-aspect frame doesn't allocate a needlessly huge buffer when the inset sits mid-frame.
-        w = max(1, int(np.ceil(box.right())) + 2)
-        h = max(1, int(np.ceil(box.bottom())) + 2)
+    def _bake_layer(box: QRectF, line_poly: QPolygonF, k: float) -> QImage:
+        """Bake the unchanging map art — JUST the exported lap's racing line, vivid amber over a dark
+        halo, no backdrop box and no full-session trace — once into a transparent ARGB32 image (the
+        per-frame marker is drawn over the blit). The halo (see `_stroke_polyline`) is what replaces
+        the dropped box: the line reads on bright sky AND dark tarmac without a grey panel."""
+        w = max(1, int(np.ceil(box.right())) + 4)
+        h = max(1, int(np.ceil(box.bottom())) + 4)
         layer = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
         layer.fill(Qt.transparent)
         p = QPainter(layer)
         p.setRenderHint(QPainter.Antialiasing, True)
-        # box backdrop
-        p.setBrush(_c(C.surface, 180))
-        p.setPen(QPen(_c(C.border_strong, 160), 1.2))
-        p.drawRoundedRect(box, 8, 8)
-        # faint full trace
+        # With no backing box, the line ITSELF has to read over bright sky AND the kart's dark/amber
+        # bodywork. Three passes give it a self-contained "glow + outline" so it lifts off any
+        # background (the box replacement the roadmap asks for):
+        #   1) a wide, soft DARK underglow (acts as a drop-shadow halo without a hard rectangle),
+        #   2) a dark crisp OUTLINE,
+        #   3) a thick BRIGHT-WHITE line on top.
+        # White (not the amber accent) keeps the racing line distinct from the amber g-dial and the
+        # kart's amber bodywork; the hot-coral marker is the only you-are-here pop (clear hierarchy).
+        soft = QPen(_c(EXPORT.halo, 130), 12.0 * k)
+        soft.setJoinStyle(Qt.RoundJoin)
+        soft.setCapStyle(Qt.RoundCap)
         p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(_c(C.text_muted, 120), 1.4))
-        p.drawPolyline(trace)
-        # selected lap line (amber accent)
-        if lap_poly is not None:
-            p.setPen(QPen(_c(C.accent, 235), 2.2))
-            p.drawPolyline(lap_poly)
+        p.setPen(soft)
+        p.drawPolyline(line_poly)
+        _stroke_polyline(p, line_poly, EXPORT.text, 4.0 * k, halo=3.0 * k, halo_alpha=235)
         p.end()
         return layer
 
     def paint(self, p: QPainter, marker_index: int | None) -> None:
         if not self._ok:
             return
-        # blit the baked static layer (backdrop + full trace + lap line) — a sub-ms copy that
-        # replaces the per-frame re-rasterization of the (huge) trace polyline.
+        # blit the baked lap line — a sub-ms copy.
         p.drawImage(0, 0, self._layer)
-        # marker dot (warm coral, matches MapView.MARKER_COLOR = C.behind) — the only moving element.
-        if marker_index is not None and 0 <= marker_index < len(self._xs):
-            m = self._proj(float(self._xs[marker_index]), float(self._ys[marker_index]))
-            p.setPen(Qt.NoPen)
-            p.setBrush(_c(C.behind, 255))
-            p.drawEllipse(m, 5.0, 5.0)
-            p.setPen(QPen(_c(C.canvas, 200), 1.0))
-            p.setBrush(Qt.NoBrush)
-            p.drawEllipse(m, 5.0, 5.0)
+        if marker_index is None or not (0 <= marker_index < len(self._xs)):
+            return
+        m = self._proj(float(self._xs[marker_index]), float(self._ys[marker_index]))
+        k = self._k
+        # --- short comet TAIL: the last few lap points trailing the marker, fading out, so the
+        # direction of travel + recent path read at a glance. Drawn only when we have the lap line.
+        if self._lap_pts is not None and self._lap_pts.size() > 4:
+            # find the lap point nearest the marker (the lap line and the marker share the proj),
+            # then draw the preceding ~24 points as a fading bright tail.
+            n = self._lap_pts.size()
+            # marker_index is a full-trace index; map it to a fraction along the lap line.
+            j = min(n - 1, max(0, int(round(marker_index / max(1, len(self._xs) - 1) * (n - 1)))))
+            tail_len = max(2, int(round(24 * k)))
+            j0 = max(0, j - tail_len)
+            tail = QPolygonF([self._lap_pts.at(i) for i in range(j0, j + 1)])
+            if tail.size() >= 2:
+                # a hot amber comet over the white line shows the recent path + direction of travel;
+                # a dark halo under it keeps it readable where the white line is bright too.
+                hp = QPen(_c(EXPORT.halo, 180), 4.6 * k)
+                hp.setJoinStyle(Qt.RoundJoin)
+                hp.setCapStyle(Qt.RoundCap)
+                p.setPen(hp)
+                p.setBrush(Qt.NoBrush)
+                p.drawPolyline(tail)
+                tp = QPen(_c(EXPORT.accent_bright, 235), 3.2 * k)
+                tp.setJoinStyle(Qt.RoundJoin)
+                tp.setCapStyle(Qt.RoundCap)
+                p.setPen(tp)
+                p.drawPolyline(tail)
+        # --- glowing marker: a soft radial glow, a hot-coral core, and a bright outer ring so it
+        # is trackable over the green line AND a busy background (the bigger/brighter marker ask).
+        glow_r = 11.0 * k
+        grad = QRadialGradient(m, glow_r)
+        grad.setColorAt(0.0, _c(EXPORT.accent_bright, 220))
+        grad.setColorAt(0.5, _c(EXPORT.marker, 150))
+        grad.setColorAt(1.0, _c(EXPORT.marker, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(grad)
+        p.drawEllipse(m, glow_r, glow_r)
+        # dark halo ring (reads on bright sky), then the hot core, then a white rim.
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(_c(EXPORT.halo, 220), 1.6 * k))
+        p.drawEllipse(m, 5.2 * k, 5.2 * k)
+        p.setPen(Qt.NoPen)
+        p.setBrush(_c(EXPORT.marker, 255))
+        p.drawEllipse(m, 4.6 * k, 4.6 * k)
+        p.setPen(QPen(_c(EXPORT.text, 235), 1.4 * k))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(m, 4.6 * k, 4.6 * k)
 
 
 def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues) -> None:
-    """The always-on Δ / speed readout card (bottom-left). Same content + three-way Δ colour the
-    app's diff box uses (theme.delta_colour): "Δ +0.42 s    138 km/h"."""
-    from . import theme
-    p.setBrush(_c(C.surface, 205))
-    p.setPen(QPen(_c(C.border_strong, 170), 1.2))
-    p.drawRoundedRect(box, 8, 8)
-    pad = box.height() * 0.22
+    """The always-on Δ / speed readout (bottom-left), export-restyled: a HERO speed number with a
+    small "km/h" unit, and a punchy Δ cue (vivid saturated green ahead / red behind via
+    `export_delta_colour`) — all outlined for legibility. It keeps a SLIM grouping pill, but a DARK
+    translucent one (not the dim grey theme surface): a dark anchor makes the bright haloed text pop
+    consistently over both bright sky and dark tarmac, which reads better than the old grey card
+    while staying a tasteful HUD chip rather than a heavy panel.
+
+    `box` is the layout rect; the speed/Δ are drawn at a larger fraction of it than before so the
+    number is the clear focal point of the readout."""
+    k = box.height() / 44.0   # the readout box is ~44 px tall at 1080p; scale radii/strokes with it
+    # slim dark pill (rounded), faint bright keyline — a dark anchor for the bright text. At a
+    # moderate-high alpha it reads as an intentional HUD chip rather than a grey wash over sky.
+    p.setBrush(_c(EXPORT.halo, 165))
+    p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
+    p.drawRoundedRect(box, 9 * k, 9 * k)
+    pad = box.height() * 0.26
     inner = box.adjusted(pad, 0, -pad, 0)
-    delta_txt = "Δ —" if vals.delta_s is None else f"Δ {vals.delta_s:+.2f} s"
-    speed_txt = "— km/h" if vals.speed_kmh is None else f"{vals.speed_kmh:.0f} km/h"
-    colour = theme.delta_colour(vals.delta_s) or C.text
-    fnt = _font(box.height() * 0.46, bold=True)
-    p.setFont(fnt)
-    # Δ in the cue colour, speed in primary text — two draws so they can differ in colour.
-    p.setPen(QPen(_c(colour)))
-    p.drawText(inner, Qt.AlignVCenter | Qt.AlignLeft, delta_txt + "     ")
-    fm_w = p.fontMetrics().horizontalAdvance(delta_txt + "     ")
-    p.setPen(QPen(_c(C.text)))
-    p.drawText(inner.adjusted(fm_w, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, speed_txt)
+    # --- HERO speed: big number + small unit ---
+    speed_num = "—" if vals.speed_kmh is None else f"{vals.speed_kmh:.0f}"
+    big = _font(box.height() * 0.74, bold=True)
+    unit = _font(box.height() * 0.34, bold=True)
+    fm_big = QFontMetricsF(big)
+    base_y = inner.y() + (inner.height() + fm_big.ascent() - fm_big.descent()) / 2.0
+    x = inner.x()
+    _draw_text(p, QPointF(x, base_y), speed_num, big, EXPORT.text, halo=2.4 * k)
+    x += fm_big.horizontalAdvance(speed_num) + 4 * k
+    fm_unit = QFontMetricsF(unit)
+    _draw_text(p, QPointF(x, base_y - (fm_big.ascent() - fm_unit.ascent()) * 0.15),
+               "km/h", unit, EXPORT.text_dim, halo=1.8 * k)
+    x += fm_unit.horizontalAdvance("km/h") + 16 * k
+    # --- Δ cue: punchy vivid colour ---
+    delta_txt = "Δ —" if vals.delta_s is None else f"Δ {vals.delta_s:+.2f}"
+    dcol = export_delta_colour(vals.delta_s)
+    dfont = _font(box.height() * 0.50, bold=True)
+    fm_d = QFontMetricsF(dfont)
+    dy = inner.y() + (inner.height() + fm_d.ascent() - fm_d.descent()) / 2.0
+    _draw_text(p, QPointF(x, dy), delta_txt, dfont, dcol, halo=2.2 * k)
 
 
 def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: float) -> None:
-    """The lap / sector strip (top-left): the lap label + elapsed-into-lap time, with a progress
-    fill marking how far through the lap (by time) the playhead is — a compact at-a-glance bar."""
-    p.setBrush(_c(C.surface, 195))
-    p.setPen(QPen(_c(C.border_strong, 160), 1.0))
-    p.drawRoundedRect(box, 6, 6)
+    """The lap / sector strip (top-left), export-restyled: a bold outlined "LAP n  m:ss.mmm" with a
+    vivid amber progress fill marking how far through the lap (by time) the playhead is. Keeps a
+    slim DARK grouping pill (a dark anchor for the bright text) instead of the dim grey card — same
+    tasteful HUD language as the readout, legible over any background."""
+    k = box.height() / 44.0
+    p.setBrush(_c(EXPORT.halo, 165))
+    p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
+    p.drawRoundedRect(box, 8 * k, 8 * k)
     if vals.lap_id is None:
         return
     win = session.lap_window(vals.lap_id)
     if win is not None:
         ls, le = win
         frac = 0.0 if le <= ls else max(0.0, min(1.0, (vals.t - ls) / (le - ls)))
-        fill = QRectF(box.x(), box.y(), box.width() * frac, box.height())
-        p.setBrush(_c(C.accent, 70))
-        p.setPen(Qt.NoPen)
-        p.drawRoundedRect(fill, 6, 6)
+        if frac > 0:
+            # vivid amber progress fill, clipped to the pill so the rounded corners stay clean.
+            clip = QPainterPath()
+            clip.addRoundedRect(box, 8 * k, 8 * k)
+            p.save()
+            p.setClipPath(clip)
+            fill = QRectF(box.x(), box.y(), box.width() * frac, box.height())
+            p.setBrush(_c(EXPORT.accent, 120))
+            p.setPen(Qt.NoPen)
+            p.drawRect(fill)
+            p.restore()
         elapsed = max(0.0, vals.t - ls)
     else:
         elapsed = max(0.0, vals.t - t0)
-    p.setPen(QPen(_c(C.text)))
-    p.setFont(_font(box.height() * 0.52, bold=True))
     label = f"LAP {vals.lap_id}   {fmt_time(elapsed)}"
-    p.drawText(box.adjusted(box.height() * 0.4, 0, -box.height() * 0.2, 0),
-               Qt.AlignVCenter | Qt.AlignLeft, label)
+    inner = box.adjusted(box.height() * 0.42, 0, -box.height() * 0.2, 0)
+    _text_at(p, inner, Qt.AlignVCenter | Qt.AlignLeft, label,
+             _font(box.height() * 0.54, bold=True), EXPORT.text, halo=2.2 * k)
 
 
 class OverlayPainter:
@@ -844,13 +1087,19 @@ class OverlayPainter:
         self._spec = spec
         self._w, self._h = out_w, out_h
         cfg = spec.config
+        # Global size scale for the export overlays: 1.0 at 1080p, growing/shrinking with the output
+        # height so line widths, the g-dot, the map marker + glyph outlines all look right at 720p
+        # through 4K (the brief's "sizes that scale with out_height"). The g-dial + map-inset paint
+        # take this `k`; the readout/strip self-scale from their box height.
+        self._k = out_h / 1080.0
         m = cfg.margin_frac * out_h
         # g-meter: square in the TOP-RIGHT.
         gside = cfg.gmeter_frac * out_h
         self._g_rect = QRectF(out_w - m - gside, m, gside, gside)
         # map inset: BOTTOM-RIGHT.
         mw, mh = cfg.map_w_frac * out_w, cfg.map_h_frac * out_h
-        self._map = _MapInset(session, QRectF(out_w - m - mw, out_h - m - mh, mw, mh), spec.lap_id)
+        self._map = _MapInset(session, QRectF(out_w - m - mw, out_h - m - mh, mw, mh),
+                              spec.lap_id, scale_k=self._k)
         # readout: BOTTOM-LEFT.
         rh = max(cfg.readout_h_frac * out_h, 22.0)
         self._readout_rect = QRectF(m, out_h - m - rh, max(out_w * 0.30, 260.0), rh)
@@ -889,7 +1138,10 @@ class OverlayPainter:
         # headless dial's filtering state (identical to the on-screen widget).
         p.save()
         p.translate(self._g_rect.topLeft())
-        gmeter_overlay.paint_dial(p, self._g_rect.width(), self._g_rect.height(), dial_state)
+        # export=True -> the vivid, no-box, big-number dial; scale_k from the dial's own size (1.0
+        # at the ~280 px 1080p dial) so its strokes/glyphs track the output resolution.
+        gmeter_overlay.paint_dial(p, self._g_rect.width(), self._g_rect.height(), dial_state,
+                                  export=True, scale_k=self._g_rect.width() / 280.0)
         p.restore()
         self._map.paint(p, vals.marker_index)
         _paint_readout(p, self._readout_rect, vals)
