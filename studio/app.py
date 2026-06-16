@@ -541,6 +541,17 @@ class StudioWindow(QMainWindow):
                                           "session's own best lap")
         self._clear_ref_action.triggered.connect(self._clear_reference)
         self._clear_ref_action.setEnabled(False)
+        # F7 Phase B: cross-recording VIDEO compare — pane A = this recording's lap, pane B = the
+        # reference recording's lap playing its OWN footage + telemetry. DISTINCT from the existing
+        # same-recording "Compare videos" toggle (which compares two laps of THIS recording); that
+        # toggle stays intact. Enabled only when a reference is loaded (synced in
+        # _update_reference_status).
+        self._cross_compare_action = menu.addAction("Compare vs reference recording")
+        self._cross_compare_action.setToolTip(
+            "Side-by-side: this recording's lap (left) vs the loaded reference recording's lap "
+            "(right), each playing its own footage. Load a reference recording first.")
+        self._cross_compare_action.triggered.connect(self._enter_cross_compare)
+        self._cross_compare_action.setEnabled(False)
         # F8 session library: a local index of every analyzed recording (date / track / best /
         # theoretical) with per-track PB progression + quick re-open. Additive — its own
         # separated section so the File-menu region stays conflict-light against the other PRs.
@@ -957,6 +968,23 @@ class StudioWindow(QMainWindow):
         self.session.clear_reference()
         self._apply_reference_change()
 
+    def _enter_cross_compare(self):
+        """File ▸ "Compare vs reference recording" (F7 Phase B): enter the cross-recording video
+        compare — pane A = this recording's current/selected lap, pane B = the reference
+        recording's lap, each playing its own footage. No-op (with a notice) if no reference
+        recording is loaded. The existing same-recording "Compare videos" toggle is unaffected; the
+        compare button reflects the two-pane stage either way."""
+        if not hasattr(self, "session") or self.session.reference_session() is None:
+            QMessageBox.information(
+                self, "pacer studio — no reference recording",
+                "Load a reference recording first (File ▸ Load reference recording…), then "
+                "compare against it.")
+            return
+        if not self.compare.enter_cross():
+            QMessageBox.information(
+                self, "pacer studio — cross-recording compare unavailable",
+                "The reference recording's lap could not be set up for compare.")
+
     def _apply_reference_change(self):
         """Refresh every "vs best" surface after the reference was loaded OR cleared, and update
         the menu + status chip. The reference replaces the local best lap as the Δ / map-overlay /
@@ -984,6 +1012,12 @@ class StudioWindow(QMainWindow):
         active = hasattr(self, "session") and self.session.has_reference()
         if hasattr(self, "_clear_ref_action"):
             self._clear_ref_action.setEnabled(active)
+        # F7 Phase B: the cross-recording video compare needs both a reference AND its retained live
+        # Session (Phase A could load a data-only reference; the compare needs the footage). Enable
+        # only when both are present.
+        if hasattr(self, "_cross_compare_action"):
+            can_cross = active and self.session.reference_session() is not None
+            self._cross_compare_action.setEnabled(can_cross)
         chip = getattr(self, "_ref_chip", None)
         if chip is None:
             return

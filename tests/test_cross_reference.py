@@ -188,6 +188,113 @@ def test_dormant_delta_is_byte_identical():
     print("test_dormant_delta_is_byte_identical OK")
 
 
+# ----------------------------------------------- F7 Phase B: cross-recording VIDEO compare
+def test_reference_session_retained_and_cleared():
+    """Phase B keeps the LIVE reference Session alive (Phase A discarded it). It must be reachable
+    via reference_session() after load, expose the reference lap id, and be dropped on clear."""
+    p_times, p_dists = odometer(150, 0.40, 0.0, 900.0)
+    primary = make_session({2: (p_times, p_dists)}, best=2, valid=[2])
+    r_times, r_dists = odometer(150, 0.40, 0.0, 920.0)
+    ref = make_session({5: (r_times, r_dists)}, best=5, valid=[5])
+    primary._reference_fit_loop = lambda: None
+    ref.lap_trace_xy = lambda _lid: (np.zeros(0), np.zeros(0))
+    assert primary.set_reference_session(ref) is None
+    assert primary.reference_session() is ref, "the live reference Session must be retained"
+    assert primary.reference_lap_id() == 5, "pane B locks to the reference best lap"
+    primary.clear_reference()
+    assert primary.reference_session() is None, "clear must drop the live reference Session"
+    assert primary.reference_lap_id() is None
+    print("test_reference_session_retained_and_cleared OK")
+
+
+def test_reference_delta_vs_lap_endpoint_is_negated_laptime_diff():
+    """Pane B's badge = reference vs primary. The production contract is that `t_ref` is the
+    reference recording's GLOBAL media clock (the reference lap sits at its lap_window start ≈
+    1000 s here, NOT 0), so the method must REBASE it to seconds-into-the-reference-lap before the
+    normalized-distance interp. The endpoint at the reference finish must equal
+    (reference_time − primary_time) == −(pane A's endpoint), the cross-recording laptime diff; the
+    MID-lap value must be the genuine mid delta, NOT the clamped finish delta — that mid assertion
+    is what catches a global→into-lap regression (interp of a ~1000 s t_ref against a from-0 axis
+    would clamp to the finish)."""
+    p_times, p_dists = odometer(150, 0.40, 0.0, 900.0)
+    primary = make_session({2: (p_times, p_dists)}, best=2, valid=[2])
+    # The reference's curve is the primary's, elapsed scaled 0.97× (≈3 % faster everywhere) and
+    # anchored at a GLOBAL window start of 1000 s — exactly the away-from-0 anchor a real reference
+    # file has (its best lap sits ~1000 s into the recording, not at the media-clock origin).
+    REF_START = 1000.0
+    r_elapsed = (p_times - p_times[0]) * 0.97
+    r_times = r_elapsed + REF_START
+    ref = make_session({5: (r_times, p_dists.copy())}, best=5, valid=[5])
+    ref.lap_window = lambda _lid, w=(float(r_times[0]), float(r_times[-1])): w  # GLOBAL clock window
+    primary._reference_fit_loop = lambda: None
+    ref.lap_trace_xy = lambda _lid: (np.zeros(0), np.zeros(0))
+    assert primary.set_reference_session(ref) is None
+
+    p_lap_time = float(p_times[-1] - p_times[0])
+    r_lap_time = float(r_times[-1] - r_times[0])
+    # delta_at_lap (pane A) at the primary finish == primary − reference (behind, positive).
+    a_end = primary.delta_at_lap(2, float(p_times[-1]))
+    # reference_delta_vs_lap (pane B) takes the GLOBAL reference clock; at the reference finish it is
+    # reference − primary (ahead, negative). A clamp bug would also land here (s=1), so the mid is key.
+    b_end = primary.reference_delta_vs_lap(2, float(r_times[-1]))
+    assert a_end is not None and b_end is not None
+    assert abs(a_end - (p_lap_time - r_lap_time)) < 1e-6, a_end
+    assert abs(b_end - (r_lap_time - p_lap_time)) < 1e-6, b_end
+    assert abs(a_end + b_end) < 1e-6, "pane A and pane B endpoints must be exact negatives"
+
+    # MID-lap, on the GLOBAL clock (≈ 1000 + half the reference lap time). The reference's elapsed
+    # is exactly 0.97× the primary's at the same track fraction s, so independently of the method:
+    #   reference_delta = elapsed_ref(s) − elapsed_primary(s) = (0.97 − 1) × elapsed_primary(s).
+    # We pick the global mid time, derive its s, and compute the expected delta by hand — a
+    # clamp-to-finish regression would instead return b_end (the finish delta), failing this.
+    t_mid = float(r_times[len(r_times) // 2])            # GLOBAL reference clock, mid lap
+    t_into = t_mid - REF_START                            # seconds-into-the-reference-lap
+    s_mid = float(np.interp(t_into, r_elapsed, p_dists)) / float(p_dists[-1])
+    prim_elapsed_at_s = float(np.interp(s_mid * float(p_dists[-1]), p_dists, p_times - p_times[0]))
+    want_mid = (0.97 - 1.0) * prim_elapsed_at_s          # reference − primary at the same s
+    got_mid = primary.reference_delta_vs_lap(2, t_mid)
+    assert got_mid is not None and abs(got_mid - want_mid) < 1e-6, (got_mid, want_mid)
+    assert abs(got_mid - b_end) > 1e-3, "mid Δ must NOT equal the clamped finish Δ"
+    assert want_mid < 0, "reference is faster, so the mid Δ (reference − primary) is negative"
+    print(f"test_reference_delta_vs_lap OK: paneA={a_end:+.4f}s, paneB={b_end:+.4f}s, "
+          f"mid={got_mid:+.4f}s (want {want_mid:+.4f}s, not the {b_end:+.4f}s finish)")
+
+
+def test_reference_overlay_index_tracks_progress():
+    """The cross-recording map ghost indexes the FITTED overlay ring by the reference lap's
+    normalized progress at the GLOBAL reference clock `t_ref` — 0 at the start, the last index at
+    the finish, monotone between. The reference window is anchored at 1000 s (away from 0), so this
+    also proves the global→into-lap rebase: without it the ~1000 s t_ref would clamp every query to
+    the finish index, and the mid assertion (0 < imid < m−1) would fail."""
+    REF_START = 1000.0
+    p_times, p_dists = odometer(150, 0.40, 0.0, 900.0)
+    primary = make_session({2: (p_times, p_dists)}, best=2, valid=[2])
+    r_times, r_dists = odometer(150, 0.40, REF_START, 900.0)  # GLOBAL clock anchored at 1000 s
+    ref = make_session({5: (r_times, r_dists)}, best=5, valid=[5])
+    ref.lap_window = lambda _lid, w=(float(r_times[0]), float(r_times[-1])): w
+    # Give both a real, well-fitting loop so build() produces an overlay (the ghost line).
+    primary._reference_fit_loop = lambda: loop_xy(scale=100.0)
+    ref.lap_trace_xy = lambda _lid: (loop_xy(scale=100.0).T[0], loop_xy(scale=100.0).T[1])
+    assert primary.set_reference_session(ref) is None
+    assert primary.reference_overlay_xy() is not None, "a matching loop must overlay"
+    m = len(primary.reference_overlay_xy())
+    i0 = primary.reference_overlay_index_at_progress(float(r_times[0]))      # start (t_ref=1000)
+    imid = primary.reference_overlay_index_at_progress(float(r_times[len(r_times) // 2]))
+    i1 = primary.reference_overlay_index_at_progress(float(r_times[-1]))     # finish
+    assert i0 == 0, i0
+    assert i1 == m - 1, (i1, m)
+    assert 0 < imid < m - 1, imid
+    # Independent expectation for the mid index: rebase to into-lap, take s, index the ring — proves
+    # the value isn't the clamped finish (which a global-clock-vs-from-0 interp would return).
+    t_into = float(r_times[len(r_times) // 2]) - REF_START
+    s_mid = float(np.interp(t_into, r_times - r_times[0], r_dists)) / float(r_dists[-1])
+    want_mid = min(int(round(s_mid * (m - 1))), m - 1)
+    assert imid == want_mid, (imid, want_mid)
+    assert imid != i1, "mid index must NOT clamp to the finish index"
+    print(f"test_reference_overlay_index OK: start={i0}, mid={imid} (want {want_mid}), "
+          f"finish={i1} of {m}")
+
+
 # ---------------------------------------------------------------- the overlay fit gate
 def test_overlay_fits_good_loop_and_drops_gross_misfit():
     dist, speed, elapsed = (np.linspace(0, 1000, 50), np.full(50, 50.0), np.linspace(0, 60, 50))

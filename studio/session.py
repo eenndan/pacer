@@ -178,6 +178,14 @@ class Session:
         # NOT touched by set_timing_lines — re-segmenting the PRIMARY laps doesn't change the
         # (frozen, externally-loaded) reference curve.
         self._reference: cross_reference.ReferenceLap | None = None
+        # F7 Phase B: the LIVE reference Session, kept alive so the cross-recording VIDEO compare
+        # can play the reference recording's footage + feed pane B its OWN telemetry (g / lap
+        # window / lap id) from the reference's time axis + ChapterMap. Phase A discards this right
+        # after extracting the lightweight `_reference` arrays; Phase B retains it. None = DORMANT
+        # (no reference, or a data-only reference loaded by a test that never set it). Set by
+        # set_reference_session; cleared by clear_reference. One extra Session of memory — it was
+        # already loaded transiently, so this is acceptable (see the F7 Phase B brief).
+        self._reference_session: Session | None = None
 
         # Full-trace arrays in local meters + the video-clock time + speed (km/h), from ONE
         # pacer.Laps.track_columns crossing (the same bulk idiom as _lap_columns; was a
@@ -332,6 +340,10 @@ class Session:
             loop_xy=ref_loop, primary_loop_xy=primary_loop,
             source_label=source_label or "reference", lap_id=ref_best,
         )
+        # F7 Phase B: KEEP the live reference Session (its time axis + ChapterMap + g) so the
+        # cross-recording VIDEO compare can play its footage in pane B with the right telemetry.
+        # getattr-guarded set so a bare Session (test path, no __init__) gains the slot lazily.
+        self._reference_session = ref
         # The per-corner Δ baseline just changed (best lap -> reference lap), so every cached
         # per-lap corner-stat delta is stale. Drop them; they recompute lazily against the new
         # reference. (The corner DETECTION — windows — is unchanged, so _corner_cache stays.)
@@ -346,6 +358,9 @@ class Session:
         if self._ref is None:
             return
         self._reference = None
+        # F7 Phase B: drop the retained live reference Session too (frees its decode/arrays) — the
+        # cross-recording video compare can no longer be entered once the reference is cleared.
+        self._reference_session = None
         # Revert the per-corner Δ baseline to the local best lap: the cached deltas (measured
         # against the now-cleared reference) are stale. Drop them; they recompute lazily.
         # getattr-guarded for the bare-Session test path (no __init__ ran to create the slot).
@@ -381,6 +396,117 @@ class Session:
         distance, which is frame-independent)."""
         ref = self._ref
         return ref.overlay_xy if ref is not None else None
+
+    # ----------------------------------------- cross-recording VIDEO compare (F7 Phase B)
+    # The retained live reference Session + the few derived lookups the cross-recording compare
+    # needs: its ChapterMap (pane B video source), its best lap id (pane B's locked lap), the
+    # reference lap's position on the FITTED overlay line (the map ghost), and the reference-vs-
+    # primary Δ at a reference-clock time (pane B's badge). These let CompareController route
+    # pane B through the reference WITHOUT importing pacer (the views-stay-pacer-free boundary).
+    def reference_session(self) -> Session | None:
+        """The live reference Session retained for the cross-recording video compare, or None when
+        no reference is loaded (or a data-only reference was set without a live Session). Lets the
+        app/controller route pane B's video source + g + lap window through the reference."""
+        return getattr(self, "_reference_session", None)
+
+    def reference_lap_id(self) -> int | None:
+        """The reference lap id (the reference recording's best lap) that pane B is locked to, or
+        None when dormant. v1 locks pane B to this lap (no pane-B picker)."""
+        ref = self._ref
+        return ref.lap_id if ref is not None else None
+
+    def _reference_progress_at(self, t_ref: float) -> tuple[float, float] | None:
+        """The reference lap's progress at the reference recording's GLOBAL media-clock time
+        `t_ref`, returned as `(s, elapsed_into_lap)`:
+          * `s` ∈ [0, 1] — the reference lap's NORMALIZED track fraction (cum_dist / total_dist),
+            clamped to the lap window;
+          * `elapsed_into_lap` — the reference's own time-into-lap (seconds-from-its-start),
+            clamped to [0, total_time].
+        None when there's no reference, no retained reference Session, or the lap is degenerate.
+
+        WHY the conversion: the cross-recording compare hands pane B's position as the REFERENCE
+        recording's GLOBAL media clock (the reference lap sits at `lap_window[0]` ≈ wherever it is
+        in that file, NOT 0). But `ReferenceLap.time_dist_elapsed()` carries an elapsed-FROM-0 axis
+        (the reference lives on no shared media clock). So `t_ref` MUST be rebased to seconds-into-
+        the-reference-lap — `t_into = t_ref − ref_window_start` — before it is interpolated against
+        the from-0 `dist`/`elapsed` arrays. Without this the interp of a ~1000 s `t_ref` against a
+        [0..60] axis clamps to the finish, freezing the map ghost at S/F and the badge at the
+        finish delta. Both `reference_delta_vs_lap` and `reference_overlay_index_at_progress` build
+        on this single helper so they convert the clock identically (and stay fake-satisfiable in
+        tests — only `lap_window` is needed off the reference Session, not its per-lap arrays)."""
+        ref = self._ref
+        if ref is None:
+            return None
+        ref_sess = self.reference_session()
+        if ref_sess is None:
+            return None
+        window = ref_sess.lap_window(ref.lap_id)
+        if window is None:
+            return None
+        # The reference lap's OWN from-0 arc-length curves (the same source the Δ charts/table use),
+        # so the rebased t_into and these arrays share one zero — no clamp-to-finish mismatch.
+        _times, dists, elapsed = ref.time_dist_elapsed()
+        total_dist = float(dists[-1]) if len(dists) else 0.0
+        total_time = float(elapsed[-1]) if len(elapsed) else 0.0
+        if total_dist <= 0 or total_time <= 0:
+            return None
+        t_into = t_ref - float(window[0])  # GLOBAL reference clock -> seconds-into-the-reference-lap
+        # np.interp clamps t_into to [elapsed[0]=0, elapsed[-1]=total_time], so s and the elapsed
+        # below are already window-clamped (start before the lap -> s=0, after the finish -> s=1).
+        s = float(np.interp(t_into, elapsed, dists)) / total_dist  # [0, 1]
+        s = min(max(s, 0.0), 1.0)
+        elapsed_into_lap = float(np.interp(t_into, elapsed, elapsed))  # clamp(t_into, 0, total_time)
+        return s, elapsed_into_lap
+
+    def reference_overlay_index_at_progress(self, t_ref: float) -> int | None:
+        """The index into `reference_overlay_xy()` of the reference kart's position at the reference
+        recording's GLOBAL media-clock time `t_ref` — for the F4 map ghost in cross-recording
+        compare. The overlay ring is the reference racing line ALREADY fit into THIS session's local
+        frame (cross_reference), sampled along its own arc length; the reference lap's normalized
+        progress at `t_ref` (distance-fraction, via `_reference_progress_at`) maps onto it directly.
+        None when there's no overlay (no reference or a poor spatial fit) — the ghost is then
+        suppressed, the charts/table are unaffected.
+
+        Distinct from `index_at_time` (which indexes the PRIMARY trace): the cross-recording ghost
+        must sit on the reference overlay line, not the primary trace."""
+        ref = self._ref
+        if ref is None or ref.overlay_xy is None:
+            return None
+        prog = self._reference_progress_at(t_ref)
+        if prog is None:
+            return None
+        s, _elapsed_into_lap = prog
+        m = len(ref.overlay_xy)
+        if m == 0:
+            return None
+        return min(int(round(s * (m - 1))), m - 1)
+
+    def reference_delta_vs_lap(self, lap_id: int, t_ref: float) -> float | None:
+        """Δ (seconds) of the REFERENCE lap vs the primary `lap_id` at the reference's track
+        position at the reference recording's GLOBAL media-clock time `t_ref`: how far ahead (−) /
+        behind (+) the reference is relative to the primary lap at that normalized distance. None if
+        either lap is degenerate.
+
+        Pane B's "Δ vs other" badge in cross-recording compare — the mirror of pane A's
+        `delta_at_lap(lap_a, t_a)` (primary vs reference). Reuses the SAME normalized-distance
+        alignment Phase A's delta machinery uses (via `_reference_progress_at`, which rebases the
+        GLOBAL reference clock to seconds-into-the-reference-lap first), so the two are consistent
+        and the finish-line (s=1) Δ is exactly `reference_total_time − primary_lap_time`, the
+        cross-recording laptime difference (the negative of pane A's endpoint)."""
+        prog = self._reference_progress_at(t_ref)
+        if prog is None:
+            return None
+        s, elapsed_ref = prog  # reference's track fraction + its own time-into-lap, both clamped
+        prim_td = self._lap_time_dist_elapsed(lap_id)
+        if prim_td is None:
+            return None
+        prim_times, prim_dists, prim_elapsed = prim_td
+        total_prim = float(prim_dists[-1])
+        if total_prim <= 0:
+            return None
+        # The primary lap's elapsed at the SAME track fraction s (invert s → primary distance → time).
+        prim_elapsed_at_s = float(np.interp(s * total_prim, prim_dists, prim_elapsed))
+        return elapsed_ref - prim_elapsed_at_s
 
     # The delta seam. Each returns the REFERENCE lap's data when one is loaded, else None so the
     # caller keeps its exact local-best-lap code path (the byte-identical dormant invariant).

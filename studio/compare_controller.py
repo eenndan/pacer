@@ -80,6 +80,28 @@ class CompareController:
         # moved (mirrors the playback _applied_t gate). A sentinel that no real (float, float)
         # equals, so the first tick after enter always applies.
         self._compare_last_t: object = None
+        # F7 Phase B (cross-recording video compare): pane B can come from a DIFFERENT recording —
+        # the loaded reference Session (`session.reference_session()`). When that mode is active,
+        # `_cross` is True and `_session_b` is the reference Session: pane B's g / lap window / lap
+        # id / video source all resolve against IT, not `self.session`. The pane-B Δ badge + the
+        # F4 map ghost route through the cross-recording helpers on the PRIMARY session (which owns
+        # the reference curve + the fitted overlay line). DORMANT (`_cross` False): `_session_b is
+        # self.session` and every pane-B feed is byte-identical to same-recording compare today.
+        self._cross = False
+        self._session_b: Session = session
+
+    @property
+    def session_b(self) -> Session:
+        """The session pane B's telemetry (g / lap window / lap id / video source) resolves
+        against: `self.session` for same-recording compare (byte-identical to today), or the
+        retained reference Session for the cross-recording video compare (F7 Phase B)."""
+        return self._session_b
+
+    @property
+    def cross(self) -> bool:
+        """True iff the active compare is a CROSS-RECORDING video compare (pane B = the reference
+        recording's lap), distinct from the same-recording two-lap compare."""
+        return self._cross
 
     def set_scrub(self, scrub: ScrubController) -> None:
         """Inject the scrub controller after construction (mutually-referential wiring)."""
@@ -133,17 +155,36 @@ class CompareController:
                 return
         self._compare_last_t = (t_a, t_b)
         # Secondary g (the primary's g comes from the readout path). A no-op if the overlay is off.
+        # Cross-recording: pane B's g comes from the REFERENCE session's own g(t) on its own clock.
         if self.video.is_gmeter_visible():
-            self.video.set_pane_g(1, self.session.g_at_time(t_b))
+            self.video.set_pane_g(1, self._session_b.g_at_time(t_b))
         # Each pane's Δ vs the OTHER lap, at that pane's own current track position.
-        self._set_pane_badge(0, self.session.delta_between(a, b, t_a))
-        self._set_pane_badge(1, self.session.delta_between(b, a, t_b))
+        if self._cross:
+            # Cross-recording: pane A's badge is the primary lap vs the REFERENCE (the active
+            # baseline, so delta_at_lap already measures vs it); pane B's badge is the reference
+            # vs the primary lap at the reference's own track position. Both reuse the Phase-A
+            # normalized-distance alignment, so they're consistent + endpoint-symmetric.
+            self._set_pane_badge(0, self.session.delta_at_lap(a, t_a))
+            self._set_pane_badge(1, self.session.reference_delta_vs_lap(a, t_b))
+        else:
+            self._set_pane_badge(0, self.session.delta_between(a, b, t_a))
+            self._set_pane_badge(1, self.session.delta_between(b, a, t_b))
         # F4 map ghost: lap B's kart at the SAME t_b the badge above used (the secondary pane's
         # own clock — both panes play "time into lap" from S/F, so this is lap B's position at
-        # equal elapsed-into-lap; no second time-alignment is invented). index_at_time is the
-        # same O(log n) lookup the red marker's tick path resolves; the map does a setPos only.
+        # equal elapsed-into-lap; no second time-alignment is invented).
         if self.map is not None:
-            self.map.set_ghost_index(self.session.index_at_time(t_b))
+            if self._cross:
+                # The ghost must sit on the REFERENCE racing line (already fit into THIS session's
+                # local frame by cross_reference), NOT the primary trace. Drive it from the
+                # reference lap's progress at t_b indexed onto the fitted overlay ring.
+                i = self.session.reference_overlay_index_at_progress(t_b)
+                xy = self.session.reference_overlay_xy()
+                if i is not None and xy is not None:
+                    self.map.set_ghost_pos(float(xy[i, 0]), float(xy[i, 1]))
+            else:
+                # Same-recording: index_at_time is the same O(log n) lookup the red marker's tick
+                # path resolves on the PRIMARY trace; the map does a setPos only.
+                self.map.set_ghost_index(self.session.index_at_time(t_b))
 
     def _set_pane_badge(self, side: int, d: float | None) -> None:
         """Format + colour a pane's "Δ vs other" badge (+behind / −ahead vs the other pane's lap).
@@ -168,6 +209,10 @@ class CompareController:
             self.exit()
 
     def enter(self) -> None:
+        # Same-recording compare: pane B is another lap of THIS session. Make that explicit so a
+        # prior cross-recording compare (or a re-entry) resets the routing to the primary session.
+        self._cross = False
+        self._session_b = self.session
         valid = self.session.valid_lap_ids()
         if len(valid) < 2:
             return  # the toggle should be disabled, but guard anyway
@@ -189,8 +234,10 @@ class CompareController:
         if wa is None or wb is None:
             self._compare = False
             return
+        # pane_b_source=None → the secondary pane reuses the PRIMARY recording's ChapterMap
+        # (`video._source`), byte-identical to before — both panes play the SAME recording.
         self.video.set_compare(a, b, wa, wb, self._lap_caption(a), self._lap_caption(b),
-                               valid, self._lap_choice_labels(valid))
+                               valid, self._lap_choice_labels(valid), pane_b_source=None)
         # Each pane plays "time into lap": reset the pair to its lap starts, PAUSED, so both videos
         # are aligned at S/F and roll together on the next Play (no auto-play on enter).
         self._reset_pair_to_start()
@@ -206,7 +253,75 @@ class CompareController:
         self._compare_last_t = None
         self._on_pair_changed()  # F5: refresh the brake glyphs to show BOTH compared laps
 
+    def enter_cross(self) -> bool:
+        """F7 Phase B: enter the CROSS-RECORDING video compare — pane A = the primary recording's
+        current/selected lap (unchanged), pane B = the loaded REFERENCE recording's reference lap,
+        played from the reference's OWN footage + telemetry. Requires a reference Session retained
+        (`session.reference_session()`); returns False (a no-op) if none is loaded or the lap
+        windows are degenerate, so the caller can keep the UI state coherent.
+
+        v1 LOCKS pane B to the reference lap (no pane-B lap picker — a picker would have to list
+        the reference recording's laps and re-route every pane-B feed through a reseed against the
+        reference Session; deferred, see the PR note). Pane B's g / lap window / lap id / video
+        source resolve through the reference Session; the Δ badge + map ghost reuse Phase A's
+        normalized-distance reference curve + the fitted overlay line."""
+        ref_sess = self.session.reference_session()
+        ref_lap = self.session.reference_lap_id()
+        if ref_sess is None or ref_lap is None:
+            return False
+        valid = self.session.valid_lap_ids()
+        if not valid:
+            return False
+        best = self.session.best_lap_id()
+        # Pane A = the lap the playhead is in, else the primary table selection, else best/first.
+        a = self.session.lap_at_time(self._get_applied_t() or 0.0)
+        if a is None or a not in valid:
+            sel = [lid for lid in self.plots.selected_lap_ids() if lid in valid]
+            a = sel[0] if sel else (best if best is not None and best in valid else valid[0])
+        wa = self.session.lap_window(a)
+        wb = ref_sess.lap_window(ref_lap)  # the reference lap's window on the REFERENCE clock
+        if wa is None or wb is None:
+            return False
+        self._cross = True
+        self._session_b = ref_sess
+        self._compare = True
+        self._compare_a, self._compare_b = a, ref_lap
+        # Pane B's video source is the REFERENCE recording's ChapterMap (its footage); pane A keeps
+        # the primary recording's source. The pane-B picker is locked to the reference lap (one
+        # choice), so its choice list is just that lap's caption.
+        pane_b_source = ref_sess.chapters or ref_sess.video_path
+        cap_a = self._lap_caption(a)
+        cap_b = self._cross_caption_b(ref_sess, ref_lap)
+        # Pane A's picker still lists this session's valid laps; pane B's is locked (single entry).
+        self.video.set_compare(a, ref_lap, wa, wb, cap_a, cap_b,
+                               valid, self._lap_choice_labels(valid),
+                               pane_b_source=pane_b_source,
+                               pane_b_choices=[ref_lap], pane_b_choice_labels=[cap_b])
+        self._reset_pair_to_start()
+        # The chart overlay shows pane A's lap vs the reference baseline (already the active Δ
+        # baseline since a reference is loaded) — drive it with just lap A; the reference curve is
+        # drawn as the green baseline by Session.delta under REFERENCE_ID.
+        self.plots.set_laps([a])
+        self.video.set_pane_gmeter_lap(0, a)
+        # Pane B's g scope is the reference lap, but the lap id lives on the REFERENCE session, not
+        # this one. set_pane_gmeter_lap only needs the lap id for the scope window the overlay
+        # draws; feed the reference lap id (the overlay reads its own per-pane g feed in tick()).
+        self.video.set_pane_gmeter_lap(1, ref_lap)
+        self._set_followed_lap(a)
+        self._compare_last_t = None
+        self._on_pair_changed()
+        return True
+
+    def _cross_caption_b(self, ref_sess: Session, ref_lap: int) -> str:
+        """Pane B caption for the cross-recording compare: the reference RECORDING's label plus the
+        reference lap time, so the cross-recording origin is obvious (the friend's file, not a lap
+        of this session)."""
+        label = self.session.reference_label() or "reference"
+        return f"{label} · lap {ref_lap} · {fmt_time(ref_sess.lap_time(ref_lap))}"
+
     def exit(self) -> None:
+        self._cross = False
+        self._session_b = self.session
         self._compare = False
         self._compare_a = self._compare_b = None
         self.video.exit_compare()
@@ -230,6 +345,10 @@ class CompareController:
         untouched. Drives the [A,B] pair that feeds the charts + the per-tick Δ badges."""
         if not self._compare:
             return
+        if self._cross and side != 0:
+            # v1: pane B is LOCKED to the reference lap in cross-recording compare — ignore any
+            # pane-B repoint (the picker is a single locked entry, so this shouldn't fire).
+            return
         valid = self.session.valid_lap_ids()
         if lap_id not in valid:
             return
@@ -247,8 +366,13 @@ class CompareController:
         # videos never end up "one mid-lap, the other at start". This clears the other pane's
         # lingering position too and leaves both ready to roll together on the next Play.
         self._reset_pair_to_start()
-        # Refresh the chart overlay with the new pair; freeze auto-follow on the (new) primary lap.
-        if self._compare_a is not None and self._compare_b is not None:
+        # Refresh the chart overlay; freeze auto-follow on the (new) primary lap. Cross-recording
+        # draws just lap A vs the reference baseline (pane B's reference curve is the green
+        # baseline drawn by Session.delta), so the overlay is [A] there, [A,B] for same-recording.
+        if self._cross:
+            self.plots.set_laps([self._compare_a])
+            self._set_followed_lap(self._compare_a)
+        elif self._compare_a is not None and self._compare_b is not None:
             self.plots.set_laps([self._compare_a, self._compare_b])
             self._set_followed_lap(self._compare_a)
         # The compared pair changed — force the next tick() to recompute the badges/g.
@@ -259,8 +383,11 @@ class CompareController:
     def _seek_pane_to_lap_start(self, side: int, lap_id: int) -> None:
         """Seek one pane to a hair INTO its lap (the theme.LAP_SEEK_NUDGE_S nudge keeps the
         ms-quantized position inside the lap, mirroring the lap-table seek), so it parks on the
-        lap's start."""
-        window = self.session.lap_window(lap_id)
+        lap's start. Pane B's window resolves against `session_b` — for cross-recording that is the
+        REFERENCE session's clock (its local media time), so the seek lands on the reference lap's
+        S/F in the reference footage, not a primary-clock time."""
+        sess = self.session if side == 0 else self._session_b
+        window = sess.lap_window(lap_id)
         if window is not None:
             self.video.seek_pane(side, window[0] + theme.LAP_SEEK_NUDGE_S)
 

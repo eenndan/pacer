@@ -692,6 +692,14 @@ class MapView(QWidget):
         is a bare setPos (exactly as cheap as the red marker's tick path — no item churn)."""
         if i is None:
             return
+        self.set_ghost_pos(float(self.session.tx[i]), float(self.session.ty[i]))
+
+    def set_ghost_pos(self, x: float, y: float):
+        """Place the compare ghost at an explicit local-frame (x, y). Used by the F7 Phase B
+        cross-recording compare, where lap B lives in ANOTHER recording: its kart position can't be
+        a primary-trace index (set_ghost_index), so the controller hands the point sampled off the
+        REFERENCE racing line ALREADY fit into this session's local frame. Same lazy item + bare
+        setPos as set_ghost_index — both routes share the one ghost item."""
         if self._ghost is None:
             # A hollow ring (no fill), smaller than the 15 px video marker, in the lap-B accent
             # — visually unmistakable next to the filled coral marker. NOT movable: it displays
@@ -702,7 +710,7 @@ class MapView(QWidget):
             self._ghost.setZValue(9)  # above lap overlays/rainbow (≤5), below the marker (10)
             self.plot.addItem(self._ghost)
         self.ghost_updates += 1
-        self._ghost.setPos(pg.Point(float(self.session.tx[i]), float(self.session.ty[i])))
+        self._ghost.setPos(pg.Point(x, y))
 
     def clear_ghost(self):
         """Remove the ghost on compare exit. The item is deleted, not hidden, so the map's item

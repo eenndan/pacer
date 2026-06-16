@@ -178,11 +178,17 @@ class _FakePlots:
 
 
 class _FakeMap:
-    """Records marker placements + serves a queued marker-drag seek (drained once per tick)."""
+    """Records marker placements + serves a queued marker-drag seek (drained once per tick), and
+    records the compare GHOST drives: `ghost_idx` (same-recording, set_ghost_index on the primary
+    trace) vs `ghost_pos` (cross-recording, set_ghost_pos on the reference overlay line) — the two
+    are mutually exclusive, so a cross-recording tick must NEVER touch ghost_idx and vice versa."""
 
     def __init__(self):
         self.placed = []        # set_playhead_time(t)
         self._marker_seek = None
+        self.ghost_idx = []     # set_ghost_index(i) — same-recording ghost (primary-trace index)
+        self.ghost_pos = []     # set_ghost_pos(x, y) — cross-recording ghost (overlay-line point)
+        self.cleared_ghost = 0  # clear_ghost() count (compare exit)
 
     def set_playhead_time(self, t):
         self.placed.append(t)
@@ -190,6 +196,15 @@ class _FakeMap:
     def take_marker_seek(self):
         t, self._marker_seek = self._marker_seek, None
         return t
+
+    def set_ghost_index(self, i):
+        self.ghost_idx.append(i)
+
+    def set_ghost_pos(self, x, y):
+        self.ghost_pos.append((x, y))
+
+    def clear_ghost(self):
+        self.cleared_ghost += 1
 
 
 class _FakeTable:
@@ -230,6 +245,7 @@ def _make_controllers(session, *, table_selected=None):
         set_followed_lap=set_followed_lap,
         select_default=select_default,
         get_applied_t=lambda: state["applied_t"],
+        map_view=map_view,  # the F4 ghost collaborator (same- and cross-recording)
     )
     scrub = ScrubController(
         session, video, plots, map_view,
@@ -513,6 +529,170 @@ def test_compare_tick_noop_until_pair_set():
     compare.tick()
     assert video.badges == [] and video.pane_g == []
     print("test_compare_tick_noop_until_pair_set OK")
+
+
+# ============================================= F7 Phase B: cross-recording video compare
+def _attach_reference(primary, *, ref_lap=5, faster=0.95, overlay=True):
+    """Build a SECOND bare reference Session and adopt it as the primary's cross-recording
+    reference. The reference lap mirrors the primary's lap A curve but `faster`× the time (so the
+    deltas are non-trivial) on its OWN clock (anchored away from 0). Returns (ref_session, ref_lap).
+    Stubs only what the cross-recording compare reads: lap_window / lap_time / g_at_time on the
+    reference, plus chapters/video_path as the pane-B video source marker."""
+    ta = primary._dist_cache[3][0]   # lap A times (the _make_session lap A id is 3)
+    da = primary._dist_cache[3][1]   # lap A dists
+    r_times = (ta - ta[0]) * faster + 1000.0   # reference's own clock, anchored at 1000 s
+    from tests._synthetic import seed_lap
+    ref = bare_session({ref_lap: (r_times, da.copy())}, best=ref_lap, valid=[ref_lap])
+    seed_lap(ref, ref_lap, r_times, da.copy())
+    rwin = (float(r_times[0]), float(r_times[-1]))
+    ref.lap_window = lambda lid, _w=rwin: _w
+    ref.lap_time = lambda lid, _t=float(r_times[-1] - r_times[0]): _t
+    # Reference g: a DIFFERENT deterministic signal from the primary's, to prove pane B routes
+    # through the reference session (not self.session).
+    ref.g_at_time = lambda t: (round(0.5 * t, 6), round(-0.6 * t, 6), round(0.7 * t, 6))
+    # A distinct chapters marker (the pane-B video source the controller must pass through).
+    ref.chapters = f"REF_CHAPTERS_{ref_lap}"
+    ref.video_path = None
+    # Build a cross_reference.ReferenceLap directly (avoids the pacer-backed loop-fit path) and
+    # wire the primary's reference seam to it + the live reference session.
+    from studio import cross_reference as xr
+    overlay_xy = np.column_stack([np.linspace(0, 100, 60), np.linspace(0, 50, 60)]) if overlay else None
+    primary._reference = xr.ReferenceLap(
+        dist=da.copy(), speed_kmh=np.full(len(da), 50.0), elapsed=(r_times - r_times[0]),
+        total_time=float(r_times[-1] - r_times[0]), source_label="friend", lap_id=ref_lap,
+        overlay_xy=overlay_xy, map_fit_rms=(1.0 if overlay else None),
+    )
+    primary._reference_session = ref
+    return ref, ref_lap
+
+
+def test_cross_compare_routes_pane_b_through_reference():
+    """enter_cross(): pane A is the primary lap, pane B is the reference recording's lap. The
+    pane-B video SOURCE handed to set_compare is the REFERENCE's chapters (not the primary's), and
+    the lap windows differ (pane B on the reference clock). Pane B's lap is locked to the reference."""
+    s, a, _b = _make_session()
+    ref, ref_lap = _attach_reference(s)
+    _scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    state["applied_t"] = 105.0  # inside lap A
+    assert compare.enter_cross() is True
+    assert compare.cross and compare.session_b is ref
+    assert compare.lap_a == a and compare.lap_b == ref_lap
+    # set_compare got the REFERENCE source for pane B + the locked single-lap picker.
+    args, kwargs = video.compare_args
+    assert kwargs["pane_b_source"] == f"REF_CHAPTERS_{ref_lap}", kwargs["pane_b_source"]
+    assert kwargs["pane_b_choices"] == [ref_lap], kwargs.get("pane_b_choices")
+    # Pane A window is the primary lap A's; pane B window is the reference lap's (different clock).
+    wa, wb = args[2], args[3]
+    assert wa == s.lap_window(a)
+    assert wb == ref.lap_window(ref_lap) and wb[0] >= 1000.0, wb
+    print(f"test_cross_compare_routes_pane_b_through_reference OK: pane B source={kwargs['pane_b_source']}")
+
+
+def test_cross_compare_tick_pane_b_feeds_from_reference():
+    """In cross-recording tick(): pane B's g == reference_session.g_at_time(t_b) EXACTLY (not the
+    primary's g), pane B's badge == the reference-vs-primary cross-recording delta, and pane A's
+    badge == the primary-vs-reference delta. The map ghost sits on the reference overlay line.
+
+    HARDENED against the global-clock-vs-from-0 clamp bug: pane B is parked MID-lap on the
+    reference's GLOBAL clock (≈ 1000 + half the lap), and the expected ghost index + badge are
+    computed INDEPENDENTLY of the methods under test — by rebasing t_b to seconds-into-the-
+    reference-lap and indexing the overlay ring / scaling the linear synthetic delta by hand. A
+    clamp-to-finish regression (interp of a ~1000 s t_b against the from-0 reference axis) would
+    drive the ghost to the LAST overlay index and the badge to the finish Δ, both of which these
+    independent assertions reject. We also assert the ghost lands STRICTLY between the start and
+    last overlay indices."""
+    s, a, _b = _make_session()
+    ref, ref_lap = _attach_reference(s)
+    _scrub, compare, video, _plots, map_view, _table, state = _make_controllers(s)
+    state["applied_t"] = 105.0
+    assert compare.enter_cross()
+    # Park both panes mid-lap on their OWN clocks (pane B's clock is anchored ≈ 1000 s, not 0).
+    ta = _lap_times(s, a)
+    r_times = ref._dist_cache[ref_lap][0]
+    t_a = float(ta[len(ta) // 2])
+    t_b = float(r_times[len(r_times) // 2])
+    assert t_b >= 1000.0, t_b  # the reference clock is genuinely away from 0 (the clamp trap)
+    video.pane_times = {0: t_a, 1: t_b}
+    compare._compare_last_t = None
+    compare.tick()
+    # Pane B g routes through the REFERENCE session, exactly.
+    assert video.pane_g[-1] == (1, ref.g_at_time(t_b)), video.pane_g[-1]
+    assert video.pane_g[-1] != (1, s.g_at_time(t_b)), "must NOT use the primary session's g"
+    # Badges: pane A = primary vs reference (delta_at_lap), pane B = reference vs primary.
+    d_a = s.delta_at_lap(a, t_a)
+    d_b = s.reference_delta_vs_lap(a, t_b)
+    badge_sides = {side: txt for side, txt, _c in video.badges}
+    assert badge_sides[0] == f"Δ {d_a:+.2f} s", badge_sides[0]
+    assert badge_sides[1] == f"Δ {d_b:+.2f} s", badge_sides[1]
+
+    # --- INDEPENDENT expectations (no call to the methods under test) ---
+    # The reference lap (see _attach_reference) is the primary lap A's distance curve, elapsed
+    # scaled by `faster` (0.95) and anchored at 1000 s; its overlay ring is M points sampled along
+    # the lap. Rebase the GLOBAL t_b to into-lap, derive s, and compute both expectations by hand.
+    ref_lap_obj = s._ref
+    ref_dist, ref_elapsed = ref_lap_obj.dist, ref_lap_obj.elapsed  # from-0 arrays
+    win0 = ref.lap_window(ref_lap)[0]
+    t_into = t_b - win0
+    s_frac = float(np.interp(t_into, ref_elapsed, ref_dist)) / float(ref_dist[-1])
+    xy = s.reference_overlay_xy()
+    m = len(xy)
+    want_idx = min(int(round(s_frac * (m - 1))), m - 1)
+    # primary lap A's elapsed at the same fraction s, then reference − primary (faster=0.95 vs 1.0).
+    pa_elapsed = ta - ta[0]
+    pa_dist = s._dist_cache[a][1]
+    prim_elapsed_at_s = float(np.interp(s_frac * float(pa_dist[-1]), pa_dist, pa_elapsed))
+    want_b_delta = float(np.interp(t_into, ref_elapsed, ref_elapsed)) - prim_elapsed_at_s
+
+    # Map ghost placed on the reference OVERLAY line (set_ghost_pos), NOT a primary-trace index.
+    assert map_view.ghost_pos, "cross-recording ghost must use set_ghost_pos"
+    assert not map_view.ghost_idx, "cross-recording must NOT index the primary trace"
+    assert map_view.ghost_pos[-1] == (float(xy[want_idx, 0]), float(xy[want_idx, 1])), (
+        map_view.ghost_pos[-1], want_idx)
+    # The mid ghost must land STRICTLY inside the ring — proves it is not clamped to S/F or finish.
+    assert 0 < want_idx < m - 1, (want_idx, m)
+    # And the pane-B badge is the genuine MID delta, not the clamped finish delta.
+    assert abs(d_b - want_b_delta) < 1e-6, (d_b, want_b_delta)
+    print(f"test_cross_compare_tick_pane_b_feeds_from_reference OK: ghost idx={want_idx}/{m-1} "
+          f"(mid, not clamped), paneB Δ={d_b:+.3f}s")
+
+
+def test_cross_compare_disabled_without_reference():
+    """enter_cross() is a no-op (returns False) when no reference Session is retained — the menu
+    action is disabled in that state, but the controller guards anyway."""
+    s, _a, _b = _make_session()
+    _scrub, compare, _video, _plots, _map, _table, state = _make_controllers(s)
+    state["applied_t"] = 105.0
+    assert compare.enter_cross() is False
+    assert not compare.active and not compare.cross
+    print("test_cross_compare_disabled_without_reference OK")
+
+
+def test_same_recording_compare_is_byte_identical_session_b():
+    """Regression guard: the same-recording compare (enter()) must route pane B through
+    self.session — `session_b is self.session` and `cross` is False — so its feeds are unchanged
+    from main. Even with a reference loaded, enter() (the same-recording toggle) stays local."""
+    s, a, b = _make_session()
+    _attach_reference(s)  # a reference is loaded, but the SAME-recording toggle ignores it
+    _scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    state["applied_t"] = 105.0
+    compare.enter()  # the existing same-recording compare path
+    assert compare.session_b is s, "same-recording compare must route pane B through self.session"
+    assert compare.cross is False
+    assert (compare.lap_a, compare.lap_b) == (a, b), "same-recording pins two LOCAL laps"
+    # pane_b_source is None (reuse the primary recording's source) — byte-identical to main.
+    _args, kwargs = video.compare_args
+    assert kwargs.get("pane_b_source") is None, kwargs.get("pane_b_source")
+    # tick() uses delta_between (the same-recording path), not the cross-recording helpers.
+    ta, tb = _lap_times(s, a), _lap_times(s, b)
+    video.pane_times = {0: float(ta[len(ta) // 2]), 1: float(tb[len(tb) // 2])}
+    compare._compare_last_t = None
+    compare.tick()
+    d_ab = s.delta_between(a, b, video.pane_times[0])
+    d_ba = s.delta_between(b, a, video.pane_times[1])
+    assert video.badges[0][1] == f"Δ {d_ab:+.2f} s"
+    assert video.badges[1][1] == f"Δ {d_ba:+.2f} s"
+    assert video.pane_g[-1] == (1, s.g_at_time(video.pane_times[1])), "pane B g from self.session"
+    print("test_same_recording_compare_is_byte_identical_session_b OK")
 
 
 if __name__ == "__main__":
