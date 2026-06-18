@@ -39,6 +39,7 @@ from . import chapters, export_data, export_video, library, sidecar, theme
 from .coaching_panel import OpportunitiesDialog
 from .compare_controller import CompareController
 from .consistency_panel import ConsistencyPanel
+from .help_dialog import AboutDialog, ShortcutsDialog
 from .lap_table import CornerTable, LapTable
 from .library_dialog import LibraryDialog
 from .map_view import MapView
@@ -607,6 +608,32 @@ class StudioWindow(QMainWindow):
             "top-5 most inconsistent corners.")
         self._consistency_action.toggled.connect(self._on_consistency_toggled)
 
+        # Help menu (rightmost): the discoverable surface for an otherwise-invisible interaction
+        # model — the playback toggles, ±-stepping, chart-cursor scrub and the draggable map
+        # start/finish line have no on-screen hint. Two read-only dialogs (studio/help_dialog.py):
+        # the keyboard-shortcut reference (also bound to F1 / ? in _build_shortcuts) and an About
+        # card. Additive — like the other menus it's built once on the persistent QMainWindow menu
+        # bar, so it survives the central-widget rebuild and needs no per-load wiring.
+        help_menu = self.menuBar().addMenu("&Help")
+        self._shortcuts_action = help_menu.addAction("Keyboard shortcuts")
+        self._shortcuts_action.setShortcut(QKeySequence(Qt.Key_F1))
+        self._shortcuts_action.setToolTip(
+            "List the keyboard shortcuts and the key drag interactions (chart scrub, start/finish "
+            "line)")
+        self._shortcuts_action.triggered.connect(self._show_shortcuts)
+        self._about_action = help_menu.addAction("About pacer studio")
+        self._about_action.setToolTip("What pacer studio is and what it does")
+        self._about_action.triggered.connect(self._show_about)
+
+    def _show_shortcuts(self):
+        """Help ▸ Keyboard shortcuts (also F1 / ?): the themed, read-only shortcut reference.
+        Built fresh + modal each time — it carries no app state, so there's nothing to refresh."""
+        ShortcutsDialog(self).exec()
+
+    def _show_about(self):
+        """Help ▸ About pacer studio: the small themed About card (name / tagline / blurb)."""
+        AboutDialog(self).exec()
+
     # ----------------------------------------------------- keyboard shortcuts
     def _build_shortcuts(self):
         """Window-level playback shortcuts: Space (play/pause), M (mute), G (g-meter overlay),
@@ -635,6 +662,10 @@ class StudioWindow(QMainWindow):
         shortcut(Qt.Key_M, lambda: self._video_do(lambda v: v.toggle_mute()))
         shortcut(Qt.Key_G, lambda: self._video_do(lambda v: v.gmeter_btn.click()))
         shortcut(Qt.Key_C, lambda: self._video_do(lambda v: v.compare_btn.click()))
+        # ? opens the shortcut reference (F1 is set on the Help-menu action itself). The shortcut
+        # text in that dialog (studio/help_dialog.py SHORTCUT_GROUPS) is the documented twin of
+        # these bindings + the ←/→ stepping in keyPressEvent — keep them in sync.
+        shortcut(Qt.Key_Question, self._show_shortcuts)
 
     def _video_do(self, fn):
         """Run `fn` against the CURRENT VideoView, resolved at ACTIVATION time (not capture
