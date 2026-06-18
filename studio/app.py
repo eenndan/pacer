@@ -124,6 +124,13 @@ class StudioWindow(QMainWindow):
         sibling chapters). Tearing the central widget down and rebuilding keeps the panels — each
         of which captures `session` at construction — simple and free of stale references."""
         print("studio: loading telemetry…", flush=True)
+        # Kill the "black-void launch": Session.load is a ~4 s SYNCHRONOUS call, and on the first
+        # launch it runs before the window is ever shown — so the user stares at nothing for seconds
+        # (and every "Load full recording" reload hard-freezes the window). Before blocking, show the
+        # window with a lightweight centered "Loading telemetry…" placeholder and force ONE paint, so
+        # there is always immediate visual feedback. Full threading of the load is out of scope; a
+        # visible loading state is enough. Replaced by the real UI in _build_ui once the load returns.
+        self._show_loading_placeholder(paths)
         # Assign _paths BEFORE the guarded load: readers that stay reachable after a failed FIRST
         # load (e.g. the still-enabled "Load full recording" action) must always find a value.
         self._paths = list(paths)
@@ -183,6 +190,28 @@ class StudioWindow(QMainWindow):
         # …) only logs a warning and never disrupts the app. A missing/empty index just starts
         # one; a corrupt index self-heals (library.load returns an empty index).
         self._update_library(paths)
+
+    def _show_loading_placeholder(self, paths: list[str]):
+        """Immediate visual feedback for the ~4 s blocking Session.load (the worst first impression
+        was a black void / a frozen window during it). Install a centered "Loading telemetry…" card
+        as the central widget, SHOW the window if it isn't visible yet, and force a single synchronous
+        paint so it actually appears BEFORE the load blocks the event loop. Cheap and robust — no
+        thread; the placeholder is replaced by the real UI in _build_ui when the load returns.
+
+        Defensive: a unit-test StudioWindow.__new__'d without a QApplication has no app to paint —
+        QApplication.instance() is then None, so the processEvents nudge is simply skipped."""
+        label = chapters.recording_label(paths)
+        placeholder = QLabel(f"Loading telemetry…\n\n{label}" if label else "Loading telemetry…")
+        placeholder.setAlignment(Qt.AlignCenter)
+        placeholder.setWordWrap(True)
+        self.setCentralWidget(placeholder)
+        if not self.isVisible():
+            self.show()
+        # Force one paint so the placeholder is on screen before Session.load blocks the loop. Without
+        # this the setCentralWidget/show only schedule a paint that never runs until after the load.
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
 
     def _on_load_failed(self, paths: list[str], exc: Exception):
         """A session load failed (missing / corrupt / no-GPS file). Show a clear, non-fatal error
@@ -490,6 +519,13 @@ class StudioWindow(QMainWindow):
         self.plots.modeChanged.connect(self._refresh_sector_lines)
 
         self._select_default()
+        # Poster frame: seek the PRIMARY pane a hair into the best lap WHILE PAUSED so the (largest)
+        # video quadrant shows a real frame at launch instead of a black void, and the map marker /
+        # charts / readout are all populated and consistent with that frame. A paused seek decodes
+        # and presents the frame without playing audio. Done after _select_default() so the chart
+        # selection is already in place. Skipped cleanly when there's no valid lap (poster_seek
+        # checks best_lap_id()), so a 0-lap session still launches.
+        self._poster_seek()
         self._refresh_sector_lines()  # draw any sectors present on launch (none by default)
         self._sync_full_recording_action()
         # F7: the permanent status-bar chip showing which cross-recording reference is active.
@@ -1111,6 +1147,35 @@ class StudioWindow(QMainWindow):
         self.table.select(ids)
         self._on_laps_selected(ids)
 
+    def _poster_seek(self):
+        """Park the PRIMARY video pane on the best lap's first frame at launch (and after a reload),
+        so the largest quadrant isn't a black void before the user touches anything — and so the
+        map marker / charts / hero readout all reflect a real moment INSIDE a lap (not lead-in).
+
+        Seek a hair INTO the lap (theme.LAP_SEEK_NUDGE_S past its start) for the same reason
+        _on_laps_selected does — a seek to the exact contiguous-lap boundary ms-quantizes a touch
+        below it and resolves to the PREVIOUS lap. The pane is freshly constructed and never played,
+        so it is already paused; the seek decodes + presents the frame without starting playback or
+        audio. Seed _applied_t so the very next tick's "did the position advance" check sees the
+        poster position as already-applied (the readout/marker are driven directly here).
+
+        Graceful no-lap edge: if there is no valid best lap there is nothing to poster, so skip the
+        seek entirely (the 0-valid-lap session still launches — just on a black/first frame)."""
+        best = self.session.best_lap_id()
+        if best is None:
+            return
+        window = self.session.lap_window(best)
+        if window is None:
+            return
+        target = window[0] + theme.LAP_SEEK_NUDGE_S
+        self.video.seek(target)          # paused decode → presents the best lap's start frame
+        self._latest_t = target
+        self._applied_t = target
+        # Populate the chart playhead + readout / map marker directly from the poster time so the
+        # t=0 state is consistent with the shown frame immediately (the same work a playback tick
+        # does), without waiting for a positionChanged tick the seek may not emit synchronously.
+        self._apply_position(target)
+
     def _on_user_select(self, ids):
         # A genuine user click in the lap table also jumps the video to that lap (F1).
         self._on_laps_selected(ids, seek=True)
@@ -1300,7 +1365,11 @@ class StudioWindow(QMainWindow):
         else:
             # +behind / −ahead vs best, at the same track position.
             delta_txt = f"Δ {d:+.2f} s"
-        speed_txt = f"{sp:.0f} km/h" if sp is not None else "— km/h"
+        # Honest no-lap state: outside a valid lap (lead-in / between laps / cool-down) the hero box
+        # reads "— km/h" rather than a misleading lead-in speed (the old "12 km/h at t=0" first
+        # impression). A real speed is shown only WHILE a lap is current. With the launch poster-seek
+        # landing inside the best lap, t=0 now shows the best lap's real speed instead of "—".
+        speed_txt = f"{sp:.0f} km/h" if (sp is not None and lap_id is not None) else "— km/h"
         # Colour cue: the shared three-way rule (theme.delta_colour) — green when meaningfully up
         # on best, red when down, and the primary text colour when there's no delta OR it's dead
         # even (|Δ| within ±theme.DELTA_EVEN_EPS_S; an exact 0 used to read GREEN). The card's
