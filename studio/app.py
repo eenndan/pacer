@@ -691,7 +691,16 @@ class StudioWindow(QMainWindow):
     def _update_library(self, paths: list[str]):
         """Upsert the just-loaded recording into the local session-library index. FULLY GUARDED:
         any failure (entry build, or an unwritable app-support dir) is swallowed with a warning
-        — a library write must NEVER disrupt a load. Called post-UI from _load (see there)."""
+        — a library write must NEVER disrupt a load. Called post-UI from _load (see there).
+
+        SKIP non-recordings: the bundled ``DEFAULT_SAMPLE`` (launched with no file) and any
+        recording with no valid laps would otherwise persist a junk row (0 laps, null track) that
+        the library dialog then surfaces forever. A library of *analyzed* sessions only wants rows
+        with at least one real lap, so an empty/unsegmented open is not indexed."""
+        if any(os.path.abspath(p) == os.path.abspath(DEFAULT_SAMPLE) for p in paths):
+            return
+        if not self.session.valid_lap_ids():
+            return
         try:
             entry = self.session.library_entry(paths)
             library.upsert_and_save(entry)

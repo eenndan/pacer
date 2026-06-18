@@ -1,9 +1,9 @@
 """Tests for the session library (studio.library + studio.library_dialog, F8).
 
 The library is a local index of analyzed recordings — one entry per recording fingerprint
-(first-chapter stem + total duration) with track / date / lap count / best / theoretical / paths
-— stored in the macOS app-support dir and surfaced by the File ▸ Library… dialog with a per-track
-PB-progression mini-chart.
+(the CHAPTER-INVARIANT recording identity: GoPro prefix + recording number) with track / date /
+lap count / best / theoretical / paths — stored in the macOS app-support dir and surfaced by the
+File ▸ Library… dialog with a per-track PB-progression mini-chart.
 
 CRITICAL: every test here points the index at a TEMP directory by monkeypatching
 ``library._app_support_dir`` (the single seam) — the suite NEVER touches the user's real
@@ -43,16 +43,21 @@ from studio.library_dialog import (  # noqa: E402
     _COL_TRACK,
     MISSING_ROLE,
     NUM_ROLE,
+    TRACK_ROLE,
     LibraryDialog,
+    _entry_disabled,
+    _entry_junk,
 )
 
 
 # ------------------------------------------------------------------ helpers
-def _entry(stem, dur, *, track="Daytona MK", date="2024-05-01", laps=12,
+def _entry(stem, *, track="Daytona MK", date="2024-05-01", laps=12,
            best=68.4, theo=67.9, paths=None):
-    """Build a valid library entry with a fingerprint derived from (stem, dur)."""
+    """Build a valid library entry with a fingerprint derived from the (chapter-invariant) stem.
+    (The signature dropped the old per-recording duration arg — the fingerprint no longer uses
+    it; tests that need DISTINCT recordings pass distinct stems.)"""
     return {
-        "fingerprint": library.fingerprint(stem, dur),
+        "fingerprint": library.fingerprint(stem),
         "stem": stem,
         "track": track,
         "date": date,
@@ -65,16 +70,31 @@ def _entry(stem, dur, *, track="Daytona MK", date="2024-05-01", laps=12,
 
 # ============================================================ pure index (no Qt)
 
-def test_fingerprint_rounds_duration_and_is_canonical():
-    """The fingerprint is ``stem|duration-to-0.1s``: 275.44 and 275.41 collapse to the same key
-    (sub-0.1s jitter in a recomputed duration can't fork the identity), and it's a fixed
-    one-decimal string (no float repr drift)."""
-    assert library.fingerprint("GX010062", 275.44) == "GX010062|275.4"
-    assert library.fingerprint("GX010062", 275.41) == "GX010062|275.4"
-    assert library.fingerprint("GX010062", 275.0) == "GX010062|275.0"
-    # A different stem or a >0.1s-different duration is a DIFFERENT recording.
-    assert library.fingerprint("GX010060", 275.4) != library.fingerprint("GX010062", 275.4)
-    assert library.fingerprint("GX010062", 275.4) != library.fingerprint("GX010062", 280.4)
+def test_fingerprint_is_chapter_invariant_recording_identity():
+    """The fingerprint is the recording's CHAPTER-INVARIANT identity (GoPro prefix + recording
+    number): the per-chapter index is stripped so any chapter of one recording fingerprints the
+    same, and the media duration is NOT in the key (it differs between a single-chapter and a full
+    chaptered open of the SAME recording, the bug this fixes)."""
+    # Every chapter of recording 0062 → the SAME key.
+    assert library.fingerprint("GX010062") == "GX0062"
+    assert library.fingerprint("GX020062") == "GX0062"
+    assert library.fingerprint("GX030062") == "GX0062"
+    # Prefix is upper-cased / honoured; a different recording number is a different recording.
+    assert library.fingerprint("gx010062") == "GX0062"
+    assert library.fingerprint("GH010062") == "GH0062"
+    assert library.fingerprint("GX010060") != library.fingerprint("GX010062")
+    # A non-GoPro stem (e.g. the bundled sample) keys on itself — never collides with a recording.
+    assert library.fingerprint("hero6") == "hero6"
+    assert library.fingerprint("") == ""
+
+
+def test_fingerprint_single_vs_full_chaptered_open_collapse():
+    """The CORE dedup contract: opening recording 0060 as a single chapter (GX010060) and as its
+    full chaptered chain (first chapter GX010060) produce the SAME fingerprint — so one recording
+    is ONE library row, not two (the duration-in-key splitting bug)."""
+    single = library.fingerprint("GX010060")            # first stem of a 1-chapter open
+    full = library.fingerprint("GX010060")              # first stem of the full chain open
+    assert single == full == "GX0060"
 
 
 def test_save_load_roundtrip_bit_exact():
@@ -83,14 +103,14 @@ def test_save_load_roundtrip_bit_exact():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "library.json")
         idx = library.empty_index()
-        library.upsert(idx, _entry("GX010060", 1100.25, best=68.408, theo=67.901))
+        library.upsert(idx, _entry("GX010060", best=68.408, theo=67.901))
         library.save(idx, p)
         back = library.load(p)
         assert back["version"] == 1
         assert len(back["entries"]) == 1
         e = back["entries"][0]
         assert e["best"] == 68.408 and e["theoretical"] == 67.901   # exact float equality
-        assert e["fingerprint"] == "GX010060|1100.2"
+        assert e["fingerprint"] == "GX0060"
         assert e["paths"] == ["/media/GX010060.MP4"]
         # A second save of the loaded index is byte-identical on disk (fully stable).
         p2 = os.path.join(d, "again.json")
@@ -113,26 +133,26 @@ def test_upsert_replaces_same_fingerprint_in_place():
     in place — count stays 1, position is kept, values are replaced. A different fingerprint
     appends."""
     idx = library.empty_index()
-    # First open: single chapter.
-    library.upsert(idx, _entry("GX010062", 275.4, laps=10, best=70.0,
+    # First open: single chapter (first stem GX010062).
+    library.upsert(idx, _entry("GX010062", laps=10, best=70.0,
                                paths=["/m/GX010062.MP4"]))
     assert len(idx["entries"]) == 1
-    # Re-open the SAME recording (same stem+duration) as the FULL chaptered chain: same
-    # fingerprint, different paths + better best → updates in place, NO duplicate.
-    library.upsert(idx, _entry("GX010062", 275.4, laps=10, best=68.1,
+    # Re-open the SAME recording as the FULL chaptered chain: the first chapter's stem is still
+    # GX010062 → SAME fingerprint, different paths + better best → updates in place, NO duplicate.
+    library.upsert(idx, _entry("GX010062", laps=10, best=68.1,
                                paths=["/m/GX010062.MP4", "/m/GX020062.MP4"]))
     assert len(idx["entries"]) == 1, idx["entries"]
     e = idx["entries"][0]
     assert e["best"] == 68.1
     assert e["paths"] == ["/m/GX010062.MP4", "/m/GX020062.MP4"]
     # A genuinely different recording appends.
-    library.upsert(idx, _entry("GX010060", 1100.0))
+    library.upsert(idx, _entry("GX010060"))
     assert len(idx["entries"]) == 2
     # And the re-open of the FIRST keeps its position (index 0), not reshuffled to the end.
-    library.upsert(idx, _entry("GX010062", 275.4, best=67.5,
+    library.upsert(idx, _entry("GX010062", best=67.5,
                                paths=["/m/GX010062.MP4", "/m/GX020062.MP4"]))
     assert len(idx["entries"]) == 2
-    assert idx["entries"][0]["fingerprint"] == "GX010062|275.4"
+    assert idx["entries"][0]["fingerprint"] == "GX0062"
     assert idx["entries"][0]["best"] == 67.5
 
 
@@ -141,8 +161,8 @@ def test_upsert_and_save_no_duplicate_across_loads():
     on disk (the app's per-load call is idempotent for a re-opened recording)."""
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "library.json")
-        library.upsert_and_save(_entry("GX010060", 1100.0, best=70.0), p)
-        library.upsert_and_save(_entry("GX010060", 1100.0, best=68.0), p)
+        library.upsert_and_save(_entry("GX010060", best=70.0), p)
+        library.upsert_and_save(_entry("GX010060", best=68.0), p)
         idx = library.load(p)
         assert len(idx["entries"]) == 1
         assert idx["entries"][0]["best"] == 68.0
@@ -158,7 +178,7 @@ def test_load_missing_is_empty_index():
 def test_load_corrupt_returns_empty_then_heals():
     """Every malformed shape → a safe EMPTY index (self-heal, same philosophy as the sidecar's
     revert guard); a fresh write over the garbage then heals it to a real index."""
-    good = _entry("GX010060", 1100.0)
+    good = _entry("GX010060")
     fp = good["fingerprint"]
     bad_bodies = [
         "{ not json",                                            # not JSON at all
@@ -209,7 +229,7 @@ def test_null_track_date_best_roundtrip():
     the entry is still valid and listable."""
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "library.json")
-        e = _entry("hero6", 30.0, track=None, date=None, laps=0, best=None, theo=None)
+        e = _entry("hero6", track=None, date=None, laps=0, best=None, theo=None)
         library.upsert_and_save(e, p)
         back = library.load(p)["entries"][0]
         assert back["track"] is None and back["date"] is None
@@ -221,12 +241,12 @@ def test_pb_series_per_track_sorted_and_filtered():
     """pb_series returns (date, best) for ONE track, sorted ascending by date, dropping entries
     with no date or no best, and excluding other tracks."""
     idx = library.empty_index()
-    library.upsert(idx, _entry("A", 100.0, track="MK", date="2024-06-01", best=69.0))
-    library.upsert(idx, _entry("B", 200.0, track="MK", date="2024-05-01", best=70.0))
-    library.upsert(idx, _entry("C", 300.0, track="MK", date="2024-07-01", best=68.0))
-    library.upsert(idx, _entry("D", 400.0, track="MK", date=None, best=60.0))     # no date → drop
-    library.upsert(idx, _entry("E", 500.0, track="MK", date="2024-08-01", best=None))  # no best
-    library.upsert(idx, _entry("F", 600.0, track="OtherTrack", date="2024-06-01", best=50.0))
+    library.upsert(idx, _entry("A", track="MK", date="2024-06-01", best=69.0))
+    library.upsert(idx, _entry("B", track="MK", date="2024-05-01", best=70.0))
+    library.upsert(idx, _entry("C", track="MK", date="2024-07-01", best=68.0))
+    library.upsert(idx, _entry("D", track="MK", date=None, best=60.0))     # no date → drop
+    library.upsert(idx, _entry("E", track="MK", date="2024-08-01", best=None))  # no best
+    library.upsert(idx, _entry("F", track="OtherTrack", date="2024-06-01", best=50.0))
     series = library.pb_series(idx, "MK")
     assert series == [("2024-05-01", 70.0), ("2024-06-01", 69.0), ("2024-07-01", 68.0)]
     assert library.pb_series(idx, "Unknown") == []
@@ -238,7 +258,7 @@ def test_app_support_path_uses_patched_seam(monkeypatch):
     with tempfile.TemporaryDirectory() as d:
         monkeypatch.setattr(library, "_app_support_dir", lambda: d)
         assert library.library_path() == os.path.join(d, "library.json")
-        library.upsert_and_save(_entry("GX010060", 1100.0))   # no explicit path → patched dir
+        library.upsert_and_save(_entry("GX010060"))   # no explicit path → patched dir
         assert os.path.exists(os.path.join(d, "library.json"))
         assert len(library.load()["entries"]) == 1            # default-path load sees it
 
@@ -259,27 +279,34 @@ def _two_entry_index(tmp_present_paths):
     """An index with two entries: one PRESENT (paths exist on disk) and one MISSING. Returns
     (index, present_fingerprint, missing_fingerprint)."""
     idx = library.empty_index()
-    present = _entry("GX010060", 1100.0, track="MK", date="2024-05-01", best=70.0,
+    present = _entry("GX010060", track="MK", date="2024-05-01", best=70.0,
                      paths=tmp_present_paths)
-    missing = _entry("GX010062", 275.4, track="MK", date="2024-06-01", best=68.0,
+    missing = _entry("GX010062", track="MK", date="2024-06-01", best=68.0,
                      paths=["/definitely/missing/GX010062.MP4"])
     library.upsert(idx, present)
     library.upsert(idx, missing)
     return idx, present["fingerprint"], missing["fingerprint"]
 
 
+def _row_with_date(dlg, date_text):
+    """The table row index whose DATE cell renders `date_text` (the table is sorted, so insertion
+    order ≠ row order — find by value)."""
+    return next(r for r in range(dlg.table.rowCount())
+               if dlg.table.item(r, _COL_DATE).text() == date_text)
+
+
 def test_dialog_lists_both_entries_sorted():
-    """The dialog lists every entry; sorted ascending by date the present (2024-05-01) row is
-    above the missing (2024-06-01) row."""
+    """The dialog lists every entry; sorted DESCENDING by date (newest first) the missing
+    (2024-06-01) row is above the present (2024-05-01) row."""
     with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
         idx, _, _ = _two_entry_index([real.name])
         dlg = LibraryDialog(idx, _OpenSpy())
         assert dlg.table.rowCount() == 2
-        # Row 0 after the default ascending date sort is the earlier date.
-        assert dlg.table.item(0, _COL_DATE).text() == "2024-05-01"
-        assert dlg.table.item(1, _COL_DATE).text() == "2024-06-01"
+        # Row 0 under the default newest-first date sort is the LATER date.
+        assert dlg.table.item(0, _COL_DATE).text() == "2024-06-01"
+        assert dlg.table.item(1, _COL_DATE).text() == "2024-05-01"
         # Best column carries the numeric sort key (seconds), so it orders by value.
-        assert dlg.table.item(0, _COL_BEST).data(NUM_ROLE) == 70.0
+        assert dlg.table.item(1, _COL_BEST).data(NUM_ROLE) == 70.0
         dlg.deleteLater()
 
 
@@ -302,8 +329,8 @@ def test_dialog_open_routes_through_callback():
         idx, _, _ = _two_entry_index([real.name])
         spy = _OpenSpy()
         dlg = LibraryDialog(idx, spy)
-        # Select the present row (the 2024-05-01 one — row 0 after the date sort).
-        dlg.table.selectRow(0)
+        # Select the present row (the 2024-05-01 one — found by value, not a fixed row index).
+        dlg.table.selectRow(_row_with_date(dlg, "2024-05-01"))
         assert dlg.open_btn.isEnabled()
         dlg.open_btn.click()
         assert spy.calls == [[real.name]], spy.calls
@@ -339,8 +366,9 @@ def test_dialog_double_click_opens_present_row():
         idx, _, _ = _two_entry_index([real.name])
         spy = _OpenSpy()
         dlg = LibraryDialog(idx, spy)
-        dlg.table.selectRow(0)                       # the present row
-        dlg.table.itemDoubleClicked.emit(dlg.table.item(0, _COL_DATE))
+        present_row = _row_with_date(dlg, "2024-05-01")   # the present row (found by value)
+        dlg.table.selectRow(present_row)
+        dlg.table.itemDoubleClicked.emit(dlg.table.item(present_row, _COL_DATE))
         assert spy.calls == [[real.name]]
         dlg.deleteLater()
 
@@ -349,9 +377,9 @@ def test_dialog_pb_chart_plots_best_vs_date():
     """The PB mini-chart plots best-vs-date for the selected row's track. Two MK sessions →
     two points, x ascending by date, y the best laps."""
     idx = library.empty_index()
-    library.upsert(idx, _entry("A", 100.0, track="MK", date="2024-05-01", best=70.0,
+    library.upsert(idx, _entry("A", track="MK", date="2024-05-01", best=70.0,
                                paths=[]))
-    library.upsert(idx, _entry("B", 200.0, track="MK", date="2024-06-01", best=68.0,
+    library.upsert(idx, _entry("B", track="MK", date="2024-06-01", best=68.0,
                                paths=[]))
     dlg = LibraryDialog(idx, _OpenSpy())
     # Force the PB chart to the MK track and read the plotted series back.
@@ -365,13 +393,178 @@ def test_dialog_pb_chart_plots_best_vs_date():
 
 def test_dialog_empty_index_shows_empty_library():
     """A missing/empty index → an empty dialog (no rows, Open disabled, PB chart empty) — the
-    dormant/safe default."""
+    dormant/safe default. The PB chart shows its empty-state message rather than bare axes."""
     dlg = LibraryDialog(library.empty_index(), _OpenSpy())
     assert dlg.table.rowCount() == 0
     assert not dlg.open_btn.isEnabled()
     xs, ys = dlg._pb_curve.getData()
     assert (xs is None or len(xs) == 0)
+    assert dlg._pb_empty.isVisible()                 # empty-state shown, not bare placeholder axes
     dlg.deleteLater()
+
+
+# --------------------------------------------------- junk-row quarantine + auto-select + empty-state
+
+def test_entry_junk_and_disabled_classification():
+    """A row is JUNK (quarantined) iff it has no track OR no laps; DISABLED iff junk OR file-missing.
+    A real recording (track + laps + a present path) is neither."""
+    assert _entry_junk(_entry("hero6", track=None, laps=0))          # no track AND no laps
+    assert _entry_junk(_entry("GX010060", track=None))               # no track
+    assert _entry_junk(_entry("GX010060", laps=0))                   # no laps
+    assert not _entry_junk(_entry("GX010060", track="MK", laps=5))   # a real recording
+    # Disabled merges junk with file-missing (the existing-path one isn't on disk → disabled too).
+    assert _entry_disabled(_entry("GX010060", track=None, laps=0))
+    assert _entry_disabled(_entry("GX010060", paths=["/definitely/missing.MP4"]))
+
+
+def test_dialog_quarantines_junk_row_and_does_not_select_it():
+    """A user's existing library.json may carry a JUNK row (null track / 0 laps — e.g. the legacy
+    bundled-sample row). The dialog greys + disables it, never auto-selects it, and the auto-selected
+    row is instead the real recording — so the dialog renders cleanly without manual cleanup."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        # A real recording (present file) + a junk row (null track, 0 laps).
+        library.upsert(idx, _entry("GX010060", track="MK", date="2024-05-01", best=70.0,
+                                   laps=8, paths=[real.name]))
+        library.upsert(idx, _entry("hero6", track=None, date=None, best=None, theo=None,
+                                   laps=0, paths=[real.name]))   # present file, but no track/laps
+        dlg = LibraryDialog(idx, _OpenSpy())
+        junk_row = next(r for r in range(dlg.table.rowCount())
+                        if dlg.table.item(r, _COL_TRACK).text().startswith("unknown track"))
+        junk_date = dlg.table.item(junk_row, _COL_DATE)
+        # Quarantined: greyed + not selectable/enabled, labelled "(no laps)", flagged MISSING_ROLE.
+        assert not (junk_date.flags() & Qt.ItemIsEnabled)
+        assert not (junk_date.flags() & Qt.ItemIsSelectable)
+        assert bool(junk_date.data(MISSING_ROLE))
+        assert "(no laps)" in dlg.table.item(junk_row, _COL_TRACK).text()
+        # Auto-selection landed on the REAL recording (track MK), NOT the junk row.
+        sel = dlg._selected_date_item()
+        assert sel is not None and sel.data(TRACK_ROLE) == "MK"
+        assert dlg.open_btn.isEnabled()                     # the selected row is openable
+        dlg.deleteLater()
+
+
+def test_dialog_autoselects_most_recent_usable_row():
+    """Auto-selection picks the most recent USABLE recording (newest-first sort, first non-junk
+    present row) — so the PB chart opens with data, never on the earliest/legacy junk row."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        library.upsert(idx, _entry("GX010060", track="MK", date="2024-05-01", best=71.0,
+                                   paths=[real.name]))
+        library.upsert(idx, _entry("GX010062", track="MK", date="2024-07-01", best=68.0,
+                                   paths=[real.name]))   # the LATER session
+        dlg = LibraryDialog(idx, _OpenSpy())
+        sel = dlg._selected_date_item()
+        assert sel is not None and sel.text() == "2024-07-01"   # newest usable row selected
+        dlg.deleteLater()
+
+
+def test_dialog_all_junk_selects_nothing_and_shows_empty_state():
+    """If EVERY row is junk/quarantined, nothing is auto-selected, Open stays disabled, and the PB
+    chart shows its empty-state (not bare placeholder axes)."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("hero6", track=None, date=None, best=None, theo=None,
+                               laps=0, paths=["/definitely/missing.MP4"]))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    assert dlg._selected_date_item() is None
+    assert not dlg.open_btn.isEnabled()
+    assert dlg._pb_empty.isVisible()
+    dlg.deleteLater()
+
+
+def test_dialog_pb_empty_state_when_fewer_than_two_points():
+    """The PB chart shows an in-chart empty-state (NOT bare axes) for a track with <2 dated bests,
+    and HIDES it once there are >=2 points to chart."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("A", track="MK", date="2024-05-01", best=70.0, paths=[]))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    dlg._show_pb("MK")                       # exactly 1 dated best → empty-state visible
+    assert dlg._pb_empty.isVisible()
+    xs, _ = dlg._pb_curve.getData()
+    assert len(xs) == 1                      # the lone marker IS drawn (framed), not cleared
+    # A null track also shows the empty-state.
+    dlg._show_pb(None)
+    assert dlg._pb_empty.isVisible()
+    # Add a second MK session → the empty-state hides and the line draws.
+    library.upsert(idx, _entry("B", track="MK", date="2024-06-01", best=68.0, paths=[]))
+    dlg._show_pb("MK")
+    assert not dlg._pb_empty.isVisible()
+    xs2, _ = dlg._pb_curve.getData()
+    assert len(xs2) == 2
+    dlg.deleteLater()
+
+
+# ===================================== Session.library_entry + app skip (pacer; skipped without it)
+# These exercise the REAL Session.library_entry (absolute paths) and the app's _update_library skip
+# (0-lap / bundled-sample rows are NOT indexed). They import the pacer-backed studio.session /
+# studio.app, so they run under CTest (pacer on PYTHONPATH) and no-op in the standalone, pacer-free
+# runner — keeping the pure-index + dialog tests above importable anywhere.
+def _pacer_available() -> bool:
+    try:
+        import pacer  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001 — any import failure means "no built bindings here"
+        return False
+
+
+def test_library_entry_stores_absolute_paths():
+    """Session.library_entry stores ABSOLUTE chapter paths (os.path.abspath), so the dialog's
+    file-exists check is independent of the process cwd. A 0062 recording fingerprints to GX0062."""
+    if not _pacer_available():
+        print("skip test_library_entry_stores_absolute_paths (no pacer)")
+        return
+    from studio.session import Session
+    s = Session.__new__(Session)        # bare; seed only what library_entry reads
+    s._valid_cache = [0, 1, 2]
+    s._best_cache = 1
+    s.track_name = "Daytona MK"
+    s.laps = type("L", (), {"lap_time": staticmethod(lambda i: 68.4)})()
+    s.session_date = lambda: "2024-05-01"
+    s.theoretical_best = lambda: 67.9
+    # A relative path → the entry must store it absolute.
+    rel = os.path.join("subdir", "GX010062.MP4")
+    entry = Session.library_entry(s, [rel])
+    assert entry["fingerprint"] == "GX0062"          # chapter-invariant identity
+    assert entry["paths"] == [os.path.abspath(rel)]  # absolute, cwd-independent
+    assert os.path.isabs(entry["paths"][0])
+    assert entry["track"] == "Daytona MK" and entry["best"] == 68.4
+
+
+def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):
+    """The app's _update_library does NOT index a 0-lap open or the bundled DEFAULT_SAMPLE — so a
+    no-file launch (or an unsegmented recording) can't leave a permanent junk row in the library."""
+    if not _pacer_available():
+        print("skip test_update_library_skips_zero_lap_and_bundled_sample (no pacer)")
+        return
+    from studio import app as studio_app
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        upserts = []
+        monkeypatch.setattr(library, "upsert_and_save",
+                            lambda entry, *a, **k: upserts.append(entry))
+        win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+
+        # A 0-lap session → skipped (no valid laps).
+        win.session = type("S", (), {"valid_lap_ids": staticmethod(lambda: [])})()
+        studio_app.StudioWindow._update_library(win, ["/m/GX010060.MP4"])
+        assert upserts == []
+
+        # The bundled sample → skipped even with laps (it's not a real analysis recording).
+        win.session = type("S", (), {
+            "valid_lap_ids": staticmethod(lambda: [0, 1]),
+            "library_entry": staticmethod(lambda paths: _entry("hero6", track=None, laps=0)),
+        })()
+        studio_app.StudioWindow._update_library(win, [studio_app.DEFAULT_SAMPLE])
+        assert upserts == []
+
+        # A real recording WITH laps → indexed.
+        win.session = type("S", (), {
+            "valid_lap_ids": staticmethod(lambda: [0, 1]),
+            "library_entry": staticmethod(
+                lambda paths: _entry("GX010060", track="MK", laps=2)),
+        })()
+        studio_app.StudioWindow._update_library(win, ["/m/GX010060.MP4"])
+        assert len(upserts) == 1 and upserts[0]["fingerprint"] == "GX0060"
 
 
 # ------------------------------------------------------------------ runner

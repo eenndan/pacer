@@ -11,28 +11,30 @@ schema validation and atomic JSON I/O, unit-testable with no telemetry file and 
 recording's analyzed values are extracted from the live ``Session`` by the caller
 (``Session.library_entry()``) and handed in as a plain dict; this file never imports pacer.
 
-Identity — the FINGERPRINT. One entry per *recording*, keyed by
-``"<first-chapter stem>|<total duration rounded to 0.1 s>"`` (e.g. ``"GX010062|275.4"``).
-WHY this key and not the file path: the same recording can be opened as a single chapter
-(GX010062.MP4) or as its full chaptered chain (GX010062+GX020062+GX030062), and the path list
-differs between those two opens — but the FIRST chapter's stem and the recording's total media
-duration are the same either way, so both opens map to ONE entry. The duration disambiguates the
-rare case of two unrelated recordings whose first chapter happens to share a stem in different
-folders (the stem is the basename, not the full path). Rounded to 0.1 s so the fingerprint is
-stable across the sub-millisecond jitter in a remuxed/recomputed duration.
+Identity — the FINGERPRINT. One entry per *recording*, keyed by the recording's CHAPTER-INVARIANT
+identity (e.g. ``"GX0062"`` — the GoPro prefix + 4-digit recording number, shared by every chapter
+of one recording). WHY this key and not the file path or the per-chapter stem: the same recording
+can be opened as a single chapter (GX010062.MP4) or as its full chaptered chain
+(GX010062+GX020062+GX030062), and BOTH the path list AND the total media duration differ between
+those two opens (a single chapter is ~1730 s; the full chain ~4655 s) — so neither can key the
+identity without splitting one recording into two rows. The (prefix, recording number) pair is the
+ONE thing identical across any chapter or chapter-set of a recording, so both opens map to ONE
+entry. (The per-chapter index ``CC`` is deliberately NOT in the key — ``GX010062`` and
+``GX020062`` are the same recording.) For a non-GoPro clip (e.g. the bundled ``hero6.mp4``) the
+caller falls back to the bare stem, keyed on its own so it can never collide with a real recording.
 
 Schema (version 1) — one JSON object::
 
     {"version": 1,
      "entries": [
-       {"fingerprint": "GX010062|275.4",   # the identity key (see above)
+       {"fingerprint": "GX0062",            # the chapter-invariant identity key (see above)
         "stem":        "GX010062",          # first-chapter stem, for display
         "track":       <registry track name or null>,
         "date":        "YYYY-MM-DD" | null,  # GPS9 wall-clock date (Session.session_date)
         "lap_count":   <int>,                # valid lap count
         "best":        <float seconds> | null,    # best lap time
         "theoretical": <float seconds> | null,    # Session.theoretical_best
-        "paths":       ["/abs/GX010062.MP4", ...]}, # the chapter file path(s) as opened
+        "paths":       ["/abs/GX010062.MP4", ...]}, # the chapter file path(s) as opened (absolute)
        ...]}
 
 Defensive load: ANY corruption (missing file, not JSON, wrong version, malformed entries) →
@@ -49,8 +51,15 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 
 VERSION = 1
+
+# A GoPro chaptered stem: prefix (GX/GH/GP/GL) + 2-digit chapter index CC + 4-digit recording
+# number NNNN (e.g. "GX010062"). The recording's identity is (prefix, NNNN) — the chapter index
+# is stripped so every chapter of one recording fingerprints to the same key. Mirrors
+# studio.chapters' GoPro grammar but kept local so library.py stays self-contained + pacer-free.
+_GOPRO_STEM_RE = re.compile(r"^(G[XHPL])\d{2}(\d{4})$", re.IGNORECASE)
 
 # The library file's name + its directory under the user's app-support root. Kept as a module
 # constant so a test can monkeypatch `library._app_support_dir` (the seam below) to a temp dir
@@ -81,11 +90,17 @@ def empty_index() -> dict:
     return {"version": VERSION, "entries": []}
 
 
-def fingerprint(stem: str, total_duration: float) -> str:
-    """The recording identity key: ``"<stem>|<duration rounded to 0.1 s>"`` (see module docstring
-    for the WHY). The duration is rounded to one decimal and formatted with one decimal place so
-    275.4 and 275.44 collapse to the same key and the string is canonical (no float repr drift)."""
-    return f"{stem}|{round(float(total_duration), 1):.1f}"
+def fingerprint(stem: str) -> str:
+    """The recording's CHAPTER-INVARIANT identity key derived from a first-chapter `stem` (see the
+    module docstring for the WHY). For a GoPro stem ``G[XHPL]<CC><NNNN>`` the chapter index ``CC``
+    is dropped, leaving ``prefix + recording number`` (e.g. ``"GX010062"`` -> ``"GX0062"``), so any
+    chapter or chapter-set of one recording maps to ONE key — and crucially it does NOT include the
+    media duration, which differs between a single-chapter open and a full chaptered open of the
+    SAME recording. A non-GoPro stem (e.g. the bundled ``hero6`` sample) keys on itself."""
+    m = _GOPRO_STEM_RE.match(stem or "")
+    if m is None:
+        return stem
+    return f"{m.group(1).upper()}{m.group(2)}"
 
 
 def _valid_entry(e) -> bool:
