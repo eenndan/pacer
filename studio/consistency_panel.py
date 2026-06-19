@@ -45,7 +45,13 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
 
 COLUMNS = ["Corner", "σ (s)", "med Δ (s)"]
 TOP_N = 5            # ranked corners shown — the actionable shortlist, not the full table
-BODY_HEIGHT = 150    # px; compact strip — the lap table above stays the panel's main event
+# Compact strip — the lap table above stays the panel's main event. The body is no longer a FIXED
+# height (that crushed the lap table to ~1 row when this strip was mounted in the table column —
+# the #1 layout complaint); it now sits in a resizable splitter section in app.py with a sensible
+# DEFAULT and a hard MIN/MAX, so the user can shrink it (its own table scrolls) rather than the lap
+# table losing rows. The corner list scrolls within its own pane once below ~3 rows.
+BODY_HEIGHT = 150    # px; the strip's natural/default height (splitter starts here)
+BODY_MIN_HEIGHT = 70   # px; below this the corner list scrolls instead of vanishing
 ROW_HEIGHT = 22
 # Trend sparkline: a quiet dim line with small dots per lap; the running session-best (PB)
 # laps get the best-lap green (the lap table's convention) so "where the PBs happened" pops.
@@ -135,7 +141,12 @@ class ConsistencyPanel(QWidget):
         body_lay.setSpacing(0)
         body_lay.addWidget(self.spark, 3)
         body_lay.addWidget(self.table, 2)
-        self.body.setFixedHeight(BODY_HEIGHT)
+        # NOT setFixedHeight: a fixed body crushed the lap table when this strip mounted in the
+        # table column. Cap the body's MAX so it stays a compact strip (it never wants to grow into
+        # the lap table's space) but allow it to shrink to BODY_MIN_HEIGHT — the corner list scrolls
+        # within its own pane below that — so dragging the splitter shrinks THIS strip, not the table.
+        self.body.setMinimumHeight(BODY_MIN_HEIGHT)
+        self.body.setMaximumHeight(BODY_HEIGHT)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)

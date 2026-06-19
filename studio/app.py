@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -413,7 +413,22 @@ class StudioWindow(QMainWindow):
         # its stats. Hidden via setVisible(False), which drops it from the table panel's layout
         # entirely (the table stack keeps all the height), so the lap-table layout is intact.
         self.consistency.setVisible(self._consistency_visible)
-        table_panel = self._headered(table_header, (self.table_stack, 1), self.consistency)
+        # Stop Consistency from crushing the lap table (the broken state: enabling it left ~1 lap
+        # row). Two guards: (1) the table stack gets a MIN HEIGHT of ~5 lap rows + header so it can
+        # never be squeezed below a usable size; (2) the table stack + the consistency strip share a
+        # VERTICAL SPLITTER (not a fixed-height child) so the strip is resizable — enabling it
+        # shrinks/scrolls the (max-capped, min-bounded) consistency strip, never the table. The
+        # splitter's stretch heavily favours the table; the consistency section keeps its compact
+        # default. A collapsed/hidden strip gives ALL the height back to the table, as before.
+        rows_h = self.table.table.verticalHeader().defaultSectionSize()
+        self.table_stack.setMinimumHeight(rows_h * 5 + 56)  # ~5 rows + column header + footer
+        table_body = QSplitter(Qt.Vertical)
+        table_body.addWidget(self.table_stack)
+        table_body.addWidget(self.consistency)
+        table_body.setStretchFactor(0, 1)   # the lap table takes any extra height
+        table_body.setStretchFactor(1, 0)   # the consistency strip keeps its compact size
+        table_body.setCollapsible(0, False)  # never collapse the lap table away
+        table_panel = self._headered(table_header, (table_body, 1))
 
         # MAP header: title (left) + the rainbow-channel cycle, snap toggle and sector buttons
         # (right-aligned, compact) — moved OFF the full-width row that used to sit between the
@@ -438,35 +453,64 @@ class StudioWindow(QMainWindow):
         plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0), 1, self.plots.x_mode_combo)
         plots_panel = self._headered(plots_header, (self.plots, 1))
 
-        # Bias more default height to the VIDEO (it read small): ~66% of the left column to the
-        # video vs ~34% for the lap table, and stretch factors so the video grows faster than the
-        # table on a window resize (the table only needs enough for a handful of lap rows).
+        # Rebalanced defaults — the #1 layout complaint was the inverted space/value ratio: the
+        # single VIDEO frame (the least information-dense panel) got the most area while the
+        # analytical charts (the product's core) were cramped. We give the analytical core room and
+        # leave the video clearly usable but not dominant. Left column = video over table, split
+        # ~52/48 so enabling Consistency has a healthy lap table to share (the video used to swallow
+        # ~66%); stretch factors keep that ratio on a vertical resize.
         left = QSplitter(Qt.Vertical)
         left.addWidget(video_panel)
         left.addWidget(table_panel)
-        left.setStretchFactor(0, 66)
-        left.setStretchFactor(1, 34)
-        left.setSizes([620, 320])
+        left.setStretchFactor(0, 52)
+        left.setStretchFactor(1, 48)
+        left.setSizes([440, 400])
 
-        # Rebalance the right column: the charts (the analytical core) get the MAJORITY — map ~40%
-        # / charts ~60%. The map only needs enough to read the (now-tighter) track clearly.
+        # Right column: the charts (the analytical core) get the MAJORITY — map ~38% / charts ~62%.
+        # The map only needs enough to read the track clearly; every extra pixel goes to the curves.
         right = QSplitter(Qt.Vertical)
         right.addWidget(map_panel)
         right.addWidget(plots_panel)
-        right.setStretchFactor(0, 40)
-        right.setStretchFactor(1, 60)
-        right.setSizes([360, 540])
+        right.setStretchFactor(0, 38)
+        right.setStretchFactor(1, 62)
+        right.setSizes([320, 520])
 
-        # Give the left column (video + table) a larger share of the window width than before so the
-        # video reads bigger, and add stretch factors (the main splitter had none) so the columns
-        # keep their ratio on a horizontal resize instead of the right column taking all the growth.
+        # Main horizontal split: hand the analytical RIGHT column the larger share — left (video +
+        # table) ~40% / right (map + charts) ~60% — flipping the old video-biased 46/54. Stretch
+        # factors keep the ratio on a horizontal resize (so the charts, not the video, take the
+        # growth). The video stays comfortably readable at ~40% of a 1440-wide window.
         main = QSplitter(Qt.Horizontal)
         main.addWidget(left)
         main.addWidget(right)
-        main.setStretchFactor(0, 46)
-        main.setStretchFactor(1, 54)
-        main.setSizes([660, 780])
+        main.setStretchFactor(0, 40)
+        main.setStretchFactor(1, 60)
+        main.setSizes([576, 864])
         self.setCentralWidget(main)
+
+        # Focus / maximize: double-clicking ANY panel's header strip toggles that quadrant to fill
+        # the window (collapse the other splitter sections) and double-clicking again restores the
+        # grid — "focus charts" / "focus video" for free, no new menus. The four panels + the
+        # splitters they live in are stashed on the window so the handler (a) survives the
+        # central-widget rebuild in _build_ui — a reload re-stashes fresh widgets — and (b) can map a
+        # header back to its panel + outer column. Each panel's header is the FIRST child added in
+        # _panel/_headered; we filter double-clicks on it. Any in-flight maximize is cleared on a
+        # rebuild so the new grid starts un-maximized with its fresh default sizes.
+        self._main_splitter = main
+        self._left_splitter = left
+        self._right_splitter = right
+        self._video_panel = video_panel
+        self._table_panel = table_panel
+        self._map_panel = map_panel
+        self._plots_panel = plots_panel
+        self._maximized_panel = None          # the currently-maximized panel, or None
+        self._saved_splitter_sizes = None     # (main, left, right) sizes captured at maximize
+        # Fresh routing map for THIS build's headers (a reload's old headers belong to the disposed
+        # tree and must not resolve); each _install_header_dblclick call adds one entry.
+        self._header_routes = {}
+        self._install_header_dblclick(video_panel, left, main)
+        self._install_header_dblclick(table_panel, left, main)
+        self._install_header_dblclick(map_panel, right, main)
+        self._install_header_dblclick(plots_panel, right, main)
 
         # --- cross-panel wiring ---
         # positionChanged fires in the video decode/present path; it must do almost nothing
@@ -565,6 +609,93 @@ class StudioWindow(QMainWindow):
             self._ref_chip.setProperty("role", "BarLabel")
             self.statusBar().addPermanentWidget(self._ref_chip)
         self._update_reference_status()
+
+    # ----------------------------------------------------- panel focus / maximize
+    def _install_header_dblclick(self, panel: QWidget, column: QSplitter, main: QSplitter):
+        """Make a panel's HEADER strip double-click-to-maximize. The header is the first child of
+        the panel's layout (the `_panel` text label or the `_headered`/`_header_bar` widget — both
+        carry the `PanelHeader` role), so we install an event filter on it and route a double-click
+        to `_toggle_panel_maximized`. We remember each header's (panel, column, main) routing in a
+        per-build dict so eventFilter — one method for all four — knows which quadrant fired.
+
+        Rebuilt-safe: _build_ui re-seeds an empty `_header_routes` before calling this for the
+        fresh widgets each load, so a stale header from the disposed tree can never resolve.
+        Defensive: a header-less panel (shouldn't happen) is simply skipped."""
+        item = panel.layout().itemAt(0)
+        header = item.widget() if item is not None else None
+        if header is None:
+            return
+        self._header_routes[header] = (panel, column, main)
+        header.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """Catch a double-click on any registered panel header and toggle that panel's maximize.
+        Everything else passes through untouched (return the base implementation)."""
+        if (event.type() == QEvent.MouseButtonDblClick
+                and obj in getattr(self, "_header_routes", {})):
+            panel, _column, _main = self._header_routes[obj]
+            self._toggle_panel_maximized(panel)
+            return True
+        return super().eventFilter(obj, event)
+
+    def _toggle_panel_maximized(self, panel: QWidget):
+        """Toggle `panel` between filling the window and the normal 2x2 grid. MAXIMIZE: snapshot the
+        three splitters' current sizes, then collapse every section EXCEPT the one holding `panel` —
+        in its own column AND the main splitter's other column — so the panel takes the whole
+        central area. RESTORE (called on the maximized panel, or any panel while one is maximized):
+        put the snapshotted sizes back. Robust to a panel that isn't in the current grid (a no-op)
+        and to being driven programmatically (the verify harness calls this directly).
+
+        The saved sizes live on the WINDOW (not the rebuilt central widget); a fresh _build_ui
+        resets _maximized_panel to None, so a reload always starts from the un-maximized grid."""
+        routes = getattr(self, "_header_routes", {})
+        # Resolve the panel's owning COLUMN from its header route — the panel itself isn't a dict
+        # key, so scan the values (only four entries; trivial). The main splitter is read directly
+        # off self below, so we only need the column here.
+        column = None
+        for p, c, _m in routes.values():
+            if p is panel:
+                column = c
+                break
+        if column is None:  # panel not part of the current grid — nothing to do
+            return
+
+        if self._maximized_panel is panel:
+            # RESTORE: this panel is currently maximized → put the saved grid sizes back.
+            self._restore_splitter_sizes()
+            return
+        if self._maximized_panel is not None:
+            # A DIFFERENT panel is maximized → restore the grid first, then maximize this one fresh
+            # from the true (un-collapsed) sizes (so re-maximizing doesn't snapshot a collapsed grid).
+            self._restore_splitter_sizes()
+
+        # MAXIMIZE. Snapshot the live sizes so restore is exact, then drive each splitter so only the
+        # section(s) leading to `panel` keep height/width and the rest collapse to 0.
+        self._saved_splitter_sizes = (self._main_splitter.sizes(),
+                                      self._left_splitter.sizes(),
+                                      self._right_splitter.sizes())
+        in_left = column is self._left_splitter
+        # Main split: keep the column that holds `panel`, collapse the other to 0.
+        full_w = sum(self._main_splitter.sizes()) or self._main_splitter.width()
+        self._main_splitter.setSizes([full_w, 0] if in_left else [0, full_w])
+        # The owning column: keep the panel's section, collapse its sibling. video/map are index 0,
+        # table/charts are index 1 in their respective columns.
+        top_panels = (self._video_panel, self._map_panel)
+        full_h = sum(column.sizes()) or column.height()
+        column.setSizes([full_h, 0] if panel in top_panels else [0, full_h])
+        self._maximized_panel = panel
+
+    def _restore_splitter_sizes(self):
+        """Put the pre-maximize grid sizes back (the inverse of _toggle_panel_maximized's collapse)
+        and clear the maximized state. No-op when nothing is maximized / no snapshot exists."""
+        sizes = self._saved_splitter_sizes
+        if sizes is None:
+            return
+        self._main_splitter.setSizes(sizes[0])
+        self._left_splitter.setSizes(sizes[1])
+        self._right_splitter.setSizes(sizes[2])
+        self._maximized_panel = None
+        self._saved_splitter_sizes = None
 
     # ----------------------------------------------------- multi-chapter UI / opt-in
     def _build_menu(self):
