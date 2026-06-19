@@ -53,6 +53,12 @@ CURSOR_HOVER_PEN = pg.mkPen(C.accent, width=2, style=Qt.DashLine)
 # Hover dot rides the delta curve: accent fill with a dark canvas outline so it pops on any curve.
 HOVER_DOT_BRUSH = pg.mkBrush(C.accent)
 HOVER_DOT_PEN = pg.mkPen(C.canvas, width=1)
+# In-plot legend plate: a near-opaque surface fill + hairline border so the legend reads as a
+# small card ON the chart rather than sitting transparently on top of the rising speed traces.
+# Alpha 230/255 keeps a hint of the gridlines behind it without the labels fighting the data.
+_sr, _sg, _sb = theme._hex_rgb(C.surface)
+LEGEND_BRUSH = pg.mkBrush(_sr, _sg, _sb, 230)
+LEGEND_PEN = pg.mkPen(C.border, width=1)
 # F2: sector boundary guide lines — clearly-legible NEUTRAL grey dashed vertical lines on BOTH
 # charts. C.text_muted (#6B7280) reads cleanly against the surface and dashed reads better than
 # dotted at this scale; they stay NEUTRAL (not amber) so they never clash with the amber
@@ -171,9 +177,14 @@ class PlotsView(QWidget):
                 ax.setTextPen(C.text_dim)      # tick labels + axis title
                 ax.setTickFont(theme.mono_font(11))  # tabular figures so digits column-align
                 ax.setStyle(maxTickLevel=1, hideOverlappingLabels=True)  # fewer, cleaner ticks
-        # Legend + per-plot title read dimmed (the title is rebuilt in refresh()).
+        # Legend reads dimmed AND sits on a surface plate (brush) + hairline border (pen) so it
+        # doesn't float transparently over the rising speed traces. The per-plot title still reads
+        # dimmed for any incidental use, but refresh() no longer sets one (the legend identifies
+        # the curves now — see _curve_label).
         if leg is not None:
             leg.setLabelTextColor(C.text_dim)
+            leg.setBrush(LEGEND_BRUSH)
+            leg.setPen(LEGEND_PEN)
         for plot in (self.p_speed, self.p_delta):
             plot.titleLabel.setAttr("color", C.text_dim)
 
@@ -453,11 +464,8 @@ class PlotsView(QWidget):
         # speed and delta curves (and the cursors) share one axis and stay x-linked → aligned.
         result = self.session.delta(draw_ids, x_mode=x_mode)
         if not result:
-            self.p_speed.setTitle(None)
             return
         best, speed, delta = result
-        labels = [self._curve_label(lid, lid == best) for lid in draw_ids]
-        self.p_speed.setTitle("   ".join(labels) or None)
         for k, lid in enumerate(draw_ids):
             # Semantic colouring (Phase 2): the BEST lap is green (C.ahead) to match the lap
             # table; every other lap cycles through the categorical CHART_SERIES (amber accent
@@ -469,10 +477,10 @@ class PlotsView(QWidget):
             color = theme.SERIES_BEST if is_best else PALETTE[k % len(PALETTE)]
             width = 1 if (is_best and best_always_on) else 2
             pen = pg.mkPen(color, width=width)
-            if lid == REFERENCE_ID:
-                name = "reference (best)"
-            else:
-                name = f"lap {lid}" + (" (best)" if is_best else "")
+            # The in-plot legend is the ONLY curve identifier now (the floating chart title was
+            # removed — it read like a debug print and duplicated this). So fold the lap time into
+            # the legend name; " · best" (mid-dot, spaced) tags the always-on green baseline.
+            name = self._curve_label(lid, is_best)
             if lid in speed:
                 sx, spd = speed[lid]
                 c = self.p_speed.plot(sx, spd, pen=pen, name=name)
@@ -512,17 +520,18 @@ class PlotsView(QWidget):
         self._draw_driving()
 
     def _curve_label(self, lid: int, is_baseline: bool) -> str:
-        """The chart-title label for one drawn curve. A local lap reads "lap N m:ss.mmm" (with a
-        trailing " ★best" when it's the baseline). The cross-recording REFERENCE curve (id
-        REFERENCE_ID, F7) reads "ref <label> m:ss.mmm ★" instead — it has no local lap id, so its
-        time comes from the session's reference accessor. DORMANT: never reaches the reference
-        branch, so local-lap labels are byte-identical to before."""
+        """The in-plot LEGEND label for one drawn curve (was the floating chart title — removed).
+        A local lap reads "lap N m:ss.mmm" with a clean spaced " · best" tag on the baseline (no
+        glued-on "★best", which jammed straight onto the time). The cross-recording REFERENCE curve
+        (id REFERENCE_ID, F7) reads "ref <label> m:ss.mmm · best" instead — it has no local lap id,
+        so its time comes from the session's reference accessor. DORMANT: never reaches the
+        reference branch in the local-only path."""
         if lid == REFERENCE_ID:
             t = self.session.reference_lap_time() or 0.0
             tag = self.session.reference_label() or "reference"
-            return f"ref {tag} {fmt_time(t)} ★"
+            return f"ref {tag} {fmt_time(t)} · best"
         return (f"lap {lid} {fmt_time(self.session.lap_time(lid))}"
-                + (" ★best" if is_baseline else ""))
+                + (" · best" if is_baseline else ""))
 
     def set_playhead_time(self, t: float, *, force: bool = False):
         """Place BOTH cursors from a single media time t (the shared playhead). Shared setter verb

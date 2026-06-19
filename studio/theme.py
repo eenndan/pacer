@@ -285,6 +285,41 @@ def icon(name: str, color: str | None = None) -> QIcon:
     return qta.icon(name, color=color or C.text, color_active=C.accent)
 
 
+_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+# Cached path of the generated combobox-chevron PNG (set on first _caret_down_asset() success).
+_caret_asset_path: str | None = None
+
+
+def _caret_down_asset() -> str | None:
+    """Render the Phosphor `ph.caret-down` glyph (tinted to C.text_dim) to a small PNG under
+    studio/assets/ and return its path — the bundled image QComboBox::down-arrow references via
+    `image: url(...)`. We use a real glyph instead of the old QSS border hack: Qt QSS has no
+    `transform`, so a "rotated border square" actually renders as an L-shaped corner bracket on
+    every combo. A bundled PNG renders identically across machines (no per-machine font metrics).
+
+    Generated once per process and cached; returns None if qtawesome is missing or rendering
+    fails, in which case _build_qss() simply omits the rule (Qt falls back to its native arrow —
+    plain, but never the broken L)."""
+    global _caret_asset_path
+    if _caret_asset_path is not None:
+        return _caret_asset_path
+    try:
+        import qtawesome as qta
+        from PySide6.QtCore import QSize
+        # @2x source so the down-scaled 12px arrow stays crisp on HiDPI displays.
+        px = qta.icon("ph.caret-down", color=C.text_dim).pixmap(QSize(24, 24))
+        os.makedirs(_ASSETS_DIR, exist_ok=True)
+        path = os.path.join(_ASSETS_DIR, "caret-down.png")
+        if not px.save(path, "PNG"):
+            return None
+    except Exception as exc:  # missing dep / render / IO — degrade to the native arrow
+        print(f"theme: caret-down asset unavailable ({exc}); using native combo arrow.",
+              flush=True)
+        return None
+    _caret_asset_path = path
+    return path
+
+
 # ====================================================================== palette
 def _palette() -> QPalette:
     """A dark QPalette so framework-drawn chrome (native dialogs, default widget bits not covered
@@ -328,6 +363,26 @@ def _build_qss() -> str:
     NOTE: QVideoWidget is intentionally NOT styled here. A global opaque background on its native
     video surface can blank the frame on macOS; we leave it to the palette.
     """
+    # Real down-chevron asset for QComboBox::down-arrow (see _caret_down_asset). When it can't be
+    # generated (no qtawesome) we omit the override so Qt draws its native arrow — never the old
+    # broken L-bracket. QSS url() wants forward slashes even on Windows.
+    caret = _caret_down_asset()
+    # caret_arrow_rule is an f-string, so its literal CSS braces are DOUBLED ({{ }} → { }); the
+    # resulting VALUE has single braces and is substituted into the outer QSS f-string via a plain
+    # {caret_arrow_rule} placeholder (inserted verbatim, not re-parsed). When the asset can't be
+    # generated we emit only a comment, so Qt keeps its native arrow — never the old broken L.
+    if caret:
+        caret_url = caret.replace(os.sep, "/")  # QSS url() wants forward slashes on every OS
+        caret_arrow_rule = f"""QComboBox::down-arrow {{
+    image: url({caret_url});
+    width: 12px; height: 12px;
+    margin-right: 6px;
+}}
+QComboBox::down-arrow:on {{  /* open: nudge so it reads as pressed, no flip */
+    top: 1px;
+}}"""
+    else:
+        caret_arrow_rule = "/* QComboBox::down-arrow: native arrow (asset unavailable) */"
     return f"""
 /* ---------------------------------------------------------------- base */
 QWidget {{
@@ -504,13 +559,7 @@ QComboBox::drop-down {{
     border: none;
     width: 20px;
 }}
-QComboBox::down-arrow {{
-    width: 8px; height: 8px;
-    /* simple chevron via a rotated border square (no image asset in Phase 1) */
-    border-left: 1px solid {C.text_dim};
-    border-bottom: 1px solid {C.text_dim};
-    margin-right: 6px;
-}}
+{caret_arrow_rule}
 QComboBox QAbstractItemView {{
     background-color: {C.surface};
     color: {C.text};

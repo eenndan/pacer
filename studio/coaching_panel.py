@@ -170,7 +170,12 @@ class OpportunitiesDialog(QDialog):
         """The per-row jump-to button. Captures the row's (cid, entry_dist) and calls the
         injected `jump_to` — the app selects the corner (map + Corners view) and seeks the best
         lap to its entry. Disabled when no callback was injected (headless layout tests)."""
-        btn = QPushButton("Go →")
+        # "Jump" + a Phosphor arrow icon, NOT a literal "Go →": the Unicode arrow doesn't render in
+        # the UI font (it came out as a garbled glyph), so use the bundled icon font. variant=primary
+        # (QSS) makes it read as the row's call-to-action; a min width keeps the label from clipping.
+        btn = QPushButton(theme.icon("ph.arrow-right", color=C.on_accent), "Jump")
+        btn.setProperty("variant", "primary")
+        btn.setMinimumWidth(88)  # room for the arrow icon + "Jump" so neither clips
         btn.setToolTip(f"Select C{opp.cid} on the map and jump the video to your best lap's "
                        "entry to this corner")
         if self._jump_to is None:
