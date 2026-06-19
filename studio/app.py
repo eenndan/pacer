@@ -569,6 +569,16 @@ class StudioWindow(QMainWindow):
         self.scrub.set_compare(self.compare)
 
         self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
+        # C8: feed the scrub slider its MoTeC-style lap-ruler ticks — every valid lap's start/end
+        # position on the GLOBAL clock, so the transport bar shows at a glance where each lap sits in
+        # the session. lap_window is (start, start+lap_time); the slider de-dups back-to-back
+        # boundaries that map to the same pixel. Re-fed on each (re)load with the freshly segmented laps.
+        bounds: list[float] = []
+        for lid in self.session.valid_lap_ids():
+            w = self.session.lap_window(lid)
+            if w is not None:
+                bounds.extend(w)
+        self.video.set_lap_ticks(bounds)
         # D1: the global scrub slider + ←/→ arrows seek pane A only; in compare mode distance-lock
         # the SAME move to pane B so the pair never desyncs. The hook self-guards on compare being
         # active (fanout_seek_b no-ops outside compare), so wiring it once here is safe in single mode.
@@ -1664,9 +1674,12 @@ class StudioWindow(QMainWindow):
         self.table.set_current_lap(lap_id)
         self.map.set_current_lap(lap_id)  # highlight the current lap's trace on the map
         sp = float(self.session.tv[i]) if i is not None else None  # F2: speed km/h at that index
-        speed = f"{sp:.1f}" if sp is not None else "-"
-        lap = lap_id if lap_id is not None else "-"
-        self.video.set_readout(f"t = {fmt_time(t)}   speed = {speed} km/h   lap {lap}")
+        # C6: the under-video strip is now ONLY the transport timecode — the live MOMENT (Δ · speed ·
+        # lap) lives once, in the hero #DiffBox in the charts header, so the two can no longer
+        # duplicate OR disagree (the old strip read "speed 72.6" while the box read "73"). On a
+        # multi-chapter recording it also names the current chapter (e.g. "1/3"), which IS video-
+        # specific and not shown anywhere else; for a single file it is just the timecode.
+        self.video.set_readout(self._transport_readout(t))
         self._update_diff_box(t, sp, lap_id)
         # g-meter overlay: feed the vehicle-frame g at the current media time (a cheap lookup) and
         # the current lap (so the max-G envelope resets at the lap boundary, showing THIS lap's
@@ -1681,6 +1694,16 @@ class StudioWindow(QMainWindow):
             self.video.set_gmeter_lap(lap_id)
         if self.video.is_gmeter_visible():
             self.video.set_g(self.session.g_at_time(t))
+
+    def _transport_readout(self, t: float) -> str:
+        """The under-video TIMECODE strip (C6): the media position, plus the current chapter when
+        the recording spans several (the one piece of video-specific context not surfaced anywhere
+        else). Deliberately does NOT echo speed / Δ / lap — those live in the hero #DiffBox, the
+        single source of the live moment."""
+        chs = self.session.chapters
+        if chs is not None and chs.is_multi:
+            return f"{fmt_time(t)}   ·   chapter {chs.chapter_at(t) + 1}/{len(chs)}"
+        return fmt_time(t)
 
     def _follow_current_lap(self, lap_id: int | None, t: float):
         """Auto-follow the playhead's lap on the speed + delta charts (current lap vs best).

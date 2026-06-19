@@ -38,6 +38,7 @@ slider/readout; in compare mode the slider spans each lap's window via the prima
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -46,6 +47,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSplitter,
+    QStyle,
+    QStyleOptionSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -71,6 +74,74 @@ _PANE_INSET = 5
 # picker is the single home of the lap text now, so it must never clip. AdjustToContents lets it
 # grow past this when the current item is wider; this is just the no-clip minimum.
 _PICKER_MIN_W = 150
+
+
+class _LapRulerSlider(QSlider):
+    """The transport scrub slider, drawn with subtle LAP-BOUNDARY tick marks over the groove so it
+    doubles as a MoTeC-style lap ruler — at a glance you can see where each lap starts/ends along
+    the session and scrub straight to one. Behaviour is a plain horizontal QSlider (the app's seek
+    wiring is unchanged); only the painting is extended.
+
+    The ticks are GLOBAL-time boundaries in the slider's own value units (ms): the app feeds the
+    sorted, de-duplicated lap start/end positions via `set_lap_ticks` (derived from the session lap
+    windows mapped onto the slider range). We paint AFTER the base groove/handle so the marks sit on
+    top of the groove but the handle still reads clearly over them. Each boundary value is mapped to
+    an x pixel via the style's groove rect + sliderPositionFromValue (the same geometry the handle
+    uses), so the ticks line up exactly with where the handle lands at that time."""
+
+    # Tick visuals: a thin near-full-height mark inside the groove band, dim so it reads as a ruler
+    # cue and never competes with the amber fill / handle. Drawn at ~55 % alpha of the dim text.
+    _TICK_H = 10   # px tall (centred on the groove), a touch taller than the 8px groove so it reads
+
+    def __init__(self, orientation):
+        super().__init__(orientation)
+        self._lap_ticks: list[int] = []  # boundary values in slider units (ms), sorted/unique
+
+    def set_lap_ticks(self, values: list[int]) -> None:
+        """Set the lap-boundary tick positions (slider-value units, i.e. global ms). Values outside
+        the current range are tolerated (clamped at paint); a repaint is requested so the ruler
+        updates immediately on (re)load / compare enter/exit. Empty clears the ruler."""
+        self._lap_ticks = sorted({int(v) for v in values})
+        self.update()
+
+    def _groove_rect(self):
+        """The style's groove rect for this slider — the band the handle travels in. Used to map a
+        boundary value to an x pixel exactly as the handle is placed, so ticks and handle agree."""
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        return self.style().subControlRect(
+            QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self)
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)  # base groove + sub/add-page fill + handle (themed QSS) first
+        lo, hi = self.minimum(), self.maximum()
+        if not self._lap_ticks or hi <= lo:
+            return
+        groove = self._groove_rect()
+        # Span the handle CAN travel: the groove minus the handle's own length, so the mapped x for
+        # a value matches where the handle's centre lands (sliderPositionFromValue uses this span).
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        handle = self.style().subControlRect(
+            QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+        span = groove.width() - handle.width()
+        x0 = groove.x() + handle.width() // 2
+        cy = groove.center().y()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)  # crisp 1px ruler marks
+        pen = QPen(QColor(theme.C.text_dim))
+        pen.setWidth(1)
+        painter.setPen(pen)
+        painter.setOpacity(0.55)
+        seen = set()
+        for v in self._lap_ticks:
+            cv = min(max(v, lo), hi)
+            x = x0 + QStyle.sliderPositionFromValue(lo, hi, cv, span, opt.upsideDown)
+            if x in seen:        # collapse boundaries that map to the same pixel (back-to-back laps)
+                continue
+            seen.add(x)
+            painter.drawLine(x, cy - self._TICK_H // 2, x, cy + self._TICK_H // 2)
+        painter.end()
 
 
 class _PaneCell(QWidget):
@@ -269,6 +340,10 @@ class VideoView(QWidget):
         self._cell_b: _PaneCell | None = None   # secondary cell wrapper (compare mode)
         self._splitter: QSplitter | None = None
         self._compare_enabled = False           # ≥2 valid laps (set by app via set_compare_enabled)
+        # GLOBAL-time lap-boundary positions (seconds) for the slider's MoTeC-style lap ruler, fed by
+        # the app (set_lap_ticks) and re-applied whenever the slider range changes (compare confines
+        # it to one lap, so the ruler is cleared there and restored on exit). None until the app loads.
+        self._lap_boundaries_s: list[float] = []
 
         # Compact Phosphor-icon transport buttons (no text). Icons are themed via theme.icon and
         # set ONCE per state change in the existing handlers — never on the playback tick.
@@ -298,15 +373,17 @@ class VideoView(QWidget):
         self.gmeter_btn.toggled.connect(self._on_gmeter_toggled)
         self.gmeter_btn.toggled.connect(self.set_gmeter_visible)
 
-        # "Compare videos" toggle (Phase B): a LABELED checkable button that reveals a 2nd, equal
-        # video pane side-by-side. Off by default; enabled only when ≥2 valid laps (app drives the
+        # "Compare videos" toggle (Phase B): an ICON-ONLY checkable button in the SAME transport
+        # vocabulary as play/mute/g-meter (one compact 32×30 square, a Phosphor glyph, meaning in the
+        # tooltip) — no wide text button breaking the row's rhythm. The `ph.columns` two-pane glyph
+        # reads as "show a 2nd video beside this one"; checked it goes amber via the shared QSS
+        # :checked rule (mirroring the g-meter toggle), and the glyph is recoloured to C.accent so the
+        # ON state is unmistakable. Off by default; enabled only when ≥2 valid laps (app drives the
         # enable flag). The toggle itself only flips _two_panes + emits compareToggled — the app owns
-        # the lap-pair seeding and calls back into set_compare/exit_compare. Its label + fill swap
-        # between states in _set_compare_btn_state so it's obvious both what it does (adds a 2nd
-        # comparison video) and whether it's currently on ("⧉ Compare" ghost → "Comparing ✕" amber).
+        # the lap-pair seeding and calls back into set_compare/exit_compare.
         self.compare_btn = QPushButton()
         self.compare_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
-        self.compare_btn.setFixedHeight(_ICON_BTN.height())
+        self.compare_btn.setFixedSize(_ICON_BTN)
         self.compare_btn.setCheckable(True)
         self.compare_btn.setEnabled(False)
         self.compare_btn.toggled.connect(self._on_compare_toggled)
@@ -314,8 +391,9 @@ class VideoView(QWidget):
 
         # The slider spans the WHOLE session (global ms 0..total). For a multi-chapter recording
         # its range is the summed duration; for a single file it's the file's own duration. The
-        # value is always GLOBAL ms.
-        self.slider = QSlider(Qt.Horizontal)
+        # value is always GLOBAL ms. It is a _LapRulerSlider so lap-boundary tick marks (fed by the
+        # app via set_lap_ticks) render over the groove — the scrub bar doubles as a lap ruler.
+        self.slider = _LapRulerSlider(Qt.Horizontal)
         self.slider.setRange(0, 0)
         self.slider.setToolTip("Seek — click or drag · ←/→ step 1 s · Shift+←/→ 5 s")
         # Useful step sizes (the value is GLOBAL ms; the defaults are 1/10 ms — imperceptible):
@@ -458,6 +536,25 @@ class VideoView(QWidget):
     def set_readout(self, text: str):
         self.readout.setText(text)
 
+    def set_lap_ticks(self, boundaries_s: list[float]) -> None:
+        """Feed the slider its lap-boundary RULER ticks: GLOBAL-time lap start/end positions in
+        seconds (the app derives them from the session lap windows). Stored so they can be re-applied
+        whenever the slider RANGE changes (compare enter/exit re-confine it), and converted to the
+        slider's value units (ms) for painting. Only drawn while the slider spans the whole session
+        (single-video mode); in compare the range is pinned to one lap's window, where lap ticks are
+        meaningless, so they're cleared (re-applied on exit)."""
+        self._lap_boundaries_s = list(boundaries_s)
+        self._apply_lap_ticks()
+
+    def _apply_lap_ticks(self) -> None:
+        """(Re)push the stored lap boundaries onto the slider as ms ticks — but only in single-video
+        mode (the whole-session range). In compare mode the slider is confined to lap A's window, so
+        clear the ruler there."""
+        if self._two_panes or not getattr(self, "_lap_boundaries_s", None):
+            self.slider.set_lap_ticks([])
+        else:
+            self.slider.set_lap_ticks([int(round(s * 1000)) for s in self._lap_boundaries_s])
+
     # ------------------------------------------------------------- compare toggle / enablement
     def set_compare_enabled(self, enabled: bool):
         """Enable the "Compare videos" toggle only when ≥2 valid laps exist (app drives this).
@@ -469,26 +566,15 @@ class VideoView(QWidget):
             self.compare_btn.setChecked(False)  # -> _on_compare_toggled(False) tears down
 
     def _set_compare_btn_state(self, on: bool):
-        """Drive the labeled compare toggle's appearance for its OFF/ON state. OFF: a ghost/neutral
-        "⧉ Compare" (columns glyph + text) that reads as "click to add a 2nd comparison video". ON:
-        an accent-FILLED "Comparing ✕" (the variant=primary amber fill via the QSS) with a small
-        close affordance so it's obviously active and reads as "click to exit". Only called on a
-        state change (enter/exit + the initial build) — never per tick."""
-        if on:
-            self.compare_btn.setIcon(theme.icon("ph.columns", color=theme.C.on_accent))
-            self.compare_btn.setText(" Comparing  ✕")
-            self.compare_btn.setToolTip("Comparing two laps' videos — click to exit (C)")
-            self.compare_btn.setProperty("variant", "primary")
-        else:
-            self.compare_btn.setIcon(theme.icon("ph.columns"))
-            self.compare_btn.setText(" Compare")
-            self.compare_btn.setToolTip(
-                "Compare two laps' videos side-by-side (C) — needs ≥2 valid laps")
-            self.compare_btn.setProperty("variant", "")
-        # A dynamic-property change needs an explicit style re-polish to take effect (Qt caches
-        # the resolved QSS until the property is re-evaluated). Done only on the state flip.
-        self.compare_btn.style().unpolish(self.compare_btn)
-        self.compare_btn.style().polish(self.compare_btn)
+        """Drive the ICON-ONLY compare toggle's OFF/ON appearance — in the same vocabulary as the
+        g-meter toggle. The `ph.columns` glyph is constant (it always means "two-pane compare"); ON
+        it is recoloured to C.accent and the shared QSS :checked rule tints the button amber so the
+        active state is obvious without a width-breaking text label. The meaning lives in the tooltip.
+        Only called on a state change (enter/exit + the initial build) — never per tick."""
+        self.compare_btn.setIcon(theme.icon("ph.columns", color=theme.C.accent if on else None))
+        self.compare_btn.setToolTip(
+            "Comparing two laps' videos side-by-side — click to exit (C)" if on else
+            "Compare two laps' videos side-by-side (C) — needs ≥2 valid laps")
 
     def _sync_compare_btn(self, on: bool):
         """Sync the compare toggle's CHECKED state + labeled OFF/ON appearance to the live two-pane
@@ -631,6 +717,7 @@ class VideoView(QWidget):
         # (both panes stay aligned within the window). Re-applied on every (re)seed so a primary
         # repoint updates the slider bounds too.
         self._set_slider_window(window_a)
+        self._apply_lap_ticks()  # confined to one lap now -> the whole-session lap ruler is cleared
 
     def reseed_pane(self, side: int, lap_id: int, window: tuple[float, float],
                     caption: str, lap_choices: list[int],
@@ -672,6 +759,7 @@ class VideoView(QWidget):
         full_ms = self._whole_session_max_ms()
         if full_ms > 0:
             self.slider.setRange(0, full_ms)
+        self._apply_lap_ticks()  # whole-session range again -> restore the lap ruler
         self._teardown_secondary()
         # Drop the cell wrappers + splitter (the primary pane has been reparented out of _cell_a).
         for w in (self._cell_a, self._cell_b, self._splitter):

@@ -508,7 +508,9 @@ QPushButton:disabled {{
 QPushButton:focus {{
     border: 1px solid {C.accent};
 }}
-/* checked state (the G overlay toggle) */
+/* checked state — the icon transport toggles (g-meter overlay + the compare toggle): a subtle
+   amber tint + accent border so an active toggle reads clearly without breaking the icon-button
+   vocabulary (the glyph itself is also recoloured to the accent in code). */
 QPushButton:checked {{
     background-color: {C.accent_tint};
     border: 1px solid {C.accent};
@@ -527,18 +529,6 @@ QPushButton[variant="primary"]:hover {{
 QPushButton[variant="primary"]:pressed {{
     background-color: {C.accent_press};
     border-color: {C.accent_press};
-}}
-/* a CHECKABLE primary button (the "Comparing" compare toggle) keeps the solid amber fill when
-   checked — the filled variant must win over the generic :checked tint above, so it reads as
-   clearly ACTIVE rather than the subtle tint used for the icon toggles. */
-QPushButton[variant="primary"]:checked {{
-    background-color: {C.accent};
-    color: {C.on_accent};
-    border: 1px solid {C.accent};
-}}
-QPushButton[variant="primary"]:checked:hover {{
-    background-color: {C.accent_hover};
-    border-color: {C.accent_hover};
 }}
 
 /* ---------------------------------------------------------------- combo box */
@@ -569,26 +559,30 @@ QComboBox QAbstractItemView {{
     outline: none;
 }}
 
-/* ---------------------------------------------------------------- slider */
+/* ---------------------------------------------------------------- slider
+   The transport scrub bar is the primary seek target, so the groove is a substantial 8px (was a
+   thin 4px hairline that read accidental and was fiddly to grab) and the handle a 18px grippable
+   dot. The taller groove also gives the lap-ruler tick marks (drawn in _LapRulerSlider) room to
+   read. radius = height/2 keeps both groove and handle fully rounded. */
 QSlider::groove:horizontal {{
-    height: 4px;
+    height: 8px;
     background: {C.border};
-    border-radius: 2px;
+    border-radius: 4px;
 }}
 QSlider::sub-page:horizontal {{
     background: {C.accent};
-    border-radius: 2px;
+    border-radius: 4px;
 }}
 QSlider::add-page:horizontal {{
     background: {C.border};
-    border-radius: 2px;
+    border-radius: 4px;
 }}
 QSlider::handle:horizontal {{
     background: {C.text};
-    width: 14px;
-    height: 14px;
+    width: 18px;
+    height: 18px;
     margin: -5px 0;
-    border-radius: 7px;
+    border-radius: 9px;
 }}
 QSlider::handle:horizontal:hover {{
     background: {C.accent};
