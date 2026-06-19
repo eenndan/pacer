@@ -34,7 +34,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _synthetic import bare_session, odometer, seed_cols  # noqa: E402
+from _synthetic import bare_session, odometer, seed_cols, seed_lap  # noqa: E402
 
 import pacer  # noqa: E402
 from studio._signal import (  # noqa: E402
@@ -442,6 +442,120 @@ def test_best_rolling_excludes_dropout_straddles():
     empty = bare_session(valid=[])
     assert empty.best_rolling_lap() is None
     print("test_best_rolling_excludes_dropout_straddles OK")
+
+
+# ----------------------- 7) sector-segmentation robustness (D10 dedupe / D11 poison guard)
+
+def make_dupe_sector_session():
+    """TWO straight-line laps + THREE sector lines where TWO of them sit on the SAME track
+    odometer (350 m, dropped twice). The raw global-argmin + sort would project them to the
+    same cum_distance and emit a 0 s middle split; the dedupe in sector_boundary_distances
+    must collapse the pair to a single boundary so every lap keeps positive, ordered splits."""
+    lap_a, lap_b = 3, 7
+    ta, da = odometer(120, 0.1, 100.0, 520.0)
+    tb, db = odometer(110, 0.1, 300.0, 508.0, lambda u: 1.3 + 0.7 * np.sin(u) ** 2)
+    s = bare_session({lap_a: (ta, da), lap_b: (tb, db)}, best=lap_b, valid=[lap_a, lap_b])
+    seed_cols(s, lap_a, ta, da)
+    seed_cols(s, lap_b, tb, db)
+    s.laps = SimpleNamespace(sectors=SimpleNamespace(sector_lines=[
+        _seg(150.0, -5.0, 150.0, 5.0),
+        _seg(350.0, -5.0, 350.0, 5.0),   # the duplicate pair: same midpoint x as the next line,
+        _seg(350.0, -4.0, 350.0, 6.0),   # so both project to the SAME odometer -> must dedupe
+    ]))
+    return s, lap_a, lap_b
+
+
+def test_sector_boundaries_dedupe_coincident_lines():
+    """D10: two sector lines on the same odometer collapse to ONE ascending boundary (not a
+    pair that sort() would leave adjacent and equal), so the boundary count is N_lines - 1 and
+    the boundaries are strictly increasing — the guide lines can't sit on top of each other."""
+    s, lap_a, lap_b = make_dupe_sector_session()
+    for lid in (lap_a, lap_b):
+        bounds = s.sector_boundary_distances(lid)
+        assert len(bounds) == 2, (lid, bounds)            # 3 lines, the dupe pair fused to 1
+        assert all(b2 - b1 > 0 for b1, b2 in zip(bounds, bounds[1:], strict=False)), \
+            (lid, bounds)
+    print("test_sector_boundaries_dedupe_coincident_lines OK")
+
+
+def test_lap_sector_splits_no_zero_split_from_dupe_line():
+    """D11 root: with the duplicate line collapsed, lap_sector_splits emits one split per
+    DEDUPED sub-sector (boundaries+1 = 3, not the 4 the raw line count would give), all
+    strictly positive, summing to the lap time — no 0 s / out-of-order split survives."""
+    s, lap_a, lap_b = make_dupe_sector_session()
+    for lid in (lap_a, lap_b):
+        splits = s.lap_sector_splits(lid)
+        assert len(splits) == 3, (lid, splits)            # boundaries (2) + 1, post-dedupe
+        assert all(sp > 0 for sp in splits), (lid, splits)
+        laptime = float(s._dist_cache[lid][0][-1] - s._dist_cache[lid][0][0])
+        assert abs(sum(splits) - laptime) < 1e-9, (lid, sum(splits), laptime)
+    print("test_lap_sector_splits_no_zero_split_from_dupe_line OK")
+
+
+def test_theoretical_best_not_poisoned_by_degenerate_lap():
+    """D11 headline: a single lap with a degenerate (here near-zero) split must NOT drag the
+    per-column session best toward 0 / the theoretical best below a real lap's best stitch.
+
+    The session-best columns and theoretical_best computed WITH a degenerate lap present equal
+    those computed from the same valid laps with the degenerate lap excluded (the > 0 filter in
+    session_best_splits ignores its poisoned column entry) — and the theoretical best is never
+    faster than every real lap's worst column would allow."""
+    s, lap_a, lap_b = make_two_lap_sector_session()  # 2 lines -> 3 fully-filled columns
+    clean_bests = s.session_best_splits()
+    clean_theo = s.theoretical_best()
+    assert clean_bests and all(b is not None for b in clean_bests), clean_bests
+    assert all(b > 0 for b in clean_bests), clean_bests
+
+    # Inject a THIRD valid lap whose middle split is degenerate (0 s): seed its caches, then
+    # monkeypatch lap_sector_splits so that lap returns a poisoned column directly (a 0 s split)
+    # while the two real laps keep their real projections — the exact shape D11 warns about
+    # (one degenerate lap among good ones feeding the per-column min).
+    lap_c = 9
+    tc, dc = odometer(115, 0.1, 200.0, 514.0)
+    seed_lap(s, lap_c, tc, dc)
+    seed_cols(s, lap_c, tc, dc)
+    s._valid_cache = [lap_a, lap_b, lap_c]
+    real_splits = {lid: s.lap_sector_splits(lid) for lid in (lap_a, lap_b)}
+    poisoned = list(real_splits[lap_a])
+    poisoned[1] = 0.0  # a degenerate middle split — the spurious 0 the guard must drop
+
+    orig = s.lap_sector_splits
+
+    def patched(lid):
+        return poisoned if lid == lap_c else orig(lid)
+
+    s.lap_sector_splits = patched
+    try:
+        poisoned_bests = s.session_best_splits()
+        poisoned_theo = s.theoretical_best()
+    finally:
+        s.lap_sector_splits = orig
+        s._valid_cache = [lap_a, lap_b]
+
+    # The degenerate lap's 0 s column is filtered, so the per-column bests + theoretical best are
+    # IDENTICAL to the clean two-lap session — the poison never reaches the purple cells / footer.
+    assert poisoned_bests == clean_bests, (poisoned_bests, clean_bests)
+    assert poisoned_theo == clean_theo, (poisoned_theo, clean_theo)
+    # And concretely: the middle column's best is a real positive split, not the injected 0.
+    assert poisoned_bests[1] > 0.0, poisoned_bests
+    print("test_theoretical_best_not_poisoned_by_degenerate_lap OK")
+
+
+def test_session_best_splits_filters_nonpositive_keeps_tiny_positive():
+    """D11 defensive filter, pinned directly: session_best_splits takes the per-column min over
+    FINITE and STRICTLY-POSITIVE splits only — a 0 / negative entry is ignored, but a legit
+    tiny-but-positive split is still eligible to win its column."""
+    s, lap_a, lap_b = make_two_lap_sector_session()  # 2 lines -> 3 columns
+    s._valid_cache = [lap_a, lap_b]
+    fake = {
+        lap_a: [10.0, 0.0, 20.0],     # middle column degenerate (0) -> must be ignored
+        lap_b: [10.0, 1e-6, 20.0],    # middle column tiny BUT positive -> eligible, wins
+    }
+    s.lap_sector_splits = lambda lid: fake[lid]
+    bests = s.session_best_splits()
+    assert bests == [10.0, 1e-6, 20.0], bests   # the 0 lost to the tiny-positive, not vice-versa
+    assert s.theoretical_best() == float(sum([10.0, 1e-6, 20.0]))
+    print("test_session_best_splits_filters_nonpositive_keeps_tiny_positive OK")
 
 
 if __name__ == "__main__":

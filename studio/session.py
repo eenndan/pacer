@@ -806,10 +806,8 @@ class Session:
         instead project each sector line's MIDPOINT onto this lap's trace — the cum_distance of
         the nearest trace point is that boundary's lap distance d_k — then read elapsed time at
         each boundary by interpolating on (cum_distance, elapsed). With the lap start (d=0) and
-        finish (d=total) the N boundaries give N+1 splits that are all positive and SUM to the
-        lap time for every lap (no blanks, none exceeding the lap time)."""
-        lines = self.laps.sectors.sector_lines
-        n_splits = len(lines) + 1
+        finish (d=total) the boundaries give one more split than there are boundaries, all
+        positive and SUMMING to the lap time for every lap (no blanks, none exceeding it)."""
         # times + cum_distances from the one bulk lap_columns crossing (both length lap.count(),
         # so the former m = min(len(points), len(cum_distances)) is just that length).
         times, _xs, _ys, _full_speed, cum = self._lap_columns(lap_id)
@@ -820,9 +818,12 @@ class Session:
         elapsed = times[:m] - times[0]
 
         # Each sector line's lap distance = cum_distance of the lap point nearest its midpoint —
-        # single-sourced (and already sorted ascending) via sector_boundary_distances, so the
-        # boundary guide lines (F2) sit exactly where these splits are measured.
+        # single-sourced (ascending, windowed + DEDUPED) via sector_boundary_distances, so the
+        # boundary guide lines (F2) sit exactly where these splits are measured. The split count
+        # follows the DEDUPED boundary count (not len(sector_lines)): a duplicate / wrong-pass
+        # line was already collapsed there, so it can't inject a 0 s split here.
         bounds = self.sector_boundary_distances(lap_id)
+        n_splits = len(bounds) + 1
 
         total = float(cum_distance[-1])
         # Boundaries plus lap start/finish: N+1 sub-sectors. interp elapsed at each.
@@ -831,11 +832,35 @@ class Session:
         splits = [float(t_at[k + 1] - t_at[k]) for k in range(n_splits)]
         return splits
 
+    # Sector boundaries closer than this fraction of the lap odometer are treated as the SAME
+    # line and collapsed (D10/D11). WHY a fraction, not a fixed metre: it scales from go-kart
+    # laps (~1 km) up; 0.2% of a ~1.06 km D24 lap is ~2 m — well under the GPS step (~1.4 m at
+    # 50 Hz / 70 km/h) so two distinct lines a real sub-sector apart are never fused, but two
+    # lines the user dropped on top of each other (or a wrong-pass mis-snap that lands on a
+    # neighbour) can't survive as a 0 s / out-of-order split that would poison the splits and
+    # the theoretical best.
+    _SECTOR_DEDUPE_FRAC = 0.002
+
     def sector_boundary_distances(self, lap_id: int) -> list[float]:
         """Per-lap odometer distance (metres) of each sector line, found the SAME way
         `lap_sector_splits` measures the splits: project each sector line's midpoint onto this
-        lap's trace and take the nearest point's cum_distance. Sorted ascending. So the boundary
-        guide lines on the charts (F2) land exactly where the split times are measured."""
+        lap's trace and take the nearest point's cum_distance, then return them ASCENDING. So the
+        boundary guide lines on the charts (F2) land exactly where the split times are measured.
+
+        Two robustness guards live here (the single source of every consumer's boundaries):
+          * WINDOWED projection — a plain global argmin over the whole lap snaps a line to its
+            globally-nearest trace point, which on an out-and-back / hairpin (the line's midpoint
+            sits near two passes) or two lines placed close together can pick the WRONG pass and
+            put the boundary at a bogus odometer. So each line is first projected globally to find
+            its lap fraction, then RE-projected within a window around that fraction, breaking
+            wrong-pass ties toward the expected location while leaving a normal, well-separated
+            line on a single-pass section byte-identical to the old global argmin.
+          * DEDUPE — after sorting, boundaries within `_SECTOR_DEDUPE_FRAC` of the previous one
+            are dropped, so a duplicate / mis-snapped line can never yield a zero-length (or, once
+            the sort masks it, out-of-order) split. Returning fewer boundaries than lines is fine:
+            lap_sector_splits derives its split count from THIS list, and the table simply shows a
+            blank in any trailing S-column a deduped lap no longer fills (its highlight/best-split
+            paths already tolerate a short per-lap split list)."""
         lines = self.laps.sectors.sector_lines
         if not lines:
             return []
@@ -846,13 +871,38 @@ class Session:
         if m < 2:
             return []
         xs, ys, cum = xs[:m], ys[:m], cum[:m]
+        total = float(cum[-1])
+        # Window half-width (in samples) for the wrong-pass guard: a fraction of the lap's
+        # samples, reusing the same ±2% arc the rolling-best nearest-point search trusts (a real
+        # sub-sector is far wider than that, so the window keeps the matching pass while excluding
+        # the OTHER pass of an out-and-back). Floored at 1 so it stays a no-op refinement (the
+        # window is just the global point) on tiny synthetic laps.
+        half = max(1, int(round(self._ROLLING_SEARCH_FRAC * m)))
         bounds = []
         for seg in lines:
             mx = (seg.first.x + seg.second.x) / 2.0
             my = (seg.first.y + seg.second.y) / 2.0
-            j = int(np.argmin((xs - mx) ** 2 + (ys - my) ** 2))
+            d2 = (xs - mx) ** 2 + (ys - my) ** 2
+            j_global = int(np.argmin(d2))
+            # Re-pick the nearest point WITHIN a window around the global hit. On a single-pass
+            # section the window minimum IS the global hit, so this is a no-op; on an out-and-back
+            # it keeps the match on the pass the global argmin already chose rather than letting a
+            # marginally-closer point on the OTHER pass win.
+            lo = max(0, j_global - half)
+            hi = min(m, j_global + half + 1)
+            j = lo + int(np.argmin(d2[lo:hi]))
             bounds.append(float(cum[j]))
-        return sorted(bounds)
+        bounds.sort()
+        # Collapse boundaries that land on (nearly) the same odometer: keep the first, drop any
+        # follower within the dedupe tolerance of the last KEPT boundary. This is what stops a
+        # degenerate (duplicate / wrong-pass) line from producing a 0 s / out-of-order split that
+        # `lap_sector_splits` would emit and `session_best_splits` could take as a spurious min.
+        tol = self._SECTOR_DEDUPE_FRAC * total if total > 0 else 0.0
+        deduped: list[float] = []
+        for b in bounds:
+            if not deduped or b - deduped[-1] > tol:
+                deduped.append(b)
+        return deduped
 
     # ------------------------------------- session summaries: theoretical + rolling best (F1)
     def session_best_splits(self) -> list[float | None]:
@@ -866,11 +916,25 @@ class Session:
         Recomputed per call (refresh-time only, never per-tick): the inputs are the cached
         per-lap `lap_sector_splits`, so memoizing here would only add another slot to clear
         on re-segment."""
+        # Column count tracks len(sector_lines)+1 — the SAME count the lap table headers use
+        # (sector_count()+1), so the purple cells and the footer stay column-aligned with the
+        # table. A lap that deduped to fewer boundaries (a duplicate / wrong-pass line collapsed
+        # in sector_boundary_distances) just contributes nothing to its missing trailing column
+        # via the i<len(sp) guard below; if that column is empty on EVERY lap it reads None,
+        # exactly the documented "some column has no finite split" → theoretical_best None case.
         n_splits = len(self.laps.sectors.sector_lines) + 1
         all_splits = [self.lap_sector_splits(lap_id) for lap_id in self.valid_lap_ids()]
         best: list[float | None] = []
         for i in range(n_splits):
-            vals = [sp[i] for sp in all_splits if i < len(sp) and math.isfinite(sp[i])]
+            # Defensive against a degenerate split surviving into a column: take the per-column
+            # min only over FINITE and STRICTLY-POSITIVE splits (sp[i] > 0). sector_boundary_-
+            # distances already dedupes coincident boundaries (the root), but were one lap's
+            # geometry to still emit a 0 s / negative split (e.g. a non-monotonic projection),
+            # the > 0 guard keeps that one lap from poisoning theoretical_best with a spurious
+            # near-zero minimum. A legitimately tiny-but-positive split (a very short sub-sector)
+            # still passes — only non-positive values are filtered.
+            vals = [sp[i] for sp in all_splits
+                    if i < len(sp) and math.isfinite(sp[i]) and sp[i] > 0]
             best.append(min(vals) if vals else None)
         return best
 
