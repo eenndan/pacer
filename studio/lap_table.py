@@ -30,6 +30,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QGridLayout,
+    QHeaderView,
     QLabel,
     QStackedWidget,
     QTableWidget,
@@ -446,8 +447,24 @@ class LapTable(QWidget):
 # = the selected lap's per-corner metrics vs the best lap (session.lap_corner_stats). A separate
 # widget stacked with LapTable (the header toggle in app.py flips between them) so Laps mode
 # stays byte-identical — this class shares only the module's display constants.
-CORNER_COLUMNS = ["Corner", "Time (s)", "Δ best", "Apex (km/h)", "Δ apex", "Entry", "Exit",
-                  "Grip %"]
+# Headers are abbreviated so all 8 columns fit the (narrow) left-stack panel WITHOUT a horizontal
+# scrollbar — units that used to ride in the header ("(s)", "(km/h)", "%") move to per-column header
+# tooltips (CORNER_COL_TIPS) so nothing is lost. The two Δ columns are already compact and keep
+# their labels. With ResizeToContents on the numerics (below), short labels = narrow columns, so the
+# Corner name column can stretch to take the slack instead of the table overflowing.
+CORNER_COLUMNS = ["Corner", "Time", "Δ best", "Apex", "Δ apex", "Entry", "Exit", "Grip"]
+# Full meaning + units for each header, shown on hover (the abbreviation's source of truth). Aligned
+# 1:1 with CORNER_COLUMNS; "" = self-explanatory (no tooltip needed).
+CORNER_COL_TIPS = [
+    "Detected corner in track order (⟲ left / ⟳ right)",
+    "Time spent in the corner (seconds)",
+    "Δ vs the best lap's same corner (seconds; − is faster)",
+    "Apex (minimum) speed through the corner (km/h)",
+    "Δ apex speed vs the best lap (km/h; + is faster)",
+    "Corner entry speed (km/h)",
+    "Corner exit speed (km/h)",
+    "Friction-circle grip utilisation: median |g| vs the lap envelope (%)",
+]
 CORNER_DIR_GLYPH = {1: "⟲", -1: "⟳"}  # left / right (turn sense), shown after the C-label
 
 
@@ -467,10 +484,23 @@ class CornerTable(QWidget):
         self._lap_id: int | None = None
         self.table = QTableWidget(0, len(CORNER_COLUMNS))
         self.table.setHorizontalHeaderLabels(CORNER_COLUMNS)
+        # Full label + units on hover for each (abbreviated) header — the only place the dropped
+        # units now live, so nothing is lost by the compaction.
+        for c, tip in enumerate(CORNER_COL_TIPS):
+            if tip:
+                self.table.horizontalHeaderItem(c).setToolTip(tip)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        # Column fit (the panel is narrow): the seven numeric columns size to their (short) content
+        # via ResizeToContents, and the Corner NAME column Stretches to absorb the leftover width —
+        # so all 8 columns fit with NO horizontal scrollbar at the default panel size. The old
+        # setStretchLastSection only widened Grip while the rest stayed at Qt's 100px default and
+        # overflowed; it's dropped in favour of this per-column policy.
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in range(1, len(CORNER_COLUMNS)):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(28)
         self._num_font = theme.mono_font(theme.TABLE)

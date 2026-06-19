@@ -18,9 +18,11 @@ exactly as today — its `positionChanged` still feeds the app. The SECONDARY (r
 created LAZILY on toggle-on (its own source = the session ChapterMap), is VIDEO-ONLY (its
 `positionChanged` is NOT forwarded to the app), is always muted, and is torn down (stop +
 deleteLater the player+audio, .close() its g-meter overlay) on toggle-off and on any reload, so
-no decoder/overlay leaks. Each pane shows a caption ("lap N · m:ss.mmm", ★ on the best lap), a
-compact lap picker to repoint that side (its items carry the lap time too; emits
-`paneRepointRequested`), and a "Δ vs other" badge the app updates. Play/pause/mute fan out to
+no decoder/overlay leaks. Each pane shows a fixed ROLE caption ("THIS LAP" / "REFERENCE"), a
+compact lap picker that carries the lap IDENTITY ("lap N (m:ss.mmm)", ★ on the best lap) and
+repoints that side (emits `paneRepointRequested`), and a "Δ vs other" badge the app updates. The
+caption stays the role only — the lap+time lives once, in the picker, so the identifying text is
+never split/duplicated and never cramped out of the narrow strip. Play/pause/mute fan out to
 BOTH panes; the g-meter toggle applies per-pane (both default off).
 
 EVERY change to the compared pair (enter, either picker repoint) re-seeks BOTH panes to their
@@ -64,10 +66,24 @@ PRIMARY, SECONDARY = 0, 1
 # video would swallow the handle's mouse events and the split couldn't be dragged).
 _PANE_INSET = 5
 
+# Floor width (px) for each pane's lap picker so the lap IDENTITY it carries ("lap N (m:ss.mmm)",
+# plus a "  ★" on the best lap) is fully legible even at the narrow default compare split — the
+# picker is the single home of the lap text now, so it must never clip. AdjustToContents lets it
+# grow past this when the current item is wider; this is just the no-clip minimum.
+_PICKER_MIN_W = 150
+
 
 class _PaneCell(QWidget):
-    """A compare-mode pane wrapper: a caption strip (caption · lap picker · Δ badge) above the
+    """A compare-mode pane wrapper: a caption strip (ROLE caption · lap picker · Δ badge) above the
     PlayerPane's video. Pure chrome — it owns no playback state; the PlayerPane it wraps does.
+
+    The strip is laid out so the lap IDENTITY is never cramped: the caption is a SHORT fixed role
+    word ("THIS LAP" / "REFERENCE"), the LAP picker (which already lists "lap N (m:ss.mmm)") gets a
+    floor width and grows to fit its current text, and the Δ badge — the most disposable item — is
+    the one that yields width first. The lap+time therefore lives in exactly ONE place (the picker),
+    so the old strip (caption "lap N · m:ss.mmm" + a picker that ALSO showed lap+time) no longer
+    duplicates the identity nor truncates either copy in the narrow default split.
+
     The lap picker is a compact combo of valid laps; selecting one emits `repointRequested(lap_id)`
     which VideoView forwards to the app, tagged with this cell's side index."""
 
@@ -80,22 +96,42 @@ class _PaneCell(QWidget):
         self._lap_ids: list[int] = []
         self._labels: list[str] = []   # last-applied picker item labels (guards the repopulate)
 
-        self.caption = QLabel("")
+        # ROLE caption only — a short fixed word per side. The lap+time identity used to live here
+        # too ("lap N · m:ss.mmm"), duplicating the picker and crowding the narrow strip until both
+        # copies truncated; now the identity lives ONLY in the picker, so the caption just names the
+        # pane's role and never competes for width (set_caption ignores the app's lap-text on purpose).
+        self.caption = QLabel("THIS LAP" if side == PRIMARY else "REFERENCE")
         self.caption.setObjectName("PaneCaption")
         self.caption.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        # The fixed role word never needs to shrink — pin it to its own size so the picker (not the
+        # caption) is what grows into the spare width, and so a long badge can't squeeze the role.
+        self.caption.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
 
-        # Compact lap picker: lists valid laps; repoints this side without touching the other.
+        # Compact lap picker: lists valid laps; repoints this side without touching the other. It is
+        # the SOLE home of the lap identity ("lap N (m:ss.mmm)"), so it must never clip its current
+        # text: a floor width keeps it legible at the default split, and AdjustToContents lets it
+        # grow to its current item so the selected "lap N (m:ss.mmm)" is shown in full, not elided.
         self.picker = QComboBox()
         self.picker.setToolTip("Pick the lap shown in this pane")
+        self.picker.setMinimumWidth(_PICKER_MIN_W)
+        self.picker.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.picker.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.picker.currentIndexChanged.connect(self._on_pick)
 
-        # "Δ vs other" badge — app drives the text + colour per tick (transparent inline label).
+        # "Δ vs other" badge — app drives the text + colour per tick (transparent inline label). It
+        # is the FIRST thing to yield width (the identifying caption/picker outrank it), so it can't
+        # push the lap text out of the strip; its short "Δ +0.00 s" form fits comfortably regardless.
         self.badge = QLabel("Δ —")
         self.badge.setObjectName("PaneBadge")
         self.badge.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
+        self.badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self._badge_colour: str | None = None
         self._badge_text = "Δ —"   # last-applied badge text (guards the per-tick setText)
 
+        # Order: role caption, lap picker (grows), a flexible gap, then the Δ badge pinned right.
+        # The stretch sits between the identity (caption+picker) and the badge so any spare width is
+        # absorbed by the GAP — the picker keeps its content size and the badge keeps its own — and
+        # when width is tight the gap collapses first, before any identifying text would clip.
         strip = QHBoxLayout()
         strip.setContentsMargins(0, 0, 0, 0)
         strip.setSpacing(6)
@@ -139,7 +175,13 @@ class _PaneCell(QWidget):
         self.picker.blockSignals(False)
 
     def set_caption(self, text: str):
-        self.caption.setText(text)
+        """Compat shim: the app still hands a "lap N · m:ss.mmm" string here (and for cross-recording
+        compare, "<recording> · lap N · time"), but the caption is now a fixed ROLE word and the lap
+        identity lives solely in the picker — so we DON'T paint that text into the strip (it would
+        re-duplicate the picker and re-crowd it). We surface the app's richer text as the caption's
+        TOOLTIP instead, so hovering the role still reveals the full lap/recording detail. The
+        wiring stays intact; this is a presentation choice, keeping the strip to role + picker + Δ."""
+        self.caption.setToolTip(text)
 
     def set_badge(self, text: str, colour: str | None):
         """Set the "Δ vs other" badge text + (only when it changes) its colour — driven per tick by
