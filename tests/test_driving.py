@@ -342,7 +342,7 @@ def test_corner_table_has_grip_column():
     _qapp()
     from studio import corners as C
     from studio.lap_table import CORNER_COLUMNS, CornerTable
-    assert CORNER_COLUMNS[-1] == "Grip %", CORNER_COLUMNS
+    assert CORNER_COLUMNS[-1] == "Grip", CORNER_COLUMNS  # header abbreviated; units now in tooltip
 
     class Stub:
         def lap_count(self):
