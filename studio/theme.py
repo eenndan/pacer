@@ -130,6 +130,62 @@ def delta_colour(d: float | None) -> str | None:
     return C.ahead if d < 0 else C.behind
 
 
+# --- shared Δ/speed readout TEXT (single source of truth) ------------------------------------
+# The hero Δ/speed readout is shown in TWO substrates that must never drift: the live #DiffBox
+# QLabel (app._update_diff_box) and the burned-in export readout (export_video._paint_readout,
+# raw QPainter). These tiny Qt-free formatters are the ONE place the readout's number/units/
+# no-lap rules live, so the live label and the shareable MP4 always say the same thing. They are
+# composable FRAGMENTS — a delta value, a delta run, a speed run — plus `format_delta_speed`,
+# which assembles them into the exact one-line live string. The export, which paints the speed
+# number and its unit as SEPARATE runs (different fonts/colours; a layout this string-level helper
+# can't express), composes from the same fragments rather than the combined string.
+
+
+def format_delta_value(d: float | None) -> str:
+    """The Δ NUMBER alone, no leading glyph/units: an em dash for no delta, else a signed
+    2-decimal seconds value (e.g. "+0.00", "-0.31"). The atomic source both readouts format Δ
+    from — the live box wraps it as "Δ <v> s", the export as "Δ <v>"."""
+    return "—" if d is None else f"{d:+.2f}"
+
+
+def format_delta_run(d: float | None, *, units: bool = True) -> str:
+    """The Δ run as drawn: "Δ —" / "Δ +0.00 s" with `units` (the live #DiffBox form), or
+    "Δ —" / "Δ +0.00" without (the export readout form, which omits the trailing " s" to keep its
+    hero layout tight). Both share `format_delta_value`, so the number itself can't drift."""
+    v = format_delta_value(d)
+    if d is None:
+        return f"Δ {v}"
+    return f"Δ {v} s" if units else f"Δ {v}"
+
+
+def format_speed_run(speed_kmh: float | None, lap: int | None) -> str:
+    """The live speed run: "{n} km/h" while a lap is current, else the HONEST "— km/h" (the Phase-0
+    no-lap rule — outside a valid lap we show no misleading lead-in speed). Used by the live
+    #DiffBox; the export paints the number and unit as separate runs but applies the SAME
+    speed-known gate via `speed_number`."""
+    return f"{speed_kmh:.0f} km/h" if (speed_kmh is not None and lap is not None) else "— km/h"
+
+
+def speed_number(speed_kmh: float | None, lap: int | None) -> str:
+    """The speed NUMBER alone (no unit) under the SAME no-lap gate as `format_speed_run`: the
+    rounded km/h while a lap is current, else an em dash. The export's hero readout draws this
+    number and a small "km/h" unit separately, but shares this one gate so the two readouts agree on
+    when a speed is honestly known."""
+    return "—" if (speed_kmh is None or lap is None) else f"{speed_kmh:.0f}"
+
+
+def format_delta_speed(d: float | None, speed_kmh: float | None,
+                       lap: int | None) -> tuple[str, str | None]:
+    """The COMBINED hero Δ/speed readout, single-sourced for the live #DiffBox and the export:
+    returns (text, colour) where `text` is the exact live one-line string
+    ("Δ +0.00 s     73 km/h" — five spaces between the runs, the honest "— km/h" with no lap) and
+    `colour` is `delta_colour(d)` (None = "no semantic colour; use the widget's neutral
+    foreground"). The live box renders this verbatim; the export reuses the colour + the fragment
+    helpers (it paints the runs separately) so neither can drift from the other."""
+    text = f"{format_delta_run(d)}     {format_speed_run(speed_kmh, lap)}"
+    return text, delta_colour(d)
+
+
 # --- shared interaction constants ------------------------------------------------------------
 # Seek a few ms INTO a lap rather than onto its exact start: laps are contiguous (lap N's finish
 # == lap N+1's start) and the player quantizes seeks to whole ms, so a seek to the exact boundary

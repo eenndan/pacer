@@ -1804,24 +1804,21 @@ class StudioWindow(QMainWindow):
         normalized-distance alignment as the delta plot, so the box and the cursor on the curve
         agree) — reusing lap_id instead of re-resolving lap_at_time. Outside a valid lap Δ is —."""
         d = self.session.delta_at_lap(lap_id, t) if lap_id is not None else None
-        if d is None:
-            delta_txt = "Δ —"
-        else:
-            # +behind / −ahead vs best, at the same track position.
-            delta_txt = f"Δ {d:+.2f} s"
-        # Honest no-lap state: outside a valid lap (lead-in / between laps / cool-down) the hero box
-        # reads "— km/h" rather than a misleading lead-in speed (the old "12 km/h at t=0" first
-        # impression). A real speed is shown only WHILE a lap is current. With the launch poster-seek
-        # landing inside the best lap, t=0 now shows the best lap's real speed instead of "—".
-        speed_txt = f"{sp:.0f} km/h" if (sp is not None and lap_id is not None) else "— km/h"
-        # Colour cue: the shared three-way rule (theme.delta_colour) — green when meaningfully up
-        # on best, red when down, and the primary text colour when there's no delta OR it's dead
-        # even (|Δ| within ±theme.DELTA_EVEN_EPS_S; an exact 0 used to read GREEN). The card's
-        # surface bg / font / border come from the global QSS (#DiffBox); a per-widget `color`
-        # rule merges over it and overrides ONLY the foreground (no per-tick background/border
-        # re-layout cost), and only when the colour actually changes.
-        colour = theme.delta_colour(d) or theme.C.text
-        self.diff_box.setText(f"{delta_txt}     {speed_txt}")
+        # Text + colour come from the ONE shared formatter (theme.format_delta_speed), the single
+        # source of truth this readout shares with the burned-in export overlay so the shareable MP4
+        # can't say something different from the live box. The formatter owns: the "Δ +0.00 s" run,
+        # the honest no-lap "— km/h" (Phase-0: outside a valid lap we show no misleading lead-in
+        # speed), the five-space gap, and the three-way Δ colour. `colour` is None when there is no
+        # semantic cue (no delta / dead-even), which we resolve to the box's primary text colour.
+        text, sem_colour = theme.format_delta_speed(d, sp, lap_id)
+        # Colour cue: the shared three-way rule — green when meaningfully up on best, red when down,
+        # and the primary text colour when there's no delta OR it's dead even (|Δ| within
+        # ±theme.DELTA_EVEN_EPS_S; an exact 0 used to read GREEN). The card's surface bg / font /
+        # border come from the global QSS (#DiffBox); a per-widget `color` rule merges over it and
+        # overrides ONLY the foreground (no per-tick background/border re-layout cost), and only when
+        # the colour actually changes.
+        colour = sem_colour or theme.C.text
+        self.diff_box.setText(text)
         if colour != getattr(self, "_diff_colour", None):
             self._diff_colour = colour
             self.diff_box.setStyleSheet(f"QLabel#DiffBox {{ color: {colour}; }}")

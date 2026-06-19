@@ -63,7 +63,7 @@ from PySide6.QtGui import (
     QRadialGradient,
 )
 
-from . import gmeter_overlay
+from . import gmeter_overlay, theme
 from ._signal import fmt_time
 
 # --------------------------------------------------------------------------- ffmpeg discovery
@@ -761,15 +761,21 @@ class EXPORT:
     grid = "#FFFFFF"            # g-dial rings / crosshair — white at moderate alpha (set per use)
 
 
+# The ONE Δ-semantic rule (three-way ahead/behind/even + dead band) lives in theme.delta_colour;
+# the export only RE-COLOURS that decision into its vivid palette. This map keys the theme's two
+# semantic tokens to the export's punchier equivalents, so adding a third Δ semantic upstream is a
+# one-line addition here rather than a re-implemented rule that can silently drift.
+_DELTA_THEME_TO_EXPORT = {theme.C.ahead: EXPORT.ahead, theme.C.behind: EXPORT.behind}
+
+
 def export_delta_colour(d: float | None) -> str:
-    """The export's three-way Δ colour — the SAME ahead/behind/neutral *rule* as theme.delta_colour
-    (with the shared dead band) but mapped to the EXPORT palette's punchier, fully-saturated green/
-    red so the cue reads vividly over footage. Always returns a colour (neutral white for no/even
-    Δ) since the burned text is never the widget's neutral foreground."""
-    from .theme import DELTA_EVEN_EPS_S
-    if d is None or abs(d) <= DELTA_EVEN_EPS_S:
-        return EXPORT.neutral
-    return EXPORT.ahead if d < 0 else EXPORT.behind
+    """The export's three-way Δ colour. The ahead/behind/even DECISION (incl. the shared dead band)
+    is made by `theme.delta_colour` — the single source of truth shared with the live #DiffBox — and
+    only the colour TOKEN is remapped to the EXPORT palette's punchier, fully-saturated green/red so
+    the cue reads vividly over bright footage. A neutral/dead-even Δ (theme returns None) becomes the
+    EXPORT neutral white, since the burned text is never a widget's neutral foreground."""
+    sem = theme.delta_colour(d)
+    return EXPORT.neutral if sem is None else _DELTA_THEME_TO_EXPORT[sem]
 
 
 def _draw_text(p: QPainter, pos, text: str, font: QFont, colour: str,
@@ -1020,7 +1026,12 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues) -> None:
     pad = box.height() * 0.26
     inner = box.adjusted(pad, 0, -pad, 0)
     # --- HERO speed: big number + small unit ---
-    speed_num = "—" if vals.speed_kmh is None else f"{vals.speed_kmh:.0f}"
+    # The number + its honest no-lap rule come from the shared theme.speed_number — the SAME
+    # gate the live #DiffBox uses (a real km/h only WHILE a lap is current, else "—"). Every real
+    # export frame is inside the exported lap, so this is identical to today's burned-in number; it
+    # also keeps the export from ever drifting from the live readout's no-lap honesty. The unit is
+    # painted as a separate small run below, so we format only the number here (not "n km/h").
+    speed_num = theme.speed_number(vals.speed_kmh, vals.lap_id)
     big = _font(box.height() * 0.74, bold=True)
     unit = _font(box.height() * 0.34, bold=True)
     fm_big = QFontMetricsF(big)
@@ -1033,7 +1044,12 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues) -> None:
                "km/h", unit, EXPORT.text_dim, halo=1.8 * k)
     x += fm_unit.horizontalAdvance("km/h") + 16 * k
     # --- Δ cue: punchy vivid colour ---
-    delta_txt = "Δ —" if vals.delta_s is None else f"Δ {vals.delta_s:+.2f}"
+    # The Δ run text comes from the shared theme.format_delta_run (units=False keeps the export's
+    # tight "Δ +0.00" form — no trailing " s" — vs the live box's "Δ +0.00 s"; both share the SAME
+    # signed-2dp number via theme.format_delta_value, so they can't drift). The colour is the shared
+    # three-way decision (theme.delta_colour) re-toned to the vivid EXPORT palette by
+    # export_delta_colour.
+    delta_txt = theme.format_delta_run(vals.delta_s, units=False)
     dcol = export_delta_colour(vals.delta_s)
     dfont = _font(box.height() * 0.50, bold=True)
     fm_d = QFontMetricsF(dfont)

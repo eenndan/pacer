@@ -1076,6 +1076,104 @@ def test_export_delta_colour_three_way():
     assert ev.export_delta_colour(DELTA_EVEN_EPS_S / 2) == ev.EXPORT.neutral  # dead-even -> neutral
 
 
+# --------------------------------------------------------------------------- shared-source dedup (F6)
+def _old_export_delta_colour(d):
+    """The PRE-refactor inlined export Δ-colour rule (reimplemented dead band + palette map) — the
+    reference the now-delegating export_delta_colour must reproduce EXACTLY across a Δ sweep."""
+    from studio.theme import DELTA_EVEN_EPS_S
+    if d is None or abs(d) <= DELTA_EVEN_EPS_S:
+        return ev.EXPORT.neutral
+    return ev.EXPORT.ahead if d < 0 else ev.EXPORT.behind
+
+
+def test_export_delta_colour_equivalent_to_old_inlined_rule():
+    """REGRESSION GUARD for the F6 dedup: the export Δ colour now DELEGATES the ahead/behind/even
+    decision to theme.delta_colour (the single rule source) and only re-tones it to the vivid EXPORT
+    palette. It must return what the old inlined reimplementation did across the full Δ sweep — incl.
+    exactly 0, ±eps either side of the dead band, and large +/- — so the burned cue is unchanged."""
+    from studio.theme import DELTA_EVEN_EPS_S as eps
+    sweep = [None, -5.0, -0.20, -eps * 1.01, -eps, -eps * 0.99, 0.0,
+             eps * 0.99, eps, eps * 1.01, 0.20, 5.0]
+    for d in sweep:
+        assert ev.export_delta_colour(d) == _old_export_delta_colour(d), f"Δ={d}"
+
+
+def _old_diff_box_text_and_colour(d, sp, lap_id):
+    """The PRE-refactor inlined live #DiffBox formatter (copied verbatim from the old
+    app._update_diff_box) — the byte-for-byte reference theme.format_delta_speed must reproduce."""
+    from studio import theme
+    if d is None:
+        delta_txt = "Δ —"
+    else:
+        delta_txt = f"Δ {d:+.2f} s"
+    speed_txt = f"{sp:.0f} km/h" if (sp is not None and lap_id is not None) else "— km/h"
+    colour = theme.delta_colour(d) or theme.C.text
+    return f"{delta_txt}     {speed_txt}", colour
+
+
+def test_format_delta_speed_reproduces_old_live_diff_box():
+    """LIVE BYTE-IDENTITY: theme.format_delta_speed (the shared source the live #DiffBox + the export
+    now both read) reproduces the EXACT text + colour the old inlined app._update_diff_box produced,
+    across a sweep of (d, speed, lap) — incl. the no-lap "— km/h" honesty rule, an exact-0 / dead-even
+    Δ (neutral text colour), and ahead/behind colours. If this drifts the live hero readout changed,
+    which the refactor must not do."""
+    from studio import theme
+    cases = [
+        (None, None, None),        # no lap at all -> "Δ —     — km/h"
+        (None, 73.4, None),        # speed known but NO lap -> honest "— km/h"
+        (None, 73.4, 2),           # lap but no Δ baseline
+        (0.0, 73.4, 2),            # dead-even -> neutral text colour, "Δ +0.00 s"
+        (0.004, 73.4, 2),          # within dead band -> neutral
+        (-0.31, 88.0, 2),          # ahead -> green
+        (0.62, 64.0, 2),           # behind -> red
+        (-2.5, 100.0, 5),          # large ahead
+    ]
+    for d, sp, lap in cases:
+        text, sem = theme.format_delta_speed(d, sp, lap)
+        colour = sem or theme.C.text                       # the live call-site resolves None -> text
+        old_text, old_colour = _old_diff_box_text_and_colour(d, sp, lap)
+        assert text == old_text, f"text drift for {(d, sp, lap)}: {text!r} != {old_text!r}"
+        assert colour == old_colour, f"colour drift for {(d, sp, lap)}"
+
+
+def test_format_delta_speed_exact_strings_and_spacing():
+    """Pin the exact live readout strings (incl. the FIVE-space gap between the Δ run and the speed
+    run, the "Δ +0.00 s" units form, and the em-dash no-lap forms) so a stray space/format change is
+    caught even if the inlined reference above were also edited."""
+    from studio import theme
+    assert theme.format_delta_speed(None, None, None)[0] == "Δ —     — km/h"
+    assert theme.format_delta_speed(0.0, 73.4, 2)[0] == "Δ +0.00 s     73 km/h"
+    assert theme.format_delta_speed(-0.31, 88.0, 2)[0] == "Δ -0.31 s     88 km/h"
+    # export-side fragments: tight Δ run (no " s"), bare speed number under the SAME no-lap gate.
+    assert theme.format_delta_run(-0.31, units=False) == "Δ -0.31"
+    assert theme.format_delta_run(None, units=False) == "Δ —"
+    assert theme.speed_number(73.4, 2) == "73"
+    assert theme.speed_number(73.4, None) == "—"        # no lap -> em dash (the honesty rule)
+    assert theme.speed_number(None, 2) == "—"
+
+
+def test_paint_readout_pulls_shared_semantics():
+    """The export readout sources its Δ colour from the shared theme.delta_colour decision (via
+    export_delta_colour) — assert _paint_readout calls export_delta_colour, which is the shared-rule
+    entry point. A light spy guard so the painter can't silently fork the Δ rule again."""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter
+    seen = []
+    orig = ev.export_delta_colour
+    ev.export_delta_colour = lambda d: seen.append(d) or orig(d)
+    try:
+        img = QImage(400, 200, QImage.Format_RGB888)
+        img.fill(0)
+        p = QPainter(img)
+        vals = ev.OverlayValues(t=130.0, lap_id=2, speed_kmh=88.0, delta_s=-0.31,
+                                g=None, marker_index=10)
+        ev._paint_readout(p, QRectF(10, 150, 260, 44), vals)
+        p.end()
+    finally:
+        ev.export_delta_colour = orig
+    assert seen == [-0.31]                                # the painter routed Δ through the shared rule
+
+
 # --------------------------------------------------------------------------- export restyle: quality
 def test_quality_params_high_vs_standard():
     """quality_params maps the picker level to (bpp, crf): high keeps the original 0.10 bpp / CRF 20
