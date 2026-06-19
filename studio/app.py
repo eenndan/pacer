@@ -1194,17 +1194,60 @@ class StudioWindow(QMainWindow):
     _EXPORT_RES_OPTIONS = [
         ("720p", 720), ("1080p", 1080), ("1440p", 1440), ("Source (no downscale)", 99999),
     ]
-    _EXPORT_QUALITY_OPTIONS = [("High", "high"), ("Standard", "standard")]
+    # Quality combo labels spell out the trade-off (bitrate ⇒ file size) so the picker isn't a
+    # bare "High / Standard" guess; the second tuple element is still the OverlayConfig.quality key.
+    _EXPORT_QUALITY_OPTIONS = [
+        ("High — larger file", "high"), ("Standard — smaller file", "standard"),
+    ]
 
     def _ask_export_options(self, lap: int):
         """A small modal picker (resolution + quality) shown before the save dialog; returns an
         `export_video.OverlayConfig`, or None if the user cancels. The last choice is remembered on
         the window (`self._export_res_idx` / `self._export_quality_idx`) so a repeat export defaults
         to it. Two combos in a QDialog — lighter than a custom widget, and the only export-specific
-        UI this feature adds."""
+        UI this feature adds. The chrome around the two combos — a flush PanelHeader, a one-line
+        description of what gets burned in, the lap + its duration, and a live "what you'll get"
+        resolution hint — exists so a flagship shareable-MP4 export doesn't read as a debug prompt;
+        none of it touches the return contract."""
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Export overlay video — lap {lap}")
-        form = QFormLayout(dlg)
+        dlg.setMinimumWidth(400)
+
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(0, 0, 0, 0)          # the header strip runs flush to the edges …
+        root.setSpacing(0)
+
+        # Flush PanelHeader strip naming the lap — same surface bg + hairline as every panel/dialog
+        # header, so the modal sits inside the app's visual language rather than as a bare OS dialog.
+        header = QLabel(f"Export overlay video — lap {lap}")
+        header.setProperty("role", "PanelHeader")
+        root.addWidget(header)
+
+        # Body wrapper carries the comfortable padding (the header is full-bleed above it).
+        body = QWidget(dlg)
+        col = QVBoxLayout(body)
+        col.setContentsMargins(16, 14, 16, 14)
+        col.setSpacing(10)
+        root.addWidget(body)
+
+        # One-line description of what's burned into the footage (the overlays the renderer paints).
+        desc = QLabel("Burns the overlays into your footage: g-meter, Δ / speed, map inset and the "
+                      "lap strip.")
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {theme.C.text_dim};")
+        col.addWidget(desc)
+
+        # Which lap + its length, so the export's scope is unambiguous. lap_time is a cheap pacer-free
+        # accessor (no ffprobe), so the duration is free here; fall back gracefully if it's missing.
+        dur = self.session.lap_time(lap) if hasattr(self, "session") else float("nan")
+        lap_line = QLabel(f"Lap {lap}  ·  {fmt_time(dur)}")
+        lap_line.setStyleSheet(f"color: {theme.C.text_dim};")
+        col.addWidget(lap_line)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
         res_combo = QComboBox(dlg)
         for label, _h in self._EXPORT_RES_OPTIONS:
             res_combo.addItem(label)
@@ -1215,10 +1258,31 @@ class StudioWindow(QMainWindow):
         q_combo.setCurrentIndex(getattr(self, "_export_quality_idx", 0))  # default High
         form.addRow("Resolution", res_combo)
         form.addRow("Quality", q_combo)
+        col.addLayout(form)
+
+        # Live "what you'll get" hint. We don't ffprobe the source here (too heavy for a picker), so
+        # the hint states the TARGET height and the never-upscale rule rather than exact pixels —
+        # the same contract output_size() enforces ("Source" / a target above the source keeps the
+        # native resolution; nothing is ever upscaled).
+        hint = QLabel("")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {theme.C.text_muted};")
+        col.addWidget(hint)
+
+        def _update_hint():
+            h = self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1]
+            if h >= 99999:
+                hint.setText("Output: source resolution (never upscaled).")
+            else:
+                hint.setText(f"Output: up to {h}p tall, source aspect — never upscaled past source.")
+        res_combo.currentIndexChanged.connect(_update_hint)
+        _update_hint()
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dlg)
+        buttons.button(QDialogButtonBox.Ok).setText("Export")
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
-        form.addRow(buttons)
+        col.addWidget(buttons)
         if dlg.exec() != QDialog.Accepted:
             return None
         ri, qi = res_combo.currentIndex(), q_combo.currentIndex()
