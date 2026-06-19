@@ -594,12 +594,16 @@ class _Recorder:
 
 def _follow_window(best_lap):
     """A StudioWindow built without __init__ (no Qt/pacer), with the collaborators the
-    auto-follow logic touches stubbed by a recorder, so `_follow_current_lap` runs unchanged."""
+    auto-follow logic touches stubbed by a recorder, so `_follow_current_lap` runs unchanged.
+
+    F5: the auto-follow cursor now lives on a shared PlaybackState (`w._playback.followed_lap`)
+    instead of a loose `w._playback.followed_lap` attribute — seed one here for the __new__'d window."""
     from studio.app import StudioWindow  # local import: keeps the F1/F5 tests pacer-free
+    from studio.playback_state import PlaybackState
 
     w = StudioWindow.__new__(StudioWindow)
     rec = _Recorder()
-    w._followed_lap = None
+    w._playback = PlaybackState()  # followed_lap starts None
     w.table = rec
     w.plots = rec
     w.video = rec
@@ -618,6 +622,7 @@ def test_select_lap_seeks_into_lap_despite_ms_quantization():
     seeded `_followed_lap` and the lap resolved from the QUANTIZED seek position both equal the
     clicked lap — the fix for 'clicking a lap selects a different lap'."""
     from studio.app import StudioWindow
+    from studio.playback_state import PlaybackState
 
     starts = [10.0, 80.000005, 150.000166, 220.000714]  # contiguous; non-ms-aligned boundaries
     sess = _bare_session_for_lap_at_time(starts, end=290.0, valid=[0, 1, 2, 3])
@@ -625,6 +630,7 @@ def test_select_lap_seeks_into_lap_despite_ms_quantization():
 
     w = StudioWindow.__new__(StudioWindow)
     w.session = sess
+    w._playback = PlaybackState()  # F5: auto-follow cursor lives on the shared PlaybackState
     rec = _Recorder()
     w.table = rec
     w.plots = rec
@@ -641,10 +647,10 @@ def test_select_lap_seeks_into_lap_despite_ms_quantization():
     w.video = vid
 
     for lid in (1, 2, 3):
-        w._followed_lap = None
+        w._playback.followed_lap = None
         w._on_laps_selected([lid], seek=True)
         # The seeded follow lap is the clicked lap (not the previous one).
-        assert w._followed_lap == lid, (lid, w._followed_lap)
+        assert w._playback.followed_lap == lid, (lid, w._playback.followed_lap)
         # And the lap resolved from the ACTUAL (ms-quantized) seek position is also the clicked
         # lap — i.e. when the post-seek tick runs lap_at_time(position) it won't jump back.
         assert sess.lap_at_time(vid.pos) == lid, (lid, vid.pos, sess.lap_at_time(vid.pos))
@@ -657,7 +663,7 @@ def test_follow_switches_only_on_lap_edge():
     w, rec = _follow_window(best_lap=9)
     # Enter lap 0 → switch to [0, 9].
     w._follow_current_lap(0, t=10.0)
-    assert w._followed_lap == 0
+    assert w._playback.followed_lap == 0
     assert rec.lap_sets[-1] == [0, 9] and rec.selected[-1] == [0, 9]
     # Same lap again (another tick) → NO new switch (edge only).
     n_before = len(rec.lap_sets)
@@ -665,7 +671,7 @@ def test_follow_switches_only_on_lap_edge():
     assert len(rec.lap_sets) == n_before, "re-switched within the same lap (not an edge)"
     # Cross into lap 1 → switch to [1, 9].
     w._follow_current_lap(1, t=80.0)
-    assert w._followed_lap == 1 and rec.lap_sets[-1] == [1, 9]
+    assert w._playback.followed_lap == 1 and rec.lap_sets[-1] == [1, 9]
     # Cross 3 more boundaries → exactly 3 more switches (count == boundaries).
     base = len(rec.lap_sets)
     for lid in (2, 3, 4):
@@ -681,14 +687,14 @@ def test_follow_holds_last_lap_on_none_region():
     never blanks the charts — and the next valid lap is picked up."""
     w, rec = _follow_window(best_lap=9)
     w._follow_current_lap(5, t=50.0)
-    assert w._followed_lap == 5
+    assert w._playback.followed_lap == 5
     n = len(rec.lap_sets)
     # None region: hold — no set_laps, followed unchanged.
     w._follow_current_lap(None, t=400.0)
-    assert w._followed_lap == 5 and len(rec.lap_sets) == n, "blanked/changed in a None region"
+    assert w._playback.followed_lap == 5 and len(rec.lap_sets) == n, "blanked/changed in a None region"
     # Next valid lap is picked up on the edge out of the None region.
     w._follow_current_lap(7, t=500.0)
-    assert w._followed_lap == 7 and rec.lap_sets[-1] == [7, 9]
+    assert w._playback.followed_lap == 7 and rec.lap_sets[-1] == [7, 9]
     print("test_follow_holds_last_lap_on_none_region OK")
 
 
@@ -698,7 +704,7 @@ def test_follow_current_is_best_shows_single_lap():
     w, rec = _follow_window(best_lap=9)
     rec._dragging = True
     w._follow_current_lap(9, t=1100.0)
-    assert w._followed_lap == 9 and rec.lap_sets[-1] == [9], rec.lap_sets[-1]
+    assert w._playback.followed_lap == 9 and rec.lap_sets[-1] == [9], rec.lap_sets[-1]
     assert rec.placed == [1100.0], "cursor not re-placed mid-drag after the follow switch"
     print("test_follow_current_is_best_shows_single_lap OK")
 

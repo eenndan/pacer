@@ -35,6 +35,7 @@ from _synthetic import bare_session, odometer  # noqa: E402
 from studio import theme  # noqa: E402
 from studio.compare_controller import CompareController  # noqa: E402
 from studio.map_view import GHOST_COLOR, MARKER_COLOR, MapView  # noqa: E402
+from studio.playback_state import PlaybackState  # noqa: E402
 
 
 # --------------------------------------------------------------------- fixtures / fakes
@@ -98,11 +99,13 @@ class _FakeTable:
 def _wire(session, map_view):
     """A CompareController over the REAL MapView + minimal fakes, wired as StudioWindow does."""
     video, plots, table = _FakeVideo(), _FakePlots(), _FakeTable()
+    # F5: the compare controller now reads applied_t / writes followed_lap on a shared PlaybackState
+    # instead of the get_applied_t / set_followed_lap callbacks. This test only drives tick() (the
+    # ghost path), so a fresh state (applied_t None, followed_lap unused) matches the old lambdas.
     compare = CompareController(
         session, video, plots, table,
-        set_followed_lap=lambda lid: None,
+        playback=PlaybackState(),
         select_default=lambda: None,
-        get_applied_t=lambda: None,
         map_view=map_view,
     )
     return compare, video

@@ -7,10 +7,11 @@ the same drag is distance-locked and parks BOTH panes on the same track position
 the latest target + a dirty flag and returns; the actual seek(s) AND the cursor/marker/readout
 view refresh are COALESCED to ≤1 each per tick (`apply_tick`, called from StudioWindow's `_tick`).
 
-This object OWNS the scrub state and is a plain control-layer collaborator: it talks to Session's
-public API and the view widgets it is handed, never to `pacer` directly (the views-stay-pacer-free
-boundary). It is Qt-free itself — StudioWindow forwards the plots' scrub signals and the per-tick
-scrub branch into it, injecting its collaborators + the two small playback-state hooks it needs.
+This object OWNS the scrub-private working state (the coalescing targets/flags) and is a plain
+control-layer collaborator: it talks to Session's public API and the view widgets it is handed,
+never to `pacer` directly (the views-stay-pacer-free boundary). It is Qt-free itself — StudioWindow
+forwards the plots' scrub signals and the per-tick scrub branch into it, injecting its collaborators
++ the SHARED PlaybackState (it reads + seeds `applied_t` there, replacing the old get/set callbacks).
 
 Behaviour is byte-identical to the pre-extraction StudioWindow methods (`_on_scrub_started`,
 `_on_scrub_moved`, `_on_scrub_ended`, the `take_marker_seek` drain, and the `_scrub_target`-gated
@@ -25,6 +26,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported at runtime
     from .compare_controller import CompareController
     from .map_view import MapView
+    from .playback_state import PlaybackState
     from .plots_view import PlotsView
     from .session import Session
     from .video_view import VideoView
@@ -38,19 +40,22 @@ class ScrubController:
         plots: PlotsView,
         map_view: MapView,
         apply_readout: Callable[[float], None],
-        get_applied_t: Callable[[], float | None],
-        set_applied_t: Callable[[float | None], None],
+        playback: PlaybackState,
     ):
         self.session = session
         self.video = video
         self.plots = plots
         self.map = map_view
-        # StudioWindow's shared single-driver readout + its playback `_applied_t` cursor. The scrub
-        # path drives the readout for the dragged time and, on release, seeds `_applied_t` so the
-        # current-lap/readout stay consistent until the final seek lands.
+        # StudioWindow's shared single-driver readout: the scrub path drives the readout for the
+        # dragged time. (The readout itself lives on StudioWindow; it's a view-side callback, not
+        # playback-cursor state, so it stays injected as a callable.)
         self._apply_readout = apply_readout
-        self._get_applied_t = get_applied_t
-        self._set_applied_t = set_applied_t
+        # F5: the SHARED PlaybackState (the SAME object StudioWindow + the compare controller hold).
+        # The scrub reads `playback.applied_t` (the lap the grab scopes to) and, on release, seeds it
+        # to the final target so the current-lap/readout stay consistent until the seek lands. This
+        # replaced the injected get_applied_t / set_applied_t callbacks — same field, now shared, not
+        # tunneled through getters/setters.
+        self.playback = playback
         # Wired after construction (the two controllers are mutually referential): compare mode
         # turns the scrub distance-locked (fan the coalesced seek to the secondary pane).
         self.compare: CompareController | None = None
@@ -136,7 +141,7 @@ class ScrubController:
         # In compare mode the scrub is distance-locked to the pinned pair (the drag parks BOTH
         # panes on the same track position), not to a single playhead lap.
         self._scrub_lap = (self._compare_a if self._is_comparing
-                           else self.session.lap_at_time(self._get_applied_t() or 0.0))
+                           else self.session.lap_at_time(self.playback.applied_t or 0.0))
         self._scrub_was_playing = self.video.is_playing()
         if self._scrub_was_playing:
             self.video.pause()
@@ -200,7 +205,7 @@ class ScrubController:
             self._apply_readout(view_t)
         if target is not None:
             self.video.seek(target)  # PRIMARY pane
-            self._set_applied_t(target)  # keep current-lap/readout consistent until the seek lands
+            self.playback.applied_t = target  # keep current-lap/readout consistent until the seek lands
         if self._is_comparing and target_b is not None:
             self.video.seek_pane(1, target_b)  # SECONDARY pane (final distance-locked park)
         if self._scrub_was_playing:

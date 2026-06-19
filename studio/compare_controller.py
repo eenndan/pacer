@@ -11,8 +11,9 @@ drawn on the track map at the secondary pane's own time, removed on exit).
 It is a plain control-layer collaborator: it talks to Session's public API and the view widgets it
 is handed, never to `pacer` directly (the views-stay-pacer-free boundary). It is Qt-free itself —
 StudioWindow forwards the compare/repoint signals + the per-tick compare branch into it, injecting
-its collaborators + the small auto-follow / default-selection hooks it needs (entering/leaving
-compare suspends StudioWindow's auto-follow re-point and restores the table-driven selection).
+its collaborators + the SHARED PlaybackState (it writes `followed_lap` there to suspend/restore
+StudioWindow's auto-follow re-point on enter/exit, and reads `applied_t` to seed pane A) + the small
+default-selection hook (on exit it restores the table-driven selection).
 
 Behaviour is byte-identical to the pre-extraction StudioWindow methods (`_on_compare_toggled`,
 `_enter_compare`, `_exit_compare`, `_on_pane_repoint`, `_compare_tick`, `_set_pane_badge`,
@@ -31,6 +32,7 @@ from .video_view import PaneSpec
 
 if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported at runtime
     from .map_view import MapView
+    from .playback_state import PlaybackState
     from .plots_view import PlotsView
     from .scrub_controller import ScrubController
     from .session import Session
@@ -43,9 +45,8 @@ class CompareController:
         video: VideoView,
         plots: PlotsView,
         table,
-        set_followed_lap: Callable[[int | None], None],
+        playback: PlaybackState,
         select_default: Callable[[], None],
-        get_applied_t: Callable[[], float | None],
         map_view: MapView | None = None,
         on_pair_changed: Callable[[], None] | None = None,
     ):
@@ -62,13 +63,15 @@ class CompareController:
         # compare, the current lap on exit. Injected as a callable so the controller stays
         # Qt-free and doesn't reach into the window. Optional (None = a no-op, e.g. in tests).
         self._on_pair_changed = on_pair_changed or (lambda: None)
-        # Entering/leaving compare suspends/restores StudioWindow's auto-follow (freeze _followed_lap
-        # on the primary lap while comparing; clear it on exit) and, on exit, restores the
-        # table-driven chart selection (the `_select_default` fallback). Injected as callables so the
-        # controller stays Qt-free and doesn't hold a back-reference to the whole window.
-        self._set_followed_lap = set_followed_lap
+        # F5: the SHARED PlaybackState (the SAME object StudioWindow + the scrub controller hold).
+        # Entering/leaving compare suspends/restores StudioWindow's auto-follow by writing
+        # `playback.followed_lap` DIRECTLY (freeze it on the primary lap while comparing; clear it on
+        # exit), and enter() reads `playback.applied_t` to seed pane A from the playhead's lap. This
+        # replaced the injected set_followed_lap / get_applied_t callbacks — same fields, now shared.
+        self.playback = playback
+        # On exit, restore the table-driven chart selection (the `_select_default` fallback). Injected
+        # as a callable so the controller stays Qt-free and doesn't hold a back-reference to the window.
         self._select_default = select_default
-        self._get_applied_t = get_applied_t
         # Wired after construction (mutually referential): the per-tick early-out is BYPASSED during
         # a distance-locked scrub so the badges/g track the drag, driven from the scrub's targets.
         self.scrub: ScrubController | None = None
@@ -169,8 +172,8 @@ class CompareController:
     def tick(self) -> None:
         """Per-tick compare upkeep (O(1)): feed the SECONDARY pane its own-lap g, and refresh each
         pane's "Δ vs other" badge at that pane's current track position. The PRIMARY pane's g and
-        telemetry are still driven by the single-valued readout path — this never touches
-        StudioWindow's _latest_t/_applied_t, so the primary telemetry stays exactly as today.
+        telemetry are still driven by the single-valued readout path — this never touches the shared
+        PlaybackState's latest_t/applied_t cursor, so the primary telemetry stays exactly as today.
 
         Called from StudioWindow's `_tick` in BOTH the scrub branch (to keep the secondary g + Δ
         badges live while scrubbing) and the playback branch (when compare is on)."""
@@ -277,7 +280,7 @@ class CompareController:
             return  # the toggle should be disabled, but guard anyway
         best = self.session.best_lap_id()
         # A = the lap the playhead is currently in, else the primary table selection, else best.
-        a = self.session.lap_at_time(self._get_applied_t() or 0.0)
+        a = self.session.lap_at_time(self.playback.applied_t or 0.0)
         if a is None or a not in valid:
             sel = [lid for lid in self.plots.selected_lap_ids() if lid in valid]
             a = sel[0] if sel else (best if best in valid else valid[0])
@@ -321,9 +324,9 @@ class CompareController:
         self.plots.set_laps([a] if self._cross else [a, b])
         self.video.set_pane_gmeter_lap(0, a)
         self.video.set_pane_gmeter_lap(1, b)
-        # Suspend auto-follow: freeze _followed_lap on A so the per-tick edge check never re-points
+        # Suspend auto-follow: freeze followed_lap on A so the per-tick edge check never re-points
         # the charts while compare is on (also gated by self.active in _follow_current_lap).
-        self._set_followed_lap(a)
+        self.playback.followed_lap = a
         # Force the next tick() to recompute the badges/g for the new pair (the pane times
         # may not have moved, but the COMPARED LAPS changed).
         self._compare_last_t = None
@@ -350,7 +353,7 @@ class CompareController:
             return False
         best = self.session.best_lap_id()
         # Pane A = the lap the playhead is in, else the primary table selection, else best/first.
-        a = self.session.lap_at_time(self._get_applied_t() or 0.0)
+        a = self.session.lap_at_time(self.playback.applied_t or 0.0)
         if a is None or a not in valid:
             sel = [lid for lid in self.plots.selected_lap_ids() if lid in valid]
             a = sel[0] if sel else (best if best is not None and best in valid else valid[0])
@@ -400,7 +403,7 @@ class CompareController:
             self.map.clear_ghost()
         # Restore the table-driven chart selection + re-enable auto-follow (a fresh edge will
         # re-establish the followed lap on the next playhead movement).
-        self._set_followed_lap(None)
+        self.playback.followed_lap = None
         ids = self.table.selected_lap_ids()
         if ids:
             self.plots.set_laps(ids)
@@ -444,10 +447,10 @@ class CompareController:
         # baseline drawn by Session.delta), so the overlay is [A] there, [A,B] for same-recording.
         if self._cross:
             self.plots.set_laps([self._compare_a])
-            self._set_followed_lap(self._compare_a)
+            self.playback.followed_lap = self._compare_a
         elif self._compare_a is not None and self._compare_b is not None:
             self.plots.set_laps([self._compare_a, self._compare_b])
-            self._set_followed_lap(self._compare_a)
+            self.playback.followed_lap = self._compare_a
         # The compared pair changed — force the next tick() to recompute the badges/g.
         self._compare_last_t = None
         self._on_pair_changed()  # F5: refresh the brake glyphs to the new compared pair

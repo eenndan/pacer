@@ -43,6 +43,7 @@ from .help_dialog import AboutDialog, ShortcutsDialog
 from .lap_table import CornerTable, LapTable
 from .library_dialog import LibraryDialog
 from .map_view import MapView
+from .playback_state import PlaybackState
 from .plots_view import PlotsView
 from .scrub_controller import ScrubController
 from .session import DEFAULT_SAMPLE, Session, fmt_time
@@ -586,8 +587,20 @@ class StudioWindow(QMainWindow):
         # positionChanged fires in the video decode/present path; it must do almost nothing
         # (just record the latest time). A steady ~30 Hz timer applies the map/plot/readout
         # update off that path, so heavy repaints never starve frame presentation.
-        self._latest_t = 0.0
-        self._applied_t: float | None = None
+        #
+        # F5: the per-frame playback / scrub / auto-follow cursor (latest_t, applied_t, followed_lap)
+        # lives in ONE shared PlaybackState object instead of three loose StudioWindow attributes +
+        # a callback web into the controllers. Construct it here (before _build_controllers, which
+        # hands the SAME instance to both controllers); they read/write it directly. Reuse the
+        # existing instance on a reload so any reference the controllers already hold stays valid —
+        # just reset its fields to the fresh-window defaults.
+        existing = getattr(self, "_playback", None)
+        if existing is None:
+            self._playback = PlaybackState()
+        else:
+            existing.latest_t = 0.0
+            existing.applied_t = None
+            existing.followed_lap = None
         self.video.positionChanged.connect(self._on_position)
         # One ~30 Hz tick timer for the window's lifetime; on reload reuse it (a second timer
         # would double the tick rate and fire into the now-rebuilt panels).
@@ -603,11 +616,11 @@ class StudioWindow(QMainWindow):
 
     # ----------------------------------------------------- _build_ui phase 4: controllers
     def _build_controllers(self):
-        """Construct the CompareController + ScrubController, cross-inject them (each queries the
-        other), and wire their compare/scrub signals + per-tick feeds. Also seeds the auto-follow
-        state (_followed_lap) and the sector-line modeChanged hook, which the original block ran here
-        — AFTER the controllers — so the order is preserved exactly. Run last in _build_ui's wiring
-        phase, before the derived-views seed."""
+        """Construct the CompareController + ScrubController, hand each the SHARED PlaybackState
+        (built in _wire_signals, above) + cross-inject them (each queries the other), and wire their
+        compare/scrub signals + per-tick feeds. Also wires the sector-line modeChanged hook, which the
+        original block ran here — AFTER the controllers — so the order is preserved exactly. Run last
+        in _build_ui's wiring phase, before the derived-views seed."""
         # --- compare videos (Phase B) + plot-cursor scrub: the two heavy behavioural clusters ---
         # The compare-mode per-tick + enter/exit orchestration and the lap-scoped scrub coalescing
         # live in two injected, Qt-light, unit-testable collaborators (compare_controller.py /
@@ -617,13 +630,12 @@ class StudioWindow(QMainWindow):
         # Compare: two equal side-by-side video panes behind the explicit "Compare videos" toggle
         # (OFF by default, enabled only with >=2 valid laps). The PRIMARY (left) pane keeps driving
         # ALL telemetry exactly as today; the SECONDARY (right) pane is video-only. While compare
-        # is on, auto-follow's lap re-point is SUSPENDED (the controller freezes _followed_lap via
-        # the injected hook) so the pinned panes/charts don't thrash across lap boundaries.
+        # is on, auto-follow's lap re-point is SUSPENDED (the controller freezes followed_lap on the
+        # SHARED PlaybackState) so the pinned panes/charts don't thrash across lap boundaries.
         self.compare = CompareController(
             self.session, self.video, self.plots, self.table,
-            set_followed_lap=self._set_followed_lap,
+            playback=self._playback,  # F5: the shared cursor (reads applied_t, writes followed_lap)
             select_default=self._select_default,
-            get_applied_t=lambda: self._applied_t,
             map_view=self.map,  # F4: the compare ghost (lap B's kart) on the track map
             # F5: refresh the brake glyphs whenever the compared pair changes (both laps in
             # compare; the current lap on exit) — reuses the compare machinery, no new sync.
@@ -637,8 +649,7 @@ class StudioWindow(QMainWindow):
         self.scrub = ScrubController(
             self.session, self.video, self.plots, self.map,
             apply_readout=self._apply_readout,
-            get_applied_t=lambda: self._applied_t,
-            set_applied_t=self._set_applied_t,
+            playback=self._playback,  # F5: the shared cursor (reads + seeds applied_t on release)
         )
         # Mutually referential: scrub queries compare's on/off + pinned (A,B) for the distance-lock;
         # compare bypasses its (t_a,t_b) early-out while a scrub drag is in flight.
@@ -669,9 +680,9 @@ class StudioWindow(QMainWindow):
         # When the playhead crosses into a NEW lap (playing OR scrubbing), the speed + delta
         # charts switch to that lap, keeping the best lap as the reference overlay. We key off
         # the playhead's lap, so a single O(1) edge check per tick (in _apply_readout) drives it;
-        # we only re-select on the actual lap CHANGE so it never thrashes. _followed_lap is the
-        # lap the charts are currently following; seeded from _select_default below.
-        self._followed_lap: int | None = None
+        # we only re-select on the actual lap CHANGE so it never thrashes. The followed lap is the
+        # `followed_lap` field of the shared PlaybackState (built + reset to None in _wire_signals,
+        # above, before this method runs); _select_default re-seeds it below.
         # F2: keep the sector boundary guide lines on the charts in sync. plots_view stays
         # pacer-free, so app computes the boundary x-positions via session for the current
         # axis mode and pushes them; recompute when the mode flips (the positions' units change).
@@ -1133,7 +1144,7 @@ class StudioWindow(QMainWindow):
             self.video.seek(target)
             # Seed auto-follow to the lap the seek lands in, so the immediate post-seek tick
             # isn't treated as a lap-change edge (mirrors the lap-select seek's handling).
-            self._followed_lap = self.session.lap_at_time(target)
+            self._playback.followed_lap = self.session.lap_at_time(target)
 
     def _on_consistency_toggled(self, on: bool):
         """View ▸ "Show consistency panel": show/hide the consistency strip under the lap table.
@@ -1567,7 +1578,7 @@ class StudioWindow(QMainWindow):
         re-segmentation (_on_lines) the lap ids have shifted, so the next playhead movement must
         be free to re-establish the follow on the now-current lap (a stale id would suppress the
         edge). This multi-lap default overlay is simply replaced once the playhead enters a lap."""
-        self._followed_lap = None
+        self._playback.followed_lap = None
         rows = sorted(self.session.lap_rows(), key=lambda r: r["time"])
         ids = [r["idx"] for r in rows[:2]]
         self.table.select(ids)
@@ -1582,8 +1593,9 @@ class StudioWindow(QMainWindow):
         _on_laps_selected does — a seek to the exact contiguous-lap boundary ms-quantizes a touch
         below it and resolves to the PREVIOUS lap. The pane is freshly constructed and never played,
         so it is already paused; the seek decodes + presents the frame without starting playback or
-        audio. Seed _applied_t so the very next tick's "did the position advance" check sees the
-        poster position as already-applied (the readout/marker are driven directly here).
+        audio. Seed applied_t (on the shared PlaybackState) so the very next tick's "did the position
+        advance" check sees the poster position as already-applied (the readout/marker are driven
+        directly here).
 
         Graceful no-lap edge: if there is no valid best lap there is nothing to poster, so skip the
         seek entirely (the 0-valid-lap session still launches — just on a black/first frame)."""
@@ -1595,8 +1607,8 @@ class StudioWindow(QMainWindow):
             return
         target = window[0] + theme.LAP_SEEK_NUDGE_S
         self.video.seek(target)          # paused decode → presents the best lap's start frame
-        self._latest_t = target
-        self._applied_t = target
+        self._playback.latest_t = target
+        self._playback.applied_t = target
         # Populate the chart playhead + readout / map marker directly from the poster time so the
         # t=0 state is consistent with the shown frame immediately (the same work a playback tick
         # does), without waiting for a positionChanged tick the seek may not emit synchronously.
@@ -1664,15 +1676,15 @@ class StudioWindow(QMainWindow):
             target = self.session.lap_window(min(ids))[0] + theme.LAP_SEEK_NUDGE_S
             self.video.seek(target)
             # Don't let the auto-follow collapse a just-made (possibly multi-lap) comparison the
-            # instant the seek's positionChanged lands: seed _followed_lap to the lap the seek
+            # instant the seek's positionChanged lands: seed followed_lap to the lap the seek
             # resolves into, so the immediate post-seek tick is NOT an edge. The user keeps the
             # selected overlay while paused; once PLAYBACK MOVES ON into a different lap, the edge
             # fires and the charts collapse to [current, best] (the locked behaviour).
-            self._followed_lap = self.session.lap_at_time(target)
+            self._playback.followed_lap = self.session.lap_at_time(target)
 
     def _on_position(self, t: float):
         # Runs in the video event path — keep it trivial so frame presentation isn't starved.
-        self._latest_t = t
+        self._playback.latest_t = t
 
     def _tick(self):
         # Steady ~30 Hz. Drain a coalesced MAP MARKER-DRAG seek first (one per tick, not per
@@ -1689,25 +1701,18 @@ class StudioWindow(QMainWindow):
             self.compare.tick()  # keep the secondary g + Δ badges live while scrubbing
             return
         # Normal playback: apply an update only when the position actually advanced.
-        if self._latest_t != self._applied_t:
-            self._applied_t = self._latest_t
-            self._apply_position(self._applied_t)
+        if self._playback.latest_t != self._playback.applied_t:
+            self._playback.applied_t = self._playback.latest_t
+            self._apply_position(self._playback.applied_t)
         # Compare mode: the secondary pane is video-only (no _on_position), so feed its g + update
         # both panes' Δ badges from its own current position here, every tick (O(1) np.interp).
         if self.compare.active:
             self.compare.tick()
 
-    def _set_followed_lap(self, lap_id: int | None):
-        """Setter for the auto-follow state, injected into the compare controller (entering/leaving
-        compare freezes/clears _followed_lap). Auto-follow itself stays on StudioWindow (it's part
-        of the playback tick path); the compare controller only needs to nudge this one field."""
-        self._followed_lap = lap_id
-
-    def _set_applied_t(self, t: float | None):
-        """Setter for the playback position cursor, injected into the scrub controller (on release
-        it seeds _applied_t to the final target so current-lap/readout stay consistent until the
-        seek lands). The tick loop still owns the normal _latest_t→_applied_t advance."""
-        self._applied_t = t
+    # F5: the auto-follow / playback-cursor SETTERS are gone — the compare controller writes
+    # `followed_lap` and the scrub controller seeds `applied_t` DIRECTLY on the shared PlaybackState
+    # (self._playback), which replaced the injected set_followed_lap / set_applied_t callbacks. The
+    # tick loop still owns the normal latest_t→applied_t advance (in _tick, above).
 
     def _apply_position(self, t: float):
         self.plots.set_playhead_time(t)
@@ -1777,9 +1782,9 @@ class StudioWindow(QMainWindow):
         # re-point: the playhead crossing a lap boundary must not thrash the pinned [A,B] overlay.
         if self._comparing():
             return
-        if lap_id is None or lap_id == self._followed_lap:
+        if lap_id is None or lap_id == self._playback.followed_lap:
             return  # hold on no-lap regions; only act on a genuine change to a new valid lap
-        self._followed_lap = lap_id
+        self._playback.followed_lap = lap_id
         # Keep the best lap as the reference overlay; current lap first so it's the primary curve.
         best = self.session.best_lap_id()
         ids = [lap_id] if best is None or best == lap_id else [lap_id, best]
@@ -1824,8 +1829,9 @@ class StudioWindow(QMainWindow):
     # ------------------------------------------------------------- compare-state access
     # The scrub + compare behavioural clusters live in self.scrub / self.compare (constructed in
     # _build_ui). StudioWindow keeps the shared single-driver telemetry path (_apply_readout /
-    # _update_diff_box) and the auto-follow tick logic (_follow_current_lap / _followed_lap), both
-    # of which gate on whether compare is on — funnel that through one defensive accessor.
+    # _update_diff_box) and the auto-follow tick logic (_follow_current_lap / the shared
+    # PlaybackState's followed_lap), both of which gate on whether compare is on — funnel that
+    # through one defensive accessor.
     def _comparing(self) -> bool:
         """True iff compare mode is on. Defensive: tolerates the controller not being constructed
         yet (e.g. a StudioWindow.__new__'d for a unit test that drives _follow_current_lap directly

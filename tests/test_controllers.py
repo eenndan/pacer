@@ -38,6 +38,7 @@ _APP = QApplication.instance() or QApplication([])
 from _synthetic import bare_session, odometer  # noqa: E402
 
 from studio.compare_controller import CompareController  # noqa: E402
+from studio.playback_state import PlaybackState  # noqa: E402
 from studio.scrub_controller import ScrubController  # noqa: E402
 
 
@@ -224,38 +225,66 @@ def _lap_times(s, lid):
     return s._dist_cache[lid][0]
 
 
+class _StateProxy(dict):
+    """A dict that PROXIES `applied_t` / `followed_lap` onto the shared PlaybackState the controllers
+    actually read/write (F5), while keeping `readout_calls` / `select_default` as plain recorder keys.
+
+    This preserves the existing tests' `state["applied_t"] = 105.0` / `state["followed_lap"]` idiom
+    unchanged, but now those go straight to the SHARED object — so the assertions still test exactly
+    what the controllers see, with the callback web replaced by shared state underneath."""
+
+    _PROXIED = ("applied_t", "followed_lap")
+
+    def __init__(self, playback):
+        super().__init__(readout_calls=[], select_default=0)
+        self._pb = playback
+
+    def __getitem__(self, key):
+        if key in self._PROXIED:
+            return getattr(self._pb, key)
+        return super().__getitem__(key)
+
+    def __setitem__(self, key, value):
+        if key in self._PROXIED:
+            setattr(self._pb, key, value)
+        else:
+            super().__setitem__(key, value)
+
+
 def _make_controllers(session, *, table_selected=None):
     """Wire a ScrubController + CompareController over fake views + the bare session, exactly as
-    StudioWindow does (mutually referential), with a captured `_applied_t` and a recorder for the
-    injected apply_readout / set_followed_lap / select_default hooks."""
+    StudioWindow does (mutually referential): both controllers receive the SAME shared PlaybackState
+    (F5) instead of the old get/set applied_t + set_followed_lap callbacks, plus a recorder for the
+    still-injected apply_readout / select_default hooks.
+
+    `state` mirrors the old dict shape for the existing assertions, but `applied_t`/`followed_lap`
+    are now PROPERTIES proxying the shared PlaybackState — so `state["applied_t"] = 105.0` writes the
+    real shared field the controllers read, and `state["followed_lap"]` reads what they wrote. The
+    returned `playback` is the shared instance itself (for the shared-instance assertions)."""
     video, plots, map_view, table = _FakeVideo(), _FakePlots(), _FakeMap(), _FakeTable(table_selected)
-    state = {"applied_t": None, "followed_lap": None, "readout_calls": [], "select_default": 0}
+    playback = PlaybackState()
+    state = _StateProxy(playback)
 
     def apply_readout(t):
         state["readout_calls"].append(t)
-
-    def set_followed_lap(lid):
-        state["followed_lap"] = lid
 
     def select_default():
         state["select_default"] += 1
 
     compare = CompareController(
         session, video, plots, table,
-        set_followed_lap=set_followed_lap,
+        playback=playback,       # F5: the shared cursor (reads applied_t, writes followed_lap)
         select_default=select_default,
-        get_applied_t=lambda: state["applied_t"],
-        map_view=map_view,  # the F4 ghost collaborator (same- and cross-recording)
+        map_view=map_view,       # the F4 ghost collaborator (same- and cross-recording)
     )
     scrub = ScrubController(
         session, video, plots, map_view,
         apply_readout=apply_readout,
-        get_applied_t=lambda: state["applied_t"],
-        set_applied_t=lambda t: state.__setitem__("applied_t", t),
+        playback=playback,       # F5: the SAME shared cursor (reads + seeds applied_t)
     )
     compare.set_scrub(scrub)
     scrub.set_compare(compare)
-    return scrub, compare, video, plots, map_view, table, state
+    return scrub, compare, video, plots, map_view, table, state, playback
 
 
 # ===================================================================== ScrubController
@@ -264,7 +293,7 @@ def test_scrub_coalesces_one_seek_and_one_apply_per_tick():
     cursor/marker/readout apply at the LATEST dragged time — the coalescing the 30 Hz tick buys.
     No compare, so no secondary seek; the playhead/readout are driven by the one clamped truth."""
     s, a, _b = _make_session()
-    scrub, _compare, video, plots, map_view, _table, state = _make_controllers(s)
+    scrub, _compare, video, plots, map_view, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0  # the playhead sits inside lap A
     scrub.on_started()
     assert scrub.is_active is False, "no target yet -> not active until the first move"
@@ -297,7 +326,7 @@ def test_scrub_pauses_playing_and_resumes_on_release():
     """Grab while PLAYING pauses; release issues a final seek to the last target, seeds _applied_t,
     and resumes. Release also flushes a final view apply iff the last move never reached a tick."""
     s, a, _b = _make_session()
-    scrub, _compare, video, plots, map_view, _table, state = _make_controllers(s)
+    scrub, _compare, video, plots, map_view, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 106.0
     video.playing = True
     scrub.on_started()
@@ -318,7 +347,7 @@ def test_scrub_pauses_playing_and_resumes_on_release():
 def test_scrub_paused_grab_does_not_resume():
     """Grab while PAUSED: no pause call, and release must NOT play (we only restore prior play)."""
     s, _a, _b = _make_session()
-    scrub, _compare, video, _plots, _map, _table, state = _make_controllers(s)
+    scrub, _compare, video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 106.0
     video.playing = False
     scrub.on_started()
@@ -332,7 +361,7 @@ def test_scrub_outside_lap_is_noop():
     """A grab where the playhead is NOT inside a valid lap (lead-in) scopes to None, so moves are
     no-ops: no target, no seek, the tick does nothing."""
     s, _a, _b = _make_session()
-    scrub, _compare, video, plots, map_view, _table, state = _make_controllers(s)
+    scrub, _compare, video, plots, map_view, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 0.0  # before lap A's window (100 s) -> lap_at_time None
     scrub.on_started()
     scrub.on_moved(3.0, "time")
@@ -346,7 +375,7 @@ def test_marker_drag_drains_one_seek_per_tick():
     """The map marker-drag drain seeks once when a marker time is queued, and not when it isn't —
     independent of the scrub branch."""
     s, _a, _b = _make_session()
-    scrub, _compare, video, _plots, map_view, _table, _state = _make_controllers(s)
+    scrub, _compare, video, _plots, map_view, _table, _state, _playback = _make_controllers(s)
     scrub.drain_marker_seek()
     assert video.seeks == [], "no queued marker seek -> no seek"
     map_view._marker_seek = 123.4
@@ -363,7 +392,7 @@ def test_compare_scrub_is_distance_locked_to_both_panes():
     via seek_pane(1, ·)), parking both at the same normalized distance. Driven in 'distance' mode
     (the shared s×best_distance axis), so the two targets differ (different lap lengths/lines)."""
     s, a, b = _make_session()
-    scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    scrub, compare, video, _plots, _map, _table, state, _playback = _make_controllers(s)
     # Enter compare on the pinned pair (A primary, B secondary), playhead inside A.
     state["applied_t"] = 105.0
     compare.enter()
@@ -397,7 +426,7 @@ def test_compare_fanout_seek_b_distance_locks_slider_to_pane_b():
     lap's media time, then seek_pane(1, t_b). The result must match the plot-scrub distance-lock at
     the same track position (one distance-lock, two entry points)."""
     s, a, b = _make_session()
-    _scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    _scrub, compare, video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     compare.enter()
     video.pane_seeks.clear()  # drop enter()'s S/F reset so we assert ONLY the fan-out
@@ -420,7 +449,7 @@ def test_compare_fanout_seek_b_noop_outside_compare():
     """D1 guard: fanout_seek_b is a no-op when compare is off (the hook is wired once in app.py and
     self-guards), so the slider/arrows in single-video mode never touch a (non-existent) pane B."""
     s, _a, _b = _make_session()
-    _scrub, compare, video, _plots, _map, _table, _state = _make_controllers(s)
+    _scrub, compare, video, _plots, _map, _table, _state, _playback = _make_controllers(s)
     compare.fanout_seek_b(105.0)  # compare never entered
     assert video.pane_seeks == [], "fan-out must do nothing outside compare"
     print("test_compare_fanout_seek_b_noop_outside_compare OK")
@@ -432,7 +461,7 @@ def test_compare_tick_badges_and_g_for_two_laps():
     position, plus the SECONDARY pane's own-lap g (the primary's g is the readout path's job). With
     A slower than B, the badges have opposite signs at matching positions."""
     s, a, b = _make_session()
-    _scrub, compare, video, _plots, _map, _table, _state = _make_controllers(s)
+    _scrub, compare, video, _plots, _map, _table, _state, _playback = _make_controllers(s)
     compare._compare = True
     compare._compare_a, compare._compare_b = a, b
     compare._compare_last_t = None  # force the first tick to apply
@@ -458,7 +487,7 @@ def test_compare_tick_early_out_when_neither_pane_moved():
     """The (t_a, t_b) early-out: a second tick with UNCHANGED pane times does ZERO badge/g work
     (mirrors the playback _applied_t gate) — paused/idle compare is free per tick."""
     s, a, b = _make_session()
-    _scrub, compare, video, _plots, _map, _table, _state = _make_controllers(s)
+    _scrub, compare, video, _plots, _map, _table, _state, _playback = _make_controllers(s)
     compare._compare = True
     compare._compare_a, compare._compare_b = a, b
     compare._compare_last_t = None
@@ -483,7 +512,7 @@ def test_compare_tick_scrub_bypass_uses_drag_targets():
     landed), so compare.tick() must BYPASS the early-out and drive the badges/g from the scrub's OWN
     clamped targets (t_a = primary target, t_b = secondary target), not the stale pane times."""
     s, a, b = _make_session()
-    scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    scrub, compare, video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     compare.enter()                       # pins (a, b), resets _compare_last_t
     # Stale pane times (pre-scrub) — the early-out WOULD freeze here if not bypassed.
@@ -515,7 +544,7 @@ def test_compare_enter_seeds_pair_and_suspends_autofollow():
     + a seek_pane per side); drives the chart overlay [A,B]; freezes auto-follow on A; arms the
     badge recompute. exit(): clears the pair, restores the table-driven selection, re-enables follow."""
     s, a, b = _make_session()
-    _scrub, compare, video, plots, _map, table, state = _make_controllers(s, table_selected=[a])
+    _scrub, compare, video, plots, _map, table, state, _playback = _make_controllers(s, table_selected=[a])
     state["applied_t"] = 105.0  # inside lap A
     compare.on_toggled(True)
     assert compare.active and (compare.lap_a, compare.lap_b) == (a, b)
@@ -539,7 +568,7 @@ def test_compare_repoint_realigns_pair_and_refreezes_follow():
     S/F (pause_if_playing + both panes re-seeked), refreshes the overlay, refreezes follow on the
     (new) primary, and re-arms the badge recompute. Repointing the SECONDARY keeps A as primary."""
     s, a, b = _make_session()
-    _scrub, compare, video, plots, _map, _table, state = _make_controllers(s)
+    _scrub, compare, video, plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     compare.enter()
     video.pane_seeks.clear()
@@ -562,7 +591,7 @@ def test_compare_repoint_realigns_pair_and_refreezes_follow():
 def test_compare_tick_noop_until_pair_set():
     """tick() with no pinned pair (compare off / not entered) is a pure no-op — no badge/g work."""
     s, _a, _b = _make_session()
-    _scrub, compare, video, _plots, _map, _table, _state = _make_controllers(s)
+    _scrub, compare, video, _plots, _map, _table, _state, _playback = _make_controllers(s)
     compare.tick()
     assert video.badges == [] and video.pane_g == []
     print("test_compare_tick_noop_until_pair_set OK")
@@ -609,7 +638,7 @@ def test_cross_compare_routes_pane_b_through_reference():
     the lap windows differ (pane B on the reference clock). Pane B's lap is locked to the reference."""
     s, a, _b = _make_session()
     ref, ref_lap = _attach_reference(s)
-    _scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    _scrub, compare, video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0  # inside lap A
     assert compare.enter_cross() is True
     assert compare.cross and compare.session_b is ref
@@ -641,7 +670,7 @@ def test_cross_compare_tick_pane_b_feeds_from_reference():
     last overlay indices."""
     s, a, _b = _make_session()
     ref, ref_lap = _attach_reference(s)
-    _scrub, compare, video, _plots, map_view, _table, state = _make_controllers(s)
+    _scrub, compare, video, _plots, map_view, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     assert compare.enter_cross()
     # Park both panes mid-lap on their OWN clocks (pane B's clock is anchored ≈ 1000 s, not 0).
@@ -698,7 +727,7 @@ def test_cross_compare_disabled_without_reference():
     """enter_cross() is a no-op (returns False) when no reference Session is retained — the menu
     action is disabled in that state, but the controller guards anyway."""
     s, _a, _b = _make_session()
-    _scrub, compare, _video, _plots, _map, _table, state = _make_controllers(s)
+    _scrub, compare, _video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     assert compare.enter_cross() is False
     assert not compare.active and not compare.cross
@@ -713,7 +742,7 @@ def test_d5_toggle_reenters_cross_after_off_on():
     loaded, so pane B's source stays the reference recording's chapters."""
     s, a, _b = _make_session()
     ref, ref_lap = _attach_reference(s)
-    _scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    _scrub, compare, video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     assert compare.enter_cross() is True
     assert compare.cross and compare.session_b is ref
@@ -737,7 +766,7 @@ def test_d5_same_recording_enter_clears_prefer_cross():
     loaded. The flag is direction-correct: cross sets it, same-recording clears it."""
     s, a, b = _make_session()
     ref, _ref_lap = _attach_reference(s)
-    _scrub, compare, _video, _plots, _map, _table, state = _make_controllers(s)
+    _scrub, compare, _video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     assert compare.enter_cross() is True  # sets _prefer_cross
     compare.exit()
@@ -758,7 +787,7 @@ def test_d5_clear_prefer_cross_drops_stickiness():
     flag were stale (the reference_session() guard in on_toggled)."""
     s, a, b = _make_session()
     _ref, _ref_lap = _attach_reference(s)
-    _scrub, compare, _video, _plots, _map, _table, state = _make_controllers(s)
+    _scrub, compare, _video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     assert compare.enter_cross() is True
     compare.exit()
@@ -775,7 +804,7 @@ def test_same_recording_compare_is_byte_identical_session_b():
     from main. Even with a reference loaded, enter() (the same-recording toggle) stays local."""
     s, a, b = _make_session()
     _attach_reference(s)  # a reference is loaded, but the SAME-recording toggle ignores it
-    _scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    _scrub, compare, video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     compare.enter()  # the existing same-recording compare path
     assert compare.session_b is s, "same-recording compare must route pane B through self.session"
@@ -804,7 +833,7 @@ def test_enter_builds_two_panespecs_same_recording():
     per-side lap/window/caption are pane A's lap A and pane B's lap B respectively — the byte-for-byte
     data the old 11-positional call spread, now bundled per side."""
     s, a, b = _make_session()
-    _scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    _scrub, compare, video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     compare.enter()
     (spec_a, spec_b), kwargs = video.compare_args
@@ -829,7 +858,7 @@ def test_enter_cross_builds_locked_reference_panespec():
     'cross-vs-same is just how spec_b was built' contract, asserted on the specs themselves."""
     s, a, _b = _make_session()
     ref, ref_lap = _attach_reference(s)
-    _scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    _scrub, compare, video, _plots, _map, _table, state, _playback = _make_controllers(s)
     state["applied_t"] = 105.0
     assert compare.enter_cross() is True
     (spec_a, spec_b), _kwargs = video.compare_args
@@ -843,6 +872,51 @@ def test_enter_cross_builds_locked_reference_panespec():
     assert spec_b.choices == [ref_lap], "pane B picker is locked to the single reference lap"
     assert spec_b.choice_labels == [spec_b.caption], "the one locked entry shows the cross caption"
     print("test_enter_cross_builds_locked_reference_panespec OK")
+
+
+# ============================================= F5: shared PlaybackState replaces the callback web
+def test_controllers_and_window_share_one_playback_state():
+    """F5 contract: StudioWindow constructs ONE PlaybackState and hands the SAME instance to BOTH
+    controllers (replacing the get_applied_t / set_applied_t / set_followed_lap callback trio). So
+    the three hold the identical object, and a write by ANY of them is immediately visible to the
+    others — no getters/setters in between. `_make_controllers` mirrors the app's exact wiring, so
+    asserting on it is asserting on the production construction.
+
+    The reads/writes below are the REAL ones the controllers do:
+      * scrub release seeds `applied_t` (ScrubController.on_ended) -> the window's cursor sees it;
+      * compare enter freezes `followed_lap` on the primary lap (CompareController._enter) and exit
+        clears it (CompareController.exit) -> the window's auto-follow sees both;
+      * the window seeding `applied_t` (e.g. a poster / lap-select seek) -> the controllers read it
+        (compare.enter picks pane A from `applied_t`)."""
+    s, a, b = _make_session()
+    scrub, compare, video, _plots, _map, _table, _state, playback = _make_controllers(s)
+
+    # 1) Identity: one object, shared by both controllers (and it IS what the factory returns).
+    assert isinstance(playback, PlaybackState)
+    assert scrub.playback is playback, "scrub must hold the shared PlaybackState"
+    assert compare.playback is playback, "compare must hold the SAME PlaybackState"
+    assert scrub.playback is compare.playback, "both controllers share ONE instance"
+
+    # 2) Window-side write -> controller read. Seed applied_t the way a poster/lap-select seek does;
+    #    compare.enter() must pick pane A = the lap that contains applied_t (105.0 is inside lap A).
+    playback.applied_t = 105.0
+    compare.enter()
+    assert compare.lap_a == a, "compare read applied_t off the shared state to seed pane A"
+    # enter() also froze auto-follow on the primary lap by WRITING followed_lap on the shared state.
+    assert playback.followed_lap == a, "compare's followed_lap write is visible on the shared state"
+    compare.exit()
+    assert playback.followed_lap is None, "compare exit cleared followed_lap on the shared state"
+
+    # 3) Controller write -> window read. A scrub release seeds applied_t to the final target; the
+    #    window's cursor (same object) must reflect it without any setter in between.
+    playback.applied_t = 106.0
+    scrub.on_started()
+    scrub.on_moved(4.0, "time")
+    target = scrub.target
+    scrub.on_ended()
+    assert abs(playback.applied_t - target) < 1e-9, "scrub seeded applied_t directly on shared state"
+    assert video.seeks[-1] == target  # and the seek really fired (sanity)
+    print("test_controllers_and_window_share_one_playback_state OK")
 
 
 if __name__ == "__main__":
