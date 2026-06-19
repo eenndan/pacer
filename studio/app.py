@@ -321,12 +321,61 @@ class StudioWindow(QMainWindow):
         return panel
 
     def _build_ui(self):
+        # F4: this was the single hardest method in the app to change safely — a ~230-line block that
+        # tore down the old video, built every panel, relocated panel chrome into header strips, laid
+        # out the 2x2 nested splitter grid, wired ~15 cross-panel signals, constructed the
+        # compare/scrub controllers, and seeded default state, all positionally coupled. It's now a
+        # slim ORCHESTRATOR over focused private helpers called in the SAME ORDER; behaviour is
+        # byte-identical on first build AND on every reload (File ▸ Open / Load full recording).
+        #
         # On a reload ("Load full recording"), tear down the previous VideoView's pane(s) — stop
         # the decoder AND close the g-meter overlay window — so neither lingers after the old
         # widget tree is replaced by setCentralWidget below.
         old_video = getattr(self, "video", None)
         if old_video is not None:
             old_video.stop_all()
+        # 1) build every panel widget + its header strip + the table stack; 2) assemble the splitter
+        # grid + maximize filters + setCentralWidget; 3) wire the cross-panel signals; 4) build +
+        # cross-inject the compare/scrub controllers. Each step leaves the same self.* attributes the
+        # rest of the window depends on (video/map/plots/table/.../the three splitters).
+        self._construct_panels()
+        self._layout_panels()
+        self._wire_signals()
+        self._build_controllers()
+
+        # --- seed default state (must run after the panels + controllers exist) ---
+        # Build the full set of session-derived views through the shared seam (same sequence a
+        # re-segmentation / reference change uses): selects the two fastest laps, draws the map
+        # overlays + corners, the corner/consistency panels, the driving channels, and any sector
+        # guides present on launch (none by default). Replaces the old partial inline set
+        # (_select_default + _refresh_sector_lines).
+        self.rebuild_derived_views(reselect=True)
+        # Poster frame: seek the PRIMARY pane a hair into the best lap WHILE PAUSED so the (largest)
+        # video quadrant shows a real frame at launch instead of a black void, and the map marker /
+        # charts / readout are all populated and consistent with that frame. A paused seek decodes
+        # and presents the frame without playing audio. Done after the rebuild above so the chart
+        # selection is already in place. Skipped cleanly when there's no valid lap (poster_seek
+        # checks best_lap_id()), so a 0-lap session still launches.
+        self._poster_seek()
+        self._sync_full_recording_action()
+        # F7: the permanent status-bar chip showing which cross-recording reference is active.
+        # Created ONCE (it lives on the persistent QMainWindow status bar, which _build_ui's
+        # central-widget teardown doesn't touch) and hidden until a reference is loaded. A
+        # primary reload builds a fresh Session with no reference, so re-sync (hide) it here.
+        if getattr(self, "_ref_chip", None) is None:
+            self._ref_chip = QLabel("")
+            self._ref_chip.setProperty("role", "BarLabel")
+            self.statusBar().addPermanentWidget(self._ref_chip)
+        self._update_reference_status()
+
+    # ----------------------------------------------------- _build_ui phase 1: panels
+    def _construct_panels(self):
+        """Build every panel widget (video/map/plots/table/corner_table/consistency/diff_box +
+        the chapter banner), relocate the map/charts/table chrome into WIDGET header strips, and
+        assemble the four panel containers (self._video_panel/_table_panel/_map_panel/_plots_panel)
+        that _layout_panels then drops into the splitter grid. Sets every panel-level self.*
+        attribute the rest of the window reads. Pure construction — no layout, no cross-panel
+        signal wiring (those are _layout_panels / _wire_signals)."""
         # The VideoView is driven by the session's ChapterMap so the slider spans the whole
         # session and playback switches sources / auto-advances across chapters.
         self.video = VideoView(self.session.chapters or self.session.video_path)
@@ -453,6 +502,26 @@ class StudioWindow(QMainWindow):
         plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0), 1, self.plots.x_mode_combo)
         plots_panel = self._headered(plots_header, (self.plots, 1))
 
+        # Stash the four panel containers on the window: _layout_panels drops them into the splitter
+        # grid and the maximize routing maps a header back to its panel + outer column. A reload
+        # re-stashes the fresh widgets (the disposed tree's containers must never resolve).
+        self._video_panel = video_panel
+        self._table_panel = table_panel
+        self._map_panel = map_panel
+        self._plots_panel = plots_panel
+
+    # ----------------------------------------------------- _build_ui phase 2: layout
+    def _layout_panels(self):
+        """Assemble the 2x2 nested splitter grid from the panels _construct_panels built: a left
+        column (video over table), a right column (map over charts), and the main horizontal split,
+        each with its Phase 2 rebalanced sizes/stretch. Installs the double-click-to-maximize header
+        filters, seeds the maximize state, and setCentralWidget. Keeps the splitter refs
+        (self._main_splitter/_left_splitter/_right_splitter) the maximize code reads."""
+        video_panel = self._video_panel
+        table_panel = self._table_panel
+        map_panel = self._map_panel
+        plots_panel = self._plots_panel
+
         # Rebalanced defaults — the #1 layout complaint was the inverted space/value ratio: the
         # single VIDEO frame (the least information-dense panel) got the most area while the
         # analytical charts (the product's core) were cramped. We give the analytical core room and
@@ -498,10 +567,6 @@ class StudioWindow(QMainWindow):
         self._main_splitter = main
         self._left_splitter = left
         self._right_splitter = right
-        self._video_panel = video_panel
-        self._table_panel = table_panel
-        self._map_panel = map_panel
-        self._plots_panel = plots_panel
         self._maximized_panel = None          # the currently-maximized panel, or None
         self._saved_splitter_sizes = None     # (main, left, right) sizes captured at maximize
         # Fresh routing map for THIS build's headers (a reload's old headers belong to the disposed
@@ -512,6 +577,11 @@ class StudioWindow(QMainWindow):
         self._install_header_dblclick(map_panel, right, main)
         self._install_header_dblclick(plots_panel, right, main)
 
+    # ----------------------------------------------------- _build_ui phase 3: signals
+    def _wire_signals(self):
+        """All the cross-panel signal/slot connections + the per-tick scaffolding they feed. Run
+        after the panels exist and the grid is mounted; the compare/scrub controllers (which also
+        wire signals) are built next in _build_controllers."""
         # --- cross-panel wiring ---
         # positionChanged fires in the video decode/present path; it must do almost nothing
         # (just record the latest time). A steady ~30 Hz timer applies the map/plot/readout
@@ -531,6 +601,13 @@ class StudioWindow(QMainWindow):
         self.map.timing_lines_changed.connect(self._on_lines)
         self.table.laps_selected.connect(self._on_user_select)
 
+    # ----------------------------------------------------- _build_ui phase 4: controllers
+    def _build_controllers(self):
+        """Construct the CompareController + ScrubController, cross-inject them (each queries the
+        other), and wire their compare/scrub signals + per-tick feeds. Also seeds the auto-follow
+        state (_followed_lap) and the sector-line modeChanged hook, which the original block ran here
+        — AFTER the controllers — so the order is preserved exactly. Run last in _build_ui's wiring
+        phase, before the derived-views seed."""
         # --- compare videos (Phase B) + plot-cursor scrub: the two heavy behavioural clusters ---
         # The compare-mode per-tick + enter/exit orchestration and the lap-scoped scrub coalescing
         # live in two injected, Qt-light, unit-testable collaborators (compare_controller.py /
@@ -599,30 +676,6 @@ class StudioWindow(QMainWindow):
         # pacer-free, so app computes the boundary x-positions via session for the current
         # axis mode and pushes them; recompute when the mode flips (the positions' units change).
         self.plots.modeChanged.connect(self._refresh_sector_lines)
-
-        # Build the full set of session-derived views through the shared seam (same sequence a
-        # re-segmentation / reference change uses): selects the two fastest laps, draws the map
-        # overlays + corners, the corner/consistency panels, the driving channels, and any sector
-        # guides present on launch (none by default). Replaces the old partial inline set
-        # (_select_default + _refresh_sector_lines).
-        self.rebuild_derived_views(reselect=True)
-        # Poster frame: seek the PRIMARY pane a hair into the best lap WHILE PAUSED so the (largest)
-        # video quadrant shows a real frame at launch instead of a black void, and the map marker /
-        # charts / readout are all populated and consistent with that frame. A paused seek decodes
-        # and presents the frame without playing audio. Done after the rebuild above so the chart
-        # selection is already in place. Skipped cleanly when there's no valid lap (poster_seek
-        # checks best_lap_id()), so a 0-lap session still launches.
-        self._poster_seek()
-        self._sync_full_recording_action()
-        # F7: the permanent status-bar chip showing which cross-recording reference is active.
-        # Created ONCE (it lives on the persistent QMainWindow status bar, which _build_ui's
-        # central-widget teardown doesn't touch) and hidden until a reference is loaded. A
-        # primary reload builds a fresh Session with no reference, so re-sync (hide) it here.
-        if getattr(self, "_ref_chip", None) is None:
-            self._ref_chip = QLabel("")
-            self._ref_chip.setProperty("role", "BarLabel")
-            self.statusBar().addPermanentWidget(self._ref_chip)
-        self._update_reference_status()
 
     # ----------------------------------------------------- panel focus / maximize
     def _install_header_dblclick(self, panel: QWidget, column: QSplitter, main: QSplitter):
