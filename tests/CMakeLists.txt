@@ -99,6 +99,14 @@ add_test(NAME test_cross_reference
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cross_reference.py)
 set_tests_properties(test_cross_reference PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# F2 Δ-engine dedup (studio.session LapCurve + project): pins the one alignment primitive the
+# whole delta family now shares + the reference-baseline collapse (the reference and a local lap
+# flow through ONE project()), from first principles on a synthetic session. No telemetry file;
+# imports Session -> Qt, so run offscreen.
+add_test(NAME test_delta_engine
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_delta_engine.py)
+set_tests_properties(test_delta_engine PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # The extracted StudioWindow collaborators (studio.scrub_controller / studio.compare_controller):
 # drive the scrub-coalescing + compare per-tick logic DIRECTLY on a bare Session + fake views
 # (no full window / event loop). Imports Session -> Qt, so run offscreen.
@@ -191,7 +199,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
                         test_sidecar test_session_pure test_studio_features test_rainbow_map
-                        test_compare test_map_ghost test_cross_reference
+                        test_compare test_map_ghost test_cross_reference test_delta_engine
                         test_controllers test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video)

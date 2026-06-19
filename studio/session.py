@@ -57,6 +57,8 @@ DEFAULT_SAMPLE = "3rdparty/gpmf-parser/samples/hero6.mp4"  # a clip with real mo
 
 _UNSET = object()  # sentinel for "cache not yet computed" where None is a valid cached value
 
+_EMPTY = np.empty(0)  # the `speed` slot for a LapCurve whose speed series isn't needed (Δ family)
+
 # Sentinel "lap id" for the cross-recording reference lap (F7) in `delta()`'s returned series
 # and as its baseline id: it has no id among THIS session's laps (those are >= 0), so a negative
 # sentinel can never collide. Views detect it via Session.has_reference()/reference_label(); the
@@ -69,6 +71,65 @@ REFERENCE_ID = -1
 LapColumns = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 # One (x, y) plot series per lap id — the speed/delta payloads `delta()` returns.
 LapSeries = dict[int, tuple[np.ndarray, np.ndarray]]
+
+
+@dataclass(frozen=True)
+class LapCurve:
+    """One lap's arc-length-aligned curves — the single value object the whole Δ family aligns
+    on (F2). `dist` is the per-lap odometer (metres, monotonic), `elapsed` the seconds-from-the-
+    lap's-start, `speed` km/h, all index-aligned; `times` is the media-clock axis the source side
+    inverts a scrub/playback time onto (for a cross-recording reference, which lives on no shared
+    clock, `times` IS its 0-anchored `elapsed`, exactly what `ReferenceLap.time_dist_elapsed`
+    hands over). Built from the EXISTING per-lap cached arrays (`_lap_time_dist_elapsed` /
+    `_lap_arrays`) — no new heavy cache.
+
+    The KEY unification: a Δ "baseline" is just a `LapCurve`, so the LOCAL best lap and the
+    cross-recording REFERENCE lap are the SAME type. The old `if ref is None … else _ref_*`
+    branches that injected the reference into every delta path collapse into picking which
+    `LapCurve` is the baseline — `baseline_curve()` does exactly that.
+
+    The three primitives below reproduce the open-coded alignment arithmetic VERBATIM (same
+    `float(np.interp(...))` casts, same `/ float(total)` then `s * float(total)` order), so
+    re-expressing the delta family through them is byte-for-byte identical, not a behaviour
+    change. `total` is `float(dist[-1])`; callers guard `total <= 0` for the degenerate lap."""
+
+    dist: np.ndarray
+    elapsed: np.ndarray
+    times: np.ndarray
+    speed: np.ndarray
+
+    @property
+    def total(self) -> float:
+        """The lap's total odometer distance (metres) — `float(dist[-1])`. This is exactly the
+        value `active_baseline_total_distance()` exposes when this curve is the active baseline."""
+        return float(self.dist[-1])
+
+    def fraction_at_time(self, t: float) -> float:
+        """Normalized track fraction s ∈ [0,1] at media-clock time `t`: distance-into-the-lap at
+        `t` divided by the lap total. `np.interp` clamps `t` to the lap window, so s is clamped to
+        [0,1]. Same arithmetic as the open-coded `interp(t, times, dists) / dists[-1]`."""
+        return float(np.interp(t, self.times, self.dist)) / float(self.dist[-1])
+
+    def elapsed_at_time(self, t: float) -> float:
+        """The lap's own elapsed time (seconds-into-the-lap) at media-clock time `t`, clamped to
+        the lap window. Same as the open-coded `interp(t, times, elapsed)` (= t − lap_start)."""
+        return float(np.interp(t, self.times, self.elapsed))
+
+    def elapsed_at_fraction(self, s: float) -> float:
+        """This curve's elapsed time at normalized track fraction `s` — invert s → this lap's
+        distance (s × total) → its elapsed via the monotonic odometer. The canonical "project a
+        fraction onto a lap's elapsed axis" step (`interp(s × total, dist, elapsed)`) every Δ and
+        every alignment-derived position shares."""
+        return float(np.interp(s * float(self.dist[-1]), self.dist, self.elapsed))
+
+
+def project(s: float, baseline: LapCurve) -> float:
+    """The one canonical alignment primitive: the `baseline` curve's elapsed time at the source's
+    normalized track fraction `s`. Δ(source vs baseline) at a track position is then simply
+    `source_elapsed − project(s, baseline)`. This is the single place the "scale a fraction onto
+    the active baseline's elapsed axis" pattern lives — the local best lap and the cross-recording
+    reference are both just a `LapCurve`, so there is no separate reference branch."""
+    return baseline.elapsed_at_fraction(s)
 
 
 def _unit_tangents(xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -286,9 +347,10 @@ class Session:
     # the chart sector guide lines, the lap-table per-corner Δ columns). It is loaded once,
     # frozen into a pacer-free `cross_reference.ReferenceLap` (arc-length curves + a racing
     # line pre-aligned into THIS session's local frame), and kept here. The seam below
-    # (`_ref_arrays` / `_ref_time_dist_elapsed` / `_delta_ref_id`) is what every delta path
-    # consults: it returns the reference's data when one is loaded, else None so the caller
-    # uses the local best lap on a code path identical to before (the DORMANT invariant).
+    # (`baseline_curve()` for the per-tick Δ family + sector guides, `_ref_arrays` for `delta()`'s
+    # grid build) is what the delta paths consult: `baseline_curve()` hands back the reference lap
+    # AS A `LapCurve` when one is loaded, else the local best lap's `LapCurve` — the SAME type, so
+    # the delta math has no reference-vs-best branch (the DORMANT case is byte-identical to before).
 
     def load_reference(self, paths: list[str]) -> str | None:
         """Load another recording and adopt ITS best lap as the reference for all the "vs best"
@@ -492,35 +554,60 @@ class Session:
         alignment Phase A's delta machinery uses (via `_reference_progress_at`, which rebases the
         GLOBAL reference clock to seconds-into-the-reference-lap first), so the two are consistent
         and the finish-line (s=1) Δ is exactly `reference_total_time − primary_lap_time`, the
-        cross-recording laptime difference (the negative of pane A's endpoint)."""
+        cross-recording laptime difference (the negative of pane A's endpoint).
+
+        F2: the SAME `project(s, baseline)` step Phase A's `delta_at_lap` uses, only here the
+        SOURCE is the reference (its `s`/`elapsed` come from `_reference_progress_at`, since the
+        reference lives on its own clock) and the BASELINE is the primary `lap_id`'s curve — the
+        mirror image of pane A, expressed through the one alignment primitive."""
         prog = self._reference_progress_at(t_ref)
         if prog is None:
             return None
         s, elapsed_ref = prog  # reference's track fraction + its own time-into-lap, both clamped
-        prim_td = self._lap_time_dist_elapsed(lap_id)
-        if prim_td is None:
+        primary = self._lap_curve(lap_id)  # the baseline here is the PRIMARY lap's curve
+        if primary is None:
             return None
-        prim_times, prim_dists, prim_elapsed = prim_td
-        total_prim = float(prim_dists[-1])
-        if total_prim <= 0:
+        if primary.total <= 0:
             return None
         # The primary lap's elapsed at the SAME track fraction s (invert s → primary distance → time).
-        prim_elapsed_at_s = float(np.interp(s * total_prim, prim_dists, prim_elapsed))
-        return elapsed_ref - prim_elapsed_at_s
+        return elapsed_ref - project(s, primary)
 
-    # The delta seam. Each returns the REFERENCE lap's data when one is loaded, else None so the
-    # caller keeps its exact local-best-lap code path (the byte-identical dormant invariant).
+    # The delta seam (F2). The per-tick Δ family + the alignment-derived positions all align on a
+    # `LapCurve`; a "baseline" is just a `LapCurve`, so the LOCAL best lap and the cross-recording
+    # REFERENCE lap are the SAME type and the old `if ref is None … else _ref_*` branches collapse
+    # into `baseline_curve()` picking which one. `_ref_arrays` stays for `delta()`, whose grid
+    # builder still consumes the raw `(dist, speed_kmh, elapsed)` triple shape.
     def _ref_arrays(self):
         """`(dist, speed_kmh, elapsed)` for the reference lap when one is loaded, else None.
         Drop-in for `_lap_arrays(best)` in `delta()`."""
         ref = self._ref
         return ref.arrays() if ref is not None else None
 
-    def _ref_time_dist_elapsed(self):
-        """`(times, dists, elapsed)` for the reference lap when loaded, else None. Drop-in for
-        `_lap_time_dist_elapsed(best)` in the per-tick `delta_at_lap` / `delta_at_time`."""
+    def _lap_curve(self, lap_id: int) -> LapCurve | None:
+        """The `LapCurve` for `lap_id` (None if degenerate, <2 points). Built from the cached
+        `_lap_time_dist_elapsed` triple — `times` is the media-clock axis, `dist`/`elapsed` the
+        per-lap odometer + seconds-from-start. `speed` is left empty: the per-tick Δ family aligns
+        only on dist/elapsed/times (the speed series is `delta()`'s own grid build)."""
+        td = self._lap_time_dist_elapsed(lap_id)
+        if td is None:
+            return None
+        times, dist, elapsed = td
+        return LapCurve(dist=dist, elapsed=elapsed, times=times, speed=_EMPTY)
+
+    def baseline_curve(self) -> LapCurve | None:
+        """The ACTIVE Δ baseline as a `LapCurve`: the cross-recording REFERENCE lap when one is
+        loaded (F7), else the LOCAL best lap. None when neither exists/is degenerate. This is the
+        single seam the per-tick Δ family inverts a source fraction onto — picking the baseline
+        here is what makes the reference vs local-best branch disappear from every delta path.
+        Its `.total` is exactly `active_baseline_total_distance()`."""
         ref = self._ref
-        return ref.time_dist_elapsed() if ref is not None else None
+        if ref is not None:
+            r_times, r_dist, r_elapsed = ref.time_dist_elapsed()
+            return LapCurve(dist=r_dist, elapsed=r_elapsed, times=r_times, speed=ref.speed_kmh)
+        best = self.best_lap_id()
+        if best is None:
+            return None
+        return self._lap_curve(best)
 
     # ----------------------------------------------------------- timing lines
     @property
@@ -716,12 +803,19 @@ class Session:
         mappers (`media_time_at_plot_x` / `plot_x_at_media_time`). Single-sourcing it keeps the
         scrub cursor sitting on its curve when the reference and local-best totals DIFFER — the
         D12 bug was the x-grid using the reference total while the mappers used the local best.
-        DORMANT: with no reference this is byte-identical to `best_lap_total_distance()`."""
+        DORMANT: with no reference this is byte-identical to `best_lap_total_distance()`.
+
+        F2: this is just the active `baseline_curve().total` — the single seam the per-tick Δ
+        family inverts a fraction onto — so the x-grid and the Δ math read ONE baseline total.
+        The reference's `len(dist) >= 1`-vs-empty guard is preserved verbatim (a 1-point reference
+        still yields its total; `baseline_curve()` skips the local-best `<2`-point degenerate via
+        `_lap_curve`, exactly as `best_lap_total_distance()` did)."""
         ref = self._ref
         if ref is not None:
             dist = ref.dist
             return float(dist[-1]) if len(dist) >= 1 else None
-        return self.best_lap_total_distance()
+        baseline = self.baseline_curve()  # the local best lap's curve (ref handled above)
+        return baseline.total if baseline is not None else None
 
     def lap_rows(self) -> list[LapRow]:
         return [
@@ -1123,10 +1217,12 @@ class Session:
         positions: list[tuple[str, float]] = []
         labels = ["S/F"] + [f"S{i + 1}" for i in range(len(bounds))]
         edge_dists = [0.0, *bounds]
-        ref_td = self._ref_time_dist_elapsed()  # None unless a cross-recording reference is loaded
-        if ref_td is None:
+        if self._ref is None:
             # DORMANT path — the baseline IS the primary best lap; keep the previous arithmetic
-            # verbatim so the positions stay byte-identical to before the feature existed.
+            # verbatim so the positions stay byte-identical to before the feature existed. (NOT
+            # routed through project(): the dormant axis uses the raw boundary distance `d` and
+            # `interp(d, dists, times) − t0`, which differ in the last ULP from project()'s
+            # `interp((d/total)×total, dists, elapsed)` — deliberately kept exact, not unified.)
             if mode == "time":
                 t0 = float(times[0])
                 for label, d in zip(labels, edge_dists, strict=True):
@@ -1139,17 +1235,16 @@ class Session:
         # REFERENCE active: map each boundary's PRIMARY-lap fraction onto the reference axis
         # (distance = frac × reference_total; time = reference elapsed at that frac), so the
         # guide lines stay aligned with the curves, which are now scaled to the reference lap.
-        _bt, base_dists, base_elapsed = ref_td
-        base_total = float(base_dists[-1])
-        if base_total <= 0:
+        # The baseline is just the active `LapCurve`; time mode is exactly `project(frac, base)`.
+        base = self.baseline_curve()  # the reference lap's curve (ref is non-None here)
+        if base is None or base.total <= 0:
             return []
         for label, d in zip(labels, edge_dists, strict=True):
             frac = d / total
             if mode == "time":
-                positions.append((label, float(np.interp(frac * base_total,
-                                                          base_dists, base_elapsed))))
+                positions.append((label, project(frac, base)))
             else:
-                positions.append((label, frac * base_total))
+                positions.append((label, frac * base.total))
         return positions
 
     # -------------------------------------------------------------- corner model (F-corner)
@@ -2039,32 +2134,25 @@ class Session:
         lookup is no longer done twice). Same math/result as `delta_at_time`.
 
         The baseline is the local best lap normally, or the CROSS-RECORDING reference lap when
-        one is loaded (F7) — both supply a `(times, dists, elapsed)` triple consumed the SAME
-        way, so the only change with a reference active is which curve `s` is inverted onto.
-        DORMANT: with no reference, the baseline is `_lap_time_dist_elapsed(best)`, byte-identical
-        to before."""
-        # Baseline curve: the reference lap's when loaded, else the local best lap's.
-        best_td = self._ref_time_dist_elapsed()
-        if best_td is None:
-            best = self.best_lap_id()
-            if best is None:
-                return None
-            best_td = self._lap_time_dist_elapsed(best)
-        td = self._lap_time_dist_elapsed(lap_id)
-        if td is None or best_td is None:
+        one is loaded (F7) — both are just a `LapCurve` (via `baseline_curve()`), consumed the
+        SAME way, so the only change with a reference active is which curve `s` is inverted onto.
+        DORMANT: with no reference, the baseline is the best lap's curve, byte-identical to before.
+
+        F2: open-coded `s = interp(t, times, dists)/dists[-1]` then `interp(s × baseline_total,
+        baseline_dists, baseline_elapsed)` is now `src.fraction_at_time` + `project(s, baseline)`
+        — same arithmetic, no behaviour change."""
+        baseline = self.baseline_curve()  # reference lap's curve when loaded, else local best's
+        src = self._lap_curve(lap_id)
+        if src is None or baseline is None:
             return None
-        times, dists, elapsed = td
-        if float(dists[-1]) <= 0:
+        if src.total <= 0:
             return None
-        s = float(np.interp(t, times, dists)) / float(dists[-1])  # normalized fraction [0,1]
-        elapsed_lap = float(np.interp(t, times, elapsed))  # = t − lap_start, clamped
-        best_times, best_dists, best_elapsed = best_td
-        best_total = float(best_dists[-1])
-        if best_total <= 0:
+        s = src.fraction_at_time(t)  # normalized fraction [0,1]
+        elapsed_lap = src.elapsed_at_time(t)  # = t − lap_start, clamped
+        if baseline.total <= 0:
             return None
         # Baseline's elapsed time at the SAME track fraction s (invert s→baseline distance→time).
-        best_elapsed_at_s = float(np.interp(s * best_total, best_dists, best_elapsed))
-        return elapsed_lap - best_elapsed_at_s
+        return elapsed_lap - project(s, baseline)
 
     def delta_between(self, lap_a: int, lap_b: int, t_in_a: float) -> float | None:
         """Δ (seconds) of lap_a vs lap_b at the SAME track position lap_a is at time `t_in_a`:
@@ -2078,25 +2166,22 @@ class Session:
         For `lap_b == best_lap_id()` this equals `delta_at_time(t_in_a)` (cross-checked in the
         unit test). At the finish (s=1) it is exactly lap_a's time minus lap_b's time.
 
-        O(1) on the cached per-lap (times, dists) arrays — cheap enough for the 30 Hz tick."""
-        td_a = self._lap_time_dist_elapsed(lap_a)
-        td_b = self._lap_time_dist_elapsed(lap_b)
-        if td_a is None or td_b is None:
+        O(1) on the cached per-lap arrays — cheap enough for the 30 Hz tick. F2: the same
+        `LapCurve` source-fraction → `project()` onto baseline `b` the whole Δ family shares; here
+        the baseline is just an ARBITRARY lap rather than the active baseline."""
+        curve_a = self._lap_curve(lap_a)
+        curve_b = self._lap_curve(lap_b)
+        if curve_a is None or curve_b is None:
             return None
-        times_a, dists_a, elapsed_arr_a = td_a
-        total_a = float(dists_a[-1])
-        if total_a <= 0:
+        if curve_a.total <= 0:
             return None
         # lap_a's normalized track fraction s and its own elapsed time at t_in_a (clamped to lap).
-        s = float(np.interp(t_in_a, times_a, dists_a)) / total_a  # [0,1]
-        elapsed_a = float(np.interp(t_in_a, times_a, elapsed_arr_a))  # = t_in_a − start
-        times_b, dists_b, elapsed_arr_b = td_b
-        total_b = float(dists_b[-1])
-        if total_b <= 0:
+        s = curve_a.fraction_at_time(t_in_a)  # [0,1]
+        elapsed_a = curve_a.elapsed_at_time(t_in_a)  # = t_in_a − start
+        if curve_b.total <= 0:
             return None
         # lap_b's elapsed time at the SAME track fraction s (invert s → b's distance → time).
-        elapsed_b_at_s = float(np.interp(s * total_b, dists_b, elapsed_arr_b))
-        return elapsed_a - elapsed_b_at_s
+        return elapsed_a - project(s, curve_b)
 
     def nearest_index(self, x: float, y: float) -> int | None:
         if len(self.tx) == 0:
