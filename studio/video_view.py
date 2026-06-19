@@ -37,6 +37,8 @@ slider/readout; in compare mode the slider spans each lap's window via the prima
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
@@ -74,6 +76,37 @@ _PANE_INSET = 5
 # picker is the single home of the lap text now, so it must never clip. AdjustToContents lets it
 # grow past this when the current item is wider; this is just the no-clip minimum.
 _PICKER_MIN_W = 150
+
+
+@dataclass
+class PaneSpec:
+    """F8b: everything ONE compare pane needs, bundled per side — replaces the ~11 per-side
+    positional params `set_compare` used to spread across the two panes (lap_a/lap_b, window_a/
+    window_b, caption_a/caption_b, lap_choices/pane_b_choices, lap_choice_labels/
+    pane_b_choice_labels, pane_b_source). With a spec per side `set_compare(pane_a, pane_b)`
+    treats both panes symmetrically and the cross-vs-same difference becomes simply how pane B's
+    spec was built (its `source`/`choices`/`choice_labels`).
+
+    Fields:
+      * lap_id        — the lap this pane shows (selects the picker entry, never emitting a repoint).
+      * window        — (start_global, end_global) lap window on this pane's OWN clock; the pane is
+                        confined to it and pane A's window also confines the global scrub slider.
+      * caption       — the app's rich "lap N · m:ss.mmm" (or cross "<rec> · lap N · time") text;
+                        surfaced as the pane caption's TOOLTIP (the fixed ROLE word stays the label).
+      * source        — this pane's media source (ChapterMap/path). None reuses the PRIMARY
+                        recording's source (`self._source`); an explicit source plays a DIFFERENT
+                        recording (F7 Phase B cross-recording compare). The PRIMARY pane is never
+                        rebuilt, so pane A's source is conventionally None (it always = self._source).
+      * choices       — the lap ids the pane's picker lists (cross-recording locks pane B to the
+                        single reference lap; same-recording both panes list the session's valid laps).
+      * choice_labels — parallel display labels for `choices` (None falls back to "lap {id}").
+    """
+    lap_id: int
+    window: tuple[float, float]
+    caption: str
+    source: object = None
+    choices: list[int] = field(default_factory=list)
+    choice_labels: list[str] | None = None
 
 
 class _LapRulerSlider(QSlider):
@@ -597,31 +630,31 @@ class VideoView(QWidget):
         self._set_compare_btn_state(bool(on))
         self.compareToggled.emit(bool(on))
 
-    def set_compare(self, lap_a: int, lap_b: int,
-                    window_a: tuple[float, float], window_b: tuple[float, float],
-                    caption_a: str, caption_b: str,
-                    lap_choices: list[int], lap_choice_labels: list[str] | None = None,
-                    pane_b_source: object = None,
-                    pane_b_choices: list[int] | None = None,
-                    pane_b_choice_labels: list[str] | None = None):
+    def set_compare(self, pane_a: PaneSpec, pane_b: PaneSpec):
         """Enter (or re-seed) compare mode: swap the single-pane stage for a horizontal QSplitter
         of TWO equal PlayerPanes. The PRIMARY pane is the existing self.pane (telemetry driver);
         the SECONDARY pane is created LAZILY here on first entry, always muted, video-only (its
         positionChanged is NOT forwarded to the app).
 
-        `pane_b_source` is the SECONDARY pane's media source (a ChapterMap or path): None reuses
+        F8b: each side is now ONE `PaneSpec` (lap_id, window, caption, source, choices,
+        choice_labels) instead of ~11 per-side positional params spread across the two panes — the
+        two panes are seeded symmetrically and the cross-vs-same difference is simply how pane B's
+        spec was built.
+
+        `pane_b.source` is the SECONDARY pane's media source (a ChapterMap or path): None reuses
         the PRIMARY recording's source (`self._source`) — same-recording compare, byte-identical to
         before; an explicit source plays a DIFFERENT recording in pane B (F7 Phase B cross-recording
         video compare). If it differs from the source the live secondary opened on, the secondary
-        pane is REBUILT on the new source (its splitter cell re-wrapped). `pane_b_choices` /
-        `pane_b_choice_labels` override pane B's lap picker — cross-recording locks it to the single
-        reference lap; None uses the primary `lap_choices` / `lap_choice_labels`.
+        pane is REBUILT on the new source (its splitter cell re-wrapped). `pane_b.choices` /
+        `pane_b.choice_labels` drive pane B's lap picker — cross-recording locks it to the single
+        reference lap. `pane_a.source` is conventionally None: the PRIMARY pane is never rebuilt, so
+        it always plays `self._source`.
 
         Each pane gets its lap_window + caption + lap-picker choices; the app seeks each pane to
         its lap start separately. Re-calling this while already in compare mode just re-seeds the
         windows/captions/pickers (used after a picker repoint) WITHOUT rebuilding the splitter."""
         # The secondary pane's media source: an explicit cross-recording source, else the primary's.
-        sec_source = pane_b_source if pane_b_source is not None else self._source
+        sec_source = pane_b.source if pane_b.source is not None else self._source
         # If the live secondary opened on a DIFFERENT source (same-recording ↔ cross-recording, or
         # a primary reload), tear it (and its splitter cell) down so it is rebuilt on the new
         # footage below. `_teardown_secondary` only drops the pane; drop the stale _cell_b too.
@@ -701,41 +734,40 @@ class VideoView(QWidget):
         self._two_panes = True
         self._sync_compare_btn(True)
 
-        # Seed each pane's lap window + caption + picker. The app seeks the panes to their starts.
-        self.pane.set_lap_window(*window_a)
-        self.secondary.set_lap_window(*window_b)
-        self._cell_a.set_caption(caption_a)
-        self._cell_b.set_caption(caption_b)
-        self._cell_a.set_lap_choices(lap_choices, lap_a, lap_choice_labels)
-        # Pane B's picker: an explicit (cross-recording, locked-to-reference) choice list when
-        # given, else the same primary lap choices as pane A (same-recording compare).
-        b_choices = pane_b_choices if pane_b_choices is not None else lap_choices
-        b_labels = pane_b_choice_labels if pane_b_choices is not None else lap_choice_labels
-        self._cell_b.set_lap_choices(b_choices, lap_b, b_labels)
+        # Seed each pane's lap window + caption + picker FROM ITS SPEC (symmetric per side). The app
+        # seeks the panes to their starts. Pane B's choice list is whatever its spec carries — an
+        # explicit cross-recording locked-to-reference list, or the session's valid laps for a
+        # same-recording compare (the caller builds the spec accordingly).
+        self.pane.set_lap_window(*pane_a.window)
+        self.secondary.set_lap_window(*pane_b.window)
+        self._cell_a.set_caption(pane_a.caption)
+        self._cell_b.set_caption(pane_b.caption)
+        self._cell_a.set_lap_choices(pane_a.choices, pane_a.lap_id, pane_a.choice_labels)
+        self._cell_b.set_lap_choices(pane_b.choices, pane_b.lap_id, pane_b.choice_labels)
         # Confine the global scrub slider to lap A's window: its value is GLOBAL ms, so range it to
         # [start_a, end_a] so dragging it can never escape lap A or step the primary past the lap
         # (both panes stay aligned within the window). Re-applied on every (re)seed so a primary
         # repoint updates the slider bounds too.
-        self._set_slider_window(window_a)
+        self._set_slider_window(pane_a.window)
         self._apply_lap_ticks()  # confined to one lap now -> the whole-session lap ruler is cleared
 
-    def reseed_pane(self, side: int, lap_id: int, window: tuple[float, float],
-                    caption: str, lap_choices: list[int],
-                    lap_choice_labels: list[str] | None = None):
-        """Repoint ONE pane (after its lap picker was used): update its lap window + caption +
-        keep the picker selection in sync. The app re-seeks this pane to its new lap start and
-        refreshes the chart overlay + Δ badge. Used so a repoint never disturbs the other pane."""
+    def reseed_pane(self, side: int, spec: PaneSpec):
+        """Repoint ONE pane (after its lap picker was used) from its new `PaneSpec`: update its lap
+        window + caption + keep the picker selection in sync. The app re-seeks this pane to its new
+        lap start and refreshes the chart overlay + Δ badge. Used so a repoint never disturbs the
+        other pane. F8b: takes the same per-side `PaneSpec` as `set_compare` (only the side's lap/
+        window/caption/picker change — never the media source, which a repoint keeps)."""
         pane = self._pane_for(side)
         cell = self._cell_for(side)
         if pane is None or cell is None:
             return
-        pane.set_lap_window(*window)
-        cell.set_caption(caption)
-        cell.set_lap_choices(lap_choices, lap_id, lap_choice_labels)
+        pane.set_lap_window(*spec.window)
+        cell.set_caption(spec.caption)
+        cell.set_lap_choices(spec.choices, spec.lap_id, spec.choice_labels)
         # A PRIMARY repoint changes lap A's window — re-confine the global scrub to the new window
         # so the slider keeps tracking the (telemetry-driving) primary pane within its lap.
         if side == PRIMARY:
-            self._set_slider_window(window)
+            self._set_slider_window(spec.window)
 
     def exit_compare(self):
         """Leave compare mode: tear the secondary pane down (stop + deleteLater player+audio,

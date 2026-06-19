@@ -5,9 +5,9 @@ so they never exercised the real VideoView -> PlayerPane -> QMediaPlayer playbac
 real-GUI bugs:
 
   1. enter_cross's set_compare flips the compare TOGGLE button checked, which (signal still live)
-     re-entered the app's on_toggled -> same-recording enter() -> set_compare(pane_b_source=None),
-     REBUILDING pane B on the PRIMARY recording's source. Pane B then played the wrong (original)
-     footage. Fixed by syncing the toggle WITHOUT emitting (VideoView._sync_compare_btn).
+     re-entered the app's on_toggled -> same-recording enter() -> set_compare with a pane B spec
+     whose source is None, REBUILDING pane B on the PRIMARY recording's source. Pane B then played
+     the wrong (original) footage. Fixed by syncing the toggle WITHOUT emitting (_sync_compare_btn).
   2. The compare panes came up unequal and the splitter handle wouldn't drag. Fixed with an
      entry-time 50/50 split from the splitter's real width + a draggable handle (width / no-collapse
      / opaque resize / per-cell size policy / a video-surface inset).
@@ -36,7 +36,15 @@ _APP = QApplication.instance() or QApplication([])
 
 from studio import chapters  # noqa: E402
 from studio.player_pane import PlayerPane  # noqa: E402
-from studio.video_view import VideoView  # noqa: E402
+from studio.video_view import PaneSpec, VideoView  # noqa: E402
+
+
+def _spec(lap_id, window, caption, choices, *, source=None, choice_labels=None):
+    """F8b helper: build a PaneSpec for one compare pane (was a slab of per-side positional args to
+    set_compare). source=None reuses the primary recording; an explicit source is a cross-recording
+    pane B."""
+    return PaneSpec(lap_id, window, caption, source=source,
+                    choices=list(choices), choice_labels=choice_labels)
 
 
 def _cmap(stem: str, n: int = 3, dur: float = 1700.0) -> chapters.ChapterMap:
@@ -62,16 +70,16 @@ def test_enter_cross_keeps_pane_b_on_reference_source():
 
     def on_toggled(on):
         reentries.append(on)
-        if on:
-            view.set_compare(0, 0, (0.0, 10.0), (0.0, 10.0), "A", "B",
-                             [0], None, pane_b_source=None)  # same-recording -> PRIMARY source
+        if on:  # same-recording -> pane B reuses the PRIMARY source (spec source None)
+            view.set_compare(_spec(0, (0.0, 10.0), "A", [0]),
+                             _spec(0, (0.0, 10.0), "B", [0]))
 
     view.compareToggled.connect(on_toggled)
 
-    # Enter the CROSS-recording compare: pane B's source is the reference ChapterMap.
-    view.set_compare(0, 0, (0.0, 10.0), (1000.0, 1010.0), "A", "ref B",
-                     [0], None, pane_b_source=reference,
-                     pane_b_choices=[0], pane_b_choice_labels=["ref B"])
+    # Enter the CROSS-recording compare: pane B's spec carries the reference ChapterMap source.
+    view.set_compare(_spec(0, (0.0, 10.0), "A", [0]),
+                     _spec(0, (1000.0, 1010.0), "ref B", [0],
+                           source=reference, choice_labels=["ref B"]))
 
     assert view.secondary is not None
     assert view._secondary_source is reference, (
@@ -89,11 +97,41 @@ def test_same_recording_compare_still_uses_primary_source():
     recording's source, exactly as before. The button-sync change must not disturb this path."""
     primary = _cmap("PRIMARY")
     view = VideoView(primary)
-    view.set_compare(0, 1, (0.0, 10.0), (20.0, 30.0), "A", "B", [0, 1], None, pane_b_source=None)
+    view.set_compare(_spec(0, (0.0, 10.0), "A", [0, 1]),
+                     _spec(1, (20.0, 30.0), "B", [0, 1]))
     assert view.secondary is not None
     assert view._secondary_source is primary, view._secondary_source
     assert view.compare_btn.isChecked()
     print("test_same_recording_compare_still_uses_primary_source OK: pane B on the primary source")
+
+
+# --------------------------------------------------------------- F8b (PaneSpec round-trip)
+def test_panespec_round_trips_onto_each_pane():
+    """F8b: each side's PaneSpec lands on the RIGHT pane — lap_window on the pane, caption as the
+    cell's tooltip (the strip's role word stays the label), and the picker selecting the spec's
+    lap_id with the spec's choices/labels. Proves set_compare(pane_a, pane_b) fans the bundled
+    per-side data to the correct cell, and reseed_pane(side, spec) repoints just that side."""
+    view = VideoView(_cmap("PRIMARY"))
+    view.set_compare(
+        _spec(0, (1.0, 9.0), "cap A", [0, 1], choice_labels=["lap 0", "lap 1"]),
+        _spec(1, (20.0, 30.0), "cap B", [0, 1], choice_labels=["lap 0", "lap 1"]))
+    # Windows: pane A confined the global slider to its window (ms); both panes hold their lap window.
+    assert (view.slider.minimum(), view.slider.maximum()) == (1_000, 9_000)
+    # Captions surface as the cell-caption TOOLTIP (the visible label is the fixed ROLE word).
+    assert view._cell_a.caption.toolTip() == "cap A"
+    assert view._cell_b.caption.toolTip() == "cap B"
+    assert view._cell_a.caption.text() == "THIS LAP"  # role label unchanged by the spec caption
+    # Pickers: each cell selected the spec's lap_id from the spec's choices/labels (no repoint emit).
+    assert view._cell_a.picker.currentData() == 0 and view._cell_a.picker.count() == 2
+    assert view._cell_b.picker.currentData() == 1 and view._cell_b.picker.count() == 2
+    assert view._cell_b.picker.currentText() == "lap 1"
+    # reseed_pane(side, spec): repoint pane A to lap 1 — its picker + window follow, B untouched.
+    view.reseed_pane(0, _spec(1, (3.0, 8.0), "cap A2", [0, 1], choice_labels=["lap 0", "lap 1"]))
+    assert view._cell_a.picker.currentData() == 1
+    assert view._cell_a.caption.toolTip() == "cap A2"
+    assert (view.slider.minimum(), view.slider.maximum()) == (3_000, 8_000)
+    assert view._cell_b.picker.currentData() == 1, "the other pane must be untouched by the repoint"
+    print("test_panespec_round_trips_onto_each_pane OK")
 
 
 # --------------------------------------------------------------- Issue 2 (splitter)
@@ -104,7 +142,8 @@ def test_compare_splitter_equal_and_draggable():
     view = VideoView(_cmap("PRIMARY"))
     view.resize(800, 400)
     view.show()
-    view.set_compare(0, 1, (0.0, 10.0), (20.0, 30.0), "A", "B", [0, 1], None, pane_b_source=None)
+    view.set_compare(_spec(0, (0.0, 10.0), "A", [0, 1]),
+                     _spec(1, (20.0, 30.0), "B", [0, 1]))
     _APP.processEvents()
     sp = view._splitter
     assert sp is not None
@@ -253,7 +292,8 @@ def test_d6_compare_mode_does_not_widen_lap_window():
     must NOT widen it. _on_duration early-outs while _lap_window is set, leaving the lap-confined
     range intact."""
     view = VideoView(chapters.ChapterMap(["/tmp/CONF.MP4"], [60.0]))
-    view.set_compare(0, 0, (10.0, 20.0), (10.0, 20.0), "A", "B", [0], None, pane_b_source=None)
+    view.set_compare(_spec(0, (10.0, 20.0), "A", [0]),
+                     _spec(0, (10.0, 20.0), "B", [0]))
     lo, hi = view.slider.minimum(), view.slider.maximum()
     assert (lo, hi) == (10_000, 20_000), (lo, hi)  # confined to lap A's window
     view._on_duration(62_500)  # a real video duration arriving mid-compare must not widen it
@@ -277,7 +317,8 @@ def test_d1_slider_move_fans_out_to_pane_b_in_compare():
     assert fanned == [], "fan-out must not fire in single-video mode"
 
     # Enter compare, then move the slider: the hook fires with the clamped global time.
-    view.set_compare(0, 1, (4.0, 9.0), (20.0, 30.0), "A", "B", [0, 1], None, pane_b_source=None)
+    view.set_compare(_spec(0, (4.0, 9.0), "A", [0, 1]),
+                     _spec(1, (20.0, 30.0), "B", [0, 1]))
     fanned.clear()
     view._on_slider_moved(7_000)  # 7 s, inside lap A's [4,9] window
     assert fanned == [7.0], fanned
@@ -294,7 +335,8 @@ def test_d1_step_routes_through_fanout():
     view = VideoView(_cmap("PRIMARY"))
     fanned = []
     view.set_compare_seek_fanout(lambda t: fanned.append(t))
-    view.set_compare(0, 1, (4.0, 9.0), (20.0, 30.0), "A", "B", [0, 1], None, pane_b_source=None)
+    view.set_compare(_spec(0, (4.0, 9.0), "A", [0, 1]),
+                     _spec(1, (20.0, 30.0), "B", [0, 1]))
     # Park the primary near lap A's start, then step +1 s; the fan-out must fire (clamped to window).
     view.pane.seek(5.0)
     fanned.clear()
@@ -379,6 +421,7 @@ def test_real_media_pane_b_is_reference_at_lap_start():
 def _run_all():
     test_enter_cross_keeps_pane_b_on_reference_source()
     test_same_recording_compare_still_uses_primary_source()
+    test_panespec_round_trips_onto_each_pane()
     test_compare_splitter_equal_and_draggable()
     test_deferred_seek_waits_for_the_right_chapter_file()
     test_source_is_chapter_headless_null_player_is_true()

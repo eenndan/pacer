@@ -614,15 +614,16 @@ def test_cross_compare_routes_pane_b_through_reference():
     assert compare.enter_cross() is True
     assert compare.cross and compare.session_b is ref
     assert compare.lap_a == a and compare.lap_b == ref_lap
-    # set_compare got the REFERENCE source for pane B + the locked single-lap picker.
-    args, kwargs = video.compare_args
-    assert kwargs["pane_b_source"] == f"REF_CHAPTERS_{ref_lap}", kwargs["pane_b_source"]
-    assert kwargs["pane_b_choices"] == [ref_lap], kwargs.get("pane_b_choices")
+    # F8b: set_compare now takes two PaneSpecs. Pane B's spec carries the REFERENCE source + the
+    # locked single-lap picker; pane A's the primary lap A.
+    (spec_a, spec_b), _kwargs = video.compare_args
+    assert spec_b.source == f"REF_CHAPTERS_{ref_lap}", spec_b.source
+    assert spec_b.choices == [ref_lap], spec_b.choices
+    assert spec_a.lap_id == a and spec_b.lap_id == ref_lap
     # Pane A window is the primary lap A's; pane B window is the reference lap's (different clock).
-    wa, wb = args[2], args[3]
-    assert wa == s.lap_window(a)
-    assert wb == ref.lap_window(ref_lap) and wb[0] >= 1000.0, wb
-    print(f"test_cross_compare_routes_pane_b_through_reference OK: pane B source={kwargs['pane_b_source']}")
+    assert spec_a.window == s.lap_window(a)
+    assert spec_b.window == ref.lap_window(ref_lap) and spec_b.window[0] >= 1000.0, spec_b.window
+    print(f"test_cross_compare_routes_pane_b_through_reference OK: pane B source={spec_b.source}")
 
 
 def test_cross_compare_tick_pane_b_feeds_from_reference():
@@ -725,8 +726,8 @@ def test_d5_toggle_reenters_cross_after_off_on():
     assert compare.session_b is ref, "pane B must still resolve against the reference session"
     assert (compare.lap_a, compare.lap_b) == (a, ref_lap)
     # And the pane-B video source handed to set_compare is the REFERENCE's chapters, not this session.
-    _args, kwargs = video.compare_args
-    assert kwargs["pane_b_source"] == f"REF_CHAPTERS_{ref_lap}", kwargs["pane_b_source"]
+    (_spec_a, spec_b), _kwargs = video.compare_args
+    assert spec_b.source == f"REF_CHAPTERS_{ref_lap}", spec_b.source
     print("test_d5_toggle_reenters_cross_after_off_on OK")
 
 
@@ -780,9 +781,10 @@ def test_same_recording_compare_is_byte_identical_session_b():
     assert compare.session_b is s, "same-recording compare must route pane B through self.session"
     assert compare.cross is False
     assert (compare.lap_a, compare.lap_b) == (a, b), "same-recording pins two LOCAL laps"
-    # pane_b_source is None (reuse the primary recording's source) — byte-identical to main.
-    _args, kwargs = video.compare_args
-    assert kwargs.get("pane_b_source") is None, kwargs.get("pane_b_source")
+    # Pane B's spec source is None (reuse the primary recording's source) — byte-identical to main.
+    (spec_a, spec_b), _kwargs = video.compare_args
+    assert spec_b.source is None, spec_b.source
+    assert spec_a.lap_id == a and spec_b.lap_id == b
     # tick() uses delta_between (the same-recording path), not the cross-recording helpers.
     ta, tb = _lap_times(s, a), _lap_times(s, b)
     video.pane_times = {0: float(ta[len(ta) // 2]), 1: float(tb[len(tb) // 2])}
@@ -794,6 +796,53 @@ def test_same_recording_compare_is_byte_identical_session_b():
     assert video.badges[1][1] == f"Δ {d_ba:+.2f} s"
     assert video.pane_g[-1] == (1, s.g_at_time(video.pane_times[1])), "pane B g from self.session"
     print("test_same_recording_compare_is_byte_identical_session_b OK")
+
+
+def test_enter_builds_two_panespecs_same_recording():
+    """F8b: same-recording enter() builds two PaneSpecs and calls set_compare(spec_a, spec_b). Both
+    specs carry source=None (the primary recording), both pickers list the SAME valid laps, and the
+    per-side lap/window/caption are pane A's lap A and pane B's lap B respectively — the byte-for-byte
+    data the old 11-positional call spread, now bundled per side."""
+    s, a, b = _make_session()
+    _scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    state["applied_t"] = 105.0
+    compare.enter()
+    (spec_a, spec_b), kwargs = video.compare_args
+    assert kwargs == {}, "set_compare is positional (two specs), no leftover keyword spread"
+    assert (spec_a.lap_id, spec_b.lap_id) == (a, b)
+    assert spec_a.window == s.lap_window(a) and spec_b.window == s.lap_window(b)
+    assert spec_a.source is None and spec_b.source is None, "same-recording -> both panes primary src"
+    # Both pickers list the session's valid laps, with the shared per-lap labels.
+    valid = s.valid_lap_ids()
+    labels = compare._lap_choice_labels(valid)
+    assert spec_a.choices == valid and spec_b.choices == valid
+    assert spec_a.choice_labels == labels and spec_b.choice_labels == labels
+    # Captions are the per-lap "lap N · time" text (★ on best) — A's and B's, distinctly.
+    assert spec_a.caption == compare._lap_caption(a) and spec_b.caption == compare._lap_caption(b)
+    print("test_enter_builds_two_panespecs_same_recording OK")
+
+
+def test_enter_cross_builds_locked_reference_panespec():
+    """F8b: enter_cross() builds the SAME shaped pair, differing ONLY in pane B's spec — its source
+    is the reference recording's chapters and its picker is LOCKED to the single reference lap (one
+    choice, the cross caption). Pane A's spec is unchanged from the same-recording case. This is the
+    'cross-vs-same is just how spec_b was built' contract, asserted on the specs themselves."""
+    s, a, _b = _make_session()
+    ref, ref_lap = _attach_reference(s)
+    _scrub, compare, video, _plots, _map, _table, state = _make_controllers(s)
+    state["applied_t"] = 105.0
+    assert compare.enter_cross() is True
+    (spec_a, spec_b), _kwargs = video.compare_args
+    # Pane A: this session's lap A, primary source, full valid-lap picker (same as same-recording).
+    assert spec_a.lap_id == a and spec_a.source is None
+    assert spec_a.choices == s.valid_lap_ids()
+    # Pane B: the reference recording — reference source, reference window, LOCKED single-lap picker.
+    assert spec_b.lap_id == ref_lap
+    assert spec_b.source == f"REF_CHAPTERS_{ref_lap}", spec_b.source
+    assert spec_b.window == ref.lap_window(ref_lap)
+    assert spec_b.choices == [ref_lap], "pane B picker is locked to the single reference lap"
+    assert spec_b.choice_labels == [spec_b.caption], "the one locked entry shows the cross caption"
+    print("test_enter_cross_builds_locked_reference_panespec OK")
 
 
 if __name__ == "__main__":

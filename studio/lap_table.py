@@ -61,7 +61,7 @@ NUMERIC_COL_START = 1
 NUM_ROLE = Qt.UserRole  # the numeric sort key stored on every cell
 LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the Lap cell
 
-# The SESSION-BESTS summary block under the table: (title, session accessor name, tooltip).
+# The SESSION-BESTS summary block under the table: (title, session accessor CALLABLE, tooltip).
 # Both values are composed FROM the per-sector bests / start-anywhere windows and read from
 # Session so the table cells and the footer can never disagree (the per-column session-best
 # itself is `Session.session_best_splits` — hoisted there so both consumers share one
@@ -69,12 +69,18 @@ LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the La
 # reserved strictly for the per-sector best CELLS so the footer can't read as "more purple
 # cells". Each stat sits in its own labelled tile (dim caption + hero tabular value) under a
 # "SESSION BESTS" section divider, so the block reads as a deliberate designed footer.
+#
+# F8a: the accessor is a CALLABLE `s -> value | None` (was a method-NAME string resolved via
+# getattr(session, name)()). The string form silently broke the footer at runtime if a Session
+# method was renamed — invisible to grep-for-callers and rename refactors. A direct call through
+# the lambda makes the dependency a real, checkable reference (a renamed/removed method is now a
+# load-time/lint error, not a silent runtime miss). Behaviour + displayed values are unchanged.
 FOOTER_ROWS = (
-    ("Theoretical", "theoretical_best",
+    ("Theoretical", lambda s: s.theoretical_best(),
      "Theoretical best — sum of the session-best sector splits (the purple cells): the lap "
      "you'd drive by stitching every best sector together. With no sector lines this equals "
      "the best lap time."),
-    ("Best rolling", "best_rolling_lap",
+    ("Best rolling", lambda s: s.best_rolling_lap(),
      "Best rolling — the fastest single complete loop regardless of where it starts: the "
      "minimum time from passing any track position to passing it again one lap later (windows "
      "spanning a GPS-dropout ⚠ lap are excluded)."),
@@ -217,7 +223,7 @@ class LapTable(QWidget):
         tiles.setSpacing(20)
         hero_num = theme.mono_font(theme.HERO - 5, theme.W_SEMIBOLD)  # a clear step up from 13px
         self._footer_values: list[QLabel] = []
-        for title, _accessor, tip in FOOTER_ROWS:
+        for title, _accessor, tip in FOOTER_ROWS:  # _accessor (the value callable) used in _refresh_footer
             tile = QVBoxLayout()
             tile.setContentsMargins(0, 0, 0, 0)
             tile.setSpacing(0)
@@ -238,11 +244,13 @@ class LapTable(QWidget):
         return footer
 
     def _refresh_footer(self):
-        """Rewrite the footer values from Session (the accessor named per row in FOOTER_ROWS).
-        None (no valid laps / a sector column with no data) renders as the em-dash."""
+        """Rewrite the footer values from Session (the accessor CALLABLE per row in FOOTER_ROWS).
+        None (no valid laps / a sector column with no data) renders as the em-dash. F8a: the
+        accessor is now a direct `s -> value` callable (was a getattr-by-name on a method string),
+        so a renamed Session method is a real reference error here, not a silent footer miss."""
         for (_title, accessor, _tip), label in zip(FOOTER_ROWS, self._footer_values,
                                                    strict=True):
-            v = getattr(self.session, accessor)()
+            v = accessor(self.session)
             label.setText(fmt_time(v if v is not None else float("nan")))
 
     def _n_split_cols(self) -> int:

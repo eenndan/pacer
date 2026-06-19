@@ -38,6 +38,7 @@ from _synthetic import bare_session  # noqa: E402
 from studio import gapfill, theme  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
 from studio.lap_table import (  # noqa: E402
+    FOOTER_ROWS,
     NUM_ROLE,
     LapTable,
     _NumItem,
@@ -251,6 +252,28 @@ def test_lap_table_footer_survives_sort_and_updates_on_refresh():
     table.refresh()
     assert _footer_texts(table) == ["—", "—"]
     print("test_lap_table_footer_survives_sort_and_updates_on_refresh OK")
+
+
+def test_lap_table_footer_accessors_are_callables():
+    """F8a: each FOOTER_ROWS accessor is a CALLABLE `session -> value` (not a method-NAME string
+    resolved via getattr). It must resolve directly off the session and produce the SAME values the
+    footer shows — so a renamed Session method is a real reference error, not a silent footer miss.
+
+    Guards both: that the accessors are callable (the regression the string form invited), and that
+    calling them maps 1:1 onto the rendered tiles. Also flips the session's numbers to confirm the
+    callable re-reads live state (no cached name lookup)."""
+    sess = _FakeFooterSession()
+    # The accessors are callables — calling each yields the same numbers the rendered footer shows.
+    by_call = [acc(sess) for _title, acc, _tip in FOOTER_ROWS]
+    assert all(callable(acc) for _t, acc, _tip in FOOTER_ROWS), "FOOTER_ROWS accessors must be callables"
+    assert by_call == [sess.theoretical_best(), sess.best_rolling_lap()] == [68.2, 68.3]
+    # The rendered tiles equal fmt_time of those callable results (1:1 with FOOTER_ROWS order).
+    table = LapTable(sess)
+    assert _footer_texts(table) == [fmt_time(v) for v in by_call]
+    # The callables read LIVE state: change the session, re-call, the values track.
+    sess.theo, sess.rolling = 67.5, 67.9
+    assert [acc(sess) for _t, acc, _tip in FOOTER_ROWS] == [67.5, 67.9]
+    print("test_lap_table_footer_accessors_are_callables OK")
 
 
 # ------------------------------------------------ E1: zero-valid-lap empty states
