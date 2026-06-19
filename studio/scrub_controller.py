@@ -156,7 +156,10 @@ class ScrubController:
         lap = self._scrub_lap
         if lap is None:  # not inside a valid lap (lead-in / between laps) — no-op
             return
-        best_d = self.session.best_lap_total_distance()
+        # The distance-mode plot-x is scaled by the ACTIVE baseline total (the cross-recording
+        # reference's total when one is loaded, else the local best) — the same basis delta()
+        # scaled the x-grid with — so the dragged x maps back to the right track position.
+        best_d = self.session.active_baseline_total_distance()
         t = self.session.media_time_at_plot_x(lap, x, mode, best_distance=best_d)
         if t is None:
             return

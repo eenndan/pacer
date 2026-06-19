@@ -237,6 +237,73 @@ def test_no_corners_or_no_loss_excluded():
     print("ok gate: no corners -> excluded; no loss -> enough but empty rows")
 
 
+# ---------------------------------------- D13: coaching row halves share ONE baseline (local best)
+def test_brake_window_projected_onto_each_laps_own_odometer():
+    """D13 (odometer-frame): a corner's [enter, exit] is in the BEST-lap (reference) odometer, but
+    each lap's brake events live in its OWN odometer. summarize() must project the window onto each
+    lap's own odometer before matching. Here the corner is [50, 90] in a 1000 m reference frame; the
+    median lap is 1100 m long, so its window is [55, 99]. A median brake at onset 96 m (inside the
+    PROJECTED [55-30, 99] window, but OUTSIDE the un-projected [50-30, 90]) must count as braking —
+    proving the projection happened. Without the fix the brake would fall outside and pick LINE."""
+    corners, best, times, lap_times = _one_corner_lossy(0.5)  # one corner: enter 50, exit 90
+    med_brakes = [_brake(onset_dist=96.0, duration=0.9)]   # in projected [25, 99], not raw [20, 90]
+    best_brakes = [_brake(onset_dist=40.0, duration=0.3)]  # best frame == reference frame here
+    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+                      sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
+                      best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
+                      median_apex_deltas=[0.0],
+                      corner_dist_total=1000.0, median_lap_total=1100.0, best_lap_total=1000.0)
+    r = opp.rows[0]
+    assert r.reason.kind == K.REASON_BRAKING, r.reason
+    assert abs(r.reason.brake_extra_s - 0.6) < 1e-9  # 0.9 - 0.3
+    # control: the SAME inputs WITHOUT the totals (identity projection) leave the brake outside the
+    # un-projected window -> it does NOT count -> the row falls back to LINE.
+    opp0 = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+                       sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
+                       best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
+                       median_apex_deltas=[0.0])
+    assert opp0.rows[0].reason.kind == K.REASON_LINE, opp0.rows[0].reason
+    print("ok D13 odometer-frame: corner window projected onto each lap's own odometer for braking")
+
+
+def _stadium_reference(s, *, apex_scale):
+    """Build a ReferenceLap for the stadium session whose speed profile is `apex_scale`× the best
+    lap's — so its per-corner APEX speeds differ from the local best's. If the apex signal followed
+    the reference (the D13 bug) loading this would CHANGE the reported apex deficit; the fix keeps
+    it pinned to the local best, so the deficit is identical with and without the reference."""
+    from studio import cross_reference
+    t0, _xs, _ys, sp0, cum = s._cols_cache[0]  # the best lap (0)
+    dist = np.asarray(cum, float)
+    speed_kmh = np.asarray(sp0, float) * 3.6 * apex_scale
+    elapsed = np.asarray(t0, float) - float(t0[0])
+    return cross_reference.ReferenceLap(
+        dist=dist, speed_kmh=speed_kmh, elapsed=elapsed, total_time=float(elapsed[-1]),
+        source_label="ref", lap_id=0, overlay_xy=None, map_fit_rms=None,
+    )
+
+
+def test_apex_signal_and_loss_share_local_best_baseline_under_reference():
+    """D13 (apex baseline): with a CROSS-RECORDING reference loaded, the per-corner Δ baseline for
+    the lap table switches to the reference — but the coaching loss is still vs the LOCAL best, so
+    the apex SIGNAL must stay vs the local best too (both halves of a row on ONE baseline). Assert
+    the reported apex deficit is IDENTICAL with and without a reference whose apex speeds differ."""
+    s = _stadium_session()
+    base = s.coaching_opportunities()  # no reference: apex deficit measured vs local best
+    base_apex = {r.cid: r.reason.apex_speed_deficit for r in base.rows}
+    # Load a reference whose apex speeds are 10% lower than the local best's (so the OLD code, which
+    # measured the median's apex vs the reference, would report a DIFFERENT — smaller — deficit).
+    s._reference = _stadium_reference(s, apex_scale=0.90)
+    s._corner_stats_cache.clear()  # drop the deltas computed against the now-different baseline
+    with_ref = s.coaching_opportunities()
+    with_ref_apex = {r.cid: r.reason.apex_speed_deficit for r in with_ref.rows}
+    assert base_apex == with_ref_apex, (base_apex, with_ref_apex)
+    # and the losses (the OTHER half of the row) are also unchanged — both halves on the local best.
+    base_loss = {r.cid: round(r.time_lost, 9) for r in base.rows}
+    ref_loss = {r.cid: round(r.time_lost, 9) for r in with_ref.rows}
+    assert base_loss == ref_loss, (base_loss, ref_loss)
+    print(f"ok D13 apex baseline: apex deficit + loss unchanged by a reference {base_apex}")
+
+
 # ------------------------------------------------------------------- Session wiring
 def _stadium_session():
     """Bare Session (test_corners stadium idiom): 4 clean laps that all lose time in the SAME

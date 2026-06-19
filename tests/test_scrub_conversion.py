@@ -13,11 +13,14 @@ distance mode both use x = s × best_distance, so 'distance' and 'delta' are the
 """
 import os
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from _synthetic import bare_session, odometer  # noqa: E402
+from _synthetic import bare_session, odometer, seed_cols  # noqa: E402
+
+from studio import cross_reference  # noqa: E402
 
 
 def make_session(lap_id=3, t0=100.0, dt=0.1, n=120, total_dist=520.0):
@@ -140,6 +143,114 @@ def test_plot_x_zero_total_distance_returns_none():
         assert s.plot_x_at_media_time(lid, 100.1, mode, best_distance=600.0) is None
     assert abs(s.plot_x_at_media_time(lid, 100.1, "time") - 0.1) < 1e-9
     print("test_plot_x_zero_total_distance_returns_none OK")
+
+
+# ----------------------------- D12: active-baseline single-source (cross-recording reference)
+# When a cross-recording reference (F7) is loaded, the distance-mode chart x-axis is scaled by
+# the REFERENCE total (delta() scales its x-grid with the baseline lap's distance). The cursor
+# mappers must use the SAME total — active_baseline_total_distance() — or a dragged cursor seeks
+# the wrong track position and no longer sits on its curve. These tests pin both to ONE total.
+
+def _ref_lap(total_dist):
+    """A minimal ReferenceLap whose odometer total is `total_dist` (the only field these tests
+    read via active_baseline_total_distance / delta). speed/elapsed are plausible monotonic
+    curves so delta()'s normalized-distance interp has real arrays to consume."""
+    n = 60
+    dist = np.linspace(0.0, float(total_dist), n)
+    elapsed = np.linspace(0.0, 30.0, n)
+    speed = np.full(n, 80.0)
+    return cross_reference.ReferenceLap(
+        dist=dist, speed_kmh=speed, elapsed=elapsed, total_time=float(elapsed[-1]),
+        source_label="ref", lap_id=0, overlay_xy=None, map_fit_rms=None,
+    )
+
+
+def test_active_baseline_total_is_local_best_when_no_reference():
+    """DORMANT path: with no reference, active_baseline_total_distance() == the local best lap's
+    total (byte-identical to best_lap_total_distance()) — the no-behaviour-change invariant."""
+    s, lid, times, dists = make_session(total_dist=520.0)
+    s._best_cache = lid  # the seeded lap is the local best
+    assert s._ref is None
+    assert abs(s.active_baseline_total_distance() - s.best_lap_total_distance()) < 1e-12
+    assert abs(s.active_baseline_total_distance() - float(dists[-1])) < 1e-9
+    print("test_active_baseline_total_is_local_best_when_no_reference OK")
+
+
+def test_active_baseline_total_follows_reference_when_loaded():
+    """With a reference loaded, active_baseline_total_distance() returns the REFERENCE total, NOT
+    the local best's — even though best_lap_total_distance() still reports the local best."""
+    s, lid, times, dists = make_session(total_dist=520.0)
+    s._best_cache = lid
+    ref_total = 640.0  # deliberately DIFFERENT from the local best (520 m) — the desync trigger
+    s._reference = _ref_lap(ref_total)
+    assert abs(s.best_lap_total_distance() - 520.0) < 1e-9       # local best unchanged
+    assert abs(s.active_baseline_total_distance() - ref_total) < 1e-9  # baseline follows the ref
+    print("test_active_baseline_total_follows_reference_when_loaded OK")
+
+
+def test_cursor_mappers_use_reference_total_and_roundtrip():
+    """The cursor mappers fed active_baseline_total_distance() (the reference total) round-trip
+    exactly AND map the lap finish to x == reference_total — so the cursor sits on its curve when
+    the reference and local-best totals differ (the D12 bug was the mappers using the local best
+    total while the x-grid used the reference total)."""
+    s, lid, times, dists = make_session(total_dist=520.0)
+    s._best_cache = lid
+    s._reference = _ref_lap(640.0)
+    base_d = s.active_baseline_total_distance()
+    assert abs(base_d - 640.0) < 1e-9
+    for t in np.linspace(times[0], times[-1], 37):
+        x = s.plot_x_at_media_time(lid, t, "distance", best_distance=base_d)
+        t2 = s.media_time_at_plot_x(lid, x, "distance", best_distance=base_d)
+        assert abs(t2 - t) < 1e-6, (t, x, t2)
+    # the lap finish (s=1) maps to x == the BASELINE total, i.e. the reference total
+    assert abs(s.plot_x_at_media_time(lid, times[-1], "distance", best_distance=base_d)
+               - 640.0) < 1e-9
+    print("test_cursor_mappers_use_reference_total_and_roundtrip OK")
+
+
+def test_delta_x_max_and_cursor_share_the_baseline_total():
+    """THE D12 consistency check: delta()'s distance x-extent and the cursor mappers use the SAME
+    total. With a reference loaded, the distance-mode x grid's max equals the reference total, and
+    that equals active_baseline_total_distance() (what the mappers are fed) — so the cursor lands
+    exactly at the right end of the curve. Verified for a reference total != the local best."""
+    s, lid, times, dists = make_session(total_dist=520.0)
+    seed_cols(s, lid, times, dists)        # delta() reads _lap_arrays off the columns cache
+    s._best_cache = lid
+    s._valid_cache = [lid]
+    s.laps = SimpleNamespace(laps_count=lambda: lid + 1)  # delta()'s id-range filter
+    ref_total = 640.0
+    s._reference = _ref_lap(ref_total)
+    base_d = s.active_baseline_total_distance()
+    out = s.delta([lid], x_mode="distance")
+    assert out is not None
+    _best_id, speed, _delta = out
+    # every series shares the one distance x-grid; its max is the baseline (reference) total
+    x_axis = speed[lid][0]
+    assert abs(float(x_axis[-1]) - ref_total) < 1e-6, float(x_axis[-1])
+    assert abs(float(x_axis[-1]) - base_d) < 1e-9    # == what the cursor mappers are fed
+    # and the cursor's finish-x matches that same axis max (cursor sits on the curve end)
+    assert abs(s.plot_x_at_media_time(lid, times[-1], "distance", best_distance=base_d)
+               - float(x_axis[-1])) < 1e-6
+    print("test_delta_x_max_and_cursor_share_the_baseline_total OK")
+
+
+def test_delta_x_max_unchanged_with_no_reference():
+    """No-reference invariant: delta()'s distance x-max is the LOCAL best total and equals what
+    the cursor mappers are fed — unchanged by this fix."""
+    s, lid, times, dists = make_session(total_dist=520.0)
+    seed_cols(s, lid, times, dists)
+    s._best_cache = lid
+    s._valid_cache = [lid]
+    s.laps = SimpleNamespace(laps_count=lambda: lid + 1)
+    assert s._ref is None
+    base_d = s.active_baseline_total_distance()
+    out = s.delta([lid], x_mode="distance")
+    assert out is not None
+    _best_id, speed, _delta = out
+    x_axis = speed[lid][0]
+    assert abs(float(x_axis[-1]) - float(dists[-1])) < 1e-6   # local best total
+    assert abs(float(x_axis[-1]) - base_d) < 1e-9
+    print("test_delta_x_max_unchanged_with_no_reference OK")
 
 
 if __name__ == "__main__":

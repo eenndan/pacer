@@ -695,9 +695,11 @@ class Session:
         return self._best_cache
 
     def best_lap_total_distance(self) -> float | None:
-        """The best lap's total odometer distance (metres) — the basis the delta plot's x-axis is
-        scaled in (x = s × best_distance). Used to map the delta cursor's x to/from a media time.
-        Matches the `best_dist[-1]` used in `delta()`. None if there's no valid best lap."""
+        """The LOCAL best lap's total odometer distance (metres). None if there's no valid best
+        lap. NOTE: the distance-mode chart x-axis is scaled by `active_baseline_total_distance()`
+        (the REFERENCE total when one is loaded), not this — use that for cursor↔x mapping so the
+        cursor mappers agree with `delta()`'s x-grid. This stays the local-best value for the
+        callers that genuinely want the local best lap's length."""
         best = self.best_lap_id()
         if best is None:
             return None
@@ -705,6 +707,21 @@ class Session:
         if td is None:
             return None
         return float(td[1][-1])
+
+    def active_baseline_total_distance(self) -> float | None:
+        """The total odometer distance (metres) of the ACTIVE Δ baseline — the CROSS-RECORDING
+        reference lap's total when one is loaded (F7), else the local best lap's total. This is
+        the single source of truth for the basis the distance-mode chart x-axis is scaled in
+        (x = s × baseline_total), used by BOTH `delta()`'s x-grid AND the distance-mode cursor
+        mappers (`media_time_at_plot_x` / `plot_x_at_media_time`). Single-sourcing it keeps the
+        scrub cursor sitting on its curve when the reference and local-best totals DIFFER — the
+        D12 bug was the x-grid using the reference total while the mappers used the local best.
+        DORMANT: with no reference this is byte-identical to `best_lap_total_distance()`."""
+        ref = self._ref
+        if ref is not None:
+            dist = ref.dist
+            return float(dist[-1]) if len(dist) >= 1 else None
+        return self.best_lap_total_distance()
 
     def lap_rows(self) -> list[LapRow]:
         return [
@@ -1363,12 +1380,18 @@ class Session:
         # Cross-lap σ of time-in-corner per cid (from the F6 ranking), as the LINE signal.
         sigmas_by_cid = {sp.cid: sp.sigma for sp in self.corner_consistency()}
 
-        # The median lap's per-corner apex-speed delta vs best (km/h) — the APEX signal. From
-        # lap_corner_stats (deltas measured against the best lap). [] if no median lap.
+        # The median lap's per-corner apex-speed delta vs the LOCAL best lap (km/h) — the APEX
+        # signal. Computed DIRECTLY as median_apex − best_apex (raw apex_speed from each lap's
+        # stats), NOT via CornerStat.apex_speed_delta: that field follows the active Δ baseline,
+        # which becomes the CROSS-RECORDING reference when one is loaded (F7), whereas the coaching
+        # losses are measured vs the LOCAL best lap (best_corner_times). Mixing baselines made the
+        # two halves of a coaching row disagree (D13); pinning the apex signal to the local best,
+        # the same baseline as the loss, keeps the row self-consistent. [] if no median lap.
         if med_id is not None:
             med_stats = self.lap_corner_stats(med_id)
-            median_apex_deltas = ([s.apex_speed_delta for s in med_stats]
-                                  if len(med_stats) == n else [])
+            median_apex_deltas = (
+                [med_stats[i].apex_speed - best_stats[i].apex_speed for i in range(n)]
+                if len(med_stats) == n else [])
         else:
             median_apex_deltas = []
 
@@ -1378,6 +1401,16 @@ class Session:
         best_brakes = self.lap_brake_events(best)
         med_coast = self.lap_coasting_spans(med_id) if med_id is not None else []
         best_coast = self.lap_coasting_spans(best)
+
+        # Odometer totals so summarize can project each corner window onto each lap's OWN odometer
+        # before matching that lap's brake/coast events (which live in its own odometer — D13). The
+        # corner edges (c.enter/c.exit) are in the corner basis' reference total; the median/best
+        # events are in their own laps' totals. Mirrors lap_corner_grip's projection.
+        basis = self._corner_basis()
+        corner_dist_total = float(basis[1]) if basis is not None else None
+        best_lap_total = self.best_lap_total_distance()
+        med_td = self._lap_time_dist(med_id) if med_id is not None else None
+        median_lap_total = float(med_td[1][-1]) if med_td is not None else None
 
         return coaching.summarize(
             corners=corner_list,
@@ -1391,6 +1424,9 @@ class Session:
             median_coast_spans=med_coast,
             best_coast_spans=best_coast,
             median_apex_deltas=median_apex_deltas,
+            corner_dist_total=corner_dist_total,
+            median_lap_total=median_lap_total,
+            best_lap_total=best_lap_total,
         )
 
     def corner_entry_media_time(self, lap_id: int, cid: int) -> float | None:
@@ -1554,14 +1590,16 @@ class Session:
             return []
         if mode == "time":
             return [(e.onset_time, e.peak_decel) for e in events]
-        # 'distance' — normalize by this lap's total, scale to the best lap's distance.
+        # 'distance' — normalize by this lap's total, scale to the ACTIVE baseline's distance
+        # (the reference total when one is loaded) so the glyphs sit on the curves/cursor, which
+        # delta() scales the same way. Same single-source as the cursor mappers (D12).
         best = self.best_lap_id()
         td = self._lap_time_dist(lap_id)
         if best is None or td is None:
             return []
         _times, dists = td
         total_lap = float(dists[-1])
-        best_total = self.best_lap_total_distance()
+        best_total = self.active_baseline_total_distance()
         if total_lap <= 0 or not best_total:
             return []
         return [(e.onset_dist / total_lap * best_total, e.peak_decel) for e in events]
@@ -1587,7 +1625,8 @@ class Session:
             return []
         _times, dists = td
         total_lap = float(dists[-1])
-        best_total = self.best_lap_total_distance()
+        # ACTIVE baseline total (reference when loaded) — the shared axis delta() uses (D12).
+        best_total = self.active_baseline_total_distance()
         if total_lap <= 0 or not best_total:
             return []
         return [(s.start_dist / total_lap * best_total, s.end_dist / total_lap * best_total)
@@ -1657,11 +1696,13 @@ class Session:
     # same x on BOTH plots — the two cursors always coincide. Two plots, one truth = the media
     # time:
     #   * TIME mode (both plots):     x = t - lap_start            (t = lap_start + x)
-    #   * DISTANCE mode (both plots): x = s × best_total_dist, where s = dist_in_lap(t)/lap_total
+    #   * DISTANCE mode (both plots): x = s × baseline_total_dist, where s = dist_in_lap(t)/lap_total
     #     is the NORMALIZED distance fraction. This is the SAME axis the curves are drawn on
-    #     (session.delta maps every lap's s∈[0,1] through the best lap's distance), so a cursor
-    #     placed here sits exactly on its curve AND coincides with the other plot's cursor.
-    #     Inverse: s = x / best_total_dist; dist_in_lap = s × this lap's total; then interp→time.
+    #     (session.delta maps every lap's s∈[0,1] through the ACTIVE baseline's distance — the
+    #     cross-recording reference's total when one is loaded, else the local best), so a cursor
+    #     placed here sits exactly on its curve AND coincides with the other plot's cursor. Pass
+    #     `active_baseline_total_distance()` as `best_distance` so both halves use the SAME total.
+    #     Inverse: s = x / baseline_total; dist_in_lap = s × this lap's total; then interp→time.
     # 'distance' and 'delta' are the SAME shared-distance mode (delta is kept as a readable alias
     # for the signal the delta-plot cursor emits). All clamp to the lap window so a drag can't
     # escape the current lap.
@@ -1672,9 +1713,11 @@ class Session:
 
         `mode` is 'time' (time-into-lap x, seconds) or 'distance'/'delta' (the SHARED distance
         axis, x = s × best_distance metres — both plots use it, so the cursors coincide). For
-        the distance/delta modes pass the best lap's total distance as `best_distance`. The
-        result is CLAMPED to `lap_id`'s [start, end] media window so a drag can't leave the
-        current lap. Returns None if the lap is degenerate (so the caller can no-op)."""
+        the distance/delta modes pass the ACTIVE baseline's total distance as `best_distance`
+        (`active_baseline_total_distance()` — the reference total when one is loaded, else the
+        local best) so this inverts delta()'s x-grid exactly. The result is CLAMPED to `lap_id`'s
+        [start, end] media window so a drag can't leave the current lap. Returns None if the lap
+        is degenerate (so the caller can no-op)."""
         td = self._lap_time_dist(lap_id)
         if td is None:
             return None
@@ -1812,6 +1855,9 @@ class Session:
         best_dist, _, best_elapsed = arrays[best]
         # Distance mode keeps the x-axis in metres via the baseline lap's distance (one shared
         # x): the local best normally, or the cross-recording reference's distance when active.
+        # `best_dist[-1]` here is exactly `active_baseline_total_distance()` (the same baseline
+        # array) — the distance-mode cursor mappers read that accessor so they agree with this
+        # grid even when the reference and local-best totals differ (the D12 single-source).
         x_dist = s_grid * float(best_dist[-1])
         best_elapsed_on_grid = np.interp(s_grid, best_dist / best_dist[-1], best_elapsed)
 

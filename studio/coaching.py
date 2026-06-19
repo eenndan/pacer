@@ -194,13 +194,19 @@ def _window_brake_time(events, d_enter: float, d_exit: float) -> float:
     return sum(float(e.duration) for e in events if lo <= e.onset_dist <= d_exit)
 
 
-def _brake_extra(med_events, best_events, d_enter: float, d_exit: float) -> float:
+def _brake_extra(med_events, best_events, med_win: tuple[float, float],
+                 best_win: tuple[float, float]) -> float:
     """Extra seconds on the brakes vs best in the corner's approach: the median lap's total
     time-on-brakes in the window minus the best lap's, floored at 0 (braking LESS than best is
     not a loss this reason claims). An earlier onset shows up as more time on the brakes, so the
-    single time-on-brakes difference captures both 'earlier' and 'longer'."""
-    return max(_window_brake_time(med_events, d_enter, d_exit)
-               - _window_brake_time(best_events, d_enter, d_exit), 0.0)
+    single time-on-brakes difference captures both 'earlier' and 'longer'.
+
+    Each lap's events live in its OWN odometer (Session reads them off each lap's own distance
+    axis), so the SAME corner is a different metre window on each: `med_win`/`best_win` are the
+    corner window already projected onto the median / best lap's own odometer (D13). With no
+    projection both equal the corner edges, so this is unchanged."""
+    return max(_window_brake_time(med_events, *med_win)
+               - _window_brake_time(best_events, *best_win), 0.0)
 
 
 def _coast_in_window(spans, d_enter: float, d_exit: float) -> float:
@@ -214,27 +220,33 @@ def _coast_in_window(spans, d_enter: float, d_exit: float) -> float:
     return total
 
 
-def _coast_extra(med_spans, best_spans, d_enter: float, d_exit: float) -> float:
+def _coast_extra(med_spans, best_spans, med_win: tuple[float, float],
+                 best_win: tuple[float, float]) -> float:
     """Extra coasting seconds inside the corner vs best: the median lap's coasting duration in
-    the window minus the best lap's, floored at 0."""
-    return max(_coast_in_window(med_spans, d_enter, d_exit)
-               - _coast_in_window(best_spans, d_enter, d_exit), 0.0)
+    the window minus the best lap's, floored at 0. `med_win`/`best_win` are the corner window
+    projected onto each lap's OWN odometer (its spans live there) — see _brake_extra (D13)."""
+    return max(_coast_in_window(med_spans, *med_win)
+               - _coast_in_window(best_spans, *best_win), 0.0)
 
 
 def _pick_reason(time_lost: float, apex_speed_delta: float, sigma: float,
                  med_events, best_events, med_spans, best_spans,
-                 d_enter: float, d_exit: float) -> Reason:
+                 med_win: tuple[float, float], best_win: tuple[float, float]) -> Reason:
     """Choose the dominant reason for one corner: the strongest of the four comparable strengths
     (largest wins, ties -> _REASON_PRIORITY order). The raw evidence behind each strength is
     carried on the Reason regardless of which won, so the UI/tests read them uniformly, and the
     contribution is time_lost × the winning strength (≤ time_lost — never overclaims).
 
+    `med_win`/`best_win` are the corner window projected onto the median / best lap's OWN
+    odometer (the frame their brake/coast events live in — D13). With no projection both equal
+    the corner edges, so this is unchanged.
+
     LINE is the fallback: when no concrete input signal (apex/brake/coast) fires but there IS
     real cross-lap spread, σ carries the row. When nothing fires the reason is REASON_NONE (the
     row still shows the time lost)."""
     apex_deficit = max(-float(apex_speed_delta), 0.0)   # km/h slower than best at the apex
-    brake_extra = _brake_extra(med_events, best_events, d_enter, d_exit)
-    coast_extra = _coast_extra(med_spans, best_spans, d_enter, d_exit)
+    brake_extra = _brake_extra(med_events, best_events, med_win, best_win)
+    coast_extra = _coast_extra(med_spans, best_spans, med_win, best_win)
     sig = max(float(sigma), 0.0)
 
     # Comparable strengths in [0,1). A reason can only win when the corner is actually losing
@@ -279,6 +291,9 @@ def summarize(
     best_coast_spans,
     median_apex_deltas: list[float],
     *,
+    corner_dist_total: float | None = None,
+    median_lap_total: float | None = None,
+    best_lap_total: float | None = None,
     top_n: int = TOP_N,
     min_laps: int = MIN_LAPS,
 ) -> Opportunities:
@@ -297,8 +312,17 @@ def summarize(
       best_brake_events       the BEST lap's brake events.
       median_coast_spans      the MEDIAN lap's coasting spans (driving.CoastSpan list).
       best_coast_spans        the BEST lap's coasting spans.
-      median_apex_deltas      the median lap's per-corner apex_speed_delta vs best (km/h),
-                              aligned to `corners`.
+      median_apex_deltas      the median lap's per-corner apex-speed delta vs the LOCAL best lap
+                              (km/h; negative = slower than best), aligned to `corners`. MUST use
+                              the SAME baseline as the losses (the local best) — see D13.
+      corner_dist_total       the corner edges' (`c.enter`/`c.exit`) odometer reference total (m);
+      median_lap_total        the MEDIAN lap's own odometer total (m);
+      best_lap_total          the BEST lap's own odometer total (m).
+                              These three project each corner window onto each lap's OWN odometer
+                              (d = c.enter / corner_dist_total × lap_total) before matching that
+                              lap's brake/coast events, which live in its own odometer (D13).
+                              When any is None the projection is the identity (the corner edges are
+                              used as-is) — the dormant path, byte-identical to before.
 
     Returns an Opportunities. `enough=False` (empty rows) when < `min_laps` candidate laps."""
     n_laps = len(candidate_lap_ids)
@@ -316,6 +340,19 @@ def summarize(
         return Opportunities(enough=False, n_laps=n_laps, median_lap_id=med_id, rows=[])
     losses = np.median(times - best[None, :], axis=0)  # (n_corners,)
 
+    # Project a corner's [enter, exit] (in the corner-edge odometer reference) onto one lap's OWN
+    # odometer (d = c.enter / corner_dist_total × lap_total — the SAME normalized-distance
+    # projection lap_corner_grip / lap_corner_stats use). A lap's brake/coast events are measured
+    # in its own odometer, so this puts the corner window in the SAME frame before matching (D13).
+    # If any total is missing/degenerate the corner edges are returned as-is (the dormant path,
+    # identical to before this fix).
+    def _win(c, lap_total: float | None) -> tuple[float, float]:
+        if (corner_dist_total and lap_total and corner_dist_total > 0
+                and lap_total != corner_dist_total):
+            scale = lap_total / corner_dist_total
+            return float(c.enter) * scale, float(c.exit) * scale
+        return float(c.enter), float(c.exit)
+
     # Build a row per corner with a positive median loss; rank by the loss (biggest first).
     ranked_idx = [i for i in np.argsort(-losses, kind="stable") if losses[i] > 1e-9]
 
@@ -331,7 +368,7 @@ def summarize(
                 sigma=float(sigmas_by_cid.get(c.cid, 0.0)),
                 med_events=median_brake_events, best_events=best_brake_events,
                 med_spans=median_coast_spans, best_spans=best_coast_spans,
-                d_enter=float(c.enter), d_exit=float(c.exit),
+                med_win=_win(c, median_lap_total), best_win=_win(c, best_lap_total),
             )
         else:
             reason = Reason(kind=REASON_NONE, contribution=0.0, apex_speed_deficit=0.0,

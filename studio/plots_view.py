@@ -559,9 +559,11 @@ class PlotsView(QWidget):
         self._cursor_t = t
         x = None
         mode = self._axis_mode()  # the one shared axis mode (both plots)
-        # best_lap_total_distance is only used by the distance/delta axis (time mode ignores it),
-        # so skip the lookup entirely in time mode.
-        best_d = None if mode == "time" else self.session.best_lap_total_distance()
+        # The distance/delta axis is scaled by the ACTIVE baseline total (the cross-recording
+        # reference's total when one is loaded, else the local best) — the same basis delta()
+        # scales its x-grid with — so the cursor stays on its curve. Time mode ignores it, so
+        # skip the lookup entirely there.
+        best_d = None if mode == "time" else self.session.active_baseline_total_distance()
         for lid in self._lap_ids:
             window = self.session.lap_window(lid)
             if window and window[0] <= t <= window[1]:
