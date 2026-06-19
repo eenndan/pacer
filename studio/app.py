@@ -600,15 +600,19 @@ class StudioWindow(QMainWindow):
         # axis mode and pushes them; recompute when the mode flips (the positions' units change).
         self.plots.modeChanged.connect(self._refresh_sector_lines)
 
-        self._select_default()
+        # Build the full set of session-derived views through the shared seam (same sequence a
+        # re-segmentation / reference change uses): selects the two fastest laps, draws the map
+        # overlays + corners, the corner/consistency panels, the driving channels, and any sector
+        # guides present on launch (none by default). Replaces the old partial inline set
+        # (_select_default + _refresh_sector_lines).
+        self.rebuild_derived_views(reselect=True)
         # Poster frame: seek the PRIMARY pane a hair into the best lap WHILE PAUSED so the (largest)
         # video quadrant shows a real frame at launch instead of a black void, and the map marker /
         # charts / readout are all populated and consistent with that frame. A paused seek decodes
-        # and presents the frame without playing audio. Done after _select_default() so the chart
+        # and presents the frame without playing audio. Done after the rebuild above so the chart
         # selection is already in place. Skipped cleanly when there's no valid lap (poster_seek
         # checks best_lap_id()), so a 0-lap session still launches.
         self._poster_seek()
-        self._refresh_sector_lines()  # draw any sectors present on launch (none by default)
         self._sync_full_recording_action()
         # F7: the permanent status-bar chip showing which cross-recording reference is active.
         # Created ONCE (it lives on the persistent QMainWindow status bar, which _build_ui's
@@ -1448,19 +1452,13 @@ class StudioWindow(QMainWindow):
         the menu + status chip. The reference replaces the local best lap as the Δ / map-overlay /
         sector-guide / per-corner-Δ baseline, so the same panels a re-segment refreshes are
         rebuilt here (minus the actual re-segmentation — the PRIMARY laps are unchanged)."""
-        # The lap table's per-corner Δ columns + the Corners view read against the (now changed)
-        # baseline; the map's faint reference line switches to/from the reference racing line.
-        self.table.refresh()
-        self.corner_table.refresh()
-        self.map.refresh_overlays()
-        # Rebuild the delta/speed charts (the baseline curve + the x-axis scale changed) and the
-        # sector guide lines on the rescaled axis.
-        if self._comparing():
-            # Compare mode draws its own pinned [A,B] pair; just refresh its overlay in place.
-            self.plots.refresh()
-        else:
-            self._select_default()
-        self._refresh_sector_lines()
+        # Routed through the shared rebuild seam so a reference change refreshes the IDENTICAL union
+        # a re-segmentation does. This FIXES a real latent drift: the old hand-maintained sequence
+        # here omitted map.set_corners() and _refresh_driving_channels(), so loading/clearing a
+        # reference (which DOES change the per-corner Δ baseline) left the corner-map markers and
+        # the brake/coast glyphs stale — they now refresh too. reselect mirrors the old branch:
+        # _select_default() in single mode, plots.refresh() (keep the pinned pair) while comparing.
+        self.rebuild_derived_views(reselect=not self._comparing())
         self._update_reference_status()
 
     def _update_reference_status(self):
@@ -1827,32 +1825,64 @@ class StudioWindow(QMainWindow):
         self.plots.set_brake_markers(brake_plot)
         self.plots.set_coasting_spans(coast_plot)
 
+    def rebuild_derived_views(self, *, reselect: bool = True):
+        """THE single seam that rebuilds every session-DERIVED surface from the current Session.
+
+        A re-segmentation (_on_lines), a reference load/clear (_apply_reference_change) and the
+        initial build tail (_build_ui) all change the baseline the same panels read against (the
+        laps, the per-corner Δ, the racing-line overlay, the brake/coast channels, the sector
+        guides), so they MUST refresh the identical union of views, in the identical order — three
+        hand-maintained copies of this sequence had already DRIFTED (the reference path silently
+        omitted set_corners + the driving channels). Each call site keeps only its own SPECIFIC
+        extras inline (set_timing_lines / set_compare_enabled / _save_sidecar for the segmentation
+        edit; _update_reference_status for the reference change; the one-time chip/sync setup at
+        build) and routes everything shared through here.
+
+        Ordering is load-bearing and preserved from the (more complete) _on_lines sequence:
+          • table first (the lap rows + Δ columns);
+          • map.refresh_overlays then map.set_corners — set_corners re-pushes the corner labels AND
+            clears any stale corner highlight, so it runs before the consumers below;
+          • corner_table + consistency (both read the now-current corner model / lap set);
+          • _refresh_driving_channels — re-push the brake glyphs / coast bands EXPLICITLY here,
+            because the selection step below can early-out (a re-segment may leave the primary lap
+            id unchanged so _set_corner_lap short-circuits) while the underlying channels DID change;
+          • the selection step LAST-but-one: _select_default() to re-pick the two fastest laps
+            (reselect=True), OR plots.refresh() to redraw the pinned [A,B] pair in place while
+            comparing (reselect=False) — a re-select would collapse the comparison;
+          • _refresh_sector_lines after the selection (it re-derives the brake glyphs for the
+            now-current selection in the current axis mode)."""
+        self.table.refresh()
+        # Re-segmentation / reference change shifts the measured-vs-inferred map segments and the
+        # faint reference line; redraw the overlays, then re-push the corner labels (set_corners
+        # also clears any stale corner highlight) so the corner consumers below read fresh state.
+        self.map.refresh_overlays()
+        self.map.set_corners(self.session.corner_map_markers())
+        self.corner_table.refresh()
+        # F6: the lap set / splits / per-corner σ shifted with the baseline — rebuild the strip.
+        self.consistency.refresh()
+        # F5: the driving channels were invalidated with the corner model; re-push them HERE (the
+        # selection below may early-out on an unchanged primary-lap id while the channels changed).
+        self._refresh_driving_channels()
+        if reselect:
+            self._select_default()
+        else:
+            # Compare mode draws its own pinned [A,B] pair; refresh that overlay in place rather
+            # than re-selecting the two fastest laps (which would tear the comparison down).
+            self.plots.refresh()
+        # F2: the sector guide lines + their units track the (possibly rescaled) axis and the new
+        # selection, so refresh them AFTER the selection is in place.
+        self._refresh_sector_lines()
+
     def _on_lines(self, start, sectors):
         # Re-segmentation shifts lap ids, so any pinned compare pair is now stale — leave compare
         # mode first (also tears the 2nd pane down), then re-segment and rebuild the default view.
         if self._comparing():
             self.video.set_compare_enabled(False)  # un-checks -> compareToggled(False) -> exit
         self.session.set_timing_lines(start, sectors)
-        self.table.refresh()
-        # Re-segmentation shifted lap ids + cleared the per-lap gap-fill cache; redraw the map
-        # overlays so their measured/inferred segments match the new segmentation.
-        self.map.refresh_overlays()
-        # The corner model was invalidated with the per-lap caches: re-detect + re-push the
-        # map's corner labels and rebuild the Corners view (its lap id is range-guarded; the
-        # _select_default below re-points it at the new selection).
-        self.map.set_corners(self.session.corner_map_markers())
-        self.corner_table.refresh()
-        # F6: lap set / splits / corner stats all shifted with the segmentation — rebuild the
-        # consistency strip (set_corners above already cleared any stale corner highlight).
-        self.consistency.refresh()
-        # F5: the driving channels were invalidated with the corner model; re-push the brake
-        # glyphs / coast bands. _select_default below re-points the primary lap, but its id may
-        # be unchanged across the re-segment (so _set_corner_lap would early-out) while the
-        # underlying channels DID change — so refresh explicitly here, mirroring corner_table.
-        self._refresh_driving_channels()
-        self._select_default()
-        # F2: the sector lines changed — update the chart guide lines live.
-        self._refresh_sector_lines()
+        # Re-segmentation shifted lap ids, cleared the per-lap gap-fill cache and invalidated the
+        # corner model + driving channels — rebuild every derived view through the shared seam,
+        # re-selecting the two fastest laps (compare was just exited above, so reselect=True).
+        self.rebuild_derived_views(reselect=True)
         # The valid-lap count may have changed — re-evaluate whether compare can be offered.
         self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
         # Persist the user's edit (this handler fires only on a drag release / sector add or

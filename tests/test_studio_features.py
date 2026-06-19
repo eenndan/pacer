@@ -727,6 +727,152 @@ def test_consistency_panel_hidden_by_default_and_toggle_refreshes():
     print("test_consistency_panel_hidden_by_default_and_toggle_refreshes OK")
 
 
+# ----------------------------------------------------- F3: the single rebuild-derived-views seam
+class _ViewSpy:
+    """A stand-in for a derived-view collaborator (table / corner_table / map / consistency /
+    plots) that records which of its refresh methods were invoked, so we can assert the rebuild
+    seam touches the UNION of views — without building any real pyqtgraph/Qt panels."""
+
+    def __init__(self):
+        self.calls = []  # ordered method-name log, e.g. ["refresh", "set_corners", ...]
+
+    def __getattr__(self, name):
+        # Any method the seam calls on a view is recorded and treated as a harmless no-op. Guard
+        # the dunder/private lookups so the recorder itself stays well-behaved.
+        if name.startswith("_"):
+            raise AttributeError(name)
+
+        def _rec(*_a, **_k):
+            self.calls.append(name)
+        return _rec
+
+
+def _rebuild_window(comparing=False):
+    """A StudioWindow built WITHOUT __init__ (no Qt/pacer), with every derived-view collaborator
+    replaced by a _ViewSpy and the two leaf refresh helpers (_refresh_driving_channels /
+    _refresh_sector_lines) + _select_default replaced by call counters. rebuild_derived_views and
+    _apply_reference_change run UNCHANGED on top of these spies."""
+    from studio.app import StudioWindow
+
+    w = StudioWindow.__new__(StudioWindow)
+    w.table = _ViewSpy()
+    w.corner_table = _ViewSpy()
+    w.map = _ViewSpy()
+    w.consistency = _ViewSpy()
+    w.plots = _ViewSpy()
+
+    # _comparing() reads self.compare; mimic its on/off via the real predicate's contract.
+    w.compare = SimpleNamespace(active=comparing)
+
+    # session.corner_map_markers is the one session read the seam makes directly (set_corners arg);
+    # stub it so no pacer is needed. has_reference()/reference_*() back _update_reference_status.
+    w.session = SimpleNamespace(
+        corner_map_markers=lambda: [],
+        has_reference=lambda: False,
+        reference_session=lambda: None,
+    )
+
+    # Replace the two leaf helpers + the selection step with counters so we can assert each was
+    # invoked exactly through the seam (the real bodies push to plots/map and are tested elsewhere).
+    rec = SimpleNamespace(driving=0, sector=0, select=0, update_ref=0)
+
+    def _driving():
+        rec.driving += 1
+
+    def _sector(mode=None):  # noqa: ARG001 — matches the real signature
+        rec.sector += 1
+
+    def _select():
+        rec.select += 1
+
+    def _update_ref():
+        rec.update_ref += 1
+
+    w._refresh_driving_channels = _driving
+    w._refresh_sector_lines = _sector
+    w._select_default = _select
+    w._update_reference_status = _update_ref
+    return w, rec
+
+
+def test_rebuild_derived_views_refreshes_the_union_of_views():
+    """rebuild_derived_views(reselect=True) must refresh the FULL union of session-derived views:
+    table.refresh, map.refresh_overlays, map.set_corners, corner_table.refresh,
+    consistency.refresh, the driving-channel refresh, the default re-selection and the sector-line
+    refresh — the single seam every refresh path now routes through."""
+    w, rec = _rebuild_window(comparing=False)
+
+    w.rebuild_derived_views(reselect=True)
+
+    assert "refresh" in w.table.calls, "table not refreshed"
+    assert "refresh_overlays" in w.map.calls, "map overlays not refreshed"
+    assert "set_corners" in w.map.calls, "map corners not re-pushed"
+    assert "refresh" in w.corner_table.calls, "corner table not refreshed"
+    assert "refresh" in w.consistency.calls, "consistency strip not refreshed"
+    assert rec.driving == 1, "driving channels not refreshed"
+    assert rec.sector == 1, "sector lines not refreshed"
+    # reselect=True picks the default selection and does NOT redraw the (absent) compare overlay.
+    assert rec.select == 1, "default selection not made"
+    assert "refresh" not in w.plots.calls, "plots.refresh ran despite reselect=True"
+
+    # Ordering invariants that matter: map overlays + corners before the corner consumers, and the
+    # sector lines after the selection (they re-derive against the now-current selection/axis).
+    mc = w.map.calls
+    assert mc.index("refresh_overlays") < mc.index("set_corners"), mc
+    print("test_rebuild_derived_views_refreshes_the_union_of_views OK")
+
+
+def test_rebuild_derived_views_compare_branch_refreshes_plots_not_reselect():
+    """reselect=False (compare mode) must refresh the pinned [A,B] overlay via plots.refresh()
+    instead of re-selecting the two fastest laps (which would tear the comparison down) — while
+    still refreshing every other derived view."""
+    w, rec = _rebuild_window(comparing=True)
+
+    w.rebuild_derived_views(reselect=False)
+
+    assert rec.select == 0, "re-selected in compare mode (would collapse the comparison)"
+    assert "refresh" in w.plots.calls, "compare overlay (plots.refresh) not refreshed"
+    # The rest of the union is still refreshed regardless of the selection branch.
+    assert "refresh" in w.table.calls and "set_corners" in w.map.calls
+    assert "refresh" in w.consistency.calls and rec.driving == 1 and rec.sector == 1
+    print("test_rebuild_derived_views_compare_branch_refreshes_plots_not_reselect OK")
+
+
+def test_apply_reference_change_now_refreshes_corners_and_driving_channels():
+    """THE FIX: _apply_reference_change previously OMITTED map.set_corners() and
+    _refresh_driving_channels(), so a reference load/clear left the per-corner map markers and the
+    brake/coast glyphs stale even though the reference changes the per-corner Δ baseline. Routing
+    it through rebuild_derived_views means both are now invoked — proven here on the spied window."""
+    w, rec = _rebuild_window(comparing=False)
+
+    w._apply_reference_change()
+
+    # The drift fix: these two were NOT called by the old reference path; they must be now.
+    assert "set_corners" in w.map.calls, "FIX REGRESSED: reference path skips map.set_corners"
+    assert rec.driving == 1, "FIX REGRESSED: reference path skips _refresh_driving_channels"
+    # And it still does everything the old path did (plus updates the reference status chip last).
+    assert "refresh" in w.table.calls and "refresh_overlays" in w.map.calls
+    assert "refresh" in w.corner_table.calls and "refresh" in w.consistency.calls
+    assert rec.select == 1 and rec.sector == 1
+    assert rec.update_ref == 1, "_update_reference_status not called after the rebuild"
+    print("test_apply_reference_change_now_refreshes_corners_and_driving_channels OK")
+
+
+def test_apply_reference_change_keeps_pinned_pair_while_comparing():
+    """While comparing, a reference change must refresh the pinned [A,B] overlay (plots.refresh),
+    NOT re-select — reselect is gated on not self._comparing()."""
+    w, rec = _rebuild_window(comparing=True)
+
+    w._apply_reference_change()
+
+    assert rec.select == 0, "reference change re-selected while comparing"
+    assert "refresh" in w.plots.calls, "compare overlay not refreshed on reference change"
+    # The drift fix still holds in the compare branch.
+    assert "set_corners" in w.map.calls and rec.driving == 1
+    assert rec.update_ref == 1
+    print("test_apply_reference_change_keeps_pinned_pair_while_comparing OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
