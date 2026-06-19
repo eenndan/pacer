@@ -13,9 +13,15 @@ These exercise the load-bearing pure logic directly on synthetic data:
     (not purple — the purple is the per-sector best cells') values + defining tooltips, show
     fmt_time'd session values, survive a sort, and update on refresh() after a (simulated)
     timing-line move.
-  * Auto-follow — `StudioWindow._follow_current_lap`: the speed+delta charts switch to the
-    playhead's lap (vs best) only on a lap-change EDGE; None (lead-in) HOLDS the last lap; the
-    table re-select uses the programmatic (no-seek) path so it never fights playback.
+  * Auto-follow — `CentralView._follow_current_lap` (F7: moved off StudioWindow onto the
+    session-scoped central view): the speed+delta charts switch to the playhead's lap (vs best)
+    only on a lap-change EDGE; None (lead-in) HOLDS the last lap; the table re-select uses the
+    programmatic (no-seek) path so it never fights playback.
+  * F7 atomic CentralView swap — `StudioWindow._build_ui`: a reload disposes the OLD view (its
+    VideoView.stop_all) BEFORE building + swapping in a fresh CentralView, the persistent ~30 Hz
+    tick timer is created ONCE and REUSED across the swap (not duplicated), and the window chrome
+    (_video_do) resolves to the NEW view's video — proven on a fake-CentralView window with no
+    pacer / real panels.
 Run: python tests/test_studio_features.py
 """
 import math
@@ -593,15 +599,17 @@ class _Recorder:
 
 
 def _follow_window(best_lap):
-    """A StudioWindow built without __init__ (no Qt/pacer), with the collaborators the
+    """A CentralView built without __init__ (no Qt/pacer), with the collaborators the
     auto-follow logic touches stubbed by a recorder, so `_follow_current_lap` runs unchanged.
 
-    F5: the auto-follow cursor now lives on a shared PlaybackState (`w._playback.followed_lap`)
-    instead of a loose `w._playback.followed_lap` attribute — seed one here for the __new__'d window."""
-    from studio.app import StudioWindow  # local import: keeps the F1/F5 tests pacer-free
+    F7: the per-frame auto-follow + selection logic moved off StudioWindow onto CentralView (which
+    now OWNS the session-scoped panels + the shared cursor); the method body is byte-identical, so
+    these tests construct the view that owns it. F5: the auto-follow cursor lives on a shared
+    PlaybackState (`w._playback.followed_lap`) — seed one here for the __new__'d view."""
+    from studio.central_view import CentralView  # local import: keeps the F1/F5 tests pacer-free
     from studio.playback_state import PlaybackState
 
-    w = StudioWindow.__new__(StudioWindow)
+    w = CentralView.__new__(CentralView)
     rec = _Recorder()
     w._playback = PlaybackState()  # followed_lap starts None
     w.table = rec
@@ -621,14 +629,15 @@ def test_select_lap_seeks_into_lap_despite_ms_quantization():
     land just before the (contiguous) boundary and resolve to the previous lap. Asserts the
     seeded `_followed_lap` and the lap resolved from the QUANTIZED seek position both equal the
     clicked lap — the fix for 'clicking a lap selects a different lap'."""
-    from studio.app import StudioWindow
+    from studio.central_view import CentralView
     from studio.playback_state import PlaybackState
 
     starts = [10.0, 80.000005, 150.000166, 220.000714]  # contiguous; non-ms-aligned boundaries
     sess = _bare_session_for_lap_at_time(starts, end=290.0, valid=[0, 1, 2, 3])
     sess.best_lap_id = lambda: 0
 
-    w = StudioWindow.__new__(StudioWindow)
+    # F7: _on_laps_selected (with its seek-into-lap nudge) is now owned by CentralView.
+    w = CentralView.__new__(CentralView)
     w.session = sess
     w._playback = PlaybackState()  # F5: auto-follow cursor lives on the shared PlaybackState
     rec = _Recorder()
@@ -728,28 +737,31 @@ class _StubConsistency:
 
 def test_consistency_panel_hidden_by_default_and_toggle_refreshes():
     """F6: the consistency strip is HIDDEN by default and the View toggle shows it (refreshing its
-    stats) / hides it again. Mirrors _build_ui's default-hide + _on_consistency_toggled exactly:
-    the default flag is False, applying it hides the panel, and toggling on refreshes + shows."""
-    from studio.app import StudioWindow
+    stats) / hides it again. F7: the show/hide + stats-refresh body moved onto CentralView
+    (set_consistency_visible / _apply_consistency_visible); the persistent View toggle on the window
+    just records the choice on the window and delegates here. This drives the view method directly:
+    the build-time default-hide (refresh=False) then the toggle (refresh iff showing)."""
+    from studio.central_view import CentralView
 
-    w = StudioWindow.__new__(StudioWindow)
-    # The window default (set in __init__): the panel is hidden until the View toggle turns it on.
+    w = CentralView.__new__(CentralView)
+    # The window default (passed into the view at construction): the panel is hidden until the View
+    # toggle turns it on.
     w._consistency_visible = False
     panel = _StubConsistency()
     w.consistency = panel
-    # _build_ui applies the flag to the freshly-built (shown) panel:
-    panel.setVisible(w._consistency_visible)
+    # __init__ applies the flag to the freshly-built (shown) panel via _apply_consistency_visible:
+    w._apply_consistency_visible(refresh=False)
     assert panel.isVisible() is False, "consistency panel must be hidden by default"
     assert panel.refreshed == 0
 
-    # Toggle ON via the real handler: it refreshes the stats then shows the panel.
-    w._on_consistency_toggled(True)
+    # Toggle ON via the real (moved) handler: it refreshes the stats then shows the panel.
+    w.set_consistency_visible(True)
     assert w._consistency_visible is True
     assert panel.isVisible() is True
     assert panel.refreshed == 1, "showing must refresh the stats"
 
     # Toggle OFF: hidden again, no extra refresh.
-    w._on_consistency_toggled(False)
+    w.set_consistency_visible(False)
     assert w._consistency_visible is False
     assert panel.isVisible() is False
     assert panel.refreshed == 1
@@ -777,13 +789,18 @@ class _ViewSpy:
 
 
 def _rebuild_window(comparing=False):
-    """A StudioWindow built WITHOUT __init__ (no Qt/pacer), with every derived-view collaborator
+    """A CentralView built WITHOUT __init__ (no Qt/pacer), with every derived-view collaborator
     replaced by a _ViewSpy and the two leaf refresh helpers (_refresh_driving_channels /
-    _refresh_sector_lines) + _select_default replaced by call counters. rebuild_derived_views and
-    _apply_reference_change run UNCHANGED on top of these spies."""
-    from studio.app import StudioWindow
+    _refresh_sector_lines) + _select_default replaced by call counters, so the SHARED rebuild seam
+    (rebuild_derived_views) runs UNCHANGED on top of these spies.
 
-    w = StudioWindow.__new__(StudioWindow)
+    F7: the rebuild seam + the derived-view panels moved off StudioWindow onto CentralView (which
+    now owns them); the seam body is byte-identical. _apply_reference_change still lives on the
+    WINDOW (a persistent Analyse-menu action) but now delegates the refresh to self.view's seam — so
+    the two reference tests below wrap the returned spied view in a StudioWindow via _ref_window."""
+    from studio.central_view import CentralView
+
+    w = CentralView.__new__(CentralView)
     w.table = _ViewSpy()
     w.corner_table = _ViewSpy()
     w.map = _ViewSpy()
@@ -794,12 +811,8 @@ def _rebuild_window(comparing=False):
     w.compare = SimpleNamespace(active=comparing)
 
     # session.corner_map_markers is the one session read the seam makes directly (set_corners arg);
-    # stub it so no pacer is needed. has_reference()/reference_*() back _update_reference_status.
-    w.session = SimpleNamespace(
-        corner_map_markers=lambda: [],
-        has_reference=lambda: False,
-        reference_session=lambda: None,
-    )
+    # stub it so no pacer is needed.
+    w.session = SimpleNamespace(corner_map_markers=lambda: [])
 
     # Replace the two leaf helpers + the selection step with counters so we can assert each was
     # invoked exactly through the seam (the real bodies push to plots/map and are tested elsewhere).
@@ -814,12 +827,32 @@ def _rebuild_window(comparing=False):
     def _select():
         rec.select += 1
 
-    def _update_ref():
-        rec.update_ref += 1
-
     w._refresh_driving_channels = _driving
     w._refresh_sector_lines = _sector
     w._select_default = _select
+    return w, rec
+
+
+def _ref_window(comparing=False):
+    """A StudioWindow built WITHOUT __init__ whose `.view` is a spied CentralView (from
+    _rebuild_window), so the WINDOW's _apply_reference_change — which delegates the derived-view
+    refresh to self.view.rebuild_derived_views and ends in self._update_reference_status — runs
+    unchanged. _update_reference_status is replaced by a counter (its real body drives the
+    persistent menu + chip, tested via the smoke harness)."""
+    from studio.app import StudioWindow
+
+    view, rec = _rebuild_window(comparing=comparing)
+    w = StudioWindow.__new__(StudioWindow)
+    w.view = view
+    # has_reference()/reference_*() back the real _update_reference_status; the window keeps `session`.
+    w.session = SimpleNamespace(
+        has_reference=lambda: False,
+        reference_session=lambda: None,
+    )
+
+    def _update_ref():
+        rec.update_ref += 1
+
     w._update_reference_status = _update_ref
     return w, rec
 
@@ -871,17 +904,17 @@ def test_apply_reference_change_now_refreshes_corners_and_driving_channels():
     """THE FIX: _apply_reference_change previously OMITTED map.set_corners() and
     _refresh_driving_channels(), so a reference load/clear left the per-corner map markers and the
     brake/coast glyphs stale even though the reference changes the per-corner Δ baseline. Routing
-    it through rebuild_derived_views means both are now invoked — proven here on the spied window."""
-    w, rec = _rebuild_window(comparing=False)
+    it through rebuild_derived_views means both are now invoked — proven here on the spied view."""
+    w, rec = _ref_window(comparing=False)
 
     w._apply_reference_change()
 
     # The drift fix: these two were NOT called by the old reference path; they must be now.
-    assert "set_corners" in w.map.calls, "FIX REGRESSED: reference path skips map.set_corners"
+    assert "set_corners" in w.view.map.calls, "FIX REGRESSED: reference path skips map.set_corners"
     assert rec.driving == 1, "FIX REGRESSED: reference path skips _refresh_driving_channels"
     # And it still does everything the old path did (plus updates the reference status chip last).
-    assert "refresh" in w.table.calls and "refresh_overlays" in w.map.calls
-    assert "refresh" in w.corner_table.calls and "refresh" in w.consistency.calls
+    assert "refresh" in w.view.table.calls and "refresh_overlays" in w.view.map.calls
+    assert "refresh" in w.view.corner_table.calls and "refresh" in w.view.consistency.calls
     assert rec.select == 1 and rec.sector == 1
     assert rec.update_ref == 1, "_update_reference_status not called after the rebuild"
     print("test_apply_reference_change_now_refreshes_corners_and_driving_channels OK")
@@ -889,17 +922,126 @@ def test_apply_reference_change_now_refreshes_corners_and_driving_channels():
 
 def test_apply_reference_change_keeps_pinned_pair_while_comparing():
     """While comparing, a reference change must refresh the pinned [A,B] overlay (plots.refresh),
-    NOT re-select — reselect is gated on not self._comparing()."""
-    w, rec = _rebuild_window(comparing=True)
+    NOT re-select — reselect is gated on not self.view._comparing()."""
+    w, rec = _ref_window(comparing=True)
 
     w._apply_reference_change()
 
     assert rec.select == 0, "reference change re-selected while comparing"
-    assert "refresh" in w.plots.calls, "compare overlay not refreshed on reference change"
+    assert "refresh" in w.view.plots.calls, "compare overlay not refreshed on reference change"
     # The drift fix still holds in the compare branch.
-    assert "set_corners" in w.map.calls and rec.driving == 1
+    assert "set_corners" in w.view.map.calls and rec.driving == 1
     assert rec.update_ref == 1
     print("test_apply_reference_change_keeps_pinned_pair_while_comparing OK")
+
+
+# ----------------------------------------------------- F7: atomic CentralView swap
+class _FakeView:
+    """A stand-in CentralView for the swap test: records dispose() (the pre-swap teardown) and
+    carries a `video` so _video_do has something to resolve to. No Qt/pacer — a plain object the
+    fake setCentralWidget below just stores."""
+    n_built = 0
+
+    def __init__(self, *_a, **_k):
+        type(self).n_built += 1
+        self.disposed = False
+        self.video = SimpleNamespace(name=f"video#{type(self).n_built}")
+
+    def dispose(self):
+        self.disposed = True
+
+
+def test_build_ui_atomic_swap_disposes_old_reuses_timer_and_rechromes():
+    """F7: _build_ui must, on a reload, (1) DISPOSE the outgoing view before building the new one,
+    (2) install a FRESH CentralView as self.view via setCentralWidget, (3) create the ~30 Hz tick
+    timer ONCE and REUSE it across the swap (never a second timer), and (4) leave the window chrome
+    (_video_do) resolving to the NEW view's video. Driven on a StudioWindow.__new__'d window with
+    CentralView + the chrome-seed helpers stubbed, so no pacer / real panels / event loop are
+    needed — only the swap MECHANICS are under test."""
+    from PySide6.QtWidgets import QMainWindow
+
+    import studio.app as appmod
+    from studio.app import StudioWindow
+
+    # QMainWindow.__init__ is needed so QTimer(self) (parented to the window) constructs; we still
+    # SKIP StudioWindow.__init__ (no real load / menus / shortcuts).
+    w = StudioWindow.__new__(StudioWindow)
+    QMainWindow.__init__(w)
+    w._tick_timer = None
+    w.session = object()
+    w._paths = ["/x/REC.MP4"]
+    w._sidecar_path = None
+    w._consistency_visible = False
+    # Stub the chrome-seed methods _build_ui calls after the swap (they touch the real menu / status
+    # bar, irrelevant to the swap mechanics).
+    w._sync_full_recording_action = lambda: None
+    w._update_reference_status = lambda: None
+    # Record setCentralWidget so we can assert the NEW view is what gets installed each build.
+    installed = []
+    w.setCentralWidget = lambda widget: installed.append(widget)
+
+    # Swap the real CentralView for the fake, and count QTimer constructions so we can prove the
+    # timer is built exactly once across both builds.
+    orig_view_cls, orig_timer_cls = appmod.CentralView, appmod.QTimer
+    timers_made = []
+
+    class _CountingTimer(orig_timer_cls):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            timers_made.append(self)
+
+    appmod.CentralView = _FakeView
+    appmod.QTimer = _CountingTimer
+    _FakeView.n_built = 0
+    try:
+        # FIRST build: no old view to dispose; a new view installed; the timer created once + started.
+        w._build_ui()
+        v1 = w.view
+        assert isinstance(v1, _FakeView) and installed[-1] is v1, "first view not installed"
+        assert _FakeView.n_built == 1
+        assert len(timers_made) == 1 and w._tick_timer is timers_made[0], "timer not created once"
+        assert w._tick_timer.isActive(), "tick timer not started"
+        t1 = w._tick_timer
+        # _video_do resolves to v1's video.
+        seen = {}
+        w._video_do(lambda vid: seen.__setitem__("v", vid))
+        assert seen["v"] is v1.video, "_video_do did not resolve to the first view's video"
+
+        # RELOAD: the old view is disposed BEFORE the new is built, a fresh view is installed, and
+        # the SAME timer is reused (no second QTimer).
+        w._build_ui()
+        v2 = w.view
+        assert v2 is not v1, "reload reused the same view object"
+        assert v1.disposed, "old view NOT disposed before the swap"
+        assert not v2.disposed, "new view was disposed"
+        assert installed[-1] is v2 and _FakeView.n_built == 2, "new view not installed"
+        assert len(timers_made) == 1 and w._tick_timer is t1, "tick timer was REPLACED on reload"
+        # _video_do now resolves to v2's video (the new view) — the chrome re-homed atomically.
+        seen.clear()
+        w._video_do(lambda vid: seen.__setitem__("v", vid))
+        assert seen["v"] is v2.video, "_video_do still resolves to the disposed view's video"
+    finally:
+        appmod.CentralView, appmod.QTimer = orig_view_cls, orig_timer_cls
+    print("test_build_ui_atomic_swap_disposes_old_reuses_timer_and_rechromes OK")
+
+
+# F7: _tick on the window is a thin delegate to the live view's tick() — assert the delegation +
+# the defensive no-view guard, without a real view.
+def test_tick_delegates_to_live_view_and_guards_no_view():
+    """The persistent window timer's slot (_tick) must delegate to self.view.tick() and be a safe
+    no-op before the first successful load (no view yet)."""
+    from studio.app import StudioWindow
+
+    w = StudioWindow.__new__(StudioWindow)
+    # No view yet (failed/absent first load): _tick must not raise.
+    w._tick()  # no exception == pass
+    # With a view, it delegates exactly once per call.
+    calls = {"n": 0}
+    w.view = SimpleNamespace(tick=lambda: calls.__setitem__("n", calls["n"] + 1))
+    w._tick()
+    w._tick()
+    assert calls["n"] == 2, calls
+    print("test_tick_delegates_to_live_view_and_guards_no_view OK")
 
 
 if __name__ == "__main__":

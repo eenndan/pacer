@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import QBuffer, QEvent, QIODevice, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QBuffer, QIODevice, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,32 +22,20 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressDialog,
-    QPushButton,
-    QSizePolicy,
-    QSplitter,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from . import chapters, export_data, export_video, library, sidecar, theme
+from .central_view import CentralView
 from .coaching_panel import OpportunitiesDialog
-from .compare_controller import CompareController
-from .consistency_panel import ConsistencyPanel
 from .help_dialog import AboutDialog, ShortcutsDialog
-from .lap_table import CornerTable, LapTable
 from .library_dialog import LibraryDialog
-from .map_view import MapView
-from .playback_state import PlaybackState
-from .plots_view import PlotsView
-from .scrub_controller import ScrubController
 from .session import DEFAULT_SAMPLE, Session, fmt_time
-from .video_view import VideoView
 
 
 class _VideoExportWorker(QThread):
@@ -105,10 +93,15 @@ class StudioWindow(QMainWindow):
     def __init__(self, paths: list[str], full: bool = False):
         super().__init__()
         self.resize(1440, 900)
-        self._tick_timer = None  # created on the first _build_ui; reused across reloads
+        # F7: the ONE session-scoped central view (a fresh CentralView per load, swapped in
+        # atomically by _build_ui). None until the first successful load — the persistent chrome
+        # (shortcuts / tick / menus) all guard on it being present and reach session-scoped widgets
+        # THROUGH it (self.view.video / self.view.session / …), the single swap point.
+        self.view = None
+        self._tick_timer = None  # created on the first _build_ui; reused across reloads (window-owned)
         # F6: the consistency panel is HIDDEN by default; the View menu toggle (built below) flips
-        # this. Held on the window (not the rebuilt central widget) so the user's choice survives a
-        # reload. The check item + the panel's visibility are re-synced to it in _build_ui.
+        # this. Held on the WINDOW (not the swapped-in central view) so the user's choice survives a
+        # reload; it is passed into each fresh CentralView, which applies it to the new panel.
         self._consistency_visible = False
         self._build_menu()
         self._build_shortcuts()
@@ -121,10 +114,11 @@ class StudioWindow(QMainWindow):
 
     # ------------------------------------------------------------------ loading
     def _load(self, paths: list[str]):
-        """Load (or reload) the session for `paths` and (re)build the whole UI + wiring. Used at
-        startup and by the "Load full recording" action (which reloads with the discovered
-        sibling chapters). Tearing the central widget down and rebuilding keeps the panels — each
-        of which captures `session` at construction — simple and free of stale references."""
+        """Load (or reload) the session for `paths`, then (F7) build a FRESH CentralView and swap it
+        in atomically (_build_ui). Used at startup and by the "Load full recording" action (which
+        reloads with the discovered sibling chapters). The window keeps the load orchestration +
+        `session`/`_paths`; each panel captures `session` at construction, so building a brand-new
+        view per load keeps them simple and free of stale references."""
         print("studio: loading telemetry…", flush=True)
         # Kill the "black-void launch": Session.load is a ~4 s SYNCHRONOUS call, and on the first
         # launch it runs before the window is ever shown — so the user stares at nothing for seconds
@@ -262,518 +256,63 @@ class StudioWindow(QMainWindow):
             placeholder.setWordWrap(True)
             self.setCentralWidget(placeholder)
 
-    @staticmethod
-    def _panel(title: str, *contents) -> QWidget:
-        """Wrap panel content under a flush "section header" label (the `.PanelHeader` QSS role:
-        small uppercase dimmed strip). Each `contents` entry is either a widget (added with no
-        stretch) or a `(widget, stretch)` tuple. Purely a header + tight container — it changes
-        no behaviour and adds no per-tick cost."""
-        panel = QWidget()
-        lay = QVBoxLayout(panel)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-        header = QLabel(title)
-        header.setProperty("role", "PanelHeader")
-        lay.addWidget(header)
-        for c in contents:
-            if isinstance(c, tuple):
-                lay.addWidget(c[0], c[1])
-            else:
-                lay.addWidget(c)
-        return panel
-
-    @staticmethod
-    def _header_bar(*segments) -> QWidget:
-        """A flush header strip styled like `.PanelHeader` (surface bg, bottom hairline) that holds
-        WIDGETS rather than plain text — used for the map header (title + right-aligned sector
-        buttons) and the charts' consolidated bar (label · readout · toggle). Each `segments` entry
-        is a widget, an int stretch (inserts `addStretch(n)`), or a `(widget, stretch)` tuple. The
-        bar carries the `PanelHeader` role so its background/border/typography match the plain
-        headers; child widgets keep their own QSS (buttons, combo, the #DiffBox)."""
-        bar = QWidget()
-        bar.setProperty("role", "PanelHeader")
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(8, 4, 8, 4)
-        row.setSpacing(8)
-        for seg in segments:
-            if isinstance(seg, int):
-                row.addStretch(seg)
-            elif isinstance(seg, tuple):
-                row.addWidget(seg[0], seg[1])
-            else:
-                row.addWidget(seg)
-        return bar
-
-    @staticmethod
-    def _headered(header: QWidget, *contents) -> QWidget:
-        """Stack a custom `header` widget above panel `contents` (same tight container as `_panel`
-        but with a widget header instead of a text label). Each `contents` entry is a widget or a
-        `(widget, stretch)` tuple."""
-        panel = QWidget()
-        lay = QVBoxLayout(panel)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-        lay.addWidget(header)
-        for c in contents:
-            if isinstance(c, tuple):
-                lay.addWidget(c[0], c[1])
-            else:
-                lay.addWidget(c)
-        return panel
-
     def _build_ui(self):
-        # F4: this was the single hardest method in the app to change safely — a ~230-line block that
-        # tore down the old video, built every panel, relocated panel chrome into header strips, laid
-        # out the 2x2 nested splitter grid, wired ~15 cross-panel signals, constructed the
-        # compare/scrub controllers, and seeded default state, all positionally coupled. It's now a
-        # slim ORCHESTRATOR over focused private helpers called in the SAME ORDER; behaviour is
-        # byte-identical on first build AND on every reload (File ▸ Open / Load full recording).
-        #
-        # On a reload ("Load full recording"), tear down the previous VideoView's pane(s) — stop
-        # the decoder AND close the g-meter overlay window — so neither lingers after the old
-        # widget tree is replaced by setCentralWidget below.
-        old_video = getattr(self, "video", None)
-        if old_video is not None:
-            old_video.stop_all()
-        # 1) build every panel widget + its header strip + the table stack; 2) assemble the splitter
-        # grid + maximize filters + setCentralWidget; 3) wire the cross-panel signals; 4) build +
-        # cross-inject the compare/scrub controllers. Each step leaves the same self.* attributes the
-        # rest of the window depends on (video/map/plots/table/.../the three splitters).
-        self._construct_panels()
-        self._layout_panels()
-        self._wire_signals()
-        self._build_controllers()
+        """F7 atomic swap: build a FRESH CentralView for the just-loaded session and install it as
+        the central widget in one move. This replaced the old ~230-line in-place teardown/rebuild
+        (`_construct_panels`/`_layout_panels`/`_wire_signals`/`_build_controllers` + the maximize
+        machinery) — all of that session-scoped construction now lives atomically inside
+        CentralView.__init__, so there is no longer a window-side rebuild that can leave a reference
+        stale mid-flight. The window keeps ONLY the persistent chrome work here (the tick timer, the
+        statusbar ref-chip, the "Load full recording" enablement) which lives on the QMainWindow and
+        survives the swap.
 
-        # --- seed default state (must run after the panels + controllers exist) ---
-        # Build the full set of session-derived views through the shared seam (same sequence a
-        # re-segmentation / reference change uses): selects the two fastest laps, draws the map
-        # overlays + corners, the corner/consistency panels, the driving channels, and any sector
-        # guides present on launch (none by default). Replaces the old partial inline set
-        # (_select_default + _refresh_sector_lines).
-        self.rebuild_derived_views(reselect=True)
-        # Poster frame: seek the PRIMARY pane a hair into the best lap WHILE PAUSED so the (largest)
-        # video quadrant shows a real frame at launch instead of a black void, and the map marker /
-        # charts / readout are all populated and consistent with that frame. A paused seek decodes
-        # and presents the frame without playing audio. Done after the rebuild above so the chart
-        # selection is already in place. Skipped cleanly when there's no valid lap (poster_seek
-        # checks best_lap_id()), so a 0-lap session still launches.
-        self._poster_seek()
+        Reload ordering preserved EXACTLY: dispose the OUTGOING view FIRST (its VideoView.stop_all
+        stops the decoder + closes the g-meter overlay window) BEFORE the new view is constructed and
+        swapped in — the same "old video stop_all + g-meter overlay close before the central widget
+        is replaced" the old reload did. CentralView.__init__ then runs the identical seed sequence
+        (rebuild_derived_views(reselect=True) → poster seek → consistency-visible re-sync); the
+        chrome-side seed (ref-chip + _sync_full_recording_action + _update_reference_status) runs
+        below, after the swap, just as before."""
+        old_view = getattr(self, "view", None)
+        if old_view is not None:
+            old_view.dispose()  # stop the old decoder + close its g-meter overlay before the swap
+        # Build the new session-scoped view atomically (panels + controllers + PlaybackState + the
+        # derived-views seed + poster seek all happen in its __init__), then swap it in as ONE unit.
+        # The window keeps the canonical session / _paths; the view holds a read alias + the paths
+        # (banner) + the sidecar path (timing-line save), per the documented session/_paths split.
+        self.view = CentralView(self.session, self._paths, self._sidecar_path,
+                                self._consistency_visible, parent=self)
+        self.setCentralWidget(self.view)
+        # One ~30 Hz tick timer for the WINDOW's lifetime; created once and REUSED across reloads (a
+        # second timer would double the tick rate). It delegates to the current view's tick() — the
+        # swap above just re-points which view that is. Kept on the persistent window (not the view)
+        # so it is never torn down by a reload.
+        if self._tick_timer is None:
+            self._tick_timer = QTimer(self)
+            self._tick_timer.setInterval(33)  # ~30 Hz
+            self._tick_timer.timeout.connect(self._tick)
+            self._tick_timer.start()
+
         self._sync_full_recording_action()
         # F7: the permanent status-bar chip showing which cross-recording reference is active.
-        # Created ONCE (it lives on the persistent QMainWindow status bar, which _build_ui's
-        # central-widget teardown doesn't touch) and hidden until a reference is loaded. A
-        # primary reload builds a fresh Session with no reference, so re-sync (hide) it here.
+        # Created ONCE (it lives on the persistent QMainWindow status bar, which the central-widget
+        # swap doesn't touch) and hidden until a reference is loaded. A primary reload builds a fresh
+        # Session with no reference, so re-sync (hide) it here.
         if getattr(self, "_ref_chip", None) is None:
             self._ref_chip = QLabel("")
             self._ref_chip.setProperty("role", "BarLabel")
             self.statusBar().addPermanentWidget(self._ref_chip)
         self._update_reference_status()
 
-    # ----------------------------------------------------- _build_ui phase 1: panels
-    def _construct_panels(self):
-        """Build every panel widget (video/map/plots/table/corner_table/consistency/diff_box +
-        the chapter banner), relocate the map/charts/table chrome into WIDGET header strips, and
-        assemble the four panel containers (self._video_panel/_table_panel/_map_panel/_plots_panel)
-        that _layout_panels then drops into the splitter grid. Sets every panel-level self.*
-        attribute the rest of the window reads. Pure construction — no layout, no cross-panel
-        signal wiring (those are _layout_panels / _wire_signals)."""
-        # The VideoView is driven by the session's ChapterMap so the slider spans the whole
-        # session and playback switches sources / auto-advances across chapters.
-        self.video = VideoView(self.session.chapters or self.session.video_path)
-        # g-meter overlay: label its source (accl/gps) and only offer the toggle when a g signal
-        # was actually computed (IMU present). The overlay itself is pacer-free — g comes from
-        # session via self.video.set_g at the tick.
-        self.video.set_gmeter_source(self.session.gmeter_source())
-        self.video.gmeter_btn.setEnabled(self.session.has_gmeter)
-        if not self.session.has_gmeter:
-            self.video.gmeter_btn.setToolTip("No accelerometer data in this recording")
-        self.map = MapView(self.session)
-        # Corner labels on the map (F-corner): pushed from here so MapView stays a pure
-        # consumer of (label, x, y, direction) tuples — the model lives in session/corners.
-        self.map.set_corners(self.session.corner_map_markers())
-        self.plots = PlotsView(self.session)
-        self.table = LapTable(self.session)
-        # Corners mode (F-corner): a second table stacked under the same panel — rows = the
-        # detected corners for the selected lap (time, Δ vs best, apex/entry/exit speeds).
-        # The header toggle below flips the stack; Laps mode itself is untouched.
-        self.corner_table = CornerTable(self.session)
-        self._corner_lap: int | None = None  # the lap the Corners view describes
-
-        # Always-on Δ/speed readout for the CURRENT playback/scrub moment (Δ-to-best is the
-        # priority). Owned here (values come from session); it's the EMPHASIZED centre element of
-        # the charts' consolidated header bar (built below), so it never overlaps the curves.
-        # plots_view stays pacer-free — it knows nothing about this readout. Base styling
-        # (mono/tabular ~22px, transparent on the bar's surface) comes from the global QSS via
-        # objectName "DiffBox"; only the Δ-value COLOUR is driven per-tick.
-        self.diff_box = QLabel("Δ —    — km/h")
-        self.diff_box.setObjectName("DiffBox")
-        self.diff_box.setAlignment(Qt.AlignCenter)
-        self.diff_box.setFont(theme.mono_font(theme.HERO, theme.W_SEMIBOLD))
-        self._diff_colour = None  # last applied Δ-value colour (per-tick recolor guard)
-
-        # Multi-chapter status banner above the video: shows the recording label and, for a
-        # chaptered session, which chapter is currently playing (updated via chapterChanged).
-        # Slim themed strip via objectName "ChapterBanner" (surface bg, dimmed, accent left rule).
-        self.chapter_label = QLabel("")
-        self.chapter_label.setObjectName("ChapterBanner")
-        self.chapter_label.setAlignment(Qt.AlignCenter)
-        self._seam_loading = False  # True while a chapter is reopening at a seam (banner hint)
-        self._update_chapter_label(self.video.current_chapter())
-        self.video.chapterChanged.connect(self._update_chapter_label)
-        # Brief, clearly-styled "loading next chapter…" hint on the banner during a seam reopen, so a
-        # momentary hitch reads as intentional rather than a freeze. Reuses the ChapterBanner strip.
-        self.video.seamLoading.connect(self._on_seam_loading)
-        # Only show the banner for a real (>1 chapter) chaptered session; a single file is
-        # exactly as before (no banner clutter).
-        self.chapter_label.setVisible(self.video.is_multi)
-
-        # Each panel gets a flush "section header" strip (uppercase, dimmed) above its content.
-        # The video panel stacks the chapter banner under its plain text header; the table is
-        # wrapped fresh. The MAP and PLOTS panels use WIDGET header bars (below) so the right
-        # column's chrome collapses into the headers instead of full-width rows between the panels.
-        video_panel = self._panel("VIDEO", self.chapter_label, (self.video, 1))
-
-        # TABLE panel: a widget header bar (like the map's) holding the LAPS/CORNERS mode
-        # label + the Corners toggle, above a QStackedWidget of the two tables. Laps mode
-        # (index 0, the default) is the untouched LapTable; toggling to Corners and back
-        # leaves it byte-identical (the stack only changes which page is visible).
-        self._table_label = QLabel("LAPS")
-        self._table_label.setProperty("role", "BarLabel")
-        self.corners_btn = QPushButton("Corners")
-        self.corners_btn.setCheckable(True)
-        self.corners_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        self.corners_btn.setToolTip(
-            "Per-corner analysis of the selected lap: time-in-corner, Δ vs the best lap, "
-            "apex/entry/exit speeds. Corners are detected from the track's own curvature.")
-        self.corners_btn.toggled.connect(self._on_corners_toggled)
-        self.table_stack = QStackedWidget()
-        self.table_stack.addWidget(self.table)         # index 0 — Laps (default)
-        self.table_stack.addWidget(self.corner_table)  # index 1 — Corners
-        table_header = self._header_bar(self._table_label, 1, self.corners_btn)
-        # F6: the compact collapsible CONSISTENCY strip under the lap table — lap-time trend
-        # sparkline + the top-5 inconsistent corners (ranked by σ × median loss). Clicking a
-        # corner row ring-highlights its apex on the map and does NOTHING else (read-only;
-        # no lap selection / seek). It owns its own header (with the collapse chevron), so
-        # it mounts as one widget below the table stack.
-        self.consistency = ConsistencyPanel(self.session)
-        self.consistency.corner_clicked.connect(self.map.highlight_corner)
-        # F6 default-hidden: the consistency strip is OFF by default (a real hide, not just
-        # collapsed) so the lap table owns the whole table panel — the View ▸ "Show consistency
-        # panel" check item (unchecked by default, wired in _build_menu) brings it back and refreshes
-        # its stats. Hidden via setVisible(False), which drops it from the table panel's layout
-        # entirely (the table stack keeps all the height), so the lap-table layout is intact.
-        self.consistency.setVisible(self._consistency_visible)
-        # Stop Consistency from crushing the lap table (the broken state: enabling it left ~1 lap
-        # row). Two guards: (1) the table stack gets a MIN HEIGHT of ~5 lap rows + header so it can
-        # never be squeezed below a usable size; (2) the table stack + the consistency strip share a
-        # VERTICAL SPLITTER (not a fixed-height child) so the strip is resizable — enabling it
-        # shrinks/scrolls the (max-capped, min-bounded) consistency strip, never the table. The
-        # splitter's stretch heavily favours the table; the consistency section keeps its compact
-        # default. A collapsed/hidden strip gives ALL the height back to the table, as before.
-        rows_h = self.table.table.verticalHeader().defaultSectionSize()
-        self.table_stack.setMinimumHeight(rows_h * 5 + 56)  # ~5 rows + column header + footer
-        table_body = QSplitter(Qt.Vertical)
-        table_body.addWidget(self.table_stack)
-        table_body.addWidget(self.consistency)
-        table_body.setStretchFactor(0, 1)   # the lap table takes any extra height
-        table_body.setStretchFactor(1, 0)   # the consistency strip keeps its compact size
-        table_body.setCollapsible(0, False)  # never collapse the lap table away
-        table_panel = self._headered(table_header, (table_body, 1))
-
-        # MAP header: title (left) + the rainbow-channel cycle, snap toggle and sector buttons
-        # (right-aligned, compact) — moved OFF the full-width row that used to sit between the
-        # map and the charts. Their handlers/signal wiring (re-segmentation, opt-in snap, the F3
-        # rainbow rebuild) live in MapView; this is just the mount point.
-        for b in (self.map.rainbow_btn, self.map.snap_btn,
-                  self.map.add_sector_btn, self.map.reset_sectors_btn):
-            b.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        map_label = QLabel("MAP")
-        map_label.setProperty("role", "BarLabel")
-        map_header = self._header_bar(map_label, 1, self.map.rainbow_btn, self.map.snap_btn,
-                                      self.map.add_sector_btn, self.map.reset_sectors_btn)
-        map_panel = self._headered(map_header, (self.map, 1))
-
-        # CHARTS consolidated bar (replaces the old separate panel-header row + full-width DiffBox
-        # row + the combo's own row): section label (left) · the emphasized Δ/speed readout
-        # (centre) · the x-mode toggle relocated from plots_view (right). The toggle keeps its
-        # modeChanged wiring; the readout keeps its per-tick recolor. ~2 rows of height reclaimed.
-        plots_label = QLabel("SPEED · Δ TO BEST")
-        plots_label.setProperty("role", "BarLabel")
-        self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0), 1, self.plots.x_mode_combo)
-        plots_panel = self._headered(plots_header, (self.plots, 1))
-
-        # Stash the four panel containers on the window: _layout_panels drops them into the splitter
-        # grid and the maximize routing maps a header back to its panel + outer column. A reload
-        # re-stashes the fresh widgets (the disposed tree's containers must never resolve).
-        self._video_panel = video_panel
-        self._table_panel = table_panel
-        self._map_panel = map_panel
-        self._plots_panel = plots_panel
-
-    # ----------------------------------------------------- _build_ui phase 2: layout
-    def _layout_panels(self):
-        """Assemble the 2x2 nested splitter grid from the panels _construct_panels built: a left
-        column (video over table), a right column (map over charts), and the main horizontal split,
-        each with its Phase 2 rebalanced sizes/stretch. Installs the double-click-to-maximize header
-        filters, seeds the maximize state, and setCentralWidget. Keeps the splitter refs
-        (self._main_splitter/_left_splitter/_right_splitter) the maximize code reads."""
-        video_panel = self._video_panel
-        table_panel = self._table_panel
-        map_panel = self._map_panel
-        plots_panel = self._plots_panel
-
-        # Rebalanced defaults — the #1 layout complaint was the inverted space/value ratio: the
-        # single VIDEO frame (the least information-dense panel) got the most area while the
-        # analytical charts (the product's core) were cramped. We give the analytical core room and
-        # leave the video clearly usable but not dominant. Left column = video over table, split
-        # ~52/48 so enabling Consistency has a healthy lap table to share (the video used to swallow
-        # ~66%); stretch factors keep that ratio on a vertical resize.
-        left = QSplitter(Qt.Vertical)
-        left.addWidget(video_panel)
-        left.addWidget(table_panel)
-        left.setStretchFactor(0, 52)
-        left.setStretchFactor(1, 48)
-        left.setSizes([440, 400])
-
-        # Right column: the charts (the analytical core) get the MAJORITY — map ~38% / charts ~62%.
-        # The map only needs enough to read the track clearly; every extra pixel goes to the curves.
-        right = QSplitter(Qt.Vertical)
-        right.addWidget(map_panel)
-        right.addWidget(plots_panel)
-        right.setStretchFactor(0, 38)
-        right.setStretchFactor(1, 62)
-        right.setSizes([320, 520])
-
-        # Main horizontal split: hand the analytical RIGHT column the larger share — left (video +
-        # table) ~40% / right (map + charts) ~60% — flipping the old video-biased 46/54. Stretch
-        # factors keep the ratio on a horizontal resize (so the charts, not the video, take the
-        # growth). The video stays comfortably readable at ~40% of a 1440-wide window.
-        main = QSplitter(Qt.Horizontal)
-        main.addWidget(left)
-        main.addWidget(right)
-        main.setStretchFactor(0, 40)
-        main.setStretchFactor(1, 60)
-        main.setSizes([576, 864])
-        self.setCentralWidget(main)
-
-        # Focus / maximize: double-clicking ANY panel's header strip toggles that quadrant to fill
-        # the window (collapse the other splitter sections) and double-clicking again restores the
-        # grid — "focus charts" / "focus video" for free, no new menus. The four panels + the
-        # splitters they live in are stashed on the window so the handler (a) survives the
-        # central-widget rebuild in _build_ui — a reload re-stashes fresh widgets — and (b) can map a
-        # header back to its panel + outer column. Each panel's header is the FIRST child added in
-        # _panel/_headered; we filter double-clicks on it. Any in-flight maximize is cleared on a
-        # rebuild so the new grid starts un-maximized with its fresh default sizes.
-        self._main_splitter = main
-        self._left_splitter = left
-        self._right_splitter = right
-        self._maximized_panel = None          # the currently-maximized panel, or None
-        self._saved_splitter_sizes = None     # (main, left, right) sizes captured at maximize
-        # Fresh routing map for THIS build's headers (a reload's old headers belong to the disposed
-        # tree and must not resolve); each _install_header_dblclick call adds one entry.
-        self._header_routes = {}
-        self._install_header_dblclick(video_panel, left, main)
-        self._install_header_dblclick(table_panel, left, main)
-        self._install_header_dblclick(map_panel, right, main)
-        self._install_header_dblclick(plots_panel, right, main)
-
-    # ----------------------------------------------------- _build_ui phase 3: signals
-    def _wire_signals(self):
-        """All the cross-panel signal/slot connections + the per-tick scaffolding they feed. Run
-        after the panels exist and the grid is mounted; the compare/scrub controllers (which also
-        wire signals) are built next in _build_controllers."""
-        # --- cross-panel wiring ---
-        # positionChanged fires in the video decode/present path; it must do almost nothing
-        # (just record the latest time). A steady ~30 Hz timer applies the map/plot/readout
-        # update off that path, so heavy repaints never starve frame presentation.
-        #
-        # F5: the per-frame playback / scrub / auto-follow cursor (latest_t, applied_t, followed_lap)
-        # lives in ONE shared PlaybackState object instead of three loose StudioWindow attributes +
-        # a callback web into the controllers. Construct it here (before _build_controllers, which
-        # hands the SAME instance to both controllers); they read/write it directly. Reuse the
-        # existing instance on a reload so any reference the controllers already hold stays valid —
-        # just reset its fields to the fresh-window defaults.
-        existing = getattr(self, "_playback", None)
-        if existing is None:
-            self._playback = PlaybackState()
-        else:
-            existing.latest_t = 0.0
-            existing.applied_t = None
-            existing.followed_lap = None
-        self.video.positionChanged.connect(self._on_position)
-        # One ~30 Hz tick timer for the window's lifetime; on reload reuse it (a second timer
-        # would double the tick rate and fire into the now-rebuilt panels).
-        if getattr(self, "_tick_timer", None) is None:
-            self._tick_timer = QTimer(self)
-            self._tick_timer.setInterval(33)  # ~30 Hz
-            self._tick_timer.timeout.connect(self._tick)
-            self._tick_timer.start()
-        # The map marker drag no longer emits a seek per mouse-move; the app's tick drains a
-        # coalesced ONE-per-tick seek via map.take_marker_seek() (see _tick).
-        self.map.timing_lines_changed.connect(self._on_lines)
-        self.table.laps_selected.connect(self._on_user_select)
-
-    # ----------------------------------------------------- _build_ui phase 4: controllers
-    def _build_controllers(self):
-        """Construct the CompareController + ScrubController, hand each the SHARED PlaybackState
-        (built in _wire_signals, above) + cross-inject them (each queries the other), and wire their
-        compare/scrub signals + per-tick feeds. Also wires the sector-line modeChanged hook, which the
-        original block ran here — AFTER the controllers — so the order is preserved exactly. Run last
-        in _build_ui's wiring phase, before the derived-views seed."""
-        # --- compare videos (Phase B) + plot-cursor scrub: the two heavy behavioural clusters ---
-        # The compare-mode per-tick + enter/exit orchestration and the lap-scoped scrub coalescing
-        # live in two injected, Qt-light, unit-testable collaborators (compare_controller.py /
-        # scrub_controller.py). StudioWindow constructs + wires them and forwards signals + the
-        # per-tick branches; the controllers OWN their state. Behaviour is byte-identical.
-        #
-        # Compare: two equal side-by-side video panes behind the explicit "Compare videos" toggle
-        # (OFF by default, enabled only with >=2 valid laps). The PRIMARY (left) pane keeps driving
-        # ALL telemetry exactly as today; the SECONDARY (right) pane is video-only. While compare
-        # is on, auto-follow's lap re-point is SUSPENDED (the controller freezes followed_lap on the
-        # SHARED PlaybackState) so the pinned panes/charts don't thrash across lap boundaries.
-        self.compare = CompareController(
-            self.session, self.video, self.plots, self.table,
-            playback=self._playback,  # F5: the shared cursor (reads applied_t, writes followed_lap)
-            select_default=self._select_default,
-            map_view=self.map,  # F4: the compare ghost (lap B's kart) on the track map
-            # F5: refresh the brake glyphs whenever the compared pair changes (both laps in
-            # compare; the current lap on exit) — reuses the compare machinery, no new sync.
-            on_pair_changed=self._refresh_driving_channels,
-        )
-        # Scrub: a fine, lap-scoped scrubber (the full-video slider stays). Dragging either plot
-        # cursor seeks the video WITHIN the current lap; plots_view emits the raw plot-x + which
-        # axis it came from and the controller converts it (via session) to a clamped media time,
-        # throttles the seek to <=1 per tick, pauses while dragging and resumes iff it was playing.
-        # In compare mode the drag is distance-locked across both panes.
-        self.scrub = ScrubController(
-            self.session, self.video, self.plots, self.map,
-            apply_readout=self._apply_readout,
-            playback=self._playback,  # F5: the shared cursor (reads + seeds applied_t on release)
-        )
-        # Mutually referential: scrub queries compare's on/off + pinned (A,B) for the distance-lock;
-        # compare bypasses its (t_a,t_b) early-out while a scrub drag is in flight.
-        self.compare.set_scrub(self.scrub)
-        self.scrub.set_compare(self.compare)
-
-        self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
-        # C8: feed the scrub slider its MoTeC-style lap-ruler ticks — every valid lap's start/end
-        # position on the GLOBAL clock, so the transport bar shows at a glance where each lap sits in
-        # the session. lap_window is (start, start+lap_time); the slider de-dups back-to-back
-        # boundaries that map to the same pixel. Re-fed on each (re)load with the freshly segmented laps.
-        bounds: list[float] = []
-        for lid in self.session.valid_lap_ids():
-            w = self.session.lap_window(lid)
-            if w is not None:
-                bounds.extend(w)
-        self.video.set_lap_ticks(bounds)
-        # D1: the global scrub slider + ←/→ arrows seek pane A only; in compare mode distance-lock
-        # the SAME move to pane B so the pair never desyncs. The hook self-guards on compare being
-        # active (fanout_seek_b no-ops outside compare), so wiring it once here is safe in single mode.
-        self.video.set_compare_seek_fanout(self.compare.fanout_seek_b)
-        self.video.compareToggled.connect(self.compare.on_toggled)
-        self.video.paneRepointRequested.connect(self.compare.on_pane_repoint)
-        self.plots.scrubStarted.connect(self.scrub.on_started)
-        self.plots.scrubMoved.connect(self.scrub.on_moved)
-        self.plots.scrubEnded.connect(self.scrub.on_ended)
-        # Auto-follow: the charts always show whichever lap the playhead is in (current vs best).
-        # When the playhead crosses into a NEW lap (playing OR scrubbing), the speed + delta
-        # charts switch to that lap, keeping the best lap as the reference overlay. We key off
-        # the playhead's lap, so a single O(1) edge check per tick (in _apply_readout) drives it;
-        # we only re-select on the actual lap CHANGE so it never thrashes. The followed lap is the
-        # `followed_lap` field of the shared PlaybackState (built + reset to None in _wire_signals,
-        # above, before this method runs); _select_default re-seeds it below.
-        # F2: keep the sector boundary guide lines on the charts in sync. plots_view stays
-        # pacer-free, so app computes the boundary x-positions via session for the current
-        # axis mode and pushes them; recompute when the mode flips (the positions' units change).
-        self.plots.modeChanged.connect(self._refresh_sector_lines)
-
-    # ----------------------------------------------------- panel focus / maximize
-    def _install_header_dblclick(self, panel: QWidget, column: QSplitter, main: QSplitter):
-        """Make a panel's HEADER strip double-click-to-maximize. The header is the first child of
-        the panel's layout (the `_panel` text label or the `_headered`/`_header_bar` widget — both
-        carry the `PanelHeader` role), so we install an event filter on it and route a double-click
-        to `_toggle_panel_maximized`. We remember each header's (panel, column, main) routing in a
-        per-build dict so eventFilter — one method for all four — knows which quadrant fired.
-
-        Rebuilt-safe: _build_ui re-seeds an empty `_header_routes` before calling this for the
-        fresh widgets each load, so a stale header from the disposed tree can never resolve.
-        Defensive: a header-less panel (shouldn't happen) is simply skipped."""
-        item = panel.layout().itemAt(0)
-        header = item.widget() if item is not None else None
-        if header is None:
-            return
-        self._header_routes[header] = (panel, column, main)
-        header.installEventFilter(self)
-
-    def eventFilter(self, obj, event):
-        """Catch a double-click on any registered panel header and toggle that panel's maximize.
-        Everything else passes through untouched (return the base implementation)."""
-        if (event.type() == QEvent.MouseButtonDblClick
-                and obj in getattr(self, "_header_routes", {})):
-            panel, _column, _main = self._header_routes[obj]
-            self._toggle_panel_maximized(panel)
-            return True
-        return super().eventFilter(obj, event)
-
-    def _toggle_panel_maximized(self, panel: QWidget):
-        """Toggle `panel` between filling the window and the normal 2x2 grid. MAXIMIZE: snapshot the
-        three splitters' current sizes, then collapse every section EXCEPT the one holding `panel` —
-        in its own column AND the main splitter's other column — so the panel takes the whole
-        central area. RESTORE (called on the maximized panel, or any panel while one is maximized):
-        put the snapshotted sizes back. Robust to a panel that isn't in the current grid (a no-op)
-        and to being driven programmatically (the verify harness calls this directly).
-
-        The saved sizes live on the WINDOW (not the rebuilt central widget); a fresh _build_ui
-        resets _maximized_panel to None, so a reload always starts from the un-maximized grid."""
-        routes = getattr(self, "_header_routes", {})
-        # Resolve the panel's owning COLUMN from its header route — the panel itself isn't a dict
-        # key, so scan the values (only four entries; trivial). The main splitter is read directly
-        # off self below, so we only need the column here.
-        column = None
-        for p, c, _m in routes.values():
-            if p is panel:
-                column = c
-                break
-        if column is None:  # panel not part of the current grid — nothing to do
-            return
-
-        if self._maximized_panel is panel:
-            # RESTORE: this panel is currently maximized → put the saved grid sizes back.
-            self._restore_splitter_sizes()
-            return
-        if self._maximized_panel is not None:
-            # A DIFFERENT panel is maximized → restore the grid first, then maximize this one fresh
-            # from the true (un-collapsed) sizes (so re-maximizing doesn't snapshot a collapsed grid).
-            self._restore_splitter_sizes()
-
-        # MAXIMIZE. Snapshot the live sizes so restore is exact, then drive each splitter so only the
-        # section(s) leading to `panel` keep height/width and the rest collapse to 0.
-        self._saved_splitter_sizes = (self._main_splitter.sizes(),
-                                      self._left_splitter.sizes(),
-                                      self._right_splitter.sizes())
-        in_left = column is self._left_splitter
-        # Main split: keep the column that holds `panel`, collapse the other to 0.
-        full_w = sum(self._main_splitter.sizes()) or self._main_splitter.width()
-        self._main_splitter.setSizes([full_w, 0] if in_left else [0, full_w])
-        # The owning column: keep the panel's section, collapse its sibling. video/map are index 0,
-        # table/charts are index 1 in their respective columns.
-        top_panels = (self._video_panel, self._map_panel)
-        full_h = sum(column.sizes()) or column.height()
-        column.setSizes([full_h, 0] if panel in top_panels else [0, full_h])
-        self._maximized_panel = panel
-
-    def _restore_splitter_sizes(self):
-        """Put the pre-maximize grid sizes back (the inverse of _toggle_panel_maximized's collapse)
-        and clear the maximized state. No-op when nothing is maximized / no snapshot exists."""
-        sizes = self._saved_splitter_sizes
-        if sizes is None:
-            return
-        self._main_splitter.setSizes(sizes[0])
-        self._left_splitter.setSizes(sizes[1])
-        self._right_splitter.setSizes(sizes[2])
-        self._maximized_panel = None
-        self._saved_splitter_sizes = None
+    def _tick(self):
+        """The persistent ~30 Hz timer's slot — delegates the per-frame drain/scrub/apply/compare
+        work to the CURRENT session-scoped view (CentralView.tick). The timer lives on the window
+        and is reused across reloads; only `self.view` changes on a swap, so this always drives the
+        live view. Defensive no-op before the first successful load (no view yet — a failed first
+        load leaves none)."""
+        view = getattr(self, "view", None)
+        if view is not None:
+            view.tick()
 
     # ----------------------------------------------------- menu bar / information architecture
     def _build_menu(self):
@@ -928,11 +467,12 @@ class StudioWindow(QMainWindow):
     def _build_shortcuts(self):
         """Window-level playback shortcuts: Space (play/pause), M (mute), G (g-meter overlay),
         C (compare mode). Created ONCE in __init__ and parented to the WINDOW, so they survive
-        every central-widget rebuild.
+        every central-view swap.
 
-        Handlers dereference `self.video` DYNAMICALLY (via _video_do) — _build_ui replaces the
-        VideoView on every reload (File ▸ Open… / Load full recording), so capturing the widget
-        at shortcut-creation time would leave the shortcuts driving a disposed player.
+        Handlers dereference the CURRENT video DYNAMICALLY (via _video_do → self.view.video) —
+        _build_ui swaps in a fresh CentralView (with a fresh VideoView) on every reload (File ▸
+        Open… / Load full recording), so capturing the widget at shortcut-creation time would leave
+        the shortcuts driving a disposed player.
 
         The checkable toggles (G / C) go through their QPushButton's click() so the button's
         checked state, icon and QSS stay in sync with the keyboard path, and a DISABLED button
@@ -958,12 +498,15 @@ class StudioWindow(QMainWindow):
         shortcut(Qt.Key_Question, self._show_shortcuts)
 
     def _video_do(self, fn):
-        """Run `fn` against the CURRENT VideoView, resolved at ACTIVATION time (not capture
-        time): _build_ui swaps self.video on reload. No-op before the first successful load
-        (a failed first load leaves no `video` attribute — the shortcuts must not crash)."""
-        video = getattr(self, "video", None)
-        if video is not None:
-            fn(video)
+        """Run `fn` against the CURRENT VideoView, resolved at ACTIVATION time (not capture time)
+        THROUGH the live central view: _build_ui swaps in a fresh CentralView (and thus a fresh
+        self.view.video) on reload. This is the generalised dynamic-resolution idiom — it now
+        resolves `self.view.video` (the single swap point) instead of a window-held `self.video`.
+        No-op before the first successful load (a failed first load leaves no `view` — the shortcuts
+        must not crash)."""
+        view = getattr(self, "view", None)
+        if view is not None:
+            fn(view.video)
 
     def keyPressEvent(self, event):
         """←/→ step the video ±1 s (Shift: ±5 s), clamped + compare-aware via VideoView.step.
@@ -1123,41 +666,42 @@ class StudioWindow(QMainWindow):
         Corners view is shown, the map rings the apex (MapView.highlight_corner, the consistency
         panel's cue), and the video seeks to corner_entry_media_time(best, cid) — an absolute
         media time, fed straight to video.seek like the lap-select seek. No-op if there's no best
-        lap or the corner/entry can't be resolved (a degenerate session)."""
+        lap or the corner/entry can't be resolved (a degenerate session). The session-scoped panels
+        (table / corners button / map / video / the shared cursor) are reached through self.view —
+        the single swap point."""
         best = self.session.best_lap_id()
         if best is None:
             return
+        view = self.view
         # Select the best lap (programmatic select, NOT a user-select, so it doesn't re-enter the
         # seek-on-select path — we own the seek below, to the corner entry rather than the lap
         # start). This repoints the Corners view + charts onto the best lap.
-        self.table.select([best])
-        self._on_laps_selected([best])
+        view.table.select([best])
+        view._on_laps_selected([best])
         # Show the Corners view so the selected corner's per-corner row is visible (the toggle
         # also updates the table header). Idempotent if already in Corners mode.
-        if not self.corners_btn.isChecked():
-            self.corners_btn.setChecked(True)
+        if not view.corners_btn.isChecked():
+            view.corners_btn.setChecked(True)
         # Ring the corner's apex on the map (display-only cue, same as the consistency panel).
-        self.map.highlight_corner(cid)
+        view.map.highlight_corner(cid)
         # Seek the video to the best lap's entry to this corner.
         target = self.session.corner_entry_media_time(best, cid)
         if target is not None:
-            self.video.seek(target)
+            view.video.seek(target)
             # Seed auto-follow to the lap the seek lands in, so the immediate post-seek tick
             # isn't treated as a lap-change edge (mirrors the lap-select seek's handling).
-            self._playback.followed_lap = self.session.lap_at_time(target)
+            view._playback.followed_lap = self.session.lap_at_time(target)
 
     def _on_consistency_toggled(self, on: bool):
         """View ▸ "Show consistency panel": show/hide the consistency strip under the lap table.
-        The choice is remembered on the window so it survives a reload. Showing it refreshes its
-        stats first (it may have been built for an old session, or never shown). No-op before the
-        first successful load (no panel yet)."""
+        The choice is remembered on the WINDOW (self._consistency_visible) so it survives a reload —
+        a fresh CentralView is seeded with it at construction. The actual show/hide + stats refresh
+        is the view's job (set_consistency_visible). No-op before the first successful load (no view
+        yet)."""
         self._consistency_visible = bool(on)
-        panel = getattr(self, "consistency", None)
-        if panel is None:
-            return
-        if self._consistency_visible:
-            panel.refresh()  # ensure the shown stats are current for this session
-        panel.setVisible(self._consistency_visible)
+        view = getattr(self, "view", None)
+        if view is not None:
+            view.set_consistency_visible(self._consistency_visible)
 
     # ----------------------------------------------------------- data export (F11)
     # File ▸ Export: the writers live in studio/export_data.py (pacer-free, Qt-free); this
@@ -1188,8 +732,10 @@ class StudioWindow(QMainWindow):
     def _export_lap_id(self) -> int | None:
         """The lap the channels CSV describes: the PRIMARY selected/followed lap (the same
         lap the Corners view tracks), falling back to the best lap. None when the session
-        has no usable lap at all."""
-        lap = getattr(self, "_corner_lap", None)
+        has no usable lap at all. The primary lap lives on the central view (self.view._corner_lap);
+        resolved through it, with a defensive getattr for the no-view (failed-first-load) case."""
+        view = getattr(self, "view", None)
+        lap = getattr(view, "_corner_lap", None) if view is not None else None
         return lap if lap is not None else self.session.best_lap_id()
 
     def _export_laps_csv(self):
@@ -1223,9 +769,10 @@ class StudioWindow(QMainWindow):
         if not path:
             return
         # Snapshot the map + charts as they are on screen right now (QWidget.grab) — the
-        # report writer itself stays Qt-free and just embeds the bytes.
-        images = [("Track map", self._grab_png(self.map)),
-                  ("Speed · Δ to best", self._grab_png(self.plots))]
+        # report writer itself stays Qt-free and just embeds the bytes. The panels are reached
+        # through the live central view.
+        images = [("Track map", self._grab_png(self.view.map)),
+                  ("Speed · Δ to best", self._grab_png(self.view.plots))]
         if self._run_export(lambda: export_data.write_report_html(
                 path, self.session,
                 source_label=chapters.recording_label(self._paths) or "session",
@@ -1490,8 +1037,10 @@ class StudioWindow(QMainWindow):
         self.session.clear_reference()
         # D5: the reference is gone — drop the sticky "prefer cross-recording compare" preference so
         # a later compare toggle enters SAME-recording compare (there's no reference to compare to).
-        if hasattr(self, "compare"):
-            self.compare.clear_prefer_cross()
+        # The compare controller lives on the live central view.
+        view = getattr(self, "view", None)
+        if view is not None:
+            view.compare.clear_prefer_cross()
         self._apply_reference_change()
 
     def _enter_cross_compare(self):
@@ -1506,7 +1055,8 @@ class StudioWindow(QMainWindow):
                 "Load a reference recording first (File ▸ Load reference recording…), then "
                 "compare against it.")
             return
-        if not self.compare.enter_cross():
+        # The compare controller lives on the live central view.
+        if not self.view.compare.enter_cross():
             QMessageBox.information(
                 self, "pacer studio — cross-recording compare unavailable",
                 "The reference recording's lap could not be set up for compare.")
@@ -1515,14 +1065,19 @@ class StudioWindow(QMainWindow):
         """Refresh every "vs best" surface after the reference was loaded OR cleared, and update
         the menu + status chip. The reference replaces the local best lap as the Δ / map-overlay /
         sector-guide / per-corner-Δ baseline, so the same panels a re-segment refreshes are
-        rebuilt here (minus the actual re-segmentation — the PRIMARY laps are unchanged)."""
+        rebuilt here (minus the actual re-segmentation — the PRIMARY laps are unchanged).
+
+        Stays on the WINDOW: it is triggered by the persistent Analyse-menu actions (load / clear
+        reference) and ends in _update_reference_status, which drives the menu enablement + the
+        persistent status-bar chip. The session-derived refresh itself is the view's shared seam
+        (self.view.rebuild_derived_views), gated on the view's compare state."""
         # Routed through the shared rebuild seam so a reference change refreshes the IDENTICAL union
         # a re-segmentation does. This FIXES a real latent drift: the old hand-maintained sequence
         # here omitted map.set_corners() and _refresh_driving_channels(), so loading/clearing a
         # reference (which DOES change the per-corner Δ baseline) left the corner-map markers and
         # the brake/coast glyphs stale — they now refresh too. reselect mirrors the old branch:
         # _select_default() in single mode, plots.refresh() (keep the pinned pair) while comparing.
-        self.rebuild_derived_views(reselect=not self._comparing())
+        self.view.rebuild_derived_views(reselect=not self.view._comparing())
         self._update_reference_status()
 
     def _update_reference_status(self):
@@ -1547,419 +1102,6 @@ class StudioWindow(QMainWindow):
         else:
             chip.setVisible(False)
 
-    def _update_chapter_label(self, chapter_index: int):
-        """Banner text: the recording label plus, for a chaptered session, the current chapter.
-        Suppressed while a seam reopen is in flight (the "loading next chapter…" hint owns the banner
-        until the next chapter has presented, at which point _on_seam_loading(False) restores this)."""
-        if getattr(self, "_seam_loading", False):
-            return
-        label = chapters.recording_label(self._paths)
-        if self.video.is_multi:
-            self.chapter_label.setText(f"{label}  —  chapter {chapter_index + 1} of "
-                                       f"{len(self.session.chapters)}")
-        else:
-            self.chapter_label.setText(label)
-
-    def _on_seam_loading(self, loading: bool):
-        """Show/clear a brief "loading next chapter…" hint on the chapter banner during a seam
-        reopen. On (EndOfMedia → reopen): a clearly-styled hint so the momentary hitch reads as
-        intentional. Off (next chapter loaded + resumed): restore the normal current-chapter text.
-        chapterChanged fires during the switch, so it's gated on _seam_loading to not clobber this."""
-        self._seam_loading = bool(loading)
-        if loading:
-            self.chapter_label.setText("loading next chapter…")
-        else:
-            self._update_chapter_label(self.video.current_chapter())
-
-    def _select_default(self):
-        """Pre-select the two fastest laps so speed + a real delta-to-best show on launch.
-
-        Also clears the auto-follow state: on launch nothing is "current" yet, and after a
-        re-segmentation (_on_lines) the lap ids have shifted, so the next playhead movement must
-        be free to re-establish the follow on the now-current lap (a stale id would suppress the
-        edge). This multi-lap default overlay is simply replaced once the playhead enters a lap."""
-        self._playback.followed_lap = None
-        rows = sorted(self.session.lap_rows(), key=lambda r: r["time"])
-        ids = [r["idx"] for r in rows[:2]]
-        self.table.select(ids)
-        self._on_laps_selected(ids)
-
-    def _poster_seek(self):
-        """Park the PRIMARY video pane on the best lap's first frame at launch (and after a reload),
-        so the largest quadrant isn't a black void before the user touches anything — and so the
-        map marker / charts / hero readout all reflect a real moment INSIDE a lap (not lead-in).
-
-        Seek a hair INTO the lap (theme.LAP_SEEK_NUDGE_S past its start) for the same reason
-        _on_laps_selected does — a seek to the exact contiguous-lap boundary ms-quantizes a touch
-        below it and resolves to the PREVIOUS lap. The pane is freshly constructed and never played,
-        so it is already paused; the seek decodes + presents the frame without starting playback or
-        audio. Seed applied_t (on the shared PlaybackState) so the very next tick's "did the position
-        advance" check sees the poster position as already-applied (the readout/marker are driven
-        directly here).
-
-        Graceful no-lap edge: if there is no valid best lap there is nothing to poster, so skip the
-        seek entirely (the 0-valid-lap session still launches — just on a black/first frame)."""
-        best = self.session.best_lap_id()
-        if best is None:
-            return
-        window = self.session.lap_window(best)
-        if window is None:
-            return
-        target = window[0] + theme.LAP_SEEK_NUDGE_S
-        self.video.seek(target)          # paused decode → presents the best lap's start frame
-        self._playback.latest_t = target
-        self._playback.applied_t = target
-        # Populate the chart playhead + readout / map marker directly from the poster time so the
-        # t=0 state is consistent with the shown frame immediately (the same work a playback tick
-        # does), without waiting for a positionChanged tick the seek may not emit synchronously.
-        self._apply_position(target)
-
-    def _on_user_select(self, ids):
-        # A genuine user click in the lap table also jumps the video to that lap (F1).
-        self._on_laps_selected(ids, seek=True)
-
-    # --------------------------------------------------------- corners view (F-corner)
-    def _on_corners_toggled(self, on: bool):
-        """Flip the table panel between Laps mode (the untouched LapTable) and Corners mode.
-        The corner table is (re)pointed at the current selection lazily on entry, so an
-        unused Corners view costs nothing."""
-        self.table_stack.setCurrentIndex(1 if on else 0)
-        if on:
-            self.corner_table.set_lap(self._corner_lap)
-        self._update_table_header()
-
-    def _set_corner_lap(self, lap_id: int | None):
-        """Track the lap the Corners view describes — the PRIMARY selected/followed lap.
-        Cheap when nothing changed; the table itself only refills on a real lap change.
-        Defensive getattrs: a StudioWindow.__new__'d for a unit test drives
-        _follow_current_lap without building the UI (the _comparing() idiom)."""
-        if lap_id == getattr(self, "_corner_lap", None):
-            return
-        self._corner_lap = lap_id
-        table = getattr(self, "corner_table", None)
-        if table is not None:
-            table.set_lap(lap_id)
-            self._update_table_header()
-        # F5: the primary lap changed → refresh its brake glyphs / coast bands. Skipped while
-        # comparing (the compare pair drives the glyphs via on_pair_changed, not the primary
-        # lap). Defensive: a __new__'d test window without the views has no map/plots to push to.
-        if getattr(self, "map", None) is not None and not self._comparing():
-            self._refresh_driving_channels()
-
-    def _update_table_header(self):
-        """The table panel's mode label: "LAPS", or "CORNERS · LAP n" while in Corners mode
-        (so it is always explicit WHICH lap the per-corner rows describe)."""
-        if self.corners_btn.isChecked():
-            lap = self._corner_lap
-            self._table_label.setText(f"CORNERS · LAP {lap}" if lap is not None else "CORNERS")
-        else:
-            self._table_label.setText("LAPS")
-
-    def _on_laps_selected(self, ids, seek=False):
-        # The table multi-selection drives the PLOTS only; the map's current-lap overlay
-        # follows the video position (and thus selection, since F1 seeks into the lap).
-        self.plots.set_laps(ids)
-        # Corners view follows the primary selected lap (ids[0]: the lowest-id selection —
-        # the same lap a user-click seek jumps to — or the fastest from _select_default).
-        self._set_corner_lap(ids[0] if ids else None)
-        # F1 seeks ONLY on user selection — not on programmatic re-select from
-        # _select_default()/_on_lines(), or dragging a timing line would yank the video.
-        if seek and ids:
-            # Seek a hair INTO the selected lap, not onto its exact start. Laps are contiguous
-            # (lap N's finish == lap N+1's start) and the player quantizes the seek to whole ms
-            # (setPosition takes int(seconds*1000)), so a seek to the exact boundary lands a few
-            # tenths of a ms BELOW it — which then resolves to the PREVIOUS lap and makes the
-            # ▶ marker / map / auto-follow jump back one lap (the reported "clicking a lap selects
-            # a different lap" bug). Nudging by theme.LAP_SEEK_NUDGE_S (a few ms, imperceptible
-            # in a ~70 s lap) guarantees the ms-quantized playback position lands INSIDE the lap,
-            # so lap_at_time(position) == the lap the user clicked.
-            target = self.session.lap_window(min(ids))[0] + theme.LAP_SEEK_NUDGE_S
-            self.video.seek(target)
-            # Don't let the auto-follow collapse a just-made (possibly multi-lap) comparison the
-            # instant the seek's positionChanged lands: seed followed_lap to the lap the seek
-            # resolves into, so the immediate post-seek tick is NOT an edge. The user keeps the
-            # selected overlay while paused; once PLAYBACK MOVES ON into a different lap, the edge
-            # fires and the charts collapse to [current, best] (the locked behaviour).
-            self._playback.followed_lap = self.session.lap_at_time(target)
-
-    def _on_position(self, t: float):
-        # Runs in the video event path — keep it trivial so frame presentation isn't starved.
-        self._playback.latest_t = t
-
-    def _tick(self):
-        # Steady ~30 Hz. Drain a coalesced MAP MARKER-DRAG seek first (one per tick, not per
-        # mouse-move): the marker stashes its latest dragged time and the resulting seek drives the
-        # normal playback→tick sync that re-places the marker/cursor/readout.
-        self.scrub.drain_marker_seek()
-        # While the user is scrubbing a plot cursor, the source of truth is the drag, not playback:
-        # the scrub controller issues at most ONE coalesced seek per tick to the latest dragged
-        # target (both panes in compare) and applies the cursor/marker/readout once, and the
-        # (stale / seek-driven) playback position is NOT applied — that gating is what prevents the
-        # drag↔positionChanged feedback loop from oscillating.
-        if self.scrub.is_active:
-            self.scrub.apply_tick()
-            self.compare.tick()  # keep the secondary g + Δ badges live while scrubbing
-            return
-        # Normal playback: apply an update only when the position actually advanced.
-        if self._playback.latest_t != self._playback.applied_t:
-            self._playback.applied_t = self._playback.latest_t
-            self._apply_position(self._playback.applied_t)
-        # Compare mode: the secondary pane is video-only (no _on_position), so feed its g + update
-        # both panes' Δ badges from its own current position here, every tick (O(1) np.interp).
-        if self.compare.active:
-            self.compare.tick()
-
-    # F5: the auto-follow / playback-cursor SETTERS are gone — the compare controller writes
-    # `followed_lap` and the scrub controller seeds `applied_t` DIRECTLY on the shared PlaybackState
-    # (self._playback), which replaced the injected set_followed_lap / set_applied_t callbacks. The
-    # tick loop still owns the normal latest_t→applied_t advance (in _tick, above).
-
-    def _apply_position(self, t: float):
-        self.plots.set_playhead_time(t)
-        self._apply_readout(t)
-
-    def _apply_readout(self, t: float):
-        # Resolve the two per-tick searches ONCE and reuse them everywhere below (the lap that
-        # contains t, and the nearest trace index at t) — they used to be recomputed two more
-        # times each tick (delta_at_time re-ran lap_at_time; the playhead + speed lookups each
-        # re-ran index_at_time).
-        lap_id = self.session.lap_at_time(t)   # F3: which lap is on the video
-        i = self.session.index_at_time(t)      # nearest trace sample (marker + speed)
-        self.map.set_marker_index(i)           # F3: red marker (same point set_playhead_time chose)
-        self._follow_current_lap(lap_id, t)  # charts auto-follow the playhead's lap (vs best)
-        self.table.set_current_lap(lap_id)
-        self.map.set_current_lap(lap_id)  # highlight the current lap's trace on the map
-        sp = float(self.session.tv[i]) if i is not None else None  # F2: speed km/h at that index
-        # C6: the under-video strip is now ONLY the transport timecode — the live MOMENT (Δ · speed ·
-        # lap) lives once, in the hero #DiffBox in the charts header, so the two can no longer
-        # duplicate OR disagree (the old strip read "speed 72.6" while the box read "73"). On a
-        # multi-chapter recording it also names the current chapter (e.g. "1/3"), which IS video-
-        # specific and not shown anywhere else; for a single file it is just the timecode.
-        self.video.set_readout(self._transport_readout(t))
-        self._update_diff_box(t, sp, lap_id)
-        # g-meter overlay: feed the vehicle-frame g at the current media time (a cheap lookup) and
-        # the current lap (so the max-G envelope resets at the lap boundary, showing THIS lap's
-        # grip). Gate the g_at_time lookup on the overlay being visible (off by default) so the
-        # searchsorted+hypot is skipped entirely when nothing consumes it.
-        #
-        # In COMPARE mode the panes' g-meter lap scope is PINNED to the chosen pair (each pane via
-        # set_pane_gmeter_lap once on enter/repoint), so the normal-mode per-tick primary pin would
-        # double-drive the primary's envelope and fight that fixed scope. Skip it here so the scope
-        # is driven by exactly one path — mirroring the same early-out in _follow_current_lap.
-        if not self._comparing():
-            self.video.set_gmeter_lap(lap_id)
-        if self.video.is_gmeter_visible():
-            self.video.set_g(self.session.g_at_time(t))
-
-    def _transport_readout(self, t: float) -> str:
-        """The under-video TIMECODE strip (C6): the media position, plus the current chapter when
-        the recording spans several (the one piece of video-specific context not surfaced anywhere
-        else). Deliberately does NOT echo speed / Δ / lap — those live in the hero #DiffBox, the
-        single source of the live moment."""
-        chs = self.session.chapters
-        if chs is not None and chs.is_multi:
-            return f"{fmt_time(t)}   ·   chapter {chs.chapter_at(t) + 1}/{len(chs)}"
-        return fmt_time(t)
-
-    def _follow_current_lap(self, lap_id: int | None, t: float):
-        """Auto-follow the playhead's lap on the speed + delta charts (current lap vs best).
-
-        On a lap-change EDGE — `lap_id` is a valid lap that differs from the one the charts are
-        currently following — switch the charts to show [current lap, best] and update the lap
-        table highlight/selection to match, so the table ▶/selection, the map overlay and the
-        plots all agree on the current lap. Only acts on the actual edge (O(1) check per tick, a
-        refresh only on the change) so it never thrashes, and it works while PLAYING or SCRUBBING
-        (we key off the playhead's lap, not the play state).
-
-        Graceful edges:
-          * `lap_id is None` (lead-in / between laps / cool-down) → HOLD the last followed lap;
-            never blank the charts.
-          * The table selection is updated via the programmatic `select()` path (signals blocked),
-            so it does NOT emit `laps_selected` and therefore cannot trigger a user-seek that would
-            fight playback. (Select-lap→seek is gated to genuine user clicks via _on_user_select.)
-        """
-        # Compare mode pins the panes + charts to the chosen pair, so SUSPEND the auto-follow
-        # re-point: the playhead crossing a lap boundary must not thrash the pinned [A,B] overlay.
-        if self._comparing():
-            return
-        if lap_id is None or lap_id == self._playback.followed_lap:
-            return  # hold on no-lap regions; only act on a genuine change to a new valid lap
-        self._playback.followed_lap = lap_id
-        # Keep the best lap as the reference overlay; current lap first so it's the primary curve.
-        best = self.session.best_lap_id()
-        ids = [lap_id] if best is None or best == lap_id else [lap_id, best]
-        self.table.select(ids)   # programmatic (signals blocked) → no seek, won't fight playback
-        self.plots.set_laps(ids)
-        self._set_corner_lap(lap_id)  # the Corners view follows the playhead's lap too
-        # During a scrub-across-boundary, set_laps→refresh re-places the cursor via
-        # set_playhead_time (force=False), which is a no-op mid-drag; re-place it from the dragged
-        # time (force=True) so the cursor stays put in the now-current lap (resolving the old
-        # "scrub dead off the displayed lap" caveat too).
-        if self.plots.is_dragging():
-            self.plots.set_playhead_time(t, force=True)
-
-    def _update_diff_box(self, t: float, sp: float | None, lap_id: int | None):
-        """Refresh the always-on Δ/speed box for the current moment (priority: Δ-to-best in
-        seconds). Δ comes from session.delta_at_lap with the already-resolved `lap_id` (same
-        normalized-distance alignment as the delta plot, so the box and the cursor on the curve
-        agree) — reusing lap_id instead of re-resolving lap_at_time. Outside a valid lap Δ is —."""
-        d = self.session.delta_at_lap(lap_id, t) if lap_id is not None else None
-        # Text + colour come from the ONE shared formatter (theme.format_delta_speed), the single
-        # source of truth this readout shares with the burned-in export overlay so the shareable MP4
-        # can't say something different from the live box. The formatter owns: the "Δ +0.00 s" run,
-        # the honest no-lap "— km/h" (Phase-0: outside a valid lap we show no misleading lead-in
-        # speed), the five-space gap, and the three-way Δ colour. `colour` is None when there is no
-        # semantic cue (no delta / dead-even), which we resolve to the box's primary text colour.
-        text, sem_colour = theme.format_delta_speed(d, sp, lap_id)
-        # Colour cue: the shared three-way rule — green when meaningfully up on best, red when down,
-        # and the primary text colour when there's no delta OR it's dead even (|Δ| within
-        # ±theme.DELTA_EVEN_EPS_S; an exact 0 used to read GREEN). The card's surface bg / font /
-        # border come from the global QSS (#DiffBox); a per-widget `color` rule merges over it and
-        # overrides ONLY the foreground (no per-tick background/border re-layout cost), and only when
-        # the colour actually changes.
-        colour = sem_colour or theme.C.text
-        self.diff_box.setText(text)
-        if colour != getattr(self, "_diff_colour", None):
-            self._diff_colour = colour
-            self.diff_box.setStyleSheet(f"QLabel#DiffBox {{ color: {colour}; }}")
-
-    # ------------------------------------------------------------- compare-state access
-    # The scrub + compare behavioural clusters live in self.scrub / self.compare (constructed in
-    # _build_ui). StudioWindow keeps the shared single-driver telemetry path (_apply_readout /
-    # _update_diff_box) and the auto-follow tick logic (_follow_current_lap / the shared
-    # PlaybackState's followed_lap), both of which gate on whether compare is on — funnel that
-    # through one defensive accessor.
-    def _comparing(self) -> bool:
-        """True iff compare mode is on. Defensive: tolerates the controller not being constructed
-        yet (e.g. a StudioWindow.__new__'d for a unit test that drives _follow_current_lap directly
-        without building the UI) — mirrors the old `getattr(self, "_compare", False)` guard."""
-        compare = getattr(self, "compare", None)
-        return compare is not None and compare.active
-
-    def _refresh_sector_lines(self, mode: str | None = None):
-        """F2: push the sector boundary positions (start/finish + each sector line) to the charts
-        for the current axis mode. Computed via session (the s×best_distance / time-into-lap
-        axis), so plots_view stays pacer-free. Called on launch, after a sector edit, and when
-        the dist/time mode flips (positions' units change)."""
-        mode = mode or self.plots.axis_mode()
-        self.plots.set_sector_lines(self.session.sector_plot_positions(mode))
-        # The chart x-axis units changed with the mode too, so the F5 brake glyphs / coast bands
-        # need re-pushing in the new mode's units (same reason as the sector lines).
-        self._refresh_driving_channels()
-
-    def _driving_lap_colour(self, lap_id: int, k: int):
-        """The glyph colour for a lap's brake points, matching the speed chart's curve colour:
-        the best lap is green (theme.SERIES_BEST), every other lap cycles theme.CHART_SERIES by
-        its draw-order index `k` — so a brake glyph always sits on its own lap's curve colour
-        (and compare's two laps stay distinguishable, like the curves)."""
-        if lap_id == self.session.best_lap_id():
-            return theme.SERIES_BEST
-        return theme.CHART_SERIES[k % len(theme.CHART_SERIES)]
-
-    def _refresh_driving_channels(self):
-        """F5: push the brake glyphs (map + speed chart) and shaded coasting spans (speed chart)
-        for the lap(s) currently shown — the current/selected lap normally, BOTH laps in compare
-        (the Circuit Tools braking-zone comparison). Pure consumer of session.lap_brake_* /
-        lap_coasting_* so the views stay pacer-free; cheap (the channels are cached per
-        segmentation). Called on load, lap-selection change, axis-mode flip, compare enter/exit/
-        repoint, and re-segmentation."""
-        # The laps to annotate, in the SAME order the charts draw them, so the colours line up.
-        if self._comparing() and self.compare.lap_a is not None and self.compare.lap_b is not None:
-            lap_ids = [self.compare.lap_a, self.compare.lap_b]
-        elif self._corner_lap is not None:
-            lap_ids = [self._corner_lap]
-        else:
-            lap_ids = []
-        mode = self.plots.axis_mode()
-        map_markers, brake_plot, coast_plot = [], [], []
-        for k, lid in enumerate(lap_ids):
-            colour = self._driving_lap_colour(lid, k)
-            map_markers.append((self.session.lap_brake_map_markers(lid), colour))
-            brake_plot.append((self.session.lap_brake_plot_positions(lid, mode), colour))
-            coast_plot.append((self.session.lap_coasting_plot_spans(lid, mode), colour))
-        self.map.set_brake_markers(map_markers)
-        self.plots.set_brake_markers(brake_plot)
-        self.plots.set_coasting_spans(coast_plot)
-
-    def rebuild_derived_views(self, *, reselect: bool = True):
-        """THE single seam that rebuilds every session-DERIVED surface from the current Session.
-
-        A re-segmentation (_on_lines), a reference load/clear (_apply_reference_change) and the
-        initial build tail (_build_ui) all change the baseline the same panels read against (the
-        laps, the per-corner Δ, the racing-line overlay, the brake/coast channels, the sector
-        guides), so they MUST refresh the identical union of views, in the identical order — three
-        hand-maintained copies of this sequence had already DRIFTED (the reference path silently
-        omitted set_corners + the driving channels). Each call site keeps only its own SPECIFIC
-        extras inline (set_timing_lines / set_compare_enabled / _save_sidecar for the segmentation
-        edit; _update_reference_status for the reference change; the one-time chip/sync setup at
-        build) and routes everything shared through here.
-
-        Ordering is load-bearing and preserved from the (more complete) _on_lines sequence:
-          • table first (the lap rows + Δ columns);
-          • map.refresh_overlays then map.set_corners — set_corners re-pushes the corner labels AND
-            clears any stale corner highlight, so it runs before the consumers below;
-          • corner_table + consistency (both read the now-current corner model / lap set);
-          • _refresh_driving_channels — re-push the brake glyphs / coast bands EXPLICITLY here,
-            because the selection step below can early-out (a re-segment may leave the primary lap
-            id unchanged so _set_corner_lap short-circuits) while the underlying channels DID change;
-          • the selection step LAST-but-one: _select_default() to re-pick the two fastest laps
-            (reselect=True), OR plots.refresh() to redraw the pinned [A,B] pair in place while
-            comparing (reselect=False) — a re-select would collapse the comparison;
-          • _refresh_sector_lines after the selection (it re-derives the brake glyphs for the
-            now-current selection in the current axis mode)."""
-        self.table.refresh()
-        # Re-segmentation / reference change shifts the measured-vs-inferred map segments and the
-        # faint reference line; redraw the overlays, then re-push the corner labels (set_corners
-        # also clears any stale corner highlight) so the corner consumers below read fresh state.
-        self.map.refresh_overlays()
-        self.map.set_corners(self.session.corner_map_markers())
-        self.corner_table.refresh()
-        # F6: the lap set / splits / per-corner σ shifted with the baseline — rebuild the strip.
-        self.consistency.refresh()
-        # F5: the driving channels were invalidated with the corner model; re-push them HERE (the
-        # selection below may early-out on an unchanged primary-lap id while the channels changed).
-        self._refresh_driving_channels()
-        if reselect:
-            self._select_default()
-        else:
-            # Compare mode draws its own pinned [A,B] pair; refresh that overlay in place rather
-            # than re-selecting the two fastest laps (which would tear the comparison down).
-            self.plots.refresh()
-        # F2: the sector guide lines + their units track the (possibly rescaled) axis and the new
-        # selection, so refresh them AFTER the selection is in place.
-        self._refresh_sector_lines()
-
-    def _on_lines(self, start, sectors):
-        # Re-segmentation shifts lap ids, so any pinned compare pair is now stale — leave compare
-        # mode first (also tears the 2nd pane down), then re-segment and rebuild the default view.
-        if self._comparing():
-            self.video.set_compare_enabled(False)  # un-checks -> compareToggled(False) -> exit
-        self.session.set_timing_lines(start, sectors)
-        # Re-segmentation shifted lap ids, cleared the per-lap gap-fill cache and invalidated the
-        # corner model + driving channels — rebuild every derived view through the shared seam,
-        # re-selecting the two fastest laps (compare was just exited above, so reselect=True).
-        self.rebuild_derived_views(reselect=True)
-        # The valid-lap count may have changed — re-evaluate whether compare can be offered.
-        self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
-        # Persist the user's edit (this handler fires only on a drag release / sector add or
-        # reset — never on a plain load), so the hand-tuned lines survive an app restart.
-        self._save_sidecar()
-
-    def _save_sidecar(self):
-        """Write the current timing lines to the recording's sidecar JSON (absolute lat/lon
-        via session.timing_lines_latlon). Called ONLY from _on_lines — i.e. only on a genuine
-        user edit — so an untouched session never creates or rewrites the file. Best-effort:
-        an unwritable folder just logs and the lines still apply for this run."""
-        path = getattr(self, "_sidecar_path", None)
-        if not path:
-            return
-        start, sectors = self.session.timing_lines_latlon()
-        try:
-            sidecar.save(path, self.session.track_name, start, sectors)
-        except OSError as exc:
-            print(f"studio: could not write timing-line sidecar {path}: {exc}", flush=True)
-            return
-        print(f"studio: timing lines saved to {os.path.basename(path)}", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
