@@ -75,12 +75,15 @@ print("after add-sector: laps", s.lap_count(), "valid", len(s.valid_lap_ids()))
 assert w._sidecar_path and os.path.exists(w._sidecar_path), "sidecar not written on user edit"
 os.remove(w._sidecar_path)
 
-# F8: the post-load upsert recorded this recording in the (temp-diverted) library index. Assert
-# it landed with the right lap count, then drop the temp dir so the run leaves no artifacts.
+# F8: _update_library deliberately does NOT index the bundled DEFAULT_SAMPLE, nor any open with
+# no valid laps — that guard is what stops a junk row (0 laps, null track) from being persisted
+# and then surfaced by the library dialog forever. This smoke run opens exactly that sample (0
+# valid laps), so assert the (temp-diverted) index stayed empty, then drop the temp dir so the
+# run leaves no artifacts.
 _lib = library.load()
-assert len(_lib["entries"]) == 1, f"library upsert: expected 1 entry, got {len(_lib['entries'])}"
-assert _lib["entries"][0]["lap_count"] == len(s.valid_lap_ids()), "library lap_count mismatch"
-print("library entry:", _lib["entries"][0]["stem"], "laps", _lib["entries"][0]["lap_count"])
+assert len(s.valid_lap_ids()) == 0, "smoke fixture changed: DEFAULT_SAMPLE now has valid laps"
+assert len(_lib["entries"]) == 0, f"library: sample/0-lap open must be skipped, got {len(_lib['entries'])}"
+print("library entries:", len(_lib["entries"]), "(sample correctly not indexed)")
 shutil.rmtree(_LIB_DIR, ignore_errors=True)
 
 print("SMOKE OK" + (" (no-video)" if os.environ.get("PACER_NO_MEDIA") == "1" else ""))

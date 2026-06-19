@@ -86,6 +86,22 @@ def _entry_missing(entry: dict) -> bool:
     return not any(os.path.exists(p) for p in paths)
 
 
+def _entry_junk(entry: dict) -> bool:
+    """True iff `entry` is a malformed/non-analysis row — no resolved track OR no valid laps. Such
+    rows (e.g. the legacy bundled-sample row, or a recording that wouldn't segment) carry nothing to
+    chart or compare, so the dialog QUARANTINES them: greyed + non-selectable + never auto-selected,
+    so a library.json that already contains junk (from before the indexing fixes) still renders
+    cleanly without manual cleanup. New loads no longer create such rows (app skips 0-lap opens)."""
+    return not entry.get("track") or not entry.get("lap_count")
+
+
+def _entry_disabled(entry: dict) -> bool:
+    """True iff the row should be greyed + non-selectable — its file(s) are gone OR it's a junk row
+    (no track / no laps). The two reasons are merged so selection, auto-select and the open guard
+    all share one "is this row usable?" test."""
+    return _entry_missing(entry) or _entry_junk(entry)
+
+
 def _date_sort_key(date: str | None) -> float | None:
     """A sortable numeric key for a "YYYY-MM-DD" date string: its ordinal (days). Lexical order
     of an ISO date already equals chronological order, but a numeric key keeps the _NumItem path
@@ -147,7 +163,10 @@ class LibraryDialog(QDialog):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self._fill_rows()
         self.table.setSortingEnabled(True)
-        self.table.sortItems(_COL_DATE, Qt.AscendingOrder)
+        # Newest-first: the most recent session is the one a user usually wants to look at, and it
+        # also keeps the auto-selected row (the first USABLE one, below) the latest real recording
+        # rather than the earliest — which used to land on a junk/legacy row and clear the chart.
+        self.table.sortItems(_COL_DATE, Qt.DescendingOrder)
         self.table.itemSelectionChanged.connect(self._on_selection)
         self.table.itemDoubleClicked.connect(lambda _it: self._open_selected())
         root.addWidget(self.table, 3)
@@ -172,6 +191,13 @@ class LibraryDialog(QDialog):
             pen=_PB_PEN, symbol="o", symbolSize=7,
             symbolBrush=_PB_BRUSH, symbolPen=pg.mkPen(C.surface, width=1))
         self.pb_plot.addItem(self._pb_curve)
+        # An in-chart EMPTY-STATE label, centred in the view, shown whenever there are <2 points to
+        # plot (no track, no dated bests, or a single session). Without it the chart shows bare
+        # placeholder axes that read as "broken"; the message + a framed axis range read as "empty".
+        # Anchored to the view centre (ignores data bounds) so it stays put as the range changes.
+        self._pb_empty = pg.TextItem(color=C.text_dim, anchor=(0.5, 0.5))
+        self._pb_empty.setParentItem(self.pb_plot.getPlotItem().getViewBox())
+        self._pb_empty.setVisible(False)
         root.addWidget(self.pb_plot, 2)
 
         # ----- buttons
@@ -186,9 +212,25 @@ class LibraryDialog(QDialog):
         buttons.addWidget(close_btn)
         root.addLayout(buttons)
 
-        # Select the first row (if any) so the PB chart + Open button initialise sensibly.
-        if self.table.rowCount():
-            self.table.selectRow(0)
+        # Auto-select the first USABLE row (a present, non-junk recording) under the newest-first
+        # sort — i.e. the most recent real session — so the PB chart + Open button initialise with
+        # data, never on a quarantined junk/missing row (those clear the chart and look broken). If
+        # every row is quarantined, select nothing and the PB chart shows its empty-state.
+        self._select_first_usable_row()
+
+    def _select_first_usable_row(self):
+        """Select the first row (in the current sort order) whose DATE cell is NOT flagged disabled
+        (MISSING_ROLE) — i.e. a present, non-junk recording. No-op (leaves nothing selected) when
+        every row is quarantined, so the PB chart + Open button stay in their empty/disabled state.
+        Called once at construction; the PB chart's <2-point empty-state covers the no-selection."""
+        for r in range(self.table.rowCount()):
+            date_item = self.table.item(r, _COL_DATE)
+            if date_item is not None and not bool(date_item.data(MISSING_ROLE)):
+                self.table.selectRow(r)
+                return
+        # Nothing usable: refresh the chart explicitly to its empty-state (no selection signal
+        # fires when no row gets selected).
+        self._on_selection()
 
     # ------------------------------------------------------------------ table build
     def _fill_rows(self):
@@ -199,6 +241,8 @@ class LibraryDialog(QDialog):
         dim = QBrush(QColor(C.text_muted))
         for r, e in enumerate(self._entries):
             missing = _entry_missing(e)
+            junk = _entry_junk(e)
+            disabled = missing or junk
             date = e.get("date")
             track = e.get("track")
             best = e.get("best")
@@ -208,7 +252,9 @@ class LibraryDialog(QDialog):
             date_item.setData(NUM_ROLE, _date_sort_key(date))
             date_item.setData(PATHS_ROLE, list(e.get("paths") or []))
             date_item.setData(TRACK_ROLE, track)
-            date_item.setData(MISSING_ROLE, missing)
+            # MISSING_ROLE doubles as the "not openable / not auto-selectable" flag — set for a
+            # file-missing OR a quarantined junk row, so _on_selection / _open_selected guard both.
+            date_item.setData(MISSING_ROLE, disabled)
 
             track_item = QTableWidgetItem(track or "unknown track")
 
@@ -217,14 +263,18 @@ class LibraryDialog(QDialog):
             theo_item = _NumItem(fmt_time(theo) if theo is not None else "—")
             theo_item.setData(NUM_ROLE, theo)
 
+            # A junk row says so; a present-but-missing-file row keeps its established label.
+            suffix = "  (no laps)" if junk else "  (file missing)" if missing else ""
+
             items = (date_item, track_item, best_item, theo_item)
             for col, it in enumerate(items):
-                if missing:
-                    # Greyed + not selectable/enabled: the file is gone, so it can't be opened.
+                if disabled:
+                    # Greyed + not selectable/enabled: nothing to open (file gone) or nothing to
+                    # chart (no track / no laps), so the row is quarantined, not auto-selected.
                     it.setForeground(dim)
                     it.setFlags(it.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
                     if col == _COL_TRACK:
-                        it.setText(f"{track or 'unknown track'}  (file missing)")
+                        it.setText(f"{track or 'unknown track'}{suffix}")
                 self.table.setItem(r, col, it)
 
     # ------------------------------------------------------------------ selection
@@ -248,11 +298,16 @@ class LibraryDialog(QDialog):
         self._show_pb(item.data(TRACK_ROLE))
 
     def _show_pb(self, track: str | None):
-        """Plot the PB progression (best lap vs date) for `track` from the index. With <1 dated
-        best the curve clears (nothing to place on the time axis) and the title notes it."""
+        """Plot the PB progression (best lap vs date) for `track` from the index. Three cases, each
+        with a SENSIBLE chart (never bare placeholder axes that read as broken):
+          * >=2 dated bests  → the line + markers, auto-ranged to the data, empty-state hidden;
+          * exactly 1        → the single marker, framed by a small padded range so it doesn't sit
+                               on the axis edge, plus a "one session so far" empty-state note;
+          * 0 (no track, or no dated best laps) → curve cleared + an explicit in-chart message."""
         if not track:
             self._pb_curve.setData([], [])
             self._pb_title.setText("PB progression")
+            self._set_pb_empty("Select a recording to see its track's PB progression")
             return
         series = _library.pb_series(self._index, track)
         xs, ys = [], []
@@ -265,10 +320,38 @@ class LibraryDialog(QDialog):
         if len(ys) >= 2:
             self._pb_title.setText(
                 f"PB progression — {track}  ({fmt_time(min(ys))} best over {len(ys)} sessions)")
+            self._set_pb_empty(None)
+            self.pb_plot.enableAutoRange()
+            self.pb_plot.autoRange()
         elif len(ys) == 1:
             self._pb_title.setText(f"PB progression — {track}  (1 session: {fmt_time(ys[0])})")
+            # Frame the lone point: a 1-day x window and a +/-1 s y window around it, so the marker
+            # sits in the middle of the view rather than on the axis edge (autoRange degenerates on
+            # a single point). The empty-state note explains there's nothing to chart YET.
+            self._frame_single_point(xs[0], ys[0])
+            self._set_pb_empty("Not enough sessions on this track yet to chart progression")
         else:
             self._pb_title.setText(f"PB progression — {track}  (no dated best laps)")
+            self._set_pb_empty("Not enough sessions on this track yet to chart progression")
+
+    def _set_pb_empty(self, message: str | None):
+        """Show (or hide, on None) the centred in-chart empty-state label. Re-positioned to the
+        view's centre on every call so it stays centred as the axis range changes underneath it."""
+        if not message:
+            self._pb_empty.setVisible(False)
+            return
+        self._pb_empty.setText(message)
+        self._pb_empty.setVisible(True)
+        rect = self.pb_plot.getPlotItem().getViewBox().viewRect()
+        self._pb_empty.setPos(rect.center())
+
+    def _frame_single_point(self, x: float, y: float):
+        """Set a small PADDED axis range around a single (x, y) point so it's framed centrally (a
+        bare ``setData`` of one point with autorange leaves a degenerate zero-width range)."""
+        self.pb_plot.disableAutoRange()
+        day = 86400.0
+        self.pb_plot.setXRange(x - day, x + day, padding=0)
+        self.pb_plot.setYRange(y - 1.0, y + 1.0, padding=0)
 
     # ------------------------------------------------------------------ open
     def _open_selected(self):
