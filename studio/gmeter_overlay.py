@@ -230,36 +230,45 @@ def paint_dial(p: QPainter, w: float, h: float, st: DialState,
         return
     cx, cy, r = dial_geom(w, h)
 
-    # --- faint, subtle backdrop (more see-through than a solid panel) ---
-    # C.canvas (the darkest neutral) at low alpha so the video shows through; a hairline
-    # border in C.border_strong (also dimmed) frames it without drawing attention.
+    # --- dark translucent backing matching the app surface ---
+    # C.surface (the app's panel/card neutral, NOT the darker canvas) at a moderate alpha so the
+    # dial reads as a piece of the app's chrome floating over the footage rather than a flat gray
+    # square — the video still shows through, but the panel-grey tint ties it to the side panels.
+    # A theme hairline (C.border) frames it the same way every panel edge is drawn.
     backdrop = QRectF(1, 1, w - 2, h - 2)
-    p.setBrush(_c(C.canvas, 150))
-    p.setPen(QPen(_c(C.border_strong, 90), 1))
+    p.setBrush(_c(C.surface, 168))
+    p.setPen(QPen(_c(C.border, 200), 1))
     p.drawRoundedRect(backdrop, 12, 12)
 
-    # --- title: "G meter" ---
-    p.setPen(QPen(_c(C.text_dim, 220)))
-    p.setFont(_font(8.5, bold=True))
-    p.drawText(QRectF(0, 3, w, 14), Qt.AlignHCenter | Qt.AlignVCenter, "G meter")
+    # --- title: "G METER" ---
+    # Theme caption type: dimmed off-white (C.text_dim) + a little letter-spacing so the small
+    # uppercase caption reads like the app's PanelHeader labels rather than a generic title.
+    p.setPen(QPen(_c(C.text_dim, 235)))
+    title_f = _font(7.5, bold=True)
+    title_f.setLetterSpacing(QFont.AbsoluteSpacing, 1.4)
+    p.setFont(title_f)
+    p.drawText(QRectF(0, 3, w, 14), Qt.AlignHCenter | Qt.AlignVCenter, "G METER")
 
-    # --- concentric rings (thin, clean) ---
+    # --- concentric rings (thin, clean hairlines) ---
+    # The grid circles use the same C.border hairline as every panel/gridline in the app, dimmed,
+    # so they recede behind the live data instead of looking like a foreign light-gray ring set.
     p.setBrush(Qt.NoBrush)
     for gval in _RINGS:
         rr = r * (gval / _FULL_SCALE_G)
-        p.setPen(QPen(_c(C.border, 200), 1.0))   # inner grid circles — dim
+        p.setPen(QPen(_c(C.border, 190), 1.0))   # inner grid circles — theme hairline, dim
         p.drawEllipse(QPointF(cx, cy), rr, rr)
-    # outer boundary ring — a touch stronger than the inner grid circles
-    p.setPen(QPen(_c(C.border_strong, 220), 1.2))
+    # outer boundary ring — the interactive/hover hairline (C.border_strong), a touch stronger
+    p.setPen(QPen(_c(C.border_strong, 215), 1.2))
     p.drawEllipse(QPointF(cx, cy), r, r)
-    # faint crosshair guides (tick/axis marks) — muted
-    p.setPen(QPen(_c(C.text_muted, 90), 0.8))
+    # faint crosshair guides (tick/axis marks) — the muted tertiary text token, very low alpha
+    p.setPen(QPen(_c(C.text_muted, 80), 0.8))
     p.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
     p.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
 
     # --- filled max-G envelope (translucent blob = grip used this lap) ---
-    # Recoloured from red to the accent amber: outline C.accent, fill C.accent at low alpha so
-    # the grip envelope reads clearly over footage without dominating.
+    # Tinted with the amber accent family. A LOW-alpha C.accent fill (so the panel-grey backing +
+    # rings still read through it instead of the old muddy olive slab), under a crisp, brighter
+    # C.accent_hover outline so the swept grip envelope's EDGE pops as the headline amber element.
     if len(st.hull_pts) >= 3:
         hull = _convex_hull(st.hull_pts)
         if len(hull) >= 3:
@@ -268,13 +277,13 @@ def paint_dial(p: QPainter, w: float, h: float, st: DialState,
             path = QPainterPath()
             path.addPolygon(poly)
             path.closeSubpath()
-            p.setPen(QPen(_c(C.accent, 170), 1.2))
-            p.setBrush(_c(C.accent, 56))
+            p.setBrush(_c(C.accent, 38))             # quiet amber wash — lets the grid show through
+            p.setPen(QPen(_c(C.accent_hover, 215), 1.4))  # bright amber rim = the grip envelope
             p.drawPath(path)
 
     # --- cardinal peak-g numbers (robust max felt-g per direction) ---
     p.setFont(_font(8.0, bold=True))
-    p.setPen(QPen(_c(C.text_dim, 230)))   # axis value labels — dimmed off-white
+    p.setPen(QPen(_c(C.text_dim, 235)))   # axis value labels — dimmed off-white (theme caption)
     off = 11
     # forward (braking) at top, back (accel) at bottom, left/right on the sides
     p.drawText(QRectF(cx - 22, cy - r - off - 6, 44, 12), Qt.AlignCenter, f"{st.peak_fwd:.1f}")
@@ -285,21 +294,24 @@ def paint_dial(p: QPainter, w: float, h: float, st: DialState,
                f"{st.peak_right:.1f}")
 
     # --- the live dot (NO line from centre to the dot — just a soft glow + dot) ---
-    # An accent (amber) glow fading out, with a bright off-white (C.text) core so the felt-
-    # force pointer is clearly visible over the footage and reads as the live indicator.
+    # A brighter accent (amber) glow fading out — using C.accent_hover so the live pointer's halo
+    # stays distinct from the dimmer C.accent envelope wash it sits inside. A 1px C.canvas ring
+    # separates the core from the amber glow (and from the footage), and a bright off-white
+    # (C.text) core marks the felt-force pointer as the live indicator.
     if st.have:
         dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
         grad = QRadialGradient(QPointF(dx, dy), 8)
-        grad.setColorAt(0.0, _c(C.accent, 235))
-        grad.setColorAt(1.0, _c(C.accent, 0))
+        grad.setColorAt(0.0, _c(C.accent_hover, 245))
+        grad.setColorAt(1.0, _c(C.accent_hover, 0))
         p.setPen(Qt.NoPen)
         p.setBrush(grad)
         p.drawEllipse(QPointF(dx, dy), 7, 7)
-        p.setBrush(_c(C.text, 245))
+        p.setPen(QPen(_c(C.canvas, 220), 1.0))   # thin dark ring so the core reads off the glow
+        p.setBrush(_c(C.text, 250))
         p.drawEllipse(QPointF(dx, dy), 2.6, 2.6)
 
     # --- source tag (tiny, bottom-right) ---
-    p.setPen(QPen(_c(C.text_muted, 150)))
+    p.setPen(QPen(_c(C.text_muted, 160)))
     p.setFont(_font(6.0))
     p.drawText(QRectF(w - 44, h - 13, 40, 11), Qt.AlignRight, st.source.upper())
 
