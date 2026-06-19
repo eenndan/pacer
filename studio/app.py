@@ -566,16 +566,30 @@ class StudioWindow(QMainWindow):
             self.statusBar().addPermanentWidget(self._ref_chip)
         self._update_reference_status()
 
-    # ----------------------------------------------------- multi-chapter UI / opt-in
+    # ----------------------------------------------------- menu bar / information architecture
     def _build_menu(self):
-        """The opt-in UI action: File ▸ "Load full recording" discovers the sibling chapters of
-        the currently-opened file and reloads the whole session as one chaptered recording.
-        Disabled when there's nothing more to load (already multi-chapter, or no siblings on
-        disk, or a non-GoPro clip)."""
+        """Build the menu bar: File / Analyse / View / Help. The IA splits the menus by INTENT —
+        File owns getting recordings in and data out (Open, Open Recent, Load full recording,
+        Export ▸, Export overlay video, Library), while Analyse gathers the comparison/coaching
+        surface (reference recording load/clear, cross-recording compare, the Opportunities
+        summary). View + Help are unchanged. Every action keeps its original handler + disabled-
+        state sync — this method only regroups them and adds the Open Recent submenu.
+
+        Also the opt-in multi-chapter action: File ▸ "Load full recording" discovers the sibling
+        chapters of the currently-opened file and reloads the whole session as one chaptered
+        recording (disabled when there's nothing more to load — already multi-chapter, no siblings
+        on disk, or a non-GoPro clip)."""
         menu = self.menuBar().addMenu("&File")
         self._open_action = menu.addAction("Open…")
         self._open_action.setShortcut(QKeySequence.Open)
         self._open_action.triggered.connect(self._open_file)
+        # Open Recent ▸ — re-open any recently analyzed recording straight from the menu, without a
+        # trip through the Library dialog. Populated lazily from the session-library index on
+        # aboutToShow (so it always reflects the latest loads + on-disk state); each entry re-opens
+        # through the SAME guarded _load path the Library dialog uses. See _sync_recent_menu.
+        self._recent_menu = menu.addMenu("Open Recent")
+        self._recent_menu.aboutToShow.connect(self._sync_recent_menu)
+        self._sync_recent_menu()  # seed it once so it's populated before its first open
         self._full_action = menu.addAction("Load full recording")
         self._full_action.setToolTip(
             "Discover this recording's sibling chapters and load them as one continuous session")
@@ -611,16 +625,30 @@ class StudioWindow(QMainWindow):
             "map inset, lap strip) to a shareable MP4")
         self._export_video_action.triggered.connect(self._export_overlay_video)
         self._export_video_action.setEnabled(False)
-        # F7 cross-recording reference: load ANOTHER recording and overlay/compare against its
-        # best lap (race a friend's GoPro file). Additive — kept separate from the actions above
-        # so a merged File-menu PR (another agent may add more here) stays conflict-light.
+        # F8 session library: a local index of every analyzed recording (date / track / best /
+        # theoretical) with per-track PB progression + quick re-open. The Open Recent submenu above
+        # is the one-click fast path into this same index; the dialog is the full browse + chart.
         menu.addSeparator()
-        self._ref_action = menu.addAction("Load reference recording…")
+        self._library_action = menu.addAction("Library…")
+        self._library_action.setToolTip(
+            "Browse your analyzed recordings (date / track / best lap / theoretical best), "
+            "re-open any of them, and see per-track PB progression")
+        self._library_action.triggered.connect(self._open_library)
+
+        # ----- Analyse menu: the comparison / coaching surface, grouped by INTENT (rather than
+        # scattered through File). It collects the F7 cross-recording reference cluster (load /
+        # clear / compare) and the F10 Opportunities summary. Built once on the persistent menu
+        # bar; the actions keep their original handlers + disabled-state syncs (_update_reference_
+        # status drives Clear / Compare enablement exactly as before — only the parent menu changed).
+        analyse_menu = self.menuBar().addMenu("&Analyse")
+        # F7 cross-recording reference: load ANOTHER recording and overlay/compare against its
+        # best lap (race a friend's GoPro file).
+        self._ref_action = analyse_menu.addAction("Load reference recording…")
         self._ref_action.setToolTip(
             "Pick another recording of the SAME track; its best lap becomes the Δ / map / table "
             "reference (instead of this session's own best lap)")
         self._ref_action.triggered.connect(self._load_reference_file)
-        self._clear_ref_action = menu.addAction("Clear reference")
+        self._clear_ref_action = analyse_menu.addAction("Clear reference")
         self._clear_ref_action.setToolTip("Revert the Δ / map / table reference to this "
                                           "session's own best lap")
         self._clear_ref_action.triggered.connect(self._clear_reference)
@@ -630,28 +658,18 @@ class StudioWindow(QMainWindow):
         # same-recording "Compare videos" toggle (which compares two laps of THIS recording); that
         # toggle stays intact. Enabled only when a reference is loaded (synced in
         # _update_reference_status).
-        self._cross_compare_action = menu.addAction("Compare vs reference recording")
+        self._cross_compare_action = analyse_menu.addAction("Compare vs reference recording")
         self._cross_compare_action.setToolTip(
             "Side-by-side: this recording's lap (left) vs the loaded reference recording's lap "
             "(right), each playing its own footage. Load a reference recording first.")
         self._cross_compare_action.triggered.connect(self._enter_cross_compare)
         self._cross_compare_action.setEnabled(False)
-        # F8 session library: a local index of every analyzed recording (date / track / best /
-        # theoretical) with per-track PB progression + quick re-open. Additive — its own
-        # separated section so the File-menu region stays conflict-light against the other PRs.
-        menu.addSeparator()
-        self._library_action = menu.addAction("Library…")
-        self._library_action.setToolTip(
-            "Browse your analyzed recordings (date / track / best lap / theoretical best), "
-            "re-open any of them, and see per-track PB progression")
-        self._library_action.triggered.connect(self._open_library)
-
-        # F10 auto coaching summary: a SEPARATE top-level "Coaching" menu (its own region so the
-        # File menu stays conflict-light) with the post-load "Opportunities" dialog — the top-3
-        # corners by realistic time lost vs your own best lap, each with the dominant measured
-        # reason + a jump-to. Read-only; recomputed from the session each time it's opened.
-        coaching_menu = self.menuBar().addMenu("&Coaching")
-        self._opportunities_action = coaching_menu.addAction("Opportunities…")
+        # F10 auto coaching summary: the post-load "Opportunities" dialog — the top-3 corners by
+        # realistic time lost vs your own best lap, each with the dominant measured reason + a
+        # jump-to. Read-only; recomputed from the session each time it's opened. (Folded in from the
+        # former single-item Coaching menu — it's an analysis surface, so it belongs here.)
+        analyse_menu.addSeparator()
+        self._opportunities_action = analyse_menu.addAction("Opportunities…")
         self._opportunities_action.setToolTip(
             "Where to find time vs your own best lap: the top-3 corners by realistic time lost "
             "(median of your clean laps), each with the measured reason and a jump-to.")
@@ -808,9 +826,74 @@ class StudioWindow(QMainWindow):
         dlg = LibraryDialog(library.load(), open_recording=self._load, parent=self)
         dlg.exec()
 
+    # Open Recent: a handful of recently analyzed recordings (most-recent-first), each re-opening
+    # through the SAME guarded `_load` path the Library dialog uses. The "recents" source is the
+    # session-library index — re-using its single source of truth rather than tracking a second
+    # MRU list — so a recording shows up the moment it's indexed (post-load) and disappears if its
+    # file is later moved/deleted.
+    _RECENT_LIMIT = 8
+
+    def _recent_entries(self) -> list[dict]:
+        """The Open Recent candidates: USABLE library entries (file present, real track + laps —
+        the same "openable row" test the Library dialog applies), ordered most-recent-first by the
+        recording date, capped at _RECENT_LIMIT. Junk rows (no track / no laps — e.g. the legacy
+        bundled-sample row) and entries whose every chapter path is gone are skipped, since neither
+        is openable. Fully guarded: any failure reading the index yields an empty list (the menu
+        then shows its disabled "(none)" item) — Open Recent must never break the menu bar."""
+        try:
+            entries = library.load().get("entries", [])
+        except Exception as exc:  # noqa: BLE001 — the recents list is additive; never break the menu
+            print(f"studio: Open Recent unavailable ({exc!r}).", flush=True)
+            return []
+        usable = [
+            e for e in entries
+            # openable == has a real track + at least one lap (not a junk row) AND at least one
+            # chapter path still on disk (any one is enough; _load discovers the siblings).
+            if e.get("track") and e.get("lap_count")
+            and any(os.path.exists(p) for p in (e.get("paths") or []))
+        ]
+        # Most-recent-first by recording date ("YYYY-MM-DD" sorts chronologically as text); a
+        # missing date sorts last. Mirrors the Library dialog's default date-descending order.
+        usable.sort(key=lambda e: e.get("date") or "", reverse=True)
+        return usable[:self._RECENT_LIMIT]
+
+    def _recent_label(self, entry: dict) -> str:
+        """A one-line Open Recent label: ``<track> — <best>  (<date>)`` from a library entry,
+        gracefully degrading when a field is absent (an unknown-track or undated row)."""
+        track = entry.get("track") or "unknown track"
+        best = entry.get("best")
+        parts = [track]
+        if best is not None:
+            parts.append(f"— {fmt_time(best)}")
+        date = entry.get("date")
+        if date:
+            parts.append(f"({date})")
+        return "  ".join(parts)
+
+    def _sync_recent_menu(self):
+        """Rebuild the Open Recent submenu from the current library index. Called on the submenu's
+        aboutToShow (so it always reflects the latest loads + on-disk state) and once at build time.
+        Each entry re-opens via the guarded `_load` path with its recorded chapter paths. An empty
+        recents list shows a single disabled "(none)" placeholder so the submenu is never blank."""
+        self._recent_menu.clear()
+        entries = self._recent_entries()
+        if not entries:
+            none_action = self._recent_menu.addAction("(none)")
+            none_action.setEnabled(False)
+            return
+        for entry in entries:
+            paths = list(entry.get("paths") or [])
+            action = self._recent_menu.addAction(self._recent_label(entry))
+            action.setToolTip(os.path.basename(paths[0]) if paths else "")
+            # Bind THIS entry's paths into the slot (default-arg capture — a loop-closure over
+            # `paths` would re-open whichever entry is last). Re-open through the same guarded
+            # `_load` the Library dialog / File ▸ Open use, so the load guards + sidecar restore
+            # + library upsert all apply identically.
+            action.triggered.connect(lambda checked=False, p=paths: self._load(p))
+
     # -------------------------------------------------- auto coaching summary (F10)
     def _open_opportunities(self):
-        """Coaching ▸ Opportunities…: open the read-only opportunities dialog, built from a
+        """Analyse ▸ Opportunities…: open the read-only opportunities dialog, built from a
         FRESH session.coaching_opportunities() (recomputed each open — zero per-tick cost; the
         per-lap inputs it composes are already cached). The dialog handles its own friendly
         excluded state when there are too few clean laps. Each row's Go button routes to
