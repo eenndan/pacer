@@ -45,7 +45,6 @@ from studio.library_dialog import (  # noqa: E402
     NUM_ROLE,
     TRACK_ROLE,
     LibraryDialog,
-    _entry_disabled,
     _entry_junk,
 )
 
@@ -460,16 +459,13 @@ def test_dialog_empty_index_shows_empty_library():
 
 # --------------------------------------------------- junk-row quarantine + auto-select + empty-state
 
-def test_entry_junk_and_disabled_classification():
-    """A row is JUNK (quarantined) iff it has no track OR no laps; DISABLED iff junk OR file-missing.
-    A real recording (track + laps + a present path) is neither."""
+def test_entry_junk_classification():
+    """A row is JUNK (quarantined) iff it has no track OR no laps; a real recording
+    (track + laps) is not."""
     assert _entry_junk(_entry("hero6", track=None, laps=0))          # no track AND no laps
     assert _entry_junk(_entry("GX010060", track=None))               # no track
     assert _entry_junk(_entry("GX010060", laps=0))                   # no laps
     assert not _entry_junk(_entry("GX010060", track="MK", laps=5))   # a real recording
-    # Disabled merges junk with file-missing (the existing-path one isn't on disk → disabled too).
-    assert _entry_disabled(_entry("GX010060", track=None, laps=0))
-    assert _entry_disabled(_entry("GX010060", paths=["/definitely/missing.MP4"]))
 
 
 def test_dialog_quarantines_junk_row_and_does_not_select_it():

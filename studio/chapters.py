@@ -39,7 +39,6 @@ class GoProName:
     prefix: str       # "GX" / "GH" / "GP" / "GL" (upper-cased)
     chapter: int      # CC — the 2-digit chapter index (1-based on GoPro)
     recording: int    # NNNN — the 4-digit recording number shared by siblings
-    ext: str          # the original extension as written on disk (e.g. ".MP4")
 
 
 def parse_gopro_name(path: str) -> GoProName | None:
@@ -53,8 +52,7 @@ def parse_gopro_name(path: str) -> GoProName | None:
     if not m:
         return None
     prefix, cc, nnnn = m.group(1), m.group(2), m.group(3)
-    ext = os.path.splitext(base)[1]
-    return GoProName(prefix=prefix.upper(), chapter=int(cc), recording=int(nnnn), ext=ext)
+    return GoProName(prefix=prefix.upper(), chapter=int(cc), recording=int(nnnn))
 
 
 def discover_siblings(path: str) -> list[str]:
@@ -159,10 +157,6 @@ class ChapterMap:
     @property
     def is_multi(self) -> bool:
         return len(self.chapters) > 1
-
-    @property
-    def paths(self) -> list[str]:
-        return [c.path for c in self.chapters]
 
     def chapter_at(self, global_t: float) -> int:
         """Index of the chapter containing global time `global_t`. Times below 0 map to the

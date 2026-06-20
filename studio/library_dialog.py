@@ -86,13 +86,6 @@ def _entry_junk(entry: dict) -> bool:
     return not entry.get("track") or not entry.get("lap_count")
 
 
-def _entry_disabled(entry: dict) -> bool:
-    """True iff the row should be greyed + non-selectable — its file(s) are gone OR it's a junk row
-    (no track / no laps). The two reasons are merged so selection, auto-select and the open guard
-    all share one "is this row usable?" test."""
-    return _entry_missing(entry) or _entry_junk(entry)
-
-
 def _date_sort_key(date: str | None) -> float | None:
     """A sortable numeric key for a "YYYY-MM-DD" date string: its ordinal (days). Lexical order
     of an ISO date already equals chronological order, but a numeric key keeps the _NumItem path

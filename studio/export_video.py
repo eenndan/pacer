@@ -295,15 +295,15 @@ def resolve_video_source(chapter_map, t0: float, t1: float,
     span = chs[i0:i1 + 1]
     inpoint = max(0.0, t0 - start.offset)        # local start within the first spanned chapter
     tmp = tmp_dir or os.environ.get("TMPDIR") or "/tmp"
-    _fd, list_path = _mk_concat_list(span, tmp, first_inpoint=inpoint)
+    list_path = _mk_concat_list(span, tmp, first_inpoint=inpoint)
     return VideoSource(probe_path=start.path, time_offset=float(t0),
                        concat_list_path=list_path)
 
 
 def _mk_concat_list(chapters_span, tmp_dir: str,
-                    first_inpoint: float | None = None) -> tuple[int, str]:
-    """Write an ffmpeg concat-demuxer list file for `chapters_span` into `tmp_dir`; returns
-    (fd, path). `first_inpoint` (seconds) adds an `inpoint` after the first file (lap-start keyframe
+                    first_inpoint: float | None = None) -> str:
+    """Write an ffmpeg concat-demuxer list file for `chapters_span` into `tmp_dir`; returns its
+    path. `first_inpoint` (seconds) adds an `inpoint` after the first file (lap-start keyframe
     seek)."""
     import tempfile
     fd, list_path = tempfile.mkstemp(prefix="pacer_export_concat_", suffix=".txt", dir=tmp_dir)
@@ -317,7 +317,7 @@ def _mk_concat_list(chapters_span, tmp_dir: str,
             lines.append(f"inpoint {first_inpoint:.6f}\n")
     with os.fdopen(fd, "w") as f:
         f.write("".join(lines))
-    return fd, list_path
+    return list_path
 
 
 # --------------------------------------------------------------------------- export spec
@@ -916,7 +916,7 @@ class OverlayPainter:
     """Composites the overlay elements onto each decoded frame. Built ONCE per export (it caches
     the static map-inset geometry + a headless g-meter dial that it drives frame-to-frame with the
     SAME set_lap/set_g sequence the live tick uses, so the burned dial's EMA/envelope evolve
-    identically). `paint_frame` mutates the passed QImage in place."""
+    identically). `paint_frame_with_state` mutates the passed QImage in place."""
 
     def __init__(self, session, spec: ExportSpec, out_w: int, out_h: int):
         self._session = session
@@ -979,12 +979,6 @@ class OverlayPainter:
         _paint_readout(p, self._readout_rect, vals)
         _paint_strip(p, self._strip_rect, self._session, vals, self._spec.t0)
         p.end()
-
-    def paint_frame(self, img: QImage, vals: OverlayValues) -> None:
-        """Paint all overlay elements onto `img`, advancing the g-meter dial first (so its
-        dot/envelope reflect this frame). The simple sequential path — kept for the single-threaded
-        render + callers that drive one frame at a time."""
-        self.paint_frame_with_state(img, vals, self.advance_and_snapshot(vals))
 
 
 def _paint_packed_frame(painter: OverlayPainter, out_w: int, out_h: int, raw: bytes,
