@@ -220,7 +220,6 @@ CAPTION = 12
 
 # --- weights ---
 W_REGULAR = QFont.Weight.Normal     # 400
-W_MEDIUM = QFont.Weight.Medium      # 500
 W_SEMIBOLD = QFont.Weight.DemiBold  # 600
 
 # --- font stacks (used in QSS font-family declarations) ---

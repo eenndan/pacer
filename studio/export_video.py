@@ -504,17 +504,6 @@ def resolve_fps(cfg: OverlayConfig, src_fps: float) -> float:
     return fps
 
 
-def resolve_workers(workers: int | None) -> int:
-    """How many parallel COMPOSITE (paint) worker threads to use. None/0 = auto: a small pool sized
-    to the machine (cpu_count-1, clamped to [1, 4]) — enough to overlap painting with decode+encode
-    without oversubscribing the cores VideoToolbox/ffmpeg also want. An explicit positive value is
-    honoured (1 = the in-line single-threaded paint)."""
-    if workers and workers > 0:
-        return int(workers)
-    cpu = os.cpu_count() or 2
-    return max(1, min(4, cpu - 1))
-
-
 # --------------------------------------------------------------------------- per-frame values
 @dataclass
 class OverlayValues:

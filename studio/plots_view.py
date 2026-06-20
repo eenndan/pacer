@@ -72,7 +72,6 @@ ZERO_LINE_PEN = pg.mkPen(C.border, width=1)
 # coasting spans (a translucent vertical band over each coast region). The brake glyph uses
 # the lap's own series colour (app passes it) so compare mode reads lap A vs lap B; the coast
 # band is a quiet neutral fill that never competes with the curves.
-COAST_FILL = pg.mkBrush(C.text_muted)  # alpha applied per-region below
 COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
 COAST_PEN = pg.mkPen(None)
 
