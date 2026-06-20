@@ -1,63 +1,28 @@
 """Vehicle-frame g from the GoPro's real accelerometer, with a GPS-derived cross-check.
 
-WHAT THIS COMPUTES
-------------------
-A classic friction-circle g-meter needs, at each instant, the kart-frame
-**lateral** (sideways) and **longitudinal** (forward/brake) acceleration in g. This module
-turns the raw GoPro IMU streams (bound in the C++ core: ACCL accelerometer, GRAV gravity
-vector, CORI camera-orientation quaternion — all on the MEDIA clock) into that vehicle-frame
-g signal, and independently derives the same g from the GPS trajectory as a cross-check.
+Computes kart-frame lateral/longitudinal g (in g) from the GoPro IMU streams (ACCL, GRAV, CORI,
+all on the media clock) plus an independent GPS-derived cross-check. Axis conventions resolved
+empirically (see studio/docs/gmeter-validation.md).
 
-THE CAMERA -> KART FRAME TRANSFORM (validated empirically on the real session)
------------------------------------------------------------------------------
-The GoPro reports acceleration in its own body frame. We need it in the kart's horizontal
-frame (forward / lateral). The streams' axis conventions were resolved empirically against
-the real recording (see `studio/docs/gmeter-validation.md`):
-
-  1. GRAV gives the gravity DIRECTION (a unit vector) in the camera body frame, but its three
-     elements are PERMUTED relative to ACCL's (ACCL native order is Z,X,Y). The permutation
-     ACCL[i] <- GRAV[PERM[i]] with PERM=(1,0,2) makes 9.81*GRAV match the at-rest ACCL within
-     ~1% — so GRAV, mapped through PERM, is the gravity vector expressed in the ACCL frame.
-
-  2. LINEAR acceleration = ACCL - 9.81*ĝ  (subtract gravity in the ACCL frame). This is the
-     real motion-induced acceleration, free of the static 1 g.
-
-  3. CORI (the on-camera fused orientation quaternion) rotates a camera-frame vector into a
-     fixed WORLD frame. Empirically CORI stores world->camera, so we use its CONJUGATE to go
-     camera->world; with that, the rotated gravity vector is CONSTANT over time (std ~0.035),
-     confirming the rotation is correct. (CORI's axis convention matches GRAV's, so we permute
-     the ACCL-frame vectors by PERM before rotating, same as gravity.)
-
-  4. Project the world-frame linear accel onto the HORIZONTAL plane (perpendicular to the
-     constant world-gravity direction). This 2D horizontal accel has the correct MAGNITUDE,
-     but lives in CORI's world frame whose yaw is arbitrary (CORI yaw drifts and is NOT tied
-     to GPS north — confirmed: camera heading does not track GPS heading).
-
-  5. Resolve the one remaining unknown — the constant yaw + handedness between CORI's world
-     plane and the GPS (ENU) world — by a single per-recording Procrustes (SVD) fit of the
-     ACCL horizontal accel onto the GPS-derived horizontal accel vector. This is a one-time
-     sensor-mount calibration (like zeroing a g-meter). With it, the ACCL horizontal accel is
-     expressed in ENU and can be split per-sample into FORWARD (along GPS velocity) and LATERAL
-     (perpendicular) using the GPS heading at each instant.
+The camera->kart transform:
+  1. Gravity-remove: GRAV permuted onto ACCL's axes via PERM=(1,0,2); linear = ACCL - 9.81*ĝ.
+  2. Rotate camera->world via CORI's conjugate (CORI stores world->camera); the rotated gravity
+     is constant over time, confirming the rotation.
+  3. Project onto the horizontal plane (perpendicular to world-gravity). Magnitude is correct but
+     the in-plane yaw is arbitrary (CORI yaw drifts, not tied to GPS north).
+  4. Resolve the constant yaw + handedness by a per-recording Procrustes (SVD) fit of the ACCL
+     horizontal accel onto the GPS-derived one (a one-time mount calibration). Then split each
+     sample into forward (along GPS velocity) and lateral using the GPS heading.
 
   longitudinal_g = a_forward / 9.81     (+ = accelerating, - = braking)
   lateral_g      = a_left    / 9.81     (+ = turning left, - = turning right)
 
-THE GPS CROSS-CHECK (validates the whole transform; honest about disagreement)
------------------------------------------------------------------------------
-Independently, from the GPS trajectory:
-  longitudinal_g = (d|v|/dt) / 9.81
-  lateral_g      = (|v| * yaw_rate) / 9.81   (= v^2 * curvature / 9.81)
-Comparing the two over the whole moving session (Pearson correlation + RMS magnitude) is the
-acid test that the camera->kart transform is right. The result is reported by `cross_check`
-and surfaced at load; see the module README for the measured numbers (lateral correlates
-strongly; longitudinal magnitude matches but per-sample correlation is weaker, as expected
-for the small, GPS-derivative-noisy forward-g channel).
+GPS cross-check (the acid test of the transform): from the GPS trajectory,
+longitudinal_g = (d|v|/dt)/9.81 and lateral_g = (|v|*yaw_rate)/9.81; compared over the moving
+session via correlation + RMS (lateral correlates strongly; longitudinal magnitude matches but
+its per-sample correlation is weaker, as expected for the noisy forward-g channel).
 
-PERFORMANCE
------------
-All of this runs ONCE at load. The output is a downsampled (lat_g, long_g) time series on the
-media clock; `GMeter.at_time` is a cheap `searchsorted` lookup used at the 30 Hz UI tick.
+All of this runs once at load; GMeter.at_time is a cheap searchsorted lookup for the 30 Hz tick.
 """
 
 from __future__ import annotations
@@ -76,16 +41,9 @@ _PERM = (1, 0, 2)
 # CORI stores world->camera; conjugate it to rotate camera->world.
 _CORI_CONJUGATE = True
 
-# Output series rate. The dot is driven at ~30 Hz and the real g signal is band-limited well
-# below the 200 Hz ACCL rate, so we resample to a modest rate (light low-pass beforehand kills
-# the high-frequency vibration that would make the dot jitter). 50 Hz is plenty for the meter.
-_OUTPUT_HZ = 50.0
-# Low-pass window applied to the horizontal accel before output, in seconds. ~0.15 s tames
-# vibration / road buzz without lagging real corner/brake transitions.
-_LOWPASS_S = 0.15
-# Speed (m/s) above which a sample is "moving" — used to fit the alignment and the cross-check
-# (heading / forward direction are ill-defined at a standstill).
-_MOVING_MS = 4.0
+_OUTPUT_HZ = 50.0    # output rate; g is band-limited well below ACCL 200Hz
+_LOWPASS_S = 0.15    # pre-output low-pass (s): kills road buzz without lagging corners/brakes
+_MOVING_MS = 4.0     # m/s; heading is ill-defined at a standstill (used for fit + cross-check)
 
 
 def _norm_rows(a):
@@ -114,9 +72,8 @@ def _quat_rotate_world(qw, qx, qy, qz, v):
 
 @dataclass
 class CrossCheck:
-    """Result of comparing the ACCL-derived vehicle-frame g to the GPS-derived g, over the
-    moving part of the session. The correlations and RMS magnitudes are the honest validation
-    of the camera->kart transform."""
+    """ACCL-derived g vs GPS-derived g over the moving session: per-channel correlation + RMS,
+    the fitted mount yaw/handedness, and a trust verdict (ok)."""
     n: int               # number of moving samples compared
     lat_corr: float      # Pearson r, ACCL lateral g vs GPS lateral g
     long_corr: float     # Pearson r, ACCL longitudinal g vs GPS longitudinal g
@@ -191,10 +148,7 @@ def _gps_derived_g(gt, gx, gy, gspeed):
     dt[dt <= 0] = np.median(dt[dt > 0]) if np.any(dt > 0) else 1.0
 
     def medfilt(a, k=5):
-        # Edge-shrinking running median: out[i] = median(a[max(0,i-h) : min(n,i+h+1)]).
-        # Vectorized — the full interior windows in one sliding_window_view + np.median(axis=1)
-        # (was a Python loop over all n samples); only the h shrinking windows at each end stay
-        # per-element. Identical slices to the loop, so the output is bit-for-bit the same.
+        # Edge-shrinking running median: interior via sliding_window_view; the h windows at each end shrink.
         h = k // 2
         if n < k:  # too short for any full window — every window shrinks; do them all directly
             return np.array([np.median(a[max(0, i - h):min(n, i + h + 1)]) for i in range(n)])
@@ -230,15 +184,12 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
       cori: (Nc,5) [t, w, x, y, z] camera-orientation quaternion
       gps_t, gps_x, gps_y: GPS trajectory time + local-metre east/north (the smoothed track)
       gps_speed: GPS speed (m/s) aligned to gps_t
-      segment_bounds: optional list of (t_start, t_end) global-clock spans, ONE PER CHAPTER.
-        CORI is referenced to each CHAPTER's own capture start (chapter 1 begins at the identity
-        quaternion), so its world-frame yaw differs per chapter — the CORI-plane->ENU alignment
-        MUST be fit independently per chapter. Pass the chapter offset table here; with one
-        chapter (or None) it's a single global fit, exactly as before.
+      segment_bounds: optional list of (t_start, t_end) spans, one per chapter. CORI's world yaw
+        resets each chapter, so the CORI-plane->ENU alignment MUST be fit independently per
+        chapter; None = a single global fit.
 
-    Returns a GMeter. If ACCL/GRAV/CORI are missing (older cameras) OR the cross-check shows the
-    ACCL is unusable, the GPS-derived g is used as the live signal instead (and `source`/`cross`
-    say so) — we never silently ship a garbage meter.
+    Returns a GMeter. If the IMU is missing or the cross-check shows the ACCL is unusable, the
+    GPS-derived g is used instead (source/cross say so) — we never ship a garbage meter.
     """
     gps_t = np.asarray(gps_t, float)
     if len(gps_t) >= 4:
@@ -384,9 +335,8 @@ def _fit_segment(ta, h1, h2, gps_t, long_gps, lat_gps, fwd, left, moving):
     _, s, R, ca, cl, along, lat = best
     reflect = (s == -1)
     yaw = float(np.degrees(np.arctan2(R[1, 0], R[0, 0])))
-    # Trust heuristic: a real kart-mounted cam shows a clear lateral correlation. A head-/
-    # vibration-dominated mount produces weak lateral correlation. Lateral is the discriminating
-    # channel (it dominates karting and is the cleanest GPS reference).
+    # Trust heuristic: lateral is the discriminating channel (clear correlation = a real mount,
+    # weak = head/vibration-dominated).
     ok = bool(cl >= 0.4 and np.isfinite(cl))
     cross = CrossCheck(
         n=int(np.sum(m)), lat_corr=float(cl), long_corr=float(ca),
@@ -399,10 +349,8 @@ def _fit_segment(ta, h1, h2, gps_t, long_gps, lat_gps, fwd, left, moving):
 
 
 def _merge_crosses(crosses):
-    """Combine per-chapter cross-checks into one (sample-count-weighted correlations + RMS).
-    `ok` is true if the WHOLE recording's weighted lateral correlation clears the bar — so one
-    weak chapter doesn't condemn an otherwise-good ACCL, and the per-chapter alignment means a
-    chapter's bad global-yaw no longer drags the verdict down."""
+    """Combine per-chapter cross-checks (sample-count-weighted correlations + RMS). `ok` keys off
+    the whole recording's weighted lateral correlation so one weak chapter can't condemn it."""
     crosses = [c for c in crosses if c is not None and c.n > 0]
     if not crosses:
         return None

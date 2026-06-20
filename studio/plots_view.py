@@ -1,25 +1,10 @@
-"""PlotsView: speed (top) and lap-vs-best delta (bottom) on ONE shared, x-linked x-axis.
+"""PlotsView: speed (top) and lap-vs-best delta (bottom) on one shared, x-linked x-axis.
 
-Shows the laps selected in the lap table PLUS the best lap as an always-on green reference
-(`SERIES_BEST`) — the panel is "Δ TO BEST", so the best lap is the baseline and is drawn even
-when the user selects other laps. The best is added to a DRAW set at refresh time only; the
-selection (`self._lap_ids`) is never mutated, so the cursor/scrub/hover-dot/auto-follow keep
-keying off the user's current lap, not the best. A vertical cursor on both plots follows the
-video position whenever the currently-playing lap is among those displayed.
-
-Both plots share a single x-axis driven by the dist/time toggle and kept x-linked, so the same
-media moment maps to the same x on both → the two cursors ALWAYS line up vertically (and pan/zoom
-on one follows the other). In distance mode x = normalized-distance × best-lap distance (metres,
-the axis `session.delta` draws the curves on); in time mode x = time-into-lap (seconds).
-
-The cursor is also a SCRUBBER: it is draggable on both plots, and dragging it seeks the video
-within the current lap. The delta plot additionally shows a HOVER DOT that rides the delta curve
-under the mouse with its Δ value — independent of the playback cursor, to inspect any point.
-
-This view stays pacer-free — it only emits the raw plot-x and which axis/plot a scrub came from
-(`scrubStarted` / `scrubMoved(x, mode)` / `scrubEnded`); app.py owns session + video and does all
-conversion, throttled seeking, pause/resume and re-sync. The always-on Δ/speed readout box lives
-in app.py too (values from session); the hover dot reads only the curve already drawn here.
+The best lap is always drawn green as the Δ baseline (added to a draw set at refresh time only;
+the selection `self._lap_ids` is never mutated). Distance mode x = normalized-distance ×
+best-lap distance; time mode x = time-into-lap. A draggable cursor on both plots scrubs the
+video; the delta plot also shows a hover dot riding the delta curve. Stays pacer-free — emits
+raw plot-x + axis mode; app.py owns session/video and all conversion.
 """
 
 from __future__ import annotations
@@ -39,51 +24,40 @@ from .theme import C
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
 
-# Antialiased path rendering is a major per-repaint cost; the cursor's InfiniteLine.setValue
-# re-renders every visible curve each ~30 Hz tick, so keep it OFF for smooth playback.
+# Antialias off: the cursor re-renders every visible curve each ~30Hz tick.
 pg.setConfigOptions(antialias=False)
 
-# Lap-curve palette (Phase 2): tokenized categorical series. The BEST lap is recoloured to
-# C.ahead (green) at draw time so it matches the lap table; the rest cycle through CHART_SERIES.
+# Lap-curve palette: best is recoloured green at draw time (matches the lap table); rest cycle.
 PALETTE = theme.CHART_SERIES
-# Scrub cursor: a thin neutral dashed line (quiet by default); brighter accent + thicker on hover
-# so the user can tell it's grabbable. Pens are built ONCE here, never per-tick.
+# Scrub cursor: thin neutral dashed (quiet); brighter accent + thicker on hover so it reads as
+# grabbable. Pens built once.
 CURSOR_PEN = pg.mkPen(C.text_dim, width=1, style=Qt.DashLine)
 CURSOR_HOVER_PEN = pg.mkPen(C.accent, width=2, style=Qt.DashLine)
 # Hover dot rides the delta curve: accent fill with a dark canvas outline so it pops on any curve.
 HOVER_DOT_BRUSH = pg.mkBrush(C.accent)
 HOVER_DOT_PEN = pg.mkPen(C.canvas, width=1)
-# In-plot legend plate: a near-opaque surface fill + hairline border so the legend reads as a
-# small card ON the chart rather than sitting transparently on top of the rising speed traces.
-# Alpha 230/255 keeps a hint of the gridlines behind it without the labels fighting the data.
+# Legend plate: near-opaque surface fill (alpha 230) + hairline border so it reads as a card on
+# the chart.
 _sr, _sg, _sb = theme._hex_rgb(C.surface)
 LEGEND_BRUSH = pg.mkBrush(_sr, _sg, _sb, 230)
 LEGEND_PEN = pg.mkPen(C.border, width=1)
-# F2: sector boundary guide lines — clearly-legible NEUTRAL grey dashed vertical lines on BOTH
-# charts. C.text_muted (#6B7280) reads cleanly against the surface and dashed reads better than
-# dotted at this scale; they stay NEUTRAL (not amber) so they never clash with the amber
-# current-lap curve, and behind everything (setZValue(-5)) so they remain a subordinate backdrop.
+# F2: sector boundary guide lines — neutral grey dashed (so they never clash with the amber
+# current-lap curve), behind everything (zValue -5).
 SECTOR_LINE_PEN = pg.mkPen(C.text_muted, width=1, style=Qt.DashLine)
 SECTOR_LABEL_COLOR = C.text_dim
 # The delta plot's y=0 reference line — a faint hairline, same weight as the gridlines.
 ZERO_LINE_PEN = pg.mkPen(C.border, width=1)
-# F5 driving channels on the speed chart: brake-point glyphs (▼) at each braking-zone onset,
-# riding the speed curve, sized by peak decel (same ramp as the map glyphs); and shaded
-# coasting spans (a translucent vertical band over each coast region). The brake glyph uses
-# the lap's own series colour (app passes it) so compare mode reads lap A vs lap B; the coast
-# band is a quiet neutral fill that never competes with the curves.
+# F5: brake glyphs (sized by peak decel) ride the speed curve; coast spans shade a neutral band.
 COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
 COAST_PEN = pg.mkPen(None)
 
 
 class PlotsView(QWidget):
-    # Cursor-scrub signals. plots_view stays pacer-free: it emits only the raw plot-x and which
-    # axis/plot the drag came from; app.py converts to a media time, seeks, and re-syncs.
+    # Scrub signals (pacer-free: emit raw plot-x; app converts/seeks).
     scrubStarted = Signal()
     scrubMoved = Signal(float, str)  # (plot_x, mode) — mode in {'time','distance'} (shared axis)
     scrubEnded = Signal()
-    # Emitted whenever the shared x-axis mode flips (distance ⇄ time). app re-pushes the sector
-    # boundary positions for the new mode (F2) so the vertical guide lines reposition correctly.
+    # Fired when the shared x-axis mode flips; app re-pushes sector positions for the new mode (F2).
     modeChanged = Signal(str)  # the new mode: 'time' | 'distance'
 
     def __init__(self, session: Session):
@@ -97,67 +71,46 @@ class PlotsView(QWidget):
         self._cursor_t: float | None = None  # last applied position; re-placed after refresh()
         self._user_dragging = False  # True between grab and release of either cursor
         self._suppress = False  # guard programmatic setValue from re-emitting a scrub
-        # F2: sector boundary guide lines (start/finish + each sector) on BOTH plots. Items are
-        # tracked so they can be cleared/redrawn live as sectors are edited; positions are
-        # (label, x) for the CURRENT axis mode, pushed by app via set_sector_lines.
+        # F2: sector boundary guide lines on both plots; positions are (label, x) for the current
+        # axis mode, pushed by app via set_sector_lines.
         self._sector_items: list = []
         self._sector_positions: list[tuple[str, float]] = []
-        # F5 driving channels on the speed chart: brake glyphs + shaded coasting bands. The
-        # DATA is pushed by app (so this view stays pacer-free) as per-lap lists keyed by the
-        # SAME draw set the curves use; the items are tracked so refresh() clears/redraws them
-        # on the freshly-fit axes (positions are in the current mode's units, like the sectors).
-        #   _brake_data: list of (positions, colour) — positions = [(plot-x, peak_decel)]
-        #   _coast_data: list of (spans, colour)     — spans = [(plot-x0, plot-x1)]
+        # F5 driving channels (brake glyphs + coast bands); data pushed by app, redrawn on fitted axes.
         self._brake_items: list = []
         self._coast_items: list = []
-        self._brake_data: list = []
-        self._coast_data: list = []
+        self._brake_data: list = []  # [(positions=[(x,decel)], colour)]
+        self._coast_data: list = []  # [(spans=[(x0,x1)], colour)]
 
-        # x-axis toggle — drives BOTH plots together (distance ⇄ time-into-lap). The plots share
-        # one x-axis and stay x-linked, so the speed + delta cursors always align in either mode.
-        # The combo is EXPOSED but NOT placed here: app.py mounts it (right-aligned) in the single
-        # consolidated bar above the charts — section label · Δ/speed readout · this toggle — so
-        # the toggle no longer eats its own full-width row. Its modeChanged wiring is unchanged.
+        # x-axis toggle (distance/time). Exposed but mounted by app.py in its consolidated bar.
         self.x_mode_combo = QComboBox()
         self.x_mode_combo.addItems(["x: distance", "x: time"])
         self.x_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
 
         self.glw = pg.GraphicsLayoutWidget()
-        # Tight outer margins + inter-plot spacing so the plot area fills the panel — the charts
-        # are the analytical core and need every pixel. Set on the central GraphicsLayout.
+        # Tight margins so the charts fill the panel.
         self.glw.ci.layout.setContentsMargins(2, 2, 2, 2)
         self.glw.ci.layout.setSpacing(4)
         self.p_speed = self.glw.addPlot(row=0, col=0)
         self.p_delta = self.glw.addPlot(row=1, col=0)
-        # Give the Δ plot more room — it was a cramped sliver. Row stretch ≈ speed 58 / Δ 42 so
-        # the delta curve (the priority readout) is comfortably legible while speed stays dominant.
+        # Speed 58 / delta 42 row stretch - delta legible, speed dominant.
         self.glw.ci.layout.setRowStretchFactor(0, 58)
         self.glw.ci.layout.setRowStretchFactor(1, 42)
         self.p_speed.setLabel("left", "speed (km/h)")
-        # The two plots are x-linked and share ONE x-axis, so the speed plot's bottom axis would
-        # just duplicate the Δ plot's "distance (m)"/"time (s)" labels+ticks — wasted vertical
-        # space. Hide the speed plot's bottom axis entirely; the SHARED x ticks/label live on the
-        # BOTTOM (Δ) plot only. The gridlines below still draw the vertical guides on the speed
-        # plot, so it reads cleanly against the same x.
+        # Hide the speed plot's bottom axis: the shared x ticks/label live on the Δ plot only.
         self.p_speed.hideAxis("bottom")
         # Faint gridlines (alpha 0.10) so they read as a quiet backdrop, not a foreground grid.
         self.p_speed.showGrid(x=True, y=True, alpha=0.10)
         leg = self.p_speed.addLegend(offset=(8, 8))
         self.p_delta.setLabel("left", "Δ to best (s)")
         self.p_delta.setLabel("bottom", "distance (m)")
-        # Sub-second deltas otherwise auto-scale to a "(x0.001)" SI prefix on the axis; keep
-        # the left axis in plain seconds so it reads e.g. 0.228 directly.
+        # Sub-second deltas otherwise auto-scale to a "(x0.001)" SI prefix; keep plain seconds.
         self.p_delta.getAxis("left").enableAutoSIPrefix(False)
         self.p_delta.showGrid(x=True, y=True, alpha=0.10)
-        # Both plots now share ONE x basis in BOTH modes (distance = s×best_dist; time =
-        # time-into-lap), so keep them permanently x-linked — same moment = same x on each, and
-        # pan/zoom on one follows the other. (Previously unlinked in time mode.)
+        # Permanently x-linked: same x basis in both modes, so cursors/pan/zoom track.
         self.p_delta.setXLink(self.p_speed)
         self.p_delta.addLine(y=0, pen=ZERO_LINE_PEN)
 
-        # Premium axis styling (Phase 2): dim axis lines + tick text to tokens, tabular numeric
-        # tick font, and reduced tick clutter. Set ONCE here — never on the 30 Hz tick. The speed
-        # plot's bottom axis is hidden (shared x lives on the Δ plot), so only style its LEFT axis.
+        # Axis styling, set once: dim tokens, tabular mono font, fewer ticks.
         for plot, sides in ((self.p_speed, ("left",)), (self.p_delta, ("left", "bottom"))):
             for side in sides:
                 ax = plot.getAxis(side)
@@ -165,10 +118,7 @@ class PlotsView(QWidget):
                 ax.setTextPen(C.text_dim)      # tick labels + axis title
                 ax.setTickFont(theme.mono_font(11))  # tabular figures so digits column-align
                 ax.setStyle(maxTickLevel=1, hideOverlappingLabels=True)  # fewer, cleaner ticks
-        # Legend reads dimmed AND sits on a surface plate (brush) + hairline border (pen) so it
-        # doesn't float transparently over the rising speed traces. The per-plot title still reads
-        # dimmed for any incidental use, but refresh() no longer sets one (the legend identifies
-        # the curves now — see _curve_label).
+        # Legend: dimmed text on a surface plate.
         if leg is not None:
             leg.setLabelTextColor(C.text_dim)
             leg.setBrush(LEGEND_BRUSH)
@@ -176,9 +126,7 @@ class PlotsView(QWidget):
         for plot in (self.p_speed, self.p_delta):
             plot.titleLabel.setAttr("color", C.text_dim)
 
-        # Draggable scrub cursors. A generous hover region (hoverPen + a wider hover-detection
-        # span) makes the thin dashed line easy to grab. movable=True; their drag signals are
-        # wired to the scrub handlers below.
+        # Draggable scrub cursors; hoverPen makes the thin dashed line easy to grab.
         self.cur_speed = pg.InfiniteLine(angle=90, movable=True, pen=CURSOR_PEN,
                                          hoverPen=CURSOR_HOVER_PEN)
         self.cur_delta = pg.InfiniteLine(angle=90, movable=True, pen=CURSOR_PEN,
@@ -189,19 +137,13 @@ class PlotsView(QWidget):
         self.p_speed.addItem(self.cur_speed)
         self.p_delta.addItem(self.cur_delta)
 
-        # Continuous drag (sigDragged) → scrubMoved; release (sigPositionChangeFinished) →
-        # scrubEnded. scrubStarted is emitted on the first drag tick of a grab (tracked by
-        # _user_dragging). Programmatic setValue (the playback tick) does NOT emit sigDragged,
-        # and _suppress guards the rest, so the tick can never masquerade as a user scrub.
+        # sigDragged->scrubMoved; sigPositionChangeFinished->scrubEnded. setValue doesn't emit sigDragged.
         self.cur_speed.sigDragged.connect(self._on_speed_dragged)
         self.cur_delta.sigDragged.connect(self._on_delta_dragged)
         self.cur_speed.sigPositionChangeFinished.connect(self._on_drag_finished)
         self.cur_delta.sigPositionChangeFinished.connect(self._on_drag_finished)
 
-        # Hover dot on the delta plot: a marker that rides the delta curve under the mouse, with
-        # a small label showing the Δ value (and the distance/time there). Independent of the
-        # playback cursor — lets the user inspect ANY point. Hidden until the mouse is over the
-        # plot. The handler does a cheap nearest-index lookup on `_delta_curves` (no re-plot).
+        # Hover dot: rides the delta curve under the mouse, showing the delta value (see _on_delta_hover).
         self.hover_dot = pg.ScatterPlotItem(size=9, brush=HOVER_DOT_BRUSH, pen=HOVER_DOT_PEN)
         self.hover_dot.setZValue(20)
         self.hover_dot.setVisible(False)
@@ -212,10 +154,7 @@ class PlotsView(QWidget):
         self.p_delta.addItem(self.hover_label)
         self.p_delta.scene().sigMouseMoved.connect(self._on_delta_hover)
 
-        # E1 in-panel EMPTY STATE: a recording with zero valid laps has nothing to plot, so refresh()
-        # would leave blank axes — indistinguishable from a broken app. Stack a centred, dimmed
-        # placeholder over the charts and swap to it (refresh() flips the stack) when there are no
-        # laps to draw, so the panel always explains itself instead of showing empty axes.
+        # E1: empty-state placeholder shown (via the stack) when there are no laps to plot.
         self._empty = QLabel(
             "No lap data to plot.\n\n"
             "This recording has no complete laps — the speed and Δ-to-best "
@@ -235,47 +174,39 @@ class PlotsView(QWidget):
     def _on_mode_changed(self, index):
         self._time_mode = index == 1
         self.refresh()
-        # The sector guide-line x-positions are mode-dependent; ask app to re-push them for the
-        # new mode (F2). app recomputes via session and calls set_sector_lines.
+        # Sector positions are mode-dependent; ask app to re-push them for the new mode (F2).
         self.modeChanged.emit(self._axis_mode())
 
     # ----------------------------------------------------------- cursor scrub
     def is_dragging(self) -> bool:
-        """True while the user is actively dragging either cursor — app.py uses this to stop the
-        playback tick from fighting the drag (it ignores position-driven cursor updates then)."""
+        """True while a cursor is being dragged (app suppresses the playback tick then)."""
         return self._user_dragging
 
     def _axis_mode(self) -> str:
-        """The ONE shared x-axis mode driving both plots: 'time' or 'distance' (the latter is
-        the s×best_distance axis the conversion helpers treat identically to 'delta')."""
+        """The shared x-axis mode: 'time' or 'distance' (the s×best_distance axis)."""
         return "time" if self._time_mode else "distance"
 
     def _axis_unit(self) -> str:
-        """The bare unit for the current x-axis mode ('s' for time, 'm' for distance) — the single
-        source for both the axis title (_axis_label) and the hover readout's "@ x <unit>"."""
+        """The bare unit for the current x-axis mode ('s' for time, 'm' for distance)."""
         return "s" if self._time_mode else "m"
 
     def _axis_label(self) -> str:
-        """The Δ-plot bottom-axis title for the current mode, e.g. 'time (s)' / 'distance (m)'.
-        Built from _axis_mode + _axis_unit so the mode→label/unit mapping lives in one place."""
+        """The Δ-plot bottom-axis title for the current mode, e.g. 'time (s)' / 'distance (m)'."""
         return f"{self._axis_mode()} ({self._axis_unit()})"
 
     def axis_mode(self) -> str:
-        """Public read of the current shared-axis mode ('time'|'distance'), so app can compute
-        the sector boundary positions (F2) in the right units without poking internals."""
+        """Public read of the current shared-axis mode ('time'|'distance')."""
         return self._axis_mode()
 
     def _on_speed_dragged(self, *_):
         self._emit_scrub(self.cur_speed.value(), self._axis_mode())
 
     def _on_delta_dragged(self, *_):
-        # Same shared axis as the speed plot now (distance mode = s×best_dist; time = into-lap),
-        # so the delta cursor's x converts with the same mode — no longer a separate 'delta' axis.
+        # Shared axis with the speed plot, so the delta cursor's x converts with the same mode.
         self._emit_scrub(self.cur_delta.value(), self._axis_mode())
 
     def _emit_scrub(self, x: float, mode: str):
-        # Programmatic setValue doesn't emit sigDragged, but guard anyway: never let a re-placed
-        # cursor masquerade as a user drag (belt-and-braces against the feedback loop).
+        # _suppress guards a programmatic re-place from looking like a drag.
         if self._suppress:
             return
         if not self._user_dragging:
@@ -293,16 +224,13 @@ class PlotsView(QWidget):
         self.refresh()
 
     def selected_lap_ids(self) -> list[int]:
-        """The lap ids currently overlaid on the charts (read-only copy). Mirrors
-        LapTable.selected_lap_ids so callers needn't reach into the private `_lap_ids`."""
+        """Copy of the lap ids overlaid on the charts."""
         return list(self._lap_ids)
 
     # ----------------------------------------------------------- sector lines (F2)
     def set_sector_lines(self, positions):
-        """Draw the sector BOUNDARIES as subtle vertical guide lines on BOTH charts. `positions`
-        is a list of (label, plot-x) on the CURRENT shared-axis mode (app computes them via
-        session, so this view stays pacer-free). Called live as sectors are added/moved/reset and
-        whenever the dist/time mode flips. An empty list clears the lines."""
+        """Set sector guide lines on both charts. positions = [(label, plot-x)] in the current
+        mode; [] clears."""
         self._sector_positions = list(positions or [])
         self._draw_sectors()
 
@@ -312,18 +240,13 @@ class PlotsView(QWidget):
         self._sector_items = []
 
     def _draw_sectors(self):
-        """(Re)draw the cached sector guide lines on both plots. A small label (S/F, S1, S2…)
-        sits near the TOP of the speed plot so it doesn't collide with the delta curve. The lines
-        sit BELOW the scrub cursor (lower zValue) and use a neutral grey dashed pen so they read
-        clearly without obscuring the curves or the cursor."""
+        """(Re)draw cached sector lines: label on the speed plot top only, behind the cursor."""
         self._clear_sectors()
         if not self._sector_positions:
             return
         for label, x in self._sector_positions:
             for plot in (self.p_speed, self.p_delta):
-                # Only the speed plot carries the text label (top); the delta plot just gets the
-                # line so the boundary reads across both without crowding the small delta panel.
-                # InfiniteLine wants the label as a format string and styling in labelOpts.
+                # Label on the speed plot only (delta panel is too small).
                 text = label if plot is self.p_speed else None
                 ln = pg.InfiniteLine(
                     pos=float(x), angle=90, pen=SECTOR_LINE_PEN, label=text,
@@ -335,17 +258,12 @@ class PlotsView(QWidget):
 
     # ----------------------------------------------------- driving channels (F5)
     def set_brake_markers(self, brake_data):
-        """Show brake-point glyphs on the speed chart. `brake_data` is a list of
-        (positions, colour) where positions = [(plot-x, peak_decel)] on the CURRENT shared-axis
-        mode (app computes them via session, so this view stays pacer-free) and colour is that
-        lap's series colour. One entry for the current lap; BOTH laps in compare. [] clears."""
+        """Set brake glyphs. brake_data = [(positions=[(x,decel)], colour)]; [] clears."""
         self._brake_data = list(brake_data or [])
         self._draw_driving()
 
     def set_coasting_spans(self, coast_data):
-        """Shade coasting spans on the speed chart. `coast_data` is a list of (spans, colour)
-        where spans = [(plot-x0, plot-x1)] on the CURRENT shared-axis mode. One entry for the
-        current lap; BOTH laps in compare. [] clears."""
+        """Set coast bands. coast_data = [(spans=[(x0,x1)], colour)]; [] clears."""
         self._coast_data = list(coast_data or [])
         self._draw_driving()
 
@@ -358,10 +276,7 @@ class PlotsView(QWidget):
         self._coast_items = []
 
     def _draw_driving(self):
-        """(Re)draw the brake glyphs + coast bands on the speed plot from the cached per-lap
-        data. Brake glyphs RIDE the lap's speed curve (their y = the speed at the onset x, from
-        the cached curve); the coast band is a translucent vertical LinearRegionItem. Both are
-        rebuilt wholesale (cheap; only on a selection/mode/compare change, never per tick)."""
+        """(Re)draw brake glyphs (riding the speed curve) + coast bands from cached data."""
         self._clear_driving()
         # Coast bands first so the brake glyphs draw above them.
         for spans, _colour in self._coast_data:
@@ -371,7 +286,7 @@ class PlotsView(QWidget):
                 region = pg.LinearRegionItem(
                     values=(float(x0), float(x1)), orientation="vertical",
                     brush=pg.mkBrush(fill), pen=COAST_PEN, movable=False)
-                region.setZValue(-4)  # above the sector lines (-5), below the curves
+                region.setZValue(-4)  # above sector lines, below the curves
                 self.p_speed.addItem(region)
                 self._coast_items.append(region)
         for positions, colour in self._brake_data:
@@ -379,8 +294,7 @@ class PlotsView(QWidget):
                 continue
             spots = []
             for x, decel in positions:
-                # Ride the speed curve: the glyph y is the speed at this x. Fall back to the
-                # nearest drawn-lap curve if this exact lap's curve isn't cached.
+                # Glyph y = speed at this x (riding the curve).
                 y = self._speed_at_x(float(x))
                 if y is None:
                     continue
@@ -389,21 +303,18 @@ class PlotsView(QWidget):
                 continue
             dots = pg.ScatterPlotItem(symbol="t", pen=None, brush=pg.mkBrush(colour), pxMode=True)
             dots.addPoints(spots)
-            dots.setZValue(8)  # above the curves + coast band, below the scrub cursor
+            dots.setZValue(8)  # above curves + coast band, below the cursor
             self.p_speed.addItem(dots)
             self._brake_items.append(dots)
 
     def _speed_at_x(self, x: float):
-        """The speed-curve y at plot-x `x`, interpolated from the cached speed curves. When
-        several laps are drawn (compare), the nearest sample across all curves is used so a
-        glyph still lands on a sensible point. None if no speed curve is drawn."""
+        """Interpolated speed-curve y at plot-x x (nearest curve when several drawn); None if none."""
         best_y = None
         best_dx = None
         for sx, spd in self._speed_curves.values():
             if len(sx) < 2:
                 continue
-            # x is monotonic; np.interp clamps to the ends (a glyph just past the last sample
-            # rides the endpoint). Track the curve whose x-range is closest to x.
+            # np.interp clamps to ends; pick the curve whose x-range is closest.
             dx = 0.0 if sx[0] <= x <= sx[-1] else min(abs(x - sx[0]), abs(x - sx[-1]))
             if best_dx is None or dx < best_dx:
                 best_dx = dx
@@ -417,24 +328,17 @@ class PlotsView(QWidget):
         self._hide_hover()
         self._delta_curves = []  # [(lid, xs, ys)] for the hover-dot nearest-sample snap
         self._speed_curves = {}  # {lid: (sx, spd)} rebuilt below; F5 brake glyphs ride these
-        # Clear the sector guide lines too: a stale vertical InfiniteLine would otherwise be
-        # caught by the autoRange fit below (like the cursor) and stretch the frozen range.
-        # They're redrawn at the end on the freshly-fit axes (and re-pushed by app on a mode flip).
+        # Clear sector lines + driving items up front: a stale item left in place would be caught
+        # by the autoRange fit below (like the cursor) and stretch the frozen range; both are
+        # redrawn at the end on the fitted axes.
         self._clear_sectors()
-        # F5 brake glyphs / coast bands: clear them up front for the same reason (a stale
-        # scatter/region would skew the autoRange fit); redrawn at the end on the fitted axes.
         self._clear_driving()
 
-        # Both plots share ONE x-axis (distance = s×best_dist, or time-into-lap), kept x-linked
-        # in BOTH modes so the two cursors always align. The shared x label/ticks live ONLY on the
-        # bottom (Δ) plot — the speed plot's bottom axis is hidden — so relabel just the Δ axis.
         x_mode = self._axis_mode()
-        self.p_delta.setLabel("bottom", self._axis_label())
+        self.p_delta.setLabel("bottom", self._axis_label())  # shared x label lives on the Δ plot
 
-        # Hide the cursors before fitting: cur_speed still holds the PREVIOUS mode's x (a
-        # distance value when toggling to time mode), and a visible InfiniteLine contributes
-        # that stale x to autoRange — stretching the frozen range ~8x. They're re-placed on
-        # the new axis basis after the fit (below), so they never contaminate the range.
+        # Hide the cursors before fitting: a visible InfiniteLine still holding the previous mode's
+        # x would contribute that stale value to autoRange. Re-placed after the fit.
         self.cur_speed.setVisible(False)
         self.cur_delta.setVisible(False)
 
@@ -442,18 +346,8 @@ class PlotsView(QWidget):
         self.p_speed.enableAutoRange()
         self.p_delta.enableAutoRange()
 
-        # The whole panel is "Δ TO BEST" — the baseline lap IS the reference curve, so it must
-        # ALWAYS be drawn (green) regardless of the user's selection, even when they picked other
-        # laps. Build a DRAW set = the selection plus the baseline (appended once if not already
-        # chosen), WITHOUT mutating self._lap_ids: the cursor/scrub/hover-dot/auto-follow all key
-        # off _lap_ids and the current lap, so the always-on baseline must not change which lap is
-        # "current". (session.delta also fetches the baseline's arrays internally, but we pass it
-        # explicitly so its speed/delta series come back in `speed`/`delta` to be drawn.)
-        #
-        # CROSS-RECORDING REFERENCE (F7): when one is loaded, the always-on baseline is the
-        # REFERENCE lap (from another recording, id = REFERENCE_ID), not the local best — append
-        # that sentinel so its curve is drawn green. DORMANT: with no reference, baseline = the
-        # local best lap, byte-identical to before.
+        # Always draw the delta baseline (green) even if unselected, without mutating _lap_ids.
+        # F7: baseline = the cross-recording REFERENCE lap when loaded, else the local best.
         if self.session.has_reference():
             baseline = REFERENCE_ID
         else:
@@ -463,41 +357,30 @@ class PlotsView(QWidget):
         if best_always_on:
             draw_ids.append(baseline)
 
-        # One delta() call yields BOTH plots' series on the SAME x basis for `x_mode`, so the
-        # speed and delta curves (and the cursors) share one axis and stay x-linked → aligned.
+        # One delta() call yields both plots' series on the same x basis, so they stay x-linked.
         result = self.session.delta(draw_ids, x_mode=x_mode)
         if not result:
-            # E1: nothing to plot (zero valid laps → no baseline, no curves). Show the centred
-            # empty-state placeholder instead of leaving blank axes that read as a broken panel.
-            self._stack.setCurrentIndex(1)
+            self._stack.setCurrentIndex(1)  # E1: no laps -> empty-state placeholder
             return
-        # Laps exist: ensure the charts (not the placeholder) are shown.
         self._stack.setCurrentIndex(0)
         best, speed, delta = result
         for k, lid in enumerate(draw_ids):
-            # Semantic colouring (Phase 2): the BEST lap is green (C.ahead) to match the lap
-            # table; every other lap cycles through the categorical CHART_SERIES (amber accent
-            # first → the primary/first-selected lap pops). width=2 solid keeps the fast path.
-            # The ALWAYS-ON best reference (drawn because it's the Δ baseline, not because the
-            # user selected it) is rendered slightly thinner so an explicitly-selected lap reads
-            # as primary — but it stays clearly green so "Δ to best" always has its green baseline.
+            # Best lap green (matches lap table); others cycle CHART_SERIES. Always-on best drawn
+            # thinner so a selected lap reads primary.
             is_best = lid == best
             color = theme.SERIES_BEST if is_best else PALETTE[k % len(PALETTE)]
             width = 1 if (is_best and best_always_on) else 2
             pen = pg.mkPen(color, width=width)
-            # The in-plot legend is the ONLY curve identifier now (the floating chart title was
-            # removed — it read like a debug print and duplicated this). So fold the lap time into
-            # the legend name; " · best" (mid-dot, spaced) tags the always-on green baseline.
+            # Legend label folds in the lap time (see _curve_label).
             name = self._curve_label(lid, is_best)
             if lid in speed:
                 sx, spd = speed[lid]
                 c = self.p_speed.plot(sx, spd, pen=pen, name=name)
-                # x is monotonic (distance or time), so downsampling + clip-to-view is valid and
-                # cuts the segments re-rendered on every cursor tick to roughly the visible set.
+                # Monotonic x -> downsample + clip-to-view is valid; cuts per-tick re-render.
                 c.setDownsampling(auto=True)
                 c.setClipToView(True)
                 self._curves.append((self.p_speed, c))
-                self._speed_curves[lid] = (sx, spd)  # F5: so brake glyphs can ride this curve
+                self._speed_curves[lid] = (sx, spd)  # F5: brake glyphs ride this curve
             if lid in delta:
                 dd, dl = delta[lid]
                 c = self.p_delta.plot(dd, dl, pen=pen)
@@ -506,34 +389,23 @@ class PlotsView(QWidget):
                 self._curves.append((self.p_delta, c))
                 self._delta_curves.append((lid, dd, dl))
 
-        # Fit each plot to its data once, then freeze autorange: cursor moves (InfiniteLine
-        # setValue every tick) must not trigger a range recompute. x is linked, so fitting both
-        # axes here covers the shared x range and each plot's own y range. Pan/zoom still works.
+        # Fit once, then freeze autorange so per-tick cursor moves don't recompute the range.
         self.glw.scene().update()
         self.p_speed.autoRange()
         self.p_delta.autoRange()
         self.p_speed.disableAutoRange()
         self.p_delta.disableAutoRange()
 
-        # Re-place the cursors on the now-frozen axes (in the new basis) so they're correct
-        # immediately — including when paused, where no position tick follows the toggle.
+        # Re-place the cursors on the now-frozen axes (also covers the paused-toggle case).
         if self._cursor_t is not None:
             self.set_playhead_time(self._cursor_t)
-        # Redraw the sector guide lines on the freshly-fit axes (positions are in the current
-        # mode's units; app re-pushes them when the mode flips, but a selection-only refresh
-        # keeps the same positions, so just redraw the cached ones here).
+        # Redraw the cached sector lines + driving items on the freshly-fit axes.
         self._draw_sectors()
-        # F5: redraw the brake glyphs / coast bands on the fitted axes (cached per-lap data in
-        # the current mode's units; app re-pushes on a mode flip / selection change).
         self._draw_driving()
 
     def _curve_label(self, lid: int, is_baseline: bool) -> str:
-        """The in-plot LEGEND label for one drawn curve (was the floating chart title — removed).
-        A local lap reads "lap N m:ss.mmm" with a clean spaced " · best" tag on the baseline (no
-        glued-on "★best", which jammed straight onto the time). The cross-recording REFERENCE curve
-        (id REFERENCE_ID, F7) reads "ref <label> m:ss.mmm · best" instead — it has no local lap id,
-        so its time comes from the session's reference accessor. DORMANT: never reaches the
-        reference branch in the local-only path."""
+        """Legend label for a curve: 'lap N m:ss.mmm' (+ ' · best' on the baseline), or
+        'ref <label> ...' for the F7 reference curve."""
         if lid == REFERENCE_ID:
             t = self.session.reference_lap_time() or 0.0
             tag = self.session.reference_label() or "reference"
@@ -542,35 +414,20 @@ class PlotsView(QWidget):
                 + (" · best" if is_baseline else ""))
 
     def set_playhead_time(self, t: float, *, force: bool = False):
-        """Place BOTH cursors from a single media time t (the shared playhead). Shared setter verb
-        with MapView.set_playhead_time.
-
-        Normally (force=False) this is a no-op while the user is dragging a cursor: the source of
-        truth is then the drag, not playback, so the tick can't fight the drag (app also pauses,
-        but any in-flight positionChanged from the seek must not bounce the cursor either).
-
-        force=True skips that mid-drag guard: app calls it during a scrub with the CLAMPED/converted
-        time so the dragged line snaps to the lap boundary and the other plot's cursor stays in
-        sync — 'two lines, one truth'."""
+        """Place both cursors from media time t. No-op mid-drag unless force=True (used during a
+        scrub to snap the dragged line to the clamped time)."""
         if self._user_dragging and not force:
             return
         self._place(t)
 
     def _place(self, t: float):
-        """Place BOTH cursors from the SAME media time t (the single source of truth) on the
-        SHARED x-axis, so they coincide. Both plots use one basis for the active mode: time-mode
-        x = time-into-lap; distance-mode x = normalized-distance × best_distance (the axis the
-        curves are drawn on — NOT raw odometer, which for a non-best lap would sit the cursor off
-        the curve and diverge from the other plot). Guarded by _suppress so a programmatic
-        setValue can never masquerade as a user scrub. Caches t so refresh() can re-place after a
-        mode/lap change."""
+        """Place both cursors at media time t on the shared x-axis. Caches t for refresh()
+        re-placement; _suppress prevents a re-emit."""
         self._cursor_t = t
         x = None
-        mode = self._axis_mode()  # the one shared axis mode (both plots)
-        # The distance/delta axis is scaled by the ACTIVE baseline total (the cross-recording
-        # reference's total when one is loaded, else the local best) — the same basis delta()
-        # scales its x-grid with — so the cursor stays on its curve. Time mode ignores it, so
-        # skip the lookup entirely there.
+        mode = self._axis_mode()
+        # Distance mode: scale by the active baseline total (same basis as delta()'s x-grid).
+        # Time mode skips it.
         best_d = None if mode == "time" else self.session.active_baseline_total_distance()
         for lid in self._lap_ids:
             window = self.session.lap_window(lid)
@@ -594,10 +451,8 @@ class PlotsView(QWidget):
         self.hover_label.setVisible(False)
 
     def _on_delta_hover(self, scene_pos):
-        """Mouse over the delta plot → snap a dot to the nearest delta-curve sample at the
-        hovered x and label its Δ value (+ the distance/time there). Independent of the playback
-        cursor: lets the user read Δ at ANY point by mouse-over. Cheap — a nearest-index lookup on
-        the cached curve arrays, no re-plot. Hidden when the mouse leaves the plot."""
+        """Snap the hover dot to the nearest delta-curve sample at the hovered x and label its
+        delta value."""
         vb = self.p_delta.getViewBox()
         if vb is None or not self._delta_curves:
             self._hide_hover()
