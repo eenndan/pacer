@@ -1,40 +1,19 @@
-"""PlayerPane: one self-contained single-lap video player (the reusable unit of the player).
+"""PlayerPane: one self-contained single-lap video player.
 
-Extracted verbatim from the original VideoView so it can be composed: a PlayerPane owns ONE
-QMediaPlayer + QVideoWidget + QAudioOutput plus an attached g-meter overlay, and presents a
-(possibly chaptered) recording as ONE continuous video on a GLOBAL session clock. VideoView is
-now a thin shell that wraps exactly one PlayerPane and adds the transport row + slider; Phase B
-will compose two panes side by side. The single-lap behaviour is byte-for-byte the legacy one.
+Owns one QMediaPlayer + QVideoWidget + QAudioOutput plus a g-meter overlay, and presents a
+(possibly chaptered) recording as ONE continuous video on a GLOBAL session clock:
+  * `positionChanged(global_s)` emits global time (local + the current chapter's offset), so the
+    telemetry sync sees one clock.
+  * `seek(global_t)` maps to (chapter, local); a different chapter switches the source first.
+  * EndOfMedia auto-advances to the next chapter (play from 0).
+A single file is a one-chapter map at offset 0, so global == local.
 
-A recording can be a single file OR a chaptered multi-file recording (a long GoPro session
-split at a size limit into chapters that are contiguous in time). QMediaPlayer plays exactly
-ONE source, so to present a multi-chapter recording as one continuous video this pane keeps
-the ordered chapter list + cumulative offsets (a `chapters.ChapterMap`) and:
-
-  * The emitted position is in GLOBAL session time (0..sum-of-durations), so the telemetry sync
-    (cursor, map marker, plots, readout) sees one continuous clock.
-  * `seek(global_t)` maps the global time to (chapter i, local_t); if chapter i isn't the
-    current source it SWITCHES the source to chapter i, then seeks to local_t.
-  * On `EndOfMedia` for chapter i it auto-loads chapter i+1 and keeps playing from 0, so
-    playback flows ACROSS chapters with no user action (a brief reopen hitch at the seam is
-    expected — QMediaPlayer reopens the file).
-  * `positionChanged` (a LOCAL media position) is converted to global (+offset of the current
-    chapter) before being emitted.
-
-For a single-file recording the ChapterMap has one entry at offset 0, so global == local and
-behaviour is exactly the legacy single-source path.
-
-THE G-METER OVERLAY (load-bearing macOS behaviour — preserved exactly)
-----------------------------------------------------------------------
-The classic friction-circle g-meter is drawn ON the video as a frameless translucent TOP-LEVEL
-window (not a plain child) so the window-server composites it ABOVE the QVideoWidget's native
-video surface — a child widget is painted behind that surface on macOS and never shows on
-screen. The pane pins it to the video's TOP-RIGHT corner in GLOBAL screen coords, sized as a
-fraction of the video, and keeps it there as the video moves/resizes. Keeping it pinned needs
-SEVEN hooks, all preserved here: installEventFilter on the video widget (Move/Resize), the
-pane's own moveEvent / resizeEvent / showEvent / hideEvent / closeEvent, and the per-tick
-re-pin inside set_g (a top-level window does NOT follow the parent when the WHOLE app window is
-dragged, so it must be re-pinned from the ~30 Hz tick). Driven by the app via set_g / set_lap.
+The friction-circle g-meter is the CANONICAL home of the top-level-window overlay trick: it's drawn
+as a frameless TOP-LEVEL window (not a child) because on macOS the window-server composites a child
+BEHIND the QVideoWidget's native video surface, so it never shows. The pane pins it to the video's
+top-right corner in global screen coords and keeps it there via several hooks (see the SEVEN hooks
+below + the per-tick re-pin in set_g, since a top-level window doesn't follow the parent on an
+app-window drag).
 """
 
 from __future__ import annotations
@@ -57,35 +36,22 @@ _OVERLAY_MIN_W = 120        # don't shrink below something legible
 _OVERLAY_MAX_W = 240        # don't grow huge on a very wide window
 _OVERLAY_PAD = 12           # px inset from the video corner
 
-# Lap-window stop tolerance (seconds). The emitted global position is quantized to whole ms
-# (QMediaPlayer.position() is ms) and frames land ~16 ms apart at 60 fps, so the playhead can
-# step from just-before to just-after the window end without ever reporting it exactly. We fire
-# the stop as soon as the position reaches within this tolerance of the end, so a lap end can't
-# be overshot by a frame nor under-resolved by the ms quantization. Far smaller than a frame.
+# Lap-end stop tolerance (s): position is ms-quantized and frames ~16 ms apart, so clamp within this
+# sub-frame of the window end (else it can step from just-before to just-after without reporting it).
 _WINDOW_STOP_TOL_S = 0.002
 
-# Bounded-resume watchdog for the cross-chapter seam. The reopen is normally near-instant once the
-# switch gate lets the deferred seek+resume fire on the genuine load (~0.1 s on the 12 GB chapters),
-# but a recording/disk hiccup must NEVER leave the player hung. If a pending cross-chapter seek
-# hasn't been applied within this budget after the source switch, the watchdog force-applies it
-# (seek + resume) regardless of the status sequence, so playback always resumes within a bound.
+# Budget after a cross-chapter switch before the watchdog force-applies the deferred seek+resume, so
+# a disk/recording hiccup at a seam can never leave the player hung.
 _SEAM_RESUME_WATCHDOG_MS = 8000
 
 # ----------------------------------------------------------------- headless / CI seam
-# PACER_NO_MEDIA=1 swaps the pane's media triplet (QMediaPlayer + QAudioOutput + QVideoWidget)
-# for the inert stand-ins below, at CONSTRUCTION time. Everything else — the ChapterMap, the
-# deferred-seek/seam state machine, the lap-window clamp, the g-meter overlay, every signal the
-# shell wires — is built exactly as in production. Purpose: the CI E2E smoke
-# (`python -m studio.dev._smoke --no-video`) builds the full StudioWindow on a headless runner
-# with no media/audio devices, where opening the real ffmpeg/AVFoundation pipeline blocks
-# indefinitely. The flag is read once per pane construction (never on a playback path), and the
-# production path is byte-identical when the variable is unset.
+# PACER_NO_MEDIA=1 swaps the media triplet for the inert _Null* stand-ins below (headless CI smoke);
+# built identically otherwise. Read once at construction.
 
 
 class _NullMediaPlayer(QObject):
-    """Inert QMediaPlayer stand-in (PACER_NO_MEDIA=1): exposes the same four signals PlayerPane
-    wires (they simply never fire), a no-op transport, and a permanent StoppedState — no decoder
-    or media pipeline is ever created. deleteLater comes from QObject."""
+    """Inert QMediaPlayer stand-in (PACER_NO_MEDIA=1): same signals (never fire), no-op transport,
+    permanent StoppedState."""
 
     positionChanged = Signal("qlonglong")
     playbackStateChanged = Signal(object)
@@ -114,13 +80,13 @@ class _NullMediaPlayer(QObject):
         pass
 
     def playbackState(self):
-        # Enum ACCESS on the real class is safe headless — only instantiating the backend isn't.
+        # enum access needs no backend
         return QMediaPlayer.PlaybackState.StoppedState
 
 
 class _NullAudioOutput(QObject):
-    """Inert QAudioOutput stand-in (PACER_NO_MEDIA=1): remembers the muted flag (the shell's
-    mute toggle reads it back) and never opens an audio device. Starts muted, like production."""
+    """Inert QAudioOutput stand-in (PACER_NO_MEDIA=1): remembers the muted flag, no device. Starts
+    muted, like production."""
 
     def __init__(self):
         super().__init__()
@@ -146,12 +112,10 @@ class PlayerPane(QWidget):
     positionChanged = Signal(float)  # GLOBAL seconds on the session clock
     chapterChanged = Signal(int)     # current chapter index (for the UI label)
     playbackStateChanged = Signal(object)  # forwards QMediaPlayer.PlaybackState to the shell
-    durationChanged = Signal("qlonglong")  # re-emits the inner QMediaPlayer.durationChanged (ms), so
-    # the transport shell can listen to the pane (not the private QMediaPlayer) for the slider range.
-    # Signature matches QMediaPlayer.durationChanged(qlonglong) so the re-emit connects as a slot.
-    # True while a cross-chapter source switch is reopening the next chapter (the shell shows a
-    # brief "loading next chapter…" indicator so a seam hitch reads as intentional); False once the
-    # next chapter has loaded and the deferred seek+resume has been applied.
+    # re-emits inner QMediaPlayer.durationChanged(ms) so the shell wires to the pane, not the
+    # private player. Signature matches QMediaPlayer.durationChanged(qlonglong).
+    durationChanged = Signal("qlonglong")
+    # True while a cross-chapter switch is reopening the next chapter (shell shows a brief loading hint).
     seamLoading = Signal(bool)
 
     def __init__(self, source: str | chapters.ChapterMap | None):
@@ -162,69 +126,43 @@ class PlayerPane(QWidget):
         if isinstance(source, chapters.ChapterMap):
             self._chapters = source
         elif source:
-            # A lone path with no media-duration table: durations aren't known here, so use a
-            # 0-duration single-entry map. Global==local for one chapter regardless of duration,
-            # so playback/seek is correct; only `total_duration` (unused for one file) is 0.
+            # lone path: a 0-duration single-entry map (global == local for one chapter; only the
+            # unused total_duration is 0).
             self._chapters = chapters.ChapterMap([source], [0.0])
 
-        self._current_chapter = 0  # index into self._chapters.chapters of the loaded source
-        # A seek requested while the source is still loading (setSource is async): applied when
-        # the media reaches LoadedMedia. (chapter_index, local_seconds, resume_playing). This
-        # also covers the auto-advance (EndOfMedia -> load next chapter at local 0, keep playing),
-        # so a stale EndOfMedia from the old source while a switch is pending is safely ignored.
+        self._current_chapter = 0  # loaded chapter index
+        # deferred (chapter, local, resume) seek applied on genuine load; also drives EndOfMedia
+        # auto-advance.
         self._pending: tuple[int, float, bool] | None = None
-        # A source switch is in flight: setSource() is async AND the Qt/FFmpeg backend SYNCHRONOUSLY
-        # re-emits the OLD source's leftover statuses (a spurious LoadedMedia, and a stale EndOfMedia)
-        # the instant setSource is called — BEFORE it has begun parsing the new file. Honouring the
-        # pending seek+play on that spurious LoadedMedia consumes _pending, then the REAL load (which
-        # always passes through LoadingMedia) resets the player and the seek+play is silently
-        # discarded — the player sits idle forever (the chapter-seam stall). So a switch is gated:
-        # we ignore loaded/end statuses until the load genuinely begins (a LoadingMedia transition,
-        # or a real load completion arriving after the synchronous burst), then apply _pending once.
+        # source switch in flight: gate out the OLD source's spurious LoadedMedia/EndOfMedia (see
+        # _on_media_status / THE CHAPTER-SEAM GATE).
         self._switching = False
-        # Set when the user deliberately pauses DURING a seam reopen (a switch is in flight / a
-        # deferred seek+resume is pending): the deferred resume captured the play-state from BEFORE
-        # the pause, so honouring it on the genuine load (or via the watchdog) would override the
-        # user's pause and resume playback they explicitly stopped. This flag makes _apply_pending
-        # skip the play() when the user paused mid-reopen, so a deliberate pause survives the seam.
+        # user paused mid-reopen: makes _apply_pending skip the resume so a deliberate pause survives
+        # the seam (the deferred resume captured the pre-pause state).
         self._user_paused_during_reopen = False
         self._latest_global = 0.0  # last emitted global time (for current_global_time())
-        # Compare-mode lap window: when set to (start_global, end_global) the pane plays "time
-        # into lap" — it pauses + clamps at `end_global` instead of running to the end of the
-        # session. None in normal mode (whole session, behaviour unchanged). The window spans
-        # GLOBAL time so a lap that STARTS in one chapter and ENDS in the next still stops at the
-        # right instant: cross-chapter auto-advance stays enabled WHILE inside the window, and the
-        # stop fires only when the emitted global position reaches `end_global` in whatever chapter
-        # that lands in. See _on_position.
+        # compare-mode lap window (start_global, end_global): the pane pauses+clamps at end instead
+        # of the session end; None in normal mode. See _on_position.
         self._lap_window: tuple[float, float] | None = None
 
-        # Headless / CI seam (see the _Null* stand-ins above): PACER_NO_MEDIA=1 builds the pane
-        # with an inert media triplet instead of the decoder/audio/video-surface stack. Read once,
-        # here, at construction — no playback path ever re-checks it.
+        # PACER_NO_MEDIA=1 builds the pane with the inert media triplet (see the _Null* stand-ins).
         no_media = os.environ.get("PACER_NO_MEDIA") == "1"
         self.video = QWidget() if no_media else QVideoWidget()
-        # Classic friction-circle g-meter, drawn ON the video. It is a frameless translucent
-        # TOP-LEVEL window (not a plain child) so the window-server composites it ABOVE the
-        # QVideoWidget's native video surface — a child widget is painted behind that surface on
-        # macOS and never shows on screen. The pane pins it to the video's TOP-RIGHT corner in
-        # GLOBAL screen coords, sized as a fraction of the video, and keeps it there as the video
-        # moves/resizes. Driven by app.set_g at the ~30 Hz tick from session.g_at_time.
+        # g-meter: frameless top-level window pinned to the video corner (see module docstring for
+        # the macOS why).
         self.gmeter = GMeterOverlay(self)
         self.gmeter.hide()  # off by default; the toggle reveals it
         self._gmeter_on = False
-        # Keep the overlay window pinned to the video corner: the QVideoWidget's resize/move
-        # changes its on-screen rect, and dragging the whole app window moves it too. We watch
-        # the video widget (resize/move) here; the pane's own move/resize are caught in our
-        # moveEvent/resizeEvent (a top-level overlay doesn't follow the parent automatically).
+        # watch the video widget's move/resize to re-pin the overlay (the pane's own move/resize are
+        # caught in moveEvent/resizeEvent).
         self.video.installEventFilter(self)
         if no_media:
             self.player = _NullMediaPlayer()
             self.audio = _NullAudioOutput()
         else:
             self.player = QMediaPlayer()
-            # F4: real audio output with a mute toggle. DEFAULT = muted (this is a telemetry tool —
-            # avoid a surprise blast of 4K clip audio on launch). A reasonable volume is set so the
-            # un-mute button is immediately audible; the toggle flips QAudioOutput.isMuted().
+            # muted by default (telemetry tool — no surprise 4K-clip audio); volume preset so un-mute
+            # is audible.
             self.audio = QAudioOutput()
             self.audio.setVolume(0.6)
             self.audio.setMuted(True)
@@ -239,23 +177,18 @@ class PlayerPane(QWidget):
         self.player.positionChanged.connect(self._on_position)
         self.player.playbackStateChanged.connect(self._on_state)
         self.player.mediaStatusChanged.connect(self._on_media_status)
-        # Re-emit duration changes from the pane so the transport shell can wire to the pane's
-        # public signal rather than reaching into the private QMediaPlayer.
-        self.player.durationChanged.connect(self.durationChanged)
+        self.player.durationChanged.connect(self.durationChanged)  # re-emit on the pane's signal
 
         # Bounded-resume watchdog: a one-shot armed when a cross-chapter switch defers a seek+resume,
-        # disarmed the instant the seek is applied on the genuine load. If it ever fires, the reopen
-        # took longer than the budget (a disk/recording hiccup) — force-apply the pending seek+resume
-        # so playback can NEVER hang at a seam. Parented to the pane so it's torn down with it.
+        # force-applying it if the reopen exceeds the budget so a seam can never hang.
         self._seam_watchdog = QTimer(self)
         self._seam_watchdog.setSingleShot(True)
         self._seam_watchdog.setInterval(_SEAM_RESUME_WATCHDOG_MS)
         self._seam_watchdog.timeout.connect(self._on_seam_watchdog)
 
         if self._chapters is not None:
-            # Initial load is NOT a source replacement: don't arm the switch gate (there are no
-            # leftover statuses to suppress, and no deferred seek to arm the watchdog — a gate left
-            # armed because the first load skipped LoadingMedia would hang the pane forever).
+            # initial load is not a replacement — don't gate (no spurious statuses, and a gate left
+            # armed with no watchdog would hang).
             self._set_source(0, switching=False)
 
     # ------------------------------------------------------------- source mgmt
@@ -273,10 +206,9 @@ class PlayerPane(QWidget):
         return len(self._chapters) if self._chapters is not None else 0
 
     def chapter_duration(self, index: int) -> float:
-        """The GPMF/metadata-track duration (seconds) of chapter `index`, or 0 if unknown / out of
-        range. This is the duration that built the global offset table — it can differ from the real
-        VIDEO-track duration QMediaPlayer reports (durationChanged); D6 reconciles the two for the
-        slider range."""
+        """The GPMF/metadata-track duration (seconds) of chapter `index`, or 0 if unknown/out of
+        range. Built the global offset table; can differ from the real video-track duration
+        QMediaPlayer reports (the slider range reconciles the two)."""
         if self._chapters is None or not (0 <= index < len(self._chapters)):
             return 0.0
         return self._chapters.chapters[index].duration
@@ -295,11 +227,9 @@ class PlayerPane(QWidget):
         return self._chapters.chapters[self._current_chapter].offset
 
     def _source_is_chapter(self, index: int) -> bool:
-        """True iff the player's CURRENT media source is in fact chapter `index`'s file — i.e. the
-        genuine target load has landed (not a leftover load from an earlier _set_source still in
-        flight). Compares resolved absolute local-file paths. The headless null player has no
-        source() (the deferred seek there is synchronous + raceless), so it reports True so the
-        PACER_NO_MEDIA path stays byte-identical."""
+        """True iff the player's current source is chapter `index`'s file (the genuine target load
+        landed, not a leftover from an earlier _set_source). Compares absolute paths; the headless
+        null player has no source() (synchronous, raceless) so it reports True."""
         if self._chapters is None:
             return True
         source = getattr(self.player, "source", None)
@@ -312,28 +242,19 @@ class PlayerPane(QWidget):
         return os.path.abspath(loaded) == want
 
     def _set_source(self, index: int, switching: bool = True):
-        """Load chapter `index` as the player's source (no seek/play here — callers arrange the
-        post-load seek via self._pending, applied once the NEW media has genuinely loaded).
-
-        `switching` arms the switch gate (_switching): a source REPLACEMENT must ignore the OLD
-        source's leftover LoadedMedia/EndOfMedia that the backend re-emits synchronously inside
-        setSource(), before it parses the new file (see _switching / the gate). The INITIAL load has
-        no prior source, so it passes switching=False — arming the gate there would HANG the pane
-        permanently if the first load skips the LoadingMedia transition that disarms it (there is no
-        deferred seek on the initial load, so the watchdog isn't armed to rescue it either)."""
+        """Load chapter `index` (no seek/play; callers defer the post-load seek via _pending).
+        `switching` arms the gate that suppresses the old source's spurious statuses on a
+        REPLACEMENT; the initial load passes False (no leftover statuses, and a gate left armed with
+        no watchdog would hang)."""
         if self._chapters is None:
             return
         index = min(max(index, 0), len(self._chapters) - 1)
         self._current_chapter = index
-        # Arm the switch gate BEFORE setSource so the synchronous spurious statuses it emits are
-        # ignored — but ONLY for an actual source replacement; the initial load must not gate (it
-        # has no leftover statuses to suppress and no watchdog to un-stick it).
-        self._switching = switching
+        self._switching = switching   # arm the gate before setSource (replacement only)
         path = self._chapters.chapters[index].path
         self.player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
         self.chapterChanged.emit(index)
-        # If this switch defers a seek+resume, arm the bounded-resume watchdog so a stuck reopen
-        # can't hang playback. Restarted here (idempotent) and stopped when _pending is applied.
+        # arm the bounded-resume watchdog if this switch defers a seek (idempotent; stopped on apply).
         if self._pending is not None:
             self._seam_watchdog.start()
 
@@ -342,25 +263,18 @@ class PlayerPane(QWidget):
         return self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
 
     def play(self):
-        # An explicit play() is the latest user intent and overrides a pause made earlier DURING a
-        # seam reopen: clear the "user paused mid-reopen" flag so the deferred seek+resume (and the
-        # watchdog) honour PLAY when the genuine load lands. Without this, a pause-then-play during a
-        # reopen stayed paused — the flag set by the pause survived and _apply_pending skipped the
-        # resume, so play-after-pause-during-reopen never resumed.
+        # explicit play overrides a pause made mid-seam: honour PLAY on the genuine load (else
+        # play-after-pause-during-reopen never resumes).
         self._user_paused_during_reopen = False
-        # If a lap window is set and the pane is parked at/after the window end (it auto-paused
-        # there on the last play), a bare play() would be a dead no-op — the playhead is already at
-        # the stop point, so it pauses again on the very next position tick. Seek back to the window
-        # start first so Play actually rolls the lap again. (Normal mode / mid-window: unchanged.)
+        # parked at the lap end (auto-paused): rewind to the window start so Play re-rolls the lap
+        # (else a bare play() pauses again on the next tick).
         win = self._lap_window
         if win is not None and self.current_global_time() >= win[1] - _WINDOW_STOP_TOL_S:
             self.seek(win[0])
         self.player.play()
 
     def pause(self):
-        # If the user pauses while a seam reopen is in flight, remember it so the deferred
-        # seek+resume (which captured the play-state from before this pause) doesn't override the
-        # pause and resume playback on the genuine load / watchdog.
+        # pause mid-reopen: remember it so the deferred resume does not override it (see _apply_pending).
         if self._switching or self._pending is not None:
             self._user_paused_during_reopen = True
         self.player.pause()
@@ -382,34 +296,25 @@ class PlayerPane(QWidget):
         index, local = self._chapters.to_local(seconds)
         if index == self._current_chapter:
             if self._switching or self._pending is not None:
-                # A source switch to THIS chapter is in flight (its real load hasn't arrived yet):
-                # an immediate setPosition would land on the old, not-yet-replaced media (or be
-                # discarded when the real load resets the player) AND clearing _pending here would
-                # drop the deferred seam seek+resume — re-introducing the chapter-seam stall. So
-                # FOLD the new local target into the deferred seek instead of bypassing the gate,
-                # preserving the captured resume intent so playback still resumes on the real load.
+                # switch to THIS chapter still in flight: fold the new target into the deferred seek
+                # (a direct setPosition would hit the old media / be reset), preserving the resume intent.
                 resume = self._pending[2] if self._pending is not None else self.is_playing()
                 self._pending = (index, local, resume)
             else:
                 self.player.setPosition(int(local * 1000))
         else:
-            # Switch source; defer the seek (and a resume if currently playing) to LoadedMedia.
+            # switch source; defer the seek (+ a resume if playing) to LoadedMedia.
             self._pending = (index, local, self.is_playing())
             self._set_source(index)
 
     # ------------------------------------------------------------- lap window (compare mode)
     def set_lap_window(self, start_global: float, end_global: float):
-        """Confine playback to ONE lap's GLOBAL [start, end] window (compare mode's "time into
-        lap"): the pane plays at 1× from the lap start and pauses + clamps at the lap end instead
-        of running to the session's end. Cross-chapter auto-advance is UNAFFECTED — a lap that
-        spans a chapter seam still plays across it (the EndOfMedia handler keeps advancing while
-        inside the window); only the window END triggers the stop, in whatever chapter it lands in.
-        Caller seeks the pane to the lap start (a hair in) separately."""
+        """Confine playback to a lap GLOBAL [start, end]: pause+clamp at end instead of session end.
+        Cross-chapter auto-advance still spans seams inside the window."""
         self._lap_window = (float(start_global), float(end_global))
 
     def clear_lap_window(self):
-        """Drop the lap window — back to whole-session playback (normal mode). Behaviour after
-        this is byte-identical to a pane that never had a window set."""
+        """Drop the lap window (back to whole-session playback)."""
         self._lap_window = None
 
     # ------------------------------------------------------------- g-meter overlay
@@ -440,12 +345,9 @@ class PlayerPane(QWidget):
             self.gmeter.raise_()
 
     def set_g(self, g):
-        """Feed the current (lateral_g, longitudinal_g, total_g) to the overlay (None blanks the
-        live dot). A no-op repaint cost when the overlay is hidden, so the app can call it every
-        tick unconditionally. Also keeps the overlay window pinned to the video corner: a top-level
-        window does NOT follow the parent when the WHOLE app window is dragged (no child moveEvent),
-        so re-pin from this existing ~30 Hz tick (cheap — _position_gmeter only moves it if the
-        corner actually changed)."""
+        """Feed (lat_g, long_g, total_g) to the overlay (None blanks the dot); no-op cost when
+        hidden so call every tick. Also re-pins from this ~30 Hz tick (a top-level overlay does not
+        track app-window drags)."""
         if self._gmeter_on:
             self._position_gmeter()
             self.gmeter.set_g(g)
@@ -454,70 +356,54 @@ class PlayerPane(QWidget):
         self.gmeter.set_source(source)
 
     def set_gmeter_lap(self, lap_id):
-        """Tell the overlay which lap is being driven so its max-G envelope resets at the lap
-        boundary (per-lap grip-usage scope). A no-op repaint cost when the overlay is hidden."""
+        """Tell the overlay which lap drives it so its max-G envelope resets at the lap boundary."""
         self.gmeter.set_lap(lap_id)
 
     def _position_gmeter(self):
-        """Pin the overlay window to the video's TOP-RIGHT corner, in GLOBAL screen coords (the
-        overlay is a top-level window, so it does NOT inherit the video's coordinate space), sized
-        as a FRACTION of the video so it scales on resize. Called on show and whenever the video
-        widget or this pane moves/resizes."""
+        """Pin the overlay to the video top-right corner (global screen coords), sized as a fraction
+        of the video."""
         vw, vh = self.video.width(), self.video.height()
-        # Width = a fraction of the video, clamped to a sensible legible range; height follows the
-        # overlay's aspect. Cap both to the available video area so it never overflows a tiny video.
         w = int(min(max(vw * _OVERLAY_FRAC, _OVERLAY_MIN_W), _OVERLAY_MAX_W,
                     max(vw - 2 * _OVERLAY_PAD, 1)))
         h = int(min(w * _OVERLAY_ASPECT, max(vh - 2 * _OVERLAY_PAD, 1)))
-        # Top-right corner of the video widget, mapped to the screen.
         corner = self.video.mapToGlobal(QPoint(vw - w - _OVERLAY_PAD, _OVERLAY_PAD))
         rect = QRect(corner.x(), corner.y(), w, h)
-        # Only move it if the target actually changed — _position_gmeter runs on the 30 Hz tick, so
-        # an unconditional setGeometry every frame would needlessly churn (and can flicker).
+        # only move on change — runs every 30 Hz tick.
         if self.gmeter.geometry() != rect:
             self.gmeter.setGeometry(rect)
 
-    # --- the SEVEN hooks that keep the top-level overlay pinned to the video corner ---
+    # --- hooks keeping the top-level overlay pinned to the video corner (+ the per-tick re-pin in set_g) ---
     def eventFilter(self, obj, event):
-        # (1) Keep the g-meter overlay window pinned to the QVideoWidget's corner as the video
-        # moves or resizes (the layout/splitters resize it; the native surface can also emit Move).
+        # re-pin on video widget resize/move
         if obj is self.video and event.type() in (QEvent.Resize, QEvent.Move):
             self._sync_gmeter()
         return super().eventFilter(obj, event)
 
-    # (2)/(3) Re-pin the overlay window when this pane itself moves/resizes (e.g. the user drags
-    # the main window or moves a splitter) — a top-level overlay doesn't track its parent.
     def moveEvent(self, event):
         super().moveEvent(event)
-        self._sync_gmeter()
+        self._sync_gmeter()   # re-pin (top-level overlay does not track parent)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._sync_gmeter()
+        self._sync_gmeter()   # re-pin (top-level overlay does not track parent)
 
     def showEvent(self, event):
         super().showEvent(event)
-        # (4) Re-show + re-pin the overlay if it's meant to be on (it was hidden in hideEvent while
-        # the pane was hidden); a bare _sync_gmeter would reposition but not bring it back.
+        # re-show + re-pin (hideEvent hid it; a bare _sync_gmeter wouldn't bring it back)
         if self._gmeter_on:
             self._position_gmeter()
             self.gmeter.show()
             self.gmeter.raise_()
 
     def hideEvent(self, event):
-        # (5) When the pane is hidden (e.g. window minimised / reload teardown) hide the overlay
-        # window too, so a detached top-level can't linger on screen. _gmeter_on is left ON so
-        # showEvent brings it back.
         super().hideEvent(event)
+        # hide the overlay so a detached top-level can't linger; _gmeter_on stays on for showEvent.
         if self._gmeter_on:
             self.gmeter.hide()
 
     def closeEvent(self, event):
-        # (6) Ensure the top-level overlay window is destroyed with the pane (it has no parent
-        # window to close it). Belt-and-braces for the reload teardown.
-        self.gmeter.close()
+        self.gmeter.close()   # the overlay has no parent window to close it
         super().closeEvent(event)
-    # (7) the per-tick re-pin lives in set_g above (the ~30 Hz tick re-pins on app-window drags).
 
     def stop(self):
         """Stop the decoder AND close the overlay window — clean disposal for a reload / Phase B
@@ -527,13 +413,8 @@ class PlayerPane(QWidget):
         self.gmeter.close()
 
     def dispose(self):
-        """Fully release this pane's decoder + audio + overlay for a compare teardown / reload.
-
-        The QMediaPlayer and QAudioOutput are plain attributes (NOT Qt children of the pane), so
-        deleting the pane alone does NOT free them — they would linger until Python GC, holding a
-        decoder open. So: stop the decoder, detach the video/audio sinks, close the overlay window,
-        and explicitly deleteLater() the player + audio so the FFmpeg decoder + the audio device
-        are released promptly. The pane widget itself is deleteLater'd by the caller. Idempotent."""
+        """Release decoder + audio + overlay (player/audio are NOT Qt children of the pane, so they
+        must be deleteLater-d explicitly or the FFmpeg decoder lingers until GC). Idempotent."""
         self._seam_watchdog.stop()  # no stray seam timer firing into a deleted player
         try:
             self.player.stop()
@@ -548,21 +429,14 @@ class PlayerPane(QWidget):
 
     # ------------------------------------------------------------- player events
     def _on_position(self, ms: int):
-        """Local media position -> global session time. The emitted position is global, so all
-        telemetry sync sees one continuous clock spanning every chapter.
-
-        Compare mode (a lap window is set): once the GLOBAL position reaches the window END
-        (within a sub-frame tolerance — the position is ms-quantized and frames land ~16 ms apart,
-        so it can step from just-before to just-after the end without reporting it exactly), pause
-        and clamp the EMITTED position to the end so the pane parks exactly on the lap's last frame
-        rather than overshooting. The cross-chapter machine is untouched: this only stops at the
-        window end, wherever that falls — auto-advance still carries a seam-straddling lap across
-        the chapter boundary up TO that end."""
+        """Local media position -> global session time (so all telemetry sync sees one clock).
+        Compare mode: at the window end (within tolerance) pause and clamp the emitted position to
+        the end so the pane parks on the lap's last frame; cross-chapter auto-advance is untouched
+        (it carries a seam-straddling lap up to that end)."""
         global_s = self._offset() + ms / 1000.0
         win = self._lap_window
         if win is not None and global_s >= win[1] - _WINDOW_STOP_TOL_S:
-            # Reached (or stepped just past) the lap end: stop here and report the clamped end so
-            # downstream sync never sees a time beyond the lap. Pausing is idempotent.
+            # reached the lap end: pause and report the clamped end (idempotent).
             if self.is_playing():
                 self.player.pause()
             global_s = win[1]
@@ -570,26 +444,19 @@ class PlayerPane(QWidget):
         self.positionChanged.emit(global_s)
 
     def _on_media_status(self, status):
-        """Apply a deferred cross-chapter seek once the new source has GENUINELY loaded, and
-        auto-advance to the next chapter at end-of-media so playback flows across the whole
-        recording.
+        """Apply the deferred seek once the new source genuinely loads; auto-advance at EndOfMedia.
 
-        THE CHAPTER-SEAM GATE (_switching). setSource() is async, but the Qt/FFmpeg backend
-        SYNCHRONOUSLY re-emits the OLD source's leftover statuses the instant setSource is called —
-        a spurious LoadedMedia and a stale EndOfMedia — BEFORE it begins parsing the new file. The
-        real load then arrives a beat later as LoadingMedia -> LoadedMedia/BufferedMedia. If we
-        honour _pending on that spurious LoadedMedia we consume it, the subsequent real load resets
-        the player, and the seek+resume play() is silently discarded — playback never resumes (the
-        seam stall). So while _switching is set we IGNORE every status until LoadingMedia confirms
-        the real load has begun; only then is the next LoadedMedia/BufferedMedia the genuine one we
-        apply _pending on. The stale EndOfMedia is likewise ignored while switching."""
+        THE CHAPTER-SEAM GATE (_switching): setSource is async but the backend synchronously re-emits
+        the OLD source's leftover statuses (a spurious LoadedMedia + stale EndOfMedia) BEFORE parsing
+        the new file; the real load then arrives as LoadingMedia -> LoadedMedia. Honouring _pending
+        on the spurious LoadedMedia consumes it and the real load discards the seek+resume -> the
+        seam stall. So while switching we ignore every status until LoadingMedia confirms the real
+        load began, then apply _pending on the next genuine LoadedMedia."""
         if self._switching:
-            # The real load always passes through LoadingMedia; that transition marks the end of the
-            # synchronous spurious burst. Open the gate there and wait for the genuine load.
+            # the real load always passes through LoadingMedia: open the gate there.
             if status == QMediaPlayer.MediaStatus.LoadingMedia:
                 self._switching = False
-            # Ignore the spurious LoadedMedia/EndOfMedia emitted before the real load begins.
-            return
+            return  # ignore the spurious statuses emitted before the real load
 
         loaded = status in (
             QMediaPlayer.MediaStatus.LoadedMedia,
@@ -597,14 +464,9 @@ class PlayerPane(QWidget):
         )
         if loaded and self._pending is not None:
             index, local, resume = self._pending
-            # Apply the deferred seek ONLY when the genuinely-loaded source is in fact the pending
-            # chapter's FILE — not merely when the pending chapter index matches _current_chapter.
-            # On a FRESH pane the initial _set_source(0) and an immediate cross-chapter seek to a
-            # LATER chapter are both in flight: the gate can be opened (LoadingMedia) by the chapter-0
-            # load while _current_chapter is already the target index, so a chapter-0 LoadedMedia
-            # would otherwise pass the index check and seek the WRONG file. Matching the actual loaded
-            # URL closes that race: a leftover/early load that isn't the target file is ignored (its
-            # LoadingMedia merely opened the gate), and _pending survives until the real target loads.
+            # Match the loaded FILE, not just the index: on a fresh pane a chapter-0 load can open the
+            # gate while _current_chapter is already a later target, so an index-only check would seek
+            # the wrong file.
             if index == self._current_chapter and self._source_is_chapter(index):
                 self._apply_pending(local, resume)
             return
@@ -620,42 +482,32 @@ class PlayerPane(QWidget):
         self._switching = False
         self._seam_watchdog.stop()
         self.player.setPosition(int(local * 1000))
-        # Honour a deliberate pause made DURING the reopen: the captured resume intent predates that
-        # pause, so a user who paused mid-seam stays paused (combine both — only resume if the
-        # original intent was to play AND the user did not pause during the reopen).
+        # resume only if the original intent was to play AND the user did not pause mid-reopen.
         if resume and not self._user_paused_during_reopen:
             self.player.play()
         self._user_paused_during_reopen = False
-        # Seam reopen finished: drop the "loading next chapter…" indicator.
-        self.seamLoading.emit(False)
+        self.seamLoading.emit(False)   # seam reopen finished
 
     def _on_seam_watchdog(self):
-        """Bounded-resume fallback: the deferred cross-chapter seek wasn't applied within the budget
-        (a slow/hiccuping reopen). Force-apply it so playback resumes regardless of the status
-        sequence — playback must NEVER hang at a seam. No-op if _pending was already cleared."""
+        """Bounded-resume fallback: force-apply a deferred seek the genuine load never applied, so a
+        seam never hangs. No-op if already cleared."""
         if self._pending is None:
             return
         index, local, resume = self._pending
-        # Only force-apply if the intended chapter is in fact the loaded source (it is, since
-        # _set_source set _current_chapter synchronously); apply the seek+resume regardless of gate.
+        # chapter set synchronously by _set_source; apply regardless of gate.
         if index == self._current_chapter:
             self._apply_pending(local, resume)
 
     def _on_end_of_media(self):
-        """Chapter i reached its end. If there's a next chapter, load it and continue playing from
-        0 (seamless auto-advance); otherwise it's the true end of the session — leave it paused at
-        the end. The reopen is fast (the gate in _on_media_status makes the deferred seek+resume
-        fire on the GENUINE load), but signal seamLoading so the shell can show a brief, clearly
-        styled "loading next chapter…" hint for the reopen window."""
+        """Chapter end: auto-advance to the next chapter (play from 0) via a deferred seek, or stay
+        paused at the true session end. Emits seamLoading(True) for the shell's brief reopen hint."""
         if self._chapters is None:
             return
         nxt = self._current_chapter + 1
         if nxt < len(self._chapters):
-            # Auto-advance: keep playing into the next chapter from its start.
             self.seamLoading.emit(True)
             self._pending = (nxt, 0.0, True)
             self._set_source(nxt)
 
     def _on_state(self, state):
-        # Re-emitted as playbackStateChanged for the shell to update its transport icon.
         self.playbackStateChanged.emit(state)

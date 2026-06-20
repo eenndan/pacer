@@ -1,43 +1,23 @@
-"""Offline video-overlay export (F9): burn the telemetry overlays onto the GoPro footage and
-mux out a shareable MP4.
+"""Offline video-overlay export: burn the telemetry overlays onto the GoPro footage and mux a
+shareable MP4.
 
-WHAT THIS IS — AND IS NOT
--------------------------
-A self-contained OFFLINE renderer. It runs its OWN frame-by-frame render loop driven by a caller
-that pumps `Renderer.run_chunk` (so the UI stays responsive + cancellable) — it has NO dependency
-on the live Qt event loop, the VideoView, the player, or any running app state. It is also
-`pacer`-FREE: like the other analysis/IO modules (export_data.py, corners.py), it is fed entirely
-by a `Session` (the same accessors the live app reads at each tick) and never imports the compiled
-bindings. It DOES use QPainter/QImage to composite — that is pure off-screen 2-D drawing, not an
-event loop — so the burned-in overlays are pixel-for-pixel the same widgets the app shows.
+A self-contained OFFLINE renderer with its own frame-by-frame loop (the caller pumps
+`Renderer.run_chunk` for a responsive, cancellable UI); it has no dependency on the live Qt event
+loop and, like the other analysis/IO modules, is fed entirely by a `Session` (never the compiled
+bindings). QPainter/QImage compositing is pure off-screen drawing, so the burned-in overlays match
+the live widgets.
 
-DECODE / COMPOSITE / MUX (the ffmpeg-rawvideo-pipe approach)
------------------------------------------------------------
-The project already shells out to nothing but ffmpeg (added as a pixi dep for this feature), and a
-raw-video pipe is the simplest robust path that needs no extra Python codec dependency (PyAV is not
-in the env). Two ffmpeg processes bracket a Python compositing loop:
+Pipeline (raw-video pipe, the simplest path needing no extra Python codec dep):
+  1. DECODE: `ffmpeg -ss t0 -i src -t dur -vf scale=W:H -pix_fmt rgb24 -f rawvideo pipe:1` — trim to
+     the lap's media-time window, scale, stream W*H*3 bytes/frame to our stdout.
+  2. COMPOSITE: each frame -> QImage (RGB888); a QPainter paints the overlays at the frame's media
+     time, reading the same Session/gmeter accessors the live readout uses.
+  3. MUX: `ffmpeg -f rawvideo -i pipe:0 -ss t0 -i src -t dur -map 0:v -map 1:a ...` re-encodes our
+     frames + the source audio over the same window.
 
-  1. DECODE: `ffmpeg -ss t0 -i src -t dur -vf scale=W:H -pix_fmt rgb24 -f rawvideo pipe:1`
-     trims the source to exactly the selected lap's media-time window, scales to the output size,
-     and streams raw RGB frames to our stdout pipe. We read W*H*3 bytes per frame.
-  2. COMPOSITE: each frame's bytes become a QImage (Format_RGB888); a QPainter paints the overlay
-     elements (g-meter dial, Δ/speed box, track-map inset + marker, lap/sector strip) at the
-     frame's MEDIA TIME — reading the SAME Session/gmeter accessors the live readout uses.
-  3. MUX: `ffmpeg -f rawvideo -i pipe:0 -ss t0 -i src -t dur -map 0:v -map 1:a -c:v libx264
-     -c:a aac out.mp4` reads our composited RGB frames from stdin, re-encodes H.264, and carries
-     the source AUDIO trimmed to the SAME window (so the export keeps engine/track sound, in sync).
-
-The decode and mux fps are PINNED to one chosen output fps so frame N out lines up with frame N in;
-the audio `-ss`/`-t` on the source uses the identical window, so duration and A/V sync match the
-lap to within a frame.
-
-SCOPE (v1): ONE selected lap. Full-session export and compare-pair side-by-side are Phase 2
-(see studio/PLAN.md). A cancellable progress flow is driven by the caller (app.py owns the dialog).
-
-The numbers burned in are EXACT in the sense that matters: `overlay_values_at` reads
-`session.index_at_time` → `session.tv[i]` for speed, `session.lap_at_time`+`delta_at_lap` for Δ,
-and `session.g_at_time` for the g dot — the very calls app._apply_readout makes — so a frame grab
-at media time t shows what the app shows at t.
+Decode/mux fps are PINNED to one output fps for A/V sync (frame N out == frame N in). Scope: ONE
+selected lap. `overlay_values_at` mirrors app._apply_readout, so a frame grab at t shows what the
+app shows at t.
 """
 
 from __future__ import annotations
@@ -74,38 +54,25 @@ FFPROBE = "ffprobe"
 
 
 def ffmpeg_available() -> bool:
-    """True iff both ffmpeg and ffprobe are resolvable on PATH — gate a real render (and the
-    real-render test) on this so an env without ffmpeg degrades to a clear message instead of a
-    crash."""
+    """True iff both ffmpeg and ffprobe are on PATH."""
     return shutil.which(FFMPEG) is not None and shutil.which(FFPROBE) is not None
 
 
 # --------------------------------------------------------------------------- encoder selection
-# The headline GPU offload: on Apple Silicon, ffmpeg's `h264_videotoolbox` encoder runs the H.264
-# encode on the Apple media engine (the dedicated video hardware) instead of the CPU. That both
-# makes the encode itself faster AND — crucially for this composite pipeline — frees the CPU cores
-# the software libx264 encoder was contending for with our QPainter loop. It is quality-via-BITRATE
-# (no CRF), so we target a generous bitrate that stays visually clean at 1080p. We KEEP libx264 as a
-# robust fallback: a VideoToolbox encode session can fail at runtime on some pixel-format / size
-# combinations, so we (a) probe it once at startup and (b) if the probe or a real encode fails,
-# transparently fall back to libx264 so the feature never breaks.
+# VT_H264 = the Apple media-engine HW encoder (bitrate-driven; offloads the encode + frees CPU for
+# the composite). SW_H264 = the libx264 CRF fallback, used when a VT session won't open — probed
+# once at startup and retried on a runtime encode failure.
 VT_H264 = "h264_videotoolbox"
 SW_H264 = "libx264"
 
-# Target H.264 bitrate (bits/s) as bits-per-pixel-per-frame so the VideoToolbox stream stays clean
-# at any size/fps. ~0.10 bpp is a comfortably high 1080p60 setting (~12.4 Mbit/s) that keeps the
-# burned-in overlay text + the footage crisp; VideoToolbox is bitrate-driven so we err generous
-# (storage is cheap — it's a shareable clip, not an archive master). Floor keeps tiny test sizes
-# from getting a starved bitrate.
+# Target VideoToolbox bitrate as bits-per-pixel-per-frame: ~0.10 bpp ~= 12.4 Mbit/s at 1080p60,
+# floored at _MIN_VT_BITRATE so tiny test sizes aren't starved.
 _BITS_PER_PIXEL = 0.10
 _MIN_VT_BITRATE = 2_000_000
 
-# Selectable QUALITY presets (the export-quality picker). A quality level maps to BOTH encoder
-# knobs so the choice has the same effect regardless of which encoder resolves: a bits-per-pixel
-# target for the bitrate-driven VideoToolbox encoder, and a matching CRF for the libx264 fallback.
-# "high" keeps the original visually-lossless defaults (0.10 bpp / CRF 20); "standard" is a leaner,
-# smaller-file setting (~0.06 bpp / CRF 23) that still looks clean for a shareable overlay clip.
-# Lower CRF = higher quality; higher bpp = higher quality (so high > standard on both).
+# Quality presets: a level maps to BOTH encoder knobs (a VideoToolbox bpp + a matching libx264 CRF)
+# so the choice means the same on either encoder. "high" = visually-lossless (0.10 bpp / CRF 20);
+# "standard" = leaner (~0.06 bpp / CRF 23).
 _QUALITY_PRESETS = {
     "standard": {"bpp": 0.060, "crf": 23},
     "high": {"bpp": _BITS_PER_PIXEL, "crf": 20},
@@ -132,9 +99,8 @@ def vt_target_bitrate(out_w: int, out_h: int, fps: float, bpp: float = _BITS_PER
 
 
 def videotoolbox_encoder_available() -> bool:
-    """True iff ffmpeg lists the `h264_videotoolbox` encoder (it's compiled in). A cheap static
-    capability check — NOT proof a hardware session will open, which `videotoolbox_usable` confirms
-    with a real tiny encode. Cached so repeated exports don't re-shell ffmpeg."""
+    """True iff ffmpeg lists `h264_videotoolbox` (compiled in). Cached. (See videotoolbox_usable for
+    whether a session actually opens.)"""
     cached = getattr(videotoolbox_encoder_available, "_cached", None)
     if cached is not None:
         return cached
@@ -232,48 +198,25 @@ def resolve_hwaccel_decode(choice: str | bool, encoder: str) -> bool:
 
 
 # --------------------------------------------------------------------------- configuration
-# Output presets. 1080p default (the brief): a shareable size that re-encodes fast enough while
-# staying crisp. Width is derived from the source aspect at render time (so a 16:9 4K source maps
-# to 1920x1080, but a different aspect keeps its shape) — `height` is the controlling dimension.
+# 1080p default; width follows the source aspect at render time (height is the controlling dim).
 @dataclass(frozen=True)
 class OverlayConfig:
     """Layout + output knobs for the export. All overlay placements are FRACTIONS of the frame so
     the composition scales with `out_height`. The defaults reproduce the app's corner placements
     (g-meter top-right, readout bottom-left, map inset bottom-right, lap strip top-left)."""
     out_height: int = 1080            # controlling output dimension (width follows source aspect)
-    # Output QUALITY level for the encode — the export-quality picker's bitrate knob. "high" (the
-    # default) keeps the original visually-lossless target (0.10 bpp VideoToolbox / CRF 20 libx264);
-    # "standard" is a leaner, smaller-file setting (~0.06 bpp / CRF 23) that still looks clean for a
-    # shareable clip. Resolved to concrete encoder numbers by `quality_params`; affects BOTH the
-    # VideoToolbox bitrate and the libx264 CRF so the choice means the same on either encoder.
-    quality: str = "high"
+    quality: str = "high"             # "high"/"standard"; resolved to encoder numbers by quality_params
     fps: float | None = None          # explicit output fps; None = source fps, then fps_cap applies
-    # Cap the output fps. A telemetry overlay reads identically at 30 fps as at 59.94 — the dial,
-    # Δ box and map move smoothly — but 30 fps HALVES the frame count, so it ~halves every per-frame
-    # cost (decode + composite + encode). GoPro footage is typically 59.94/60; capping to 30 is the
-    # single cheapest large speed-up with negligible perceived loss for an overlay clip. Set to None
-    # to keep the full source rate. (If `fps` is set explicitly, that wins and the cap is ignored.)
+    # Cap the output fps: a telemetry overlay reads identically at 30 as at 59.94 but 30 ~halves
+    # every per-frame cost. None keeps the source rate; an explicit `fps` overrides the cap.
     fps_cap: float | None = 30.0
-    # Video encoder: "auto" picks the Apple media-engine encoder (h264_videotoolbox) when a real
-    # hardware session opens on this machine, else libx264; force "libx264" / "videotoolbox" to
-    # override. VideoToolbox offloads the H.264 encode to the GPU/media engine (frees CPU cores).
-    encoder: str = "auto"
-    # Hardware-accelerated DECODE via VideoToolbox. "auto" enables it whenever VideoToolbox is the
-    # encoder too (so BOTH the decode and the encode run on the media engine, leaving the CPU for the
-    # parallel composite — the configuration that rescues a core-starved machine); True/False force
-    # it. Neutral on wall-time on a fast box; a big CPU relief on a slow one.
-    hwaccel_decode: str | bool = "auto"
-    # Retained for backward compatibility / explicit API, but the renderer is now SINGLE-THREADED
-    # by design (see Renderer): VideoToolbox is process-isolated and frees the CPU, so an in-line
-    # paint keeps up at 30 fps and we avoid the fragile parallel-pipeline deadlock surface that
-    # could hang the GUI export. This field is accepted but does not spin up a paint pool.
+    encoder: str = "auto"             # "auto"/"libx264"/"videotoolbox" (see resolve_encoder)
+    hwaccel_decode: str | bool = "auto"  # "auto" pairs the hw decode with the hw encoder (see resolve_hwaccel_decode)
+    # No-op (kept for back-compat); the renderer is single-threaded.
     workers: int | None = None
-    # No-progress WATCHDOG (seconds). If the frame counter does not advance for this long, the
-    # render is presumed WEDGED (a hung VideoToolbox session / stuck pipe) and is aborted cleanly
-    # (ffmpeg killed, threads joined, a RenderTimeoutError surfaced) — then retried ONCE on the
-    # software encoder. This is what makes an infinite hang structurally impossible. Generous
-    # enough that a merely-slow machine never trips it (a 1080p frame composites in tens of ms;
-    # even a stalled-then-recovering encoder gets 30 s of grace).
+    # No-progress WATCHDOG (seconds): if the frame counter doesn't advance for this long the render
+    # is presumed WEDGED (hung VT session / stuck pipe), aborted cleanly, then retried ONCE on
+    # libx264 — what makes an infinite hang impossible. Generous so a merely-slow machine never trips.
     watchdog_timeout: float = 30.0
     # g-meter dial: a square pinned to the TOP-RIGHT, side = this fraction of frame height.
     gmeter_frac: float = 0.26
@@ -288,32 +231,16 @@ class OverlayConfig:
 
 
 # --------------------------------------------------------------------------- chaptered source
-# A long GoPro recording is split (at a file-SIZE limit, not at a lap) into CHAPTERS that are
-# contiguous on ONE global media clock — chapter i covers global [offset_i, offset_i+dur_i). The
-# rest of the app treats the recording as one session by laying the chapters on that global axis
-# (studio/chapters.ChapterMap) and the video player seeks across them by mapping a global time to
-# (chapter file, local time). The EXPORT must do the SAME: a lap's window is a GLOBAL window, but
-# ffmpeg can only `-ss` INTO A SINGLE FILE's own (local) clock. Seeking with a global t0 into the
-# FIRST chapter file (the old bug) lands PAST that file's end for any lap outside chapter 1, so
-# ffmpeg decodes ZERO frames and the export produces nothing (an empty progress bar / a 0-byte
-# clip). `VideoSource` is the resolved, file-local source ffmpeg actually reads.
+# A chaptered GoPro recording lays its files on one global media clock (chapter i covers global
+# [offset_i, offset_i+dur_i); studio/chapters.ChapterMap). ffmpeg can only `-ss` into a SINGLE
+# file's own (local) clock, so a global window resolves to either one chapter file (offset =
+# chapter.offset) or a CONCAT over a seam-crossing span. The concat demuxer plays the spanned files
+# back-to-back as one stream; the first chapter carries a concat `inpoint` at the window's local
+# start (a fast keyframe seek that, unlike a plain `-ss` before a concat input, actually lands),
+# making that stream begin at the lap so its local clock is 0 at the global t0.
 #
-# Two shapes, both reusing the ChapterMap's global<->local arithmetic (we never reinvent it):
-#   * a SINGLE chapter file when the whole window lies inside one chapter — ffmpeg `-i file` with
-#     `local = global - chapter.offset` for the seek;
-#   * a CONCAT of the spanned chapter files when the window crosses a chapter SEAM (a lap can
-#     straddle a boundary) — ffmpeg's concat demuxer plays them back-to-back as one continuous
-#     stream so frames + audio flow across the seam. The first spanned chapter carries a concat
-#     `inpoint` at the window's local start within it, so the concatenated stream BEGINS at the lap
-#     start (a fast keyframe seek, not a decode-from-file-0 scan, and — unlike a plain `-ss` before
-#     a concat input, which does not seek reliably — it actually lands there); the stream's local
-#     clock is then 0 at the global t0.
-#
-# `time_offset` is the global->local shift: a frame's GLOBAL media time t maps to this source's own
-# clock as `t - time_offset`. For a single-chapter source it is the chapter's global offset; for a
-# seam/concat source it is t0 (the inpoint put the lap start at the concatenation's t=0). For a
-# plain single-file recording the offset is 0 and global == local, so the legacy single-file path is
-# exactly preserved.
+# `time_offset` is the global->local shift (local = global - time_offset): the chapter offset for a
+# single chapter, t0 for a concat span, 0 for a plain single file (global == local).
 @dataclass(frozen=True)
 class VideoSource:
     """The file-local ffmpeg source for an export, resolved from the global window via a
@@ -326,12 +253,9 @@ class VideoSource:
     concat_list_path: str | None = None   # set iff this is a concat-demuxer source (seam case)
 
     def input_args(self) -> list[str]:
-        """The ffmpeg input portion: a concat-demuxer input when spanning a seam, else a plain
-        `-i <file>`. Placed where the old `-i src_path` was in the decode/encode argv."""
+        """ffmpeg input args: the concat demuxer over the span, else `-i <file>`."""
         if self.concat_list_path is not None:
-            # `-safe 0` allows absolute paths in the list; the concat demuxer presents the listed
-            # chapter files as ONE continuous stream so a seam-crossing window decodes unbroken.
-            return ["-f", "concat", "-safe", "0", "-i", self.concat_list_path]
+            return ["-f", "concat", "-safe", "0", "-i", self.concat_list_path]  # -safe 0: abs paths
         return ["-i", self.probe_path]
 
     def cleanup(self) -> None:
@@ -344,45 +268,30 @@ class VideoSource:
 
 
 def single_file_source(path: str) -> VideoSource:
-    """A VideoSource for a plain single file (no chapters): global == local, offset 0. Used to
-    synthesize a source from a bare `src_path` so the legacy single-file export path is unchanged."""
+    """A VideoSource for a plain single file (no chapters): global == local, offset 0."""
     return VideoSource(probe_path=path, time_offset=0.0)
 
 
 def resolve_video_source(chapter_map, t0: float, t1: float,
                          tmp_dir: str | None = None) -> VideoSource:
-    """Resolve the GLOBAL window [t0, t1) to the file-local ffmpeg source via a `ChapterMap`
-    (studio/chapters.ChapterMap) — the SAME global<->local mapping the video player seeks with, so
-    the export reads the EXACT footage the player shows for that window. `chapter_map` may be None
-    or a single-chapter map (a plain recording): then there's one file and global == local.
-
-    Single chapter  -> `-i <that chapter file>`, time_offset = the chapter's global offset.
-    Spans a seam    -> a concat demuxer over every chapter from the start chapter through the end
-                       chapter, with an `inpoint` on the first one at the window's local start so
-                       the concatenation BEGINS at the lap (a fast keyframe seek into the seam);
-                       time_offset = t0 (the lap start is the concatenation's t=0). The concat list
-                       is written under `tmp_dir` (default the system temp dir); the caller frees it
-                       via `VideoSource.cleanup()`.
-
+    """Resolve the GLOBAL window [t0, t1) to a VideoSource via a `ChapterMap`:
+      * single chapter -> `-i <that file>`, time_offset = chapter.offset;
+      * spans a seam   -> a concat demuxer over chapters [i0..i1] with an `inpoint` at the lap start
+                          on the first; time_offset = t0 (the lap is the concatenation's t=0). The
+                          concat list is written under `tmp_dir`; the caller frees it via cleanup().
     Raises ValueError if `chapter_map` has no chapters."""
     chs = list(getattr(chapter_map, "chapters", []) or [])
     if not chs:
         raise ValueError("resolve_video_source needs a ChapterMap with at least one chapter")
     i0 = chapter_map.chapter_at(t0)
-    # The end is half-open; nudge a window that ends exactly on a seam back into the chapter it
-    # actually played, so a lap ending at offset_{k+1} doesn't pull in a needless extra chapter.
+    # End is half-open: nudge a window ending exactly on a seam back into the chapter it played, so a
+    # lap ending at offset_{k+1} doesn't pull in a needless extra chapter.
     i1 = chapter_map.chapter_at(max(t0, t1 - 1e-6))
     start = chs[i0]
     if i1 <= i0:
-        # Whole window inside ONE chapter: seek that file at local = global - chapter.offset.
         return VideoSource(probe_path=start.path, time_offset=float(start.offset))
-    # Spans a seam: concat the chapters [i0 .. i1] so frames/audio flow across the boundary. The
-    # FIRST spanned chapter gets a concat `inpoint` at the window's local start within it, so the
-    # concatenated stream BEGINS at the lap start (a fast keyframe seek, NOT a decode-from-file-0
-    # scan) and runs continuously into the next chapter — `inpoint` is what makes the seam seek both
-    # correct AND fast (a plain `-ss` before a concat input does not seek reliably). With the stream
-    # starting at the lap, the source's local clock is 0 at the global t0, so time_offset = t0 and
-    # the decode/encode seek with `-ss 0`.
+    # Concat the spanned chapters; inpoint trims the first to the lap start (fast keyframe seek), so
+    # the stream begins at t0 -> time_offset = t0 and decode/encode seek with -ss 0.
     span = chs[i0:i1 + 1]
     inpoint = max(0.0, t0 - start.offset)        # local start within the first spanned chapter
     tmp = tmp_dir or os.environ.get("TMPDIR") or "/tmp"
@@ -393,23 +302,18 @@ def resolve_video_source(chapter_map, t0: float, t1: float,
 
 def _mk_concat_list(chapters_span, tmp_dir: str,
                     first_inpoint: float | None = None) -> tuple[int, str]:
-    """Write an ffmpeg concat-demuxer list file for `chapters_span` (each `file '<abspath>'`,
-    single-quotes in the path escaped per the concat syntax) into `tmp_dir`, returning (fd, path).
-    The chapters are listed in order so the demuxer presents them as one stream. `first_inpoint`
-    (seconds) adds a concat `inpoint` directive after the FIRST file so the concatenated stream
-    starts at that local time within the first chapter (the lap start) — a fast keyframe seek into
-    the seam rather than a decode-from-zero scan."""
+    """Write an ffmpeg concat-demuxer list file for `chapters_span` into `tmp_dir`; returns
+    (fd, path). `first_inpoint` (seconds) adds an `inpoint` after the first file (lap-start keyframe
+    seek)."""
     import tempfile
     fd, list_path = tempfile.mkstemp(prefix="pacer_export_concat_", suffix=".txt", dir=tmp_dir)
     lines = []
     for idx, c in enumerate(chapters_span):
         ap = os.path.abspath(c.path)
-        # The concat demuxer's quoting: a literal ' inside a single-quoted token is '\''.
+        # concat-demuxer quoting: a literal ' inside a single-quoted token is '\''.
         esc = ap.replace("'", "'\\''")
         lines.append(f"file '{esc}'\n")
         if idx == 0 and first_inpoint and first_inpoint > 0:
-            # inpoint trims the FIRST file's start so the concatenation begins at the lap (the next
-            # chapters play from their own start, so frames flow across the seam unbroken).
             lines.append(f"inpoint {first_inpoint:.6f}\n")
     with os.fdopen(fd, "w") as f:
         f.write("".join(lines))
@@ -421,18 +325,11 @@ def _mk_concat_list(chapters_span, tmp_dir: str,
 class ExportSpec:
     """Everything a render needs, resolved up front so the render loop is pure mechanism.
 
-    `t0`/`t1` are the GLOBAL media-clock window (seconds) to export — normally a lap's window from
-    `lap_window_for_export`. `lap_id` is the lap whose Δ baseline + sector strip are shown (and
-    whose g-meter envelope scope is pinned). `out_path` the MP4 to write; `config` the
-    layout/output knobs.
-
-    The VIDEO SOURCE is `source` — a `VideoSource` that resolves the global window to the correct
-    chapter file(s) + the file-local seek offset (see VideoSource / resolve_video_source). For a
-    chaptered recording app.py builds it from `session.chapters`; for a plain single file it is the
-    file with offset 0. `src_path` is retained for backward compatibility / a single-file caller:
-    if `source` is omitted it is synthesized from `src_path` (offset 0). All ffmpeg seeking uses
-    the source-LOCAL time (`t0/t1 - source.time_offset`), never the global t0, which is what fixes
-    the chaptered-export 'past EOF, zero frames' hang."""
+    `t0`/`t1` = the GLOBAL media-clock window (a lap). `source` resolves it to the right chapter
+    file(s) + a local seek offset; `src_path` is a single-file back-compat shortcut (synthesized into
+    `source` if `source` is omitted). ffmpeg seeks with the source-LOCAL time (`t0/t1 -
+    source.time_offset`), never the global t0. `lap_id` is the lap whose Δ baseline + sector strip +
+    g-meter scope are shown."""
     out_path: str
     lap_id: int
     t0: float
@@ -464,12 +361,8 @@ class ExportSpec:
 
 # --------------------------------------------------------------------------- trim math
 def lap_window_for_export(session, lap_id: int) -> tuple[float, float] | None:
-    """The MEDIA-clock (t0, t1) window to export for `lap_id`, or None if the lap is unusable.
-
-    This is exactly `Session.lap_window` (start_timestamp, start+lap_time) — the SAME half-open
-    window `lap_at_time` resolves, so every frame in [t0, t1) reports this lap. Kept as a named
-    helper (rather than inlining lap_window) because the export is the one place the window's
-    semantics are load-bearing for A/V sync, and so the math is unit-testable without ffmpeg."""
+    """The MEDIA-clock (t0, t1) window for `lap_id` (== Session.lap_window: start, start+lap_time),
+    or None if unusable. Half-open, so every frame in [t0, t1) reports this lap."""
     win = session.lap_window(lap_id)
     if win is None:
         return None
@@ -546,29 +439,18 @@ def output_size(src_w: int, src_h: int, cfg: OverlayConfig) -> tuple[int, int]:
         w = int(round(src_w * (h / src_h)))
     else:
         w = h * 16 // 9
-    w += w & 1                      # make even
+    w += w & 1
     h += h & 1
     return max(w, 2), max(h, 2)
 
 
 def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
                      hwaccel: bool = False) -> list[str]:
-    """The DECODE ffmpeg argv: seek to the source-LOCAL t0 BEFORE the input (fast keyframe seek)
-    and AGAIN trim by duration, scale to (out_w, out_h), force the constant output `fps`, emit
-    rgb24 rawvideo to stdout. `-an`/`-sn`/`-dn` drop audio/subs/data — we only want the video here.
-
-    The seek uses `spec.local_t0` (the global t0 shifted into the resolved source's own clock), and
-    the input is `spec.source.input_args()` — a single chapter file, or the concat demuxer over the
-    chapters a seam-crossing lap spans. This is what makes a chaptered export read the RIGHT footage
-    (the old code seeked a GLOBAL t0 into the first chapter file, landing past its end for any lap
-    outside chapter 1 -> zero frames).
-
-    `hwaccel` adds `-hwaccel videotoolbox` BEFORE the input so the Apple media engine decodes the
-    (HEVC/H.264) source instead of the CPU. On GoPro HEVC that moves the decode — a ~6-core software
-    job — onto the hardware, freeing those cores for the parallel composite + (if used) leaving the
-    encode untouched. It barely changes wall-time on a fast multi-core machine (software HEVC decode
-    is already threaded) but is a large CPU relief on a core-starved one, which is exactly where the
-    export was 'too slow to use'."""
+    """DECODE argv: -ss spec.local_t0 before the input (keyframe seek) + -t duration, scale to
+    out_w x out_h, force the constant `fps`, emit rgb24 rawvideo to stdout; -an/-sn/-dn drop
+    non-video. Input is spec.source.input_args() (chapter file or concat span); the source-LOCAL
+    seek is what makes a chaptered export read the right footage. `hwaccel` adds `-hwaccel
+    videotoolbox` to offload the decode (a big CPU relief on a core-starved machine)."""
     hw = ["-hwaccel", "videotoolbox"] if hwaccel else []
     return [
         FFMPEG, "-nostdin", "-loglevel", "error",
@@ -610,15 +492,9 @@ def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float,
 
 def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
                      encoder: str = SW_H264) -> list[str]:
-    """The MUX/ENCODE ffmpeg argv: input 0 is our composited rgb24 rawvideo on stdin (we declare
-    its size + rate); input 1 is the SOURCE again, seek-trimmed to the same source-LOCAL window for
-    its AUDIO. Map our video + the source audio, encode H.264 with the chosen `encoder`
-    (h264_videotoolbox GPU offload or libx264) and AAC. `-shortest` guards against a fractional-frame
-    audio overrun.
-
-    The audio seek/input MIRROR the decode's: `spec.local_t0` + the same `spec.source.input_args()`
-    (single file or concat list), so the audio is the SAME chapter span as the video and stays in
-    sync across a seam — not a global t0 into the first chapter (the old chaptered-export bug)."""
+    """MUX argv: input 0 = our rgb24 rawvideo on stdin; input 1 = the source audio over the SAME
+    source-LOCAL window (mirrors the decode, so audio stays in sync across a seam). Map video+audio,
+    encode H.264 (`encoder`) + AAC, -shortest."""
     return [
         FFMPEG, "-nostdin", "-loglevel", "error", "-y",
         # input 0: raw composited video from our pipe
@@ -719,18 +595,9 @@ def _font(px: float, bold: bool = False) -> QFont:
 
 
 # --------------------------------------------------------------------------- export palette
-# The live app theme (studio/theme.C) is tuned to read on a DARK ~#15-#21 surface: its text is a
-# dim off-white (#DDE1E8 / #9AA1AD), its accent a mid amber (#F5A623), its lines low-alpha. Burned
-# over BRIGHT outdoor kart footage (sky, sunlit tarmac) those wash out — the exact complaint that
-# drove this restyle. So the EXPORT uses its OWN palette: pure/near-pure whites for text, FULLY
-# saturated semantic colours (a punchier green-ahead / red-behind than the theme's muted pair), and
-# a brighter amber accent — every value below is OPAQUE and high-contrast. It does NOT touch the
-# live app theme (the on-screen overlays keep theme.C); only the offline composite reads EXPORT.
-#
-# Legibility over a frame that swings from bright sky to dark tarmac comes from a per-element
-# OUTLINE/SHADOW (see `_draw_text` / `_stroke_polyline`): a dark halo under every bright glyph and
-# line makes it read on a light background, and the bright fill makes it read on a dark one. That
-# halo — not a translucent box — is what lets the g-meter and map drop their grey backdrops.
+# Export palette: opaque, high-contrast colours for burning over bright footage (the live theme.C
+# is dim-on-dark and washes out). Legibility comes from a dark halo under every glyph/line (see
+# _draw_text / _stroke_polyline), which is what lets the g-meter and map drop their grey backdrops.
 class EXPORT:
     """Vivid, opaque, export-tuned colours for burning overlays onto BRIGHT footage. Separate from
     the live theme tokens (which are dim-on-dark). Hex strings; use these in the composite only."""
@@ -750,19 +617,14 @@ class EXPORT:
     grid = "#FFFFFF"            # g-dial rings / crosshair — white at moderate alpha (set per use)
 
 
-# The ONE Δ-semantic rule (three-way ahead/behind/even + dead band) lives in theme.delta_colour;
-# the export only RE-COLOURS that decision into its vivid palette. This map keys the theme's two
-# semantic tokens to the export's punchier equivalents, so adding a third Δ semantic upstream is a
-# one-line addition here rather than a re-implemented rule that can silently drift.
+# Remap theme.delta_colour semantic tokens to the punchier EXPORT palette (the 3-way decision stays
+# in theme).
 _DELTA_THEME_TO_EXPORT = {theme.C.ahead: EXPORT.ahead, theme.C.behind: EXPORT.behind}
 
 
 def export_delta_colour(d: float | None) -> str:
-    """The export's three-way Δ colour. The ahead/behind/even DECISION (incl. the shared dead band)
-    is made by `theme.delta_colour` — the single source of truth shared with the live #DiffBox — and
-    only the colour TOKEN is remapped to the EXPORT palette's punchier, fully-saturated green/red so
-    the cue reads vividly over bright footage. A neutral/dead-even Δ (theme returns None) becomes the
-    EXPORT neutral white, since the burned text is never a widget's neutral foreground."""
+    """Export 3-way delta colour: theme.delta_colour decides ahead/behind/even; we remap its token
+    to the vivid EXPORT palette (a neutral/None Δ -> EXPORT white)."""
     sem = theme.delta_colour(d)
     return EXPORT.neutral if sem is None else _DELTA_THEME_TO_EXPORT[sem]
 
@@ -850,19 +712,10 @@ def _stroke_polyline(p: QPainter, poly: QPolygonF, colour: str, width: float,
 
 
 class _MapInset:
-    """Precomputed track-map inset for the EXPORT: the EXPORTED LAP's racing line projected into a
-    fixed inset box ONCE and BAKED into a cached RGBA layer, so each frame only blits that layer +
-    places a glowing moving marker (with a short comet tail). No backdrop box and NO full-session
-    trace — for a single exported lap the lap line IS the track shape, and a vivid haloed line +
-    glow marker reads over bright footage without a grey panel (the restyle's map asks).
-
-    Why the cache still matters: the lap line is a few thousand antialiased points; re-rasterizing
-    it every frame cost tens of ms/frame and dominated the render. The line never changes between
-    frames, so it is baked once here and blitted (a sub-ms copy); only the marker + its short tail
-    are drawn per frame. (Same caching as before — only WHAT is baked changed.)
-
-    Degenerate-lap fallback: if the lap's own trace is unusable (too few points), the inset falls
-    back to the full-session trace line (still vivid, still no box) so it is never empty."""
+    """Track-map inset for the export: the exported lap's racing line is projected once and baked
+    into a cached RGBA layer (re-rasterizing it per frame dominated render cost); each frame blits
+    the layer + draws a glowing marker with a short comet tail. A degenerate lap trace falls back to
+    the full-session trace line so the inset is never empty."""
 
     def __init__(self, session, box: QRectF, lap_id: int, scale_k: float = 1.0):
         self._box = box
@@ -922,14 +775,9 @@ class _MapInset:
         layer.fill(Qt.transparent)
         p = QPainter(layer)
         p.setRenderHint(QPainter.Antialiasing, True)
-        # With no backing box, the line ITSELF has to read over bright sky AND the kart's dark/amber
-        # bodywork. Three passes give it a self-contained "glow + outline" so it lifts off any
-        # background (the box replacement the roadmap asks for):
-        #   1) a wide, soft DARK underglow (acts as a drop-shadow halo without a hard rectangle),
-        #   2) a dark crisp OUTLINE,
-        #   3) a thick BRIGHT-WHITE line on top.
-        # White (not the amber accent) keeps the racing line distinct from the amber g-dial and the
-        # kart's amber bodywork; the hot-coral marker is the only you-are-here pop (clear hierarchy).
+        # 3 passes for a self-contained glow so the line reads on any background: soft dark
+        # underglow, dark outline, bright-white line (white keeps it distinct from the amber
+        # dial/marker).
         soft = QPen(_c(EXPORT.halo, 130), 12.0 * k)
         soft.setJoinStyle(Qt.RoundJoin)
         soft.setCapStyle(Qt.RoundCap)
@@ -997,29 +845,17 @@ class _MapInset:
 
 
 def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues) -> None:
-    """The always-on Δ / speed readout (bottom-left), export-restyled: a HERO speed number with a
-    small "km/h" unit, and a punchy Δ cue (vivid saturated green ahead / red behind via
-    `export_delta_colour`) — all outlined for legibility. It keeps a SLIM grouping pill, but a DARK
-    translucent one (not the dim grey theme surface): a dark anchor makes the bright haloed text pop
-    consistently over both bright sky and dark tarmac, which reads better than the old grey card
-    while staying a tasteful HUD chip rather than a heavy panel.
-
-    `box` is the layout rect; the speed/Δ are drawn at a larger fraction of it than before so the
-    number is the clear focal point of the readout."""
+    """Bottom-left delta/speed readout: a hero speed number + small km/h unit and a vivid delta cue
+    (export_delta_colour), all haloed, on a slim dark pill."""
     k = box.height() / 44.0   # the readout box is ~44 px tall at 1080p; scale radii/strokes with it
-    # slim dark pill (rounded), faint bright keyline — a dark anchor for the bright text. At a
-    # moderate-high alpha it reads as an intentional HUD chip rather than a grey wash over sky.
     p.setBrush(_c(EXPORT.halo, 165))
     p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
     p.drawRoundedRect(box, 9 * k, 9 * k)
     pad = box.height() * 0.26
     inner = box.adjusted(pad, 0, -pad, 0)
     # --- HERO speed: big number + small unit ---
-    # The number + its honest no-lap rule come from the shared theme.speed_number — the SAME
-    # gate the live #DiffBox uses (a real km/h only WHILE a lap is current, else "—"). Every real
-    # export frame is inside the exported lap, so this is identical to today's burned-in number; it
-    # also keeps the export from ever drifting from the live readout's no-lap honesty. The unit is
-    # painted as a separate small run below, so we format only the number here (not "n km/h").
+    # theme.speed_number is the shared formatter the live #DiffBox uses (real km/h only while a lap
+    # is current, else dash) — kept identical, no drift.
     speed_num = theme.speed_number(vals.speed_kmh, vals.lap_id)
     big = _font(box.height() * 0.74, bold=True)
     unit = _font(box.height() * 0.34, bold=True)
@@ -1033,11 +869,8 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues) -> None:
                "km/h", unit, EXPORT.text_dim, halo=1.8 * k)
     x += fm_unit.horizontalAdvance("km/h") + 16 * k
     # --- Δ cue: punchy vivid colour ---
-    # The Δ run text comes from the shared theme.format_delta_run (units=False keeps the export's
-    # tight "Δ +0.00" form — no trailing " s" — vs the live box's "Δ +0.00 s"; both share the SAME
-    # signed-2dp number via theme.format_delta_value, so they can't drift). The colour is the shared
-    # three-way decision (theme.delta_colour) re-toned to the vivid EXPORT palette by
-    # export_delta_colour.
+    # theme.format_delta_run(units=False) = the export's tight "Δ +0.00" form (shared with the live
+    # box, so no drift); colour from export_delta_colour.
     delta_txt = theme.format_delta_run(vals.delta_s, units=False)
     dcol = export_delta_colour(vals.delta_s)
     dfont = _font(box.height() * 0.50, bold=True)
@@ -1047,10 +880,8 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues) -> None:
 
 
 def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: float) -> None:
-    """The lap / sector strip (top-left), export-restyled: a bold outlined "LAP n  m:ss.mmm" with a
-    vivid amber progress fill marking how far through the lap (by time) the playhead is. Keeps a
-    slim DARK grouping pill (a dark anchor for the bright text) instead of the dim grey card — same
-    tasteful HUD language as the readout, legible over any background."""
+    """Lap/sector strip (top-left): "LAP n  m:ss.mmm" with a vivid amber time-progress fill, on the
+    same slim dark pill as the readout."""
     k = box.height() / 44.0
     p.setBrush(_c(EXPORT.halo, 165))
     p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
@@ -1062,7 +893,7 @@ def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: flo
         ls, le = win
         frac = 0.0 if le <= ls else max(0.0, min(1.0, (vals.t - ls) / (le - ls)))
         if frac > 0:
-            # vivid amber progress fill, clipped to the pill so the rounded corners stay clean.
+            # progress fill clipped to the pill so the rounded corners stay clean.
             clip = QPainterPath()
             clip.addRoundedRect(box, 8 * k, 8 * k)
             p.save()
@@ -1124,18 +955,14 @@ class OverlayPainter:
         self._dial.set_g(vals.g)
 
     def advance_and_snapshot(self, vals: OverlayValues):
-        """Advance the dial ONE tick (sequential, order-dependent — the EMA/envelope accumulate)
-        and return an immutable `DialState` snapshot of the resulting filtering state. The render is
-        single-threaded, so this just runs in line with the paint; the snapshot split (advance →
-        paint-from-snapshot) is kept because it cleanly separates the order-dependent numeric step
-        from the stateless drawing and keeps the paint a pure function of its args."""
+        """Advance the dial one tick (order-dependent: EMA/envelope accumulate) and return an
+        immutable `DialState` snapshot."""
         self.feed_g(vals)
         return self._dial._dial_state()
 
     def paint_frame_with_state(self, img: QImage, vals: OverlayValues, dial_state) -> None:
-        """Paint all overlay elements onto `img` (an RGB frame at the output size) from a PRECOMPUTED
-        `dial_state`. Touches no shared mutable state — a pure function of (img, vals, dial_state).
-        `img` is mutated in place."""
+        """Paint all overlay elements onto `img` (an RGB frame at the output size) from a precomputed
+        `dial_state`. `img` is mutated in place."""
         p = QPainter(img)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.TextAntialiasing, True)
@@ -1162,15 +989,9 @@ class OverlayPainter:
 
 def _paint_packed_frame(painter: OverlayPainter, out_w: int, out_h: int, raw: bytes,
                         vals: OverlayValues, dial) -> bytes:
-    """Composite one decoded rgb24 frame and return the painted bytes PACKED at out_w*3.
-
-    `raw` is one frame PACKED at out_w*3 as ffmpeg emits it; we own a writable copy, wrap it in a
-    QImage and paint the overlays from the PRECOMPUTED `dial` snapshot. QImage scanlines are
-    4-byte-aligned, so when out_w*3 isn't a multiple of 4 the image carries per-row padding — we
-    view the (h, bytesPerLine) buffer and keep the first 3*out_w columns so the bytes handed to the
-    encoder are tightly packed (without this a non-4-aligned width would shear every row + desync
-    the stream). Free of shared mutable state, so a pool of threads can run it on distinct frames
-    concurrently (Qt releases the GIL during rasterization, so the paints actually overlap)."""
+    """Composite one rgb24 frame and return bytes tightly PACKED at out_w*3. QImage scanlines are
+    4-byte-aligned, so for a non-4-aligned out_w*3 we strip each row's trailing padding (otherwise
+    every row shears + the stream desyncs)."""
     buf = bytearray(raw)
     img = QImage(buf, out_w, out_h, 3 * out_w, QImage.Format_RGB888)
     painter.paint_frame_with_state(img, vals, dial)
@@ -1187,23 +1008,14 @@ class CancelledError(Exception):
 
 
 class RenderTimeoutError(RuntimeError):
-    """Raised when the render makes NO frame progress for `watchdog_timeout` seconds — i.e. a
-    stage WEDGED (a VideoToolbox session that hangs instead of exiting, a stuck pipe, a decoder
-    that stopped emitting). Unlike `_EncodeError` (a process that *failed* with a non-zero exit),
-    a wedge never "fails", so without this watchdog the export would hang forever (the user's
-    symptom). `run` catches it to retry ONCE on the software encoder, then surfaces it as a clear
-    error rather than hanging."""
+    """No frame progress for `watchdog_timeout` s — a wedged stage that never "fails"; `run` retries
+    once on libx264 then surfaces a clear error."""
 
 
 class NoFramesError(RuntimeError):
-    """Raised when the decode produced ZERO usable frames — the render "finished" without ever
-    advancing the bar. This is the chaptered-export failure mode: a seek that lands past the
-    resolved source's end emits no frames, so the loop hits an immediate short read and would
-    otherwise report a SILENT 0-frame 'success' (an empty MP4, a dialog that never moved). Treating
-    it as a clear error — rather than success or a 30 s watchdog wait — is the defense-in-depth that
-    makes 'nothing happened for 2 minutes' impossible even if a bad window slips past the up-front
-    guard. The up-front `guard_validate_window` normally catches this first; this is the backstop
-    for a source whose duration ffprobe couldn't read."""
+    """The decode produced zero frames (a past-EOF/empty seek) — a silent 0-frame "success"
+    otherwise. The up-front `guard_validate_window` normally catches this; this is the backstop for a
+    source whose duration ffprobe couldn't read."""
 
 
 class _EncodeError(RuntimeError):
@@ -1227,14 +1039,9 @@ class RenderResult:
 
 
 class _StderrDrainer:
-    """Continuously drain an ffmpeg process's stderr on a daemon thread, keeping only the TAIL.
-
-    Why this exists: ffmpeg writes progress/warnings/errors to stderr, and an OS pipe buffer is
-    only ~64 KB. The render loop blocks reading the DECODER's stdout and writing the ENCODER's
-    stdin; if either ffmpeg fills its stderr pipe in the meantime and nothing is draining it, that
-    ffmpeg BLOCKS on write(stderr) → the whole pipeline deadlocks (and no test that mocks the
-    subprocess can catch it). Draining stderr off-thread makes that impossible regardless of how
-    chatty ffmpeg gets. We retain a bounded tail so a non-zero exit can still be explained."""
+    """Drain an ffmpeg stderr on a daemon thread, keeping a bounded tail. Without this, a full
+    (~64 KB) stderr pipe blocks ffmpeg while the loop is busy on the stdout/stdin pipes -> deadlock.
+    tail() explains a non-zero exit."""
 
     def __init__(self, stream, tail_bytes: int = 8192):
         self._stream = stream
@@ -1341,21 +1148,11 @@ class Renderer:
         return self._encoder
 
     def run_chunk(self, n: int = 24) -> bool:
-        """SINGLE-THREADED pump: composite up to `n` frames in order; return True when the render is
-        COMPLETE (outputs finalized). Reads one frame's bytes per iteration from the decoder, paints
-        it (advancing the dial sequentially), and writes it to the encoder's stdin.
-
-        This is THE render engine — `run()` simply pumps it to completion (under a no-progress
-        watchdog). It is deliberately single-threaded: VideoToolbox runs the H.264 encode on the
-        Apple media engine (process-isolated, off the CPU), so an in-line QPainter composite keeps
-        up comfortably at the 30 fps default while avoiding the parallel-pipeline deadlock surface
-        that could wedge the GUI export. The caller (a QThread) can drive this in chunks for a
-        responsive, cancellable progress dialog.
-
-        On a wedge: if the supervisor (see `_start_supervisor`) killed the ffmpeg processes because
-        the export stalled or the user cancelled, the blocked `stdout.read`/`stdin.write` returns a
-        short read / raises BrokenPipe; we then translate that into the right exception
-        (RenderTimeoutError / CancelledError / _EncodeError) so the render never hangs."""
+        """Single-threaded pump: composite up to `n` frames in order (read frame -> paint -> write to
+        encoder). Returns True when complete. THE render engine; `run()` pumps it under the watchdog.
+        A short read = clean end (or NoFramesError); a supervisor kill turns the blocked
+        read/write into the right typed exception (RenderTimeoutError / CancelledError /
+        _EncodeError) so the render never hangs."""
         if self._done:
             return True
         if not self._started:
@@ -1416,21 +1213,10 @@ class Renderer:
         return _paint_packed_frame(self._painter, self._out_w, self._out_h, raw, vals, dial)
 
     def _start_supervisor(self, cancel) -> None:
-        """Spawn the daemon SUPERVISOR thread that makes an infinite hang structurally impossible.
-
-        The render loop blocks on pipe I/O (`stdout.read` / `stdin.write`); a wedged stage (a
-        VideoToolbox session that hangs instead of exiting, a stuck pipe, a decoder that stopped)
-        would block it FOREVER — there is no timeout on a pipe read/write, and a cancel flag the
-        loop only polls *between* frames can't interrupt a write that never returns. The supervisor
-        runs alongside and, the instant it sees either condition, KILLS the ffmpeg processes:
-
-          * NO-PROGRESS WATCHDOG: `frames_done` hasn't advanced for `watchdog_timeout` seconds →
-            abort "timeout" (then `run` retries once on the software encoder);
-          * CANCEL: the caller's `cancel()` returned True → abort "cancel".
-
-        Killing the processes unblocks the loop's read/write at the OS level (EOF / SIGPIPE), and
-        `_raise_if_aborted` turns that into a typed exception. A zero/none `watchdog_timeout`
-        disables only the stall check (cancel still works)."""
+        """Daemon supervisor: polls every 0.5s; aborts "cancel" if `cancel()` returns True, or
+        "timeout" if no frame for `watchdog_timeout` s. Kills ffmpeg so the blocked pipe I/O returns;
+        `_raise_if_aborted` then raises the typed error. A zero/none timeout disables only the stall
+        check (cancel still works)."""
         if self._supervisor is not None:
             return
         self._last_progress_t = time.monotonic()
@@ -1447,13 +1233,7 @@ class Renderer:
                             return
                     except Exception:  # noqa: BLE001 - a bad cancel cb must not crash the guard
                         pass
-                # No-progress watchdog. Armed from render START (here), NOT from the first frame,
-                # and deliberately NOT gated on `self._started`: a render that wedges during SETUP
-                # (ffmpeg launch) or on the FIRST decode read — e.g. a seek that yields zero frames
-                # while ffmpeg slowly demuxes a huge file — would otherwise sit on an empty bar with
-                # nothing to catch it (the chaptered-export symptom). `_last_progress_t` is reset
-                # only when a real frame is written, so "N s elapsed with 0 frames produced" trips
-                # the abort just like a mid-render stall.
+                # Armed from render start (not first frame) so a setup/zero-frame wedge also trips it.
                 if self._watchdog_timeout > 0 and not self._done:
                     if time.monotonic() - self._last_progress_t > self._watchdog_timeout:
                         self._abort("timeout")
@@ -1484,17 +1264,9 @@ class Renderer:
         self._supervisor = None
 
     def run(self, progress=None, cancel=None, chunk: int = 48) -> RenderResult:
-        """Render to completion (the call the GUI worker makes). `progress(done, total)` is invoked
-        as frames are written; `cancel()` -> True aborts cleanly (raises CancelledError after the
-        pipes are torn down). Returns a RenderResult.
-
-        ROBUSTNESS — two independent guards so the export NEVER hangs and NEVER silently breaks:
-          * a no-progress WATCHDOG (the supervisor) aborts a WEDGED render (a hung VideoToolbox
-            session / stuck pipe makes no progress and never "fails", so only a watchdog catches
-            it) — then we retry ONCE on the software encoder;
-          * a VideoToolbox encode that *fails* with a non-zero exit (`_EncodeError`) also retries
-            ONCE on libx264, for a machine where a hardware session won't open.
-        Either retry re-runs from a fresh, libx264-forced Renderer (a clean reset of the pipes)."""
+        """Render to completion. `progress(done, total)` / `cancel()` callbacks. A VT encode that
+        fails (`_EncodeError`) or wedges (RenderTimeoutError) retries ONCE on a fresh libx264-forced
+        Renderer; otherwise surfaces a clear RuntimeError. Returns a RenderResult."""
         try:
             return self._run_chunked(progress, cancel, chunk)
         except (_EncodeError, RenderTimeoutError) as exc:
@@ -1611,18 +1383,12 @@ class Renderer:
 def build_lap_spec(session, out_path: str, lap_id: int,
                    config: OverlayConfig | None = None,
                    src_path: str | None = None) -> ExportSpec:
-    """Build the `ExportSpec` for `lap_id`, resolving the VIDEO SOURCE from the session's chapters
-    so the export reads the RIGHT footage regardless of which chapter(s) the lap's GLOBAL window
-    lands in. Raises ValueError if the lap has no usable window.
-
-    Source resolution (the chaptered-export fix), reusing the player's global<->local mapping:
-      * `session.chapters` (a ChapterMap) present -> map the global window to a single chapter file
-        (or a concat of the chapters a seam-crossing lap spans) via `resolve_video_source`;
+    """Build the `ExportSpec` for `lap_id`, resolving the VIDEO SOURCE from the session's chapters.
+    Raises ValueError if the lap has no usable window. Source:
+      * `session.chapters` (a ChapterMap) present -> resolve_video_source (single chapter or a concat
+        over a seam-crossing span);
       * no ChapterMap -> the plain single file (`src_path`, else `session.video_path`), offset 0.
-
-    The caller OWNS the returned spec's `source` lifecycle and must call `spec.source.cleanup()`
-    when done (it may have written a temp concat-list file). app.py builds the spec this way so it
-    can run the Renderer off the UI thread behind a progress dialog."""
+    The caller OWNS the returned spec's `source` and must call `spec.source.cleanup()` when done."""
     win = lap_window_for_export(session, lap_id)
     if win is None:
         raise ValueError(f"lap {lap_id} has no usable export window")
@@ -1642,11 +1408,9 @@ def build_lap_spec(session, out_path: str, lap_id: int,
 def render_lap(session, src_path: str, out_path: str, lap_id: int,
                config: OverlayConfig | None = None,
                progress=None, cancel=None) -> RenderResult:
-    """Convenience: build the chapter-aware ExportSpec for `lap_id`'s window and render it to
-    completion. Raises ValueError if the lap has no usable window. Used by the headless render path
-    + tests; the app builds the spec itself (via `build_lap_spec`) so it can run the Renderer off
-    the UI thread with a progress dialog. `src_path` is the fallback single-file source when the
-    session has no ChapterMap."""
+    """Build the lap spec and render to completion (headless/tests). Raises ValueError if the lap
+    window is unusable; `src_path` is the fallback single-file source when the session has no
+    ChapterMap."""
     spec = build_lap_spec(session, out_path, lap_id, config=config, src_path=src_path)
     try:
         return Renderer(session, spec).run(progress=progress, cancel=cancel)
