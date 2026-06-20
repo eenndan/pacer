@@ -72,19 +72,8 @@ ZERO_LINE_PEN = pg.mkPen(C.border, width=1)
 # coasting spans (a translucent vertical band over each coast region). The brake glyph uses
 # the lap's own series colour (app passes it) so compare mode reads lap A vs lap B; the coast
 # band is a quiet neutral fill that never competes with the curves.
-BRAKE_MARKER_MIN_PX = 9
-BRAKE_MARKER_MAX_PX = 17
-BRAKE_DECEL_LO = 0.10   # g
-BRAKE_DECEL_HI = 0.45   # g
 COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
 COAST_PEN = pg.mkPen(None)
-
-
-def _brake_glyph_size(peak_decel: float) -> float:
-    """Brake event peak decel (g) -> speed-chart glyph size (px), clamped to the ramp ends."""
-    frac = (float(peak_decel) - BRAKE_DECEL_LO) / max(BRAKE_DECEL_HI - BRAKE_DECEL_LO, 1e-6)
-    frac = min(max(frac, 0.0), 1.0)
-    return BRAKE_MARKER_MIN_PX + frac * (BRAKE_MARKER_MAX_PX - BRAKE_MARKER_MIN_PX)
 
 
 class PlotsView(QWidget):
@@ -395,7 +384,7 @@ class PlotsView(QWidget):
                 y = self._speed_at_x(float(x))
                 if y is None:
                     continue
-                spots.append({"pos": (float(x), y), "size": _brake_glyph_size(decel)})
+                spots.append({"pos": (float(x), y), "size": theme.brake_glyph_size(decel)})
             if not spots:
                 continue
             dots = pg.ScatterPlotItem(symbol="t", pen=None, brush=pg.mkBrush(colour), pxMode=True)

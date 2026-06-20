@@ -66,6 +66,15 @@ def _smooth(a, w: int = SMOOTH_WINDOW):
     return _boxcar_core(a, w)
 
 
+def boxcar(a, w):
+    """Edge-corrected boxcar moving average (shared by driving + gmeter). No-op for w<2 or
+    arrays shorter than 2; clamps the window to the array length. See `_boxcar_core`."""
+    a = np.asarray(a, float)
+    if w < 2 or len(a) < 2:
+        return a
+    return _boxcar_core(a, min(w, len(a)))
+
+
 def _smooth_segments(a, seg_bounds, w: int = SMOOTH_WINDOW):
     """Apply `_smooth` independently within each contiguous run [lo, hi) so a boxcar never
     averages across a time discontinuity (chaptered files / GPS dropouts)."""

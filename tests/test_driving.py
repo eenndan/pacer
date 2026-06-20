@@ -275,7 +275,8 @@ def test_map_brake_markers_overlay():
     _qapp()
     import pyqtgraph as pg
 
-    from studio.map_view import _brake_glyph_size, _BrakeMarkers
+    from studio.map_view import _BrakeMarkers
+    from studio.theme import brake_glyph_size
     widget = pg.PlotWidget()
     bm = _BrakeMarkers(widget.getPlotItem())
     # two laps' brake sets (compare mode) -> one scatter item per non-empty lap.
@@ -285,7 +286,7 @@ def test_map_brake_markers_overlay():
     bm.set_markers([])  # clears
     assert bm._items == []
     # harder braking -> bigger glyph
-    assert _brake_glyph_size(0.45) > _brake_glyph_size(0.10)
+    assert brake_glyph_size(0.45) > brake_glyph_size(0.10)
     print("ok map overlay: one scatter per lap, sizes ramp with decel, clears cleanly")
 
 

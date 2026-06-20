@@ -80,25 +80,9 @@ CORNER_LABEL_BOX_PX = (22.0, 16.0)
 # selection; accent amber so it pops without adding a new colour.
 CORNER_HIGHLIGHT_PEN_W = 2
 CORNER_HIGHLIGHT_SIZE = 18
-# Brake-point glyphs (F5): a downward triangle (▼) at each braking-zone ONSET, sized by the
-# peak decel so harder braking reads as a bigger marker. The glyph colour is the lap's own
-# accent (so in compare mode lap A vs lap B are distinguishable, matching the chart series),
-# defaulting to the warm "behind" coral on a single lap so it reads on the amber current-lap
-# line. Sizes map peak decel (g) linearly between a floor and a cap so a light dab and a hard
-# stomp are both visible but bounded.
-BRAKE_MARKER_MIN_PX = 9      # glyph size at/below BRAKE_DECEL_LO
-BRAKE_MARKER_MAX_PX = 18     # glyph size at/above BRAKE_DECEL_HI
-BRAKE_DECEL_LO = 0.10        # g: floor of the size ramp (a light brake)
-BRAKE_DECEL_HI = 0.45        # g: cap of the size ramp (a hard brake)
-
-
-def _brake_glyph_size(peak_decel: float) -> float:
-    """Map a brake event's peak decel (g) to a glyph size (px), clamped to the ramp ends so a
-    light dab and a hard stomp are both visible but bounded."""
-    lo, hi = BRAKE_DECEL_LO, BRAKE_DECEL_HI
-    frac = (float(peak_decel) - lo) / max(hi - lo, 1e-6)
-    frac = min(max(frac, 0.0), 1.0)
-    return BRAKE_MARKER_MIN_PX + frac * (BRAKE_MARKER_MAX_PX - BRAKE_MARKER_MIN_PX)
+# Brake-point glyphs (F5): a downward ▼ at each braking-zone onset, sized by peak decel via
+# theme.brake_glyph_size (shared with the speed chart); colour = the lap's own series accent
+# (compare mode distinguishes lap A vs B), defaulting to the "behind" coral on a single lap.
 
 
 class _TimingLine:
@@ -635,7 +619,7 @@ class _BrakeMarkers:
         for markers, colour in lap_markers:
             if not markers:
                 continue
-            spots = [{"pos": (x, y), "size": _brake_glyph_size(d)} for x, y, d in markers]
+            spots = [{"pos": (x, y), "size": theme.brake_glyph_size(d)} for x, y, d in markers]
             dots = pg.ScatterPlotItem(
                 symbol="t", pen=None, brush=pg.mkBrush(colour), pxMode=True)
             dots.addPoints(spots)
