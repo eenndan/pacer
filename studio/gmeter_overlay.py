@@ -1,55 +1,27 @@
-"""GMeterOverlay: a subtle "G meter" dial painted OVER the video (felt-force convention).
+"""GMeterOverlay: a subtle "G meter" dial painted over the video (felt-force convention).
 
-A frameless, translucent, always-on-top top-level window pinned to the QVideoWidget's TOP-RIGHT
-corner and sized as a fraction of the video, drawn with a faint backdrop so it sits subtly over
-footage. It shows the inertial reaction the DRIVER'S BODY feels (not the raw acceleration
-vector), a translucent red max-G envelope of the grip used this lap, and the peak g reached in
-each cardinal direction.
+Native-window trick: on macOS a QVideoWidget renders through a native surface the window-server
+composites independently of Qt's z-order, so a plain child overlay is hidden behind the video.
+This overlay is its own frameless top-level window, composited as a separate layer above the
+video surface; the VideoView keeps it pinned to the video's corner.
 
-Why a top-level window and not a plain child widget: on macOS a QVideoWidget renders through a
-NATIVE surface (its own QWindow) that the window-server composites independently of Qt's z-order
-for ordinary ("alien", non-native) child widgets. A child overlay therefore lands in the parent's
-backing store and is painted OVER by the native video layer — invisible on screen even though it
-exists in the widget tree. Giving the overlay its own native top-level window makes the
-window-server composite it as a separate layer ABOVE the video surface, so it shows over live
-footage. The VideoView keeps it pinned to the video's corner on move/resize/show.
+Felt-force axes (the pointer is the inertial reaction the body feels, not the accel vector;
+g_at_time's accel convention is +lateral=left, +long=accelerating):
+  * braking      -> pointer UP
+  * accelerating -> pointer DOWN
+  * turning right -> pointer LEFT
+  * turning left  -> pointer RIGHT
+Screen mapping: dx = +lateral*scale, dy = +longitudinal*scale.
 
-THE FELT-FORCE CONVENTION (the pointer = what the driver's body feels, not the accel vector)
--------------------------------------------------------------------------------------------
-`session.g_at_time` reports the kart-frame ACCELERATION in g (validated in studio/gmeter.py):
-  +lateral      = turning LEFT,     -lateral      = turning RIGHT
-  +longitudinal = ACCELERATING,     -longitudinal = BRAKING
-The body feels the inertial REACTION — the opposite of the acceleration. We map that felt force
-onto the dial so it reads like the g-meter in a car:
-  * BRAKING (long<0)  -> pointer UP    (you're thrown forward / "up" on the meter)
-  * ACCELERATING      -> pointer DOWN
-  * turning RIGHT     -> pointer LEFT  (you're thrown to the left)
-  * turning LEFT      -> pointer RIGHT
-Screen mapping (screen +x = right, screen +y = down):
-  dx =  +lateral * scale        (left-turn -> right; right-turn -> left)
-  dy =  +longitudinal * scale   (braking long<0 -> up; accelerating long>0 -> down)
-i.e. the pointer is the felt force −(accel) expressed in the dial's up=forward-thrown frame.
+Chin-mount shake: the dot is an EMA of the felt-force g; the envelope + cardinal peaks use a
+high-percentile (robust) peak so a single shake spike can't blow them out.
 
-HELMET-SHAKE FILTERING (the GoPro is chin-mounted; the accel carries head/mount jitter)
----------------------------------------------------------------------------------------
-The gross g is good (lateral cross-check r≈0.90) but a chin mount adds high-frequency shake on
-top of the real vehicle g. So the DOT is driven by a short exponential moving average of the
-felt-force g (smooth but still responsive to real braking/cornering), and the ENVELOPE / peak-g
-NUMBERS use that filtered signal PLUS a high-percentile (robust) peak so a single shake spike
-can't blow the envelope or the cardinal numbers out to a spurious huge value.
+Envelope = a convex hull of accumulated filtered felt points (grip used this scope); the four
+cardinal numbers are the robust peak felt-g per direction. Scope defaults to the current lap and
+resets at the lap boundary (`_RESET_ON_LAP` / `reset_envelope()`).
 
-MAX-G ENVELOPE (the red blob) + cardinal peaks
-----------------------------------------------
-Filtered felt-force points are accumulated and their swept area is filled in translucent red
-(a convex hull of the points) — the grip envelope used in the current scope. The four cardinal
-numbers are the robust peak felt-g reached forward/back/left/right. Scope defaults to the
-CURRENT LAP and resets at the lap boundary (`set_lap` drives this); change `_RESET_ON_LAP` or
-call `reset_envelope()` for other scopes.
-
-This widget is `pacer`-free: it knows nothing about the telemetry source. The app feeds it
-`set_g((lateral_g, longitudinal_g, total_g))` and `set_lap(lap_id)` at the ~30 Hz tick. The
-convention flip + filtering are DISPLAY concerns and live here; the validated g values in
-`session`/`gmeter.py` are untouched.
+`pacer`-free: the app feeds set_g + set_lap at the ~30 Hz tick. The convention flip + filtering
+are display concerns and live here; the validated g values in gmeter.py are untouched.
 """
 
 from __future__ import annotations
@@ -74,27 +46,18 @@ from .theme import C
 
 
 def _c(token: str, alpha: int | None = None) -> QColor:
-    """A QColor from a theme hex token, optionally overriding the alpha (0-255). Lets the overlay
-    paint with the design tokens while keeping its hand-tuned per-element translucency."""
+    """QColor from a theme hex token, optional alpha override (0-255)."""
     col = QColor(token)
     if alpha is not None:
         col.setAlpha(alpha)
     return col
 
-# Visual scale: the outer ring is this many g (so a 1.0 g corner sits well inside and a ~1.5 g
-# spike still lands within the dial). The labelled rings follow _RINGS.
+# Outer ring g; a 1.0 g corner sits well inside and a ~1.5 g spike still lands within the dial.
 _FULL_SCALE_G = 1.6
 _RINGS = (0.5, 1.0)              # labelled rings (g)
 
-# Pointer low-pass: exponential moving average factor per ~30 Hz sample. Smaller = smoother but
-# laggier. ~0.30 gives a ~0.1 s time-constant — tames chin-mount/helmet shake while staying
-# responsive to a real brake/turn transition.
-_DOT_EMA_ALPHA = 0.30
+_DOT_EMA_ALPHA = 0.30            # dot low-pass per 30Hz sample (~0.1s tc); tames chin-mount shake
 
-# Envelope robustness: we keep a rolling window of recent FILTERED felt-force points and grow
-# the per-direction peaks only from a high PERCENTILE of the magnitude in each direction, so a
-# lone helmet-shake spike never sets a cardinal peak or pushes the hull out. The hull is built
-# from the filtered points themselves (already de-spiked by the EMA + the percentile gate).
 _PEAK_PERCENTILE = 90.0          # cardinal peak = this percentile of recent felt-g (robust)
 _PEAK_WINDOW = 90                # samples (~3 s at 30 Hz) feeding the percentile peak
 _ENVELOPE_MAX_PTS = 240          # cap on hull input points per scope (ring buffer)
@@ -110,21 +73,17 @@ def _font(pt: float, bold: bool = False) -> QFont:
 
 @dataclass
 class DialState:
-    """The pure DRAW state of the g-meter dial — everything `paint_dial` needs, decoupled from
-    the live QWidget. The live overlay snapshots its own fields into one of these per paint
-    (`GMeterOverlay._dial_state`); the OFFLINE video exporter (studio/export_video.py) drives a
-    headless `GMeterOverlay` exactly like the live tick and snapshots the same way, so the burned-
-    in dial is byte-identical to the on-screen one for the same g/lap history. Felt-force axes:
-    +fx = thrown right, +fy(down) = thrown back (accel), -fy(up) = thrown forward (brake)."""
-    fx: float = 0.0                    # filtered felt-force lateral (= +lateral g)
-    fy: float = 0.0                    # filtered felt-force longitudinal (= +longitudinal g)
-    have: bool = False                 # is there a live g reading to draw the dot for?
-    hull_pts: list[tuple[float, float]] = field(default_factory=list)  # filtered felt points
-    peak_fwd: float = 0.0              # braking  (felt UP)
-    peak_back: float = 0.0             # accel    (felt DOWN)
-    peak_left: float = 0.0             # turning right (felt LEFT)
-    peak_right: float = 0.0            # turning left  (felt RIGHT)
-    source: str = "accl"               # which sensor drives the meter ("accl"/"gps")
+    """Pure draw state for paint_dial; snapshotted by both the live widget and the offline
+    exporter so the burned dial matches the screen."""
+    fx: float = 0.0
+    fy: float = 0.0
+    have: bool = False
+    hull_pts: list[tuple[float, float]] = field(default_factory=list)
+    peak_fwd: float = 0.0
+    peak_back: float = 0.0
+    peak_left: float = 0.0
+    peak_right: float = 0.0
+    source: str = "accl"
 
 
 def dial_geom(w: float, h: float):
@@ -156,11 +115,8 @@ def dial_to_screen(cx, cy, r, fx, fy):
 
 
 # --------------------------------------------------------------------------- export palette
-# Vivid, opaque colours for the EXPORT render of the dial (burned over BRIGHT outdoor footage),
-# kept separate from the dim-on-dark live theme tokens (class C). Mirrors studio.export_video.EXPORT
-# so the burned g-meter matches the rest of the burned HUD; defined locally so this shared,
-# pacer-free module needs no import from the exporter. The LIVE overlay never uses these — it keeps
-# the C.* tokens — so its on-screen look is byte-identical to before.
+# Export-render palette: vivid/opaque for burning over bright footage (live uses C.* tokens).
+# Kept local to mirror export_video.EXPORT without importing it (this module is pacer-free).
 _EX_TEXT = "#FFFFFF"
 _EX_HALO = "#0A0C10"          # dark outline/shadow under every bright element
 _EX_ACCENT = "#FFB21E"        # envelope amber (brighter + saturated vs C.accent)
@@ -170,9 +126,8 @@ _EX_GRID = "#FFFFFF"          # rings / crosshair (white at moderate alpha)
 
 def _draw_text_outlined(p: QPainter, rect: QRectF, flags, text: str, font: QFont,
                         colour: str, halo: float = 2.2) -> None:
-    """Draw `text` aligned within `rect` (Qt alignment flags) with a dark OUTLINE under a bright
-    fill — the EXPORT legibility treatment so a burned label reads over bright sky AND dark tarmac.
-    Used only by the export branch of `paint_dial`; the live widget draws plain text as before."""
+    """Draw aligned `text` with a dark outline under a bright fill so a burned label reads over
+    sky and tarmac."""
     fm = QFontMetricsF(font)
     w = fm.horizontalAdvance(text)
     if flags & Qt.AlignHCenter:
@@ -201,10 +156,8 @@ def _draw_text_outlined(p: QPainter, rect: QRectF, flags, text: str, font: QFont
 
 
 def _export_dial_geom(w: float, h: float):
-    """Dial centre + radius for the EXPORT render. Like `dial_geom` but reserves a LARGER margin so
-    the (much bigger) cardinal peak numbers sit clearly outside the ring, and drops the live widget's
-    title strip so the dial fills more of the box (the export has no 'G meter' caption-bar look).
-    Separate from `dial_geom` so the LIVE widget's geometry — and its tests — are unchanged."""
+    """Dial centre+radius for export: larger number margin, no title strip so the dial fills more
+    of the box."""
     margin = 0.20 * min(w, h)          # room for the larger outlined cardinal numbers
     r = max((min(w, h) - 2 * margin) / 2.0, 8.0)
     return w / 2.0, h / 2.0, r
@@ -212,46 +165,32 @@ def _export_dial_geom(w: float, h: float):
 
 def paint_dial(p: QPainter, w: float, h: float, st: DialState,
                export: bool = False, scale_k: float = 1.0) -> None:
-    """Paint the g-meter dial (backdrop, rings, max-G envelope, cardinal peaks, live dot, source
-    tag) into the painter's current coordinate system, sized to a (w, h) box at the origin. This
-    is the EXTRACTED body of the live overlay's old paintEvent — the single source of the dial's
-    look, used by both `GMeterOverlay.paintEvent` (snapshotting `self`) and the offline video
-    exporter (snapshotting a headless overlay). No widget state is touched here.
+    """Paint the dial (backdrop, rings, envelope, peaks, dot, source tag) sized to (w,h) at the
+    origin. Single source for the live widget + the offline exporter; no widget state touched.
 
-    `export=False` (the default — what the LIVE widget passes) renders EXACTLY as before, so the
-    on-screen overlay is byte-identical. `export=True` renders the EXPORT variant for burning over
-    bright footage: NO backdrop box, white high-contrast rings/crosshair, a brighter envelope, a
-    bigger glowing dot, and SUBSTANTIALLY larger outlined cardinal-g numbers (the roadmap's
-    "bigger g-meter numbers, no box, more vivid"). `scale_k` scales the export's line widths/dot/
-    glyphs so the dial looks right at any `out_height` (1.0 ≈ a ~280 px dial at 1080p)."""
+    export=False = on-screen look; export=True = the burn-over-bright variant (no box, white rings,
+    brighter envelope, bigger glowing dot, large outlined numbers). `scale_k` scales export
+    strokes/glyphs to the output height (1.0 ≈ a ~280 px dial at 1080p)."""
     p.setRenderHint(QPainter.Antialiasing, True)
     if export:
         _paint_dial_export(p, w, h, st, scale_k)
         return
     cx, cy, r = dial_geom(w, h)
 
-    # --- dark translucent backing matching the app surface ---
-    # C.surface (the app's panel/card neutral, NOT the darker canvas) at a moderate alpha so the
-    # dial reads as a piece of the app's chrome floating over the footage rather than a flat gray
-    # square — the video still shows through, but the panel-grey tint ties it to the side panels.
-    # A theme hairline (C.border) frames it the same way every panel edge is drawn.
+    # panel-grey backing (C.surface) + theme hairline so the dial reads as app chrome over footage
     backdrop = QRectF(1, 1, w - 2, h - 2)
     p.setBrush(_c(C.surface, 168))
     p.setPen(QPen(_c(C.border, 200), 1))
     p.drawRoundedRect(backdrop, 12, 12)
 
-    # --- title: "G METER" ---
-    # Theme caption type: dimmed off-white (C.text_dim) + a little letter-spacing so the small
-    # uppercase caption reads like the app's PanelHeader labels rather than a generic title.
+    # G METER caption, theme caption type
     p.setPen(QPen(_c(C.text_dim, 235)))
     title_f = _font(7.5, bold=True)
     title_f.setLetterSpacing(QFont.AbsoluteSpacing, 1.4)
     p.setFont(title_f)
     p.drawText(QRectF(0, 3, w, 14), Qt.AlignHCenter | Qt.AlignVCenter, "G METER")
 
-    # --- concentric rings (thin, clean hairlines) ---
-    # The grid circles use the same C.border hairline as every panel/gridline in the app, dimmed,
-    # so they recede behind the live data instead of looking like a foreign light-gray ring set.
+    # concentric rings: theme hairline, dimmed
     p.setBrush(Qt.NoBrush)
     for gval in _RINGS:
         rr = r * (gval / _FULL_SCALE_G)
@@ -265,10 +204,7 @@ def paint_dial(p: QPainter, w: float, h: float, st: DialState,
     p.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
     p.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
 
-    # --- filled max-G envelope (translucent blob = grip used this lap) ---
-    # Tinted with the amber accent family. A LOW-alpha C.accent fill (so the panel-grey backing +
-    # rings still read through it instead of the old muddy olive slab), under a crisp, brighter
-    # C.accent_hover outline so the swept grip envelope's EDGE pops as the headline amber element.
+    # grip envelope: low-alpha amber fill + brighter amber rim
     if len(st.hull_pts) >= 3:
         hull = _convex_hull(st.hull_pts)
         if len(hull) >= 3:
@@ -281,9 +217,9 @@ def paint_dial(p: QPainter, w: float, h: float, st: DialState,
             p.setPen(QPen(_c(C.accent_hover, 215), 1.4))  # bright amber rim = the grip envelope
             p.drawPath(path)
 
-    # --- cardinal peak-g numbers (robust max felt-g per direction) ---
+    # cardinal peak-g numbers (robust max felt-g per direction)
     p.setFont(_font(8.0, bold=True))
-    p.setPen(QPen(_c(C.text_dim, 235)))   # axis value labels — dimmed off-white (theme caption)
+    p.setPen(QPen(_c(C.text_dim, 235)))
     off = 11
     # forward (braking) at top, back (accel) at bottom, left/right on the sides
     p.drawText(QRectF(cx - 22, cy - r - off - 6, 44, 12), Qt.AlignCenter, f"{st.peak_fwd:.1f}")
@@ -293,11 +229,7 @@ def paint_dial(p: QPainter, w: float, h: float, st: DialState,
     p.drawText(QRectF(cx + r + off - 22, cy - 6, 44, 12), Qt.AlignLeft | Qt.AlignVCenter,
                f"{st.peak_right:.1f}")
 
-    # --- the live dot (NO line from centre to the dot — just a soft glow + dot) ---
-    # A brighter accent (amber) glow fading out — using C.accent_hover so the live pointer's halo
-    # stays distinct from the dimmer C.accent envelope wash it sits inside. A 1px C.canvas ring
-    # separates the core from the amber glow (and from the footage), and a bright off-white
-    # (C.text) core marks the felt-force pointer as the live indicator.
+    # live dot: amber glow + a dark-ringed off-white core (the felt-force pointer)
     if st.have:
         dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
         grad = QRadialGradient(QPointF(dx, dy), 8)
@@ -310,17 +242,16 @@ def paint_dial(p: QPainter, w: float, h: float, st: DialState,
         p.setBrush(_c(C.text, 250))
         p.drawEllipse(QPointF(dx, dy), 2.6, 2.6)
 
-    # --- source tag (tiny, bottom-right) ---
+    # source tag (tiny, bottom-right)
     p.setPen(QPen(_c(C.text_muted, 160)))
     p.setFont(_font(6.0))
     p.drawText(QRectF(w - 44, h - 13, 40, 11), Qt.AlignRight, st.source.upper())
 
 
 def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float) -> None:
-    """The EXPORT g-dial: no backdrop box, vivid white high-contrast rings, a brighter amber grip
-    envelope, BIG outlined cardinal-g numbers, and a bigger glowing felt-force dot — all carrying a
-    dark halo so they read over bright sky AND dark tarmac. Layout uses `_export_dial_geom` (bigger
-    number margin, no title strip). `k` scales strokes/glyphs with the output height."""
+    """The export g-dial: no backdrop box, white high-contrast rings, a brighter amber envelope,
+    big outlined cardinal-g numbers, and a bigger haloed dot. Layout via _export_dial_geom; `k`
+    scales strokes/glyphs with the output height."""
     k = max(0.5, float(k))
     cx, cy, r = _export_dial_geom(w, h)
 
@@ -397,34 +328,29 @@ def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float)
 
 class GMeterOverlay(QWidget):
     def __init__(self, parent: QWidget | None = None):
-        # A frameless, translucent, always-on-top TOOL window — its own native layer so the
-        # window-server composites it ABOVE the QVideoWidget's native video surface (a plain
-        # child widget would be hidden behind that surface on macOS). `parent` is kept only for
-        # ownership/lifetime; the window is positioned in GLOBAL screen coords by the VideoView.
+        # Frameless translucent top-level window so it composites above the native video surface
+        # (a child widget would be hidden behind it on macOS); positioned by the VideoView.
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
                          | Qt.WindowDoesNotAcceptFocus | Qt.NoDropShadowWindowHint)
-        # Transparent, click-through window painted on top of the video.
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setMinimumSize(120, 140)
-        # Live felt-force pointer (filtered) in g; dial axes are felt: +x = thrown right,
-        # +y(down) = thrown back (accelerating), -y(up) = thrown forward (braking).
-        self._fx = 0.0                 # filtered felt-force lateral (= +lateral g)
-        self._fy = 0.0                 # filtered felt-force longitudinal (= +longitudinal g)
-        self._have = False             # is there a current g reading to draw the dot for?
-        self._ema_init = False         # has the EMA been seeded yet?
+        # Filtered felt-force pointer in g; axes: +x = thrown right, +y(down) = thrown back (accel),
+        # -y(up) = thrown forward (brake). Peaks are the robust per-direction max felt-g (all >= 0).
+        self._fx = 0.0
+        self._fy = 0.0
+        self._have = False
+        self._ema_init = False
         self._source = "accl"
-        # Envelope + robust peaks, accumulated over the current scope (default: this lap).
         self._hull_pts: list[tuple[float, float]] = []     # filtered felt points (ring buffer)
         self._recent: list[tuple[float, float]] = []       # rolling window for percentile peaks
-        # Cardinal peak felt-g: forward (brake), back (accel), left, right (all >= 0).
-        self._peak_fwd = 0.0           # braking  (felt UP)
-        self._peak_back = 0.0          # accel    (felt DOWN)
-        self._peak_left = 0.0          # turning right (felt LEFT)
-        self._peak_right = 0.0         # turning left  (felt RIGHT)
-        self._lap: int | None = None   # current lap id (for the per-lap reset)
+        self._peak_fwd = 0.0
+        self._peak_back = 0.0
+        self._peak_left = 0.0
+        self._peak_right = 0.0
+        self._lap: int | None = None
 
     # ------------------------------------------------------------------ data in
     def set_g(self, g: tuple[float, float, float] | None) -> None:
@@ -437,11 +363,9 @@ class GMeterOverlay(QWidget):
                 self.update()
             return
         lat, lon, _total = g
-        # Felt-force convention: pointer is the inertial reaction the body feels (see module doc).
-        #   felt x = +lateral      (turn left -> right on the dial; turn right -> left)
-        #   felt y = +longitudinal (braking long<0 -> up; accelerating long>0 -> down)
+        # Felt-force convention (see module doc): felt x = +lateral, felt y = +longitudinal.
         fx, fy = lat, lon
-        # Shake low-pass (EMA) for a smooth dot that tracks vehicle g, not head/mount jitter.
+        # Shake low-pass (EMA) so the dot tracks vehicle g, not head/mount jitter.
         if not self._ema_init:
             self._fx, self._fy, self._ema_init = fx, fy, True
         else:
@@ -453,21 +377,13 @@ class GMeterOverlay(QWidget):
         self.update()
 
     def _accumulate(self, fx: float, fy: float) -> None:
-        """Grow the per-lap envelope + robust cardinal peaks from the FILTERED felt point.
-
-        Robustness to chin-mount shake (two layers): the cardinal numbers track a high PERCENTILE
-        of the recent filtered magnitude in each direction (not the instantaneous max), so a lone
-        spike that slips through the EMA can't set a peak; and the hull point is CLAMPED to those
-        robust per-direction peaks before it's added, so a single spike can never push the blob
-        past the robust envelope either. (The EMA already de-spikes the dot itself.)"""
+        """Grow per-lap envelope + robust cardinal peaks from the filtered felt point. Peaks use a
+        percentile of the recent window and the hull point is clamped to them, so a lone shake spike
+        can't balloon either."""
         self._recent.append((fx, fy))
         if len(self._recent) > _PEAK_WINDOW:
             self._recent.pop(0)
-        # Per-direction robust peak from the rolling window: the felt extent reached in each of
-        # the four cardinals, taken at _PEAK_PERCENTILE so a single shake sample doesn't win.
-        # Single pass partitions the window into the four sign-split lists (was four separate
-        # comprehensions, each re-iterating _recent); the per-list _pct is unchanged so the peaks
-        # are byte-identical.
+        # Robust peak per cardinal: percentile of the rolling window so a single shake sample can't win.
         right, left, back, fwd = [], [], [], []
         for px, py in self._recent:
             if px > 0:
@@ -482,8 +398,7 @@ class GMeterOverlay(QWidget):
         self._peak_left = max(self._peak_left, _pct(left, _PEAK_PERCENTILE))
         self._peak_back = max(self._peak_back, _pct(back, _PEAK_PERCENTILE))
         self._peak_fwd = max(self._peak_fwd, _pct(fwd, _PEAK_PERCENTILE))
-        # Clamp the hull candidate to the robust per-direction peaks so one spike can't balloon the
-        # blob (the peaks themselves are percentile-gated). A tiny margin keeps the dot inside.
+        # Clamp the hull candidate to the robust per-direction peaks so one spike can't balloon the blob.
         hx = min(fx, self._peak_right) if fx >= 0 else max(fx, -self._peak_left)
         hy = min(fy, self._peak_back) if fy >= 0 else max(fy, -self._peak_fwd)
         self._hull_pts.append((hx, hy))
@@ -491,10 +406,8 @@ class GMeterOverlay(QWidget):
             self._hull_pts.pop(0)
 
     def set_lap(self, lap_id: int | None) -> None:
-        """Tell the meter which lap is being driven. When it CHANGES to a new valid lap (and
-        _RESET_ON_LAP), the envelope + cardinal peaks reset so the blob shows THIS lap's grip
-        usage. `None` (lead-in / between laps) is held — never resets — so the envelope persists
-        across the brief no-lap gaps."""
+        """Set the current lap. A change to a new valid lap resets the envelope + peaks (when
+        _RESET_ON_LAP); None (lead-in / between laps) is held so the envelope persists."""
         if lap_id is None or lap_id == self._lap:
             return
         if _RESET_ON_LAP and self._lap is not None:
@@ -507,10 +420,8 @@ class GMeterOverlay(QWidget):
         self.update()
 
     def reset_envelope(self) -> None:
-        """Clear the accumulated max-G envelope + cardinal peaks (new scope, e.g. a new lap), AND
-        re-seed the live-dot EMA so the filtered pointer starts fresh on the new scope's first
-        sample instead of carrying the previous lap's filtered value (which would make the dot drift
-        in from the old lap's position on a per-lap reset)."""
+        """Clear the envelope + cardinal peaks and re-seed the dot EMA so the pointer starts fresh
+        on the new scope's first sample (no carry-over from the previous lap)."""
         self._hull_pts.clear()
         self._recent.clear()
         self._peak_fwd = self._peak_back = self._peak_left = self._peak_right = 0.0
@@ -521,19 +432,16 @@ class GMeterOverlay(QWidget):
 
     # ------------------------------------------------------------------ painting
     def _geom(self):
-        """Centre + radius of the dial (delegates to the shared `dial_geom`). Kept as a thin
-        method so the existing offscreen tests that call `ov._geom()` / `ov._to_screen(...)`
-        keep working unchanged."""
+        # thin delegate to dial_geom; kept for the offscreen tests
         return dial_geom(self.width(), self.height())
 
     def _to_screen(self, cx, cy, r, fx, fy):
-        """Felt-force point -> dial pixel (delegates to the shared `dial_to_screen`)."""
+        # thin delegate to dial_to_screen (tests)
         return dial_to_screen(cx, cy, r, fx, fy)
 
     def _dial_state(self) -> DialState:
-        """Snapshot the live filtering state into a pure `DialState` for `paint_dial`. The live
-        paint path and the offline exporter both render through the same function from such a
-        snapshot, so what's burned into the video matches what's on screen."""
+        """Snapshot the live filtering state into a pure DialState for paint_dial (same snapshot
+        the exporter renders from, so the burned dial matches the screen)."""
         return DialState(
             fx=self._fx, fy=self._fy, have=self._have, hull_pts=list(self._hull_pts),
             peak_fwd=self._peak_fwd, peak_back=self._peak_back,
