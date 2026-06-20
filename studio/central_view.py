@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -71,12 +71,6 @@ class CentralView(QWidget):
     Built atomically per load by StudioWindow; owns the panels, the compare/scrub controllers, the
     shared PlaybackState and the per-frame ``tick()``. The persistent chrome on the window reaches
     every session-scoped widget through ``window.view`` — this object is the single swap point."""
-
-    # Re-emitted up to the window so the persistent statusbar / menus can react WITHOUT the window
-    # reaching into the view's internals. Currently the window drives those directly through
-    # ``self.view`` (the chip/menu sync stays on the window after the swap), so no consumer is wired
-    # yet; the signal exists as the clean seam if a future chrome reaction needs it.
-    referenceChanged = Signal()
 
     def __init__(self, session, paths: list[str], sidecar_path: str | None,
                  consistency_visible: bool, parent: QWidget | None = None):

@@ -76,7 +76,6 @@ BRAKE_MARKER_MIN_PX = 9
 BRAKE_MARKER_MAX_PX = 17
 BRAKE_DECEL_LO = 0.10   # g
 BRAKE_DECEL_HI = 0.45   # g
-COAST_FILL = pg.mkBrush(C.text_muted)  # alpha applied per-region below
 COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
 COAST_PEN = pg.mkPen(None)
 
