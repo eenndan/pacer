@@ -80,7 +80,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import _boxcar_core
+from ._signal import boxcar
 
 # --- model constants -------------------------------------------------------------------
 # Additional boxcar applied to long_g before brake/coast thresholding, in seconds. gmeter
@@ -171,14 +171,6 @@ class CoastSpan:
     duration: float      # how long it lasts (s)
 
 
-def _boxcar(a: np.ndarray, w: int) -> np.ndarray:
-    """Edge-corrected boxcar (the shared `_signal._boxcar_core`); no-op for w < 2 / tiny a."""
-    a = np.asarray(a, float)
-    if w < 2 or len(a) < 2:
-        return a
-    return _boxcar_core(a, min(w, len(a)))
-
-
 def _smooth_window(t: np.ndarray) -> int:
     """Samples spanning SMOOTH_S given the (roughly uniform) g-series time step."""
     if len(t) < 3:
@@ -239,7 +231,7 @@ def brake_events(dist, elapsed, long_g, theta_b: float) -> list[BrakeEvent]:
     dist, elapsed, g = dist[:n], elapsed[:n], g[:n]
     if n < 2:
         return []
-    g = _boxcar(g, _smooth_window(elapsed))
+    g = boxcar(g, _smooth_window(elapsed))
     hi = float(theta_b)               # ENTER braking below -hi
     lo = float(theta_b) * RELEASE_RATIO  # RELEASE only once decel recovers above -lo
     out: list[BrakeEvent] = []
@@ -286,8 +278,8 @@ def coasting_spans(dist, elapsed, speed_kmh, long_g, lat_g,
     dist, elapsed, speed_kmh = dist[:n], elapsed[:n], speed_kmh[:n]
     lg, la = lg[:n], la[:n]
     w = _smooth_window(elapsed)
-    lg = _boxcar(lg, w)
-    la = _boxcar(la, w)
+    lg = boxcar(lg, w)
+    la = boxcar(la, w)
     coast = (np.abs(lg) < theta_c) & (np.abs(la) < theta_lat) & (speed_kmh > MOVING_KMH)
     out: list[CoastSpan] = []
     i = 0

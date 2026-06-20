@@ -66,7 +66,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import _boxcar_core
+from ._signal import boxcar
 
 G = 9.80665  # m/s^2
 
@@ -90,19 +90,6 @@ _MOVING_MS = 4.0
 
 def _norm_rows(a):
     return a / np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-12)
-
-
-def _boxcar(a, w):
-    """Edge-corrected boxcar moving average (no end taper). No-op for w < 2.
-
-    Clamps the window to the array length (so a short input still smooths over what it has),
-    then defers to the shared `_signal._boxcar_core` — the SAME edge-corrected boxcar that
-    backs `_signal._smooth`."""
-    a = np.asarray(a, float)
-    if w < 2 or len(a) < 2:
-        return a
-    w = min(w, len(a))
-    return _boxcar_core(a, w)
 
 
 def _quat_rotate_world(qw, qx, qy, qz, v):
@@ -218,16 +205,16 @@ def _gps_derived_g(gt, gx, gy, gspeed):
             out[n - 1 - i] = np.median(a[n - 1 - i - h:])  # right edge: window clipped at n
         return out
 
-    xs = _boxcar(medfilt(gx), 11)
-    ys = _boxcar(medfilt(gy), 11)
+    xs = boxcar(medfilt(gx), 11)
+    ys = boxcar(medfilt(gy), 11)
     vx = np.gradient(xs) / dt
     vy = np.gradient(ys) / dt
     vmag = np.hypot(vx, vy)
     fwd = np.column_stack([vx, vy]) / np.maximum(vmag, 1e-6)[:, None]
     left = np.column_stack([-fwd[:, 1], fwd[:, 0]])
     psi = np.unwrap(np.arctan2(vy, vx))
-    yaw_rate = np.gradient(_boxcar(psi, 11)) / dt
-    spd = _boxcar(gspeed, 9)
+    yaw_rate = np.gradient(boxcar(psi, 11)) / dt
+    spd = boxcar(gspeed, 9)
     long_g = np.clip(np.gradient(spd) / dt / G, -2.0, 2.0)
     lat_g = np.clip(spd * yaw_rate / G, -3.0, 3.0)
     moving = spd > _MOVING_MS
@@ -364,7 +351,7 @@ def _horizontal_accel(accl, grav, cori, ta):
     e2 = np.cross(gdir, e1)
     e2 = e2 / np.linalg.norm(e2)
     lp_w = max(int(_LOWPASS_S * len(ta) / max(ta[-1] - ta[0], 1e-6)), 1)
-    return _boxcar(horiz @ e1, lp_w), _boxcar(horiz @ e2, lp_w)
+    return boxcar(horiz @ e1, lp_w), boxcar(horiz @ e2, lp_w)
 
 
 def _fit_segment(ta, h1, h2, gps_t, long_gps, lat_gps, fwd, left, moving):
