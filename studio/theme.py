@@ -141,6 +141,20 @@ def delta_colour(d: float | None) -> str | None:
 # can't express), composes from the same fragments rather than the combined string.
 
 
+# --- brake-glyph size ramp (shared by the map + speed-chart brake markers, so the two glyphs
+# can't drift): peak decel (g) maps linearly between a floor and a cap. ---
+BRAKE_MARKER_MIN_PX = 9      # glyph px at/below BRAKE_DECEL_LO (a light dab)
+BRAKE_MARKER_MAX_PX = 18     # glyph px at/above BRAKE_DECEL_HI (a hard stomp)
+BRAKE_DECEL_LO = 0.10        # g: floor of the size ramp
+BRAKE_DECEL_HI = 0.45        # g: cap of the size ramp
+
+
+def brake_glyph_size(peak_decel: float) -> float:
+    """Brake-event peak decel (g) -> marker glyph size (px), clamped to the ramp ends."""
+    frac = (float(peak_decel) - BRAKE_DECEL_LO) / max(BRAKE_DECEL_HI - BRAKE_DECEL_LO, 1e-6)
+    return BRAKE_MARKER_MIN_PX + min(max(frac, 0.0), 1.0) * (BRAKE_MARKER_MAX_PX - BRAKE_MARKER_MIN_PX)
+
+
 def format_delta_value(d: float | None) -> str:
     """The Δ NUMBER alone, no leading glyph/units: an em dash for no delta, else a signed
     2-decimal seconds value (e.g. "+0.00", "-0.31"). The atomic source both readouts format Δ
