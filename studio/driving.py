@@ -43,6 +43,21 @@ COAST_DRAG_MIN = 0.03     # g; below this |decel| is steady-state cruise, not co
 MIN_COAST_S = 0.25        # drop coast blips between brake-release and throttle-pickup
 MOVING_KMH = 14.4         # 4.0 m/s; below this a sample is "stopped"
 MAX_LONG_G = 2.0          # clip speed-derivative spikes (a GPS glitch can't manufacture a brake)
+# Maneuver merge: the release hysteresis splits one braking-into-a-corner (threshold brake -> ease/
+# trail -> re-brake) into several events. These fuse the fragments back into ONE brake point.
+# Discriminator priority is DATA-DRIVEN (measured on real GPS-derived g, _diag_merge.py): adjacent
+# same-corner fragments sit within ~17 m of coast (p90) while distinct corners cluster >30 m apart,
+# so DISTANCE + the corner-window guard separate them cleanly; the throttle sign does NOT (same-corner
+# g blips to +0.06..+0.4 between trail sub-phases on the noisy signal), so it is only a coarse safety.
+MERGE_TROUGH_GAP_M = 25.0 # m; PRIMARY cut: fuse fragments within this much coast distance of each
+#                           other (same-corner p90<=17 m; distinct corners >30 m). The corner guard
+#                           handles the close distinct-corner cases distance alone would over-merge.
+MERGE_ACCEL_G = 0.50      # g; SAFETY only: a clear, hard re-throttle (smoothed signed g above this)
+#                           between two brakes keeps them separate even inside one corner window — the
+#                           fallback for a corner model that wrongly merges two real corners. Set HIGH
+#                           on purpose: a low value wrongly blocks valid same-corner merges.
+MERGE_GATE_S = 0.30       # s; boxcar for the merge gate's signed g (wider than the detector's SMOOTH_S)
+CORNER_LEAD_M = 40.0      # m; widen corner windows upstream (braking starts before the geometry)
 
 
 def speed_long_g(speed_kmh, t) -> np.ndarray:
@@ -97,12 +112,17 @@ class CoastSpan:
     duration: float      # how long it lasts (s)
 
 
-def _smooth_window(t: np.ndarray) -> int:
-    """Samples spanning SMOOTH_S given the (roughly uniform) time step."""
+def _win(t: np.ndarray, seconds: float) -> int:
+    """Number of samples spanning `seconds` given the (roughly uniform) time step."""
     if len(t) < 3:
         return 1
     dt = float(np.median(np.diff(t)))
-    return max(int(round(SMOOTH_S / max(dt, 1e-9))), 1)
+    return max(int(round(seconds / max(dt, 1e-9))), 1)
+
+
+def _smooth_window(t: np.ndarray) -> int:
+    """Samples spanning SMOOTH_S (the detector's pre-threshold boxcar)."""
+    return _win(t, SMOOTH_S)
 
 
 def derive_thresholds(long_g, speed_kmh) -> Thresholds:
@@ -132,10 +152,16 @@ def derive_thresholds(long_g, speed_kmh) -> Thresholds:
     )
 
 
-def brake_events(dist, elapsed, long_g, theta_b: float) -> list[BrakeEvent]:
+def brake_events(dist, elapsed, long_g, theta_b: float, *,
+                 corner_windows=None) -> list[BrakeEvent]:
     """Detect braking zones on one lap (aligned dist/elapsed/long_g, same lap; gmeter sign:
     long_g<0 braking). Held open with Schmitt hysteresis (see RELEASE_RATIO). `long_g` is the
-    clean speed-derived longitudinal. Returns events in track order."""
+    clean speed-derived longitudinal. Adjacent fragments of ONE braking maneuver (the release
+    hysteresis splits a threshold-brake -> trail -> re-brake) are then fused by
+    merge_brake_maneuvers, unless the driver got back on the throttle between them (a chicane) —
+    so a corner gets one brake point. `corner_windows` (optional lap-odometer (enter,exit) spans)
+    is a block-only fail-safe that keeps two genuinely-distinct corners separate. Events in
+    track order."""
     dist = np.asarray(dist, float)
     elapsed = np.asarray(elapsed, float)
     g = np.asarray(long_g, float)
@@ -146,7 +172,9 @@ def brake_events(dist, elapsed, long_g, theta_b: float) -> list[BrakeEvent]:
     g = boxcar(g, _smooth_window(elapsed))
     hi = float(theta_b)                  # ENTER braking below -hi
     lo = float(theta_b) * RELEASE_RATIO  # RELEASE only once decel recovers above -lo
-    out: list[BrakeEvent] = []
+    # Collect raw fragments (no MIN_BRAKE_S yet — a short pre-onset spike must be free to fold into
+    # its parent maneuver before the duration test). Each: (i0, i1, onset_dist, onset_time, peak, end_dist).
+    raw: list[tuple] = []
     i = 0
     while i < n:
         if g[i] < -hi:
@@ -158,17 +186,58 @@ def brake_events(dist, elapsed, long_g, theta_b: float) -> list[BrakeEvent]:
             while j1 + 1 < n and g[j1 + 1] < -lo:  # extend forwards until decel releases
                 j1 += 1
             seg = g[j0:j1 + 1]
-            duration = float(elapsed[j1] - elapsed[j0])
-            if duration >= MIN_BRAKE_S:
-                out.append(BrakeEvent(
-                    onset_dist=float(dist[j0]),
-                    onset_time=float(elapsed[j0]),
-                    peak_decel=float(-seg.min()),  # deepest decel as a positive magnitude
-                    duration=duration,
-                ))
+            raw.append((j0, j1, float(dist[j0]), float(elapsed[j0]),
+                        float(-seg.min()), float(dist[j1])))
             i = j1 + 1
         else:
             i += 1
+    if not raw:
+        return []
+    g_gate = boxcar(g, _win(elapsed, MERGE_GATE_S))
+    return merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows)
+
+
+def merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows=None) -> list[BrakeEvent]:
+    """Fuse adjacent brake fragments that belong to ONE braking maneuver. `raw` is the per-fragment
+    (i0, i1, onset_dist, onset_time, peak, end_dist) list in track order; `g_gate` the merge-gate
+    smoothed signed g. Two fragments stay SEPARATE iff: more than MERGE_TROUGH_GAP_M of coast
+    separates them (the primary distance cut), OR (block-only guard) they sit in two different corner
+    windows, OR (coarse safety) a clear hard re-throttle (smoothed g above +MERGE_ACCEL_G) sits
+    between them. A merged group keeps the EARLIEST onset verbatim (so recall + onset accuracy are
+    untouched), peak = max, duration = the true onset->release span; MIN_BRAKE_S is applied to the
+    merged span."""
+    def corner_of(d):
+        if corner_windows is None:
+            return None
+        for k, (a, b) in enumerate(corner_windows):
+            if a <= d <= b:
+                return k
+        return None  # out of all windows -> the guard stays inert for this event
+
+    groups = [list(raw[0])]
+    for ev in raw[1:]:
+        a = groups[-1]
+        if ev[0] > a[1]:  # samples between a's release and ev's onset
+            between = g_gate[a[1]:ev[0] + 1]
+            got_throttle = between.size > 0 and float(between.max()) > MERGE_ACCEL_G
+        else:
+            got_throttle = False  # overlapping/abutting fragments -> certainly one maneuver
+        trough_gap = ev[2] - a[5]  # onset_dist_b - end_dist_a (coast distance between)
+        ca, cb = corner_of(a[2]), corner_of(ev[2])
+        block = ca is not None and cb is not None and ca != cb
+        if (not got_throttle) and (trough_gap <= MERGE_TROUGH_GAP_M) and (not block):
+            a[1] = ev[1]                 # extend the group's release index
+            a[4] = max(a[4], ev[4])      # peak = deepest sub-phase
+            a[5] = ev[5]                 # extend the group's end distance
+            # onset (a[2]/a[3]) kept verbatim -> the first hard decel = the brake point
+        else:
+            groups.append(list(ev))
+    out: list[BrakeEvent] = []
+    for grp in groups:
+        span = float(elapsed[grp[1]] - elapsed[grp[0]])
+        if span >= MIN_BRAKE_S:
+            out.append(BrakeEvent(onset_dist=grp[2], onset_time=grp[3],
+                                  peak_decel=grp[4], duration=span))
     return out
 
 

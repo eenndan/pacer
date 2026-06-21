@@ -87,6 +87,78 @@ def test_short_blip_is_rejected():
     print("ok short blip rejected")
 
 
+def test_trail_brake_merges_to_one_point():
+    """One braking maneuver split by the hysteresis (hard brake -> ease above the release band, no
+    throttle -> re-brake, close together) fuses to ONE event at the FIRST onset (the brake point)."""
+    dist, elapsed = _lap_trace()
+    n = len(dist)
+    g = np.zeros(n)
+    g[200:260] = -0.45             # threshold brake
+    g[260:280] = -0.03             # ease (above release band -theta_b*0.35 -> splits the raw event)
+    g[280:340] = -0.30             # re-brake, ~8 m later (well within MERGE_TROUGH_GAP_M)
+    events = D.brake_events(dist, elapsed, g, THETA_B)
+    assert len(events) == 1, [(e.onset_dist, e.peak_decel) for e in events]
+    assert abs(events[0].onset_dist - dist[200]) < 5.0, events[0].onset_dist  # onset = first hard decel
+    assert abs(events[0].peak_decel - 0.45) < 0.02, events[0].peak_decel       # peak = deepest sub-phase
+    print(f"ok merge: trail-brake fused to 1 @ {events[0].onset_dist:.0f} m, peak {events[0].peak_decel:.2f} g")
+
+
+def test_chicane_throttle_squirt_stays_two():
+    """Two genuine brake points with a clear hard re-throttle between them (a chicane) stay TWO —
+    the throttle-sign safety (smoothed g above +MERGE_ACCEL_G) blocks the merge."""
+    dist, elapsed = _lap_trace()
+    n = len(dist)
+    g = np.zeros(n)
+    g[200:260] = -0.40
+    g[260:300] = 0.60              # a clear throttle squirt (> MERGE_ACCEL_G=0.50)
+    g[300:360] = -0.40
+    events = D.brake_events(dist, elapsed, g, THETA_B)
+    assert len(events) == 2, [(e.onset_dist) for e in events]
+    print("ok merge: chicane with a throttle squirt stayed 2 points")
+
+
+def test_corner_guard_blocks_back_to_back_corners():
+    """Two brakes close together with NO throttle between (distance gate alone would merge) stay
+    TWO when they sit in DIFFERENT corner windows — the block-only corner guard."""
+    dist, elapsed = _lap_trace()
+    n = len(dist)
+    g = np.zeros(n)
+    g[200:240] = -0.40            # onset ~80 m
+    g[250:290] = -0.40            # onset ~100 m, ~8 m of coast between, no throttle
+    windows = [(70.0, 95.0), (96.0, 120.0)]  # the two onsets fall in different corners
+    merged = D.brake_events(dist, elapsed, g, THETA_B)                       # no guard -> merges
+    guarded = D.brake_events(dist, elapsed, g, THETA_B, corner_windows=windows)
+    assert len(merged) == 1, "without the guard the close no-throttle pair should merge"
+    assert len(guarded) == 2, "the corner guard must keep two distinct corners separate"
+    print("ok merge: corner guard kept back-to-back corners separate (1 -> 2 with windows)")
+
+
+def test_corner_guard_inert_outside_windows():
+    """Two close no-throttle brakes OUTSIDE all corner windows still merge — the guard never wrongly
+    blocks (the out-of-window fail-safe; regression for the guard-hole)."""
+    dist, elapsed = _lap_trace()
+    n = len(dist)
+    g = np.zeros(n)
+    g[200:240] = -0.40
+    g[250:290] = -0.40
+    far = [(1000.0, 1100.0)]  # both onsets are outside this window -> guard inert
+    events = D.brake_events(dist, elapsed, g, THETA_B, corner_windows=far)
+    assert len(events) == 1, "out-of-window events must be decided by the gates, not blocked"
+    print("ok merge: guard inert outside windows (close pair still merged)")
+
+
+def test_distance_keeps_far_brakes_separate():
+    """Two brakes far apart (more than MERGE_TROUGH_GAP_M of coast) stay TWO on distance alone."""
+    dist, elapsed = _lap_trace()
+    n = len(dist)
+    g = np.zeros(n)
+    g[100:160] = -0.40
+    g[400:460] = -0.40   # ~96 m later, far beyond MERGE_TROUGH_GAP_M
+    events = D.brake_events(dist, elapsed, g, THETA_B)
+    assert len(events) == 2, [(e.onset_dist) for e in events]
+    print("ok merge: far-apart brakes stayed separate on the distance cut")
+
+
 def test_coasting_classification():
     """Coasting is the off-power band: DECELERATING from drag (COAST_DRAG_MIN < decel < theta_b)
     while moving — NOT where the kart is braking or accelerating."""

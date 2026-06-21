@@ -85,10 +85,27 @@ class DrivingChannels:
         if len(dists) < 2:
             return []
         # Brake detection on the CLEAN speed-derived longitudinal (d|v|/dt), not the IMU axis.
+        # Corner windows are passed as a block-only guard so the maneuver merge keeps two genuinely-
+        # distinct corners separate; None (no corner model) just lets the throttle gate decide.
         long_clean = driving.speed_long_g(speed_kmh, elapsed)
-        events = driving.brake_events(dists, elapsed, long_clean, th.theta_b)
+        windows = self._corner_windows(float(dists[-1]))
+        events = driving.brake_events(dists, elapsed, long_clean, th.theta_b,
+                                      corner_windows=windows)
         self._brake_events_cache[lap_id] = events
         return events
+
+    def _corner_windows(self, total_lap: float):
+        """The detected corners projected onto this lap's odometer as (enter, exit) spans, widened
+        CORNER_LEAD_M upstream (braking starts before the geometric entry). None when there's no
+        corner model — the brake merge then runs purely on the throttle/distance gates."""
+        basis = self._s._corner_basis()
+        if not basis or not basis[0] or total_lap <= 0:
+            return None
+        corner_list, total_ref = basis
+        if total_ref <= 0:
+            return None
+        return [(max(0.0, c.enter / total_ref * total_lap - driving.CORNER_LEAD_M),
+                 c.exit / total_ref * total_lap) for c in corner_list]
 
     def lap_coasting_spans(self, lap_id: int) -> list[driving.CoastSpan]:
         """Coasting spans on one lap, in track order. [] when no g signal or a degenerate lap."""
