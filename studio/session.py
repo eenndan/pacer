@@ -1583,8 +1583,9 @@ class Session:
         """Vehicle-frame g at media-clock time `t`: (lateral_g, longitudinal_g, total_g), or
         None if no g signal is available. Signs: +lateral = turning left, +longitudinal =
         accelerating (−longitudinal = braking). O(log n) lookup into the precomputed series —
-        cheap enough for the 30 Hz overlay tick. The g comes from the GoPro accelerometer
-        (ACCL+GRAV+CORI), transformed into the kart frame (see studio/gmeter.py)."""
+        cheap enough for the 30 Hz overlay tick. LATERAL is from the GoPro accelerometer
+        (ACCL+GRAV+CORI in the kart frame); LONGITUDINAL is the GPS speed derivative, because the
+        IMU forward axis is vibration-inflated (see studio/gmeter.py)."""
         return self._gmeter.at_time(t)
 
     @property
