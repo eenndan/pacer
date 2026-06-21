@@ -1,97 +1,75 @@
-# pacer
+# Pacer
 
-This is my project for analysing telemetry data from races.
-It's still work-in-progress, but the worst of the early-days jank has been cleaned
-up: input paths are no longer baked into the binary, there's a small test suite, and
-the build is green again.
+**A race-telemetry analysis studio for track days.** Pacer turns a single GoPro
+recording into a full telemetry workstation — track map, lap-by-lap deltas, synced
+video, and a g-meter — from the GPS and motion data the camera already records.
+No transponder, no extra hardware.
 
-The product is **one front-end** on top of a small C++ core:
+> Local desktop app (macOS / Linux). Open an `.MP4`, get your laps.
 
-- **`studio/`** — a local **PySide6 + pyqtgraph** desktop app (track map, speed/Δ-to-best charts,
-  lap table, synced GoPro video, accelerometer g-meter overlay), written in pure Python on top of
-  the core via its Python bindings. See [studio/README.md](studio/README.md).
+<!-- Add a hero screenshot at docs/screenshot.png and it renders here. -->
+<!-- ![Pacer studio](docs/screenshot.png) -->
 
-The C++ core (`pacer/`) does the heavy lifting — GPMF ingest, geometry, lap/sector segmentation,
-GPS9 true-clock lap timing — and is exposed to Python via nanobind. (An older C++/ImGui GUI and a
-set of Jupyter notebooks used to live here; both were removed once the studio app superseded them.)
+## What it does
 
-## getting started
+- **True-clock lap timing** — lap and sector times from the GoPro GPS9 stream on the
+  camera's own clock, validated unbiased against a real transponder.
+- **Track map** — the racing line coloured by speed, with brake points and the
+  start/sector lines you can drag to re-segment.
+- **Δ-to-best charts** — speed and cumulative time delta against your best lap,
+  distance-aligned so corners line up.
+- **Lap table** — every lap and its sector splits, sortable, best-lap highlighted.
+- **Synced GoPro video** — scrub the lap and the footage follows; play two laps
+  **side by side**, including the best lap of *another* recording of the same track
+  ("race a friend's GoPro file").
+- **G-meter** — a live accelerometer overlay driven by the camera's IMU.
+- **Driving channels** — brake, coasting and grip derived from the trace.
+- **Video overlay export** — burn the telemetry overlay onto the footage (via
+  ffmpeg) for sharing.
+- **Session library** — a local index of everything you've analysed.
 
-### env
+## Architecture
 
-I use [pixi](https://pixi.sh) for external dependency management.
-It is much better than `conda`/`mamba`/`micromamba` while leveraging the same infrastructure.
-I use `cmake` for building binary stuff, `litgen` for code-generation of bindings and `scikit-build` to glue two together via `pyproject.toml`.
-Is it the best setup? No. Does it work? Somewhat.
+One desktop app on top of a small, fast C++ core:
+
+- **`studio/`** — the product: a **PySide6 + pyqtgraph** desktop app, pure Python on
+  top of the core via its bindings. See [studio/README.md](studio/README.md).
+- **`pacer/`** — the **C++ core**: GPMF ingest, geometry, lap/sector segmentation,
+  and GPS9 true-clock timing, exposed to Python through **nanobind**.
+- **`bindings/`** — the nanobind bindings, generated from the C++ headers.
+
+## Quick start
+
+[pixi](https://pixi.sh) manages all external dependencies (`cmake`, `ninja`,
+`catch2`, **`ffmpeg`** for video export). Build tooling is `cmake` + `litgen`
+(binding codegen) glued via `scikit-build-core`.
 
 ```bash
-git submodule update --init --recursive  # 3rdparty/ deps (gpmf-parser, nanobind)
-pixi install                              # env + editable python bindings
+git submodule update --init --recursive   # 3rdparty deps (gpmf-parser, nanobind)
+pixi install                              # environment + editable Python bindings
+pixi run studio -- /path/to/GX010060.MP4  # build + launch on a recording
 ```
 
-External binary deps come from conda-forge via pixi (`[tool.pixi.dependencies]` in
-`pyproject.toml`): `cmake`/`ninja`/`clang-format` for the build, `catch2` for the C++ tests, and
-**`ffmpeg`** (the `ffmpeg`/`ffprobe` binaries) for the studio app's video-overlay export (F9 —
-[studio/export_video.py](studio/export_video.py)). The app shells out to nothing else.
+GoPro chapter siblings (`GX01…`, `GX02…`) are chained automatically.
 
-After that, there are pixi tasks for the common stuff (no need to memorize commands):
+## Development
 
 ```bash
-pixi run build      # configure + build everything (cmake + Ninja)
-pixi run test       # run the C++ (Catch2) + Python studio tests via ctest
-pixi run studio     # build + launch the studio app (PySide6); pass files: pixi run studio -- a.MP4
-pixi run fmt        # clang-format the C/C++ sources
-pixi run lint       # ruff check
+pixi run build   # configure + build everything (cmake + Ninja)
+pixi run test    # C++ (Catch2) + Python tests via ctest
+pixi run fmt     # clang-format the C/C++ sources
+pixi run lint    # ruff
 ```
 
-### what to do?
+## Acknowledgements
 
-Good places to start:
+Pacer began as a fork of [dendi239/pacer](https://github.com/dendi239/pacer) by
+Denys Smirnov, whose original C++ core seeded the project. It has since been
+substantially rewritten and is now developed independently. Thanks to Denys for
+the foundation.
 
-- the **studio app** — `pixi run studio -- /path/to/GX010060.MP4` (the GoPro chapter siblings can be
-  chained with `--full`). Map + speed/Δ charts + lap table + synced video + g-meter. The full
-  orientation doc is [studio/README.md](studio/README.md).
+GPS/IMU parsing uses GoPro's [gpmf-parser](https://github.com/gopro/gpmf-parser).
 
-## components
+## License
 
-Some components:
-
-- `pacer/`: bread and butter --- the C++ core library (datatypes, geometry, gps-source, laps);
-- `studio/`: the PySide6 + pyqtgraph desktop app (the product) on top of the core;
-- `studio/dev/`: developer / validation / research scripts (not part of the shipping app);
-- `bindings/`: Python bindings semi-automatically generated from the C++ source.
-
-## future ideas
-
-Still in progress:
-
-- more tracks (the studio app currently hard-codes one) + real track auto-detection;
-- persisting sector / start-line edits per file;
-- a more on-line approach, e.g. to use live in session for comments like:
-  - too much wheelspin on exit;
-  - too little braking on entry;
-  - shorter line is better;
-  - keep minimum speed higher;
-  - etc.
-- keep chipping away at the code (it's much better, but still WIP).
-
-See [studio/PLAN.md](studio/PLAN.md) for the studio app's full state, shipped features, the
-empirically-rejected experiments, and the near-term backlog.
-
-Wow, something already done:
-
-- the **studio app** — map + speed/Δ charts + lap table + **synced GoPro video** + accelerometer
-  g-meter overlay, with GPS9 true-clock lap timing (validated unbiased vs a real transponder);
-- lap segmentation, comparison between laps with delta — including against the best lap of
-  **another recording** of the same track (cross-recording reference, "race a friend's GoPro file");
-- nanobind-based Python bindings to rapidly experiment in Python;
-- integration with 3rd-party GPS data (GoPro GPMF GPS5/GPS9);
-- config/CLI-driven inputs (no more hard-coded paths), formatting/lint config,
-  pixi tasks, and a test suite (C++ Catch2 + pure-Python studio tests).
-
-## credits
-
-It's ain't much, but it's honest work.
-
-pacer © 2025 by Denys Smirnov is licensed under CC BY-NC-SA 4.0.
-To view a copy of this license, visit <https://creativecommons.org/licenses/by-nc-sa/4.0/>
+[MIT](LICENSE) © 2025-2026 eenndan
