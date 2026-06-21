@@ -23,8 +23,10 @@ class DrivingChannels:
 
     def __init__(self, session):
         self._s = session
-        # thresholds: _UNSET until computed (None = legal no-g result); kept across re-segments.
+        # thresholds + grip envelope: _UNSET until computed (None = legal no-g); both derive from the
+        # g series, which is constant -> kept across re-segments.
         self._thresholds_cache: object = _UNSET
+        self._grip_env_cache: object = _UNSET
         # Per-lap channels, all projected through the segmentation -> cleared on re-segment.
         self._brake_events_cache: dict[int, list[driving.BrakeEvent]] = {}
         self._coasting_spans_cache: dict[int, list[driving.CoastSpan]] = {}
@@ -148,9 +150,19 @@ class DrivingChannels:
         # (same projection lap_corner_stats uses).
         windows = [(c.enter / total_ref * total_lap, c.exit / total_ref * total_lap)
                    for c in corner_list]
-        grip = driving.corner_grip(dists, long_g, lat_g, windows)
+        grip = driving.corner_grip(dists, long_g, lat_g, windows, self._grip_envelope())
         self._corner_grip_cache[lap_id] = grip
         return grip
+
+    def _grip_envelope(self) -> float:
+        """The session-wide combined-g grip limit (cached; constant across re-segments). corner_grip
+        normalizes to this so a slow lap reads lower, vs normalizing to each lap's own peak."""
+        if self._grip_env_cache is not _UNSET:
+            return self._grip_env_cache
+        gm = self._s._gmeter
+        speed_kmh = np.interp(gm.times, self._s.tt, self._s.tv)
+        self._grip_env_cache = driving.grip_envelope(gm.long_g, gm.lat_g, speed_kmh)
+        return self._grip_env_cache
 
     # ------------------------------------------------------------------ map / plot glue
     def lap_brake_map_markers(self, lap_id: int) -> list[tuple[float, float, float]]:
