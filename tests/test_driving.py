@@ -65,7 +65,7 @@ def test_known_brake_pulse_is_detected():
 def test_brake_hysteresis_merges_one_zone():
     """A brake with a brief mid-zone ripple back toward zero (but staying in the lo band) stays
     ONE event (Schmitt-trigger hysteresis), not two — the headline reason for the lo/hi split.
-    The ripple (-0.13 g) sits between theta_b*RELEASE_RATIO (0.12) and theta_b (0.20), so it
+    The ripple (-0.13 g) sits between theta_b*RELEASE_RATIO (0.07) and theta_b (0.20), so it
     must NOT release the event."""
     dist, elapsed = _lap_trace()
     n = len(dist)
@@ -88,46 +88,41 @@ def test_short_blip_is_rejected():
 
 
 def test_coasting_classification():
-    """Coasting is classified where both g components sit at the floor AND speed barely changes,
-    and NOT where the kart is braking, accelerating, or cornering."""
+    """Coasting is the off-power band: DECELERATING from drag (COAST_DRAG_MIN < decel < theta_b)
+    while moving — NOT where the kart is braking or accelerating."""
     dist, elapsed = _lap_trace(n=1000, dur=20.0)
     n = len(dist)
     long_g = np.zeros(n)
-    lat_g = np.zeros(n)
     speed = np.full(n, 60.0)
-    # Segment A [100:300): genuine coast (g ~ 0, speed flat).
-    # Segment B [400:600): braking (long_g -0.4) -> not coast.
+    # Segment A [100:300): genuine coast (gentle ~0.06 g decel, below the brake threshold).
+    long_g[100:300] = -0.06
+    # Segment B [400:600): braking (decel 0.4 g, above theta_b) -> not coast.
     long_g[400:600] = -0.4
-    speed[400:600] = np.linspace(60.0, 45.0, 200)
-    # Segment C [700:900): hard cornering (lat_g 0.5) -> not coast.
-    lat_g[700:900] = 0.5
-    th = D.derive_thresholds(long_g, lat_g, speed)
-    spans = D.coasting_spans(dist, elapsed, speed, long_g, lat_g, th.theta_c, th.theta_lat)
-    # The big coast span A must be present; the braking + cornering windows must NOT be coast.
+    # Segment C [700:900): accelerating (long_g +0.2) -> not coast (not decelerating).
+    long_g[700:900] = 0.2
+    th = D.derive_thresholds(long_g, speed)
+    spans = D.coasting_spans(dist, elapsed, speed, long_g, th.theta_b)
     covered = np.zeros(n, dtype=bool)
     for s in spans:
         covered |= (dist >= s.start_dist) & (dist <= s.end_dist)
-    a_mid = int(0.5 * (100 + 300))
-    b_mid = int(0.5 * (400 + 600))
-    c_mid = int(0.5 * (700 + 900))
+    a_mid, b_mid, c_mid = int(0.5 * (100 + 300)), int(0.5 * (400 + 600)), int(0.5 * (700 + 900))
     assert covered[a_mid], "coast segment A not detected"
     assert not covered[b_mid], "braking misclassified as coast"
-    assert not covered[c_mid], "cornering misclassified as coast"
-    print(f"ok coasting: {len(spans)} span(s); A coast, B brake, C corner correctly separated")
+    assert not covered[c_mid], "acceleration misclassified as coast"
+    print(f"ok coasting: {len(spans)} span(s); A coast, B brake, C accel correctly separated")
 
 
 def test_coast_rejects_steady_pull():
-    """A long, gentle, STEADY mild accel (g within the coast band but speed climbing steadily)
-    is NOT a coast — the speed-change guard rejects it."""
+    """A steady mild ACCEL (speed climbing) is not coasting — coast requires the car to be
+    decelerating off-power, not on the throttle."""
     dist, elapsed = _lap_trace(n=1000, dur=20.0)
     n = len(dist)
-    long_g = np.full(n, 0.02)  # within theta_c, but a real (mild) accel
-    lat_g = np.zeros(n)
-    speed = np.linspace(40.0, 80.0, n)  # +100% over the lap — far past COAST_MAX_SPEED_FRAC
-    th = D.derive_thresholds(long_g, lat_g, speed)
-    spans = D.coasting_spans(dist, elapsed, speed, long_g, lat_g, th.theta_c, th.theta_lat)
+    long_g = np.full(n, 0.05)   # mild but real acceleration (positive longitudinal g)
+    speed = np.linspace(40.0, 80.0, n)
+    th = D.derive_thresholds(long_g, speed)
+    spans = D.coasting_spans(dist, elapsed, speed, long_g, th.theta_b)
     assert spans == [], [(s.start_dist, s.duration) for s in spans]
-    print("ok coast: steady mild pull rejected by the speed-change guard")
+    print("ok coast: a steady mild pull (accelerating) is not coasting")
 
 
 def test_corner_grip_math():
@@ -153,33 +148,31 @@ def test_corner_grip_math():
     print(f"ok grip: corner1 {grip[0]:.2f}, corner2 {grip[1]:.2f} (=1.0 envelope), empty 0")
 
 
-def test_thresholds_track_distribution_and_are_floored():
-    """theta_b == the MEDIAN of the BRAKING-ONLY decel of the distribution (duty-cycle
-    independent), and every threshold is floored so a no-braking session can't manufacture
-    events. The synthetic distribution mimics the measured D24 shape: an accel/coast bulk near
-    zero plus a braking population spread roughly 0.2..0.8 g (median ~0.45 g)."""
+def test_thresholds_physical_and_floored():
+    """theta_b is PHYSICAL: a low percentile of the session's braking-only decel, clamped to
+    [BRAKE_G_FLOOR, BRAKE_G_CEIL] so the same brake reads consistently and a no-braking session
+    can't manufacture events. The distribution mimics the measured D24 shape (braking 0.2..0.8 g)."""
     n = 4000
     rng = np.random.default_rng(0)
     long_g = np.abs(rng.normal(0.0, 0.15, n))        # accel/coast bulk (positive-ish, near 0)
-    # ~35% of samples are braking, decel spread 0.2..0.8 g (median ~0.45) — the D24 shape.
     brake_idx = rng.choice(n, size=int(0.35 * n), replace=False)
     long_g[brake_idx] = -rng.uniform(0.2, 0.8, len(brake_idx))
-    lat_g = rng.normal(0.0, 0.3, n)
     speed = np.full(n, 60.0)
-    th = D.derive_thresholds(long_g, lat_g, speed)
+    th = D.derive_thresholds(long_g, speed)
     decel = np.maximum(-long_g, 0.0)
-    braking_median = float(np.median(decel[decel > D.BRAKE_SAMPLE_FLOOR]))
-    assert abs(th.theta_b - braking_median) < 1e-9, (th.theta_b, braking_median)
-    assert 0.4 < th.theta_b < 0.55, th.theta_b  # ~the median of a 0.2..0.8 uniform brake spread
-    assert th.theta_c >= D.THETA_C_FLOOR and th.theta_lat >= D.THETA_LAT_FLOOR
+    braking = decel[decel > D.BRAKE_SAMPLE_FLOOR]
+    expected = float(np.clip(np.percentile(braking, D.BRAKE_ADAPT_PCT),
+                             D.BRAKE_G_FLOOR, D.BRAKE_G_CEIL))
+    assert abs(th.theta_b - expected) < 1e-9, (th.theta_b, expected)
+    assert D.BRAKE_G_FLOOR <= th.theta_b <= D.BRAKE_G_CEIL, th.theta_b
     # A session with NO braking: theta_b floors out, so brake detection finds nothing.
     calm = np.abs(rng.normal(0.0, 0.02, n))  # all (mild) accel, never braking
-    th_calm = D.derive_thresholds(calm, lat_g, speed)
-    assert th_calm.theta_b == D.THETA_B_FLOOR, th_calm.theta_b
+    th_calm = D.derive_thresholds(calm, speed)
+    assert th_calm.theta_b == D.BRAKE_G_FLOOR, th_calm.theta_b
     dist, elapsed = _lap_trace(n=n, dur=40.0)
     assert D.brake_events(dist, elapsed, -calm, th_calm.theta_b) == []
-    print(f"ok thresholds: theta_b={th.theta_b:.3f} == median(braking decel) "
-          f"{braking_median:.3f}; calm session floors out -> 0 events")
+    print(f"ok thresholds: theta_b={th.theta_b:.3f} g (physical, clamped); "
+          f"calm session floors to {D.BRAKE_G_FLOOR} -> 0 events")
 
 
 # ------------------------------------------------------------------- Session wiring
@@ -195,17 +188,19 @@ def _bare_driving_session():
     n = 600
     times = 100.0 + np.linspace(0.0, 12.0, n)
     dists = np.linspace(0.0, 300.0, n)
+    # Brake/coast now read the SPEED-derived longitudinal (not the IMU), so the synthetic must
+    # move the speed: a hard brake mid-lap, then a brief gentle off-power coast.
+    speed = np.full(n, 16.0)                       # m/s
+    speed[250:330] = np.linspace(16.0, 10.0, 80)   # hard brake (~0.38 g) -> onset at ~125 m
+    speed[330:430] = np.linspace(10.0, 9.0, 100)   # gentle off-power coast (~0.05 g)
+    speed[430:] = 9.0
     s._dist_cache[0] = (times, dists, times - times[0])
-    s._cols_cache = {0: (times, dists.copy(), np.zeros(n), np.full(n, 16.0), dists.copy())}
+    s._cols_cache = {0: (times, dists.copy(), np.zeros(n), speed.copy(), dists.copy())}
     s.tt = times.copy()
-    s.tv = np.full(n, 57.6)  # km/h (= 16 m/s)
-    long_g = np.zeros(n)
-    # One brake zone with a VARIED depth (ramps 0.2 -> 0.5 -> 0.2 g) so the braking-only median
-    # (~0.35 g) sits clearly below the peak (0.5 g) — the realistic shape (a single flat-depth
-    # brake would make theta_b == the peak and the strict-below test trivial/edge).
-    long_g[250:330] = -np.concatenate([np.linspace(0.2, 0.5, 40), np.linspace(0.5, 0.2, 40)])
-    lat_g = np.zeros(n)
-    s._gmeter = gmeter.GMeter(times=times.copy(), lat_g=lat_g, long_g=long_g,
+    s.tv = speed * 3.6  # km/h
+    # A g meter is still required (the channels gate on a g signal), but its long_g is no longer
+    # used for brake/coast; lat_g feeds grip only.
+    s._gmeter = gmeter.GMeter(times=times.copy(), lat_g=np.zeros(n), long_g=np.zeros(n),
                               cross=None, source="accl")
     # F1: the driving + corner caches live in the DrivingChannels / CornerModel services now;
     # reset them through the service-aware helpers (the raw slots moved off Session).
