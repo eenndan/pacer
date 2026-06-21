@@ -192,6 +192,28 @@ def test_empty_inputs_give_empty_meter():
     assert gm.at_time(5.0) is None
 
 
+def test_at_time_uses_gps_longitudinal_and_reports_source():
+    """When a GPS-derived longitudinal is present, at_time returns IT for the long axis (not the
+    inflated IMU long_g) and keeps the IMU lateral; long_source says 'gps'. Without it, at_time
+    falls back to long_g (a synthetic / GPS-only meter)."""
+    n = 50
+    times = np.linspace(0.0, 5.0, n)
+    lat = np.full(n, 0.3)
+    imu_long = np.full(n, 0.9)   # the vibration-inflated IMU forward axis
+    gps_long = np.full(n, 0.45)  # the validated GPS-derived longitudinal
+    gm = gmeter.GMeter(times=times, lat_g=lat, long_g=imu_long, cross=None, source="accl",
+                       long_g_gps=gps_long)
+    latv, lonv, total = gm.at_time(2.5)
+    assert abs(lonv - 0.45) < 1e-9, lonv               # GPS long, not the 0.9 IMU
+    assert abs(latv - 0.3) < 1e-9, latv                # IMU lateral kept
+    assert abs(total - np.hypot(0.3, 0.45)) < 1e-9
+    assert gm.long_source == "gps"
+    gm2 = gmeter.GMeter(times=times, lat_g=lat, long_g=imu_long, cross=None, source="accl")
+    assert abs(gm2.at_time(2.5)[1] - 0.9) < 1e-9       # no GPS long -> IMU fallback
+    assert gm2.long_source == "accl"
+    print("ok at_time: GPS longitudinal preferred, IMU lateral kept, long_source reported")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

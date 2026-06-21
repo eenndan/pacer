@@ -44,10 +44,25 @@ _CORI_CONJUGATE = True
 _OUTPUT_HZ = 50.0    # output rate; g is band-limited well below ACCL 200Hz
 _LOWPASS_S = 0.15    # pre-output low-pass (s): kills road buzz without lagging corners/brakes
 _MOVING_MS = 4.0     # m/s; heading is ill-defined at a standstill (used for fit + cross-check)
+# The live dial / export overlay read LONGITUDINAL g from the GPS speed derivative, not the IMU
+# forward axis: the latter is vibration-dominated (~1.5x inflated, weakly correlated with the
+# validated GPS-derived g — see studio/docs/gmeter-validation.md and the brake/coast channels). A
+# 0.35 s boxcar removes the d|v|/dt spikes, leaving a signal that is both correctly scaled AND
+# smoother than the raw IMU. Lateral g (which the IMU gets right, r~0.9) is unchanged.
+_DIAL_LONG_SMOOTH_S = 0.35
 
 
 def _norm_rows(a):
     return a / np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-12)
+
+
+def _speed_long_g(speed_kmh, t):
+    """Longitudinal g from the speed trace: clip(d|v|/dt / G). + accelerating, - braking."""
+    v = np.asarray(speed_kmh, float) / 3.6
+    t = np.asarray(t, float)
+    if len(v) < 3:
+        return np.zeros(len(v))
+    return np.clip(np.gradient(v, t) / G, -2.0, 2.0)
 
 
 def _quat_rotate_world(qw, qx, qy, qz, v):
@@ -108,13 +123,24 @@ class GMeter:
     long_g: np.ndarray
     cross: CrossCheck | None
     source: str = "accl"
+    # The dial/overlay longitudinal series (GPS speed derivative, smoothed) on the same `times`
+    # grid; None for a synthetic/GPS-only meter, in which case at_time falls back to long_g.
+    long_g_gps: np.ndarray | None = None
 
     def __len__(self) -> int:
         return len(self.times)
 
+    @property
+    def long_source(self) -> str:
+        """Where the dial's longitudinal g comes from: 'gps' (the validated speed derivative) when
+        available, else 'accl' (the raw IMU forward axis)."""
+        return "gps" if self.long_g_gps is not None else self.source
+
     def at_time(self, t: float) -> tuple[float, float, float] | None:
         """(lateral_g, longitudinal_g, total_g) at media time `t`, or None if no g series.
-        O(log n) — a `searchsorted` plus nearest pick; called at the 30 Hz tick."""
+        Lateral is from the IMU (which it gets right); LONGITUDINAL is the GPS-derived signal
+        (long_g_gps) when present — the IMU forward axis is vibration-inflated. O(log n)
+        searchsorted + nearest pick; called at the 30 Hz tick."""
         n = len(self.times)
         if n == 0:
             return None
@@ -124,7 +150,7 @@ class GMeter:
         if 0 < i < n and abs(self.times[i - 1] - t) < abs(self.times[i] - t):
             i -= 1
         lat = float(self.lat_g[i])
-        lon = float(self.long_g[i])
+        lon = float(self.long_g_gps[i] if self.long_g_gps is not None else self.long_g[i])
         return lat, lon, float(np.hypot(lat, lon))
 
     @property
@@ -263,7 +289,15 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
         gm.cross = cross
         gm.source = "gps"
         return gm
-    return GMeter(times=times, lat_g=lat_g, long_g=long_g, cross=cross, source="accl")
+    # The dial/overlay longitudinal: the GPS speed derivative on the output grid, smoothed (the IMU
+    # forward axis is vibration-inflated). Lateral keeps the IMU. None if there's no GPS trajectory.
+    long_g_gps = None
+    if len(gps_t) >= 4:
+        spd_kmh = np.interp(times, gps_t, np.asarray(gps_speed, float) * 3.6)
+        w = max(int(round(_DIAL_LONG_SMOOTH_S * _OUTPUT_HZ)), 1)
+        long_g_gps = boxcar(_speed_long_g(spd_kmh, times), w)
+    return GMeter(times=times, lat_g=lat_g, long_g=long_g, cross=cross, source="accl",
+                  long_g_gps=long_g_gps)
 
 
 def _horizontal_accel(accl, grav, cori, ta):
