@@ -54,7 +54,8 @@ class DrivingChannels:
         return long_g, lat_g
 
     def thresholds(self):
-        """Session-wide brake/coast thresholds (None when no g signal); cached."""
+        """Session-wide brake threshold (None when no g signal); cached. Derived from the CLEAN
+        speed-derived longitudinal g, not the vibration-dominated IMU forward axis (see driving)."""
         if self._thresholds_cache is not _UNSET:
             return self._thresholds_cache
         s = self._s
@@ -62,10 +63,11 @@ class DrivingChannels:
         if not gm.has_data:
             self._thresholds_cache = None
             return None
-        # Speed resampled to the g clock (trace + g series share the media clock).
+        # Speed resampled to the g clock (trace + g series share the media clock), then the clean
+        # longitudinal g = d|v|/dt — the validated brake signal.
         speed_kmh = np.interp(gm.times, s.tt, s.tv)
-        self._thresholds_cache = driving.derive_thresholds(
-            gm.long_g, gm.lat_g, speed_kmh)
+        long_clean = driving.speed_long_g(speed_kmh, gm.times)
+        self._thresholds_cache = driving.derive_thresholds(long_clean, speed_kmh)
         return self._thresholds_cache
 
     # ------------------------------------------------------------------ per-lap channels
@@ -76,12 +78,15 @@ class DrivingChannels:
         if got is not None:
             return got
         th = self.thresholds()
-        long_g, _lat_g = self._lap_g_arrays(lap_id)
-        td = self._s._lap_time_dist_elapsed(lap_id)
-        if th is None or long_g is None or td is None:
+        arr = self._s._lap_arrays(lap_id)
+        if th is None or arr is None:
             return []
-        _times, dists, elapsed = td
-        events = driving.brake_events(dists, elapsed, long_g, th.theta_b)
+        dists, speed_kmh, elapsed = arr
+        if len(dists) < 2:
+            return []
+        # Brake detection on the CLEAN speed-derived longitudinal (d|v|/dt), not the IMU axis.
+        long_clean = driving.speed_long_g(speed_kmh, elapsed)
+        events = driving.brake_events(dists, elapsed, long_clean, th.theta_b)
         self._brake_events_cache[lap_id] = events
         return events
 
@@ -92,14 +97,14 @@ class DrivingChannels:
             return got
         s = self._s
         th = self.thresholds()
-        long_g, lat_g = self._lap_g_arrays(lap_id)
-        td = s._lap_time_dist_elapsed(lap_id)
-        if th is None or long_g is None or td is None:
+        arr = s._lap_arrays(lap_id)
+        if th is None or arr is None:
             return []
-        _times, dists, _elapsed = td
-        _d, speed_kmh, elapsed = s._lap_arrays(lap_id)
-        spans = driving.coasting_spans(dists, elapsed, speed_kmh[:len(dists)], long_g, lat_g,
-                                       th.theta_c, th.theta_lat)
+        dists, speed_kmh, elapsed = arr
+        if len(dists) < 2:
+            return []
+        long_clean = driving.speed_long_g(speed_kmh, elapsed)
+        spans = driving.coasting_spans(dists, elapsed, speed_kmh, long_clean, th.theta_b)
         self._coasting_spans_cache[lap_id] = spans
         return spans
 
