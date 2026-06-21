@@ -72,4 +72,6 @@ GPS/IMU parsing uses GoPro's [gpmf-parser](https://github.com/gopro/gpmf-parser)
 
 ## License
 
-[MIT](LICENSE) © 2025-2026 eenndan
+Pacer © 2025-2026 eenndan, licensed under
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see
+[LICENSE](LICENSE). NonCommercial use only; derivatives must be shared alike.
