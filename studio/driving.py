@@ -58,6 +58,8 @@ MERGE_ACCEL_G = 0.50      # g; SAFETY only: a clear, hard re-throttle (smoothed 
 #                           on purpose: a low value wrongly blocks valid same-corner merges.
 MERGE_GATE_S = 0.30       # s; boxcar for the merge gate's signed g (wider than the detector's SMOOTH_S)
 CORNER_LEAD_M = 40.0      # m; widen corner windows upstream (braking starts before the geometry)
+GRIP_ENV_PCT = 98.0       # percentile of combined |g| over the session = the grip "limit" (robust max)
+GRIP_ENV_FLOOR = 0.3      # g; a session that never loaded the tyres can't make a tiny divisor
 
 
 def speed_long_g(speed_kmh, t) -> np.ndarray:
@@ -272,23 +274,42 @@ def coasting_spans(dist, elapsed, speed_kmh, long_g, theta_b: float) -> list[Coa
     return out
 
 
-def corner_grip(dist, long_g, lat_g, windows) -> list[float]:
+def grip_envelope(long_g, lat_g, speed_kmh) -> float:
+    """The session's combined-g grip limit: the GRIP_ENV_PCT percentile of hypot(lat,long) over the
+    MOVING samples (robust against a one-sample IMU spike), floored. corner_grip normalizes to this —
+    the car/tyre's session-wide capability — so a slow lap reads genuinely lower, unlike normalizing
+    to each lap's own peak (which renders every lap ~the same)."""
+    long_g = np.asarray(long_g, float)
+    lat_g = np.asarray(lat_g, float)
+    speed_kmh = np.asarray(speed_kmh, float)
+    n = min(len(long_g), len(lat_g), len(speed_kmh))
+    if n == 0:
+        return GRIP_ENV_FLOOR
+    gmag = np.hypot(long_g[:n], lat_g[:n])
+    moving = speed_kmh[:n] > MOVING_KMH
+    if not np.any(moving):
+        moving = np.ones(n, dtype=bool)
+    return max(float(np.percentile(gmag[moving], GRIP_ENV_PCT)), GRIP_ENV_FLOOR)
+
+
+def corner_grip(dist, long_g, lat_g, windows, envelope: float) -> list[float]:
     """Per-corner grip utilization: median(hypot(lat,long)) inside each (enter,exit) odo window
-    / lap-envelope max, in (0,1]. One float per window (0.0 if empty)."""
+    / the SESSION grip `envelope` (see grip_envelope), clamped to [0,1]. Normalizing to the session
+    envelope rather than this lap's own peak makes the values comparable across laps — a slow lap
+    reads lower. One float per window (0.0 if empty)."""
     dist = np.asarray(dist, float)
     lg = np.asarray(long_g, float)
     la = np.asarray(lat_g, float)
     n = min(len(dist), len(lg), len(la))
     dist, lg, la = dist[:n], lg[:n], la[:n]
     gmag = np.hypot(la, lg)
-    envelope_max = float(gmag.max()) if n else 0.0
-    if envelope_max <= 0:
+    if envelope <= 0 or n == 0:
         return [0.0 for _ in windows]
     out: list[float] = []
     for d0, d1 in windows:
         idx = np.flatnonzero((dist >= d0) & (dist <= d1))
         if len(idx):
-            out.append(float(np.median(gmag[idx])) / envelope_max)
+            out.append(min(float(np.median(gmag[idx])) / envelope, 1.0))
         else:
             out.append(0.0)
     return out

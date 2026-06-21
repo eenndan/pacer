@@ -198,26 +198,49 @@ def test_coast_rejects_steady_pull():
 
 
 def test_corner_grip_math():
-    """Grip utilization = median(|g|)/envelope_max in each window, in (0,1], higher in the
-    harder corner; an empty window yields 0; a window AT the lap's peak |g| yields ~1."""
+    """Grip utilization = median(|g|) in each window / the SESSION envelope, clamped to [0,1];
+    higher in the harder corner; an empty window -> 0; a window at/above the envelope clamps to 1."""
     n = 600
     dist = np.linspace(0.0, 600.0, n)
     long_g = np.zeros(n)
     lat_g = np.zeros(n)
-    # Corner 1 [100:200): |g| ~ 0.3 ; Corner 2 [300:400): |g| ~ 0.6 (the hard one, = envelope).
+    # Corner 1 [100:200): |g| ~ 0.3 ; Corner 2 [300:400): |g| ~ 0.6.
     lat_g[100:200] = 0.3
     lat_g[300:400] = 0.6
     windows = [(dist[100], dist[199]), (dist[300], dist[399]), (590.0, 600.0)]
-    grip = D.corner_grip(dist, long_g, lat_g, windows)
+    env = 0.6  # the session grip envelope (passed in, not this lap's own peak)
+    grip = D.corner_grip(dist, long_g, lat_g, windows, env)
     assert len(grip) == 3
-    assert 0.0 < grip[0] <= 1.0 and 0.0 < grip[1] <= 1.0
-    assert grip[1] > grip[0], grip  # the harder corner uses more grip
-    assert abs(grip[1] - 1.0) < 1e-6, grip[1]  # corner 2 IS the lap's envelope max
-    assert abs(grip[0] - 0.5) < 1e-6, grip[0]  # 0.3 / 0.6
-    # An empty window (past the data) -> 0.
-    grip_empty = D.corner_grip(dist, long_g, lat_g, [(700.0, 800.0)])
-    assert grip_empty == [0.0]
-    print(f"ok grip: corner1 {grip[0]:.2f}, corner2 {grip[1]:.2f} (=1.0 envelope), empty 0")
+    assert abs(grip[0] - 0.5) < 1e-6, grip[0]   # 0.3 / 0.6
+    assert abs(grip[1] - 1.0) < 1e-6, grip[1]   # 0.6 / 0.6 (at the envelope)
+    assert grip[2] == 0.0                         # empty window
+    # A corner that loads BEYOND the envelope clamps to 1.0 (never > 1).
+    assert D.corner_grip(dist, long_g, lat_g, [(dist[300], dist[399])], 0.3) == [1.0]
+    # The cross-lap win: the SAME corner driven slower (less g) reads LOWER against the SAME
+    # session envelope — lap-self-normalization (the old metric) could not show this.
+    slow = lat_g.copy()
+    slow[300:400] = 0.4
+    g_fast = D.corner_grip(dist, long_g, lat_g, [(dist[300], dist[399])], env)[0]
+    g_slow = D.corner_grip(dist, long_g, slow, [(dist[300], dist[399])], env)[0]
+    assert g_slow < g_fast, (g_slow, g_fast)
+    print(f"ok grip: 0.3->{grip[0]:.2f}, 0.6->{grip[1]:.2f} (clamped), empty 0, slower corner lower")
+
+
+def test_grip_envelope_is_session_robust_and_floored():
+    """grip_envelope = p98 of combined g over MOVING samples, floored — robust to a lone IMU spike
+    and to a session that never loaded the tyres."""
+    n = 2000
+    rng = np.random.default_rng(1)
+    long_g = rng.normal(0.0, 0.2, n)
+    lat_g = rng.normal(0.0, 0.5, n)
+    speed = np.full(n, 60.0)
+    env = D.grip_envelope(long_g, lat_g, speed)
+    assert abs(env - np.percentile(np.hypot(long_g, lat_g), D.GRIP_ENV_PCT)) < 1e-9
+    long_g[0] = 50.0  # a single huge spike must NOT blow up the envelope (p98, not max)
+    assert D.grip_envelope(long_g, lat_g, speed) < 5.0
+    calm = np.full(n, 0.01)  # a calm session floors out
+    assert D.grip_envelope(calm, calm, speed) == D.GRIP_ENV_FLOOR
+    print(f"ok grip envelope: p98 robust max = {env:.2f} g, spike-proof, floored when calm")
 
 
 def test_thresholds_physical_and_floored():
