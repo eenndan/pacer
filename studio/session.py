@@ -645,13 +645,24 @@ class Session:
         self._valid_cache = _band_lap_ids(self.laps)
         return self._valid_cache
 
+    def _best_candidate_ids(self) -> list[int]:
+        """Laps eligible to be the HEADLINE best / Δ-baseline / session-best split: valid laps
+        with NO interior GPS dropout. A dropout lap's distance is speed-integral-reconstructed
+        and its timing is less reliable (it is already excluded from consistency σ and corner
+        detection), so it must not be allowed to become the 'best lap', the delta baseline, or a
+        purple session-best cell. Falls back to all valid laps when EVERY valid lap has a dropout
+        (a flagged best beats no best). The lap table still SHOWS dropout laps, flagged ⚠."""
+        valid = self.valid_lap_ids()
+        clean = [i for i in valid if not self.lap_has_dropout(i)]
+        return clean if clean else valid
+
     def best_lap_id(self) -> int | None:
-        """The valid lap with the fastest time, else None. Memoized (same lifetime as
+        """The fastest dropout-free valid lap, else None. Memoized (same lifetime as
         valid_lap_ids; cleared on re-segment) — resolved several times per tick."""
         if self._best_cache is not _UNSET:
             return self._best_cache
-        valid = self.valid_lap_ids()
-        self._best_cache = min(valid, key=self.laps.lap_time) if valid else None
+        candidates = self._best_candidate_ids()
+        self._best_cache = min(candidates, key=self.laps.lap_time) if candidates else None
         return self._best_cache
 
     def best_lap_total_distance(self) -> float | None:
@@ -877,7 +888,9 @@ class Session:
         # N+1 columns, matching the lap-table headers; a deduped lap contributes nothing to a
         # missing trailing column (i<len(sp) guard).
         n_splits = len(self.laps.sectors.sector_lines) + 1
-        all_splits = [self.lap_sector_splits(lap_id) for lap_id in self.valid_lap_ids()]
+        # Dropout laps are excluded (see _best_candidate_ids): a reconstructed-distance lap must
+        # not own a purple session-best split or feed theoretical_best.
+        all_splits = [self.lap_sector_splits(lap_id) for lap_id in self._best_candidate_ids()]
         best: list[float | None] = []
         for i in range(n_splits):
             # min over finite, strictly-positive splits only, so a stray 0/negative split can't
@@ -927,8 +940,11 @@ class Session:
         valid = self.valid_lap_ids()
         if not valid:
             return None
-        # Complete valid laps are themselves (S/F-aligned) rolling windows: rolling ≤ best.
-        best = min(self.laps.lap_time(i) for i in valid)
+        # Complete laps are themselves (S/F-aligned) rolling windows: rolling ≤ best. Seed the
+        # floor from the dropout-free candidate set (same rule as best_lap_id) so a dropout lap's
+        # unreliable time can't undercut the rolling best; the pair windows below already skip
+        # dropout laps (line: lap_has_dropout guard).
+        best = min(self.laps.lap_time(i) for i in self._best_candidate_ids())
         valid_set = set(valid)
         for a in valid:
             b = a + 1

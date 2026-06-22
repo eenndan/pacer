@@ -39,7 +39,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
-from _synthetic import bare_session  # noqa: E402
+from _synthetic import bare_session, seed_cols  # noqa: E402
 
 from studio import gapfill, theme  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
@@ -143,6 +143,12 @@ def _session_with_splits(splits, n_lines):
     s = bare_session(valid=sorted(splits))
     s.lap_sector_splits = lambda lid: splits[lid]
     s.laps = SimpleNamespace(sectors=SimpleNamespace(sector_lines=[object()] * n_lines))
+    # session_best_splits now excludes GPS-dropout laps (A1), so it reads each lap's trace via
+    # lap_has_dropout -> seed a trivial steady (dropout-free) trace per lap so all stay candidates.
+    steady_t = np.arange(20) * 0.1
+    steady_d = np.linspace(0.0, 100.0, 20)
+    for lid in splits:
+        seed_cols(s, lid, steady_t, steady_d)
     return s
 
 
