@@ -1,0 +1,49 @@
+name: Bug report
+description: Something is wrong or crashes
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Pacer parses GoPro GPMF telemetry, and the stream layout varies
+        by camera model and firmware — so those details (below) genuinely help us reproduce.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: "I opened GX010060.MP4 and the lap table was empty…"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Launch with `pixi run studio -- <file>`
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: gopro
+    attributes:
+      label: GoPro model + firmware
+      description: e.g. "HERO11 Black, v2.12". Helps if the telemetry stream looks off.
+      placeholder: "HERO__ Black, v_____"
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Pacer version / commit
+      description: Output of `git rev-parse --short HEAD`, or the release tag.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output / logs
+      description: Anything Pacer printed to the terminal (it logs load + quality-gate info).
+      render: shell
+    validations:
+      required: false

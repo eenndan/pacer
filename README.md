@@ -5,7 +5,7 @@ recording into a full telemetry workstation — track map, lap-by-lap deltas, sy
 video, and a g-meter — from the GPS and motion data the camera already records.
 No transponder, no extra hardware.
 
-> Local desktop app (macOS / Linux). Open an `.MP4`, get your laps.
+> Local desktop app (macOS, Apple Silicon). Open an `.MP4`, get your laps.
 
 ![Pacer — speed-coloured track map with corners and brake points, dual-lap speed and Δ-to-best charts, lap table with session bests, and synced GoPro video](docs/screenshot.png)
 
