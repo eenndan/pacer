@@ -558,6 +558,50 @@ def test_session_best_splits_filters_nonpositive_keeps_tiny_positive():
     print("test_session_best_splits_filters_nonpositive_keeps_tiny_positive OK")
 
 
+def _two_lap_dropout_session():
+    """Two straight-line laps where the FASTER lap (0) has an interior GPS dropout and the
+    slower lap (1) is clean. No sector lines, so each lap_sector_splits == its elapsed lap time.
+    `_best_cache` is reset to the real sentinel so best_lap_id() runs its live path (bare
+    __new__ would otherwise leave the slot unset)."""
+    from studio.session import _UNSET
+    t0 = np.arange(500) * 0.1            # 0.1 s steps (no gap) ...
+    t0[250:] += 1.0                      # ... with ONE interior 1.1 s gap -> a GPS-dropout lap
+    d0 = np.linspace(0.0, 500.0, 500)
+    t1 = np.arange(550) * 0.1            # clean, steady, and SLOWER (54.9 s vs lap 0's ~50.9 s)
+    d1 = np.linspace(0.0, 500.0, 550)
+    s = bare_session({0: (t0, d0), 1: (t1, d1)}, valid=[0, 1])
+    seed_cols(s, 0, t0, d0)
+    seed_cols(s, 1, t1, d1)
+    s.laps = SimpleNamespace(lap_time=lambda lid: {0: 50.0, 1: 55.0}[lid],
+                             sectors=SimpleNamespace(sector_lines=[]))
+    s._best_cache = _UNSET
+    return s
+
+
+def test_best_excludes_dropout_lap_then_falls_back():
+    """A1 fix: a GPS-dropout lap (reconstructed distance, less-reliable timing) must never be the
+    headline best / Δ-baseline / session-best split, even when it is the FASTEST lap — but if
+    EVERY valid lap has a dropout, the candidate set falls back so a (⚠-flagged) best still
+    exists. The lap table still SHOWS the dropout lap; only the 'best' selection excludes it."""
+    s = _two_lap_dropout_session()
+    assert s.lap_has_dropout(0) is True and s.lap_has_dropout(1) is False
+    # The faster lap 0 is excluded; only the clean lap 1 is a best candidate.
+    assert s._best_candidate_ids() == [1]
+    assert s.best_lap_id() == 1, "the dropout lap must NOT win 'best' despite being faster"
+    # No sectors => one column == the clean candidate's lap time, NOT the faster dropout lap's.
+    split0, split1 = s.lap_sector_splits(0)[0], s.lap_sector_splits(1)[0]
+    assert split0 < split1, (split0, split1)        # the dropout lap really is faster ...
+    assert s.session_best_splits() == [split1]      # ... yet the clean (slower) lap owns purple
+    assert abs(s.theoretical_best() - split1) < 1e-9
+
+    # Fallback: when both laps are dropouts the set degrades to all valid, best = fastest.
+    s2 = _two_lap_dropout_session()
+    s2.lap_has_dropout = lambda lid: True
+    assert s2._best_candidate_ids() == [0, 1]
+    assert s2.best_lap_id() == 0
+    print("test_best_excludes_dropout_lap_then_falls_back OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
