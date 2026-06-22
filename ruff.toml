@@ -9,7 +9,7 @@ extend-exclude = [
     "3rdparty",
     "bindings/*/*/__init__.pyi",
     # frozen GPS-accuracy research evidence scripts (historical record, kept for repro)
-    "studio/dev/research",
+    "research",
 ]
 
 [lint]

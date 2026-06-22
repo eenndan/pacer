@@ -38,7 +38,7 @@ The interpolation path it was written against has been removed; the script is ke
 verbatim notebook optimizers, not as a runnable tool.
 
 Run (historical):
-  PYTHONPATH=. python studio/dev/research/notebook_vs_gps9.py <REC.MP4> <CSV> \
+  PYTHONPATH=. python research/notebook_vs_gps9.py <REC.MP4> <CSV> \
       --race-start "2026-05-23 12:00:00Z" [--dump out.json]
 """
 from __future__ import annotations

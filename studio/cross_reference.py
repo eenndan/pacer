@@ -19,7 +19,7 @@ WHY this is a thin value object and NOT a second live Session wired into the vie
 This module is PACER-FREE (numpy only): `Session.load_reference` does the one pacer-backed
 step (loading the second Session via the normal pipeline) and hands the already-extracted
 plain numpy arrays here. So `cross_reference` never imports `pacer`, matching the
-views-stay-pacer-free / analysis-is-numpy boundary in PLAN.md.
+views-stay-pacer-free / analysis-is-numpy boundary in AGENTS.md.
 """
 
 from __future__ import annotations

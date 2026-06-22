@@ -6,7 +6,7 @@ and the georeferenced reference-centerline fallback donor that reconstruction ca
 from (via studio/reference.py). Nothing in this module alters any analysis quantity (lap
 times, distances, deltas) — it only decides what the map DRAWS across GPS dropouts.
 
-PACER-FREE by design (PLAN.md: only ingest/load/session/tracks may import pacer): every
+PACER-FREE by design (AGENTS.md: only ingest/load/session/tracks may import pacer): every
 input arrives as a plain numpy array or a Session-bound callable over Session's own cached
 per-lap arrays, so this module never touches the bound core.
 

@@ -337,7 +337,5 @@ ffmpeg-cmd construction + the mocked render pump — no ffmpeg needed; the real 
 
 ## State & next ideas
 
-See [PLAN.md](PLAN.md) for the full project state: shipped features, the **empirically-rejected**
-experiments (with the why for each), tech debt, and the near-term backlog. In short, next up: more
-tracks in `tracks.py` (+ real auto-detection), persist sector/start-line config per file, and polish
-(keyboard shortcuts, optional snap toggle).
+Next up: more tracks in `tracks.py` (+ real auto-detection), persist sector/start-line config per
+file, and polish (keyboard shortcuts, optional snap toggle).
