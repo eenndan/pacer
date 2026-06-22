@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-D = "/Users/daniil/Desktop/D24"
+D = "~/Desktop/D24"
 PATHS = [f"{D}/GX010060.MP4"]
 
 

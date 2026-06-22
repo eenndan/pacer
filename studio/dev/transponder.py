@@ -4,7 +4,7 @@ Used by `studio/dev/_validate_wallclock.py` to VALIDATE the GPS9 true-clock lap 
 transponder data out of sample. The transponder CSV is a reference INPUT only (never committed to
 the repo).
 
-The export from the timing system (e.g. "Team MIND, 24 Hour Race, Daytona 24 Hours 2026.csv")
+The export from the timing system (e.g. "race-results.csv")
 has columns `Lap,Pos,Lap Time,Diff to Last Lap,Diff to Best Lap,Gap in Front,Diff to P1,Speed`.
 The later columns embed commas and stray quotes (e.g. `2", laps`), so a naive full-row CSV
 parse is unsafe — we split on comma and read only field[0] (`Lap`, an int) and field[2]

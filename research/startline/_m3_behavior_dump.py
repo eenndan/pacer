@@ -12,7 +12,7 @@ import sys
 
 import numpy as np
 
-D = "/Users/daniil/Desktop/D24"
+D = "~/Desktop/D24"
 SESSIONS = {
     "single_GX010060": [f"{D}/GX010060.MP4"],
     "chaptered_GX0x0062": [f"{D}/GX010062.MP4", f"{D}/GX020062.MP4", f"{D}/GX030062.MP4"],

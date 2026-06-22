@@ -16,7 +16,7 @@ Each build also prints the fit RMS + footprint coverage against the source sessi
 against another for an honest cross-session check.
 
 History: the original polyline was digitized BY EYE from a thumbnail of the track image
-`/Users/daniil/Desktop/Tracks/MK/gmaps_pict.png` (no embedded geo-coordinates). That trace
+`~/Desktop/Tracks/MK/gmaps_pict.png` (no embedded geo-coordinates). That trace
 turned out to be a poor rendition of the real layout — even a globally-correct similarity
 fit (the cyclic-correspondence fit in reference.py) could only reach RMS ≈ 21 m / 42 %
 footprint coverage against real sessions — so the shipped JSON was rebuilt from measured
