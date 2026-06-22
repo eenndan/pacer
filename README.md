@@ -1,6 +1,7 @@
 # Pacer
 
 [![CI](https://github.com/eenndan/pacer/actions/workflows/ci.yml/badge.svg)](https://github.com/eenndan/pacer/actions/workflows/ci.yml)
+[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](LICENSE)
 
 **A race-telemetry analysis studio for track days.** Pacer turns a single GoPro
 recording into a full telemetry workstation — track map, lap-by-lap deltas, synced
@@ -9,8 +10,7 @@ No transponder, no extra hardware.
 
 > Local desktop app (macOS / Linux). Open an `.MP4`, get your laps.
 
-<!-- Add a hero screenshot at docs/screenshot.png and it renders here. -->
-<!-- ![Pacer studio](docs/screenshot.png) -->
+![Pacer — speed-coloured track map with corners and brake points, dual-lap speed and Δ-to-best charts, lap table with session bests, and synced GoPro video](docs/screenshot.png)
 
 ## What it does
 
