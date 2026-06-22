@@ -7,10 +7,10 @@
 
 bool pacer::Segment::Intersects(Point fst, Point snd, double *ratio) const {
   // Proper-crossing test. Two segments cross iff each one's endpoints fall on
-  // strictly opposite sides of the other's supporting line. "Side" is the sign of
-  // the line's perpendicular (Rot()) dotted with the offset to an endpoint; if
-  // the two signs agree (product >= 0) the endpoints are on one side, or one lies
-  // exactly on the line — either way, no proper crossing.
+  // strictly opposite sides of the other's supporting line. "Side" is the sign
+  // of the line's perpendicular (Rot()) dotted with the offset to an endpoint;
+  // if the two signs agree (product >= 0) the endpoints are on one side, or one
+  // lies exactly on the line — either way, no proper crossing.
 
   // Test 1: do this segment's endpoints straddle the line through fst->snd?
   const Point perp_other = (snd - fst).Rot();
@@ -46,11 +46,12 @@ pacer::Point pacer::Interpolate(Point from, Point to, double ratio) {
   return from * (1 - ratio) + to * ratio;
 }
 
-pacer::GPSSample pacer::Interpolate(GPSSample from, GPSSample to, double ratio) {
-  // `ratio` is the [0,1] blend factor. A degenerate timing-line segment can hand
-  // us a NaN; we then keep `from`'s integer timestamp, because a NaN -> int64_t
-  // cast is UB (the double fields are allowed to go NaN). Fields are written in
-  // declaration order to avoid -Wreorder-init-list.
+pacer::GPSSample pacer::Interpolate(GPSSample from, GPSSample to,
+                                    double ratio) {
+  // `ratio` is the [0,1] blend factor. A degenerate timing-line segment can
+  // hand us a NaN; we then keep `from`'s integer timestamp, because a NaN ->
+  // int64_t cast is UB (the double fields are allowed to go NaN). Fields are
+  // written in declaration order to avoid -Wreorder-init-list.
   assert(std::isnan(ratio) || (ratio >= 0 && ratio <= 1));
   int64_t timestamp_ms =
       std::isnan(ratio)
@@ -85,9 +86,9 @@ auto pacer::CoordinateSystem::Global(Vec3f point) const -> GPSSample {
       ((point / Vec3f{R_equator, R_equator, R_pole}).Norm() - 1) * R_equator;
   const double lat =
       180 *
-      std::atan2(
-          point[2] / R_pole,
-          std::sqrt(point[0] * point[0] + point[1] * point[1]) / R_equator) /
+      std::atan2(point[2] / R_pole,
+                 std::sqrt(point[0] * point[0] + point[1] * point[1]) /
+                     R_equator) /
       M_PI;
 
   return GPSSample{

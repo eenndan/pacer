@@ -9,10 +9,11 @@
 
 namespace pacer {
 
-// A 3-component vector in the LOCAL metric frame, used by CoordinateSystem and the
-// local<->global conversions. It lives beside Point because it is a geometry
-// vector rather than a telemetry sample, and it keeps the full linear + pointwise
-// algebra (Global() divides one elementwise by a per-axis radius vector).
+// A 3-component vector in the LOCAL metric frame, used by CoordinateSystem and
+// the local<->global conversions. It lives beside Point because it is a
+// geometry vector rather than a telemetry sample, and it keeps the full linear
+// + pointwise algebra (Global() divides one elementwise by a per-axis radius
+// vector).
 struct Vec3f : public VectorOperators<Vec3f, double, 3> {
   double x = 0, y = 0, z = 0;
 
@@ -51,52 +52,55 @@ struct Point : LinearOperators<Point, double, 2> {
 Point ToPoint(Point x);
 Point ToPoint(Vec3f v);
 
-// GPS degrees -> Point{lon, lat}. Deliberately a different name from ToPoint so a
-// degrees sample can never be mixed with a local-metres point behind one
+// GPS degrees -> Point{lon, lat}. Deliberately a different name from ToPoint so
+// a degrees sample can never be mixed with a local-metres point behind one
 // overload set at a call site.
 Point ToLonLat(GPSSample s);
 
-// Per-coordinate approximate equality (both within `eps`). This is the one place
-// the geometry layer defines "close enough"; Segment::operator== builds on it.
-// Point's own operator== (from the LinearOperators mixin) stays exact and is not
-// the Python-bound equality — only Segment exposes __eq__.
+// Per-coordinate approximate equality (both within `eps`). This is the one
+// place the geometry layer defines "close enough"; Segment::operator== builds
+// on it. Point's own operator== (from the LinearOperators mixin) stays exact
+// and is not the Python-bound equality — only Segment exposes __eq__.
 bool ApproxEqual(const Point &a, const Point &b, double eps = 1e-6);
 
 struct Segment {
   Point first, second;
 
   // True iff this segment and fst->snd cross PROPERLY. Both straddle tests use
-  // strict signs, so a touch — an endpoint of either segment lying exactly on the
-  // other's supporting line — is NOT a crossing (pinned by tests/test_geometry,
-  // including that a trace vertex sitting exactly on a timing line produces no
-  // crossing from either adjacent segment). On a true return, if `ratio` is
-  // non-null it gets the crossing's fraction along fst->snd, so
-  // fst*(1-ratio) + snd*ratio is the intersection point (Split uses it to
-  // interpolate the crossing sample/time). `ratio` is untouched on false.
+  // strict signs, so a touch — an endpoint of either segment lying exactly on
+  // the other's supporting line — is NOT a crossing (pinned by
+  // tests/test_geometry, including that a trace vertex sitting exactly on a
+  // timing line produces no crossing from either adjacent segment). On a true
+  // return, if `ratio` is non-null it gets the crossing's fraction along
+  // fst->snd, so fst*(1-ratio) + snd*ratio is the intersection point (Split
+  // uses it to interpolate the crossing sample/time). `ratio` is untouched on
+  // false.
   bool Intersects(Point fst, Point snd, double *ratio) const;
 
   bool operator==(const Segment &other) const;
 };
 
 struct CoordinateSystem {
-  // Maps GPS coordinates to a local metric frame (metres). The forward map is an
-  // ECEF-style projection with a height-compensation factor h_c = 1 + alt/R_eq:
+  // Maps GPS coordinates to a local metric frame (metres). The forward map is
+  // an ECEF-style projection with a height-compensation factor h_c = 1 +
+  // alt/R_eq:
   //
   //   x = h_c * R_eq * cos(lat) * cos(lon)
   //   y = h_c * R_eq * cos(lat) * sin(lon)
   //   z = h_c * R_pole * sin(lat)
   //
   // The local basis is the (almost) normalised gradient of that map along
-  // lon / lat / altitude, orthogonalised by the radius choice. Good enough for a
-  // single track; not a survey-grade datum.
+  // lon / lat / altitude, orthogonalised by the radius choice. Good enough for
+  // a single track; not a survey-grade datum.
 
-  // The default frame is the IDENTITY basis (dx/dy/dz = the ECEF unit axes, origin
-  // at the geocentre), so Local() of a default-constructed system returns the raw
-  // ECEF position in metres and Distance() the true 3D chord — rather than the
-  // silent zeros an all-zero basis used to yield for code that forgot to install a
-  // real CoordinateSystem(origin). Every real pipeline still sets a track-centred
-  // origin before any distance is read (verified byte-identical on a real
-  // session), so this only changes what FORGOTTEN initialisation produces.
+  // The default frame is the IDENTITY basis (dx/dy/dz = the ECEF unit axes,
+  // origin at the geocentre), so Local() of a default-constructed system
+  // returns the raw ECEF position in metres and Distance() the true 3D chord —
+  // rather than the silent zeros an all-zero basis used to yield for code that
+  // forgot to install a real CoordinateSystem(origin). Every real pipeline
+  // still sets a track-centred origin before any distance is read (verified
+  // byte-identical on a real session), so this only changes what FORGOTTEN
+  // initialisation produces.
   CoordinateSystem() = default;
   explicit CoordinateSystem(GPSSample origin);
 
@@ -121,8 +125,8 @@ Point Interpolate(Point from, Point to, double ratio);
 GPSSample Interpolate(GPSSample from, GPSSample to, double ratio);
 
 // If `start_line` crosses the segment first->second, return the interpolated
-// crossing (point + time); otherwise nullopt. Templated on the spatial type so it
-// serves both the GPS trace and local-metres traces.
+// crossing (point + time); otherwise nullopt. Templated on the spatial type so
+// it serves both the GPS trace and local-metres traces.
 template <class P>
 std::optional<PointInTime<P>> Split(Segment start_line, PointInTime<P> first,
                                     PointInTime<P> second) {
