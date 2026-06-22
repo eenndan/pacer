@@ -20,7 +20,7 @@ start_b=(52.04020, -0.78460),
 
 ## 1. Where the real start/finish is (from the pictures)
 
-Source images: `/Users/daniil/Desktop/Tracks/MK/` — `gmaps_sat.png` (satellite),
+Source images: `~/Desktop/Tracks/MK/` — `gmaps_sat.png` (satellite),
 `Daytona-Milton-Keynes_Aerial.jpg`, `gmaps_pict.png` (map outline), `Link-Cliff-Plan.pdf`
 (the official "Linkback + Cliff Drop Circuit" line-drawing plan, 1.375 km layout).
 

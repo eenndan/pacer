@@ -35,13 +35,11 @@ from . import (
     render_cache,
     tracks,
 )
-
 from ._signal import (
     SMOOTH_WINDOW,
     _band_lap_ids,
     fmt_time,  # noqa: F401  (re-export for call sites; lives in _signal now)
 )
-
 from .load import load_recording
 
 DEFAULT_SAMPLE = "3rdparty/gpmf-parser/samples/hero6.mp4"  # a clip with real motion

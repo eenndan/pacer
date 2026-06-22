@@ -34,7 +34,7 @@ _APP = QApplication.instance() or QApplication([])
 from studio import chapters  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 
-REAL_MP4 = "/Users/daniil/Desktop/D24/GX010060.MP4"
+REAL_MP4 = os.path.expanduser(os.environ.get("PACER_REAL_MP4", "~/Desktop/D24/GX010060.MP4"))
 # The chaptered D24 recording (GX010060 + GX020060 + GX030060) for the gated real chaptered render.
 REAL_CHAPTER_DIR = os.path.dirname(REAL_MP4)
 

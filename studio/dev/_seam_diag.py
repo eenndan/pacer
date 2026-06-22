@@ -23,7 +23,7 @@ from studio import chapters  # noqa: E402
 from studio.ingest import read_gpmf as _read_gpmf  # noqa: E402
 from studio.video_view import VideoView  # noqa: E402
 
-PATHS = [f"/Users/daniil/Desktop/D24/GX0{i}0060.MP4" for i in (1, 2, 3)]
+PATHS = [os.path.expanduser(f"~/Desktop/D24/GX0{i}0060.MP4") for i in (1, 2, 3)]
 OUT = "/tmp/claude/seam_fix/timeline.txt"
 
 _t0 = time.monotonic()

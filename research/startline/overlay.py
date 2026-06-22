@@ -26,7 +26,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui  # noqa: F401
 import pacer
 
-SAT = "/Users/daniil/Desktop/Tracks/MK/gmaps_sat.png"
+SAT = "~/Desktop/Tracks/MK/gmaps_sat.png"
 IMG_W, IMG_H = 1732, 1488
 
 

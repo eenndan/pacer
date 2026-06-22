@@ -1,7 +1,7 @@
 [project]
-authors = [{ name = "Denys Smirnov", email = "dendi239@gmail.com" }]
+authors = [{ name = "eenndan" }]
 dependencies = ["litgen @ git+https://github.com/pthom/litgen"]
-description = "Add a short description here"
+description = "Python bindings for the pacer C++ telemetry core"
 name = "pacer"
 requires-python = ">= 3.11"
 version = "0.1.0"

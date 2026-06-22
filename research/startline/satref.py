@@ -23,7 +23,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from pyqtgraph.Qt import QtGui
 import pyqtgraph as pg  # noqa: F401
 
-SAT = "/Users/daniil/Desktop/Tracks/MK/gmaps_sat.png"
+SAT = "~/Desktop/Tracks/MK/gmaps_sat.png"
 
 
 def load_rgb(path):

@@ -6,6 +6,7 @@ Prints the top-3 opportunities with their reasons + numbers, the per-corner medi
 the manual delta-chart cross-check of #1, the time-loss-vs-consistency ranking comparison, the
 determinism assertion, and the jump-to seek-target assertion. Not part of the app; not registered.
 """
+import os
 import sys
 
 import numpy as np
@@ -131,4 +132,4 @@ def main(path: str) -> int:
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else
-                  "/Users/daniil/Desktop/D24/GX010060.MP4"))
+                  os.path.expanduser("~/Desktop/D24/GX010060.MP4")))

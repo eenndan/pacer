@@ -21,7 +21,7 @@ from studio.session import Session  # noqa: E402
 from studio.plots_view import PlotsView  # noqa: E402
 from studio.map_view import MapView  # noqa: E402
 
-D = "/Users/daniil/Desktop/D24"
+D = "~/Desktop/D24"
 PATHS = [f"{D}/GX010060.MP4"]
 
 # Detect which API generation we're on (AFTER has set_playhead_time; BEFORE has set_cursor_time).

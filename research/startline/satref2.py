@@ -15,7 +15,7 @@ from pyqtgraph.Qt import QtGui
 
 from studio import reference
 
-SAT = "/Users/daniil/Desktop/Tracks/MK/gmaps_sat.png"
+SAT = "~/Desktop/Tracks/MK/gmaps_sat.png"
 
 
 def load_rgb(path):

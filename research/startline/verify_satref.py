@@ -17,7 +17,7 @@ from studio import reference
 
 
 def main():
-    sat = "/Users/daniil/Desktop/Tracks/MK/gmaps_sat.png"
+    sat = "~/Desktop/Tracks/MK/gmaps_sat.png"
     sr = json.load(open(".startline_tmp/satref.json"))
     gd = json.load(open(".startline_tmp/georef_0060.json"))
     ox, oy = sr["track_px_origin"]

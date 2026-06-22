@@ -12,7 +12,7 @@ import numpy as np
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from pyqtgraph.Qt import QtGui, QtCore
 
-PLAN = "/Users/daniil/Documents/Github/pacer/.startline_tmp/Link-Cliff-Plan.pdf.png"
+PLAN = "~/Documents/Github/pacer/.startline_tmp/Link-Cliff-Plan.pdf.png"
 
 
 def main():
