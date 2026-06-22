@@ -105,6 +105,11 @@ def _quality_ok(s) -> bool:
     quality (fix<0, or a non-positive/non-finite DOP — e.g. the GPS5 stream, which carries
     neither) as "keep": we reject ONLY when the core actually reports a poor fix. `dop`/`fix`
     come from the GPS9 stream (C++ core); sentinels are fix=-1 and dop=-1.0."""
+    # Reject non-finite position/speed (garbage / truncated GPMF) up front: a NaN/inf lat,
+    # lon, or speed would otherwise poison the cleaner's percentile/distance math and flow
+    # into the C++ geometry as NaN line / segmentation.
+    if not (math.isfinite(s.lat) and math.isfinite(s.lon) and math.isfinite(s.full_speed)):
+        return False
     fix = getattr(s, "fix", -1)
     dop = getattr(s, "dop", -1.0)
     if fix is not None and 0 <= fix < MIN_FIX:  # known, but no 3D lock

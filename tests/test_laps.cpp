@@ -271,6 +271,32 @@ TEST_CASE("GetLapDistance agrees with the GetLap/cum_distances model",
   }
 }
 
+TEST_CASE("PickRandomStart on a co-located trace yields a finite empty line",
+          "[laps]") {
+  // Regression: co-located reference points (a stationary trace, or smoothing
+  // collapsing the two samples) make dir.Norm() == 0; the unguarded normalize
+  // produced NaN/inf start-line geometry that flowed into segmentation.
+  GPSSample origin{.lat = 40.0, .lon = -74.0, .altitude = 0};
+  CoordinateSystem cs(origin);
+
+  Laps laps;
+  // Several identical points: every local position collapses to one spot.
+  for (int k = 0; k < 5; ++k)
+    laps.AddPoint(cs.Global(Vec3f{3.0, 4.0, 0}), static_cast<double>(k));
+  laps.SetCoordinateSystem(cs);
+
+  Segment line = laps.PickRandomStart();
+  CHECK(std::isfinite(line.first.x));
+  CHECK(std::isfinite(line.first.y));
+  CHECK(std::isfinite(line.second.x));
+  CHECK(std::isfinite(line.second.y));
+  // No definable line -> the empty sentinel (both endpoints at the origin).
+  CHECK(line.first.x == 0.0);
+  CHECK(line.first.y == 0.0);
+  CHECK(line.second.x == 0.0);
+  CHECK(line.second.y == 0.0);
+}
+
 TEST_CASE("ClearPoints then re-adding points is safe (was UB)", "[laps]") {
   // Group 1 regression: ClearPoints() used to .clear() cum_point_dist_ (size
   // 0), so the {0} seed the class relies on (index [0] / .back()) was gone. A

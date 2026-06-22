@@ -134,6 +134,29 @@ def _run_clean(samples):
     return kept
 
 
+def test_gate_quality_drops_nonfinite_position_and_speed():
+    """A2: garbage / truncated GPMF can yield NaN/inf lat/lon/speed; the quality gate drops
+    those up front so they never reach the cleaner's percentile/distance math or the C++
+    geometry. Finite sentinel-quality samples (no fix/dop fields) are still kept."""
+    from studio._signal import _gate_quality
+    good = [_gps(float(i), 0.0, 10.0) for i in range(4)]
+    bad = [
+        pacer.GPSSample(lat=float("nan"), lon=0.0, altitude=0.0,
+                        full_speed=10.0, ground_speed=10.0),
+        pacer.GPSSample(lat=0.0, lon=float("inf"), altitude=0.0,
+                        full_speed=10.0, ground_speed=10.0),
+        pacer.GPSSample(lat=0.0, lon=0.0, altitude=0.0,
+                        full_speed=float("nan"), ground_speed=0.0),
+    ]
+    samples = [good[0], bad[0], good[1], bad[1], good[2], bad[2], good[3]]
+    n = len(samples)
+    spans = [(float(i), float(i) + 0.1) for i in range(n)]
+    s2, sp2, kept = _gate_quality(samples, spans, list(range(n)))
+    assert kept == [0, 2, 4, 6], kept     # only the finite samples survive
+    assert len(s2) == len(sp2) == 4
+    print("test_gate_quality_drops_nonfinite_position_and_speed OK")
+
+
 def test_clean_short_trace_passthrough():
     """< 10 samples: returned untouched — even an all-stationary scrap is kept verbatim."""
     samples = [_gps(0.0, 0.0, 0.0) for _ in range(9)]
