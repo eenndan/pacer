@@ -178,6 +178,13 @@ pacer::Segment pacer::Laps::PickRandomStart() const {
   auto p1 = Point{s1[0], s1[1]}, p2 = Point{s2[0], s2[1]};
   auto mid = (p1 + p2) / 2, dir = (p2 - p1);
 
+  // Co-located reference points (a stationary trace, or smoothing collapsing
+  // the two samples) make dir.Norm() == 0; normalizing would yield NaN/inf line
+  // geometry that poisons segmentation. No definable line -> the same sentinel
+  // as too-few-points.
+  if (dir.Norm() < 1e-9)
+    return Segment{};
+
   dir /= dir.Norm();
   dir = Point{-dir[1], dir[0]};
 
