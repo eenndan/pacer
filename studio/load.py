@@ -1,7 +1,7 @@
 """The Session.load pipeline: raw GPMF streams -> a cleaned, GPS9-true-clock-timed, smoothed,
 segmented `pacer.Laps` + its coordinate frame.
 
-One of the few pacer-touching modules (see studio/PLAN.md); numpy signal helpers live in
+One of the few pacer-touching modules (see AGENTS.md); numpy signal helpers live in
 studio/_signal.py.
 """
 

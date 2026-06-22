@@ -201,7 +201,7 @@ own Python code. This section closes that gap: it runs the **notebook's literal 
 optimizers** and lines the notebook-generated lap times up against our GPS9 timing and the
 transponder, lap by lap, on **both** recordings.
 
-**Harness:** `studio/dev/research/notebook_vs_gps9.py`. The `notebook_t1` (free
+**Harness:** `research/notebook_vs_gps9.py`. The `notebook_t1` (free
 per-sample Adam) and `notebook_t2` (parametric `{phase, frequency}` Adam) functions are copied
 **verbatim** from `notebooks/interpolation.ipynb` cells `4c1dba4b` and `31c96b74` — same loss
 (`spacing + [floor,ceil]` constraints), same `[1e-1,1e-2,1e-3]` LR schedule, fresh `torch.optim.Adam`
@@ -339,10 +339,10 @@ pixi run python -m studio.dev._validate_wallclock -- /path/GX010060.MP4 "<transp
 # §4b — the NOTEBOOK's OWN t1/t2 PyTorch pipeline vs GPS9 vs transponder, segmentation held
 # constant (only the time axis varies). OMP_NUM_THREADS=1 avoids a torch OpenMP tmp stall.
 OMP_NUM_THREADS=1 PYTHONPATH=. pixi run python -u \
-    studio/dev/research/notebook_vs_gps9.py /path/GX010060.MP4 "<csv>" \
+    research/notebook_vs_gps9.py /path/GX010060.MP4 "<csv>" \
     --race-start "2026-05-23 12:00:00Z" --dump /tmp/claude/notebook_vs_gps9_0060.json
 OMP_NUM_THREADS=1 PYTHONPATH=. pixi run python -u \
-    studio/dev/research/notebook_vs_gps9.py /path/GX010062.MP4 "<csv>" \
+    research/notebook_vs_gps9.py /path/GX010062.MP4 "<csv>" \
     --race-start "2026-05-23 12:00:00Z" --dump /tmp/claude/notebook_vs_gps9_0062.json
 
 # faithfulness: C++ port == the notebook's t2 (max |Δt| ~3.6e-15 s)
@@ -352,7 +352,7 @@ pixi run python tests/test_interpolation_parity.py
 PYTHONPATH=. pixi run python -c "see §3"
 ```
 
-Scripts (committed under `studio/dev/research/`): **`notebook_vs_gps9.py`** (§4b — the notebook's own
+Scripts (committed under `research/`): **`notebook_vs_gps9.py`** (§4b — the notebook's own
 t1/t2 PyTorch optimizers vs GPS9 vs transponder, segmentation held constant) and
 `decode_upstream_figs.py` (decodes the upstream plotly base64 typed-arrays). `validate_interp.py`
 (§4 — GPS9 vs our C++ port) was **removed** along with the interpolation path it tested. The

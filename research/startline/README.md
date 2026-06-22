@@ -7,7 +7,7 @@ multi-MB `trace_*.json` dumps) are regenerable by re-running these scripts again
 test sessions (`~/Desktop/D24` recordings), so only the scripts and the small result JSONs
 (`satref*.json`, `plan_sf.json`, `georef_0060.json`, `cands_*.json`, `sweep_*.json`,
 `val_*_current.json`) are kept. Copied verbatim — a historical record, not runnable tools
-(this dir is excluded from ruff like the rest of `studio/dev/research/`).
+(this dir is excluded from ruff like the rest of `research/`).
 
 How they fit together:
 

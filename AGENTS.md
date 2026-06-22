@@ -8,8 +8,7 @@ There is **one front-end** on top of the C++ core:
 
 - **`studio/`** — the product: a local **PySide6 + pyqtgraph** desktop app (track map,
   speed/Δ charts, lap table, synced video, accelerometer g-meter). Pure Python on top of the C++
-  core via its nanobind bindings. **Start here for app work** — see [studio/README.md](studio/README.md)
-  and [studio/PLAN.md](studio/PLAN.md).
+  core via its nanobind bindings. **Start here for app work** — see [studio/README.md](studio/README.md).
 
 The core is C++23; auto-generated Python bindings (`bindings/pacer`) expose its types to Python
 (used by `studio/`). An older C++/ImGui `timeline` GUI, a set of analysis notebooks, and a C++ Adam
@@ -37,7 +36,7 @@ pacer/                         # repo root
 │   └── laps/                  #   lap/sector segmentation + per-lap queries (the data model)
 │
 ├── studio/                    # ── THE STUDIO APP (PySide6 + pyqtgraph; pure Python on the core) ──
-│   │                          #   see studio/README.md (modules) + studio/PLAN.md (state/handoff)
+│   │                          #   see studio/README.md (modules)
 │   ├── dev/                   #   developer / validation scripts (diagnose, _validate_wallclock, …)
 │   │   └── research/          #   frozen GPS-accuracy evidence scripts (historical record)
 │   └── docs/                  #   GPS-accuracy / start-line / g-meter investigation write-ups
@@ -210,7 +209,7 @@ them; an interrupted `pixi add` once pruned them and broke the build mid-session
 For studio-specific architecture rules an agent must respect (local-meter coordinate space, the
 "only `session.py`, `load.py` (the load pipeline), `tracks.py`, and `ingest.py` (the GoPro/GPMF
 data-loading layer) touch `pacer`; views stay pacer-free" rule, perf invariants), see
-[studio/PLAN.md](studio/PLAN.md) and [studio/README.md](studio/README.md).
+[studio/README.md](studio/README.md).
 
 ---
 

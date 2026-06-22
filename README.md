@@ -1,5 +1,7 @@
 # Pacer
 
+[![CI](https://github.com/eenndan/pacer/actions/workflows/ci.yml/badge.svg)](https://github.com/eenndan/pacer/actions/workflows/ci.yml)
+
 **A race-telemetry analysis studio for track days.** Pacer turns a single GoPro
 recording into a full telemetry workstation — track map, lap-by-lap deltas, synced
 video, and a g-meter — from the GPS and motion data the camera already records.

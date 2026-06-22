@@ -1,7 +1,7 @@
 """Ingest: the pacer-touching GoPro/GPMF IO layer.
 
 Builds the `SequentialGPSSource` chain and reads raw GPS + IMU; no Laps/analysis (session.py
-does that). One of the few pacer-touching modules (see studio/PLAN.md).
+does that). One of the few pacer-touching modules (see AGENTS.md).
 """
 
 from __future__ import annotations
