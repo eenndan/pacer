@@ -31,9 +31,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import boxcar
-
-G = 9.80665  # m/s^2
+from ._signal import G, boxcar, speed_long_g
 
 # Empirically resolved GoPro stream-frame conventions (see module docstring + validation doc).
 # GRAV/CORI element order is a permutation of ACCL's native (Z,X,Y) element order.
@@ -54,15 +52,6 @@ _DIAL_LONG_SMOOTH_S = 0.35
 
 def _norm_rows(a):
     return a / np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-12)
-
-
-def _speed_long_g(speed_kmh, t):
-    """Longitudinal g from the speed trace: clip(d|v|/dt / G). + accelerating, - braking."""
-    v = np.asarray(speed_kmh, float) / 3.6
-    t = np.asarray(t, float)
-    if len(v) < 3:
-        return np.zeros(len(v))
-    return np.clip(np.gradient(v, t) / G, -2.0, 2.0)
 
 
 def _quat_rotate_world(qw, qx, qy, qz, v):
@@ -295,7 +284,7 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
     if len(gps_t) >= 4:
         spd_kmh = np.interp(times, gps_t, np.asarray(gps_speed, float) * 3.6)
         w = max(int(round(_DIAL_LONG_SMOOTH_S * _OUTPUT_HZ)), 1)
-        long_g_gps = boxcar(_speed_long_g(spd_kmh, times), w)
+        long_g_gps = boxcar(speed_long_g(spd_kmh, times), w)
     return GMeter(times=times, lat_g=lat_g, long_g=long_g, cross=cross, source="accl",
                   long_g_gps=long_g_gps)
 
