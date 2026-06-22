@@ -25,7 +25,8 @@ GPMFSource::GPMFSource(const char *filename)
 
 GPMFSource::~GPMFSource() noexcept {
   // Release the lazily-allocated, call-to-call-reused payload buffer before
-  // closing the source. Allocating one per call (the original behaviour) leaked.
+  // closing the source. Allocating one per call (the original behaviour)
+  // leaked.
   if (payload_res_) {
     FreePayloadResource(mp4handle_, payload_res_);
     payload_res_ = 0;
@@ -39,10 +40,10 @@ GPMFSource::GPMFSource(size_t mp4handle) : mp4handle_(mp4handle) {}
 
 uint32_t GPMFSource::Seek(double target) {
   // `index_` is unsigned, so decrementing it at 0 wraps to UINT32_MAX — a bogus
-  // index that then reads like EOF. We initialise the span in/out, only step the
-  // index back when the previous lookup SUCCEEDED and we are not already at 0, and
-  // stop at 0 rather than spin. Net effect: seeking before the first payload
-  // clamps to index 0 instead of wrapping past the end.
+  // index that then reads like EOF. We initialise the span in/out, only step
+  // the index back when the previous lookup SUCCEEDED and we are not already at
+  // 0, and stop at 0 rather than spin. Net effect: seeking before the first
+  // payload clamps to index 0 instead of wrapping past the end.
   double span_in = 0, span_out = 0;
   uint32_t ret = GPMF_OK;
   do {
@@ -125,8 +126,8 @@ namespace {
 // total_records). Handed by reference to the per-codec parsers below.
 using SampleEmit = std::function<void(GPSSample, uint32_t, uint32_t)>;
 
-// Decode one GPS9 payload (the stream must already be positioned at its samples)
-// and emit every fix. GPS9 element layout:
+// Decode one GPS9 payload (the stream must already be positioned at its
+// samples) and emit every fix. GPS9 element layout:
 //   [lat, lon, alt, 2D speed, 3D speed, days-since-2000, secs-since-midnight,
 //    DOP, fix(0/2/3)]
 // Indices 0-6 are mandatory (a struct narrower than 7 elements would over-read,
@@ -138,7 +139,8 @@ void ParseGPS9(GPMF_stream *ms, uint32_t samples, uint32_t elements,
     return;
   }
   // A vector scratch buffer (rather than malloc/free) unwinds cleanly if `emit`
-  // throws mid-loop — e.g. a Python callback raising back through the trampoline.
+  // throws mid-loop — e.g. a Python callback raising back through the
+  // trampoline.
   std::vector<double> scaled(static_cast<size_t>(samples) * elements);
   uint32_t nbytes = static_cast<uint32_t>(scaled.size() * sizeof(double));
   if (GPMF_OK != GPMF_ScaledData(ms, scaled.data(), nbytes, 0, samples,
@@ -170,10 +172,11 @@ void ParseGPS9(GPMF_stream *ms, uint32_t samples, uint32_t elements,
 }
 
 // Decode one GPS5 payload and emit every fix. `timestamp` is the GPSU time the
-// caller resolved alongside it. GPS5 layout: [lat, lon, alt, 2D speed, 3D speed];
-// it carries no DOP / fix, so those keep the GPSSample sentinels. The fields are
-// read by explicit index (stride = the struct's element width) so 2D speed lands
-// in ground_speed and 3D speed in full_speed, matching the GPS9 branch.
+// caller resolved alongside it. GPS5 layout: [lat, lon, alt, 2D speed, 3D
+// speed]; it carries no DOP / fix, so those keep the GPSSample sentinels. The
+// fields are read by explicit index (stride = the struct's element width) so 2D
+// speed lands in ground_speed and 3D speed in full_speed, matching the GPS9
+// branch.
 void ParseGPS5(GPMF_stream *ms, uint32_t samples, uint32_t elements,
                int64_t timestamp, const SampleEmit &emit) {
   if (!(samples && elements >= 5)) {
@@ -208,16 +211,16 @@ uint32_t GPMFSource::ReadSamples(
   if (payload == nullptr) {
     // Empty / past-the-end index. Return the code quietly — the iteration
     // protocol (IsEnd/Next) handles empties, and this is the chapter-seam hot
-    // path, so a per-seam log line would be pure noise. GPMF_ERROR_MEMORY (== 1)
-    // is the parser's own code for GetPayload() == nullptr.
+    // path, so a per-seam log line would be pure noise. GPMF_ERROR_MEMORY (==
+    // 1) is the parser's own code for GetPayload() == nullptr.
     return GPMF_ERROR_MEMORY;
   }
 
   GPMF_stream metadata_stream, *ms = &metadata_stream;
   auto ret = GPMF_Init(ms, payload, psize);
   if (ret != GPMF_OK) {
-    // A corrupt payload is genuinely abnormal (unlike an empty one), so report it
-    // on stderr — never on stdout, which may be piped.
+    // A corrupt payload is genuinely abnormal (unlike an empty one), so report
+    // it on stderr — never on stdout, which may be piped.
     fprintf(stderr, "pacer: GPMF_Init failed for payload %u (corrupt GPMF?)\n",
             index_);
     return ret;
@@ -273,11 +276,11 @@ uint32_t GPMFSource::ReadSamples(
 void GPMFSource::ReadStream(
     uint32_t fourcc,
     const std::function<void(const double *, uint32_t, double)> &emit) const {
-  // Walk one stream (ACCL / GRAV / CORI) across EVERY payload, timestamping each
-  // sample on the media clock. A payload spans [span_in, span_out] (GetPayloadTime,
-  // same clock as the GPS spans), and its `samples` rows are spread evenly across
-  // that span, matching the GPS / video sync. nelem is clamped to 4 (vec3 for
-  // ACCL/GRAV, quaternion for CORI).
+  // Walk one stream (ACCL / GRAV / CORI) across EVERY payload, timestamping
+  // each sample on the media clock. A payload spans [span_in, span_out]
+  // (GetPayloadTime, same clock as the GPS spans), and its `samples` rows are
+  // spread evenly across that span, matching the GPS / video sync. nelem is
+  // clamped to 4 (vec3 for ACCL/GRAV, quaternion for CORI).
   uint32_t payloads = GetNumberPayloads(mp4handle_);
   for (uint32_t i = 0; i < payloads; ++i) {
     uint32_t psize = GetPayloadSize(mp4handle_, i);
@@ -307,8 +310,8 @@ void GPMFSource::ReadStream(
       if (GPMF_OK == GPMF_ScaledData(ms, scaled.data(), nbytes, 0, samples,
                                      GPMF_TYPE_DOUBLE)) {
         for (uint32_t s = 0; s < samples; ++s) {
-          double t = span_in + (span_out - span_in) *
-                                   (static_cast<double>(s) / samples);
+          double t = span_in +
+                     (span_out - span_in) * (static_cast<double>(s) / samples);
           double vals[4] = {0, 0, 0, 0};
           uint32_t nelem = elements > 4 ? 4 : elements;
           for (uint32_t e = 0; e < nelem; ++e) {

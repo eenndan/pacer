@@ -12,20 +12,20 @@ namespace pacer {
 struct GPSSample {
   double lat, lon, altitude, full_speed, ground_speed;
   int64_t timestamp_ms;
-  // Fix-quality fields, present on GPS9 but not on the legacy GPS5 stream. `dop`
-  // is the dilution of precision (strictly positive on a genuine fix) and `fix`
-  // the solution type (0 = none, 2 = 2D, 3 = 3D). The negative sentinels stand
-  // for "unknown", which downstream reads as "do not quality-filter" — so GPS5
-  // data is kept. A negative literal (unlike NaN) also round-trips cleanly into
-  // the generated Python stub. The defaults keep pre-existing aggregate
+  // Fix-quality fields, present on GPS9 but not on the legacy GPS5 stream.
+  // `dop` is the dilution of precision (strictly positive on a genuine fix) and
+  // `fix` the solution type (0 = none, 2 = 2D, 3 = 3D). The negative sentinels
+  // stand for "unknown", which downstream reads as "do not quality-filter" — so
+  // GPS5 data is kept. A negative literal (unlike NaN) also round-trips cleanly
+  // into the generated Python stub. The defaults keep pre-existing aggregate
   // initialisers (which omit these two) valid.
   double dop = -1.0;
   int fix = -1;
 };
 
 // A spatial value tagged with the time it was observed (seconds). `P` is the
-// spatial type, so one template covers both the GPS trace (P = GPSSample) and the
-// local-metres crossing interpolation (P = Point).
+// spatial type, so one template covers both the GPS trace (P = GPSSample) and
+// the local-metres crossing interpolation (P = Point).
 template <class P> struct PointInTime {
   P point;
   double time;

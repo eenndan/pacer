@@ -1,10 +1,10 @@
 #pragma once
 
-// Small CRTP vector-algebra mixins. A concrete N-component type derives from one
-// of these and only has to expose element access through `operator[]`; in return
-// it inherits the arithmetic operators, a dot product (`Scalar`) and Euclidean
-// magnitude. Every reduction walks indices 0..N-1 in ascending order, so the
-// floating-point accumulation is deterministic down to the bit.
+// Small CRTP vector-algebra mixins. A concrete N-component type derives from
+// one of these and only has to expose element access through `operator[]`; in
+// return it inherits the arithmetic operators, a dot product (`Scalar`) and
+// Euclidean magnitude. Every reduction walks indices 0..N-1 in ascending order,
+// so the floating-point accumulation is deterministic down to the bit.
 
 #include <cmath>
 #include <cstddef>
@@ -50,8 +50,12 @@ public:
     return self();
   }
 
-  friend Derived operator+(Derived lhs, const Derived &rhs) { return lhs += rhs; }
-  friend Derived operator-(Derived lhs, const Derived &rhs) { return lhs -= rhs; }
+  friend Derived operator+(Derived lhs, const Derived &rhs) {
+    return lhs += rhs;
+  }
+  friend Derived operator-(Derived lhs, const Derived &rhs) {
+    return lhs -= rhs;
+  }
   friend Derived operator*(Derived lhs, T k) {
     return lhs.LinearOperators::operator*=(k);
   }
@@ -103,9 +107,10 @@ public:
   }
 };
 
-// A full vector: both the linear-space algebra and the elementwise products. The
-// compound-assignment overloads are re-declared here purely to disambiguate the
-// scalar form (-> LinearOperators) from the vector form (-> PointwiseOperators).
+// A full vector: both the linear-space algebra and the elementwise products.
+// The compound-assignment overloads are re-declared here purely to disambiguate
+// the scalar form (-> LinearOperators) from the vector form (->
+// PointwiseOperators).
 template <typename Derived, typename T, size_t N>
 struct VectorOperators : LinearOperators<Derived, T, N>,
                          PointwiseOperators<Derived, T, N> {
