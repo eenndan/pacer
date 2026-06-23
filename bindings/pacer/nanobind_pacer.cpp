@@ -29,7 +29,7 @@ namespace pacer {
 class RawGPSSource_trampoline : public RawGPSSource
 {
 public:
-    NB_TRAMPOLINE(RawGPSSource, 9);
+    NB_TRAMPOLINE(RawGPSSource, 12);
 
     uint32_t ReadSamples(std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) override
     {
@@ -61,6 +61,27 @@ public:
             "read_cori", // function name (python)
             ReadCori, // function name (c++)
             param_0 // params
+        );
+    }
+    pacer::ImuArrays ReadAcclColumns() override
+    {
+        NB_OVERRIDE_NAME(
+            "read_accl_columns", // function name (python)
+            ReadAcclColumns // function name (c++)
+        );
+    }
+    pacer::ImuArrays ReadGravColumns() override
+    {
+        NB_OVERRIDE_NAME(
+            "read_grav_columns", // function name (python)
+            ReadGravColumns // function name (c++)
+        );
+    }
+    pacer::ImuArrays ReadCoriColumns() override
+    {
+        NB_OVERRIDE_NAME(
+            "read_cori_columns", // function name (python)
+            ReadCoriColumns // function name (c++)
         );
     }
     uint32_t Seek(double target) override
@@ -429,6 +450,29 @@ void py_init_module_pacer(nb::module_ &m) {
 
 
   ////////////////////    <generated_from:gps-source.hpp>    ////////////////////
+  auto pyClassImuArrays =
+      nb::class_<pacer::ImuArrays>
+          (m, "ImuArrays", " One IMU stream (ACCL / GRAV / CORI) collected as parallel columns, so the\n studio layer crosses the binding ONCE per stream instead of once per sample\n (the old path ran a per-sample C++->Python trampoline callback — ~1.5M\n round-trips per load). The columns are the SAME samples the per-sample\n ReadAccl/ReadGrav/ReadCori callbacks yield, in the same order, so the bulk\n output is byte-for-byte identical to collecting those callbacks.\n\n `times`, `xs`, `ys`, `zs` are populated for all three streams; `ws` carries\n the quaternion scalar and is filled ONLY by ReadCoriColumns (ACCL/GRAV leave\n it empty). Every populated column has the same length (the sample count).")
+      .def("__init__", [](pacer::ImuArrays * self, std::vector<double> times = std::vector<double>(), std::vector<double> ws = std::vector<double>(), std::vector<double> xs = std::vector<double>(), std::vector<double> ys = std::vector<double>(), std::vector<double> zs = std::vector<double>())
+      {
+          new (self) pacer::ImuArrays();  // placement new
+          auto r_ctor_ = self;
+          r_ctor_->times = times;
+          r_ctor_->ws = ws;
+          r_ctor_->xs = xs;
+          r_ctor_->ys = ys;
+          r_ctor_->zs = zs;
+      },
+      nb::arg("times") = std::vector<double>(), nb::arg("ws") = std::vector<double>(), nb::arg("xs") = std::vector<double>(), nb::arg("ys") = std::vector<double>(), nb::arg("zs") = std::vector<double>()
+      )
+      .def_rw("times", &pacer::ImuArrays::times, "")
+      .def_rw("ws", &pacer::ImuArrays::ws, "")
+      .def_rw("xs", &pacer::ImuArrays::xs, "")
+      .def_rw("ys", &pacer::ImuArrays::ys, "")
+      .def_rw("zs", &pacer::ImuArrays::zs, "")
+      ;
+
+
   auto pyClassRawGPSSource =
       nb::class_<pacer::RawGPSSource, pacer::RawGPSSource_trampoline>
           (m, "RawGPSSource", " Abstract source of raw GPS / IMU samples — \"raw\" meaning it hands back fixes\n without imposing a meaningful global timeline of its own.\n\n Return-code convention: the uint32_t-returning methods (ReadSamples, Seek)\n follow the GoPro GPMF parser's codes — 0 (GPMF_OK) is success and any nonzero\n value is some GPMF_ERROR_* diagnostic (GPMFSource::ReadSamples returns\n GPMF_ERROR_MEMORY == 1 when the cursor sits on an empty index). No caller\n ever branches on a particular nonzero code — only zero vs nonzero — so a\n source written outside the parser (a test, a Python subclass) may return 0\n for success and any nonzero value for \"nothing here\".")
@@ -445,6 +489,12 @@ void py_init_module_pacer(nb::module_ &m) {
           &pacer::RawGPSSource::ReadCori,
           nb::arg("param_0"),
           " CORI is the camera-orientation quaternion (w,x,y,z), ~60 Hz, media-clock\n time.")
+      .def("read_accl_columns",
+          &pacer::RawGPSSource::ReadAcclColumns)
+      .def("read_grav_columns",
+          &pacer::RawGPSSource::ReadGravColumns)
+      .def("read_cori_columns",
+          &pacer::RawGPSSource::ReadCoriColumns)
       .def("seek",
           &pacer::RawGPSSource::Seek,
           nb::arg("target"),

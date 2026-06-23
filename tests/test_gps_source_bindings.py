@@ -27,7 +27,11 @@ import pacer  # noqa: E402
 # A bundled GoPro Hero6 clip carries a real GPS5 stream (the deprecated lat/lon/alt/2D/3D
 # format). Used by the GPS5 field-order + Seek-clamp regression tests below.
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_HERO6 = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero6.mp4")
+_SAMPLES = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples")
+_HERO6 = os.path.join(_SAMPLES, "hero6.mp4")
+# A hero8-era clip carries all three IMU streams (ACCL + GRAV + CORI); the bulk-columns
+# equivalence test below uses it to exercise GRAV + the CORI quaternion-w column.
+_HERO8 = os.path.join(_SAMPLES, "hero8.mp4")
 
 
 class _PySource(pacer.RawGPSSource):
@@ -245,6 +249,82 @@ def test_python_gps_source_feeds_samples_through_cpp_sequential_source():
     assert (s20.lat, s20.lon, s20.altitude, s20.full_speed, s20.ground_speed,
             s20.timestamp_ms, s20.dop, s20.fix) == (20.0, 20.5, 120.0, 2.0, 1.0, 20000, 1.5, 3)
     print("test_python_gps_source_feeds_samples_through_cpp_sequential_source OK")
+
+
+def _per_sample_vec3(read):
+    """Drain a per-sample IMUSample reader (read_accl / read_grav) into [(t,x,y,z), ...] —
+    exactly the old studio.ingest packing before the bulk-column readers."""
+    rows = []
+    read(lambda s: rows.append((s.time, s.x, s.y, s.z)))
+    return rows
+
+
+def _columns_vec3(cols):
+    """The bulk ImuArrays (times/xs/ys/zs) re-zipped into [(t,x,y,z), ...] for elementwise =="""
+    return list(zip(cols.times, cols.xs, cols.ys, cols.zs, strict=True))
+
+
+def _assert_bulk_equals_per_sample(src, label):
+    """The CORE equivalence pin for the C2 bulk readers: read_*_columns must return EXACTLY the
+    same samples (element for element) as draining the per-sample read_accl/read_grav/read_cori
+    callbacks. Both APIs exist on the source, so collect both and compare directly."""
+    # ACCL / GRAV: (time, x, y, z).
+    assert _columns_vec3(src.read_accl_columns()) == _per_sample_vec3(src.read_accl), \
+        f"{label}: ACCL bulk columns != per-sample callback"
+    assert _columns_vec3(src.read_grav_columns()) == _per_sample_vec3(src.read_grav), \
+        f"{label}: GRAV bulk columns != per-sample callback"
+    # CORI carries the quaternion w: (time, w, x, y, z).
+    cori_rows = []
+    src.read_cori(lambda s: cori_rows.append((s.time, s.w, s.x, s.y, s.z)))
+    cc = src.read_cori_columns()
+    assert list(zip(cc.times, cc.ws, cc.xs, cc.ys, cc.zs, strict=True)) == cori_rows, \
+        f"{label}: CORI bulk columns != per-sample callback"
+    return cori_rows
+
+
+def test_bulk_imu_columns_equal_per_sample_callbacks_on_real_media():
+    """read_accl_columns / read_grav_columns / read_cori_columns return the SAME samples (every
+    element) as the old per-sample read_accl / read_grav / read_cori callbacks. hero6 (ACCL only,
+    no GRAV/CORI) and hero8 (ACCL + GRAV + CORI, exercising the quaternion-w column) together
+    cover all three streams. This is the equivalence the studio ingest bulk-read path relies on."""
+    seen_accl = seen_grav = seen_cori = False
+    for name, path in (("hero6.mp4", _HERO6), ("hero8.mp4", _HERO8)):
+        # COMMITTED in the gpmf-parser submodule (CI checks out `submodules: recursive`) — fail
+        # loudly rather than skip if the checkout is broken.
+        assert os.path.exists(path), (
+            f"required gpmf-parser submodule sample missing at {path} — "
+            "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
+        src = pacer.GPMFSource(path)
+        accl_rows = _per_sample_vec3(src.read_accl)
+        # The bulk columns must equal the per-sample drain on every stream.
+        assert _columns_vec3(src.read_accl_columns()) == accl_rows, f"{name}: ACCL differs"
+        cori_rows = _assert_bulk_equals_per_sample(src, name)
+        seen_accl = seen_accl or bool(accl_rows)
+        seen_grav = seen_grav or bool(_per_sample_vec3(src.read_grav))
+        seen_cori = seen_cori or bool(cori_rows)
+    # The clips genuinely exercise every stream (so the equivalence is non-trivial, not 0==0).
+    assert seen_accl and seen_grav and seen_cori, (seen_accl, seen_grav, seen_cori)
+    print("test_bulk_imu_columns_equal_per_sample_callbacks_on_real_media OK")
+
+
+def test_bulk_imu_columns_equal_per_sample_through_cpp_sequential_source():
+    """Bulk-vs-per-sample equivalence ALSO holds through a C++ SequentialGPSSource chain (the
+    chapter-offset path the studio uses for multi-clip recordings): the bulk readers go through
+    the same virtual ReadAccl/ReadGrav/ReadCori, so the per-chapter time shift applies identically.
+    Built from Python sources so the comparison is exact and file-independent."""
+    left = _PySource(accl=[pacer.IMUSample(x=1.0, y=2.0, z=3.0, time=0.5)],
+                     grav=[pacer.IMUSample(x=0.0, y=0.0, z=9.8, time=0.4)],
+                     cori=[pacer.QuatSample(w=1.0, x=0.0, y=0.0, z=0.0, time=0.3)],
+                     duration=10.0)
+    right = _PySource(accl=[pacer.IMUSample(x=4.0, y=5.0, z=6.0, time=0.5)],
+                      grav=[pacer.IMUSample(x=0.1, y=0.2, z=9.7, time=0.4)],
+                      cori=[pacer.QuatSample(w=0.0, x=1.0, y=0.0, z=0.0, time=0.3)],
+                      duration=5.0)
+    seq = pacer.SequentialGPSSource(left, right)
+    cori_rows = _assert_bulk_equals_per_sample(seq, "SequentialGPSSource")
+    # Sanity: the right chapter's CORI time is shifted by the left duration (10.0) in BOTH paths.
+    assert cori_rows[1][0] == 10.3, cori_rows
+    print("test_bulk_imu_columns_equal_per_sample_through_cpp_sequential_source OK")
 
 
 def test_base_read_samples_default_emits_nothing():
