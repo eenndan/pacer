@@ -124,6 +124,16 @@ add_test(NAME test_controllers
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_controllers.py)
 set_tests_properties(test_controllers PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Controller<->view fan-out on the REAL CentralView (C3, the PR#80/#81 blind spot): builds the real
+# CentralView + ScrubController/CompareController/PlaybackState as StudioWindow does, drives the
+# production SIGNALS (compare_btn.click->compareToggled, plots.scrub*, video.positionChanged), lets the
+# REAL ~30 Hz QTimer fire, and asserts no signal re-entrancy + consistent cross-widget state (C4
+# single-source-of-truth). PACER_NO_MEDIA builds the inert media triplet; the two-lap session is the
+# stadium-loop synthetic (no media file). Imports the studio widget tree -> Qt, so run offscreen.
+add_test(NAME test_central_view_realqt
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_central_view_realqt.py)
+set_tests_properties(test_central_view_realqt PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 add_test(NAME test_validate_wallclock
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_validate_wallclock.py)
 set_tests_properties(test_validate_wallclock PROPERTIES
@@ -211,7 +221,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_sidecar test_session_pure test_session_services
                         test_studio_features test_rainbow_map
                         test_compare test_map_ghost test_cross_reference test_delta_engine
-                        test_controllers test_validate_wallclock test_corners
+                        test_controllers test_central_view_realqt
+                        test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
