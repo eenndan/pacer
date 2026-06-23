@@ -28,8 +28,6 @@ import numpy as np
 
 from ._signal import boxcar
 
-G = 9.80665  # m/s^2
-
 # --- model constants -------------------------------------------------------------------
 SMOOTH_S = 0.10           # boxcar on the longitudinal g before thresholding
 BRAKE_G_FLOOR = 0.16      # g; a genuine brake application (above lift/engine-braking ~0.05-0.12 g)
@@ -42,7 +40,7 @@ MIN_BRAKE_S = 0.25        # drop brake runs shorter than the shortest real brake
 COAST_DRAG_MIN = 0.03     # g; below this |decel| is steady-state cruise, not coasting
 MIN_COAST_S = 0.25        # drop coast blips between brake-release and throttle-pickup
 MOVING_KMH = 14.4         # 4.0 m/s; below this a sample is "stopped"
-MAX_LONG_G = 2.0          # clip speed-derivative spikes (a GPS glitch can't manufacture a brake)
+# (longitudinal-g clip MAX_LONG_G and the speed_long_g helper live in studio._signal)
 # Maneuver merge: the release hysteresis splits one braking-into-a-corner (threshold brake -> ease/
 # trail -> re-brake) into several events. These fuse the fragments back into ONE brake point.
 # Discriminator priority is DATA-DRIVEN (measured on real GPS-derived g, _diag_merge.py): adjacent
@@ -60,19 +58,6 @@ MERGE_GATE_S = 0.30       # s; boxcar for the merge gate's signed g (wider than 
 CORNER_LEAD_M = 40.0      # m; widen corner windows upstream (braking starts before the geometry)
 GRIP_ENV_PCT = 98.0       # percentile of combined |g| over the session = the grip "limit" (robust max)
 GRIP_ENV_FLOOR = 0.3      # g; a session that never loaded the tyres can't make a tiny divisor
-
-
-def speed_long_g(speed_kmh, t) -> np.ndarray:
-    """Longitudinal g from the speed trace: (d|v|/dt)/G — positive accelerating, negative
-    braking. The clean, GPS-validated brake signal (the IMU forward axis is vibration-dominated).
-    Spikes are clipped to a sane envelope."""
-    v = np.asarray(speed_kmh, float) / 3.6
-    t = np.asarray(t, float)
-    n = min(len(v), len(t))
-    if n < 3:
-        return np.zeros(n)
-    g = np.gradient(v[:n], t[:n]) / G
-    return np.clip(g, -MAX_LONG_G, MAX_LONG_G)
 
 
 @dataclass(frozen=True)

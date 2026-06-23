@@ -26,6 +26,10 @@ MIN_LAP_TIME = 5.0  # s — laps shorter than this are partial/phantom, not real
 MIN_LAP_SAMPLES = 20  # a real lap has at least this many GPS samples
 LAP_BAND_LO, LAP_BAND_HI = 0.5, 1.6  # "real lap" = lap_time within [lo, hi] x median lap time
 
+# --- longitudinal g from the speed trace (shared by driving channels + the g-meter dial) ---
+G = 9.80665  # m/s^2 (standard gravity)
+MAX_LONG_G = 2.0  # clip d|v|/dt spikes: a GPS glitch can't manufacture a real brake
+
 
 def fmt_time(seconds: float) -> str:
     """`m:ss.mmm` lap/split-time formatting (em-dash for a non-finite input). Lives here —
@@ -73,6 +77,22 @@ def boxcar(a, w):
     if w < 2 or len(a) < 2:
         return a
     return _boxcar_core(a, min(w, len(a)))
+
+
+def speed_long_g(speed_kmh, t) -> np.ndarray:
+    """Longitudinal g from the speed trace: clip((d|v|/dt)/G) — positive accelerating, negative
+    braking. The clean, GPS-validated brake signal (the IMU forward axis is vibration-dominated,
+    ~1.5x inflated). Spikes are clipped to +/-MAX_LONG_G; a length mismatch between `speed_kmh`
+    and `t` uses the common prefix; <3 samples -> zeros. Single source for studio.driving and
+    studio.gmeter (the latter kept a private copy only to dodge a cross-import — this pacer-free
+    numpy module is the home both already depend on)."""
+    v = np.asarray(speed_kmh, float) / 3.6
+    t = np.asarray(t, float)
+    n = min(len(v), len(t))
+    if n < 3:
+        return np.zeros(n)
+    g = np.gradient(v[:n], t[:n]) / G
+    return np.clip(g, -MAX_LONG_G, MAX_LONG_G)
 
 
 def _smooth_segments(a, seg_bounds, w: int = SMOOTH_WINDOW):

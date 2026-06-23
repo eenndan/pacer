@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import driving
+from ._signal import speed_long_g
 
 # "cache not yet computed" sentinel (None is a legal cached value); module-local to avoid
 # importing Session.
@@ -68,7 +69,7 @@ class DrivingChannels:
         # Speed resampled to the g clock (trace + g series share the media clock), then the clean
         # longitudinal g = d|v|/dt — the validated brake signal.
         speed_kmh = np.interp(gm.times, s.tt, s.tv)
-        long_clean = driving.speed_long_g(speed_kmh, gm.times)
+        long_clean = speed_long_g(speed_kmh, gm.times)
         self._thresholds_cache = driving.derive_thresholds(long_clean, speed_kmh)
         return self._thresholds_cache
 
@@ -89,7 +90,7 @@ class DrivingChannels:
         # Brake detection on the CLEAN speed-derived longitudinal (d|v|/dt), not the IMU axis.
         # Corner windows are passed as a block-only guard so the maneuver merge keeps two genuinely-
         # distinct corners separate; None (no corner model) just lets the throttle gate decide.
-        long_clean = driving.speed_long_g(speed_kmh, elapsed)
+        long_clean = speed_long_g(speed_kmh, elapsed)
         windows = self._corner_windows(float(dists[-1]))
         events = driving.brake_events(dists, elapsed, long_clean, th.theta_b,
                                       corner_windows=windows)
@@ -122,7 +123,7 @@ class DrivingChannels:
         dists, speed_kmh, elapsed = arr
         if len(dists) < 2:
             return []
-        long_clean = driving.speed_long_g(speed_kmh, elapsed)
+        long_clean = speed_long_g(speed_kmh, elapsed)
         spans = driving.coasting_spans(dists, elapsed, speed_kmh, long_clean, th.theta_b)
         self._coasting_spans_cache[lap_id] = spans
         return spans
