@@ -60,6 +60,15 @@ IDEAL_LINE_PEN = pg.mkPen(C.best, width=1, style=Qt.DashLine)
 # F5: brake glyphs (sized by peak decel) ride the speed curve; coast spans shade a neutral band.
 COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
 COAST_PEN = pg.mkPen(None)
+# D3: the SYNTHETIC brake/throttle band — a thin sub-track pinned to the bottom of the speed
+# plot. Brake fills toward red (C.behind), throttle toward green (C.ahead); subtle alpha so it
+# reads as a secondary backdrop, never competing with the speed curves. ESTIMATED (legend-labelled).
+BT_FILL_ALPHA = 110                    # 0-255: the filled pedal band (more present than coast, still quiet)
+BT_TRACK_FRAC = 0.16                   # the band occupies the bottom ~16% of the speed plot's y-range
+BT_BRAKE_COLOR = C.behind
+BT_THROTTLE_COLOR = C.ahead
+BT_PEN = pg.mkPen(None)
+BT_BASELINE_PEN = pg.mkPen(C.border, width=1, style=Qt.DotLine)  # the band's zero (lift/cruise) line
 
 
 class PlotsView(QWidget):
@@ -90,6 +99,10 @@ class PlotsView(QWidget):
         self._coast_items: list = []
         self._brake_data: list = []  # [(positions=[(x,decel)], colour)]
         self._coast_data: list = []  # [(spans=[(x0,x1)], colour)]
+        # D3 synthetic brake/throttle band: per-lap (plot_x, intensity[-1..1]); drawn as a sub-track
+        # at the bottom of the speed plot when the toggle is on.
+        self._brake_throttle_items: list = []
+        self._brake_throttle_data: list = []  # [(xs, intensity)]
 
         # x-axis toggle (distance/time). Exposed but mounted by app.py in its consolidated bar.
         self.x_mode_combo = QComboBox()
@@ -108,6 +121,20 @@ class PlotsView(QWidget):
             "clean laps' per-distance times (dashed purple, dips below the y=0 best-lap line). "
             "No single lap drove it; it shows where your achievable lap is faster than your best.")
         self.ideal_btn.toggled.connect(self._on_ideal_toggled)
+
+        # D3 opt-in: a SYNTHETIC brake/throttle band under the speed curve. Default off so the
+        # speed chart stays clean; mounted by central_view in the charts header next to the
+        # ideal-lap toggle. ESTIMATED (we have no pedal sensors — it's the speed-derived g).
+        self._show_brake_throttle = False
+        self.brake_throttle_btn = QPushButton("Brake/Throttle")
+        self.brake_throttle_btn.setIcon(icon("ph.gauge"))
+        self.brake_throttle_btn.setCheckable(True)
+        self.brake_throttle_btn.setToolTip(
+            "Brake/Throttle band (ESTIMATED): a pedal-style trace under the speed curve, inferred "
+            "from the GPS speed-derivative — pacer has no pedal sensors. Red fills below the line "
+            "while braking, green above while on power. Derived from the same signal as the brake "
+            "points; not measured.")
+        self.brake_throttle_btn.toggled.connect(self._on_brake_throttle_toggled)
 
         self.glw = pg.GraphicsLayoutWidget()
         # Tight margins so the charts fill the panel.
@@ -210,6 +237,12 @@ class PlotsView(QWidget):
         self.ideal_btn.setIcon(icon("ph.star-four", color=C.best if on else C.text))
         self.refresh()
 
+    def _on_brake_throttle_toggled(self, on: bool):
+        """D3: toggle the synthetic brake/throttle band under the speed curve."""
+        self._show_brake_throttle = on
+        self.brake_throttle_btn.setIcon(icon("ph.gauge", color=C.accent if on else C.text))
+        self._draw_brake_throttle()
+
     # ----------------------------------------------------------- cursor scrub
     def is_dragging(self) -> bool:
         """True while a cursor is being dragged (app suppresses the playback tick then)."""
@@ -300,6 +333,12 @@ class PlotsView(QWidget):
         self._coast_data = list(coast_data or [])
         self._draw_driving()
 
+    def set_brake_throttle(self, bt_data):
+        """D3: set the synthetic brake/throttle band data. bt_data = [(xs, intensity[-1..1])] per
+        lap (xs on the shared axis); [] clears. Only rendered while the toggle is on."""
+        self._brake_throttle_data = list(bt_data or [])
+        self._draw_brake_throttle()
+
     def _clear_driving(self):
         for item in self._brake_items:
             self.p_speed.removeItem(item)
@@ -340,6 +379,60 @@ class PlotsView(QWidget):
             self.p_speed.addItem(dots)
             self._brake_items.append(dots)
 
+    def _clear_brake_throttle(self):
+        for item in self._brake_throttle_items:
+            self.p_speed.removeItem(item)
+        self._brake_throttle_items = []
+
+    def _draw_brake_throttle(self):
+        """D3: (re)draw the synthetic brake/throttle band as a sub-track pinned to the BOTTOM of the
+        speed plot's current y-range. Intensity in [-1,1] maps onto a thin strip (height BT_TRACK_FRAC
+        of the y-span): brake fills DOWN from the strip's mid-line toward red, throttle fills UP
+        toward green, so it reads like a pedal trace under the speed curve. No-op when the toggle is
+        off or there's no data. Drawn after the autorange fit (called from refresh) so the strip is
+        placed on the frozen axes; re-pinned each refresh."""
+        self._clear_brake_throttle()
+        if not self._show_brake_throttle or not self._brake_throttle_data:
+            return
+        (y0, y1) = self.p_speed.getViewBox().viewRange()[1]
+        span = y1 - y0
+        if span <= 0:
+            return
+        # The strip: a band of height BT_TRACK_FRAC*span sitting just above the x-axis, with its
+        # zero (lift/cruise) line through the middle so brake fills below it and throttle above.
+        half = 0.5 * BT_TRACK_FRAC * span
+        mid = y0 + half
+        brake_fill = pg.mkColor(BT_BRAKE_COLOR)
+        brake_fill.setAlpha(BT_FILL_ALPHA)
+        thr_fill = pg.mkColor(BT_THROTTLE_COLOR)
+        thr_fill.setAlpha(BT_FILL_ALPHA)
+        for xs, intensity in self._brake_throttle_data:
+            xs = np.asarray(xs, float)
+            inten = np.asarray(intensity, float)
+            n = min(len(xs), len(inten))
+            if n < 2:
+                continue
+            xs, inten = xs[:n], inten[:n]
+            ys = mid + np.clip(inten, -1.0, 1.0) * half  # -1 -> y0 (full brake), +1 -> mid+half (full throttle)
+            base = pg.PlotDataItem(xs, np.full(n, mid), pen=BT_PEN)
+            curve = pg.PlotDataItem(xs, ys, pen=BT_PEN)
+            # Two fills off the same mid baseline: red below (braking), green above (throttle).
+            for thresh, fill in ((np.minimum(ys, mid), brake_fill),
+                                 (np.maximum(ys, mid), thr_fill)):
+                edge = pg.PlotDataItem(xs, thresh, pen=BT_PEN)
+                region = pg.FillBetweenItem(base, edge, brush=pg.mkBrush(fill))
+                region.setZValue(-3)  # above coast bands, below the speed curves
+                self.p_speed.addItem(region)
+                self._brake_throttle_items.append(region)
+            curve.setZValue(-2)
+            self.p_speed.addItem(curve)
+            self._brake_throttle_items.append(curve)
+        # The band's zero/cruise reference line.
+        zero = pg.InfiniteLine(pos=mid, angle=0, pen=BT_BASELINE_PEN)
+        zero.setZValue(-3)
+        self.p_speed.addItem(zero)
+        self._brake_throttle_items.append(zero)
+
     def _speed_at_x(self, x: float):
         """Interpolated speed-curve y at plot-x x (nearest curve when several drawn); None if none."""
         best_y = None
@@ -369,6 +462,7 @@ class PlotsView(QWidget):
         # redrawn at the end on the fitted axes.
         self._clear_sectors()
         self._clear_driving()
+        self._clear_brake_throttle()
 
         x_mode = self._axis_mode()
         self.p_delta.setLabel("bottom", self._axis_label())  # shared x label lives on the Δ plot
@@ -440,9 +534,11 @@ class PlotsView(QWidget):
         # Re-place the cursors on the now-frozen axes (also covers the paused-toggle case).
         if self._cursor_t is not None:
             self.set_playhead_time(self._cursor_t)
-        # Redraw the cached sector lines + driving items on the freshly-fit axes.
+        # Redraw the cached sector lines + driving items on the freshly-fit axes. The
+        # brake/throttle band is pinned to the now-frozen y-range, so it draws last.
         self._draw_sectors()
         self._draw_driving()
+        self._draw_brake_throttle()
 
     def _draw_ideal(self, x_mode: str):
         """D1: draw the synthetic ideal-lap baseline on the Δ plot when the toggle is on.

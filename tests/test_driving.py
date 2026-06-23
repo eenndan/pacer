@@ -197,6 +197,32 @@ def test_coast_rejects_steady_pull():
     print("ok coast: a steady mild pull (accelerating) is not coasting")
 
 
+def test_brake_throttle_intensity_band():
+    """D3: the synthetic brake/throttle band maps the SAME speed-derived long-g to a bounded
+    [-1,1] pedal intensity — hard brake -> strongly negative, on-power -> positive, cruise/
+    sub-floor lift -> ~0, clipped to the envelope, length == the lap."""
+    dist, elapsed = _lap_trace(n=1000, dur=20.0)
+    n = len(dist)
+    g = np.zeros(n)
+    g[300:420] = -0.40           # hard brake (above theta_b) -> strong negative
+    g[600:720] = 0.30            # clear acceleration -> positive throttle
+    g[800:880] = -0.10           # sub-floor lift/engine braking (< BRAKE_INTENSITY_FLOOR) -> ~0
+    inten = D.brake_throttle_intensity(elapsed, g, THETA_B)
+    assert len(inten) == n, len(inten)
+    assert inten.min() >= -1.0 and inten.max() <= 1.0, (inten.min(), inten.max())
+    assert inten[360] < -0.8, inten[360]                      # mid brake reads ~full brake
+    assert inten[660] > 0.4, inten[660]                       # mid throttle reads positive
+    assert abs(inten[0]) < 1e-9                               # cruise is zero
+    assert abs(inten[840]) < 1e-9, inten[840]                 # a lift below the floor is not a brake
+    # A brake DEEPER than theta_b still clips to -1 (the envelope), never beyond.
+    deep = np.zeros(n)
+    deep[300:420] = -1.5
+    assert D.brake_throttle_intensity(elapsed, deep, THETA_B).min() == -1.0
+    # No g signal (theta_b <= 0) -> all zeros.
+    assert np.all(D.brake_throttle_intensity(elapsed, g, 0.0) == 0.0)
+    print("ok brake/throttle band: hard brake strong-, on-power +, lift/cruise 0, clipped to [-1,1]")
+
+
 def test_corner_grip_math():
     """Grip utilization = median(|g|) in each window / the SESSION envelope, clamped to [0,1];
     higher in the harder corner; an empty window -> 0; a window at/above the envelope clamps to 1."""
@@ -325,8 +351,19 @@ def test_session_driving_accessors_and_caching():
     # coasting spans exist (the flat-throttle stretches before/after the brake).
     spans = s.lap_coasting_spans(0)
     assert len(spans) >= 1 and s.lap_coasting_spans(0) is spans
+    # D3: the synthetic brake/throttle band — per-sample [-1,1], caches, strong brake at the onset.
+    dists_bt, _elapsed_bt, inten = s._dc.lap_brake_throttle(0)
+    assert s._dc.lap_brake_throttle(0)[2] is inten, "brake/throttle must cache per lap"
+    assert len(inten) == len(dists_bt) and inten.min() >= -1.0 and inten.max() <= 1.0
+    onset_idx = int(np.argmin(np.abs(dists_bt - events[0].onset_dist)))
+    assert inten[onset_idx + 10] < -0.5, inten[onset_idx + 10]  # braking reads strongly negative
+    # plot projection: distance mode scales by best (==self here); time mode is elapsed.
+    px_d, iy_d = s.lap_brake_throttle_plot(0, "distance")
+    assert px_d is not None and len(px_d) == len(iy_d)
+    px_t, _iy_t = s.lap_brake_throttle_plot(0, "time")
+    assert px_t is not None and abs(px_t[0]) < 1e-6  # elapsed starts at 0
     print(f"ok session: brake @ {events[0].onset_dist:.0f} m, "
-          f"{len(spans)} coast span(s), markers+positions consistent")
+          f"{len(spans)} coast span(s), brake/throttle band [-1,1], markers+positions consistent")
 
 
 def test_session_no_gmeter_degrades_to_empty():
@@ -352,6 +389,8 @@ def test_session_no_gmeter_degrades_to_empty():
     assert s.lap_coasting_spans(0) == []
     assert s.lap_corner_grip(0) == []
     assert s.lap_brake_map_markers(0) == []
+    assert s._dc.lap_brake_throttle(0) == (None, None, None)
+    assert s.lap_brake_throttle_plot(0, "distance") == (None, None)
     print("ok no-g: all driving channels empty, thresholds None")
 
 
@@ -417,6 +456,46 @@ def test_plots_brake_and_coast_overlays():
     pv.set_coasting_spans([])
     assert pv._brake_items == [] and pv._coast_items == []
     print("ok plots overlay: brake glyph rides the curve, coast band drawn, survives refresh")
+
+
+def test_plots_brake_throttle_band_toggle():
+    """D3: the brake/throttle band is OFF by default (no items) even when data is pushed; turning
+    the toggle on draws the sub-track and turning it off clears it. Survives a selection refresh."""
+    _qapp()
+    from studio.plots_view import PlotsView
+
+    class FakeSession:
+        def best_lap_id(self):
+            return 0
+
+        def has_reference(self):
+            return False
+
+        def lap_time(self, i):
+            return 70.0
+
+        def delta(self, ids, x_mode="distance"):
+            sx = np.linspace(0.0, 200.0, 100)
+            return 0, {0: (sx, np.full(100, 60.0))}, {0: (sx, np.zeros(100))}
+
+        def sector_plot_positions(self, m):
+            return []
+
+    pv = PlotsView(FakeSession())
+    pv.set_laps([0])
+    xs = np.linspace(0.0, 200.0, 100)
+    inten = np.zeros(100)
+    inten[20:40] = -0.9   # braking
+    inten[60:80] = 0.5    # throttle
+    pv.set_brake_throttle([(xs, inten)])
+    assert pv._brake_throttle_items == [], "band must stay off until toggled on"
+    pv.brake_throttle_btn.setChecked(True)  # toggled -> _draw_brake_throttle
+    assert pv._show_brake_throttle and len(pv._brake_throttle_items) > 0
+    pv.refresh()  # a selection refresh re-pins the band on the fitted axes
+    assert len(pv._brake_throttle_items) > 0
+    pv.brake_throttle_btn.setChecked(False)
+    assert not pv._show_brake_throttle and pv._brake_throttle_items == []
+    print("ok plots overlay: brake/throttle band off by default, toggles on/off, survives refresh")
 
 
 def test_corner_table_has_grip_column():

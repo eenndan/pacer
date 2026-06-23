@@ -214,8 +214,10 @@ class CentralView(QWidget):
         plots_label.setProperty("role", "BarLabel")
         self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.ideal_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.plots.brake_throttle_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0), 1,
-                                        self.plots.ideal_btn, self.plots.x_mode_combo)
+                                        self.plots.brake_throttle_btn, self.plots.ideal_btn,
+                                        self.plots.x_mode_combo)
         plots_panel = self._headered(plots_header, (self.plots, 1))
 
         # Stash the four panel containers for _layout_panels.
@@ -670,15 +672,20 @@ class CentralView(QWidget):
         else:
             lap_ids = []
         mode = self.plots.axis_mode()
-        map_markers, brake_plot, coast_plot = [], [], []
+        map_markers, brake_plot, coast_plot, bt_plot = [], [], [], []
         for k, lid in enumerate(lap_ids):
             colour = self._driving_lap_colour(lid, k)
             map_markers.append((self.session.lap_brake_map_markers(lid), colour))
             brake_plot.append((self.session.lap_brake_plot_positions(lid, mode), colour))
             coast_plot.append((self.session.lap_coasting_plot_spans(lid, mode), colour))
+            # D3: the synthetic brake/throttle band (its own red/green fill, not the lap colour).
+            xs, inten = self.session.lap_brake_throttle_plot(lid, mode)
+            if xs is not None:
+                bt_plot.append((xs, inten))
         self.map.set_brake_markers(map_markers)
         self.plots.set_brake_markers(brake_plot)
         self.plots.set_coasting_spans(coast_plot)
+        self.plots.set_brake_throttle(bt_plot)
 
     # ------------------------------------------------------------- the shared rebuild seam
     def rebuild_derived_views(self, *, reselect: bool = True):
