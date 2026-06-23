@@ -581,6 +581,40 @@ def test_dialog_populates_and_go_calls_jump_to():
     print(f"ok dialog: {dlg.table.rowCount()} rows, Go -> jump_to{calls[0]}")
 
 
+def test_brake_point_hint_text():
+    """D4: the brake-point hint helper reads metres_later -> a labelled ESTIMATED line; a negligible
+    delta (< BRAKE_HINT_MIN_M) -> None (within the estimate's noise)."""
+    from studio.coaching_panel import BRAKE_HINT_MIN_M, _brake_point_hint
+    later = SimpleNamespace(cid=3, metres_later=6.4, actual_brake_dist=78.0,
+                            optimal_brake_dist=84.4, a_max_g=0.9)
+    assert _brake_point_hint(later) == "Brake ~6 m later into C3 (EST)"
+    earlier = SimpleNamespace(cid=2, metres_later=-5.0, actual_brake_dist=90.0,
+                              optimal_brake_dist=85.0, a_max_g=0.9)
+    assert _brake_point_hint(earlier) == "Brake ~5 m earlier into C2 (EST)"
+    tiny = SimpleNamespace(cid=1, metres_later=0.5, actual_brake_dist=80.0,
+                           optimal_brake_dist=80.5, a_max_g=0.9)
+    assert abs(0.5) < BRAKE_HINT_MIN_M and _brake_point_hint(tiny) is None
+    print("ok D4 hint: 'brake ~N m later/earlier (EST)'; negligible -> None")
+
+
+def test_dialog_shows_brake_point_hint():
+    """D4: the OpportunitiesDialog appends the ESTIMATED brake-point line to a row's reason when a
+    BrakePoint is supplied for that corner, and leaves rows without one untouched."""
+    _qapp()
+    from studio.coaching_panel import OpportunitiesDialog
+    opp = _populated_opps()
+    top_cid = opp.rows[0].cid
+    brake_points = {top_cid: SimpleNamespace(cid=top_cid, metres_later=6.0, actual_brake_dist=78.0,
+                                             optimal_brake_dist=84.0, a_max_g=0.9)}
+    dlg = OpportunitiesDialog(opp, jump_to=None, brake_points=brake_points)
+    reason_text = dlg.table.item(0, 3).text()
+    assert "Brake ~6 m later" in reason_text and "EST" in reason_text, reason_text
+    # a row WITHOUT a brake point keeps just the reason sentence (no hint appended).
+    if dlg.table.rowCount() > 1:
+        assert "Brake ~" not in dlg.table.item(1, 3).text()
+    print("ok D4 dialog: brake-point hint appended to the matched corner's reason")
+
+
 def test_dialog_excluded_state_has_no_table():
     _qapp()
     from studio.coaching_panel import OpportunitiesDialog

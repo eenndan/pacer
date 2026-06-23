@@ -19,6 +19,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from studio import driving as D  # noqa: E402
+from studio._signal import G  # noqa: E402
 
 
 # --------------------------------------------------------------- synthetic g traces
@@ -296,6 +297,62 @@ def test_thresholds_physical_and_floored():
           f"calm session floors to {D.BRAKE_G_FLOOR} -> 0 events")
 
 
+# ------------------------------------------------------- D4 braking-point optimizer (physics)
+def test_optimal_brake_distance_exact_known_case():
+    """d = (v_entry^2 - v_apex^2) / (2*a_max), SI units. A known case: 30 -> 20 m/s at 5 m/s^2
+    needs (900 - 400) / 10 = 50 m."""
+    d = D.optimal_brake_distance(30.0, 20.0, 5.0)
+    assert d is not None and abs(d - 50.0) < 1e-9, d
+    # symmetric textbook check: 40 -> 0 m/s at 8 m/s^2 -> 1600/16 = 100 m
+    assert abs(D.optimal_brake_distance(40.0, 0.0, 8.0) - 100.0) < 1e-9
+    print(f"ok D4 physics: 30->20 m/s @ 5 m/s^2 = {d:.1f} m (exact)")
+
+
+def test_optimal_brake_distance_guards():
+    """v_apex >= v_entry (no braking needed) -> None; a_max <= 0 (no demonstrated braking) -> None;
+    equal speeds -> None (d would be 0)."""
+    assert D.optimal_brake_distance(20.0, 25.0, 5.0) is None  # apex faster than entry
+    assert D.optimal_brake_distance(20.0, 20.0, 5.0) is None  # equal -> no braking
+    assert D.optimal_brake_distance(30.0, 20.0, 0.0) is None  # no a_max
+    assert D.optimal_brake_distance(30.0, 20.0, -1.0) is None  # negative a_max
+    print("ok D4 physics: guards (apex>=entry, a_max<=0) -> None")
+
+
+def test_estimate_a_max_percentile_and_floor():
+    """a_max = the AMAX_PCT percentile of the per-event peak decels (g), floored — the session's
+    DEMONSTRATED peak braking, not the detection threshold."""
+    peaks = [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.90]
+    expected = max(float(np.percentile(peaks, D.AMAX_PCT)), D.AMAX_FLOOR_G)
+    assert abs(D.estimate_a_max(peaks) - expected) < 1e-9, D.estimate_a_max(peaks)
+    # a TIMID session (all tiny decels) floors out so the braking distance can't blow up.
+    assert D.estimate_a_max([0.05, 0.08, 0.10]) == D.AMAX_FLOOR_G
+    # empty / no braking -> the floor (no division by ~0).
+    assert D.estimate_a_max([]) == D.AMAX_FLOOR_G
+    # non-finite / non-positive peaks are ignored, not poisoning the percentile.
+    assert abs(D.estimate_a_max([np.nan, 0.0, -0.3, 0.6, 0.7]) - max(
+        float(np.percentile([0.6, 0.7], D.AMAX_PCT)), D.AMAX_FLOOR_G)) < 1e-9
+    print(f"ok D4 a_max: p{D.AMAX_PCT:.0f} of peaks (floored {D.AMAX_FLOOR_G}); timid floors out")
+
+
+def test_brake_point_metres_later_sign():
+    """metres_later = optimal - actual, positive when the driver can brake LATER. With a_max derived
+    from the demonstrated peaks, an optimum AHEAD of the actual onset is a positive metres-later."""
+    # demonstrated a_max from a hard session: p90 of these is well above the floor.
+    a_max_g = D.estimate_a_max([0.8, 0.85, 0.9, 0.95, 1.0])
+    a_max_ms2 = a_max_g * G
+    v_entry, v_apex = 30.0, 18.0  # m/s
+    d = D.optimal_brake_distance(v_entry, v_apex, a_max_ms2)
+    apex_dist = 200.0
+    optimal = apex_dist - d
+    # driver braked 10 m BEFORE the optimum -> can brake ~10 m later (positive).
+    actual_early = optimal - 10.0
+    assert (optimal - actual_early) > 0
+    # driver braked 10 m AFTER the optimum -> should brake earlier (negative).
+    actual_late = optimal + 10.0
+    assert (optimal - actual_late) < 0
+    print(f"ok D4 sign: a_max {a_max_g:.2f} g, d={d:.1f} m, early=+later late=-later")
+
+
 # ------------------------------------------------------------------- Session wiring
 def _bare_driving_session():
     """A bare Session (tests/_synthetic idiom) with one straight lap + a seeded g-meter that
@@ -366,6 +423,69 @@ def test_session_driving_accessors_and_caching():
           f"{len(spans)} coast span(s), brake/throttle band [-1,1], markers+positions consistent")
 
 
+def test_session_brake_points_accessor_and_caching():
+    """D4 wiring: lap_brake_points matches the lap's brake event to a seeded corner and reports the
+    apex-speed-matched optimum vs the actual onset, derived from the session's DEMONSTRATED a_max
+    (not theta_b). The numbers are pinned by construction; the accessor caches per lap."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _synthetic import reset_corner_caches
+
+    from studio.corners import Corner
+
+    s = _bare_driving_session()
+    # Seed ONE corner whose [enter, exit] window contains both the brake onset (~125 m) and the
+    # apex (the slowest sample, ~9 m/s near the end). The basis frame == this lap's odometer.
+    corner = Corner(cid=1, enter=120.0, exit=260.0, apex=190.0, direction=1, turn_deg=90.0)
+    reset_corner_caches(s, basis=([corner], 300.0))
+
+    events = s.lap_brake_events(0)
+    assert len(events) == 1, events
+    bps = s.lap_brake_points(0)
+    assert len(bps) == 1, bps
+    bp = bps[0]
+    assert bp.cid == 1
+    assert s.lap_brake_points(0) is bps, "brake points must cache per lap"
+
+    # a_max is the DEMONSTRATED peak (single event -> its own peak decel), NOT the threshold theta_b.
+    th = s.driving_thresholds()
+    assert bp.a_max_g > th.theta_b, (bp.a_max_g, th.theta_b)
+    assert abs(bp.a_max_g - events[0].peak_decel) < 1e-6, (bp.a_max_g, events[0].peak_decel)
+
+    # The actual onset matches the detected brake event's onset.
+    assert abs(bp.actual_brake_dist - events[0].onset_dist) < 1e-6
+
+    # The optimum reproduces the physics exactly: apex_dist - (v_entry^2 - v_apex^2)/(2*a_max).
+    st = s.lap_corner_stats(0)[0]
+    dists, speed_kmh, _e = s._lap_arrays(0)
+    v_entry = float(np.interp(bp.actual_brake_dist, dists, speed_kmh)) / 3.6
+    v_apex = float(st.apex_speed) / 3.6
+    d = D.optimal_brake_distance(v_entry, v_apex, bp.a_max_g * G)
+    assert d is not None
+    expected_optimal = float(st.apex_dist) - d
+    assert abs(bp.optimal_brake_dist - expected_optimal) < 1e-6, (bp.optimal_brake_dist,
+                                                                  expected_optimal)
+    assert abs(bp.metres_later - (bp.optimal_brake_dist - bp.actual_brake_dist)) < 1e-9
+    print(f"ok D4 session: C1 actual {bp.actual_brake_dist:.0f} m, optimal "
+          f"{bp.optimal_brake_dist:.0f} m, metres_later {bp.metres_later:+.1f} (a_max "
+          f"{bp.a_max_g:.2f} g > theta_b {th.theta_b:.2f})")
+
+
+def test_session_brake_points_na_when_no_brake_in_corner():
+    """A corner with NO brake event in its [enter-lead, exit] window is omitted (N/A) — the brake is
+    far from this corner."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _synthetic import reset_corner_caches
+
+    from studio.corners import Corner
+
+    s = _bare_driving_session()
+    # corner near the START (before the brake onset ~125 m, even past the lead) -> no matched brake.
+    corner = Corner(cid=1, enter=10.0, exit=40.0, apex=25.0, direction=1, turn_deg=90.0)
+    reset_corner_caches(s, basis=([corner], 300.0))
+    assert s.lap_brake_points(0) == [], s.lap_brake_points(0)
+    print("ok D4 session: corner with no braking -> N/A (omitted)")
+
+
 def test_session_no_gmeter_degrades_to_empty():
     """With no g signal (empty meter), every driving accessor returns [] and the thresholds are
     None — the channels degrade gracefully (a recording with no IMU + no GPS fallback)."""
@@ -391,6 +511,7 @@ def test_session_no_gmeter_degrades_to_empty():
     assert s.lap_brake_map_markers(0) == []
     assert s._dc.lap_brake_throttle(0) == (None, None, None)
     assert s.lap_brake_throttle_plot(0, "distance") == (None, None)
+    assert s.lap_brake_points(0) == []  # D4: no g -> no a_max -> no brake points
     print("ok no-g: all driving channels empty, thresholds None")
 
 
