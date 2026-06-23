@@ -422,6 +422,138 @@ def test_theoretical_best_no_sectors_degenerates_to_best_lap():
     print("test_theoretical_best_no_sectors_degenerates_to_best_lap OK")
 
 
+# --------------------------------------------- 6b) ideal-lap envelope / Δ-to-ideal (D1)
+
+def make_ideal_session():
+    """A bare Session of THREE clean laps with CROSSING pace so the per-distance lower envelope
+    is genuinely synthetic (no single lap is fastest everywhere). All three are seeded into both
+    caches and marked valid + clean, so `consistency_lap_ids` (valid ∧ no-dropout) returns them.
+
+    Lap A is fast early / slow late, lap C is slow early / fast late, lap B is middling. The
+    ideal envelope therefore takes A's early segment and C's late one — strictly below every
+    lap's elapsed at the cross-over region. The 0.1 s sample step is well under gapfill's 0.35 s
+    gap threshold, so `lap_has_dropout` is False for all three."""
+    la, lb, lc = 2, 5, 9
+    ta, da = odometer(120, 0.1, 100.0, 1000.0, lambda u: 2.2 - 1.4 * np.sin(u / 2))      # fast→slow
+    tb, db = odometer(118, 0.1, 300.0, 1000.0)                                            # middling
+    tc, dc = odometer(122, 0.1, 500.0, 1000.0, lambda u: 0.8 + 1.4 * np.sin(u / 2))      # slow→fast
+    s = bare_session({la: (ta, da), lb: (tb, db), lc: (tc, dc)},
+                     best=lb, valid=[la, lb, lc])
+    for lid, (t, d) in ((la, (ta, da)), (lb, (tb, db)), (lc, (tc, dc))):
+        seed_cols(s, lid, t, d)
+    s.laps = SimpleNamespace(laps_count=lambda: 10)
+    return s, (la, lb, lc)
+
+
+def test_ideal_envelope_le_every_clean_lap_at_each_grid_point():
+    """The ideal envelope ≤ every clean lap's elapsed at EVERY one of the 400 grid points — the
+    defining lower-envelope property (the made-monotonic step only raises a momentary dip back to
+    a value still ≤ the running pointwise min, so the bound holds), and it is non-decreasing,
+    starting at 0."""
+    s, ids = make_ideal_session()
+    env = s.ideal_lap_elapsed()
+    assert env is not None and len(env) == Session._DELTA_GRID_N == 400
+    assert abs(float(env[0])) < 1e-9                              # starts at 0
+    assert np.all(np.diff(env) >= -1e-12)                        # non-decreasing (valid elapsed)
+    s_grid = np.linspace(0.0, 1.0, Session._DELTA_GRID_N)
+    for lid in ids:
+        dist, _spd, elapsed = s._lap_arrays(lid)
+        lap_on_grid = np.interp(s_grid, dist / dist[-1], elapsed)
+        assert np.all(env <= lap_on_grid + 1e-9), lid
+    # Genuinely synthetic (crossing pace): the envelope matches no single lap everywhere — each
+    # lap is strictly slower than the ideal somewhere — so the ideal isn't a copy of one lap.
+    for lid in ids:
+        dist, _spd, elapsed = s._lap_arrays(lid)
+        lap_on_grid = np.interp(s_grid, dist / dist[-1], elapsed)
+        assert np.any(env < lap_on_grid - 1e-6), lid
+    print("test_ideal_envelope_le_every_clean_lap_at_each_grid_point OK")
+
+
+def test_ideal_total_le_every_clean_lap_time_and_eq_envelope_end():
+    """`ideal_total` == the envelope's last value and ≤ every clean lap's time (a lower envelope
+    can't end above the fastest lap)."""
+    s, ids = make_ideal_session()
+    env = s.ideal_lap_elapsed()
+    assert abs(s.ideal_total() - float(env[-1])) < 1e-12
+    for lid in ids:
+        laptime = float(s._lap_arrays(lid)[2][-1])
+        assert s.ideal_total() <= laptime + 1e-9, lid
+    print("test_ideal_total_le_every_clean_lap_time_and_eq_envelope_end OK")
+
+
+def test_delta_to_ideal_nonneg_and_endpoint_is_laptime_minus_ideal():
+    """`delta_to_ideal` ≥ 0 at every grid point (a lap can't beat the envelope it formed), in
+    BOTH x-modes, and dy at s=1 ≈ lap_time − ideal_total. Even the fastest lap's Δ-to-ideal is
+    ≥ 0 and its endpoint equals its (small, ≥0) margin over the synthetic ideal."""
+    s, ids = make_ideal_session()
+    ideal_total = s.ideal_total()
+    for mode in ("distance", "time"):
+        series = s.delta_to_ideal(list(ids), mode)
+        assert series is not None
+        for lid in ids:
+            x, dy = series[lid]
+            assert len(x) == len(dy) == 400
+            assert np.all(dy >= -1e-9), (mode, lid, float(dy.min()))
+            laptime = float(s._lap_arrays(lid)[2][-1])
+            assert abs(float(dy[-1]) - (laptime - ideal_total)) < 1e-9, (mode, lid)
+    # The fastest clean lap still has a ≥0 (and finite) margin over the ideal.
+    fastest = min(ids, key=lambda i: float(s._lap_arrays(i)[2][-1]))
+    end = float(s.delta_to_ideal([fastest], "distance")[fastest][1][-1])
+    assert end >= -1e-9
+    print("test_delta_to_ideal_nonneg_and_endpoint_is_laptime_minus_ideal OK")
+
+
+def test_ideal_delta_to_best_nonpositive_shares_best_axis():
+    """`ideal_delta_to_best` (the ideal drawn on delta()'s own Δ-to-best axis) is ≤ 0 everywhere
+    (the ideal is at least as fast as the best lap it contains) and ends at ideal_total −
+    best_time. Distance mode's x ends at the active baseline total; time mode's at the best lap's
+    own time."""
+    s, (la, lb, lc) = make_ideal_session()
+    best_time = float(s._lap_arrays(lb)[2][-1])  # lb is the seeded best
+    ideal_total = s.ideal_total()
+    for mode in ("distance", "time"):
+        x, dy = s.ideal_delta_to_best(mode)
+        assert len(x) == len(dy) == 400
+        assert np.all(dy <= 1e-9), (mode, float(dy.max()))
+        assert abs(float(dy[-1]) - (ideal_total - best_time)) < 1e-9, mode
+    x_dist, _ = s.ideal_delta_to_best("distance")
+    assert abs(float(x_dist[-1]) - s.active_baseline_total_distance()) < 1e-9
+    x_time, _ = s.ideal_delta_to_best("time")
+    assert abs(float(x_time[-1]) - best_time) < 1e-9
+    print("test_ideal_delta_to_best_nonpositive_shares_best_axis OK")
+
+
+def test_ideal_single_clean_lap_equals_that_lap():
+    """Edge case: ONE clean lap → the ideal envelope IS that lap (its elapsed resampled onto the
+    grid), ideal_total == its lap time, and its own Δ-to-ideal is ~0 throughout."""
+    lap = 4
+    t, d = odometer(120, 0.1, 50.0, 900.0)
+    s = bare_session({lap: (t, d)}, best=lap, valid=[lap])
+    seed_cols(s, lap, t, d)
+    s.laps = SimpleNamespace(laps_count=lambda: 5)
+    s_grid = np.linspace(0.0, 1.0, Session._DELTA_GRID_N)
+    dist, _spd, elapsed = s._lap_arrays(lap)
+    lap_on_grid = np.interp(s_grid, dist / dist[-1], elapsed)
+    env = s.ideal_lap_elapsed()
+    assert np.allclose(env, lap_on_grid, atol=1e-9)
+    assert abs(s.ideal_total() - float(elapsed[-1])) < 1e-9
+    _x, dy = s.delta_to_ideal([lap], "distance")[lap]
+    assert np.all(np.abs(dy) < 1e-9)
+    print("test_ideal_single_clean_lap_equals_that_lap OK")
+
+
+def test_ideal_none_without_clean_laps():
+    """No clean lap (no valid ids) → every ideal accessor returns None (and the renderer no-ops),
+    not a crash."""
+    s = bare_session(valid=[])
+    s.laps = SimpleNamespace(laps_count=lambda: 0)
+    assert s.ideal_lap_elapsed() is None
+    assert s.ideal_total() is None
+    assert s.delta_to_ideal([0], "distance") is None
+    assert s.ideal_delta_to_best("distance") is None
+    print("test_ideal_none_without_clean_laps OK")
+
+
 def make_rolling_session(n=401):
     """TWO CONTIGUOUS laps with mirrored pace: lap 0 runs its first half-track in 35 s and its
     second in 25 s; lap 1 the reverse (25 s then 35 s) — both 60 s laps. The loop from

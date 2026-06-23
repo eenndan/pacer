@@ -378,6 +378,60 @@ def test_plots_view_shows_empty_state_when_no_laps():
     print("test_plots_view_shows_empty_state_when_no_laps OK")
 
 
+def test_plots_view_ideal_toggle_adds_labeled_curve():
+    """D1: the ideal-lap toggle is OFF by default (no ideal curve, hidden Δ legend); turning it
+    on draws ONE extra dashed curve on the Δ plot + reveals the synthetic-labeled legend, and
+    turning it off removes it again. Honors both x-modes (it asks the session per mode)."""
+    from studio.plots_view import PlotsView
+
+    class _Sess:
+        def __init__(self):
+            self.ideal_modes = []  # records the x_mode each ideal_delta_to_best call sees
+
+        def has_reference(self):
+            return False
+
+        def best_lap_id(self):
+            return 0
+
+        def delta(self, ids, x_mode):
+            xs = np.linspace(0, 100, 5)
+            return 0, {0: (xs, xs)}, {0: (xs, xs * 0.0)}
+
+        def ideal_delta_to_best(self, x_mode="distance"):
+            self.ideal_modes.append(x_mode)
+            xs = np.linspace(0, 100, 5)
+            return xs, xs * -0.01  # ≤ 0, the ideal-vs-best shape
+
+        def lap_time(self, lid):
+            return 60.0
+
+        def lap_window(self, lid):
+            return None
+
+    sess = _Sess()
+    pv = PlotsView(sess)
+    pv.set_laps([0])
+    base_curves = len(pv._curves)
+    assert not pv._show_ideal and not pv._delta_legend.isVisible()  # off by default
+
+    pv.ideal_btn.setChecked(True)  # toggled() → _on_ideal_toggled → refresh
+    assert pv._show_ideal
+    assert len(pv._curves) == base_curves + 1, "ideal toggle must add exactly one curve"
+    assert pv._delta_legend.isVisible(), "ideal legend must reveal when on"
+    assert sess.ideal_modes[-1] == "distance"
+
+    # Time mode must also query the ideal (honors both x-modes).
+    pv.x_mode_combo.setCurrentIndex(1)
+    assert sess.ideal_modes[-1] == "time"
+
+    pv.ideal_btn.setChecked(False)  # back off → curve gone, legend hidden
+    assert not pv._show_ideal
+    assert len(pv._curves) == base_curves
+    assert not pv._delta_legend.isVisible()
+    print("test_plots_view_ideal_toggle_adds_labeled_curve OK")
+
+
 # -------------------------------------- D2: a failed RELOAD must not corrupt _paths/title/session
 def test_failed_reload_preserves_paths_title_and_session():
     """D2: File ▸ Open / Load full recording on a missing/corrupt file while a good session is

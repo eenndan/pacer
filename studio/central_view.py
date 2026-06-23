@@ -213,7 +213,9 @@ class CentralView(QWidget):
         plots_label = QLabel("SPEED · Δ TO BEST")
         plots_label.setProperty("role", "BarLabel")
         self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0), 1, self.plots.x_mode_combo)
+        self.plots.ideal_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0), 1,
+                                        self.plots.ideal_btn, self.plots.x_mode_combo)
         plots_panel = self._headered(plots_header, (self.plots, 1))
 
         # Stash the four panel containers for _layout_panels.
