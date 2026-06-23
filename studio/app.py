@@ -72,6 +72,34 @@ class _VideoExportWorker(QThread):
             pass
 
 
+class _SessionLoadWorker(QThread):
+    """QThread wrapper running the ~1.4–4 s synchronous Session.load(paths) off the UI thread, so the
+    window stays responsive (the "Loading telemetry…" placeholder shows) instead of freezing on every
+    open/reload. Session.load is pure compute (numpy + pacer C++; creates no Qt objects) so it is safe
+    off-thread; the resulting Session is a plain object handed back via a queued signal.
+
+    Each worker carries the `token` of the _load that started it; the window's completion slots ignore
+    any result whose token is stale (a newer _load superseded it), so a second drag-drop can't apply an
+    older load destructively. Per-sample ingest is Python/GIL-held; the numpy/g-meter portions release
+    the GIL — the win is the non-blocking, cancellable, supersede-safe load, not full parallelism."""
+
+    loaded = Signal(int, list, object)   # (token, paths, session)
+    failed = Signal(int, list, object)   # (token, paths, exception)
+
+    def __init__(self, token: int, paths: list[str]):
+        super().__init__()
+        self._token = token
+        self._paths = list(paths)
+
+    def run(self):
+        try:
+            session = Session.load(self._paths)
+        except Exception as exc:  # noqa: BLE001 - surface ANY load failure to the GUI thread
+            self.failed.emit(self._token, self._paths, exc)
+            return
+        self.loaded.emit(self._token, self._paths, session)
+
+
 class _WelcomeView(QWidget):
     """First-run / no-recording empty state — the product's tagline made literal: drop a GoPro
     recording onto the window, or open one. `on_open` runs the file picker, `on_demo` loads the
@@ -115,6 +143,10 @@ class _WelcomeView(QWidget):
 
 
 class StudioWindow(QMainWindow):
+    # Emitted after every load settles (on the UI thread, after _on_session_loaded /
+    # _on_load_failed have run) — a clean way for tests/smoke to wait for the now-async load.
+    loadFinished = Signal()
+
     def __init__(self, paths: list[str], full: bool = False):
         super().__init__()
         self.resize(1440, 900)
@@ -122,6 +154,13 @@ class StudioWindow(QMainWindow):
         self.setAcceptDrops(True)
         # The one session-scoped central view, swapped in fresh per load; None until first load.
         self.view = None
+        # Async-load bookkeeping: a monotonically increasing token stamps each _load; the completion
+        # slots ignore any worker result whose token is stale (a newer _load superseded it). All
+        # in-flight workers are held in a set so no QThread is GC'd mid-run (a superseded worker keeps
+        # running to completion, then drops itself out); _load_worker is the current one.
+        self._load_token = 0
+        self._load_worker = None
+        self._load_workers = set()
         self._tick_timer = None  # created on the first _build_ui; reused across reloads (window-owned)
         # Persisted on the window so the View-menu choice survives a reload (passed into each view).
         self._consistency_visible = False
@@ -174,20 +213,56 @@ class StudioWindow(QMainWindow):
 
     # ------------------------------------------------------------------ loading
     def _load(self, paths: list[str]):
-        """Load (or reload) the session for `paths`, then build a fresh CentralView and swap it in
-        (_build_ui). The window keeps the load orchestration + `session`/`_paths`; each panel
-        captures `session` at construction."""
+        """Load (or reload) the session for `paths` OFF the UI thread, then (in _on_session_loaded)
+        build a fresh CentralView and swap it in. The window keeps the load orchestration +
+        `session`/`_paths`; each panel captures `session` at construction.
+
+        Session.load is a ~1.4–4 s synchronous call, so it runs on a worker QThread: the placeholder
+        shows immediately and the window stays responsive. A superseding _load (e.g. a second
+        drag-drop) just shows the placeholder again, bumps the token, and starts a new worker — the
+        older worker's result is ignored by token when it finishes (see the completion slots)."""
         print("studio: loading telemetry…", flush=True)
-        # Session.load is a ~4 s synchronous call; show a placeholder + force one paint first so the
-        # window isn't a black void / frozen during it (see _show_loading_placeholder).
+        # Show the placeholder so the window isn't a black void during the load (the load no longer
+        # blocks the event loop, so the placeholder also stays live/paintable throughout).
         self._show_loading_placeholder(paths)
-        # A missing / corrupt / no-GPS file must not crash the app: show an error and leave the
-        # window open rather than letting it propagate out of __init__.
-        try:
-            session = Session.load(paths)
-        except Exception as exc:  # noqa: BLE001 - surface ANY load failure as a user-facing error
-            self._on_load_failed(paths, exc)
-            return
+        # Bump the token: any in-flight worker started by a previous _load is now stale and its
+        # result will be ignored. The previous worker is left to finish + clean itself up (run() is
+        # already executing; we don't block the UI on it).
+        self._load_token += 1
+        token = self._load_token
+        worker = _SessionLoadWorker(token, paths)
+        self._load_worker = worker  # the current worker
+        self._load_workers.add(worker)  # hold every in-flight worker so none is GC'd mid-load
+        worker.loaded.connect(self._on_session_loaded)
+        worker.failed.connect(self._on_load_failed_async)
+        # On finish, drop the worker from the in-flight set (and clear _load_worker if it's the
+        # current one) so a finished/superseded worker is cleaned up — no leak, no double UI build.
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
+        worker.start()
+
+    def _on_worker_finished(self, worker):
+        """A load worker's QThread finished: drop it from the in-flight set so it can be reclaimed (a
+        superseded worker that finished late is cleaned up here too). Clear _load_worker if it was the
+        current one."""
+        self._load_workers.discard(worker)
+        if self._load_worker is worker:
+            self._load_worker = None
+
+    def closeEvent(self, event):
+        """Wait for any in-flight load worker so a QThread isn't destroyed mid-run on window close
+        (Qt would warn/crash). The token is already bumped past any in-flight worker, so its result
+        is ignored regardless."""
+        for worker in list(getattr(self, "_load_workers", ())):
+            if worker.isRunning():
+                worker.wait()
+        super().closeEvent(event)
+
+    def _on_session_loaded(self, token: int, paths: list[str], session):
+        """Successful load completion (on the UI thread, via a queued signal): commit the session and
+        build the UI. Ignores a STALE result — a newer _load superseded this one, so applying it
+        would clobber the current (good) session. This is the EXACT former post-load body of _load."""
+        if token != self._load_token:
+            return  # superseded by a newer load; drop this result
         self.session = session
         # Commit _paths only after a successful load, so a failed reload leaves both self.session
         # and _paths pointing at the still-good recording (every _paths consumer stays in sync).
@@ -233,11 +308,21 @@ class StudioWindow(QMainWindow):
 
         # Record this recording in the local session library (see _update_library).
         self._update_library(paths)
+        self.loadFinished.emit()
+
+    def _on_load_failed_async(self, token: int, paths: list[str], exc: Exception):
+        """Failed load completion (on the UI thread, via a queued signal): drop a STALE result, else
+        surface the error via the existing _on_load_failed (welcome-state fallback on first load,
+        good session kept on a reload failure)."""
+        if token != self._load_token:
+            return  # superseded by a newer load; drop this result
+        self._on_load_failed(paths, exc)
+        self.loadFinished.emit()
 
     def _show_loading_placeholder(self, paths: list[str]):
-        """Immediate visual feedback for the ~4 s blocking Session.load: install a centered
+        """Immediate visual feedback while Session.load runs on a worker thread: install a centered
         "Loading telemetry…" card, show the window, and force one synchronous paint so it appears
-        before the load blocks the event loop. Replaced by the real UI in _build_ui."""
+        right away. Replaced by the real UI in _build_ui."""
         label = chapters.recording_label(paths)
         placeholder = QLabel(f"Loading telemetry…\n\n{label}" if label else "Loading telemetry…")
         placeholder.setAlignment(Qt.AlignCenter)

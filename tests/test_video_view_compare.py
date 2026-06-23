@@ -389,7 +389,13 @@ def test_real_media_pane_b_is_reference_at_lap_start():
     win = StudioWindow(prim)
     win.resize(1440, 900)
     win.show()
-    pump(3.0)
+    # C1: Session.load now runs on a worker QThread, so the session isn't ready synchronously after
+    # __init__ — pump until it settles (bounded) before touching win.session.
+    deadline = time.time() + 60.0
+    while win.view is None and time.time() < deadline:
+        _APP.processEvents()
+        time.sleep(0.01)
+    assert win.view is not None, "primary recording load did not complete"
     reason = win.session.load_reference(ref)
     assert reason is None, f"reference refused: {reason}"
     win._update_reference_status()
