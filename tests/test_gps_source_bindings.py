@@ -267,9 +267,12 @@ def test_gps5_speed_field_order_2d_ground_3d_full():
     Golden values are the first GPS5 sample of hero6.mp4: ground_speed (2D) = 1.221,
     full_speed (3D) = 1.23. Pre-fix these came out SWAPPED (ground=1.23, full=1.221), so the
     exact-value assert below fails before fix #2 and passes after."""
-    if not os.path.exists(_HERO6):
-        print("test_gps5_speed_field_order_2d_ground_3d_full SKIP (no hero6.mp4 sample)")
-        return
+    # hero6.mp4 is COMMITTED in the gpmf-parser submodule (CI checks out `submodules: recursive`),
+    # so it is GUARANTEED present in CI — fail LOUDLY rather than silently skipping this
+    # field-order regression pin if the checkout is broken/uninitialised.
+    assert os.path.exists(_HERO6), (
+        f"required gpmf-parser submodule sample missing at {_HERO6} — "
+        "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
     src = pacer.GPMFSource(_HERO6)
     rows = []
     src.read_samples(lambda s, i, n: rows.append((s.ground_speed, s.full_speed)))
@@ -289,9 +292,12 @@ def test_gps5_seek_before_first_payload_clamps_no_wrap():
     EOF-looking index); after fix #1 it clamps. Drive it on the real hero6 GPMF source:
     seek(-1.0) then read the current payload and assert it yields the first samples (not an
     empty / past-the-end span)."""
-    if not os.path.exists(_HERO6):
-        print("test_gps5_seek_before_first_payload_clamps_no_wrap SKIP (no hero6.mp4 sample)")
-        return
+    # hero6.mp4 is COMMITTED in the gpmf-parser submodule (CI checks out `submodules: recursive`),
+    # so it is GUARANTEED present in CI — fail LOUDLY rather than silently skipping this
+    # seek-clamp regression pin if the checkout is broken/uninitialised.
+    assert os.path.exists(_HERO6), (
+        f"required gpmf-parser submodule sample missing at {_HERO6} — "
+        "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
     src = pacer.GPMFSource(_HERO6)
     src.seek(-1.0)  # before the first payload
     assert not src.is_end(), "seek before the first payload wrapped to a false EOF"
