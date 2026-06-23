@@ -698,6 +698,23 @@ QLabel[role="EmptyState"] {{
     font-size: {BODY}px;
     padding: 24px;
 }}
+/* first-run welcome empty state (no recording loaded): a large wordmark + a muted invitation. */
+QLabel[role="WelcomeTitle"] {{
+    background: transparent;
+    color: {C.text};
+    font-size: {HERO}px;
+    font-weight: 700;
+}}
+QLabel[role="WelcomeSubtitle"] {{
+    background: transparent;
+    color: {C.text_muted};
+    font-size: {BODY}px;
+}}
+QLabel[role="WelcomeError"] {{
+    background: transparent;
+    color: {C.text_muted};
+    font-size: {CAPTION}px;
+}}
 """
 
 
