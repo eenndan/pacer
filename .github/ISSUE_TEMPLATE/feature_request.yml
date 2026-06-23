@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an idea or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: The driver/analysis need behind the request — not just the solution.
+      placeholder: "When comparing two laps I can't tell where I lost time within a corner…"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like Pacer to do?
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / prior art
+      description: Other tools (MoTeC, AiM, Catalyst, …) that do this, or workarounds you use.
+    validations:
+      required: false
