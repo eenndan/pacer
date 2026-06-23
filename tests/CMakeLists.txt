@@ -224,7 +224,7 @@ set_tests_properties(test_library PROPERTIES
 foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_gapfill
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
-                        test_sidecar test_session_pure test_session_services
+                        test_sidecar test_track_db test_session_pure test_session_services
                         test_studio_features test_rainbow_map
                         test_compare test_map_ghost test_cross_reference test_delta_engine
                         test_controllers test_central_view_realqt
