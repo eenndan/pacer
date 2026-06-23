@@ -1337,6 +1337,13 @@ class Session:
         — for the map's brake glyphs. peak_decel (g) drives the glyph size. [] when no brakes."""
         return self._dc.lap_brake_map_markers(lap_id)
 
+    def lap_grip_channel(self, lap_id: int):
+        """D5: per-sample grip utilization for one lap, aligned 1:1 to the lap_channels x_m/y_m map
+        points (so the track map can colour the racing line by how close the driver is to the
+        session's grip limit — see driving.grip_utilization). None when there's no g signal or the
+        lap is degenerate. ESTIMATED, lateral-dominant."""
+        return self._dc.lap_grip_utilization(lap_id)
+
     def lap_brake_plot_positions(self, lap_id: int, mode: str) -> list[tuple[float, float]]:
         """(plot-x, peak_decel) per brake onset on one lap, on the speed chart's SHARED axis for
         `mode`. [] when no brake events / no best lap (distance mode).

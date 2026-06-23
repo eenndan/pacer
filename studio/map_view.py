@@ -118,7 +118,13 @@ def _inferred_pen(color, base_width):
 # into MAP_RAINBOW_N buckets, one PlotCurveItem per bucket. Rebuilt only on lap/channel/segment change.
 RAINBOW_WIDTH = 3  # same width as the current-lap overlay, so the painted line reads identically
 # Channel-cycle button captions.
-_RAINBOW_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ"}
+_RAINBOW_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ",
+                   "grip": "Line: Grip"}
+# Cycle order for the header button: off → speed → Δ → grip → off.
+_RAINBOW_ORDER = ("off", "speed", "delta", "grip")
+# D5 grip utilization clips to [0, GRIP_UTIL_DISPLAY_MAX] for bucketing so the colour scale is the
+# physical 0..limit range, not stretched to a lap's own max (a low-load lap then reads honestly low).
+GRIP_UTIL_DISPLAY_MAX = 1.2
 
 
 def bucketize(values, n_buckets: int, lo: float | None = None, hi: float | None = None):
@@ -626,8 +632,8 @@ class MapView(QWidget):
         self.rainbow_btn.setIcon(icon("ph.palette"))
         self.rainbow_btn.setToolTip(
             "Paint the current lap's line by a channel: off → speed (red = slow, green = fast) "
-            "→ Δ vs best (red = losing, green = gaining). The faint best-lap reference is "
-            "unchanged.")
+            "→ Δ vs best (red = losing, green = gaining) → grip (ESTIMATED: red = on the session's "
+            "grip limit, green = grip left unused). The faint best-lap reference is unchanged.")
         self.rainbow_btn.clicked.connect(self._cycle_rainbow)
         self._legend = _RainbowLegend()
         self._legend.setVisible(False)
@@ -798,7 +804,7 @@ class MapView(QWidget):
     # --------------------------------------------------------------- rainbow (F3)
     def _cycle_rainbow(self):
         """Header-button click: advance the channel cycle and re-apply the rendering."""
-        order = ("off", "speed", "delta")
+        order = _RAINBOW_ORDER
         self._rainbow_mode = order[(order.index(self._rainbow_mode) + 1) % len(order)]
         self.rainbow_btn.setText(_RAINBOW_LABELS[self._rainbow_mode])
         self._apply_rainbow()
@@ -815,8 +821,8 @@ class MapView(QWidget):
         self._current_overlay.set_visible(not painted)
 
     def _build_rainbow(self, lap_id: int, mode: str) -> bool:
-        """Fill the bucket items for `lap_id`'s channel; returns False when it can't be computed
-        (degenerate lap, no best lap for Δ)."""
+        """Fill the bucket items for `lap_id`'s channel (speed / Δ-vs-best / grip); returns False
+        when it can't be computed (degenerate lap, no best lap for Δ, no g signal for grip)."""
         ch = self.session.lap_channels(lap_id)
         times, xs, ys, speed_kmh, cum = (
             ch["t_media_s"], ch["x_m"], ch["y_m"], ch["speed_kmh"], ch["dist_m"])
@@ -826,6 +832,25 @@ class MapView(QWidget):
             vals = speed_kmh
             lo_txt = f"{float(np.min(vals)):.0f}"
             hi_txt = f"{float(np.max(vals)):.0f} km/h"
+        elif mode == "grip":
+            # D5: per-sample grip utilization (|g| / session envelope), ESTIMATED + lateral-dominant.
+            # NEGATED + a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale so on-the-limit (high util) lands in
+            # the LOW (red) buckets and unused grip in the HIGH (green) ones, on the physical 0..limit
+            # range rather than this lap's own max.
+            util = self.session.lap_grip_channel(lap_id)
+            if util is None or len(util) < len(xs):
+                return False
+            vals = -np.asarray(util[:len(xs)], float)
+            # legend reads "on limit" (red, lo) → "unused" (green, hi)
+            lo_txt = "on limit"
+            hi_txt = "unused (est.)"
+            seg_vals = 0.5 * (vals[:-1] + vals[1:])
+            seg_vals = np.where(np.diff(times) > GAP_TIME_S, np.nan, seg_vals)
+            self._rainbow.set_data(
+                xs, ys,
+                bucketize(seg_vals, MAP_RAINBOW_N, lo=-GRIP_UTIL_DISPLAY_MAX, hi=0.0))
+            self._legend.set_labels(lo_txt, hi_txt)
+            return True
         else:  # Δ-vs-best, resampled from the 400-grid delta() onto this lap's point distances
             got = self.session.delta([lap_id])
             if got is None or lap_id not in got[2] or float(cum[-1]) <= 0:

@@ -362,6 +362,35 @@ def grip_envelope(long_g, lat_g, speed_kmh) -> float:
     return max(float(np.percentile(gmag[moving], GRIP_ENV_PCT)), GRIP_ENV_FLOOR)
 
 
+GRIP_UTIL_CLIP = 1.2          # display clip for per-sample utilization (a little over the p98 limit)
+
+
+def grip_utilization(lat_g, long_g, envelope: float, *,
+                     clip_max: float = GRIP_UTIL_CLIP) -> np.ndarray:
+    """D5: per-sample grip utilization = hypot(lat_g, long_g) / envelope, clipped to
+    [0, clip_max], for the track-map "unused grip" colouring.
+
+    `envelope` is the SESSION g-g limit (see grip_envelope) — the same divisor corner_grip uses, so
+    map colour and the per-corner numbers tell one story; it is floored to GRIP_ENV_FLOOR here too so
+    a low-load session can't make a tiny divisor inflate utilization. ~1.0 = on the session's grip
+    limit, < 1.0 = grip left UNUSED, > 1.0 (up to clip_max) = a transient peak above the robust p98.
+
+    Pure numpy. Aligned to the shorter of lat_g/long_g; ESTIMATED — lateral g is validated (r~0.9)
+    but the combined magnitude mixes in the noisier longitudinal axis, so it is lateral-dominant by
+    construction, never a precise friction-circle reading. NaN where either input is non-finite (the
+    map skips those segments)."""
+    lat = np.asarray(lat_g, float)
+    lon = np.asarray(long_g, float)
+    n = min(len(lat), len(lon))
+    lat, lon = lat[:n], lon[:n]
+    env = max(float(envelope), GRIP_ENV_FLOOR)
+    util = np.hypot(lat, lon) / env
+    util = np.clip(util, 0.0, float(clip_max))
+    # carry non-finite inputs through as NaN so the map's bucketize skips those segments
+    util[~(np.isfinite(lat) & np.isfinite(lon))] = np.nan
+    return util
+
+
 def corner_grip(dist, long_g, lat_g, windows, envelope: float) -> list[float]:
     """Per-corner grip utilization: median(hypot(lat,long)) inside each (enter,exit) odo window
     / the SESSION grip `envelope` (see grip_envelope), clamped to [0,1]. Normalizing to the session

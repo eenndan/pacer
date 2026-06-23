@@ -270,6 +270,44 @@ def test_grip_envelope_is_session_robust_and_floored():
     print(f"ok grip envelope: p98 robust max = {env:.2f} g, spike-proof, floored when calm")
 
 
+def test_grip_utilization_per_sample():
+    """D5: per-sample utilization = hypot(lat,long)/envelope, clipped to [0, GRIP_UTIL_CLIP].
+    A sample AT the envelope reads ~1.0; below reads <1; way above clips; non-finite -> NaN."""
+    env = 1.0
+    # lat-only samples (long = 0) at fractions/above the envelope.
+    lat = np.array([0.0, 0.5, 1.0, 1.5, 10.0])
+    lon = np.zeros_like(lat)
+    util = D.grip_utilization(lat, lon, env)
+    assert util[0] == 0.0
+    assert abs(util[1] - 0.5) < 1e-9          # 0.5 / 1.0 -> grip left UNUSED
+    assert abs(util[2] - 1.0) < 1e-9          # AT the envelope -> ~1.0 (on the limit)
+    assert abs(util[3] - 1.2) < 1e-9          # 1.5 clipped to GRIP_UTIL_CLIP
+    assert util[4] == D.GRIP_UTIL_CLIP        # a huge transient clamps, never blows up the scale
+    # combined magnitude: a (lat, long) at the envelope on the circle reads ~1.0.
+    on = D.grip_utilization([0.6], [0.8], 1.0)  # hypot = 1.0
+    assert abs(on[0] - 1.0) < 1e-9
+    print(f"ok grip util: 0.5->{util[1]:.2f} (unused), 1.0->{util[2]:.2f} (limit), "
+          f"clipped at {D.GRIP_UTIL_CLIP}")
+
+
+def test_grip_utilization_floored_divisor_and_nan():
+    """A tiny/zero envelope is FLOORED to GRIP_ENV_FLOOR (mirror corner_grip) so a low-load session
+    can't make a divisor that inflates utilization to infinity; non-finite inputs pass through NaN
+    so the map skips those segments."""
+    lat = np.array([0.3, 0.3])
+    lon = np.array([0.0, 0.0])
+    # envelope below the floor must be replaced by the floor (0.3) -> util == 1.0, not blown up.
+    util = D.grip_utilization(lat, lon, 1e-6)
+    assert abs(util[0] - (0.3 / D.GRIP_ENV_FLOOR)) < 1e-9 and util[0] <= D.GRIP_UTIL_CLIP
+    # NaN / inf in either axis -> NaN (skipped by the map's bucketize).
+    nan_util = D.grip_utilization([0.5, np.nan, 0.5], [0.0, 0.0, np.inf], 1.0)
+    assert not np.isfinite(nan_util[1]) and not np.isfinite(nan_util[2])
+    assert np.isfinite(nan_util[0])
+    # mismatched lengths align to the shorter input.
+    assert len(D.grip_utilization([0.1, 0.2, 0.3], [0.0, 0.0], 1.0)) == 2
+    print(f"ok grip util: floored divisor (env<{D.GRIP_ENV_FLOOR} -> floor), NaN passthrough")
+
+
 def test_thresholds_physical_and_floored():
     """theta_b is PHYSICAL: a low percentile of the session's braking-only decel, clamped to
     [BRAKE_G_FLOOR, BRAKE_G_CEIL] so the same brake reads consistently and a no-braking session
@@ -421,6 +459,44 @@ def test_session_driving_accessors_and_caching():
     assert px_t is not None and abs(px_t[0]) < 1e-6  # elapsed starts at 0
     print(f"ok session: brake @ {events[0].onset_dist:.0f} m, "
           f"{len(spans)} coast span(s), brake/throttle band [-1,1], markers+positions consistent")
+
+
+def test_session_grip_channel_aligned_and_cached():
+    """D5 wiring: lap_grip_channel returns one per-sample utilization value per MAP xy point
+    (lap_channels length), caches per lap, and degrades to None with no g signal."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _synthetic import reset_driving_caches
+
+    from studio import gmeter
+
+    s = _bare_driving_session()
+    # Seed a real lateral-g load on the same media clock the lap g-arrays interpolate onto, so the
+    # utilization is non-trivial; long stays 0 (lateral-dominant, the validated channel).
+    n = len(s._gmeter.times)
+    lat = np.zeros(n)
+    lat[250:330] = 0.5  # a loaded corner mid-lap
+    s._gmeter = gmeter.GMeter(times=s._gmeter.times.copy(), lat_g=lat, long_g=np.zeros(n),
+                              cross=None, source="accl")
+    reset_driving_caches(s)
+
+    util = s.lap_grip_channel(0)
+    assert util is not None
+    # aligned 1:1 to the lap's map xy points (the _lap_columns grid lap_channels' x_m comes from).
+    _t, xs, _ys, _v, _cum = s._lap_columns(0)
+    assert len(util) == len(xs), (len(util), len(xs))
+    assert s.lap_grip_channel(0) is util, "grip channel must cache per lap"
+    # the loaded stretch reads higher utilization than the unloaded straight.
+    assert float(np.nanmax(util)) > float(util[0]) + 1e-3
+    assert float(np.nanmax(util)) <= D.GRIP_UTIL_CLIP
+
+    # no g signal -> None (graceful degrade), like the map's no-g path.
+    s2 = _bare_driving_session()
+    s2._gmeter = gmeter.GMeter(times=np.empty(0), lat_g=np.empty(0), long_g=np.empty(0),
+                               cross=None, source="accl")
+    reset_driving_caches(s2)
+    assert s2.lap_grip_channel(0) is None
+    print(f"ok D5 session: grip channel len {len(util)} aligned to xy, cached, "
+          f"max {float(np.nanmax(util)):.2f}; no-g -> None")
 
 
 def test_session_brake_points_accessor_and_caching():
