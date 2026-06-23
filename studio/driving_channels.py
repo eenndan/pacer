@@ -3,9 +3,15 @@ over Session primitives. numpy-only (no pacer core).
 
 Thresholds are cached for the recording (the g series is constant); only the per-lap results
 are dropped on re-segment, since they are projected through the segmentation.
+
+DEPENDENCY INJECTION (like studio/render_cache.py): the constructor takes Session-bound
+callables over Session's own primitives, so NO method here reaches a `_`-private attribute of
+Session — Session owns the pacer side + the g-meter and wires its privates into the callables.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 import numpy as np
 
@@ -18,12 +24,43 @@ _UNSET = object()
 
 
 class DrivingChannels:
-    """Brake / coast / grip channels + session-wide thresholds, computed over the owning
-    Session's primitives.
+    """Brake / coast / grip channels + session-wide thresholds, computed over Session-bound
+    primitives.
+
+    All inputs are Session-bound callables (Session owns the pacer side + the g-meter):
+    `gmeter` returns the live GMeter (built after construction, so it must be a callable);
+    `trace_times` / `trace_speed_kmh` return the full-trace media clock + km/h speed (Session.tt /
+    .tv); `lap_arrays` / `lap_time_dist` / `lap_time_dist_elapsed` / `lap_columns` are the per-lap
+    fetches; `best_lap_id` / `valid_lap_ids` the memoized lap sets; `active_baseline_total_distance`
+    the shared distance-axis basis; `corner_basis` / `lap_corner_stats` the composed CornerModel's
+    detection basis + per-lap stats.
     """
 
-    def __init__(self, session):
-        self._s = session
+    def __init__(self, *,
+                 gmeter: Callable[[], object],
+                 trace_times: Callable[[], np.ndarray],
+                 trace_speed_kmh: Callable[[], np.ndarray],
+                 lap_arrays: Callable[[int], tuple | None],
+                 lap_time_dist: Callable[[int], tuple | None],
+                 lap_time_dist_elapsed: Callable[[int], tuple | None],
+                 lap_columns: Callable[[int], tuple],
+                 best_lap_id: Callable[[], int | None],
+                 valid_lap_ids: Callable[[], list[int]],
+                 active_baseline_total_distance: Callable[[], float | None],
+                 corner_basis: Callable[[], tuple | None],
+                 lap_corner_stats: Callable[[int], list]):
+        self._gmeter = gmeter
+        self._trace_times = trace_times
+        self._trace_speed_kmh = trace_speed_kmh
+        self._lap_arrays = lap_arrays
+        self._lap_time_dist = lap_time_dist
+        self._lap_time_dist_elapsed = lap_time_dist_elapsed
+        self._lap_columns = lap_columns
+        self._best_lap_id = best_lap_id
+        self._valid_lap_ids = valid_lap_ids
+        self._active_baseline_total_distance = active_baseline_total_distance
+        self._corner_basis = corner_basis
+        self._lap_corner_stats = lap_corner_stats
         # thresholds + grip envelope: _UNSET until computed (None = legal no-g); both derive from the
         # g series, which is constant -> kept across re-segments.
         self._thresholds_cache: object = _UNSET
@@ -62,11 +99,10 @@ class DrivingChannels:
         axis is vibration-inflated (see gmeter/driving), so the dial, the map grip colour and the
         per-corner grip all read the same validated longitudinal. Falls back to the IMU long_g for a
         GPS-only/synthetic meter. LATERAL is always the IMU lateral (which it gets right, r~0.9)."""
-        s = self._s
-        gm = s._gmeter
+        gm = self._gmeter()
         if not gm.has_data:
             return None, None
-        td = s._lap_time_dist_elapsed(lap_id)
+        td = self._lap_time_dist_elapsed(lap_id)
         if td is None:
             return None, None
         times, _dists, _elapsed = td
@@ -80,14 +116,13 @@ class DrivingChannels:
         speed-derived longitudinal g, not the vibration-dominated IMU forward axis (see driving)."""
         if self._thresholds_cache is not _UNSET:
             return self._thresholds_cache
-        s = self._s
-        gm = s._gmeter
+        gm = self._gmeter()
         if not gm.has_data:
             self._thresholds_cache = None
             return None
         # Speed resampled to the g clock (trace + g series share the media clock), then the clean
         # longitudinal g = d|v|/dt — the validated brake signal.
-        speed_kmh = np.interp(gm.times, s.tt, s.tv)
+        speed_kmh = np.interp(gm.times, self._trace_times(), self._trace_speed_kmh())
         long_clean = speed_long_g(speed_kmh, gm.times)
         self._thresholds_cache = driving.derive_thresholds(long_clean, speed_kmh)
         return self._thresholds_cache
@@ -100,7 +135,7 @@ class DrivingChannels:
         if got is not None:
             return got
         th = self.thresholds()
-        arr = self._s._lap_arrays(lap_id)
+        arr = self._lap_arrays(lap_id)
         if th is None or arr is None:
             return []
         dists, speed_kmh, elapsed = arr
@@ -120,7 +155,7 @@ class DrivingChannels:
         """The detected corners projected onto this lap's odometer as (enter, exit) spans, widened
         CORNER_LEAD_M upstream (braking starts before the geometric entry). None when there's no
         corner model — the brake merge then runs purely on the throttle/distance gates."""
-        basis = self._s._corner_basis()
+        basis = self._corner_basis()
         if not basis or not basis[0] or total_lap <= 0:
             return None
         corner_list, total_ref = basis
@@ -134,9 +169,8 @@ class DrivingChannels:
         got = self._coasting_spans_cache.get(lap_id)
         if got is not None:
             return got
-        s = self._s
         th = self.thresholds()
-        arr = s._lap_arrays(lap_id)
+        arr = self._lap_arrays(lap_id)
         if th is None or arr is None:
             return []
         dists, speed_kmh, elapsed = arr
@@ -157,7 +191,7 @@ class DrivingChannels:
         if got is not None:
             return got
         th = self.thresholds()
-        arr = self._s._lap_arrays(lap_id)
+        arr = self._lap_arrays(lap_id)
         if th is None or arr is None:
             return None, None, None
         dists, speed_kmh, elapsed = arr
@@ -175,13 +209,12 @@ class DrivingChannels:
         got = self._corner_grip_cache.get(lap_id)
         if got is not None:
             return got
-        s = self._s
         long_g, lat_g = self._lap_g_arrays(lap_id)
-        basis = s._corner_basis()
+        basis = self._corner_basis()
         if long_g is None or basis is None or not basis[0]:
             return []
         corner_list, total_ref = basis
-        td = s._lap_time_dist_elapsed(lap_id)
+        td = self._lap_time_dist_elapsed(lap_id)
         if td is None:
             return []
         _times, dists, _elapsed = td
@@ -217,8 +250,8 @@ class DrivingChannels:
         normalizes to this so a slow lap reads lower, vs normalizing to each lap's own peak."""
         if self._grip_env_cache is not _UNSET:
             return self._grip_env_cache
-        gm = self._s._gmeter
-        speed_kmh = np.interp(gm.times, self._s.tt, self._s.tv)
+        gm = self._gmeter()
+        speed_kmh = np.interp(gm.times, self._trace_times(), self._trace_speed_kmh())
         self._grip_env_cache = driving.grip_envelope(gm.long_g, gm.lat_g, speed_kmh)
         return self._grip_env_cache
 
@@ -230,12 +263,11 @@ class DrivingChannels:
         0.0 only when there's no g signal at all (the accessor then reports N/A everywhere)."""
         if self._a_max_cache is not _UNSET:
             return self._a_max_cache
-        s = self._s
         if self.thresholds() is None:  # no g signal -> no brake-point math
             self._a_max_cache = 0.0
             return 0.0
         peaks: list[float] = []
-        for lap_id in s.valid_lap_ids():
+        for lap_id in self._valid_lap_ids():
             peaks.extend(e.peak_decel for e in self.lap_brake_events(lap_id))
         self._a_max_cache = driving.estimate_a_max(peaks)
         return self._a_max_cache
@@ -255,16 +287,15 @@ class DrivingChannels:
         got = self._brake_points_cache.get(lap_id)
         if got is not None:
             return got
-        s = self._s
         a_max_g = self._a_max()
-        stats = s.lap_corner_stats(lap_id)
-        arr = s._lap_arrays(lap_id)
+        stats = self._lap_corner_stats(lap_id)
+        arr = self._lap_arrays(lap_id)
         if a_max_g <= 0.0 or not stats or arr is None:
             return []
         dists, speed_kmh, _elapsed = arr
         if len(dists) < 2:
             return []
-        basis = s._corner_basis()
+        basis = self._corner_basis()
         if basis is None or not basis[0]:
             return []
         corner_list, total_ref = basis
@@ -304,11 +335,10 @@ class DrivingChannels:
         """(x, y, peak_decel) per brake onset on one lap, in LOCAL metres on that lap's own
         trace — for the map's brake glyphs. [] when no brake events. The onset odometer is
         mapped to the lap's (x, y) via the lap's cached columns."""
-        s = self._s
         events = self.lap_brake_events(lap_id)
         if not events:
             return []
-        _t, xs, ys, _v, cum = s._lap_columns(lap_id)
+        _t, xs, ys, _v, cum = self._lap_columns(lap_id)
         onsets = np.asarray([e.onset_dist for e in events])
         mx = np.interp(onsets, cum, xs)
         my = np.interp(onsets, cum, ys)
@@ -319,7 +349,6 @@ class DrivingChannels:
         for `mode` ('distance' or 'time'). [] when no brake events / no best lap (distance mode).
           * 'distance': x = (onset_dist / lap_total) * baseline_distance
           * 'time':     x = onset_time (elapsed into the lap)"""
-        s = self._s
         events = self.lap_brake_events(lap_id)
         if not events:
             return []
@@ -327,13 +356,13 @@ class DrivingChannels:
             return [(e.onset_time, e.peak_decel) for e in events]
         # 'distance' — normalize by this lap's total, scale to the active baseline's distance
         # (the reference total when one is loaded) so the glyphs sit on the curves/cursor.
-        best = s.best_lap_id()
-        td = s._lap_time_dist(lap_id)
+        best = self._best_lap_id()
+        td = self._lap_time_dist(lap_id)
         if best is None or td is None:
             return []
         _times, dists = td
         total_lap = float(dists[-1])
-        best_total = s.active_baseline_total_distance()
+        best_total = self._active_baseline_total_distance()
         if total_lap <= 0 or not best_total:
             return []
         return [(e.onset_dist / total_lap * best_total, e.peak_decel) for e in events]
@@ -345,14 +374,13 @@ class DrivingChannels:
         mode).
           * 'distance': x = (dist / lap_total) * active_baseline_total
           * 'time':     x = elapsed (into the lap)"""
-        s = self._s
         dists, elapsed, intensity = self.lap_brake_throttle(lap_id)
         if intensity is None:
             return None, None
         if mode == "time":
             return elapsed, intensity
         total_lap = float(dists[-1])
-        best_total = s.active_baseline_total_distance()
+        best_total = self._active_baseline_total_distance()
         if total_lap <= 0 or not best_total:
             return None, None
         return dists / total_lap * best_total, intensity
@@ -361,26 +389,25 @@ class DrivingChannels:
         """(plot-x0, plot-x1) per coasting span on one lap, on the speed chart's SHARED axis
         for `mode`. Same projection as lap_brake_plot_positions. [] when no spans / no best
         lap (distance mode)."""
-        s = self._s
         spans = self.lap_coasting_spans(lap_id)
         if not spans:
             return []
         if mode == "time":
             # Elapsed at each span edge: interp the span's odometer edges into the lap's elapsed.
-            td = s._lap_time_dist_elapsed(lap_id)
+            td = self._lap_time_dist_elapsed(lap_id)
             if td is None:
                 return []
             _times, dists, elapsed = td
             return [(float(np.interp(sp.start_dist, dists, elapsed)),
                      float(np.interp(sp.end_dist, dists, elapsed))) for sp in spans]
-        best = s.best_lap_id()
-        td = s._lap_time_dist(lap_id)
+        best = self._best_lap_id()
+        td = self._lap_time_dist(lap_id)
         if best is None or td is None:
             return []
         _times, dists = td
         total_lap = float(dists[-1])
         # active baseline total (reference when loaded) — the shared axis delta() uses.
-        best_total = s.active_baseline_total_distance()
+        best_total = self._active_baseline_total_distance()
         if total_lap <= 0 or not best_total:
             return []
         return [(sp.start_dist / total_lap * best_total, sp.end_dist / total_lap * best_total)

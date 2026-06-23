@@ -86,6 +86,14 @@ add_test(NAME test_rainbow_map
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_rainbow_map.py)
 set_tests_properties(test_rainbow_map PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# map_render (E2): the Qt-free pure-numpy track-map math extracted from map_view — bucketize /
+# bucket_polylines / resample_grid_to_points + the rainbow_channel per-channel value/bucket math
+# (speed/Δ/grip, the Δ+grip negation, the grip fixed scale, the GPS-dropout NaN-mask, the None
+# gates). Imports studio.theme -> Qt, so run offscreen; no telemetry file.
+add_test(NAME test_map_render
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_map_render.py)
+set_tests_properties(test_map_render PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Compare-video Δ-badge math: session.delta_between (vs an arbitrary lap, cross-checked
 # against the hardcoded-vs-best delta_at_time). Imports Session -> Qt, so run offscreen.
 add_test(NAME test_compare
@@ -225,7 +233,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
                         test_sidecar test_track_db test_session_pure test_session_services
-                        test_studio_features test_rainbow_map
+                        test_studio_features test_rainbow_map test_map_render
                         test_compare test_map_ghost test_cross_reference test_delta_engine
                         test_controllers test_central_view_realqt
                         test_validate_wallclock test_corners
