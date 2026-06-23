@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, demo, export_data, export_video, library, sidecar, theme
+from . import chapters, demo, export_data, export_video, library, sidecar, theme, track_db
 from .central_view import CentralView
 from .coaching_panel import OpportunitiesDialog
 from .help_dialog import AboutDialog, ShortcutsDialog
@@ -358,6 +359,15 @@ class StudioWindow(QMainWindow):
             "Browse your analyzed recordings (date / track / best lap / theoretical best), "
             "re-open any of them, and see per-track PB progression")
         self._library_action.triggered.connect(self._open_library)
+        # Save the current placed start/sector lines as a named, reusable track in the database,
+        # so a future recording at this location auto-detects with these timing lines in place.
+        # Enabled (in _sync_export_menu) only when the session has usable timing lines.
+        self._save_track_action = menu.addAction("Save as track…")
+        self._save_track_action.setToolTip(
+            "Promote this recording's start/finish (and sector) lines into a named track in your "
+            "database, so the next recording at this circuit auto-detects them")
+        self._save_track_action.triggered.connect(self._save_as_track)
+        self._save_track_action.setEnabled(False)  # no session yet at construction time
 
         # Analyse menu: the comparison / coaching surface (reference load/clear/compare + Opportunities).
         analyse_menu = self.menuBar().addMenu("&Analyse")
@@ -615,6 +625,48 @@ class StudioWindow(QMainWindow):
         has = hasattr(self, "session")
         self._export_menu.setEnabled(has)
         self._export_video_action.setEnabled(has)
+        # Save-as-track needs USABLE timing lines (≥1 valid lap means the start line actually
+        # segments this trace — the lines are worth promoting to a reusable track).
+        self._save_track_action.setEnabled(self._can_save_track())
+
+    def _can_save_track(self) -> bool:
+        """True iff the current session has usable timing lines to promote into a track: a session
+        is loaded, it has valid laps (the start line really segments this trace), and the trace
+        carries a location to anchor detection on. Guarded — any failure means 'not saveable'."""
+        if not hasattr(self, "session"):
+            return False
+        try:
+            return bool(self.session.valid_lap_ids()) and self.session.point_count() > 0
+        except Exception:  # noqa: BLE001 — the guard must never raise out of a menu sync
+            return False
+
+    def _save_as_track(self):
+        """File ▸ Save as track…: promote the current start/sector lines (lat/lon) into a named
+        track in the database, so a future recording at this location auto-detects them. Fully
+        guarded — a DB write must never disrupt the session (mirror library.upsert_and_save's
+        defensive style)."""
+        if not self._can_save_track():  # defensive: action fired with nothing usable loaded
+            self.statusBar().showMessage("no usable timing lines to save as a track")
+            return
+        suggested = self.session.track_name or chapters.recording_label(self._paths) or ""
+        name, ok = QInputDialog.getText(
+            self, "Save as track", "Track name:", text=suggested)
+        name = name.strip()
+        if not ok or not name:
+            return
+        try:
+            centroid, bbox = self.session.track_location()
+            start, sectors = self.session.timing_lines_latlon()
+            entry = track_db.make_entry(name, centroid, start, sectors, bbox=bbox)
+            track_db.save_track(entry)
+        except (OSError, ValueError) as exc:
+            print(f"studio: could not save track {name!r}: {exc}", flush=True)
+            self.statusBar().showMessage(f"could not save track: {exc}")
+            return
+        # The freshly-saved track now wins detection for THIS session's name on the next load.
+        self.session.track_name = name
+        self.statusBar().showMessage(f"saved track '{name}' — future recordings here auto-detect it")
+        print(f"studio: saved track {name!r} to the track database", flush=True)
 
     def _export_default(self, suffix: str) -> str:
         """Default save path: next to the recording, named `<stem><suffix>` (e.g.

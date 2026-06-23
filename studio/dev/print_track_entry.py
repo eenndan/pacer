@@ -1,16 +1,15 @@
-"""Print a ready-to-paste `tracks.REGISTRY` entry for a recording's track.
+"""Print a recording's track detection anchor + start line (a debugging aid).
 
-Loads the session exactly as the app does (clean → smooth → detect → segment), so the
-start line it prints is the FITTED one: the registry line for an already-known track, or
-the auto-fit (`pick_random_start` + widen) for an unknown one. For an unknown track, drag
-the start line into place in the app FIRST (it persists to the .pacer.json sidecar and is
-restored here), then run this and paste the entry into `studio/tracks.py` REGISTRY — from
-then on every session at that track gets the fixed line with no dragging.
+The app now persists named tracks in the track DATABASE (studio/track_db.py) via File ▸
+Save as track…, so the normal flow is: drag the start line into place in the app, then Save
+as track — no editing of source. This tool just *reports* what detection sees: load the
+session exactly as the app does (clean → smooth → detect → segment), print the trace bbox +
+centroid (the detection anchor, matched within tracks.DETECT_RADIUS_M) and the current start
+line as absolute lat/lon (the FITTED line for a known track, or the auto-fit for an unknown
+one — restored from the .pacer.json sidecar if one exists).
 
-Prints the trace bbox + centroid (the detection anchor, matched within
-tracks.DETECT_RADIUS_M) and the current start line as absolute lat/lon. If the trace
-already matches a registry entry it says so — nothing to paste then. Only ever add entries
-for tracks we have real recordings of; the registry is measured data, not guesses.
+If the trace already matches a known track it says so. Only ever save tracks you have real
+recordings of; the database is measured data, not guesses.
 
 Run:  pixi run python -m studio.dev.print_track_entry -- /path/to/GX010060.MP4 [--full]
           [--name "Track Name"]
@@ -26,7 +25,7 @@ from ..session import Session
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description="print a ready-to-paste tracks.REGISTRY entry for a recording")
+        description="print a recording's track detection anchor + start line")
     ap.add_argument("path", help="any chapter of the recording (.MP4)")
     ap.add_argument("--full", action="store_true",
                     help="chain all sibling chapters (like the app's --full)")
@@ -57,17 +56,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"# trace bbox: lat [{mn.y:.5f}, {mx.y:.5f}]  lon [{mn.x:.5f}, {mx.x:.5f}]")
     print(f"# sidecar:    {sidecar.sidecar_path(paths[0])}")
     if known is not None:
-        print(f"# NOTE: already in REGISTRY as {known.name!r} — nothing to paste.")
+        print(f"# NOTE: already a known track ({known.name!r}) — it auto-detects already.")
     elif session.track_name is None:
         print("# WARNING: unknown track and the start line below is the AUTO-FIT — drag it")
-        print("#          into place in the app before pasting, or the entry pins a guess.")
-    print("Track(")
-    print(f'    name="{args.name if known is None else known.name}",')
-    print(f"    centroid_lat={clat:.4f},")
-    print(f"    centroid_lon={clon:.4f},")
-    print(f"    start_a=({a_lat:.5f}, {a_lon:.5f}),")
-    print(f"    start_b=({b_lat:.5f}, {b_lon:.5f}),")
-    print("),")
+        print("#          into place in the app and use File ▸ Save as track… instead.")
+    print(f"# name:     {args.name if known is None else known.name}")
+    print(f"# centroid: ({clat:.4f}, {clon:.4f})")
+    print(f"# start:    ({a_lat:.5f}, {a_lon:.5f}) -- ({b_lat:.5f}, {b_lon:.5f})")
     return 0
 
 
