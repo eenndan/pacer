@@ -162,6 +162,7 @@ class StudioWindow(QMainWindow):
         self._load_token = 0
         self._load_worker = None
         self._load_workers = set()
+        self._pending_load = None  # single-flight: the latest queued (token, paths) while a load runs
         self._tick_timer = None  # created on the first _build_ui; reused across reloads (window-owned)
         # Persisted on the window so the View-menu choice survives a reload (passed into each view).
         self._consistency_visible = False
@@ -221,35 +222,50 @@ class StudioWindow(QMainWindow):
         `session`/`_paths`; each panel captures `session` at construction.
 
         Session.load is a ~1.4–4 s synchronous call, so it runs on a worker QThread: the placeholder
-        shows immediately and the window stays responsive. A superseding _load (e.g. a second
-        drag-drop) just shows the placeholder again, bumps the token, and starts a new worker — the
-        older worker's result is ignored by token when it finishes (see the completion slots)."""
+        shows immediately and the window stays responsive. SINGLE-FLIGHT: only ONE load runs at a
+        time — pacer's C++ load is not reentrant, and two concurrent off-thread loads deadlock. A
+        superseding _load (e.g. a second drag-drop) shows the placeholder, bumps the token, and is
+        QUEUED as the pending request; it starts when the current worker finishes, and the older
+        in-flight result is ignored by token (see the completion slots)."""
         print("studio: loading telemetry…", flush=True)
         # Show the placeholder so the window isn't a black void during the load (the load no longer
         # blocks the event loop, so the placeholder also stays live/paintable throughout).
         self._show_loading_placeholder(paths)
         # Bump the token: any in-flight worker started by a previous _load is now stale and its
-        # result will be ignored. The previous worker is left to finish + clean itself up (run() is
-        # already executing; we don't block the UI on it).
+        # result will be ignored when it finishes.
         self._load_token += 1
         token = self._load_token
+        # Single-flight: if a worker is already running, remember only the LATEST request and start it
+        # when the current one finishes — never run two Session.loads at once (pacer load isn't
+        # reentrant; concurrent off-thread loads deadlock).
+        if self._load_worker is not None and self._load_worker.isRunning():
+            self._pending_load = (token, list(paths))
+            return
+        self._start_load_worker(token, paths)
+
+    def _start_load_worker(self, token: int, paths: list[str]):
+        """Spawn the single in-flight load worker for `token` (see _load's single-flight rule)."""
         worker = _SessionLoadWorker(token, paths)
         self._load_worker = worker  # the current worker
-        self._load_workers.add(worker)  # hold every in-flight worker so none is GC'd mid-load
+        self._load_workers.add(worker)  # hold the in-flight worker so it isn't GC'd mid-load
         worker.loaded.connect(self._on_session_loaded)
         worker.failed.connect(self._on_load_failed_async)
-        # On finish, drop the worker from the in-flight set (and clear _load_worker if it's the
-        # current one) so a finished/superseded worker is cleaned up — no leak, no double UI build.
+        # On finish, drop the worker + launch any queued pending load (single-flight serialization).
         worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
         worker.start()
 
     def _on_worker_finished(self, worker):
-        """A load worker's QThread finished: drop it from the in-flight set so it can be reclaimed (a
-        superseded worker that finished late is cleaned up here too). Clear _load_worker if it was the
-        current one."""
+        """A load worker's QThread finished: drop it from the in-flight set, then (single-flight)
+        start the most recent QUEUED load if one is pending and still current."""
         self._load_workers.discard(worker)
         if self._load_worker is worker:
             self._load_worker = None
+        pending = self._pending_load
+        if pending is not None:
+            self._pending_load = None
+            token, paths = pending
+            if token == self._load_token:  # still the latest request — run it now
+                self._start_load_worker(token, paths)
 
     def _drain_load_workers(self, deadline_s: float = 60.0):
         """Let any in-flight load worker finish WITHOUT deadlocking. A bare QThread.wait() on the UI
@@ -272,6 +288,7 @@ class StudioWindow(QMainWindow):
         """Drain any in-flight load worker so a QThread isn't destroyed mid-run on window close (Qt
         would warn/crash). Uses the GIL-friendly drain — a bare wait() here can deadlock the worker.
         The token is already bumped past any in-flight worker, so its result is ignored regardless."""
+        self._pending_load = None  # don't start a queued load during teardown
         self._drain_load_workers()
         super().closeEvent(event)
 
