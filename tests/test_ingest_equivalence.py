@@ -86,9 +86,13 @@ def test_read_recording_equals_two_fresh_chains_on_real_media():
     ran = []
     for name, has_grav_cori in (("hero6.mp4", False), ("hero8.mp4", True)):
         path = os.path.join(_SAMPLES, name)
-        if not os.path.exists(path):
-            print(f"  {name}: SKIP (sample missing — gpmf-parser submodule not checked out?)")
-            continue
+        # These two clips are COMMITTED in the gpmf-parser submodule, which CI checks out with
+        # `submodules: recursive` — so they are GUARANTEED present in CI. Fail LOUDLY (don't
+        # silently skip) when they're missing: a broken/uninitialised checkout must not hide this
+        # equivalence pin. Locally, run `git submodule update --init 3rdparty/gpmf-parser`.
+        assert os.path.exists(path), (
+            f"{name}: required gpmf-parser submodule sample missing at {path} — "
+            "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
         got_samples, got_spans, got_naive, got_durations, got_a, got_g, got_c = (
             ingest.read_recording([path]))
         ref_samples, ref_spans, ref_naive, ref_durations, ref_a, ref_g, ref_c = (

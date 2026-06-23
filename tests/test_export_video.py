@@ -10,8 +10,14 @@ need neither ffmpeg nor a media file:
   * the Renderer drive loop + teardown with the subprocess + ffprobe MOCKED (no real ffmpeg):
     the decode->paint->encode pump, the progress callback, and cooperative cancellation.
 
-A single real-render smoke test is GATED behind `export_video.ffmpeg_available()` AND the presence
-of the D24 media file, so CI without ffmpeg/the file still passes (the test is skipped, not failed).
+Two GATING tiers:
+  * REAL-D24-MEDIA / VideoToolbox-hardware tests self-skip (not fail) when the media file / a VT
+    session is absent — so CI without them still passes.
+  * NO-MEDIA ffmpeg tests (synthetic-clip render, watchdog, cancel, GUI worker, fallback,
+    determinism) gate through `_require_ffmpeg`: ffmpeg is a LOCKED pixi dependency (pyproject.toml),
+    so inside the pixi env (CI's `pixi run test`) a missing ffmpeg FAILS LOUDLY rather than silently
+    skipping — the safety net can't quietly no-op. Outside the pixi env (bare-python local run with
+    the env bin off PATH) they still skip.
 
 Headless offscreen Qt (the painter builds a QImage + a headless g-meter dial); fast; no network.
 
@@ -37,6 +43,32 @@ from studio import export_video as ev  # noqa: E402
 REAL_MP4 = os.path.expanduser(os.environ.get("PACER_REAL_MP4", "~/Desktop/D24/GX010060.MP4"))
 # The chaptered D24 recording (GX010060 + GX020060 + GX030060) for the gated real chaptered render.
 REAL_CHAPTER_DIR = os.path.dirname(REAL_MP4)
+
+
+def _in_pixi_env() -> bool:
+    """True when we're running inside the project's pixi env, where `ffmpeg = ">=7.1,<8"` is a
+    LOCKED dependency (pyproject.toml [tool.pixi.dependencies]) — so ffmpeg/ffprobe are guaranteed
+    present. CI runs `pixi run test`, which sets CONDA_PREFIX to .pixi/envs/<name>."""
+    prefix = os.environ.get("CONDA_PREFIX", "")
+    return os.path.join(".pixi", "envs") in prefix
+
+
+def _require_ffmpeg(label: str) -> bool:
+    """Gate the NO-MEDIA ffmpeg tests so the safety net can't silently no-op in CI.
+
+    Returns True when ffmpeg/ffprobe are available (run the test). When they're absent it FAILS
+    LOUDLY if we're inside the pixi env (ffmpeg is a locked dep there, so absence = a broken
+    env/PATH that must not hide these regression tests); otherwise — e.g. a bare-python local run
+    with the pixi bin off PATH — it returns False so the caller skips. This only guards tests that
+    need ffmpeg ALONE (a synthetic clip / mocked media); the real-D24-media tests still self-skip."""
+    if ev.ffmpeg_available():
+        return True
+    assert not _in_pixi_env(), (
+        f"{label}: ffmpeg/ffprobe not found on PATH inside the pixi env, where they are a LOCKED "
+        "dependency (pyproject.toml) — this no-media regression test must run in CI, not skip. "
+        "A broken env/PATH must fail loudly, never silently disable the safety net.")
+    print(f"skip {label} (no ffmpeg; not in the pixi env)")
+    return False
 
 
 # --------------------------------------------------------------------------- a synthetic Session
@@ -701,8 +733,7 @@ def test_real_synthetic_pipe_render_if_ffmpeg(monkeypatch_restore):
     It also guards the PERF root cause indirectly: the map inset's static art is baked once and
     blitted, so even this little render returns promptly rather than re-rasterizing the trace per
     frame."""
-    if not ev.ffmpeg_available():
-        print("skip real_synthetic_pipe_render (no ffmpeg)")
+    if not _require_ffmpeg("real_synthetic_pipe_render"):
         return
     tmp = os.environ.get("TMPDIR", "/tmp")
     src = os.path.join(tmp, "f9_syn_src.mp4")
@@ -798,8 +829,7 @@ def test_real_fallback_to_libx264_if_ffmpeg(monkeypatch_restore):
     libx264 so the export never breaks. We FORCE VT selection, then break its codec args so the VT
     encode exits non-zero; the render must retry on libx264 and still produce a valid H.264 file
     (encoder tag = libx264). Gated on ffmpeg; needs no hardware (VT is made to fail on purpose)."""
-    if not ev.ffmpeg_available():
-        print("skip real_fallback_to_libx264 (no ffmpeg)")
+    if not _require_ffmpeg("real_fallback_to_libx264"):
         return
     tmp = os.environ.get("TMPDIR", "/tmp")
     src, out = os.path.join(tmp, "f9_fb_src.mp4"), os.path.join(tmp, "f9_fb_out.mp4")
@@ -844,8 +874,7 @@ def test_composite_is_deterministic_across_workers_if_ffmpeg(monkeypatch_restore
     because it could wedge the GUI export), and the legacy `workers` knob is a no-op. Rendering the
     same clip with workers=1 and workers=4 must therefore produce BYTE-IDENTICAL frames. Gated on
     ffmpeg; no media file. (Guards the composite stays stable + frame-exact regardless of the knob.)"""
-    if not ev.ffmpeg_available():
-        print("skip composite_is_deterministic_across_workers (no ffmpeg)")
+    if not _require_ffmpeg("composite_is_deterministic_across_workers"):
         return
     import hashlib
     tmp = os.environ.get("TMPDIR", "/tmp")
@@ -890,8 +919,7 @@ def test_gui_worker_drives_render_to_completion_if_ffmpeg():
     which the mocked suite and the headless `run()` benchmarks never exercised to completion. A
     deadlock/wedge HANGS here and the runner's outer time budget catches it. Gated on ffmpeg; no
     media file."""
-    if not ev.ffmpeg_available():
-        print("skip gui_worker_drives_render_to_completion (no ffmpeg)")
+    if not _require_ffmpeg("gui_worker_drives_render_to_completion"):
         return
     from PySide6.QtCore import QEventLoop, QTimer
 
@@ -943,8 +971,7 @@ def test_watchdog_aborts_a_wedged_encoder_if_ffmpeg(monkeypatch_restore):
     VT retry to a *second* wedge) with a SHORT watchdog, then swap the real encoder for a process
     that never reads stdin; the writer blocks, the supervisor kills it, and run() raises a clear
     RuntimeError (wrapping RenderTimeoutError) well inside the test budget. Gated on ffmpeg."""
-    if not ev.ffmpeg_available():
-        print("skip watchdog_aborts_a_wedged_encoder (no ffmpeg)")
+    if not _require_ffmpeg("watchdog_aborts_a_wedged_encoder"):
         return
     import time as _time
     tmp = os.environ.get("TMPDIR", "/tmp")
@@ -1001,8 +1028,7 @@ def test_cancel_mid_write_does_not_hang_if_ffmpeg(monkeypatch_restore):
     supervisor, which kills the processes so the blocked write returns and CancelledError is raised
     promptly. (The old code only polled cancel BETWEEN frames, so a cancel during a wedged write
     could not stop it.) Gated on ffmpeg."""
-    if not ev.ffmpeg_available():
-        print("skip cancel_mid_write_does_not_hang (no ffmpeg)")
+    if not _require_ffmpeg("cancel_mid_write_does_not_hang"):
         return
     import time as _time
     tmp = os.environ.get("TMPDIR", "/tmp")
