@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 from PySide6.QtCore import QBuffer, QIODevice, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -248,13 +249,28 @@ class StudioWindow(QMainWindow):
         if self._load_worker is worker:
             self._load_worker = None
 
+    def _drain_load_workers(self, deadline_s: float = 60.0):
+        """Let any in-flight load worker finish WITHOUT deadlocking. A bare QThread.wait() on the UI
+        thread holds the GIL that the worker's Session.load still needs, so on a slow machine the
+        worker can never finish and wait() blocks forever (a real CI hang). Instead pump the event
+        loop (which releases the GIL) in short slices until no worker is running, bounded by a
+        deadline so it can never hang indefinitely."""
+        app = QApplication.instance()
+        start = time.monotonic()
+        while any(w.isRunning() for w in list(self._load_workers)):
+            if app is not None:
+                app.processEvents()
+            for w in list(self._load_workers):
+                if w.isRunning():
+                    w.wait(20)  # short, GIL-releasing slices (NOT a bare blocking wait)
+            if time.monotonic() - start > deadline_s:
+                break
+
     def closeEvent(self, event):
-        """Wait for any in-flight load worker so a QThread isn't destroyed mid-run on window close
-        (Qt would warn/crash). The token is already bumped past any in-flight worker, so its result
-        is ignored regardless."""
-        for worker in list(getattr(self, "_load_workers", ())):
-            if worker.isRunning():
-                worker.wait()
+        """Drain any in-flight load worker so a QThread isn't destroyed mid-run on window close (Qt
+        would warn/crash). Uses the GIL-friendly drain — a bare wait() here can deadlock the worker.
+        The token is already bumped past any in-flight worker, so its result is ignored regardless."""
+        self._drain_load_workers()
         super().closeEvent(event)
 
     def _on_session_loaded(self, token: int, paths: list[str], session):
