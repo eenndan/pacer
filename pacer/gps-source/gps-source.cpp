@@ -412,4 +412,44 @@ uint32_t RawGPSSource::ReadSamples(
   return 0;
 }
 
+// The three bulk readers collect the SAME samples the per-sample callbacks
+// yield — they go through the virtual ReadAccl/ReadGrav/ReadCori so a subclass
+// override (GPMFSource, SequentialGPSSource, or a Python subclass) is reflected
+// — and pack them into parallel columns. The output is byte-for-byte identical
+// to draining those callbacks into per-column lists, just without the
+// per-sample binding crossing.
+ImuArrays RawGPSSource::ReadAcclColumns() {
+  ImuArrays cols;
+  ReadAccl([&](IMUSample s) {
+    cols.times.push_back(s.time);
+    cols.xs.push_back(s.x);
+    cols.ys.push_back(s.y);
+    cols.zs.push_back(s.z);
+  });
+  return cols;
+}
+
+ImuArrays RawGPSSource::ReadGravColumns() {
+  ImuArrays cols;
+  ReadGrav([&](IMUSample s) {
+    cols.times.push_back(s.time);
+    cols.xs.push_back(s.x);
+    cols.ys.push_back(s.y);
+    cols.zs.push_back(s.z);
+  });
+  return cols;
+}
+
+ImuArrays RawGPSSource::ReadCoriColumns() {
+  ImuArrays cols;
+  ReadCori([&](QuatSample s) {
+    cols.times.push_back(s.time);
+    cols.ws.push_back(s.w);
+    cols.xs.push_back(s.x);
+    cols.ys.push_back(s.y);
+    cols.zs.push_back(s.z);
+  });
+  return cols;
+}
+
 } // namespace pacer

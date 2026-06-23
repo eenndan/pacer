@@ -4,10 +4,29 @@
 #include <cstdint>
 #include <functional>
 #include <utility>
+#include <vector>
 
 #include <pacer/datatypes/datatypes.hpp>
 
 namespace pacer {
+
+// One IMU stream (ACCL / GRAV / CORI) collected as parallel columns, so the
+// studio layer crosses the binding ONCE per stream instead of once per sample
+// (the old path ran a per-sample C++->Python trampoline callback — ~1.5M
+// round-trips per load). The columns are the SAME samples the per-sample
+// ReadAccl/ReadGrav/ReadCori callbacks yield, in the same order, so the bulk
+// output is byte-for-byte identical to collecting those callbacks.
+//
+// `times`, `xs`, `ys`, `zs` are populated for all three streams; `ws` carries
+// the quaternion scalar and is filled ONLY by ReadCoriColumns (ACCL/GRAV leave
+// it empty). Every populated column has the same length (the sample count).
+struct ImuArrays {
+  std::vector<double> times;
+  std::vector<double> ws;
+  std::vector<double> xs;
+  std::vector<double> ys;
+  std::vector<double> zs;
+};
 
 // Abstract source of raw GPS / IMU samples — "raw" meaning it hands back fixes
 // without imposing a meaningful global timeline of its own.
@@ -53,6 +72,19 @@ public:
   // CORI is the camera-orientation quaternion (w,x,y,z), ~60 Hz, media-clock
   // time.
   virtual void ReadCori(std::function<void(QuatSample)> /*on_sample*/) {}
+
+  // Bulk column readers: collect the WHOLE stream into parallel std::vector
+  // columns in ONE call (see ImuArrays), avoiding the per-sample Python
+  // trampoline of the ReadAccl/ReadGrav/ReadCori callbacks. They emit the SAME
+  // samples in the SAME order as those callbacks (byte-for-byte), just packed
+  // as columns. The vec3 readers fill times/xs/ys/zs; the quaternion reader
+  // additionally fills ws. The base default reuses the per-sample reader, so a
+  // Python subclass that overrides only ReadAccl/ReadGrav/ReadCori is bulk-read
+  // correctly through it; GPMFSource/SequentialGPSSource inherit this default
+  // too (the collection cost is identical — the win is one binding crossing).
+  virtual ImuArrays ReadAcclColumns();
+  virtual ImuArrays ReadGravColumns();
+  virtual ImuArrays ReadCoriColumns();
 
   // Move the cursor to the chunk covering `target`.
   virtual uint32_t Seek(double target) = 0;

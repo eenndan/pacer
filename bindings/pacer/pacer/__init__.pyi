@@ -415,6 +415,35 @@ class Laps:
 
 ####################    <generated_from:gps-source.hpp>    ####################
 
+class ImuArrays:
+    """One IMU stream (ACCL / GRAV / CORI) collected as parallel columns, so the
+    studio layer crosses the binding ONCE per stream instead of once per sample
+    (the old path ran a per-sample C++->Python trampoline callback — ~1.5M
+    round-trips per load). The columns are the SAME samples the per-sample
+    ReadAccl/ReadGrav/ReadCori callbacks yield, in the same order, so the bulk
+    output is byte-for-byte identical to collecting those callbacks.
+
+    `times`, `xs`, `ys`, `zs` are populated for all three streams; `ws` carries
+    the quaternion scalar and is filled ONLY by ReadCoriColumns (ACCL/GRAV leave
+    it empty). Every populated column has the same length (the sample count).
+    """
+
+    times: List[float]
+    ws: List[float]
+    xs: List[float]
+    ys: List[float]
+    zs: List[float]
+    def __init__(
+        self,
+        times: List[float] = List[float](),
+        ws: List[float] = List[float](),
+        xs: List[float] = List[float](),
+        ys: List[float] = List[float](),
+        zs: List[float] = List[float](),
+    ) -> None:
+        """Auto-generated default constructor with named params"""
+        pass
+
 class RawGPSSource:
     """Abstract source of raw GPS / IMU samples — "raw" meaning it hands back fixes
     without imposing a meaningful global timeline of its own.
@@ -467,6 +496,23 @@ class RawGPSSource:
         """CORI is the camera-orientation quaternion (w,x,y,z), ~60 Hz, media-clock
         time.
         """
+        pass
+    # Bulk column readers: collect the WHOLE stream into parallel std::vector
+    # columns in ONE call (see ImuArrays), avoiding the per-sample Python
+    # trampoline of the ReadAccl/ReadGrav/ReadCori callbacks. They emit the SAME
+    # samples in the SAME order as those callbacks (byte-for-byte), just packed
+    # as columns. The vec3 readers fill times/xs/ys/zs; the quaternion reader
+    # additionally fills ws. The base default reuses the per-sample reader, so a
+    # Python subclass that overrides only ReadAccl/ReadGrav/ReadCori is bulk-read
+    # correctly through it; GPMFSource/SequentialGPSSource inherit this default
+    # too (the collection cost is identical — the win is one binding crossing).
+    def read_accl_columns(self) -> ImuArrays:  # overridable
+        pass
+
+    def read_grav_columns(self) -> ImuArrays:  # overridable
+        pass
+
+    def read_cori_columns(self) -> ImuArrays:  # overridable
         pass
 
     def seek(self, target: float) -> int:  # overridable (pure virtual)

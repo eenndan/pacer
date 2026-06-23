@@ -45,16 +45,23 @@ def _read_gps_over(head):
     return samples, spans, naive
 
 
+def _vec3_columns(cols):
+    """Pack an ACCL/GRAV `ImuArrays` (times/xs/ys/zs columns) into an (N,4) [t,x,y,z] array,
+    byte-identical to the old per-sample `(s.time, s.x, s.y, s.z)` append + reshape(-1, 4)."""
+    return np.array([cols.times, cols.xs, cols.ys, cols.zs], float).T.reshape(-1, 4)
+
+
 def _read_imu_over(head):
     """Read ACCL/GRAV/CORI off an already-built `head` -> accl(N,4), grav(N,4), cori(N,5).
-    Independent of the GPS payload cursor, so pass order vs GPS doesn't matter."""
-    accl, grav, cori = [], [], []
-    head.read_accl(lambda s: accl.append((s.time, s.x, s.y, s.z)))
-    head.read_grav(lambda s: grav.append((s.time, s.x, s.y, s.z)))
-    head.read_cori(lambda s: cori.append((s.time, s.w, s.x, s.y, s.z)))
-    a = np.asarray(accl, float).reshape(-1, 4)
-    g = np.asarray(grav, float).reshape(-1, 4)
-    c = np.asarray(cori, float).reshape(-1, 5)
+    Uses the BULK column readers (read_*_columns) — one binding crossing per stream into parallel
+    std::vector columns — instead of the old per-sample C++->Python callback (~1.5M trampoline
+    round-trips per load). The columns are the same samples in the same order, so the packed
+    arrays are byte-identical to the per-sample path. Independent of the GPS payload cursor, so
+    pass order vs GPS doesn't matter."""
+    a = _vec3_columns(head.read_accl_columns())
+    g = _vec3_columns(head.read_grav_columns())
+    cc = head.read_cori_columns()  # CORI carries the quaternion w -> (N,5) [t,w,x,y,z]
+    c = np.array([cc.times, cc.ws, cc.xs, cc.ys, cc.zs], float).T.reshape(-1, 5)
     return a, g, c
 
 
