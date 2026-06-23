@@ -175,10 +175,10 @@ class Session:
         self._gmeter: gmeter.GMeter = gmeter._empty()
         # Corner-model service (detection + per-lap stats + session bests, all derived from the
         # segmentation). invalidate() on re-segment; invalidate_stats() when only the Δ baseline moved.
-        self._cornermodel = corner_model.CornerModel(self, REFERENCE_ID)
+        self._cornermodel = self._build_corner_model()
         # Driving-channel service (brake/coast/grip + thresholds). The thresholds depend only on
         # the constant g series so they survive a re-segment; the per-lap caches clear via invalidate().
-        self._driving = driving_channels.DrivingChannels(self)
+        self._driving = self._build_driving_channels()
 
         # Cross-recording reference lap (F7): a lap from another recording that REPLACES the local
         # best as the Δ baseline everywhere a delta is drawn. None = DORMANT (every "vs best" path
@@ -340,13 +340,46 @@ class Session:
         test path, where the slot is absent and so reads as dormant."""
         return getattr(self, "_reference", None)
 
+    # The two composed services receive Session-bound CALLABLES over Session's own primitives
+    # (the studio/render_cache.py dependency-injection pattern), so neither reaches a `_`-private
+    # attribute of Session — Session owns the pacer side + the g-meter + the active reference and
+    # wires its privates into the callables here. Built in __init__ and re-built lazily by _cm/_dc
+    # for the bare-Session (no-__init__) test path.
+    def _build_corner_model(self) -> corner_model.CornerModel:
+        return corner_model.CornerModel(
+            reference_id=REFERENCE_ID,
+            best_lap_id=self.best_lap_id,
+            valid_lap_ids=self.valid_lap_ids,
+            lap_has_dropout=self.lap_has_dropout,
+            lap_columns=self._lap_columns,
+            lap_arrays=self._lap_arrays,
+            lap_time_dist=self._lap_time_dist,
+            reference=lambda: self._ref,
+        )
+
+    def _build_driving_channels(self) -> driving_channels.DrivingChannels:
+        return driving_channels.DrivingChannels(
+            gmeter=lambda: self._gmeter,
+            trace_times=lambda: self.tt,
+            trace_speed_kmh=lambda: self.tv,
+            lap_arrays=self._lap_arrays,
+            lap_time_dist=self._lap_time_dist,
+            lap_time_dist_elapsed=self._lap_time_dist_elapsed,
+            lap_columns=self._lap_columns,
+            best_lap_id=self.best_lap_id,
+            valid_lap_ids=self.valid_lap_ids,
+            active_baseline_total_distance=self.active_baseline_total_distance,
+            corner_basis=lambda: self._cm.basis(),
+            lap_corner_stats=lambda lap_id: self._cm.lap_corner_stats(lap_id),
+        )
+
     @property
     def _cm(self) -> corner_model.CornerModel:
         """The composed CornerModel service (corner detection + per-lap stats + session bests).
         Lazily created; getattr-guarded for the bare-Session (no-__init__) test path — see _ref."""
         cm = getattr(self, "_cornermodel", None)
         if cm is None:
-            cm = corner_model.CornerModel(self, REFERENCE_ID)
+            cm = self._build_corner_model()
             self._cornermodel = cm
         return cm
 
@@ -356,7 +389,7 @@ class Session:
         getattr-guarded for the bare-Session (no-__init__) test path — see _ref."""
         dc = getattr(self, "_driving", None)
         if dc is None:
-            dc = driving_channels.DrivingChannels(self)
+            dc = self._build_driving_channels()
             self._driving = dc
         return dc
 
