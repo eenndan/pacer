@@ -85,3 +85,7 @@ GPS/IMU parsing uses GoPro's [gpmf-parser](https://github.com/gopro/gpmf-parser)
 Pacer © 2025-2026 eenndan, licensed under
 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see
 [LICENSE](LICENSE). NonCommercial use only; derivatives must be shared alike.
+
+This applies to Pacer's own code. Bundled and linked third-party components (GoPro gpmf-parser,
+nanobind, Qt/PySide6, FFmpeg, …) keep their own licenses — see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), which a redistributed app must carry.
