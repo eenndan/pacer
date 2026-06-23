@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, export_data, export_video, library, sidecar, theme
+from . import chapters, demo, export_data, export_video, library, sidecar, theme
 from .central_view import CentralView
 from .coaching_panel import OpportunitiesDialog
 from .help_dialog import AboutDialog, ShortcutsDialog
@@ -169,8 +169,10 @@ class StudioWindow(QMainWindow):
             self._full_action.setEnabled(False)
 
     def _open_demo(self):
-        """Welcome-screen "Open demo": load the bundled sample clip through the guarded path."""
-        self._load([DEFAULT_SAMPLE])
+        """Welcome-screen "Open demo": load a real demo lapping recording if one is resolvable
+        (env / cache / a one-time release download — see studio.demo), else the bundled sample clip
+        (which has no real laps but proves the app launched). Both go through the guarded path."""
+        self._load([demo.resolve_demo_recording() or DEFAULT_SAMPLE])
 
     # ------------------------------------------------------------------ loading
     def _load(self, paths: list[str]):
@@ -956,6 +958,11 @@ def main(argv: list[str] | None = None) -> int:
     full = "--full" in argv or "--chaptered" in argv
     # No path on the CLI -> open to the welcome empty state (the demo is one click from there).
     paths = [a for a in argv if not a.startswith("-")]
+    # --demo: open a real demo lapping recording on startup (resolved via env/cache/release
+    # download; see studio.demo). Falls back to the bundled sample if none resolves. This is the
+    # packaged-app first-run path — the bundled gpmf clips have no real laps.
+    if not paths and "--demo" in argv:
+        paths = [demo.resolve_demo_recording() or DEFAULT_SAMPLE]
     app = QApplication(sys.argv)
     # Apply the dark "Refined Minimal" design system BEFORE constructing any widgets, so the
     # default font/palette and the pyqtgraph background are in place when the panels are built.
