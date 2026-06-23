@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -30,8 +31,12 @@ from .lap_table import CORNER_DIR_GLYPH
 from .theme import C
 
 # column indices
-_COL_CORNER, _COL_LOST, _COL_REASON, _COL_GO = range(4)
-_HEADERS = ["Corner", "Time lost", "How to find it", ""]
+_COL_CORNER, _COL_LOST, _COL_PHASES, _COL_REASON, _COL_GO = range(5)
+_HEADERS = ["Corner", "Time lost", "Entry · Apex · Exit", "How to find it", ""]
+
+# Human label per coaching.PHASE_* id, in track order (for the breakdown bar segments + tooltip).
+_PHASE_LABEL = {coaching.PHASE_ENTRY: "Entry", coaching.PHASE_APEX: "Apex",
+                coaching.PHASE_EXIT: "Exit"}
 
 # A short, friendly per-reason hint shown as the row tooltip (the sentence already carries the
 # numbers; this explains what the lever IS). Keyed by the coaching.REASON_* ids.
@@ -46,6 +51,64 @@ _REASON_TIP = {
                           "one fixable input — repeat the same line.",
     coaching.REASON_NONE: "Time is available here versus your best lap.",
 }
+
+
+class PhaseBar(QWidget):
+    """A tiny horizontal entry/apex/exit Δt-vs-best breakdown for one corner (D2): three
+    proportional segments (widths ∝ each third's seconds of loss) over the row's three numbers.
+    Only the phases LOSING time (positive Δt) get a coloured segment; faster-than-best thirds are
+    shown as a near-zero sliver. Read-only; the segment widths are the visual cue, the small
+    numbers underneath the precise values, the tooltip the full breakdown."""
+
+    _BAR_H = 6  # px; the proportional bar's height (the numbers sit below it)
+
+    def __init__(self, phases: coaching.PhaseLoss, parent=None):
+        super().__init__(parent)
+        self._phases = phases
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(2)
+
+        vals = phases.as_tuple()                      # (entry, apex, exit) seconds
+        dominant = phases.dominant
+        ids = (coaching.PHASE_ENTRY, coaching.PHASE_APEX, coaching.PHASE_EXIT)
+        pos = [max(v, 0.0) for v in vals]            # only losses size the bar
+        scale = sum(pos)
+
+        # proportional bar
+        bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(1)
+        for pid, v, p in zip(ids, vals, pos, strict=True):
+            seg = QWidget()
+            seg.setFixedHeight(self._BAR_H)
+            # stretch ∝ the third's loss; a tiny floor so a flat row still shows three slivers
+            bar.addWidget(seg, max(int(round(p / scale * 100)), 1) if scale > 1e-9 else 1)
+            losing = v > 1e-6
+            col = (C.accent if pid == dominant else C.text_dim) if losing else C.border
+            seg.setStyleSheet(f"background:{col}; border-radius:2px;")
+        lay.addLayout(bar)
+
+        # the three numbers under the bar (the dominant one accented)
+        nums = QHBoxLayout()
+        nums.setContentsMargins(0, 0, 0, 0)
+        nums.setSpacing(4)
+        num_font = theme.mono_font(theme.CAPTION)
+        for pid, v in zip(ids, vals, strict=True):
+            lbl = QLabel(f"{v:+.2f}")
+            lbl.setFont(num_font)
+            lbl.setAlignment(Qt.AlignCenter)
+            colour = C.accent if (pid == dominant and v > 1e-6) else C.text_dim
+            lbl.setStyleSheet(f"color:{colour};")
+            nums.addWidget(lbl, 1)
+        lay.addLayout(nums)
+
+        self.setToolTip(
+            "Time lost vs your best lap, split across the corner (s):\n"
+            + "   ".join(f"{_PHASE_LABEL[p]} {v:+.2f}" for p, v in zip(ids, vals, strict=True))
+            + f"\nTotal {phases.total:+.2f} s — biggest loss on {_PHASE_LABEL[dominant].lower()}.")
 
 
 class OpportunitiesDialog(QDialog):
@@ -119,6 +182,9 @@ class OpportunitiesDialog(QDialog):
         hdr.setSectionResizeMode(_COL_REASON, QHeaderView.Stretch)
         for col in (_COL_CORNER, _COL_LOST, _COL_GO):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        # The D2 phase breakdown bar wants a stable width (the segments are proportional).
+        hdr.setSectionResizeMode(_COL_PHASES, QHeaderView.Fixed)
+        table.setColumnWidth(_COL_PHASES, 150)
         num_font = theme.mono_font(theme.TABLE)
 
         for r, opp in enumerate(opps.rows):
@@ -139,6 +205,7 @@ class OpportunitiesDialog(QDialog):
 
             table.setItem(r, _COL_CORNER, corner_item)
             table.setItem(r, _COL_LOST, lost_item)
+            table.setCellWidget(r, _COL_PHASES, PhaseBar(opp.phases))  # D2 entry/apex/exit Δt
             table.setItem(r, _COL_REASON, reason_item)
             table.setCellWidget(r, _COL_GO, self._go_button(opp))
         self.table = table  # exposed for the tests

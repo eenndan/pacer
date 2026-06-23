@@ -1265,6 +1265,13 @@ class Session:
         med_td = self._lap_time_dist(med_id) if med_id is not None else None
         median_lap_total = float(med_td[1][-1]) if med_td is not None else None
 
+        # D2: the typical lap's + best lap's speed-vs-distance traces so summarize can decompose
+        # each corner's Δt-vs-best into entry/apex/exit thirds (∫ds/v over each, the typical lap
+        # vs best — the SAME comparison the loss/reasons use). Same projection as lap_corner_stats.
+        med_dist, med_speed_kmh, _med_elapsed = (
+            self._lap_arrays(med_id) if med_id is not None else (None, None, None))
+        best_dist, best_speed_kmh, _best_elapsed = self._lap_arrays(best)
+
         return coaching.summarize(
             corners=corner_list,
             candidate_lap_ids=cand_ids,
@@ -1280,6 +1287,10 @@ class Session:
             corner_dist_total=corner_dist_total,
             median_lap_total=median_lap_total,
             best_lap_total=best_lap_total,
+            median_dist=med_dist,
+            median_speed_kmh=med_speed_kmh,
+            best_dist=best_dist,
+            best_speed_kmh=best_speed_kmh,
         )
 
     def corner_entry_media_time(self, lap_id: int, cid: int) -> float | None:
