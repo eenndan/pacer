@@ -235,6 +235,14 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
         # Known track: fixed line via _fit_start_line (widens only if passes miss the short segment).
         base = tracks.start_line_segment(track, cs)
         _fit_start_line(laps, base)  # sets laps.sectors + update() on the chosen line
+        if track.sectors:
+            # A track that defines sector lines (a user-saved track): place them on the fitted
+            # start line. MK defines none, so this is a no-op there — its timing is unchanged.
+            laps.sectors = pacer.Sectors(
+                start_line=laps.sectors.start_line,
+                sector_lines=tracks.sector_line_segments(track, cs),
+            )
+            laps.update()
     else:
         laps.sectors = pacer.Sectors(
             start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]

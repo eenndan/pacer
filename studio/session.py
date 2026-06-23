@@ -578,6 +578,17 @@ class Session:
         self.set_timing_lines(prev_start, prev_sectors)
         return False
 
+    def track_location(self) -> tuple[tuple[float, float], tuple[float, float, float, float]]:
+        """The recording's GPS detection anchor for the track database: ``(centroid, bbox)``
+        where ``centroid`` is ``(lat, lon)`` and ``bbox`` is ``(min_lat, min_lon, max_lat,
+        max_lon)``. The centroid is the trace bbox CENTRE — exactly the anchor ``load`` detects
+        on (``min_max`` returns lon/lat Points: x=lon, y=lat) — so a track saved from one
+        recording auto-detects on the next at the same circuit."""
+        mn, mx = self.laps.min_max()
+        centroid = ((mn.y + mx.y) / 2, (mn.x + mx.x) / 2)
+        bbox = (float(mn.y), float(mn.x), float(mx.y), float(mx.x))
+        return centroid, bbox
+
     def suggest_sector(self, existing: int = 0) -> Seg:
         """A line perpendicular to the track at a DISTINCT fraction of the way round, so each
         added sector lands on a different track position. With `existing` sector lines already

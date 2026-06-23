@@ -53,6 +53,12 @@ add_test(NAME test_ingest_equivalence
 # (imports pacer only — Session's chain has no Qt — and needs no telemetry file).
 add_test(NAME test_sidecar
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_sidecar.py)
+# Track database (E3): the named-track JSON store (schema round-trip / name-keyed upsert /
+# corrupt-file self-heal / built-in Daytona MK seed) is pure Python; the detect→Track→segment
+# adapter + precedence + MK no-regression + the Save-as-track guard run on a synthetic pacer.Laps
+# (imports pacer; offscreen Qt for the guard half) and self-skip without the bindings.
+add_test(NAME test_track_db
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_track_db.py)
 # Pure-fake session analysis pack (PLAN §5): _signal._band_lap_ids on a local fake,
 # load._clean on synthetic GPSSample traces, and the sector-splits / sector-plot-positions /
 # delta()-endpoint invariants on bare Sessions seeded via tests/_synthetic. Imports pacer
@@ -218,7 +224,7 @@ set_tests_properties(test_library PROPERTIES
 foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_gapfill
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
-                        test_sidecar test_session_pure test_session_services
+                        test_sidecar test_track_db test_session_pure test_session_services
                         test_studio_features test_rainbow_map
                         test_compare test_map_ghost test_cross_reference test_delta_engine
                         test_controllers test_central_view_realqt
