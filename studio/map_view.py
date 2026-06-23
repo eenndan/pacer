@@ -16,7 +16,12 @@ from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from . import theme
-from .gapfill import GAP_TIME_S
+from .map_render import (
+    bucket_polylines,
+    bucketize,  # noqa: F401  (re-exported for tests importing from map_view)
+    rainbow_channel,
+    resample_grid_to_points,  # noqa: F401  (re-exported for tests importing from map_view)
+)
 from .session import Seg
 from .theme import CHART_SERIES, MAP_RAINBOW_N, C, icon, rainbow_colors
 
@@ -122,60 +127,8 @@ _RAINBOW_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: �
                    "grip": "Line: Grip"}
 # Cycle order for the header button: off → speed → Δ → grip → off.
 _RAINBOW_ORDER = ("off", "speed", "delta", "grip")
-# D5 grip utilization clips to [0, GRIP_UTIL_DISPLAY_MAX] for bucketing so the colour scale is the
-# physical 0..limit range, not stretched to a lap's own max (a low-load lap then reads honestly low).
-GRIP_UTIL_DISPLAY_MAX = 1.2
-
-
-def bucketize(values, n_buckets: int, lo: float | None = None, hi: float | None = None):
-    """Quantize values into bucket ids 0..n_buckets-1 over [lo,hi] (default: finite min/max).
-    0=low (red), n-1=high (green). Non-finite -> -1 (skipped). Degenerate range (hi<=lo) ->
-    middle bucket. Pure numpy."""
-    v = np.asarray(values, dtype=float)
-    out = np.full(v.shape, -1, dtype=np.int64)
-    finite = np.isfinite(v)
-    if not finite.any():
-        return out
-    lo = float(np.min(v[finite])) if lo is None else float(lo)
-    hi = float(np.max(v[finite])) if hi is None else float(hi)
-    if hi <= lo:
-        out[finite] = (n_buckets - 1) // 2
-        return out
-    idx = np.floor((v[finite] - lo) / (hi - lo) * n_buckets).astype(np.int64)
-    out[finite] = np.clip(idx, 0, n_buckets - 1)  # v == hi lands exactly on n_buckets → clamp
-    return out
-
-
-def bucket_polylines(xs, ys, seg_buckets, n_buckets: int):
-    """Group a polyline's segments by bucket id into per-bucket draw arrays. Pure numpy.
-
-    seg_buckets has len(xs)-1 entries (bucket of segment i->i+1; -1 = skip). Disjoint runs in a
-    bucket are joined by a single NaN so one PlotCurveItem(connect='finite') draws them all."""
-    xs = np.asarray(xs, dtype=float)
-    ys = np.asarray(ys, dtype=float)
-    seg = np.asarray(seg_buckets)
-    out = []
-    for b in range(n_buckets):
-        idx = np.flatnonzero(seg == b)
-        if idx.size == 0:
-            out.append((np.empty(0), np.empty(0)))
-            continue
-        runs = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
-        bx: list = []
-        by: list = []
-        for r in runs:
-            bx.extend((xs[r[0]:r[-1] + 2], [np.nan]))  # segments i..j -> points i..j+1
-            by.extend((ys[r[0]:r[-1] + 2], [np.nan]))
-        out.append((np.concatenate(bx[:-1]), np.concatenate(by[:-1])))  # drop the trailing NaN
-    return out
-
-
-def resample_grid_to_points(cum_dist, grid_values):
-    """Resample a value-on-uniform-[0,1]-grid curve onto a lap's normalized odometer distances
-    (cum/cum[-1]) via np.interp. Caller guarantees cum_dist[-1] > 0."""
-    cum = np.asarray(cum_dist, dtype=float)
-    g = np.asarray(grid_values, dtype=float)
-    return np.interp(cum / cum[-1], np.linspace(0.0, 1.0, len(g)), g)
+# The per-channel rainbow value/bucket math (incl. the grip fixed scale + Δ/grip negation + the
+# GPS-dropout NaN-mask) lives in the Qt-free studio/map_render.py (rainbow_channel + helpers).
 
 
 class _RainbowOverlay:
@@ -822,50 +775,26 @@ class MapView(QWidget):
 
     def _build_rainbow(self, lap_id: int, mode: str) -> bool:
         """Fill the bucket items for `lap_id`'s channel (speed / Δ-vs-best / grip); returns False
-        when it can't be computed (degenerate lap, no best lap for Δ, no g signal for grip)."""
+        when it can't be computed (degenerate lap, no best lap for Δ, no g signal for grip).
+
+        The widget only fetches the lap's per-sample arrays from the session here; the per-channel
+        value/bucket math (negation, grip fixed scale, GPS-dropout NaN-mask) is the Qt-free
+        map_render.rainbow_channel pure function."""
         ch = self.session.lap_channels(lap_id)
         times, xs, ys, speed_kmh, cum = (
             ch["t_media_s"], ch["x_m"], ch["y_m"], ch["speed_kmh"], ch["dist_m"])
-        if len(xs) < 2:
-            return False
-        if mode == "speed":
-            vals = speed_kmh
-            lo_txt = f"{float(np.min(vals)):.0f}"
-            hi_txt = f"{float(np.max(vals)):.0f} km/h"
-        elif mode == "grip":
-            # D5: per-sample grip utilization (|g| / session envelope), ESTIMATED + lateral-dominant.
-            # NEGATED + a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale so on-the-limit (high util) lands in
-            # the LOW (red) buckets and unused grip in the HIGH (green) ones, on the physical 0..limit
-            # range rather than this lap's own max.
-            util = self.session.lap_grip_channel(lap_id)
-            if util is None or len(util) < len(xs):
-                return False
-            vals = -np.asarray(util[:len(xs)], float)
-            # legend reads "on limit" (red, lo) → "unused" (green, hi)
-            lo_txt = "on limit"
-            hi_txt = "unused (est.)"
-            seg_vals = 0.5 * (vals[:-1] + vals[1:])
-            seg_vals = np.where(np.diff(times) > GAP_TIME_S, np.nan, seg_vals)
-            self._rainbow.set_data(
-                xs, ys,
-                bucketize(seg_vals, MAP_RAINBOW_N, lo=-GRIP_UTIL_DISPLAY_MAX, hi=0.0))
-            self._legend.set_labels(lo_txt, hi_txt)
-            return True
-        else:  # Δ-vs-best, resampled from the 400-grid delta() onto this lap's point distances
+        grip_util = self.session.lap_grip_channel(lap_id) if mode == "grip" else None
+        # Δ-vs-best on the 400-grid (delta()'s y-series); None when no best lap / lap absent.
+        delta_grid = None
+        if mode == "delta":
             got = self.session.delta([lap_id])
-            if got is None or lap_id not in got[2] or float(cum[-1]) <= 0:
-                return False
-            d_pts = resample_grid_to_points(cum, got[2][lap_id][1])
-            # Negated so ahead (negative Δ) lands in the high (green) buckets.
-            vals = -d_pts
-            # Legend shows the signed Δ at each end (red = most-behind, green = most-ahead).
-            lo_txt = f"{-float(np.min(vals)):+.2f} s"
-            hi_txt = f"{-float(np.max(vals)):+.2f} s"
-        # Per-segment value = endpoint mean; segments spanning a GPS dropout get NaN -> not painted,
-        # so the rainbow never draws a chord across a hole.
-        seg_vals = 0.5 * (vals[:-1] + vals[1:])
-        seg_vals = np.where(np.diff(times) > GAP_TIME_S, np.nan, seg_vals)
-        self._rainbow.set_data(xs, ys, bucketize(seg_vals, MAP_RAINBOW_N))
+            if got is not None and lap_id in got[2]:
+                delta_grid = got[2][lap_id][1]
+        result = rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid)
+        if result is None:
+            return False
+        seg_buckets, lo_txt, hi_txt = result
+        self._rainbow.set_data(xs, ys, seg_buckets)
         self._legend.set_labels(lo_txt, hi_txt)
         return True
 
