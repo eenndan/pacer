@@ -1549,6 +1549,112 @@ class Session:
             delta[lid] = (x, elapsed_on_grid - best_elapsed_on_grid)
         return best, speed, delta
 
+    # ----------------------------------------------- ideal-lap envelope (D1)
+    def ideal_lap_elapsed(self) -> np.ndarray | None:
+        """The IDEAL-LAP elapsed curve on the 400-point normalized-distance grid (s∈[0,1]): the
+        continuous analogue of `theoretical_best` (the discrete 3-sector ideal).
+
+        For each grid point it is the MINIMUM cumulative elapsed time across the dropout-free
+        CLEAN laps (`consistency_lap_ids` — the same set every consistency stat runs on), each
+        resampled onto the shared s-grid exactly as `delta()` does. The pointwise min of valid
+        cumulative curves can momentarily dip below a later sample, so it is made monotonic
+        non-decreasing (`np.maximum.accumulate`) to remain a valid elapsed curve — a small
+        correction, since the laps already increase. Starts at 0 (every lap's elapsed[0] is 0).
+
+        This is a SYNTHETIC curve — no single lap drove it — so callers must label it as such.
+        Returns None when no clean lap has a usable (≥2 points, positive odometer) trace.
+        Independent of any cross-recording reference: the ideal is always the DRIVER's own best
+        achievable, so it ignores `_ref_arrays`.
+        """
+        s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
+        env: np.ndarray | None = None
+        for lid in self.consistency_lap_ids():
+            dist, _speed_kmh, elapsed = self._lap_arrays(lid)
+            if len(dist) < 2 or dist[-1] <= 0:
+                continue
+            elapsed_on_grid = np.interp(s_grid, dist / dist[-1], elapsed)
+            env = elapsed_on_grid if env is None else np.minimum(env, elapsed_on_grid)
+        if env is None:
+            return None
+        # Enforce a valid (non-decreasing) cumulative-elapsed curve after the pointwise min.
+        return np.maximum.accumulate(env)
+
+    def ideal_total(self) -> float | None:
+        """The IDEAL lap's total elapsed (s) — the continuous theoretical best, ≈ the sum of the
+        clean laps' best per-distance segments. ≤ every clean lap's time (it's their lower
+        envelope). None when no clean lap has a usable trace."""
+        env = self.ideal_lap_elapsed()
+        return None if env is None else float(env[-1])
+
+    def ideal_delta_to_best(self, x_mode: str = "distance") -> tuple[np.ndarray, np.ndarray] | None:
+        """The SYNTHETIC ideal lap drawn on `delta()`'s own Δ-to-best axis: `(x, dy)` where
+        dy(s) = ideal_elapsed(s) − best_elapsed(s) ≤ 0 (the ideal is at least as fast as the best
+        lap at every distance, since the best lap is one of the laps forming the envelope), ending
+        at ideal_total − best_time ≤ 0.
+
+        This shares the existing best-lap delta's reference frame (best lap = the y=0 line), so the
+        ideal reads as a secondary curve dipping below zero — "you could be THIS much faster, and
+        here is where" — without introducing a second y-origin. `x_mode` matches `delta()`
+        ('distance' → s × active-baseline total; 'time' → the BEST lap's own elapsed-into-lap, so
+        the ideal overlays the best-lap curves' x). Returns None when the ideal can't be built or
+        there is no best/baseline lap to reference."""
+        ideal = self.ideal_lap_elapsed()
+        if ideal is None:
+            return None
+        # Reference frame = delta()'s baseline (cross-recording reference when loaded, else best).
+        base = self.baseline_curve()
+        if base is None:
+            return None
+        b_dist, b_elapsed = base.dist, base.elapsed
+        if len(b_dist) < 2 or b_dist[-1] <= 0:
+            return None
+        s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
+        best_elapsed_on_grid = np.interp(s_grid, b_dist / b_dist[-1], b_elapsed)
+        if x_mode == "time":
+            x = best_elapsed_on_grid  # the best/baseline lap's own elapsed, matching delta()
+        else:
+            total = self.active_baseline_total_distance()
+            if not total:
+                return None
+            x = s_grid * float(total)
+        return x, ideal - best_elapsed_on_grid
+
+    def delta_to_ideal(self, lap_ids, x_mode: str = "distance") -> LapSeries | None:
+        """Δ-to-IDEAL for each requested lap over the 400-point grid, mirroring `delta()`'s
+        return shape (a {lap_id: (x, dy)} map) but referenced to the synthetic ideal-lap envelope
+        instead of the best lap. dy(s) = elapsed_lap(s) − ideal_elapsed(s) ≥ 0 (a lap can't beat
+        the envelope it helped form), and dy at s=1 ≈ lap_time − ideal_total.
+
+        `x_mode` matches `delta()`: 'distance' → x = s × active-baseline total (the SAME shared
+        axis the best-lap Δ draws on, so the curves overlay); 'time' → x = this lap's own elapsed
+        into the lap. Returns None when the ideal can't be built (no clean lap) or no requested
+        lap is drawable."""
+        ideal = self.ideal_lap_elapsed()
+        if ideal is None:
+            return None
+        ids = [i for i in lap_ids if 0 <= i < self.laps.laps_count()]
+        if not ids:
+            return None
+        s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
+        # Distance mode shares delta()'s x basis (active baseline total) so the two Δ curves line
+        # up on one axis; fall back to None-safe 0 only when no baseline exists (no curve drawn).
+        base_total = self.active_baseline_total_distance() if x_mode != "time" else None
+        out: LapSeries = {}
+        for lid in ids:
+            dist, _speed_kmh, elapsed = self._lap_arrays(lid)
+            if len(dist) < 2 or dist[-1] <= 0:
+                continue
+            s_lap = dist / dist[-1]
+            elapsed_on_grid = np.interp(s_grid, s_lap, elapsed)
+            if x_mode == "time":
+                x = elapsed_on_grid
+            elif base_total:
+                x = s_grid * float(base_total)
+            else:
+                continue  # distance mode with no baseline total → nothing to draw against
+            out[lid] = (x, elapsed_on_grid - ideal)
+        return out or None
+
     # ------------------------------------------------------------ video sync
     def index_at_time(self, t: float) -> int | None:
         n = len(self.tt)

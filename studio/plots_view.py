@@ -14,12 +14,19 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QComboBox, QLabel, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QLabel,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import theme
 from ._signal import fmt_time
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
-from .theme import C
+from .theme import C, icon
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -47,6 +54,9 @@ SECTOR_LINE_PEN = pg.mkPen(C.text_muted, width=1, style=Qt.DashLine)
 SECTOR_LABEL_COLOR = C.text_dim
 # The delta plot's y=0 reference line — a faint hairline, same weight as the gridlines.
 ZERO_LINE_PEN = pg.mkPen(C.border, width=1)
+# D1: the SYNTHETIC ideal-lap baseline (lower-envelope theoretical best). Best-sector purple to
+# echo the lap table's purple theoretical-best cells, dashed so it never reads as a real driven lap.
+IDEAL_LINE_PEN = pg.mkPen(C.best, width=1, style=Qt.DashLine)
 # F5: brake glyphs (sized by peak decel) ride the speed curve; coast spans shade a neutral band.
 COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
 COAST_PEN = pg.mkPen(None)
@@ -86,6 +96,19 @@ class PlotsView(QWidget):
         self.x_mode_combo.addItems(["x: distance", "x: time"])
         self.x_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
 
+        # D1 opt-in: overlay the synthetic IDEAL-lap baseline (lower envelope of the clean laps)
+        # on the Δ plot. Default off so the standard Δ-to-best view stays uncluttered. Exposed;
+        # central_view mounts it in the charts header next to the x-mode toggle.
+        self._show_ideal = False
+        self.ideal_btn = QPushButton("Ideal lap")
+        self.ideal_btn.setIcon(icon("ph.star-four"))
+        self.ideal_btn.setCheckable(True)
+        self.ideal_btn.setToolTip(
+            "Ideal lap: overlay the SYNTHETIC theoretical-best Δ — the lower envelope of your "
+            "clean laps' per-distance times (dashed purple, dips below the y=0 best-lap line). "
+            "No single lap drove it; it shows where your achievable lap is faster than your best.")
+        self.ideal_btn.toggled.connect(self._on_ideal_toggled)
+
         self.glw = pg.GraphicsLayoutWidget()
         # Tight margins so the charts fill the panel.
         self.glw.ci.layout.setContentsMargins(2, 2, 2, 2)
@@ -101,6 +124,9 @@ class PlotsView(QWidget):
         # Faint gridlines (alpha 0.10) so they read as a quiet backdrop, not a foreground grid.
         self.p_speed.showGrid(x=True, y=True, alpha=0.10)
         leg = self.p_speed.addLegend(offset=(8, 8))
+        # D1: a legend on the Δ plot too, used ONLY by the synthetic ideal-lap entry (lap Δ curves
+        # are drawn unnamed there, so it stays a single quiet line item explaining the dashed line).
+        self._delta_legend = self.p_delta.addLegend(offset=(8, 8))
         self.p_delta.setLabel("left", "Δ to best (s)")
         self.p_delta.setLabel("bottom", "distance (m)")
         # Sub-second deltas otherwise auto-scale to a "(x0.001)" SI prefix; keep plain seconds.
@@ -118,11 +144,12 @@ class PlotsView(QWidget):
                 ax.setTextPen(C.text_dim)      # tick labels + axis title
                 ax.setTickFont(theme.mono_font(11))  # tabular figures so digits column-align
                 ax.setStyle(maxTickLevel=1, hideOverlappingLabels=True)  # fewer, cleaner ticks
-        # Legend: dimmed text on a surface plate.
-        if leg is not None:
-            leg.setLabelTextColor(C.text_dim)
-            leg.setBrush(LEGEND_BRUSH)
-            leg.setPen(LEGEND_PEN)
+        # Legend: dimmed text on a surface plate (both the speed legend and the Δ ideal-lap one).
+        for lg in (leg, self._delta_legend):
+            if lg is not None:
+                lg.setLabelTextColor(C.text_dim)
+                lg.setBrush(LEGEND_BRUSH)
+                lg.setPen(LEGEND_PEN)
         for plot in (self.p_speed, self.p_delta):
             plot.titleLabel.setAttr("color", C.text_dim)
 
@@ -176,6 +203,12 @@ class PlotsView(QWidget):
         self.refresh()
         # Sector positions are mode-dependent; ask app to re-push them for the new mode (F2).
         self.modeChanged.emit(self._axis_mode())
+
+    def _on_ideal_toggled(self, on: bool):
+        """D1: toggle the synthetic ideal-lap baseline overlay on the Δ plot."""
+        self._show_ideal = on
+        self.ideal_btn.setIcon(icon("ph.star-four", color=C.best if on else C.text))
+        self.refresh()
 
     # ----------------------------------------------------------- cursor scrub
     def is_dragging(self) -> bool:
@@ -325,6 +358,9 @@ class PlotsView(QWidget):
         for plot, curve in self._curves:
             plot.removeItem(curve)
         self._curves = []
+        # D1: clear + hide the Δ ideal-lap legend; _draw_ideal re-adds + reveals it only when on.
+        self._delta_legend.clear()
+        self._delta_legend.setVisible(False)
         self._hide_hover()
         self._delta_curves = []  # [(lid, xs, ys)] for the hover-dot nearest-sample snap
         self._speed_curves = {}  # {lid: (sx, spd)} rebuilt below; F5 brake glyphs ride these
@@ -389,6 +425,11 @@ class PlotsView(QWidget):
                 self._curves.append((self.p_delta, c))
                 self._delta_curves.append((lid, dd, dl))
 
+        # D1: optional synthetic ideal-lap baseline, drawn on the SAME Δ-to-best axis (it dips
+        # below the y=0 best-lap line). Drawn before the fit so its trough is in the y-range; not
+        # added to _delta_curves so the scrub hover-dot stays on real laps.
+        self._draw_ideal(x_mode)
+
         # Fit once, then freeze autorange so per-tick cursor moves don't recompute the range.
         self.glw.scene().update()
         self.p_speed.autoRange()
@@ -402,6 +443,26 @@ class PlotsView(QWidget):
         # Redraw the cached sector lines + driving items on the freshly-fit axes.
         self._draw_sectors()
         self._draw_driving()
+
+    def _draw_ideal(self, x_mode: str):
+        """D1: draw the synthetic ideal-lap baseline on the Δ plot when the toggle is on.
+
+        `ideal_delta_to_best` returns the ideal envelope expressed on delta()'s own Δ-to-best
+        axis (ideal − best ≤ 0), so it lays under the existing curves in the same reference frame
+        and honors both x-modes. Dashed purple + a clearly-synthetic legend entry so it can't be
+        mistaken for a real driven lap. No-op (and no legend entry) when the ideal can't be built
+        (e.g. no clean lap)."""
+        if not self._show_ideal:
+            return
+        series = self.session.ideal_delta_to_best(x_mode=x_mode)
+        if series is None:
+            return
+        ix, iy = series
+        c = self.p_delta.plot(ix, iy, pen=IDEAL_LINE_PEN, name="ideal lap (synthetic)")
+        c.setDownsampling(auto=True)
+        c.setClipToView(True)
+        self._curves.append((self.p_delta, c))
+        self._delta_legend.setVisible(True)
 
     def _curve_label(self, lid: int, is_baseline: bool) -> str:
         """Legend label for a curve: 'lap N m:ss.mmm' (+ ' · best' on the baseline), or
