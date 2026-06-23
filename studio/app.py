@@ -15,10 +15,12 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressDialog,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -70,10 +72,54 @@ class _VideoExportWorker(QThread):
             pass
 
 
+class _WelcomeView(QWidget):
+    """First-run / no-recording empty state — the product's tagline made literal: drop a GoPro
+    recording onto the window, or open one. `on_open` runs the file picker, `on_demo` loads the
+    bundled sample clip. An optional `error` line is shown when this stands in for a failed first
+    load. The buttons are exposed (`open_btn`/`demo_btn`) for tests."""
+
+    def __init__(self, on_open, on_demo, error: str | None = None, parent=None):
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setAlignment(Qt.AlignCenter)
+        root.setSpacing(14)
+
+        title = QLabel("Pacer")
+        title.setProperty("role", "WelcomeTitle")
+        title.setAlignment(Qt.AlignCenter)
+        subtitle = QLabel("Drop a GoPro recording here — or open one — to get your laps.")
+        subtitle.setProperty("role", "WelcomeSubtitle")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setWordWrap(True)
+        root.addWidget(title)
+        root.addWidget(subtitle)
+
+        buttons = QHBoxLayout()
+        buttons.setAlignment(Qt.AlignCenter)
+        self.open_btn = QPushButton("Open recording…")
+        self.open_btn.setProperty("variant", "primary")
+        self.open_btn.setDefault(True)
+        self.open_btn.clicked.connect(on_open)
+        self.demo_btn = QPushButton("Open demo")
+        self.demo_btn.clicked.connect(on_demo)
+        buttons.addWidget(self.open_btn)
+        buttons.addWidget(self.demo_btn)
+        root.addLayout(buttons)
+
+        if error:
+            err = QLabel(error)
+            err.setProperty("role", "WelcomeError")
+            err.setAlignment(Qt.AlignCenter)
+            err.setWordWrap(True)
+            root.addWidget(err)
+
+
 class StudioWindow(QMainWindow):
     def __init__(self, paths: list[str], full: bool = False):
         super().__init__()
         self.resize(1440, 900)
+        # "Drop a GoPro, get your laps": files dropped on the window load through the guarded path.
+        self.setAcceptDrops(True)
         # The one session-scoped central view, swapped in fresh per load; None until first load.
         self.view = None
         self._tick_timer = None  # created on the first _build_ui; reused across reloads (window-owned)
@@ -85,7 +131,46 @@ class StudioWindow(QMainWindow):
         # paths are used as-is.
         if full and len(paths) == 1:
             paths = chapters.discover_siblings(paths[0])
-        self._load(paths)
+        # Launched with no recording -> the welcome empty state rather than a blank/auto-demo window.
+        if paths:
+            self._load(paths)
+        else:
+            self._show_welcome()
+
+    # ----------------------------------------------------------- drag-and-drop / welcome
+    @staticmethod
+    def _dropped_mp4s(mime) -> list[str]:
+        """The local .mp4 paths in a drag's mime data (sorted so chapter siblings load in order);
+        [] if the drag carries no MP4 file URLs."""
+        if not mime.hasUrls():
+            return []
+        out = [u.toLocalFile() for u in mime.urls()]
+        return sorted(p for p in out if p and p.lower().endswith(".mp4"))
+
+    def dragEnterEvent(self, event):
+        """Accept a drag only if it carries at least one .mp4 (so the cursor shows it's droppable)."""
+        if self._dropped_mp4s(event.mimeData()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        """Load the dropped GoPro file(s) through the guarded _load path. Multiple files are loaded
+        as one recording (chapter siblings); unrelated drops are user error."""
+        paths = self._dropped_mp4s(event.mimeData())
+        if paths:
+            event.acceptProposedAction()
+            self._load(paths)
+
+    def _show_welcome(self, error: str | None = None):
+        """Install the no-recording welcome empty state (also the first-load-failure fallback)."""
+        self._paths = getattr(self, "_paths", [])
+        self.setWindowTitle("pacer studio")
+        self.setCentralWidget(_WelcomeView(self._open_file, self._open_demo, error, parent=self))
+        if getattr(self, "_full_action", None) is not None:
+            self._full_action.setEnabled(False)
+
+    def _open_demo(self):
+        """Welcome-screen "Open demo": load the bundled sample clip through the guarded path."""
+        self._load([DEFAULT_SAMPLE])
 
     # ------------------------------------------------------------------ loading
     def _load(self, paths: list[str]):
@@ -178,18 +263,13 @@ class StudioWindow(QMainWindow):
             f"Could not load the recording:\n\n{offending}\n\n{reason}\n\n"
             "The file may be missing, corrupt, or contain no GPS data. "
             "The previously loaded session (if any) is unchanged.")
-        # First-load failure: no central widget yet — show an empty state so the window stays open.
+        # First-load failure: no central widget yet — show the welcome empty state (with the error)
+        # so the window stays open and the user can drop/open another recording.
         if not hasattr(self, "session"):
             # Seed _paths for the failed-first-load case (nothing else has set it, yet readers like
             # "Load full recording" stay reachable). A failed reload keeps the good _paths instead.
             self._paths = list(paths)
-            self.setWindowTitle("pacer studio — no recording loaded")
-            placeholder = QLabel(
-                "No recording loaded.\n\n"
-                f"Could not load:\n{offending}\n\n{reason}")
-            placeholder.setAlignment(Qt.AlignCenter)
-            placeholder.setWordWrap(True)
-            self.setCentralWidget(placeholder)
+            self._show_welcome(error=f"Could not load:\n{offending}\n\n{reason}")
 
     def _build_ui(self):
         """Atomic swap: dispose the outgoing view, build a fresh CentralView for the just-loaded
@@ -868,7 +948,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     # --full/--chaptered chain a single file's sibling chapters (see StudioWindow).
     full = "--full" in argv or "--chaptered" in argv
-    paths = [a for a in argv if not a.startswith("-")] or [DEFAULT_SAMPLE]
+    # No path on the CLI -> open to the welcome empty state (the demo is one click from there).
+    paths = [a for a in argv if not a.startswith("-")]
     app = QApplication(sys.argv)
     # Apply the dark "Refined Minimal" design system BEFORE constructing any widgets, so the
     # default font/palette and the pyqtgraph background are in place when the panels are built.

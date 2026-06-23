@@ -1050,6 +1050,75 @@ def test_tick_delegates_to_live_view_and_guards_no_view():
     print("test_tick_delegates_to_live_view_and_guards_no_view OK")
 
 
+# ---------------------------------------------------- B3: welcome empty state + drag-and-drop
+class _FakeDropEvent:
+    """The drag/drop event surface StudioWindow's handlers touch: mimeData() + acceptProposedAction()."""
+
+    def __init__(self, mime):
+        self._mime = mime
+        self.accepted = False
+
+    def mimeData(self):
+        return self._mime
+
+    def acceptProposedAction(self):
+        self.accepted = True
+
+
+def test_welcome_state_when_no_recording():
+    """Launched with no path, StudioWindow shows the welcome empty state (not a blank/auto-demo
+    window); its "Open demo" button loads the bundled sample through the guarded _load path."""
+    from studio.app import StudioWindow, _WelcomeView
+    from studio.session import DEFAULT_SAMPLE
+    w = StudioWindow([])
+    try:
+        cw = w.centralWidget()
+        assert isinstance(cw, _WelcomeView), type(cw)
+        assert cw.open_btn is not None and cw.demo_btn is not None
+        loaded = []
+        w._load = lambda paths: loaded.append(list(paths))
+        cw.demo_btn.click()
+        assert loaded == [[DEFAULT_SAMPLE]], loaded
+    finally:
+        w.deleteLater()
+    print("test_welcome_state_when_no_recording OK")
+
+
+def test_drag_and_drop_loads_mp4s():
+    """Dropping GoPro MP4s on the window loads them (sorted, so chapter siblings chain in order);
+    a drag with no MP4 is not accepted."""
+    from PySide6.QtCore import QMimeData, QUrl
+
+    from studio.app import StudioWindow
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile("/x/GX020060.MP4"),
+                  QUrl.fromLocalFile("/x/GX010060.MP4"),
+                  QUrl.fromLocalFile("/x/notes.txt")])
+    # The pure extractor: only .mp4, sorted; no URLs -> [].
+    assert StudioWindow._dropped_mp4s(mime) == ["/x/GX010060.MP4", "/x/GX020060.MP4"]
+    assert StudioWindow._dropped_mp4s(QMimeData()) == []
+
+    w = StudioWindow([])
+    try:
+        loaded = []
+        w._load = lambda paths: loaded.append(list(paths))
+        enter = _FakeDropEvent(mime)
+        w.dragEnterEvent(enter)
+        assert enter.accepted, "an MP4 drag should be accepted"
+        drop = _FakeDropEvent(mime)
+        w.dropEvent(drop)
+        assert drop.accepted and loaded == [["/x/GX010060.MP4", "/x/GX020060.MP4"]], loaded
+        # A drag without any MP4 is ignored (not accepted, no load).
+        txt = QMimeData()
+        txt.setUrls([QUrl.fromLocalFile("/x/a.txt")])
+        ignored = _FakeDropEvent(txt)
+        w.dragEnterEvent(ignored)
+        assert not ignored.accepted
+    finally:
+        w.deleteLater()
+    print("test_drag_and_drop_loads_mp4s OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
