@@ -35,6 +35,8 @@ class DrivingChannels:
         self._brake_events_cache: dict[int, list[driving.BrakeEvent]] = {}
         self._coasting_spans_cache: dict[int, list[driving.CoastSpan]] = {}
         self._corner_grip_cache: dict[int, list[float]] = {}
+        # D5: per-lap per-sample grip utilization, aligned to the lap's map xy points.
+        self._grip_util_cache: dict[int, object] = {}
         # D3: per-lap (dist, elapsed, intensity) for the synthetic brake/throttle band.
         self._brake_throttle_cache: dict[int, tuple] = {}
         # D4: per-lap per-corner braking-point comparisons.
@@ -46,6 +48,7 @@ class DrivingChannels:
         self._brake_events_cache.clear()
         self._coasting_spans_cache.clear()
         self._corner_grip_cache.clear()
+        self._grip_util_cache.clear()
         self._brake_throttle_cache.clear()
         self._brake_points_cache.clear()
         self._a_max_cache = _UNSET  # depends on the per-lap brake events, which re-project
@@ -53,7 +56,12 @@ class DrivingChannels:
     # ------------------------------------------------------------------ g + thresholds
     def _lap_g_arrays(self, lap_id: int):
         """(long_g, lat_g) for a lap, interpolated from the g meter onto the lap's media times
-        (both share the media clock). (None, None) when there's no g signal or a degenerate lap."""
+        (both share the media clock). (None, None) when there's no g signal or a degenerate lap.
+
+        LONGITUDINAL prefers the GPS speed-derivative (gm.long_g_gps) when present — the IMU forward
+        axis is vibration-inflated (see gmeter/driving), so the dial, the map grip colour and the
+        per-corner grip all read the same validated longitudinal. Falls back to the IMU long_g for a
+        GPS-only/synthetic meter. LATERAL is always the IMU lateral (which it gets right, r~0.9)."""
         s = self._s
         gm = s._gmeter
         if not gm.has_data:
@@ -62,7 +70,8 @@ class DrivingChannels:
         if td is None:
             return None, None
         times, _dists, _elapsed = td
-        long_g = np.interp(times, gm.times, gm.long_g)
+        long_src = gm.long_g_gps if gm.long_g_gps is not None else gm.long_g
+        long_g = np.interp(times, gm.times, long_src)
         lat_g = np.interp(times, gm.times, gm.lat_g)
         return long_g, lat_g
 
@@ -186,6 +195,22 @@ class DrivingChannels:
         grip = driving.corner_grip(dists, long_g, lat_g, windows, self._grip_envelope())
         self._corner_grip_cache[lap_id] = grip
         return grip
+
+    def lap_grip_utilization(self, lap_id: int):
+        """D5: per-sample grip utilization for one lap (hypot(lat,long) / session envelope, clipped),
+        aligned 1:1 to the lap's MAP xy points (the lap_channels / _lap_columns sample grid) so the
+        track map can colour the racing line by it. None when there's no g signal or a degenerate
+        lap. ESTIMATED, lateral-dominant (see driving.grip_utilization). Cached per lap (dropped on
+        re-segment with the other per-lap channels)."""
+        got = self._grip_util_cache.get(lap_id)
+        if got is not None:
+            return got
+        long_g, lat_g = self._lap_g_arrays(lap_id)
+        if long_g is None or len(long_g) < 2:
+            return None
+        util = driving.grip_utilization(lat_g, long_g, self._grip_envelope())
+        self._grip_util_cache[lap_id] = util
+        return util
 
     def _grip_envelope(self) -> float:
         """The session-wide combined-g grip limit (cached; constant across re-segments). corner_grip

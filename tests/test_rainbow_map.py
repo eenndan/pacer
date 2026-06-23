@@ -190,6 +190,9 @@ def _stub_session(n=60):
         "t_media_s": t, "x_m": xs, "y_m": ys, "speed_kmh": speed, "dist_m": cum}
     s.delta = lambda ids, x_mode="distance": (
         0, {}, {lid: (np.linspace(0, 500.0, 400), dvals) for lid in ids})
+    # D5 grip channel: a utilization ramp 0.1 (unused) → 1.1 (over the p98 limit), aligned to xy.
+    grip = np.linspace(0.1, 1.1, n)
+    s.lap_grip_channel = lambda lid: grip
     return s
 
 
@@ -218,7 +221,10 @@ def test_toggle_off_restores_exact_items_and_pens():
 
     mv._cycle_rainbow()  # speed → delta
     assert mv._rainbow_mode == "delta"
-    mv._cycle_rainbow()  # delta → off
+    mv._cycle_rainbow()  # delta → grip
+    assert mv._rainbow_mode == "grip"
+    assert sum(it.xData.size for it in mv._rainbow._items) > 0, "grip rainbow must hold data"
+    mv._cycle_rainbow()  # grip → off
     assert mv._rainbow_mode == "off"
     after_items = list(mv._current_overlay._items)
     assert [id(a) for a in after_items] == [id(b) for b in before_items], "items rebuilt!"
@@ -266,6 +272,49 @@ def test_speed_extremes_land_in_extreme_buckets():
     # The fast end is the polyline's END → the top bucket holds the last point.
     assert items[-1].xData[-1] == s.tx[-1]
     print("test_speed_extremes_land_in_extreme_buckets OK")
+
+
+# ----------------------------------------------------- D5 grip-utilization map channel
+def test_grip_channel_paints_and_on_limit_is_red():
+    """Selecting Grip colours the line by per-sample utilization: on the stub's 0.1→1.1 ramp the
+    ON-LIMIT end (highest util, polyline END) lands in the BOTTOM (red) bucket and the UNUSED end
+    (lowest util, polyline START) in the TOP (green) bucket — green = grip left unused."""
+    s = _stub_session()
+    mv = MapView(s)
+    mv.set_current_lap(1)
+    for _ in range(3):  # off → speed → delta → grip
+        mv._cycle_rainbow()
+    assert mv._rainbow_mode == "grip"
+    items = mv._rainbow._items
+    assert sum(it.xData.size for it in items) > 0, "grip must paint the line"
+    # The painted buckets reproduce the negated-util-on-fixed-scale contract: util RISES 0.1→1.1, so
+    # the per-segment bucket ids must FALL (more util = redder = lower bucket) on the fixed 0..1.2
+    # scale. Rebuild them the same way _build_rainbow does and check monotone-decreasing.
+    util = s.lap_grip_channel(1)
+    vals = -np.asarray(util, float)
+    seg_vals = 0.5 * (vals[:-1] + vals[1:])
+    seg_ids = bucketize(seg_vals, theme.MAP_RAINBOW_N, lo=-1.2, hi=0.0)
+    assert (np.diff(seg_ids) <= 0).all(), "rising util must paint monotonically redder"
+    assert seg_ids[0] > seg_ids[-1], (seg_ids[0], seg_ids[-1])  # unused greener than on-limit
+    assert mv._legend.isVisibleTo(mv)
+    print(f"test_grip_channel_paints_and_on_limit_is_red OK "
+          f"(unused b{seg_ids[0]} > on-limit b{seg_ids[-1]})")
+
+
+def test_grip_channel_degrades_when_no_g():
+    """No g signal (lap_grip_channel → None) must NOT paint or crash: the rainbow stays empty and
+    the normal current-lap overlay remains visible (graceful degrade, like Δ with no best lap)."""
+    s = _stub_session()
+    s.lap_grip_channel = lambda lid: None  # no g signal on this recording
+    mv = MapView(s)
+    mv.set_current_lap(1)
+    for _ in range(3):  # off → speed → delta → grip
+        mv._cycle_rainbow()
+    assert mv._rainbow_mode == "grip"
+    assert all(it.xData is None or it.xData.size == 0 for it in mv._rainbow._items), "must not paint"
+    assert all(it.isVisible() for it in mv._current_overlay._items), "overlay stays visible"
+    assert not mv._legend.isVisibleTo(mv), "legend hidden when nothing painted"
+    print("test_grip_channel_degrades_when_no_g OK")
 
 
 if __name__ == "__main__":
