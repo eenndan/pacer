@@ -30,6 +30,9 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pacer  # noqa: E402,F401  (import the built bindings BEFORE studio, like the other
+#               pacer-using tests — importing studio first can otherwise cache the repo-root
+#               `pacer/` C++ source dir as a namespace package without `Laps` in CI's fresh env)
 from studio import track_db  # noqa: E402
 
 # The measured Daytona MK line (was hardcoded in tracks.REGISTRY). The seed MUST stay
