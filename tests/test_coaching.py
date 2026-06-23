@@ -172,6 +172,123 @@ def test_dominant_reason_is_the_largest_contribution():
     print("ok dominant: largest seconds-of-loss contribution wins (coast vs apex both ways)")
 
 
+# ----------------------------------------------- D2: entry/apex/exit Δt-vs-best decomposition
+def _flat_trace(d0: float, d1: float, v_kmh: float, n: int = 200):
+    """A constant-speed lap trace over [d0, d1]: (dist, speed_kmh). Constant v makes the time
+    integral analytic — time over a span L (m) at v (m/s) is L/v — so the thirds are exact."""
+    dist = np.linspace(d0, d1, n)
+    return dist, np.full(n, float(v_kmh))
+
+
+def test_phase_losses_sum_to_total_and_signs():
+    """The three thirds telescope to the corner's total Δt-vs-best, and the sign is right:
+    a lap slower than best ⇒ positive total; faster ⇒ negative."""
+    enter, exit_ = 100.0, 220.0  # a 120 m corner window
+    best_dist, best_v = _flat_trace(0.0, 400.0, 80.0)   # best is fast everywhere
+    # SLOWER lap: 72 km/h through the window -> positive Δt over every third.
+    slow_dist, slow_v = _flat_trace(0.0, 400.0, 72.0)
+    pl = K.corner_phase_losses(slow_dist, slow_v, best_dist, best_v, enter, exit_)
+    # each third is 40 m: 40/(72/3.6) - 40/(80/3.6) = 40/20 - 40/22.222 = 2.0 - 1.8 = 0.2 s
+    for v in pl.as_tuple():
+        assert v > 0, ("slower than best must be a positive loss per third", pl)
+    assert abs(pl.total - sum(pl.as_tuple())) < 1e-9, "total must equal the sum of the thirds"
+    expected_total = (exit_ - enter) / (72.0 / 3.6) - (exit_ - enter) / (80.0 / 3.6)
+    assert abs(pl.total - expected_total) < 1e-3, (pl.total, expected_total)
+    # FASTER lap ⇒ negative total (each third negative).
+    fast_dist, fast_v = _flat_trace(0.0, 400.0, 88.0)
+    pf = K.corner_phase_losses(fast_dist, fast_v, best_dist, best_v, enter, exit_)
+    assert pf.total < 0 and all(v < 0 for v in pf.as_tuple()), pf
+    print(f"ok phases: thirds sum to total; slow⇒+{pl.total:.3f}s, fast⇒{pf.total:.3f}s")
+
+
+def test_phase_losses_all_on_entry_attributes_to_entry():
+    """A lap that loses ALL its time in the entry third (slow there, on-best elsewhere) attributes
+    the loss to entry — entry positive, apex/exit ~0, dominant == PHASE_ENTRY."""
+    enter, exit_ = 100.0, 220.0  # thirds: [100,140] entry, [140,180] apex, [180,220] exit
+    best_dist, best_v = _flat_trace(0.0, 400.0, 80.0)
+    # Lap is 60 km/h in the entry third only, matches best (80) elsewhere. Build piecewise.
+    n = 600
+    lap_dist = np.linspace(0.0, 400.0, n)
+    lap_v = np.full(n, 80.0)
+    lap_v[(lap_dist >= 100.0) & (lap_dist < 140.0)] = 60.0
+    pl = K.corner_phase_losses(lap_dist, lap_v, best_dist, best_v, enter, exit_)
+    assert pl.dominant == K.PHASE_ENTRY, pl
+    assert pl.entry > 0.0, pl
+    # apex/exit are on-best ⇒ ~0 (a tiny residual is just boundary interpolation smear at the
+    # speed step, << the entry loss).
+    assert abs(pl.apex) < 0.01 and abs(pl.exit) < 0.01, ("apex/exit on-best ~0", pl)
+    # entry ≈ the whole loss; the thirds still sum to the total
+    assert abs(pl.total - sum(pl.as_tuple())) < 1e-9
+    assert pl.entry > 0.9 * pl.total, ("entry holds the loss", pl)
+    print(f"ok phases-entry: dominant=entry, entry={pl.entry:.3f}s apex={pl.apex:.3f} "
+          f"exit={pl.exit:.3f}")
+
+
+def test_phase_losses_are_deterministic_and_degenerate_is_zero():
+    best_dist, best_v = _flat_trace(0.0, 400.0, 80.0)
+    slow_dist, slow_v = _flat_trace(0.0, 400.0, 72.0)
+    a = K.corner_phase_losses(slow_dist, slow_v, best_dist, best_v, 100.0, 220.0)
+    b = K.corner_phase_losses(slow_dist, slow_v, best_dist, best_v, 100.0, 220.0)
+    assert a == b, "corner_phase_losses must be deterministic"
+    # a degenerate (exit <= enter) window, and a too-short trace, both ⇒ zero phases
+    deg = K.corner_phase_losses(slow_dist, slow_v, best_dist, best_v, 220.0, 220.0)
+    assert deg.as_tuple() == (0.0, 0.0, 0.0), deg
+    short = K.corner_phase_losses(np.array([1.0]), np.array([10.0]), best_dist, best_v, 100.0, 220.0)
+    assert short.as_tuple() == (0.0, 0.0, 0.0), short
+    print("ok phases-det: identical across calls; degenerate window/short trace ⇒ zero")
+
+
+def test_phase_losses_projected_onto_each_laps_own_odometer():
+    """The corner window is in the reference (best) odometer; for a lap whose own odometer is
+    scaled vs the basis, the window projects onto that lap's odometer (d·lap_total/basis_total) so
+    the third boundaries land on the SAME track fraction on both laps. A lap that is 1.05× longer
+    in odometer but takes the SAME time per track-fraction (speed scaled 1.05× too) integrates to
+    ~0 loss — proving the boundaries are projected, not taken literally."""
+    enter, exit_ = 100.0, 220.0
+    corner_total = 400.0
+    best_dist, best_v = _flat_trace(0.0, 400.0, 80.0)          # best lap == corner basis frame
+    # 1.05× longer odometer AND 1.05× faster ⇒ same time over the same track fraction.
+    s = 1.05
+    lap_total = corner_total * s
+    lap_dist, lap_v = _flat_trace(0.0, lap_total, 80.0 * s)
+    pl = K.corner_phase_losses(lap_dist, lap_v, best_dist, best_v, enter, exit_,
+                               corner_dist_total=corner_total, lap_total=lap_total,
+                               best_total=corner_total)
+    assert all(abs(v) < 1e-6 for v in pl.as_tuple()), ("projected boundaries ⇒ ~0 loss", pl)
+    # Without projection (literal window on the longer-odometer lap) the same trace WOULD register
+    # a loss — the window covers a 1.05× longer slice of track. Confirms projection is doing work.
+    pl_literal = K.corner_phase_losses(lap_dist, lap_v, best_dist, best_v, enter, exit_)
+    assert pl_literal.total < -1e-3, ("literal (unprojected) window differs", pl_literal)
+    print(f"ok phases-proj: projected per-lap ⇒ {pl.as_tuple()}; literal ⇒ {pl_literal.total:.3f}s")
+
+
+def test_summarize_attaches_phase_decomposition():
+    """summarize wires the typical-lap vs best speed traces into each row's PhaseLoss, and the
+    decomposition is consistent with the row's measured loss sign (slow corner ⇒ positive sum)."""
+    corners, best, times, lap_times = _one_corner_lossy(0.5)
+    # one corner enter=50, exit=90 (see _corners). Best fast, typical slower over the window.
+    best_dist, best_v = _flat_trace(0.0, 200.0, 80.0)
+    med_dist, med_v = _flat_trace(0.0, 200.0, 70.0)
+    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+                      sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
+                      median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[-3.0],
+                      median_dist=med_dist, median_speed_kmh=med_v,
+                      best_dist=best_dist, best_speed_kmh=best_v)
+    row = opp.rows[0]
+    pl = row.phases
+    assert abs(pl.total - sum(pl.as_tuple())) < 1e-9
+    assert pl.total > 0, ("typical lap slower than best ⇒ positive Δt", pl)
+    # absent traces ⇒ zero phases (back-compat path)
+    opp0 = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+                       sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
+                       median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[-3.0])
+    assert opp0.rows[0].phases.as_tuple() == (0.0, 0.0, 0.0)
+    # the dominant-phase clause shows up in the sentence when one third dominates
+    flat_sentence = K.reason_sentence(opp0.rows[0])  # no phases -> no clause
+    assert "most of it on" not in flat_sentence
+    print(f"ok summarize-phases: row Δt={pl.total:.3f}s (thirds {pl.as_tuple()}); absent⇒zero")
+
+
 def test_brake_approach_window_and_coast_only_when_best_lacks_it():
     """A brake/coast that the BEST lap matches is NOT a loss (the difference is what counts);
     and a brake event OUTSIDE the corner approach window is ignored."""
@@ -450,12 +567,16 @@ def test_dialog_populates_and_go_calls_jump_to():
     calls = []
     dlg = OpportunitiesDialog(opp, jump_to=lambda c, d: calls.append((c, d)))
     assert dlg.table.rowCount() == len(opp.rows)
+    # columns: 0 Corner, 1 Time-lost, 2 Phases (D2 cell widget), 3 Reason, 4 Go.
     # row 0: the biggest-loss corner (C1), with the apex sentence + the time-lost format
     assert dlg.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
     assert dlg.table.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
-    assert "apex speed" in dlg.table.item(0, 2).text()
+    # column 2 is the D2 entry/apex/exit breakdown widget (no text item there)
+    from studio.coaching_panel import PhaseBar
+    assert isinstance(dlg.table.cellWidget(0, 2), PhaseBar)
+    assert "apex speed" in dlg.table.item(0, 3).text()
     # the Go button routes to jump_to(cid, entry_dist)
-    dlg.table.cellWidget(0, 3).click()
+    dlg.table.cellWidget(0, 4).click()
     assert calls == [(opp.rows[0].cid, opp.rows[0].entry_dist)], calls
     print(f"ok dialog: {dlg.table.rowCount()} rows, Go -> jump_to{calls[0]}")
 

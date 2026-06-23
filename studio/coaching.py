@@ -24,6 +24,18 @@ MIN_LAPS = 3
 # How many ranked corners get a dominant-reason attached (the panel's row count).
 TOP_N = 3
 
+# D2: the three equal-distance phases a corner window is split into for the entry/apex/exit
+# Δt-vs-best decomposition, in track order. The dominant phase is named in the reason sentence.
+PHASE_ENTRY = "entry"
+PHASE_APEX = "apex"
+PHASE_EXIT = "exit"
+PHASES = (PHASE_ENTRY, PHASE_APEX, PHASE_EXIT)
+
+# Samples per third on the shared fine distance grid the Δt integral runs on (3×PHASE_GRID_N
+# across the whole corner window). Fine enough that the thirds sum to the corner's measured loss
+# within interpolation tolerance, cheap to integrate (trapezoid over ~a few hundred samples).
+PHASE_GRID_N = 64
+
 # m prepended to a corner window when matching brake events — braking starts on the straight
 # before turn-in (~1 medium-kart brake zone), upstream of the model's cornering-start enter point.
 BRAKE_APPROACH_M = 30.0
@@ -52,6 +64,37 @@ class Reason:
 
 
 @dataclass(frozen=True)
+class PhaseLoss:
+    """D2: the entry / apex(mid) / exit Δt-vs-best decomposition of ONE corner's loss (s). The
+    three thirds sum (within interpolation tolerance) to the corner's total Δt-vs-best — the same
+    statistic as the delta-chart bleed across the window. Each is positive when the comparison lap
+    is slower than best over that third, negative when faster."""
+
+    entry: float             # Δt over the entry third (first 1/3 of the corner window, s)
+    apex: float              # Δt over the apex/mid third (s)
+    exit: float              # Δt over the exit third (s)
+
+    @property
+    def total(self) -> float:
+        """The corner's total Δt-vs-best (≈ the measured per-corner loss): the thirds telescope."""
+        return self.entry + self.apex + self.exit
+
+    @property
+    def dominant(self) -> str:
+        """The phase id (PHASE_*) costing the most time — the largest of the three thirds. Ties
+        resolve to track order (entry, then apex, then exit) for determinism."""
+        vals = {PHASE_ENTRY: self.entry, PHASE_APEX: self.apex, PHASE_EXIT: self.exit}
+        return max(PHASES, key=lambda p: vals[p])
+
+    def as_tuple(self) -> tuple[float, float, float]:
+        return (self.entry, self.apex, self.exit)
+
+
+# A zero decomposition (no phase data available / window degenerate) — keeps every row uniform.
+_NO_PHASES = PhaseLoss(entry=0.0, apex=0.0, exit=0.0)
+
+
+@dataclass(frozen=True)
 class Opportunity:
     """One corner's coaching row: how much time is realistically available and why."""
 
@@ -60,6 +103,7 @@ class Opportunity:
     time_lost: float         # median time lost vs the best lap's same corner (s, > 0)
     entry_dist: float        # the corner's enter odometer on the BEST lap (m) — the jump-to seek
     reason: Reason           # the dominant measured reason + numbers (only on the top-N rows)
+    phases: PhaseLoss = _NO_PHASES   # D2: entry/apex/exit Δt-vs-best thirds (s); sum ≈ time_lost
 
 
 @dataclass(frozen=True)
@@ -142,6 +186,78 @@ def _coast_extra(med_spans, best_spans, med_win: tuple[float, float],
                - _coast_in_window(best_spans, *best_win), 0.0)
 
 
+# ---------------------------------------------------------- D2: entry/apex/exit Δt decomposition
+# Time over a distance span = ∫ ds/v(s); the time LOST vs best over a span is therefore
+# Δt = ∫ (1/v_lap(s) − 1/v_best(s)) ds  (positive ⇒ slower than best, negative ⇒ faster). A
+# corner window [enter, exit] is split into three equal-distance thirds (entry, apex/mid, exit)
+# and Δt is integrated over each on a shared fine distance grid, so the three telescope to the
+# corner's total Δt-vs-best (the same statistic as the delta-chart bleed across the window).
+
+_V_FLOOR_KMH = 1.0  # km/h; a defensive floor on v before 1/v — laps are MOVING in corners, but a
+                    # stray non-positive/near-zero sample would blow up the reciprocal. ~0.28 m/s.
+
+
+def _span_time(dist: np.ndarray, speed_kmh: np.ndarray, d0: float, d1: float, n: int) -> float:
+    """∫ ds/v over [d0, d1] for one lap's speed-vs-distance trace, by trapezoid on a uniform
+    n-point distance sub-grid. v is interpolated onto the grid (km/h → m/s) and floored at
+    _V_FLOOR_KMH so 1/v can't diverge. Returns seconds; 0 for a degenerate (d1 ≤ d0) span."""
+    if not (d1 > d0):
+        return 0.0
+    grid = np.linspace(d0, d1, max(int(n), 2))
+    v_kmh = np.interp(grid, dist, speed_kmh)
+    v_mps = np.maximum(v_kmh, _V_FLOOR_KMH) / 3.6  # guard v > 0 (clip non-positive samples)
+    return float(np.trapezoid(1.0 / v_mps, grid))
+
+
+def corner_phase_losses(
+    lap_dist: np.ndarray, lap_speed_kmh: np.ndarray,
+    best_dist: np.ndarray, best_speed_kmh: np.ndarray,
+    c_enter: float, c_exit: float,
+    *,
+    corner_dist_total: float | None = None,
+    lap_total: float | None = None,
+    best_total: float | None = None,
+    grid_n: int = PHASE_GRID_N,
+) -> PhaseLoss:
+    """Decompose ONE corner's Δt-vs-best into entry / apex(mid) / exit thirds (seconds).
+
+    The corner window [c_enter, c_exit] is in the reference (best-lap) odometer; it is projected
+    onto EACH lap's own odometer by normalized distance (d·lap_total/corner_dist_total — the SAME
+    projection lap_corner_stats uses), so the third boundaries land on the same TRACK positions on
+    both laps. Each lap's window is split into three equal-distance thirds; per third
+    Δt = ∫ds/v_lap − ∫ds/v_best on a shared fine grid (so the thirds telescope to the corner's
+    total Δt-vs-best). Positive ⇒ the lap is slower than best over that third.
+
+    Returns a zero PhaseLoss when either trace is unusable or the window is degenerate."""
+    lap_dist = np.asarray(lap_dist, float)
+    lap_speed_kmh = np.asarray(lap_speed_kmh, float)
+    best_dist = np.asarray(best_dist, float)
+    best_speed_kmh = np.asarray(best_speed_kmh, float)
+    if len(lap_dist) < 2 or len(best_dist) < 2 or not (c_exit > c_enter):
+        return _NO_PHASES
+
+    def _proj(total: float | None) -> tuple[float, float]:
+        # Project the reference-odometer window onto a lap's own odometer (identity if a total is
+        # missing or equals the corner basis' total — the best lap's own frame).
+        if (corner_dist_total and total and corner_dist_total > 0
+                and total != corner_dist_total):
+            scale = total / corner_dist_total
+            return c_enter * scale, c_exit * scale
+        return c_enter, c_exit
+
+    lap0, lap1 = _proj(lap_total)
+    best0, best1 = _proj(best_total)
+    # Equal-distance thirds of each lap's own projected window (same fraction → same track third).
+    lap_edges = np.linspace(lap0, lap1, 4)
+    best_edges = np.linspace(best0, best1, 4)
+    out = []
+    for k in range(3):
+        dt_lap = _span_time(lap_dist, lap_speed_kmh, lap_edges[k], lap_edges[k + 1], grid_n)
+        dt_best = _span_time(best_dist, best_speed_kmh, best_edges[k], best_edges[k + 1], grid_n)
+        out.append(dt_lap - dt_best)
+    return PhaseLoss(entry=out[0], apex=out[1], exit=out[2])
+
+
 def _pick_reason(time_lost: float, apex_speed_delta: float, sigma: float,
                  med_events, best_events, med_spans, best_spans,
                  med_win: tuple[float, float], best_win: tuple[float, float]) -> Reason:
@@ -201,6 +317,10 @@ def summarize(
     corner_dist_total: float | None = None,
     median_lap_total: float | None = None,
     best_lap_total: float | None = None,
+    median_dist: np.ndarray | None = None,
+    median_speed_kmh: np.ndarray | None = None,
+    best_dist: np.ndarray | None = None,
+    best_speed_kmh: np.ndarray | None = None,
     top_n: int = TOP_N,
     min_laps: int = MIN_LAPS,
 ) -> Opportunities:
@@ -211,6 +331,9 @@ def summarize(
     laps + best lap. median_apex_deltas MUST use the SAME local-best baseline as the losses.
     corner_dist_total / median_lap_total / best_lap_total project each corner window onto each
     lap's own odometer before matching its brake/coast events; any None → identity projection.
+    median_dist/median_speed_kmh + best_dist/best_speed_kmh are the typical-lap and best-lap
+    speed-vs-distance traces; when both are present each row gets the D2 entry/apex/exit Δt-vs-best
+    decomposition (the typical lap vs best, same comparison the reasons use) — absent → zero phases.
     Returns Opportunities; enough=False (empty rows) when < min_laps candidate laps."""
     n_laps = len(candidate_lap_ids)
     med_id = median_lap_id(candidate_lap_ids, lap_times)
@@ -236,12 +359,23 @@ def summarize(
             return float(c.enter) * scale, float(c.exit) * scale
         return float(c.enter), float(c.exit)
 
+    # D2: the typical lap's speed-vs-distance trace + best lap's, for the entry/apex/exit Δt
+    # decomposition. Both must be present (and usable) to attach phases; otherwise zero phases.
+    have_phases = (median_dist is not None and median_speed_kmh is not None
+                   and best_dist is not None and best_speed_kmh is not None)
+
     # Build a row per corner with a positive median loss; rank by the loss (biggest first).
     ranked_idx = [i for i in np.argsort(-losses, kind="stable") if losses[i] > 1e-9]
 
     rows: list[Opportunity] = []
     for rank, i in enumerate(ranked_idx):
         c = corners[i]
+        phases = (corner_phase_losses(
+            median_dist, median_speed_kmh, best_dist, best_speed_kmh,
+            float(c.enter), float(c.exit),
+            corner_dist_total=corner_dist_total, lap_total=median_lap_total,
+            best_total=best_lap_total,
+        ) if have_phases else _NO_PHASES)
         attach_reason = rank < top_n
         if attach_reason:
             reason = _pick_reason(
@@ -259,22 +393,45 @@ def summarize(
                             sigma=float(sigmas_by_cid.get(c.cid, 0.0)))
         rows.append(Opportunity(
             cid=c.cid, direction=c.direction, time_lost=float(losses[i]),
-            entry_dist=float(c.enter), reason=reason,
+            entry_dist=float(c.enter), reason=reason, phases=phases,
         ))
     return Opportunities(enough=True, n_laps=n_laps, median_lap_id=med_id, rows=rows)
+
+
+# Names for the dominant phase in the coaching sentence (PHASE_* → human words).
+_PHASE_WORD = {PHASE_ENTRY: "entry", PHASE_APEX: "the apex", PHASE_EXIT: "exit"}
+
+
+def dominant_phase_clause(opp: Opportunity) -> str:
+    """A short "most of it on <phase>" clause for the opportunity's worst third, or "" when the
+    decomposition is absent/flat or no phase is clearly losing time. Surfaces the D2 attribution
+    in the human sentence without overclaiming: only when the dominant third is positive AND holds
+    a clear majority (≥ half) of the total loss."""
+    ph = opp.phases
+    total = ph.total
+    if total <= 1e-6:
+        return ""
+    worst = ph.dominant
+    worst_dt = {PHASE_ENTRY: ph.entry, PHASE_APEX: ph.apex, PHASE_EXIT: ph.exit}[worst]
+    if worst_dt <= 1e-6 or worst_dt < 0.5 * total:
+        return ""
+    return f" — most of it on {_PHASE_WORD[worst]}"
 
 
 # ------------------------------------------------------------------ UI sentence helper
 def reason_sentence(opp: Opportunity) -> str:
     """The human, numbers-only coaching sentence for one opportunity's dominant reason. Kept
-    here (next to the model) so the panel and any export read ONE phrasing and can't drift."""
+    here (next to the model) so the panel and any export read ONE phrasing and can't drift. When
+    a clear dominant phase exists (D2) it is appended ("… — most of it on exit")."""
     r = opp.reason
     if r.kind == REASON_APEX:
-        return f"carry more apex speed (−{r.apex_speed_deficit:.1f} km/h)"
-    if r.kind == REASON_BRAKING:
-        return f"brake later / shorter (+{r.brake_extra_s:.2f} s on the brakes)"
-    if r.kind == REASON_COASTING:
-        return f"back to throttle sooner (+{r.coast_extra_s:.2f} s coasting)"
-    if r.kind == REASON_LINE:
-        return f"be consistent here (σ {r.sigma:.2f} s)"
-    return "find time here"
+        base = f"carry more apex speed (−{r.apex_speed_deficit:.1f} km/h)"
+    elif r.kind == REASON_BRAKING:
+        base = f"brake later / shorter (+{r.brake_extra_s:.2f} s on the brakes)"
+    elif r.kind == REASON_COASTING:
+        base = f"back to throttle sooner (+{r.coast_extra_s:.2f} s coasting)"
+    elif r.kind == REASON_LINE:
+        base = f"be consistent here (σ {r.sigma:.2f} s)"
+    else:
+        base = "find time here"
+    return base + dominant_phase_clause(opp)
