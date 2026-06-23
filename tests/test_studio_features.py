@@ -1201,6 +1201,7 @@ def test_async_load_settles_off_ui_thread():
         assert w.view is not None
         assert list(w._paths) == [DEFAULT_SAMPLE], w._paths
     finally:
+        w._drain_load_workers()  # finish any in-flight worker WITHOUT a GIL-deadlocking wait()
         w.close()
         w.deleteLater()
     print("test_async_load_settles_off_ui_thread OK")
@@ -1241,6 +1242,7 @@ def test_reentrant_load_applies_only_latest():
         assert getattr(w, "session", None) is not None
         assert w.view is not None
     finally:
+        w._drain_load_workers()  # drain BOTH workers (incl. the superseded one) before teardown
         w.close()
         w.deleteLater()
     print("test_reentrant_load_applies_only_latest OK")
