@@ -88,8 +88,9 @@ class CompareController:
     # --- read-only state the tick loop, scrub controller + auto-follow observe ---
     @property
     def active(self) -> bool:
-        """True iff compare mode is on (the semantic compare ownership; distinct from VideoView's
-        own two-pane LAYOUT flag). Auto-follow's re-point is suspended while this is True."""
+        """True iff compare mode is on — the SINGLE source of truth for 'are we comparing'. VideoView
+        is a dumb renderer that derives its two-pane layout from the live widget tree and is driven by
+        this controller; it holds no compare flag. Auto-follow's re-point is suspended while True."""
         return self._compare
 
     @property

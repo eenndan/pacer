@@ -11,6 +11,13 @@ positionChanged is never forwarded), always muted, and disposed on exit/reload. 
 fixed ROLE caption + a lap picker (the SOLE home of lap identity, emits paneRepointRequested) + a
 "Δ vs other" badge. Play/pause/mute fan out to both panes.
 
+VideoView is a DUMB layout renderer for compare: it holds NO 'are we comparing' flag. CompareController
+is the single source of truth for that semantic state; the view derives its own layout fact (is the
+two-pane stage mounted?) from the live widget tree (_panes_mounted) and is driven by the imperative
+verbs set_compare(pane_a, pane_b) (enter/re-seed) and exit_compare() (leave). A user toggle of the
+compare button only EMITS compareToggled (the intent); the controller decides and calls those verbs
+back, which also reflect the authoritative checked/appearance state onto the button (no two-way sync).
+
 The slider + emitted position are GLOBAL session ms (multi-chapter summed); the pane maps
 global<->chapter and switches sources under the hood. In compare mode the slider spans lap A's
 window via the primary pane's clamp.
@@ -235,7 +242,8 @@ class VideoView(QWidget):
     positionChanged = Signal(float)  # GLOBAL seconds on the session clock (forwarded from the pane)
     chapterChanged = Signal(int)     # current chapter index (forwarded from the PRIMARY pane)
     seamLoading = Signal(bool)       # PRIMARY pane is reopening the next chapter at a seam (app hint)
-    compareToggled = Signal(bool)    # the "Compare videos" toggle flipped (app seeds/tears down)
+    compareToggled = Signal(bool)    # user INTENT: the compare button flipped (CompareController owns
+                                     # the decision and calls back set_compare / exit_compare)
     # A pane's lap picker was used: (side, lap_id) — app repoints that side (lap+window+caption+
     # chart overlay + badge). side is PRIMARY (0) or SECONDARY (1).
     paneRepointRequested = Signal(int, int)
@@ -252,9 +260,6 @@ class VideoView(QWidget):
         # Forward only the PRIMARY pane's seam-reopen hint (the secondary is video-only).
         self.pane.seamLoading.connect(self.seamLoading)
 
-        # True iff the two-pane stage is mounted (the view's layout state; the secondary pane + cells
-        # exist only while this is on).
-        self._two_panes = False
         # PRIMARY pane's lap window while in compare mode, else None. Confines the scrub slider to
         # lap A; the pair stays in sync only via _compare_seek_fanout (the window alone doesn't).
         self._lap_window: tuple[float, float] | None = None
@@ -273,7 +278,6 @@ class VideoView(QWidget):
         self._cell_a: _PaneCell | None = None   # primary cell wrapper (compare mode)
         self._cell_b: _PaneCell | None = None   # secondary cell wrapper (compare mode)
         self._splitter: QSplitter | None = None
-        self._compare_enabled = False           # ≥2 valid laps (set by app via set_compare_enabled)
         # lap-boundary positions (seconds) for the slider's lap ruler; re-applied on range changes.
         self._lap_boundaries_s: list[float] = []
 
@@ -304,15 +308,19 @@ class VideoView(QWidget):
         self.gmeter_btn.toggled.connect(self.set_gmeter_visible)
 
         # Icon-only compare toggle (same transport vocab as g-meter). Off by default, enabled only
-        # with >=2 laps. Appearance/meaning: _set_compare_btn_state. Emits compareToggled; the app
-        # calls back set_compare/exit_compare (which own _two_panes + the panes).
+        # with >=2 laps. The button is a pure INPUT: a user click just emits compareToggled (the
+        # intent), and CompareController — the single source of truth for 'are we comparing' — calls
+        # back set_compare / exit_compare, which render the layout AND reflect the authoritative
+        # checked/appearance state onto this button (see _set_compare_visual). The button never holds
+        # or mirrors compare state itself.
         self.compare_btn = QPushButton()
         self.compare_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
         self.compare_btn.setFixedSize(_ICON_BTN)
         self.compare_btn.setCheckable(True)
         self.compare_btn.setEnabled(False)
-        self.compare_btn.toggled.connect(self._on_compare_toggled)
-        self._set_compare_btn_state(False)
+        self.compare_btn.toggled.connect(self._set_compare_btn_appearance)  # glyph follows checked
+        self.compare_btn.toggled.connect(self.compareToggled)               # emit the user intent
+        self._set_compare_btn_appearance(False)
 
         # global-ms scrub slider over the whole session (multi-chapter summed); _LapRulerSlider
         # paints lap ticks.
@@ -359,6 +367,15 @@ class VideoView(QWidget):
         lay.addWidget(self.readout)
 
     # ------------------------------------------------------------- public API (drives the pane)
+    def _panes_mounted(self) -> bool:
+        """True iff the two-pane compare stage is currently mounted — DERIVED from the live widget
+        tree (the splitter is in the stage layout), not a mirrored flag. The secondary pane + cells
+        exist only while this is on; the splitter is built and stage-swapped on enter, dropped on
+        exit. CompareController owns the SEMANTIC 'are we comparing' state; this is purely the view's
+        own layout fact, read by the fan-out/g-meter helpers that act on whichever panes are live."""
+        return (self._splitter is not None
+                and self._stage_lay.indexOf(self._splitter) != -1)
+
     @property
     def is_multi(self) -> bool:
         return self.pane.is_multi
@@ -372,12 +389,12 @@ class VideoView(QWidget):
     def play(self):
         """Play — fans out to BOTH panes in compare mode (each rolls from its own lap start)."""
         self.pane.play()
-        if self._two_panes and self.secondary is not None:
+        if self.secondary is not None:
             self.secondary.play()
 
     def pause(self):
         self.pane.pause()
-        if self._two_panes and self.secondary is not None:
+        if self.secondary is not None:
             self.secondary.pause()
 
     def pause_if_playing(self):
@@ -386,7 +403,7 @@ class VideoView(QWidget):
         keep each pane parked at its lap start."""
         if self.pane.is_playing():
             self.pane.pause()
-        if self._two_panes and self.secondary is not None and self.secondary.is_playing():
+        if self.secondary is not None and self.secondary.is_playing():
             self.secondary.pause()
 
     def toggle(self):
@@ -452,7 +469,7 @@ class VideoView(QWidget):
         """(Re)push the stored lap boundaries onto the slider as ms ticks — but only in single-video
         mode (the whole-session range). In compare mode the slider is confined to lap A's window, so
         clear the ruler there."""
-        if self._two_panes or not getattr(self, "_lap_boundaries_s", None):
+        if self._panes_mounted() or not getattr(self, "_lap_boundaries_s", None):
             self.slider.set_lap_ticks([])
         else:
             self.slider.set_lap_ticks([int(round(s * 1000)) for s in self._lap_boundaries_s])
@@ -461,37 +478,32 @@ class VideoView(QWidget):
     def set_compare_enabled(self, enabled: bool):
         """Enable the "Compare videos" toggle only when ≥2 valid laps exist (app drives this).
         When it goes disabled while compare is ON (e.g. a reload to a session with <2 laps), the
-        button un-checks, which tears compare down via the toggled handler."""
-        self._compare_enabled = bool(enabled)
-        self.compare_btn.setEnabled(self._compare_enabled)
-        if not self._compare_enabled and self.compare_btn.isChecked():
-            self.compare_btn.setChecked(False)  # -> _on_compare_toggled(False) tears down
+        button un-checks, which emits compareToggled(False) so CompareController tears compare down
+        (and calls back exit_compare to restore the single-pane layout)."""
+        self.compare_btn.setEnabled(bool(enabled))
+        if not enabled and self.compare_btn.isChecked():
+            self.compare_btn.setChecked(False)  # -> compareToggled(False) -> controller exits
 
-    def _set_compare_btn_state(self, on: bool):
-        """Drive the compare toggle's OFF/ON appearance (glyph accent + tooltip). Only called on a
-        state change, never per tick."""
+    def _set_compare_btn_appearance(self, on: bool):
+        """Drive the compare toggle's OFF/ON appearance (glyph accent + tooltip) to track its checked
+        state. Wired to the button's `toggled` and re-applied by _set_compare_visual; never per tick."""
         self.compare_btn.setIcon(theme.icon("ph.columns", color=theme.C.accent if on else None))
         self.compare_btn.setToolTip(
             "Comparing two laps' videos side-by-side — click to exit (C)" if on else
             "Compare two laps' videos side-by-side (C) — needs ≥2 valid laps")
 
-    def _sync_compare_btn(self, on: bool):
-        """Sync the toggle's checked state + appearance to the live layout WITHOUT re-emitting
-        compareToggled — a live signal would re-enter _on_compare_toggled and run a conflicting
-        second enter/exit (corrupts cross-recording pane B). A genuine user click still routes
-        through _on_compare_toggled."""
+    def _set_compare_visual(self, on: bool):
+        """Reflect CompareController's compare state onto the button WITHOUT re-emitting compareToggled
+        — a live emit would re-enter the controller's on_toggled and run a conflicting second
+        enter/exit (the PR#81 re-entrancy that corrupted cross-recording pane B). Called only from the
+        layout verbs (set_compare / exit_compare), i.e. when the controller — the single source of
+        truth — drives the layout; a genuine user click reaches the controller via the button's own
+        live `toggled`. This is the controller→view reflection, not a view-owned flag mirror."""
         if self.compare_btn.isChecked() != on:
             self.compare_btn.blockSignals(True)
             self.compare_btn.setChecked(on)
             self.compare_btn.blockSignals(False)
-        self._set_compare_btn_state(on)
-
-    def _on_compare_toggled(self, on: bool):
-        """The toggle flipped: swap its labeled OFF/ON appearance and emit compareToggled so the app
-        seeds the lap pair (enter) or restores single-pane (exit). The actual pane build/teardown
-        happens in set_compare / exit_compare, which the app calls back."""
-        self._set_compare_btn_state(bool(on))
-        self.compareToggled.emit(bool(on))
+        self._set_compare_btn_appearance(on)
 
     def set_compare(self, pane_a: PaneSpec, pane_b: PaneSpec):
         """Enter or re-seed compare mode: swap the single pane for a 2-pane QSplitter. pane_a is the
@@ -559,8 +571,9 @@ class VideoView(QWidget):
             # also re-pin overlays on handle drag (belt-and-braces; the native surface may not emit a Move).
             self._splitter.splitterMoved.connect(self._on_splitter_moved)
 
-        # Swap the stage layout to the splitter (the primary pane re-parents into _cell_a).
-        if not self._two_panes:
+        # Swap the stage layout to the splitter (the primary pane re-parents into _cell_a). Guarded on
+        # the DERIVED mounted state so a re-seed (already two-pane) doesn't re-swap.
+        if not self._panes_mounted():
             self._stage_lay.removeWidget(self.pane)
             self._stage_lay.addWidget(self._splitter, 1)
             self.secondary.show()
@@ -568,8 +581,8 @@ class VideoView(QWidget):
         # equalize now and again next event-loop turn (setSizes needs a real width — see _equalize_panes)
         self._equalize_panes()
         QTimer.singleShot(0, self._equalize_panes)
-        self._two_panes = True
-        self._sync_compare_btn(True)
+        # Reflect the controller's compare-ON state onto the button (no re-emit; see _set_compare_visual).
+        self._set_compare_visual(True)
 
         # Seed each pane's window + caption + picker from its spec (the app seeks the panes to their starts).
         self.pane.set_lap_window(*pane_a.window)
@@ -604,13 +617,12 @@ class VideoView(QWidget):
         """Leave compare mode: tear the secondary pane down (stop + deleteLater player+audio,
         .close() overlay) and restore the single-pane stage at the PRIMARY's current position.
         The primary pane keeps decoding the whole session again (its lap window is cleared)."""
-        if not self._two_panes:
+        if not self._panes_mounted():
             return
-        self._two_panes = False
-        self._sync_compare_btn(False)
+        # Reflect the controller's compare-OFF state onto the button (no re-emit; see _set_compare_visual).
+        self._set_compare_visual(False)
         # Restore the single-pane stage: pull the primary pane out of its cell, drop the splitter.
-        if self._splitter is not None:
-            self._stage_lay.removeWidget(self._splitter)
+        self._stage_lay.removeWidget(self._splitter)
         # Reparent the primary pane back into the stage (out of _cell_a) BEFORE deleting the cells.
         self._stage_lay.addWidget(self.pane, 1)
         self.pane.show()
@@ -770,8 +782,7 @@ class VideoView(QWidget):
         t = ms / 1000.0
         self.seek(t)  # PRIMARY pane
         # fan the same move out to pane B (distance-locked); only in compare mode, after the primary seek.
-        if (self._two_panes and self.secondary is not None
-                and self._compare_seek_fanout is not None):
+        if self.secondary is not None and self._compare_seek_fanout is not None:
             self._compare_seek_fanout(t)
 
     def _on_slider_action(self, _action: int):
