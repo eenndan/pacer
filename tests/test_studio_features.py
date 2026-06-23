@@ -24,6 +24,7 @@ These exercise the load-bearing pure logic directly on synthetic data:
     pacer / real panels.
 Run: python tests/test_studio_features.py
 """
+import faulthandler
 import math
 import os
 import sys
@@ -1194,6 +1195,9 @@ def test_async_load_settles_off_ui_thread():
     from studio.app import StudioWindow
     from studio.session import DEFAULT_SAMPLE
     w = StudioWindow([DEFAULT_SAMPLE])
+    # CI diagnostic: if the off-thread load ever stalls, dump every thread's stack so the CI log
+    # pinpoints where (a no-op on the normal fast path — cancelled below).
+    faulthandler.dump_traceback_later(90, repeat=True, exit=False)
     try:
         assert _pump_until(lambda: w.view is not None), "async load never completed"
         assert getattr(w, "session", None) is not None
@@ -1201,6 +1205,7 @@ def test_async_load_settles_off_ui_thread():
         assert w.view is not None
         assert list(w._paths) == [DEFAULT_SAMPLE], w._paths
     finally:
+        faulthandler.cancel_dump_traceback_later()
         w._drain_load_workers()  # finish any in-flight worker WITHOUT a GIL-deadlocking wait()
         w.close()
         w.deleteLater()
@@ -1216,6 +1221,7 @@ def test_reentrant_load_applies_only_latest():
     from studio.app import StudioWindow
     from studio.session import DEFAULT_SAMPLE
     w = StudioWindow([])  # welcome state, no in-flight load
+    faulthandler.dump_traceback_later(90, repeat=True, exit=False)  # CI hang diagnostic (see above)
     try:
         applied_tokens = []
         _orig = w._on_session_loaded
@@ -1242,6 +1248,7 @@ def test_reentrant_load_applies_only_latest():
         assert getattr(w, "session", None) is not None
         assert w.view is not None
     finally:
+        faulthandler.cancel_dump_traceback_later()
         w._drain_load_workers()  # drain BOTH workers (incl. the superseded one) before teardown
         w.close()
         w.deleteLater()
