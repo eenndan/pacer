@@ -51,6 +51,17 @@ pixi run studio -- /path/to/GX010060.MP4  # build + launch on a recording
 
 GoPro chapter siblings (`GX01…`, `GX02…`) are chained automatically.
 
+To explore without your own footage, `pixi run studio -- --demo` opens a real demo lapping
+recording (fetched once at runtime — nothing large is committed). See
+[docs/PACKAGING.md](docs/PACKAGING.md#demo-data).
+
+## Install / Packaging
+
+To build a standalone, double-clickable **`Pacer Studio.app`** + a drag-to-install `.dmg` (no
+pixi / Python needed on the target Mac), see **[docs/PACKAGING.md](docs/PACKAGING.md)** —
+`packaging/build_macos.sh` produces an unsigned app via PyInstaller; that doc also covers the
+codesign + notarize + staple steps for distribution.
+
 ## Development
 
 ```bash

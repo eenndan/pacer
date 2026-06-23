@@ -42,7 +42,20 @@ from ._signal import (
 )
 from .load import load_recording
 
-DEFAULT_SAMPLE = "3rdparty/gpmf-parser/samples/hero6.mp4"  # a clip with real motion
+
+def _default_sample_path() -> str:
+    """The bundled sample clip path. In a normal checkout it's the repo-relative path (resolved
+    against the cwd, which is the repo root for `python -m studio`). In a frozen PyInstaller .app
+    the cwd is unpredictable (often "/"), so resolve it against sys._MEIPASS where pacer.spec adds
+    the sample as a datas entry — otherwise the bundled "Open demo" sample would never be found."""
+    import sys
+
+    rel = "3rdparty/gpmf-parser/samples/hero6.mp4"
+    base = getattr(sys, "_MEIPASS", None) if getattr(sys, "frozen", False) else None
+    return os.path.join(base, rel) if base else rel
+
+
+DEFAULT_SAMPLE = _default_sample_path()  # a clip with real motion
 
 _UNSET = object()  # sentinel for "cache not yet computed" where None is a valid cached value
 

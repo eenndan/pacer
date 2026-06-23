@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -46,15 +47,43 @@ from PySide6.QtGui import (
 from . import gmeter_overlay, theme
 from ._signal import fmt_time
 
+
 # --------------------------------------------------------------------------- ffmpeg discovery
-# Resolved lazily so importing this module never requires ffmpeg (the unit tests mock the
+# Resolved at import so importing this module never *runs* ffmpeg (the unit tests mock the
 # subprocess; only a real render needs the binaries). The pixi env puts them on PATH for the app.
-FFMPEG = "ffmpeg"
-FFPROBE = "ffprobe"
+#
+# Resolution order (so a bundled, PATH-less macOS .app still finds them):
+#   1. PACER_FFMPEG / PACER_FFPROBE env vars      — set by the PyInstaller runtime hook
+#      (packaging/pacer.spec) to the binaries bundled inside the .app, and overridable by hand.
+#   2. a binary sitting next to the frozen executable or under sys._MEIPASS (PyInstaller onedir/
+#      onefile) — the fallback if the runtime hook didn't run for some reason.
+#   3. the bare name "ffmpeg"/"ffprobe" resolved on PATH — the dev/pixi path (unchanged).
+# A frozen .app has NO PATH ffmpeg, hence steps 1-2; in a normal checkout neither bundle marker is
+# set so this is exactly the old PATH lookup.
+def _resolve_binary(name: str, env_var: str) -> str:
+    override = os.environ.get(env_var)
+    if override:
+        return override
+    # PyInstaller sets sys.frozen + sys._MEIPASS (the unpacked bundle dir). Look for a binary
+    # bundled alongside the app's resources before falling back to PATH.
+    if getattr(sys, "frozen", False):
+        roots = [getattr(sys, "_MEIPASS", None), os.path.dirname(sys.executable)]
+        for root in roots:
+            if not root:
+                continue
+            cand = os.path.join(root, name)
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                return cand
+    return name
+
+
+FFMPEG = _resolve_binary("ffmpeg", "PACER_FFMPEG")
+FFPROBE = _resolve_binary("ffprobe", "PACER_FFPROBE")
 
 
 def ffmpeg_available() -> bool:
-    """True iff both ffmpeg and ffprobe are on PATH."""
+    """True iff both ffmpeg and ffprobe are runnable. `shutil.which` resolves a bare name on PATH
+    AND validates an absolute path (the bundled/overridden case) is an executable file."""
     return shutil.which(FFMPEG) is not None and shutil.which(FFPROBE) is not None
 
 

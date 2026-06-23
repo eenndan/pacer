@@ -1334,6 +1334,29 @@ def test_real_render_quality_levels_if_media():
     print(f"real_render_quality_levels OK (720/std {br_lo} < 1080/high {br_hi} bps)")
 
 
+def test_resolve_binary_env_override_then_path():
+    """_resolve_binary (the bundled-.app ffmpeg lookup): an explicit PACER_FFMPEG/PACER_FFPROBE env
+    var wins (the runtime hook's mechanism + a hand override); with no override and not frozen, it
+    falls back to the bare PATH name (the dev/pixi path, unchanged)."""
+    saved = {k: os.environ.get(k) for k in ("PACER_FFMPEG", "PACER_FFPROBE")}
+    try:
+        os.environ["PACER_FFMPEG"] = "/opt/pacer/ffmpeg"
+        os.environ["PACER_FFPROBE"] = "/opt/pacer/ffprobe"
+        assert ev._resolve_binary("ffmpeg", "PACER_FFMPEG") == "/opt/pacer/ffmpeg"
+        assert ev._resolve_binary("ffprobe", "PACER_FFPROBE") == "/opt/pacer/ffprobe"
+        # no override + a normal (non-frozen) interpreter -> the bare name resolved on PATH later.
+        os.environ.pop("PACER_FFMPEG", None)
+        assert not getattr(sys, "frozen", False), "test interpreter unexpectedly frozen"
+        assert ev._resolve_binary("ffmpeg", "PACER_FFMPEG") == "ffmpeg"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    print("resolve_binary OK (env override wins, PATH fallback otherwise)")
+
+
 # --------------------------------------------------------------------------- restore fixture
 class _Restore:
     """Save/restore the module globals the pipeline mocks clobber, so tests don't bleed into each
