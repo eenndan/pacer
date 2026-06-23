@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import driving
-from ._signal import speed_long_g
+from ._signal import G, speed_long_g
 
 # "cache not yet computed" sentinel (None is a legal cached value); module-local to avoid
 # importing Session.
@@ -28,12 +28,17 @@ class DrivingChannels:
         # g series, which is constant -> kept across re-segments.
         self._thresholds_cache: object = _UNSET
         self._grip_env_cache: object = _UNSET
+        # D4: the session's demonstrated peak braking decel (g), derived from EVERY valid lap's brake
+        # events -> depends on the segmentation, so it is dropped on re-segment with the per-lap caches.
+        self._a_max_cache: object = _UNSET
         # Per-lap channels, all projected through the segmentation -> cleared on re-segment.
         self._brake_events_cache: dict[int, list[driving.BrakeEvent]] = {}
         self._coasting_spans_cache: dict[int, list[driving.CoastSpan]] = {}
         self._corner_grip_cache: dict[int, list[float]] = {}
         # D3: per-lap (dist, elapsed, intensity) for the synthetic brake/throttle band.
         self._brake_throttle_cache: dict[int, tuple] = {}
+        # D4: per-lap per-corner braking-point comparisons.
+        self._brake_points_cache: dict[int, list[driving.BrakePoint]] = {}
 
     def invalidate(self) -> None:
         """Drop the per-lap caches on re-segment (Session.set_timing_lines); thresholds are
@@ -42,6 +47,8 @@ class DrivingChannels:
         self._coasting_spans_cache.clear()
         self._corner_grip_cache.clear()
         self._brake_throttle_cache.clear()
+        self._brake_points_cache.clear()
+        self._a_max_cache = _UNSET  # depends on the per-lap brake events, which re-project
 
     # ------------------------------------------------------------------ g + thresholds
     def _lap_g_arrays(self, lap_id: int):
@@ -189,6 +196,83 @@ class DrivingChannels:
         speed_kmh = np.interp(gm.times, self._s.tt, self._s.tv)
         self._grip_env_cache = driving.grip_envelope(gm.long_g, gm.lat_g, speed_kmh)
         return self._grip_env_cache
+
+    # ------------------------------------------------------------------ D4 braking-point optimizer
+    def _a_max(self) -> float:
+        """The session's DEMONSTRATED peak braking deceleration (g) for the brake-point optimizer:
+        a robust high percentile of every valid lap's per-event peak decels, floored (see
+        driving.estimate_a_max). NOT the detection threshold theta_b. Cached; dropped on re-segment.
+        0.0 only when there's no g signal at all (the accessor then reports N/A everywhere)."""
+        if self._a_max_cache is not _UNSET:
+            return self._a_max_cache
+        s = self._s
+        if self.thresholds() is None:  # no g signal -> no brake-point math
+            self._a_max_cache = 0.0
+            return 0.0
+        peaks: list[float] = []
+        for lap_id in s.valid_lap_ids():
+            peaks.extend(e.peak_decel for e in self.lap_brake_events(lap_id))
+        self._a_max_cache = driving.estimate_a_max(peaks)
+        return self._a_max_cache
+
+    def lap_brake_points(self, lap_id: int) -> list[driving.BrakePoint]:
+        """D4: per-corner braking-point comparison for one lap (one BrakePoint per detected corner,
+        track order) — where the driver actually braked vs the apex-speed-matched LATEST sustainable
+        brake point (see driving.BrakePoint). ESTIMATED.
+
+        Each corner is matched to the brake event whose onset falls in [enter - lead, exit] on THIS
+        lap's odometer (the brake zone starts on the straight before turn-in); the LAST such onset is
+        taken (the brake into the corner, not an earlier corner's release). entry speed = the speed at
+        that onset; v_apex/apex_dist come from this lap's lap_corner_stats. A corner with no matched
+        brake event, or where v_apex >= v_entry (no braking needed) / no a_max, is OMITTED (N/A).
+
+        [] when there's no g signal, no corners, or the lap is degenerate."""
+        got = self._brake_points_cache.get(lap_id)
+        if got is not None:
+            return got
+        s = self._s
+        a_max_g = self._a_max()
+        stats = s.lap_corner_stats(lap_id)
+        arr = s._lap_arrays(lap_id)
+        if a_max_g <= 0.0 or not stats or arr is None:
+            return []
+        dists, speed_kmh, _elapsed = arr
+        if len(dists) < 2:
+            return []
+        basis = s._corner_basis()
+        if basis is None or not basis[0]:
+            return []
+        corner_list, total_ref = basis
+        if total_ref <= 0:
+            return []
+        total_lap = float(dists[-1])
+        a_max_ms2 = a_max_g * G
+        events = self.lap_brake_events(lap_id)
+        out: list[driving.BrakePoint] = []
+        for i, c in enumerate(corner_list):
+            if i >= len(stats):
+                break
+            st = stats[i]
+            # Project the corner's [enter - lead, exit] window onto THIS lap's odometer (the same
+            # normalized-distance projection lap_corner_stats / grip use), then take the LAST brake
+            # onset inside it as the brake into this corner.
+            lo = (c.enter / total_ref * total_lap) - driving.BRAKE_MATCH_LEAD_M
+            hi = c.exit / total_ref * total_lap
+            matched = [e for e in events if lo <= e.onset_dist <= hi]
+            if not matched:
+                continue  # no detected brake into this corner -> N/A
+            onset = float(matched[-1].onset_dist)
+            v_entry = float(np.interp(onset, dists, speed_kmh)) / 3.6  # km/h -> m/s
+            v_apex = float(st.apex_speed) / 3.6
+            d = driving.optimal_brake_distance(v_entry, v_apex, a_max_ms2)
+            if d is None:  # v_apex >= v_entry (no braking needed) -> N/A for this corner
+                continue
+            optimal = float(st.apex_dist) - d
+            out.append(driving.BrakePoint(
+                cid=c.cid, actual_brake_dist=onset, optimal_brake_dist=optimal,
+                metres_later=optimal - onset, a_max_g=a_max_g))
+        self._brake_points_cache[lap_id] = out
+        return out
 
     # ------------------------------------------------------------------ map / plot glue
     def lap_brake_map_markers(self, lap_id: int) -> list[tuple[float, float, float]]:

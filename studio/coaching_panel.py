@@ -111,19 +111,39 @@ class PhaseBar(QWidget):
             + f"\nTotal {phases.total:+.2f} s — biggest loss on {_PHASE_LABEL[dominant].lower()}.")
 
 
+# D4: below this many metres the brake-point delta is within the estimate's noise — show no hint.
+BRAKE_HINT_MIN_M = 2.0
+
+
+def _brake_point_hint(bp) -> str | None:
+    """A short, ESTIMATED braking-point coaching line for a corner's driving.BrakePoint, or None
+    when the metres are negligible (< BRAKE_HINT_MIN_M — within the estimate's noise). Positive
+    metres_later => "brake later"; negative => "brake earlier". Labelled ESTIMATED (constant-decel
+    assumption at the session's demonstrated peak braking)."""
+    m = float(bp.metres_later)
+    if abs(m) < BRAKE_HINT_MIN_M:
+        return None
+    if m > 0:
+        return f"Brake ~{m:.0f} m later into C{bp.cid} (EST)"
+    return f"Brake ~{abs(m):.0f} m earlier into C{bp.cid} (EST)"
+
+
 class OpportunitiesDialog(QDialog):
     """Coaching ▸ Opportunities dialog over a freshly-computed ``coaching.Opportunities``.
     jump_to(cid, entry_dist) fires on a row's Jump button; None disables them (headless layout
-    tests)."""
+    tests). `brake_points` (optional, cid -> driving.BrakePoint for the best lap) appends a light
+    ESTIMATED "brake ~N m later" line to a row's reason (D4)."""
 
     def __init__(self, opportunities: coaching.Opportunities,
                  jump_to: Callable[[int, float], None] | None = None,
+                 brake_points: dict | None = None,
                  parent=None):
         super().__init__(parent)
         self.setWindowTitle("pacer studio — opportunities")
         self.resize(560, 320)
         self._opps = opportunities
         self._jump_to = jump_to
+        self._brake_points = brake_points or {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -199,9 +219,17 @@ class OpportunitiesDialog(QDialog):
             lost_item.setFont(num_font)
             lost_item.setForeground(QColor(theme.delta_colour(opp.time_lost)))
 
-            reason_item = QTableWidgetItem(coaching.reason_sentence(opp))
+            sentence = coaching.reason_sentence(opp)
+            bp = self._brake_points.get(opp.cid)
+            hint = _brake_point_hint(bp) if bp is not None else None
+            reason_item = QTableWidgetItem(f"{sentence}\n{hint}" if hint else sentence)
             reason_item.setFlags(reason_item.flags() & ~Qt.ItemIsEditable)
-            reason_item.setToolTip(_REASON_TIP.get(opp.reason.kind, ""))
+            tip = _REASON_TIP.get(opp.reason.kind, "")
+            if hint is not None:
+                tip = (f"{tip}\n\n{hint}: the apex-speed-matched latest sustainable brake point is "
+                       f"~{bp.optimal_brake_dist:.0f} m; you brake at ~{bp.actual_brake_dist:.0f} m. "
+                       "ESTIMATED (constant decel at this session's demonstrated peak braking).")
+            reason_item.setToolTip(tip)
 
             table.setItem(r, _COL_CORNER, corner_item)
             table.setItem(r, _COL_LOST, lost_item)

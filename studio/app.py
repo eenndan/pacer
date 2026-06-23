@@ -566,7 +566,13 @@ class StudioWindow(QMainWindow):
         if getattr(self, "session", None) is None:
             return
         opps = self.session.coaching_opportunities()
-        dlg = OpportunitiesDialog(opps, jump_to=self._jump_to_opportunity, parent=self)
+        # D4: the best lap's per-corner braking-point comparison, keyed by cid so the dialog can
+        # append the ESTIMATED "brake ~N m later" line to a corner's reason. Empty when no g signal.
+        best = self.session.best_lap_id()
+        brake_points = ({bp.cid: bp for bp in self.session.lap_brake_points(best)}
+                        if best is not None else {})
+        dlg = OpportunitiesDialog(opps, jump_to=self._jump_to_opportunity,
+                                  brake_points=brake_points, parent=self)
         dlg.exec()
 
     def _jump_to_opportunity(self, cid: int, _entry_dist: float):

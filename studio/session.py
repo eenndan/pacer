@@ -1358,6 +1358,15 @@ class Session:
         (None, None) when there's no g signal / no best lap (distance mode)."""
         return self._dc.lap_brake_throttle_plot(lap_id, mode)
 
+    def lap_brake_points(self, lap_id: int) -> list[driving.BrakePoint]:
+        """D4: per-corner braking-point comparison for one lap — where the driver actually braked vs
+        the apex-speed-matched LATEST sustainable brake point (one driving.BrakePoint per corner, with
+        `metres_later` positive when the driver can brake later). ESTIMATED, using the session's
+        DEMONSTRATED peak braking decel (not the detection threshold). Corners with no detected brake
+        event, or where the apex speed is already at/above the entry speed, are omitted (N/A). []
+        when there's no g signal, no corners, or the lap is degenerate."""
+        return self._dc.lap_brake_points(lap_id)
+
     def library_entry(self, paths: list[str]) -> dict:
         """Build this recording's session-library entry (F8) — a plain dict fed to the
         pacer-free ``studio.library`` index. PACER stays on THIS side of the seam (the values

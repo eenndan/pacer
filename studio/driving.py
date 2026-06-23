@@ -66,6 +66,14 @@ MERGE_GATE_S = 0.30       # s; boxcar for the merge gate's signed g (wider than 
 CORNER_LEAD_M = 40.0      # m; widen corner windows upstream (braking starts before the geometry)
 GRIP_ENV_PCT = 98.0       # percentile of combined |g| over the session = the grip "limit" (robust max)
 GRIP_ENV_FLOOR = 0.3      # g; a session that never loaded the tyres can't make a tiny divisor
+# D4: braking-point optimizer. a_max (the deceleration the optimal-brake-distance physics divides by)
+# is the session's DEMONSTRATED peak braking, NOT the detection threshold theta_b: a robust high
+# percentile of the per-event peak decels (g), floored so a timid session can't yield an absurdly
+# tiny a_max (-> absurdly long optimal braking distance). Converted g->m/s^2 via G at use.
+AMAX_PCT = 90.0           # percentile of the per-event peak decels = the session's demonstrated brake
+AMAX_FLOOR_G = 0.30       # g; a_max floor — a session that never braked hard still gets a sane decel
+BRAKE_MATCH_LEAD_M = 30.0 # m; a corner's matched brake event onsets within [enter-this, exit] — the
+#                           brake zone starts on the straight before turn-in (mirrors coaching's window)
 
 
 @dataclass(frozen=True)
@@ -105,6 +113,44 @@ class CoastSpan:
     start_dist: float    # lap odometer (m) where the coast begins
     end_dist: float      # lap odometer (m) where it ends
     duration: float      # how long it lasts (s)
+
+
+@dataclass(frozen=True)
+class BrakePoint:
+    """D4: one corner's braking-point comparison — where the driver actually braked vs the
+    apex-speed-matched latest sustainable brake point. ESTIMATED (the optimum assumes constant-decel
+    braking at the session's demonstrated peak). All distances are this lap's odometer (m)."""
+
+    cid: int                    # the Corner.cid this row belongs to
+    actual_brake_dist: float    # this lap's odometer (m) at the matched brake event's onset
+    optimal_brake_dist: float   # apex_dist - braking distance d (the latest sustainable brake point)
+    metres_later: float         # optimal - actual; positive => you can brake LATER
+    a_max_g: float              # the session's demonstrated peak braking used (g, positive)
+
+
+def estimate_a_max(peak_decels, *, floor_g: float = AMAX_FLOOR_G) -> float:
+    """The session's DEMONSTRATED peak braking deceleration (g, positive) for the brake-point
+    optimizer: a robust high percentile (AMAX_PCT) of the per-event peak decels, floored to
+    `floor_g`. NOT the detection threshold theta_b — that is a floor for what counts as braking,
+    whereas a_max is what the kart can actually do, so the optimal-brake-distance physics matches
+    the driver's own demonstrated capability. An empty list -> the floor (a timid/no-brake session
+    can't manufacture an absurdly small a_max and thus an absurdly long braking distance)."""
+    peaks = np.asarray(list(peak_decels), float)
+    peaks = peaks[np.isfinite(peaks) & (peaks > 0.0)]
+    if peaks.size == 0:
+        return float(floor_g)
+    return max(float(np.percentile(peaks, AMAX_PCT)), float(floor_g))
+
+
+def optimal_brake_distance(v_entry: float, v_apex: float, a_max: float) -> float | None:
+    """The constant-decel braking distance d (m) needed to slow from `v_entry` to `v_apex` at
+    `a_max`: d = (v_entry^2 - v_apex^2) / (2 * a_max). ALL SI: speeds in m/s, a_max in m/s^2.
+
+    Defensive: returns None (no answer) when v_apex >= v_entry (no braking needed -> d <= 0) or
+    a_max <= 0 (no demonstrated braking -> the physics is undefined). Otherwise a positive d."""
+    if not (a_max > 0.0) or v_apex >= v_entry:
+        return None
+    return (float(v_entry) ** 2 - float(v_apex) ** 2) / (2.0 * float(a_max))
 
 
 def _win(t: np.ndarray, seconds: float) -> int:
