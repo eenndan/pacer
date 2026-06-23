@@ -40,6 +40,14 @@ MIN_BRAKE_S = 0.25        # drop brake runs shorter than the shortest real brake
 COAST_DRAG_MIN = 0.03     # g; below this |decel| is steady-state cruise, not coasting
 MIN_COAST_S = 0.25        # drop coast blips between brake-release and throttle-pickup
 MOVING_KMH = 14.4         # 4.0 m/s; below this a sample is "stopped"
+# D3: the synthetic brake/throttle band. A SECONDARY VISUALISATION of the SAME speed-derived
+# longitudinal g the brake detector runs on (NOT a new detector) — it just maps that g to a
+# bounded 0..1 pedal-style intensity. Braking is normalised so g == -theta_b reads ~full brake
+# (the session's own brake-threshold = "on the brakes"); throttle is normalised to a fixed accel
+# envelope (karts rarely sustain > ~0.5 g of forward accel). Smoothed with the detector's boxcar
+# so the band tracks the same signal the brake glyphs sit on. ESTIMATED, never measured.
+THROTTLE_ENV_G = 0.50     # g; positive long-g at/above this reads ~full throttle (clip)
+BRAKE_INTENSITY_FLOOR = 0.18  # g; brake decel below this reads as 0 (engine braking / lift, not a brake)
 # (longitudinal-g clip MAX_LONG_G and the speed_long_g helper live in studio._signal)
 # Maneuver merge: the release hysteresis splits one braking-into-a-corner (threshold brake -> ease/
 # trail -> re-brake) into several events. These fuse the fragments back into ONE brake point.
@@ -256,6 +264,37 @@ def coasting_spans(dist, elapsed, speed_kmh, long_g, theta_b: float) -> list[Coa
                 out.append(CoastSpan(start_dist=float(dist[j0]), end_dist=float(dist[j1]),
                                      duration=duration))
         i += 1
+    return out
+
+
+def brake_throttle_intensity(elapsed, long_g, theta_b: float) -> np.ndarray:
+    """D3: per-sample ESTIMATED brake/throttle intensity in [-1, 1] from the SAME clean
+    speed-derived longitudinal g the brake detector uses (NOT a new detector) — for the chart's
+    pedal-style band under the speed curve.
+
+      * braking  (g < 0): -min(decel / theta_b, 1), so g == -theta_b ≈ -1.0 (full brake, the
+        session's own brake threshold), and a sub-threshold lift/engine-brake below
+        BRAKE_INTENSITY_FLOOR reads 0 (it isn't a brake).
+      * throttle (g > 0): +min(accel / THROTTLE_ENV_G, 1), proportional to forward accel and
+        clipped to a sane envelope so a GPS-noise spike can't exceed full.
+      * near-zero g (cruise / mild coast): ~0.
+
+    Same SMOOTH_S boxcar as the detector so the band tracks the brake glyphs. Aligned to the
+    shorter of `elapsed`/`long_g`; theta_b<=0 (no g signal) -> zeros."""
+    elapsed = np.asarray(elapsed, float)
+    g = np.asarray(long_g, float)
+    n = min(len(elapsed), len(g))
+    if n < 1 or theta_b <= 0:
+        return np.zeros(n)
+    elapsed, g = elapsed[:n], g[:n]
+    g = boxcar(g, _smooth_window(elapsed))
+    out = np.zeros(n)
+    brake = g < 0.0
+    decel = -g[brake]
+    decel = np.where(decel >= BRAKE_INTENSITY_FLOOR, decel, 0.0)
+    out[brake] = -np.minimum(decel / float(theta_b), 1.0)
+    accel = g > 0.0
+    out[accel] = np.minimum(g[accel] / THROTTLE_ENV_G, 1.0)
     return out
 
 

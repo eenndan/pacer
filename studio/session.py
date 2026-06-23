@@ -1339,6 +1339,14 @@ class Session:
         spans / no best lap (distance mode)."""
         return self._dc.lap_coasting_plot_spans(lap_id, mode)
 
+    def lap_brake_throttle_plot(self, lap_id: int, mode: str):
+        """D3: (plot_x, intensity) for the synthetic brake/throttle band on one lap, on the speed
+        chart's SHARED axis for `mode`. `intensity` is per-sample ESTIMATED pedal intensity in
+        [-1, 1] (negative = braking, positive = throttle), derived from the SAME speed-derived
+        longitudinal g + session brake threshold as the brake detector (not a new detector).
+        (None, None) when there's no g signal / no best lap (distance mode)."""
+        return self._dc.lap_brake_throttle_plot(lap_id, mode)
+
     def library_entry(self, paths: list[str]) -> dict:
         """Build this recording's session-library entry (F8) — a plain dict fed to the
         pacer-free ``studio.library`` index. PACER stays on THIS side of the seam (the values

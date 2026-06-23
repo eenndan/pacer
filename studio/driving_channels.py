@@ -32,6 +32,8 @@ class DrivingChannels:
         self._brake_events_cache: dict[int, list[driving.BrakeEvent]] = {}
         self._coasting_spans_cache: dict[int, list[driving.CoastSpan]] = {}
         self._corner_grip_cache: dict[int, list[float]] = {}
+        # D3: per-lap (dist, elapsed, intensity) for the synthetic brake/throttle band.
+        self._brake_throttle_cache: dict[int, tuple] = {}
 
     def invalidate(self) -> None:
         """Drop the per-lap caches on re-segment (Session.set_timing_lines); thresholds are
@@ -39,6 +41,7 @@ class DrivingChannels:
         self._brake_events_cache.clear()
         self._coasting_spans_cache.clear()
         self._corner_grip_cache.clear()
+        self._brake_throttle_cache.clear()
 
     # ------------------------------------------------------------------ g + thresholds
     def _lap_g_arrays(self, lap_id: int):
@@ -128,6 +131,28 @@ class DrivingChannels:
         self._coasting_spans_cache[lap_id] = spans
         return spans
 
+    def lap_brake_throttle(self, lap_id: int):
+        """D3: (dist, elapsed, intensity) for the synthetic brake/throttle band on one lap.
+        `intensity` is per-sample ESTIMATED pedal intensity in [-1, 1] (negative braking, positive
+        throttle), derived from the SAME clean speed-derived longitudinal g + session brake
+        threshold the brake detector uses (see driving.brake_throttle_intensity). (None, None,
+        None) when there's no g signal or a degenerate lap. Cached per lap."""
+        got = self._brake_throttle_cache.get(lap_id)
+        if got is not None:
+            return got
+        th = self.thresholds()
+        arr = self._s._lap_arrays(lap_id)
+        if th is None or arr is None:
+            return None, None, None
+        dists, speed_kmh, elapsed = arr
+        if len(dists) < 2:
+            return None, None, None
+        long_clean = speed_long_g(speed_kmh, elapsed)
+        intensity = driving.brake_throttle_intensity(elapsed, long_clean, th.theta_b)
+        result = (np.asarray(dists, float), np.asarray(elapsed, float), intensity)
+        self._brake_throttle_cache[lap_id] = result
+        return result
+
     def lap_corner_grip(self, lap_id: int) -> list[float]:
         """Per-corner grip utilization for one lap, one value per detected corner in track order.
         [] when no g signal, no corners, or a degenerate lap."""
@@ -203,6 +228,25 @@ class DrivingChannels:
         if total_lap <= 0 or not best_total:
             return []
         return [(e.onset_dist / total_lap * best_total, e.peak_decel) for e in events]
+
+    def lap_brake_throttle_plot(self, lap_id: int, mode: str):
+        """D3: (plot_x, intensity) for the synthetic brake/throttle band on one lap, on the speed
+        chart's SHARED axis for `mode`. Same x projection as the brake glyphs / coast bands so the
+        band lines up under the speed curve. (None, None) when no g signal / no best lap (distance
+        mode).
+          * 'distance': x = (dist / lap_total) * active_baseline_total
+          * 'time':     x = elapsed (into the lap)"""
+        s = self._s
+        dists, elapsed, intensity = self.lap_brake_throttle(lap_id)
+        if intensity is None:
+            return None, None
+        if mode == "time":
+            return elapsed, intensity
+        total_lap = float(dists[-1])
+        best_total = s.active_baseline_total_distance()
+        if total_lap <= 0 or not best_total:
+            return None, None
+        return dists / total_lap * best_total, intensity
 
     def lap_coasting_plot_spans(self, lap_id: int, mode: str) -> list[tuple[float, float]]:
         """(plot-x0, plot-x1) per coasting span on one lap, on the speed chart's SHARED axis
