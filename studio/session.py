@@ -805,11 +805,6 @@ class Session:
         LapRenderCache (studio/render_cache.py); cleared on re-segment."""
         return self._render_cache.lap_trace_segments(lap_id)
 
-    def reference_centerline_xy(self):
-        """The georeferenced track centerline in LOCAL metres (an (M,2) array), or None —
-        the gap-fill's last-resort donor (see LapRenderCache.reference_centerline_xy)."""
-        return self._render_cache.reference_centerline_xy()
-
     # Private delegators kept for the dev tooling (denoise_check, build_reference).
     def _median_sample_dt(self) -> float:
         return self._render_cache.median_sample_dt()
@@ -1131,11 +1126,6 @@ class Session:
         """The detected corners (C1… in track order) in best-lap odometer metres. [] when
         no best lap exists."""
         return self._cm.corner_list()
-
-    def _reference_corner_stats(self) -> list[corners.CornerStat] | None:
-        """The cross-recording reference lap's per-corner stats projected onto THIS session's
-        corner windows, or None when no reference is loaded."""
-        return self._cm.reference_corner_stats()
 
     def lap_corner_stats(self, lap_id: int) -> list[corners.CornerStat]:
         """Per-corner metrics for one lap (time-in-corner, apex/entry/exit speeds, deltas vs the
