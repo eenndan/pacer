@@ -223,10 +223,10 @@ class StudioWindow(QMainWindow):
 
         Session.load is a ~1.4–4 s synchronous call, so it runs on a worker QThread: the placeholder
         shows immediately and the window stays responsive. SINGLE-FLIGHT: only ONE load runs at a
-        time — pacer's C++ load is not reentrant, and two concurrent off-thread loads deadlock. A
-        superseding _load (e.g. a second drag-drop) shows the placeholder, bumps the token, and is
-        QUEUED as the pending request; it starts when the current worker finishes, and the older
-        in-flight result is ignored by token (see the completion slots)."""
+        time — a superseding _load (e.g. a second drag-drop) is QUEUED rather than run concurrently
+        (no point loading two recordings at once, and serializing keeps the supersede ordering
+        clean). It shows the placeholder, bumps the token, and starts when the current worker
+        finishes; the older in-flight result is ignored by token (see the completion slots)."""
         print("studio: loading telemetry…", flush=True)
         # Show the placeholder so the window isn't a black void during the load (the load no longer
         # blocks the event loop, so the placeholder also stays live/paintable throughout).
@@ -235,9 +235,9 @@ class StudioWindow(QMainWindow):
         # result will be ignored when it finishes.
         self._load_token += 1
         token = self._load_token
-        # Single-flight: if a worker is already running, remember only the LATEST request and start it
-        # when the current one finishes — never run two Session.loads at once (pacer load isn't
-        # reentrant; concurrent off-thread loads deadlock).
+        # Single-flight: if a worker is already running, remember only the LATEST request and start
+        # it when the current one finishes — no point running two loads at once, and queuing keeps
+        # the supersede ordering clean.
         if self._load_worker is not None and self._load_worker.isRunning():
             self._pending_load = (token, list(paths))
             return
@@ -268,11 +268,11 @@ class StudioWindow(QMainWindow):
                 self._start_load_worker(token, paths)
 
     def _drain_load_workers(self, deadline_s: float = 60.0):
-        """Let any in-flight load worker finish WITHOUT deadlocking. A bare QThread.wait() on the UI
-        thread holds the GIL that the worker's Session.load still needs, so on a slow machine the
-        worker can never finish and wait() blocks forever (a real CI hang). Instead pump the event
-        loop (which releases the GIL) in short slices until no worker is running, bounded by a
-        deadline so it can never hang indefinitely."""
+        """Let any in-flight load worker finish before teardown, bounded so this can never hang on a
+        stuck worker. Pump the event loop in short slices (so the worker's queued completion signals
+        — incl. _on_worker_finished launching a still-pending load — can drain) and wait briefly per
+        worker, giving up after `deadline_s`. The token is bumped past every in-flight worker, so
+        whatever they emit is ignored regardless."""
         app = QApplication.instance()
         start = time.monotonic()
         while any(w.isRunning() for w in list(self._load_workers)):
@@ -280,14 +280,14 @@ class StudioWindow(QMainWindow):
                 app.processEvents()
             for w in list(self._load_workers):
                 if w.isRunning():
-                    w.wait(20)  # short, GIL-releasing slices (NOT a bare blocking wait)
+                    w.wait(20)  # short slices, bounded by the deadline below (never an unbounded wait)
             if time.monotonic() - start > deadline_s:
                 break
 
     def closeEvent(self, event):
         """Drain any in-flight load worker so a QThread isn't destroyed mid-run on window close (Qt
-        would warn/crash). Uses the GIL-friendly drain — a bare wait() here can deadlock the worker.
-        The token is already bumped past any in-flight worker, so its result is ignored regardless."""
+        would warn/crash). Uses the bounded drain so close can never hang on a stuck worker. The
+        token is already bumped past any in-flight worker, so its result is ignored regardless."""
         self._pending_load = None  # don't start a queued load during teardown
         self._drain_load_workers()
         super().closeEvent(event)

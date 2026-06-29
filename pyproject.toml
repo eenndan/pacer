@@ -25,7 +25,12 @@ qtawesome = ">=1.3"
 [tool.pixi.tasks]
 configure = "cmake -S . -B build/Release -G Ninja"
 build = { cmd = "cmake --build build/Release", depends-on = ["configure"] }
-test = { cmd = "ctest --test-dir build/Release --output-on-failure", depends-on = ["build"] }
+# --timeout 480: a per-test ceiling well under CI's 20-min job cap, with headroom over the one
+# legitimately-slow test (test_export_video, ~110 s ffmpeg encode). A hang dies at 8 min instead
+# of eating the whole job, and a ctest timeout FLUSHES the test's buffered output (with
+# --output-on-failure), surfacing the in-test faulthandler watchdog dump instead of an opaque
+# 20-min job cancel that shows nothing (what made the C1 off-thread-load CI hang diagnosable).
+test = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 480", depends-on = ["build"] }
 gen-bindings = "python bindings/pacer/generate-bindings.py"
 studio = { cmd = "python -m studio", depends-on = ["build"] }
 # fmt excludes the litgen-GENERATED nanobind_pacer.cpp: the CI regen-drift gate
