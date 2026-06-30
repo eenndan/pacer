@@ -398,6 +398,78 @@ def test_quality_banner_shows_on_degraded_timing():
     print("test_quality_banner_shows_on_degraded_timing OK")
 
 
+# ============================================================ Δ-to-ideal hero readout
+def test_hero_readout_leads_with_labelled_delta_to_ideal():
+    """The hero #DiffBox leads with Δ-to-IDEAL by default (the moat number, clearly LABELLED so it
+    can't be read as Δ-to-best), and the toggle flips it to Δ-to-best — with the other number always
+    in the box's tooltip. Drive a real position into lap 0, tick, and inspect the rendered text."""
+    view, _s, t0, _t1 = _real_central_view()
+    assert view.ideal_readout_btn.isChecked(), "the readout defaults to leading with Δ-to-ideal"
+
+    mid = float(t0[len(t0) // 2])
+    view.video.positionChanged.emit(mid)
+    view.tick()
+    text = view.diff_box.text()
+    assert text.startswith("Δideal"), f"the hero readout must LEAD with the labelled Δideal: {text!r}"
+    assert "km/h" in text, "speed stays in the readout"
+    # The other reference (Δ-to-best) is never lost — it lives in the tooltip.
+    assert "best lap" in view.diff_box.toolTip().lower(), view.diff_box.toolTip()
+
+    # Flip to Δ-to-best: the lead label changes (no longer Δideal) and the tooltip now carries ideal.
+    view.ideal_readout_btn.setChecked(False)
+    best_text = view.diff_box.text()
+    assert not best_text.startswith("Δideal"), f"toggle off must lead with Δ-to-best: {best_text!r}"
+    assert best_text.startswith("Δ "), best_text
+    assert "ideal" in view.diff_box.toolTip().lower(), view.diff_box.toolTip()
+    print(f"test_hero_readout_leads_with_labelled_delta_to_ideal OK ({text!r} / {best_text!r})")
+
+
+# ============================================================ labelled grip-map control
+def test_grip_map_reachable_via_labelled_combo():
+    """The map's rainbow channel is now a LABELLED dropdown (Off · Speed · Δ · Grip) — every channel
+    visible and one click, Grip no longer an undiscoverable 4th blind-cycle step. Selecting the Grip
+    entry sets the grip mode (the same render path the old cycle hit); the cycle API still works."""
+    view, _s, _t0, _t1 = _real_central_view()
+    combo = view.map.rainbow_combo
+    # Every channel is a labelled, visible entry (not hidden behind a cycle).
+    modes = [combo.itemData(i) for i in range(combo.count())]
+    assert modes == ["off", "speed", "delta", "grip"], modes
+    grip_idx = modes.index("grip")
+    assert "grip" in combo.itemText(grip_idx).lower(), combo.itemText(grip_idx)
+
+    # Selecting Grip drives the map to the grip channel in ONE click. (Clear the current lap first so
+    # _apply_rainbow cleanly no-ops on this lap_channels-free synthetic fixture — we're pinning the
+    # control wiring / mode selection here, not the render math, which test_rainbow_map covers.)
+    view.map._current_lap = None
+    combo.setCurrentIndex(grip_idx)
+    _APP.processEvents()
+    assert view.map._rainbow_mode == "grip", "the labelled Grip entry must select the grip channel"
+    # And the legacy cycle path is preserved + keeps the combo in sync (the rainbow tests' driver).
+    view.map._cycle_rainbow()  # grip -> off (wraps)
+    assert view.map._rainbow_mode == "off"
+    assert combo.currentData() == "off", "the cycle must keep the labelled combo in sync"
+    print("test_grip_map_reachable_via_labelled_combo OK")
+
+
+# ============================================================ persistent opportunities panel
+def test_opportunities_panel_persistent_and_visible_by_default():
+    """The coaching front-door is an ALWAYS-ON in-window panel (not just the modal dialog): the real
+    CentralView builds an OpportunitiesPanel under the lap table, visible by default. On the 2-lap
+    synthetic (< MIN_LAPS clean laps) it shows the friendly excluded state, not an empty box."""
+    from studio.coaching_panel import OpportunitiesPanel
+
+    view, _s, _t0, _t1 = _real_central_view()
+    assert isinstance(view.opportunities, OpportunitiesPanel), "the panel must be built into the view"
+    assert view.opportunities.isVisibleTo(view), "the opportunities panel is visible by default"
+    # 2-lap synthetic -> friendly 'need more laps' excluded page (index 1), never an empty table.
+    assert view.opportunities.body.currentIndex() == 1, "too few clean laps -> the friendly state"
+    assert view.opportunities.empty_label.text(), "the excluded state must carry a friendly message"
+    # The rebuild seam refreshes it without error (the re-segmentation / reference path).
+    view.rebuild_derived_views(reselect=True)
+    assert view.opportunities.isVisibleTo(view)
+    print("test_opportunities_panel_persistent_and_visible_by_default OK")
+
+
 def _run_all():
     test_real_qtimer_fires_view_tick_through_studiowindow()
     test_position_signal_then_real_tick_applies_once_and_is_stable()
@@ -406,6 +478,9 @@ def _run_all():
     test_compare_tick_keeps_panes_consistent_no_reentry()
     test_provisional_banner_shows_and_clears_with_trust_state()
     test_quality_banner_shows_on_degraded_timing()
+    test_hero_readout_leads_with_labelled_delta_to_ideal()
+    test_grip_map_reachable_via_labelled_combo()
+    test_opportunities_panel_persistent_and_visible_by_default()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 

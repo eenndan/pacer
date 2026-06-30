@@ -1034,6 +1034,7 @@ def _rebuild_window(comparing=False):
     w.table = _ViewSpy()
     w.corner_table = _ViewSpy()
     w.map = _ViewSpy()
+    w.opportunities = _ViewSpy()
     w.consistency = _ViewSpy()
     w.plots = _ViewSpy()
 
@@ -1100,6 +1101,7 @@ def test_rebuild_derived_views_refreshes_the_union_of_views():
     assert "refresh_overlays" in w.map.calls, "map overlays not refreshed"
     assert "set_corners" in w.map.calls, "map corners not re-pushed"
     assert "refresh" in w.corner_table.calls, "corner table not refreshed"
+    assert "refresh" in w.opportunities.calls, "opportunities panel not refreshed"
     assert "refresh" in w.consistency.calls, "consistency strip not refreshed"
     assert rec.driving == 1, "driving channels not refreshed"
     assert rec.sector == 1, "sector lines not refreshed"

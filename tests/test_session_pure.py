@@ -505,6 +505,54 @@ def test_delta_to_ideal_nonneg_and_endpoint_is_laptime_minus_ideal():
     print("test_delta_to_ideal_nonneg_and_endpoint_is_laptime_minus_ideal OK")
 
 
+def test_delta_to_ideal_at_matches_grid_and_is_cheap():
+    """The per-tick scalar `delta_to_ideal_at(lap, t)` (the moat number the live readout leads
+    with) AGREES with the grid-based `delta_to_ideal` curve resampled at the lap's own track
+    fraction, is ≥ 0 (a lap can't beat the envelope it formed), and at the lap finish equals
+    lap_time − ideal_total. The envelope is MEMOIZED so the 30 Hz path stays cheap."""
+    s, ids = make_ideal_session()
+    ideal_total = s.ideal_total()
+    s_grid = np.linspace(0.0, 1.0, Session._DELTA_GRID_N)
+    for lid in ids:
+        times, dist, _elapsed = s._dist_cache[lid]
+        # Sample a few media times across the lap; the scalar must match the grid Δ-to-ideal at the
+        # SAME normalized track fraction the lap is at, at that instant.
+        grid = s.delta_to_ideal([lid], "distance")[lid][1]  # dy on the 400 s-grid
+        for frac in (0.0, 0.25, 0.6, 1.0):
+            t = float(times[0] + frac * (times[-1] - times[0]))
+            got = s.delta_to_ideal_at(lid, t)
+            assert got is not None and got >= -1e-9, (lid, frac, got)
+            s_here = float(np.interp(t, times, dist)) / float(dist[-1])
+            want = float(np.interp(s_here, s_grid, grid))
+            # The scalar interps elapsed DIRECTLY at t; the grid curve resamples elapsed onto 400
+            # points first, so `want` carries one extra grid-discretization step — agree to the
+            # 400-grid resolution, not bit-for-bit (the scalar is the more accurate of the two).
+            assert abs(got - want) < 1e-4, (lid, frac, got, want)
+        # At the lap finish the scalar is lap_time − ideal_total (the table's Δ-to-ideal number).
+        finish = s.delta_to_ideal_at(lid, float(times[-1]))
+        laptime = float(times[-1] - times[0])
+        assert abs(finish - (laptime - ideal_total)) < 1e-9, (lid, finish)
+    # Memoized: the second call reuses the cached envelope (same object), not a fresh rebuild.
+    first = s._ideal_envelope()
+    assert s._ideal_envelope() is first, "ideal envelope must be memoized for the per-tick path"
+    print("test_delta_to_ideal_at_matches_grid_and_is_cheap OK")
+
+
+def test_delta_to_ideal_at_none_without_ideal_or_degenerate():
+    """`delta_to_ideal_at` returns None (no crash) when there's no clean lap to build the ideal,
+    and the memoized envelope drops on a fresh slot — the per-tick path degrades gracefully."""
+    s = bare_session(valid=[])
+    s.laps = SimpleNamespace(laps_count=lambda: 0)
+    assert s.delta_to_ideal_at(0, 0.0) is None
+    # _drop_ideal_cache is a safe no-op before the slot exists, and clears it once set.
+    s._drop_ideal_cache()
+    s2, ids = make_ideal_session()
+    assert s2._ideal_envelope() is not None
+    s2._drop_ideal_cache()
+    assert not hasattr(s2, "_ideal_cache"), "drop must forget the memoized envelope"
+    print("test_delta_to_ideal_at_none_without_ideal_or_degenerate OK")
+
+
 def test_ideal_delta_to_best_nonpositive_shares_best_axis():
     """`ideal_delta_to_best` (the ideal drawn on delta()'s own Δ-to-best axis) is ≤ 0 everywhere
     (the ideal is at least as fast as the best lap it contains) and ends at ideal_total −
