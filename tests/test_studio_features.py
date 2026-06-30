@@ -877,9 +877,9 @@ def _rebuild_window(comparing=False):
     # _comparing() reads self.compare; mimic its on/off via the real predicate's contract.
     w.compare = SimpleNamespace(active=comparing)
 
-    # session.corner_map_markers is the one session read the seam makes directly (set_corners arg);
-    # stub it so no pacer is needed.
-    w.session = SimpleNamespace(corner_map_markers=lambda: [])
+    # session.corners.corner_map_markers is the one session read the seam makes directly
+    # (set_corners arg); stub the corners service so no pacer is needed.
+    w.session = SimpleNamespace(corners=SimpleNamespace(corner_map_markers=lambda: []))
 
     # Replace the two leaf helpers + the selection step with counters so we can assert each was
     # invoked exactly through the seam (the real bodies push to plots/map and are tested elsewhere).

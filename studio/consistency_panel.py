@@ -178,7 +178,7 @@ class ConsistencyPanel(QWidget):
 
         # Top-N inconsistent corners (ranked by session.corner_consistency).
         ranked = self.session.corner_consistency()[:TOP_N]
-        glyph = {c.cid: CORNER_DIR_GLYPH.get(c.direction, "") for c in self.session.corners()}
+        glyph = {c.cid: CORNER_DIR_GLYPH.get(c.direction, "") for c in self.session.corners.corner_list()}
         self.table.blockSignals(True)
         self.table.clearSelection()
         self.table.setRowCount(len(ranked))

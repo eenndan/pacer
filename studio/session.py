@@ -25,14 +25,13 @@ from . import (
     coaching,
     consistency,
     corner_model,
-    corners,
     cross_reference,
-    driving,
     driving_channels,
     gapfill,
     gmeter,
     library,
     render_cache,
+    timeline,
     tracks,
 )
 from ._signal import (
@@ -165,8 +164,6 @@ class Session:
         self._xyt_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}  # (xs, ys, times) local m
         self._valid_cache: list[int] | None = None  # memoized "real lap" set
         self._best_cache: object = _UNSET   # sentinel: None is a legal "no best lap" result
-        # [start, end) windows on the GLOBAL clock for the O(log n) lap_at_time binary search.
-        self._lap_windows: tuple[np.ndarray, np.ndarray, list[int]] | None = None
         # Detected registry track name, or None for an unknown track (start line auto-fitted).
         # Persisted into the timing-line sidecar and used by the app's "unknown track" notice.
         self.track_name: str | None = None
@@ -205,6 +202,10 @@ class Session:
             lap_time=self.lap_time,
             trace_times=self.tt,
         )
+
+        # Cursor/plot/video-sync coordinate conversions (studio/timeline.py); owns the lap-window
+        # table, invalidate() on re-segment. Session keeps thin delegators over it (lap_at_time …).
+        self._timeline = self._build_timeline()
 
     # ---------------------------------------------------------------- loading
     @classmethod
@@ -252,7 +253,7 @@ class Session:
                   f"({len(gm)} samples, no cross-check).", flush=True)
         # Report the driving-channel thresholds derived from this session's g distribution.
         try:
-            th = self.driving_thresholds()
+            th = self.driving.thresholds()
             if th is not None:
                 print(f"studio: {th.describe()}", flush=True)
         except Exception as e:  # noqa: BLE001 — additive diagnostics only
@@ -319,7 +320,7 @@ class Session:
         self._reference_session = ref
         # The Δ baseline changed (best lap -> reference), so per-lap corner-stat deltas are stale;
         # invalidate_stats() drops only those (detection windows unchanged), recomputed lazily.
-        self._cm.invalidate_stats()
+        self.corners.invalidate_stats()
         return None
 
     def clear_reference(self) -> None:
@@ -332,7 +333,7 @@ class Session:
         self._reference_session = None
         # Revert the Δ baseline to the local best; the per-lap deltas vs the cleared reference are
         # stale (detection windows unchanged), recomputed lazily.
-        self._cm.invalidate_stats()
+        self.corners.invalidate_stats()
 
     @property
     def _ref(self) -> cross_reference.ReferenceLap | None:
@@ -369,14 +370,16 @@ class Session:
             best_lap_id=self.best_lap_id,
             valid_lap_ids=self.valid_lap_ids,
             active_baseline_total_distance=self.active_baseline_total_distance,
-            corner_basis=lambda: self._cm.basis(),
-            lap_corner_stats=lambda lap_id: self._cm.lap_corner_stats(lap_id),
+            corner_basis=lambda: self.corners.basis(),
+            lap_corner_stats=lambda lap_id: self.corners.lap_corner_stats(lap_id),
         )
 
     @property
-    def _cm(self) -> corner_model.CornerModel:
-        """The composed CornerModel service (corner detection + per-lap stats + session bests).
-        Lazily created; getattr-guarded for the bare-Session (no-__init__) test path — see _ref."""
+    def corners(self) -> corner_model.CornerModel:
+        """The corner-analysis service (corner detection + per-lap stats + session bests, on the
+        best-lap odometer basis) — call session.corners.corner_list() / .lap_corner_stats(lap) /
+        .basis() etc. directly. Lazily created; getattr-guarded for the bare-Session (no-__init__)
+        test path — see _ref."""
         cm = getattr(self, "_cornermodel", None)
         if cm is None:
             cm = self._build_corner_model()
@@ -384,14 +387,41 @@ class Session:
         return cm
 
     @property
-    def _dc(self) -> driving_channels.DrivingChannels:
-        """The composed DrivingChannels service (brake/coast/grip + thresholds). Lazily created;
-        getattr-guarded for the bare-Session (no-__init__) test path — see _ref."""
+    def driving(self) -> driving_channels.DrivingChannels:
+        """The driving-channels service (brake/coast/grip + thresholds, F5/D3/D4/D5) — call
+        session.driving.thresholds() / .lap_brake_events(lap) / .lap_grip_utilization(lap) etc.
+        directly. Lazily created; getattr-guarded for the bare-Session (no-__init__) path — see _ref."""
         dc = getattr(self, "_driving", None)
         if dc is None:
             dc = self._build_driving_channels()
             self._driving = dc
         return dc
+
+    def _build_timeline(self) -> timeline.Timeline:
+        # All inputs are live-reading lambdas (not bound-method snapshots) so the extracted
+        # conversions resolve Session's primitives exactly when the originals did — incl. tests
+        # that monkey-patch s._lap_trace_xyt after the (lazily-built) timeline exists.
+        return timeline.Timeline(
+            lap_time_dist=lambda lid: self._lap_time_dist(lid),
+            lap_trace_xyt=lambda lid: self._lap_trace_xyt(lid),
+            valid_lap_ids=lambda: self.valid_lap_ids(),
+            lap_window=lambda lid: self.lap_window(lid),
+            trace_times=lambda: self.tt,
+            trace_xs=lambda: self.tx,
+            trace_ys=lambda: self.ty,
+        )
+
+    @property
+    def timeline(self) -> timeline.Timeline:
+        """The cursor/plot/video-sync coordinate-conversion service (studio/timeline.py). The
+        public conversions below (lap_at_time / index_at_time / media_time_at_plot_x / nearest_*)
+        are thin delegators over it. Lazily created; getattr-guarded for the bare-Session
+        (no-__init__) test path — see _ref."""
+        tl = getattr(self, "_timeline", None)
+        if tl is None:
+            tl = self._build_timeline()
+            self._timeline = tl
+        return tl
 
     def has_reference(self) -> bool:
         """True iff a cross-recording reference lap is currently active."""
@@ -556,18 +586,19 @@ class Session:
         self._dist_cache.clear()
         self._xyt_cache.clear()
         self._render_cache.invalidate()  # per-lap draw segments (MAP RENDERING ONLY)
-        # The single re-segmentation point: every memoized "real lap" set + window table is now
-        # stale (lap ids / times shifted), so drop them. They lazily recompute on next access.
+        # The single re-segmentation point: every memoized "real lap" set + the timeline's lap-window
+        # table is now stale (lap ids / times shifted), so drop them. They lazily recompute on next
+        # access.
         self._valid_cache = None
         self._best_cache = _UNSET
-        self._lap_windows = None
+        self.timeline.invalidate()
         # The corner model + driving channels are derived from / projected through the
         # segmentation — stale with the rest. Each service owns its caches and clears exactly
         # them via invalidate() (the corner basis + per-lap stats + session bests; the per-lap
         # brake/coast/grip — the driving thresholds depend only on the unchanged g series so
         # they survive), replacing the ~7 hand-cleared cache slots this block used to enumerate.
-        self._cm.invalidate()
-        self._dc.invalidate()
+        self.corners.invalidate()
+        self.driving.invalidate()
 
     # ------------------------------------------ timing-line persistence (sidecar glue)
     # The sidecar (studio/sidecar.py, pacer-free) stores the user's timing lines as ABSOLUTE
@@ -1111,39 +1142,10 @@ class Session:
                 positions.append((label, frac * base.total))
         return positions
 
-    # -------------------------------------------------------------- corner model (F5)
-    # Corner detection runs once per segmentation on the MEDIAN curvature profile of the clean
-    # laps (in best-lap odometer space) and projects onto each lap by normalized distance — the
-    # same projection lap_sector_splits uses. Thin delegators to studio/corner_model.py
-    # (CornerModel); per-lap caches cleared on re-segment.
-    def _corner_basis(self) -> tuple[list[corners.Corner], float] | None:
-        """The cached (corner list, reference total distance) pair, or None with no usable best
-        lap. The reference total is the best lap's odometer length — the basis the corner windows
-        (and the delta plot's distance axis) are expressed in."""
-        return self._cm.basis()
-
-    def corners(self) -> list[corners.Corner]:
-        """The detected corners (C1… in track order) in best-lap odometer metres. [] when
-        no best lap exists."""
-        return self._cm.corner_list()
-
-    def lap_corner_stats(self, lap_id: int) -> list[corners.CornerStat]:
-        """Per-corner metrics for one lap (time-in-corner, apex/entry/exit speeds, deltas vs the
-        baseline's same corner — see corners.CornerStat). [] for a degenerate lap or no corners.
-
-        The Δ baseline is the local best lap, or the cross-recording reference's projected corner
-        stats when one is loaded (F7)."""
-        return self._cm.lap_corner_stats(lap_id)
-
-    def corner_session_bests(self) -> list[float]:
-        """Per-corner session-best time-in-corner across all VALID laps (the purple-cell
-        convention). [] when no corners."""
-        return self._cm.corner_session_bests()
-
-    def corner_map_markers(self) -> list[tuple[str, float, float, int]]:
-        """(label, x, y, direction) per corner — the apex position in LOCAL metres on the
-        best lap's trace, for the map's corner labels. [] when no corners/best lap."""
-        return self._cm.corner_map_markers()
+    # Corner analysis (detection + per-lap stats + session bests, all on the best-lap odometer
+    # basis) is the `session.corners` service (studio/corner_model.py CornerModel); per-lap caches
+    # clear on re-segment. Consumers call session.corners.corner_list() / .lap_corner_stats(lap)
+    # etc. directly — no Session forwarders.
 
     # ------------------------------------------------------------- data export (F11)
     # The export writers (studio/export_data.py) are pacer-free, so the two accessors below own
@@ -1223,12 +1225,12 @@ class Session:
         ranked by σ × median_loss (corners that are BOTH inconsistent and slow first —
         see studio/consistency.py for the weighting rationale). [] without corners."""
         ids = self.consistency_lap_ids()
-        corner_list = self.corners()
+        corner_list = self.corners.corner_list()
         if not corner_list or not ids:
             return []
         times_by_lap = []
         for i in ids:
-            st = self.lap_corner_stats(i)
+            st = self.corners.lap_corner_stats(i)
             if len(st) == len(corner_list):  # degenerate laps project to [] — skip
                 times_by_lap.append([s.time for s in st])
         return consistency.rank_corners(
@@ -1250,7 +1252,7 @@ class Session:
         consistency_lap_ids(), corner_consistency(), lap_brake_events(), lap_coasting_spans(),
         best_lap_id(), lap_time()."""
         ids = self.consistency_lap_ids()
-        corner_list = self.corners()
+        corner_list = self.corners.corner_list()
         best = self.best_lap_id()
         if not corner_list or best is None:
             return coaching.Opportunities(enough=False, n_laps=len(ids),
@@ -1263,7 +1265,7 @@ class Session:
         lap_times: list[float] = []
         corner_times_by_lap: list[list[float]] = []
         for i in ids:
-            st = self.lap_corner_stats(i)
+            st = self.corners.lap_corner_stats(i)
             if len(st) != n:
                 continue
             cand_ids.append(i)
@@ -1272,7 +1274,7 @@ class Session:
 
         # The best lap's own per-corner time-in-corner (its self-delta is 0; we need the raw
         # times as the per-corner baseline the median loss is measured against).
-        best_stats = self.lap_corner_stats(best)
+        best_stats = self.corners.lap_corner_stats(best)
         if len(best_stats) != n:
             return coaching.Opportunities(enough=False, n_laps=len(cand_ids),
                                           median_lap_id=None, rows=[])
@@ -1288,7 +1290,7 @@ class Session:
         # follows the reference baseline — keep the apex signal on the SAME baseline as the loss
         # (D13). [] if no median lap.
         if med_id is not None:
-            med_stats = self.lap_corner_stats(med_id)
+            med_stats = self.corners.lap_corner_stats(med_id)
             median_apex_deltas = (
                 [med_stats[i].apex_speed - best_stats[i].apex_speed for i in range(n)]
                 if len(med_stats) == n else [])
@@ -1297,16 +1299,16 @@ class Session:
 
         # The driving channels (brake/coast) for the median + best laps — the BRAKING/COASTING
         # signals. [] when there's no g signal (the apex/line signals still drive the reasons).
-        med_brakes = self.lap_brake_events(med_id) if med_id is not None else []
-        best_brakes = self.lap_brake_events(best)
-        med_coast = self.lap_coasting_spans(med_id) if med_id is not None else []
-        best_coast = self.lap_coasting_spans(best)
+        med_brakes = self.driving.lap_brake_events(med_id) if med_id is not None else []
+        best_brakes = self.driving.lap_brake_events(best)
+        med_coast = self.driving.lap_coasting_spans(med_id) if med_id is not None else []
+        best_coast = self.driving.lap_coasting_spans(best)
 
         # Odometer totals so summarize can project each corner window onto each lap's OWN odometer
         # before matching that lap's brake/coast events (which live in its own odometer — D13). The
         # corner edges (c.enter/c.exit) are in the corner basis' reference total; the median/best
         # events are in their own laps' totals. Mirrors lap_corner_grip's projection.
-        basis = self._corner_basis()
+        basis = self.corners.basis()
         corner_dist_total = float(basis[1]) if basis is not None else None
         best_lap_total = self.best_lap_total_distance()
         med_td = self._lap_time_dist(med_id) if med_id is not None else None
@@ -1340,86 +1342,11 @@ class Session:
             best_speed_kmh=best_speed_kmh,
         )
 
-    def corner_entry_media_time(self, lap_id: int, cid: int) -> float | None:
-        """The media-clock time (s) at which `lap_id` ENTERS corner `cid` — the jump-to seek
-        target for an opportunity (seek the best lap to the corner's entry). The corner's
-        reference-odometer enter point is projected onto this lap by normalized distance (the
-        SAME projection lap_corner_stats / lap_corner_grip use), then the lap's elapsed→media
-        time is read at that distance. None when the corner/lap is unknown or degenerate.
 
-        Returned as an ABSOLUTE media time (lap start + elapsed at entry) so the caller can
-        hand it straight to video.seek, like the lap-select seek does. Delegates to CornerModel
-        (it owns the corner basis the projection reads)."""
-        return self._cm.corner_entry_media_time(lap_id, cid)
-
-    # ----------------------------------------------------- driving channels (F5)
-    # Thin delegators to studio/driving_channels.py; per-lap caches cleared on re-segment (the
-    # thresholds depend only on the constant g series, so they survive).
-
-    def driving_thresholds(self):
-        """The brake/coast thresholds (driving.Thresholds) derived ONCE from this session's own
-        g distribution over its moving samples — no magic constants. None when there's no g signal.
-        Cached for the recording; reported at load via .describe()."""
-        return self._dc.thresholds()
-
-    def lap_brake_events(self, lap_id: int) -> list[driving.BrakeEvent]:
-        """Braking zones on one lap's longitudinal-g series (onset odometer/time, peak decel,
-        duration — see driving.BrakeEvent), in track order. [] when there's no g signal or the
-        lap is degenerate."""
-        return self._dc.lap_brake_events(lap_id)
-
-    def lap_coasting_spans(self, lap_id: int) -> list[driving.CoastSpan]:
-        """Coasting spans (neither braking/accelerating nor cornering) on one lap, in track order
-        — see driving.CoastSpan. [] when there's no g signal or the lap is degenerate."""
-        return self._dc.lap_coasting_spans(lap_id)
-
-    def lap_corner_grip(self, lap_id: int) -> list[float]:
-        """Per-corner friction-circle grip utilization for one lap (median |g| / lap-envelope max
-        inside each corner window, in (0,1] — see driving.corner_grip), one value per corner in
-        track order. [] when there's no g signal, no corners, or the lap is degenerate."""
-        return self._dc.lap_corner_grip(lap_id)
-
-    def lap_brake_map_markers(self, lap_id: int) -> list[tuple[float, float, float]]:
-        """(x, y, peak_decel) per brake onset on one lap, in LOCAL metres on that lap's own trace
-        — for the map's brake glyphs. peak_decel (g) drives the glyph size. [] when no brakes."""
-        return self._dc.lap_brake_map_markers(lap_id)
-
-    def lap_grip_channel(self, lap_id: int):
-        """D5: per-sample grip utilization for one lap, aligned 1:1 to the lap_channels x_m/y_m map
-        points (so the track map can colour the racing line by how close the driver is to the
-        session's grip limit — see driving.grip_utilization). None when there's no g signal or the
-        lap is degenerate. ESTIMATED, lateral-dominant."""
-        return self._dc.lap_grip_utilization(lap_id)
-
-    def lap_brake_plot_positions(self, lap_id: int, mode: str) -> list[tuple[float, float]]:
-        """(plot-x, peak_decel) per brake onset on one lap, on the speed chart's SHARED axis for
-        `mode`. [] when no brake events / no best lap (distance mode).
-          * 'distance': x = (onset_dist / lap_total) * best_distance
-          * 'time':     x = onset_time (elapsed into the lap)"""
-        return self._dc.lap_brake_plot_positions(lap_id, mode)
-
-    def lap_coasting_plot_spans(self, lap_id: int, mode: str) -> list[tuple[float, float]]:
-        """(plot-x0, plot-x1) per coasting span on one lap, on the speed chart's SHARED axis for
-        `mode` — the shaded coast regions. Same projection as lap_brake_plot_positions. [] when no
-        spans / no best lap (distance mode)."""
-        return self._dc.lap_coasting_plot_spans(lap_id, mode)
-
-    def lap_brake_throttle_plot(self, lap_id: int, mode: str):
-        """D3: (plot_x, intensity) for the synthetic brake/throttle band on one lap, on the speed
-        chart's SHARED axis for `mode`. `intensity` is per-sample ESTIMATED pedal intensity in
-        [-1, 1] (negative = braking, positive = throttle), derived from the SAME speed-derived
-        longitudinal g + session brake threshold as the brake detector (not a new detector).
-        (None, None) when there's no g signal / no best lap (distance mode)."""
-        return self._dc.lap_brake_throttle_plot(lap_id, mode)
-
-    def lap_brake_points(self, lap_id: int) -> list[driving.BrakePoint]:
-        """D4: per-corner braking-point comparison for one lap — where the driver actually braked vs
-        the apex-speed-matched LATEST sustainable brake point (one driving.BrakePoint per corner, with
-        `metres_later` positive when the driver can brake later). ESTIMATED, using the session's
-        DEMONSTRATED peak braking decel (not the detection threshold). Corners with no detected brake
-        event, or where the apex speed is already at/above the entry speed, are omitted (N/A). []
-        when there's no g signal, no corners, or the lap is degenerate."""
-        return self._dc.lap_brake_points(lap_id)
+    # Driving channels (brake/coast/grip + thresholds, F5/D3/D4/D5) are the `session.driving`
+    # service (studio/driving_channels.py); per-lap caches clear on re-segment, the thresholds
+    # survive (they depend only on the constant g series). Consumers call session.driving.thresholds()
+    # / .lap_brake_events(lap) / .lap_grip_utilization(lap) etc. directly — no Session forwarders.
 
     def library_entry(self, paths: list[str]) -> dict:
         """Build this recording's session-library entry (F8) — a plain dict fed to the
@@ -1477,61 +1404,18 @@ class Session:
             self._dist_cache[lap_id] = td
         return td
 
-    # ------------------------------------------------ cursor scrub: x <-> media time
-    # Cursor x<->media-time (plots_view stays pacer-free). Speed + delta share one x-linked axis:
-    #   * TIME mode:     x = t − lap_start
-    #   * DISTANCE mode: x = s × baseline_total, s = dist_in_lap(t)/lap_total — the same axis
-    #     delta() draws on, so the cursor sits on its curve. Pass
-    #     active_baseline_total_distance() as best_distance so both halves use the SAME total.
-    # 'distance' and 'delta' are the same shared-distance mode; all clamp to the lap window.
-
+    # ----------------------- cursor scrub / video sync / map nearest: the Timeline conversions
+    # The cursor/plot-x <-> media-time, media-time -> trace-index/lap, and map (x,y) -> trace
+    # conversions live in the `session.timeline` sub-object (studio/timeline.py); these stay as thin
+    # delegators so the call sites + the tests that monkey-patch s.lap_at_time keep working. Pass
+    # active_baseline_total_distance() as best_distance for the shared-distance axis.
     def media_time_at_plot_x(self, lap_id: int, x: float, mode: str,
                              best_distance: float | None = None) -> float | None:
-        """Absolute media-clock time (s) for a plot x-value within `lap_id`.
-
-        `mode` is 'time' (time-into-lap x, seconds) or 'distance'/'delta' (the SHARED distance
-        axis, x = s × best_distance metres — both plots use it, so the cursors coincide). For
-        the distance/delta modes pass the ACTIVE baseline's total distance as `best_distance`
-        (`active_baseline_total_distance()` — the reference total when one is loaded, else the
-        local best) so this inverts delta()'s x-grid exactly. The result is CLAMPED to `lap_id`'s
-        [start, end] media window so a drag can't leave the current lap. Returns None if the lap
-        is degenerate (so the caller can no-op)."""
-        td = self._lap_time_dist(lap_id)
-        if td is None:
-            return None
-        times, dists = td
-        t0, t1 = float(times[0]), float(times[-1])
-        if mode == "time":
-            t = t0 + float(x)
-        else:  # 'distance' / 'delta' — the shared normalized-distance × best_distance axis
-            if not best_distance:
-                return None
-            s = float(x) / float(best_distance)            # normalized fraction [0,1]
-            d = s * float(dists[-1])                        # → this lap's odometer (m)
-            # Invert distance→time within the lap on the monotonic odometer.
-            t = float(np.interp(d, dists, times))
-        return min(max(t, t0), t1)
+        return self.timeline.media_time_at_plot_x(lap_id, x, mode, best_distance)
 
     def plot_x_at_media_time(self, lap_id: int, t: float, mode: str,
                              best_distance: float | None = None) -> float | None:
-        """Inverse of `media_time_at_plot_x`: the plot x-value for media-clock time `t` within
-        `lap_id`, in the given `mode` ('time', or the shared-distance 'distance'/'delta'). Used
-        to re-place a cursor from the shared media time. Returns None if the lap is degenerate
-        (or distance/delta with no best distance)."""
-        td = self._lap_time_dist(lap_id)
-        if td is None:
-            return None
-        times, dists = td
-        if mode == "time":
-            return float(t) - float(times[0])
-        # 'distance' / 'delta' — the shared normalized-distance × best_distance axis.
-        if not best_distance:
-            return None
-        if dists[-1] <= 0:  # zero-length odometer (≥2 stationary points): degenerate → no x
-            return None     # (same `<= 0` convention as delta() / sector_plot_positions)
-        d = float(np.interp(t, times, dists))  # distance-into-lap at t
-        s = d / float(dists[-1])               # normalized fraction [0,1]
-        return s * float(best_distance)
+        return self.timeline.plot_x_at_media_time(lap_id, t, mode, best_distance)
 
     # -------------------------------------------------------- plot series glue
     def _lap_arrays(self, lap_id):
@@ -1739,47 +1623,12 @@ class Session:
 
     # ------------------------------------------------------------ video sync
     def index_at_time(self, t: float) -> int | None:
-        n = len(self.tt)
-        if n == 0:
-            return None
-        i = int(np.searchsorted(self.tt, t))
-        return min(max(i, 0), n - 1)
-
-    def _lap_window_table(self):
-        """Cached parallel arrays (starts, ends, lap_ids) over the VALID laps, sorted by start
-        time, for the O(log n) `lap_at_time` binary search. Cleared on re-segment. The windows
-        are [start_timestamp, start+lap_time), single-sourced via lap_window."""
-        # getattr so a bare Session built via __new__ (tests) still resolves (recomputes each call).
-        if getattr(self, "_lap_windows", None) is None:
-            valid = self.valid_lap_ids()
-            rows = [(*self.lap_window(i), i) for i in valid]
-            rows.sort(key=lambda r: r[0])  # by start time (valid is already id-ascending => time-ascending)
-            starts = np.array([r[0] for r in rows], dtype=float)
-            ends = np.array([r[1] for r in rows], dtype=float)
-            ids = [r[2] for r in rows]
-            self._lap_windows = (starts, ends, ids)
-        return self._lap_windows
+        return self.timeline.index_at_time(t)
 
     def lap_at_time(self, t: float) -> int | None:
-        """The valid lap whose [start_timestamp, start+lap_time) window contains `t` (media-clock
-        seconds), else None — for the readout + current-lap highlight.
-
-        The upper bound is HALF-OPEN (`t < end`) on purpose: consecutive laps are contiguous, so
-        an inclusive bound would resolve a `t` exactly on a lap's START — the time select→seek
-        produces — to the PREVIOUS lap, jumping the highlight back one lap. The sole side-effect
-        (the exact finish instant of the LAST lap resolving to None) is a harmless between-laps
-        moment auto-follow holds through.
-
-        O(log n) binary search on the cached, start-sorted window table."""
-        starts, ends, ids = self._lap_window_table()
-        if len(starts) == 0:
-            return None
-        k = int(np.searchsorted(starts, t, side="right")) - 1
-        if k < 0:
-            return None
-        if starts[k] <= t < ends[k]:
-            return ids[k]
-        return None
+        """The valid lap whose [start, start+lap_time) window contains media-clock time `t`, else
+        None — the readout + current-lap highlight. Delegates to session.timeline."""
+        return self.timeline.lap_at_time(t)
 
     def g_at_time(self, t: float) -> tuple[float, float, float] | None:
         """Vehicle-frame g at media-clock time `t`: (lateral_g, longitudinal_g, total_g), or
@@ -1876,44 +1725,18 @@ class Session:
         # lap_b's elapsed time at the SAME track fraction s (invert s → b's distance → time).
         return elapsed_a - project(s, curve_b)
 
+    # Map (x, y) -> trace nearest-point lookups (whole-trace + the lap-scoped variant for the
+    # draggable marker) — delegated to session.timeline (studio/timeline.py).
     def nearest_index(self, x: float, y: float) -> int | None:
-        if len(self.tx) == 0:
-            return None
-        return int(np.argmin((self.tx - x) ** 2 + (self.ty - y) ** 2))
-
-    # ----------------------------------------------- map marker: lap-scoped nearest (F3)
-    # The red map marker is draggable; dragging seeks the video. Searching the WHOLE trace for
-    # the nearest point makes the marker JUMP to another lap wherever the laps overlap
-    # spatially. So constrain the search to the CURRENT lap's own trace — the same lap-scoped
-    # behaviour as the scrub cursor. Pure numpy on the lap's local-metre points; no pacer.
-    def _lap_xy_t(self, lap_id: int):
-        """(xs, ys, times) for one lap in local metres + media-clock seconds. Reads the shared
-        per-lap cache (built once, cleared on re-segment), so a marker drag's nearest-point lookup
-        no longer rebuilds the arrays on every mouse-move. Returns None if the lap is degenerate."""
-        td = self._lap_time_dist(lap_id)  # ensures the lap is segmented/usable
-        if td is None:
-            return None
-        xs, ys, ts = self._lap_trace_xyt(lap_id)
-        if len(xs) < 1:
-            return None
-        return xs, ys, ts
+        return self.timeline.nearest_index(x, y)
 
     def nearest_index_in_lap(self, lap_id: int, x: float, y: float) -> int | None:
-        """Index (into `lap_id`'s OWN point array) of the trace point nearest (x, y), searching
-        ONLY within that lap. Returns None if the lap is degenerate. Pure numpy — used to keep
-        the dragged map marker on the current lap instead of snapping across spatial overlaps."""
-        got = self._lap_xy_t(lap_id)
-        if got is None:
-            return None
-        xs, ys, _ = got
-        return int(np.argmin((xs - x) ** 2 + (ys - y) ** 2))
+        """Index (into `lap_id`'s OWN point array) of the trace point nearest (x, y), searching ONLY
+        within that lap (so the dragged map marker can't snap across spatial overlaps). Delegates to
+        session.timeline."""
+        return self.timeline.nearest_index_in_lap(lap_id, x, y)
 
     def nearest_time_in_lap(self, lap_id: int, x: float, y: float) -> float | None:
-        """Media-clock time (s) of the point within `lap_id` nearest (x, y), CLAMPED to the lap's
-        [start, end] window. The map marker uses this so a drag scrubs smoothly inside the one
-        lap and never jumps to another lap. None if the lap is degenerate."""
-        i = self.nearest_index_in_lap(lap_id, x, y)
-        if i is None:
-            return None
-        _, _, ts = self._lap_xy_t(lap_id)
-        return float(min(max(ts[i], ts[0]), ts[-1]))
+        """Media-clock time (s) of the point within `lap_id` nearest (x, y), clamped to the lap
+        window — the map marker's drag-to-scrub target. Delegates to session.timeline."""
+        return self.timeline.nearest_time_in_lap(lap_id, x, y)

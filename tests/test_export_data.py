@@ -147,7 +147,7 @@ def test_laps_table_schema_and_values():
         assert cells[3] == f"{r['entry']:.3f}"
         splits = s.lap_sector_splits(r["idx"])
         assert cells[5] == f"{splits[0]:.3f}" and cells[6] == f"{splits[1]:.3f}"
-        stats = s.lap_corner_stats(r["idx"])
+        stats = s.corners.lap_corner_stats(r["idx"])
         assert cells[7] == f"{stats[0].time:.3f}"
         assert cells[8] == f"{stats[0].apex_speed:.3f}"
         assert cells[9] == f"{stats[1].time:.3f}"

@@ -131,10 +131,10 @@ def test_session_wiring_excludes_dropouts_and_matches_numpy():
     assert all(t == s.laps.lap_time(i) for i, t in trend), "trend times == the table's"
     assert s.sector_sigmas() == []  # no sector lines -> no split columns
     ranked = s.corner_consistency()
-    cs = s.corners()
+    cs = s.corners.corner_list()
     assert len(cs) == 2 and {sp.cid for sp in ranked} == {c.cid for c in cs}
     # exact vs direct numpy over the SAME per-lap corner times (laps 0 and 1 only)
-    times = np.array([[st.time for st in s.lap_corner_stats(i)] for i in (0, 1)])
+    times = np.array([[st.time for st in s.corners.lap_corner_stats(i)] for i in (0, 1)])
     by_cid = {sp.cid: sp for sp in ranked}
     for k, c in enumerate(cs):
         sp = by_cid[c.cid]
@@ -152,13 +152,14 @@ def _qapp():
 
 
 class _StubSession:
-    """Duck-typed stand-in for ConsistencyPanel: the four accessors it reads."""
+    """Duck-typed stand-in for ConsistencyPanel: the accessors it reads."""
 
     def __init__(self, trend, sector_sigs, ranked, corner_list):
         self._trend = trend
         self._sigs = sector_sigs
         self._ranked = ranked
-        self._corners = corner_list
+        # session.corners service face (the panel reads session.corners.corner_list()).
+        self.corners = SimpleNamespace(corner_list=lambda: corner_list)
 
     def lap_time_trend(self):
         return self._trend
@@ -168,9 +169,6 @@ class _StubSession:
 
     def corner_consistency(self):
         return self._ranked
-
-    def corners(self):
-        return self._corners
 
 
 def _stub_panel():

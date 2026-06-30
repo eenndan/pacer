@@ -82,12 +82,12 @@ def fingerprint(s) -> dict:
     out["reference_lap_id"] = _round(s.reference_lap_id())
     out["reference_overlay_xy_shape"] = (
         list(s.reference_overlay_xy().shape) if s.reference_overlay_xy() is not None else None)
-    out["driving_thresholds"] = _round(s.driving_thresholds())
+    out["driving_thresholds"] = _round(s.driving.thresholds())
 
     # Corners (session-wide).
-    out["corners"] = _round(s.corners())
-    out["corner_session_bests"] = _round(s.corner_session_bests())
-    out["corner_map_markers"] = _round(s.corner_map_markers())
+    out["corners"] = _round(s.corners.corner_list())
+    out["corner_session_bests"] = _round(s.corners.corner_session_bests())
+    out["corner_map_markers"] = _round(s.corners.corner_map_markers())
     out["consistency_lap_ids"] = _round(s.consistency_lap_ids())
     out["lap_time_trend"] = _round(s.lap_time_trend())
     out["sector_sigmas"] = _round(s.sector_sigmas())
@@ -95,7 +95,7 @@ def fingerprint(s) -> dict:
     out["coaching_opportunities"] = _round(s.coaching_opportunities())
 
     # Per-lap sweeps. Use a representative subset of valid laps (all of them — there are ~18).
-    cids = [c.cid for c in s.corners()]
+    cids = [c.cid for c in s.corners.corner_list()]
     per_lap: dict = {}
     for lid in laps:
         row: dict = {}
@@ -104,21 +104,21 @@ def fingerprint(s) -> dict:
         row["lap_sector_splits"] = _round(s.lap_sector_splits(lid))
         row["sector_boundary_distances"] = _round(s.sector_boundary_distances(lid))
         row["lap_has_dropout"] = bool(s.lap_has_dropout(lid))
-        row["lap_corner_stats"] = _round(s.lap_corner_stats(lid))
-        row["lap_corner_grip"] = _round(s.lap_corner_grip(lid))
-        row["lap_brake_events"] = _round(s.lap_brake_events(lid))
-        row["lap_coasting_spans"] = _round(s.lap_coasting_spans(lid))
-        row["lap_brake_map_markers"] = _round(s.lap_brake_map_markers(lid))
-        row["corner_map_markers_count"] = len(s.corner_map_markers())
+        row["lap_corner_stats"] = _round(s.corners.lap_corner_stats(lid))
+        row["lap_corner_grip"] = _round(s.driving.lap_corner_grip(lid))
+        row["lap_brake_events"] = _round(s.driving.lap_brake_events(lid))
+        row["lap_coasting_spans"] = _round(s.driving.lap_coasting_spans(lid))
+        row["lap_brake_map_markers"] = _round(s.driving.lap_brake_map_markers(lid))
+        row["corner_map_markers_count"] = len(s.corners.corner_map_markers())
         # corner-entry media time per corner.
         row["corner_entry_media_time"] = _round(
-            {cid: s.corner_entry_media_time(lid, cid) for cid in cids})
+            {cid: s.corners.corner_entry_media_time(lid, cid) for cid in cids})
         # brake/coast plot positions in both modes.
         for mode in ("distance", "time"):
             row[f"lap_brake_plot_positions_{mode}"] = _round(
-                s.lap_brake_plot_positions(lid, mode))
+                s.driving.lap_brake_plot_positions(lid, mode))
             row[f"lap_coasting_plot_spans_{mode}"] = _round(
-                s.lap_coasting_plot_spans(lid, mode))
+                s.driving.lap_coasting_plot_spans(lid, mode))
         per_lap[str(lid)] = row
     out["per_lap"] = per_lap
 

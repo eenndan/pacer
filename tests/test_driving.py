@@ -13,6 +13,7 @@ Run: python tests/test_driving.py
 """
 import os
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -427,35 +428,35 @@ def _bare_driving_session():
 
 def test_session_driving_accessors_and_caching():
     s = _bare_driving_session()
-    th = s.driving_thresholds()
-    assert th is not None and th is s.driving_thresholds(), "thresholds must cache"
-    events = s.lap_brake_events(0)
+    th = s.driving.thresholds()
+    assert th is not None and th is s.driving.thresholds(), "thresholds must cache"
+    events = s.driving.lap_brake_events(0)
     assert len(events) == 1, events
-    assert s.lap_brake_events(0) is events, "brake events must cache per lap"
+    assert s.driving.lap_brake_events(0) is events, "brake events must cache per lap"
     # onset at index 250/600 over 300 m -> ~125 m.
     assert abs(events[0].onset_dist - 125.0) < 5.0, events[0].onset_dist
     # map markers map the onset to the lap's (x,y) (straight lap: x == odometer).
-    markers = s.lap_brake_map_markers(0)
+    markers = s.driving.lap_brake_map_markers(0)
     assert len(markers) == 1
     assert abs(markers[0][0] - events[0].onset_dist) < 1e-6 and markers[0][2] == events[0].peak_decel
     # plot positions: distance mode scales by best distance (== this lap's, so identity here).
-    pos_d = s.lap_brake_plot_positions(0, "distance")
+    pos_d = s.driving.lap_brake_plot_positions(0, "distance")
     assert len(pos_d) == 1 and abs(pos_d[0][0] - events[0].onset_dist) < 1e-6
-    pos_t = s.lap_brake_plot_positions(0, "time")
+    pos_t = s.driving.lap_brake_plot_positions(0, "time")
     assert abs(pos_t[0][0] - events[0].onset_time) < 1e-9
     # coasting spans exist (the flat-throttle stretches before/after the brake).
-    spans = s.lap_coasting_spans(0)
-    assert len(spans) >= 1 and s.lap_coasting_spans(0) is spans
+    spans = s.driving.lap_coasting_spans(0)
+    assert len(spans) >= 1 and s.driving.lap_coasting_spans(0) is spans
     # D3: the synthetic brake/throttle band — per-sample [-1,1], caches, strong brake at the onset.
-    dists_bt, _elapsed_bt, inten = s._dc.lap_brake_throttle(0)
-    assert s._dc.lap_brake_throttle(0)[2] is inten, "brake/throttle must cache per lap"
+    dists_bt, _elapsed_bt, inten = s.driving.lap_brake_throttle(0)
+    assert s.driving.lap_brake_throttle(0)[2] is inten, "brake/throttle must cache per lap"
     assert len(inten) == len(dists_bt) and inten.min() >= -1.0 and inten.max() <= 1.0
     onset_idx = int(np.argmin(np.abs(dists_bt - events[0].onset_dist)))
     assert inten[onset_idx + 10] < -0.5, inten[onset_idx + 10]  # braking reads strongly negative
     # plot projection: distance mode scales by best (==self here); time mode is elapsed.
-    px_d, iy_d = s.lap_brake_throttle_plot(0, "distance")
+    px_d, iy_d = s.driving.lap_brake_throttle_plot(0, "distance")
     assert px_d is not None and len(px_d) == len(iy_d)
-    px_t, _iy_t = s.lap_brake_throttle_plot(0, "time")
+    px_t, _iy_t = s.driving.lap_brake_throttle_plot(0, "time")
     assert px_t is not None and abs(px_t[0]) < 1e-6  # elapsed starts at 0
     print(f"ok session: brake @ {events[0].onset_dist:.0f} m, "
           f"{len(spans)} coast span(s), brake/throttle band [-1,1], markers+positions consistent")
@@ -479,12 +480,12 @@ def test_session_grip_channel_aligned_and_cached():
                               cross=None, source="accl")
     reset_driving_caches(s)
 
-    util = s.lap_grip_channel(0)
+    util = s.driving.lap_grip_utilization(0)
     assert util is not None
     # aligned 1:1 to the lap's map xy points (the _lap_columns grid lap_channels' x_m comes from).
     _t, xs, _ys, _v, _cum = s._lap_columns(0)
     assert len(util) == len(xs), (len(util), len(xs))
-    assert s.lap_grip_channel(0) is util, "grip channel must cache per lap"
+    assert s.driving.lap_grip_utilization(0) is util, "grip channel must cache per lap"
     # the loaded stretch reads higher utilization than the unloaded straight.
     assert float(np.nanmax(util)) > float(util[0]) + 1e-3
     assert float(np.nanmax(util)) <= D.GRIP_UTIL_CLIP
@@ -494,7 +495,7 @@ def test_session_grip_channel_aligned_and_cached():
     s2._gmeter = gmeter.GMeter(times=np.empty(0), lat_g=np.empty(0), long_g=np.empty(0),
                                cross=None, source="accl")
     reset_driving_caches(s2)
-    assert s2.lap_grip_channel(0) is None
+    assert s2.driving.lap_grip_utilization(0) is None
     print(f"ok D5 session: grip channel len {len(util)} aligned to xy, cached, "
           f"max {float(np.nanmax(util)):.2f}; no-g -> None")
 
@@ -514,16 +515,16 @@ def test_session_brake_points_accessor_and_caching():
     corner = Corner(cid=1, enter=120.0, exit=260.0, apex=190.0, direction=1, turn_deg=90.0)
     reset_corner_caches(s, basis=([corner], 300.0))
 
-    events = s.lap_brake_events(0)
+    events = s.driving.lap_brake_events(0)
     assert len(events) == 1, events
-    bps = s.lap_brake_points(0)
+    bps = s.driving.lap_brake_points(0)
     assert len(bps) == 1, bps
     bp = bps[0]
     assert bp.cid == 1
-    assert s.lap_brake_points(0) is bps, "brake points must cache per lap"
+    assert s.driving.lap_brake_points(0) is bps, "brake points must cache per lap"
 
     # a_max is the DEMONSTRATED peak (single event -> its own peak decel), NOT the threshold theta_b.
-    th = s.driving_thresholds()
+    th = s.driving.thresholds()
     assert bp.a_max_g > th.theta_b, (bp.a_max_g, th.theta_b)
     assert abs(bp.a_max_g - events[0].peak_decel) < 1e-6, (bp.a_max_g, events[0].peak_decel)
 
@@ -531,7 +532,7 @@ def test_session_brake_points_accessor_and_caching():
     assert abs(bp.actual_brake_dist - events[0].onset_dist) < 1e-6
 
     # The optimum reproduces the physics exactly: apex_dist - (v_entry^2 - v_apex^2)/(2*a_max).
-    st = s.lap_corner_stats(0)[0]
+    st = s.corners.lap_corner_stats(0)[0]
     dists, speed_kmh, _e = s._lap_arrays(0)
     v_entry = float(np.interp(bp.actual_brake_dist, dists, speed_kmh)) / 3.6
     v_apex = float(st.apex_speed) / 3.6
@@ -558,7 +559,7 @@ def test_session_brake_points_na_when_no_brake_in_corner():
     # corner near the START (before the brake onset ~125 m, even past the lead) -> no matched brake.
     corner = Corner(cid=1, enter=10.0, exit=40.0, apex=25.0, direction=1, turn_deg=90.0)
     reset_corner_caches(s, basis=([corner], 300.0))
-    assert s.lap_brake_points(0) == [], s.lap_brake_points(0)
+    assert s.driving.lap_brake_points(0) == [], s.driving.lap_brake_points(0)
     print("ok D4 session: corner with no braking -> N/A (omitted)")
 
 
@@ -580,14 +581,14 @@ def test_session_no_gmeter_degrades_to_empty():
     s._gmeter = gmeter._empty()
     reset_driving_caches(s)
     reset_corner_caches(s)
-    assert s.driving_thresholds() is None
-    assert s.lap_brake_events(0) == []
-    assert s.lap_coasting_spans(0) == []
-    assert s.lap_corner_grip(0) == []
-    assert s.lap_brake_map_markers(0) == []
-    assert s._dc.lap_brake_throttle(0) == (None, None, None)
-    assert s.lap_brake_throttle_plot(0, "distance") == (None, None)
-    assert s.lap_brake_points(0) == []  # D4: no g -> no a_max -> no brake points
+    assert s.driving.thresholds() is None
+    assert s.driving.lap_brake_events(0) == []
+    assert s.driving.lap_coasting_spans(0) == []
+    assert s.driving.lap_corner_grip(0) == []
+    assert s.driving.lap_brake_map_markers(0) == []
+    assert s.driving.lap_brake_throttle(0) == (None, None, None)
+    assert s.driving.lap_brake_throttle_plot(0, "distance") == (None, None)
+    assert s.driving.lap_brake_points(0) == []  # D4: no g -> no a_max -> no brake points
     print("ok no-g: all driving channels empty, thresholds None")
 
 
@@ -701,25 +702,18 @@ def test_corner_table_has_grip_column():
     from studio.lap_table import CORNER_COLUMNS, CornerTable
     assert CORNER_COLUMNS[-1] == "Grip", CORNER_COLUMNS  # header abbreviated; units now in tooltip
 
-    class Stub:
-        def lap_count(self):
-            return 4
-
-        def corners(self):
-            return [C.Corner(cid=1, enter=0, exit=10, apex=5, direction=1, turn_deg=90)]
-
-        def lap_corner_stats(self, i):
-            return [C.CornerStat(cid=1, time=2.0, delta=0.0, apex_speed=40.0,
-                                 apex_speed_delta=0.0, apex_dist=5.0, entry_speed=60.0,
-                                 exit_speed=55.0)]
-
-        def corner_session_bests(self):
-            return [2.0]
-
-        def lap_corner_grip(self, i):
-            return [0.73]
-
-    t = CornerTable(Stub())
+    stub = SimpleNamespace(
+        lap_count=lambda: 4,
+        corners=SimpleNamespace(
+            corner_list=lambda: [C.Corner(cid=1, enter=0, exit=10, apex=5, direction=1, turn_deg=90)],
+            lap_corner_stats=lambda i: [C.CornerStat(cid=1, time=2.0, delta=0.0, apex_speed=40.0,
+                                                     apex_speed_delta=0.0, apex_dist=5.0,
+                                                     entry_speed=60.0, exit_speed=55.0)],
+            corner_session_bests=lambda: [2.0],
+        ),
+        driving=SimpleNamespace(lap_corner_grip=lambda i: [0.73]),
+    )
+    t = CornerTable(stub)
     t.set_lap(1)
     assert t.table.columnCount() == len(CORNER_COLUMNS)
     assert t.table.item(0, len(CORNER_COLUMNS) - 1).text() == "73"
@@ -733,25 +727,18 @@ def test_corner_table_grip_dash_without_g():
     from studio import corners as C
     from studio.lap_table import CORNER_COLUMNS, CornerTable
 
-    class Stub:
-        def lap_count(self):
-            return 4
-
-        def corners(self):
-            return [C.Corner(cid=1, enter=0, exit=10, apex=5, direction=1, turn_deg=90)]
-
-        def lap_corner_stats(self, i):
-            return [C.CornerStat(cid=1, time=2.0, delta=0.0, apex_speed=40.0,
-                                 apex_speed_delta=0.0, apex_dist=5.0, entry_speed=60.0,
-                                 exit_speed=55.0)]
-
-        def corner_session_bests(self):
-            return [2.0]
-
-        def lap_corner_grip(self, i):
-            return []
-
-    t = CornerTable(Stub())
+    stub = SimpleNamespace(
+        lap_count=lambda: 4,
+        corners=SimpleNamespace(
+            corner_list=lambda: [C.Corner(cid=1, enter=0, exit=10, apex=5, direction=1, turn_deg=90)],
+            lap_corner_stats=lambda i: [C.CornerStat(cid=1, time=2.0, delta=0.0, apex_speed=40.0,
+                                                     apex_speed_delta=0.0, apex_dist=5.0,
+                                                     entry_speed=60.0, exit_speed=55.0)],
+            corner_session_bests=lambda: [2.0],
+        ),
+        driving=SimpleNamespace(lap_corner_grip=lambda i: []),
+    )
+    t = CornerTable(stub)
     t.set_lap(1)
     assert t.table.item(0, len(CORNER_COLUMNS) - 1).text() == "–"
     print("ok corner table: Grip cell dashes when no g signal")

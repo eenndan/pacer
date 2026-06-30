@@ -1,18 +1,18 @@
-"""Regression pins for the F1 god-object decomposition: Session composes the per-domain
-analysis SERVICES (studio.corner_model.CornerModel + studio.driving_channels.DrivingChannels)
-and DELEGATES to them, and `set_timing_lines` / the reference set+clear drive the services'
-`invalidate()` seam instead of hand-clearing ~7 lap-keyed dict/sentinel slots.
+"""Regression pins for the Session service decomposition (F1 + E2): Session EXPOSES the
+per-domain analysis SERVICES — `session.corners` (studio.corner_model.CornerModel) and
+`session.driving` (studio.driving_channels.DrivingChannels) — as attributes consumers call
+directly, and `set_timing_lines` / the reference set+clear drive the services' `invalidate()`
+seam instead of hand-clearing ~7 lap-keyed dict/sentinel slots.
 
-The bar the F1 refactor was held to is WHOLE-API numerical equivalence on the real session
-(proved out-of-band by dev/golden_session_dump.py — 122k float values, max |Δ| = 0). This
+The bar the decomposition is held to is WHOLE-API numerical equivalence on the real session
+(proved out-of-band by dev/golden_session_dump.py — 120k+ float values, max |Δ| = 0). This
 file pins the STRUCTURAL contracts that keep that true going forward, on a deterministic
 SYNTHETIC session (the test_corners stadium loop + a seeded g-meter — no pacer Laps, no
 telemetry file), so a regression that re-introduces a stale-cache or over-clearing bug fails
 here:
 
-  1. DELEGATION — Session's public corner/driving accessors return EXACTLY what the composed
-     service returns (same object once cached): the thin delegators forward, they don't
-     recompute a second copy.
+  1. EXPOSURE — session.corners / session.driving ARE the composed services (lazily built on a
+     bare Session), each producing real output on the synthetic session.
   2. CACHING — the services memoize per lap (a second call returns the SAME object).
   3. invalidate() ACTUALLY CLEARS — each service's cache dicts/sentinels are emptied by its
      own invalidate(); CornerModel.invalidate_stats() clears ONLY the per-lap stats and KEEPS
@@ -79,53 +79,50 @@ def _synthetic_session():
     return s
 
 
-# --------------------------------------------------------------------- composition + delegation
-def test_session_composes_the_services():
-    """Session lazily owns a CornerModel + a DrivingChannels (the bare-Session path builds them
-    on first `_cm`/`_dc` access — the same getattr idiom `_ref` uses), each a real service."""
+# --------------------------------------------------------------------- composition + exposure
+def test_session_exposes_the_services():
+    """session.corners / session.driving ARE the composed services (the bare-Session path builds
+    them on first access — the same getattr idiom `_ref` uses), each stable across accesses."""
     s = _synthetic_session()
-    assert isinstance(s._cm, corner_model.CornerModel)
-    assert isinstance(s._dc, driving_channels.DrivingChannels)
+    assert isinstance(s.corners, corner_model.CornerModel)
+    assert isinstance(s.driving, driving_channels.DrivingChannels)
     # The accessor is stable (same instance each call — not rebuilt per access).
-    assert s._cm is s._cm and s._dc is s._dc
-    print("ok compose: Session._cm/_dc are the composed services")
+    assert s.corners is s.corners and s.driving is s.driving
+    print("ok expose: session.corners/driving are the composed services")
 
 
-def test_corner_delegation_is_exact():
-    """Every public corner accessor returns EXACTLY the composed CornerModel's value."""
+def test_corner_service_outputs_and_caches():
+    """The exposed CornerModel produces real output on the synthetic stadium + caches per lap."""
     s = _synthetic_session()
-    assert s.corners() == s._cm.corner_list()
-    assert len(s.corners()) >= 2, "the stadium must detect its two arcs as corners"
-    # lap_corner_stats: delegates AND caches (same object back the second time, both via Session
-    # and the service — they share the one cache).
-    st = s.lap_corner_stats(0)
-    assert st is s._cm.lap_corner_stats(0), "delegation must hit the SAME cached object"
-    assert s.lap_corner_stats(0) is st, "per-lap stats must cache"
-    assert s.corner_session_bests() == s._cm.corner_session_bests()
-    assert s.corner_map_markers() == s._cm.corner_map_markers()
-    assert s._corner_basis() is s._cm.basis()
-    # corner_entry_media_time delegates too.
-    cid = s.corners()[0].cid
-    assert s.corner_entry_media_time(0, cid) == s._cm.corner_entry_media_time(0, cid)
-    print(f"ok corner delegation: {len(s.corners())} corners, stats/bests/markers all delegate")
+    assert len(s.corners.corner_list()) >= 2, "the stadium must detect its two arcs as corners"
+    # lap_corner_stats: caches per lap (the SAME object back the second time).
+    st = s.corners.lap_corner_stats(0)
+    assert s.corners.lap_corner_stats(0) is st, "per-lap stats must cache"
+    assert s.corners.corner_session_bests(), "session bests must be non-empty"
+    assert s.corners.corner_map_markers(), "map markers must be non-empty"
+    assert s.corners.basis() is not None
+    cid = s.corners.corner_list()[0].cid
+    # corner_entry_media_time is reachable through the service (absolute media time, or None).
+    s.corners.corner_entry_media_time(0, cid)
+    print(f"ok corner service: {len(s.corners.corner_list())} corners, stats/bests/markers produced")
 
 
-def test_driving_delegation_is_exact():
-    """Every public driving accessor returns EXACTLY the composed DrivingChannels' value."""
+def test_driving_service_outputs_and_caches():
+    """The exposed DrivingChannels produces real output on the synthetic session + caches per
+    lap; the thresholds derive from the seeded g distribution."""
     s = _synthetic_session()
-    th = s.driving_thresholds()
-    assert th is not None and th is s._dc.thresholds(), "thresholds delegate + cache"
-    be = s.lap_brake_events(0)
-    assert be is s._dc.lap_brake_events(0), "delegation must hit the SAME cached object"
-    assert s.lap_brake_events(0) is be, "brake events must cache per lap"
-    assert s.lap_coasting_spans(0) is s._dc.lap_coasting_spans(0)
-    assert s.lap_corner_grip(0) == s._dc.lap_corner_grip(0)
-    assert s.lap_brake_map_markers(0) == s._dc.lap_brake_map_markers(0)
+    th = s.driving.thresholds()
+    assert th is not None and s.driving.thresholds() is th, "thresholds derive + cache"
+    be = s.driving.lap_brake_events(0)
+    assert s.driving.lap_brake_events(0) is be, "brake events must cache per lap"
+    assert s.driving.lap_coasting_spans(0) is s.driving.lap_coasting_spans(0)
+    s.driving.lap_corner_grip(0)
+    s.driving.lap_brake_map_markers(0)
     for mode in ("distance", "time"):
-        assert s.lap_brake_plot_positions(0, mode) == s._dc.lap_brake_plot_positions(0, mode)
-        assert s.lap_coasting_plot_spans(0, mode) == s._dc.lap_coasting_plot_spans(0, mode)
-    print(f"ok driving delegation: theta_b={th.theta_b:.3f}, "
-          f"{len(be)} brake event(s), all channels delegate")
+        s.driving.lap_brake_plot_positions(0, mode)
+        s.driving.lap_coasting_plot_spans(0, mode)
+    print(f"ok driving service: theta_b={th.theta_b:.3f}, "
+          f"{len(be)} brake event(s), all channels produced")
 
 
 # ------------------------------------------------------------------ invalidate() actually clears
@@ -133,9 +130,9 @@ def test_corner_invalidate_clears_its_caches():
     """CornerModel.invalidate() empties ALL three caches; invalidate_stats() empties ONLY the
     per-lap stats and KEEPS the detected-corner basis."""
     s = _synthetic_session()
-    s.lap_corner_stats(0)          # populate the per-lap stats + the basis
-    s.corner_session_bests()       # populate the session bests
-    cm = s._cm
+    s.corners.lap_corner_stats(0)          # populate the per-lap stats + the basis
+    s.corners.corner_session_bests()       # populate the session bests
+    cm = s.corners
     assert cm._basis_cache is not _CM_UNSET and cm._stats_cache and cm._bests_cache is not _CM_UNSET
 
     # invalidate_stats: stats gone, basis + bests KEPT (the narrower reference-change drop).
@@ -145,7 +142,7 @@ def test_corner_invalidate_clears_its_caches():
     assert cm._basis_cache is basis_before, "invalidate_stats must KEEP the corner basis"
 
     # full invalidate: everything reset to the not-computed sentinels.
-    s.lap_corner_stats(0)
+    s.corners.lap_corner_stats(0)
     cm.invalidate()
     assert cm._basis_cache is _CM_UNSET and not cm._stats_cache and cm._bests_cache is _CM_UNSET
     print("ok corner invalidate: invalidate() clears all; invalidate_stats() keeps the basis")
@@ -155,10 +152,10 @@ def test_driving_invalidate_keeps_thresholds():
     """DrivingChannels.invalidate() empties the three per-lap caches but KEEPS the derived
     thresholds (they depend only on the constant-for-the-recording g series)."""
     s = _synthetic_session()
-    s.lap_brake_events(0)
-    s.lap_coasting_spans(0)
-    s.lap_corner_grip(0)
-    dc = s._dc
+    s.driving.lap_brake_events(0)
+    s.driving.lap_coasting_spans(0)
+    s.driving.lap_corner_grip(0)
+    dc = s.driving
     th = dc.thresholds()
     assert th is not None and dc._brake_events_cache and dc._coasting_spans_cache
     dc.invalidate()
@@ -173,12 +170,12 @@ def test_set_timing_lines_invalidates_both_services():
     after a re-segment every per-lap service cache is empty (recomputed lazily), the corner
     basis is reset, and the driving thresholds survive."""
     s = _synthetic_session()
-    s.lap_corner_stats(0)
-    s.lap_brake_events(0)
-    s.lap_corner_grip(0)
-    s.corner_session_bests()
-    th = s.driving_thresholds()
-    cm, dc = s._cm, s._dc
+    s.corners.lap_corner_stats(0)
+    s.driving.lap_brake_events(0)
+    s.driving.lap_corner_grip(0)
+    s.corners.corner_session_bests()
+    th = s.driving.thresholds()
+    cm, dc = s.corners, s.driving
     assert cm._stats_cache and dc._brake_events_cache and cm._basis_cache is not _CM_UNSET
 
     # A FakeLaps whose update() is a no-op + an empty sectors so set_timing_lines runs without a
@@ -213,8 +210,8 @@ def test_reference_change_drops_only_per_lap_stats():
     DETECTION basis is preserved (the windows don't move when only the Δ baseline does)."""
     s = _synthetic_session()
     s.track_name = "Stadium"
-    s.lap_corner_stats(0)
-    cm = s._cm
+    s.corners.lap_corner_stats(0)
+    cm = s.corners
     basis_before = cm.basis()
     assert cm._stats_cache and basis_before is not None
 
@@ -230,7 +227,7 @@ def test_reference_change_drops_only_per_lap_stats():
     assert cm.basis() is basis_before, "same detected corners after a reference change"
 
     # clear_reference reverts the baseline -> drops the per-lap stats again, keeps the basis.
-    s.lap_corner_stats(0)
+    s.corners.lap_corner_stats(0)
     assert cm._stats_cache
     s.clear_reference()
     assert not s.has_reference()
@@ -241,9 +238,9 @@ def test_reference_change_drops_only_per_lap_stats():
 
 if __name__ == "__main__":
     tests = [
-        test_session_composes_the_services,
-        test_corner_delegation_is_exact,
-        test_driving_delegation_is_exact,
+        test_session_exposes_the_services,
+        test_corner_service_outputs_and_caches,
+        test_driving_service_outputs_and_caches,
         test_corner_invalidate_clears_its_caches,
         test_driving_invalidate_keeps_thresholds,
         test_set_timing_lines_invalidates_both_services,
