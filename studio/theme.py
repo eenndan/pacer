@@ -1,7 +1,7 @@
 """Pacer Studio design system — single source of truth for the dark theme.
 
-Pacer-free (no telemetry imports); font handling degrades gracefully when the
-bundled Inter TTFs or the network are unavailable. Public surface: C (colour/scale
+Pacer-free (no telemetry imports); font handling degrades gracefully to the system
+font stack when the bundled Inter TTFs are unavailable. Public surface: C (colour/scale
 tokens), register_fonts, apply_theme, ui_font, mono_font, delta_colour, LAP_SEEK_NUDGE_S.
 """
 
@@ -165,9 +165,8 @@ UI_STACK = '"Inter","-apple-system","SF Pro Text","Helvetica Neue","sans-serif"'
 MONO_STACK = '"SF Mono","JetBrains Mono","Menlo","monospace"'
 
 _FONTS_DIR = os.path.join(os.path.dirname(__file__), "assets", "fonts")
-# rsms/inter OFL static TTFs we try to bundle (and download if missing).
+# rsms/inter OFL static TTFs bundled under assets/fonts/.
 _INTER_FILES = ("Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf")
-_INTER_URL = ("https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip")
 
 # Set by register_fonts(): True once Inter is registered with the Qt font DB.
 _inter_available = False
@@ -185,44 +184,16 @@ def _qt_supports_feature() -> bool:
     return (major, minor) >= (6, 7) and hasattr(QFont, "setFeature")
 
 
-def _try_download_inter() -> bool:
-    """Best-effort download+extract of the Inter TTFs into _FONTS_DIR. Returns True if present;
-    network/IO failures are swallowed."""
-    import urllib.request
-    import zipfile
-
-    os.makedirs(_FONTS_DIR, exist_ok=True)
-    tmp_zip = os.path.join(_FONTS_DIR, "_inter_download.zip")
-    try:
-        urllib.request.urlretrieve(_INTER_URL, tmp_zip)  # noqa: S310 (trusted GitHub release)
-        with zipfile.ZipFile(tmp_zip) as zf:
-            for name in zf.namelist():
-                base = os.path.basename(name)
-                if base in _INTER_FILES:
-                    with zf.open(name) as src, open(os.path.join(_FONTS_DIR, base), "wb") as dst:
-                        dst.write(src.read())
-    except Exception as exc:  # network/zip/IO — degrade gracefully
-        print(f"theme: Inter download failed ({exc}); using system font fallback.", flush=True)
-        return False
-    finally:
-        if os.path.exists(tmp_zip):
-            os.remove(tmp_zip)
-    return all(os.path.exists(os.path.join(_FONTS_DIR, f)) for f in _INTER_FILES)
-
-
 def register_fonts() -> None:
-    """Register bundled Inter (download once if missing; skip on failure → system fallback). Also
-    records Qt tnum support. Call once before apply_theme."""
+    """Register the bundled Inter TTFs (assets/fonts/); skip to the system font fallback if absent.
+    Also records Qt tnum support. Call once before apply_theme."""
     global _inter_available, _supports_feature
     _supports_feature = _qt_supports_feature()
 
     have_files = all(os.path.exists(os.path.join(_FONTS_DIR, f)) for f in _INTER_FILES)
     if not have_files:
-        have_files = _try_download_inter()
-
-    if not have_files:
         _inter_available = False
-        print("theme: Inter not bundled and unavailable — using system font fallback "
+        print("theme: Inter not bundled — using system font fallback "
               f"({UI_STACK}).", flush=True)
         return
 

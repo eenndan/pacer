@@ -11,8 +11,8 @@ order:
   1. PACER_DEMO_MP4 env var      — an explicit path (a dev who already has a recording; also the
      test seam).
   2. a cached copy under <app-support>/pacer/demo/  — downloaded once, reused forever.
-  3. a one-time download from the pinned v0.1.0 GitHub release asset into that cache (best-effort;
-     mirrors theme._try_download_inter). Override the URL with PACER_DEMO_URL.
+  3. a one-time download from the pinned v0.1.0 GitHub release asset into that cache (best-effort).
+     Override the URL with PACER_DEMO_URL.
 
 If none resolve (offline first run, no env, download failed) `resolve_demo_recording` returns None
 and the caller falls back to the normal empty welcome state — the app still launches.
@@ -49,9 +49,9 @@ def demo_cache_path() -> str:
 
 
 def _try_download_demo(dest: str, url: str | None = None) -> bool:
-    """Best-effort download of the demo recording to `dest` (mirrors theme._try_download_inter):
-    network/IO failures are swallowed and return False. Writes to a temp sibling then renames so a
-    half-download never looks like a valid cache hit."""
+    """Best-effort download of the demo recording to `dest`: network/IO failures are swallowed and
+    return False. Writes to a temp sibling then renames so a half-download never looks like a valid
+    cache hit."""
     import urllib.request
 
     url = url or os.environ.get("PACER_DEMO_URL") or _DEMO_URL
