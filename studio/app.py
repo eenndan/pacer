@@ -104,8 +104,9 @@ class _SessionLoadWorker(QThread):
 
 class _WelcomeView(QWidget):
     """First-run / no-recording empty state — the product's tagline made literal: drop a GoPro
-    recording onto the window, or open one. `on_open` runs the file picker, `on_demo` loads the
-    bundled sample clip. An optional `error` line is shown when this stands in for a failed first
+    recording onto the window, or open one. `on_open` runs the file picker, `on_demo` resolves and
+    loads a real demo lapping recording (and re-shows this state with an honest message if the demo
+    can't be fetched). An optional `error` line is shown when this stands in for a failed first
     load. The buttons are exposed (`open_btn`/`demo_btn`) for tests."""
 
     def __init__(self, on_open, on_demo, error: str | None = None, parent=None):
@@ -149,7 +150,7 @@ class StudioWindow(QMainWindow):
     # _on_load_failed have run) — a clean way for tests/smoke to wait for the now-async load.
     loadFinished = Signal()
 
-    def __init__(self, paths: list[str], full: bool = False):
+    def __init__(self, paths: list[str], full: bool = False, demo_unavailable: bool = False):
         super().__init__()
         self.resize(1440, 900)
         # "Drop a GoPro, get your laps": files dropped on the window load through the guarded path.
@@ -176,6 +177,12 @@ class StudioWindow(QMainWindow):
         # Launched with no recording -> the welcome empty state rather than a blank/auto-demo window.
         if paths:
             self._load(paths)
+        elif demo_unavailable:
+            # `--demo` was requested but the demo couldn't be resolved (offline / download failed):
+            # show the welcome state with an honest message rather than silently launching the
+            # lapless bundled sample (which reads as a broken app).
+            self._show_welcome(error="Demo clip unavailable — check your connection and retry, "
+                                     "or drop your own GoPro .mp4 to get your laps.")
         else:
             self._show_welcome()
 
@@ -212,9 +219,16 @@ class StudioWindow(QMainWindow):
 
     def _open_demo(self):
         """Welcome-screen "Open demo": load a real demo lapping recording if one is resolvable
-        (env / cache / a one-time release download — see studio.demo), else the bundled sample clip
-        (which has no real laps but proves the app launched). Both go through the guarded path."""
-        self._load([demo.resolve_demo_recording() or DEFAULT_SAMPLE])
+        (env / cache / a one-time release download — see studio.demo). If it can't be resolved
+        (offline / download failed), DON'T silently load the bundled sample clip — it has zero real
+        laps, so the user would land in a blank-looking studio that reads as broken. Instead keep the
+        welcome screen and say so honestly, so they can retry or open their own footage."""
+        path = demo.resolve_demo_recording()
+        if path is None:
+            self._show_welcome(error="Demo clip unavailable — check your connection and retry, "
+                                     "or drop your own GoPro .mp4 to get your laps.")
+            return
+        self._load([path])
 
     # ------------------------------------------------------------------ loading
     def _load(self, paths: list[str]):
@@ -371,26 +385,56 @@ class StudioWindow(QMainWindow):
             app.processEvents()
 
     def _on_load_failed(self, paths: list[str], exc: Exception):
-        """A session load failed (missing / corrupt / no-GPS file). Show a clear, non-fatal error
-        (offending path + reason) and keep the app open. If a session was already loaded (this was a
-        reload, e.g. "Load full recording"), the working UI is LEFT INTACT — only the dialog shows.
-        On the very first load there is no UI yet, so install a minimal empty-state placeholder so
-        the window still opens (rather than crashing out of __init__)."""
+        """A session load failed (missing / not-a-GoPro / no-GPS file). Show a clear, non-fatal error
+        in PLAIN LANGUAGE (never the raw Python class name as the headline — that reads as amateur)
+        and keep the app open. If a session was already loaded (this was a reload, e.g. "Load full
+        recording"), the working UI is LEFT INTACT — only the dialog shows. On the very first load
+        there is no UI yet, so install the welcome empty state so the window still opens.
+
+        The raw `type(exc).__name__: exc` is logged to the console and tucked behind the dialog's
+        "Show details" — diagnostics for a bug report, not the user-facing message."""
         offending = paths[0] if paths else "(no file)"
-        reason = f"{type(exc).__name__}: {exc}"
-        print(f"studio: failed to load {offending}: {reason}", flush=True)
-        QMessageBox.critical(
-            self, "pacer studio — could not load recording",
-            f"Could not load the recording:\n\n{offending}\n\n{reason}\n\n"
-            "The file may be missing, corrupt, or contain no GPS data. "
-            "The previously loaded session (if any) is unchanged.")
-        # First-load failure: no central widget yet — show the welcome empty state (with the error)
-        # so the window stays open and the user can drop/open another recording.
+        detail = f"{type(exc).__name__}: {exc}"
+        message = self._load_failure_message(paths, exc)
+        print(f"studio: failed to load {offending}: {detail}", flush=True)
+        box = QMessageBox(QMessageBox.Critical, "pacer studio — could not load recording",
+                          f"{message}\n\n{offending}\n\n"
+                          "The previously loaded session (if any) is unchanged.", parent=self)
+        # Raw exception text lives in the collapsible details, not the headline.
+        box.setDetailedText(detail)
+        box.exec()
+        # First-load failure: no central widget yet — show the welcome empty state (with the plain
+        # message) so the window stays open and the user can drop/open another recording.
         if not hasattr(self, "session"):
             # Seed _paths for the failed-first-load case (nothing else has set it, yet readers like
             # "Load full recording" stay reachable). A failed reload keeps the good _paths instead.
             self._paths = list(paths)
-            self._show_welcome(error=f"Could not load:\n{offending}\n\n{reason}")
+            self._show_welcome(error=f"{message}\n\n{offending}")
+
+    @staticmethod
+    def _load_failure_message(paths: list[str], exc: Exception) -> str:
+        """Map a load failure to a plain-language sentence (no raw Python class name). The load path
+        raises in a few distinguishable ways:
+
+          * a non-GoPro / no-GPMF file — GPMFSource's ctor throws RuntimeError("Failed to open
+            file: …") when OpenMP4Source can't find a GPMF track (also covers a file that isn't a
+            valid MP4 at all). We split this from a genuinely-missing file by checking the path.
+          * a missing / unreadable path — the file isn't on disk (or an OSError reading it).
+          * anything else — a generic, honest fallback (still no class name up front).
+
+        A recording that OPENS but has zero GPS fixes does NOT raise — it loads as a 0-valid-lap
+        session (see _on_session_loaded's in-panel empty state), so it never reaches here."""
+        offending = paths[0] if paths else None
+        if offending is not None and not os.path.isfile(offending):
+            return "Couldn't open the file — it may have been moved or deleted."
+        text = str(exc).lower()
+        if isinstance(exc, OSError):
+            return "Couldn't open the file."
+        if isinstance(exc, RuntimeError) and "open file" in text:
+            # GPMFSource couldn't find a GPMF/GPS track in this MP4.
+            return "This doesn't look like a GoPro recording with GPS metadata."
+        # Unknown cause — honest generic message; the raw class name stays in the details/log only.
+        return "Couldn't read telemetry from this recording — it may be corrupt or unsupported."
 
     def _build_ui(self):
         """Atomic swap: dispose the outgoing view, build a fresh CentralView for the just-loaded
@@ -432,7 +476,7 @@ class StudioWindow(QMainWindow):
 
     # ----------------------------------------------------- menu bar / information architecture
     def _build_menu(self):
-        """Build the File / Analyse / View / Help menus on the persistent menu bar (survives the
+        """Build the File / Coaching / View / Help menus on the persistent menu bar (survives the
         central-widget swap)."""
         menu = self.menuBar().addMenu("&File")
         self._open_action = menu.addAction("Open…")
@@ -487,29 +531,31 @@ class StudioWindow(QMainWindow):
         self._save_track_action.triggered.connect(self._save_as_track)
         self._save_track_action.setEnabled(False)  # no session yet at construction time
 
-        # Analyse menu: the comparison / coaching surface (reference load/clear/compare + Opportunities).
-        analyse_menu = self.menuBar().addMenu("&Analyse")
-        self._ref_action = analyse_menu.addAction("Load reference recording…")
+        # Coaching menu: the comparison / coaching surface (reference load/clear/compare +
+        # Opportunities). Named "Coaching" to match the product positioning and the docs/docstrings
+        # (studio/README.md, coaching_panel.py) — its items are all coaching/analysis surfaces.
+        coaching_menu = self.menuBar().addMenu("&Coaching")
+        self._ref_action = coaching_menu.addAction("Load reference recording…")
         self._ref_action.setToolTip(
             "Pick another recording of the SAME track; its best lap becomes the Δ / map / table "
             "reference (instead of this session's own best lap)")
         self._ref_action.triggered.connect(self._load_reference_file)
-        self._clear_ref_action = analyse_menu.addAction("Clear reference")
+        self._clear_ref_action = coaching_menu.addAction("Clear reference")
         self._clear_ref_action.setToolTip("Revert the Δ / map / table reference to this "
                                           "session's own best lap")
         self._clear_ref_action.triggered.connect(self._clear_reference)
         self._clear_ref_action.setEnabled(False)
         # Cross-recording video compare (pane A = this lap, pane B = the reference's lap); distinct
         # from the same-recording "Compare videos" toggle. Enabled only when a reference is loaded.
-        self._cross_compare_action = analyse_menu.addAction("Compare vs reference recording")
+        self._cross_compare_action = coaching_menu.addAction("Compare vs reference recording")
         self._cross_compare_action.setToolTip(
             "Side-by-side: this recording's lap (left) vs the loaded reference recording's lap "
             "(right), each playing its own footage. Load a reference recording first.")
         self._cross_compare_action.triggered.connect(self._enter_cross_compare)
         self._cross_compare_action.setEnabled(False)
         # F10 Opportunities: top-3 corners by time lost vs your own best lap (recomputed per open).
-        analyse_menu.addSeparator()
-        self._opportunities_action = analyse_menu.addAction("Opportunities…")
+        coaching_menu.addSeparator()
+        self._opportunities_action = coaching_menu.addAction("Opportunities…")
         self._opportunities_action.setToolTip(
             "Where to find time vs your own best lap: the top-3 corners by realistic time lost "
             "(median of your clean laps), each with the measured reason and a jump-to.")
@@ -687,7 +733,7 @@ class StudioWindow(QMainWindow):
 
     # -------------------------------------------------- auto coaching summary (F10)
     def _open_opportunities(self):
-        """Analyse ▸ Opportunities…: open the read-only opportunities dialog, built from a
+        """Coaching ▸ Opportunities…: open the read-only opportunities dialog, built from a
         FRESH session.coaching_opportunities() (recomputed each open — zero per-tick cost; the
         per-lap inputs it composes are already cached). The dialog handles its own friendly
         excluded state when there are too few clean laps. Each row's Go button routes to
@@ -1042,7 +1088,7 @@ class StudioWindow(QMainWindow):
 
     # ----------------------------------------------- cross-recording reference (F7)
     def _load_reference_file(self):
-        """Analyse ▸ "Load reference recording…": pick another recording (same track) whose best lap
+        """Coaching ▸ "Load reference recording…": pick another recording (same track) whose best lap
         becomes the Δ / map / table reference. The picked file's chapters are chained, then handed to
         Session.load_reference. On a guard refusal the local best lap is kept and the reason shown."""
         if not hasattr(self, "session"):
@@ -1062,7 +1108,7 @@ class StudioWindow(QMainWindow):
         self._apply_reference_change()
 
     def _clear_reference(self):
-        """Analyse ▸ "Clear reference": drop the cross-recording reference; everything reverts to the
+        """Coaching ▸ "Clear reference": drop the cross-recording reference; everything reverts to the
         session's own best lap."""
         if not hasattr(self, "session") or not self.session.has_reference():
             return
@@ -1075,7 +1121,7 @@ class StudioWindow(QMainWindow):
         self._apply_reference_change()
 
     def _enter_cross_compare(self):
-        """Analyse ▸ "Compare vs reference recording": enter the cross-recording video compare —
+        """Coaching ▸ "Compare vs reference recording": enter the cross-recording video compare —
         pane A = this recording's current/selected lap, pane B = the reference recording's lap, each
         playing its own footage. No-op (with a notice) if no reference is loaded."""
         if not hasattr(self, "session") or self.session.reference_session() is None:
@@ -1129,15 +1175,22 @@ def main(argv: list[str] | None = None) -> int:
     # No path on the CLI -> open to the welcome empty state (the demo is one click from there).
     paths = [a for a in argv if not a.startswith("-")]
     # --demo: open a real demo lapping recording on startup (resolved via env/cache/release
-    # download; see studio.demo). Falls back to the bundled sample if none resolves. This is the
-    # packaged-app first-run path — the bundled gpmf clips have no real laps.
+    # download; see studio.demo). This is the packaged-app first-run path. If the demo can't be
+    # resolved (offline / download failed) we do NOT fall back to the bundled gpmf clips — they have
+    # zero real laps, so a first-run user would see a blank-looking studio. StudioWindow shows the
+    # honest "demo unavailable" welcome state instead.
+    demo_startup = False
     if not paths and "--demo" in argv:
-        paths = [demo.resolve_demo_recording() or DEFAULT_SAMPLE]
+        path = demo.resolve_demo_recording()
+        if path is not None:
+            paths = [path]
+        else:
+            demo_startup = True  # demo requested but unavailable — open the welcome state honestly
     app = QApplication(sys.argv)
     # Apply the dark "Refined Minimal" design system BEFORE constructing any widgets, so the
     # default font/palette and the pyqtgraph background are in place when the panels are built.
     theme.register_fonts()
     theme.apply_theme(app)
-    window = StudioWindow(paths, full=full)
+    window = StudioWindow(paths, full=full, demo_unavailable=demo_startup)
     window.show()
     return app.exec()

@@ -462,16 +462,17 @@ def test_failed_reload_preserves_paths_title_and_session():
     good_session = w.session
     w.setWindowTitle("pacer studio — GOOD")
 
-    # Avoid the modal dialog blocking the headless test (the dialog itself isn't under test).
+    # Avoid the modal dialog blocking the headless test (the dialog itself isn't under test). The
+    # handler now builds a QMessageBox and calls .exec(), so stub the instance exec().
     from PySide6.QtWidgets import QMessageBox
-    orig_critical = QMessageBox.critical
-    QMessageBox.critical = staticmethod(lambda *a, **k: QMessageBox.Ok)
+    orig_exec = QMessageBox.exec
+    QMessageBox.exec = lambda self: QMessageBox.Ok
     try:
         # The failed RELOAD: _load catches the load error and calls _on_load_failed. A session is
         # already set, so it must take the "leave the working UI intact" branch.
         w._on_load_failed(["/nonexistent/bad.MP4"], RuntimeError("Failed to open file"))
     finally:
-        QMessageBox.critical = orig_critical
+        QMessageBox.exec = orig_exec
 
     assert w._paths == good, f"_paths corrupted by a failed reload: {w._paths}"
     assert w.windowTitle() == "pacer studio — GOOD", w.windowTitle()
@@ -481,14 +482,41 @@ def test_failed_reload_preserves_paths_title_and_session():
     # reachable (the still-enabled "Load full recording" action) always find a value.
     w2 = StudioWindow.__new__(StudioWindow)
     QMainWindow.__init__(w2)
-    QMessageBox.critical = staticmethod(lambda *a, **k: QMessageBox.Ok)
+    QMessageBox.exec = lambda self: QMessageBox.Ok
     try:
         w2._on_load_failed(["/nonexistent/first.MP4"], RuntimeError("boom"))
     finally:
-        QMessageBox.critical = orig_critical
+        QMessageBox.exec = orig_exec
     assert w2._paths == ["/nonexistent/first.MP4"], w2._paths
     assert not hasattr(w2, "session")
     print("test_failed_reload_preserves_paths_title_and_session OK")
+
+
+def test_load_failure_message_is_plain_language():
+    """The honest-failure-UX fix: _load_failure_message maps the actionable load failures to plain
+    sentences and NEVER leaks a raw Python class name (RuntimeError/KeyError/…) into the headline.
+    The raw text stays in the dialog details / console log only."""
+    from studio.app import StudioWindow
+    msg = StudioWindow._load_failure_message
+
+    # A real-but-non-GoPro MP4 (exists on disk): GPMFSource raises "Failed to open file: …".
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".mp4") as tf:
+        m = msg([tf.name], RuntimeError(f"Failed to open file: {tf.name}"))
+    assert "GoPro" in m and "GPS" in m, m
+    assert "RuntimeError" not in m, f"leaked the class name: {m}"
+
+    # A missing file: distinguished from non-GoPro by the path check.
+    m_missing = msg(["/nonexistent/gone.MP4"], RuntimeError("Failed to open file: /nonexistent/gone.MP4"))
+    assert "moved or deleted" in m_missing.lower(), m_missing
+    assert "RuntimeError" not in m_missing, m_missing
+
+    # An unexpected cause (e.g. a numpy/binding KeyError): a generic honest message, still no class
+    # name up front.
+    m_other = msg(["/nonexistent/x.MP4"], KeyError("GPS9"))
+    assert "KeyError" not in m_other, f"leaked the class name: {m_other}"
+    assert m_other and m_other[0].isupper(), m_other  # a real sentence, not a traceback fragment
+    print("test_load_failure_message_is_plain_language OK")
 
 
 # --------------------------------------------------------------------- F3
@@ -863,7 +891,7 @@ def _rebuild_window(comparing=False):
 
     F7: the rebuild seam + the derived-view panels moved off StudioWindow onto CentralView (which
     now owns them); the seam body is byte-identical. _apply_reference_change still lives on the
-    WINDOW (a persistent Analyse-menu action) but now delegates the refresh to self.view's seam — so
+    WINDOW (a persistent Coaching-menu action) but now delegates the refresh to self.view's seam — so
     the two reference tests below wrap the returned spied view in a StudioWindow via _ref_window."""
     from studio.central_view import CentralView
 
@@ -1128,9 +1156,13 @@ class _FakeDropEvent:
 
 def test_welcome_state_when_no_recording():
     """Launched with no path, StudioWindow shows the welcome empty state (not a blank/auto-demo
-    window); its "Open demo" button loads the bundled sample through the guarded _load path."""
+    window); its "Open demo" button loads a RESOLVED demo recording through the guarded _load
+    path. It must NOT fall back to the lapless bundled sample when the demo can't be resolved —
+    that produced a blank-looking studio (the honest-first-run-UX fix)."""
+    from PySide6.QtWidgets import QLabel
+
+    from studio import app as app_mod
     from studio.app import StudioWindow, _WelcomeView
-    from studio.session import DEFAULT_SAMPLE
     w = StudioWindow([])
     try:
         cw = w.centralWidget()
@@ -1138,8 +1170,23 @@ def test_welcome_state_when_no_recording():
         assert cw.open_btn is not None and cw.demo_btn is not None
         loaded = []
         w._load = lambda paths: loaded.append(list(paths))
+
+        # Demo RESOLVES: "Open demo" loads exactly that path through the guarded _load.
+        app_mod.demo.resolve_demo_recording = lambda: "/demo/pacer-demo-lap.mp4"
         cw.demo_btn.click()
-        assert loaded == [[DEFAULT_SAMPLE]], loaded
+        assert loaded == [["/demo/pacer-demo-lap.mp4"]], loaded
+
+        # Demo UNAVAILABLE (offline / download failed): no load, and the welcome state is re-shown
+        # with an honest message — NOT a silent fall back to the lapless bundled sample.
+        loaded.clear()
+        app_mod.demo.resolve_demo_recording = lambda: None
+        w._open_demo()
+        assert loaded == [], "must not load anything when the demo can't be resolved"
+        cw2 = w.centralWidget()
+        assert isinstance(cw2, _WelcomeView), type(cw2)
+        err = [lab for lab in cw2.findChildren(QLabel)
+               if lab.property("role") == "WelcomeError"]
+        assert err and "unavailable" in err[0].text().lower(), "honest demo-unavailable message"
     finally:
         w.deleteLater()
     print("test_welcome_state_when_no_recording OK")
