@@ -375,6 +375,37 @@ def test_provisional_cue_repins_not_duplicates_on_refresh():
     print("test_provisional_cue_repins_not_duplicates_on_refresh OK")
 
 
+# ----------------------------------------------------- zero-lap in-panel empty state (FIX 5)
+def test_map_empty_state_shown_only_with_zero_valid_laps():
+    """The honest-first-run-UX fix: a load with ZERO valid laps must show a prominent, in-panel
+    empty state over the map (the largest quadrant) — with the recovery action — not a black void.
+    A session WITH laps must not show it. A re-segmentation that recovers laps (refresh_overlays)
+    must hide it."""
+    # isVisibleTo(parent), not isVisible(): the latter is False for any child of an unshown
+    # top-level window, which every offscreen MapView is — it tests the widget's own visible flag.
+    # With laps: the placeholder exists but stays hidden (the track/marker show through).
+    with_laps = _stub_session()
+    mv = MapView(with_laps)
+    assert mv._empty_state is not None
+    assert not mv._empty_state.isVisibleTo(mv.widget), "empty state must hide when there are laps"
+
+    # Zero valid laps: the placeholder is shown, carries a message, and names the recovery action.
+    no_laps = _stub_session()
+    no_laps._valid_cache = []  # bare_session memo slot: valid_lap_ids() -> []
+    mv2 = MapView(no_laps)
+    assert mv2._empty_state.isVisibleTo(mv2.widget), "0-lap load must show the in-panel empty state"
+    text = mv2._empty_state.text()
+    assert text, "empty-state placeholder must carry a message"
+    assert "start/finish" in text.lower() and "drag" in text.lower(), text
+    assert mv2._empty_state.property("role") == "EmptyState"
+
+    # Recovering laps (a dragged start line → refresh_overlays) hides the empty state again.
+    no_laps._valid_cache = [0, 1]
+    mv2.refresh_overlays()
+    assert not mv2._empty_state.isVisibleTo(mv2.widget), "recovering laps must hide the empty state"
+    print("test_map_empty_state_shown_only_with_zero_valid_laps OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -598,6 +598,19 @@ class MapView(QWidget):
         self._map_key.raise_()
         self._map_key.show()
 
+        # Zero-valid-lap empty state: a centred placeholder floated over the plot (the largest
+        # quadrant), so a load with no complete laps reads as an explained state — with the recovery
+        # action — rather than a black void. Parented to the PlotWidget, re-centred by
+        # _reposition_empty_state, shown/hidden by _refresh_empty_state (called at build + reseg).
+        self._empty_state = QLabel(
+            "No complete laps found in this recording.\n\nIf this is the right track, drag the "
+            "start/finish line on the map to set where a lap begins.", self.widget)
+        self._empty_state.setProperty("role", "EmptyState")
+        self._empty_state.setAlignment(Qt.AlignCenter)
+        self._empty_state.setWordWrap(True)
+        self._empty_state.hide()
+        self._refresh_empty_state()
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.widget, 1)
@@ -606,6 +619,7 @@ class MapView(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._reposition_key()
+        self._reposition_empty_state()
 
     def _reposition_key(self):
         """Keep the floating map key pinned to the plot's bottom-left, just inside the edge."""
@@ -614,6 +628,33 @@ class MapView(QWidget):
         m = 8  # px inset from the panel edges
         host = self.widget
         self._map_key.move(m, host.height() - self._map_key.height() - m)
+
+    def _reposition_empty_state(self):
+        """Keep the zero-lap empty-state placeholder centred over the plot, spanning a comfortable
+        width so the message wraps cleanly. No-op until it's built / while it's hidden. Uses
+        isHidden() (the explicit hide() flag), not isVisible() — the latter is False whenever the
+        top-level window isn't shown yet, which would skip the initial placement."""
+        es = getattr(self, "_empty_state", None)
+        if es is None or es.isHidden():
+            return
+        host = self.widget
+        w = min(host.width() - 24, 420)
+        es.setFixedWidth(max(w, 120))
+        es.adjustSize()
+        es.move((host.width() - es.width()) // 2, (host.height() - es.height()) // 2)
+
+    def _refresh_empty_state(self):
+        """Show the centred placeholder iff the session has zero valid (complete) laps, else hide it
+        and let the track/marker show through. Called at build and after every re-segmentation (a
+        dragged start line can flip a 0-lap recording into having laps, or back)."""
+        es = getattr(self, "_empty_state", None)
+        if es is None:
+            return
+        show = not self.session.valid_lap_ids()
+        es.setVisible(show)
+        if show:
+            es.raise_()
+            self._reposition_empty_state()
 
     # ----------------------------------------------------------- timing lines
     def _rebuild(self, start: Seg, sectors: list[Seg]):
@@ -841,6 +882,9 @@ class MapView(QWidget):
         # Re-segmentation invalidated the channel arrays too — rebuild the painted rainbow.
         if self._rainbow_mode != "off":
             self._apply_rainbow()
+        # A re-segmentation can flip the lap count to/from zero (e.g. dragging the start line onto
+        # the track), so re-evaluate the zero-lap empty state.
+        self._refresh_empty_state()
 
     # ------------------------------------------------------------- corner labels (F-corner)
     def set_corners(self, markers):
