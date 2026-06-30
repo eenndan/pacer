@@ -54,7 +54,7 @@ _APP = QApplication.instance() or QApplication([])
 # its own import); reuse its REAL-corner-detection stadium fixture instead of re-deriving one.
 from test_session_services import _synthetic_session  # noqa: E402
 
-from studio import chapters, render_cache, tracks  # noqa: E402
+from studio import chapters, data_quality, render_cache, tracks  # noqa: E402
 from studio.central_view import CentralView  # noqa: E402
 
 
@@ -368,6 +368,36 @@ def test_provisional_banner_shows_and_clears_with_trust_state():
     print("test_provisional_banner_shows_and_clears_with_trust_state OK")
 
 
+def test_quality_banner_shows_on_degraded_timing():
+    """The SECOND, orthogonal banner — timing ACCURACY (Session.timing_quality) — tracks a degraded
+    clock end-to-end through the REAL CentralView's generalized banner surface:
+      * a normal GPS9 fixture (default high quality) hides the data-quality banner;
+      * forcing a media-clock fallback + refreshing shows it (stacked under the trust banner, same
+        styling), with a concern line that names the cause;
+      * restoring high quality clears it. This pins that the two banners are independent (a degraded
+        clock does NOT require the start line to be provisional)."""
+    view, s, _t0, _t1 = _real_central_view()
+    # Default fixture: GPS9 true clock (not degraded) AND verified track → quality banner hidden.
+    assert not s.timing_quality.degraded
+    assert view.quality_banner is not None
+    assert not view.quality_banner.isVisibleTo(view), "high-quality timing must hide the banner"
+
+    # Force a media-clock fallback (older GPS5 camera) and refresh the generalized banner surface.
+    s._timing_quality = data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK)
+    assert s.timing_quality.degraded and s.timing_quality.media_clock
+    view.refresh_timing_trust()
+    assert view.quality_banner.isVisibleTo(view), "degraded timing must show the data-quality banner"
+    assert "video clock" in view.quality_banner.text().lower(), view.quality_banner.text()
+    # Independent of the start-line trust: the fixture is still a verified track.
+    assert s.timing_verified is True
+
+    # Restore high quality → banner clears.
+    s._timing_quality = data_quality.TimingQuality()
+    view.refresh_timing_trust()
+    assert not view.quality_banner.isVisibleTo(view), "restoring quality must clear the banner"
+    print("test_quality_banner_shows_on_degraded_timing OK")
+
+
 def _run_all():
     test_real_qtimer_fires_view_tick_through_studiowindow()
     test_position_signal_then_real_tick_applies_once_and_is_stable()
@@ -375,6 +405,7 @@ def _run_all():
     test_compare_scrub_fans_one_seek_to_each_real_pane_per_tick()
     test_compare_tick_keeps_panes_consistent_no_reentry()
     test_provisional_banner_shows_and_clears_with_trust_state()
+    test_quality_banner_shows_on_degraded_timing()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 

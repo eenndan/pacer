@@ -178,10 +178,20 @@ class CentralView(QWidget):
             "Per-corner analysis of the selected lap: time-in-corner, Δ vs the best lap, "
             "apex/entry/exit speeds. Corners are detected from the track's own curvature.")
         self.corners_btn.toggled.connect(self._on_corners_toggled)
+        # Small data-quality badge in the table header: an "ESTIMATED" chip shown next to the LAPS
+        # label only when Session.timing_quality is degraded (media-clock / low GPS), so the lap
+        # times the table shows carry a visible "these are estimates" cue right where they're read.
+        # Hidden (no layout footprint visible) on a normal GPS9, clean-fix recording.
+        self.quality_badge = QLabel("ESTIMATED")
+        self.quality_badge.setObjectName("QualityBadge")
+        self.quality_badge.setVisible(False)
+        self.quality_badge.setToolTip(
+            "Lap times are ESTIMATED — the timing accuracy is degraded for this recording "
+            "(see the note over the map). Most reliable on a GPS9 camera (Hero 9 and newer).")
         self.table_stack = QStackedWidget()
         self.table_stack.addWidget(self.table)         # index 0 — Laps (default)
         self.table_stack.addWidget(self.corner_table)  # index 1 — Corners
-        table_header = self._header_bar(self._table_label, 1, self.corners_btn)
+        table_header = self._header_bar(self._table_label, self.quality_badge, 1, self.corners_btn)
         # F6: the collapsible consistency strip under the lap table (trend sparkline + top-5
         # inconsistent corners); a corner-row click ring-highlights its apex on the map only.
         self.consistency = ConsistencyPanel(self.session)
@@ -221,7 +231,22 @@ class CentralView(QWidget):
             "on the map to where a lap begins to fix the timing; it's then remembered for this "
             "recording. Save it as a track (File ▸ Save as track…) so future recordings here "
             "auto-detect it.")
-        map_panel = self._headered(map_header, (self.provisional_banner, 0), (self.map, 1))
+        # Data-quality banner: the SECOND, orthogonal concern (timing ACCURACY — media-clock
+        # fallback / low GPS quality), stacked under the start-line trust banner using the SAME
+        # banner styling. Shown (with one line per active concern) only when the timing quality is
+        # degraded; a normal GPS9, clean-fix recording keeps it hidden, so the map reads identically.
+        self.quality_banner = QLabel("")
+        self.quality_banner.setObjectName("ProvisionalBanner")
+        self.quality_banner.setWordWrap(True)
+        self.quality_banner.setVisible(False)
+        self.quality_banner.setToolTip(
+            "Timing accuracy is degraded for this recording. On an older GoPro without GPS9 "
+            "(Hero 5/6/7) the lap times come from the video clock, which runs ~0.1% fast and "
+            "compresses every lap; and when many GPS fixes are rejected the positions are less "
+            "accurate. The lap times are still shown (and de-emphasized), but treat them as "
+            "estimates — they are most reliable on a GPS9 camera (Hero 9 and newer).")
+        map_panel = self._headered(
+            map_header, (self.provisional_banner, 0), (self.quality_banner, 0), (self.map, 1))
 
         # CHARTS consolidated bar: section label (left) · the Δ/speed readout (centre) · the x-mode toggle (right).
         plots_label = QLabel("SPEED · Δ TO BEST")
@@ -728,14 +753,24 @@ class CentralView(QWidget):
         self.refresh_timing_trust()
 
     def refresh_timing_trust(self):
-        """Show the persistent provisional-timing banner iff the session's timing is unverified
-        (start line auto-fitted, not user-confirmed — see Session.timing_verified), else hide it.
-        Run from the rebuild seam (a drag that confirms the timing clears it) and after saving the
-        recording as a track. The lap table's muting + the map's dashed cue refresh on their own
-        rebuilds; this owns the banner."""
+        """Refresh BOTH data-quality banners over the map from the session's two orthogonal axes:
+
+          * the provisional-timing (start-line TRUST) banner — shown iff the timing is unverified
+            (auto-fitted, not user-confirmed — see Session.timing_verified). A drag that confirms
+            the timing clears it; also refreshed after saving the recording as a track.
+          * the data-quality (timing ACCURACY) banner — shown iff Session.timing_quality is
+            degraded (media-clock fallback / low GPS quality), stacking one line per active concern.
+
+        Run from the rebuild seam. The lap table's muting + the map's dashed cue refresh on their
+        own rebuilds; this owns the two banners (the generalized banner surface)."""
         banner = getattr(self, "provisional_banner", None)
         if banner is not None:
             banner.setVisible(not self.session.timing_verified)
+        quality = getattr(self, "quality_banner", None)
+        if quality is not None:
+            concerns = self.session.timing_quality.concerns()
+            quality.setText("\n".join(concerns))
+            quality.setVisible(bool(concerns))
 
     # ------------------------------------------------------------- timing-line edits
     def _on_lines(self, start, sectors):

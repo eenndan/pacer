@@ -13,7 +13,7 @@ import numpy as np
 
 import pacer
 
-from . import chapters, tracks
+from . import chapters, data_quality, tracks
 
 # numpy-only signal/clean helpers live in studio/_signal.py (shared with gmeter).
 from ._signal import (
@@ -76,6 +76,22 @@ def _gps9_times(samples, naive, rate_factor: float = 1.0):
         i = j + 1
     # defensive monotonicity guard at run seams
     return list(np.maximum.accumulate(out))
+
+
+def _used_gps9_trueclock(samples) -> bool:
+    """Did the GPS9 true-clock axis actually get built, or did the load fall back to the media
+    clock? True iff at least one contiguous GPS9 run exists — the SAME run rule `_gps9_times`
+    uses to re-anchor spacing (two consecutive non-sentinel fixes whose delta is a sane single
+    GPS9 step). A GPS5-only camera reports ts==0 on every sample, so no run is found → False →
+    every time stayed on the naive media clock. The recording's timing-quality clock provenance
+    (data_quality.TimingQuality.clock) is read off this."""
+    ts = np.array([getattr(s, "timestamp_ms", 0) for s in samples], dtype=np.float64)
+    have = ts > 0
+    for i in range(len(ts) - 1):
+        if (have[i] and have[i + 1]
+                and GPS9_MIN_DT_S <= (ts[i + 1] - ts[i]) / 1000.0 <= GPS9_MAX_DT_S):
+            return True
+    return False
 
 
 def _sustained_moving(samples, lo, hi, run=5):
@@ -191,28 +207,43 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
     quality-gate + clean the trace, build the GPS9 true-clock axis, smooth the positions, feed
     `pacer.Laps`, centre a coordinate system on the clean track, then place/fit the start line.
 
-    Returns `(laps, cs, video_path, chapter_map, imu, track_name)`:
+    Returns `(laps, cs, video_path, chapter_map, imu, track_name, timing_quality)`:
       * `laps`/`cs` — segmented `pacer.Laps` + its `CoordinateSystem` (EMPTY/default if no paths
         or no samples survive cleaning);
       * `video_path` — first chapter path (None if no paths);
       * `chapter_map` — `chapters.ChapterMap` offset table (None if no paths);
       * `imu` — `(accl, grav, cori)` for `Session._build_gmeter` (None when the trace is empty);
-      * `track_name` — detected registry track name (None for an unknown track).
+      * `track_name` — detected registry track name (None for an unknown track);
+      * `timing_quality` — `data_quality.TimingQuality`: the per-sample timing-clock provenance
+        (GPS9 true clock vs media-clock fallback) + the gate's dropped-fix fraction. The data
+        axis ORTHOGONAL to the timing-trust (start-line) surface; the views demote the lap times
+        only when it reports degraded.
     """
     laps = pacer.Laps()
     empty = pacer.CoordinateSystem(pacer.GPSSample())
     video_path = paths[0] if paths else None
+    quality = data_quality.TimingQuality()  # high-quality default (no paths / empty trace)
     if not paths:
-        return laps, empty, None, None, None, None
+        return laps, empty, None, None, None, None, quality
 
     # Single-pass: one chain read for both GPS and IMU (see ingest.read_recording).
     samples, spans, naive, durations, accl, grav, cori = read_recording(paths)
+    n_raw = len(samples)
     # The offset table for the video layer: each chapter's media duration on one global axis.
     chapter_map = chapters.ChapterMap(list(paths), durations)
-    samples, spans, naive = _gate_quality(samples, spans, naive)
+    samples, spans, naive, dropped = _gate_quality(samples, spans, naive)
     samples, spans, naive = _clean(samples, spans, naive)
+    # Dropped-fix fraction is over the RAW fix count (pre-gate) — the share the quality gate
+    # rejected, independent of how many later survived the geometric cleaner.
+    dropped_fraction = dropped / n_raw if n_raw else 0.0
     if not samples:
-        return laps, empty, video_path, chapter_map, None, None
+        return laps, empty, video_path, chapter_map, None, None, quality
+
+    # Per-sample timing clock: GPS9 true-clock spacing when the stream carries it, else the
+    # (~0.1%-fast) media clock — the recording's headline timing-accuracy provenance.
+    clock = (data_quality.GPS9_TRUECLOCK if _used_gps9_trueclock(samples)
+             else data_quality.MEDIA_CLOCK_FALLBACK)
+    quality = data_quality.TimingQuality(clock=clock, dropped_fraction=dropped_fraction)
 
     # GPS9 true-clock spacing (re-anchored to the media clock); naive otherwise.
     times = _gps9_times(samples, naive)
@@ -249,4 +280,4 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
         )
         laps.update()
     return laps, cs, video_path, chapter_map, (accl, grav, cori), (
-        track.name if track is not None else None)
+        track.name if track is not None else None), quality

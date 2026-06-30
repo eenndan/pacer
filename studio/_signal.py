@@ -141,15 +141,18 @@ def _quality_ok(s) -> bool:
 
 
 def _gate_quality(samples, spans, naive):
-    """Drop low-quality fixes (no 3D lock / high DOP) using the GPS9 quality fields. Reports
-    the count dropped. Conservative — sentinels (unknown quality) are kept."""
+    """Drop low-quality fixes (no 3D lock / high DOP) using the GPS9 quality fields. Conservative
+    — sentinels (unknown quality) are kept. Returns ``(samples, spans, naive, dropped)`` where
+    ``dropped`` is the rejected-fix COUNT: the load path threads it into the recording's
+    data-quality signal (a large fraction degrades the timing accuracy), and still logs it."""
     keep = [i for i, s in enumerate(samples) if _quality_ok(s)]
     dropped = len(samples) - len(keep)
     if dropped:
         pct = 100.0 * dropped / max(len(samples), 1)
         print(f"studio: quality gate dropped {dropped}/{len(samples)} fixes ({pct:.1f}%) "
               f"(fix<{MIN_FIX} or dop>{MAX_DOP})", flush=True)
-    return [samples[i] for i in keep], [spans[i] for i in keep], [naive[i] for i in keep]
+    return ([samples[i] for i in keep], [spans[i] for i in keep], [naive[i] for i in keep],
+            dropped)
 
 
 def _band_lap_ids(laps) -> list[int]:

@@ -11,8 +11,11 @@ No transponder, no extra hardware.
 
 ## What it does
 
-- **True-clock lap timing** — lap and sector times from the GoPro GPS9 stream on the
-  camera's own clock, validated unbiased against a real transponder.
+- **True-clock lap timing** — on a **GPS9 camera (Hero 9 and newer)**, lap and sector times
+  come from the GPS9 stream on the camera's own clock, validated unbiased against a real
+  transponder. Older GPS5 cameras (Hero 5–7) carry no per-sample clock, so Pacer falls back to
+  the video clock (approximate — it runs ~0.1% fast); the app flags this so the times read as
+  estimates.
 - **Track map** — the racing line coloured by speed, with brake points and the
   start/sector lines you can drag to re-segment.
 - **Δ-to-best charts** — speed and cumulative time delta against your best lap,

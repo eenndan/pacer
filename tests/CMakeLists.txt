@@ -35,6 +35,11 @@ add_test(NAME test_gapfill
 # windows + invalidate), map nearest (whole-trace vs lap-scoped). Pure numpy on injected stubs.
 add_test(NAME test_timeline
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_timeline.py)
+# Data-quality signal: studio.data_quality.TimingQuality classifies the per-sample clock provenance
+# (GPS9 true clock vs media-clock fallback) + the gate's dropped-fix fraction into the degraded
+# verdict + banner concern lines. Pure value object — no Qt, no pacer.
+add_test(NAME test_data_quality
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_data_quality.py)
 # Reference-centerline closed-loop fit (studio.reference): pure Python + numpy, synthetic
 # loops with known similarity transforms (incl. cyclic offset / reversal / reflection).
 add_test(NAME test_reference
