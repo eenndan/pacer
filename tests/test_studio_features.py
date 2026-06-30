@@ -184,6 +184,10 @@ class _FakeFooterSession:
     after a (simulated) timing-line move shows new footer numbers. 1 sector line -> 2 S-columns;
     lap 1 is the best lap; the seeded splits make the per-column minima [33.8, 34.4]."""
 
+    # Verified timing (a detected/confirmed track) so the footer + purple-best assertions below
+    # read the authoritative styling, not the provisional muting (see test_lap_table_provisional_*).
+    timing_verified = True
+
     def __init__(self):
         self.splits = {0: [33.8, 36.2], 1: [34.0, 34.4], 2: [35.5, 35.7]}
         self.theo = 68.2     # = 33.8 + 34.4 (sum of the per-column minima)
@@ -273,6 +277,93 @@ def test_lap_table_footer_survives_sort_and_updates_on_refresh():
     print("test_lap_table_footer_survives_sort_and_updates_on_refresh OK")
 
 
+# ------------------------------------- timing-trust: provisional lap-table treatment
+class _TrustSession(_FakeFooterSession):
+    """A footer session whose timing-trust is togglable, to drive LapTable's provisional vs
+    verified rendering (the rest of the read surface is _FakeFooterSession's)."""
+
+    def __init__(self, verified):
+        super().__init__()
+        self.timing_verified = verified
+
+
+def _time_col_items(table):
+    """Every Time-column cell (col 1) across the rows."""
+    return [table.table.item(r, 1) for r in range(table.table.rowCount())]
+
+
+def _sector_col_items(table):
+    """Every S-split cell (cols after the base COLUMNS) across the rows."""
+    from studio.lap_table import COLUMNS
+    n = table._n_split_cols()
+    return [table.table.item(r, COLUMNS.__len__() + i)
+            for r in range(table.table.rowCount()) for i in range(n)]
+
+
+def _any_purple_or_green(table):
+    """True if ANY cell is painted the best-sector purple or the best-lap green (the 'best'
+    authority cues that must vanish on provisional timing)."""
+    purple = theme.C.best.upper()
+    green = theme.C.ahead.upper()
+    for r in range(table.table.rowCount()):
+        for c in range(table.table.columnCount()):
+            it = table.table.item(r, c)
+            if it is not None and it.foreground().color().name().upper() in (purple, green):
+                return True
+    return False
+
+
+def test_lap_table_provisional_mutes_times_and_drops_bests():
+    """PROVISIONAL timing (timing_verified False): the Time + S-split cells are muted (italic +
+    the dimmed provisional colour) with the 'Provisional' tooltip, and NEITHER the purple
+    session-best splits NOR the green best-lap are painted — a 'best' on an arbitrary start line is
+    meaningless. The footer tiles are likewise muted (italic). Dist/Entry stay normal."""
+    from studio.lap_table import BASE_COLOR, PROVISIONAL_TOOLTIP
+
+    table = LapTable(_TrustSession(verified=False))
+    prov = theme.PROVISIONAL_COLOR.upper()
+    # Time + sector cells: muted colour, italic font, provisional tooltip.
+    for it in _time_col_items(table) + _sector_col_items(table):
+        assert it.foreground().color().name().upper() == prov, "timing cell must be muted"
+        assert it.font().italic(), "timing cell must be italic (provisional)"
+        assert it.toolTip() == PROVISIONAL_TOOLTIP, it.toolTip()
+    # No purple-best / green-best authority anywhere.
+    assert not _any_purple_or_green(table), "provisional timing must paint no purple/green bests"
+    # Dist column (2) untouched: base colour, not italic.
+    dist = table.table.item(0, 2)
+    assert dist.foreground().color().name().upper() == BASE_COLOR.name().upper()
+    assert not dist.font().italic()
+    # Footer tiles muted + italic.
+    for label in table._footer_values:
+        assert label.font().italic(), "provisional footer tile must be italic"
+        assert theme.PROVISIONAL_COLOR in label.styleSheet(), label.styleSheet()
+    print("test_lap_table_provisional_mutes_times_and_drops_bests OK")
+
+
+def test_lap_table_verified_restores_bests_and_unmutes():
+    """VERIFIED timing renders exactly as before the trust surface: the purple per-sector best +
+    green best lap ARE painted, the Time/S cells are NOT italic and carry no provisional tooltip,
+    and the footer tiles are non-italic neutral text. This is the behaviour-preserving Verified
+    path; flipping a provisional table to Verified (a confirmed drag) restores it live."""
+    # Start Provisional, then flip to Verified and refresh — mirrors a confirming drag.
+    sess = _TrustSession(verified=False)
+    table = LapTable(sess)
+    assert not _any_purple_or_green(table)  # provisional: no bests
+    sess.timing_verified = True
+    table.refresh()
+
+    # Purple best-sector cells reappear (the per-column minima [33.8, 34.4]).
+    assert _any_purple_or_green(table), "verified timing must restore the best highlights"
+    # Time + sector cells un-muted: not italic, no provisional tooltip.
+    for it in _time_col_items(table) + _sector_col_items(table):
+        assert not it.font().italic(), "verified timing cell must not be italic"
+        assert it.toolTip() == "", it.toolTip()
+    # Footer tiles non-italic.
+    for label in table._footer_values:
+        assert not label.font().italic(), "verified footer tile must not be italic"
+    print("test_lap_table_verified_restores_bests_and_unmutes OK")
+
+
 def test_lap_table_footer_accessors_are_callables():
     """F8a: each FOOTER_ROWS accessor is a CALLABLE `session -> value` (not a method-NAME string
     resolved via getattr). It must resolve directly off the session and produce the SAME values the
@@ -299,6 +390,8 @@ def test_lap_table_footer_accessors_are_callables():
 class _FakeEmptySession:
     """A loaded session that reports ZERO valid laps (short clip / no GPS lock). Exposes only the
     read surface LapTable.refresh() touches; lap_rows() is [] so every per-lap accessor is unused."""
+
+    timing_verified = True  # part of the read surface (the footer reads it); no rows to mute anyway
 
     def lap_rows(self):
         return []

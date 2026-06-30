@@ -669,9 +669,12 @@ class MapView(QWidget):
 
     def _refresh_provisional_cue(self):
         """Overlay a dashed accent start line + "drag to set start/finish — lap timing provisional"
-        callout while session.track_name is None; remove it when the track is known. Re-run on
-        build and on every start-line move (_emit)."""
-        provisional = getattr(self.session, "track_name", None) is None and self._start is not None
+        callout while the session's timing is PROVISIONAL (start line auto-fitted, not user-
+        confirmed — see Session.timing_verified); remove it when the timing is Verified (a detected
+        track OR a user-confirmed start line). Re-run on build and on every start-line move (_emit),
+        so dragging the line into place (which confirms the timing) clears the cue live."""
+        provisional = (not getattr(self.session, "timing_verified", True)
+                       and self._start is not None)
         if not provisional:
             for it in (self._provisional_line, self._provisional_label):
                 if it is not None:
@@ -885,6 +888,9 @@ class MapView(QWidget):
         # A re-segmentation can flip the lap count to/from zero (e.g. dragging the start line onto
         # the track), so re-evaluate the zero-lap empty state.
         self._refresh_empty_state()
+        # A user drag re-segments AND confirms the timing (Provisional → Verified), so re-evaluate
+        # the on-canvas provisional cue here — by now session.timing_verified reflects the edit.
+        self._refresh_provisional_cue()
 
     # ------------------------------------------------------------- corner labels (F-corner)
     def set_corners(self, markers):

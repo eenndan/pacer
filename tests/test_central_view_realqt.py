@@ -328,12 +328,53 @@ def test_compare_tick_keeps_panes_consistent_no_reentry():
     print("test_compare_tick_keeps_panes_consistent_no_reentry OK")
 
 
+# ============================================================ provisional-timing trust banner
+def test_provisional_banner_shows_and_clears_with_trust_state():
+    """The persistent in-panel provisional banner tracks Session.timing_verified end-to-end through
+    the REAL CentralView:
+      * a detected/verified track (the fixture's StadiumLoop) hides the banner;
+      * flipping the session Provisional + rebuilding shows it (a prominent, persistent strip, NOT
+        a status-bar line), and the lap table mutes its times with no purple bests;
+      * a Verified flip + rebuild clears it again and restores the bests."""
+    view, s, _t0, _t1 = _real_central_view()
+    # Fixture is a known track → Verified → banner hidden.
+    assert s.timing_verified is True
+    assert view.provisional_banner is not None
+    assert not view.provisional_banner.isVisibleTo(view), "verified track must hide the banner"
+
+    # Make it an unknown, unconfirmed track and rebuild the derived views (the load-time path).
+    s.track_name = None
+    s._timing_user_confirmed = False
+    assert s.timing_verified is False
+    view.rebuild_derived_views(reselect=True)
+    assert view.provisional_banner.isVisibleTo(view), "provisional timing must show the banner"
+    text = view.provisional_banner.text().lower()
+    assert "unverified" in text and "start/finish" in text and "drag" in text, text
+    # The lap table de-emphasizes the timing (no purple/green best authority while provisional).
+    from studio import theme as _theme
+    purple, green = _theme.C.best.upper(), _theme.C.ahead.upper()
+    tbl = view.table.table
+    painted = any(
+        tbl.item(r, c) is not None
+        and tbl.item(r, c).foreground().color().name().upper() in (purple, green)
+        for r in range(tbl.rowCount()) for c in range(tbl.columnCount()))
+    assert not painted, "provisional timing must paint no purple/green bests in the lap table"
+
+    # Confirm the timing (what a start-line drag does) and rebuild → Verified → banner clears.
+    s.confirm_timing()
+    view.rebuild_derived_views(reselect=True)
+    assert s.timing_verified is True
+    assert not view.provisional_banner.isVisibleTo(view), "confirming the timing must clear the banner"
+    print("test_provisional_banner_shows_and_clears_with_trust_state OK")
+
+
 def _run_all():
     test_real_qtimer_fires_view_tick_through_studiowindow()
     test_position_signal_then_real_tick_applies_once_and_is_stable()
     test_compare_button_click_is_single_source_of_truth_no_reentrancy()
     test_compare_scrub_fans_one_seek_to_each_real_pane_per_tick()
     test_compare_tick_keeps_panes_consistent_no_reentry()
+    test_provisional_banner_shows_and_clears_with_trust_state()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 

@@ -37,6 +37,8 @@ BEST_SECTOR_COLOR = QColor(theme.C.best)      # per-column session-best split
 CURRENT_PREFIX = "▶ "  # current (playing) lap marker
 DROPOUT_SUFFIX = " ⚠"  # GPS-dropout lap (low-confidence)
 DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
+PROVISIONAL_COLOR = QColor(theme.PROVISIONAL_COLOR)  # muted text for unverified timing
+PROVISIONAL_TOOLTIP = "Provisional — start/finish line not set for this track."
 COLUMNS = ["Lap", "Time", "Dist (m)", "Entry (km/h)"]
 # Columns 1.. (everything but the Lap column) hold numerics: right-align + tabular font so the
 # digits column-align. The Lap column stays left/default.
@@ -186,11 +188,22 @@ class LapTable(QWidget):
         return footer
 
     def _refresh_footer(self):
-        """Rewrite footer values from Session; None → em-dash."""
-        for (_title, accessor, _tip), label in zip(FOOTER_ROWS, self._footer_values,
+        """Rewrite footer values from Session; None → em-dash. The SESSION-BESTS tiles (theoretical
+        best / best rolling) are reference targets stitched from the session's best splits/loops, so
+        they share the lap timing's trust: while the timing is PROVISIONAL they're muted + italic
+        with the 'provisional' tooltip (a best built on an arbitrary start line is meaningless),
+        restored to the normal hero value once Verified."""
+        provisional = not self.session.timing_verified
+        for (_title, accessor, tip), label in zip(FOOTER_ROWS, self._footer_values,
                                                    strict=True):
             v = accessor(self.session)
             label.setText(fmt_time(v if v is not None else float("nan")))
+            font = label.font()
+            font.setItalic(provisional)
+            label.setFont(font)
+            colour = theme.PROVISIONAL_COLOR if provisional else theme.C.text
+            label.setStyleSheet(f"color: {colour};")
+            label.setToolTip(f"{PROVISIONAL_TOOLTIP}\n\n{tip}" if provisional else tip)
 
     def _n_split_cols(self) -> int:
         """Number of S-split columns: sector_count()+1 if any sector lines, else 0."""
@@ -272,19 +285,34 @@ class LapTable(QWidget):
                 return r
         return -1
 
+    # The timing columns (Time + the S-split columns) — the cells whose authority depends on the
+    # start/finish line. Provisional timing mutes exactly these (Dist/Entry are line-independent).
+    def _timing_cols(self) -> set[int]:
+        return {1, *(len(COLUMNS) + i for i in range(self._n_split_cols()))}
+
     def _apply_highlights(self):
         """Re-apply ALL row/cell highlights keyed by lap id, so they survive any sort:
           * green foreground on every cell of the overall best lap,
           * purple foreground+bold on each per-column session-best split cell (F5),
           * the ▶ prefix + bold Lap cell for the current (playing) lap.
-        The blue selection is Qt's own row background and is left to the selection model."""
+        The blue selection is Qt's own row background and is left to the selection model.
+
+        TIMING TRUST: when the session's timing is PROVISIONAL (start line auto-fitted, not
+        user-confirmed — see Session.timing_verified) the timing columns (lap Time + the S-split
+        cells) are de-emphasized (muted + italic, with the 'provisional' tooltip) and BOTH "best"
+        authority cues are suppressed — no purple session-best splits and no green best-lap — since
+        a 'best' measured against an arbitrary start line is meaningless. The Dist/Entry columns,
+        which don't depend on the start line, stay normal. Verified timing renders as before."""
         rows = self.table.rowCount()
         if not rows:
             return
-        # Overall best lap = the valid lap with the min time (foreground green on all cells).
-        best_lap = self.session.best_lap_id()
+        verified = self.session.timing_verified
+        # Overall best lap = the valid lap with the min time (foreground green on all cells) —
+        # suppressed entirely while the timing is provisional.
+        best_lap = self.session.best_lap_id() if verified else None
         n_splits = self._n_split_cols()
         best_split = self._best_split
+        timing_cols = self._timing_cols()
 
         dropout_ids = self._dropout_ids
         self.table.blockSignals(True)
@@ -296,11 +324,19 @@ class LapTable(QWidget):
                 item = self.table.item(r, c)
                 if item is None:
                     continue
-                # base off-white; green/purple override below
-                item.setForeground(BEST_COLOR if is_best else BASE_COLOR)
-                # dropout row tooltip
-                item.setToolTip(DROPOUT_TOOLTIP if is_dropout else "")
-            # per-sector best → purple+bold (outranks green for this cell)
+                provisional_cell = not verified and c in timing_cols
+                # base off-white; green (best lap) / muted (provisional timing) / purple below.
+                if provisional_cell:
+                    item.setForeground(PROVISIONAL_COLOR)
+                else:
+                    item.setForeground(BEST_COLOR if is_best else BASE_COLOR)
+                # Muted+italic on the provisional timing cells; the dropout tooltip wins (it flags a
+                # data-quality issue), else the provisional note, else clear.
+                theme.apply_provisional_style(item, provisional_cell)
+                item.setToolTip(DROPOUT_TOOLTIP if is_dropout
+                                else PROVISIONAL_TOOLTIP if provisional_cell else "")
+            # per-sector best → purple+bold (outranks green for this cell) — but ONLY on verified
+            # timing; a purple "validated best" on an arbitrary start line would mislead.
             for i in range(n_splits):
                 c = len(COLUMNS) + i
                 item = self.table.item(r, c)
@@ -309,7 +345,7 @@ class LapTable(QWidget):
                 key = item.data(NUM_ROLE)
                 target = best_split[i] if i < len(best_split) else None
                 font = item.font()
-                if (target is not None and key is not None
+                if (verified and target is not None and key is not None
                         and math.isfinite(float(key))
                         and abs(float(key) - target) < 1e-9):
                     item.setForeground(BEST_SECTOR_COLOR)

@@ -95,6 +95,26 @@ def delta_colour(d: float | None) -> str | None:
     return C.ahead if d < 0 else C.behind
 
 
+# --- trust tier: how an UNVERIFIED / estimated value reads ---------------------------------
+# A value the product can't fully stand behind (provisional lap timing on an unconfirmed start
+# line today; grip "est"/estimated channels next) is rendered MUTED + ITALIC so it visibly
+# carries less authority than a validated figure, without hiding it. One source so every
+# unverified surface (lap table, future estimate labels) reads identically. Apply via
+# apply_provisional_style(item) on a QTableWidgetItem, or the [trust="provisional"] QSS role on
+# a styled QLabel.
+PROVISIONAL_COLOR = C.text_dim  # muted (not muted-most: still legible, just demoted)
+
+
+def apply_provisional_style(item, on: bool = True) -> None:
+    """De-emphasize a QTableWidgetItem as PROVISIONAL (muted + italic) when `on`, else restore a
+    non-italic font (the caller sets the real foreground). Font-only here so callers keep owning
+    the colour rules (best/dropout/base); colour is applied by the caller via PROVISIONAL_COLOR.
+    Pacer-free, Qt-only — the single visual treatment for an unverified table value."""
+    font = item.font()
+    font.setItalic(bool(on))
+    item.setFont(font)
+
+
 # Δ/speed text formatters: single source for the live #DiffBox and the burned-in export.
 # Composable fragments so the two readouts can't drift.
 
@@ -624,6 +644,18 @@ QLabel#DiffBox {{
     font-size: {HERO}px;
     font-weight: 600;
     padding: 2px 8px;
+}}
+/* provisional-timing trust banner: a persistent warning strip over the map while the lap timing
+   references an auto-fitted (unconfirmed) start line. Amber left-rule + tint so it reads as a
+   call-to-action, not an error; clears once the timing is Verified. */
+QLabel#ProvisionalBanner {{
+    background-color: {C.accent_tint};
+    color: {C.text};
+    font-size: {CAPTION}px;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-left: 3px solid {C.accent};
+    border-bottom: 1px solid {C.border};
 }}
 /* slim multi-chapter banner strip */
 QLabel#ChapterBanner {{

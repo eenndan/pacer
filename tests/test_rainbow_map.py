@@ -356,6 +356,27 @@ def test_provisional_cue_absent_on_known_track():
     print("test_provisional_cue_absent_on_known_track OK")
 
 
+def test_provisional_cue_clears_when_timing_confirmed():
+    """The cue now gates on session.timing_verified, not track_name alone: an unknown track whose
+    start line the user has CONFIRMED (a drag) is Verified, so dragging the line into place must
+    clear the dashed cue + callout. Simulate the confirm + the post-drag refresh_overlays the app
+    runs, and assert the cue is gone (Provisional → Verified live)."""
+    s = _stub_session()
+    assert getattr(s, "track_name", None) is None
+    mv = MapView(s)
+    assert mv._provisional_line is not None, "starts Provisional (unknown, unconfirmed)"
+    # A user drag confirms the timing (what Session.set_timing_lines does), then the app re-segments
+    # and calls map.refresh_overlays(), which re-evaluates the cue.
+    s.confirm_timing()
+    assert s.timing_verified is True
+    mv.refresh_overlays()
+    assert mv._provisional_line is None, "confirming the start line must clear the dashed cue"
+    assert mv._provisional_label is None, "confirming the start line must clear the callout"
+    assert not any(isinstance(it, pg.TextItem) for it in mv.plot.items), \
+        "no provisional callout may linger once the timing is confirmed"
+    print("test_provisional_cue_clears_when_timing_confirmed OK")
+
+
 def test_provisional_cue_repins_not_duplicates_on_refresh():
     """Re-pinning (a start-line move / rebuild re-runs _refresh_provisional_cue) REPOSITIONS the
     one cue rather than stacking a second: the same line+label OBJECTS persist and the plot gains

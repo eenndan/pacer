@@ -328,7 +328,8 @@ class StudioWindow(QMainWindow):
         notice = None
         data = sidecar.load(self._sidecar_path) if self._sidecar_path else None
         if data is not None:
-            if session.apply_timing_lines_latlon(data["start"], data["sectors"]):
+            if session.apply_timing_lines_latlon(data["start"], data["sectors"],
+                                                 confirmed=data["confirmed"]):
                 print(f"studio: restored saved timing lines from "
                       f"{os.path.basename(self._sidecar_path)}", flush=True)
             else:
@@ -827,8 +828,12 @@ class StudioWindow(QMainWindow):
             print(f"studio: could not save track {name!r}: {exc}", flush=True)
             self.statusBar().showMessage(f"could not save track: {exc}")
             return
-        # The freshly-saved track now wins detection for THIS session's name on the next load.
+        # The freshly-saved track now wins detection for THIS session's name on the next load —
+        # and it makes the timing VERIFIED (a named track is a trusted start line), so refresh the
+        # derived views to drop the provisional banner / muting and restore the purple session-bests.
         self.session.track_name = name
+        if getattr(self, "view", None) is not None:
+            self.view.refresh_timing_trust()
         self.statusBar().showMessage(f"saved track '{name}' — future recordings here auto-detect it")
         print(f"studio: saved track {name!r} to the track database", flush=True)
 

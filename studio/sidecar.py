@@ -14,10 +14,12 @@ the FIRST chapter's stem (via ``chapters.discover_siblings``), so a chaptered se
 (GX010062+GX020062+GX030062) and a single-file open of any one chapter share ONE sidecar.
 
 Schema (version 1) — one JSON object:
-    {"version": 1,
-     "track":   <registry track name or null>,
-     "start":   [[lat, lon], [lat, lon]],
-     "sectors": [[[lat, lon], [lat, lon]], ...]}
+    {"version":   1,
+     "track":     <registry track name or null>,
+     "start":     [[lat, lon], [lat, lon]],
+     "sectors":   [[[lat, lon], [lat, lon]], ...],
+     "confirmed": <bool — the user placed/confirmed the start line (optional; absent → True
+                   for legacy sidecars, which could only have been written by a user edit)>}
 
 Float round-trip: the json module writes floats with ``repr`` — the shortest string that
 round-trips the double EXACTLY — so save→load returns bit-identical endpoints and
@@ -67,9 +69,12 @@ def _norm_line(line) -> list[list[float]]:
 
 def load(path: str) -> dict | None:
     """Parse + validate the sidecar at `path`. Returns the normalized dict (keys:
-    ``version``/``track``/``start``/``sectors``) or None when the file is absent,
+    ``version``/``track``/``start``/``sectors``/``confirmed``) or None when the file is absent,
     unreadable, not valid JSON, not version-1, or structurally invalid — the caller
-    treats every None identically (keep the session's auto-fitted lines)."""
+    treats every None identically (keep the session's auto-fitted lines).
+
+    ``confirmed`` defaults to True when the key is absent: a legacy sidecar (pre-trust-marker)
+    was only ever written by a deliberate user edit, so it counts as a confirmed start line."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -86,17 +91,21 @@ def load(path: str) -> dict | None:
         return None
     if not isinstance(sectors, list) or not all(_valid_line(s) for s in sectors):
         return None
-    return {"version": VERSION, "track": track,
+    confirmed = data.get("confirmed", True)
+    if not isinstance(confirmed, bool):
+        return None
+    return {"version": VERSION, "track": track, "confirmed": confirmed,
             "start": _norm_line(start), "sectors": [_norm_line(s) for s in sectors]}
 
 
-def save(path: str, track: str | None, start, sectors) -> None:
+def save(path: str, track: str | None, start, sectors, confirmed: bool = True) -> None:
     """Write the sidecar for a recording: the user's current timing lines as absolute
     (lat, lon) endpoint pairs (`start` = one line, `sectors` = a list of lines), plus the
-    detected track name (or None). Written via a same-directory temp file + ``os.replace``
-    so a crash mid-write can never leave a truncated sidecar. Raises OSError on an
-    unwritable destination — the caller decides how to surface that."""
-    data = {"version": VERSION, "track": track,
+    detected track name (or None) and whether the start line is user-``confirmed`` (the
+    timing-trust marker). Written via a same-directory temp file + ``os.replace`` so a crash
+    mid-write can never leave a truncated sidecar. Raises OSError on an unwritable destination
+    — the caller decides how to surface that."""
+    data = {"version": VERSION, "track": track, "confirmed": bool(confirmed),
             "start": _norm_line(start), "sectors": [_norm_line(s) for s in sectors]}
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
