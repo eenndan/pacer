@@ -24,6 +24,151 @@ import numpy as np
 
 from ._signal import _smooth
 
+# --- per-corner alignment drift gate ---------------------------------------------------
+# The corner-window projection (lap_corner_stats / segment_times / coaching.corner_phase_losses)
+# aligns a comparison lap to the reference (best) lap by NORMALIZED distance (d·total_lap/total_ref
+# — same fraction = same track position). The codebase measures the laps' line-length drift at
+# <0.5% (see session._ROLLING_SEARCH_FRAC's note + best_rolling_lap), so within that bound the
+# normalized projection lands the boundaries within sub-sample tolerance and is kept verbatim — the
+# common, well-matched case stays NUMERICALLY IDENTICAL to the pre-gate output. Only when the drift
+# EXCEEDS this bound (a normalized fraction is then a materially different physical point, the same
+# bias best_rolling_lap rejects) do we fall back to the robust heading-gated spatial nearest-point
+# match (project_boundaries). 0.005 = the documented 0.5% line-length bound.
+NORMALIZED_DRIFT_MAX = 0.005
+
+# Spatial nearest-point gates for the drift fallback — the SAME constants best_rolling_lap trusts
+# (session._ROLLING_*): search a ±SEARCH_FRAC arc of the comparison lap around the reference
+# fraction, keep only same-direction samples (heading cos ≥ MIN_COS), accept the sub-sample-refined
+# closest approach only when it is within MATCH_MAX_M of the reference point. A boundary whose match
+# fails ANY gate falls back to the normalized projection for THAT boundary (never a NaN/None).
+_SPATIAL_SEARCH_FRAC = 0.02      # ±2% of the comparison lap's samples (~21 m), floored at 5
+_SPATIAL_HEADING_MIN_COS = 0.5   # same-direction within 60° (rejects the other leg of a corner)
+_SPATIAL_MATCH_MAX_M = 3.0       # refined closest approach must be ≤ 3 m to count as the same point
+
+
+def line_length_drift(total_lap: float, total_ref: float) -> float:
+    """The cheap line-length drift between a comparison lap and the reference (best) lap:
+    |total_lap − total_ref| / total_ref, where each total is that lap's full odometer (cum[-1]).
+    0 (no drift) for a non-positive reference total. This is the single scalar the per-corner
+    alignment gates on (≤ NORMALIZED_DRIFT_MAX → keep normalized; above → spatial fallback)."""
+    total_ref = float(total_ref)
+    if total_ref <= 0:
+        return 0.0
+    return abs(float(total_lap) - total_ref) / total_ref
+
+
+def _unit_tangents(xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-sample unit direction-of-travel of a trace (central differences, normalized; a
+    zero-length step keeps a zero vector, which the heading gate then rejects). Mirrors
+    session._unit_tangents — the same same-direction filter best_rolling_lap uses. Needs len ≥ 2."""
+    tx = np.gradient(np.asarray(xs, float))
+    ty = np.gradient(np.asarray(ys, float))
+    norm = np.hypot(tx, ty)
+    norm[norm == 0] = 1.0
+    return tx / norm, ty / norm
+
+
+def _spatial_project_boundary(d_ref: float, total_ref: float,
+                              ref_xs, ref_ys, ref_cum,
+                              lap_xs, lap_ys, lap_cum) -> float | None:
+    """Map ONE reference-odometer boundary `d_ref` onto a comparison lap's odometer by the robust
+    heading-gated, sub-sample-refined nearest-point search (the best_rolling_lap machinery, on a
+    single anchor instead of every sample). The reference (x,y) at `d_ref` is the anchor; the
+    nearest same-direction comparison-lap sample within the ±_SPATIAL_SEARCH_FRAC arc is found, its
+    two adjacent segments are projected onto, and the closer projection's chord parameter
+    interpolates the comparison-lap odometer. Returns None when no candidate passes the heading or
+    _SPATIAL_MATCH_MAX_M distance gate (caller falls back to the normalized projection)."""
+    ref_xs = np.asarray(ref_xs, float)
+    ref_ys = np.asarray(ref_ys, float)
+    ref_cum = np.asarray(ref_cum, float)
+    lap_xs = np.asarray(lap_xs, float)
+    lap_ys = np.asarray(lap_ys, float)
+    lap_cum = np.asarray(lap_cum, float)
+    n_lap = len(lap_cum)
+    if n_lap < 2 or len(ref_cum) < 2 or total_ref <= 0:
+        return None
+    # Anchor: the reference trace point + direction at the boundary odometer.
+    ax = float(np.interp(d_ref, ref_cum, ref_xs))
+    ay = float(np.interp(d_ref, ref_cum, ref_ys))
+    rtx, rty = _unit_tangents(ref_xs, ref_ys)
+    atx = float(np.interp(d_ref, ref_cum, rtx))
+    aty = float(np.interp(d_ref, ref_cum, rty))
+    # Search only a ±SEARCH_FRAC arc of the comparison lap around the same normalized fraction.
+    total_lap = float(lap_cum[-1])
+    frac = d_ref / total_ref
+    center = int(np.clip(np.searchsorted(lap_cum, frac * total_lap), 0, n_lap - 1))
+    k = max(5, int(_SPATIAL_SEARCH_FRAC * n_lap))
+    lo = max(0, center - k)
+    hi = min(n_lap, center + k + 1)
+    win = np.arange(lo, hi)
+    d2 = (lap_xs[win] - ax) ** 2 + (lap_ys[win] - ay) ** 2
+    # Same-direction gate: reject the other leg of a corner / out-and-back.
+    ltx, lty = _unit_tangents(lap_xs, lap_ys)
+    heading_cos = atx * ltx[win] + aty * lty[win]
+    d2 = np.where(heading_cos >= _SPATIAL_HEADING_MIN_COS, d2, np.inf)
+    if not np.isfinite(d2).any():
+        return None
+    j = int(win[int(np.argmin(d2))])
+
+    # Sub-sample refinement: project the anchor onto the two trace segments adjacent to its nearest
+    # comparison-lap sample; the closer projection's chord parameter interpolates the odometer.
+    def _project(j0: int, j1: int) -> tuple[float, float]:
+        vx, vy = lap_xs[j1] - lap_xs[j0], lap_ys[j1] - lap_ys[j0]
+        len2 = vx * vx + vy * vy
+        if len2 <= 0:
+            return ((lap_xs[j0] - ax) ** 2 + (lap_ys[j0] - ay) ** 2, float(lap_cum[j0]))
+        u = float(np.clip(((ax - lap_xs[j0]) * vx + (ay - lap_ys[j0]) * vy) / len2, 0.0, 1.0))
+        qx, qy = lap_xs[j0] + u * vx, lap_ys[j0] + u * vy
+        return ((qx - ax) ** 2 + (qy - ay) ** 2,
+                float(lap_cum[j0] + u * (lap_cum[j1] - lap_cum[j0])))
+
+    d2_lo, dist_lo = _project(max(j - 1, 0), j)
+    d2_hi, dist_hi = _project(j, min(j + 1, n_lap - 1))
+    best_d2, best_dist = (d2_lo, dist_lo) if d2_lo <= d2_hi else (d2_hi, dist_hi)
+    # Distance gate on the REFINED closest approach (same point only if within MATCH_MAX_M).
+    if best_d2 > _SPATIAL_MATCH_MAX_M ** 2:
+        return None
+    return best_dist
+
+
+def project_boundaries(d_ref, total_ref: float, total_lap: float, *,
+                       traces: tuple | None = None) -> np.ndarray:
+    """Project reference-odometer corner-window boundaries `d_ref` onto a comparison lap's odometer.
+
+    The DRIFT-GATED alignment shared by lap_corner_stats / segment_times / coaching: when the laps'
+    line-length drift is within NORMALIZED_DRIFT_MAX (the common, well-matched case) OR no spatial
+    `traces` are supplied, this is exactly the legacy normalized projection
+    `d_ref · total_lap / total_ref` — byte-identical to the pre-gate output. When the drift EXCEEDS
+    the bound AND `traces` are supplied, each boundary is instead mapped by the robust heading-gated
+    spatial nearest-point match (_spatial_project_boundary); any boundary whose match fails the gate
+    falls back to its normalized value (never a NaN).
+
+    `traces`, when given, is (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum) — the reference
+    (best) lap's and the comparison lap's local-frame trace + odometer (Session feeds these; the
+    pure-numpy unit tests omit them and so always get the normalized projection)."""
+    d_ref = np.asarray(d_ref, float)
+    total_ref = float(total_ref)
+    total_lap = float(total_lap)
+    normalized = d_ref * (total_lap / total_ref) if total_ref > 0 else d_ref.copy()
+    if traces is None or line_length_drift(total_lap, total_ref) <= NORMALIZED_DRIFT_MAX:
+        return normalized
+    ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum = traces
+    out = normalized.copy()
+    for i, d in enumerate(d_ref):
+        spatial = _spatial_project_boundary(float(d), total_ref,
+                                            ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum)
+        if spatial is not None:
+            out[i] = spatial
+    # The boundaries arrive in track order (enter1, exit1, enter2, …). A spatial match could in
+    # principle land marginally out of order vs its neighbours (sub-metre, near a hairpin's
+    # closest-approach); clamp to [0, total_lap] and enforce the non-decreasing order the partition
+    # (segment_times' telescoping sum) and the in-window apex search rely on. This only ever moves a
+    # boundary that the spatial match nudged across a neighbour, never the normalized values.
+    if total_lap > 0:
+        out = np.clip(np.maximum.accumulate(np.clip(out, 0.0, total_lap)), 0.0, total_lap)
+    return out
+
+
 # --- model constants -------------------------------------------------------------------
 # Constants tuned on the D24 recordings; the detected set is insensitive within the noted bands.
 KAPPA_SMOOTH_M = 8.0      # m of arc; curvature boxcar (~5 samples), resolves the shortest corners
@@ -210,23 +355,31 @@ def detect_corners(dists, kappa, threshold: float | None = None) -> list[Corner]
 
 
 # ---------------------------------------------------------------------- projection
-def _window_edges(corner_list: list[Corner], total_ref: float, total_lap: float) -> np.ndarray:
+def _window_edges(corner_list: list[Corner], total_ref: float, total_lap: float,
+                  traces: tuple | None = None) -> np.ndarray:
     """All partition edges (lap odometer metres) for one lap: lap start, each corner's
-    enter/exit projected by normalized distance (d_lap = d_ref / total_ref x total_lap —
-    the same projection lap_sector_splits uses for sector boundaries), and the lap end."""
-    fracs = [0.0]
+    enter/exit projected onto the lap's odometer (the drift-gated alignment — normalized within
+    NORMALIZED_DRIFT_MAX, robust spatial above; see project_boundaries), and the lap end. The lap
+    start/end stay the literal 0 / total_lap (the timing line is the shared S/F point on both laps,
+    so it never needs spatial re-matching). `traces` (Session-fed) enables the spatial fallback."""
+    interior = []
     for c in corner_list:
-        fracs.extend((c.enter / total_ref, c.exit / total_ref))
-    fracs.append(1.0)
-    return np.asarray(fracs, float) * float(total_lap)
+        interior.extend((c.enter, c.exit))
+    edges = [0.0]
+    if interior:
+        edges.extend(project_boundaries(interior, total_ref, total_lap, traces=traces).tolist())
+    edges.append(float(total_lap))
+    return np.asarray(edges, float)
 
 
-def segment_times(corner_list: list[Corner], total_ref: float, dists, elapsed) -> np.ndarray:
+def segment_times(corner_list: list[Corner], total_ref: float, dists, elapsed,
+                  traces: tuple | None = None) -> np.ndarray:
     """Per-segment times of the corner/straight partition: 2N+1 entries [straight0, corner1, ...].
-    One np.interp at the shared edges, so segments sum to the lap time exactly (asserted)."""
+    One np.interp at the shared edges, so segments sum to the lap time exactly (asserted). `traces`
+    (Session-fed) enables the drift-gated spatial alignment; omitted → the normalized projection."""
     dists = np.asarray(dists, float)
     elapsed = np.asarray(elapsed, float)
-    edges = _window_edges(corner_list, total_ref, float(dists[-1]))
+    edges = _window_edges(corner_list, total_ref, float(dists[-1]), traces)
     t_at = np.interp(edges, dists, elapsed)
     seg = np.diff(t_at)
     assert abs(float(seg.sum()) - float(elapsed[-1] - elapsed[0])) < 1e-9, \
@@ -235,21 +388,34 @@ def segment_times(corner_list: list[Corner], total_ref: float, dists, elapsed) -
 
 
 def lap_corner_stats(corner_list: list[Corner], total_ref: float, dists, speed_kmh,
-                     elapsed, ref: list[CornerStat] | None = None) -> list[CornerStat]:
+                     elapsed, ref: list[CornerStat] | None = None,
+                     traces: tuple | None = None) -> list[CornerStat]:
     """Project the corner windows onto ONE lap and measure each corner: time-in-corner
     (from the same edge interpolation as segment_times, so corner times + straight times
     partition the lap exactly), apex = MIN speed over the in-window samples (+ its lap
     odometer position), entry/exit speeds at the window edges, and deltas vs `ref` (the
-    reference — best — lap's own stats; None for the reference lap itself -> deltas 0)."""
+    reference — best — lap's own stats; None for the reference lap itself -> deltas 0).
+
+    The window-boundary projection is the drift-gated alignment (project_boundaries): normalized
+    distance within NORMALIZED_DRIFT_MAX, the robust spatial nearest-point match above it. `traces`
+    (Session-fed (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum)) enables the spatial fallback;
+    omitted (pure-numpy callers) → normalized, byte-identical to the pre-gate output."""
     dists = np.asarray(dists, float)
     speed_kmh = np.asarray(speed_kmh, float)
     elapsed = np.asarray(elapsed, float)
-    seg = segment_times(corner_list, total_ref, dists, elapsed)
+    seg = segment_times(corner_list, total_ref, dists, elapsed, traces)
     total_lap = float(dists[-1])
+    # The same gated enter/exit boundaries segment_times partitions on, so the in-window apex/edge
+    # speeds read off the identical window (interleaved [enter1, exit1, enter2, exit2, …]).
+    interior = []
+    for c in corner_list:
+        interior.extend((c.enter, c.exit))
+    proj = (project_boundaries(interior, total_ref, total_lap, traces=traces)
+            if interior else np.empty(0))
     out: list[CornerStat] = []
     for i, c in enumerate(corner_list):
-        d0 = c.enter / total_ref * total_lap
-        d1 = c.exit / total_ref * total_lap
+        d0 = float(proj[2 * i])
+        d1 = float(proj[2 * i + 1])
         t = float(seg[2 * i + 1])  # this corner's slice of the partition
         idx = np.flatnonzero((dists >= d0) & (dists <= d1))
         if len(idx):

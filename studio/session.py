@@ -1396,6 +1396,19 @@ class Session:
             self._lap_arrays(med_id) if med_id is not None else (None, None, None))
         best_dist, best_speed_kmh, _best_elapsed = self._lap_arrays(best)
 
+        # Drift-gate spatial traces for the phase decomposition (the same alignment lap_corner_stats
+        # uses): the corner windows live in the BEST lap's frame, so its (xs, ys, cum) is the fixed
+        # reference half of each (ref, comparison) pair. The best lap projects onto its own odometer
+        # (zero drift → normalized identity); the typical lap gets the spatial fallback above the
+        # bound. A degenerate trace → None → normalized (unchanged). Same xy basis as the map.
+        _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
+        best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
+        if med_id is not None:
+            _mt, med_xs, med_ys, _mv, med_cum = self._lap_columns(med_id)
+            median_traces = (best_xs, best_ys, best_cum, med_xs, med_ys, med_cum)
+        else:
+            median_traces = None
+
         return coaching.summarize(
             corners=corner_list,
             candidate_lap_ids=cand_ids,
@@ -1415,6 +1428,8 @@ class Session:
             median_speed_kmh=med_speed_kmh,
             best_dist=best_dist,
             best_speed_kmh=best_speed_kmh,
+            median_traces=median_traces,
+            best_traces=best_traces,
         )
 
 
