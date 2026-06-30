@@ -31,6 +31,7 @@ from . import (
     gmeter,
     library,
     render_cache,
+    timeline,
     tracks,
 )
 from ._signal import (
@@ -163,8 +164,6 @@ class Session:
         self._xyt_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}  # (xs, ys, times) local m
         self._valid_cache: list[int] | None = None  # memoized "real lap" set
         self._best_cache: object = _UNSET   # sentinel: None is a legal "no best lap" result
-        # [start, end) windows on the GLOBAL clock for the O(log n) lap_at_time binary search.
-        self._lap_windows: tuple[np.ndarray, np.ndarray, list[int]] | None = None
         # Detected registry track name, or None for an unknown track (start line auto-fitted).
         # Persisted into the timing-line sidecar and used by the app's "unknown track" notice.
         self.track_name: str | None = None
@@ -203,6 +202,10 @@ class Session:
             lap_time=self.lap_time,
             trace_times=self.tt,
         )
+
+        # Cursor/plot/video-sync coordinate conversions (studio/timeline.py); owns the lap-window
+        # table, invalidate() on re-segment. Session keeps thin delegators over it (lap_at_time …).
+        self._timeline = self._build_timeline()
 
     # ---------------------------------------------------------------- loading
     @classmethod
@@ -394,6 +397,32 @@ class Session:
             self._driving = dc
         return dc
 
+    def _build_timeline(self) -> timeline.Timeline:
+        # All inputs are live-reading lambdas (not bound-method snapshots) so the extracted
+        # conversions resolve Session's primitives exactly when the originals did — incl. tests
+        # that monkey-patch s._lap_trace_xyt after the (lazily-built) timeline exists.
+        return timeline.Timeline(
+            lap_time_dist=lambda lid: self._lap_time_dist(lid),
+            lap_trace_xyt=lambda lid: self._lap_trace_xyt(lid),
+            valid_lap_ids=lambda: self.valid_lap_ids(),
+            lap_window=lambda lid: self.lap_window(lid),
+            trace_times=lambda: self.tt,
+            trace_xs=lambda: self.tx,
+            trace_ys=lambda: self.ty,
+        )
+
+    @property
+    def timeline(self) -> timeline.Timeline:
+        """The cursor/plot/video-sync coordinate-conversion service (studio/timeline.py). The
+        public conversions below (lap_at_time / index_at_time / media_time_at_plot_x / nearest_*)
+        are thin delegators over it. Lazily created; getattr-guarded for the bare-Session
+        (no-__init__) test path — see _ref."""
+        tl = getattr(self, "_timeline", None)
+        if tl is None:
+            tl = self._build_timeline()
+            self._timeline = tl
+        return tl
+
     def has_reference(self) -> bool:
         """True iff a cross-recording reference lap is currently active."""
         return self._ref is not None
@@ -557,11 +586,12 @@ class Session:
         self._dist_cache.clear()
         self._xyt_cache.clear()
         self._render_cache.invalidate()  # per-lap draw segments (MAP RENDERING ONLY)
-        # The single re-segmentation point: every memoized "real lap" set + window table is now
-        # stale (lap ids / times shifted), so drop them. They lazily recompute on next access.
+        # The single re-segmentation point: every memoized "real lap" set + the timeline's lap-window
+        # table is now stale (lap ids / times shifted), so drop them. They lazily recompute on next
+        # access.
         self._valid_cache = None
         self._best_cache = _UNSET
-        self._lap_windows = None
+        self.timeline.invalidate()
         # The corner model + driving channels are derived from / projected through the
         # segmentation — stale with the rest. Each service owns its caches and clears exactly
         # them via invalidate() (the corner basis + per-lap stats + session bests; the per-lap
@@ -1374,61 +1404,18 @@ class Session:
             self._dist_cache[lap_id] = td
         return td
 
-    # ------------------------------------------------ cursor scrub: x <-> media time
-    # Cursor x<->media-time (plots_view stays pacer-free). Speed + delta share one x-linked axis:
-    #   * TIME mode:     x = t − lap_start
-    #   * DISTANCE mode: x = s × baseline_total, s = dist_in_lap(t)/lap_total — the same axis
-    #     delta() draws on, so the cursor sits on its curve. Pass
-    #     active_baseline_total_distance() as best_distance so both halves use the SAME total.
-    # 'distance' and 'delta' are the same shared-distance mode; all clamp to the lap window.
-
+    # ----------------------- cursor scrub / video sync / map nearest: the Timeline conversions
+    # The cursor/plot-x <-> media-time, media-time -> trace-index/lap, and map (x,y) -> trace
+    # conversions live in the `session.timeline` sub-object (studio/timeline.py); these stay as thin
+    # delegators so the call sites + the tests that monkey-patch s.lap_at_time keep working. Pass
+    # active_baseline_total_distance() as best_distance for the shared-distance axis.
     def media_time_at_plot_x(self, lap_id: int, x: float, mode: str,
                              best_distance: float | None = None) -> float | None:
-        """Absolute media-clock time (s) for a plot x-value within `lap_id`.
-
-        `mode` is 'time' (time-into-lap x, seconds) or 'distance'/'delta' (the SHARED distance
-        axis, x = s × best_distance metres — both plots use it, so the cursors coincide). For
-        the distance/delta modes pass the ACTIVE baseline's total distance as `best_distance`
-        (`active_baseline_total_distance()` — the reference total when one is loaded, else the
-        local best) so this inverts delta()'s x-grid exactly. The result is CLAMPED to `lap_id`'s
-        [start, end] media window so a drag can't leave the current lap. Returns None if the lap
-        is degenerate (so the caller can no-op)."""
-        td = self._lap_time_dist(lap_id)
-        if td is None:
-            return None
-        times, dists = td
-        t0, t1 = float(times[0]), float(times[-1])
-        if mode == "time":
-            t = t0 + float(x)
-        else:  # 'distance' / 'delta' — the shared normalized-distance × best_distance axis
-            if not best_distance:
-                return None
-            s = float(x) / float(best_distance)            # normalized fraction [0,1]
-            d = s * float(dists[-1])                        # → this lap's odometer (m)
-            # Invert distance→time within the lap on the monotonic odometer.
-            t = float(np.interp(d, dists, times))
-        return min(max(t, t0), t1)
+        return self.timeline.media_time_at_plot_x(lap_id, x, mode, best_distance)
 
     def plot_x_at_media_time(self, lap_id: int, t: float, mode: str,
                              best_distance: float | None = None) -> float | None:
-        """Inverse of `media_time_at_plot_x`: the plot x-value for media-clock time `t` within
-        `lap_id`, in the given `mode` ('time', or the shared-distance 'distance'/'delta'). Used
-        to re-place a cursor from the shared media time. Returns None if the lap is degenerate
-        (or distance/delta with no best distance)."""
-        td = self._lap_time_dist(lap_id)
-        if td is None:
-            return None
-        times, dists = td
-        if mode == "time":
-            return float(t) - float(times[0])
-        # 'distance' / 'delta' — the shared normalized-distance × best_distance axis.
-        if not best_distance:
-            return None
-        if dists[-1] <= 0:  # zero-length odometer (≥2 stationary points): degenerate → no x
-            return None     # (same `<= 0` convention as delta() / sector_plot_positions)
-        d = float(np.interp(t, times, dists))  # distance-into-lap at t
-        s = d / float(dists[-1])               # normalized fraction [0,1]
-        return s * float(best_distance)
+        return self.timeline.plot_x_at_media_time(lap_id, t, mode, best_distance)
 
     # -------------------------------------------------------- plot series glue
     def _lap_arrays(self, lap_id):
@@ -1636,47 +1623,12 @@ class Session:
 
     # ------------------------------------------------------------ video sync
     def index_at_time(self, t: float) -> int | None:
-        n = len(self.tt)
-        if n == 0:
-            return None
-        i = int(np.searchsorted(self.tt, t))
-        return min(max(i, 0), n - 1)
-
-    def _lap_window_table(self):
-        """Cached parallel arrays (starts, ends, lap_ids) over the VALID laps, sorted by start
-        time, for the O(log n) `lap_at_time` binary search. Cleared on re-segment. The windows
-        are [start_timestamp, start+lap_time), single-sourced via lap_window."""
-        # getattr so a bare Session built via __new__ (tests) still resolves (recomputes each call).
-        if getattr(self, "_lap_windows", None) is None:
-            valid = self.valid_lap_ids()
-            rows = [(*self.lap_window(i), i) for i in valid]
-            rows.sort(key=lambda r: r[0])  # by start time (valid is already id-ascending => time-ascending)
-            starts = np.array([r[0] for r in rows], dtype=float)
-            ends = np.array([r[1] for r in rows], dtype=float)
-            ids = [r[2] for r in rows]
-            self._lap_windows = (starts, ends, ids)
-        return self._lap_windows
+        return self.timeline.index_at_time(t)
 
     def lap_at_time(self, t: float) -> int | None:
-        """The valid lap whose [start_timestamp, start+lap_time) window contains `t` (media-clock
-        seconds), else None — for the readout + current-lap highlight.
-
-        The upper bound is HALF-OPEN (`t < end`) on purpose: consecutive laps are contiguous, so
-        an inclusive bound would resolve a `t` exactly on a lap's START — the time select→seek
-        produces — to the PREVIOUS lap, jumping the highlight back one lap. The sole side-effect
-        (the exact finish instant of the LAST lap resolving to None) is a harmless between-laps
-        moment auto-follow holds through.
-
-        O(log n) binary search on the cached, start-sorted window table."""
-        starts, ends, ids = self._lap_window_table()
-        if len(starts) == 0:
-            return None
-        k = int(np.searchsorted(starts, t, side="right")) - 1
-        if k < 0:
-            return None
-        if starts[k] <= t < ends[k]:
-            return ids[k]
-        return None
+        """The valid lap whose [start, start+lap_time) window contains media-clock time `t`, else
+        None — the readout + current-lap highlight. Delegates to session.timeline."""
+        return self.timeline.lap_at_time(t)
 
     def g_at_time(self, t: float) -> tuple[float, float, float] | None:
         """Vehicle-frame g at media-clock time `t`: (lateral_g, longitudinal_g, total_g), or
@@ -1773,44 +1725,18 @@ class Session:
         # lap_b's elapsed time at the SAME track fraction s (invert s → b's distance → time).
         return elapsed_a - project(s, curve_b)
 
+    # Map (x, y) -> trace nearest-point lookups (whole-trace + the lap-scoped variant for the
+    # draggable marker) — delegated to session.timeline (studio/timeline.py).
     def nearest_index(self, x: float, y: float) -> int | None:
-        if len(self.tx) == 0:
-            return None
-        return int(np.argmin((self.tx - x) ** 2 + (self.ty - y) ** 2))
-
-    # ----------------------------------------------- map marker: lap-scoped nearest (F3)
-    # The red map marker is draggable; dragging seeks the video. Searching the WHOLE trace for
-    # the nearest point makes the marker JUMP to another lap wherever the laps overlap
-    # spatially. So constrain the search to the CURRENT lap's own trace — the same lap-scoped
-    # behaviour as the scrub cursor. Pure numpy on the lap's local-metre points; no pacer.
-    def _lap_xy_t(self, lap_id: int):
-        """(xs, ys, times) for one lap in local metres + media-clock seconds. Reads the shared
-        per-lap cache (built once, cleared on re-segment), so a marker drag's nearest-point lookup
-        no longer rebuilds the arrays on every mouse-move. Returns None if the lap is degenerate."""
-        td = self._lap_time_dist(lap_id)  # ensures the lap is segmented/usable
-        if td is None:
-            return None
-        xs, ys, ts = self._lap_trace_xyt(lap_id)
-        if len(xs) < 1:
-            return None
-        return xs, ys, ts
+        return self.timeline.nearest_index(x, y)
 
     def nearest_index_in_lap(self, lap_id: int, x: float, y: float) -> int | None:
-        """Index (into `lap_id`'s OWN point array) of the trace point nearest (x, y), searching
-        ONLY within that lap. Returns None if the lap is degenerate. Pure numpy — used to keep
-        the dragged map marker on the current lap instead of snapping across spatial overlaps."""
-        got = self._lap_xy_t(lap_id)
-        if got is None:
-            return None
-        xs, ys, _ = got
-        return int(np.argmin((xs - x) ** 2 + (ys - y) ** 2))
+        """Index (into `lap_id`'s OWN point array) of the trace point nearest (x, y), searching ONLY
+        within that lap (so the dragged map marker can't snap across spatial overlaps). Delegates to
+        session.timeline."""
+        return self.timeline.nearest_index_in_lap(lap_id, x, y)
 
     def nearest_time_in_lap(self, lap_id: int, x: float, y: float) -> float | None:
-        """Media-clock time (s) of the point within `lap_id` nearest (x, y), CLAMPED to the lap's
-        [start, end] window. The map marker uses this so a drag scrubs smoothly inside the one
-        lap and never jumps to another lap. None if the lap is degenerate."""
-        i = self.nearest_index_in_lap(lap_id, x, y)
-        if i is None:
-            return None
-        _, _, ts = self._lap_xy_t(lap_id)
-        return float(min(max(ts[i], ts[0]), ts[-1]))
+        """Media-clock time (s) of the point within `lap_id` nearest (x, y), clamped to the lap
+        window — the map marker's drag-to-scrub target. Delegates to session.timeline."""
+        return self.timeline.nearest_time_in_lap(lap_id, x, y)

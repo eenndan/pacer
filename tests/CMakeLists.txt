@@ -30,6 +30,11 @@ add_test(NAME test_chapters
 # MAP-ONLY GPS-gap reconstruction (studio.gapfill): pure Python + numpy, no telemetry file.
 add_test(NAME test_gapfill
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gapfill.py)
+# Timeline (E2): the cursor/plot/video-sync coordinate conversions extracted off Session into the
+# Qt-free studio.timeline.Timeline — plot-x<->media-time (both modes), index/lap_at_time (half-open
+# windows + invalidate), map nearest (whole-trace vs lap-scoped). Pure numpy on injected stubs.
+add_test(NAME test_timeline
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_timeline.py)
 # Reference-centerline closed-loop fit (studio.reference): pure Python + numpy, synthetic
 # loops with known similarity transforms (incl. cyclic offset / reversal / reflection).
 add_test(NAME test_reference
