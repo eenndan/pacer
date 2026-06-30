@@ -24,6 +24,7 @@ These exercise the load-bearing pure logic directly on synthetic data:
     pacer / real panels.
 Run: python tests/test_studio_features.py
 """
+import faulthandler
 import math
 import os
 import sys
@@ -31,7 +32,13 @@ from types import SimpleNamespace
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO)
+
+# The bundled GoPro sample as an ABSOLUTE path. ctest runs this file from build/Release/tests, so
+# the repo-RELATIVE studio.session.DEFAULT_SAMPLE would not resolve there — the load would fail
+# and (pre-fix) hang the headless suite on the modal error dialog. Tests that load it use this.
+_BUNDLED_SAMPLE = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero6.mp4")
 
 # QTableWidgetItem needs a QApplication for _NumItem; create one offscreen.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -1173,9 +1180,103 @@ def test_drag_and_drop_loads_mp4s():
     print("test_drag_and_drop_loads_mp4s OK")
 
 
+# ------------------------------------------------ C1: async (off-UI-thread) Session.load
+def _pump_until(pred, secs=30.0):
+    """Bounded event-loop pump (no raw sleeps held): processEvents until `pred()` or the deadline.
+    Returns whether the predicate became true — the pattern the real-widget tests use to wait for an
+    async (worker-QThread) completion."""
+    import time
+    end = time.time() + secs
+    while not pred() and time.time() < end:
+        _APP.processEvents()
+        time.sleep(0.01)
+    return pred()
+
+
+def test_async_load_settles_off_ui_thread():
+    """C1: Session.load runs on a worker QThread, so the window is responsive during it and the
+    session/view aren't ready synchronously after __init__. Construct on the bundled sample, pump the
+    loop until the load settles, then assert the session + central view are wired up."""
+    os.environ.setdefault("PACER_NO_MEDIA", "1")
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio.app import StudioWindow
+    # A load failure must surface as a fast assertion, never the modal QMessageBox.critical that
+    # spins a nested event loop and blocks the headless suite forever (the original C1 CI hang).
+    orig_critical = QMessageBox.critical
+    QMessageBox.critical = staticmethod(lambda *a, **k: QMessageBox.Ok)
+    w = StudioWindow([_BUNDLED_SAMPLE])
+    try:
+        assert _pump_until(lambda: w.view is not None), "async load never completed"
+        assert getattr(w, "session", None) is not None
+        assert w.session.point_count() > 0, w.session.point_count()
+        assert w.view is not None
+        assert list(w._paths) == [_BUNDLED_SAMPLE], w._paths
+    finally:
+        w._drain_load_workers()  # finish any in-flight worker WITHOUT a GIL-deadlocking wait()
+        w.close()
+        w.deleteLater()
+        QMessageBox.critical = orig_critical
+    print("test_async_load_settles_off_ui_thread OK")
+
+
+def test_reentrant_load_applies_only_latest():
+    """C1 reentrancy/supersede: two quick _load calls in a row must apply ONLY the latest result
+    (the earlier worker's result is dropped by token), with no crash and a single coherent session.
+    Both _load calls target the same sample here; the token guard is what makes the second supersede
+    the first regardless of which worker finishes first."""
+    os.environ.setdefault("PACER_NO_MEDIA", "1")
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio.app import StudioWindow
+    orig_critical = QMessageBox.critical  # never block the headless suite on a load-failure dialog
+    QMessageBox.critical = staticmethod(lambda *a, **k: QMessageBox.Ok)
+    w = StudioWindow([])  # welcome state, no in-flight load
+    try:
+        applied_tokens = []
+        _orig = w._on_session_loaded
+
+        def _spy(token, paths, session):
+            # Record only tokens that pass the staleness guard (i.e. actually APPLIED), by replaying
+            # the guard before delegating — a stale (superseded) result must not be applied.
+            if token == w._load_token:
+                applied_tokens.append(token)
+            _orig(token, paths, session)
+        w._on_session_loaded = _spy
+
+        w._load([_BUNDLED_SAMPLE])
+        first_token = w._load_token
+        w._load([_BUNDLED_SAMPLE])  # supersede before the first worker finishes
+        latest_token = w._load_token
+        assert latest_token == first_token + 1, (first_token, latest_token)
+
+        assert _pump_until(lambda: w.view is not None), "no load settled"
+        # Only the LATEST token may have been applied; the stale (first) worker's result was dropped
+        # by the token guard. No crash, one coherent session.
+        assert applied_tokens == [latest_token], applied_tokens
+        assert first_token not in applied_tokens, applied_tokens
+        assert getattr(w, "session", None) is not None
+        assert w.view is not None
+    finally:
+        w._drain_load_workers()  # drain BOTH workers (incl. the superseded one) before teardown
+        w.close()
+        w.deleteLater()
+        QMessageBox.critical = orig_critical
+    print("test_reentrant_load_applies_only_latest OK")
+
+
 if __name__ == "__main__":
+    # Hang watchdog (permanent CI hardening): this file is full of Qt/event-loop tests, where a
+    # regression can hang the whole run, and ctest buffers a test's stdout/stderr until it ENDS —
+    # so a bare 20-min job cancel surfaces nothing. Dump every thread's stack at 180 s (clear of the
+    # ~110 s legit test_export_video, so zero noise on healthy runs); the dump lands in the buffer
+    # that `ctest --timeout` flushes when it kills the hang, pinpointing the stuck test + thread.
+    # exit=False: a pure no-op on the fast path. (This is what root-caused the original C1 hang.)
+    faulthandler.enable()
+    faulthandler.dump_traceback_later(180, repeat=True, exit=False)
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
+        print(f"START {t.__name__}", flush=True)  # breadcrumb: the last START before a hang names it
         t()
-        print(f"ok  {t.__name__}")
-    print(f"\nALL {len(tests)} STUDIO FEATURE TESTS PASSED")
+        print(f"ok  {t.__name__}", flush=True)
+    print(f"\nALL {len(tests)} STUDIO FEATURE TESTS PASSED", flush=True)

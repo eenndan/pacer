@@ -13,6 +13,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 if "--no-video" in sys.argv[1:]:
@@ -48,6 +49,15 @@ QMessageBox.critical = _fail_fast
 QMessageBox.warning = _fail_fast
 
 w = StudioWindow(["3rdparty/gpmf-parser/samples/hero6.mp4"])
+
+# C1: Session.load now runs on a worker QThread (the window stays responsive), so the session isn't
+# ready synchronously after __init__. Pump the event loop until the load settles (bounded deadline,
+# the pattern tests/test_video_view_compare.py uses) before touching w.session.
+_deadline = time.time() + 30.0
+while w.view is None and time.time() < _deadline:
+    app.processEvents()
+    time.sleep(0.01)
+assert w.view is not None, "SMOKE FAILED — session load did not complete within 30 s"
 s = w.session
 print("points:", s.laps.point_count(), "laps:", s.lap_count(),
       "valid:", len(s.valid_lap_ids()), "best:", s.best_lap_id())
