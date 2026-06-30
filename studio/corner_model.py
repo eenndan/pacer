@@ -71,6 +71,32 @@ class CornerModel:
         corner windows themselves are unchanged. Recomputed lazily against the new baseline."""
         self._stats_cache.clear()
 
+    # ----------------------------------------------------------- drift-gate spatial traces
+    def _best_trace(self) -> tuple | None:
+        """The best (reference) lap's local-frame trace (xs, ys, cum) — the spatial anchor side of
+        the per-corner drift gate (corners.project_boundaries). None when there is no usable best
+        lap. The reference-odometer corner windows are expressed in this lap's frame, so it is the
+        fixed half of every (ref, comparison) trace pair."""
+        best = self._best_lap_id()
+        if best is None:
+            return None
+        _t, xs, ys, _v, cum = self._lap_columns(best)
+        if len(cum) < 2 or float(cum[-1]) <= 0:
+            return None
+        return xs, ys, cum
+
+    def _lap_traces(self, lap_id: int, ref_trace: tuple | None) -> tuple | None:
+        """The (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum) trace pair the drift gate's
+        spatial fallback needs to map this session's corner windows onto `lap_id`. None (→ the
+        gate keeps the normalized projection) when either trace is degenerate. A reference-lap
+        (cross-recording) projection has no local trace pair, so it stays normalized."""
+        if ref_trace is None:
+            return None
+        _t, xs, ys, _v, cum = self._lap_columns(lap_id)
+        if len(cum) < 2 or float(cum[-1]) <= 0:
+            return None
+        return (*ref_trace, xs, ys, cum)
+
     # ------------------------------------------------------------------ basis + corners
     def basis(self) -> tuple[list[corners.Corner], float] | None:
         """The cached (corner list, reference total distance) pair, or None when there is no
@@ -152,8 +178,12 @@ class CornerModel:
             ref = ref_stats
         else:
             ref = self.lap_corner_stats(best) if lap_id != best else None
+        # Drift-gate spatial traces: the best lap (the corner-window reference frame) + this lap.
+        # The best lap itself projects onto its OWN odometer (zero drift → identity), so its trace
+        # pair is harmless; a degenerate trace → None → normalized projection (unchanged).
+        traces = self._lap_traces(lap_id, self._best_trace())
         stats = corners.lap_corner_stats(corner_list, total_ref, dist, speed_kmh, elapsed,
-                                         ref=ref or None)
+                                         ref=ref or None, traces=traces)
         self._stats_cache[lap_id] = stats
         return stats
 

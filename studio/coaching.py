@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .corners import project_boundaries
+
 # Min clean laps before coaching; the per-corner loss is a MEDIAN, ill-defined/unstable below 3.
 MIN_LAPS = 3
 
@@ -217,18 +219,25 @@ def corner_phase_losses(
     corner_dist_total: float | None = None,
     lap_total: float | None = None,
     best_total: float | None = None,
+    lap_traces: tuple | None = None,
+    best_traces: tuple | None = None,
     grid_n: int = PHASE_GRID_N,
 ) -> PhaseLoss:
     """Decompose ONE corner's Δt-vs-best into entry / apex(mid) / exit thirds (seconds).
 
     The corner window [c_enter, c_exit] is in the reference (best-lap) odometer; it is projected
-    onto EACH lap's own odometer by normalized distance (d·lap_total/corner_dist_total — the SAME
-    projection lap_corner_stats uses), so the third boundaries land on the same TRACK positions on
-    both laps. Each lap's window is split into three equal-distance thirds; per third
-    Δt = ∫ds/v_lap − ∫ds/v_best on a shared fine grid (so the thirds telescope to the corner's
-    total Δt-vs-best). Positive ⇒ the lap is slower than best over that third.
+    onto EACH lap's own odometer by the drift-gated alignment (project_boundaries — normalized
+    distance d·lap_total/corner_dist_total within NORMALIZED_DRIFT_MAX, the robust spatial
+    nearest-point match above it, the SAME alignment lap_corner_stats uses), so the third boundaries
+    land on the same TRACK positions on both laps. Each lap's window is split into three
+    equal-distance thirds; per third Δt = ∫ds/v_lap − ∫ds/v_best on a shared fine grid (so the
+    thirds telescope to the corner's total Δt-vs-best). Positive ⇒ the lap is slower than best over
+    that third.
 
-    Returns a zero PhaseLoss when either trace is unusable or the window is degenerate."""
+    `lap_traces`/`best_traces` (Session-fed (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum) for
+    the typical / best lap respectively) enable the spatial fallback; omitted → normalized,
+    byte-identical to the pre-gate output. Returns a zero PhaseLoss when either trace is unusable or
+    the window is degenerate."""
     lap_dist = np.asarray(lap_dist, float)
     lap_speed_kmh = np.asarray(lap_speed_kmh, float)
     best_dist = np.asarray(best_dist, float)
@@ -236,17 +245,18 @@ def corner_phase_losses(
     if len(lap_dist) < 2 or len(best_dist) < 2 or not (c_exit > c_enter):
         return _NO_PHASES
 
-    def _proj(total: float | None) -> tuple[float, float]:
-        # Project the reference-odometer window onto a lap's own odometer (identity if a total is
-        # missing or equals the corner basis' total — the best lap's own frame).
+    def _proj(total: float | None, traces: tuple | None) -> tuple[float, float]:
+        # Project the reference-odometer window [c_enter, c_exit] onto a lap's own odometer via the
+        # shared drift gate (identity if a total is missing or equals the corner basis' total — the
+        # best lap's own frame; traces enable the spatial fallback above the drift bound).
         if (corner_dist_total and total and corner_dist_total > 0
                 and total != corner_dist_total):
-            scale = total / corner_dist_total
-            return c_enter * scale, c_exit * scale
+            proj = project_boundaries([c_enter, c_exit], corner_dist_total, total, traces=traces)
+            return float(proj[0]), float(proj[1])
         return c_enter, c_exit
 
-    lap0, lap1 = _proj(lap_total)
-    best0, best1 = _proj(best_total)
+    lap0, lap1 = _proj(lap_total, lap_traces)
+    best0, best1 = _proj(best_total, best_traces)
     # Equal-distance thirds of each lap's own projected window (same fraction → same track third).
     lap_edges = np.linspace(lap0, lap1, 4)
     best_edges = np.linspace(best0, best1, 4)
@@ -321,6 +331,8 @@ def summarize(
     median_speed_kmh: np.ndarray | None = None,
     best_dist: np.ndarray | None = None,
     best_speed_kmh: np.ndarray | None = None,
+    median_traces: tuple | None = None,
+    best_traces: tuple | None = None,
     top_n: int = TOP_N,
     min_laps: int = MIN_LAPS,
 ) -> Opportunities:
@@ -334,6 +346,9 @@ def summarize(
     median_dist/median_speed_kmh + best_dist/best_speed_kmh are the typical-lap and best-lap
     speed-vs-distance traces; when both are present each row gets the D2 entry/apex/exit Δt-vs-best
     decomposition (the typical lap vs best, same comparison the reasons use) — absent → zero phases.
+    median_traces/best_traces are the matching local-frame xy traces ((ref_xs, ref_ys, ref_cum,
+    lap_xs, lap_ys, lap_cum) for the typical / best lap); they enable the drift-gated spatial
+    boundary alignment in the phase decomposition (omitted → normalized, byte-identical pre-gate).
     Returns Opportunities; enough=False (empty rows) when < min_laps candidate laps."""
     n_laps = len(candidate_lap_ids)
     med_id = median_lap_id(candidate_lap_ids, lap_times)
@@ -375,6 +390,7 @@ def summarize(
             float(c.enter), float(c.exit),
             corner_dist_total=corner_dist_total, lap_total=median_lap_total,
             best_total=best_lap_total,
+            lap_traces=median_traces, best_traces=best_traces,
         ) if have_phases else _NO_PHASES)
         attach_reason = rank < top_n
         if attach_reason:

@@ -201,6 +201,107 @@ def test_corner_stats_deltas_and_window_speeds():
     print("ok stats: apex == np.min over window (exact), deltas telescoped")
 
 
+# ----------------------------------------------------- drift-gated per-corner alignment
+def _scaled_odometer(cum, *, region_end: float, region_scale: float):
+    """A NON-UNIFORM odometer for the SAME geometry: the per-sample step lengths in [0, region_end)
+    are scaled by `region_scale` (the driver weaved through that stretch), so the total line length
+    drifts but the xy points are unchanged. The spatial match can recover the true position; the
+    normalized fraction cannot (the extra distance biases every downstream fraction)."""
+    diffs = np.diff(cum).astype(float)
+    diffs[cum[:-1] < region_end] *= region_scale
+    return np.concatenate(([0.0], np.cumsum(diffs)))
+
+
+def test_drift_within_bound_is_identical_to_normalized():
+    """The common, well-matched case: when the line-length drift is within NORMALIZED_DRIFT_MAX,
+    the gated projection is BYTE-IDENTICAL to the legacy normalized projection even when spatial
+    traces are supplied (the gate is a no-op) — the validated coaching math is not destabilised."""
+    xs, ys, cum_a = stadium()
+    d, k = C.pooled_curvature([(xs, ys, cum_a)], cum_a[-1])
+    cs = C.detect_corners(d, k)
+    total_ref = float(cum_a[-1])
+    interior = [v for c in cs for v in (c.enter, c.exit)]
+    # 0.3% uniform drift — inside the 0.5% bound.
+    cum_b = cum_a * 1.003
+    assert C.line_length_drift(float(cum_b[-1]), total_ref) <= C.NORMALIZED_DRIFT_MAX
+    normalized = np.asarray(interior) * (cum_b[-1] / total_ref)
+    traces = (xs, ys, cum_a, xs, ys, cum_b)
+    gated = C.project_boundaries(interior, total_ref, float(cum_b[-1]), traces=traces)
+    assert np.array_equal(gated, normalized), (gated, normalized)
+    # …and with NO traces it is always the normalized projection (the pure-numpy callers' path).
+    assert np.array_equal(
+        C.project_boundaries(interior, total_ref, float(cum_b[-1])), normalized)
+    print(f"ok drift gate no-op: drift "
+          f"{C.line_length_drift(float(cum_b[-1]), total_ref):.4f} <= {C.NORMALIZED_DRIFT_MAX} "
+          f"→ gated == normalized (max|Δ|={float(np.max(np.abs(gated - normalized))):.0e})")
+
+
+def test_high_drift_engages_spatial_and_recovers_true_position():
+    """Above the bound, the spatial fallback ENGAGES and is the more-correct number: with the drift
+    packed into the bottom straight (a non-uniform odometer over the SAME xy), the normalized
+    fraction biases the corner boundaries by metres while the spatial match recovers the true
+    physical odometer to machine precision."""
+    xs, ys, cum_a = stadium()
+    d, k = C.pooled_curvature([(xs, ys, cum_a)], cum_a[-1])
+    cs = C.detect_corners(d, k)
+    total_ref = float(cum_a[-1])
+    interior = [v for c in cs for v in (c.enter, c.exit)]
+    # 6% longer line over the bottom straight only → ~2% total drift, ABOVE the bound.
+    cum_b = _scaled_odometer(cum_a, region_end=STRAIGHT, region_scale=1.06)
+    drift = C.line_length_drift(float(cum_b[-1]), total_ref)
+    assert drift > C.NORMALIZED_DRIFT_MAX, drift
+    normalized = np.asarray(interior) * (cum_b[-1] / total_ref)
+    traces = (xs, ys, cum_a, xs, ys, cum_b)
+    gated = C.project_boundaries(interior, total_ref, float(cum_b[-1]), traces=traces)
+    # The true odometer of each reference point on lap B (same xy ⇒ same index, its cum_b value).
+    idx = np.interp(interior, cum_a, np.arange(len(cum_a)))
+    true = np.interp(idx, np.arange(len(cum_b)), cum_b)
+    assert np.max(np.abs(gated - true)) < 1e-6, (gated, true)         # spatial == truth
+    assert np.max(np.abs(gated - normalized)) > 1.0, (gated, normalized)  # ≠ the biased normalized
+    print(f"ok spatial engages: drift {drift:.4f} > {C.NORMALIZED_DRIFT_MAX}; "
+          f"max|gated-normalized|={float(np.max(np.abs(gated - normalized))):.2f} m, "
+          f"max|gated-true|={float(np.max(np.abs(gated - true))):.1e} m")
+
+
+def test_high_drift_no_spatial_match_falls_back_per_boundary():
+    """Defensive: above the bound but with a comparison trace whose geometry shares NO point within
+    the 3 m gate of the reference, every boundary falls back to its normalized value — never a NaN
+    or None where there was a number."""
+    xs, ys, cum_a = stadium()
+    d, k = C.pooled_curvature([(xs, ys, cum_a)], cum_a[-1])
+    cs = C.detect_corners(d, k)
+    total_ref = float(cum_a[-1])
+    interior = [v for c in cs for v in (c.enter, c.exit)]
+    cum_b = _scaled_odometer(cum_a, region_end=STRAIGHT, region_scale=1.06)
+    # Shove lap B's trace 1 km away so no point is within _SPATIAL_MATCH_MAX_M of the reference.
+    far_xs, far_ys = xs + 1000.0, ys + 1000.0
+    traces = (xs, ys, cum_a, far_xs, far_ys, cum_b)
+    gated = C.project_boundaries(interior, total_ref, float(cum_b[-1]), traces=traces)
+    normalized = np.asarray(interior) * (cum_b[-1] / total_ref)
+    assert np.array_equal(gated, normalized), (gated, normalized)
+    assert np.all(np.isfinite(gated))
+    print("ok per-boundary fallback: no spatial match → normalized, all finite")
+
+
+def test_segment_times_partition_holds_under_spatial_alignment():
+    """The corner/straight partition still sums to the lap time exactly even when the spatial
+    fallback (non-monotone-risk) is engaged — the lap start/end stay the literal S/F endpoints and
+    the gated interior boundaries are clamped non-decreasing, so segment_times' assertion holds."""
+    xs, ys, cum_a = stadium()
+    d, k = C.pooled_curvature([(xs, ys, cum_a)], cum_a[-1])
+    cs = C.detect_corners(d, k)
+    total_ref = float(cum_a[-1])
+    cum_b = _scaled_odometer(cum_a, region_end=STRAIGHT, region_scale=1.06)
+    sp_b = speed_profile(cum_b, 2.1)
+    el_b = elapsed_for(cum_b, sp_b)
+    traces = (xs, ys, cum_a, xs, ys, cum_b)
+    seg = C.segment_times(cs, total_ref, cum_b, el_b, traces)  # asserts internally
+    assert abs(float(seg.sum()) - float(el_b[-1] - el_b[0])) < 1e-9
+    st = C.lap_corner_stats(cs, total_ref, cum_b, sp_b * 3.6, el_b, traces=traces)
+    assert len(st) == len(cs) and all(s.time > 0 for s in st)  # no negative corner times
+    print("ok partition under spatial: sums to lap time, no negative corner slices")
+
+
 # ------------------------------------------------------------------- Session wiring
 def _bare_corner_session():
     """A bare Session (tests/_synthetic idiom) with two stadium laps seeded into the bulk
