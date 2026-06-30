@@ -48,7 +48,7 @@ _APP = QApplication.instance() or QApplication([])
 
 from _synthetic import bare_session, seed_cols  # noqa: E402
 
-from studio import gapfill, theme  # noqa: E402
+from studio import data_quality, gapfill, theme  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
 from studio.lap_table import (  # noqa: E402
     FOOTER_ROWS,
@@ -187,6 +187,10 @@ class _FakeFooterSession:
     # Verified timing (a detected/confirmed track) so the footer + purple-best assertions below
     # read the authoritative styling, not the provisional muting (see test_lap_table_provisional_*).
     timing_verified = True
+    # High data-quality by default (GPS9 true clock, no dropped fixes) — the orthogonal timing-
+    # ACCURACY axis the table reads (Session.timing_quality.degraded); not degraded => no estimated
+    # muting, so these fakes render exactly as a normal GPS9 recording.
+    timing_quality = data_quality.TimingQuality()
 
     def __init__(self):
         self.splits = {0: [33.8, 36.2], 1: [34.0, 34.4], 2: [35.5, 35.7]}
@@ -364,6 +368,43 @@ def test_lap_table_verified_restores_bests_and_unmutes():
     print("test_lap_table_verified_restores_bests_and_unmutes OK")
 
 
+# ------------------------------------- data quality: degraded-clock estimated treatment
+class _DegradedClockSession(_FakeFooterSession):
+    """A VERIFIED (trusted start line) session whose timing ACCURACY is degraded — a media-clock
+    fallback (older GPS5 camera). Drives LapTable's estimated-timing treatment: the timing cells
+    mute like provisional, but the bests are NOT suppressed (the start line is trusted, so the bests
+    stay valid relative to each other; only the absolute timing accuracy is an estimate)."""
+
+    def __init__(self):
+        super().__init__()
+        self.timing_quality = data_quality.TimingQuality(
+            clock=data_quality.MEDIA_CLOCK_FALLBACK)
+
+
+def test_lap_table_degraded_clock_mutes_times_but_keeps_bests():
+    """DATA-QUALITY degraded (media-clock fallback) on a VERIFIED table: the Time cells are muted
+    (italic + the dimmed colour) with the ESTIMATED-timing tooltip, the footer tiles are muted —
+    BUT, unlike provisional timing, the best authority cues are PRESERVED (purple per-sector best /
+    green best lap still painted), because the start line is trusted. This is the orthogonal axis to
+    test_lap_table_provisional_* (which DROPS the bests)."""
+    from studio.lap_table import ESTIMATED_TIMING_TOOLTIP
+
+    table = LapTable(_DegradedClockSession())
+    prov = theme.PROVISIONAL_COLOR.upper()
+    # The Time column (never a best-sector cell) is muted + italic with the ESTIMATED tooltip.
+    for it in _time_col_items(table):
+        assert it.foreground().color().name().upper() == prov, "degraded time cell must be muted"
+        assert it.font().italic(), "degraded time cell must be italic (estimated)"
+        assert it.toolTip() == ESTIMATED_TIMING_TOOLTIP, it.toolTip()
+    # The bests are KEPT (the key difference from provisional): purple/green still present.
+    assert _any_purple_or_green(table), "degraded (but verified) timing must keep the best highlights"
+    # Footer tiles muted + italic (they share the timing's authority).
+    for label in table._footer_values:
+        assert label.font().italic(), "degraded footer tile must be italic"
+        assert theme.PROVISIONAL_COLOR in label.styleSheet(), label.styleSheet()
+    print("test_lap_table_degraded_clock_mutes_times_but_keeps_bests OK")
+
+
 def test_lap_table_footer_accessors_are_callables():
     """F8a: each FOOTER_ROWS accessor is a CALLABLE `session -> value` (not a method-NAME string
     resolved via getattr). It must resolve directly off the session and produce the SAME values the
@@ -392,6 +433,7 @@ class _FakeEmptySession:
     read surface LapTable.refresh() touches; lap_rows() is [] so every per-lap accessor is unused."""
 
     timing_verified = True  # part of the read surface (the footer reads it); no rows to mute anyway
+    timing_quality = data_quality.TimingQuality()  # high-quality default (the footer reads .degraded)
 
     def lap_rows(self):
         return []

@@ -39,6 +39,13 @@ DROPOUT_SUFFIX = " ⚠"  # GPS-dropout lap (low-confidence)
 DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
 PROVISIONAL_COLOR = QColor(theme.PROVISIONAL_COLOR)  # muted text for unverified timing
 PROVISIONAL_TOOLTIP = "Provisional — start/finish line not set for this track."
+# Degraded TIMING ACCURACY (the data-quality axis, orthogonal to the start-line trust above): the
+# start line is fine but the per-sample clock is estimated (media-clock fallback) or many fixes
+# were rejected, so the lap Time / S-split cells are estimated — muted like provisional, but the
+# best/purple authority is NOT suppressed (the bests are still valid RELATIVE to each other; only
+# the absolute timing accuracy is degraded).
+ESTIMATED_TIMING_TOOLTIP = ("Timing accuracy degraded — these times are estimated and may be less "
+                            "accurate (see the data-quality note over the map).")
 COLUMNS = ["Lap", "Time", "Dist (m)", "Entry (km/h)"]
 # Columns 1.. (everything but the Lap column) hold numerics: right-align + tabular font so the
 # digits column-align. The Lap column stays left/default.
@@ -190,20 +197,23 @@ class LapTable(QWidget):
     def _refresh_footer(self):
         """Rewrite footer values from Session; None → em-dash. The SESSION-BESTS tiles (theoretical
         best / best rolling) are reference targets stitched from the session's best splits/loops, so
-        they share the lap timing's trust: while the timing is PROVISIONAL they're muted + italic
-        with the 'provisional' tooltip (a best built on an arbitrary start line is meaningless),
-        restored to the normal hero value once Verified."""
+        they share the lap timing's authority: while the timing is PROVISIONAL (arbitrary start
+        line) OR the clock is DEGRADED (media-clock / low-GPS estimate) they're muted + italic with
+        the matching tooltip, restored to the normal hero value once Verified AND high-quality."""
         provisional = not self.session.timing_verified
+        degraded = self.session.timing_quality.degraded
+        muted = provisional or degraded
+        note = PROVISIONAL_TOOLTIP if provisional else ESTIMATED_TIMING_TOOLTIP
         for (_title, accessor, tip), label in zip(FOOTER_ROWS, self._footer_values,
                                                    strict=True):
             v = accessor(self.session)
             label.setText(fmt_time(v if v is not None else float("nan")))
             font = label.font()
-            font.setItalic(provisional)
+            font.setItalic(muted)
             label.setFont(font)
-            colour = theme.PROVISIONAL_COLOR if provisional else theme.C.text
+            colour = theme.PROVISIONAL_COLOR if muted else theme.C.text
             label.setStyleSheet(f"color: {colour};")
-            label.setToolTip(f"{PROVISIONAL_TOOLTIP}\n\n{tip}" if provisional else tip)
+            label.setToolTip(f"{note}\n\n{tip}" if muted else tip)
 
     def _n_split_cols(self) -> int:
         """Number of S-split columns: sector_count()+1 if any sector lines, else 0."""
@@ -302,13 +312,20 @@ class LapTable(QWidget):
         cells) are de-emphasized (muted + italic, with the 'provisional' tooltip) and BOTH "best"
         authority cues are suppressed — no purple session-best splits and no green best-lap — since
         a 'best' measured against an arbitrary start line is meaningless. The Dist/Entry columns,
-        which don't depend on the start line, stay normal. Verified timing renders as before."""
+        which don't depend on the start line, stay normal. Verified timing renders as before.
+
+        DATA QUALITY (orthogonal — Session.timing_quality): a media-clock-fallback recording or one
+        whose GPS quality gate rejected many fixes ALSO mutes the timing cells (an 'estimated'
+        tooltip), but does NOT suppress the bests — the start line is trusted, so the bests stay
+        valid RELATIVE to each other; only the absolute timing accuracy is degraded. A normal GPS9,
+        clean-fix recording (the common case) leaves both axes untouched."""
         rows = self.table.rowCount()
         if not rows:
             return
         verified = self.session.timing_verified
+        degraded = self.session.timing_quality.degraded
         # Overall best lap = the valid lap with the min time (foreground green on all cells) —
-        # suppressed entirely while the timing is provisional.
+        # suppressed entirely while the timing is provisional (but NOT for a merely-degraded clock).
         best_lap = self.session.best_lap_id() if verified else None
         n_splits = self._n_split_cols()
         best_split = self._best_split
@@ -325,16 +342,21 @@ class LapTable(QWidget):
                 if item is None:
                     continue
                 provisional_cell = not verified and c in timing_cols
-                # base off-white; green (best lap) / muted (provisional timing) / purple below.
-                if provisional_cell:
+                # A degraded-clock timing cell mutes too, but only when NOT already provisional
+                # (provisional is the stronger demotion + suppresses the bests; degraded keeps them).
+                estimated_cell = verified and degraded and c in timing_cols
+                muted_cell = provisional_cell or estimated_cell
+                # base off-white; green (best lap) / muted (provisional or estimated timing) / purple.
+                if muted_cell:
                     item.setForeground(PROVISIONAL_COLOR)
                 else:
                     item.setForeground(BEST_COLOR if is_best else BASE_COLOR)
-                # Muted+italic on the provisional timing cells; the dropout tooltip wins (it flags a
-                # data-quality issue), else the provisional note, else clear.
-                theme.apply_provisional_style(item, provisional_cell)
+                # Muted+italic on any demoted timing cell; the dropout tooltip wins (it flags a
+                # per-lap issue), else the provisional note, else the estimated-timing note, else clear.
+                theme.apply_provisional_style(item, muted_cell)
                 item.setToolTip(DROPOUT_TOOLTIP if is_dropout
-                                else PROVISIONAL_TOOLTIP if provisional_cell else "")
+                                else PROVISIONAL_TOOLTIP if provisional_cell
+                                else ESTIMATED_TIMING_TOOLTIP if estimated_cell else "")
             # per-sector best → purple+bold (outranks green for this cell) — but ONLY on verified
             # timing; a purple "validated best" on an arbitrary start line would mislead.
             for i in range(n_splits):

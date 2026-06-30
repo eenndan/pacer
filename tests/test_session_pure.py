@@ -151,9 +151,11 @@ def test_gate_quality_drops_nonfinite_position_and_speed():
     samples = [good[0], bad[0], good[1], bad[1], good[2], bad[2], good[3]]
     n = len(samples)
     spans = [(float(i), float(i) + 0.1) for i in range(n)]
-    s2, sp2, kept = _gate_quality(samples, spans, list(range(n)))
+    s2, sp2, kept, dropped = _gate_quality(samples, spans, list(range(n)))
     assert kept == [0, 2, 4, 6], kept     # only the finite samples survive
     assert len(s2) == len(sp2) == 4
+    assert dropped == 3, dropped          # the 3 non-finite fixes were rejected — the count the
+    #                                       load path threads into the recording's data-quality signal
     print("test_gate_quality_drops_nonfinite_position_and_speed OK")
 
 
