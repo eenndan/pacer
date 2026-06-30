@@ -1,8 +1,10 @@
 """Help-menu dialogs: the keyboard-shortcut reference + the About card.
 
-The whole interaction model (Space/M/G/C toggles, ←/→ stepping, chart-cursor scrub, and the
-draggable map start/finish line) is otherwise undiscoverable — there's no on-screen hint for any
-of it. These two themed QDialogs are the discoverable surface, opened from the Help menu (and F1).
+The whole interaction model (Space/M/G/C toggles, ←/→ stepping, chart-cursor scrub) is otherwise
+undiscoverable — there's no on-screen hint for any of it. These two themed QDialogs are the
+discoverable surface, opened from the Help menu (and F1). (The draggable start/finish line is the
+exception: an unverified-timing recording now surfaces a persistent banner + an on-canvas "drag to
+set start/finish" cue, so that one IS discoverable on the recordings where it matters.)
 
 Single source of truth: SHORTCUT_GROUPS below is the ONE place the shortcut text lives. The keys
 listed here MUST stay in lockstep with the actual bindings, which are defined in

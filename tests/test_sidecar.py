@@ -98,7 +98,31 @@ def test_save_none_track_and_no_sectors():
         # The raw file matches the documented schema keys exactly.
         with open(p) as f:
             raw = json.load(f)
-        assert set(raw) == {"version", "track", "start", "sectors"}
+        assert set(raw) == {"version", "track", "start", "sectors", "confirmed"}
+
+
+def test_confirmed_roundtrip_and_legacy_default():
+    """The timing-trust marker `confirmed` persists; a legacy sidecar written before the marker
+    (no `confirmed` key) loads as confirmed=True — it could only have come from a user edit."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "GX010060.pacer.json")
+        # Explicit confirmed=False survives the round trip.
+        sidecar.save(p, None, _START, [], confirmed=False)
+        data = sidecar.load(p)
+        assert data["confirmed"] is False
+        # Explicit confirmed=True (the save default) survives.
+        sidecar.save(p, None, _START, [], confirmed=True)
+        assert sidecar.load(p)["confirmed"] is True
+        # A legacy file with NO `confirmed` key → defaults True (back-compat).
+        legacy = f'{{"version": 1, "track": null, "start": {json.dumps(_START)}, "sectors": []}}'
+        with open(p, "w") as f:
+            f.write(legacy)
+        assert sidecar.load(p)["confirmed"] is True
+        # A non-bool `confirmed` is rejected like any other malformed field.
+        bad = f'{{"version": 1, "start": {json.dumps(_START)}, "confirmed": "yes"}}'
+        with open(p, "w") as f:
+            f.write(bad)
+        assert sidecar.load(p) is None
 
 
 def test_load_missing_file_is_none():
@@ -255,6 +279,42 @@ def test_apply_keeps_sectors_on_revert():
     foreign = [[_CLAT + 0.01, _CLON], [_CLAT + 0.0101, _CLON + 0.0001]]
     assert session.apply_timing_lines_latlon(foreign, []) is False
     assert session.sector_count() == 1  # the sector line came back with the revert
+
+
+def test_timing_trust_state_transitions():
+    """The Session timing-trust model (Provisional ↔ Verified):
+      * a detected track (track_name set) is Verified on its own;
+      * an unknown track with an auto-fitted, unconfirmed start line is Provisional;
+      * a user edit (set_timing_lines) OR confirm_timing() flips it Verified;
+      * apply_timing_lines_latlon restores the persisted `confirmed` marker on success."""
+    session = _make_session()
+    # _make_session ends with a set_timing_lines() (a user edit), so it's confirmed here; reset
+    # to the auto-fitted, unknown-track baseline to exercise the Provisional state.
+    session.track_name = None
+    session._timing_user_confirmed = False
+    assert session.timing_verified is False, "auto-fitted unknown track must be Provisional"
+
+    # A detected track is Verified with no user confirmation.
+    session.track_name = "Some Circuit"
+    assert session.timing_verified is True
+    session.track_name = None  # back to unknown for the confirmation paths
+
+    # An explicit start-line edit confirms it.
+    session.set_timing_lines(session.start_line, session.sector_lines)
+    assert session.timing_user_confirmed is True and session.timing_verified is True
+
+    # confirm_timing() is the same flip, idempotent.
+    session._timing_user_confirmed = False
+    session.confirm_timing()
+    assert session.timing_verified is True
+
+    # Restoring a sidecar carries the persisted marker: confirmed=False stays Provisional...
+    start, sectors = session.timing_lines_latlon()
+    assert session.apply_timing_lines_latlon(start, sectors, confirmed=False) is True
+    assert session.timing_verified is False, "an unconfirmed restore stays Provisional"
+    # ...and confirmed=True restores the Verified state.
+    assert session.apply_timing_lines_latlon(start, sectors, confirmed=True) is True
+    assert session.timing_verified is True
 
 
 def test_make_segment_matches_tracks_helper():

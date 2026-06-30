@@ -167,6 +167,12 @@ class Session:
         # Detected registry track name, or None for an unknown track (start line auto-fitted).
         # Persisted into the timing-line sidecar and used by the app's "unknown track" notice.
         self.track_name: str | None = None
+        # Timing-trust marker (see timing_verified): True once the USER has explicitly placed/
+        # confirmed the start/finish line (a drag, or a restored sidecar that recorded the
+        # confirmation). A detected track is trusted on its own (track_name), so this only matters
+        # on an unknown track whose start line was auto-fitted. set_timing_lines() flips it True
+        # (an explicit edit IS the confirmation); the sidecar persists it across reloads.
+        self._timing_user_confirmed = False
         # Vehicle-frame g from the GoPro ACCL+GRAV+CORI, cross-checked vs GPS-derived g. Built in
         # load(); empty until then, so a from-scratch Session() just has no g signal.
         self._gmeter: gmeter.GMeter = gmeter._empty()
@@ -567,6 +573,38 @@ class Session:
             return None
         return self._lap_curve(best)
 
+    # ----------------------------------------------------------- timing trust
+    @property
+    def timing_verified(self) -> bool:
+        """Whether this recording's lap timing references a TRUSTED start/finish line:
+
+          * VERIFIED — the track was auto-detected from the track database (``track_name`` set),
+            OR the user explicitly placed/confirmed the start line (a drag, or a restored sidecar
+            that recorded the confirmation). Lap times / sector splits / theoretical-best are
+            authoritative; the lap table paints purple session-bests, the map shows no warning.
+          * PROVISIONAL (``not timing_verified``) — the start line was auto-fitted on an unknown
+            track and never confirmed, so every lap time is referenced to an ARBITRARY point. The
+            views de-emphasize the timing, drop the purple "validated best" cue, and show a
+            persistent "drag to set start/finish" banner until this flips True.
+
+        Trust lives here (on Session); the views just render it. getattr-guarded for the
+        bare-Session (no-__init__) test path, where the slots are absent — see ``_ref``."""
+        if getattr(self, "track_name", None) is not None:
+            return True
+        return bool(getattr(self, "_timing_user_confirmed", False))
+
+    def confirm_timing(self) -> None:
+        """Mark the start/finish line as user-confirmed (Provisional → Verified). Called when the
+        user drags a timing line — an explicit edit IS the confirmation. Idempotent; persisted by
+        the sidecar via ``timing_user_confirmed``."""
+        self._timing_user_confirmed = True
+
+    @property
+    def timing_user_confirmed(self) -> bool:
+        """The raw user-confirmation flag (for the sidecar to persist). Distinct from
+        ``timing_verified``, which also counts a detected track as trusted."""
+        return bool(getattr(self, "_timing_user_confirmed", False))
+
     # ----------------------------------------------------------- timing lines
     @property
     def start_line(self) -> Seg:
@@ -576,7 +614,14 @@ class Session:
     def sector_lines(self) -> list[Seg]:
         return [Seg.from_pacer(s) for s in self.laps.sectors.sector_lines]
 
-    def set_timing_lines(self, start: Seg, sectors: list[Seg]) -> None:
+    def set_timing_lines(self, start: Seg, sectors: list[Seg],
+                         user_confirm: bool = True) -> None:
+        """Re-segment on new timing lines. `user_confirm=True` (a genuine user edit, the default)
+        marks the timing user-confirmed → Verified; the sidecar-restore + revert paths pass
+        `user_confirm=False` so they don't fabricate a confirmation the user never made (that's
+        decided from the persisted flag in `apply_timing_lines_latlon`)."""
+        if user_confirm:
+            self._timing_user_confirmed = True
         self.laps.sectors = pacer.Sectors(
             start_line=start.to_pacer(),
             sector_lines=[s.to_pacer() for s in sectors],
@@ -620,9 +665,14 @@ class Session:
             return out
         return line(self.start_line), [line(s) for s in self.sector_lines]
 
-    def apply_timing_lines_latlon(self, start, sectors) -> bool:
+    def apply_timing_lines_latlon(self, start, sectors, confirmed: bool = True) -> bool:
         """Apply persisted absolute-lat/lon timing lines (the sidecar's form): convert each
         endpoint to local metres via ``cs.local`` and re-segment through set_timing_lines.
+
+        `confirmed` (the sidecar's user-confirmation marker) is restored onto the session on
+        success, so a recording whose start line the user once dragged stays VERIFIED across
+        reloads (no purple-suppression / banner on a track they already fixed). A legacy sidecar
+        with no marker is treated as confirmed (it could only have been written by a user edit).
 
         REVERT GUARD: if the new segmentation yields NO valid laps — a corrupt sidecar, or
         one written for a different recording/track whose lines never cross this trace —
@@ -636,10 +686,13 @@ class Session:
             b = self.cs.local(pacer.GPSSample(lat=float(b_lat), lon=float(b_lon), altitude=0))
             return Seg(float(a[0]), float(a[1]), float(b[0]), float(b[1]))
 
-        self.set_timing_lines(seg(start), [seg(s) for s in sectors])
+        # user_confirm=False here: the confirmation is decided by the persisted `confirmed`
+        # marker (below), not by the act of restoring — restoring isn't a fresh user edit.
+        self.set_timing_lines(seg(start), [seg(s) for s in sectors], user_confirm=False)
         if self.valid_lap_ids():
+            self._timing_user_confirmed = bool(confirmed)
             return True
-        self.set_timing_lines(prev_start, prev_sectors)
+        self.set_timing_lines(prev_start, prev_sectors, user_confirm=False)
         return False
 
     def track_location(self) -> tuple[tuple[float, float], tuple[float, float, float, float]]:

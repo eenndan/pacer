@@ -207,7 +207,21 @@ class CentralView(QWidget):
         map_label.setProperty("role", "BarLabel")
         map_header = self._header_bar(map_label, 1, self.map.rainbow_btn, self.map.snap_btn,
                                       self.map.add_sector_btn, self.map.reset_sectors_btn)
-        map_panel = self._headered(map_header, (self.map, 1))
+        # Provisional-timing trust banner: a persistent, prominent strip between the map header and
+        # the map while the lap timing references an auto-fitted (unconfirmed) start line. NOT a
+        # transient status-bar line — it stays until the timing is Verified (see refresh_timing_trust),
+        # then hides. The on-canvas dashed cue in MapView is the matching call-to-action.
+        self.provisional_banner = QLabel(
+            "Lap timing is unverified — drag the start/finish line on the map to where a lap begins.")
+        self.provisional_banner.setObjectName("ProvisionalBanner")
+        self.provisional_banner.setWordWrap(True)
+        self.provisional_banner.setToolTip(
+            "The start/finish line was auto-fitted because this track isn't in the database, so "
+            "every lap time, split and 'best' is measured from an arbitrary point. Drag the line "
+            "on the map to where a lap begins to fix the timing; it's then remembered for this "
+            "recording. Save it as a track (File ▸ Save as track…) so future recordings here "
+            "auto-detect it.")
+        map_panel = self._headered(map_header, (self.provisional_banner, 0), (self.map, 1))
 
         # CHARTS consolidated bar: section label (left) · the Δ/speed readout (centre) · the x-mode toggle (right).
         plots_label = QLabel("SPEED · Δ TO BEST")
@@ -710,6 +724,18 @@ class CentralView(QWidget):
             self.plots.refresh()
         # After the selection: the sector lines + their units track the axis and new selection.
         self._refresh_sector_lines()
+        # The provisional-timing banner tracks the trust state (a re-segment can confirm it).
+        self.refresh_timing_trust()
+
+    def refresh_timing_trust(self):
+        """Show the persistent provisional-timing banner iff the session's timing is unverified
+        (start line auto-fitted, not user-confirmed — see Session.timing_verified), else hide it.
+        Run from the rebuild seam (a drag that confirms the timing clears it) and after saving the
+        recording as a track. The lap table's muting + the map's dashed cue refresh on their own
+        rebuilds; this owns the banner."""
+        banner = getattr(self, "provisional_banner", None)
+        if banner is not None:
+            banner.setVisible(not self.session.timing_verified)
 
     # ------------------------------------------------------------- timing-line edits
     def _on_lines(self, start, sectors):
@@ -731,7 +757,8 @@ class CentralView(QWidget):
             return
         start, sectors = self.session.timing_lines_latlon()
         try:
-            sidecar.save(path, self.session.track_name, start, sectors)
+            sidecar.save(path, self.session.track_name, start, sectors,
+                         confirmed=self.session.timing_user_confirmed)
         except OSError as exc:
             print(f"studio: could not write timing-line sidecar {path}: {exc}", flush=True)
             return
