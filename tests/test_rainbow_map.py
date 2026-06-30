@@ -24,6 +24,7 @@ import sys
 from types import SimpleNamespace
 
 import numpy as np
+import pyqtgraph as pg
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -317,6 +318,61 @@ def test_grip_channel_degrades_when_no_g():
     assert all(it.isVisible() for it in mv._current_overlay._items), "overlay stays visible"
     assert not mv._legend.isVisibleTo(mv), "legend hidden when nothing painted"
     print("test_grip_channel_degrades_when_no_g OK")
+
+
+# ----------------------------------------------- B4 unknown-track provisional start cue
+# The auto-fitted start/finish line on an UNKNOWN track is only a guess, so lap times are
+# arbitrary until the user drags it. MapView overlays a dashed accent line + a "drag to set
+# start/finish — lap timing provisional" callout while session.track_name is None, and REMOVES
+# both once the track is known. Losing that cue silently = wrong lap times with no warning, so
+# pin the unknown→present / known→absent gate and the re-pin-not-duplicate behaviour.
+def test_provisional_cue_present_on_unknown_track():
+    """Unknown track (track_name is None, the bare-Session default): the cue is PRESENT — both
+    the dashed line and the callout exist, are added to the plot, and the label warns the user
+    the timing is a guess they must drag to set."""
+    s = _stub_session()
+    assert getattr(s, "track_name", None) is None, "bare stub must read as an unknown track"
+    mv = MapView(s)
+    assert mv._provisional_line is not None, "unknown track must overlay the dashed start cue"
+    assert mv._provisional_label is not None, "unknown track must show the provisional callout"
+    assert mv._provisional_line in mv.plot.items, "the cue line must be added to the plot"
+    assert mv._provisional_label in mv.plot.items, "the callout must be added to the plot"
+    text = mv._provisional_label.toPlainText()
+    assert "drag to set start/finish" in text, text
+    assert "provisional" in text, text
+    print("test_provisional_cue_present_on_unknown_track OK")
+
+
+def test_provisional_cue_absent_on_known_track():
+    """Known track (track_name set): NO cue — both state slots are None and neither a stray line
+    nor callout lingers in the plot (the start/finish line is trusted, no warning needed)."""
+    s = _stub_session()
+    s.track_name = "Daytona"
+    mv = MapView(s)
+    assert mv._provisional_line is None, "a known track must not draw the provisional line"
+    assert mv._provisional_label is None, "a known track must not draw the provisional callout"
+    assert not any(isinstance(it, pg.TextItem) for it in mv.plot.items), \
+        "no provisional callout may linger on a known track"
+    print("test_provisional_cue_absent_on_known_track OK")
+
+
+def test_provisional_cue_repins_not_duplicates_on_refresh():
+    """Re-pinning (a start-line move / rebuild re-runs _refresh_provisional_cue) REPOSITIONS the
+    one cue rather than stacking a second: the same line+label OBJECTS persist and the plot gains
+    no extra items. A drift on each move would litter the map with stale 'provisional' callouts."""
+    s = _stub_session()
+    mv = MapView(s)
+    line0, label0 = mv._provisional_line, mv._provisional_label
+    n_items = len(mv.plot.items)
+    n_labels = sum(isinstance(it, pg.TextItem) for it in mv.plot.items)
+    mv._refresh_provisional_cue()
+    mv._refresh_provisional_cue()
+    assert mv._provisional_line is line0, "the cue line must be repositioned, not rebuilt"
+    assert mv._provisional_label is label0, "the callout must be repositioned, not rebuilt"
+    assert len(mv.plot.items) == n_items, "re-pinning must not add plot items"
+    assert sum(isinstance(it, pg.TextItem) for it in mv.plot.items) == n_labels == 1, \
+        "exactly one provisional callout, never a stack"
+    print("test_provisional_cue_repins_not_duplicates_on_refresh OK")
 
 
 if __name__ == "__main__":
