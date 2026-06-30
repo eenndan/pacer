@@ -658,6 +658,7 @@ class Session:
         # access.
         self._valid_cache = None
         self._best_cache = _UNSET
+        self._drop_ideal_cache()  # the ideal envelope is a min over the (now-shifted) lap arrays
         self.timeline.invalidate()
         # The corner model + driving channels are derived from / projected through the
         # segmentation — stale with the rest. Each service owns its caches and clears exactly
@@ -1432,6 +1433,16 @@ class Session:
             best_traces=best_traces,
         )
 
+    def coaching_brake_points(self) -> dict:
+        """The best lap's per-corner braking-point comparison, keyed by cid → driving.BrakePoint,
+        for the coaching surfaces' ESTIMATED "brake ~N m later" hint (D4). Empty {} when there's no
+        best lap or no g signal. One source so the modal dialog AND the persistent panel append the
+        SAME hint (the app/panel no longer hand-roll this from best_lap_id() + lap_brake_points())."""
+        best = self.best_lap_id()
+        if best is None:
+            return {}
+        return {bp.cid: bp for bp in self.driving.lap_brake_points(best)}
+
 
     # Driving channels (brake/coast/grip + thresholds, F5/D3/D4/D5) are the `session.driving`
     # service (studio/driving_channels.py); per-lap caches clear on re-segment, the thresholds
@@ -1785,6 +1796,50 @@ class Session:
             return None
         # Baseline's elapsed time at the SAME track fraction s (invert s→baseline distance→time).
         return elapsed_lap - project(s, baseline)
+
+    def _ideal_envelope(self) -> np.ndarray | None:
+        """The ideal-lap elapsed curve (`ideal_lap_elapsed`) MEMOIZED on the `_DELTA_GRID_N` grid,
+        so the per-tick `delta_to_ideal_at` re-uses one synthetic envelope instead of rebuilding it
+        (a min over every clean lap, resampled) on every 30 Hz frame. The cache is dropped whenever
+        the timing lines move (set_timing_lines → the lap arrays change), like the other per-lap
+        memos — see `_drop_ideal_cache`."""
+        cached = getattr(self, "_ideal_cache", _UNSET)
+        if cached is _UNSET:
+            cached = self.ideal_lap_elapsed()
+            self._ideal_cache = cached
+        return cached
+
+    def _drop_ideal_cache(self):
+        """Forget the memoized ideal envelope (re-segmentation / reference changes shift the lap
+        arrays the envelope is built from). Defensive: no-op when the slot was never set."""
+        if hasattr(self, "_ideal_cache"):
+            del self._ideal_cache
+
+    def delta_to_ideal_at(self, lap_id: int, t: float) -> float | None:
+        """Δ-to-IDEAL (seconds) at media-clock time `t` for the already-resolved `lap_id` — the
+        per-tick scalar analogue of `delta_to_ideal`'s 400-grid curve, and the moat number the
+        live readout leads with ("you're 0.42 s off your achievable lap, here").
+
+        dy = elapsed_lap(s) − ideal_elapsed(s) ≥ 0: the lap can't beat the synthetic envelope it
+        helped form, so this is how much time the IDEAL lap has banked by this track position. At
+        the finish (s=1) it ≈ lap_time − ideal_total.
+
+        Cheap by construction: the ideal envelope is memoized (`_ideal_envelope`) and the source
+        lap's curve is the same cached `LapCurve` `delta_at_lap` uses, so a tick is two O(log n)
+        np.interps. None when the ideal can't be built (no clean lap), the lap is degenerate, or
+        `t` isn't inside a valid lap."""
+        ideal = self._ideal_envelope()
+        if ideal is None:
+            return None
+        src = self._lap_curve(lap_id)
+        if src is None or src.total <= 0:
+            return None
+        s = src.fraction_at_time(t)              # normalized fraction [0,1]
+        elapsed_lap = src.elapsed_at_time(t)     # = t − lap_start, clamped to the lap
+        # ideal_elapsed at the SAME track fraction s (the envelope is on the uniform s-grid).
+        s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
+        ideal_here = float(np.interp(s, s_grid, ideal))
+        return elapsed_lap - ideal_here
 
     def delta_between(self, lap_a: int, lap_b: int, t_in_a: float) -> float | None:
         """Δ (seconds) of lap_a vs lap_b at the SAME track position lap_a is at time `t_in_a`:

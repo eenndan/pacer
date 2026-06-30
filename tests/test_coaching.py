@@ -624,6 +624,91 @@ def test_dialog_excluded_state_has_no_table():
     print("ok dialog: excluded state shows the friendly message, no table, no crash")
 
 
+# ------------------------------------------- the PERSISTENT top-3 panel (the coaching front-door)
+def test_panel_renders_top3_off_a_session():
+    """The always-on OpportunitiesPanel reads the session's coaching_opportunities() directly and
+    renders the TOP-3 rows (corner · time lost · reason), the SAME data the modal dialog shows. On
+    the stadium session (4 clean laps, the far corner losing time) it shows the ranked rows, leads
+    with the slow corner, and the body is on the table page (not the excluded state)."""
+    _qapp()
+    from studio.coaching_panel import PANEL_TOP_N, OpportunitiesPanel
+    s = _stadium_session()
+    opp = s.coaching_opportunities()
+    assert opp.enough and opp.rows, "fixture must produce real opportunities"
+    panel = OpportunitiesPanel(s)
+    assert panel.body.currentIndex() == 0, "enough laps -> the table page, not the excluded state"
+    n = min(len(opp.rows), PANEL_TOP_N)
+    assert panel.table.rowCount() == n, (panel.table.rowCount(), n)
+    # Row 0 is the top-ranked corner (the far corner, cid 2), with the +time-lost format.
+    assert panel.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
+    assert panel.table.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
+    assert coaching_module_reason(panel, opp), "the reason cell must carry the coaching sentence"
+    # A row click emits the corner cid (the map-ring consumer); selecting row 0 -> rows[0].cid.
+    got = []
+    panel.corner_clicked.connect(lambda c: got.append(c))
+    panel.table.selectRow(0)
+    assert got and got[-1] == opp.rows[0].cid, got
+    print(f"ok panel: top-{n} rows, C{opp.rows[0].cid} first, row-click emits cid")
+
+
+def coaching_module_reason(panel, opp) -> bool:
+    """The panel's reason cell (col 2) shows the same coaching sentence the dialog renders."""
+    return K.reason_sentence(opp.rows[0])[:12] in panel.table.item(0, 2).text()
+
+
+def test_panel_shows_need_more_laps_state_not_empty_box():
+    """Under MIN_LAPS clean laps the panel shows the FRIENDLY 'drive more laps' message (the
+    excluded page), NOT an empty table — the same no-table state the dialog uses."""
+    _qapp()
+    from studio.coaching_panel import OpportunitiesPanel
+    # The <MIN_LAPS fixture (2 clean laps) -> coaching_opportunities().enough is False.
+    s = _gate_session()
+    assert s.coaching_opportunities().enough is False
+    panel = OpportunitiesPanel(s)
+    assert panel.body.currentIndex() == 1, "too few laps -> the excluded (friendly) page"
+    assert panel.table.rowCount() == 0, "the excluded state must not fill the table"
+    msg = panel.empty_label.text().lower()
+    assert "clean" in msg and "lap" in msg, msg
+    assert str(K.MIN_LAPS) in panel.empty_label.text(), "the friendly state names the lap minimum"
+    print("ok panel: <MIN_LAPS -> friendly need-more-laps state, no empty box")
+
+
+def test_panel_refresh_swaps_between_states():
+    """refresh() recomputes from the session: a panel built on a too-few-laps session shows the
+    excluded page, then re-pointing it at a full session + refresh() swaps to the top-3 table (the
+    re-segmentation path the central view drives)."""
+    _qapp()
+    from studio.coaching_panel import OpportunitiesPanel
+    panel = OpportunitiesPanel(_gate_session())
+    assert panel.body.currentIndex() == 1
+    panel.session = _stadium_session()
+    panel.refresh()
+    assert panel.body.currentIndex() == 0, "refresh must surface the rows once the laps qualify"
+    assert panel.table.rowCount() >= 1
+    print("ok panel: refresh swaps excluded <-> populated off the live session")
+
+
+def _gate_session():
+    """The <MIN_LAPS (2 clean laps) bare stadium session — coaching_opportunities() is excluded."""
+    from _synthetic import bare_session, reset_corner_caches, reset_driving_caches
+    from test_corners import elapsed_for, speed_profile, stadium
+
+    s = bare_session(valid=[0, 1], best=0)
+    s._cols_cache = {}
+    s._gmeter = SimpleNamespace(has_data=False)
+    reset_corner_caches(s)
+    reset_driving_caches(s)
+    xs, ys, cum = stadium()
+    for lid, ph, base in ((0, 0.7, 100.0), (1, 2.1, 300.0)):
+        sp = speed_profile(cum, ph)
+        t = base + elapsed_for(cum, sp)
+        s._cols_cache[lid] = (t, xs, ys, sp, cum)
+    lt = {i: float(s._cols_cache[i][0][-1] - s._cols_cache[i][0][0]) for i in (0, 1)}
+    s.laps = SimpleNamespace(lap_time=lambda i: lt[i],
+                             sectors=SimpleNamespace(sector_lines=[]), laps_count=lambda: 2)
+    return s
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

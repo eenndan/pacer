@@ -13,7 +13,14 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import theme
 from .map_render import (
@@ -122,11 +129,13 @@ def _inferred_pen(color, base_width):
 # F3 rainbow: pyqtgraph has no per-vertex pen, so the channel (speed / Δ-vs-best) is quantized
 # into MAP_RAINBOW_N buckets, one PlotCurveItem per bucket. Rebuilt only on lap/channel/segment change.
 RAINBOW_WIDTH = 3  # same width as the current-lap overlay, so the painted line reads identically
-# Channel-cycle button captions.
-_RAINBOW_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ",
-                   "grip": "Line: Grip"}
-# Cycle order for the header button: off → speed → Δ → grip → off.
+# Cycle order for the channel control: off → speed → Δ → grip → off (kept for the cycle API the
+# tests drive; the labelled combo lists the SAME modes, so no channel is hidden behind a blind cycle).
 _RAINBOW_ORDER = ("off", "speed", "delta", "grip")
+# Short, legible per-channel labels for the map-header dropdown (each channel visible + one click),
+# replacing the old blind-cycle button captions (where Grip was an undiscoverable 4th step).
+_RAINBOW_COMBO_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ to best",
+                         "grip": "Line: Grip (est)"}
 # The per-channel rainbow value/bucket math (incl. the grip fixed scale + Δ/grip negation + the
 # GPS-dropout NaN-mask) lives in the Qt-free studio/map_render.py (rainbow_channel + helpers).
 
@@ -578,16 +587,21 @@ class MapView(QWidget):
         self.snap_btn.toggled.connect(
             lambda on: self.snap_btn.setIcon(icon("ph.magnet", color=C.accent if on else C.text)))
 
-        # F3 rainbow button: cycles off -> speed -> Δ; app.py mounts it in the map header. See _apply_rainbow.
+        # F3 rainbow channel control: a LABELLED dropdown (Off · Speed · Δ · Grip), so every channel
+        # — Grip especially, formerly an undiscoverable 4th blind-cycle step — is visible and one
+        # click away. central_view mounts it in the map header. The cycle API (_cycle_rainbow /
+        # _rainbow_mode / _RAINBOW_ORDER) is preserved underneath and stays in sync with the combo.
         self._rainbow = _RainbowOverlay(self.plot)
-        self._rainbow_mode = "off"  # "off" | "speed" | "delta" (the cycle order below)
-        self.rainbow_btn = QPushButton(_RAINBOW_LABELS["off"])
-        self.rainbow_btn.setIcon(icon("ph.palette"))
-        self.rainbow_btn.setToolTip(
-            "Paint the current lap's line by a channel: off → speed (red = slow, green = fast) "
-            "→ Δ vs best (red = losing, green = gaining) → grip (ESTIMATED: red = on the session's "
-            "grip limit, green = grip left unused). The faint best-lap reference is unchanged.")
-        self.rainbow_btn.clicked.connect(self._cycle_rainbow)
+        self._rainbow_mode = "off"  # "off" | "speed" | "delta" | "grip" (see _RAINBOW_ORDER)
+        self.rainbow_combo = QComboBox()
+        for mode in _RAINBOW_ORDER:
+            self.rainbow_combo.addItem(_RAINBOW_COMBO_LABELS[mode], userData=mode)
+        self.rainbow_combo.setToolTip(
+            "Colour the current lap's line by a channel: Speed (red = slow, green = fast), "
+            "Δ to best (red = losing, green = gaining), or Grip (ESTIMATED: red = on the session's "
+            "grip limit, green = grip left unused). Off leaves the plain racing line. The faint "
+            "best-lap reference is unchanged.")
+        self.rainbow_combo.currentIndexChanged.connect(self._on_rainbow_combo)
         self._legend = _RainbowLegend()
         self._legend.setVisible(False)
 
@@ -799,12 +813,44 @@ class MapView(QWidget):
             self._ghost = None
 
     # --------------------------------------------------------------- rainbow (F3)
-    def _cycle_rainbow(self):
-        """Header-button click: advance the channel cycle and re-apply the rendering."""
-        order = _RAINBOW_ORDER
-        self._rainbow_mode = order[(order.index(self._rainbow_mode) + 1) % len(order)]
-        self.rainbow_btn.setText(_RAINBOW_LABELS[self._rainbow_mode])
+    def set_rainbow_mode(self, mode: str):
+        """Set the painted channel to `mode` (one of _RAINBOW_ORDER) and re-render. The single seam
+        the labelled combo and the cycle API both route through, so the mode, the combo selection
+        and the rendering never drift. Unknown modes are ignored."""
+        if mode not in _RAINBOW_ORDER or mode == self._rainbow_mode:
+            # Still keep the combo in sync (e.g. a no-op re-select) but skip a redundant rebuild.
+            self._sync_rainbow_combo(mode if mode in _RAINBOW_ORDER else self._rainbow_mode)
+            return
+        self._rainbow_mode = mode
+        self._sync_rainbow_combo(mode)
         self._apply_rainbow()
+
+    def _sync_rainbow_combo(self, mode: str):
+        """Reflect `mode` in the labelled combo without re-entering _on_rainbow_combo (the combo's
+        change signal is the user-driven path; this is the programmatic mirror)."""
+        combo = getattr(self, "rainbow_combo", None)
+        if combo is None:
+            return
+        idx = _RAINBOW_ORDER.index(mode)
+        if combo.currentIndex() != idx:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+    def _on_rainbow_combo(self, _index: int):
+        """The labelled dropdown's selection changed → switch the painted channel to the chosen
+        mode (Off · Speed · Δ · Grip), each one click, none hidden behind a blind cycle."""
+        mode = self.rainbow_combo.currentData()
+        if mode is not None:
+            self.set_rainbow_mode(mode)
+
+    def _cycle_rainbow(self):
+        """Advance the channel cycle off → speed → Δ → grip → off and re-apply. Retained as the
+        keyboard/programmatic cycle path (and the rainbow tests' driver); it routes through
+        set_rainbow_mode so the labelled combo stays in sync."""
+        order = _RAINBOW_ORDER
+        nxt = order[(order.index(self._rainbow_mode) + 1) % len(order)]
+        self.set_rainbow_mode(nxt)
 
     def _apply_rainbow(self):
         """(Re)build or clear the rainbow for the current lap+mode. The only path that fills the

@@ -9,8 +9,9 @@ entry). When ``opportunities.enough`` is False the table is a friendly "need mor
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -29,6 +31,9 @@ from PySide6.QtWidgets import (
 from . import coaching, theme
 from .lap_table import CORNER_DIR_GLYPH
 from .theme import C
+
+if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
+    from .session import Session
 
 # column indices
 _COL_CORNER, _COL_LOST, _COL_PHASES, _COL_REASON, _COL_GO = range(5)
@@ -128,6 +133,43 @@ def _brake_point_hint(bp) -> str | None:
     return f"Brake ~{abs(m):.0f} m earlier into C{bp.cid} (EST)"
 
 
+# --- shared per-row cell builders (the modal dialog AND the persistent panel render rows the SAME
+# way, so the corner / time-lost / reason cells can't drift between the two surfaces). ---
+def _corner_cell(opp: coaching.Opportunity) -> QTableWidgetItem:
+    """The 'C<n> <dir-glyph>' corner cell (read-only)."""
+    glyph = CORNER_DIR_GLYPH.get(opp.direction, "")
+    item = QTableWidgetItem(f"C{opp.cid} {glyph}")
+    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+    return item
+
+
+def _lost_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
+    """The '+<t> s' time-lost cell (right-aligned, red = time given away)."""
+    item = QTableWidgetItem(f"+{opp.time_lost:.2f} s")
+    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    item.setFont(num_font)
+    item.setForeground(QColor(theme.delta_colour(opp.time_lost)))
+    return item
+
+
+def _reason_cell(opp: coaching.Opportunity, brake_points: dict) -> QTableWidgetItem:
+    """The 'How to find it' reason cell: the coaching sentence + (when a braking-point estimate is
+    available for this corner) the ESTIMATED 'brake ~N m' line, with the per-reason tooltip."""
+    sentence = coaching.reason_sentence(opp)
+    bp = brake_points.get(opp.cid)
+    hint = _brake_point_hint(bp) if bp is not None else None
+    item = QTableWidgetItem(f"{sentence}\n{hint}" if hint else sentence)
+    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+    tip = _REASON_TIP.get(opp.reason.kind, "")
+    if hint is not None:
+        tip = (f"{tip}\n\n{hint}: the apex-speed-matched latest sustainable brake point is "
+               f"~{bp.optimal_brake_dist:.0f} m; you brake at ~{bp.actual_brake_dist:.0f} m. "
+               "ESTIMATED (constant decel at this session's demonstrated peak braking).")
+    item.setToolTip(tip)
+    return item
+
+
 class OpportunitiesDialog(QDialog):
     """Coaching ▸ Opportunities dialog over a freshly-computed ``coaching.Opportunities``.
     jump_to(cid, entry_dist) fires on a row's Jump button; None disables them (headless layout
@@ -208,33 +250,10 @@ class OpportunitiesDialog(QDialog):
         num_font = theme.mono_font(theme.TABLE)
 
         for r, opp in enumerate(opps.rows):
-            glyph = CORNER_DIR_GLYPH.get(opp.direction, "")
-            corner_item = QTableWidgetItem(f"C{opp.cid} {glyph}")
-            corner_item.setFlags(corner_item.flags() & ~Qt.ItemIsEditable)
-
-            # red: time given away
-            lost_item = QTableWidgetItem(f"+{opp.time_lost:.2f} s")
-            lost_item.setFlags(lost_item.flags() & ~Qt.ItemIsEditable)
-            lost_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            lost_item.setFont(num_font)
-            lost_item.setForeground(QColor(theme.delta_colour(opp.time_lost)))
-
-            sentence = coaching.reason_sentence(opp)
-            bp = self._brake_points.get(opp.cid)
-            hint = _brake_point_hint(bp) if bp is not None else None
-            reason_item = QTableWidgetItem(f"{sentence}\n{hint}" if hint else sentence)
-            reason_item.setFlags(reason_item.flags() & ~Qt.ItemIsEditable)
-            tip = _REASON_TIP.get(opp.reason.kind, "")
-            if hint is not None:
-                tip = (f"{tip}\n\n{hint}: the apex-speed-matched latest sustainable brake point is "
-                       f"~{bp.optimal_brake_dist:.0f} m; you brake at ~{bp.actual_brake_dist:.0f} m. "
-                       "ESTIMATED (constant decel at this session's demonstrated peak braking).")
-            reason_item.setToolTip(tip)
-
-            table.setItem(r, _COL_CORNER, corner_item)
-            table.setItem(r, _COL_LOST, lost_item)
+            table.setItem(r, _COL_CORNER, _corner_cell(opp))
+            table.setItem(r, _COL_LOST, _lost_cell(opp, num_font))
             table.setCellWidget(r, _COL_PHASES, PhaseBar(opp.phases))  # D2 entry/apex/exit Δt
-            table.setItem(r, _COL_REASON, reason_item)
+            table.setItem(r, _COL_REASON, _reason_cell(opp, self._brake_points))
             table.setCellWidget(r, _COL_GO, self._go_button(opp))
         self.table = table  # exposed for the tests
         return table
@@ -254,3 +273,154 @@ class OpportunitiesDialog(QDialog):
             cid, entry = opp.cid, opp.entry_dist
             btn.clicked.connect(lambda _checked=False, c=cid, d=entry: self._jump_to(c, d))
         return btn
+
+
+# How many opportunities the always-on panel surfaces (the actionable shortlist — the full ranking
+# stays in the modal dialog). Compact by design so it never crowds the 2x2 studio.
+PANEL_TOP_N = 3
+# Panel body height bounds (resizable splitter section in central_view, like the consistency strip).
+PANEL_BODY_HEIGHT = 132   # px; natural/default height (~3 rows + a slim column header)
+PANEL_BODY_MIN_HEIGHT = 64   # px; below this the list scrolls instead of vanishing
+
+
+class OpportunitiesPanel(QWidget):
+    """The PERSISTENT, always-on coaching summary (the front-door surface): a compact collapsible
+    strip showing the TOP-3 opportunities (corner · time lost · dominant reason) over a freshly
+    computed ``coaching.Opportunities``. Mirrors the consistency strip's pattern (header + chevron +
+    bounded body); the full modal ``OpportunitiesDialog`` stays available for the detail.
+
+    Reads ONLY session accessors (``coaching_opportunities`` + ``coaching_brake_points``) — no
+    analysis here. Refreshed on load / lap-selection / re-segmentation (never on the 30 Hz tick).
+    A row click emits ``corner_clicked(cid)`` so the app can ring the corner's apex on the map (the
+    Jump-to-corner detail action stays in the modal dialog). Honours the existing ESTIMATED
+    labelling (the ``(EST)`` brake-point lines via ``_reason_cell``) and the friendly "need more
+    laps" state when there aren't enough clean laps."""
+
+    # Clicked corner cid (None on deselect) -> the map apex-ring highlight (wired in central_view).
+    corner_clicked = Signal(object)
+
+    _COLUMNS = ["Corner", "Time lost", "How to find it"]
+
+    def __init__(self, session: Session):
+        super().__init__()
+        self.session = session
+        self._num_font = theme.mono_font(theme.TABLE)
+        self._cids: list[int] = []  # row -> corner cid, set in refresh()
+
+        # --- header: title · headline summary · collapse chevron (the consistency-strip pattern).
+        title = QLabel("OPPORTUNITIES")
+        title.setProperty("role", "BarLabel")
+        self.summary_label = QLabel("")  # "0.42 s in 3 corners …" — set in refresh()
+        self.summary_label.setProperty("role", "BarLabel")
+        self.summary_label.setToolTip(
+            "The biggest realistic time gains vs your own best lap (median of your clean, "
+            "GPS-dropout-free laps). Open Coaching ▸ Opportunities… for the full ranking + jump-to.")
+        self.collapse_btn = QPushButton("▾")
+        self.collapse_btn.setCheckable(True)  # checked = collapsed
+        self.collapse_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.collapse_btn.setToolTip("Collapse / expand the opportunities panel")
+        self.collapse_btn.toggled.connect(self._on_collapse)
+        header = QWidget()
+        header.setProperty("role", "PanelHeader")
+        row = QHBoxLayout(header)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.setSpacing(8)
+        row.addWidget(title)
+        row.addStretch(1)
+        row.addWidget(self.summary_label)
+        row.addWidget(self.collapse_btn)
+
+        # --- body: a stack of {top-3 table, friendly "need more laps" label}, swapped in refresh().
+        self.table = QTableWidget(0, len(self._COLUMNS))
+        self.table.setHorizontalHeaderLabels(self._COLUMNS)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.setWordWrap(True)
+        self.table.verticalHeader().setDefaultSectionSize(34)
+        hdr = self.table.horizontalHeader()
+        hdr.setStretchLastSection(True)  # the reason column takes the slack
+        for col in (0, 1):
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        self.table.itemSelectionChanged.connect(self._on_row_selected)
+
+        self.empty_label = QLabel("")
+        self.empty_label.setWordWrap(True)
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setStyleSheet(f"color: {C.text_dim};")
+
+        self.body = QStackedWidget()
+        self.body.addWidget(self.table)        # index 0 — the top-3 rows
+        self.body.addWidget(self.empty_label)  # index 1 — the friendly excluded state
+        self.body.setMinimumHeight(PANEL_BODY_MIN_HEIGHT)
+        self.body.setMaximumHeight(PANEL_BODY_HEIGHT)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(header)
+        lay.addWidget(self.body)
+        self.refresh()
+
+    # ------------------------------------------------------------------ build
+    def refresh(self):
+        """Recompute the opportunities from the session and rebuild the top-3 rows (or the friendly
+        excluded state). Called on load / lap-selection / re-segmentation — never on the 30 Hz tick.
+        Clears any held row selection (a stale cid would mis-ring the map)."""
+        opps = self.session.coaching_opportunities()
+        brake_points = self.session.coaching_brake_points()
+        if opps.enough and opps.rows:
+            self._fill_rows(opps, brake_points)
+        else:
+            self._show_excluded(opps)
+
+    def _fill_rows(self, opps: coaching.Opportunities, brake_points: dict):
+        """Populate the compact top-3 table from `opps.rows` (shared cell builders, so a row reads
+        identically to the modal dialog) and the headline summary."""
+        rows = opps.rows[:PANEL_TOP_N]
+        total = sum(r.time_lost for r in rows)
+        self.summary_label.setText(f"{total:.2f} s across the top {len(rows)}")
+
+        self.table.blockSignals(True)
+        self.table.clearSelection()
+        self.table.setRowCount(len(rows))
+        self._cids = [opp.cid for opp in rows]
+        for r, opp in enumerate(rows):
+            self.table.setItem(r, 0, _corner_cell(opp))
+            self.table.setItem(r, 1, _lost_cell(opp, self._num_font))
+            self.table.setItem(r, 2, _reason_cell(opp, brake_points))
+        self.table.blockSignals(False)
+        self.body.setCurrentIndex(0)
+
+    def _show_excluded(self, opps: coaching.Opportunities):
+        """Show the friendly "need more laps" / "no corner losing time" state (NOT an empty box),
+        matching the modal dialog's wording so the two surfaces read the same."""
+        self._cids = []
+        if not opps.enough:
+            msg = (f"Drive at least {coaching.MIN_LAPS} clean (valid, GPS-dropout-free) laps to "
+                   f"surface coaching opportunities — this session has {opps.n_laps}.")
+        else:
+            msg = ("No corner is losing time vs your best lap on your typical lap — your best-lap "
+                   "pace is consistent. Nice driving.")
+        self.summary_label.setText("")
+        self.empty_label.setText(msg)
+        self.body.setCurrentIndex(1)
+
+    # ------------------------------------------------------------- interaction
+    def _on_row_selected(self):
+        """Emit the clicked row's corner cid (None on deselect). The map apex-ring is the only
+        consumer — read-only panel, no seek/lap-selection side effects (the Jump-to-corner detail
+        action lives in the modal dialog)."""
+        rows = self.table.selectionModel().selectedRows()
+        if rows and 0 <= rows[0].row() < len(self._cids):
+            self.corner_clicked.emit(self._cids[rows[0].row()])
+        else:
+            self.corner_clicked.emit(None)
+
+    def _on_collapse(self, collapsed: bool):
+        """Hide/show the body; the header strip (with the headline summary) stays. The chevron flips
+        so the affordance reads the right way in both states."""
+        self.body.setVisible(not collapsed)
+        self.collapse_btn.setText("▸" if collapsed else "▾")

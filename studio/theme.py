@@ -178,6 +178,23 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
     return text, delta_colour(d)
 
 
+# The hero readout LEADS with Δ-to-IDEAL — the product's moat number ("how far off your own
+# achievable lap are you, right here") — rather than Δ-to-best. Labelled "Δideal" so it can never be
+# read as the plain best-lap Δ; the IDEAL gap is always ≥ 0 (you can't beat the envelope you helped
+# form), so it carries the single "behind"/amber colour rather than the two-way ahead/behind ramp.
+def format_ideal_readout(d_ideal: float | None, speed_kmh: float | None,
+                         lap: int | None) -> tuple[str, str | None]:
+    """Hero #DiffBox readout (text, colour): 'Δideal <v> s<5 spaces><n> km/h', leading with the
+    Δ-to-ideal scalar. `d_ideal` is `Session.delta_to_ideal_at` (≥ 0 by construction, None outside a
+    lap / before an ideal exists). Colour = `C.behind` when there's real time on the table, else
+    neutral — there is no "ahead of ideal", so this never goes green."""
+    v = format_delta_value(d_ideal)
+    delta_run = f"Δideal {v}" + (" s" if d_ideal is not None else "")
+    text = f"{delta_run}     {format_speed_run(speed_kmh, lap)}"
+    colour = C.behind if (d_ideal is not None and d_ideal > DELTA_EVEN_EPS_S) else None
+    return text, colour
+
+
 # Seek a few ms INTO a lap: an exact-boundary seek rounds down to the previous lap. Shared by the
 # lap-table and compare seeks.
 LAP_SEEK_NUDGE_S = 0.010

@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import chapters, sidecar, theme
+from .coaching_panel import OpportunitiesPanel
 from .compare_controller import CompareController
 from .consistency_panel import ConsistencyPanel
 from .lap_table import CornerTable, LapTable
@@ -148,11 +149,29 @@ class CentralView(QWidget):
         self._corner_lap: int | None = None  # the lap the Corners view describes
 
         # Always-on Δ/speed readout for the current moment (hero #DiffBox; Δ colour set per-tick).
-        self.diff_box = QLabel("Δ —    — km/h")
+        # By default it LEADS with Δ-to-IDEAL (the moat number: how far off your own achievable lap
+        # you are, right here) rather than Δ-to-best; the small ideal_readout_btn flips it to
+        # Δ-to-best, and whichever number isn't shown lives in the box's tooltip — no information is
+        # removed, just re-prioritized (see _update_diff_box).
+        self.diff_box = QLabel("Δideal —    — km/h")
         self.diff_box.setObjectName("DiffBox")
         self.diff_box.setAlignment(Qt.AlignCenter)
         self.diff_box.setFont(theme.mono_font(theme.HERO, theme.W_SEMIBOLD))
         self._diff_colour = None  # last applied Δ-value colour (per-tick recolor guard)
+        # Last (speed, lap) the readout rendered — so toggling the reference re-renders without a tick.
+        self._last_diff_speed: float | None = None
+        self._last_diff_lap: int | None = None
+        # Checked (default) → Δ-to-ideal leads; unchecked → Δ-to-best leads. A small labelled toggle
+        # so the reference of the hero number is always explicit and one click to swap.
+        self.ideal_readout_btn = QPushButton("vs ideal")
+        self.ideal_readout_btn.setCheckable(True)
+        self.ideal_readout_btn.setChecked(True)
+        self.ideal_readout_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.ideal_readout_btn.setToolTip(
+            "Hero readout reference: ON = Δ to your IDEAL achievable lap (the synthetic best of "
+            "every clean lap's best sector — the time still on the table); OFF = Δ to your best "
+            "single lap. The other number is always in the readout's tooltip.")
+        self.ideal_readout_btn.toggled.connect(self._on_ideal_readout_toggled)
 
         # Chapter banner above the video; shown only for multi-chapter sessions.
         self.chapter_label = QLabel("")
@@ -192,30 +211,41 @@ class CentralView(QWidget):
         self.table_stack.addWidget(self.table)         # index 0 — Laps (default)
         self.table_stack.addWidget(self.corner_table)  # index 1 — Corners
         table_header = self._header_bar(self._table_label, self.quality_badge, 1, self.corners_btn)
-        # F6: the collapsible consistency strip under the lap table (trend sparkline + top-5
-        # inconsistent corners); a corner-row click ring-highlights its apex on the map only.
+        # The PERSISTENT, always-on coaching front-door: the top-3 opportunities (corner · time
+        # lost · reason) under the lap table, the same data the modal dialog shows. Visible by
+        # default (the moat made the default screen), compact + collapsible. A corner-row click
+        # ring-highlights its apex on the map (the Jump-to-corner detail action stays in the dialog).
+        self.opportunities = OpportunitiesPanel(self.session)
+        self.opportunities.corner_clicked.connect(self.map.highlight_corner)
+        # F6: the collapsible consistency strip under the opportunities panel (trend sparkline +
+        # top-5 inconsistent corners); a corner-row click ring-highlights its apex on the map only.
         self.consistency = ConsistencyPanel(self.session)
         self.consistency.corner_clicked.connect(self.map.highlight_corner)
-        # Consistency strip shares a vertical splitter with the table stack so enabling it shrinks the
-        # (min/max-capped) strip, never the lap table; table stack gets a ~5-row min-height so it stays
-        # usable.
+        # Both strips share a vertical splitter with the table stack so they shrink the
+        # (min/max-capped) strips, never the lap table; the table stack gets a ~5-row min-height so
+        # it stays usable. Opportunities sits directly under the table (the front-door), consistency
+        # below it.
         rows_h = self.table.table.verticalHeader().defaultSectionSize()
         self.table_stack.setMinimumHeight(rows_h * 5 + 56)  # ~5 rows + column header + footer
         table_body = QSplitter(Qt.Vertical)
         table_body.addWidget(self.table_stack)
+        table_body.addWidget(self.opportunities)
         table_body.addWidget(self.consistency)
         table_body.setStretchFactor(0, 1)   # the lap table takes any extra height
-        table_body.setStretchFactor(1, 0)   # the consistency strip keeps its compact size
+        table_body.setStretchFactor(1, 0)   # the opportunities strip keeps its compact size
+        table_body.setStretchFactor(2, 0)   # the consistency strip keeps its compact size
         table_body.setCollapsible(0, False)  # never collapse the lap table away
         table_panel = self._headered(table_header, (table_body, 1))
 
-        # MAP header: title (left) + the rainbow/snap/sector buttons (right); handlers live in MapView.
-        for b in (self.map.rainbow_btn, self.map.snap_btn,
-                  self.map.add_sector_btn, self.map.reset_sectors_btn):
+        # MAP header: title (left) + the line-channel dropdown / snap / sector controls (right);
+        # handlers live in MapView. The rainbow channel is a LABELLED combo (Off · Speed · Δ · Grip)
+        # so Grip is discoverable, not a blind 4th cycle step.
+        for b in (self.map.snap_btn, self.map.add_sector_btn, self.map.reset_sectors_btn):
             b.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.map.rainbow_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         map_label = QLabel("MAP")
         map_label.setProperty("role", "BarLabel")
-        map_header = self._header_bar(map_label, 1, self.map.rainbow_btn, self.map.snap_btn,
+        map_header = self._header_bar(map_label, 1, self.map.rainbow_combo, self.map.snap_btn,
                                       self.map.add_sector_btn, self.map.reset_sectors_btn)
         # Provisional-timing trust banner: a persistent, prominent strip between the map header and
         # the map while the lap timing references an auto-fitted (unconfirmed) start line. NOT a
@@ -254,7 +284,8 @@ class CentralView(QWidget):
         self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.ideal_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.brake_throttle_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0), 1,
+        plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0),
+                                        self.ideal_readout_btn, 1,
                                         self.plots.brake_throttle_btn, self.plots.ideal_btn,
                                         self.plots.x_mode_combo)
         plots_panel = self._headered(plots_header, (self.plots, 1))
@@ -661,13 +692,36 @@ class CentralView(QWidget):
         if self.plots.is_dragging():
             self.plots.set_playhead_time(t, force=True)
 
+    def _on_ideal_readout_toggled(self, _on: bool):
+        """Flip the hero readout between leading with Δ-to-ideal (checked) and Δ-to-best (unchecked),
+        then re-render it for the current moment so the swap is immediate (not deferred to the next
+        tick)."""
+        self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
+                              self._last_diff_lap)
+
     def _update_diff_box(self, t: float, sp: float | None, lap_id: int | None):
-        """Refresh the Δ/speed box for the current moment (Δ-to-best priority). Text + colour from
-        the shared theme.format_delta_speed (same formatter as the export overlay)."""
-        d = self.session.delta_at_lap(lap_id, t) if lap_id is not None else None
-        text, sem_colour = theme.format_delta_speed(d, sp, lap_id)
+        """Refresh the hero Δ/speed box for the current moment. By default it LEADS with Δ-to-IDEAL
+        (the moat number — how far off the driver's own achievable lap they are, right here) via
+        theme.format_ideal_readout; the ideal_readout_btn flips it to lead with Δ-to-best (the
+        export overlay's theme.format_delta_speed). The number NOT leading is shown in the box's
+        tooltip, so both are always one read/hover away (no information removed, just re-prioritized).
+
+        Both deltas are cheap per-tick scalars on the already-resolved lap: delta_at_lap (Δ-to-best)
+        and delta_to_ideal_at (Δ-to-ideal, grid-based + memoized envelope), so the ~30 Hz path adds
+        only two O(log n) np.interps."""
+        # Stash the moment so a toggle can re-render without a tick (see _on_ideal_readout_toggled).
+        self._last_diff_speed, self._last_diff_lap = sp, lap_id
+        d_best = self.session.delta_at_lap(lap_id, t) if lap_id is not None else None
+        d_ideal = self.session.delta_to_ideal_at(lap_id, t) if lap_id is not None else None
+        if self.ideal_readout_btn.isChecked():
+            text, sem_colour = theme.format_ideal_readout(d_ideal, sp, lap_id)
+            tip = f"Δ to your best lap here: {theme.format_delta_run(d_best)}"
+        else:
+            text, sem_colour = theme.format_delta_speed(d_best, sp, lap_id)
+            tip = f"Δ to your IDEAL achievable lap here: Δideal {theme.format_delta_value(d_ideal)}"
         colour = sem_colour or theme.C.text
         self.diff_box.setText(text)
+        self.diff_box.setToolTip(tip)
         # Only restyle when the colour changes (avoids a per-tick stylesheet re-layout).
         if colour != getattr(self, "_diff_colour", None):
             self._diff_colour = colour
@@ -729,15 +783,18 @@ class CentralView(QWidget):
     # ------------------------------------------------------------- the shared rebuild seam
     def rebuild_derived_views(self, *, reselect: bool = True):
         """The single seam that rebuilds every session-derived surface (table, map overlays/corners,
-        corner table, consistency, driving channels, selection, sector lines) in a load-bearing
-        order — three drifted copies were unified here. Shared by re-segmentation, a reference
-        load/clear, and the initial build; each call site keeps only its own extras inline."""
+        corner table, opportunities, consistency, driving channels, selection, sector lines) in a
+        load-bearing order — three drifted copies were unified here. Shared by re-segmentation, a
+        reference load/clear, and the initial build; each call site keeps only its own extras inline."""
         self.table.refresh()
         # set_corners re-pushes the corner labels AND clears any stale highlight, so it runs after
         # refresh_overlays and before the corner consumers below.
         self.map.refresh_overlays()
         self.map.set_corners(self.session.corners.corner_map_markers())
         self.corner_table.refresh()
+        # The persistent coaching front-door: recompute the top-3 opportunities (the clean-lap set /
+        # corner losses shift on a re-segmentation; recomputed per build, never on the 30 Hz tick).
+        self.opportunities.refresh()
         self.consistency.refresh()
         # Re-push driving channels explicitly: the selection step below can early-out on an
         # unchanged primary-lap id while the channels did change.
