@@ -137,7 +137,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/x265-3.5-hbc6ce65_3.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-h6491c7d_2.conda
       - pypi: bindings/pacer
-      - pypi: git+https://github.com/pthom/litgen#b83e0ca75952031dbab328e230ff866f8076d14a
+      - pypi: git+https://github.com/pthom/litgen?rev=b83e0ca75952031dbab328e230ff866f8076d14a#b83e0ca75952031dbab328e230ff866f8076d14a
       - pypi: https://files.pythonhosted.org/packages/17/f3/f2b63df0251e7cd3172ea28e32ede52739de9566bcefcd0178681538ac81/shiboken6-6.11.1-cp310-abi3-macosx_13_0_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/25/b1/da1d826ccc9258674b26dd0abcbbb1c55cab06e7fbf2697518b67edc79fc/qtawesome-1.4.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/32/36/4c242f81fdcbfa4fb62a5645f6af79191f4097a0577bd5460c24f19cc4ef/pyqtgraph-0.14.0-py3-none-any.whl
@@ -1771,9 +1771,9 @@ packages:
 - pypi: bindings/pacer
   name: pacer
   requires_dist:
-  - litgen @ git+https://github.com/pthom/litgen
+  - litgen @ git+https://github.com/pthom/litgen@b83e0ca75952031dbab328e230ff866f8076d14a
   requires_python: '>=3.11'
-- pypi: git+https://github.com/pthom/litgen#b83e0ca75952031dbab328e230ff866f8076d14a
+- pypi: git+https://github.com/pthom/litgen?rev=b83e0ca75952031dbab328e230ff866f8076d14a#b83e0ca75952031dbab328e230ff866f8076d14a
   name: litgen
   version: 0.22.0
   requires_dist:

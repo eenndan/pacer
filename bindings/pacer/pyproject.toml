@@ -1,6 +1,6 @@
 [project]
 authors = [{ name = "eenndan" }]
-dependencies = ["litgen @ git+https://github.com/pthom/litgen"]
+dependencies = ["litgen @ git+https://github.com/pthom/litgen@b83e0ca75952031dbab328e230ff866f8076d14a"]
 description = "Python bindings for the pacer C++ telemetry core"
 name = "pacer"
 requires-python = ">= 3.11"
