@@ -65,9 +65,9 @@ def reset_corner_caches(session, *, basis=_MISSING):
     = _UNSET`` seeding (those raw slots moved into studio.corner_model.CornerModel). Force a
     fresh service so the next access recomputes; optionally SEED the (corner_list, total_ref)
     basis so a test that hand-builds corners (no real curvature on a FakeLaps) gets them back
-    from ``corners()`` / ``lap_corner_stats()``. The per-lap stats then come from the REAL
-    projection against the seeded basis, exactly as before."""
-    cm = session._cm  # lazily builds the service on a bare Session.__new__
+    from ``session.corners.corner_list()`` / ``.lap_corner_stats()``. The per-lap stats then come
+    from the REAL projection against the seeded basis, exactly as before."""
+    cm = session.corners  # the CornerModel service; lazily builds on a bare Session.__new__
     cm.invalidate()
     if basis is not _MISSING:
         cm._basis_cache = basis  # seeded basis (or None); the per-lap stats stay real-projected
@@ -81,7 +81,7 @@ def reset_driving_caches(session):
     the per-lap channels. The thresholds slot is reset to the service's own _UNSET sentinel so
     they re-derive lazily (matching production)."""
     from studio.driving_channels import _UNSET as driving_unset
-    dc = session._dc  # lazily builds the service on a bare Session.__new__
+    dc = session.driving  # the DrivingChannels service; lazily builds on a bare Session.__new__
     dc._thresholds_cache = driving_unset
     dc.invalidate()
 

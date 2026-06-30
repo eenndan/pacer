@@ -461,11 +461,11 @@ class CornerTable(QWidget):
         # Range-guard the lap id: a re-segmentation can shrink the lap count while this view
         # still holds the previous selection (app re-selects right after; until then, empty).
         ok = self._lap_id is not None and 0 <= self._lap_id < self.session.lap_count()
-        stats = self.session.lap_corner_stats(self._lap_id) if ok else []
-        corner_list = self.session.corners() if stats else []
-        bests = self.session.corner_session_bests() if stats else []
+        stats = self.session.corners.lap_corner_stats(self._lap_id) if ok else []
+        corner_list = self.session.corners.corner_list() if stats else []
+        bests = self.session.corners.corner_session_bests() if stats else []
         # Per-corner grip utilisation (%); [] when there's no g signal → the column shows a dash.
-        grip = self.session.lap_corner_grip(self._lap_id) if stats else []
+        grip = self.session.driving.lap_corner_grip(self._lap_id) if stats else []
         self.table.setRowCount(len(stats))
         for r, st in enumerate(stats):
             c = corner_list[r]

@@ -581,7 +581,7 @@ class StudioWindow(QMainWindow):
         # D4: the best lap's per-corner braking-point comparison, keyed by cid so the dialog can
         # append the ESTIMATED "brake ~N m later" line to a corner's reason. Empty when no g signal.
         best = self.session.best_lap_id()
-        brake_points = ({bp.cid: bp for bp in self.session.lap_brake_points(best)}
+        brake_points = ({bp.cid: bp for bp in self.session.driving.lap_brake_points(best)}
                         if best is not None else {})
         dlg = OpportunitiesDialog(opps, jump_to=self._jump_to_opportunity,
                                   brake_points=brake_points, parent=self)
@@ -602,7 +602,7 @@ class StudioWindow(QMainWindow):
         if not view.corners_btn.isChecked():
             view.corners_btn.setChecked(True)
         view.map.highlight_corner(cid)
-        target = self.session.corner_entry_media_time(best, cid)
+        target = self.session.corners.corner_entry_media_time(best, cid)
         if target is not None:
             view.video.seek(target)
             # Seed auto-follow to the seek's lap so the post-seek tick isn't a lap-change edge.

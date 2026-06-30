@@ -191,8 +191,10 @@ def _stub_session(n=60):
     s.delta = lambda ids, x_mode="distance": (
         0, {}, {lid: (np.linspace(0, 500.0, 400), dvals) for lid in ids})
     # D5 grip channel: a utilization ramp 0.1 (unused) → 1.1 (over the p98 limit), aligned to xy.
+    # Stub the DrivingChannels service face MapView reads (session.driving.lap_grip_utilization);
+    # set the backing _driving slot since session.driving is a (settable-only-via-slot) property.
     grip = np.linspace(0.1, 1.1, n)
-    s.lap_grip_channel = lambda lid: grip
+    s._driving = SimpleNamespace(lap_grip_utilization=lambda lid: grip)
     return s
 
 
@@ -290,7 +292,7 @@ def test_grip_channel_paints_and_on_limit_is_red():
     # The painted buckets reproduce the negated-util-on-fixed-scale contract: util RISES 0.1→1.1, so
     # the per-segment bucket ids must FALL (more util = redder = lower bucket) on the fixed 0..1.2
     # scale. Rebuild them the same way _build_rainbow does and check monotone-decreasing.
-    util = s.lap_grip_channel(1)
+    util = s.driving.lap_grip_utilization(1)
     vals = -np.asarray(util, float)
     seg_vals = 0.5 * (vals[:-1] + vals[1:])
     seg_ids = bucketize(seg_vals, theme.MAP_RAINBOW_N, lo=-1.2, hi=0.0)
@@ -302,10 +304,10 @@ def test_grip_channel_paints_and_on_limit_is_red():
 
 
 def test_grip_channel_degrades_when_no_g():
-    """No g signal (lap_grip_channel → None) must NOT paint or crash: the rainbow stays empty and
+    """No g signal (driving.lap_grip_utilization → None) must NOT paint or crash: the rainbow stays empty and
     the normal current-lap overlay remains visible (graceful degrade, like Δ with no best lap)."""
     s = _stub_session()
-    s.lap_grip_channel = lambda lid: None  # no g signal on this recording
+    s.driving.lap_grip_utilization = lambda lid: None  # no g signal on this recording
     mv = MapView(s)
     mv.set_current_lap(1)
     for _ in range(3):  # off → speed → delta → grip

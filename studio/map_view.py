@@ -783,7 +783,7 @@ class MapView(QWidget):
         ch = self.session.lap_channels(lap_id)
         times, xs, ys, speed_kmh, cum = (
             ch["t_media_s"], ch["x_m"], ch["y_m"], ch["speed_kmh"], ch["dist_m"])
-        grip_util = self.session.lap_grip_channel(lap_id) if mode == "grip" else None
+        grip_util = self.session.driving.lap_grip_utilization(lap_id) if mode == "grip" else None
         # Δ-vs-best on the 400-grid (delta()'s y-series); None when no best lap / lap absent.
         delta_grid = None
         if mode == "delta":

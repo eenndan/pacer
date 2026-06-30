@@ -21,7 +21,7 @@ def main(path: str) -> int:
     valid = s.valid_lap_ids()
     clean = s.consistency_lap_ids()
     best = s.best_lap_id()
-    corners = s.corners()
+    corners = s.corners.corner_list()
     print(f"\ntrack={s.track_name}  valid_laps={len(valid)}  clean_laps={len(clean)}  "
           f"best_lap={best} ({s.lap_time(best):.3f}s)  corners={len(corners)}")
 
@@ -32,13 +32,13 @@ def main(path: str) -> int:
     # --- the full per-corner median-loss table (every corner, ranked) -------------------
     print("\n=== per-corner median time lost vs best (over the clean laps), ranked ===")
     # Recompute the raw losses for transparency (same as the model).
-    best_stats = s.lap_corner_stats(best)
+    best_stats = s.corners.lap_corner_stats(best)
     best_ct = {st.cid: st.time for st in best_stats}
     losses = {}
     for c in corners:
         per = []
         for i in clean:
-            st = s.lap_corner_stats(i)
+            st = s.corners.lap_corner_stats(i)
             if len(st) == len(corners):
                 per.append(st[c.cid - 1].time - best_ct[c.cid])
         if per:
@@ -115,7 +115,7 @@ def main(path: str) -> int:
     print("\n=== determinism: two coaching_opportunities() calls are IDENTICAL — OK ===")
 
     # --- jump-to: #1's seek target == best lap's corner-entry media time ----------------
-    target = s.corner_entry_media_time(best, top.cid)
+    target = s.corners.corner_entry_media_time(best, top.cid)
     win = s.lap_window(best)
     # the corner's window on the best lap (media times at enter/exit)
     t0, _xs, _ys, _v, cum = s._lap_columns(best)

@@ -60,7 +60,7 @@ def laps_table(session) -> tuple[list[str], list[tuple[int, list[str]]]]:
     rows_meta = session.lap_rows()
     n_sect = session.sector_count()
     n_splits = n_sect + 1 if n_sect else 0  # N lines -> N+1 sub-sectors; 0 lines -> none
-    corner_list = session.corners()
+    corner_list = session.corners.corner_list()
     dropout_ids = session.dropout_lap_ids()
 
     headers = ["lap", "time_s", "dist_m", "entry_kmh", "flag"]
@@ -76,7 +76,7 @@ def laps_table(session) -> tuple[list[str], list[tuple[int, list[str]]]]:
         splits = session.lap_sector_splits(lap_id) if n_splits else []
         for i in range(n_splits):
             cells.append(_f3(splits[i]) if i < len(splits) else "")
-        stats = {s.cid: s for s in session.lap_corner_stats(lap_id)}
+        stats = {s.cid: s for s in session.corners.lap_corner_stats(lap_id)}
         for c in corner_list:
             s = stats.get(c.cid)
             cells += [_f3(s.time), _f3(s.apex_speed)] if s is not None else ["", ""]

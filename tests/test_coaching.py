@@ -410,7 +410,7 @@ def test_apex_signal_and_loss_share_local_best_baseline_under_reference():
     # Load a reference whose apex speeds are 10% lower than the local best's (so the OLD code, which
     # measured the median's apex vs the reference, would report a DIFFERENT — smaller — deficit).
     s._reference = _stadium_reference(s, apex_scale=0.90)
-    s._cm.invalidate_stats()  # drop the deltas computed against the now-different baseline (F1)
+    s.corners.invalidate_stats()  # drop the deltas computed against the now-different baseline (F1)
     with_ref = s.coaching_opportunities()
     with_ref_apex = {r.cid: r.reason.apex_speed_deficit for r in with_ref.rows}
     assert base_apex == with_ref_apex, (base_apex, with_ref_apex)
@@ -473,15 +473,15 @@ def test_session_coaching_opportunities_ranks_the_slow_corner():
     opp = s.coaching_opportunities()
     assert opp.enough is True, opp
     assert opp.rows, "expected at least one opportunity"
-    corner_list = s.corners()
+    corner_list = s.corners.corner_list()
     assert len(corner_list) == 2, corner_list
     # the second corner (the one the slow laps bleed time in) ranks first
     top = opp.rows[0]
     assert top.cid == 2, [(r.cid, round(r.time_lost, 3)) for r in opp.rows]
     # cross-check the time lost == direct median over laps 1-3 of (corner-2 time - best corner-2)
-    best_stats = s.lap_corner_stats(0)
+    best_stats = s.corners.lap_corner_stats(0)
     best_c2 = best_stats[1].time
-    losses = [s.lap_corner_stats(i)[1].time - best_c2 for i in (1, 2, 3)]
+    losses = [s.corners.lap_corner_stats(i)[1].time - best_c2 for i in (1, 2, 3)]
     assert abs(top.time_lost - float(np.median(losses))) < 1e-9, (top.time_lost, losses)
     # no g signal -> the reason falls back to apex (the slow half drops the apex speed) or line
     assert top.reason.kind in (K.REASON_APEX, K.REASON_LINE), top.reason
@@ -491,19 +491,19 @@ def test_session_coaching_opportunities_ranks_the_slow_corner():
 
 def test_session_corner_entry_media_time_projects_onto_best():
     s = _stadium_session()
-    corner_list = s.corners()
+    corner_list = s.corners.corner_list()
     c2 = corner_list[1]
     best = 0
     t0, _xs, _ys, _sp, cum = s._cols_cache[best]
     total_ref = float(cum[-1])  # best lap is the reference; total_lap == total_ref here
     # project the corner's enter odometer onto the best lap and read its media time
     expected = float(np.interp(c2.enter / total_ref * float(cum[-1]), cum, t0))
-    got = s.corner_entry_media_time(best, c2.cid)
+    got = s.corners.corner_entry_media_time(best, c2.cid)
     assert got is not None and abs(got - expected) < 1e-6, (got, expected)
     # the entry time is INSIDE the corner window's start, before the apex time
     assert t0[0] <= got <= t0[-1]
     # an unknown cid -> None (no crash)
-    assert s.corner_entry_media_time(best, 999) is None
+    assert s.corners.corner_entry_media_time(best, 999) is None
     print(f"ok entry-time: C{c2.cid} entry on best lap = {got:.3f}s (== manual projection)")
 
 

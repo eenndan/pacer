@@ -11,6 +11,7 @@ on stubs. Run:  QT_QPA_PLATFORM=offscreen python tests/test_corners.py
 """
 import os
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -222,15 +223,15 @@ def _bare_corner_session():
 
 def test_session_accessors():
     s = _bare_corner_session()
-    cs = s.corners()
-    assert len(cs) == 2 and cs is s.corners(), "corners() must compute once and cache"
-    ref = s.lap_corner_stats(0)
-    st = s.lap_corner_stats(1)
+    cs = s.corners.corner_list()
+    assert len(cs) == 2 and cs is s.corners.corner_list(), "corners() must compute once and cache"
+    ref = s.corners.lap_corner_stats(0)
+    st = s.corners.lap_corner_stats(1)
     assert all(r.delta == 0.0 for r in ref), ref
-    assert len(st) == 2 and st is s.lap_corner_stats(1), "per-lap stats must cache"
-    bests = s.corner_session_bests()
+    assert len(st) == 2 and st is s.corners.lap_corner_stats(1), "per-lap stats must cache"
+    bests = s.corners.corner_session_bests()
     assert bests == [min(a.time, b.time) for a, b in zip(ref, st, strict=False)]
-    markers = s.corner_map_markers()
+    markers = s.corners.corner_map_markers()
     assert len(markers) == 2
     for (label, mx, my, d), c in zip(markers, cs, strict=False):
         assert label == c.label and d == c.direction
@@ -247,33 +248,28 @@ def _qapp():
 
 
 class _StubSession:
-    """Duck-typed stand-in for CornerTable: the four accessors it reads, nothing more."""
+    """Duck-typed stand-in for CornerTable: the corner/driving service faces it reads."""
 
     def __init__(self, corner_list, stats_by_lap, bests, n_laps=8):
-        self._corners = corner_list
         self._stats = stats_by_lap
-        self._bests = bests
         self._n = n_laps
         self.calls = 0
+        # session.corners / session.driving service stand-ins (the access pattern CornerTable uses).
+        self.corners = SimpleNamespace(
+            corner_list=lambda: corner_list,
+            lap_corner_stats=self._lap_corner_stats,
+            corner_session_bests=lambda: bests,
+        )
+        # F5 Grip % column reads session.driving.lap_corner_grip; [] (no g) -> the cell shows a dash
+        # (this corner test pins the corner metrics; grip is covered in tests/test_driving.py).
+        self.driving = SimpleNamespace(lap_corner_grip=lambda lap_id: [])
 
     def lap_count(self):
         return self._n
 
-    def corners(self):
-        return self._corners
-
-    def lap_corner_stats(self, lap_id):
+    def _lap_corner_stats(self, lap_id):
         self.calls += 1
         return self._stats.get(lap_id, [])
-
-    def corner_session_bests(self):
-        return self._bests
-
-    def lap_corner_grip(self, lap_id):
-        # F5 added a Grip % column to CornerTable; the stub returns [] (no g) so the column
-        # shows a dash — this corner test pins the corner metrics, not the grip channel
-        # (driving.py's own grip is covered in tests/test_driving.py).
-        return []
 
 
 def test_corner_table_populates_and_highlights():

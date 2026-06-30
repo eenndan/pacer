@@ -140,7 +140,7 @@ class CentralView(QWidget):
             self.video.gmeter_btn.setToolTip("No accelerometer data in this recording")
         self.map = MapView(self.session)
         # Corner labels pushed from here so MapView stays a pure consumer of marker tuples.
-        self.map.set_corners(self.session.corner_map_markers())
+        self.map.set_corners(self.session.corners.corner_map_markers())
         self.plots = PlotsView(self.session)
         self.table = LapTable(self.session)
         # Corners mode: a 2nd table stacked under the same panel (per-corner rows for the selected lap).
@@ -675,11 +675,11 @@ class CentralView(QWidget):
         map_markers, brake_plot, coast_plot, bt_plot = [], [], [], []
         for k, lid in enumerate(lap_ids):
             colour = self._driving_lap_colour(lid, k)
-            map_markers.append((self.session.lap_brake_map_markers(lid), colour))
-            brake_plot.append((self.session.lap_brake_plot_positions(lid, mode), colour))
-            coast_plot.append((self.session.lap_coasting_plot_spans(lid, mode), colour))
+            map_markers.append((self.session.driving.lap_brake_map_markers(lid), colour))
+            brake_plot.append((self.session.driving.lap_brake_plot_positions(lid, mode), colour))
+            coast_plot.append((self.session.driving.lap_coasting_plot_spans(lid, mode), colour))
             # D3: the synthetic brake/throttle band (its own red/green fill, not the lap colour).
-            xs, inten = self.session.lap_brake_throttle_plot(lid, mode)
+            xs, inten = self.session.driving.lap_brake_throttle_plot(lid, mode)
             if xs is not None:
                 bt_plot.append((xs, inten))
         self.map.set_brake_markers(map_markers)
@@ -697,7 +697,7 @@ class CentralView(QWidget):
         # set_corners re-pushes the corner labels AND clears any stale highlight, so it runs after
         # refresh_overlays and before the corner consumers below.
         self.map.refresh_overlays()
-        self.map.set_corners(self.session.corner_map_markers())
+        self.map.set_corners(self.session.corners.corner_map_markers())
         self.corner_table.refresh()
         self.consistency.refresh()
         # Re-push driving channels explicitly: the selection step below can early-out on an
