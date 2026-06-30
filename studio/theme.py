@@ -115,6 +115,21 @@ def apply_provisional_style(item, on: bool = True) -> None:
     item.setFont(font)
 
 
+# A separate, lighter trust tier from PROVISIONAL: an ESTIMATED value is a real inferred reading the
+# product DOES stand behind as an estimate (grip utilisation, the brake/throttle band, brake-point
+# hints), not an unverified one to demote. It carries the same "(est)"/ESTIMATED wording the inferred
+# brake/throttle band + brake-point coaching already use, so every estimate reads identically; the
+# cell stays full-strength (no muting/italic) because it IS a value to trust as an estimate — the
+# label is what signals the tier.
+ESTIMATED_SUFFIX = " (est)"   # appended to a column/label title carrying an estimated value
+
+
+def estimated_label(title: str) -> str:
+    """`title` with the shared ESTIMATED marker appended — the one place the "(est)" wording lives,
+    so the grip column, future estimate labels, etc. all read the same."""
+    return f"{title}{ESTIMATED_SUFFIX}"
+
+
 # Δ/speed text formatters: single source for the live #DiffBox and the burned-in export.
 # Composable fragments so the two readouts can't drift.
 

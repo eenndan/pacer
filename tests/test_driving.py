@@ -226,8 +226,9 @@ def test_brake_throttle_intensity_band():
 
 
 def test_corner_grip_math():
-    """Grip utilization = median(|g|) in each window / the SESSION envelope, clamped to [0,1];
-    higher in the harder corner; an empty window -> 0; a window at/above the envelope clamps to 1."""
+    """Grip utilization = median(|g|) in each window / the SESSION envelope, clamped to
+    [0, CORNER_GRIP_CLIP]; higher in the harder corner; an empty window -> 0; a corner AT the
+    envelope reads ~1.0 (the honest "at the limit"); a corner well past it clamps at the ceiling."""
     n = 600
     dist = np.linspace(0.0, 600.0, n)
     long_g = np.zeros(n)
@@ -240,10 +241,15 @@ def test_corner_grip_math():
     grip = D.corner_grip(dist, long_g, lat_g, windows, env)
     assert len(grip) == 3
     assert abs(grip[0] - 0.5) < 1e-6, grip[0]   # 0.3 / 0.6
-    assert abs(grip[1] - 1.0) < 1e-6, grip[1]   # 0.6 / 0.6 (at the envelope)
+    assert abs(grip[1] - 1.0) < 1e-6, grip[1]   # 0.6 / 0.6 (AT the envelope -> honest ~100%)
     assert grip[2] == 0.0                         # empty window
-    # A corner that loads BEYOND the envelope clamps to 1.0 (never > 1).
-    assert D.corner_grip(dist, long_g, lat_g, [(dist[300], dist[399])], 0.3) == [1.0]
+    # HONESTY: a corner just at/over the robust-p98 envelope is NOT capped at a misleading 1.0 — the
+    # ceiling is CORNER_GRIP_CLIP (>1) so the value can read "at the limit" (~100%) and a hair over.
+    over = D.corner_grip(dist, long_g, lat_g, [(dist[300], dist[399])], 0.3)  # 0.6/0.3 = 2.0
+    assert over == [D.CORNER_GRIP_CLIP] and D.CORNER_GRIP_CLIP > 1.0, over
+    # A corner driven exactly AT the envelope reads ~1.0 (no longer pre-capped below it).
+    at_limit = D.corner_grip(dist, long_g, lat_g, [(dist[300], dist[399])], 0.6)
+    assert abs(at_limit[0] - 1.0) < 1e-9, at_limit
     # The cross-lap win: the SAME corner driven slower (less g) reads LOWER against the SAME
     # session envelope — lap-self-normalization (the old metric) could not show this.
     slow = lat_g.copy()
@@ -500,6 +506,39 @@ def test_session_grip_channel_aligned_and_cached():
           f"max {float(np.nanmax(util)):.2f}; no-g -> None")
 
 
+def test_grip_envelope_uses_clean_not_raw_longitudinal():
+    """HONESTY FIX: the friction-circle envelope (the grip DIVISOR) must be built from the CLEAN
+    GPS-derived longitudinal (gm.long_g_gps), NOT the vibration-inflated raw IMU gm.long_g. A raw
+    long_g blown far past the clean one used to inflate the divisor and bias EVERY grip reading
+    systematically low. Here raw and clean differ hugely; the envelope must follow the clean axis."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _synthetic import reset_driving_caches
+
+    from studio import gmeter
+
+    s = _bare_driving_session()
+    n = len(s._gmeter.times)
+    times = s._gmeter.times.copy()
+    lat = np.zeros(n)
+    lat[250:330] = 0.5  # a real lateral load (the validated axis)
+    raw_long = np.zeros(n)
+    raw_long[100:500] = 1.8  # the IMU forward axis grossly vibration-inflated (~1.8 g of "noise")
+    clean_long = np.zeros(n)  # the CLEAN GPS-derived longitudinal: essentially no forward g here
+    s._gmeter = gmeter.GMeter(times=times, lat_g=lat, long_g=raw_long, cross=None,
+                              source="accl", long_g_gps=clean_long)
+    reset_driving_caches(s)
+
+    env = s.driving._grip_envelope()
+    # The clean friction circle is just the lateral 0.5 g (long ~0) -> p98 ~0.5 g, floored at 0.3.
+    # If the RAW long (1.8 g) had leaked into the divisor, hypot(0.5,1.8) ~1.87 -> env ~1.8.
+    assert env < 0.7, f"envelope {env:.3f} g — raw inflated long_g leaked into the grip divisor"
+    # And it equals the envelope computed directly from the CLEAN axes (numerator==divisor axes).
+    speed_kmh = np.interp(times, s.tt, s.tv)
+    expect = D.grip_envelope(clean_long, lat, speed_kmh)
+    assert abs(env - expect) < 1e-9, (env, expect)
+    print(f"ok grip envelope: clean-axis divisor = {env:.2f} g (NOT the raw 1.8 g IMU long)")
+
+
 def test_session_brake_points_accessor_and_caching():
     """D4 wiring: lap_brake_points matches the lap's brake event to a seeded corner and reports the
     apex-speed-matched optimum vs the actual onset, derived from the session's DEMONSTRATED a_max
@@ -699,8 +738,11 @@ def test_plots_brake_throttle_band_toggle():
 def test_corner_table_has_grip_column():
     _qapp()
     from studio import corners as C
+    from studio import theme
     from studio.lap_table import CORNER_COLUMNS, CornerTable
-    assert CORNER_COLUMNS[-1] == "Grip", CORNER_COLUMNS  # header abbreviated; units now in tooltip
+    # The grip column carries the shared ESTIMATED marker (honest: it's an inferred friction-circle
+    # estimate, not a measured percentage) — "Grip (est)", units/meaning in the header tooltip.
+    assert CORNER_COLUMNS[-1] == theme.estimated_label("Grip") == "Grip (est)", CORNER_COLUMNS
 
     stub = SimpleNamespace(
         lap_count=lambda: 4,

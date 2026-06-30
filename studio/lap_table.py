@@ -438,7 +438,8 @@ class LapTable(QWidget):
 # lap (session.lap_corner_stats). A separate widget stacked with LapTable; shares only the module
 # display constants. Headers are abbreviated so all 8 columns fit the narrow panel — dropped units
 # move to per-column header tooltips (CORNER_COL_TIPS).
-CORNER_COLUMNS = ["Corner", "Time", "Δ best", "Apex", "Δ apex", "Entry", "Exit", "Grip"]
+CORNER_COLUMNS = ["Corner", "Time", "Δ best", "Apex", "Δ apex", "Entry", "Exit",
+                  theme.estimated_label("Grip")]
 # Full meaning + units per header, shown on hover (1:1 with CORNER_COLUMNS).
 CORNER_COL_TIPS = [
     "Detected corner in track order (⟲ left / ⟳ right)",
@@ -448,7 +449,14 @@ CORNER_COL_TIPS = [
     "Δ apex speed vs the best lap (km/h; + is faster)",
     "Corner entry speed (km/h)",
     "Corner exit speed (km/h)",
-    "Friction-circle grip utilisation: median |g| vs the lap envelope (%)",
+    # ESTIMATED, not measured: the friction circle mixes the noisier longitudinal axis, so this is
+    # lateral-dominant. Numerator and divisor share the SAME validated axes (clean GPS-derived
+    # longitudinal + IMU lateral). Normalised to the SESSION envelope (not each lap's own peak) so a
+    # slow lap reads genuinely lower; ~100% means at this session's grip limit (it can read a little
+    # over when a corner sits just past the robust p98 envelope).
+    "Grip utilisation (ESTIMATED): median combined |g| in the corner vs the session friction-circle "
+    "envelope (%). Estimated from the clean GPS-derived longitudinal + IMU lateral g; ~100% = at the "
+    "session's grip limit. Normalised session-wide so a slower lap reads lower.",
 ]
 CORNER_DIR_GLYPH = {1: "⟲", -1: "⟳"}  # left / right (turn sense), shown after the C-label
 

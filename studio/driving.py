@@ -363,6 +363,11 @@ def grip_envelope(long_g, lat_g, speed_kmh) -> float:
 
 
 GRIP_UTIL_CLIP = 1.2          # display clip for per-sample utilization (a little over the p98 limit)
+CORNER_GRIP_CLIP = 1.1        # display clip for the per-corner median grip: a corner can genuinely
+#                               sit AT (~1.0) or just past the session's robust-p98 envelope, so the
+#                               cap is OVER 1.0 (was a dishonest 1.0 that could never read "at the
+#                               limit"). Tighter than GRIP_UTIL_CLIP because a median is far less
+#                               spiky than the per-sample series, so 1.1 is ample honest headroom.
 
 
 def grip_utilization(lat_g, long_g, envelope: float, *,
@@ -391,11 +396,18 @@ def grip_utilization(lat_g, long_g, envelope: float, *,
     return util
 
 
-def corner_grip(dist, long_g, lat_g, windows, envelope: float) -> list[float]:
+def corner_grip(dist, long_g, lat_g, windows, envelope: float, *,
+                clip_max: float = CORNER_GRIP_CLIP) -> list[float]:
     """Per-corner grip utilization: median(hypot(lat,long)) inside each (enter,exit) odo window
-    / the SESSION grip `envelope` (see grip_envelope), clamped to [0,1]. Normalizing to the session
-    envelope rather than this lap's own peak makes the values comparable across laps — a slow lap
-    reads lower. One float per window (0.0 if empty)."""
+    / the SESSION grip `envelope` (see grip_envelope), clamped to [0, clip_max]. Normalizing to the
+    session envelope rather than this lap's own peak makes the values comparable across laps — a slow
+    lap reads lower. The ceiling is OVER 1.0 (CORNER_GRIP_CLIP) so a corner genuinely AT or just past
+    the session's robust-p98 envelope reads ~100%+ honestly, instead of being capped at a misleading
+    1.0 that can never say "you're at the limit". One float per window (0.0 if empty).
+
+    `long_g`/`lat_g` are the SAME validated axes the envelope is built from (clean speed-derived
+    longitudinal + IMU lateral; see DrivingChannels._lap_g_arrays / _grip_envelope), so numerator
+    and divisor share one friction circle and the value is unbiased."""
     dist = np.asarray(dist, float)
     lg = np.asarray(long_g, float)
     la = np.asarray(lat_g, float)
@@ -408,7 +420,7 @@ def corner_grip(dist, long_g, lat_g, windows, envelope: float) -> list[float]:
     for d0, d1 in windows:
         idx = np.flatnonzero((dist >= d0) & (dist <= d1))
         if len(idx):
-            out.append(min(float(np.median(gmag[idx])) / envelope, 1.0))
+            out.append(min(float(np.median(gmag[idx])) / envelope, float(clip_max)))
         else:
             out.append(0.0)
     return out

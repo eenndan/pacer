@@ -96,9 +96,10 @@ class DrivingChannels:
         (both share the media clock). (None, None) when there's no g signal or a degenerate lap.
 
         LONGITUDINAL prefers the GPS speed-derivative (gm.long_g_gps) when present — the IMU forward
-        axis is vibration-inflated (see gmeter/driving), so the dial, the map grip colour and the
-        per-corner grip all read the same validated longitudinal. Falls back to the IMU long_g for a
-        GPS-only/synthetic meter. LATERAL is always the IMU lateral (which it gets right, r~0.9)."""
+        axis is vibration-inflated (see gmeter/driving), so the dial, the map grip colour, the
+        per-corner grip AND the friction-circle envelope (_grip_envelope) all read this same
+        validated longitudinal. Falls back to the IMU long_g for a GPS-only/synthetic meter. LATERAL
+        is always the IMU lateral (which it gets right, r~0.9)."""
         gm = self._gmeter()
         if not gm.has_data:
             return None, None
@@ -247,12 +248,26 @@ class DrivingChannels:
 
     def _grip_envelope(self) -> float:
         """The session-wide combined-g grip limit (cached; constant across re-segments). corner_grip
-        normalizes to this so a slow lap reads lower, vs normalizing to each lap's own peak."""
+        normalizes to this so a slow lap reads lower, vs normalizing to each lap's own peak.
+
+        AXIS: the friction circle is built from the SAME trusted axes the per-corner / per-sample
+        grip numerator uses — the CLEAN speed-derived longitudinal g (long_g_gps when present; see
+        _lap_g_arrays) and the IMU lateral. Using the raw IMU long_g here (vibration-inflated, ~2x
+        RMS) would inflate the divisor and bias every grip reading systematically LOW."""
         if self._grip_env_cache is not _UNSET:
             return self._grip_env_cache
         gm = self._gmeter()
         speed_kmh = np.interp(gm.times, self._trace_times(), self._trace_speed_kmh())
-        self._grip_env_cache = driving.grip_envelope(gm.long_g, gm.lat_g, speed_kmh)
+        # Clean longitudinal on the g clock: prefer the GPS speed-derivative the dial/corner grip
+        # use; for a GPS-only/synthetic meter (no long_g_gps) derive it from the resampled speed,
+        # falling back to the IMU long_g only when there's no speed trace to differentiate.
+        if gm.long_g_gps is not None:
+            long_clean = gm.long_g_gps
+        elif gm.times.size >= 2:
+            long_clean = speed_long_g(speed_kmh, gm.times)
+        else:
+            long_clean = gm.long_g
+        self._grip_env_cache = driving.grip_envelope(long_clean, gm.lat_g, speed_kmh)
         return self._grip_env_cache
 
     # ------------------------------------------------------------------ D4 braking-point optimizer
