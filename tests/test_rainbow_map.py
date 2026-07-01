@@ -210,6 +210,7 @@ def test_toggle_off_restores_exact_items_and_pens():
     rebuilt — and every rainbow bucket item is emptied."""
     s = _stub_session()
     mv = MapView(s)
+    mv.set_rainbow_mode("off")  # start from OFF (the map now defaults to speed) for a clean baseline
     mv.set_current_lap(1)
     before_items = list(mv._current_overlay._items)
     before_pens = [it.opts["pen"] for it in before_items]
@@ -246,7 +247,7 @@ def test_tick_path_does_zero_rainbow_rebuilds():
     s = _stub_session()
     mv = MapView(s)
     mv.set_current_lap(1)
-    mv._cycle_rainbow()  # speed
+    mv.set_rainbow_mode("speed")  # ensure the SPEED channel is on (independent of the default)
     base = mv._rainbow.rebuilds
     assert base >= 1
     for k in range(100):  # 100 ticks inside the same lap
@@ -266,7 +267,7 @@ def test_speed_extremes_land_in_extreme_buckets():
     s = _stub_session()
     mv = MapView(s)
     mv.set_current_lap(1)
-    mv._cycle_rainbow()  # speed
+    mv.set_rainbow_mode("speed")  # the SPEED channel (also the map's default on a fresh load)
     items = mv._rainbow._items
     assert items[0].xData.size > 0, "slowest segments missing from the bottom (red) bucket"
     assert items[-1].xData.size > 0, "fastest segments missing from the top (green) bucket"
@@ -277,6 +278,30 @@ def test_speed_extremes_land_in_extreme_buckets():
     print("test_speed_extremes_land_in_extreme_buckets OK")
 
 
+def test_default_channel_is_speed_and_combo_reads_speed():
+    """A freshly-built MapView leads with the SPEED gradient (the signature visual): the mode is
+    'speed', the labelled combo already shows 'Line: Speed', and once the current lap is set the
+    speed rainbow paints without any user action. Cycling still walks off → speed → Δ → grip → off
+    and the combo stays in sync at every step."""
+    s = _stub_session()
+    mv = MapView(s)
+    assert mv._rainbow_mode == "speed", "the map must open speed-coloured"
+    assert mv.rainbow_combo.currentData() == "speed"
+    assert mv.rainbow_combo.currentText() == "Line: Speed"
+    # Setting the current lap paints the speed rainbow with no explicit toggle.
+    mv.set_current_lap(1)
+    assert sum(it.xData.size for it in mv._rainbow._items) > 0, "speed line must paint on load"
+    assert mv._legend.isVisibleTo(mv), "the speed legend shows on load"
+    # Cycling still visits every channel in order, combo mirroring the mode each step.
+    seen = [mv._rainbow_mode]
+    for _ in range(4):
+        mv._cycle_rainbow()
+        assert mv.rainbow_combo.currentData() == mv._rainbow_mode, "combo must stay in sync"
+        seen.append(mv._rainbow_mode)
+    assert seen == ["speed", "delta", "grip", "off", "speed"], seen
+    print("test_default_channel_is_speed_and_combo_reads_speed OK")
+
+
 # ----------------------------------------------------- D5 grip-utilization map channel
 def test_grip_channel_paints_and_on_limit_is_red():
     """Selecting Grip colours the line by per-sample utilization: on the stub's 0.1→1.1 ramp the
@@ -284,6 +309,7 @@ def test_grip_channel_paints_and_on_limit_is_red():
     (lowest util, polyline START) in the TOP (green) bucket — green = grip left unused."""
     s = _stub_session()
     mv = MapView(s)
+    mv.set_rainbow_mode("off")  # normalise the start point (default is now speed)
     mv.set_current_lap(1)
     for _ in range(3):  # off → speed → delta → grip
         mv._cycle_rainbow()
@@ -310,6 +336,7 @@ def test_grip_channel_degrades_when_no_g():
     s = _stub_session()
     s.driving.lap_grip_utilization = lambda lid: None  # no g signal on this recording
     mv = MapView(s)
+    mv.set_rainbow_mode("off")  # normalise the start point (default is now speed)
     mv.set_current_lap(1)
     for _ in range(3):  # off → speed → delta → grip
         mv._cycle_rainbow()
