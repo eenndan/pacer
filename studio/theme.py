@@ -897,6 +897,14 @@ QLabel[role="EmptyState"] {{
     font-size: {BODY}px;
     padding: 24px;
 }}
+/* first-run welcome DROP ZONE: a dashed-border rounded rect framing the wordmark/invitation/
+   buttons, so the drag-and-drop affordance is VISIBLE (a user reads "drop a file here"). Restrained
+   — a dashed hairline over the canvas, not a heavy box; the buttons inside keep their own styling. */
+QFrame#WelcomeDropZone {{
+    background: transparent;
+    border: 2px dashed {C.border_strong};
+    border-radius: 16px;
+}}
 /* first-run welcome empty state (no recording loaded): a large wordmark + a muted invitation. */
 QLabel[role="WelcomeTitle"] {{
     background: transparent;

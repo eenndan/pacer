@@ -368,7 +368,11 @@ class OpportunitiesPanel(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(True)
-        self.table.verticalHeader().setDefaultSectionSize(34)
+        # Let each row grow to fit its wrapped "How to find it" cell instead of a fixed 34-px row
+        # that clips a 2nd line at a narrow panel width (the ellipsis-truncation bug). The body's
+        # max-height cap still keeps the panel compact — it scrolls once the auto-height rows exceed
+        # it, rather than cutting off the coaching sentence.
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         hdr = self.table.horizontalHeader()
         hdr.setStretchLastSection(True)  # the reason column takes the slack
         for col in (0, 1, 2):  # corner · time-lost · σ size to content; reason (last) stretches
@@ -431,6 +435,9 @@ class OpportunitiesPanel(QWidget):
             self.table.setItem(r, 2, _sigma_cell(opp, self._num_font))  # consistency σ on the row
             self.table.setItem(r, 3, _reason_cell(opp, brake_points, self._speed_unit))
         self.table.blockSignals(False)
+        # Grow each row to its wrapped-reason height for the current column widths (the reason is the
+        # stretch column, so its width — and thus the wrap — depends on the panel's live size).
+        self.table.resizeRowsToContents()
         self.body.setCurrentIndex(0)
 
     def _show_excluded(self, opps: coaching.Opportunities):
@@ -446,6 +453,13 @@ class OpportunitiesPanel(QWidget):
         self.summary_label.setText("")
         self.empty_label.setText(msg)
         self.body.setCurrentIndex(1)
+
+    def resizeEvent(self, event):
+        """Re-fit the row heights when the panel width changes: the reason (stretch) column
+        re-wraps as the panel narrows, so a row that was one line can become two — auto-height keeps
+        the full "How to find it" sentence visible instead of clipping it (the truncation bug)."""
+        super().resizeEvent(event)
+        self.table.resizeRowsToContents()
 
     # ------------------------------------------------------------- interaction
     def _on_row_selected(self):
