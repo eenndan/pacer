@@ -1470,6 +1470,177 @@ def test_report_problem_opens_github_issues_url():
     print("test_report_problem_opens_github_issues_url OK")
 
 
+# ----------------------------------------------- off-thread reference load (reliability guard)
+def test_reference_load_runs_on_worker_not_main_thread():
+    """The cross-recording reference load must NOT run Session.load synchronously on the UI thread
+    (it froze the window on the moat "race a friend's GoPro" path). _start_reference_load spawns a
+    _SessionLoadWorker and adopts the result via set_reference_session on the worker's finished
+    signal — so no synchronous load runs in the menu handler. We assert a worker was created and
+    that the apply is wired to the worker (not called inline), without a real telemetry file."""
+    from studio.app import StudioWindow, _SessionLoadWorker
+
+    w = StudioWindow([])  # welcome state; no session yet
+    try:
+        # No primary session -> the guarded picker path is a no-op (nothing to attach a reference to),
+        # but the off-thread starter is independent of the picker and is what we exercise.
+        w.session = SimpleNamespace()  # a stand-in primary session so _on_reference_loaded proceeds
+        sync_calls = []
+        # Fail loudly if anything drives the SYNCHRONOUS Session.load_reference on the main thread.
+        w.session.load_reference = lambda paths: sync_calls.append(paths)
+
+        applied = []
+        w.session.set_reference_session = lambda ref, source_label="": (applied.append(ref), None)[1]
+        # _apply_reference_change touches the (absent) view; stub it so the apply path is observable.
+        w._apply_reference_change = lambda: applied.append("applied")
+
+        before = set(w._load_workers)
+        w._start_reference_load([_BUNDLED_SAMPLE])
+        # A worker was created and held (so it isn't GC'd mid-load), and it is a _SessionLoadWorker —
+        # the SAME machinery as the primary open, not a second bespoke worker class.
+        new_workers = set(w._load_workers) - before
+        assert len(new_workers) == 1, new_workers
+        worker = next(iter(new_workers))
+        assert isinstance(worker, _SessionLoadWorker), type(worker)
+        assert w._ref_load_worker is worker
+        # The synchronous load path was NOT taken on the main thread.
+        assert sync_calls == [], sync_calls
+        # Let the worker settle: on success the apply runs via set_reference_session (queued signal).
+        assert _pump_until(lambda: bool(applied), 60.0), "reference load never settled"
+        assert applied[-1] == "applied", applied
+        assert len(applied) >= 2 and applied[0] is not None, applied  # a ref Session was adopted
+    finally:
+        w._drain_load_workers()
+        w.close()
+        w.deleteLater()
+    print("test_reference_load_runs_on_worker_not_main_thread OK")
+
+
+def test_reference_load_supersedes_older_reference():
+    """A second reference load must supersede an older in-flight one (bump the token), so a stale
+    reference result is dropped rather than clobbering the newer one — mirroring the primary load's
+    token guard. Here we just assert the token bumps and the current worker is the latest."""
+    from studio.app import StudioWindow
+
+    w = StudioWindow([])
+    try:
+        w.session = SimpleNamespace()
+        w.session.set_reference_session = lambda ref, source_label="": None
+        w._apply_reference_change = lambda: None
+
+        w._start_reference_load([_BUNDLED_SAMPLE])
+        first_token = w._ref_load_token
+        first_worker = w._ref_load_worker
+        w._start_reference_load([_BUNDLED_SAMPLE])  # supersede before the first finishes
+        assert w._ref_load_token == first_token + 1, (first_token, w._ref_load_token)
+        assert w._ref_load_worker is not first_worker
+        # A result stamped with the stale first token is ignored by the guard.
+        applied = []
+        w.session.set_reference_session = lambda ref, source_label="": (applied.append(ref), None)[1]
+        w._on_reference_loaded(first_token, [_BUNDLED_SAMPLE], SimpleNamespace())
+        assert applied == [], applied  # stale token dropped, no apply
+    finally:
+        w._drain_load_workers()
+        w.close()
+        w.deleteLater()
+    print("test_reference_load_supersedes_older_reference OK")
+
+
+# ----------------------------------------------- global exception -> Report-a-problem dialog
+def test_show_error_report_details_traceback_and_report_button_opens_issues():
+    """_show_error_report builds a themed dialog whose Details carries the full traceback, and whose
+    Report-a-problem button opens ISSUES_URL. We monkeypatch QMessageBox.exec to auto-click the
+    report button and QDesktopServices.openUrl to capture the URL (no real browser / modal loop)."""
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio import app as studio_app
+
+    try:
+        raise ValueError("boom-token-42")
+    except ValueError:
+        exc_type, exc, tb = sys.exc_info()
+
+    opened = []
+    orig_open = QDesktopServices.openUrl
+    orig_exec = QMessageBox.exec
+    QDesktopServices.openUrl = staticmethod(lambda url: (opened.append(url.toString()), True)[1])
+
+    # exec() is where the report button would be clicked; simulate that click, then return. NOTE:
+    # setDetailedText adds its own "Show Details…" ActionRole button, so match on the button TEXT,
+    # not just the role (the report button's text starts with "Report a problem").
+    def _fake_exec(self):
+        for b in self.buttons():
+            if b.text().startswith("Report a problem"):
+                # A button click emits clicked -> QMessageBox records it as clickedButton().
+                b.click()
+                break
+        return QMessageBox.Close
+    QMessageBox.exec = _fake_exec
+    try:
+        box = studio_app._show_error_report(exc_type, exc, tb)
+    finally:
+        QDesktopServices.openUrl = orig_open
+        QMessageBox.exec = orig_exec
+
+    # The full traceback (incl. the raised message) is behind Details, not in the headline.
+    assert "boom-token-42" in box.detailedText(), box.detailedText()
+    assert "ValueError" in box.detailedText(), box.detailedText()
+    assert "boom-token-42" not in box.text().split("ValueError")[0], box.text()
+    # Clicking the report button opened the SAME issues URL as Help ▸ Report a problem…
+    assert opened == [studio_app.ISSUES_URL], opened
+    print("test_show_error_report_details_traceback_and_report_button_opens_issues OK")
+
+
+def test_install_excepthook_sets_handler_and_is_defensive_without_qapplication():
+    """main() installs a sys.excepthook (via install_excepthook). The handler is defensive: with no
+    QApplication it falls back to the default hook (a plain stderr trace) and never raises — a
+    headless/CLI failure still prints normally. We can't easily drop the singleton QApplication in
+    this offscreen process, so we assert the hook is installed and that its body never propagates."""
+    from studio import app as studio_app
+
+    orig = sys.excepthook
+    try:
+        studio_app.install_excepthook()
+        assert sys.excepthook is studio_app._excepthook
+        # Feed the handler a synthetic exception with the report dialog stubbed out (so no modal
+        # loop): it must return without raising, whether or not a QApplication is live.
+        orig_show = studio_app._show_error_report
+        studio_app._show_error_report = lambda *a: None
+        try:
+            raise RuntimeError("handled-not-raised")
+        except RuntimeError:
+            et, e, tb = sys.exc_info()
+        try:
+            studio_app._excepthook(et, e, tb)  # must not propagate
+        finally:
+            studio_app._show_error_report = orig_show
+    finally:
+        sys.excepthook = orig
+    print("test_install_excepthook_sets_handler_and_is_defensive_without_qapplication OK")
+
+
+def test_excepthook_never_propagates_even_if_dialog_throws():
+    """A crashing excepthook is worse than none: if _show_error_report itself throws, the handler
+    must swallow it and fall back to the default hook, never letting the failure propagate."""
+    from studio import app as studio_app
+
+    orig_show = studio_app._show_error_report
+
+    def _boom(*a):
+        raise RuntimeError("dialog blew up")
+    studio_app._show_error_report = _boom
+    try:
+        try:
+            raise ValueError("original error")
+        except ValueError:
+            et, e, tb = sys.exc_info()
+        # Must not raise despite _show_error_report throwing (defensive guard).
+        studio_app._excepthook(et, e, tb)
+    finally:
+        studio_app._show_error_report = orig_show
+    print("test_excepthook_never_propagates_even_if_dialog_throws OK")
+
+
 if __name__ == "__main__":
     # Hang watchdog (permanent CI hardening): this file is full of Qt/event-loop tests, where a
     # regression can hang the whole run, and ctest buffers a test's stdout/stderr until it ENDS —
