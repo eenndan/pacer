@@ -30,6 +30,23 @@ No transponder, no extra hardware.
   ffmpeg) for sharing.
 - **Session library** — a local index of everything you've analysed.
 
+## Get Pacer
+
+**A Mac (Apple Silicon) and a GoPro is all you need.**
+
+1. **Download** the latest **`Pacer Studio.app`** (`.dmg`) from the
+   [**Releases**](https://github.com/eenndan/pacer/releases) page — no pixi, Python, or build
+   tools required on your Mac. *(The build is currently unsigned, so on first launch **right-click
+   the app ▸ Open** to get past Gatekeeper — see [docs/PACKAGING.md](docs/PACKAGING.md#gatekeeper).
+   No release binary yet? Build one yourself in one command — see [Build from source](#build-from-source).)*
+2. **Open a GoPro `.MP4`** — drag it onto the window, or `File ▸ Open`.
+3. **Read your first lap** — the [**First lap walkthrough**](docs/FIRST_LAP.md) shows you the
+   30-second path from footage to "where am I losing time?"
+
+> On a track Pacer doesn't know yet, it places a sensible start/finish line for you and flags the
+> timing as *provisional* — drag the line on the map to where a lap begins and it's remembered for
+> that recording. See the walkthrough.
+
 ## Architecture
 
 One desktop app on top of a small, fast C++ core:
@@ -40,11 +57,11 @@ One desktop app on top of a small, fast C++ core:
   and GPS9 true-clock timing, exposed to Python through **nanobind**.
 - **`bindings/`** — the nanobind bindings, generated from the C++ headers.
 
-## Quick start
+## Build from source
 
-[pixi](https://pixi.sh) manages all external dependencies (`cmake`, `ninja`,
-`catch2`, **`ffmpeg`** for video export). Build tooling is `cmake` + `litgen`
-(binding codegen) glued via `scikit-build-core`.
+*For developers, or to produce your own `.dmg`.* [pixi](https://pixi.sh) manages all external
+dependencies (`cmake`, `ninja`, `catch2`, **`ffmpeg`** for video export). Build tooling is
+`cmake` + `litgen` (binding codegen) glued via `scikit-build-core`.
 
 ```bash
 git submodule update --init --recursive   # 3rdparty deps (gpmf-parser, nanobind)

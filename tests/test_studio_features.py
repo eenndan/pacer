@@ -1452,6 +1452,24 @@ def test_reentrant_load_applies_only_latest():
     print("test_reentrant_load_applies_only_latest OK")
 
 
+def test_report_problem_opens_github_issues_url():
+    """Help ▸ Report a problem… opens the GitHub new-issue page — the only support channel; there
+    is no crash reporting / telemetry, so nothing leaves the machine unless the user picks this."""
+    from PySide6.QtGui import QDesktopServices
+
+    from studio import app as studio_app
+    opened = []
+    orig = QDesktopServices.openUrl
+    QDesktopServices.openUrl = staticmethod(lambda url: (opened.append(url.toString()), True)[1])
+    try:
+        studio_app.StudioWindow._report_problem(object())  # body ignores self
+    finally:
+        QDesktopServices.openUrl = orig
+    assert opened == [studio_app.ISSUES_URL], opened
+    assert opened[0].startswith("https://github.com/eenndan/pacer/issues"), opened[0]
+    print("test_report_problem_opens_github_issues_url OK")
+
+
 if __name__ == "__main__":
     # Hang watchdog (permanent CI hardening): this file is full of Qt/event-loop tests, where a
     # regression can hang the whole run, and ctest buffers a test's stdout/stderr until it ENDS —
