@@ -98,6 +98,17 @@ add_test(NAME test_studio_features
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_studio_features.py)
 set_tests_properties(test_studio_features PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# CI half of the Session equivalence gate (test/synthetic-golden-gate): automates the F1/E2/#50
+# byte-identity machinery (studio.dev.golden_session_dump.fingerprint + golden_compare.walk, eps
+# 1e-9) over the DETERMINISTIC synthetic session (test_session_services._synthetic_session — stadium
+# loop + seeded g-meter, REAL corner/driving/delta/bests/consistency, no media file), across
+# base/ref/ref_cleared phases, vs a committed baseline (golden_synthetic_baseline.json). Any
+# Session-math leaf drift fails the build — with NO ~11.8 GB D24 load, so it runs in CI. The full,
+# higher-coverage D24 golden dump stays the (unchanged) MANUAL gate. Imports Session -> Qt, offscreen.
+add_test(NAME test_golden_synthetic
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_golden_synthetic.py)
+set_tests_properties(test_golden_synthetic PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # F3 rainbow track map: pure-numpy bucketization / NaN-break / Δ-resampling helpers + the
 # MapView toggle invariants (OFF restores byte-identical items; zero rebuilds on the tick
 # path) on a stub session. Imports map_view -> Qt, so run offscreen.
@@ -299,6 +310,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
                         test_sidecar test_track_db test_session_pure test_session_services
+                        test_golden_synthetic
                         test_studio_features test_rainbow_map test_map_render
                         test_compare test_map_ghost test_cross_reference test_delta_engine
                         test_controllers test_central_view_realqt
