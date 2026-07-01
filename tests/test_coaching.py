@@ -621,6 +621,40 @@ def test_dialog_shows_brake_point_hint():
     print("ok D4 dialog: brake-point hint appended to the matched corner's reason")
 
 
+def test_dialog_reason_cell_is_not_truncated():
+    """The MODAL OpportunitiesDialog's "How to find it" reason cell must show its FULL text (no
+    ellipsis clip) at the dialog's default size — the modal carries two extra columns the panel
+    lacks (the fixed ~150-px Entry·Apex·Exit PhaseBar + the per-row Jump button) which squeeze the
+    stretch reason column. Mirror the panel's #66 test: word-wrap on + the vertical header sizes
+    rows to their content, and the dialog default width leaves the reason column real room (a
+    genuinely long, 2-line reason grows the row past the old fixed 40-px section)."""
+    _qapp()
+    from PySide6.QtWidgets import QHeaderView
+
+    from studio.coaching_panel import _COL_REASON, OpportunitiesDialog
+    opp = _populated_opps()
+    dlg = OpportunitiesDialog(opp, jump_to=None)
+    assert dlg.table.wordWrap() is True, "the reason cell must word-wrap, not elide"
+    assert (dlg.table.verticalHeader().sectionResizeMode(0)
+            == QHeaderView.ResizeToContents), "rows must auto-fit their wrapped content, not clip"
+    # At the dialog's default size the stretch reason column must have real room — not a sliver
+    # squeezed by the phase bar + Jump button. A sane floor well above the ~40-px truncating width.
+    dlg.resize(920, 380)
+    dlg.table.resizeColumnsToContents()  # settle the content columns; reason keeps the slack
+    assert dlg.table.columnWidth(_COL_REASON) > 200, (
+        f"the reason column must have real width, got {dlg.table.columnWidth(_COL_REASON)}px")
+    # A genuinely long, two-line reason MUST grow the row past the old fixed 40-px section (which
+    # clipped the 2nd line). Set the text directly so the assertion is deterministic.
+    long_reason = ("Carry more apex speed here — your typical lap is ~5 km/h slower than your "
+                   "best through the slowest point.\nBrake ~4 m later into C2 (est)")
+    dlg.table.item(0, _COL_REASON).setText(long_reason)
+    dlg.table.resizeRowsToContents()
+    assert dlg.table.rowHeight(0) > 40, (
+        f"a wrapped 2-line reason must grow the row, not clip: {dlg.table.rowHeight(0)}px")
+    print(f"ok dialog: reason cell not truncated (reason col w={dlg.table.columnWidth(_COL_REASON)}px, "
+          f"row0 h={dlg.table.rowHeight(0)}px, wrap+auto-height)")
+
+
 def test_dialog_excluded_state_has_no_table():
     _qapp()
     from studio.coaching_panel import OpportunitiesDialog
