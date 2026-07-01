@@ -204,7 +204,12 @@ class OpportunitiesDialog(QDialog):
                  parent=None, speed_unit: str | None = None):
         super().__init__(parent)
         self.setWindowTitle("pacer studio — opportunities")
-        self.resize(560, 320)
+        # A wider default than the persistent panel: the modal carries two extra columns the panel
+        # doesn't (the fixed ~150-px Entry·Apex·Exit PhaseBar + the per-row Jump button), which
+        # squeeze the stretch reason column into a sliver that truncates ("brake …", "find tim…").
+        # Give the reason real room so it reads as 1–2 wrapped lines, and keep the modal resizable.
+        self.resize(920, 380)
+        self.setMinimumWidth(720)
         self._opps = opportunities
         self._jump_to = jump_to
         self._brake_points = brake_points or {}
@@ -264,7 +269,13 @@ class OpportunitiesDialog(QDialog):
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setFocusPolicy(Qt.NoFocus)
         table.setAlternatingRowColors(True)
-        table.verticalHeader().setDefaultSectionSize(40)
+        # Word-wrap the reason cell + let each row grow to its wrapped content instead of a fixed
+        # 40-px section that clips a 2nd line (the modal's extra PhaseBar + Jump columns squeeze the
+        # stretch reason column, so the "How to find it" sentence wraps and MUST get the height for
+        # it). Mirrors the persistent OpportunitiesPanel's now-untruncated behaviour (#66) so the two
+        # coaching surfaces read consistently.
+        table.setWordWrap(True)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         hdr = table.horizontalHeader()
         hdr.setSectionResizeMode(_COL_REASON, QHeaderView.Stretch)
         for col in (_COL_CORNER, _COL_LOST, _COL_SIGMA, _COL_GO):
@@ -281,6 +292,9 @@ class OpportunitiesDialog(QDialog):
             table.setCellWidget(r, _COL_PHASES, PhaseBar(opp.phases))  # D2 entry/apex/exit Δt
             table.setItem(r, _COL_REASON, _reason_cell(opp, self._brake_points, self._speed_unit))
             table.setCellWidget(r, _COL_GO, self._go_button(opp))
+        # Fit each row to its wrapped-reason height at the current column widths (the reason is the
+        # stretch column, so a 2-line sentence needs the extra height — same as the panel's fill).
+        table.resizeRowsToContents()
         self.table = table  # exposed for the tests
         return table
 
