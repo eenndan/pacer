@@ -72,3 +72,18 @@ jobs:
         # clang-format (the generated nanobind_pacer.cpp is excluded — owned by the
         # regen-drift gate above).
         run: pixi run fmt-check
+
+      - name: Demo asset reachable (non-blocking)
+        # The "Open demo" CTA + `--demo` fetch this clip (studio/demo.py `_DEMO_URL`). It isn't
+        # uploaded yet, so this is a NON-BLOCKING reminder (continue-on-error) that surfaces the
+        # missing asset without failing the pipeline; it goes green once the demo `.mp4` is attached
+        # to the release. Keep the URL in sync with studio/demo.py._DEMO_URL.
+        continue-on-error: true
+        run: |
+          URL="https://github.com/eenndan/pacer/releases/download/v0.1.0/pacer-demo-lap.mp4"
+          CODE=$(curl -sIL -o /dev/null -w '%{http_code}' "$URL")
+          if [ "$CODE" = "200" ]; then
+            echo "demo asset OK ($URL)"
+          else
+            echo "::warning::demo asset unreachable (HTTP $CODE) — 'Open demo' / --demo will fail until it's uploaded: $URL"
+          fi

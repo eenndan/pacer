@@ -7,8 +7,8 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut
+from PySide6.QtCore import QBuffer, QIODevice, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QActionGroup, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -44,6 +44,10 @@ from .coaching_panel import OpportunitiesDialog
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
 from .session import DEFAULT_SAMPLE, Session, fmt_time
+
+# Help ▸ Report a problem… opens this GitHub new-issue page (the only support channel; no crash
+# reporting / telemetry — nothing is sent without the user opening this).
+ISSUES_URL = "https://github.com/eenndan/pacer/issues/new"
 
 
 class _VideoExportWorker(QThread):
@@ -733,6 +737,10 @@ class StudioWindow(QMainWindow):
         self._about_action = help_menu.addAction("About pacer studio")
         self._about_action.setToolTip("What pacer studio is and what it does")
         self._about_action.triggered.connect(self._show_about)
+        self._report_action = help_menu.addAction("Report a problem…")
+        self._report_action.setToolTip(
+            "Open a new issue on GitHub (include your GoPro model/firmware and what you were doing)")
+        self._report_action.triggered.connect(self._report_problem)
 
     def _show_shortcuts(self):
         """Help ▸ Keyboard shortcuts (also F1 / ?): the read-only shortcut reference."""
@@ -741,6 +749,12 @@ class StudioWindow(QMainWindow):
     def _show_about(self):
         """Help ▸ About pacer studio: the small themed About card (name / tagline / blurb)."""
         AboutDialog(self).exec()
+
+    def _report_problem(self):
+        """Help ▸ Report a problem…: open the GitHub new-issue page in the browser — a support
+        channel so a user who hits one of the confidently-wrong-input cases has somewhere to go
+        (there is no crash reporting / telemetry; nothing is sent automatically)."""
+        QDesktopServices.openUrl(QUrl(ISSUES_URL))
 
     def _show_privacy(self):
         """Help ▸ Your data & privacy: the local-data disclosure card (what pacer stores + how to
