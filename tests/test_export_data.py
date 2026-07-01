@@ -228,6 +228,74 @@ def test_channels_csv_without_g_signal():
     assert header == list(cols) and header[-1] == "speed_kmh"
 
 
+def test_channels_csv_g_long_is_clean_gps_not_raw_imu():
+    """HONESTY FIX (#41 leftover): the channels CSV g_long column must carry the CLEAN GPS
+    speed-derivative longitudinal (gm.long_g_gps) — the same validated axis the dial / map grip /
+    DrivingChannels read — NOT the vibration-inflated raw IMU forward axis (gm.long_g). Construct a
+    g-meter where the two differ hugely and assert the CLEAN value is what lands in lap_channels and
+    the exported CSV (never the distrusted raw axis)."""
+    s = make_session()
+    n = len(s._gmeter.times)
+    times = s._gmeter.times.copy()
+    lat = s._gmeter.lat_g.copy()
+    raw_long = np.full(n, 1.7)     # the IMU forward axis grossly vibration-inflated
+    clean_long = np.full(n, 0.15)  # the CLEAN GPS-derived longitudinal — the trusted value
+    s._gmeter = gmeter.GMeter(times=times, lat_g=lat, long_g=raw_long, cross=None,
+                              source="accl", long_g_gps=clean_long)
+    cols = s.lap_channels(0)
+    # The exported g_long tracks the CLEAN axis (constant 0.15), NOT the raw 1.7.
+    assert np.allclose(cols["g_long"], 0.15, atol=1e-9), cols["g_long"][:3]
+    assert not np.any(np.isclose(cols["g_long"], 1.7)), "raw inflated IMU long_g leaked into the CSV"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "channels.csv")
+        export_data.write_channels_csv(path, s, 0)
+        with open(path, newline="", encoding="utf-8") as f:
+            r = csv.reader(f)
+            header = next(r)
+            col = header.index("g_long")
+            g_long_csv = np.asarray([float(row[col]) for row in r])
+    assert np.allclose(g_long_csv, 0.15, atol=1e-9), g_long_csv[:3]
+    print("ok channels CSV g_long = clean GPS-derived longitudinal (not the raw inflated IMU axis)")
+
+
+# --------------------------------------------------------------------------- session_date
+def test_session_date_uses_local_calendar_day_not_utc():
+    """CORRECTNESS FIX: session_date() must be the LOCAL calendar day the driver drove, not the
+    UTC day. An evening session west of UTC (here 22:30 local in a UTC-05 zone) is 03:30Z the NEXT
+    day; the always-UTC path rolled it onto the wrong day and mis-filed it in the library / the
+    per-track PB axis. With a fixed timezone the local day must be the driving day (the 8th), NOT
+    the UTC day (the 9th). The GPS5-sentinel guard (ts <= 0 -> None) is unchanged."""
+    import time
+
+    # 2026-01-09T03:30:00Z — i.e. 2026-01-08 22:30 local in America/New_York (UTC-05 in January).
+    evening_utc_ms = 1767929400000
+    old_tz = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+        # Sanity: this instant is the 9th in UTC but the 8th locally (the rollover the fix targets).
+        assert datetime.datetime.fromtimestamp(
+            evening_utc_ms / 1000.0, tz=datetime.UTC).strftime("%Y-%m-%d") == "2026-01-09"
+        expected_local = datetime.datetime.fromtimestamp(
+            evening_utc_ms / 1000.0).strftime("%Y-%m-%d")
+        assert expected_local == "2026-01-08", expected_local
+
+        s = make_session()
+        s.laps = FakeLaps(s.laps._laps, first_ts_ms=evening_utc_ms)
+        assert s.session_date() == "2026-01-08", s.session_date()  # local day, not the UTC 9th
+
+        # GPS5 sentinel (ts <= 0) still yields None (guard unchanged).
+        s.laps = FakeLaps(s.laps._laps, first_ts_ms=0)
+        assert s.session_date() is None
+    finally:
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()
+    print("ok session_date: evening-UTC timestamp reports the LOCAL driving day (not the UTC roll)")
+
+
 # ------------------------------------------------------------------------------- report
 def test_report_html_wellformed_with_images():
     s = make_session()
@@ -243,8 +311,9 @@ def test_report_html_wellformed_with_images():
     assert f"Laps ({len(s.valid_lap_ids())})" in body_text
     assert fmt_time(s.lap_time(s.best_lap_id())) in body_text  # the best-time string
     assert "GX010060" in body_text and "Daytona MK" in body_text
-    expected_date = datetime.datetime.fromtimestamp(
-        TS_MS / 1000.0, tz=datetime.UTC).strftime("%Y-%m-%d")
+    # session_date() reports the LOCAL calendar day the driver drove (not UTC) — compute the
+    # expectation the same naive-local way so this holds in any analysis-machine timezone.
+    expected_date = datetime.datetime.fromtimestamp(TS_MS / 1000.0).strftime("%Y-%m-%d")
     assert s.session_date() == expected_date and expected_date in body_text
     # One table row per lap (+1 header row) in the laps table (the second <table>).
     tables = root.findall(".//table")
@@ -277,6 +346,8 @@ if __name__ == "__main__":
     test_write_laps_csv_matches_table()
     test_channels_csv_roundtrip_exact()
     test_channels_csv_without_g_signal()
+    test_channels_csv_g_long_is_clean_gps_not_raw_imu()
+    test_session_date_uses_local_calendar_day_not_utc()
     test_report_html_wellformed_with_images()
     test_report_html_no_images_no_corners()
     print("test_export_data: OK")

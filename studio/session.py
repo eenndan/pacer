@@ -1183,7 +1183,12 @@ class Session:
         (F3). Keys, in CSV column order: t_media_s, elapsed_s, lat_deg, lon_deg, x_m (cs.local),
         y_m, dist_m (the gap-aware odometer), speed_mps, speed_kmh; g_long / g_lat present only
         with a g signal (interpolated onto the lap's sample times; +long = accelerating, +lat =
-        turning left). Read-only; nothing cached."""
+        turning left). Read-only; nothing cached.
+
+        g_long is the CLEAN GPS speed-derivative longitudinal (gm.long_g_gps) when present — the same
+        validated axis the dial, the map grip colour and DrivingChannels read; the raw IMU forward
+        axis is vibration-inflated (~2x RMS, see gmeter/driving) so it is NOT exported. Falls back to
+        the IMU long_g only for a GPS-only/synthetic meter with no speed-derivative series."""
         times, xs, ys, speed_mps, cum = self._lap_columns(lap_id)
         pts = self.laps.get_lap(lap_id).points
         lat = np.asarray([p.point.lat for p in pts], dtype=float)
@@ -1202,21 +1207,31 @@ class Session:
             "speed_kmh": speed_mps * 3.6,
         }
         if self._gmeter.has_data:
-            out["g_long"] = np.interp(times, self._gmeter.times, self._gmeter.long_g)
-            out["g_lat"] = np.interp(times, self._gmeter.times, self._gmeter.lat_g)
+            gm = self._gmeter
+            long_src = gm.long_g_gps if gm.long_g_gps is not None else gm.long_g
+            out["g_long"] = np.interp(times, gm.times, long_src)
+            out["g_lat"] = np.interp(times, gm.times, gm.lat_g)
         return out
 
     def session_date(self) -> str | None:
-        """The recording's UTC date ("YYYY-MM-DD") from the first kept GPS fix's GPS9
-        wall-clock timestamp (epoch ms — see pacer's ParseGPS9; preserved verbatim through
-        the clean/smooth pipeline). None when the stream carries no per-fix timestamp
-        (a GPS5-only camera) or the session is empty — the report shows a dash."""
+        """The recording's LOCAL calendar date ("YYYY-MM-DD") — the day the driver actually drove —
+        from the first kept GPS fix's GPS9 wall-clock timestamp (epoch ms — see pacer's ParseGPS9;
+        preserved verbatim through the clean/smooth pipeline). None when the stream carries no
+        per-fix timestamp (a GPS5-only camera) or the session is empty — the report shows a dash.
+
+        LOCAL, not UTC: an evening session (e.g. 22:00 local, west of UTC) is on the same calendar
+        day as the driver experienced it, so it lands under the RIGHT date in the library and its
+        per-track PB-progression axis is correct. Converting the UTC epoch straight to a UTC date
+        would roll such a session onto the next day. The one caveat: analysing on a machine in a
+        DIFFERENT timezone than where you drove uses the analysis machine's local day — acceptable,
+        and far better than the always-UTC roll-over the raw epoch would give."""
         if self.laps.point_count() == 0:
             return None
         ts = int(self.laps.get_point(0).point.timestamp_ms)
         if ts <= 0:  # GPS5 / sentinel samples report 0 — no wall clock to read
             return None
-        dt = datetime.datetime.fromtimestamp(ts / 1000.0, tz=datetime.UTC)
+        # Naive fromtimestamp → the platform's LOCAL calendar day for the UTC epoch (see above).
+        dt = datetime.datetime.fromtimestamp(ts / 1000.0)
         return dt.strftime("%Y-%m-%d")
 
     # ------------------------------------------------------------ consistency stats (F6)
