@@ -266,6 +266,17 @@ add_test(NAME test_accessible_cues
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_accessible_cues.py)
 set_tests_properties(test_accessible_cues PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Shareable lap card (image) (feat/shareable-lap-card): the PURE card_data field extraction off
+# Session accessors (best lap / Δ-to-ideal / top opportunity / track / date / unit), the km/h↔mph
+# unit flip in the reason sentence, and the HONESTY verdict (provisional/no-lap ⇒ blocked;
+# degraded ⇒ stamped, not blocked); render_card → a non-empty CARD_W×CARD_H QImage on both
+# palettes, with/without a map thumbnail; and the app DI wiring (Export ▸ Lap card save through a
+# monkeypatched QFileDialog, Copy lap card onto a monkeypatched clipboard, blocked-session greying,
+# and the _PBToast "Share your PB →" routing). Builds QImages, so run offscreen. No telemetry file.
+add_test(NAME test_share_card
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_share_card.py)
+set_tests_properties(test_share_card PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
@@ -284,7 +295,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video
-                        test_data_safety test_units test_accessible_cues)
+                        test_data_safety test_units test_accessible_cues test_share_card)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
