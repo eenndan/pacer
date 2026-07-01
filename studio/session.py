@@ -21,6 +21,9 @@ import numpy as np
 import pacer
 
 from . import (
+    bests as bests_service,
+)
+from . import (
     chapters,
     coaching,
     consistency,
@@ -111,17 +114,6 @@ def project(s: float, baseline: LapCurve) -> float:
     return baseline.elapsed_at_fraction(s)
 
 
-def _unit_tangents(xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Per-sample unit direction-of-travel of a trace (central differences, normalized;
-    a zero-length step keeps a zero vector, which any heading gate then rejects). Used by
-    `best_rolling_lap`'s same-direction match filter. Needs len ≥ 2 (guarded by callers)."""
-    tx = np.gradient(xs)
-    ty = np.gradient(ys)
-    norm = np.hypot(tx, ty)
-    norm[norm == 0] = 1.0
-    return tx / norm, ty / norm
-
-
 class LapRow(TypedDict):
     """One `lap_rows()` row — the lap id + the lap-level metrics the lap table shows."""
 
@@ -189,6 +181,10 @@ class Session:
         # Driving-channel service (brake/coast/grip + thresholds). The thresholds depend only on
         # the constant g series so they survive a re-segment; the per-lap caches clear via invalidate().
         self._driving = self._build_driving_channels()
+        # Session-summary bests service (headline best / session-best splits / theoretical / rolling).
+        # Stateless apart from best_lap_id's memo, which stays in Session._best_cache (cleared in
+        # set_timing_lines, seeded by tests) via injected cache accessors — nothing to invalidate here.
+        self._bests = self._build_bests()
 
         # Cross-recording reference lap (F7): a lap from another recording that REPLACES the local
         # best as the Δ baseline everywhere a delta is drawn. None = DORMANT (every "vs best" path
@@ -388,6 +384,38 @@ class Session:
             corner_basis=lambda: self.corners.basis(),
             lap_corner_stats=lambda lap_id: self.corners.lap_corner_stats(lap_id),
         )
+
+    def _build_bests(self) -> bests_service.Bests:
+        # `lap_time` reads Session's pacer `laps.lap_time` (NOT the `self.lap_time` accessor, which
+        # some tests patch on the instance) so the moved bodies read exactly what the originals did.
+        # best_lap_id's memo lives in Session._best_cache (cleared in set_timing_lines, seeded by the
+        # pure-Python tests), reached via these get/set accessors + the shared _UNSET sentinel.
+        return bests_service.Bests(
+            valid_lap_ids=self.valid_lap_ids,
+            lap_has_dropout=self.lap_has_dropout,
+            lap_time=lambda i: self.laps.lap_time(i),
+            lap_sector_splits=self.lap_sector_splits,
+            sector_line_count=lambda: len(self.laps.sectors.sector_lines),
+            lap_columns=self._lap_columns,
+            best_cache_get=lambda: self._best_cache,
+            best_cache_set=self._set_best_cache,
+            unset=_UNSET,
+        )
+
+    def _set_best_cache(self, value: object) -> None:
+        self._best_cache = value
+
+    @property
+    def bests(self) -> bests_service.Bests:
+        """The session-summary bests service (headline best / session-best splits / theoretical /
+        rolling, F1) — call session.bests.best_lap_id() / .session_best_splits() etc. directly (the
+        public methods below are thin delegators over it). Lazily created; getattr-guarded for the
+        bare-Session (no-__init__) test path — see _ref."""
+        bs = getattr(self, "_bests", None)
+        if bs is None:
+            bs = self._build_bests()
+            self._bests = bs
+        return bs
 
     @property
     def corners(self) -> corner_model.CornerModel:
@@ -857,24 +885,16 @@ class Session:
         return self._valid_cache
 
     def _best_candidate_ids(self) -> list[int]:
-        """Laps eligible to be the HEADLINE best / Δ-baseline / session-best split: valid laps
-        with NO interior GPS dropout. A dropout lap's distance is speed-integral-reconstructed
-        and its timing is less reliable (it is already excluded from consistency σ and corner
-        detection), so it must not be allowed to become the 'best lap', the delta baseline, or a
-        purple session-best cell. Falls back to all valid laps when EVERY valid lap has a dropout
-        (a flagged best beats no best). The lap table still SHOWS dropout laps, flagged ⚠."""
-        valid = self.valid_lap_ids()
-        clean = [i for i in valid if not self.lap_has_dropout(i)]
-        return clean if clean else valid
+        """Delegates to the bests service (studio/bests.py) — kept as a thin Session forwarder
+        for the ~call sites that read it through Session. See Bests.best_candidate_ids."""
+        return self.bests.best_candidate_ids()
 
     def best_lap_id(self) -> int | None:
-        """The fastest dropout-free valid lap, else None. Memoized (same lifetime as
-        valid_lap_ids; cleared on re-segment) — resolved several times per tick."""
-        if self._best_cache is not _UNSET:
-            return self._best_cache
-        candidates = self._best_candidate_ids()
-        self._best_cache = min(candidates, key=self.laps.lap_time) if candidates else None
-        return self._best_cache
+        """Delegates to the bests service (studio/bests.py). Kept as a thin Session forwarder so
+        the ~41 call sites (and the tests that monkey-patch `s.best_lap_id`) keep working. The
+        memo lives in Session._best_cache, which the service reads/writes through injected
+        accessors. See Bests.best_lap_id."""
+        return self.bests.best_lap_id()
 
     def best_lap_total_distance(self) -> float | None:
         """The LOCAL best lap's total odometer distance (metres), or None. The distance-mode chart
@@ -1051,8 +1071,9 @@ class Session:
         # samples, reusing the same ±2% arc the rolling-best nearest-point search trusts (a real
         # sub-sector is far wider than that, so the window keeps the matching pass while excluding
         # the OTHER pass of an out-and-back). Floored at 1 so it stays a no-op refinement (the
-        # window is just the global point) on tiny synthetic laps.
-        half = max(1, int(round(self._ROLLING_SEARCH_FRAC * m)))
+        # window is just the global point) on tiny synthetic laps. The arc constant lives with
+        # best_rolling_lap in studio/bests.py — one source shared here.
+        half = max(1, int(round(bests_service.ROLLING_SEARCH_FRAC * m)))
         bounds = []
         for seg in lines:
             mx = (seg.first.x + seg.second.x) / 2.0
@@ -1080,139 +1101,21 @@ class Session:
         return deduped
 
     # ------------------------------------- session summaries: theoretical + rolling best (F1)
+    # The "best" cluster (candidate set / headline best / session-best splits / theoretical /
+    # rolling) is the `session.bests` service (studio/bests.py Bests); Session keeps thin
+    # delegators below so the ~call sites + the tests that monkey-patch these on an instance keep
+    # working. See Bests for the bodies.
     def session_best_splits(self) -> list[float | None]:
-        """The session-best (minimum) split per sub-sector COLUMN, computed independently per
-        column across all VALID laps — exactly the values the lap table paints purple (F5).
-        N sector lines → N+1 columns; a column with no finite data → None. Hoisted here from
-        lap_table so the table's purple cells and the theoretical-best footer read ONE
-        computation and can never disagree. With NO sector lines a lap is a single sub-sector
-        whose split is its lap time, so the one column's best is the best lap time.
-
-        Recomputed per call (refresh-time only, never per-tick): the inputs are the cached
-        per-lap `lap_sector_splits`, so memoizing here would only add another slot to clear
-        on re-segment."""
-        # N+1 columns, matching the lap-table headers; a deduped lap contributes nothing to a
-        # missing trailing column (i<len(sp) guard).
-        n_splits = len(self.laps.sectors.sector_lines) + 1
-        # Dropout laps are excluded (see _best_candidate_ids): a reconstructed-distance lap must
-        # not own a purple session-best split or feed theoretical_best.
-        all_splits = [self.lap_sector_splits(lap_id) for lap_id in self._best_candidate_ids()]
-        best: list[float | None] = []
-        for i in range(n_splits):
-            # min over finite, strictly-positive splits only, so a stray 0/negative split can't
-            # poison theoretical_best.
-            vals = [sp[i] for sp in all_splits
-                    if i < len(sp) and math.isfinite(sp[i]) and sp[i] > 0]
-            best.append(min(vals) if vals else None)
-        return best
+        """Delegates to the bests service (studio/bests.py). See Bests.session_best_splits."""
+        return self.bests.session_best_splits()
 
     def theoretical_best(self) -> float | None:
-        """The THEORETICAL BEST lap time (seconds): the sum of the session-best sector splits
-        (`session_best_splits` — the purple cells), i.e. the lap you'd drive by stitching every
-        best sector together. Always exactly the sum of the purple cells, because both read the
-        same accessor. With no sector lines a lap is one sub-sector, so this DEGENERATES to the
-        best lap time by definition (documented choice: the footer row stays meaningful before
-        any sectors are placed instead of reading '—'). None when no valid laps exist or some
-        column has no finite split (every lap partial there)."""
-        bests = self.session_best_splits()
-        if not bests or any(b is None for b in bests):
-            return None
-        return float(sum(bests))
-
-    # Nearest-point search arc as a fraction of lap samples (~21 m; line-length drift measured
-    # <0.5%). Floor of 5 samples keeps short synthetic laps searchable.
-    _ROLLING_SEARCH_FRAC = 0.02
-    # Match must travel the same direction (within 60°) to reject the OTHER leg of a corner/
-    # out-and-back; genuine same-point matches measure cos > 0.9.
-    _ROLLING_HEADING_MIN_COS = 0.5
-    # Refined closest approach must be ≤ 3 m to count as the same point (genuine winners ≤ 1.6 m).
-    # A rejected anchor only drops a candidate window, so the gate can't bias the minimum down.
-    _ROLLING_MATCH_MAX_M = 3.0
+        """Delegates to the bests service (studio/bests.py). See Bests.theoretical_best."""
+        return self.bests.theoretical_best()
 
     def best_rolling_lap(self) -> float | None:
-        """The BEST ROLLING lap time (seconds): the fastest single COMPLETE loop of the track
-        regardless of where it starts — the minimum, over every track position P, of the time
-        from passing P to passing P again one lap later. None if no valid laps.
-
-        Per-pair windows anchored to the same SPATIAL point: for each consecutive valid-lap pair
-        (k, k+1), every lap-k sample is an anchor P and the window ends when lap k+1 passes
-        CLOSEST to P (nearest same-direction sample within the search arc, sub-sample refined).
-        WHY not a normalized-distance phase / fixed-odometer window: the laps' line lengths differ,
-        so equal phase is a different physical point — those bias the min optimistically.
-
-        Window admission: straddling windows only across consecutive valid laps where NEITHER has
-        a GPS dropout (else the timing is unreliable). Every complete valid lap is admitted as the
-        S/F-aligned degenerate window, so best_rolling ≤ best lap time."""
-        valid = self.valid_lap_ids()
-        if not valid:
-            return None
-        # Complete laps are themselves (S/F-aligned) rolling windows: rolling ≤ best. Seed the
-        # floor from the dropout-free candidate set (same rule as best_lap_id) so a dropout lap's
-        # unreliable time can't undercut the rolling best; the pair windows below already skip
-        # dropout laps (line: lap_has_dropout guard).
-        best = min(self.laps.lap_time(i) for i in self._best_candidate_ids())
-        valid_set = set(valid)
-        for a in valid:
-            b = a + 1
-            if b not in valid_set or self.lap_has_dropout(a) or self.lap_has_dropout(b):
-                continue
-            times_a, xs_a, ys_a, _spd_a, cum_a = self._lap_columns(a)
-            times_b, xs_b, ys_b, _spd_b, cum_b = self._lap_columns(b)
-            n_a, n_b = len(times_a), len(times_b)
-            if n_a < 2 or n_b < 2:
-                continue
-            total_a, total_b = float(cum_a[-1]), float(cum_b[-1])
-            if total_a <= 0 or total_b <= 0:
-                continue
-            # Consecutive valid laps are time-contiguous by construction (lap a's interpolated
-            # finish crossing IS lap b's start crossing — one crossing instant computed once in
-            # the segmentation). Defensive: skip a pair with a real hole between the laps (only
-            # reachable on hand-seeded sessions), where the windows would not be one loop.
-            if abs(float(times_b[0]) - float(times_a[-1])) > 1e-3:
-                continue
-            # Nearest lap-b sample per anchor, searched only inside the ±_ROLLING_SEARCH_FRAC
-            # arc around the anchor's normalized fraction, and only among samples travelled in
-            # the same direction (the heading gate — see both constants' WHY above).
-            s_a = cum_a / total_a
-            s_b = cum_b / total_b
-            k = max(5, int(self._ROLLING_SEARCH_FRAC * n_b))
-            centers = np.clip(np.searchsorted(s_b, s_a), 0, n_b - 1)
-            idx = np.clip(centers[:, None] + np.arange(-k, k + 1)[None, :], 0, n_b - 1)
-            d2 = (xs_b[idx] - xs_a[:, None]) ** 2 + (ys_b[idx] - ys_a[:, None]) ** 2
-            tax, tay = _unit_tangents(xs_a, ys_a)
-            tbx, tby = _unit_tangents(xs_b, ys_b)
-            heading_cos = tax[:, None] * tbx[idx] + tay[:, None] * tby[idx]
-            d2 = np.where(heading_cos >= self._ROLLING_HEADING_MIN_COS, d2, np.inf)
-            rowmin = np.argmin(d2, axis=1)
-            anchors = np.arange(n_a)
-            j = idx[anchors, rowmin]
-            # An anchor whose whole search arc fails the heading gate (degenerate geometry)
-            # simply contributes no window.
-            usable = np.isfinite(d2[anchors, rowmin])
-
-            # Sub-sample refinement: project each anchor onto the two trace segments adjacent
-            # to its nearest sample; the closer projection's chord parameter interpolates the
-            # crossing time (the same chord idiom the C++ start-line crossing uses).
-            def _project(j0, j1, xs_b=xs_b, ys_b=ys_b, times_b=times_b,
-                         xs_a=xs_a, ys_a=ys_a):
-                vx, vy = xs_b[j1] - xs_b[j0], ys_b[j1] - ys_b[j0]
-                len2 = vx * vx + vy * vy
-                safe = np.where(len2 > 0, len2, 1.0)
-                u = ((xs_a - xs_b[j0]) * vx + (ys_a - ys_b[j0]) * vy) / safe
-                u = np.clip(np.where(len2 > 0, u, 0.0), 0.0, 1.0)
-                qx, qy = xs_b[j0] + u * vx, ys_b[j0] + u * vy
-                dist2 = (qx - xs_a) ** 2 + (qy - ys_a) ** 2
-                return dist2, times_b[j0] + u * (times_b[j1] - times_b[j0])
-
-            d2_lo, t_lo = _project(np.maximum(j - 1, 0), j)
-            d2_hi, t_hi = _project(j, np.minimum(j + 1, n_b - 1))
-            t_cross = np.where(d2_lo <= d2_hi, t_lo, t_hi)
-            # Distance gate on the REFINED closest approach (see _ROLLING_MATCH_MAX_M's WHY).
-            usable &= np.minimum(d2_lo, d2_hi) <= self._ROLLING_MATCH_MAX_M ** 2
-            w = np.where(usable, t_cross - times_a, np.inf)
-            if np.isfinite(w).any():
-                best = min(best, float(np.min(w)))
-        return float(best)
+        """Delegates to the bests service (studio/bests.py). See Bests.best_rolling_lap."""
+        return self.bests.best_rolling_lap()
 
     def sector_plot_positions(self, mode: str) -> list[tuple[str, float]]:
         """(label, plot-x) for the sector BOUNDARIES on the speed+delta charts' SHARED axis (F2).
