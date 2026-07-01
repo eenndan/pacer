@@ -25,6 +25,16 @@ MAX_DOP = 10.0  # GPS9 DOP: dilution of precision; >~10 is a poor-geometry fix. 
 MIN_LAP_TIME = 5.0  # s — laps shorter than this are partial/phantom, not real laps
 MIN_LAP_SAMPLES = 20  # a real lap has at least this many GPS samples
 LAP_BAND_LO, LAP_BAND_HI = 0.5, 1.6  # "real lap" = lap_time within [lo, hi] x median lap time
+# A second, tighter band on lap DISTANCE. On a fixed circuit every real lap covers a
+# near-constant distance (it's the same loop), so lap distance clusters far tighter than lap
+# TIME — a real lap varies only by racing-line / GPS noise (~a few %), while a mis-segmented
+# short/long lap (an extra/missed start-line crossing) is off by 10%+. That phantom can defeat
+# the time band (a 0.87x-median lap sits inside [0.5, 1.6]) yet be crowned 'best', which then
+# poisons best_lap_id / theoretical_best / the Δ-to-best baseline / the coaching Opportunities /
+# the current-lap map. ±10% of the median lap distance comfortably keeps every real lap while
+# rejecting such a phantom. Only applied when real per-lap distances are available (see
+# `_band_lap_ids`); the time band is unchanged.
+LAP_DIST_BAND_LO, LAP_DIST_BAND_HI = 0.90, 1.10
 
 # --- longitudinal g from the speed trace (shared by driving channels + the g-meter dial) ---
 G = 9.80665  # m/s^2 (standard gravity)
@@ -157,12 +167,17 @@ def _gate_quality(samples, spans, naive):
 
 def _band_lap_ids(laps) -> list[int]:
     """The ids of laps that qualify as 'real laps': enough samples (>= MIN_LAP_SAMPLES) and a
-    long-enough time (>= MIN_LAP_TIME), AND a lap time within [LAP_BAND_LO, LAP_BAND_HI] x the
-    MEDIAN lap time. A fixed threshold is too crude (short double-crossings of the start line
-    pass it and pollute the 'best' lap); the band adapts to any track length.
+    long-enough time (>= MIN_LAP_TIME), a lap time within [LAP_BAND_LO, LAP_BAND_HI] x the
+    MEDIAN lap time, AND a lap distance within [LAP_DIST_BAND_LO, LAP_DIST_BAND_HI] x the
+    median lap distance. A fixed threshold is too crude (short double-crossings of the start
+    line pass it and pollute the 'best' lap); the time band adapts to any track length, and the
+    tighter distance band catches a mis-segmented short/long lap that defeats the time band —
+    on a fixed circuit lap distance clusters far tighter than lap time (see the band consts).
 
     `laps` is the bound `pacer.Laps` object, but this function only calls its read accessors
-    (laps_count / lap_time / sample_count) — it imports no pacer itself, so it stays pure.
+    (laps_count / lap_time / sample_count / get_lap_distance) — it imports no pacer itself, so
+    it stays pure. The distance accessor is guarded with getattr so the FAKE `laps` doubles in
+    the tests (which expose only the time surface) fall back to the unchanged time-only result.
     The single source for Session.valid_lap_ids and session._band_lap_count."""
     basic = [(i, laps.lap_time(i)) for i in range(laps.laps_count())
              if laps.sample_count(i) >= MIN_LAP_SAMPLES and laps.lap_time(i) >= MIN_LAP_TIME]
@@ -170,4 +185,20 @@ def _band_lap_ids(laps) -> list[int]:
         return []
     med = float(np.median([t for _, t in basic]))
     lo, hi = LAP_BAND_LO * med, LAP_BAND_HI * med
-    return [i for i, t in basic if lo <= t <= hi]
+    timed = [i for i, t in basic if lo <= t <= hi]
+
+    # Distance band: reject a lap whose distance is off the median even though its TIME passed
+    # (a mis-segmented short/long lap). Only when real per-lap distances exist — the fake test
+    # doubles have no get_lap_distance, and a stream that reports no finite/positive distance
+    # gives no median to band against, so both fall back to the time-only result unchanged.
+    get_dist = getattr(laps, "get_lap_distance", None)
+    if get_dist is None or not timed:
+        return timed
+    dists = {i: float(get_dist(i)) for i in timed}
+    finite = [d for d in dists.values() if math.isfinite(d) and d > 0]
+    if not finite:
+        return timed
+    med_d = float(np.median(finite))
+    lo_d, hi_d = LAP_DIST_BAND_LO * med_d, LAP_DIST_BAND_HI * med_d
+    return [i for i in timed
+            if math.isfinite(dists[i]) and dists[i] > 0 and lo_d <= dists[i] <= hi_d]
