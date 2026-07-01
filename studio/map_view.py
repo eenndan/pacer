@@ -674,6 +674,14 @@ class MapView(QWidget):
             self._reposition_empty_state()
 
     # ----------------------------------------------------------- timing lines
+    def reload_timing_lines(self) -> None:
+        """Re-draw the draggable start/sector line items from the session's CURRENT timing lines,
+        WITHOUT emitting timing_lines_changed. Used after an Undo (the session lines were already
+        restored through Session.undo_timing_lines): the map's handles must follow the session, but
+        this is not a fresh user edit, so it must not re-fire the change signal / re-persist."""
+        self._rebuild(self.session.start_line, self.session.sector_lines)
+        self._refresh_best()
+
     def _rebuild(self, start: Seg, sectors: list[Seg]):
         for tl in [self._start, *self._sectors]:
             if tl:

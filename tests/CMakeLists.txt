@@ -231,6 +231,16 @@ add_test(NAME test_library
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_library.py)
 set_tests_properties(test_library PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Data safety (data-safety-undo-privacy): the timing-line UNDO history (Session pushes the prior
+# lines before each edit + restores the latest through apply_timing_lines_latlon — segmentation +
+# PB baseline recompute identically; no-op with no history; confirmed-state preserved; bounded
+# stack) on a REAL pacer.Laps, and the library privacy controls (library.remove/clear + the guarded
+# sidecar unlink + the offscreen LibraryDialog forget/clear DI wiring). Imports pacer + the dialog
+# -> Qt, so run offscreen.
+add_test(NAME test_data_safety
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_data_safety.py)
+set_tests_properties(test_data_safety PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Speed-units toggle (studio.units / prefs, BUILD 5): the pure km/h↔mph conversion/label/format
 # helpers, the persisted-choice round-trip + safe default, the theme readout formatters honouring
 # the unit (km/h default byte-identical), coaching.reason_sentence + map_render's speed legend +
@@ -258,7 +268,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video
-                        test_units)
+                        test_data_safety test_units)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

@@ -718,6 +718,53 @@ class Session:
         self.set_timing_lines(prev_start, prev_sectors, user_confirm=False)
         return False
 
+    # ------------------------------------------ timing-line undo (edit history)
+    # A bounded per-session stack of PRIOR timing-line states, captured just BEFORE each user
+    # edit (the map drag re-segments AND overwrites the sidecar with no confirm; dragging the
+    # start line slightly wrong would otherwise silently destroy the good timing + PB baseline).
+    # Each state is a (start_latlon, sectors_latlon, confirmed) snapshot in the SAME load-invariant
+    # (lat, lon) form the sidecar persists, so a restore replays through apply_timing_lines_latlon
+    # — the same re-segment/apply path a fresh edit or a sidecar restore takes (no bespoke
+    # re-segmentation, and the PB/session-best baseline recomputes for free from the restored lines).
+    _UNDO_DEPTH = 32  # plenty for a hand-tuning session; bounds the stack so it can't grow forever
+
+    def _timing_history(self) -> list:
+        """The undo stack (lazily created — getattr-guarded for the bare-Session no-__init__ path)."""
+        hist = getattr(self, "_timing_undo", None)
+        if hist is None:
+            hist = []
+            self._timing_undo = hist
+        return hist
+
+    def push_timing_history(self) -> None:
+        """Snapshot the CURRENT timing lines onto the undo stack — call BEFORE applying a user
+        edit, so Undo can restore exactly what was on screen before the drag. Stored as the
+        sidecar's load-invariant (start_latlon, sectors_latlon, confirmed) triple. Bounded to
+        ``_UNDO_DEPTH`` (oldest dropped)."""
+        start, sectors = self.timing_lines_latlon()
+        hist = self._timing_history()
+        hist.append((start, sectors, self.timing_user_confirmed))
+        if len(hist) > self._UNDO_DEPTH:
+            del hist[0]
+
+    def can_undo_timing(self) -> bool:
+        """True iff there's a prior timing-line state to undo (the Edit ▸ Undo enablement)."""
+        return bool(self._timing_history())
+
+    def undo_timing_lines(self) -> bool:
+        """Restore the most recent snapshot pushed by ``push_timing_history`` — pop it and replay
+        it through ``apply_timing_lines_latlon`` (the same re-segment/apply path a live edit takes,
+        so the segmentation + PB/session-best baseline recompute identically, and a restored
+        previously-confirmed state stays confirmed). Returns True if a state was restored, False
+        when the stack is empty (Undo is then a no-op). The restore itself is NOT re-pushed, so
+        repeated Undo walks back through the history one edit at a time."""
+        hist = self._timing_history()
+        if not hist:
+            return False
+        start, sectors, confirmed = hist.pop()
+        self.apply_timing_lines_latlon(start, sectors, confirmed=confirmed)
+        return True
+
     def track_location(self) -> tuple[tuple[float, float], tuple[float, float, float, float]]:
         """The recording's GPS detection anchor for the track database: ``(centroid, bbox)``
         where ``centroid`` is ``(lat, lon)`` and ``bbox`` is ``(min_lat, min_lon, max_lat,

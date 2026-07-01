@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -44,6 +44,10 @@ from .video_view import VideoView
 
 class CentralView(QWidget):
     """Session-scoped central widget for one loaded recording (see module docstring)."""
+
+    # Emitted after any timing-line change (a user drag OR an Undo) so the window can refresh the
+    # Edit ▸ Undo action's enabled state from the session's undo stack.
+    timingEdited = Signal()
 
     def __init__(self, session, paths: list[str], sidecar_path: str | None,
                  consistency_visible: bool, parent: QWidget | None = None,
@@ -860,14 +864,17 @@ class CentralView(QWidget):
 
     # ------------------------------------------------------------- timing-line edits
     def _on_lines(self, start, sectors):
-        # Re-segmentation shifts lap ids: exit compare (stale pair), re-segment, rebuild all derived
-        # views (reselect=True), re-check compare availability, persist the edit.
+        # Re-segmentation shifts lap ids: snapshot the PRIOR lines for Undo, exit compare (stale
+        # pair), re-segment, rebuild all derived views (reselect=True), re-check compare
+        # availability, persist the edit.
+        self.session.push_timing_history()  # capture the pre-edit state so a bad drag is undoable
         if self._comparing():
             self.video.set_compare_enabled(False)  # un-checks -> compareToggled(False) -> exit
         self.session.set_timing_lines(start, sectors)
         self.rebuild_derived_views(reselect=True)
         self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
         self._save_sidecar()
+        self.timingEdited.emit()  # let the window refresh the Edit ▸ Undo enablement
 
     def _save_sidecar(self):
         """Write the timing lines to the recording's sidecar JSON. Called only from _on_lines (a
@@ -884,3 +891,23 @@ class CentralView(QWidget):
             print(f"studio: could not write timing-line sidecar {path}: {exc}", flush=True)
             return
         print(f"studio: timing lines saved to {os.path.basename(path)}", flush=True)
+
+    def undo_timing_lines(self) -> bool:
+        """Undo the last timing-line edit (Edit ▸ Undo / Cmd+Z). Restores the prior lines through
+        Session.undo_timing_lines (which replays them through the same re-segment/apply path, so
+        the segmentation + PB/session-best baseline recompute identically), then re-draws the map
+        handles, rebuilds the derived views, and re-persists the restored lines to the sidecar.
+        No-op (returns False) when there's no prior edit to undo. Compare mode is torn down first
+        (a re-segment shifts lap ids, invalidating any pinned pair) — mirrors _on_lines."""
+        if not self.session.undo_timing_lines():
+            return False
+        if self._comparing():
+            self.video.set_compare_enabled(False)
+        # The session lines are already restored; pull the map's draggable handles onto them WITHOUT
+        # re-emitting timing_lines_changed (that would re-push the undone state onto the stack).
+        self.map.reload_timing_lines()
+        self.rebuild_derived_views(reselect=True)
+        self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
+        self._save_sidecar()  # persist the restored lines so a reload sees the undone state
+        self.timingEdited.emit()
+        return True
