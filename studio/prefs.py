@@ -27,6 +27,10 @@ SPEED_UNIT = "speed_unit"
 # The accessible/colour-blind-safe semantic palette toggle (studio/theme.py). Stored as a bool;
 # False (default) keeps the original red/green cues, True swaps in the blue/orange CB-safe axis.
 COLORBLIND_PALETTE = "colorblind_palette"
+# The last folder the user opened a recording from — so the Open dialog reopens where their footage
+# lives instead of a useless default each session. Stored as an absolute path string; the accessor
+# only returns it when it still exists on disk (an old drive gets unmounted), else "" (today's fallback).
+LAST_DIR = "last_dir"
 
 
 def _app_support_dir() -> str:
@@ -106,3 +110,24 @@ def colorblind_palette(path: str | None = None) -> bool:
 def set_colorblind_palette(on: bool, path: str | None = None) -> None:
     """Persist the colour-blind-safe palette toggle."""
     set(COLORBLIND_PALETTE, bool(on), path)
+
+
+def last_dir(path: str | None = None) -> str:
+    """The persisted last-opened folder, or "" when unset / no longer a directory. Guarded so a
+    stale value (an unplugged drive) never lands the Open dialog on a missing path — the caller then
+    falls back to today's behaviour (the current recording's folder, or nowhere)."""
+    val = get(LAST_DIR, "", path)
+    if isinstance(val, str) and val and os.path.isdir(val):
+        return val
+    return ""
+
+
+def set_last_dir(folder: str, path: str | None = None) -> None:
+    """Persist the folder a recording was just opened from. Fully guarded — remembering the folder
+    must never disrupt a load — so an empty/garbage value or an unwritable prefs file is swallowed."""
+    if not isinstance(folder, str) or not folder:
+        return
+    try:
+        set(LAST_DIR, folder, path)
+    except OSError:
+        pass

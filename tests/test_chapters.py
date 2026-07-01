@@ -95,6 +95,75 @@ def test_discover_does_not_mix_prefixes():
         assert [os.path.basename(p) for p in sibs] == ["GX010060.MP4", "GX020060.MP4"]
 
 
+# ---------------------------------------------------------- order_chapters
+def test_order_chapters_sorts_and_dedupes():
+    # Out-of-order + a duplicate (the union of dropped chapters ∪ discovered siblings).
+    out = chapters.order_chapters(
+        ["/f/GX020060.MP4", "/f/GX010060.MP4", "/f/GX020060.MP4", "/f/GX030060.MP4"])
+    assert [os.path.basename(p) for p in out] == [
+        "GX010060.MP4", "GX020060.MP4", "GX030060.MP4"]
+
+
+def test_order_chapters_non_gopro_kept():
+    out = chapters.order_chapters(["/f/hero6.mp4"])
+    assert out == ["/f/hero6.mp4"]
+
+
+# --------------------------------------------------- grouping into recordings
+def test_group_chapters_of_one_recording_together():
+    # GX01/GX02 of recording 0060 (same folder) group into ONE recording, ordered by CC.
+    groups = chapters.group_into_recordings(
+        ["/foot/GX020060.MP4", "/foot/GX010060.MP4"])
+    assert len(groups) == 1
+    assert [os.path.basename(p) for p in groups[0]] == ["GX010060.MP4", "GX020060.MP4"]
+
+
+def test_group_keeps_distinct_recordings_separate():
+    # Two different recording numbers must stay as SEPARATE recordings (never merged onto one clock).
+    groups = chapters.group_into_recordings(
+        ["/foot/GX010060.MP4", "/foot/GX010062.MP4", "/foot/GX020060.MP4"])
+    assert len(groups) == 2
+    bases = [[os.path.basename(p) for p in g] for g in groups]
+    # First-appearance order: 0060 first (it appeared first), then 0062.
+    assert bases == [["GX010060.MP4", "GX020060.MP4"], ["GX010062.MP4"]]
+
+
+def test_group_separates_by_folder_and_prefix():
+    # Same recording NUMBER but a different folder OR different prefix = a different recording.
+    groups = chapters.group_into_recordings(
+        ["/a/GX010060.MP4", "/b/GX010060.MP4", "/a/GH010060.MP4"])
+    assert len(groups) == 3
+
+
+def test_group_non_gopro_names_are_singletons():
+    groups = chapters.group_into_recordings(
+        ["/x/hero6.mp4", "/x/random.MP4", "/x/GX010060.MP4"])
+    # Each non-GoPro name is its own single-file recording; the GoPro one is its own group.
+    assert len(groups) == 3
+    assert all(len(g) == 1 for g in groups)
+
+
+def test_group_orders_chapters_by_cc():
+    groups = chapters.group_into_recordings(
+        ["/f/GX030060.MP4", "/f/GX010060.MP4", "/f/GX020060.MP4"])
+    assert len(groups) == 1
+    assert [os.path.basename(p) for p in groups[0]] == [
+        "GX010060.MP4", "GX020060.MP4", "GX030060.MP4"]
+
+
+def test_group_dedupes_repeated_path():
+    groups = chapters.group_into_recordings(
+        ["/f/GX010060.MP4", "/f/GX010060.MP4"])
+    assert len(groups) == 1
+    assert groups[0] == ["/f/GX010060.MP4"]
+
+
+def test_group_empty_and_single():
+    assert chapters.group_into_recordings([]) == []
+    single = chapters.group_into_recordings(["/f/GX010060.MP4"])
+    assert single == [["/f/GX010060.MP4"]]
+
+
 # ------------------------------------------------------------------ the label
 def test_recording_label():
     assert chapters.recording_label(["GX010060.MP4", "GX020060.MP4", "GX030060.MP4"]) == \
