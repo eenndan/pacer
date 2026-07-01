@@ -230,6 +230,200 @@ def test_pct_and_hull_helpers():
     assert len(hull) == 4
 
 
+# ------------------------------------------------------------- per-frame repaint caching (perf)
+# The live overlay's paintEvent fires every ~30 Hz tick to move the dot. These pin that the SLOW
+# work (the convex hull + the static ring/backdrop/number layer) is cached and reused across frames,
+# recomputed only when the envelope / size / palette actually change — while the on-screen pixels
+# stay identical (the split is a rendering-COST optimisation, not a visual change).
+
+def _spy_hull(monkeypatch=None):
+    """Wrap studio.gmeter_overlay._convex_hull with a call counter. Returns (restore, counter)."""
+    from studio import gmeter_overlay as g
+    orig = g._convex_hull
+    calls = {"n": 0}
+
+    def counted(points):
+        calls["n"] += 1
+        return orig(points)
+
+    g._convex_hull = counted
+    return (lambda: setattr(g, "_convex_hull", orig)), calls
+
+
+def _seed(ov, n=40, lap=1):
+    ov.set_lap(lap)
+    for _ in range(n):
+        ov.set_g((0.6, -0.4, 0.72))
+
+
+def _paint(ov):
+    """Drive one real paintEvent (render into an offscreen pixmap) — the per-frame repaint path."""
+    from PySide6.QtGui import QPixmap
+    pm = QPixmap(ov.size())
+    ov.render(pm)
+
+
+def test_static_layer_cached_hull_computed_once_across_frames():
+    """Two consecutive repaints with an UNCHANGED envelope recompute the convex hull exactly ONCE —
+    the static layer (hull included) is cached and re-blitted; only the dot is redrawn each frame."""
+    ov = _fresh()
+    _seed(ov)
+    restore, calls = _spy_hull()
+    try:
+        # First paint: cache miss -> renders the static layer (one hull compute).
+        _paint(ov)
+        assert calls["n"] == 1, f"first frame should compute the hull once, got {calls['n']}"
+        # Simulate more playback frames WITHOUT new g-data (paused / static frame): each repaint
+        # must reuse the cached static layer and NOT recompute the hull.
+        for _ in range(5):
+            _paint(ov)
+        assert calls["n"] == 1, f"unchanged envelope must not recompute the hull, got {calls['n']}"
+    finally:
+        restore()
+
+
+def test_moving_dot_alone_does_not_recompute_static_layer():
+    """set_g that only MOVES the dot (its envelope/peaks may tick, but a paint after a manual dot
+    move on a frozen envelope) reuses the static layer. Here we freeze the envelope by not feeding
+    new samples and just re-render at shifted dot positions — the hull is computed only once."""
+    ov = _fresh()
+    _seed(ov)
+    restore, calls = _spy_hull()
+    try:
+        _paint(ov)
+        base = calls["n"]
+        for dx in (0.1, -0.2, 0.3):
+            ov._fx = dx            # move the dot only (no envelope change)
+            _paint(ov)
+        assert calls["n"] == base, "moving only the dot must not recompute the hull/static layer"
+    finally:
+        restore()
+
+
+def test_envelope_change_invalidates_and_recomputes_hull():
+    """A NEW g-sample (envelope grows / peaks tick) invalidates the cache: the next repaint
+    recomputes the hull. A stale cached envelope would be a real bug."""
+    ov = _fresh()
+    _seed(ov)
+    restore, calls = _spy_hull()
+    try:
+        _paint(ov)
+        assert calls["n"] == 1
+        _paint(ov)
+        assert calls["n"] == 1, "no data change -> cached"
+        ov.set_g((0.9, -0.7, 1.14))   # new felt sample -> envelope/version changes
+        _paint(ov)
+        assert calls["n"] == 2, "an envelope update must recompute the hull on the next paint"
+    finally:
+        restore()
+
+
+def test_palette_change_invalidates_static_layer():
+    """A palette flip invalidates the static-layer cache (the key includes the active palette), so
+    the next repaint re-renders it (recomputing the hull). Conservative invalidation — a missed
+    palette flip would leave stale chrome."""
+    from studio import theme
+    ov = _fresh()
+    _seed(ov)
+    restore, calls = _spy_hull()
+    prev = theme.active_palette()
+    try:
+        _paint(ov)
+        assert calls["n"] == 1
+        _paint(ov)
+        assert calls["n"] == 1
+        theme.set_palette(theme.PALETTE_COLORBLIND if prev == theme.PALETTE_STANDARD
+                          else theme.PALETTE_STANDARD)
+        _paint(ov)
+        assert calls["n"] == 2, "a palette change must invalidate the cached static layer"
+    finally:
+        theme.set_palette(prev)
+        restore()
+
+
+def test_resize_invalidates_static_layer():
+    """Resizing the widget invalidates the cache (the key includes width/height) — the static layer
+    is size-dependent (dial geometry), so it must re-render at the new size."""
+    ov = _fresh()
+    _seed(ov)
+    restore, calls = _spy_hull()
+    try:
+        _paint(ov)
+        assert calls["n"] == 1
+        ov.resize(240, 268)
+        _paint(ov)
+        assert calls["n"] == 2, "a resize must invalidate the size-keyed static layer"
+    finally:
+        restore()
+
+
+def test_static_cache_key_reused_across_frames():
+    """The static-layer cache key is (width, height, dpr, palette, env_version) and is stable across
+    frames with an unchanged envelope, so the same cached QPixmap object is reused (not rebuilt)."""
+    ov = _fresh()
+    _seed(ov)
+    _paint(ov)
+    pm1, key1 = ov._static_pixmap, ov._static_key
+    assert pm1 is not None and key1 is not None
+    _paint(ov)
+    assert ov._static_pixmap is pm1, "unchanged frame must reuse the SAME cached pixmap object"
+    assert ov._static_key == key1
+    # env_version is part of the key and monotonically identifies the envelope state.
+    assert key1[-1] == ov._env_version
+
+
+def test_cached_paint_is_pixel_identical_to_full_render():
+    """The cached-static-layer + dot composite is BYTE-IDENTICAL to a fresh single-pass full render
+    of the same state, ON THE WIDGET'S TRANSLUCENT SURFACE (the real on-screen path). This is the
+    pixel-identity guarantee: the optimisation removes redundant recompute/redraw, nothing visual."""
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    from studio import gmeter_overlay as g
+    ov = _fresh(280, 280)
+    _seed(ov, n=60)
+    st = ov._dial_state()
+    w = h = 280
+
+    def _full():
+        img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        img.fill(QColor(0, 0, 0, 0))                     # the widget's translucent surface
+        p = QPainter(img)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        g.paint_dial(p, w, h, st, export=False)
+        p.end()
+        return img
+
+    def _cached():
+        img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        img.fill(QColor(0, 0, 0, 0))
+        p = QPainter(img)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.drawPixmap(0, 0, ov._static_layer(st))
+        g._paint_dial_dot(p, w, h, st)
+        p.end()
+        return img
+
+    def _arr(img):
+        return np.array(np.frombuffer(img.constBits(), np.uint8,
+                                      count=4 * w * h).reshape(h, w, 4)).copy()
+
+    diff = np.abs(_arr(_full()).astype(int) - _arr(_cached()).astype(int))
+    assert diff.max() == 0, f"cached render must be pixel-identical (maxdiff {int(diff.max())})"
+
+
+def test_source_change_invalidates_static_layer():
+    """The source tag lives in the cached static layer, so set_source to a NEW label invalidates it;
+    an unchanged label is a no-op (no needless re-render)."""
+    ov = _fresh()
+    _seed(ov)
+    ov.set_source("accl")
+    v0 = ov._env_version
+    ov.set_source("accl")               # unchanged -> no bump
+    assert ov._env_version == v0, "unchanged source must not invalidate the static layer"
+    ov.set_source("gps")                # changed -> bump
+    assert ov._env_version > v0, "a source change must invalidate the static layer"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
