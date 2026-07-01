@@ -36,8 +36,8 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
     from .session import Session
 
 # column indices
-_COL_CORNER, _COL_LOST, _COL_PHASES, _COL_REASON, _COL_GO = range(5)
-_HEADERS = ["Corner", "Time lost", "Entry · Apex · Exit", "How to find it", ""]
+_COL_CORNER, _COL_LOST, _COL_SIGMA, _COL_PHASES, _COL_REASON, _COL_GO = range(6)
+_HEADERS = ["Corner", "Time lost", "±σ", "Entry · Apex · Exit", "How to find it", ""]
 
 # Human label per coaching.PHASE_* id, in track order (for the breakdown bar segments + tooltip).
 _PHASE_LABEL = {coaching.PHASE_ENTRY: "Entry", coaching.PHASE_APEX: "Apex",
@@ -153,6 +153,23 @@ def _lost_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
     return item
 
 
+def _sigma_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
+    """The lap-to-lap consistency cell (±σ s): the σ of time-in-corner over the clean laps, folded
+    onto the CANONICAL coaching row so 'how much time' (the lost cell) and 'how repeatable' read
+    together — the Consistency panel's signal on the same rows, so the two surfaces can't disagree.
+    Small σ = repeatable; large = time left on the table inconsistently here."""
+    item = QTableWidgetItem(f"±{opp.reason.sigma:.2f}")
+    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    item.setFont(num_font)
+    item.setForeground(QColor(C.text_dim))
+    item.setToolTip(
+        "Lap-to-lap consistency through this corner: σ of time-in-corner over your clean laps. "
+        "Small = repeatable; large = you're inconsistently leaving time here (the Consistency "
+        "panel ranks corners by σ × median loss).")
+    return item
+
+
 def _reason_cell(opp: coaching.Opportunity, brake_points: dict) -> QTableWidgetItem:
     """The 'How to find it' reason cell: the coaching sentence + (when a braking-point estimate is
     available for this corner) the ESTIMATED 'brake ~N m' line, with the per-reason tooltip."""
@@ -242,7 +259,7 @@ class OpportunitiesDialog(QDialog):
         table.verticalHeader().setDefaultSectionSize(40)
         hdr = table.horizontalHeader()
         hdr.setSectionResizeMode(_COL_REASON, QHeaderView.Stretch)
-        for col in (_COL_CORNER, _COL_LOST, _COL_GO):
+        for col in (_COL_CORNER, _COL_LOST, _COL_SIGMA, _COL_GO):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         # The D2 phase breakdown bar wants a stable width (the segments are proportional).
         hdr.setSectionResizeMode(_COL_PHASES, QHeaderView.Fixed)
@@ -252,6 +269,7 @@ class OpportunitiesDialog(QDialog):
         for r, opp in enumerate(opps.rows):
             table.setItem(r, _COL_CORNER, _corner_cell(opp))
             table.setItem(r, _COL_LOST, _lost_cell(opp, num_font))
+            table.setItem(r, _COL_SIGMA, _sigma_cell(opp, num_font))  # lap-to-lap consistency σ
             table.setCellWidget(r, _COL_PHASES, PhaseBar(opp.phases))  # D2 entry/apex/exit Δt
             table.setItem(r, _COL_REASON, _reason_cell(opp, self._brake_points))
             table.setCellWidget(r, _COL_GO, self._go_button(opp))
@@ -299,7 +317,7 @@ class OpportunitiesPanel(QWidget):
     # Clicked corner cid (None on deselect) -> the map apex-ring highlight (wired in central_view).
     corner_clicked = Signal(object)
 
-    _COLUMNS = ["Corner", "Time lost", "How to find it"]
+    _COLUMNS = ["Corner", "Time lost", "±σ", "How to find it"]
 
     def __init__(self, session: Session):
         super().__init__()
@@ -342,7 +360,7 @@ class OpportunitiesPanel(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(34)
         hdr = self.table.horizontalHeader()
         hdr.setStretchLastSection(True)  # the reason column takes the slack
-        for col in (0, 1):
+        for col in (0, 1, 2):  # corner · time-lost · σ size to content; reason (last) stretches
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
 
@@ -390,7 +408,8 @@ class OpportunitiesPanel(QWidget):
         for r, opp in enumerate(rows):
             self.table.setItem(r, 0, _corner_cell(opp))
             self.table.setItem(r, 1, _lost_cell(opp, self._num_font))
-            self.table.setItem(r, 2, _reason_cell(opp, brake_points))
+            self.table.setItem(r, 2, _sigma_cell(opp, self._num_font))  # consistency σ on the row
+            self.table.setItem(r, 3, _reason_cell(opp, brake_points))
         self.table.blockSignals(False)
         self.body.setCurrentIndex(0)
 
