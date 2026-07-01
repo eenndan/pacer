@@ -54,9 +54,12 @@ SECTOR_LINE_PEN = pg.mkPen(C.text_muted, width=1, style=Qt.DashLine)
 SECTOR_LABEL_COLOR = C.text_dim
 # The delta plot's y=0 reference line — a faint hairline, same weight as the gridlines.
 ZERO_LINE_PEN = pg.mkPen(C.border, width=1)
-# D1: the SYNTHETIC ideal-lap baseline (lower-envelope theoretical best). Best-sector purple to
-# echo the lap table's purple theoretical-best cells, dashed so it never reads as a real driven lap.
-IDEAL_LINE_PEN = pg.mkPen(C.best, width=1, style=Qt.DashLine)
+# D1: the SYNTHETIC ideal-lap baseline (lower-envelope theoretical best). Best-SECTOR colour to
+# echo the lap table's theoretical-best cells, dashed so it never reads as a real driven lap. Built
+# at DRAW time (not frozen at import) so it follows the active palette's best-sector hue (purple →
+# teal in the colour-blind palette), matching the lap-table cells.
+def _ideal_line_pen():
+    return pg.mkPen(theme.best_sector_colour(), width=1, style=Qt.DashLine)
 # F5: brake glyphs (sized by peak decel) ride the speed curve; coast spans shade a neutral band.
 COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
 COAST_PEN = pg.mkPen(None)
@@ -65,8 +68,9 @@ COAST_PEN = pg.mkPen(None)
 # reads as a secondary backdrop, never competing with the speed curves. ESTIMATED (legend-labelled).
 BT_FILL_ALPHA = 110                    # 0-255: the filled pedal band (more present than coast, still quiet)
 BT_TRACK_FRAC = 0.16                   # the band occupies the bottom ~16% of the speed plot's y-range
-BT_BRAKE_COLOR = C.behind
-BT_THROTTLE_COLOR = C.ahead
+# Brake fills toward the "behind" hue, throttle toward the "ahead" hue. Resolved at DRAW time via
+# the palette accessors (not frozen at import) so the band follows the active palette — red/green by
+# default, orange/blue in the colour-blind palette (matching the Δ readout + rainbow map).
 BT_PEN = pg.mkPen(None)
 BT_BASELINE_PEN = pg.mkPen(C.border, width=1, style=Qt.DotLine)  # the band's zero (lift/cruise) line
 
@@ -406,9 +410,11 @@ class PlotsView(QWidget):
         # zero (lift/cruise) line through the middle so brake fills below it and throttle above.
         half = 0.5 * BT_TRACK_FRAC * span
         mid = y0 + half
-        brake_fill = pg.mkColor(BT_BRAKE_COLOR)
+        # Resolve the fill hues from the ACTIVE palette at draw time so the band follows a
+        # colour-blind flip (behind=red/orange, ahead=green/blue) — matching the Δ readout + rainbow.
+        brake_fill = pg.mkColor(theme.behind_colour())
         brake_fill.setAlpha(BT_FILL_ALPHA)
-        thr_fill = pg.mkColor(BT_THROTTLE_COLOR)
+        thr_fill = pg.mkColor(theme.ahead_colour())
         thr_fill.setAlpha(BT_FILL_ALPHA)
         for xs, intensity in self._brake_throttle_data:
             xs = np.asarray(xs, float)
@@ -463,6 +469,13 @@ class PlotsView(QWidget):
             return
         self._speed_unit = unit
         self._apply_speed_axis_label()
+        self.refresh()
+
+    def refresh_palette(self):
+        """Re-render the charts after a colour-blind-palette flip so the SEMANTIC-hue surfaces follow
+        it: the brake/throttle band (behind/ahead fills) and the synthetic ideal-lap line (best-sector
+        hue) both read the palette accessors at draw time, so a plain refresh() re-pens them. The
+        identity lap-curve palette (CHART_SERIES) is palette-independent, so this is just a redraw."""
         self.refresh()
 
     def refresh(self):
@@ -576,7 +589,7 @@ class PlotsView(QWidget):
         if series is None:
             return
         ix, iy = series
-        c = self.p_delta.plot(ix, iy, pen=IDEAL_LINE_PEN, name="ideal lap (synthetic)")
+        c = self.p_delta.plot(ix, iy, pen=_ideal_line_pen(), name="ideal lap (synthetic)")
         c.setDownsampling(auto=True)
         c.setClipToView(True)
         self._curves.append((self.p_delta, c))

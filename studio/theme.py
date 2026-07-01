@@ -210,7 +210,12 @@ def apply_provisional_style(item, on: bool = True) -> None:
 # brake/throttle band + brake-point coaching already use, so every estimate reads identically; the
 # cell stays full-strength (no muting/italic) because it IS a value to trust as an estimate — the
 # label is what signals the tier.
-ESTIMATED_SUFFIX = " (est)"   # appended to a column/label title carrying an estimated value
+# The ONE canonical short form for an inline "estimated" badge/suffix. Everything user-facing that
+# marks a value as estimated uses this (grip column, brake-point hints, the brake/throttle legend),
+# so the app never spells it four ways ("(est)"/"(EST)"/"ESTIMATED"/"(est.)"). Longer explanatory
+# tooltip PROSE may still say the full word "estimated"; only the short chips/suffixes unify here.
+ESTIMATED_MARK = "(est)"      # the bare canonical inline marker
+ESTIMATED_SUFFIX = f" {ESTIMATED_MARK}"   # appended to a column/label title carrying an estimated value
 
 
 def estimated_label(title: str) -> str:
@@ -893,6 +898,19 @@ QLabel[role="WelcomeError"] {{
     background: transparent;
     color: {C.text_muted};
     font-size: {CAPTION}px;
+}}
+/* ESTIMATED data-quality badge (central_view QualityBadge): a small padded/rounded/tinted chip
+   next to the LAPS label when the timing quality is degraded — so it reads as a chip, not plain
+   text. Amber-tinted like the other trust affordances (the provisional banner / accent), sized
+   small. Only shown (setVisible) when Session.timing_quality is degraded. */
+QLabel#QualityBadge {{
+    background-color: {C.accent_tint};
+    color: {C.accent};
+    font-size: {TABLE_HEADER}px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border: 1px solid {C.accent};
+    border-radius: 8px;
 }}
 """
 

@@ -1304,9 +1304,12 @@ class StudioWindow(QMainWindow):
         self._export_res_idx, self._export_quality_idx = ri, qi   # remember for next time
         out_height = self._EXPORT_RES_OPTIONS[ri][1]
         quality = self._EXPORT_QUALITY_OPTIONS[qi][1]
-        # Burn the current display unit into the overlay so the export matches the on-screen readout.
+        # Burn the current display unit + semantic palette into the overlay so the export matches the
+        # on-screen readout (incl. the colour-blind Δ hue axis — the exported clip is the shared
+        # artifact, so it must follow the user's colour-blind choice, not stay red/green).
         return export_video.OverlayConfig(out_height=out_height, quality=quality,
-                                          speed_unit=self._speed_unit)
+                                          speed_unit=self._speed_unit,
+                                          palette=theme.active_palette())
 
     def _export_overlay_video(self):
         if not hasattr(self, "session"):

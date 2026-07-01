@@ -1194,7 +1194,7 @@ def test_paint_readout_pulls_shared_semantics():
     from PySide6.QtGui import QImage, QPainter
     seen = []
     orig = ev.export_delta_colour
-    ev.export_delta_colour = lambda d: seen.append(d) or orig(d)
+    ev.export_delta_colour = lambda d, palette=None: seen.append(d) or orig(d, palette)
     try:
         img = QImage(400, 200, QImage.Format_RGB888)
         img.fill(0)
