@@ -35,6 +35,7 @@ from . import (
     export_video,
     library,
     prefs,
+    share_card,
     sidecar,
     theme,
     track_db,
@@ -231,19 +232,23 @@ class _WelcomeView(QWidget):
 class _PBToast(QWidget):
     """A transient "new personal best!" celebration card overlaid on the window (top-centre) when a
     freshly-analysed session beats its track's prior PB on verified timing. Tasteful, not modal: an
-    amber-accented card that auto-dismisses after a few seconds, carries a "See your progress →" link
-    (opens the per-track PB-progression chart — the retention surface) and a × to dismiss now.
+    amber-accented card that auto-dismisses after a few seconds. At the peak-pride moment it turns
+    into a SHARE loop: the PRIMARY "Share your PB →" button saves the shareable lap card (image),
+    and a secondary "See your progress →" link opens the per-track PB-progression chart (retention),
+    plus a × to dismiss now.
 
     Purely presentational — the caller decides WHEN to show it (library.pb_moment) and passes the
-    formatted `title`/`body` + the `on_progress` callback. Exposed attributes (title_label / link_btn
-    / close_btn) let the suite assert the wording + that the link routes to the progression."""
+    formatted `title`/`body` + the `on_progress` / `on_share` callbacks (either may be None to hide
+    that action). Exposed attributes (title_label / body_label / link_btn / share_btn / close_btn)
+    let the suite assert the wording + that each button routes to its injected callback."""
 
     AUTO_DISMISS_MS = 6000  # generous but transient — long enough to read, short enough to not nag
 
-    def __init__(self, title: str, body: str, on_progress, parent=None):
+    def __init__(self, title: str, body: str, on_progress, on_share=None, parent=None):
         super().__init__(parent)
         self.setObjectName("PBToast")
         self._on_progress = on_progress
+        self._on_share = on_share
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 10)
         lay.setSpacing(2)
@@ -267,14 +272,26 @@ class _PBToast(QWidget):
         self.body_label.setWordWrap(True)
         lay.addWidget(self.body_label)
 
+        # The action row: the PRIMARY "Share your PB →" (one tap to the lap card) then the
+        # secondary progression link. Each is created only when its callback is injected.
+        self.share_btn = None
+        self.link_btn = None
+        link_row = QHBoxLayout()
+        link_row.setContentsMargins(0, 0, 0, 0)
+        link_row.addStretch(1)
+        if on_share is not None:
+            self.share_btn = QPushButton("Share your PB →")
+            self.share_btn.setObjectName("PBToastShare")
+            self.share_btn.setProperty("variant", "primary")
+            self.share_btn.setCursor(Qt.PointingHandCursor)
+            self.share_btn.setToolTip("Save a shareable lap card (image) of this personal best")
+            self.share_btn.clicked.connect(self._on_share_clicked)
+            link_row.addWidget(self.share_btn)
         self.link_btn = QPushButton("See your progress →")
         self.link_btn.setObjectName("PBToastLink")
         self.link_btn.setCursor(Qt.PointingHandCursor)
         self.link_btn.setToolTip("Open this track's personal-best progression chart")
         self.link_btn.clicked.connect(self._on_link)
-        link_row = QHBoxLayout()
-        link_row.setContentsMargins(0, 0, 0, 0)
-        link_row.addStretch(1)
         link_row.addWidget(self.link_btn)
         lay.addLayout(link_row)
 
@@ -298,6 +315,12 @@ class _PBToast(QWidget):
         self.dismiss()
         if self._on_progress is not None:
             self._on_progress()
+
+    def _on_share_clicked(self):
+        """One-tap share: route to the injected share callback (save the lap card), then dismiss."""
+        self.dismiss()
+        if self._on_share is not None:
+            self._on_share()
 
     def dismiss(self):
         self._timer.stop()
@@ -692,6 +715,20 @@ class StudioWindow(QMainWindow):
         self._export_report_action.setToolTip(
             "A one-page self-contained report: session stats, lap table, map + chart snapshots")
         self._export_report_action.triggered.connect(self._export_report)
+        # The shareable lap card (image): the one-tap social output. Two actions — save the PNG,
+        # or copy it to the clipboard to paste straight into a chat. Greyed (in _sync_export_menu)
+        # when there's no VERIFIED lap to brag about (an unverified/provisional time never becomes
+        # a bragging card); the render itself honesty-stamps a data-quality-degraded time.
+        self._export_menu.addSeparator()
+        self._share_card_action = self._export_menu.addAction("Lap card (image)…")
+        self._share_card_action.setToolTip(
+            "Save a shareable lap card (PNG): your best lap, Δ to your ideal, the #1 corner to "
+            "find time, and a speed map — the one-tap thing to post after a good session")
+        self._share_card_action.triggered.connect(self._export_share_card)
+        self._copy_card_action = self._export_menu.addAction("Copy lap card")
+        self._copy_card_action.setToolTip(
+            "Copy the shareable lap card image to the clipboard — paste it straight into a chat")
+        self._copy_card_action.triggered.connect(self._copy_share_card)
         self._export_menu.setEnabled(False)  # no session yet at construction time
         menu.aboutToShow.connect(self._sync_export_menu)
         # F9 video export: burns the overlays onto the footage (renderer in export_video.py).
@@ -983,7 +1020,11 @@ class StudioWindow(QMainWindow):
             old = getattr(self, "_pb_toast", None)
             if old is not None:
                 old.dismiss()
-            toast = _PBToast(title, body, on_progress=self._open_library, parent=self)
+            # Offer the one-tap share only when the card is actually shareable (verified lap) —
+            # a PB moment is verified timing by construction, but stay honest via the same verdict.
+            on_share = None if self._share_card_blocked() else self._share_pb_card
+            toast = _PBToast(title, body, on_progress=self._open_library,
+                             on_share=on_share, parent=self)
             self._pb_toast = toast
             toast.show_for(self)
         except Exception as exc:  # noqa: BLE001 — a celebration must never break a load
@@ -1238,9 +1279,25 @@ class StudioWindow(QMainWindow):
         has = hasattr(self, "session")
         self._export_menu.setEnabled(has)
         self._export_video_action.setEnabled(has)
+        # The shareable lap card is enabled only when there's a VERIFIED lap to brag about (an
+        # unverified/provisional start line makes the lap time meaningless — never a bragging
+        # card). card_data owns the verdict (blocked); we mirror it onto both card actions.
+        card_ok = has and not self._share_card_blocked()
+        self._share_card_action.setEnabled(card_ok)
+        self._copy_card_action.setEnabled(card_ok)
         # Save-as-track needs USABLE timing lines (≥1 valid lap means the start line actually
         # segments this trace — the lines are worth promoting to a reusable track).
         self._save_track_action.setEnabled(self._can_save_track())
+
+    def _share_card_blocked(self) -> bool:
+        """True when a shareable lap card must NOT be offered (no valid/verified lap). Reads the
+        pure card_data verdict; any failure means 'not shareable' (grey it out, never crash)."""
+        if not hasattr(self, "session"):
+            return True
+        try:
+            return share_card.card_data(self.session, unit=self._speed_unit).blocked
+        except Exception:  # noqa: BLE001 — a menu sync must never raise
+            return True
 
     def _can_save_track(self) -> bool:
         """True iff the current session has usable timing lines to promote into a track: a session
@@ -1369,6 +1426,68 @@ class StudioWindow(QMainWindow):
         buf.open(QIODevice.WriteOnly)
         image.save(buf, "PNG")
         return bytes(buf.data())
+
+    # ------------------------------------------------ shareable lap card (image)
+    # File ▸ Export ▸ "Lap card (image)…" / "Copy lap card" + the PB-toast one-tap share. The
+    # numbers come from share_card.card_data (pure Session accessors); the speed-map thumbnail is
+    # the SAME live-MapView→PNG grab the HTML report uses (no reinvented rendering). Honesty lives
+    # in card_data (blocked ⇒ never built; stamped ⇒ "estimated timing" burned on).
+    def _build_share_card(self):
+        """Render the shareable lap card to a QImage from the current session, or None when the
+        session is blocked (provisional / no valid lap) or a session/view is missing. The map
+        thumbnail is grabbed from the live MapView (best-effort — a grab failure just drops the
+        thumbnail, the card still renders). Palette + unit follow the app's active choices."""
+        if not hasattr(self, "session") or getattr(self, "view", None) is None:
+            return None
+        data = share_card.card_data(self.session, unit=self._speed_unit)
+        if data.blocked:
+            return None
+        try:
+            map_png = self._grab_png(self.view.map)
+        except Exception as exc:  # noqa: BLE001 — the thumbnail is optional; never fail the card
+            print(f"studio: lap-card map thumbnail not grabbed ({exc!r}).", flush=True)
+            map_png = None
+        return share_card.render_card(data, map_png, palette=theme.active_palette())
+
+    def _export_share_card(self):
+        """File ▸ Export ▸ "Lap card (image)…": render the card and save it as a PNG."""
+        image = self._build_share_card()
+        if image is None:
+            self.statusBar().showMessage("no verified lap to make a shareable card for")
+            return
+        path = self._export_save_path("Export lap card", "_lap_card.png", "PNG images (*.png)")
+        if not path:
+            return
+        if self._run_export(lambda: self._save_card_png(image, path), path):
+            self.statusBar().showMessage(f"saved {os.path.basename(path)}")
+
+    @staticmethod
+    def _save_card_png(image, path: str) -> None:
+        """Write the card QImage to `path` as PNG; raise OSError on failure so _run_export shows
+        the standard warning (QImage.save returns False rather than raising)."""
+        if not image.save(path, "PNG"):
+            raise OSError(f"could not write {path}")
+
+    def _copy_share_card(self):
+        """File ▸ Export ▸ "Copy lap card": render the card and put it on the clipboard, so the
+        user can paste it straight into a chat. clipboard() is injected-testable (monkeypatched in
+        the offscreen test); guarded so a clipboard hiccup never crashes the app."""
+        image = self._build_share_card()
+        if image is None:
+            self.statusBar().showMessage("no verified lap to make a shareable card for")
+            return
+        try:
+            QApplication.clipboard().setImage(image)
+        except Exception as exc:  # noqa: BLE001 — a clipboard failure must not disrupt the app
+            print(f"studio: lap card not copied ({exc!r}).", flush=True)
+            self.statusBar().showMessage("could not copy the lap card")
+            return
+        self.statusBar().showMessage("lap card copied — paste it into a chat")
+
+    def _share_pb_card(self):
+        """The PB toast's one-tap share: save the shareable lap card at the personal-best moment
+        (the peak-pride surface). Routes through the same save path as the menu action."""
+        self._export_share_card()
 
     # ------------------------------------------------- video-overlay export (F9)
     # File ▸ Export overlay video Qt side (renderer is event-loop-free in export_video.py).
