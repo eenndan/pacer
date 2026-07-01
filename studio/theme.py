@@ -12,6 +12,8 @@ import os
 from PySide6 import __version__ as PYSIDE_VERSION
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPalette
 
+from . import units
+
 
 # ====================================================================== tokens
 class C:
@@ -161,20 +163,30 @@ def format_delta_run(d: float | None, *, units: bool = True) -> str:
     return f"Δ {v} s" if units else f"Δ {v}"
 
 
-def format_speed_run(speed_kmh: float | None, lap: int | None) -> str:
-    """<n> km/h while a lap is current, else '— km/h' (no misleading speed outside a lap)."""
-    return f"{speed_kmh:.0f} km/h" if (speed_kmh is not None and lap is not None) else "— km/h"
+def format_speed_run(speed_kmh: float | None, lap: int | None,
+                     unit: str | None = None) -> str:
+    """<n> <unit> while a lap is current, else '— <unit>' (no misleading speed outside a lap).
+    `unit` (km/h default) converts at the DISPLAY boundary only — `speed_kmh` stays km/h."""
+    label = units.speed_label(unit)
+    if speed_kmh is None or lap is None:
+        return f"— {label}"
+    return f"{units.convert_speed(speed_kmh, unit):.0f} {label}"
 
 
-def speed_number(speed_kmh: float | None, lap: int | None) -> str:
-    """Speed number alone (no unit), same no-lap gate as format_speed_run: rounded km/h or em dash."""
-    return "—" if (speed_kmh is None or lap is None) else f"{speed_kmh:.0f}"
+def speed_number(speed_kmh: float | None, lap: int | None,
+                 unit: str | None = None) -> str:
+    """Speed number alone (no unit), same no-lap gate as format_speed_run: the rounded speed in
+    `unit` (km/h default) or an em dash."""
+    if speed_kmh is None or lap is None:
+        return "—"
+    return f"{units.convert_speed(speed_kmh, unit):.0f}"
 
 
 def format_delta_speed(d: float | None, speed_kmh: float | None,
-                       lap: int | None) -> tuple[str, str | None]:
-    """Combined live readout: (text, colour). text = 'Δ <v> s<5 spaces><n> km/h'; colour = delta_colour(d)."""
-    text = f"{format_delta_run(d)}     {format_speed_run(speed_kmh, lap)}"
+                       lap: int | None, unit: str | None = None) -> tuple[str, str | None]:
+    """Combined live readout: (text, colour). text = 'Δ <v> s<5 spaces><n> <unit>'; colour =
+    delta_colour(d). `unit` (km/h default) applies to the speed number only."""
+    text = f"{format_delta_run(d)}     {format_speed_run(speed_kmh, lap, unit)}"
     return text, delta_colour(d)
 
 
@@ -183,14 +195,15 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
 # read as the plain best-lap Δ; the IDEAL gap is always ≥ 0 (you can't beat the envelope you helped
 # form), so it carries the single "behind"/amber colour rather than the two-way ahead/behind ramp.
 def format_ideal_readout(d_ideal: float | None, speed_kmh: float | None,
-                         lap: int | None) -> tuple[str, str | None]:
-    """Hero #DiffBox readout (text, colour): 'Δideal <v> s<5 spaces><n> km/h', leading with the
+                         lap: int | None, unit: str | None = None) -> tuple[str, str | None]:
+    """Hero #DiffBox readout (text, colour): 'Δideal <v> s<5 spaces><n> <unit>', leading with the
     Δ-to-ideal scalar. `d_ideal` is `Session.delta_to_ideal_at` (≥ 0 by construction, None outside a
     lap / before an ideal exists). Colour = `C.behind` when there's real time on the table, else
-    neutral — there is no "ahead of ideal", so this never goes green."""
+    neutral — there is no "ahead of ideal", so this never goes green. `unit` (km/h default) applies
+    to the speed number only."""
     v = format_delta_value(d_ideal)
     delta_run = f"Δideal {v}" + (" s" if d_ideal is not None else "")
-    text = f"{delta_run}     {format_speed_run(speed_kmh, lap)}"
+    text = f"{delta_run}     {format_speed_run(speed_kmh, lap, unit)}"
     colour = C.behind if (d_ideal is not None and d_ideal > DELTA_EVEN_EPS_S) else None
     return text, colour
 

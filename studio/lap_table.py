@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme
+from . import theme, units
 from ._signal import fmt_time
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
@@ -47,6 +47,15 @@ PROVISIONAL_TOOLTIP = "Provisional — start/finish line not set for this track.
 ESTIMATED_TIMING_TOOLTIP = ("Timing accuracy degraded — these times are estimated and may be less "
                             "accurate (see the data-quality note over the map).")
 COLUMNS = ["Lap", "Time", "Dist (m)", "Entry (km/h)"]
+_ENTRY_COL = len(COLUMNS) - 1  # the Entry-speed column (last base column); its header names the unit
+
+
+def _columns(unit: str | None) -> list[str]:
+    """The base column headers with the Entry column named in the current speed unit
+    ("Entry (km/h)" / "Entry (mph)"). Length is invariant, so every len(COLUMNS) offset holds."""
+    cols = list(COLUMNS)
+    cols[_ENTRY_COL] = f"Entry ({units.speed_label(unit)})"
+    return cols
 # Columns 1.. (everything but the Lap column) hold numerics: right-align + tabular font so the
 # digits column-align. The Lap column stays left/default.
 NUMERIC_COL_START = 1
@@ -103,12 +112,16 @@ class LapTable(QWidget):
         super().__init__()
         self.session = session
         self._current_lap = None  # the lap on the video (independent of selection)
+        # Speed display unit (km/h default); the app pushes the persisted choice via set_speed_unit.
+        # Drives the Entry column header + the Entry value conversion (a display-only concern —
+        # session.lap_rows still returns km/h).
+        self._speed_unit = units.DEFAULT_UNIT
         # Highlight caches filled by refresh(): per-column best splits + dropout lap ids.
         self._best_split: list = []
         self._dropout_ids: set = set()
 
         self.table = QTableWidget(0, len(COLUMNS))
-        self.table.setHorizontalHeaderLabels(COLUMNS)
+        self.table.setHorizontalHeaderLabels(_columns(self._speed_unit))
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -220,6 +233,15 @@ class LapTable(QWidget):
         n = self.session.sector_count()
         return n + 1 if n else 0
 
+    def set_speed_unit(self, unit: str):
+        """Switch the Entry-speed display unit live: re-header + re-fill (converts the Entry cells).
+        No-op if unchanged."""
+        unit = units.normalize_unit(unit)
+        if unit == self._speed_unit:
+            return
+        self._speed_unit = unit
+        self.refresh()
+
     def refresh(self):
         rows = self.session.lap_rows()
 
@@ -232,7 +254,7 @@ class LapTable(QWidget):
         # sub-sector (none by default = today's 4 columns). Column count depends on this,
         # so set the headers here — refresh() runs on selection and after sectors change.
         n_splits = self._n_split_cols()
-        headers = COLUMNS + [f"S{i + 1}" for i in range(n_splits)]
+        headers = _columns(self._speed_unit) + [f"S{i + 1}" for i in range(n_splits)]
 
         # Per-lap splits + per-column session-best (same accessor the footer sums, so cells/footer agree).
         splits_by_lap = {row["idx"]: self.session.lap_sector_splits(row["idx"]) for row in rows}
@@ -253,7 +275,10 @@ class LapTable(QWidget):
                 (str(lap_id), float(lap_id)),
                 (fmt_time(row["time"]), float(row["time"])),
                 (f"{row['dist']:.0f}", float(row["dist"])),
-                (f"{row['entry']:.1f}", float(row["entry"])),
+                # Entry speed: convert km/h → the display unit for BOTH the shown text and the
+                # numeric sort key so ordering matches what's on screen (identity for km/h).
+                (f"{units.convert_speed(row['entry'], self._speed_unit):.1f}",
+                 units.convert_speed(float(row["entry"]), self._speed_unit)),
             ]
             for i in range(n_splits):
                 if i < len(splits):
@@ -459,27 +484,35 @@ class LapTable(QWidget):
 # Rows = detected corners (track order), cols = the selected lap's per-corner metrics vs the best
 # lap (session.lap_corner_stats). A separate widget stacked with LapTable; shares only the module
 # display constants. Headers are abbreviated so all 8 columns fit the narrow panel — dropped units
-# move to per-column header tooltips (CORNER_COL_TIPS).
+# move to per-column header tooltips (_corner_col_tips).
 CORNER_COLUMNS = ["Corner", "Time", "Δ best", "Apex", "Δ apex", "Entry", "Exit",
                   theme.estimated_label("Grip")]
-# Full meaning + units per header, shown on hover (1:1 with CORNER_COLUMNS).
-CORNER_COL_TIPS = [
-    "Detected corner in track order (⟲ left / ⟳ right)",
-    "Time spent in the corner (seconds)",
-    "Δ vs the best lap's same corner (seconds; − is faster)",
-    "Apex (minimum) speed through the corner (km/h)",
-    "Δ apex speed vs the best lap (km/h; + is faster)",
-    "Corner entry speed (km/h)",
-    "Corner exit speed (km/h)",
-    # ESTIMATED, not measured: the friction circle mixes the noisier longitudinal axis, so this is
-    # lateral-dominant. Numerator and divisor share the SAME validated axes (clean GPS-derived
-    # longitudinal + IMU lateral). Normalised to the SESSION envelope (not each lap's own peak) so a
-    # slow lap reads genuinely lower; ~100% means at this session's grip limit (it can read a little
-    # over when a corner sits just past the robust p98 envelope).
-    "Grip utilisation (ESTIMATED): median combined |g| in the corner vs the session friction-circle "
-    "envelope (%). Estimated from the clean GPS-derived longitudinal + IMU lateral g; ~100% = at the "
-    "session's grip limit. Normalised session-wide so a slower lap reads lower.",
-]
+# The 4 speed columns whose per-corner VALUES convert km/h → the display unit (Apex, Δ apex,
+# Entry, Exit). Δ apex is a speed DIFFERENCE, so it scales by the same factor.
+CORNER_SPEED_COLS = (3, 4, 5, 6)
+
+
+def _corner_col_tips(unit: str | None) -> list[str]:
+    """Full meaning + units per header, shown on hover (1:1 with CORNER_COLUMNS). The four speed
+    tips name the current display unit ("km/h" / "mph"); the rest are unit-independent."""
+    u = units.speed_label(unit)
+    return [
+        "Detected corner in track order (⟲ left / ⟳ right)",
+        "Time spent in the corner (seconds)",
+        "Δ vs the best lap's same corner (seconds; − is faster)",
+        f"Apex (minimum) speed through the corner ({u})",
+        f"Δ apex speed vs the best lap ({u}; + is faster)",
+        f"Corner entry speed ({u})",
+        f"Corner exit speed ({u})",
+        # ESTIMATED, not measured: the friction circle mixes the noisier longitudinal axis, so this is
+        # lateral-dominant. Numerator and divisor share the SAME validated axes (clean GPS-derived
+        # longitudinal + IMU lateral). Normalised to the SESSION envelope (not each lap's own peak) so a
+        # slow lap reads genuinely lower; ~100% means at this session's grip limit (it can read a little
+        # over when a corner sits just past the robust p98 envelope).
+        "Grip utilisation (ESTIMATED): median combined |g| in the corner vs the session friction-circle "
+        "envelope (%). Estimated from the clean GPS-derived longitudinal + IMU lateral g; ~100% = at the "
+        "session's grip limit. Normalised session-wide so a slower lap reads lower.",
+    ]
 CORNER_DIR_GLYPH = {1: "⟲", -1: "⟳"}  # left / right (turn sense), shown after the C-label
 
 
@@ -493,11 +526,12 @@ class CornerTable(QWidget):
         super().__init__()
         self.session = session
         self._lap_id: int | None = None
+        # Speed display unit (km/h default); app pushes the persisted choice via set_speed_unit.
+        # Drives the Apex/Δ apex/Entry/Exit value conversion + the per-column tooltips' unit name.
+        self._speed_unit = units.DEFAULT_UNIT
         self.table = QTableWidget(0, len(CORNER_COLUMNS))
         self.table.setHorizontalHeaderLabels(CORNER_COLUMNS)
-        for c, tip in enumerate(CORNER_COL_TIPS):
-            if tip:
-                self.table.horizontalHeaderItem(c).setToolTip(tip)
+        self._apply_corner_tips()
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -512,6 +546,22 @@ class CornerTable(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.table)
+
+    def _apply_corner_tips(self):
+        """(Re)apply the per-column header tooltips for the current speed unit."""
+        for c, tip in enumerate(_corner_col_tips(self._speed_unit)):
+            if tip:
+                self.table.horizontalHeaderItem(c).setToolTip(tip)
+
+    def set_speed_unit(self, unit: str):
+        """Switch the corner speed display unit live: re-tooltip + re-fill the speed cells. No-op
+        if unchanged."""
+        unit = units.normalize_unit(unit)
+        if unit == self._speed_unit:
+            return
+        self._speed_unit = unit
+        self._apply_corner_tips()
+        self.refresh()
 
     def set_lap(self, lap_id: int | None):
         """Show the corners of `lap_id` (None clears). No-op when unchanged — called per
@@ -536,16 +586,21 @@ class CornerTable(QWidget):
         for r, st in enumerate(stats):
             c = corner_list[r]
             grip_pct = f"{grip[r] * 100:.0f}" if r < len(grip) else "–"
+            # Speeds convert km/h → the display unit at the cell boundary (identity for km/h);
+            # apex Δ is a speed difference so it scales by the same factor. Δ COLOURS keep the raw
+            # km/h delta (sign/magnitude threshold is unit-agnostic — a factor never flips it).
+            u = self._speed_unit
+            conv = units.convert_speed
             cells: list[tuple[str, str | None]] = [
                 (f"{c.label} {CORNER_DIR_GLYPH.get(c.direction, '')}", None),
                 (f"{st.time:.2f}", None),
                 (f"{st.delta:+.2f}", theme.delta_colour(st.delta)),
-                (f"{st.apex_speed:.1f}", None),
+                (f"{conv(st.apex_speed, u):.1f}", None),
                 # Apex-speed Δ: FASTER through the corner is better, so the shared Δ colour
                 # rule (negative = green) is applied to the NEGATED speed delta.
-                (f"{st.apex_speed_delta:+.1f}", theme.delta_colour(-st.apex_speed_delta)),
-                (f"{st.entry_speed:.1f}", None),
-                (f"{st.exit_speed:.1f}", None),
+                (f"{conv(st.apex_speed_delta, u):+.1f}", theme.delta_colour(-st.apex_speed_delta)),
+                (f"{conv(st.entry_speed, u):.1f}", None),
+                (f"{conv(st.exit_speed, u):.1f}", None),
                 (grip_pct, None),
             ]
             is_best = bool(bests) and r < len(bests) and abs(st.time - bests[r]) < 1e-9

@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import coaching, theme
+from . import coaching, theme, units
 from .lap_table import CORNER_DIR_GLYPH
 from .theme import C
 
@@ -170,10 +170,12 @@ def _sigma_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
     return item
 
 
-def _reason_cell(opp: coaching.Opportunity, brake_points: dict) -> QTableWidgetItem:
-    """The 'How to find it' reason cell: the coaching sentence + (when a braking-point estimate is
-    available for this corner) the ESTIMATED 'brake ~N m' line, with the per-reason tooltip."""
-    sentence = coaching.reason_sentence(opp)
+def _reason_cell(opp: coaching.Opportunity, brake_points: dict,
+                 speed_unit: str | None = None) -> QTableWidgetItem:
+    """The 'How to find it' reason cell: the coaching sentence (apex deficit in `speed_unit`, km/h
+    default) + (when a braking-point estimate is available for this corner) the ESTIMATED 'brake
+    ~N m' line, with the per-reason tooltip."""
+    sentence = coaching.reason_sentence(opp, speed_unit)
     bp = brake_points.get(opp.cid)
     hint = _brake_point_hint(bp) if bp is not None else None
     item = QTableWidgetItem(f"{sentence}\n{hint}" if hint else sentence)
@@ -196,13 +198,16 @@ class OpportunitiesDialog(QDialog):
     def __init__(self, opportunities: coaching.Opportunities,
                  jump_to: Callable[[int, float], None] | None = None,
                  brake_points: dict | None = None,
-                 parent=None):
+                 parent=None, speed_unit: str | None = None):
         super().__init__(parent)
         self.setWindowTitle("pacer studio — opportunities")
         self.resize(560, 320)
         self._opps = opportunities
         self._jump_to = jump_to
         self._brake_points = brake_points or {}
+        # Speed display unit (km/h default) for the reason sentence's apex deficit; opened fresh
+        # per view so it's fixed at construction (no live flip needed on a modal).
+        self._speed_unit = speed_unit
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -271,7 +276,7 @@ class OpportunitiesDialog(QDialog):
             table.setItem(r, _COL_LOST, _lost_cell(opp, num_font))
             table.setItem(r, _COL_SIGMA, _sigma_cell(opp, num_font))  # lap-to-lap consistency σ
             table.setCellWidget(r, _COL_PHASES, PhaseBar(opp.phases))  # D2 entry/apex/exit Δt
-            table.setItem(r, _COL_REASON, _reason_cell(opp, self._brake_points))
+            table.setItem(r, _COL_REASON, _reason_cell(opp, self._brake_points, self._speed_unit))
             table.setCellWidget(r, _COL_GO, self._go_button(opp))
         self.table = table  # exposed for the tests
         return table
@@ -324,6 +329,9 @@ class OpportunitiesPanel(QWidget):
         self.session = session
         self._num_font = theme.mono_font(theme.TABLE)
         self._cids: list[int] = []  # row -> corner cid, set in refresh()
+        # Speed display unit (km/h default) for the reason sentence's apex deficit; pushed by the
+        # window's Units toggle via set_speed_unit.
+        self._speed_unit = units.DEFAULT_UNIT
 
         # --- header: title · headline summary · collapse chevron (the consistency-strip pattern).
         title = QLabel("OPPORTUNITIES")
@@ -394,6 +402,15 @@ class OpportunitiesPanel(QWidget):
         else:
             self._show_excluded(opps)
 
+    def set_speed_unit(self, unit: str):
+        """Switch the reason sentence's apex-deficit unit live: re-fill the rows. No-op if
+        unchanged."""
+        unit = units.normalize_unit(unit)
+        if unit == self._speed_unit:
+            return
+        self._speed_unit = unit
+        self.refresh()
+
     def _fill_rows(self, opps: coaching.Opportunities, brake_points: dict):
         """Populate the compact top-3 table from `opps.rows` (shared cell builders, so a row reads
         identically to the modal dialog) and the headline summary."""
@@ -409,7 +426,7 @@ class OpportunitiesPanel(QWidget):
             self.table.setItem(r, 0, _corner_cell(opp))
             self.table.setItem(r, 1, _lost_cell(opp, self._num_font))
             self.table.setItem(r, 2, _sigma_cell(opp, self._num_font))  # consistency σ on the row
-            self.table.setItem(r, 3, _reason_cell(opp, brake_points))
+            self.table.setItem(r, 3, _reason_cell(opp, brake_points, self._speed_unit))
         self.table.blockSignals(False)
         self.body.setCurrentIndex(0)
 

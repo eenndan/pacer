@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from . import units
 from .gapfill import GAP_TIME_S
 from .theme import MAP_RAINBOW_N
 
@@ -84,7 +85,8 @@ def _seg_buckets(times, vals, lo=None, hi=None):
     return bucketize(seg_vals, MAP_RAINBOW_N, lo=lo, hi=hi)
 
 
-def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid):
+def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
+                    speed_unit=None):
     """Compute the per-segment bucket ids + legend texts for one rainbow channel. Pure numpy.
 
     Inputs are the lap's already-fetched per-sample arrays (the map fetches them from Session):
@@ -103,8 +105,10 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid):
         return None
     if mode == "speed":
         vals = speed_kmh
-        lo_txt = f"{float(np.min(vals)):.0f}"
-        hi_txt = f"{float(np.max(vals)):.0f} km/h"
+        # Bucketing is scale-invariant (min/max normalized), so the COLOURS ride the raw km/h; only
+        # the legend end-labels convert to the display unit (identity for km/h).
+        lo_txt = f"{units.convert_speed(float(np.min(vals)), speed_unit):.0f}"
+        hi_txt = f"{units.convert_speed(float(np.max(vals)), speed_unit):.0f} {units.speed_label(speed_unit)}"
         return _seg_buckets(times, vals), lo_txt, hi_txt
     if mode == "grip":
         # D5: per-sample grip utilization (|g| / session envelope), ESTIMATED + lateral-dominant.

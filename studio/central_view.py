@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, sidecar, theme
+from . import chapters, sidecar, theme, units
 from .coaching_panel import OpportunitiesPanel
 from .compare_controller import CompareController
 from .consistency_panel import ConsistencyPanel
@@ -46,16 +46,26 @@ class CentralView(QWidget):
     """Session-scoped central widget for one loaded recording (see module docstring)."""
 
     def __init__(self, session, paths: list[str], sidecar_path: str | None,
-                 consistency_visible: bool, parent: QWidget | None = None):
+                 consistency_visible: bool, parent: QWidget | None = None,
+                 speed_unit: str | None = None):
         super().__init__(parent)
         # Read aliases of window-owned state; the view never reassigns these.
         self.session = session
         self._paths = list(paths)
         self._sidecar_path = sidecar_path
         self._consistency_visible = consistency_visible
+        # Speed display unit (km/h default). The window passes the persisted choice and pushes
+        # later flips via set_speed_unit; the hero #DiffBox reads it, sub-views hold their own copy.
+        self._speed_unit = units.normalize_unit(speed_unit)
 
         # Atomic build: panels -> layout -> signals -> controllers.
         self._construct_panels()
+        # Seed each speed-bearing sub-view's unit BEFORE the first rebuild fills them (set the
+        # field directly — set_speed_unit would trigger a redundant pre-build refresh). The plots
+        # axis label needs re-applying since it was set at km/h in the sub-view's own __init__.
+        for w in (self.plots, self.table, self.corner_table, self.map, self.opportunities):
+            w._speed_unit = self._speed_unit
+        self.plots._apply_speed_axis_label()
         self._layout_panels()
         self._wire_signals()
         self._build_controllers()
@@ -153,7 +163,9 @@ class CentralView(QWidget):
         # you are, right here) rather than Δ-to-best; the small ideal_readout_btn flips it to
         # Δ-to-best, and whichever number isn't shown lives in the box's tooltip — no information is
         # removed, just re-prioritized (see _update_diff_box).
-        self.diff_box = QLabel("Δideal —    — km/h")
+        # Placeholder text before the first tick — uses the display unit so it never flashes km/h
+        # when the app is set to mph (the live readout re-renders on the first _update_diff_box).
+        self.diff_box = QLabel(f"Δideal —    — {units.speed_label(self._speed_unit)}")
         self.diff_box.setObjectName("DiffBox")
         self.diff_box.setAlignment(Qt.AlignCenter)
         self.diff_box.setFont(theme.mono_font(theme.HERO, theme.W_SEMIBOLD))
@@ -475,6 +487,23 @@ class CentralView(QWidget):
         self._saved_splitter_sizes = None
 
     # --------------------------------------------------------- consistency panel (F6)
+    def set_speed_unit(self, unit: str):
+        """Switch the speed display unit live across every session-derived surface: the plots
+        speed axis, the lap + corner tables, and the hero #DiffBox readout. Driven by the
+        persistent View ▸ Units toggle on the window. No-op if unchanged."""
+        unit = units.normalize_unit(unit)
+        if unit == self._speed_unit:
+            return
+        self._speed_unit = unit
+        self.plots.set_speed_unit(unit)
+        self.table.set_speed_unit(unit)
+        self.corner_table.set_speed_unit(unit)
+        self.map.set_speed_unit(unit)
+        self.opportunities.set_speed_unit(unit)
+        # Re-render the readout in place from the last stashed moment (no tick needed).
+        self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
+                              self._last_diff_lap)
+
     def set_consistency_visible(self, on: bool):
         """Show/hide the consistency strip; refreshes its stats when showing. Driven by the
         persistent View-menu item on the window."""
@@ -714,10 +743,10 @@ class CentralView(QWidget):
         d_best = self.session.delta_at_lap(lap_id, t) if lap_id is not None else None
         d_ideal = self.session.delta_to_ideal_at(lap_id, t) if lap_id is not None else None
         if self.ideal_readout_btn.isChecked():
-            text, sem_colour = theme.format_ideal_readout(d_ideal, sp, lap_id)
+            text, sem_colour = theme.format_ideal_readout(d_ideal, sp, lap_id, self._speed_unit)
             tip = f"Δ to your best lap here: {theme.format_delta_run(d_best)}"
         else:
-            text, sem_colour = theme.format_delta_speed(d_best, sp, lap_id)
+            text, sem_colour = theme.format_delta_speed(d_best, sp, lap_id, self._speed_unit)
             tip = f"Δ to your IDEAL achievable lap here: Δideal {theme.format_delta_value(d_ideal)}"
         colour = sem_colour or theme.C.text
         self.diff_box.setText(text)

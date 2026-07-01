@@ -231,6 +231,15 @@ add_test(NAME test_library
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_library.py)
 set_tests_properties(test_library PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Speed-units toggle (studio.units / prefs, BUILD 5): the pure km/h↔mph conversion/label/format
+# helpers, the persisted-choice round-trip + safe default, the theme readout formatters honouring
+# the unit (km/h default byte-identical), coaching.reason_sentence + map_render's speed legend +
+# the export OverlayConfig/readout using it, and the LapTable Entry header/value + CornerTable speed
+# cells flipping to mph. Imports the studio widgets (LapTable/export) -> Qt, so run offscreen.
+add_test(NAME test_units
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_units.py)
+set_tests_properties(test_units PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
@@ -248,7 +257,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_controllers test_central_view_realqt
                         test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
-                        test_driving test_coaching test_library test_export_video)
+                        test_driving test_coaching test_library test_export_video
+                        test_units)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
