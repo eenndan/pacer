@@ -58,6 +58,11 @@ def _session():
     s.laps = SimpleNamespace(sectors=SimpleNamespace(start_line=line, sector_lines=[]))
     s.lap_trace_segments = lambda lid: [
         SimpleNamespace(xs=s.tx[:10], ys=s.ty[:10], measured=True)]
+    # The map now opens SPEED-coloured, so set_current_lap paints the speed rainbow; give the stub
+    # the per-lap channel surface (the test_rainbow_map idiom) so that harmless paint has data.
+    s.lap_channels = lambda lid: {
+        "t_media_s": s.tt, "x_m": s.tx, "y_m": s.ty,
+        "speed_kmh": s.tv, "dist_m": np.linspace(0.0, 500.0, len(s.tt))}
     return s, a, b
 
 

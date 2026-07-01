@@ -432,6 +432,37 @@ def test_map_corner_markers_overlay():
     print("ok map overlay: dots per direction + a label per corner, clears cleanly")
 
 
+def test_map_corner_labels_declutter_offset_and_no_overlap():
+    """Corner labels are drawn OFFSET from their apex (nudged outward + clear of the start
+    crosshair), and two near-coincident corners' labels do NOT land on the same spot — the
+    declutter separates them rather than dropping one. Detection/apexes are untouched: this is a
+    LABEL-draw offset only."""
+    _qapp()
+    import pyqtgraph as pg
+
+    from studio.map_view import _CornerMarkers
+    widget = pg.PlotWidget()
+    widget.resize(400, 300)  # give the viewbox a real px size so the offsets are meaningful
+    widget.getPlotItem().getViewBox().setRange(xRange=(-20, 20), yRange=(-20, 20), padding=0)
+    cm = _CornerMarkers(widget.getPlotItem())
+    # Three corners bunched at the origin — right where the start/finish crosshair sits — the exact
+    # near-start cluster the audit flagged. Every label must move off its apex and off its neighbours.
+    apexes = {"C1": (0.0, 0.0), "C11": (0.1, 0.0), "C12": (0.0, 0.1)}
+    markers = [("C1", 0.0, 0.0, 1), ("C11", 0.1, 0.0, -1), ("C12", 0.0, 0.1, 1)]
+    cm.set_corners(markers, start_xy=(0.0, 0.0))
+    texts = {it.textItem.toPlainText(): it for it in cm._items if isinstance(it, pg.TextItem)}
+    assert set(texts) == {"C1", "C11", "C12"}, "every corner keeps a label (none dropped)"
+    positions = []
+    for label, (ax, ay) in apexes.items():
+        pos = texts[label].pos()
+        # (a) the label is drawn OFF the raw apex point (a visible nudge, not on top of the dot).
+        assert (pos.x() - ax) ** 2 + (pos.y() - ay) ** 2 > 1e-6, (label, pos)
+        positions.append((round(pos.x(), 6), round(pos.y(), 6)))
+    # (b) no two labels share the exact same position — the near-coincident cluster is separated.
+    assert len(set(positions)) == len(positions), positions
+    print(f"ok label declutter: 3 near-coincident labels offset off-apex + distinct {positions}")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

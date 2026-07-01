@@ -55,13 +55,18 @@ CORNER_LEFT_COLOR = theme.CHART_SERIES[1]    # cyan — left-handers
 CORNER_RIGHT_COLOR = theme.CHART_SERIES[4]   # coral — right-handers
 CORNER_DOT_ALPHA = 170                       # 0-255: subtle, under the text label
 # Corner C# labels: near-primary text on a dark halo plate, nudged outward from the corner-cloud
-# centroid, greedily px-box de-collided (see set_corners).
+# centroid, then de-cluttered so labels don't stack on each other or on the start/finish crosshair
+# where corners bunch up near the start (see set_corners).
 CORNER_LABEL_COLOR = C.text                   # near-primary so the label reads over the surface
 CORNER_LABEL_HALO = QColor(C.surface)         # dark translucent plate behind the glyphs
 CORNER_LABEL_HALO.setAlpha(190)
 CORNER_LABEL_OFFSET_PX = 14                    # px the label is nudged outward from the centroid
-# Generous px box for the greedy overlap test (no per-frame metrics; labels are static once built).
+# Generous px box for the overlap test (no per-frame metrics; labels are static once built).
 CORNER_LABEL_BOX_PX = (22.0, 16.0)
+# Extra outward push (px) applied to a label whose apex sits within CORNER_START_CLEAR_PX of the
+# start/finish crosshair, so the amber crosshair and its clustered C-labels stop colliding.
+CORNER_START_CLEAR_PX = 26.0
+CORNER_START_NUDGE_PX = 12.0
 # Click-to-locate cue: a hollow accent ring slightly larger than the apex dot.
 CORNER_HIGHLIGHT_PEN_W = 2
 CORNER_HIGHLIGHT_SIZE = 18
@@ -421,10 +426,11 @@ class _CornerMarkers:
             return 1.0, 1.0
         return size.width() / rect.width(), size.height() / rect.height()
 
-    def set_corners(self, markers):
+    def set_corners(self, markers, start_xy=None):
         """(Re)build labels + apex dots from (label,x,y,direction) markers ([] clears; also clears
-        any highlight). Labels are nudged outward from the centroid and greedily de-collided; dots
-        are always drawn."""
+        any highlight). Labels are nudged outward from the corner-cloud centroid, pushed clear of the
+        start/finish crosshair (``start_xy`` = its local-metre midpoint, or None), and de-cluttered
+        so overlapping labels are separated rather than dropped; dots are always drawn."""
         self.set_highlight(None)
         self._markers = list(markers)
         for it in self._items:
@@ -443,24 +449,8 @@ class _CornerMarkers:
             dots.setZValue(5)  # above lap traces, below the marker (z=10)
             self.plot.addItem(dots)
             self._items.append(dots)
-        # Nudge each label outward from the apex-cloud centroid (px offset -> data units).
-        cx = float(np.mean([x for _l, x, _y, _d in markers]))
-        cy = float(np.mean([y for _l, _x, y, _d in markers]))
-        sx, sy = self._px_per_data()
-        bw, bh = CORNER_LABEL_BOX_PX
-        placed_px: list[tuple[float, float]] = []  # (px_x, px_y) centres of kept labels
-        for label, x, y, _d in markers:
-            dx, dy = float(x) - cx, float(y) - cy
-            norm = (dx * dx + dy * dy) ** 0.5 or 1.0
-            # px offset converted back to data units along the outward unit vector.
-            ox = (dx / norm) * CORNER_LABEL_OFFSET_PX / max(sx, 1e-6)
-            oy = (dy / norm) * CORNER_LABEL_OFFSET_PX / max(sy, 1e-6)
-            lx, ly = float(x) + ox, float(y) + oy
-            # Greedy de-collision in PX space: drop this label if its box overlaps a kept one.
-            px_x, px_y = lx * sx, ly * sy
-            if any(abs(px_x - px) < bw and abs(px_y - py) < bh for px, py in placed_px):
-                continue
-            placed_px.append((px_x, px_y))
+        for label, (lx, ly) in zip(
+                [m[0] for m in markers], self._label_positions(markers, start_xy), strict=True):
             # fill = a translucent dark plate behind the glyphs (the "halo"); border None keeps
             # it subtle. Anchor centred on the offset point so the nudge reads symmetrically.
             text = pg.TextItem(text=label, color=CORNER_LABEL_COLOR, anchor=(0.5, 0.5),
@@ -470,6 +460,63 @@ class _CornerMarkers:
             text.setZValue(6)
             self.plot.addItem(text)
             self._items.append(text)
+
+    def _label_positions(self, markers, start_xy):
+        """Compute the (lx, ly) draw position for each corner label in data units, decluttered.
+
+        Each label starts nudged outward from the apex-cloud centroid; a label whose apex sits atop
+        the start/finish crosshair gets an extra outward push so the amber crosshair stays readable;
+        then any two labels whose px boxes overlap are separated (both slid apart along the line
+        joining them) rather than one being dropped — every corner keeps a visible label. All the
+        collision reasoning is in PX space; the returned positions are back in data units."""
+        cx = float(np.mean([x for _l, x, _y, _d in markers]))
+        cy = float(np.mean([y for _l, _x, y, _d in markers]))
+        sx, sy = self._px_per_data()
+        bw, bh = CORNER_LABEL_BOX_PX
+        start_px = None if start_xy is None else (start_xy[0] * sx, start_xy[1] * sy)
+        # Initial px placement: outward-normal offset from the centroid, plus a start-line push.
+        px_pts: list[list[float]] = []
+        for _label, x, y, _d in markers:
+            apex_px = (float(x) * sx, float(y) * sy)
+            dx, dy = float(x) - cx, float(y) - cy
+            norm = (dx * dx + dy * dy) ** 0.5 or 1.0
+            ux, uy = dx / norm, dy / norm  # outward unit vector (data-space direction)
+            off = CORNER_LABEL_OFFSET_PX
+            # Start-line exclusion: a corner apex near the crosshair gets an extra outward nudge so
+            # its label clears the amber start/finish glyph (a common cluster near the start).
+            if start_px is not None:
+                spx, spy = apex_px[0] - start_px[0], apex_px[1] - start_px[1]
+                if (spx * spx + spy * spy) ** 0.5 < CORNER_START_CLEAR_PX:
+                    off += CORNER_START_NUDGE_PX
+            px_pts.append([apex_px[0] + ux * off, apex_px[1] + uy * off])
+        # Iteratively separate overlapping label boxes (a few passes settle the near-start cluster;
+        # this is a tasteful nudge, not a physics sim). Two overlapping boxes are pushed apart along
+        # the line joining them until their boxes just clear.
+        for _ in range(6):
+            moved = False
+            for i in range(len(px_pts)):
+                for j in range(i + 1, len(px_pts)):
+                    ax, ay = px_pts[i]
+                    bx, by = px_pts[j]
+                    ddx, ddy = bx - ax, by - ay
+                    ox, oy = bw - abs(ddx), bh - abs(ddy)
+                    if ox <= 0 or oy <= 0:
+                        continue  # boxes already clear on at least one axis
+                    moved = True
+                    # Push apart along whichever axis needs the smaller correction (least visual move).
+                    if ox < oy:
+                        sgn = 1.0 if ddx >= 0 else -1.0
+                        shift = (ox / 2.0 + 0.5) * sgn
+                        px_pts[i][0] -= shift
+                        px_pts[j][0] += shift
+                    else:
+                        sgn = 1.0 if ddy >= 0 else -1.0
+                        shift = (oy / 2.0 + 0.5) * sgn
+                        px_pts[i][1] -= shift
+                        px_pts[j][1] += shift
+            if not moved:
+                break
+        return [(px / sx, py / sy) for px, py in px_pts]
 
     def set_highlight(self, label: str | None):
         """Ring-highlight one corner's apex by label (None / unknown clears). Display-only."""
@@ -613,7 +660,12 @@ class MapView(QWidget):
         # click away. central_view mounts it in the map header. The cycle API (_cycle_rainbow /
         # _rainbow_mode / _RAINBOW_ORDER) is preserved underneath and stays in sync with the combo.
         self._rainbow = _RainbowOverlay(self.plot)
-        self._rainbow_mode = "off"  # "off" | "speed" | "delta" | "grip" (see _RAINBOW_ORDER)
+        # Default the map's line to the SPEED gradient — the product's signature visual — so a
+        # freshly-loaded recording (and the lap-card thumbnail it seeds) leads with the coloured
+        # racing line instead of a flat single colour. The speed channel is cached/vectorised in
+        # studio/map_render.py, so painting it on load costs no extra work. Off/Δ/grip stay one
+        # combo pick (or one cycle) away.
+        self._rainbow_mode = "speed"  # "off" | "speed" | "delta" | "grip" (see _RAINBOW_ORDER)
         self.rainbow_combo = QComboBox()
         for mode in _RAINBOW_ORDER:
             self.rainbow_combo.addItem(_RAINBOW_COMBO_LABELS[mode], userData=mode)
@@ -622,6 +674,9 @@ class MapView(QWidget):
             "Δ to best (red = losing, green = gaining), or Grip (ESTIMATED: red = on the session's "
             "grip limit, green = grip left unused). Off leaves the plain racing line. The faint "
             "best-lap reference is unchanged.")
+        # Show the default channel in the combo BEFORE wiring the change signal, so the initial
+        # selection reads "Line: Speed" without re-entering _on_rainbow_combo.
+        self._sync_rainbow_combo(self._rainbow_mode)
         self.rainbow_combo.currentIndexChanged.connect(self._on_rainbow_combo)
         self._legend = _RainbowLegend()
         self._legend.setVisible(False)
@@ -989,8 +1044,17 @@ class MapView(QWidget):
     # ------------------------------------------------------------- corner labels (F-corner)
     def set_corners(self, markers):
         """Show corner labels at the given (label, x, y, direction) apex markers ([] clears).
-        Pushed by the app."""
-        self._corner_markers.set_corners(markers)
+        Pushed by the app. The start/finish line's midpoint is handed down so labels near the
+        crosshair are nudged clear of it (declutter)."""
+        self._corner_markers.set_corners(markers, start_xy=self._start_line_midpoint())
+
+    def _start_line_midpoint(self):
+        """(x, y) midpoint of the session's start/finish line in local metres, or None if it isn't
+        available (bare-Session test paths). Drives the corner-label start-line declutter push."""
+        seg = getattr(self.session, "start_line", None)
+        if seg is None:
+            return None
+        return ((seg.x1 + seg.x2) / 2.0, (seg.y1 + seg.y2) / 2.0)
 
     def highlight_corner(self, cid: int | None):
         """Ring-highlight one corner's apex marker by 1-based cid (None clears) — driven by

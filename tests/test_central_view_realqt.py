@@ -119,6 +119,15 @@ def _real_central_view():
     start_seg = tracks.make_segment(float(x0[0]), float(y0[0]) - 5.0,
                                     float(x0[0]), float(y0[0]) + 5.0)
 
+    # Per-lap point clouds (lat/lon carried as the x/y placeholders) so Session.lap_channels — now
+    # reached on load because the map opens SPEED-coloured — resolves through self.laps.get_lap.
+    lap_pts = {
+        0: [SimpleNamespace(point=SimpleNamespace(lat=float(xx), lon=float(yy)))
+            for xx, yy in zip(x0, y0, strict=False)],
+        1: [SimpleNamespace(point=SimpleNamespace(lat=float(xx), lon=float(yy)))
+            for xx, yy in zip(x1, y1, strict=False)],
+    }
+
     class _Laps:
         def __init__(self):
             self.sectors = SimpleNamespace(start_line=start_seg, sector_lines=[])
@@ -131,6 +140,9 @@ def _real_central_view():
 
         def lap_time(self, lid):
             return windows[lid][1] - windows[lid][0]
+
+        def get_lap(self, lid):
+            return SimpleNamespace(points=lap_pts[lid])
     s.laps = _Laps()
     s.track_name = "StadiumLoop"
     # A single-chapter ChapterMap spanning the two laps so VideoView's slider/inert pane build.
@@ -502,8 +514,9 @@ def test_grip_map_reachable_via_labelled_combo():
     assert "grip" in combo.itemText(grip_idx).lower(), combo.itemText(grip_idx)
 
     # Selecting Grip drives the map to the grip channel in ONE click. (Clear the current lap first so
-    # _apply_rainbow cleanly no-ops on this lap_channels-free synthetic fixture — we're pinning the
-    # control wiring / mode selection here, not the render math, which test_rainbow_map covers.)
+    # _apply_rainbow cleanly no-ops here — the grip channel needs a g signal this fixture doesn't
+    # seed; we're pinning the control wiring / mode selection, not the render math, which
+    # test_rainbow_map covers.)
     view.map._current_lap = None
     combo.setCurrentIndex(grip_idx)
     _APP.processEvents()
