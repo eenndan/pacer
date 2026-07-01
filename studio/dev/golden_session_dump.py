@@ -56,116 +56,177 @@ def _round(v):
     return repr(v)
 
 
-def fingerprint(s) -> dict:
-    """Dense fingerprint of one Session STATE — every public analysis accessor, swept."""
+# Sentinel recorded for a leaf that an accessor could not serve in non-strict mode (e.g. the
+# bare synthetic Session has no pacer `laps`, so the pacer-passthrough accessors raise). A
+# distinct, comparison-stable string so golden_compare still catches a supported->unsupported
+# regression, without one missing accessor aborting the whole dump.
+_UNSUPPORTED = "__unsupported__"
+
+
+def fingerprint(s, *, strict: bool = True) -> dict:
+    """Dense fingerprint of one Session STATE — every public analysis accessor, swept.
+
+    strict=True (default, the real D24 gate): every accessor is called directly; any exception
+    propagates — behaviour is byte-identical to the original single-flow dump.
+
+    strict=False (the CI synthetic gate): each accessor is guarded so an accessor a *bare*
+    synthetic Session cannot serve (no pacer `laps` object -> the pacer-passthrough accessors
+    raise AttributeError) records the `_UNSUPPORTED` sentinel instead of aborting the dump. The
+    Python Session-math the equivalence gate protects (real corner detection / driving channels /
+    delta / bests / consistency, all seeded on the synthetic session) is still fingerprinted in
+    full; only the C++ Laps passthroughs (lap_count, sector geometry, session_date, ...) fall to
+    the sentinel. This never runs on the D24 path, so the real fingerprint stays byte-identical."""
     out: dict = {}
+
+    def put(key, thunk):
+        """Assign out[key] from thunk(). strict: propagate. non-strict: sentinel on failure."""
+        if strict:
+            out[key] = thunk()
+            return
+        try:
+            out[key] = thunk()
+        except Exception:
+            out[key] = _UNSUPPORTED
+
+    def guard(thunk, default=_UNSUPPORTED):
+        """Evaluate thunk() for use inside a composite leaf; sentinel/default on failure
+        (non-strict only — strict re-raises so the real gate is unchanged)."""
+        if strict:
+            return thunk()
+        try:
+            return thunk()
+        except Exception:
+            return default
+
     laps = s.valid_lap_ids()
     out["valid_lap_ids"] = _round(laps)
     out["best_lap_id"] = _round(s.best_lap_id())
-    out["lap_count"] = s.lap_count()
-    out["sector_count"] = s.sector_count()
-    out["point_count"] = s.point_count()
-    out["lap_rows"] = _round(s.lap_rows())
-    out["best_lap_total_distance"] = _round(s.best_lap_total_distance())
-    out["active_baseline_total_distance"] = _round(s.active_baseline_total_distance())
-    out["session_best_splits"] = _round(s.session_best_splits())
-    out["theoretical_best"] = _round(s.theoretical_best())
-    out["best_rolling_lap"] = _round(s.best_rolling_lap())
-    out["dropout_lap_ids"] = _round(sorted(s.dropout_lap_ids()))
-    out["session_date"] = _round(s.session_date())
-    out["track_name"] = _round(s.track_name)
+    put("lap_count", lambda: s.lap_count())
+    put("sector_count", lambda: s.sector_count())
+    put("point_count", lambda: s.point_count())
+    put("lap_rows", lambda: _round(s.lap_rows()))
+    put("best_lap_total_distance", lambda: _round(s.best_lap_total_distance()))
+    put("active_baseline_total_distance", lambda: _round(s.active_baseline_total_distance()))
+    put("session_best_splits", lambda: _round(s.session_best_splits()))
+    put("theoretical_best", lambda: _round(s.theoretical_best()))
+    put("best_rolling_lap", lambda: _round(s.best_rolling_lap()))
+    put("dropout_lap_ids", lambda: _round(sorted(s.dropout_lap_ids())))
+    put("session_date", lambda: _round(s.session_date()))
+    put("track_name", lambda: _round(s.track_name))
     out["has_gmeter"] = bool(s.has_gmeter)
-    out["gmeter_source"] = _round(s.gmeter_source())
+    put("gmeter_source", lambda: _round(s.gmeter_source()))
     out["has_reference"] = bool(s.has_reference())
-    out["reference_label"] = _round(s.reference_label())
-    out["reference_lap_time"] = _round(s.reference_lap_time())
-    out["reference_lap_id"] = _round(s.reference_lap_id())
-    out["reference_overlay_xy_shape"] = (
-        list(s.reference_overlay_xy().shape) if s.reference_overlay_xy() is not None else None)
-    out["driving_thresholds"] = _round(s.driving.thresholds())
+    put("reference_label", lambda: _round(s.reference_label()))
+    put("reference_lap_time", lambda: _round(s.reference_lap_time()))
+    put("reference_lap_id", lambda: _round(s.reference_lap_id()))
+    put("reference_overlay_xy_shape", lambda: (
+        list(s.reference_overlay_xy().shape) if s.reference_overlay_xy() is not None else None))
+    put("driving_thresholds", lambda: _round(s.driving.thresholds()))
 
     # Corners (session-wide).
-    out["corners"] = _round(s.corners.corner_list())
-    out["corner_session_bests"] = _round(s.corners.corner_session_bests())
-    out["corner_map_markers"] = _round(s.corners.corner_map_markers())
-    out["consistency_lap_ids"] = _round(s.consistency_lap_ids())
-    out["lap_time_trend"] = _round(s.lap_time_trend())
-    out["sector_sigmas"] = _round(s.sector_sigmas())
-    out["corner_consistency"] = _round(s.corner_consistency())
-    out["coaching_opportunities"] = _round(s.coaching_opportunities())
+    put("corners", lambda: _round(s.corners.corner_list()))
+    put("corner_session_bests", lambda: _round(s.corners.corner_session_bests()))
+    put("corner_map_markers", lambda: _round(s.corners.corner_map_markers()))
+    put("consistency_lap_ids", lambda: _round(s.consistency_lap_ids()))
+    put("lap_time_trend", lambda: _round(s.lap_time_trend()))
+    put("sector_sigmas", lambda: _round(s.sector_sigmas()))
+    put("corner_consistency", lambda: _round(s.corner_consistency()))
+    put("coaching_opportunities", lambda: _round(s.coaching_opportunities()))
 
     # Per-lap sweeps. Use a representative subset of valid laps (all of them — there are ~18).
-    cids = [c.cid for c in s.corners.corner_list()]
+    cids = [c.cid for c in guard(lambda: s.corners.corner_list(), default=[])]
     per_lap: dict = {}
     for lid in laps:
         row: dict = {}
-        row["lap_time"] = _round(s.lap_time(lid))
-        row["lap_window"] = _round(s.lap_window(lid))
-        row["lap_sector_splits"] = _round(s.lap_sector_splits(lid))
-        row["sector_boundary_distances"] = _round(s.sector_boundary_distances(lid))
-        row["lap_has_dropout"] = bool(s.lap_has_dropout(lid))
-        row["lap_corner_stats"] = _round(s.corners.lap_corner_stats(lid))
-        row["lap_corner_grip"] = _round(s.driving.lap_corner_grip(lid))
-        row["lap_brake_events"] = _round(s.driving.lap_brake_events(lid))
-        row["lap_coasting_spans"] = _round(s.driving.lap_coasting_spans(lid))
-        row["lap_brake_map_markers"] = _round(s.driving.lap_brake_map_markers(lid))
-        row["corner_map_markers_count"] = len(s.corners.corner_map_markers())
+        # Every thunk binds lid=lid (guard calls it immediately in-iteration, so the binding is
+        # only a defensive late-binding guard — it keeps ruff's B023 quiet).
+        row["lap_time"] = guard(lambda lid=lid: _round(s.lap_time(lid)))
+        row["lap_window"] = guard(lambda lid=lid: _round(s.lap_window(lid)))
+        row["lap_sector_splits"] = guard(lambda lid=lid: _round(s.lap_sector_splits(lid)))
+        row["sector_boundary_distances"] = guard(
+            lambda lid=lid: _round(s.sector_boundary_distances(lid)))
+        row["lap_has_dropout"] = guard(lambda lid=lid: bool(s.lap_has_dropout(lid)))
+        row["lap_corner_stats"] = guard(lambda lid=lid: _round(s.corners.lap_corner_stats(lid)))
+        row["lap_corner_grip"] = guard(lambda lid=lid: _round(s.driving.lap_corner_grip(lid)))
+        row["lap_brake_events"] = guard(lambda lid=lid: _round(s.driving.lap_brake_events(lid)))
+        row["lap_coasting_spans"] = guard(lambda lid=lid: _round(s.driving.lap_coasting_spans(lid)))
+        row["lap_brake_map_markers"] = guard(
+            lambda lid=lid: _round(s.driving.lap_brake_map_markers(lid)))
+        row["corner_map_markers_count"] = guard(lambda: len(s.corners.corner_map_markers()))
         # corner-entry media time per corner.
         row["corner_entry_media_time"] = _round(
-            {cid: s.corners.corner_entry_media_time(lid, cid) for cid in cids})
+            {cid: guard(lambda lid=lid, cid=cid: s.corners.corner_entry_media_time(lid, cid))
+             for cid in cids})
         # brake/coast plot positions in both modes.
         for mode in ("distance", "time"):
-            row[f"lap_brake_plot_positions_{mode}"] = _round(
-                s.driving.lap_brake_plot_positions(lid, mode))
-            row[f"lap_coasting_plot_spans_{mode}"] = _round(
-                s.driving.lap_coasting_plot_spans(lid, mode))
+            row[f"lap_brake_plot_positions_{mode}"] = guard(
+                lambda lid=lid, mode=mode: _round(s.driving.lap_brake_plot_positions(lid, mode)))
+            row[f"lap_coasting_plot_spans_{mode}"] = guard(
+                lambda lid=lid, mode=mode: _round(s.driving.lap_coasting_plot_spans(lid, mode)))
         per_lap[str(lid)] = row
     out["per_lap"] = per_lap
 
     # sector_plot_positions in both modes.
     for mode in ("distance", "time"):
-        out[f"sector_plot_positions_{mode}"] = _round(s.sector_plot_positions(mode))
+        put(f"sector_plot_positions_{mode}", lambda mode=mode: _round(s.sector_plot_positions(mode)))
 
     # The delta family on a dense grid. Pick the best lap window for time sweeps.
     best = s.best_lap_id()
     if best is not None:
-        w = s.lap_window(best)
+        w = guard(lambda: s.lap_window(best), default=None)
         if w is not None:
             t0, t1 = w
             grid = np.linspace(t0, t1, 200)
-            out["delta_at_time"] = _round([s.delta_at_time(float(t)) for t in grid])
-            out["delta_at_lap_best"] = _round([s.delta_at_lap(best, float(t)) for t in grid])
-            out["g_at_time"] = _round([s.g_at_time(float(t)) for t in grid])
-            out["lap_at_time"] = _round([s.lap_at_time(float(t)) for t in grid])
-            out["index_at_time"] = _round([s.index_at_time(float(t)) for t in grid])
+            put("delta_at_time", lambda: _round([s.delta_at_time(float(t)) for t in grid]))
+            put("delta_at_lap_best", lambda: _round([s.delta_at_lap(best, float(t)) for t in grid]))
+            put("g_at_time", lambda: _round([s.g_at_time(float(t)) for t in grid]))
+            put("lap_at_time", lambda: _round([s.lap_at_time(float(t)) for t in grid]))
+            put("index_at_time", lambda: _round([s.index_at_time(float(t)) for t in grid]))
             # scrub conversions over the grid, in both modes.
-            bd = s.active_baseline_total_distance()
+            bd = guard(lambda: s.active_baseline_total_distance(), default=None)
             for mode in ("distance", "time"):
                 xs_grid = np.linspace(0.0, (bd or 100.0), 100) if mode == "distance" \
                     else np.linspace(0.0, float(t1 - t0), 100)
-                out[f"media_time_at_plot_x_{mode}"] = _round(
-                    [s.media_time_at_plot_x(best, float(x), mode, bd) for x in xs_grid])
-                out[f"plot_x_at_media_time_{mode}"] = _round(
-                    [s.plot_x_at_media_time(best, float(t), mode, bd) for t in grid])
-    # delta_between across several pairs.
-    if len(laps) >= 2:
+                put(f"media_time_at_plot_x_{mode}", lambda mode=mode, xs_grid=xs_grid: _round(
+                    [s.media_time_at_plot_x(best, float(x), mode, bd) for x in xs_grid]))
+                put(f"plot_x_at_media_time_{mode}", lambda mode=mode: _round(
+                    [s.plot_x_at_media_time(best, float(t), mode, bd) for t in grid]))
+    # delta_between across several pairs (needs >=3 valid laps for the (best, laps[2]) pair).
+    if len(laps) >= 3:
         pairs = [(laps[0], laps[-1]), (laps[1], laps[0]), (best, laps[2])]
         db = {}
         for a, b in pairs:
-            wa = s.lap_window(a)
+            wa = guard(lambda a=a: s.lap_window(a), default=None)
             if wa is None:
                 continue
             ta = np.linspace(wa[0], wa[1], 50)
-            db[f"{a}->{b}"] = _round([s.delta_between(a, b, float(t)) for t in ta])
+            db[f"{a}->{b}"] = guard(
+                lambda a=a, b=b, ta=ta: _round([s.delta_between(a, b, float(t)) for t in ta]))
+        out["delta_between"] = db
+    elif len(laps) >= 2:
+        # Two-lap sweep (the synthetic session): the one cross-lap pair the window math supports.
+        a, b = laps[0], laps[1]
+        wa = guard(lambda: s.lap_window(a), default=None)
+        db = {}
+        if wa is not None:
+            ta = np.linspace(wa[0], wa[1], 50)
+            db[f"{a}->{b}"] = guard(lambda: _round([s.delta_between(a, b, float(t)) for t in ta]))
+        else:
+            # No lap window (bare synthetic) — sweep delta_between on the seeded lap clocks so the
+            # cross-lap Δ math (the F2 delta-engine) is still fingerprinted deterministically.
+            ta = guard(lambda: np.linspace(*_lap_clock_span(s, a), 50), default=None)
+            if ta is not None:
+                db[f"{a}->{b}"] = _round([guard(lambda t=t: s.delta_between(a, b, float(t)))
+                                          for t in ta])
         out["delta_between"] = db
 
     # delta() output for a subset of lap selections, both modes.
     sel = laps[: min(4, len(laps))]
     delta_out = {}
     for mode in ("distance", "time"):
-        res = s.delta(sel, mode)
-        if res is None:
-            delta_out[mode] = None
+        res = guard(lambda mode=mode: s.delta(sel, mode), default=_UNSUPPORTED)
+        if res is None or res == _UNSUPPORTED:
+            delta_out[mode] = None if res is None else _UNSUPPORTED
             continue
         bid, speed, delta = res
         delta_out[mode] = {
@@ -177,19 +238,26 @@ def fingerprint(s) -> dict:
 
     # lap_channels for the best lap (export path).
     if best is not None:
-        ch = s.lap_channels(best)
-        out["lap_channels_best"] = {k: _round(v) for k, v in sorted(ch.items())}
+        put("lap_channels_best",
+            lambda: {k: _round(v) for k, v in sorted(s.lap_channels(best).items())})
 
     # reference-specific accessors (active only in the ref phase; harmless dumps otherwise).
     if s.has_reference():
-        w = s.lap_window(best) if best is not None else None
+        w = guard(lambda: s.lap_window(best), default=None) if best is not None else None
         if w is not None:
             grid = np.linspace(w[0], w[1], 80)
-            out["reference_delta_vs_lap"] = _round(
-                [s.reference_delta_vs_lap(best, float(t)) for t in grid])
-            out["reference_overlay_index_at_progress"] = _round(
-                [s.reference_overlay_index_at_progress(float(t)) for t in grid])
+            put("reference_delta_vs_lap", lambda: _round(
+                [s.reference_delta_vs_lap(best, float(t)) for t in grid]))
+            put("reference_overlay_index_at_progress", lambda: _round(
+                [s.reference_overlay_index_at_progress(float(t)) for t in grid]))
     return out
+
+
+def _lap_clock_span(s, lap_id):
+    """(t0, t1) media-clock span of a seeded lap from `_dist_cache` — used only by the non-strict
+    synthetic path to sweep delta_between when there is no pacer `laps` to give a lap_window."""
+    times = s._dist_cache[lap_id][0]
+    return float(times[0]), float(times[-1])
 
 
 def main():

@@ -152,13 +152,30 @@ Pixi tasks (`[tool.pixi.tasks]` in [pyproject.toml](pyproject.toml)):
 The C++ build also runs the binding codegen target and deploys the compiled `.so`.
 `CMAKE_EXPORT_COMPILE_COMMANDS` is on; [.clangd](.clangd) expects `build/Release/compile_commands.json`.
 
-**Tests** (wired in [tests/CMakeLists.txt](tests/CMakeLists.txt)) — 17 CTest entries:
+**Tests** (wired in [tests/CMakeLists.txt](tests/CMakeLists.txt)):
 - C++ Catch2 (5): `test_ops`, `test_geometry`, `test_coordinate_system`, `test_laps`,
   `test_gps_source`.
-- Python studio (12; pure-Python, fast, registered with CTest): `test_scrub_conversion`,
-  `test_lap_timing`, `test_chapters`, `test_gapfill`, `test_gps_source_bindings`,
-  `test_ingest_equivalence`, `test_studio_features`, `test_compare`, `test_controllers`,
-  `test_validate_wallclock`, `test_gmeter`, `test_gmeter_overlay`.
+- Python studio (the rest; pure-Python, fast, registered with CTest — offscreen Qt where they
+  import the studio widget tree): the studio-feature / controller / analytics suites incl.
+  `test_scrub_conversion`, `test_lap_timing`, `test_chapters`, `test_gapfill`,
+  `test_gps_source_bindings`, `test_ingest_equivalence`, `test_studio_features`, `test_compare`,
+  `test_controllers`, `test_validate_wallclock`, `test_gmeter`, `test_gmeter_overlay`,
+  `test_session_services`, `test_corners`, `test_driving`, `test_consistency`, `test_coaching`, ….
+
+**The Session equivalence gate (two halves).** Every Session refactor (F1 god-object
+decomposition, E2, the #50 delta-engine dedup) is held to WHOLE-public-API numerical equivalence
+via [studio/dev/golden_session_dump.py](studio/dev/golden_session_dump.py) (a dense fingerprint of
+a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/dev/golden_compare.py)
+(leaf-by-leaf compare):
+- **MANUAL, full-coverage half** — the canonical dump loads the real ~11.8 GB `~/Desktop/D24`
+  recording (120k+ leaves, eps 0) and is a dev-Desktop-only gate; it does NOT run in CI.
+- **CI half** — `test_golden_synthetic` automates the SAME machinery
+  (`fingerprint(strict=False)` + `golden_compare.walk`, eps 1e-9) over the deterministic SYNTHETIC
+  session (`test_session_services._synthetic_session`: stadium loop + seeded g-meter, REAL
+  corner/driving/delta/bests/consistency, no media file), across base/ref/ref_cleared phases, vs a
+  committed baseline (`tests/golden_synthetic_baseline.json`). It runs with no big file, so it
+  gates every future Session-math change in CI. Regenerate the baseline only after an intentional,
+  reviewed change: `python tests/test_golden_synthetic.py --write-baseline`.
 
 **Inputs:** the studio app takes file paths on the CLI (`pixi run studio -- a.MP4`).
 
