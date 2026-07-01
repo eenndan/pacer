@@ -567,16 +567,18 @@ def test_dialog_populates_and_go_calls_jump_to():
     calls = []
     dlg = OpportunitiesDialog(opp, jump_to=lambda c, d: calls.append((c, d)))
     assert dlg.table.rowCount() == len(opp.rows)
-    # columns: 0 Corner, 1 Time-lost, 2 Phases (D2 cell widget), 3 Reason, 4 Go.
+    # columns: 0 Corner, 1 Time-lost, 2 ±σ, 3 Phases (D2 cell widget), 4 Reason, 5 Go.
     # row 0: the biggest-loss corner (C1), with the apex sentence + the time-lost format
     assert dlg.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
     assert dlg.table.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
-    # column 2 is the D2 entry/apex/exit breakdown widget (no text item there)
+    # column 2 is the lap-to-lap consistency σ folded onto the canonical row (Consistency signal)
+    assert dlg.table.item(0, 2).text() == f"±{opp.rows[0].reason.sigma:.2f}", dlg.table.item(0, 2).text()
+    # column 3 is the D2 entry/apex/exit breakdown widget (no text item there)
     from studio.coaching_panel import PhaseBar
-    assert isinstance(dlg.table.cellWidget(0, 2), PhaseBar)
-    assert "apex speed" in dlg.table.item(0, 3).text()
+    assert isinstance(dlg.table.cellWidget(0, 3), PhaseBar)
+    assert "apex speed" in dlg.table.item(0, 4).text()
     # the Go button routes to jump_to(cid, entry_dist)
-    dlg.table.cellWidget(0, 4).click()
+    dlg.table.cellWidget(0, 5).click()
     assert calls == [(opp.rows[0].cid, opp.rows[0].entry_dist)], calls
     print(f"ok dialog: {dlg.table.rowCount()} rows, Go -> jump_to{calls[0]}")
 
@@ -607,11 +609,11 @@ def test_dialog_shows_brake_point_hint():
     brake_points = {top_cid: SimpleNamespace(cid=top_cid, metres_later=6.0, actual_brake_dist=78.0,
                                              optimal_brake_dist=84.0, a_max_g=0.9)}
     dlg = OpportunitiesDialog(opp, jump_to=None, brake_points=brake_points)
-    reason_text = dlg.table.item(0, 3).text()
+    reason_text = dlg.table.item(0, 4).text()
     assert "Brake ~6 m later" in reason_text and "EST" in reason_text, reason_text
     # a row WITHOUT a brake point keeps just the reason sentence (no hint appended).
     if dlg.table.rowCount() > 1:
-        assert "Brake ~" not in dlg.table.item(1, 3).text()
+        assert "Brake ~" not in dlg.table.item(1, 4).text()
     print("ok D4 dialog: brake-point hint appended to the matched corner's reason")
 
 
@@ -642,6 +644,8 @@ def test_panel_renders_top3_off_a_session():
     # Row 0 is the top-ranked corner (the far corner, cid 2), with the +time-lost format.
     assert panel.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
     assert panel.table.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
+    # col 2: the lap-to-lap consistency σ folded onto the canonical row (the same as the dialog).
+    assert panel.table.item(0, 2).text() == f"±{opp.rows[0].reason.sigma:.2f}", panel.table.item(0, 2).text()
     assert coaching_module_reason(panel, opp), "the reason cell must carry the coaching sentence"
     # A row click emits the corner cid (the map-ring consumer); selecting row 0 -> rows[0].cid.
     got = []
@@ -652,8 +656,9 @@ def test_panel_renders_top3_off_a_session():
 
 
 def coaching_module_reason(panel, opp) -> bool:
-    """The panel's reason cell (col 2) shows the same coaching sentence the dialog renders."""
-    return K.reason_sentence(opp.rows[0])[:12] in panel.table.item(0, 2).text()
+    """The panel's reason cell (col 3, after σ was folded in at col 2) shows the same coaching
+    sentence the dialog renders."""
+    return K.reason_sentence(opp.rows[0])[:12] in panel.table.item(0, 3).text()
 
 
 def test_panel_shows_need_more_laps_state_not_empty_box():
