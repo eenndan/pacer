@@ -119,8 +119,11 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
             return None
         vals = -np.asarray(grip_util[:len(xs)], float)
         seg_buckets = _seg_buckets(times, vals, lo=-GRIP_UTIL_DISPLAY_MAX, hi=0.0)
-        # legend reads "on limit" (red, lo) → "unused" (green, hi)
-        return seg_buckets, "on limit", "unused (est.)"
+        # legend reads "⚠ on limit" (red, lo) → "unused" (green, hi). The ⚠ marks the AT-LIMIT
+        # extreme with a non-hue cue: the grip map is a red→green gradient with no shape/sign of its
+        # own, so the labelled endpoints + this warning glyph carry the "at limit vs grip left"
+        # meaning without relying on the red/green hue (colour blindness / greyscale).
+        return seg_buckets, "⚠ on limit", "unused (est.)"
     # Δ-vs-best, resampled from the 400-grid delta() onto this lap's point distances
     if delta_grid is None or float(cum[-1]) <= 0:
         return None

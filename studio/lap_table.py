@@ -32,10 +32,16 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
     from .session import Session
 
 BASE_COLOR = QColor(theme.C.text)             # default row text
-BEST_COLOR = QColor(theme.C.ahead)            # overall best lap
-BEST_SECTOR_COLOR = QColor(theme.C.best)      # per-column session-best split
+# The two "best" foregrounds are PALETTE-DEPENDENT (green/purple by default, blue/teal in the colour-
+# blind palette), so they're resolved per-refresh via theme.best_lap_colour()/best_sector_colour()
+# rather than frozen at import — a palette flip then recolours the cells on the next refresh().
 CURRENT_PREFIX = "▶ "  # current (playing) lap marker
 DROPOUT_SUFFIX = " ⚠"  # GPS-dropout lap (low-confidence)
+# NON-COLOUR redundancy for the "best" cues so they read without the green/purple hue (colour
+# blindness / greyscale): a ★ marks the overall best lap's Lap cell and each session-best split
+# cell. Paired with the existing bold, the star carries the meaning independent of colour.
+BEST_LAP_MARK = "★ "     # prefixes the best lap's Lap cell (after any ▶ current marker)
+BEST_SECTOR_MARK = " ★"  # suffixes a session-best split cell's value
 DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
 PROVISIONAL_COLOR = QColor(theme.PROVISIONAL_COLOR)  # muted text for unverified timing
 PROVISIONAL_TOOLTIP = "Provisional — start/finish line not set for this track."
@@ -116,9 +122,12 @@ class LapTable(QWidget):
         # Drives the Entry column header + the Entry value conversion (a display-only concern —
         # session.lap_rows still returns km/h).
         self._speed_unit = units.DEFAULT_UNIT
-        # Highlight caches filled by refresh(): per-column best splits + dropout lap ids.
+        # Highlight caches filled by refresh(): per-column best splits + dropout lap ids + the
+        # overall-best lap id (so the ★ best-lap mark on the Lap cell survives sorts/current-lap
+        # rewrites, which go through _lap_cell_text).
         self._best_split: list = []
         self._dropout_ids: set = set()
+        self._best_lap_id = None
 
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(_columns(self._speed_unit))
@@ -352,9 +361,16 @@ class LapTable(QWidget):
         # Overall best lap = the valid lap with the min time (foreground green on all cells) —
         # suppressed entirely while the timing is provisional (but NOT for a merely-degraded clock).
         best_lap = self.session.best_lap_id() if verified else None
+        # Cache the best-lap id so the ★ mark on the Lap cell (applied via _lap_cell_text) tracks it;
+        # None while provisional so no ★ paints a meaningless "best" against an arbitrary start line.
+        self._best_lap_id = best_lap
         n_splits = self._n_split_cols()
         best_split = self._best_split
         timing_cols = self._timing_cols()
+        # Palette-dependent "best" foregrounds, resolved per-refresh so a colour-blind-palette flip
+        # recolours the cells (green→blue best lap, purple→teal best sector) on the next refresh().
+        best_color = QColor(theme.best_lap_colour())
+        best_sector_color = QColor(theme.best_sector_colour())
 
         dropout_ids = self._dropout_ids
         self.table.blockSignals(True)
@@ -375,15 +391,17 @@ class LapTable(QWidget):
                 if muted_cell:
                     item.setForeground(PROVISIONAL_COLOR)
                 else:
-                    item.setForeground(BEST_COLOR if is_best else BASE_COLOR)
+                    item.setForeground(best_color if is_best else BASE_COLOR)
                 # Muted+italic on any demoted timing cell; the dropout tooltip wins (it flags a
                 # per-lap issue), else the provisional note, else the estimated-timing note, else clear.
                 theme.apply_provisional_style(item, muted_cell)
                 item.setToolTip(DROPOUT_TOOLTIP if is_dropout
                                 else PROVISIONAL_TOOLTIP if provisional_cell
                                 else ESTIMATED_TIMING_TOOLTIP if estimated_cell else "")
-            # per-sector best → purple+bold (outranks green for this cell) — but ONLY on verified
-            # timing; a purple "validated best" on an arbitrary start line would mislead.
+            # per-sector best → purple+bold + a ★ mark (outranks green for this cell) — but ONLY on
+            # verified timing; a "validated best" on an arbitrary start line would mislead. The ★ is
+            # the NON-COLOUR redundancy (bold alone is weak); the split text is rebuilt from the
+            # stored numeric key each pass so the mark toggles cleanly across sorts (no double-★).
             for i in range(n_splits):
                 c = len(COLUMNS) + i
                 item = self.table.item(r, c)
@@ -392,10 +410,14 @@ class LapTable(QWidget):
                 key = item.data(NUM_ROLE)
                 target = best_split[i] if i < len(best_split) else None
                 font = item.font()
-                if (verified and target is not None and key is not None
-                        and math.isfinite(float(key))
-                        and abs(float(key) - target) < 1e-9):
-                    item.setForeground(BEST_SECTOR_COLOR)
+                is_best_split = (verified and target is not None and key is not None
+                                 and math.isfinite(float(key))
+                                 and abs(float(key) - target) < 1e-9)
+                if key is not None and math.isfinite(float(key)):
+                    base = f"{float(key):.2f}"
+                    item.setText(base + BEST_SECTOR_MARK if is_best_split else base)
+                if is_best_split:
+                    item.setForeground(best_sector_color)
                     font.setBold(True)
                 else:
                     font.setBold(False)
@@ -404,11 +426,14 @@ class LapTable(QWidget):
         self._apply_current_lap()
 
     def _lap_cell_text(self, lap_id, on: bool) -> str:
-        """The Lap-cell text for `lap_id`: a '▶ ' prefix when it's the current (playing) lap and a
-        trailing ' ⚠' low-confidence marker when it has a GPS dropout."""
+        """The Lap-cell text for `lap_id`: a '▶ ' prefix when it's the current (playing) lap, a '★ '
+        mark when it's the overall best lap (the NON-COLOUR redundancy for the green best-lap row —
+        reads without hue), and a trailing ' ⚠' low-confidence marker on a GPS-dropout lap. The ▶
+        current marker leads the ★ so the playing lap is always identifiable first."""
         prefix = CURRENT_PREFIX if on else ""
+        best = BEST_LAP_MARK if lap_id == self._best_lap_id else ""
         suffix = DROPOUT_SUFFIX if lap_id in self._dropout_ids else ""
-        return f"{prefix}{lap_id}{suffix}"
+        return f"{prefix}{best}{lap_id}{suffix}"
 
     def _set_row_current(self, r: int, on: bool):
         """Apply/clear the ▶ prefix + bold on ONE row's Lap cell (the only per-lap-change cue)."""
@@ -605,14 +630,18 @@ class CornerTable(QWidget):
             ]
             is_best = bool(bests) and r < len(bests) and abs(st.time - bests[r]) < 1e-9
             for col, (text, colour) in enumerate(cells):
+                # session-best corner time also carries the ★ non-colour mark (matches the lap
+                # table's session-best split cells) so "this is the best" reads without the hue.
+                if col == 1 and is_best:
+                    text = text + BEST_SECTOR_MARK
                 item = QTableWidgetItem(text)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 if col >= NUMERIC_COL_START:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     item.setFont(self._num_font)
-                # session-best corner time: purple+bold, outranks the Δ colour
+                # session-best corner time: palette best-sector colour + bold, outranks the Δ colour
                 if col == 1 and is_best:
-                    item.setForeground(BEST_SECTOR_COLOR)
+                    item.setForeground(QColor(theme.best_sector_colour()))
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)

@@ -173,13 +173,14 @@ def test_rainbow_channel_delta_negated_and_gated():
 def test_rainbow_channel_grip_fixed_scale_and_negation():
     """Grip is NEGATED on a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale (not the lap's own max): a
     rising util ramp paints monotonically redder (more grip used = redder), the unused end is
-    greener than the on-limit end, and the legend is the fixed 'on limit'/'unused (est.)' pair."""
+    greener than the on-limit end, and the legend is the fixed '⚠ on limit'/'unused (est.)' pair
+    (the ⚠ is the non-hue at-limit cue for colour-blind readers)."""
     t, xs, ys, speed, cum = _lap_arrays()
     util = np.linspace(0.1, 1.1, len(xs))         # unused → over the limit
     seg, lo, hi = rainbow_channel("grip", t, xs, ys, speed, cum, util, None)
     assert (np.diff(seg) <= 0).all(), "rising util must paint monotonically redder"
     assert seg[0] > seg[-1], (seg[0], seg[-1])    # unused greener than on-limit
-    assert lo == "on limit" and hi == "unused (est.)"
+    assert lo == "⚠ on limit" and hi == "unused (est.)"
     # The fixed scale is the contract: equal to bucketize(neg-util-seg, lo=-MAX, hi=0).
     vals = -util
     seg_vals = 0.5 * (vals[:-1] + vals[1:])

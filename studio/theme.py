@@ -47,8 +47,74 @@ class C:
     best = "#B794F6"            # best-sector purple
 
 
+# ====================================================================== accessible palette
+# The three semantic colours that carry MEANING BY HUE — ahead/behind on the Δ readout + rainbow,
+# and the two "best" cues in the lap table (best lap, best sector) — are the accessibility hazard:
+# ~8% of males can't tell the default red/green apart. So they live behind a PALETTE SELECTOR (one
+# source of truth) rather than as raw hex sprinkled through the views. The default palette is the
+# original red/green/purple (no change for existing users); the "colour-blind-safe" palette swaps
+# in a blue/orange deuteranopia-safe axis (+ a distinct teal best-sector). Views read these through
+# the accessor functions below (ahead_colour / behind_colour / best_lap_colour / best_sector_colour
+# / delta_colour / rainbow_colors), NEVER C.ahead / C.behind / C.best directly, so flipping the
+# palette recolours every surface at once.
+PALETTE_STANDARD = "standard"
+PALETTE_COLORBLIND = "colorblind"
+
+# blue = ahead/faster/success, orange = behind/slower — the standard deuteranopia-safe pair (they
+# stay distinct under red-green colour blindness AND in greyscale, unlike red/green). Best lap reads
+# as "success" so it shares the ahead blue; the best-sector cue needs to differ from the best-lap
+# cue, so it takes a distinct teal (also CB-safe against both blue and orange).
+_PALETTES = {
+    PALETTE_STANDARD:  {"ahead": C.ahead, "behind": C.behind, "best": C.best},
+    PALETTE_COLORBLIND: {"ahead": "#4C9BFF", "behind": "#F0902B", "best": "#38C7C7"},
+}
+
+# The active palette name. Set once at startup from the persisted pref (see set_palette / the app);
+# defaults to STANDARD so nothing changes for an existing user and every not-yet-migrated call site
+# renders as before.
+_active_palette = PALETTE_STANDARD
+
+
+def set_palette(name: str) -> None:
+    """Select the active semantic palette (PALETTE_STANDARD / PALETTE_COLORBLIND). Unknown names
+    fall back to STANDARD. Changes what ahead_colour / behind_colour / best_*_colour / delta_colour
+    / rainbow_colors return, so the caller re-renders the delta readout, lap table and rainbow map
+    afterwards. The single toggle for the colour-blind-safe option."""
+    global _active_palette
+    _active_palette = name if name in _PALETTES else PALETTE_STANDARD
+
+
+def active_palette() -> str:
+    """The active palette name — for the app to reflect the current View-menu checkmark / persist."""
+    return _active_palette
+
+
+def ahead_colour() -> str:
+    """The 'ahead / faster / success' hue for the ACTIVE palette (green by default, blue in the
+    colour-blind palette). The one place the ahead colour is resolved."""
+    return _PALETTES[_active_palette]["ahead"]
+
+
+def behind_colour() -> str:
+    """The 'behind / slower' hue for the active palette (red by default, orange colour-blind)."""
+    return _PALETTES[_active_palette]["behind"]
+
+
+def best_lap_colour() -> str:
+    """The overall-best-lap foreground for the active palette. Reads as 'success', so it shares the
+    ahead hue (green / blue) — matching the lap-table best-lap cells to the chart's best-lap curve."""
+    return ahead_colour()
+
+
+def best_sector_colour() -> str:
+    """The per-sector session-best foreground for the active palette (purple by default, teal in the
+    colour-blind palette). Distinct from best_lap_colour so the two 'best' cues never collide."""
+    return _PALETTES[_active_palette]["best"]
+
+
 # Categorical lap-curve palette (amber accent first); best lap uses SERIES_BEST green to match
-# the lap table.
+# the lap table. These are IDENTITY colours (which lap is which), not the ahead/behind SEMANTIC
+# hues, so they are palette-independent — the map already carries no red/green meaning here.
 CHART_SERIES = [
     C.accent,    # amber  — primary / first lap (also the app accent)
     "#5BC8E0",   # cyan
@@ -62,7 +128,8 @@ SERIES_BEST = C.ahead
 
 
 # Track-map current lap coloured by a channel (speed / Δ-vs-best), quantized into MAP_RAINBOW_N
-# buckets through the C.behind → C.accent → C.ahead ramp so it matches the Δ readout.
+# buckets through the behind → accent → ahead ramp so it matches the Δ readout. The ramp endpoints
+# follow the ACTIVE palette (see rainbow_colors), so the colour-blind option recolours the map too.
 MAP_RAINBOW_N = 16  # rainbow buckets (one PlotCurveItem each); smooth enough, cheap enough
 
 
@@ -72,9 +139,11 @@ def _hex_rgb(h: str) -> tuple[int, int, int]:
 
 
 def rainbow_colors(n: int = MAP_RAINBOW_N) -> list[str]:
-    """`n` hex colours low→high along the C.behind → C.accent → C.ahead ramp (index 0 = red/slow,
-    n-1 = green/fast)."""
-    anchors = [_hex_rgb(C.behind), _hex_rgb(C.accent), _hex_rgb(C.ahead)]
+    """`n` hex colours low→high along the behind → accent → ahead ramp (index 0 = slow/losing,
+    n-1 = fast/gaining). The behind/ahead endpoints follow the ACTIVE palette, so the map ramp
+    matches the Δ readout in both the default (red→amber→green) and colour-blind (orange→amber→blue)
+    palettes."""
+    anchors = [_hex_rgb(behind_colour()), _hex_rgb(C.accent), _hex_rgb(ahead_colour())]
     out = []
     for i in range(n):
         t = i / (n - 1) * (len(anchors) - 1)
@@ -91,10 +160,28 @@ DELTA_EVEN_EPS_S = 0.005
 
 
 def delta_colour(d: float | None) -> str | None:
-    """Three-way Δ colour: C.ahead if ahead, C.behind if behind, None (neutral) for no/even delta."""
+    """Three-way Δ colour for the ACTIVE palette: ahead_colour() if ahead, behind_colour() if
+    behind, None (neutral) for no/even delta. Routes through the palette accessors so the colour-
+    blind-safe option recolours every Δ surface (readout, chart, corner table) at once."""
     if d is None or abs(d) <= DELTA_EVEN_EPS_S:
         return None
-    return C.ahead if d < 0 else C.behind
+    return ahead_colour() if d < 0 else behind_colour()
+
+
+# Non-colour redundancy for the Δ ahead/behind cue: a small directional arrow paired with the
+# already-signed number so "am I ahead or behind" reads WITHOUT hue (survives greyscale / colour
+# blindness). Ahead (faster, Δ < 0) → ▲ "gaining"; behind (slower, Δ > 0) → ▼ "losing"; even → none.
+# The sign (−/+) and the arrow agree, so the cue is doubly non-colour.
+DELTA_AHEAD_ARROW = "▲"   # ahead / gaining (negative Δ)
+DELTA_BEHIND_ARROW = "▼"  # behind / losing (positive Δ)
+
+
+def delta_arrow(d: float | None) -> str:
+    """The non-colour direction glyph for a Δ: ▲ ahead, ▼ behind, '' even/None. Pairs with the
+    signed number so ahead-vs-behind never depends on hue alone (the accessibility redundancy)."""
+    if d is None or abs(d) <= DELTA_EVEN_EPS_S:
+        return ""
+    return DELTA_AHEAD_ARROW if d < 0 else DELTA_BEHIND_ARROW
 
 
 # --- trust tier: how an UNVERIFIED / estimated value reads ---------------------------------
@@ -155,12 +242,17 @@ def format_delta_value(d: float | None) -> str:
     return "—" if d is None else f"{d:+.2f}"
 
 
-def format_delta_run(d: float | None, *, units: bool = True) -> str:
-    """Δ <v> with optional trailing ' s' (units=True live box, False export)."""
+def format_delta_run(d: float | None, *, units: bool = True, arrow: bool = True) -> str:
+    """Δ <v> with an optional trailing ' s' (units=True live box, False export) and an optional
+    trailing direction arrow (▲ ahead / ▼ behind). The arrow is the NON-COLOUR redundancy so the
+    ahead/behind meaning survives greyscale / colour blindness; the signed value (−/+) already
+    agrees with it. `arrow=False` for plain-number contexts (tooltips that name the direction in
+    words)."""
     v = format_delta_value(d)
+    a = f" {delta_arrow(d)}" if (arrow and delta_arrow(d)) else ""
     if d is None:
         return f"Δ {v}"
-    return f"Δ {v} s" if units else f"Δ {v}"
+    return f"Δ {v} s{a}" if units else f"Δ {v}{a}"
 
 
 def format_speed_run(speed_kmh: float | None, lap: int | None,
@@ -701,6 +793,45 @@ QLabel#ProvisionalBanner {{
     padding: 5px 12px;
     border-left: 3px solid {C.accent};
     border-bottom: 1px solid {C.border};
+}}
+/* "new personal best!" celebration toast — a transient, tasteful card overlaid on the window when a
+   freshly-analysed session beats the track's prior PB (verified timing only). Amber accent so it
+   reads as a positive moment, not an error; auto-dismisses. The link inside opens the PB progression. */
+QWidget#PBToast {{
+    background-color: {C.surface_active};
+    border: 1px solid {C.accent};
+    border-radius: 8px;
+}}
+QLabel#PBToastTitle {{
+    background: transparent;
+    color: {C.accent};
+    font-size: {BODY}px;
+    font-weight: 700;
+}}
+QLabel#PBToastBody {{
+    background: transparent;
+    color: {C.text};
+    font-size: {CAPTION}px;
+}}
+/* the "see your progress" link + the dismiss ×: flat text buttons that don't look like the chunky
+   panel QPushButtons. */
+QPushButton#PBToastLink, QPushButton#PBToastClose {{
+    background: transparent;
+    border: none;
+    color: {C.accent};
+    font-size: {CAPTION}px;
+    font-weight: 600;
+    padding: 2px 6px;
+}}
+QPushButton#PBToastLink:hover {{
+    color: {C.accent_hover};
+    text-decoration: underline;
+}}
+QPushButton#PBToastClose {{
+    color: {C.text_dim};
+}}
+QPushButton#PBToastClose:hover {{
+    color: {C.text};
 }}
 /* slim multi-chapter banner strip */
 QLabel#ChapterBanner {{

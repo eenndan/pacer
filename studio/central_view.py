@@ -508,6 +508,21 @@ class CentralView(QWidget):
         self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
                               self._last_diff_lap)
 
+    def refresh_palette(self):
+        """Re-render every surface that carries an ahead/behind or best colour after the active
+        semantic palette changed (the window has already called theme.set_palette). The lap /
+        corner tables recompute their best + Δ foregrounds; the map re-pens its rainbow + legend;
+        the hero Δ readout re-styles from the last moment. Cheap: a handful of in-place repaints,
+        no session recompute."""
+        self.table.refresh()
+        self.corner_table.refresh()
+        self.map.refresh_palette()
+        # Force a Δ-box restyle even if the number is unchanged: the palette flip changes the colour
+        # for the SAME delta, so clear the cached colour first.
+        self._diff_colour = None
+        self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
+                              self._last_diff_lap)
+
     def set_consistency_visible(self, on: bool):
         """Show/hide the consistency strip; refreshes its stats when showing. Driven by the
         persistent View-menu item on the window."""
