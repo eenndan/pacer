@@ -1481,7 +1481,13 @@ class Session:
         sidecar uses) by ``library.fingerprint``, which strips the chapter index so a single-chapter
         open and a full chaptered open of the same recording share ONE entry (the duration, which
         differs between those two opens, is deliberately NOT in the key). `paths` are the file
-        path(s) as opened, stored ABSOLUTE so the dialog's file-exists check is cwd-independent."""
+        path(s) as opened, stored ABSOLUTE so the dialog's file-exists check is cwd-independent.
+
+        TRUST flags (library schema v2) are sourced from the live Session here (pacer stays on this
+        side of the seam): ``verified`` = ``timing_verified`` (a trusted start/finish line),
+        ``degraded`` = ``timing_quality.degraded`` (ESTIMATED absolute timing), and ``dropout`` =
+        this recording has ANY valid lap with an interior GPS dropout. The library uses them to keep
+        an untrustworthy "best" OUT of the per-track PB progression (see library.is_trustworthy)."""
         first = chapters.discover_siblings(paths[0])[0] if paths else ""
         stem = os.path.splitext(os.path.basename(first))[0] if first else ""
         best_id = self.best_lap_id()
@@ -1494,6 +1500,9 @@ class Session:
             "lap_count": len(self.valid_lap_ids()),
             "best": best,
             "theoretical": self.theoretical_best(),
+            "verified": bool(self.timing_verified),
+            "degraded": bool(self.timing_quality.degraded),
+            "dropout": bool(self.dropout_lap_ids()),
             "paths": [os.path.abspath(p) for p in paths],
         }
 

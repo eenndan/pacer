@@ -9,9 +9,9 @@ fingerprint = (GoPro prefix, recording number) so every chapter of a recording m
 entry — neither the path list nor the media duration is stable across a single-chapter vs a full
 chaptered open of the SAME recording.
 
-Schema (version 1) — one JSON object::
+Schema (version 2) — one JSON object::
 
-    {"version": 1,
+    {"version": 2,
      "entries": [
        {"fingerprint": "GX0062",            # the chapter-invariant identity key (see above)
         "stem":        "GX010062",          # first-chapter stem, for display
@@ -20,8 +20,20 @@ Schema (version 1) — one JSON object::
         "lap_count":   <int>,                # valid lap count
         "best":        <float seconds> | null,    # best lap time
         "theoretical": <float seconds> | null,    # Session.theoretical_best
+        "verified":    <bool>,               # session.timing_verified — a TRUSTED start/finish line
+        "degraded":    <bool>,               # session.timing_quality.degraded — ESTIMATED absolute timing
+        "dropout":     <bool>,               # the session's best lap (or any valid lap) had a GPS dropout
         "paths":       ["/abs/GX010062.MP4", ...]}, # the chapter file path(s) as opened (absolute)
        ...]}
+
+The three TRUST flags (``verified``/``degraded``/``dropout``, schema v2) let the PB progression
+EXCLUDE an untrustworthy "best": a PROVISIONAL start line (``not verified``) or a data-quality-
+DEGRADED clock (``degraded``) references its lap number to something arbitrary/estimated, so it
+must never set or beat a personal best; a GPS-``dropout`` best is less reliable, so it is kept but
+also excluded from the PB set (a dropout lap's time can't be trusted to set a PB either). The
+library TABLE still shows every session (with a trust indicator); only the PB CHART + PB logic use
+the trustworthy subset (``trustworthy_entries``). See ``_TRUST_UNKNOWN`` for the v1→v2 back-compat
+default that keeps a pre-existing (flag-less) PB history included.
 
 Load self-heals WITHOUT destroying durable history:
   * a single bad entry is dropped (count logged), the rest kept (so the next ``save``, which
@@ -47,7 +59,15 @@ import shutil
 
 _log = logging.getLogger(__name__)
 
-VERSION = 1
+VERSION = 2
+
+# v1→v2 back-compat default for the three trust flags on a LEGACY (pre-flags) entry. A schema-v1
+# library was written before per-entry trust existed, so its bests must NOT be retroactively
+# discarded from the PB history — we treat a legacy entry as "trusted-unknown": verified (its best
+# stays a candidate PB), not degraded, no dropout. This is the honest choice for pre-existing data
+# (we have no per-entry signal to say otherwise) and is the whole point of the migration: every
+# legacy best stays in the chart. New v2 saves overwrite these with the real session flags.
+_TRUST_UNKNOWN = {"verified": True, "degraded": False, "dropout": False}
 
 # GoPro stem G[XHPL]<CC><NNNN>; the CC chapter index is stripped so every chapter shares one key.
 _GOPRO_STEM_RE = re.compile(r"^(G[XHPL])\d{2}(\d{4})$", re.IGNORECASE)
@@ -109,6 +129,12 @@ def _valid_entry(e) -> bool:
             isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
         ):
             return False
+    # Trust flags (schema v2). ABSENT is allowed (a legacy v1 entry lacks them — the migration
+    # defaults them to trusted-unknown); PRESENT must be a real bool, never a stray non-bool.
+    for key in ("verified", "degraded", "dropout"):
+        v = e.get(key)
+        if v is not None and not isinstance(v, bool):
+            return False
     paths = e.get("paths")
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         return False
@@ -116,7 +142,9 @@ def _valid_entry(e) -> bool:
 
 
 def _norm_entry(e: dict) -> dict:
-    """Canonicalize a validated entry to the stored shape + key order."""
+    """Canonicalize a validated entry to the stored shape + key order. A MISSING trust flag (a
+    legacy v1 entry that never had one) is filled with its trusted-unknown default so a normalized
+    entry always carries all three v2 flags as real bools — the PB filter reads them directly."""
     best = e.get("best")
     theo = e.get("theoretical")
     return {
@@ -127,19 +155,35 @@ def _norm_entry(e: dict) -> dict:
         "lap_count": int(e["lap_count"]),
         "best": None if best is None else float(best),
         "theoretical": None if theo is None else float(theo),
+        "verified": bool(e.get("verified", _TRUST_UNKNOWN["verified"])),
+        "degraded": bool(e.get("degraded", _TRUST_UNKNOWN["degraded"])),
+        "dropout": bool(e.get("dropout", _TRUST_UNKNOWN["dropout"])),
         "paths": [str(p) for p in e.get("paths", [])],
     }
 
 
 def _migrate(data: dict, from_version: int) -> dict:
     """Forward-migrate an OLDER on-disk index (``from_version`` < ``VERSION``) to the current
-    schema, PRESERVING every entry. There is only VERSION=1 today, so this is a no-op passthrough —
-    but it is the single hook a FUTURE schema bump adds its per-version transform to, so an older
-    library is upgraded in place rather than discarded. The framework matters more than the (empty)
-    body: a version bump must migrate, never wipe. Returns ``data`` (mutated in place); the caller
-    re-stamps the version and re-validates entries after this runs."""
-    # No migrations to WRITE yet (VERSION == 1). Add ``if from_version < N: ...`` steps here, in
-    # ascending order, when the schema changes — each transform must keep the user's history.
+    schema, PRESERVING every entry. This is the hook PR #55 built precisely so a schema bump keeps
+    the user's analyzed history — a version bump must MIGRATE, never wipe. Per-version transforms
+    run in ascending order; each MUST keep every entry. Returns ``data`` (mutated in place); the
+    caller re-stamps the version and re-validates entries after this runs.
+
+    v1 → v2 (trust flags): a v1 entry predates ``verified``/``degraded``/``dropout``, so it has none
+    of them. We do NOT drop those legacy bests from the PB history — they're back-filled with the
+    trusted-unknown default (``_TRUST_UNKNOWN``: verified, not degraded, no dropout) so a pre-
+    existing PB stays in the chart. ``_norm_entry`` fills the same default for any that slip through
+    absent, so this back-fill is belt-and-suspenders; doing it here keeps the migration explicit and
+    self-documenting (the point of #55: the transform lives in one hook)."""
+    if from_version < 2:
+        # entries may be a non-list here (a corrupt shape load() rejects AFTER migration); guard so
+        # the back-fill is a no-op on a bad shape rather than crashing.
+        entries = data.get("entries")
+        if isinstance(entries, list):
+            for e in entries:
+                if isinstance(e, dict):
+                    for key, default in _TRUST_UNKNOWN.items():
+                        e.setdefault(key, default)
     return data
 
 
@@ -360,29 +404,114 @@ def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
     )
 
 
+def is_trustworthy(entry: dict) -> bool:
+    """Whether an entry's ``best`` may set / beat a personal best. False (EXCLUDED from the PB set)
+    when the entry is:
+
+      * NOT verified (``verified`` is False) — a PROVISIONAL start line, so the lap number is
+        referenced to an arbitrary point and is meaningless as a PB; or
+      * degraded (``degraded`` is True) — the app itself calls the absolute timing ESTIMATED
+        (media-clock fallback / low GPS quality), so we won't stand behind it as a PB; or
+      * a GPS ``dropout`` best (``dropout`` is True) — a dropout lap's time/distance are less
+        reliable, so it must not silently set a PB either.
+
+    A LEGACY (v1-migrated) entry carries the trusted-unknown default (verified, not degraded, no
+    dropout — see ``_TRUST_UNKNOWN``), so it stays INCLUDED: a pre-existing PB history is honoured.
+    Reads the normalized flags directly (``_norm_entry`` fills any absent one with its default), so
+    the gate matches the app's ``pb_moment_for(verified, degraded)`` decision — dropout adds the one
+    axis a per-entry index can carry that the live gate can't."""
+    return (bool(entry.get("verified", _TRUST_UNKNOWN["verified"]))
+            and not bool(entry.get("degraded", _TRUST_UNKNOWN["degraded"]))
+            and not bool(entry.get("dropout", _TRUST_UNKNOWN["dropout"])))
+
+
+def trust_label(entry: dict) -> str | None:
+    """A short, muted trust tag for an UNTRUSTWORTHY entry (for the library table indicator), or
+    None for a trustworthy one (verified, not degraded, no dropout — including legacy trusted-
+    unknown). The most-significant reason wins so one tag renders: ``"provisional"`` (unverified
+    start line — the lap number is meaningless), else ``"estimated"`` (degraded / media-clock
+    absolute timing), else ``"dropout"`` (a GPS-dropout best). Pure classification, reused by the
+    dialog so its indicator wording stays in one place and matches ``is_trustworthy``."""
+    if not bool(entry.get("verified", _TRUST_UNKNOWN["verified"])):
+        return "provisional"
+    if bool(entry.get("degraded", _TRUST_UNKNOWN["degraded"])):
+        return "estimated"
+    if bool(entry.get("dropout", _TRUST_UNKNOWN["dropout"])):
+        return "dropout"
+    return None
+
+
 def prior_best(index: dict, track: str) -> float | None:
-    """The fastest recorded best lap for `track` across the CURRENT index (seconds), or None when
-    the track has no prior dated-or-undated best yet. Used to decide the "new personal best" moment:
-    the caller compares a freshly-analysed session's best against this BEFORE upserting the session,
-    so a genuine improvement is a PB beat and the first-ever session on a track has no prior to beat.
-    Unlike pb_series this does NOT require a date (a PB is a PB even on a GPS5 no-date recording)."""
+    """The fastest TRUSTWORTHY recorded best lap for `track` across the CURRENT index (seconds), or
+    None when the track has no trustworthy prior best yet. Used to decide the "new personal best"
+    moment: the caller compares a freshly-analysed session's best against this BEFORE upserting the
+    session, so a genuine improvement is a PB beat and the first-ever session on a track has no prior
+    to beat. EXCLUDES untrustworthy entries (provisional / degraded / dropout — see
+    ``is_trustworthy``) so a meaningless "best" never becomes the bar a real lap has to beat. Unlike
+    pb_series this does NOT require a date (a PB is a PB even on a GPS5 no-date recording)."""
     bests = [
         float(e["best"])
         for e in index.get("entries", [])
-        if e.get("track") == track and e.get("best") is not None
+        if e.get("track") == track and e.get("best") is not None and is_trustworthy(e)
     ]
     return min(bests) if bests else None
 
 
 def pb_series(index: dict, track: str) -> list[tuple[str, float]]:
-    """The PB-progression series for one `track`: ``[(date, best), ...]`` over every entry of that
-    track that has BOTH a date and a best lap, sorted ascending by date (then by best, so two
-    sessions on the same day order by lap time). The mini-chart plots best-vs-date from this.
-    Entries with no date or no best are dropped (nothing to place on the time axis)."""
+    """The PB-progression series for one `track`: ``[(date, best), ...]`` over every TRUSTWORTHY
+    entry of that track that has BOTH a date and a best lap, sorted ascending by date (then by best,
+    so two sessions on the same day order by lap time). The mini-chart plots best-vs-date from this.
+    Entries with no date or no best are dropped (nothing to place on the time axis); UNTRUSTWORTHY
+    entries (provisional / degraded / dropout — see ``is_trustworthy``) are dropped too, so a
+    meaningless "best" never appears in the progression or sets its floor. Legacy trusted-unknown
+    entries stay in (back-compat)."""
     pts = [
         (e["date"], float(e["best"]))
         for e in index.get("entries", [])
         if e.get("track") == track and e.get("date") and e.get("best") is not None
+        and is_trustworthy(e)
     ]
     pts.sort(key=lambda p: (p[0], p[1]))
     return pts
+
+
+def track_summary(index: dict, track: str) -> dict | None:
+    """A compact cross-session progress read for one `track`, for the library header line. Reuses
+    the index + ``pb_series`` (no new cross-session corner analytics). Returns None when `track` is
+    falsy; otherwise::
+
+        {"track", "sessions",     # total library rows for this track (all, trustworthy or not)
+         "best", "best_date",     # the fastest TRUSTWORTHY dated best + its date (None if none)
+         "pb_count",              # count of improving steps in the PB series (new-PB moments)
+         "trend"}                 # "improving" | "stalled" | "single" | "none"
+
+    ``best``/``pb_count``/``trend`` come from the TRUSTWORTHY dated series only (``pb_series``), so a
+    provisional/degraded/dropout "best" never inflates the read; ``sessions`` counts every row so the
+    header is honest about the whole library ("12 sessions · best … · 3 PBs"). ``pb_count`` is the
+    number of times a session set a new running best (a genuine improvement step), and ``trend`` is a
+    light "improving" (the latest session is at/within the running best) vs "stalled" verdict — the
+    2nd/3rd-visit hook, not an analytics engine."""
+    if not track:
+        return None
+    sessions = sum(1 for e in index.get("entries", []) if e.get("track") == track)
+    series = pb_series(index, track)          # trustworthy, dated, sorted ascending by date
+    if not series:
+        return {"track": track, "sessions": sessions, "best": None, "best_date": None,
+                "pb_count": 0, "trend": "none"}
+    # Fastest trustworthy dated best + the date it was set (earliest date on a tie).
+    best_date, best = min(series, key=lambda p: (p[1], p[0]))
+    # Count improving steps: each time the running best drops, that session set a new PB.
+    pb_count = 0
+    running = None
+    for _date, b in series:
+        if running is None or b < running:
+            pb_count += 1
+            running = b
+    if len(series) == 1:
+        trend = "single"
+    else:
+        # Improving iff the most-recent session's best equals the overall best (it holds/renewed
+        # the record); otherwise the track has stalled off its PB.
+        trend = "improving" if series[-1][1] <= best else "stalled"
+    return {"track": track, "sessions": sessions, "best": float(best), "best_date": best_date,
+            "pb_count": pb_count, "trend": trend}
