@@ -602,6 +602,102 @@ def test_session_brake_points_na_when_no_brake_in_corner():
     print("ok D4 session: corner with no braking -> N/A (omitted)")
 
 
+def _high_drift_two_lap_session():
+    """A bare Session with lap 0 = best (reference frame) and lap 1 = the current lap sharing the
+    SAME xy geometry but a HIGH-DRIFT (non-uniformly scaled) odometer — the driving_channels
+    analogue of test_corners' _scaled_odometer fixture. Both laps get the brake-mid speed + g
+    signal the other driving tests use, so the grip/brake-window projections actually run. Returns
+    (session, total_ref, total_lap_drifted)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _synthetic import bare_session, reset_corner_caches, reset_driving_caches
+
+    from studio import gmeter
+
+    n = 600
+    # A gently BENT trace (not a pure straight) so the spatial nearest-point match has real heading
+    # to gate on; xs sweeps, ys bows — shared by BOTH laps (same physical line).
+    u = np.linspace(0.0, 1.0, n)
+    xs = 300.0 * u
+    ys = 20.0 * np.sin(np.pi * u)
+    seg = np.hypot(np.diff(xs), np.diff(ys))
+    cum0 = np.concatenate(([0.0], np.cumsum(seg)))          # lap 0's true odometer
+    total_ref = float(cum0[-1])
+    # Lap 1: SAME xy, but the first third's step lengths scaled 1.15x (the driver weaved there) →
+    # the total line length drifts ~5% > NORMALIZED_DRIFT_MAX, so the normalized fraction biases the
+    # corner boundaries by metres while the spatial match recovers the true position.
+    diffs = seg.astype(float).copy()
+    diffs[cum0[:-1] < total_ref / 3.0] *= 1.15
+    cum1 = np.concatenate(([0.0], np.cumsum(diffs)))
+    total_lap = float(cum1[-1])
+
+    times = 100.0 + np.linspace(0.0, 12.0, n)
+    speed = np.full(n, 16.0)
+    speed[250:330] = np.linspace(16.0, 10.0, 80)   # a hard brake mid-lap (the onset the tests read)
+    speed[330:] = 10.0
+
+    s = bare_session(valid=[0, 1], best=0)
+    s._cols_cache = {
+        0: (times.copy(), xs.copy(), ys.copy(), speed.copy(), cum0.copy()),
+        1: (times.copy(), xs.copy(), ys.copy(), speed.copy(), cum1.copy()),
+    }
+    s.tt = times.copy()
+    s.tv = speed * 3.6
+    s._gmeter = gmeter.GMeter(times=times.copy(), lat_g=np.full(n, 0.4), long_g=np.zeros(n),
+                              cross=None, source="accl")
+    reset_driving_caches(s)
+    reset_corner_caches(s)
+    return s, total_ref, total_lap
+
+
+def test_grip_and_brake_windows_engage_spatial_drift_fallback():
+    """CORRECTNESS FIX (#43 leftover): the grip-window and brake-point-window corner projections in
+    DrivingChannels must go through the SAME drift-gated alignment (corners.project_boundaries) that
+    lap_corner_stats already uses — normalized within NORMALIZED_DRIFT_MAX, the robust spatial
+    nearest-point match above it. On a HIGH-DRIFT lap the spatial fallback must ENGAGE and yield a
+    window that DIFFERS from the biased raw normalized projection, mirroring test_corners'
+    test_high_drift_engages_spatial_and_recovers_true_position."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _synthetic import reset_corner_caches
+
+    from studio import corners as C
+    from studio.corners import Corner
+
+    s, total_ref, total_lap = _high_drift_two_lap_session()
+    # One corner spanning the bent stretch (its window lands where the odometer drift lives).
+    corner = Corner(cid=1, enter=total_ref * 0.20, exit=total_ref * 0.45,
+                    apex=total_ref * 0.32, direction=1, turn_deg=90.0)
+    reset_corner_caches(s, basis=([corner], total_ref))
+    dc = s.driving
+
+    # The drift is genuinely above the bound and the spatial traces are usable (so the gate fires).
+    traces = dc._corner_traces(1)
+    assert traces is not None
+    drift = C.line_length_drift(total_lap, total_ref)
+    assert drift > C.NORMALIZED_DRIFT_MAX, drift
+
+    interior = [corner.enter, corner.exit]
+    normalized = np.asarray(interior) * (total_lap / total_ref)
+    gated = C.project_boundaries(interior, total_ref, total_lap, traces=traces)
+    # The gate ENGAGED: the spatial projection differs materially from the biased normalized one.
+    assert np.max(np.abs(gated - normalized)) > 1.0, (gated, normalized)
+
+    # _corner_windows (the brake-merge guard) now carries the SPATIAL projection, NOT the normalized.
+    win = dc._corner_windows(1, total_lap)
+    assert len(win) == 1
+    lo, hi = win[0]
+    assert abs(hi - float(gated[1])) < 1e-6, (hi, gated[1])                 # exit == spatial
+    assert abs(hi - float(normalized[1])) > 1.0, (hi, normalized[1])        # != biased normalized
+    assert abs(lo - (float(gated[0]) - D.CORNER_LEAD_M)) < 1e-6, (lo, gated[0])
+
+    # The grip + brake-point accessors run through the SAME gated projection without error.
+    grip = dc.lap_corner_grip(1)
+    assert len(grip) == 1 and 0.0 <= grip[0]
+    _bps = dc.lap_brake_points(1)  # may be [] if no brake matches, but must not raise / mis-project
+    assert isinstance(_bps, list)
+    print(f"ok drift fallback: drift {drift:.3f} > {C.NORMALIZED_DRIFT_MAX}; grip/brake windows use "
+          f"spatial (max|gated-normalized|={float(np.max(np.abs(gated - normalized))):.1f} m)")
+
+
 def test_session_no_gmeter_degrades_to_empty():
     """With no g signal (empty meter), every driving accessor returns [] and the thresholds are
     None — the channels degrade gracefully (a recording with no IMU + no GPS fallback)."""

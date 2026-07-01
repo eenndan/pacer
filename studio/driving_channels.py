@@ -15,7 +15,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from . import driving
+from . import corners, driving
 from ._signal import G, speed_long_g
 
 # "cache not yet computed" sentinel (None is a legal cached value); module-local to avoid
@@ -90,6 +90,33 @@ class DrivingChannels:
         self._brake_points_cache.clear()
         self._a_max_cache = _UNSET  # depends on the per-lap brake events, which re-project
 
+    # ----------------------------------------------------------- drift-gate spatial traces
+    def _best_trace(self) -> tuple | None:
+        """The best (reference) lap's local-frame trace (xs, ys, cum) — the spatial anchor side of
+        the per-corner drift gate (corners.project_boundaries), mirroring CornerModel._best_trace.
+        The reference-odometer corner windows are expressed in this lap's frame, so it is the fixed
+        half of every (ref, comparison) trace pair. None when there is no usable best lap."""
+        best = self._best_lap_id()
+        if best is None:
+            return None
+        _t, xs, ys, _v, cum = self._lap_columns(best)
+        if len(cum) < 2 or float(cum[-1]) <= 0:
+            return None
+        return xs, ys, cum
+
+    def _corner_traces(self, lap_id: int) -> tuple | None:
+        """The (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum) trace pair the drift gate's
+        spatial fallback needs to map this session's corner windows onto `lap_id` (mirrors
+        CornerModel._lap_traces). None (→ the gate keeps the normalized projection, byte-identical
+        to the pre-gate output) when either trace is degenerate."""
+        ref_trace = self._best_trace()
+        if ref_trace is None:
+            return None
+        _t, xs, ys, _v, cum = self._lap_columns(lap_id)
+        if len(cum) < 2 or float(cum[-1]) <= 0:
+            return None
+        return (*ref_trace, xs, ys, cum)
+
     # ------------------------------------------------------------------ g + thresholds
     def _lap_g_arrays(self, lap_id: int):
         """(long_g, lat_g) for a lap, interpolated from the g meter onto the lap's media times
@@ -146,24 +173,32 @@ class DrivingChannels:
         # Corner windows are passed as a block-only guard so the maneuver merge keeps two genuinely-
         # distinct corners separate; None (no corner model) just lets the throttle gate decide.
         long_clean = speed_long_g(speed_kmh, elapsed)
-        windows = self._corner_windows(float(dists[-1]))
+        windows = self._corner_windows(lap_id, float(dists[-1]))
         events = driving.brake_events(dists, elapsed, long_clean, th.theta_b,
                                       corner_windows=windows)
         self._brake_events_cache[lap_id] = events
         return events
 
-    def _corner_windows(self, total_lap: float):
+    def _corner_windows(self, lap_id: int, total_lap: float):
         """The detected corners projected onto this lap's odometer as (enter, exit) spans, widened
         CORNER_LEAD_M upstream (braking starts before the geometric entry). None when there's no
-        corner model — the brake merge then runs purely on the throttle/distance gates."""
+        corner model — the brake merge then runs purely on the throttle/distance gates.
+
+        The enter/exit boundaries are mapped by the drift-gated alignment (corners.project_boundaries
+        — normalized distance within NORMALIZED_DRIFT_MAX, the robust spatial nearest-point match
+        above it; the same gate lap_corner_stats uses), byte-identical to the old normalized
+        projection in the common well-matched case."""
         basis = self._corner_basis()
         if not basis or not basis[0] or total_lap <= 0:
             return None
         corner_list, total_ref = basis
         if total_ref <= 0:
             return None
-        return [(max(0.0, c.enter / total_ref * total_lap - driving.CORNER_LEAD_M),
-                 c.exit / total_ref * total_lap) for c in corner_list]
+        interior = [b for c in corner_list for b in (c.enter, c.exit)]
+        proj = corners.project_boundaries(interior, total_ref, total_lap,
+                                          traces=self._corner_traces(lap_id))
+        return [(max(0.0, float(proj[2 * i]) - driving.CORNER_LEAD_M), float(proj[2 * i + 1]))
+                for i in range(len(corner_list))]
 
     def lap_coasting_spans(self, lap_id: int) -> list[driving.CoastSpan]:
         """Coasting spans on one lap, in track order. [] when no g signal or a degenerate lap."""
@@ -222,10 +257,14 @@ class DrivingChannels:
         total_lap = float(dists[-1])
         if total_lap <= 0:
             return []
-        # Project each corner's reference-odometer window onto this lap by normalized distance
-        # (same projection lap_corner_stats uses).
-        windows = [(c.enter / total_ref * total_lap, c.exit / total_ref * total_lap)
-                   for c in corner_list]
+        # Project each corner's reference-odometer window onto this lap by the drift-gated alignment
+        # (corners.project_boundaries — the SAME gate lap_corner_stats uses: normalized within
+        # NORMALIZED_DRIFT_MAX, the robust spatial nearest-point match above it), byte-identical to
+        # the old normalized projection in the common well-matched case.
+        interior = [b for c in corner_list for b in (c.enter, c.exit)]
+        proj = corners.project_boundaries(interior, total_ref, total_lap,
+                                          traces=self._corner_traces(lap_id))
+        windows = [(float(proj[2 * i]), float(proj[2 * i + 1])) for i in range(len(corner_list))]
         grip = driving.corner_grip(dists, long_g, lat_g, windows, self._grip_envelope())
         self._corner_grip_cache[lap_id] = grip
         return grip
@@ -319,16 +358,22 @@ class DrivingChannels:
         total_lap = float(dists[-1])
         a_max_ms2 = a_max_g * G
         events = self.lap_brake_events(lap_id)
+        # Project every corner's [enter, exit] onto THIS lap's odometer via the drift-gated alignment
+        # (corners.project_boundaries — the SAME gate lap_corner_stats / grip use: normalized within
+        # NORMALIZED_DRIFT_MAX, the robust spatial nearest-point match above it), byte-identical to
+        # the old normalized projection in the common well-matched case.
+        interior = [b for c in corner_list for b in (c.enter, c.exit)]
+        proj = corners.project_boundaries(interior, total_ref, total_lap,
+                                          traces=self._corner_traces(lap_id))
         out: list[driving.BrakePoint] = []
         for i, c in enumerate(corner_list):
             if i >= len(stats):
                 break
             st = stats[i]
-            # Project the corner's [enter - lead, exit] window onto THIS lap's odometer (the same
-            # normalized-distance projection lap_corner_stats / grip use), then take the LAST brake
-            # onset inside it as the brake into this corner.
-            lo = (c.enter / total_ref * total_lap) - driving.BRAKE_MATCH_LEAD_M
-            hi = c.exit / total_ref * total_lap
+            # Take the LAST brake onset inside the corner's projected [enter - lead, exit] window as
+            # the brake into this corner.
+            lo = float(proj[2 * i]) - driving.BRAKE_MATCH_LEAD_M
+            hi = float(proj[2 * i + 1])
             matched = [e for e in events if lo <= e.onset_dist <= hi]
             if not matched:
                 continue  # no detected brake into this corner -> N/A
