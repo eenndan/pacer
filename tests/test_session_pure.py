@@ -44,7 +44,13 @@ from studio._signal import (  # noqa: E402
     MIN_LAP_TIME,
     _band_lap_ids,
 )
-from studio.load import MIN_START_SPEED, _clean, _sustained_moving  # noqa: E402
+from studio.load import (  # noqa: E402
+    _HEURISTIC_HALF_M,
+    MIN_START_SPEED,
+    _clean,
+    _heuristic_start_base,
+    _sustained_moving,
+)
 from studio.session import Session  # noqa: E402
 
 # ------------------------------------------------------------------ shared fakes / seeding
@@ -805,6 +811,36 @@ def test_best_excludes_dropout_lap_then_falls_back():
     assert s2._best_candidate_ids() == [0, 1]
     assert s2.best_lap_id() == 0
     print("test_best_excludes_dropout_lap_then_falls_back OK")
+
+
+def test_heuristic_start_base_perpendicular_at_peak_speed():
+    """The unknown-track heuristic places the start/finish line PERPENDICULAR to travel at the
+    peak-speed point (the main straight). A straight along +x with the peak in the middle → a
+    vertical (constant-x) line centred on the peak, spanning 2·_HEURISTIC_HALF_M."""
+    n = 41
+    xs = np.linspace(0.0, 100.0, n)
+    ys = np.zeros(n)
+    speeds = np.ones(n)
+    speeds[20] = 50.0                       # peak at the middle sample (x = 50)
+    seg = _heuristic_start_base(xs, ys, speeds)
+    assert seg is not None
+    # Centred on the peak point (50, 0)…
+    assert abs((seg.first.x + seg.second.x) / 2 - 50.0) < 1e-6
+    assert abs((seg.first.y + seg.second.y) / 2 - 0.0) < 1e-6
+    # …perpendicular to the +x heading, so the line is vertical (both endpoints at x = 50)…
+    assert abs(seg.first.x - 50.0) < 1e-6 and abs(seg.second.x - 50.0) < 1e-6
+    # …and spans 2·half in y.
+    assert abs(abs(seg.first.y - seg.second.y) - 2 * _HEURISTIC_HALF_M) < 1e-6
+    print("test_heuristic_start_base_perpendicular_at_peak_speed OK")
+
+
+def test_heuristic_start_base_degenerate_returns_none():
+    """Too few samples, or no local heading (all points coincide), → None so the caller falls back
+    to the old random pick (never a crash / zero-length line)."""
+    assert _heuristic_start_base(np.zeros(3), np.zeros(3), np.ones(3)) is None  # too few samples
+    n = 41
+    assert _heuristic_start_base(np.zeros(n), np.zeros(n), np.ones(n)) is None  # no heading
+    print("test_heuristic_start_base_degenerate_returns_none OK")
 
 
 if __name__ == "__main__":
