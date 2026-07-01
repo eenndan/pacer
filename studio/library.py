@@ -23,8 +23,17 @@ Schema (version 1) — one JSON object::
         "paths":       ["/abs/GX010062.MP4", ...]}, # the chapter file path(s) as opened (absolute)
        ...]}
 
-Load self-heals: file-level corruption -> empty index; one bad entry -> dropped (count logged),
-the rest kept (so the next ``save``, which rewrites only the survivors, doesn't lose all history).
+Load self-heals WITHOUT destroying durable history:
+  * a single bad entry is dropped (count logged), the rest kept (so the next ``save``, which
+    rewrites only the survivors, doesn't lose all history);
+  * an OLDER on-disk ``version`` is MIGRATED forward (``_migrate``) — never discarded — so the
+    first run after a future schema bump preserves every analyzed recording;
+  * a NEWER on-disk ``version`` (a downgrade) is loaded BEST-EFFORT (keep the entries it can, ignore
+    unknown fields) and the newer file is NOT destructively rewritten in place;
+  * only genuine FILE-level corruption (unreadable / not JSON / not a dict / missing-or-bad version /
+    non-list ``entries``) falls back to an empty index — and even then, before any write would
+    overwrite the unparseable/newer file, ``save`` first copies it to a ``library.json.bak`` sidecar
+    so nothing is ever silently lost.
 """
 
 from __future__ import annotations
@@ -34,6 +43,7 @@ import logging
 import math
 import os
 import re
+import shutil
 
 _log = logging.getLogger(__name__)
 
@@ -121,20 +131,62 @@ def _norm_entry(e: dict) -> dict:
     }
 
 
-def load(path: str | None = None) -> dict:
-    """Load + validate the library index, returning the normalized dict. File-level corruption
-    (absent / unreadable / not JSON / not a dict / wrong version / non-list ``entries``) ->
-    ``empty_index()``; a single malformed entry is dropped (count logged), the rest kept. `path`
-    defaults to ``library_path()``."""
-    if path is None:
-        path = library_path()
+def _migrate(data: dict, from_version: int) -> dict:
+    """Forward-migrate an OLDER on-disk index (``from_version`` < ``VERSION``) to the current
+    schema, PRESERVING every entry. There is only VERSION=1 today, so this is a no-op passthrough —
+    but it is the single hook a FUTURE schema bump adds its per-version transform to, so an older
+    library is upgraded in place rather than discarded. The framework matters more than the (empty)
+    body: a version bump must migrate, never wipe. Returns ``data`` (mutated in place); the caller
+    re-stamps the version and re-validates entries after this runs."""
+    # No migrations to WRITE yet (VERSION == 1). Add ``if from_version < N: ...`` steps here, in
+    # ascending order, when the schema changes — each transform must keep the user's history.
+    return data
+
+
+def _is_loadable_dict(path: str) -> tuple[bool, dict | None]:
+    """(readable_json_dict, parsed) for `path`: True/parsed when the file exists and parses to a
+    JSON object, else (False, None). The seam ``load`` and ``save`` share so 'genuine corruption'
+    (the only case that ever falls back to empty / triggers a backup) is decided in one place."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
+        return False, None
+    if not isinstance(data, dict):
+        return False, None
+    return True, data
+
+
+def load(path: str | None = None) -> dict:
+    """Load + validate the library index, returning the normalized dict. NEVER wipes durable
+    history on a version mismatch:
+
+      * an OLDER ``version`` is MIGRATED forward (``_migrate``) and re-stamped — entries preserved;
+      * a NEWER ``version`` (a downgrade) is loaded BEST-EFFORT (keep valid entries, ignore unknown
+        fields); the on-disk newer file is left for ``save`` to back up rather than clobber;
+      * a single malformed entry is dropped (count logged), the rest kept.
+
+    Only genuine FILE-level corruption (absent / unreadable / not JSON / not a dict / missing or
+    non-int ``version`` / non-list ``entries``) -> ``empty_index()``. `path` defaults to
+    ``library_path()``."""
+    if path is None:
+        path = library_path()
+    ok, data = _is_loadable_dict(path)
+    if not ok:
         return empty_index()
-    if not isinstance(data, dict) or data.get("version") != VERSION:
+    version = data.get("version")
+    # A missing / non-int version is untrustworthy shape (not a real schema number) -> corruption.
+    if isinstance(version, bool) or not isinstance(version, int):
         return empty_index()
+    if version < VERSION:
+        # OLDER file: migrate forward, preserving every entry, then re-validate below.
+        _log.warning("library: migrating index from version %d to %d (%s)", version, VERSION, path)
+        data = _migrate(data, version)
+    elif version > VERSION:
+        # NEWER file (a downgrade): load best-effort — keep what validates, ignore unknown fields.
+        # save() backs the newer file up before it would ever be overwritten (see _backup_unsafe).
+        _log.warning("library: index is version %d, newer than this build's %d — loading "
+                     "best-effort (%s)", version, VERSION, path)
     raw = data.get("entries")
     if not isinstance(raw, list):
         return empty_index()
@@ -147,13 +199,48 @@ def load(path: str | None = None) -> dict:
     return {"version": VERSION, "entries": [_norm_entry(e) for e in entries]}
 
 
+def _backup_unsafe(path: str) -> None:
+    """Before ``save`` would OVERWRITE an existing on-disk library it could not safely round-trip
+    (genuine corruption, or a NEWER un-migratable file), copy it to a ``<path>.bak`` sidecar so the
+    user's original bytes are never silently lost. Called only for the un-round-trippable cases:
+    a healthy current/older file that ``load`` migrated is rewritten normally (no backup churn).
+
+    Backup is best-effort and MUST NOT block the write: any failure to back up just logs (a write
+    that keeps the app usable beats refusing to save because the backup slot is unwritable). Uses
+    ``shutil.copy2`` (preserves mtime); the ``.bak`` is overwritten each time so it always mirrors
+    the last replaced-yet-unparseable file rather than accumulating."""
+    if not os.path.exists(path):
+        return
+    ok, data = _is_loadable_dict(path)
+    unsafe = (not ok) or (
+        isinstance(data, dict)
+        and isinstance(data.get("version"), int)
+        and not isinstance(data.get("version"), bool)
+        and data["version"] > VERSION
+    )
+    if not unsafe:
+        return
+    try:
+        shutil.copy2(path, path + ".bak")
+        _log.warning("library: backed up an unreadable/newer index to %s before overwriting",
+                     os.path.basename(path) + ".bak")
+    except OSError as exc:
+        _log.warning("library: could not back up %s before overwrite (%r)", path, exc)
+
+
 def save(index: dict, path: str | None = None) -> None:
     """Write the index atomically (temp file + ``os.replace``) so a crash mid-write can't leave a
     truncated library. Creates the app-support dir if missing. `path` defaults to
-    ``library_path()``. Raises OSError on an unwritable destination."""
+    ``library_path()``. Raises OSError on an unwritable destination.
+
+    DATA-SAFETY: before overwriting an existing file that could not be parsed/migrated (genuine
+    corruption or a NEWER downgrade-incompatible file), the original is first copied to a
+    ``library.json.bak`` sidecar (``_backup_unsafe``) — a schema bump or a downgrade can never
+    silently destroy the user's analyzed history."""
     if path is None:
         path = library_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    _backup_unsafe(path)
     # Re-normalize on the way out: store only the schema fields, in canonical shape/order.
     out = {"version": VERSION, "entries": [_norm_entry(e) for e in index.get("entries", [])]}
     tmp = path + ".tmp"

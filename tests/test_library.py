@@ -182,7 +182,8 @@ def test_load_corrupt_returns_empty_then_heals():
     bad_bodies = [
         "{ not json",                                            # not JSON at all
         "[]",                                                     # not an object
-        '{"version": 2, "entries": []}',                         # unknown version
+        '{"entries": []}',                                       # missing version (untrustworthy)
+        '{"version": "one", "entries": []}',                     # non-int version (untrustworthy)
         '{"version": 1}',                                        # no entries list
         '{"version": 1, "entries": 3}',                          # entries not a list
         '{"version": 1, "entries": [{"stem": "x"}]}',            # entry has no fingerprint
@@ -266,16 +267,98 @@ def test_load_drops_all_when_every_entry_malformed():
 
 
 def test_load_file_level_garbage_still_resets_to_empty():
-    """FILE-level corruption (not a dict / wrong version / non-list entries) still resets the
-    WHOLE index to empty — the entry-tolerant change is scoped to individual entries only; an
-    untrustworthy top-level shape can't be partially salvaged."""
+    """FILE-level corruption (not a dict / missing-or-non-int version / non-list entries) still
+    resets the WHOLE index to empty — the entry-tolerant change is scoped to individual entries
+    only; an untrustworthy top-level shape can't be partially salvaged. (A version MISMATCH is a
+    DIFFERENT case — migrated / best-effort, NOT wiped — covered in the migration tests below.)"""
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "library.json")
-        for body in ("{ not json", "[]", '{"version": 2, "entries": []}',
+        for body in ("{ not json", "[]", '{"entries": []}',
+                     '{"version": true, "entries": []}',
                      '{"version": 1, "entries": 3}'):
             with open(p, "w") as f:
                 f.write(body)
             assert library.load(p) == {"version": 1, "entries": []}, body
+
+
+# ------------------------------------------------------- version-safe migration + backup (data loss)
+def test_older_version_is_migrated_not_wiped():
+    """THE LANDMINE: an OLDER on-disk version must NOT be treated as corruption. Its analyzed
+    history is MIGRATED forward (entries preserved) and re-stamped to the current VERSION — not
+    silently discarded behind a warning no one sees."""
+    good_a = _entry("GX010060", track="Daytona MK", best=68.4)
+    good_b = _entry("GX010061", track="Sonoma", best=71.2)
+    fps = {e["fingerprint"] for e in (good_a, good_b)}
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        with open(p, "w") as f:
+            json.dump({"version": 0, "entries": [good_a, good_b]}, f)  # an older schema
+        idx = library.load(p)
+        # Every entry survived and the index is re-stamped to the current version.
+        assert idx["version"] == library.VERSION
+        assert {e["fingerprint"] for e in idx["entries"]} == fps
+        # And a subsequent save writes the migrated (current-version) file back — no data lost.
+        library.save(idx, p)
+        assert {e["fingerprint"] for e in library.load(p)["entries"]} == fps
+
+
+def test_newer_version_is_loaded_best_effort_and_backed_up_before_overwrite():
+    """A NEWER on-disk version (a downgrade) is loaded BEST-EFFORT (keep valid entries, ignore
+    unknown fields) rather than wiped, AND the original newer bytes are copied to a .bak sidecar
+    BEFORE any save would overwrite them — a downgrade can never silently destroy history."""
+    good = _entry("GX010060", track="Daytona MK", best=68.4)
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        # A future schema (version 99) with an unknown extra field the current build ignores.
+        newer = {"version": 99, "entries": [good], "future_field": {"a": 1}}
+        original_bytes = json.dumps(newer, indent=2).encode("utf-8")
+        with open(p, "wb") as f:
+            f.write(original_bytes)
+        # Best-effort load: the valid entry survives, re-stamped down to the current version.
+        idx = library.load(p)
+        assert idx["version"] == library.VERSION
+        assert [e["fingerprint"] for e in idx["entries"]] == [good["fingerprint"]]
+        # Now a save (as the app would do post-load) must BACK UP the newer file first.
+        library.save(idx, p)
+        bak = p + ".bak"
+        assert os.path.exists(bak), "the newer file must be backed up before overwrite"
+        with open(bak, "rb") as f:
+            assert f.read() == original_bytes  # the .bak holds the ORIGINAL newer bytes verbatim
+
+
+def test_unparseable_file_is_backed_up_before_overwrite():
+    """Genuine corruption (unparseable JSON) still resets to empty on load, but the corrupt bytes
+    are preserved to a .bak sidecar before the next save overwrites them — nothing is silently
+    lost even in the true-corruption path."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        corrupt = b"{ this is not valid json at all "
+        with open(p, "wb") as f:
+            f.write(corrupt)
+        assert library.load(p) == {"version": 1, "entries": []}  # corruption -> empty
+        library.upsert_and_save(_entry("GX010060"), p)           # the heal write
+        bak = p + ".bak"
+        assert os.path.exists(bak)
+        with open(bak, "rb") as f:
+            assert f.read() == corrupt  # the corrupt original is preserved verbatim
+
+
+def test_healthy_save_does_not_create_a_backup():
+    """A normal save over a healthy current-version file must NOT churn out a .bak (backup is only
+    for the un-round-trippable corrupt/newer cases) — the everyday upsert stays backup-free."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        library.upsert_and_save(_entry("GX010060"), p)  # first write (no prior file)
+        library.upsert_and_save(_entry("GX010061"), p)  # overwrite a healthy file
+        assert not os.path.exists(p + ".bak")
+
+
+def test_migrate_hook_is_a_preserving_passthrough():
+    """The _migrate hook is a no-op passthrough today (VERSION == 1, no migrations written) — it
+    must PRESERVE every entry so a future bump has a place to transform data without losing it."""
+    data = {"version": 0, "entries": [_entry("GX010060"), _entry("GX010061")]}
+    out = library._migrate(data, 0)
+    assert out["entries"] == data["entries"]  # nothing dropped or reshaped
 
 
 def test_null_track_date_best_roundtrip():
