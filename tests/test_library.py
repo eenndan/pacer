@@ -37,7 +37,9 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 _APP = QApplication.instance() or QApplication([])
 
 from studio import library  # noqa: E402
+from studio._signal import fmt_time  # noqa: E402
 from studio.library_dialog import (  # noqa: E402
+    _ALL_TRACKS,
     _COL_BEST,
     _COL_DATE,
     _COL_TRACK,
@@ -51,10 +53,13 @@ from studio.library_dialog import (  # noqa: E402
 
 # ------------------------------------------------------------------ helpers
 def _entry(stem, *, track="Daytona MK", date="2024-05-01", laps=12,
-           best=68.4, theo=67.9, paths=None):
+           best=68.4, theo=67.9, paths=None,
+           verified=True, degraded=False, dropout=False):
     """Build a valid library entry with a fingerprint derived from the (chapter-invariant) stem.
     (The signature dropped the old per-recording duration arg — the fingerprint no longer uses
-    it; tests that need DISTINCT recordings pass distinct stems.)"""
+    it; tests that need DISTINCT recordings pass distinct stems.) The v2 trust flags default to
+    TRUSTWORTHY (verified, not degraded, no dropout) so most tests get a PB-eligible entry; a test
+    that wants an EXCLUDED entry flips one flag."""
     return {
         "fingerprint": library.fingerprint(stem),
         "stem": stem,
@@ -63,6 +68,9 @@ def _entry(stem, *, track="Daytona MK", date="2024-05-01", laps=12,
         "lap_count": laps,
         "best": best,
         "theoretical": theo,
+        "verified": verified,
+        "degraded": degraded,
+        "dropout": dropout,
         "paths": paths if paths is not None else [f"/media/{stem}.MP4"],
     }
 
@@ -105,7 +113,7 @@ def test_save_load_roundtrip_bit_exact():
         library.upsert(idx, _entry("GX010060", best=68.408, theo=67.901))
         library.save(idx, p)
         back = library.load(p)
-        assert back["version"] == 1
+        assert back["version"] == library.VERSION
         assert len(back["entries"]) == 1
         e = back["entries"][0]
         assert e["best"] == 68.408 and e["theoretical"] == 67.901   # exact float equality
@@ -171,7 +179,7 @@ def test_load_missing_is_empty_index():
     """A missing file → a fresh empty index (NOT an error) — a first-ever run shows an empty
     library."""
     idx = library.load("/nonexistent/dir/library.json")
-    assert idx == {"version": 1, "entries": []}
+    assert idx == {"version": library.VERSION, "entries": []}
 
 
 def test_load_corrupt_returns_empty_then_heals():
@@ -211,7 +219,7 @@ def test_load_corrupt_returns_empty_then_heals():
         for body in bad_bodies:
             with open(p, "w") as f:
                 f.write(body)
-            assert library.load(p) == {"version": 1, "entries": []}, body
+            assert library.load(p) == {"version": library.VERSION, "entries": []}, body
         # Heal: a fresh upsert+save over the (last) garbage yields a clean, loadable index.
         library.upsert_and_save(good, p)
         idx = library.load(p)
@@ -221,7 +229,8 @@ def test_load_corrupt_returns_empty_then_heals():
             raw = json.load(f)
         assert set(raw) == {"version", "entries"}
         assert set(raw["entries"][0]) == {
-            "fingerprint", "stem", "track", "date", "lap_count", "best", "theoretical", "paths"}
+            "fingerprint", "stem", "track", "date", "lap_count", "best", "theoretical",
+            "verified", "degraded", "dropout", "paths"}
 
 
 def test_load_drops_only_malformed_entries_keeps_valid_history():
@@ -263,7 +272,7 @@ def test_load_drops_all_when_every_entry_malformed():
         p = os.path.join(d, "library.json")
         with open(p, "w") as f:
             json.dump({"version": 1, "entries": [bad1, bad2]}, f)
-        assert library.load(p) == {"version": 1, "entries": []}
+        assert library.load(p) == {"version": library.VERSION, "entries": []}
 
 
 def test_load_file_level_garbage_still_resets_to_empty():
@@ -278,7 +287,7 @@ def test_load_file_level_garbage_still_resets_to_empty():
                      '{"version": 1, "entries": 3}'):
             with open(p, "w") as f:
                 f.write(body)
-            assert library.load(p) == {"version": 1, "entries": []}, body
+            assert library.load(p) == {"version": library.VERSION, "entries": []}, body
 
 
 # ------------------------------------------------------- version-safe migration + backup (data loss)
@@ -335,7 +344,7 @@ def test_unparseable_file_is_backed_up_before_overwrite():
         corrupt = b"{ this is not valid json at all "
         with open(p, "wb") as f:
             f.write(corrupt)
-        assert library.load(p) == {"version": 1, "entries": []}  # corruption -> empty
+        assert library.load(p) == {"version": library.VERSION, "entries": []}  # corruption -> empty
         library.upsert_and_save(_entry("GX010060"), p)           # the heal write
         bak = p + ".bak"
         assert os.path.exists(bak)
@@ -353,12 +362,16 @@ def test_healthy_save_does_not_create_a_backup():
         assert not os.path.exists(p + ".bak")
 
 
-def test_migrate_hook_is_a_preserving_passthrough():
-    """The _migrate hook is a no-op passthrough today (VERSION == 1, no migrations written) — it
-    must PRESERVE every entry so a future bump has a place to transform data without losing it."""
-    data = {"version": 0, "entries": [_entry("GX010060"), _entry("GX010061")]}
-    out = library._migrate(data, 0)
-    assert out["entries"] == data["entries"]  # nothing dropped or reshaped
+def test_migrate_hook_preserves_entries_and_backfills_trust_flags():
+    """The _migrate hook (the PR #55 framework) must PRESERVE every entry AND, for the v1→v2 bump,
+    back-fill the three trust flags with the trusted-unknown default so a pre-existing (flag-less)
+    PB history is not discarded. Same count, same fingerprints, flags defaulted."""
+    data = {"version": 1, "entries": [_entry("GX010060"), _entry("GX010061")]}
+    out = library._migrate(data, 1)
+    assert len(out["entries"]) == 2                               # nothing dropped
+    assert [e["fingerprint"] for e in out["entries"]] == ["GX0060", "GX0061"]
+    for e in out["entries"]:
+        assert e["verified"] is True and e["degraded"] is False and e["dropout"] is False
 
 
 def test_null_track_date_best_roundtrip():
@@ -387,6 +400,121 @@ def test_pb_series_per_track_sorted_and_filtered():
     series = library.pb_series(idx, "MK")
     assert series == [("2024-05-01", 70.0), ("2024-06-01", 69.0), ("2024-07-01", 68.0)]
     assert library.pb_series(idx, "Unknown") == []
+
+
+# --------------------------------------------------------- v2 trust: PB exclusion + migration + summary
+
+def test_is_trustworthy_gate():
+    """is_trustworthy: a verified, non-degraded, non-dropout entry (incl. a legacy flag-less one)
+    is trustworthy; flipping ANY of verified→False / degraded→True / dropout→True excludes it."""
+    assert library.is_trustworthy(_entry("A"))                              # all clean
+    assert library.is_trustworthy({"best": 68.0})                           # legacy flag-less → in
+    assert not library.is_trustworthy(_entry("A", verified=False))          # provisional → out
+    assert not library.is_trustworthy(_entry("A", degraded=True))           # estimated → out
+    assert not library.is_trustworthy(_entry("A", dropout=True))            # dropout → out
+
+
+def test_pb_series_excludes_untrustworthy_keeps_legacy_and_verified():
+    """THE PB-TRUST RULE: pb_series (and the PB floor) must EXCLUDE a provisional / degraded /
+    dropout best, INCLUDE a legacy trusted-unknown best and a verified one. A meaningless "best"
+    never appears in the progression or sets the bar a real lap must beat."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("V", track="MK", date="2024-05-01", best=70.0))    # verified → in
+    # A LEGACY (flag-less) entry: upserted raw so _norm_entry back-fills the trusted-unknown default.
+    library.upsert(idx, {"fingerprint": "GX0061", "stem": "GX010061", "track": "MK",
+                         "date": "2024-05-02", "lap_count": 5, "best": 69.5,
+                         "theoretical": None, "paths": []})                        # legacy → in
+    library.upsert(idx, _entry("P", track="MK", date="2024-05-03", best=60.0,     # provisional
+                               verified=False))                                    #   (fastest!) → OUT
+    library.upsert(idx, _entry("D", track="MK", date="2024-05-04", best=61.0,     # degraded → OUT
+                               degraded=True))
+    library.upsert(idx, _entry("R", track="MK", date="2024-05-05", best=62.0,     # dropout → OUT
+                               dropout=True))
+    series = library.pb_series(idx, "MK")
+    # Only the verified + legacy bests appear; the three untrustworthy (and FASTER) bests are gone.
+    assert series == [("2024-05-01", 70.0), ("2024-05-02", 69.5)]
+    # And the PB floor is the verified/legacy min (69.5), NOT the provisional 60.0.
+    assert library.prior_best(idx, "MK") == 69.5
+
+
+def test_trust_label_reasons_and_priority():
+    """trust_label: None for trustworthy (incl. legacy), else the most-significant reason —
+    provisional > estimated > dropout — so exactly one tag renders."""
+    assert library.trust_label(_entry("A")) is None
+    assert library.trust_label({"best": 1.0}) is None                       # legacy → trustworthy
+    assert library.trust_label(_entry("A", verified=False)) == "provisional"
+    assert library.trust_label(_entry("A", degraded=True)) == "estimated"
+    assert library.trust_label(_entry("A", dropout=True)) == "dropout"
+    # Priority: an entry that is BOTH provisional and dropout reads as "provisional" (the worst).
+    assert library.trust_label(_entry("A", verified=False, dropout=True)) == "provisional"
+
+
+def test_real_v1_file_migrates_to_v2_all_entries_preserved():
+    """THE #55 VALIDATION: a real on-disk schema-v1 file (no trust flags) round-trips to v2 with
+    EVERY legacy entry preserved and back-filled to trusted-unknown — a pre-existing PB history is
+    NOT retroactively discarded (all legacy bests stay eligible for the PB chart)."""
+    # Two v1-shaped entries WITHOUT any trust flags (the pre-#55-user file on disk).
+    v1_a = {"fingerprint": "GX0060", "stem": "GX010060", "track": "MK", "date": "2024-05-01",
+            "lap_count": 8, "best": 68.4, "theoretical": 67.9, "paths": []}
+    v1_b = {"fingerprint": "GX0061", "stem": "GX010061", "track": "MK", "date": "2024-06-01",
+            "lap_count": 9, "best": 67.1, "theoretical": 66.8, "paths": []}
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        with open(p, "w") as f:
+            json.dump({"version": 1, "entries": [v1_a, v1_b]}, f)
+        idx = library.load(p)
+        # Re-stamped to v2, both entries survived, each back-filled trusted-unknown.
+        assert idx["version"] == 2 == library.VERSION
+        assert {e["fingerprint"] for e in idx["entries"]} == {"GX0060", "GX0061"}
+        for e in idx["entries"]:
+            assert e["verified"] is True and e["degraded"] is False and e["dropout"] is False
+        # The legacy bests are trustworthy → still charted (back-compat: history is not discarded).
+        assert library.pb_series(idx, "MK") == [("2024-05-01", 68.4), ("2024-06-01", 67.1)]
+        # A save writes the migrated v2 file back with no data loss.
+        library.save(idx, p)
+        back = library.load(p)
+        assert back["version"] == 2
+        assert {e["fingerprint"] for e in back["entries"]} == {"GX0060", "GX0061"}
+
+
+def test_upsert_writes_v2_trust_flags():
+    """A new upsert stores the entry's verified/degraded/dropout flags verbatim (the app sources
+    them from the live Session), and they survive save→load."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        library.upsert_and_save(
+            _entry("GX010060", verified=False, degraded=True, dropout=True), p)
+        e = library.load(p)["entries"][0]
+        assert e["verified"] is False and e["degraded"] is True and e["dropout"] is True
+
+
+def test_track_summary_counts_best_pbs_and_trend():
+    """track_summary is a light honest read from the TRUSTWORTHY dated series: sessions counts every
+    row, best/best_date/pb_count/trend come from pb_series only (a provisional/degraded/dropout best
+    never inflates them)."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("A", track="MK", date="2024-05-01", best=70.0))
+    library.upsert(idx, _entry("B", track="MK", date="2024-06-01", best=69.0))   # new PB
+    library.upsert(idx, _entry("C", track="MK", date="2024-07-01", best=68.0))   # new PB
+    # A provisional FASTER "best" — counted as a session, but never the best / a PB.
+    library.upsert(idx, _entry("P", track="MK", date="2024-08-01", best=50.0, verified=False))
+    s = library.track_summary(idx, "MK")
+    assert s["sessions"] == 4                       # every row counts
+    assert s["best"] == 68.0 and s["best_date"] == "2024-07-01"   # trustworthy best, NOT 50.0
+    assert s["pb_count"] == 3                        # 70 → 69 → 68 are three improving steps
+    assert s["trend"] == "improving"                 # latest trustworthy session holds the record
+    # A stalled track: the latest session is off the earlier PB.
+    idx2 = library.empty_index()
+    library.upsert(idx2, _entry("A", track="MK", date="2024-05-01", best=68.0))
+    library.upsert(idx2, _entry("B", track="MK", date="2024-06-01", best=70.0))  # slower → stalled
+    s2 = library.track_summary(idx2, "MK")
+    assert s2["best"] == 68.0 and s2["pb_count"] == 1 and s2["trend"] == "stalled"
+    # A track with no trustworthy dated best → sessions counted, best None, trend "none".
+    idx3 = library.empty_index()
+    library.upsert(idx3, _entry("X", track="MK", date="2024-05-01", best=60.0, verified=False))
+    s3 = library.track_summary(idx3, "MK")
+    assert s3["sessions"] == 1 and s3["best"] is None and s3["trend"] == "none"
+    assert library.track_summary(idx, None) is None
 
 
 def test_app_support_path_uses_patched_seam(monkeypatch):
@@ -628,6 +756,97 @@ def test_dialog_pb_empty_state_when_fewer_than_two_points():
     dlg.deleteLater()
 
 
+# ------------------------------------------------ v2 dialog: search / filter / trust tag / summary
+
+def _visible_rows(dlg) -> set[str]:
+    """The DATE-cell text of every VISIBLE (non-hidden) table row — the on-screen filtered set."""
+    return {dlg.table.item(r, _COL_DATE).text()
+            for r in range(dlg.table.rowCount()) if not dlg.table.isRowHidden(r)}
+
+
+def test_dialog_search_filters_rows_by_track_and_date():
+    """The search box filters rows live by a track OR date substring (case-insensitive); clearing
+    it restores every row."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("A", track="Sonoma", date="2024-05-01", best=70.0, paths=[]))
+    library.upsert(idx, _entry("B", track="Buttonwillow", date="2024-06-15", best=68.0, paths=[]))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    # Track substring (case-insensitive) → only the Sonoma row.
+    dlg.search.setText("sonoma")
+    assert _visible_rows(dlg) == {"2024-05-01"}
+    # Date substring → only the June row.
+    dlg.search.setText("06-15")
+    assert _visible_rows(dlg) == {"2024-06-15"}
+    # Cleared → both rows back.
+    dlg.search.setText("")
+    assert _visible_rows(dlg) == {"2024-05-01", "2024-06-15"}
+    dlg.deleteLater()
+
+
+def test_dialog_track_filter_combo_scopes_to_one_track():
+    """The track-filter combo lists the distinct tracks and, when set, hides other tracks' rows;
+    'All tracks' shows everything."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("A", track="Sonoma", date="2024-05-01", best=70.0, paths=[]))
+    library.upsert(idx, _entry("B", track="Buttonwillow", date="2024-06-15", best=68.0, paths=[]))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    # Combo carries the sentinel + the two distinct tracks (sorted).
+    items = [dlg.track_filter.itemText(i) for i in range(dlg.track_filter.count())]
+    assert items == [_ALL_TRACKS, "Buttonwillow", "Sonoma"]
+    dlg.track_filter.setCurrentText("Sonoma")
+    assert _visible_rows(dlg) == {"2024-05-01"}
+    dlg.track_filter.setCurrentText(_ALL_TRACKS)
+    assert _visible_rows(dlg) == {"2024-05-01", "2024-06-15"}
+    dlg.deleteLater()
+
+
+def test_dialog_trust_tag_shows_on_untrustworthy_row():
+    """An untrustworthy (provisional/estimated/dropout) recording renders a muted trust tag in its
+    Track cell; a trustworthy row does not."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        library.upsert(idx, _entry("GX010060", track="MK", date="2024-05-01", best=70.0,
+                                   laps=8, paths=[real.name]))                    # trustworthy
+        library.upsert(idx, _entry("GX010062", track="MK", date="2024-06-01", best=68.0,
+                                   laps=8, verified=False, paths=[real.name]))    # provisional
+        dlg = LibraryDialog(idx, _OpenSpy())
+        prov_row = _row_with_date(dlg, "2024-06-01")
+        good_row = _row_with_date(dlg, "2024-05-01")
+        prov_text = dlg.table.item(prov_row, _COL_TRACK).text()
+        good_text = dlg.table.item(good_row, _COL_TRACK).text()
+        assert "provisional" in prov_text                # the untrustworthy row is tagged
+        assert "provisional" not in good_text            # the trustworthy row is not
+        # The tag is muted+italic (the theme's trust tier), but the row stays openable (not disabled).
+        assert dlg.table.item(prov_row, _COL_TRACK).font().italic()
+        assert not bool(dlg.table.item(prov_row, _COL_DATE).data(MISSING_ROLE))
+        dlg.deleteLater()
+
+
+def test_dialog_progress_summary_line_for_selected_track():
+    """Selecting a track shows the compact progress summary (session count + trustworthy best +
+    PB count) — and a provisional 'best' never inflates it."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        library.upsert(idx, _entry("GX010060", track="MK", date="2024-05-01", best=70.0,
+                                   laps=8, paths=[real.name]))
+        library.upsert(idx, _entry("GX010062", track="MK", date="2024-06-01", best=68.0,
+                                   laps=8, paths=[real.name]))
+        # A provisional faster best — a session, but not the best / a PB.
+        library.upsert(idx, _entry("GX010064", track="MK", date="2024-07-01", best=50.0,
+                                   laps=8, verified=False, paths=[real.name]))
+        dlg = LibraryDialog(idx, _OpenSpy())
+        dlg._show_summary("MK")
+        text = dlg._summary.text()
+        assert "3 sessions" in text                      # every row counts
+        assert "50" not in text                          # the provisional 50.0 never shows as best
+        assert fmt_time(68.0) in text                    # the trustworthy best does
+        assert "2 PBs" in text                           # 70 → 68 = two improving steps
+        # No track selected → blank line.
+        dlg._show_summary(None)
+        assert dlg._summary.text() == ""
+        dlg.deleteLater()
+
+
 # ===================================== Session.library_entry + app skip (pacer; skipped without it)
 # These exercise the REAL Session.library_entry (absolute paths) and the app's _update_library skip
 # (0-lap / bundled-sample rows are NOT indexed). They import the pacer-backed studio.session /
@@ -655,6 +874,10 @@ def test_library_entry_stores_absolute_paths():
     s.laps = type("L", (), {"lap_time": staticmethod(lambda i: 68.4)})()
     s.session_date = lambda: "2024-05-01"
     s.theoretical_best = lambda: 67.9
+    # Trust-flag accessors (library schema v2). timing_verified reads track_name (set → Verified)
+    # and timing_quality is getattr-guarded to high-quality on a bare Session; dropout_lap_ids walks
+    # real lap columns absent here, so stub it (this recording has no dropout lap).
+    s.dropout_lap_ids = lambda: set()
     # A relative path → the entry must store it absolute.
     rel = os.path.join("subdir", "GX010062.MP4")
     entry = Session.library_entry(s, [rel])
@@ -662,6 +885,11 @@ def test_library_entry_stores_absolute_paths():
     assert entry["paths"] == [os.path.abspath(rel)]  # absolute, cwd-independent
     assert os.path.isabs(entry["paths"][0])
     assert entry["track"] == "Daytona MK" and entry["best"] == 68.4
+    # v2 trust flags sourced from the live Session: a detected-track recording is Verified, its
+    # default timing_quality is not degraded, and no dropout lap was flagged.
+    assert entry["verified"] is True
+    assert entry["degraded"] is False
+    assert entry["dropout"] is False
 
 
 def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):

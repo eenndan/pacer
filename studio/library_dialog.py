@@ -10,9 +10,12 @@ imports the app.
 Layout::
 
     ┌───────────────────────────────────────────────┐
-    │  Date │ Track │ Best │ Theoretical             │  ← sortable table (one row / recording)
-    │  …      …       …      …                        │     missing-file rows greyed + disabled
-    ├───────────────────────────────────────────────┤
+    │  [search…]                    [track filter ▾] │  ← live filter row (track/date substring +
+    ├───────────────────────────────────────────────┤     a per-track combo) so it scales to 50–200
+    │  Date │ Track │ Best │ Theoretical             │  ← sortable table (one row / recording);
+    │  …      …       …      …                        │     missing-file rows greyed + disabled; an
+    ├───────────────────────────────────────────────┤     UNTRUSTWORTHY row carries a muted trust tag
+    │  <selected track> · 12 sessions · best … · …    │  ← light cross-session progress summary line
     │  PB progression — <track>   [best-vs-date plot] │  ← pyqtgraph mini-chart for the selected
     ├───────────────────────────────────────────────┤     row's track (best lap vs recording date)
     │                              [Open]   [Close]   │
@@ -20,6 +23,12 @@ Layout::
 
 Date/Best/Theoretical sort numerically via ``_NumItem``; Track sorts as text. The Open button +
 a double-click re-open the selected row's recording (disabled for a missing/junk row).
+
+TRUST (library schema v2): the table SHOWS every session, but an untrustworthy one (provisional
+start line / estimated timing / GPS dropout — see ``library.trust_label``) gets a muted tag and is
+EXCLUDED from the PB chart + progress summary, which read only ``library.pb_series`` /
+``library.track_summary`` (the trustworthy subset). The dialog stays pacer-free — it consumes the
+plain flags on the entry dicts and those pure helpers.
 """
 
 from __future__ import annotations
@@ -32,10 +41,12 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -59,6 +70,10 @@ PATHS_ROLE = Qt.UserRole + 1    # the entry's file path list (on the Date cell)
 TRACK_ROLE = Qt.UserRole + 2    # the entry's track name, raw (on the Date cell)
 MISSING_ROLE = Qt.UserRole + 3  # True if the recording's file(s) are missing (on the Date cell)
 FP_ROLE = Qt.UserRole + 4       # the entry's fingerprint key (on the Date cell), for forget/remove
+FILTER_ROLE = Qt.UserRole + 5   # lower-cased "track date" haystack for the search box (on Date)
+
+# The "all tracks" sentinel for the track-filter combo (index 0). A real track name never equals it.
+_ALL_TRACKS = "All tracks"
 
 # Privacy disclosure — a calm, factual note of what pacer stores locally and where. Surfaced in the
 # Library dialog (this is where a user browsing their recorded history would look) and by
@@ -74,6 +89,15 @@ PRIVACY_NOTE = (
 # A PlotDataItem pen/brush for the PB line + its markers (amber accent, the app's primary).
 _PB_PEN = pg.mkPen(C.accent, width=2)
 _PB_BRUSH = pg.mkBrush(C.accent)
+
+# The progress-summary trend word per library.track_summary["trend"]. "single"/"none" add nothing
+# (there's no trend to read from one/zero sessions) so they map to no word.
+_TREND_WORD = {"improving": "improving", "stalled": "off your PB"}
+
+
+def _plural(n: int, noun: str) -> str:
+    """"1 session" / "3 sessions" — the summary line's one pluralization helper."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
 class _NumItem(QTableWidgetItem):
@@ -161,6 +185,23 @@ class LibraryDialog(QDialog):
         self._title.setProperty("role", "PanelHeader")
         root.addWidget(self._title)
 
+        # ----- filter row: live search (track/date substring) + a per-track combo. Makes the
+        # library usable at 50–200 sessions (the 4-column sortable table alone doesn't).
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search track or date…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._apply_filter)
+        filter_row.addWidget(self.search, 1)
+        self.track_filter = QComboBox()
+        self.track_filter.addItem(_ALL_TRACKS)
+        for name in self._distinct_tracks():
+            self.track_filter.addItem(name)
+        self.track_filter.currentIndexChanged.connect(self._apply_filter)
+        filter_row.addWidget(self.track_filter)
+        root.addLayout(filter_row)
+
         # ----- the sortable recordings table
         self.table = QTableWidget(len(self._entries), len(_HEADERS))
         self.table.setHorizontalHeaderLabels(_HEADERS)
@@ -185,6 +226,15 @@ class LibraryDialog(QDialog):
             self.table.setContextMenuPolicy(Qt.CustomContextMenu)
             self.table.customContextMenuRequested.connect(self._on_context_menu)
         root.addWidget(self.table, 3)
+
+        # ----- light cross-session progress summary for the selected track (the 2nd/3rd-visit
+        # hook: "N sessions · best … · M PBs · improving"). Reads library.track_summary (trustworthy
+        # subset); honest — it never counts a provisional/estimated/dropout best as the best.
+        self._summary = QLabel("")
+        self._summary.setWordWrap(True)
+        self._summary.setFont(theme.mono_font(11))
+        self._summary.setStyleSheet(f"color: {C.text_dim};")
+        root.addWidget(self._summary)
 
         # ----- per-track PB-progression mini-chart (best lap vs recording date)
         self._pb_title = QLabel("PB progression")
@@ -256,8 +306,10 @@ class LibraryDialog(QDialog):
         buttons.addWidget(close_btn)
         root.addLayout(buttons)
 
-        # Auto-select the most recent usable recording (none if all quarantined).
+        # Auto-select the most recent usable recording (none if all quarantined), then apply the
+        # (initially empty) filter so the summary line + row visibility are in sync from the start.
         self._select_first_usable_row()
+        self._apply_filter()
 
     def _select_first_usable_row(self):
         """Select the first row (in the current sort order) whose DATE cell is NOT flagged disabled
@@ -272,6 +324,48 @@ class LibraryDialog(QDialog):
         # Nothing usable: refresh the chart explicitly to its empty-state (no selection signal
         # fires when no row gets selected).
         self._on_selection()
+
+    # ------------------------------------------------------------------ filter
+    def _distinct_tracks(self) -> list[str]:
+        """The sorted distinct track names across the current entries (for the filter combo).
+        Skips null-track (junk) rows — there's no track to filter on."""
+        return sorted({e["track"] for e in self._entries if e.get("track")})
+
+    def _apply_filter(self):
+        """Hide rows that don't match the search text (track/date substring) AND the selected track
+        filter. Live — wired to both the search box and the combo. Uses ``setRowHidden`` so the sort
+        order / selection model stay intact; re-selects the first visible usable row afterward so the
+        PB chart + summary track the visible set."""
+        query = self.search.text().strip().lower() if hasattr(self, "search") else ""
+        chosen = self.track_filter.currentText() if hasattr(self, "track_filter") else _ALL_TRACKS
+        for r in range(self.table.rowCount()):
+            date_item = self.table.item(r, _COL_DATE)
+            if date_item is None:
+                continue
+            hay = date_item.data(FILTER_ROLE) or ""
+            track = date_item.data(TRACK_ROLE)
+            hidden = (bool(query) and query not in hay) or (
+                chosen != _ALL_TRACKS and track != chosen)
+            self.table.setRowHidden(r, hidden)
+        # Keep a sensible selection: if the selected row got hidden (or none is selected), land on
+        # the first VISIBLE usable row so the chart/summary reflect what's on screen.
+        self._reselect_visible()
+
+    def _reselect_visible(self):
+        """Select the first VISIBLE, non-disabled row; clear the selection (→ empty chart/summary)
+        when the filter leaves nothing usable on screen."""
+        cur = self._selected_date_item()
+        if cur is not None and not self.table.isRowHidden(cur.row()):
+            return                                   # current selection still visible — keep it
+        for r in range(self.table.rowCount()):
+            if self.table.isRowHidden(r):
+                continue
+            date_item = self.table.item(r, _COL_DATE)
+            if date_item is not None and not bool(date_item.data(MISSING_ROLE)):
+                self.table.selectRow(r)
+                return
+        self.table.clearSelection()
+        self._on_selection()                         # nothing visible/usable → empty state
 
     # ------------------------------------------------------------------ table build
     def _fill_rows(self):
@@ -297,6 +391,8 @@ class LibraryDialog(QDialog):
             # MISSING_ROLE doubles as the "not openable / not auto-selectable" flag — set for a
             # file-missing OR a quarantined junk row, so _on_selection / _open_selected guard both.
             date_item.setData(MISSING_ROLE, disabled)
+            # The search haystack: lower-cased "track date" so the box matches either substring.
+            date_item.setData(FILTER_ROLE, f"{track or ''} {date or ''}".strip().lower())
 
             track_item = QTableWidgetItem(track or "unknown track")
 
@@ -305,8 +401,13 @@ class LibraryDialog(QDialog):
             theo_item = _NumItem(fmt_time(theo) if theo is not None else "—")
             theo_item.setData(NUM_ROLE, theo)
 
-            # A junk row says so; a present-but-missing-file row keeps its established label.
-            suffix = "  (no laps)" if junk else "  (file missing)" if missing else ""
+            # A junk row says so; a present-but-missing-file row keeps its established label. An
+            # UNTRUSTWORTHY-but-openable row gets a muted trust tag (provisional/estimated/dropout)
+            # so the user can see WHICH sessions the PB chart excludes — reusing the theme's trust
+            # tier (italic + PROVISIONAL_COLOR, palette-safe).
+            trust = None if disabled else _library.trust_label(e)
+            suffix = ("  (no laps)" if junk else "  (file missing)" if missing
+                      else f"  · {trust}" if trust else "")
 
             items = (date_item, track_item, best_item, theo_item)
             for col, it in enumerate(items):
@@ -315,6 +416,12 @@ class LibraryDialog(QDialog):
                     it.setFlags(it.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
                     if col == _COL_TRACK:
                         it.setText(f"{track or 'unknown track'}{suffix}")
+                elif col == _COL_TRACK and trust:
+                    # Muted + italic across the row's Track cell so the tag reads as demoted, not an
+                    # error. The row stays fully selectable/openable — it's just marked, not blocked.
+                    it.setText(f"{track or 'unknown track'}{suffix}")
+                    it.setForeground(QBrush(QColor(theme.PROVISIONAL_COLOR)))
+                    theme.apply_provisional_style(it, True)
                 self.table.setItem(r, col, it)
 
     # ------------------------------------------------------------------ selection
@@ -326,16 +433,39 @@ class LibraryDialog(QDialog):
         return self.table.item(rows[0].row(), _COL_DATE)
 
     def _on_selection(self):
-        """A row was selected: refresh the PB chart for its track; enable Open only for a usable
-        (present, non-junk) recording."""
+        """A row was selected: refresh the PB chart + progress summary for its track; enable Open
+        only for a usable (present, non-junk) recording."""
         item = self._selected_date_item()
         if item is None:
             self.open_btn.setEnabled(False)
             self._show_pb(None)
+            self._show_summary(None)
             return
         missing = bool(item.data(MISSING_ROLE))
         self.open_btn.setEnabled(not missing)
-        self._show_pb(item.data(TRACK_ROLE))
+        track = item.data(TRACK_ROLE)
+        self._show_pb(track)
+        self._show_summary(track)
+
+    def _show_summary(self, track: str | None):
+        """Set the light cross-session progress line for `track` from ``library.track_summary``
+        (trustworthy subset). Blank when there's no track selected; otherwise a compact honest read:
+        ``"<track> · 12 sessions · best 68.42 (2026-06-14) · 3 PBs · improving"``. A track with no
+        trustworthy dated best just reports its session count (nothing to boast yet)."""
+        summary = _library.track_summary(self._index, track) if track else None
+        if not summary:
+            self._summary.setText("")
+            return
+        parts = [summary["track"], _plural(summary["sessions"], "session")]
+        if summary["best"] is not None:
+            best = fmt_time(summary["best"])
+            date = f" ({summary['best_date']})" if summary["best_date"] else ""
+            parts.append(f"best {best}{date}")
+            parts.append(_plural(summary["pb_count"], "PB"))
+            trend = _TREND_WORD.get(summary["trend"])
+            if trend:
+                parts.append(trend)
+        self._summary.setText("  ·  ".join(parts))
 
     def _show_pb(self, track: str | None):
         """Plot best-lap-vs-date for `track`: line for >=2 dated bests, a framed single marker for
@@ -456,9 +586,22 @@ class LibraryDialog(QDialog):
         self._fill_rows()
         self.table.setSortingEnabled(True)
         self.table.sortItems(_COL_DATE, Qt.DescendingOrder)
+        # Rebuild the track-filter combo (a forget/clear can change the distinct-track set); keep the
+        # current pick if it still exists, else fall back to "All tracks". Block the change signal so
+        # the rebuild doesn't re-trigger _apply_filter mid-render.
+        prev = self.track_filter.currentText()
+        self.track_filter.blockSignals(True)
+        self.track_filter.clear()
+        self.track_filter.addItem(_ALL_TRACKS)
+        for name in self._distinct_tracks():
+            self.track_filter.addItem(name)
+        idx = self.track_filter.findText(prev)
+        self.track_filter.setCurrentIndex(idx if idx >= 0 else 0)
+        self.track_filter.blockSignals(False)
         if getattr(self, "clear_btn", None) is not None:
             self.clear_btn.setEnabled(bool(self._entries))
         self._select_first_usable_row()
+        self._apply_filter()
 
     # ------------------------------------------------------------------ open
     def _open_selected(self):
