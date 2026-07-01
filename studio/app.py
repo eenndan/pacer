@@ -41,7 +41,7 @@ from . import (
 )
 from .central_view import CentralView
 from .coaching_panel import OpportunitiesDialog
-from .help_dialog import AboutDialog, ShortcutsDialog
+from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
 from .session import DEFAULT_SAMPLE, Session, fmt_time
 
@@ -466,6 +466,9 @@ class StudioWindow(QMainWindow):
         self.view = CentralView(self.session, self._paths, self._sidecar_path,
                                 self._consistency_visible, parent=self,
                                 speed_unit=getattr(self, "_speed_unit", units.DEFAULT_UNIT))
+        # Keep Edit ▸ Undo's enabled state in sync with the session's undo stack as lines are dragged.
+        self.view.timingEdited.connect(self._sync_edit_menu)
+        self._sync_edit_menu()  # a fresh load has no prior edit -> Undo disabled
         self.setCentralWidget(self.view)
         # One ~30 Hz tick timer for the window's lifetime, created once and reused across reloads (a
         # second would double the tick rate); the swap just re-points which view tick() drives.
@@ -547,6 +550,21 @@ class StudioWindow(QMainWindow):
         self._save_track_action.triggered.connect(self._save_as_track)
         self._save_track_action.setEnabled(False)  # no session yet at construction time
 
+        # Edit menu: Undo the last timing-line edit (Cmd+Z). Dragging the start/finish (or a sector)
+        # line immediately re-segments AND overwrites the sidecar — a slightly-wrong nudge would
+        # otherwise silently destroy the good timing lines + the PB / session-best baseline with no
+        # way back. Undo restores the previous lines through the same re-segment/apply path (see
+        # CentralView.undo_timing_lines). Disabled until there's a prior edit in this session.
+        edit_menu = self.menuBar().addMenu("&Edit")
+        self._undo_action = edit_menu.addAction("Undo timing-line edit")
+        self._undo_action.setShortcut(QKeySequence.Undo)  # Cmd+Z on macOS
+        self._undo_action.setToolTip(
+            "Revert the last start/finish or sector-line drag (re-segments and restores the "
+            "previous lap timing + session-best baseline)")
+        self._undo_action.triggered.connect(self._undo_timing)
+        self._undo_action.setEnabled(False)  # no session / no edit yet
+        edit_menu.aboutToShow.connect(self._sync_edit_menu)
+
         # Coaching menu: the comparison / coaching surface (reference load/clear/compare +
         # Opportunities). Named "Coaching" to match the product positioning and the docs/docstrings
         # (studio/README.md, coaching_panel.py) — its items are all coaching/analysis surfaces.
@@ -611,6 +629,10 @@ class StudioWindow(QMainWindow):
             "List the keyboard shortcuts and the key drag interactions (chart scrub, start/finish "
             "line)")
         self._shortcuts_action.triggered.connect(self._show_shortcuts)
+        self._privacy_action = help_menu.addAction("Your data && privacy")
+        self._privacy_action.setToolTip(
+            "What pacer stores on this Mac (all local/offline) and how to remove it")
+        self._privacy_action.triggered.connect(self._show_privacy)
         self._about_action = help_menu.addAction("About pacer studio")
         self._about_action.setToolTip("What pacer studio is and what it does")
         self._about_action.triggered.connect(self._show_about)
@@ -622,6 +644,33 @@ class StudioWindow(QMainWindow):
     def _show_about(self):
         """Help ▸ About pacer studio: the small themed About card (name / tagline / blurb)."""
         AboutDialog(self).exec()
+
+    def _show_privacy(self):
+        """Help ▸ Your data & privacy: the local-data disclosure card (what pacer stores + how to
+        remove it). All local/offline; the copy lives in help_dialog.PRIVACY_PARAGRAPHS."""
+        PrivacyDialog(self).exec()
+
+    # ----------------------------------------------------- timing-line undo (Edit ▸ Undo)
+    def _sync_edit_menu(self):
+        """Enable Edit ▸ Undo only when the current session has a prior timing-line edit to revert.
+        Connected to the Edit menu's aboutToShow AND refreshed live via the view's timingEdited
+        signal (so the shortcut's enabled state tracks each drag), so neither _load nor _on_lines
+        needs to reach into the menu. getattr-guarded — _build_ui can run before _build_menu in a
+        partial test harness (test_central_view_realqt builds the UI without the menu bar)."""
+        action = getattr(self, "_undo_action", None)
+        if action is None:
+            return
+        session = getattr(self, "session", None)
+        action.setEnabled(bool(session is not None and session.can_undo_timing()))
+
+    def _undo_timing(self):
+        """Edit ▸ Undo (Cmd+Z): revert the last timing-line edit via the current view. No-op when
+        nothing is loaded or there's no prior edit (the action is disabled there too)."""
+        view = getattr(self, "view", None)
+        if view is None:
+            return
+        if view.undo_timing_lines():
+            self.statusBar().showMessage("reverted the last start/finish-line edit")
 
     # ----------------------------------------------------- keyboard shortcuts
     def _build_shortcuts(self):
@@ -704,9 +753,50 @@ class StudioWindow(QMainWindow):
     def _open_library(self):
         """File ▸ Library…: open the session-library dialog (a sortable list of analyzed
         recordings + per-track PB progression). Re-opening an entry routes back through the
-        guarded `_load` path; the dialog reads the index defensively (empty when missing)."""
-        dlg = LibraryDialog(library.load(), open_recording=self._load, parent=self)
+        guarded `_load` path; the dialog reads the index defensively (empty when missing). The
+        privacy controls (forget one recording / clear the library) are injected here — the dialog
+        stays pacer-free + file-op-free, the app owns the index write + sidecar delete."""
+        dlg = LibraryDialog(library.load(), open_recording=self._load, parent=self,
+                            forget_recording=self._forget_recording,
+                            clear_library=self._clear_library)
         dlg.exec()
+
+    def _forget_recording(self, entry: dict) -> dict:
+        """Privacy "forget this recording": drop `entry` from the library index AND delete its
+        per-video `.pacer.json` timing-line sidecar, then return the fresh index (for the dialog to
+        re-render). The media file is NEVER touched. Fully guarded — a failed index write or a
+        missing/locked sidecar just logs; the deletion uses os.remove behind an existence check +
+        try/except (never a shell rm)."""
+        index = library.load()
+        library.remove(index, entry.get("fingerprint"))
+        try:
+            library.save(index)
+        except OSError as exc:
+            print(f"studio: could not update the library index ({exc!r}).", flush=True)
+        # Delete the recording's sidecar (resolved from the FIRST recorded chapter path — the same
+        # stem the sidecar was written under). Guarded end-to-end.
+        paths = entry.get("paths") or []
+        if paths:
+            try:
+                side = sidecar.sidecar_path(paths[0])
+                if os.path.exists(side):
+                    os.remove(side)
+                    print(f"studio: deleted timing-line sidecar {os.path.basename(side)}",
+                          flush=True)
+            except OSError as exc:
+                print(f"studio: could not delete the sidecar ({exc!r}).", flush=True)
+        return library.load()
+
+    def _clear_library(self) -> dict:
+        """Privacy "clear library": wipe the whole app-support index (only the library history of
+        what/where you recorded). The media files + their `.pacer.json` sidecars are left untouched.
+        Returns the fresh (empty) index for the dialog to re-render. Guarded — a failed write logs
+        and returns the current index unchanged."""
+        try:
+            library.clear()
+        except OSError as exc:
+            print(f"studio: could not clear the library index ({exc!r}).", flush=True)
+        return library.load()
 
     # Open Recent: recently analyzed recordings (most-recent-first), each re-opened via the guarded
     # `_load`. Sourced from the session-library index rather than a separate MRU list.

@@ -188,6 +188,26 @@ def upsert_and_save(entry: dict, path: str | None = None) -> dict:
     return index
 
 
+def remove(index: dict, fingerprint_key: str) -> bool:
+    """Drop the entry with fingerprint `fingerprint_key` from `index` (mutates the entries list).
+    Returns True if an entry was removed, False if none matched. The privacy "forget this recording"
+    control's index half — the sidecar-file deletion is a separate, guarded os call in the app."""
+    entries = index.setdefault("entries", [])
+    for i, e in enumerate(entries):
+        if e.get("fingerprint") == fingerprint_key:
+            del entries[i]
+            return True
+    return False
+
+
+def clear(path: str | None = None) -> None:
+    """Wipe the whole library index to an empty one and write it back atomically. Removes ONLY the
+    app-support index (the personal history of what/where you recorded) — the actual media files and
+    their per-video ``.pacer.json`` sidecars are left untouched. `path` defaults to
+    ``library_path()``; raises OSError on an unwritable destination."""
+    save(empty_index(), path)
+
+
 def pb_series(index: dict, track: str) -> list[tuple[str, float]]:
     """The PB-progression series for one `track`: ``[(date, best), ...]`` over every entry of that
     track that has BOTH a date and a best lap, sorted ascending by date (then by best, so two

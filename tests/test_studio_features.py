@@ -1178,6 +1178,9 @@ class _FakeView:
         type(self).n_built += 1
         self.disposed = False
         self.video = SimpleNamespace(name=f"video#{type(self).n_built}")
+        # The real CentralView exposes a `timingEdited` signal that _build_ui connects to keep
+        # Edit ▸ Undo's enabled state in sync; the swap test only needs a .connect() no-op here.
+        self.timingEdited = SimpleNamespace(connect=lambda *_a, **_k: None)
 
     def dispose(self):
         self.disposed = True

@@ -53,6 +53,25 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
 ]
 
+# Your-data & privacy disclosure (Help ▸ Your data & privacy). Honest + calm: everything is local
+# and offline. Names the two on-disk stores + how to remove them. Kept here (with the shortcuts /
+# about copy) as the single source of the app's Help-menu text.
+PRIVACY_TITLE = "Your data & privacy"
+PRIVACY_PARAGRAPHS = [
+    "pacer studio runs entirely on your Mac. It does not upload, sync or share anything — no "
+    "account, no network, no telemetry. Everything below stays on this computer, offline.",
+    "What it stores, and where:",
+    "•  Timing-line sidecar — when you place or drag a start/finish or sector line, pacer saves "
+    "those lines next to your video as a small \"<name>.pacer.json\" file, so your lap timing "
+    "survives a restart. It contains only the line coordinates and the track name — no video.",
+    "•  Session library — each analyzed recording is indexed in "
+    "\"~/Library/Application Support/pacer/library.json\": the file path(s), track name, GPS date "
+    "and lap times. This is what powers the Library list and per-track PB progression.",
+    "How to remove it:  open File ▸ Library…, right-click a recording and choose "
+    "\"Forget this recording\" to drop it from the index and delete its sidecar, or click "
+    "\"Clear library\" to wipe the whole index. Your video files are never touched.",
+]
+
 APP_NAME = "pacer studio"
 APP_TAGLINE = "Race-telemetry analysis for GoPro footage."
 APP_BLURB = (
@@ -143,6 +162,38 @@ class AboutDialog(QDialog):
         blurb.setWordWrap(True)
         blurb.setStyleSheet(f"color: {C.text_dim};")
         root.addWidget(blurb)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        root.addSpacing(6)
+        root.addWidget(buttons)
+
+
+class PrivacyDialog(QDialog):
+    """Help ▸ Your data & privacy. A read-only, themed card disclosing what pacer stores locally
+    (the per-video .pacer.json sidecar + the app-support library index) and how to remove it. All
+    copy is single-sourced from PRIVACY_PARAGRAPHS. Self-contained / app-state-free (headless-safe)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{APP_NAME} — {PRIVACY_TITLE}")
+        self.setMinimumWidth(460)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 16)
+        root.setSpacing(10)
+
+        heading = QLabel(PRIVACY_TITLE)
+        heading.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {C.text};")
+        root.addWidget(heading)
+
+        for para in PRIVACY_PARAGRAPHS:
+            label = QLabel(para)
+            label.setWordWrap(True)
+            label.setStyleSheet(f"color: {C.text_dim};")
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            root.addWidget(label)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
