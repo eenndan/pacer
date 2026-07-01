@@ -51,6 +51,73 @@ from .session import DEFAULT_SAMPLE, Session, fmt_time
 ISSUES_URL = "https://github.com/eenndan/pacer/issues/new"
 
 
+def _show_error_report(exc_type, exc, tb):
+    """Show a themed "Something went wrong" dialog for an otherwise-unhandled exception, with the
+    traceback tucked behind a collapsible Details and a button that opens the Report-a-problem page
+    (the same ISSUES_URL as Help ▸ Report a problem…). Factored out of the excepthook so a test can
+    call it directly (with QDesktopServices.openUrl monkeypatched) without actually raising.
+
+    The full traceback is logged to stderr by the excepthook (dev console trace kept); here it is the
+    user-facing surface — a plain-language headline + the raw class name only inside Details, matching
+    the load-failure dialog's tone. Returns the dialog so a caller/test can inspect it."""
+    import traceback
+
+    summary = f"{exc_type.__name__}: {exc}" if exc is not None else exc_type.__name__
+    detail = "".join(traceback.format_exception(exc_type, exc, tb))
+    box = QMessageBox(
+        QMessageBox.Critical, "pacer studio — something went wrong",
+        "Something went wrong and pacer hit an unexpected error.\n\n"
+        "The app is still running — you can keep working, but if this keeps happening, "
+        "please report it so it can be fixed.\n\n"
+        f"{summary}")
+    # The traceback is diagnostics for a bug report — behind the collapsible Details, not the headline.
+    box.setDetailedText(detail)
+    box.addButton(QMessageBox.Close)
+    report_btn = box.addButton("Report a problem…", QMessageBox.ActionRole)
+    box.setDefaultButton(QMessageBox.Close)
+    box.exec()
+    if box.clickedButton() is report_btn:
+        QDesktopServices.openUrl(QUrl(ISSUES_URL))
+    return box
+
+
+def _excepthook(exc_type, exc, tb):
+    """Top-level sys.excepthook (installed by main() AFTER the QApplication exists): log the full
+    traceback to stderr AND, if a QApplication is running, surface it in a themed Report-a-problem
+    dialog rather than silently dying. Without this, an unhandled exception in ANY signal handler (a
+    start-line drag, a scrub tick, a menu action, the g-meter repaint) propagates to Qt's default
+    handler, which on PySide6 prints to a stderr the user never sees and can silently kill the app
+    with zero dialog and zero path to Report-a-problem.
+
+    PySide6 caveat: exceptions raised inside a Qt slot are routed to sys.excepthook on modern PySide6
+    (older versions swallowed them entirely); installing sys.excepthook is the correct, documented
+    approach — so we do exactly that rather than over-engineering a per-slot wrapper.
+
+    Defensive by construction: a handler that itself throws is worse than none, so the whole body is
+    guarded — on any failure it falls back to the default excepthook. It does NOT sys.exit: a
+    recoverable slot error should leave the app alive where it can."""
+    try:
+        # Keep the console trace for devs (and for the pre-/no-QApplication headless/CLI case, this is
+        # the whole behaviour — a normal stderr traceback).
+        sys.__excepthook__(exc_type, exc, tb)
+        app = QApplication.instance()
+        if app is None:
+            return  # pre-QApplication / headless: the stderr trace above is the correct behaviour
+        _show_error_report(exc_type, exc, tb)
+    except Exception:  # noqa: BLE001 — a crashing excepthook is worse than none; degrade gracefully
+        try:
+            sys.__excepthook__(exc_type, exc, tb)
+        except Exception:  # noqa: BLE001 — last resort: never let the handler itself propagate
+            pass
+
+
+def install_excepthook():
+    """Install the top-level exception handler. Called from main() AFTER the QApplication exists so a
+    running app surfaces the themed dialog; a headless/CLI failure (no QApplication) still prints a
+    normal stderr traceback via the default hook."""
+    sys.excepthook = _excepthook
+
+
 class _VideoExportWorker(QThread):
     """QThread wrapper running export_video.Renderer off the UI thread, forwarding frame progress
     and a final ok/message via queued signals. cancel() cooperatively stops the render; a
@@ -258,6 +325,13 @@ class StudioWindow(QMainWindow):
         self._load_worker = None
         self._load_workers = set()
         self._pending_load = None  # single-flight: the latest queued (token, paths) while a load runs
+        # Reference (cross-recording compare) load bookkeeping — the reference Session.load is the SAME
+        # ~1.4–4 s synchronous compute as the primary open, so it too runs on a _SessionLoadWorker (a
+        # freeze here was the worst kind: it hit the moat "race a friend's GoPro" path). Its own token
+        # supersedes/ignores a stale reference result; a reference load never runs concurrently with a
+        # primary load or a second reference load (see _load_reference_file).
+        self._ref_load_token = 0
+        self._ref_load_worker = None
         self._tick_timer = None  # created on the first _build_ui; reused across reloads (window-owned)
         # Persisted on the window so the View-menu choice survives a reload (passed into each view).
         self._consistency_visible = False
@@ -405,6 +479,10 @@ class StudioWindow(QMainWindow):
         would warn/crash). Uses the bounded drain so close can never hang on a stuck worker. The
         token is already bumped past any in-flight worker, so its result is ignored regardless."""
         self._pending_load = None  # don't start a queued load during teardown
+        # Bump the reference token past any in-flight reference worker too, so a reference load that
+        # finishes mid-teardown is ignored (its set_reference_session apply is dropped by the token
+        # guard) — matching how the primary load's token already supersedes any in-flight worker.
+        self._ref_load_token += 1
         self._drain_load_workers()
         super().closeEvent(event)
 
@@ -1469,8 +1547,12 @@ class StudioWindow(QMainWindow):
     # ----------------------------------------------- cross-recording reference (F7)
     def _load_reference_file(self):
         """Coaching ▸ "Load reference recording…": pick another recording (same track) whose best lap
-        becomes the Δ / map / table reference. The picked file's chapters are chained, then handed to
-        Session.load_reference. On a guard refusal the local best lap is kept and the reason shown."""
+        becomes the Δ / map / table reference. The picked file's chapters are chained, then loaded OFF
+        the UI thread (same ~1.4–4 s Session.load as the primary open — running it synchronously here
+        froze the window on the moat cross-recording-compare path). On completion the loaded Session is
+        adopted via set_reference_session + _apply_reference_change on the UI thread; on a guard refusal
+        or a load failure the local best lap is kept and the reason surfaces (a status line + notice),
+        never a freeze."""
         if not hasattr(self, "session"):
             return
         start_dir = os.path.dirname(self._paths[0]) if getattr(self, "_paths", None) else ""
@@ -1479,13 +1561,65 @@ class StudioWindow(QMainWindow):
         if not path:
             return
         paths = chapters.discover_siblings(path)
+        self._start_reference_load(paths)
+
+    def _start_reference_load(self, paths: list[str]):
+        """Spawn the off-thread reference Session.load for `paths` (the file-picker-free half of
+        _load_reference_file, so tests drive it without a dialog). Reuses the primary open's
+        _SessionLoadWorker; a lightweight status-bar "Loading reference…" replaces the whole-view
+        placeholder (the primary session stays shown). GUARD: a reference load must not run alongside a
+        primary load or a second reference load — bump the reference token (so a still-running older
+        reference worker's result is ignored) and, if one is already in flight, supersede it rather than
+        launch a concurrent second load."""
         print(f"studio: loading reference recording — {len(paths)} chapter(s)…", flush=True)
-        reason = self.session.load_reference(paths)
+        self.statusBar().showMessage("Loading reference…")
+        # Bump the token: any in-flight reference worker started earlier is now stale; its result is
+        # ignored when it finishes (see _on_reference_loaded / _on_reference_load_failed).
+        self._ref_load_token += 1
+        token = self._ref_load_token
+        worker = _SessionLoadWorker(token, paths)
+        self._ref_load_worker = worker
+        self._load_workers.add(worker)  # hold it so the QThread isn't GC'd mid-load (shared drain set)
+        worker.loaded.connect(self._on_reference_loaded)
+        worker.failed.connect(self._on_reference_load_failed)
+        worker.finished.connect(lambda w=worker: self._on_reference_worker_finished(w))
+        worker.start()
+
+    def _on_reference_worker_finished(self, worker):
+        """A reference load worker's QThread finished: drop it from the shared in-flight set."""
+        self._load_workers.discard(worker)
+        if self._ref_load_worker is worker:
+            self._ref_load_worker = None
+
+    def _on_reference_loaded(self, token: int, paths: list[str], ref):
+        """Reference load succeeded (UI thread, queued signal): adopt the loaded Session as the
+        reference (the guard + apply half — set_reference_session — that load_reference already splits
+        out) and refresh the derived views. Ignores a STALE result (a newer reference load superseded
+        this one). A guard refusal keeps the local best lap and surfaces the reason."""
+        if token != self._ref_load_token:
+            return  # superseded by a newer reference load; drop this result
+        if not hasattr(self, "session"):
+            return  # the primary session went away while the reference loaded — nothing to attach to
+        reason = self.session.set_reference_session(
+            ref, source_label=chapters.recording_label(paths))
         if reason is not None:
             print(f"studio: reference not loaded — {reason}", flush=True)
+            self.statusBar().clearMessage()
             QMessageBox.information(self, "pacer studio — reference not loaded", reason)
             return
+        self.statusBar().clearMessage()
         self._apply_reference_change()
+
+    def _on_reference_load_failed(self, token: int, paths: list[str], exc: Exception):
+        """Reference load failed (UI thread, queued signal): drop a STALE result, else surface the
+        reason without a freeze and keep the local best lap (the feature is additive). Mirrors
+        load_reference's own could-not-load message, just off-thread."""
+        if token != self._ref_load_token:
+            return  # superseded by a newer reference load; drop this result
+        reason = f"could not load the reference recording ({type(exc).__name__}: {exc})"
+        print(f"studio: reference not loaded — {reason}", flush=True)
+        self.statusBar().clearMessage()
+        QMessageBox.information(self, "pacer studio — reference not loaded", reason)
 
     def _clear_reference(self):
         """Coaching ▸ "Clear reference": drop the cross-recording reference; everything reverts to the
@@ -1582,6 +1716,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             demo_startup = True  # demo requested but unavailable — open the welcome state honestly
     app = QApplication(sys.argv)
+    # Install the top-level exception handler now the QApplication exists: an unhandled exception in
+    # any signal handler surfaces a themed Report-a-problem dialog (and a stderr trace) instead of
+    # silently killing the app. Must be AFTER QApplication() so the handler can show a dialog.
+    install_excepthook()
     # Apply the dark "Refined Minimal" design system BEFORE constructing any widgets, so the
     # default font/palette and the pyqtgraph background are in place when the panels are built.
     theme.register_fonts()
