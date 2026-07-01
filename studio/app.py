@@ -400,12 +400,41 @@ class StudioWindow(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
-        """Load the dropped GoPro file(s) through the guarded _load path. Multiple files are loaded
-        as one recording (chapter siblings); unrelated drops are user error."""
+        """Load the dropped GoPro file(s) through the guarded _load path.
+
+        Files are first GROUPED into distinct recordings (chapters.group_into_recordings — same
+        folder + GoPro recording id NNNN = one recording). Dropping the chapters of ONE recording
+        loads it exactly as before; dropping SEVERAL unrelated recordings must NOT fold them onto one
+        clock (which fabricates bogus laps), so we open only the FIRST and say so — the user opens the
+        rest one at a time (a batch-import queue is a noted follow-up, not this)."""
         paths = self._dropped_mp4s(event.mimeData())
-        if paths:
-            event.acceptProposedAction()
-            self._load(paths)
+        if not paths:
+            return
+        event.acceptProposedAction()
+        self._open_recordings(paths)
+
+    def _open_recordings(self, paths: list[str]):
+        """Group `paths` into recordings and load the first, never merging unrelated recordings.
+
+        Expands the chosen recording's full on-disk chapter set via discover_siblings (so a single
+        opened chapter still chains its siblings, matching --full / File ▸ Open), then loads that ONE
+        recording. On a multi-recording drop it surfaces a clear, non-modal status message naming what
+        was opened. Shared by dropEvent (and any future multi-selection open path)."""
+        groups = chapters.group_into_recordings(paths)
+        if not groups:
+            return
+        first = groups[0]
+        # Expand the chosen recording's full chapter set. group_into_recordings only saw the dropped
+        # paths; discover_siblings finds the rest of THIS recording's chapters on disk. UNION the two
+        # (dropped chapters ∪ discovered siblings), ordered by chapter index and de-duped, so neither
+        # an explicitly-dropped chapter nor an on-disk sibling is ever lost — and dropping the two
+        # chapters of one recording loads exactly those two (the common case stays unchanged).
+        to_load = chapters.order_chapters(first + chapters.discover_siblings(first[0]))
+        self._load(to_load)
+        if len(groups) > 1:
+            self.statusBar().showMessage(
+                f"Dropped {len(groups)} recordings — opened {chapters.recording_label(to_load)}. "
+                "Open the others one at a time.")
 
     def _show_welcome(self, error: str | None = None):
         """Install the no-recording welcome empty state (also the first-load-failure fallback)."""
@@ -951,12 +980,25 @@ class StudioWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def _open_file(self):
-        """File ▸ Open…: pick a GoPro MP4 and reload through the guarded _load path."""
-        start_dir = os.path.dirname(self._paths[0]) if getattr(self, "_paths", None) else ""
+        """File ▸ Open…: pick a GoPro MP4 and reload through the guarded _load path.
+
+        Starts the dialog in the persisted last-opened folder (a track-day user's footage lives in one
+        place), falling back to the current recording's folder and then nowhere. On a successful open
+        the picked file's folder is remembered for next time."""
+        start_dir = self._open_start_dir()
         path, _ = QFileDialog.getOpenFileName(
             self, "Open recording", start_dir, "GoPro recordings (*.MP4 *.mp4)")
         if path:
+            prefs.set_last_dir(os.path.dirname(path))
             self._load([path])
+
+    def _open_start_dir(self) -> str:
+        """The folder the Open / reference dialogs should start in: the persisted last-opened folder
+        if it still exists, else the current recording's folder, else "" (today's fallback)."""
+        remembered = prefs.last_dir()
+        if remembered:
+            return remembered
+        return os.path.dirname(self._paths[0]) if getattr(self, "_paths", None) else ""
 
     def _sync_full_recording_action(self):
         """Enable "Load full recording" only when the current session is a SINGLE opened chapter
@@ -1674,11 +1716,12 @@ class StudioWindow(QMainWindow):
         never a freeze."""
         if not hasattr(self, "session"):
             return
-        start_dir = os.path.dirname(self._paths[0]) if getattr(self, "_paths", None) else ""
+        start_dir = self._open_start_dir()
         path, _ = QFileDialog.getOpenFileName(
             self, "Load reference recording", start_dir, "GoPro recordings (*.MP4 *.mp4)")
         if not path:
             return
+        prefs.set_last_dir(os.path.dirname(path))
         paths = chapters.discover_siblings(path)
         self._start_reference_load(paths)
 

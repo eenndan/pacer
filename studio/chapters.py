@@ -97,6 +97,64 @@ def discover_siblings(path: str) -> list[str]:
     return ordered
 
 
+def order_chapters(paths: list[str]) -> list[str]:
+    """Order the chapters of ONE recording ascending by chapter index ``CC`` and de-dupe on the
+    absolute path — PURE (filename parsing only, no filesystem). Non-GoPro names (info is None) sort
+    to the front (index 0) and keep their order. Used to merge dropped chapters with the on-disk
+    siblings discovered for the same recording without losing or double-loading any of them."""
+    with_cc = [(parse_gopro_name(p), p) for p in paths]
+    with_cc.sort(key=lambda t: (t[0].chapter if t[0] is not None else 0))
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for _, p in with_cc:
+        key = os.path.abspath(p)
+        if key not in seen:
+            seen.add(key)
+            ordered.append(p)
+    return ordered
+
+
+def group_into_recordings(paths: list[str]) -> list[list[str]]:
+    """Group a flat list of dropped/opened paths into distinct RECORDINGS, so unrelated files are
+    never folded onto one clock.
+
+    PURE: parses filenames only — no filesystem access (no ``os.listdir``/``stat``). It groups the
+    paths it is *given*; the app layer expands a chosen recording's on-disk chapters separately via
+    ``discover_siblings``.
+
+    A GoPro chaptered file ``G[XHLP]<CC><NNNN>.MP4`` belongs to the recording keyed by its
+    ``(directory, prefix, recording number NNNN)`` — the same rule ``discover_siblings`` chains on,
+    so sibling chapters (same ``NNNN``, same folder, same prefix; different ``CC``) group together
+    and are ordered ascending by chapter index ``CC``. Different recording numbers, folders, or
+    prefixes are DISTINCT recordings and are never merged.
+
+    Non-GoPro / unparseable names (e.g. the bundled ``hero6.mp4``) each become their own single-file
+    recording — they can't be chaptered, so they're always standalone.
+
+    Groups are returned in first-appearance order (the order the paths were given), so the FIRST
+    recording in the result is the first one the user dropped/selected. Duplicate paths within a
+    recording are de-duplicated on the absolute path."""
+    groups: list[list[str]] = []
+    index: dict[tuple, int] = {}
+    for path in paths:
+        info = parse_gopro_name(path)
+        if info is None:
+            # Not a chaptered GoPro name — its own standalone recording. Key on the resolved path so
+            # the very same file dropped twice doesn't spawn two singletons.
+            key = ("_single", os.path.abspath(path))
+        else:
+            folder = os.path.dirname(os.path.abspath(path))
+            key = (folder, info.prefix, info.recording)
+        if key not in index:
+            index[key] = len(groups)
+            groups.append([])
+        groups[index[key]].append(path)
+
+    # Within each recording, order the chapters ascending by chapter index and dedupe on the absolute
+    # path (a non-GoPro singleton keeps its single entry as-is).
+    return [order_chapters(group) for group in groups]
+
+
 def recording_label(paths: list[str]) -> str:
     """A short human label for a (possibly multi-chapter) session, e.g.
     ``"recording 0060 · 3 chapters"`` or ``"recording 0060"`` for a lone chapter, or the bare

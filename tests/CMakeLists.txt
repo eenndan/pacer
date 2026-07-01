@@ -27,6 +27,15 @@ add_test(NAME test_lap_timing
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_timing.py)
 add_test(NAME test_chapters
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chapters.py)
+# Import ergonomics (fix/import-ergonomics): the last-opened-folder pref round-trip (prefs.LAST_DIR)
+# + File ▸ Open starting there and recording the picked folder, and the multi-recording drop guard
+# (chapters.group_into_recordings groups distinct recordings; _open_recordings loads only the FIRST
+# and never merges unrelated ones onto one clock). Builds a StudioWindow via __new__ so it imports
+# Qt -> run offscreen. No telemetry file.
+add_test(NAME test_import_ergonomics
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_import_ergonomics.py)
+set_tests_properties(test_import_ergonomics PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # MAP-ONLY GPS-gap reconstruction (studio.gapfill): pure Python + numpy, no telemetry file.
 add_test(NAME test_gapfill
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gapfill.py)
@@ -286,6 +295,7 @@ set_tests_properties(test_share_card PROPERTIES
 # AttributeError. PYTHONPATH makes the deployed package win deterministically in every
 # install state; APPEND keeps the per-test QT_QPA_PLATFORM settings above intact.
 foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_gapfill
+                        test_import_ergonomics
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
                         test_sidecar test_track_db test_session_pure test_session_services
