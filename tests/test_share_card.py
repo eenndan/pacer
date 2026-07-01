@@ -163,6 +163,39 @@ def test_card_data_survives_coaching_error():
     print("test_card_data_survives_coaching_error OK")
 
 
+# --------------------------------------------------------------------- hero Δ-to-ideal copy
+def test_hero_delta_line_reads_cleanly_on_both_branches():
+    """The Δ-to-ideal hero line reads like a shipped product on BOTH branches. A positive gap keeps
+    the "+0.31 s vs your ideal lap" voice; a gap AT the envelope (≈ 0) reads plainly as "level with
+    your ideal lap" — NEVER the old doubled "on your ideal lap vs your ideal lap" template bug."""
+    pos = share_card.hero_delta_line(0.31)
+    assert pos == "+0.31 s vs your ideal lap", pos
+    # right on the envelope (and safely inside the even-epsilon): the clean even copy
+    even = share_card.hero_delta_line(0.0)
+    assert even == "level with your ideal lap", even
+    # the garbled doubled label must be gone from the even branch
+    assert even.count("vs your ideal lap") == 0
+    assert "on your ideal lap vs" not in even
+    # a hair below the even-epsilon still reads as level (not a spurious "+0.00 s")
+    assert share_card.hero_delta_line(theme.DELTA_EVEN_EPS_S) == "level with your ideal lap"
+    # just above the epsilon flips to the positive voice
+    just_over = share_card.hero_delta_line(theme.DELTA_EVEN_EPS_S + 0.01)
+    assert just_over.startswith("+") and just_over.endswith("vs your ideal lap"), just_over
+    print("test_hero_delta_line_reads_cleanly_on_both_branches OK")
+
+
+def test_even_ideal_card_renders_with_the_clean_copy():
+    """A best lap sitting ON the ideal envelope (gap ≈ 0) still renders a valid card, and its hero
+    line is the clean even copy — the whole reason for the fix (rendering the real card surfaced
+    the garbled string)."""
+    d = share_card.card_data(FakeSession(best_time=67.90, ideal=67.90), unit="kmh")
+    assert d.delta_to_ideal_s == 0.0, d.delta_to_ideal_s
+    assert share_card.hero_delta_line(d.delta_to_ideal_s) == "level with your ideal lap"
+    img = share_card.render_card(d, None, palette=theme.PALETTE_STANDARD)
+    assert not img.isNull() and img.width() == share_card.CARD_W
+    print("test_even_ideal_card_renders_with_the_clean_copy OK")
+
+
 # --------------------------------------------------------------------- render-layer tests
 def _one_px_png() -> bytes:
     """A tiny real PNG to stand in for the grabbed MapView thumbnail."""
@@ -203,6 +236,54 @@ def test_render_card_stamped_and_degraded_still_renders():
     img = share_card.render_card(d, None, palette=theme.PALETTE_STANDARD)
     assert not img.isNull() and img.width() == share_card.CARD_W
     print("test_render_card_stamped_and_degraded_still_renders OK")
+
+
+# ---------------------------------------------------------- clean map grab (legend off the card)
+def _map_view_session():
+    """A bare Session with just enough surface for MapView.__init__ (trace arrays + a start-line
+    Seg via the real ``laps.sectors`` shape + the best-lap/reference hooks) — the test_map_ghost
+    idiom, trimmed. No pacer, no file. ``start_line``/``sector_lines`` stay the real Session
+    properties (they read ``laps.sectors`` through ``Seg.from_pacer``)."""
+    import numpy as np
+
+    from studio.session import Session
+    s = Session.__new__(Session)
+    ang = np.linspace(0.0, 2 * np.pi, 60)
+    s.tt = np.linspace(0.0, 6.0, 60)
+    s.tx = np.cos(ang) * 50.0
+    s.ty = np.sin(ang) * 30.0
+    s.tv = np.linspace(40.0, 120.0, 60)
+    line = SimpleNamespace(first=SimpleNamespace(x=-60.0, y=0.0),
+                           second=SimpleNamespace(x=-40.0, y=0.0))
+    s.laps = SimpleNamespace(sectors=SimpleNamespace(start_line=line, sector_lines=[]))
+    s._valid_cache = [1]  # one valid lap → the empty-state placeholder stays hidden
+    s.reference_overlay_xy = lambda: None
+    s.reference_label = lambda: None
+    s.best_lap_id = lambda: None
+    s.nearest_index = lambda x, y: None
+    return s
+
+
+def test_map_view_grab_clean_hides_the_map_key_legend():
+    """MapView.grab_clean() hides the dev 'Map key' legend overlay for the duration of a grab (so it
+    never lands on the shareable card) and RESTORES it afterwards — the live map keeps its key. The
+    speed rainbow mode (the card's signature visual) is untouched by the clean grab."""
+    from studio.map_view import MapView
+    mv = MapView(_map_view_session())
+    key = mv._map_key
+    key.show()
+    # isHidden() is the explicit hide flag (isVisible() reads False off-screen because the top-level
+    # window isn't shown — the empty-state idiom), so assert on isHidden throughout.
+    assert not key.isHidden(), "precondition: the map key is shown on the live map"
+    seen = {}
+    with mv.grab_clean():
+        seen["key_hidden_during_grab"] = key.isHidden()
+        # the clean grab must not disturb the speed colouring the card leads with
+        seen["rainbow_mode"] = mv._rainbow_mode
+    assert seen["key_hidden_during_grab"] is True, "the map key must be hidden during a clean grab"
+    assert seen["rainbow_mode"] == "speed", "clean grab must preserve the speed rainbow"
+    assert not key.isHidden(), "the map key must be restored after the clean grab"
+    print("test_map_view_grab_clean_hides_the_map_key_legend OK")
 
 
 # --------------------------------------------------------------------- app-wiring tests (DI)
@@ -303,6 +384,60 @@ def test_blocked_session_builds_no_card_and_greys_actions():
     print("test_blocked_session_builds_no_card_and_greys_actions OK")
 
 
+def test_build_card_grabs_the_map_with_the_legend_hidden():
+    """_build_share_card grabs the map thumbnail through the map's grab_clean context, so the dev
+    'Map key' legend is hidden AT grab time (never on the card) and restored after. The map is
+    faked with a legend + a grab_clean context that records the legend's visibility during the
+    grab — mirroring the real MapView contract without a full plot build."""
+    from contextlib import contextmanager
+
+    class _FakeLegend(QWidget):
+        pass
+
+    class _FakeMap(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.resize(80, 60)
+            self.legend = _FakeLegend(self)
+            self.legend.setVisible(True)
+            self.grab_calls = []
+
+        @contextmanager
+        def grab_clean(self):
+            self.legend.setVisible(False)
+            try:
+                yield self
+            finally:
+                self.legend.setVisible(True)
+
+        def grab(self):
+            # record the legend's EXPLICIT hide flag at the moment the pixels are taken. isHidden()
+            # (not isVisible()) because an off-screen never-shown widget always reads isVisible()
+            # False regardless of hide() — isHidden() is True only when hide()/setVisible(False) ran.
+            self.grab_calls.append(self.legend.isHidden())
+            return super().grab()
+
+    w = _bare_window(FakeSession())
+    fake_map = _FakeMap()
+    w.view = SimpleNamespace(map=fake_map)
+    img = w._build_share_card()
+    assert img is not None and img.width() == share_card.CARD_W
+    assert fake_map.grab_calls == [True], \
+        f"the map key must be hidden during the card grab, saw {fake_map.grab_calls}"
+    assert fake_map.legend.isHidden() is False, "the legend must be restored after the grab"
+    print("test_build_card_grabs_the_map_with_the_legend_hidden OK")
+
+
+def test_build_card_falls_back_to_plain_grab_for_a_bare_widget():
+    """A map with no grab_clean (a bare QWidget, as older wiring / tests use) still yields a card —
+    _grab_clean_map_png falls back to the plain widget→PNG grab, so the card is never lost."""
+    w = _bare_window(FakeSession())  # view.map is a plain QWidget (no grab_clean)
+    assert not hasattr(w.view.map, "grab_clean")
+    img = w._build_share_card()
+    assert img is not None and img.width() == share_card.CARD_W
+    print("test_build_card_falls_back_to_plain_grab_for_a_bare_widget OK")
+
+
 def test_pb_toast_share_button_routes_to_on_share():
     """The PBToast's 'Share your PB →' primary button routes to its injected on_share callback
     (the one-tap card save), and 'See your progress →' still routes to on_progress."""
@@ -342,13 +477,18 @@ if __name__ == "__main__":
     test_card_data_stamps_degraded_timing()
     test_card_data_no_opportunity_when_too_few_laps()
     test_card_data_survives_coaching_error()
+    test_hero_delta_line_reads_cleanly_on_both_branches()
+    test_even_ideal_card_renders_with_the_clean_copy()
     test_render_card_is_a_nonempty_image_of_the_right_size()
     test_render_card_without_thumbnail_and_on_both_palettes()
     test_render_card_stamped_and_degraded_still_renders()
+    test_map_view_grab_clean_hides_the_map_key_legend()
     test_export_share_card_saves_png_through_the_dialog()
     test_export_share_card_cancel_writes_nothing()
     test_copy_share_card_sets_clipboard_image()
     test_blocked_session_builds_no_card_and_greys_actions()
+    test_build_card_grabs_the_map_with_the_legend_hidden()
+    test_build_card_falls_back_to_plain_grab_for_a_bare_widget()
     test_pb_toast_share_button_routes_to_on_share()
     test_pb_toast_hides_share_button_when_no_callback()
     print("\nAll shareable-lap-card tests passed.")

@@ -1276,11 +1276,23 @@ class StudioWindow(QMainWindow):
         if data.blocked:
             return None
         try:
-            map_png = self._grab_png(self.view.map)
+            map_png = self._grab_clean_map_png(self.view.map)
         except Exception as exc:  # noqa: BLE001 — the thumbnail is optional; never fail the card
             print(f"studio: lap-card map thumbnail not grabbed ({exc!r}).", flush=True)
             map_png = None
         return share_card.render_card(data, map_png, palette=theme.active_palette())
+
+    def _grab_clean_map_png(self, map_view) -> bytes:
+        """Grab the MapView to PNG for the SHARE card with its dev "Map key" legend (and any other
+        pure-interaction chrome) suppressed — that overlay belongs on the live app, never on a
+        social share image. Uses the MapView's ``grab_clean`` context to hide + restore the chrome
+        around the same widget→PNG path the report uses; falls back to the plain grab for a bare
+        widget (tests) that has no such context. The speed colouring is untouched."""
+        grab_clean = getattr(map_view, "grab_clean", None)
+        if grab_clean is None:
+            return self._grab_png(map_view)
+        with grab_clean():
+            return self._grab_png(map_view)
 
     def _export_share_card(self):
         """File ▸ Export ▸ "Lap card (image)…": render the card and save it as a PNG."""
