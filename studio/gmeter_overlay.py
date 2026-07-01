@@ -37,11 +37,13 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
     QPolygonF,
     QRadialGradient,
 )
 from PySide6.QtWidgets import QWidget
 
+from . import theme
 from .theme import C
 
 
@@ -170,11 +172,26 @@ def paint_dial(p: QPainter, w: float, h: float, st: DialState,
 
     export=False = on-screen look; export=True = the burn-over-bright variant (no box, white rings,
     brighter envelope, bigger glowing dot, large outlined numbers). `scale_k` scales export
-    strokes/glyphs to the output height (1.0 ≈ a ~280 px dial at 1080p)."""
+    strokes/glyphs to the output height (1.0 ≈ a ~280 px dial at 1080p).
+
+    The two layers (static template + moving dot) are painted here in one pass so a one-shot
+    caller (the offline exporter renders every frame fresh) stays byte-identical to the original.
+    The live widget instead caches the static layer and re-blits it per frame (see
+    `GMeterOverlay.paintEvent`); the split is a rendering-cost optimisation, not a visual change."""
     p.setRenderHint(QPainter.Antialiasing, True)
     if export:
         _paint_dial_export(p, w, h, st, scale_k)
         return
+    _paint_dial_static(p, w, h, st)
+    _paint_dial_dot(p, w, h, st)
+
+
+def _paint_dial_static(p: QPainter, w: float, h: float, st: DialState) -> None:
+    """The SLOW-CHANGING live dial layer: backdrop box, caption, rings, crosshair, grip envelope,
+    cardinal peak numbers, source tag — everything except the per-frame moving dot. Identical
+    frame-to-frame at a given size while the envelope/peaks/source are unchanged, so the live widget
+    renders this once into a cached pixmap (keyed by size + palette + envelope-version) and re-blits
+    it every tick, drawing only the dot on top."""
     cx, cy, r = dial_geom(w, h)
 
     # panel-grey backing (C.surface) + theme hairline so the dial reads as app chrome over footage
@@ -229,23 +246,28 @@ def paint_dial(p: QPainter, w: float, h: float, st: DialState,
     p.drawText(QRectF(cx + r + off - 22, cy - 6, 44, 12), Qt.AlignLeft | Qt.AlignVCenter,
                f"{st.peak_right:.1f}")
 
-    # live dot: amber glow + a dark-ringed off-white core (the felt-force pointer)
-    if st.have:
-        dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
-        grad = QRadialGradient(QPointF(dx, dy), 8)
-        grad.setColorAt(0.0, _c(C.accent_hover, 245))
-        grad.setColorAt(1.0, _c(C.accent_hover, 0))
-        p.setPen(Qt.NoPen)
-        p.setBrush(grad)
-        p.drawEllipse(QPointF(dx, dy), 7, 7)
-        p.setPen(QPen(_c(C.canvas, 220), 1.0))   # thin dark ring so the core reads off the glow
-        p.setBrush(_c(C.text, 250))
-        p.drawEllipse(QPointF(dx, dy), 2.6, 2.6)
-
     # source tag (tiny, bottom-right)
     p.setPen(QPen(_c(C.text_muted, 160)))
     p.setFont(_font(6.0))
     p.drawText(QRectF(w - 44, h - 13, 40, 11), Qt.AlignRight, st.source.upper())
+
+
+def _paint_dial_dot(p: QPainter, w: float, h: float, st: DialState) -> None:
+    """The PER-FRAME live dial layer: the felt-force pointer (amber glow + dark-ringed off-white
+    core), the only element that moves every ~30 Hz tick. Painted on top of the static layer."""
+    if not st.have:
+        return
+    cx, cy, r = dial_geom(w, h)
+    dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
+    grad = QRadialGradient(QPointF(dx, dy), 8)
+    grad.setColorAt(0.0, _c(C.accent_hover, 245))
+    grad.setColorAt(1.0, _c(C.accent_hover, 0))
+    p.setPen(Qt.NoPen)
+    p.setBrush(grad)
+    p.drawEllipse(QPointF(dx, dy), 7, 7)
+    p.setPen(QPen(_c(C.canvas, 220), 1.0))   # thin dark ring so the core reads off the glow
+    p.setBrush(_c(C.text, 250))
+    p.drawEllipse(QPointF(dx, dy), 2.6, 2.6)
 
 
 def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float) -> None:
@@ -351,6 +373,14 @@ class GMeterOverlay(QWidget):
         self._peak_left = 0.0
         self._peak_right = 0.0
         self._lap: int | None = None
+        # --- static-layer cache (a per-frame repaint blits this + draws only the moving dot) ---
+        # `_env_version` bumps whenever ANY static-layer content changes (the grip envelope points,
+        # the cardinal peaks, or the source tag). The cached pixmap is keyed by (size, palette,
+        # env_version), so the convex hull + all the ring/backdrop/number drawing recompute exactly
+        # ONCE per envelope change — not every ~30 Hz tick that only moves the dot.
+        self._env_version = 0
+        self._static_pixmap = None          # QPixmap | None
+        self._static_key: tuple | None = None
 
     # ------------------------------------------------------------------ data in
     def set_g(self, g: tuple[float, float, float] | None) -> None:
@@ -404,6 +434,11 @@ class GMeterOverlay(QWidget):
         self._hull_pts.append((hx, hy))
         if len(self._hull_pts) > _ENVELOPE_MAX_PTS:
             self._hull_pts.pop(0)
+        # A new felt sample changed the hull points AND (possibly) the cardinal peaks — both live in
+        # the cached static layer, so invalidate it. Bump unconditionally: cheap, and the peaks can
+        # tick up on any sample. (Once the envelope is full the hull_pts *content* still shifts, so a
+        # length-only key would go stale here — the version counter is the safe choice.)
+        self._env_version += 1
 
     def set_lap(self, lap_id: int | None) -> None:
         """Set the current lap. A change to a new valid lap resets the envelope + peaks (when
@@ -416,7 +451,10 @@ class GMeterOverlay(QWidget):
 
     def set_source(self, source: str) -> None:
         """Label which sensor drives the meter ("accl" or "gps"); shown small in the corner."""
+        if source == self._source:
+            return
         self._source = source
+        self._env_version += 1   # the source tag lives in the cached static layer — invalidate it
         self.update()
 
     def reset_envelope(self) -> None:
@@ -428,6 +466,7 @@ class GMeterOverlay(QWidget):
         # Re-seed the dot EMA: the next set_g seeds _fx/_fy from its own value (no carry-over).
         self._ema_init = False
         self._fx = self._fy = 0.0
+        self._env_version += 1   # envelope + peaks cleared → the cached static layer is stale
         self.update()
 
     # ------------------------------------------------------------------ painting
@@ -447,9 +486,38 @@ class GMeterOverlay(QWidget):
             peak_fwd=self._peak_fwd, peak_back=self._peak_back,
             peak_left=self._peak_left, peak_right=self._peak_right, source=self._source)
 
+    def _static_layer(self, st: DialState):
+        """Return the cached static-dial QPixmap for the current size + palette + envelope-version,
+        rendering it once on a miss. This is where the convex hull + the ring/backdrop/number
+        drawing actually run — exactly once per envelope change, NOT once per ~30 Hz tick."""
+        w, h = self.width(), self.height()
+        dpr = self.devicePixelRatioF()
+        key = (w, h, round(dpr, 4), theme.active_palette(), self._env_version)
+        if self._static_pixmap is not None and self._static_key == key:
+            return self._static_pixmap
+        # Render the static layer once into a transparent pixmap at the widget's device pixel ratio
+        # (so it blits back 1:1 with no scaling — pixel-identical to painting it directly).
+        pm = QPixmap(int(round(w * dpr)), int(round(h * dpr)))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.transparent)
+        sp = QPainter(pm)
+        sp.setRenderHint(QPainter.Antialiasing, True)
+        _paint_dial_static(sp, w, h, st)
+        sp.end()
+        self._static_pixmap = pm
+        self._static_key = key
+        return pm
+
     def paintEvent(self, _event):
+        # Per-frame cost = blit the cached static layer + draw ONLY the moving dot. The backdrop,
+        # rings, crosshair, caption, grip envelope (convex hull) and cardinal numbers are rendered
+        # once into `_static_pixmap` and reused until the envelope/size/palette changes; only the
+        # felt-force dot is re-drawn each ~30 Hz tick (the sole element that moves).
+        st = self._dial_state()
         p = QPainter(self)
-        paint_dial(p, self.width(), self.height(), self._dial_state())
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.drawPixmap(0, 0, self._static_layer(st))
+        _paint_dial_dot(p, self.width(), self.height(), st)
         p.end()
 
 
