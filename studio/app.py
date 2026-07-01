@@ -854,10 +854,12 @@ class StudioWindow(QMainWindow):
 
         Returns the "new personal best" MOMENT (a library.pb_moment dict) or None. The moment is
         decided against the index AS IT IS BEFORE THIS SESSION IS UPSERTED (so the recording being
-        added can't be its own prior PB), and ONLY when the timing is VERIFIED — a PB against an
-        arbitrary provisional start line is meaningless, so we never celebrate it. The caller shows
-        the celebratory banner from the returned moment; a library-write failure still returns the
-        moment (the comparison already succeeded)."""
+        added can't be its own prior PB), and ONLY when the timing is VERIFIED and NOT data-quality
+        degraded — a PB against an arbitrary provisional start line is meaningless, and a PB whose
+        absolute timing the app itself calls ESTIMATED (media-clock / low GPS) isn't one to
+        celebrate, so we never celebrate either. The caller shows the celebratory banner from the
+        returned moment; a library-write failure still returns the moment (the comparison already
+        succeeded)."""
         if any(os.path.abspath(p) == os.path.abspath(DEFAULT_SAMPLE) for p in paths):
             return None
         if not self.session.valid_lap_ids():
@@ -865,12 +867,14 @@ class StudioWindow(QMainWindow):
         moment = None
         try:
             entry = self.session.library_entry(paths)
-            # Decide the PB moment against the PRIOR index (before the upsert), gated on verified
-            # timing — a provisional/unconfirmed start line makes the lap number meaningless
-            # (library.pb_moment_for returns None for unverified timing).
+            # Decide the PB moment against the PRIOR index (before the upsert), gated on BOTH timing
+            # axes — a provisional/unconfirmed start line makes the lap number meaningless, and a
+            # data-quality-degraded (media-clock / low-GPS ESTIMATED) time isn't one to celebrate
+            # (library.pb_moment_for returns None for either).
             prior_index = library.load()
             moment = library.pb_moment_for(
-                self.session.timing_verified, prior_index, entry.get("track"), entry.get("best"))
+                self.session.timing_verified, prior_index, entry.get("track"), entry.get("best"),
+                degraded=self.session.timing_quality.degraded)
             library.upsert_and_save(entry)
         except Exception as exc:  # noqa: BLE001 — the index is additive; never break a load
             print(f"studio: session library not updated ({exc!r}).", flush=True)

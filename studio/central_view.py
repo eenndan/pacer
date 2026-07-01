@@ -184,9 +184,10 @@ class CentralView(QWidget):
         self.ideal_readout_btn.setChecked(True)
         self.ideal_readout_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.ideal_readout_btn.setToolTip(
-            "Hero readout reference: ON = Δ to your IDEAL achievable lap (the synthetic best of "
-            "every clean lap's best sector — the time still on the table); OFF = Δ to your best "
-            "single lap. The other number is always in the readout's tooltip.")
+            "Hero readout reference: ON = Δ to your THEORETICAL IDEAL — the best you've driven at "
+            "each point on track, stitched together into a synthetic curve (not a single drivable "
+            "lap); OFF = Δ to your best single lap. The other number is always in the readout's "
+            "tooltip.")
         self.ideal_readout_btn.toggled.connect(self._on_ideal_readout_toggled)
 
         # Chapter banner above the video; shown only for multi-chapter sessions.
@@ -263,27 +264,35 @@ class CentralView(QWidget):
         map_label.setProperty("role", "BarLabel")
         map_header = self._header_bar(map_label, 1, self.map.rainbow_combo, self.map.snap_btn,
                                       self.map.add_sector_btn, self.map.reset_sectors_btn)
-        # Provisional-timing trust banner: a persistent, prominent strip between the map header and
-        # the map while the lap timing references an auto-fitted (unconfirmed) start line. NOT a
-        # transient status-bar line — it stays until the timing is Verified (see refresh_timing_trust),
-        # then hides. The on-canvas dashed cue in MapView is the matching call-to-action.
+        # Trust strip over the map: ONE compact strip, two tiers of concern, so it never eats a
+        # third of the ≤320px map (the common first-run case: unknown track + older GoPro would
+        # stack two word-wrapped banners). The ACTIONABLE line leads (provisional_banner — "place
+        # the start line", amber CTA style); the INFORMATIONAL data-quality line (quality_banner —
+        # media-clock / low-GPS FYI, calmer #InfoBanner style) sits under it as a quiet sub-note.
+        # Each is a single compact line (full detail in the tooltip), each shown only when its
+        # concern applies, so when just one applies the strip reads exactly as before. See
+        # refresh_timing_trust for the show/hide logic. The on-canvas dashed cue in MapView is the
+        # primary, most-direct call-to-action for the provisional concern.
+        #
+        # ACTIONABLE tier (amber CTA): drag the start/finish line to fix the timing.
         self.provisional_banner = QLabel(
             "Lap timing is unverified — drag the start/finish line on the map to where a lap begins.")
         self.provisional_banner.setObjectName("ProvisionalBanner")
-        self.provisional_banner.setWordWrap(True)
+        self.provisional_banner.setWordWrap(False)
         self.provisional_banner.setToolTip(
             "The start/finish line was auto-fitted because this track isn't in the database, so "
             "every lap time, split and 'best' is measured from an arbitrary point. Drag the line "
             "on the map to where a lap begins to fix the timing; it's then remembered for this "
             "recording. Save it as a track (File ▸ Save as track…) so future recordings here "
             "auto-detect it.")
-        # Data-quality banner: the SECOND, orthogonal concern (timing ACCURACY — media-clock
-        # fallback / low GPS quality), stacked under the start-line trust banner using the SAME
-        # banner styling. Shown (with one line per active concern) only when the timing quality is
+        # INFORMATIONAL tier (calmer #InfoBanner, NOT a call-to-action): timing ACCURACY — the
+        # SECOND, orthogonal concern (media-clock fallback / low GPS quality). A pure FYI: there's
+        # nothing to "do", so it wears the quiet informational style rather than the amber CTA one.
+        # Shown (one compact line summarising the active concern[s]) only when the timing quality is
         # degraded; a normal GPS9, clean-fix recording keeps it hidden, so the map reads identically.
         self.quality_banner = QLabel("")
-        self.quality_banner.setObjectName("ProvisionalBanner")
-        self.quality_banner.setWordWrap(True)
+        self.quality_banner.setObjectName("InfoBanner")
+        self.quality_banner.setWordWrap(False)
         self.quality_banner.setVisible(False)
         self.quality_banner.setToolTip(
             "Timing accuracy is degraded for this recording. On an older GoPro without GPS9 "
@@ -291,8 +300,16 @@ class CentralView(QWidget):
             "compresses every lap; and when many GPS fixes are rejected the positions are less "
             "accurate. The lap times are still shown (and de-emphasized), but treat them as "
             "estimates — they are most reliable on a GPS9 camera (Hero 9 and newer).")
-        map_panel = self._headered(
-            map_header, (self.provisional_banner, 0), (self.quality_banner, 0), (self.map, 1))
+        # Both tiers live in ONE strip container (a single bottom hairline; the two lines stack
+        # tight), so the map sees a compact strip whether one or both concerns apply.
+        self._trust_strip = QWidget()
+        self._trust_strip.setObjectName("TrustStrip")
+        strip_lay = QVBoxLayout(self._trust_strip)
+        strip_lay.setContentsMargins(0, 0, 0, 0)
+        strip_lay.setSpacing(0)
+        strip_lay.addWidget(self.provisional_banner)
+        strip_lay.addWidget(self.quality_banner)
+        map_panel = self._headered(map_header, (self._trust_strip, 0), (self.map, 1))
 
         # CHARTS consolidated bar: section label (left) · the Δ/speed readout (centre) · the x-mode toggle (right).
         plots_label = QLabel("SPEED · Δ TO BEST")
@@ -870,24 +887,47 @@ class CentralView(QWidget):
         self.refresh_timing_trust()
 
     def refresh_timing_trust(self):
-        """Refresh BOTH data-quality banners over the map from the session's two orthogonal axes:
+        """Refresh the ONE trust strip over the map from the session's two orthogonal axes, as two
+        tiers within a single compact strip:
 
-          * the provisional-timing (start-line TRUST) banner — shown iff the timing is unverified
-            (auto-fitted, not user-confirmed — see Session.timing_verified). A drag that confirms
-            the timing clears it; also refreshed after saving the recording as a track.
-          * the data-quality (timing ACCURACY) banner — shown iff Session.timing_quality is
-            degraded (media-clock fallback / low GPS quality), stacking one line per active concern.
+          * ACTIONABLE — the provisional-timing (start-line TRUST) line, shown iff the timing is
+            unverified (auto-fitted, not user-confirmed — see Session.timing_verified). Amber CTA
+            style. A drag that confirms the timing clears it; also refreshed after saving as a track.
+          * INFORMATIONAL — the data-quality (timing ACCURACY) line, shown iff Session.timing_quality
+            is degraded (media-clock fallback / low GPS quality). Calmer FYI style; a single compact
+            summary line (full detail in its tooltip), so the strip stays ~one or two lines even when
+            both concerns apply.
 
-        Run from the rebuild seam. The lap table's muting + the map's dashed cue refresh on their
-        own rebuilds; this owns the two banners (the generalized banner surface)."""
-        banner = getattr(self, "provisional_banner", None)
-        if banner is not None:
-            banner.setVisible(not self.session.timing_verified)
-        quality = getattr(self, "quality_banner", None)
-        if quality is not None:
-            concerns = self.session.timing_quality.concerns()
-            quality.setText("\n".join(concerns))
-            quality.setVisible(bool(concerns))
+        The whole strip is hidden when neither concern applies (a normal GPS9, verified-track
+        recording — the common good case — so the map reads identically to today). Run from the
+        rebuild seam. The lap table's muting + the map's dashed cue refresh on their own rebuilds.
+        Defensive: a CentralView.__new__'d for a unit test drives the seam without building the
+        banner widgets, so the session reads stay behind the widget-presence guard (as before)."""
+        strip = getattr(self, "_trust_strip", None)
+        if strip is None:  # partially-built view (no banner chrome) — nothing to refresh
+            return
+        provisional = not self.session.timing_verified
+        concerns = self.session.timing_quality.concerns()
+        self.provisional_banner.setVisible(provisional)
+        self.quality_banner.setText(self._quality_summary(concerns))
+        self.quality_banner.setVisible(bool(concerns))
+        # The strip (its shared hairline) shows only while a concern is live.
+        strip.setVisible(provisional or bool(concerns))
+
+    @staticmethod
+    def _quality_summary(concerns: list[str]) -> str:
+        """A single compact FYI line summarising the active data-quality concern(s) — so the strip
+        never grows to a per-concern paragraph over the map (the full prose stays in the tooltip).
+        One concern reads as its own short summary; both collapse to a combined one-liner."""
+        if not concerns:
+            return ""
+        media = any("video clock" in c.lower() for c in concerns)
+        low_gps = any("gps quality" in c.lower() for c in concerns)
+        if media and low_gps:
+            return "Timing estimated (video clock) and GPS quality low — times may be less accurate."
+        if media:
+            return "Timing estimated from the video clock — lap times may drift ~0.1%."
+        return "GPS quality low — some fixes rejected; times may be less accurate."
 
     # ------------------------------------------------------------- timing-line edits
     def _on_lines(self, start, sectors):

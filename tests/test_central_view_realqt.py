@@ -329,18 +329,19 @@ def test_compare_tick_keeps_panes_consistent_no_reentry():
     print("test_compare_tick_keeps_panes_consistent_no_reentry OK")
 
 
-# ============================================================ provisional-timing trust banner
+# ============================================================ combined trust strip (de-clutter)
 def test_provisional_banner_shows_and_clears_with_trust_state():
-    """The persistent in-panel provisional banner tracks Session.timing_verified end-to-end through
+    """The ACTIONABLE tier of the ONE trust strip tracks Session.timing_verified end-to-end through
     the REAL CentralView:
-      * a detected/verified track (the fixture's StadiumLoop) hides the banner;
-      * flipping the session Provisional + rebuilding shows it (a prominent, persistent strip, NOT
-        a status-bar line), and the lap table mutes its times with no purple bests;
+      * a detected/verified track (the fixture's StadiumLoop) hides the strip;
+      * flipping the session Provisional + rebuilding shows the actionable line (a prominent,
+        persistent strip, NOT a status-bar line), and the lap table mutes its times with no bests;
       * a Verified flip + rebuild clears it again and restores the bests."""
     view, s, _t0, _t1 = _real_central_view()
-    # Fixture is a known track → Verified → banner hidden.
+    # Fixture is a known track → Verified → strip + banner hidden.
     assert s.timing_verified is True
     assert view.provisional_banner is not None
+    assert not view._trust_strip.isVisibleTo(view), "verified track must hide the whole strip"
     assert not view.provisional_banner.isVisibleTo(view), "verified track must hide the banner"
 
     # Make it an unknown, unconfirmed track and rebuild the derived views (the load-time path).
@@ -361,42 +362,85 @@ def test_provisional_banner_shows_and_clears_with_trust_state():
         for r in range(tbl.rowCount()) for c in range(tbl.columnCount()))
     assert not painted, "provisional timing must paint no purple/green bests in the lap table"
 
-    # Confirm the timing (what a start-line drag does) and rebuild → Verified → banner clears.
+    # Confirm the timing (what a start-line drag does) and rebuild → Verified → strip clears.
     s.confirm_timing()
     view.rebuild_derived_views(reselect=True)
     assert s.timing_verified is True
     assert not view.provisional_banner.isVisibleTo(view), "confirming the timing must clear the banner"
+    assert not view._trust_strip.isVisibleTo(view), "confirming the timing must hide the strip"
     print("test_provisional_banner_shows_and_clears_with_trust_state OK")
 
 
-def test_quality_banner_shows_on_degraded_timing():
-    """The SECOND, orthogonal banner — timing ACCURACY (Session.timing_quality) — tracks a degraded
-    clock end-to-end through the REAL CentralView's generalized banner surface:
-      * a normal GPS9 fixture (default high quality) hides the data-quality banner;
-      * forcing a media-clock fallback + refreshing shows it (stacked under the trust banner, same
-        styling), with a concern line that names the cause;
-      * restoring high quality clears it. This pins that the two banners are independent (a degraded
-        clock does NOT require the start line to be provisional)."""
+def test_quality_banner_is_informational_and_independent():
+    """The INFORMATIONAL tier — timing ACCURACY (Session.timing_quality) — tracks a degraded clock
+    end-to-end AND wears the calmer (non-CTA) style, independent of the start-line trust:
+      * a normal GPS9 fixture (default high quality) hides the data-quality line + the strip;
+      * forcing a media-clock fallback + refreshing shows it as a compact single line naming the
+        cause, using the informational #InfoBanner objectName (NOT the amber #ProvisionalBanner CTA);
+      * restoring high quality clears it. Pins that the two tiers are independent (a degraded clock
+        does NOT require the start line to be provisional)."""
     view, s, _t0, _t1 = _real_central_view()
-    # Default fixture: GPS9 true clock (not degraded) AND verified track → quality banner hidden.
+    # Default fixture: GPS9 true clock (not degraded) AND verified track → strip + line hidden.
     assert not s.timing_quality.degraded
     assert view.quality_banner is not None
-    assert not view.quality_banner.isVisibleTo(view), "high-quality timing must hide the banner"
+    assert not view._trust_strip.isVisibleTo(view), "high-quality verified timing hides the strip"
+    assert not view.quality_banner.isVisibleTo(view), "high-quality timing must hide the FYI line"
+    # FYI-only tier uses the informational (calmer) style, NOT the amber CTA #ProvisionalBanner.
+    assert view.quality_banner.objectName() == "InfoBanner", view.quality_banner.objectName()
+    assert view.provisional_banner.objectName() == "ProvisionalBanner"
 
-    # Force a media-clock fallback (older GPS5 camera) and refresh the generalized banner surface.
+    # Force a media-clock fallback (older GPS5 camera) and refresh the trust strip.
     s._timing_quality = data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK)
     assert s.timing_quality.degraded and s.timing_quality.media_clock
     view.refresh_timing_trust()
-    assert view.quality_banner.isVisibleTo(view), "degraded timing must show the data-quality banner"
+    assert view.quality_banner.isVisibleTo(view), "degraded timing must show the FYI line"
+    assert view._trust_strip.isVisibleTo(view), "a live concern shows the strip"
     assert "video clock" in view.quality_banner.text().lower(), view.quality_banner.text()
-    # Independent of the start-line trust: the fixture is still a verified track.
+    # Compact: a single line, not the multi-line per-concern paragraph it used to stack.
+    assert "\n" not in view.quality_banner.text(), "the FYI line must stay a single compact line"
+    # Independent of the start-line trust: the fixture is still a verified track, so the amber
+    # actionable line stays hidden (only the FYI line shows).
     assert s.timing_verified is True
+    assert not view.provisional_banner.isVisibleTo(view), "verified timing hides the actionable line"
 
-    # Restore high quality → banner clears.
+    # Restore high quality → strip clears.
     s._timing_quality = data_quality.TimingQuality()
     view.refresh_timing_trust()
-    assert not view.quality_banner.isVisibleTo(view), "restoring quality must clear the banner"
-    print("test_quality_banner_shows_on_degraded_timing OK")
+    assert not view.quality_banner.isVisibleTo(view), "restoring quality must clear the FYI line"
+    assert not view._trust_strip.isVisibleTo(view), "no concern hides the strip"
+    print("test_quality_banner_is_informational_and_independent OK")
+
+
+def test_provisional_and_degraded_share_one_trust_strip():
+    """The de-clutter core: when BOTH concerns apply (unknown track + older GoPro — the common
+    first-run case) they show in ONE strip, not two separate word-wrapped ProvisionalBanner widgets
+    eating a third of the map. The actionable line leads (amber CTA), the FYI line follows (calmer
+    info style), and both live under the single #TrustStrip container."""
+    view, s, _t0, _t1 = _real_central_view()
+    # Provisional start line AND a degraded (media-clock) recording at once.
+    s.track_name = None
+    s._timing_user_confirmed = False
+    s._timing_quality = data_quality.TimingQuality(clock=data_quality.MEDIA_CLOCK_FALLBACK)
+    assert s.timing_verified is False and s.timing_quality.degraded
+    view.rebuild_derived_views(reselect=True)
+
+    # BOTH lines are visible inside the ONE strip.
+    assert view._trust_strip.isVisibleTo(view), "a live concern shows the strip"
+    assert view.provisional_banner.isVisibleTo(view), "the actionable line shows"
+    assert view.quality_banner.isVisibleTo(view), "the FYI line shows"
+    # The actionable call-to-action is present (drag the start/finish line).
+    ptext = view.provisional_banner.text().lower()
+    assert "drag" in ptext and "start/finish" in ptext, ptext
+
+    # They are the SAME single strip container, not two independent top-level banner widgets: both
+    # are children of view._trust_strip.
+    assert view.provisional_banner.parent() is view._trust_strip
+    assert view.quality_banner.parent() is view._trust_strip
+    # Only ONE #TrustStrip exists in the map panel's banner area (not two stacked banners).
+    from PySide6.QtWidgets import QWidget as _QW
+    strips = [w for w in view.findChildren(_QW) if w.objectName() == "TrustStrip"]
+    assert len(strips) == 1, f"exactly one trust strip, found {len(strips)}"
+    print("test_provisional_and_degraded_share_one_trust_strip OK")
 
 
 # ============================================================ Δ-to-ideal hero readout
@@ -423,6 +467,25 @@ def test_hero_readout_leads_with_labelled_delta_to_ideal():
     assert best_text.startswith("Δ "), best_text
     assert "ideal" in view.diff_box.toolTip().lower(), view.diff_box.toolTip()
     print(f"test_hero_readout_leads_with_labelled_delta_to_ideal OK ({text!r} / {best_text!r})")
+
+
+def test_delta_to_ideal_tooltips_are_honest_not_best_sector():
+    """Δ-to-ideal is a 400-point per-distance lower envelope — a synthetic curve no human drives in
+    one pass — so its labels must describe it as a stitched-together theoretical ideal, NOT mis-sell
+    it as the 'best of every clean sector'. Assert the hero readout-toggle tooltip and the ideal-lap
+    plot toggle tooltip both read honestly (no 'best sector' claim, and the 'stitched'/'not a single
+    lap' framing present)."""
+    view, _s, _t0, _t1 = _real_central_view()
+    readout_tip = view.ideal_readout_btn.toolTip().lower()
+    assert "best sector" not in readout_tip and "best of every" not in readout_tip, readout_tip
+    assert "stitched together" in readout_tip, readout_tip
+    assert "not a single" in readout_tip, readout_tip
+
+    plot_tip = view.plots.ideal_btn.toolTip().lower()
+    assert "best sector" not in plot_tip and "best of every" not in plot_tip, plot_tip
+    assert "stitched together" in plot_tip, plot_tip
+    assert "not a single" in plot_tip, plot_tip
+    print("test_delta_to_ideal_tooltips_are_honest_not_best_sector OK")
 
 
 # ============================================================ labelled grip-map control
@@ -478,8 +541,10 @@ def _run_all():
     test_compare_scrub_fans_one_seek_to_each_real_pane_per_tick()
     test_compare_tick_keeps_panes_consistent_no_reentry()
     test_provisional_banner_shows_and_clears_with_trust_state()
-    test_quality_banner_shows_on_degraded_timing()
+    test_quality_banner_is_informational_and_independent()
+    test_provisional_and_degraded_share_one_trust_strip()
     test_hero_readout_leads_with_labelled_delta_to_ideal()
+    test_delta_to_ideal_tooltips_are_honest_not_best_sector()
     test_grip_map_reachable_via_labelled_combo()
     test_opportunities_panel_persistent_and_visible_by_default()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")

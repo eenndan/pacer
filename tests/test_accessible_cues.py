@@ -506,6 +506,17 @@ def test_pb_moment_does_not_fire_on_provisional_timing():
     print("test_pb_moment_does_not_fire_on_provisional_timing OK")
 
 
+def test_pb_moment_does_not_fire_on_degraded_timing():
+    """DATA-QUALITY degraded timing NEVER celebrates — a recording can be Verified (trusted start
+    line) yet still ESTIMATED (media-clock fallback / low GPS), and the app won't celebrate a PB
+    whose absolute time it itself calls estimated. Same beating session that fires on verified +
+    high-quality (degraded default False), but degraded=True → None even with verified=True."""
+    idx = _index(_entry("MK", 70.0))
+    assert library.pb_moment_for(True, idx, "MK", 68.5) is not None       # verified + high quality
+    assert library.pb_moment_for(True, idx, "MK", 68.5, degraded=True) is None  # verified but degraded
+    print("test_pb_moment_does_not_fire_on_degraded_timing OK")
+
+
 def test_pb_moment_first_session_is_not_a_beat():
     """The first-ever session on a track has no prior PB to beat → a gentler "first" moment (not a
     celebration of beating anything)."""
@@ -576,6 +587,7 @@ if __name__ == "__main__":
     test_estimated_quality_badge_is_a_real_chip()
     test_pb_moment_beats_prior_best_on_verified_timing()
     test_pb_moment_does_not_fire_on_provisional_timing()
+    test_pb_moment_does_not_fire_on_degraded_timing()
     test_pb_moment_first_session_is_not_a_beat()
     test_pb_moment_tie_slower_and_no_track_do_not_fire()
     test_pb_moment_text_wording()

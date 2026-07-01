@@ -33,8 +33,9 @@ auto-detect next time? **File ▸ Save as track…** turns your line into a name
 - **Lap table** — every lap and its sector splits, sortable, with your session best highlighted
   (★). The **Entry** column is the corner-entry speed; toggle **View ▸ Units** for mph.
 - **Δ-to-ideal / Δ-to-best charts** — the speed trace and the cumulative time delta, distance-
-  aligned so corners line up. The live readout leads with **Δ-to-ideal**: how far you are off the
-  *achievable* lap (the best of every sector stitched together), right where you are on track.
+  aligned so corners line up. The live readout leads with **Δ-to-ideal**: how far you are off your
+  *theoretical ideal* — the best you've driven at each point on track, stitched together (not a
+  single drivable lap) — right where you are on track.
 
 ## 4 · See where the time goes (the coaching)
 
