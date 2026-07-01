@@ -659,6 +659,37 @@ def test_panel_renders_top3_off_a_session():
     print(f"ok panel: top-{n} rows, C{opp.rows[0].cid} first, row-click emits cid")
 
 
+def test_panel_reason_cell_is_not_truncated():
+    """The persistent panel's "How to find it" reason cell must show its FULL text (no ellipsis
+    clip) even at a narrow panel width: word-wrap is on AND the vertical header sizes rows to their
+    content, so a wrapped 2nd line grows the row instead of being cut off (the truncation bug). We
+    assert the layout invariants (word-wrap + ResizeToContents rows) and that a squeezed panel still
+    gives the reason row height for its multi-line wrapped sentence."""
+    _qapp()
+    from PySide6.QtWidgets import QHeaderView
+
+    from studio.coaching_panel import OpportunitiesPanel
+    s = _stadium_session()
+    panel = OpportunitiesPanel(s)
+    assert panel.table.wordWrap() is True, "the reason cell must word-wrap, not elide"
+    assert (panel.table.verticalHeader().sectionResizeMode(0)
+            == QHeaderView.ResizeToContents), "rows must auto-fit their wrapped content, not clip"
+
+    # A genuinely long, two-line "How to find it" reason at a narrow (1512-px-laptop) panel width:
+    # the stretch column squeezes, the sentence wraps, and the row MUST grow past the old fixed
+    # 34-px section (which clipped the 2nd line). Set the long text directly so the assertion is
+    # deterministic regardless of the fixture's exact reason wording.
+    panel.resize(360, panel.height())
+    long_reason = ("Carry more apex speed here — your typical lap is ~5 km/h slower than your "
+                   "best through the slowest point.\nBrake ~4 m later into C2 (est)")
+    panel.table.item(0, 3).setText(long_reason)
+    panel.table.resizeRowsToContents()
+    assert panel.table.rowHeight(0) > 34, (
+        f"a wrapped 2-line reason must grow the row, not clip: {panel.table.rowHeight(0)}px")
+    print(f"ok panel: reason cell not truncated (row0 h={panel.table.rowHeight(0)}px, "
+          f"wrap+auto-height)")
+
+
 def coaching_module_reason(panel, opp) -> bool:
     """The panel's reason cell (col 3, after σ was folded in at col 2) shows the same coaching
     sentence the dialog renders."""

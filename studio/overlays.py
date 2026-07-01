@@ -6,26 +6,49 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from . import theme
+from .theme import C
+
 
 class WelcomeView(QWidget):
     """First-run / no-recording empty state — the product's tagline made literal: drop a GoPro
-    recording onto the window, or open one. `on_open` runs the file picker, `on_demo` resolves and
-    loads a real demo lapping recording (and re-shows this state with an honest message if the demo
-    can't be fetched). An optional `error` line is shown when this stands in for a failed first
-    load. The buttons are exposed (`open_btn`/`demo_btn`) for tests."""
+    recording onto the window, or open one. The centred content sits inside a dashed-border DROP
+    ZONE (`drop_zone`, objectName "WelcomeDropZone") so the drag-and-drop affordance is VISIBLE — a
+    user reads "you can drop a file here" instead of just being told. `on_open` runs the file
+    picker, `on_demo` resolves and loads a real demo lapping recording (and re-shows this state with
+    an honest message if the demo can't be fetched). An optional `error` line is shown when this
+    stands in for a failed first load. The buttons are exposed (`open_btn`/`demo_btn`) for tests."""
 
     def __init__(self, on_open, on_demo, error: str | None = None, parent=None):
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setAlignment(Qt.AlignCenter)
-        root.setSpacing(14)
+
+        # The dashed-border drop zone framing the centred content — the VISIBLE target for the
+        # window's drag-and-drop (StudioWindow dragEnter/dropEvent). Restrained, on-theme (a
+        # rounded rect with a dashed hairline over the canvas), not a heavy hero box.
+        self.drop_zone = QFrame()
+        self.drop_zone.setObjectName("WelcomeDropZone")
+        self.drop_zone.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
+        zone = QVBoxLayout(self.drop_zone)
+        zone.setAlignment(Qt.AlignCenter)
+        zone.setContentsMargins(56, 44, 56, 44)
+        zone.setSpacing(14)
+
+        # A small muted drop glyph above the wordmark, reinforcing "drop a file here" without hue.
+        self.drop_icon = QLabel()
+        self.drop_icon.setPixmap(theme.icon("ph.download-simple", color=C.text_muted).pixmap(36, 36))
+        self.drop_icon.setAlignment(Qt.AlignCenter)
+        zone.addWidget(self.drop_icon)
 
         title = QLabel("Pacer")
         title.setProperty("role", "WelcomeTitle")
@@ -34,8 +57,8 @@ class WelcomeView(QWidget):
         subtitle.setProperty("role", "WelcomeSubtitle")
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        zone.addWidget(title)
+        zone.addWidget(subtitle)
 
         buttons = QHBoxLayout()
         buttons.setAlignment(Qt.AlignCenter)
@@ -47,14 +70,16 @@ class WelcomeView(QWidget):
         self.demo_btn.clicked.connect(on_demo)
         buttons.addWidget(self.open_btn)
         buttons.addWidget(self.demo_btn)
-        root.addLayout(buttons)
+        zone.addLayout(buttons)
 
         if error:
             err = QLabel(error)
             err.setProperty("role", "WelcomeError")
             err.setAlignment(Qt.AlignCenter)
             err.setWordWrap(True)
-            root.addWidget(err)
+            zone.addWidget(err)
+
+        root.addWidget(self.drop_zone, 0, Qt.AlignCenter)
 
 
 class PBToast(QWidget):

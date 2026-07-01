@@ -1333,6 +1333,25 @@ def test_welcome_state_when_no_recording():
     print("test_welcome_state_when_no_recording OK")
 
 
+def test_welcome_view_shows_a_drop_zone():
+    """The first-run WelcomeView frames its centred content in a VISIBLE dashed-border drop zone
+    (objectName "WelcomeDropZone"), so the drag-and-drop affordance reads on screen instead of only
+    being described in the subtitle. The title/subtitle + Open/Open-demo buttons live inside it."""
+    from PySide6.QtWidgets import QFrame, QPushButton
+
+    from studio.overlays import WelcomeView
+    v = WelcomeView(on_open=lambda: None, on_demo=lambda: None)
+    try:
+        assert isinstance(v.drop_zone, QFrame), type(v.drop_zone)
+        assert v.drop_zone.objectName() == "WelcomeDropZone", v.drop_zone.objectName()
+        # the drop zone is the affordance FRAME: the buttons render inside it, not as bare siblings.
+        assert v.open_btn in v.drop_zone.findChildren(QPushButton)
+        assert v.demo_btn in v.drop_zone.findChildren(QPushButton)
+    finally:
+        v.deleteLater()
+    print("test_welcome_view_shows_a_drop_zone OK")
+
+
 def test_drag_and_drop_loads_mp4s():
     """Dropping GoPro MP4s on the window loads them (sorted, so chapter siblings chain in order);
     a drag with no MP4 is not accepted."""
