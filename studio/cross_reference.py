@@ -63,6 +63,12 @@ class ReferenceLap:
     lap_id: int
     overlay_xy: np.ndarray | None
     map_fit_rms: float | None  # RMS (m) of the overlay fit, or None when no overlay
+    # True when the reference was admitted by GEOMETRY (unknown track name — matched on GPS
+    # location/size) rather than a confirmed same-named track. The overlay is valid, but neither
+    # recording's start line is known-good, so the aligned Δ phase may be off until the user sets
+    # both start lines. The UI surfaces a short "matched by location — unverified" caveat on it.
+    # Defaults False so the confirmed same-named-track path is byte-identical (no caveat).
+    is_geometric: bool = False
 
     def arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """`(dist, speed_kmh, elapsed)` — the `_lap_arrays`-shaped triple `Session.delta`
@@ -87,6 +93,7 @@ def build(
     primary_loop_xy: np.ndarray | None,
     source_label: str,
     lap_id: int,
+    is_geometric: bool = False,
 ) -> ReferenceLap:
     """Assemble a `ReferenceLap` from the reference lap's extracted arrays.
 
@@ -96,6 +103,10 @@ def build(
     overlay is the reference loop fit onto the primary loop (so it draws in the primary frame);
     if the fit RMS exceeds MAP_FIT_RMS_TOL_M (or either loop is degenerate) the overlay is None
     and only the map racing-line is skipped — the distance-aligned charts/table are unaffected.
+
+    `is_geometric` marks a reference admitted by GPS-geometry match (unknown track name) rather
+    than a confirmed same-named track — carried onto the `ReferenceLap` so the UI can flag it
+    UNVERIFIED. Defaults False (the confirmed-track path is unchanged).
     """
     dist = np.asarray(dist, float)
     speed_kmh = np.asarray(speed_kmh, float)
@@ -116,5 +127,5 @@ def build(
     return ReferenceLap(
         dist=dist, speed_kmh=speed_kmh, elapsed=elapsed, total_time=total_time,
         source_label=source_label, lap_id=lap_id,
-        overlay_xy=overlay_xy, map_fit_rms=fit_rms,
+        overlay_xy=overlay_xy, map_fit_rms=fit_rms, is_geometric=is_geometric,
     )

@@ -133,6 +133,11 @@ add_test(NAME test_cross_reference
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cross_reference.py)
 set_tests_properties(test_cross_reference PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Geometry track-match (studio.track_match): the haversine primitive + the two-check
+# (location + footprint size) same/not-same verdict that admits an UNKNOWN-track reference by
+# GPS geometry ("race a friend's GoPro off an unknown track"). Pure numpy/math — no pacer, no Qt.
+add_test(NAME test_track_match
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_track_match.py)
 # F2 Δ-engine dedup (studio.session LapCurve + project): pins the one alignment primitive the
 # whole delta family now shares + the reference-baseline collapse (the reference and a local lap
 # flow through ONE project()), from first principles on a synthetic session. No telemetry file;
