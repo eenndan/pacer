@@ -143,6 +143,39 @@ def _fit_start_line(laps, base):
     return best_seg
 
 
+# Half-length (m each side of the racing line) of the heuristic unknown-track start line, and the
+# number of samples each side used to estimate the local heading at the peak. _fit_start_line widens
+# the line further if a pass misses it; ~a kart straight's width so the perpendicular line crosses
+# the racing line once per lap.
+_HEURISTIC_HALF_M = 15.0
+_HEURISTIC_HEADING_SAMPLES = 5
+
+
+def _heuristic_start_base(xs, ys, speeds):
+    """A SENSIBLE unknown-track start/finish line (vs an arbitrary point): a `pacer.Segment`
+    perpendicular to the direction of travel at the PEAK-SPEED point — the main straight, which the
+    car crosses once per lap and where a timing line reads cleanly (no mid-corner ambiguity). All
+    coordinates are LOCAL metres (match `tracks.make_segment` / `cs.local`). Returns None when the
+    geometry is degenerate (too few samples / no local heading) so the caller falls back to
+    `laps.pick_random_start()`. NOTE: the timing stays PROVISIONAL until the user confirms the line
+    (see Session.timing_verified) — this is a better DEFAULT placement, not a trusted fix."""
+    n = len(speeds)
+    if n < 2 * _HEURISTIC_HEADING_SAMPLES + 1:
+        return None
+    i = int(np.argmax(speeds))
+    k = _HEURISTIC_HEADING_SAMPLES
+    a, b = max(0, i - k), min(n - 1, i + k)
+    dx, dy = float(xs[b] - xs[a]), float(ys[b] - ys[a])
+    heading = math.hypot(dx, dy)
+    if heading < 1e-6:
+        return None
+    ux, uy = dx / heading, dy / heading   # unit direction of travel at the peak
+    px, py = -uy, ux                      # the perpendicular — the timing line's direction
+    cx, cy = float(xs[i]), float(ys[i])
+    return tracks.make_segment(cx - px * _HEURISTIC_HALF_M, cy - py * _HEURISTIC_HALF_M,
+                               cx + px * _HEURISTIC_HALF_M, cy + py * _HEURISTIC_HALF_M)
+
+
 def _clean(samples, spans, naive):
     """Trim the stationary lead-in/cool-down (where GPS spikes cluster), then drop lone
     teleport glitches (a fix far from BOTH neighbours while they stay close to each other).
@@ -275,9 +308,20 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
             )
             laps.update()
     else:
-        laps.sectors = pacer.Sectors(
-            start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]
-        )
-        laps.update()
+        # Unknown track: place a SENSIBLE default line perpendicular to travel at the peak-speed
+        # point (the main straight) instead of an arbitrary point, then validate/widen it. Fall back
+        # to the old random pick if the heuristic is degenerate OR its line finds no laps. Either way
+        # the timing is PROVISIONAL (muted + the "drag the start/finish line" banner) until confirmed.
+        xs = np.fromiter((cs.local(s)[0] for s in samples), float, len(samples))
+        ys = np.fromiter((cs.local(s)[1] for s in samples), float, len(samples))
+        speeds = np.fromiter((s.full_speed for s in samples), float, len(samples))
+        base = _heuristic_start_base(xs, ys, speeds)
+        if base is not None:
+            _fit_start_line(laps, base)
+        if base is None or _band_lap_count(laps) == 0:
+            laps.sectors = pacer.Sectors(
+                start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]
+            )
+            laps.update()
     return laps, cs, video_path, chapter_map, (accl, grav, cori), (
         track.name if track is not None else None), quality
