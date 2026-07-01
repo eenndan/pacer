@@ -157,6 +157,38 @@ def test_single_recording_drop_is_unchanged(monkeypatch):
     print("test_single_recording_drop_is_unchanged OK")
 
 
+def test_extracted_worker_and_overlay_modules_import_without_cycle():
+    """The self-contained worker/overlay classes were extracted out of the app.py god-object into
+    studio.workers / studio.overlays. Those leaf modules must import standalone (no reach back into
+    studio.app — an import cycle would raise here), and studio.app must re-use the same class
+    objects (its use-sites bind the extracted classes, not shadow copies)."""
+    import importlib
+    import sys
+
+    # Evict app + the leaf modules, then import ONLY the leaves. If either reached back into
+    # studio.app it would re-import it here — so studio.app staying absent from sys.modules is the
+    # import-cycle guard.
+    for mod in ("studio.app", "studio.workers", "studio.overlays"):
+        sys.modules.pop(mod, None)
+    importlib.import_module("studio.workers")
+    importlib.import_module("studio.overlays")
+    assert "studio.app" not in sys.modules, "leaf modules must not import studio.app (import cycle)"
+
+    # Now import app; it binds the SAME (already-cached) leaf classes, not shadow re-declarations.
+    import studio.app as app_mod
+    from studio.overlays import PBToast, WelcomeView
+    from studio.workers import SessionLoadWorker, VideoExportWorker
+    for cls in (SessionLoadWorker, VideoExportWorker):
+        assert cls.__module__ == "studio.workers", cls.__module__
+    for cls in (PBToast, WelcomeView):
+        assert cls.__module__ == "studio.overlays", cls.__module__
+    assert app_mod.SessionLoadWorker is SessionLoadWorker
+    assert app_mod.VideoExportWorker is VideoExportWorker
+    assert app_mod.PBToast is PBToast
+    assert app_mod.WelcomeView is WelcomeView
+    print("test_extracted_worker_and_overlay_modules_import_without_cycle OK")
+
+
 # ------------------------------------------------------------------------ runner
 def _run_all():
     import inspect
