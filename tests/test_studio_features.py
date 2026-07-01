@@ -1302,11 +1302,12 @@ def test_welcome_state_when_no_recording():
     from PySide6.QtWidgets import QLabel
 
     from studio import app as app_mod
-    from studio.app import StudioWindow, _WelcomeView
+    from studio.app import StudioWindow
+    from studio.overlays import WelcomeView
     w = StudioWindow([])
     try:
         cw = w.centralWidget()
-        assert isinstance(cw, _WelcomeView), type(cw)
+        assert isinstance(cw, WelcomeView), type(cw)
         assert cw.open_btn is not None and cw.demo_btn is not None
         loaded = []
         w._load = lambda paths: loaded.append(list(paths))
@@ -1323,7 +1324,7 @@ def test_welcome_state_when_no_recording():
         w._open_demo()
         assert loaded == [], "must not load anything when the demo can't be resolved"
         cw2 = w.centralWidget()
-        assert isinstance(cw2, _WelcomeView), type(cw2)
+        assert isinstance(cw2, WelcomeView), type(cw2)
         err = [lab for lab in cw2.findChildren(QLabel)
                if lab.property("role") == "WelcomeError"]
         assert err and "unavailable" in err[0].text().lower(), "honest demo-unavailable message"
@@ -1474,10 +1475,11 @@ def test_report_problem_opens_github_issues_url():
 def test_reference_load_runs_on_worker_not_main_thread():
     """The cross-recording reference load must NOT run Session.load synchronously on the UI thread
     (it froze the window on the moat "race a friend's GoPro" path). _start_reference_load spawns a
-    _SessionLoadWorker and adopts the result via set_reference_session on the worker's finished
+    SessionLoadWorker and adopts the result via set_reference_session on the worker's finished
     signal — so no synchronous load runs in the menu handler. We assert a worker was created and
     that the apply is wired to the worker (not called inline), without a real telemetry file."""
-    from studio.app import StudioWindow, _SessionLoadWorker
+    from studio.app import StudioWindow
+    from studio.workers import SessionLoadWorker
 
     w = StudioWindow([])  # welcome state; no session yet
     try:
@@ -1495,12 +1497,12 @@ def test_reference_load_runs_on_worker_not_main_thread():
 
         before = set(w._load_workers)
         w._start_reference_load([_BUNDLED_SAMPLE])
-        # A worker was created and held (so it isn't GC'd mid-load), and it is a _SessionLoadWorker —
+        # A worker was created and held (so it isn't GC'd mid-load), and it is a SessionLoadWorker —
         # the SAME machinery as the primary open, not a second bespoke worker class.
         new_workers = set(w._load_workers) - before
         assert len(new_workers) == 1, new_workers
         worker = next(iter(new_workers))
-        assert isinstance(worker, _SessionLoadWorker), type(worker)
+        assert isinstance(worker, SessionLoadWorker), type(worker)
         assert w._ref_load_worker is worker
         # The synchronous load path was NOT taken on the main thread.
         assert sync_calls == [], sync_calls

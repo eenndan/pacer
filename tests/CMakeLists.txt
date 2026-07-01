@@ -269,7 +269,7 @@ set_tests_properties(test_units PROPERTIES
 # source: delta_colour / best_lap/best_sector colours / rainbow endpoints flip, default byte-
 # identical) + its prefs round-trip, the LapTable best-cell recolour through the selector, and the
 # library.pb_moment/pb_moment_for/pb_moment_text decision (beats prior PB on verified timing; NOT
-# on provisional / first-ever / tie / slower) + the _PBToast wording & progression-link routing.
+# on provisional / first-ever / tie / slower) + the PBToast wording & progression-link routing.
 # Imports the LapTable + the app toast -> Qt, so run offscreen. No telemetry file.
 add_test(NAME test_accessible_cues
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_accessible_cues.py)
@@ -281,7 +281,7 @@ set_tests_properties(test_accessible_cues PROPERTIES
 # degraded ⇒ stamped, not blocked); render_card → a non-empty CARD_W×CARD_H QImage on both
 # palettes, with/without a map thumbnail; and the app DI wiring (Export ▸ Lap card save through a
 # monkeypatched QFileDialog, Copy lap card onto a monkeypatched clipboard, blocked-session greying,
-# and the _PBToast "Share your PB →" routing). Builds QImages, so run offscreen. No telemetry file.
+# and the PBToast "Share your PB →" routing). Builds QImages, so run offscreen. No telemetry file.
 add_test(NAME test_share_card
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_share_card.py)
 set_tests_properties(test_share_card PROPERTIES

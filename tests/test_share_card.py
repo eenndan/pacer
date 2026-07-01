@@ -9,7 +9,7 @@ Two layers, tested separately (mirroring the module split):
     CARD_W×CARD_H size, on both palettes, with + without a map thumbnail.
   * The app wiring (offscreen, DI): File ▸ Export ▸ "Lap card (image)…" saves the PNG through a
     monkeypatched QFileDialog; "Copy lap card" puts an image on a monkeypatched clipboard; the
-    Export-menu sync greys both out on a blocked session; and the _PBToast "Share your PB →"
+    Export-menu sync greys both out on a blocked session; and the PBToast "Share your PB →"
     button routes to its injected on_share callback.
 
 Runs offscreen (QImage/QPainter need a QApplication). No telemetry file, no pacer Laps — the
@@ -304,21 +304,21 @@ def test_blocked_session_builds_no_card_and_greys_actions():
 
 
 def test_pb_toast_share_button_routes_to_on_share():
-    """The _PBToast's 'Share your PB →' primary button routes to its injected on_share callback
+    """The PBToast's 'Share your PB →' primary button routes to its injected on_share callback
     (the one-tap card save), and 'See your progress →' still routes to on_progress."""
-    from studio.app import _PBToast
+    from studio.overlays import PBToast
     shared, progressed = [], []
-    toast = _PBToast("New personal best! 🏁", "MK — 1:08.42, 0.31 s faster.",
-                     on_progress=lambda: progressed.append(True),
-                     on_share=lambda: shared.append(True))
+    toast = PBToast("New personal best! 🏁", "MK — 1:08.42, 0.31 s faster.",
+                    on_progress=lambda: progressed.append(True),
+                    on_share=lambda: shared.append(True))
     assert toast.share_btn is not None
     assert "share" in toast.share_btn.text().lower()
     toast.share_btn.click()
     assert shared == [True], "the share button must route to on_share"
     # a fresh toast for the progress link (the first click dismissed the toast)
-    toast2 = _PBToast("New personal best! 🏁", "MK — 1:08.42.",
-                      on_progress=lambda: progressed.append(True),
-                      on_share=lambda: shared.append(True))
+    toast2 = PBToast("New personal best! 🏁", "MK — 1:08.42.",
+                     on_progress=lambda: progressed.append(True),
+                     on_share=lambda: shared.append(True))
     toast2.link_btn.click()
     assert progressed == [True], "the progress link must still route to on_progress"
     print("test_pb_toast_share_button_routes_to_on_share OK")
@@ -327,8 +327,8 @@ def test_pb_toast_share_button_routes_to_on_share():
 def test_pb_toast_hides_share_button_when_no_callback():
     """With no on_share callback (a session that can't make a card), the toast shows no share
     button — only the progression link (backwards-compatible with the pre-share toast)."""
-    from studio.app import _PBToast
-    toast = _PBToast("New personal best!", "MK.", on_progress=lambda: None, on_share=None)
+    from studio.overlays import PBToast
+    toast = PBToast("New personal best!", "MK.", on_progress=lambda: None, on_share=None)
     assert toast.share_btn is None
     assert toast.link_btn is not None
     print("test_pb_toast_hides_share_button_when_no_callback OK")

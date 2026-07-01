@@ -8,7 +8,7 @@ import shutil
 import sys
 import time
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QBuffer, QIODevice, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QActionGroup, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,13 +17,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QHBoxLayout,
     QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressDialog,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -45,7 +43,9 @@ from .central_view import CentralView
 from .coaching_panel import OpportunitiesDialog
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
-from .session import DEFAULT_SAMPLE, Session, fmt_time
+from .overlays import PBToast, WelcomeView
+from .session import DEFAULT_SAMPLE, fmt_time
+from .workers import SessionLoadWorker, VideoExportWorker
 
 # Help ▸ Report a problem… opens this GitHub new-issue page (the only support channel; no crash
 # reporting / telemetry — nothing is sent without the user opening this).
@@ -119,215 +119,6 @@ def install_excepthook():
     sys.excepthook = _excepthook
 
 
-class _VideoExportWorker(QThread):
-    """QThread wrapper running export_video.Renderer off the UI thread, forwarding frame progress
-    and a final ok/message via queued signals. cancel() cooperatively stops the render; a
-    failed/cancelled run drops the partial output."""
-
-    progress = Signal(int, int)              # (frames_done, frames_total)
-    finished_export = Signal(bool, str)      # (ok, message)  message="cancelled" / an error text
-
-    def __init__(self, session, spec):
-        super().__init__()
-        self._session = session
-        self._spec = spec
-        self._cancelled = False
-
-    def cancel(self):
-        self._cancelled = True
-
-    def run(self):
-        try:
-            renderer = export_video.Renderer(self._session, self._spec)
-            renderer.run(progress=lambda d, t: self.progress.emit(d, t),
-                         cancel=lambda: self._cancelled)
-            self.finished_export.emit(True, "")
-        except export_video.CancelledError:
-            self._cleanup_partial()
-            self.finished_export.emit(False, "cancelled")
-        except Exception as exc:  # surfaced in a dialog by the GUI thread
-            self._cleanup_partial()
-            self.finished_export.emit(False, str(exc))
-
-    def _cleanup_partial(self):
-        """Drop a partially-written output so cancel/error leaves no broken MP4."""
-        try:
-            if os.path.exists(self._spec.out_path):
-                os.remove(self._spec.out_path)
-        except OSError:
-            pass
-
-
-class _SessionLoadWorker(QThread):
-    """QThread wrapper running the ~1.4–4 s synchronous Session.load(paths) off the UI thread, so the
-    window stays responsive (the "Loading telemetry…" placeholder shows) instead of freezing on every
-    open/reload. Session.load is pure compute (numpy + pacer C++; creates no Qt objects) so it is safe
-    off-thread; the resulting Session is a plain object handed back via a queued signal.
-
-    Each worker carries the `token` of the _load that started it; the window's completion slots ignore
-    any result whose token is stale (a newer _load superseded it), so a second drag-drop can't apply an
-    older load destructively. Per-sample ingest is Python/GIL-held; the numpy/g-meter portions release
-    the GIL — the win is the non-blocking, cancellable, supersede-safe load, not full parallelism."""
-
-    loaded = Signal(int, list, object)   # (token, paths, session)
-    failed = Signal(int, list, object)   # (token, paths, exception)
-
-    def __init__(self, token: int, paths: list[str]):
-        super().__init__()
-        self._token = token
-        self._paths = list(paths)
-
-    def run(self):
-        try:
-            session = Session.load(self._paths)
-        except Exception as exc:  # noqa: BLE001 - surface ANY load failure to the GUI thread
-            self.failed.emit(self._token, self._paths, exc)
-            return
-        self.loaded.emit(self._token, self._paths, session)
-
-
-class _WelcomeView(QWidget):
-    """First-run / no-recording empty state — the product's tagline made literal: drop a GoPro
-    recording onto the window, or open one. `on_open` runs the file picker, `on_demo` resolves and
-    loads a real demo lapping recording (and re-shows this state with an honest message if the demo
-    can't be fetched). An optional `error` line is shown when this stands in for a failed first
-    load. The buttons are exposed (`open_btn`/`demo_btn`) for tests."""
-
-    def __init__(self, on_open, on_demo, error: str | None = None, parent=None):
-        super().__init__(parent)
-        root = QVBoxLayout(self)
-        root.setAlignment(Qt.AlignCenter)
-        root.setSpacing(14)
-
-        title = QLabel("Pacer")
-        title.setProperty("role", "WelcomeTitle")
-        title.setAlignment(Qt.AlignCenter)
-        subtitle = QLabel("Drop a GoPro recording here — or open one — to get your laps.")
-        subtitle.setProperty("role", "WelcomeSubtitle")
-        subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setWordWrap(True)
-        root.addWidget(title)
-        root.addWidget(subtitle)
-
-        buttons = QHBoxLayout()
-        buttons.setAlignment(Qt.AlignCenter)
-        self.open_btn = QPushButton("Open recording…")
-        self.open_btn.setProperty("variant", "primary")
-        self.open_btn.setDefault(True)
-        self.open_btn.clicked.connect(on_open)
-        self.demo_btn = QPushButton("Open demo")
-        self.demo_btn.clicked.connect(on_demo)
-        buttons.addWidget(self.open_btn)
-        buttons.addWidget(self.demo_btn)
-        root.addLayout(buttons)
-
-        if error:
-            err = QLabel(error)
-            err.setProperty("role", "WelcomeError")
-            err.setAlignment(Qt.AlignCenter)
-            err.setWordWrap(True)
-            root.addWidget(err)
-
-
-class _PBToast(QWidget):
-    """A transient "new personal best!" celebration card overlaid on the window (top-centre) when a
-    freshly-analysed session beats its track's prior PB on verified timing. Tasteful, not modal: an
-    amber-accented card that auto-dismisses after a few seconds. At the peak-pride moment it turns
-    into a SHARE loop: the PRIMARY "Share your PB →" button saves the shareable lap card (image),
-    and a secondary "See your progress →" link opens the per-track PB-progression chart (retention),
-    plus a × to dismiss now.
-
-    Purely presentational — the caller decides WHEN to show it (library.pb_moment) and passes the
-    formatted `title`/`body` + the `on_progress` / `on_share` callbacks (either may be None to hide
-    that action). Exposed attributes (title_label / body_label / link_btn / share_btn / close_btn)
-    let the suite assert the wording + that each button routes to its injected callback."""
-
-    AUTO_DISMISS_MS = 6000  # generous but transient — long enough to read, short enough to not nag
-
-    def __init__(self, title: str, body: str, on_progress, on_share=None, parent=None):
-        super().__init__(parent)
-        self.setObjectName("PBToast")
-        self._on_progress = on_progress
-        self._on_share = on_share
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(2)
-
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        self.title_label = QLabel(title)
-        self.title_label.setObjectName("PBToastTitle")
-        top.addWidget(self.title_label)
-        top.addStretch(1)
-        self.close_btn = QPushButton("✕")
-        self.close_btn.setObjectName("PBToastClose")
-        self.close_btn.setCursor(Qt.PointingHandCursor)
-        self.close_btn.setToolTip("Dismiss")
-        self.close_btn.clicked.connect(self.dismiss)
-        top.addWidget(self.close_btn)
-        lay.addLayout(top)
-
-        self.body_label = QLabel(body)
-        self.body_label.setObjectName("PBToastBody")
-        self.body_label.setWordWrap(True)
-        lay.addWidget(self.body_label)
-
-        # The action row: the PRIMARY "Share your PB →" (one tap to the lap card) then the
-        # secondary progression link. Each is created only when its callback is injected.
-        self.share_btn = None
-        self.link_btn = None
-        link_row = QHBoxLayout()
-        link_row.setContentsMargins(0, 0, 0, 0)
-        link_row.addStretch(1)
-        if on_share is not None:
-            self.share_btn = QPushButton("Share your PB →")
-            self.share_btn.setObjectName("PBToastShare")
-            self.share_btn.setProperty("variant", "primary")
-            self.share_btn.setCursor(Qt.PointingHandCursor)
-            self.share_btn.setToolTip("Save a shareable lap card (image) of this personal best")
-            self.share_btn.clicked.connect(self._on_share_clicked)
-            link_row.addWidget(self.share_btn)
-        self.link_btn = QPushButton("See your progress →")
-        self.link_btn.setObjectName("PBToastLink")
-        self.link_btn.setCursor(Qt.PointingHandCursor)
-        self.link_btn.setToolTip("Open this track's personal-best progression chart")
-        self.link_btn.clicked.connect(self._on_link)
-        link_row.addWidget(self.link_btn)
-        lay.addLayout(link_row)
-
-        # Auto-dismiss after a beat (window-owned QTimer so it's cleaned up with the toast).
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.timeout.connect(self.dismiss)
-
-    def show_for(self, parent: QWidget):
-        """Position the toast top-centre over `parent`, show it on top, and start the auto-dismiss."""
-        self.adjustSize()
-        pw = parent.width()
-        x = max(0, (pw - self.width()) // 2)
-        self.move(x, 16)
-        self.raise_()
-        self.show()
-        self._timer.start(self.AUTO_DISMISS_MS)
-
-    def _on_link(self):
-        """Route to the PB-progression surface, then dismiss (the chart is the destination now)."""
-        self.dismiss()
-        if self._on_progress is not None:
-            self._on_progress()
-
-    def _on_share_clicked(self):
-        """One-tap share: route to the injected share callback (save the lap card), then dismiss."""
-        self.dismiss()
-        if self._on_share is not None:
-            self._on_share()
-
-    def dismiss(self):
-        self._timer.stop()
-        self.hide()
-        self.deleteLater()
-
-
 class StudioWindow(QMainWindow):
     # Emitted after every load settles (on the UI thread, after _on_session_loaded /
     # _on_load_failed have run) — a clean way for tests/smoke to wait for the now-async load.
@@ -349,7 +140,7 @@ class StudioWindow(QMainWindow):
         self._load_workers = set()
         self._pending_load = None  # single-flight: the latest queued (token, paths) while a load runs
         # Reference (cross-recording compare) load bookkeeping — the reference Session.load is the SAME
-        # ~1.4–4 s synchronous compute as the primary open, so it too runs on a _SessionLoadWorker (a
+        # ~1.4–4 s synchronous compute as the primary open, so it too runs on a SessionLoadWorker (a
         # freeze here was the worst kind: it hit the moat "race a friend's GoPro" path). Its own token
         # supersedes/ignores a stale reference result; a reference load never runs concurrently with a
         # primary load or a second reference load (see _load_reference_file).
@@ -440,7 +231,7 @@ class StudioWindow(QMainWindow):
         """Install the no-recording welcome empty state (also the first-load-failure fallback)."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle("pacer studio")
-        self.setCentralWidget(_WelcomeView(self._open_file, self._open_demo, error, parent=self))
+        self.setCentralWidget(WelcomeView(self._open_file, self._open_demo, error, parent=self))
         if getattr(self, "_full_action", None) is not None:
             self._full_action.setEnabled(False)
 
@@ -487,7 +278,7 @@ class StudioWindow(QMainWindow):
 
     def _start_load_worker(self, token: int, paths: list[str]):
         """Spawn the single in-flight load worker for `token` (see _load's single-flight rule)."""
-        worker = _SessionLoadWorker(token, paths)
+        worker = SessionLoadWorker(token, paths)
         self._load_worker = worker  # the current worker
         self._load_workers.add(worker)  # hold the in-flight worker so it isn't GC'd mid-load
         worker.loaded.connect(self._on_session_loaded)
@@ -1065,7 +856,7 @@ class StudioWindow(QMainWindow):
             # Offer the one-tap share only when the card is actually shareable (verified lap) —
             # a PB moment is verified timing by construction, but stay honest via the same verdict.
             on_share = None if self._share_card_blocked() else self._share_pb_card
-            toast = _PBToast(title, body, on_progress=self._open_library,
+            toast = PBToast(title, body, on_progress=self._open_library,
                              on_share=on_share, parent=self)
             self._pb_toast = toast
             toast.show_for(self)
@@ -1673,7 +1464,7 @@ class StudioWindow(QMainWindow):
         dlg.setAutoReset(False)
         dlg.setValue(0)  # with max=0 too, Qt renders an indeterminate "busy" bar
 
-        worker = _VideoExportWorker(self.session, spec)
+        worker = VideoExportWorker(self.session, spec)
         self._video_worker = worker  # keep a ref so the thread isn't GC'd mid-render
         started = {"first": False}
 
@@ -1728,7 +1519,7 @@ class StudioWindow(QMainWindow):
     def _start_reference_load(self, paths: list[str]):
         """Spawn the off-thread reference Session.load for `paths` (the file-picker-free half of
         _load_reference_file, so tests drive it without a dialog). Reuses the primary open's
-        _SessionLoadWorker; a lightweight status-bar "Loading reference…" replaces the whole-view
+        SessionLoadWorker; a lightweight status-bar "Loading reference…" replaces the whole-view
         placeholder (the primary session stays shown). GUARD: a reference load must not run alongside a
         primary load or a second reference load — bump the reference token (so a still-running older
         reference worker's result is ignored) and, if one is already in flight, supersede it rather than
@@ -1739,7 +1530,7 @@ class StudioWindow(QMainWindow):
         # ignored when it finishes (see _on_reference_loaded / _on_reference_load_failed).
         self._ref_load_token += 1
         token = self._ref_load_token
-        worker = _SessionLoadWorker(token, paths)
+        worker = SessionLoadWorker(token, paths)
         self._ref_load_worker = worker
         self._load_workers.add(worker)  # hold it so the QThread isn't GC'd mid-load (shared drain set)
         worker.loaded.connect(self._on_reference_loaded)

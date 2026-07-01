@@ -556,12 +556,12 @@ def test_pb_moment_text_wording():
 
 
 def test_pb_toast_shows_wording_and_link_routes_to_progression():
-    """The _PBToast surfaces the celebration wording and its "See your progress →" link routes to
+    """The PBToast surfaces the celebration wording and its "See your progress →" link routes to
     the injected progression callback (the app passes _open_library — the PB-progression chart),
     then dismisses. This is the retention hook made discoverable."""
-    from studio.app import _PBToast
+    from studio.overlays import PBToast
     routed = []
-    toast = _PBToast("New personal best! 🏁", "MK — 1:08.42, 0.31 s faster.",
+    toast = PBToast("New personal best! 🏁", "MK — 1:08.42, 0.31 s faster.",
                      on_progress=lambda: routed.append(True))
     assert "personal best" in toast.title_label.text().lower()
     assert "faster" in toast.body_label.text()

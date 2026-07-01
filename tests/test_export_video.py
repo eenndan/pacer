@@ -913,7 +913,7 @@ def test_composite_is_deterministic_across_workers_if_ffmpeg(monkeypatch_restore
 # ----------------------------------- GUI-worker path + watchdog/cancel regression (the missed gap)
 def test_gui_worker_drives_render_to_completion_if_ffmpeg():
     """REGRESSION — the test gap that let the GUI hang slip past three fixes: drive the ACTUAL GUI
-    export worker (studio.app._VideoExportWorker, a QThread) end-to-end on a tiny real clip and
+    export worker (studio.workers.VideoExportWorker, a QThread) end-to-end on a tiny real clip and
     assert it COMPLETES (the dialog would reach 100%) without hanging. The worker calls
     Renderer.run(progress=…, cancel=…) — the exact path File ▸ 'Export overlay video…' triggers —
     which the mocked suite and the headless `run()` benchmarks never exercised to completion. A
@@ -923,7 +923,7 @@ def test_gui_worker_drives_render_to_completion_if_ffmpeg():
         return
     from PySide6.QtCore import QEventLoop, QTimer
 
-    from studio.app import _VideoExportWorker
+    from studio.workers import VideoExportWorker
 
     tmp = os.environ.get("TMPDIR", "/tmp")
     src, out = os.path.join(tmp, "f9_gui_src.mp4"), os.path.join(tmp, "f9_gui_out.mp4")
@@ -938,7 +938,7 @@ def test_gui_worker_drives_render_to_completion_if_ffmpeg():
     spec = ev.ExportSpec(src_path=src, out_path=out, lap_id=1, t0=0.0, t1=1.5,
                          config=ev.OverlayConfig(out_height=360, encoder="libx264",
                                                  hwaccel_decode=False))
-    worker = _VideoExportWorker(s, spec)
+    worker = VideoExportWorker(s, spec)
     result = {"ok": None, "msg": None, "last": (0, 0)}
     loop = QEventLoop()
     worker.progress.connect(lambda d, t: result.update(last=(d, t)))
