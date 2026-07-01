@@ -780,17 +780,28 @@ class Session:
         return bool(self._timing_history())
 
     def undo_timing_lines(self) -> bool:
-        """Restore the most recent snapshot pushed by ``push_timing_history`` — pop it and replay
+        """Restore the most recent snapshot pushed by ``push_timing_history`` — PEEK it and replay
         it through ``apply_timing_lines_latlon`` (the same re-segment/apply path a live edit takes,
         so the segmentation + PB/session-best baseline recompute identically, and a restored
         previously-confirmed state stays confirmed). Returns True if a state was restored, False
         when the stack is empty (Undo is then a no-op). The restore itself is NOT re-pushed, so
-        repeated Undo walks back through the history one edit at a time."""
+        repeated Undo walks back through the history one edit at a time.
+
+        REVERT-GUARD SEAM: ``apply_timing_lines_latlon`` can REJECT a replay (returns False) when
+        the restored lines yield no valid laps — a corrupt snapshot, or one that no longer crosses
+        the trace. In that case the snapshot must NOT be consumed and nothing is persisted: the
+        session is left on its prior good state and Undo stays available, so a bad replay can never
+        pop the history AND re-save a broken segmentation. The pop therefore happens ONLY on a
+        successful, guard-accepted restore."""
         hist = self._timing_history()
         if not hist:
             return False
-        start, sectors, confirmed = hist.pop()
-        self.apply_timing_lines_latlon(start, sectors, confirmed=confirmed)
+        start, sectors, confirmed = hist[-1]  # peek — don't consume until the replay is accepted
+        if not self.apply_timing_lines_latlon(start, sectors, confirmed=confirmed):
+            # The revert guard rejected the restore (it already left the session on its prior good
+            # lines). Keep the snapshot so Undo stays available and the caller doesn't re-persist.
+            return False
+        hist.pop()
         return True
 
     def track_location(self) -> tuple[tuple[float, float], tuple[float, float, float, float]]:

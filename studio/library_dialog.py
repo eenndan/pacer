@@ -133,7 +133,9 @@ class LibraryDialog(QDialog):
     def __init__(self, index: dict, open_recording: Callable[[list[str]], None],
                  parent=None,
                  forget_recording: Callable[[dict], dict] | None = None,
-                 clear_library: Callable[[], dict] | None = None):
+                 clear_library: Callable[[], dict] | None = None,
+                 reveal_library: Callable[[], None] | None = None,
+                 backup_library: Callable[[], None] | None = None):
         super().__init__(parent)
         self.setWindowTitle("pacer studio — session library")
         self.resize(720, 600)
@@ -144,6 +146,11 @@ class LibraryDialog(QDialog):
         # wipe, all guarded in the app) and RETURNS the fresh index so the dialog re-renders from it.
         self._forget_recording = forget_recording
         self._clear_library = clear_library
+        # Data-portability controls (optional). Reveal opens the app-support folder in Finder; back
+        # up copies library.json to a chosen path. The app OWNS both file ops (dialog stays
+        # pacer-free / file-op-free); neither mutates the index, so no re-render is needed.
+        self._reveal_library = reveal_library
+        self._backup_library = backup_library
         self._entries = list(index.get("entries", []))
 
         root = QVBoxLayout(self)
@@ -225,6 +232,20 @@ class LibraryDialog(QDialog):
             self.clear_btn.clicked.connect(self._on_clear_library)
             self.clear_btn.setEnabled(bool(self._entries))
             buttons.addWidget(self.clear_btn)
+        # Data portability: reveal the index folder / back up library.json. Non-destructive, so no
+        # confirm and always enabled when wired (there's always a folder to reveal, and back-up
+        # informs the user when there's nothing to copy yet). Injected callbacks only.
+        if self._reveal_library is not None:
+            self.reveal_btn = QPushButton("Reveal in Finder")
+            self.reveal_btn.setToolTip(
+                "Open the folder that holds your library index (library.json)")
+            self.reveal_btn.clicked.connect(lambda: self._reveal_library())
+            buttons.addWidget(self.reveal_btn)
+        if self._backup_library is not None:
+            self.backup_btn = QPushButton("Back up…")
+            self.backup_btn.setToolTip("Save a copy of your library index to a location you choose")
+            self.backup_btn.clicked.connect(lambda: self._backup_library())
+            buttons.addWidget(self.backup_btn)
         buttons.addStretch(1)
         self.open_btn = QPushButton("Open")
         self.open_btn.setEnabled(False)

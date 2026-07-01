@@ -27,3 +27,8 @@ pacer-ios/
 
 # start-line verification scratch (extract/georef/sweep; see studio/docs/start-line-verification.md)
 .startline_tmp/
+
+# internal review / planning notes (kept locally in the product root, never committed)
+CPO_REVIEW.md
+ROADMAP.md
+EXECUTION_PLAN.md

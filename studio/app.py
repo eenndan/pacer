@@ -4,6 +4,7 @@ load; the panel layout lives in CentralView."""
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import time
 
@@ -629,6 +630,18 @@ class StudioWindow(QMainWindow):
             "Browse your analyzed recordings (date / track / best lap / theoretical best), "
             "re-open any of them, and see per-track PB progression")
         self._library_action.triggered.connect(self._open_library)
+        # Data portability: reveal the app-support folder that holds library.json (so the durable
+        # index is findable), and back it up to a chosen file — turning it from an unrecoverable
+        # blob into something the user can copy/restore. (Also surfaced in the Library dialog.)
+        self._reveal_library_action = menu.addAction("Reveal library in Finder")
+        self._reveal_library_action.setToolTip(
+            "Open the folder that holds your library index (library.json), so you can find, copy "
+            "or back it up yourself")
+        self._reveal_library_action.triggered.connect(self._reveal_library)
+        self._backup_library_action = menu.addAction("Back up library…")
+        self._backup_library_action.setToolTip(
+            "Save a copy of your library index (library.json) to a location you choose")
+        self._backup_library_action.triggered.connect(self._backup_library)
         # Save the current placed start/sector lines as a named, reusable track in the database,
         # so a future recording at this location auto-detects with these timing lines in place.
         # Enabled (in _sync_export_menu) only when the session has usable timing lines.
@@ -904,7 +917,9 @@ class StudioWindow(QMainWindow):
         stays pacer-free + file-op-free, the app owns the index write + sidecar delete."""
         dlg = LibraryDialog(library.load(), open_recording=self._load, parent=self,
                             forget_recording=self._forget_recording,
-                            clear_library=self._clear_library)
+                            clear_library=self._clear_library,
+                            reveal_library=self._reveal_library,
+                            backup_library=self._backup_library)
         dlg.exec()
 
     def _forget_recording(self, entry: dict) -> dict:
@@ -925,6 +940,10 @@ class StudioWindow(QMainWindow):
         if paths:
             try:
                 side = sidecar.sidecar_path(paths[0])
+                # If the forgotten recording is the one CURRENTLY loaded, the live session still
+                # holds this sidecar path — clear it FIRST so a passive timing nudge can't re-write
+                # the file we're about to delete (an explicit re-save could re-establish it later).
+                self._disable_sidecar_if_open(side)
                 if os.path.exists(side):
                     os.remove(side)
                     print(f"studio: deleted timing-line sidecar {os.path.basename(side)}",
@@ -932,6 +951,22 @@ class StudioWindow(QMainWindow):
             except OSError as exc:
                 print(f"studio: could not delete the sidecar ({exc!r}).", flush=True)
         return library.load()
+
+    def _disable_sidecar_if_open(self, forgotten_side: str) -> None:
+        """When the recording being forgotten IS the currently-loaded session, null the live sidecar
+        path on both the window and the central view so a subsequent passive timing nudge can't
+        RE-CREATE the just-deleted ``.pacer.json`` (``CentralView._save_sidecar`` no-ops on an empty
+        path). The window's ``_sidecar_path`` is also cleared so any rebuilt view stays de-linked.
+        Matched by resolved sidecar path (chapter-invariant to how the sidecar was written); a
+        no-match (forgetting a DIFFERENT recording) leaves the open session untouched."""
+        live = getattr(self, "_sidecar_path", None)
+        if not live or os.path.abspath(live) != os.path.abspath(forgotten_side):
+            return
+        self._sidecar_path = None
+        view = getattr(self, "view", None)
+        if view is not None:
+            view._sidecar_path = None
+        print("studio: cleared the open recording's sidecar link after forgetting it", flush=True)
 
     def _clear_library(self) -> dict:
         """Privacy "clear library": wipe the whole app-support index (only the library history of
@@ -943,6 +978,41 @@ class StudioWindow(QMainWindow):
         except OSError as exc:
             print(f"studio: could not clear the library index ({exc!r}).", flush=True)
         return library.load()
+
+    def _reveal_library(self) -> None:
+        """Data portability: open the app-support FOLDER that holds ``library.json`` in Finder, so
+        the durable index is findable/copyable. Reveals the DIRECTORY (created lazily on the first
+        save; ``os.makedirs`` here so a never-saved library still opens to an existing folder rather
+        than a Finder error). Guarded — a failed open just logs."""
+        directory = os.path.dirname(library.library_path())
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except OSError as exc:
+            print(f"studio: could not open the library folder ({exc!r}).", flush=True)
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(directory))
+
+    def _backup_library(self) -> None:
+        """Data portability: copy ``library.json`` to a user-chosen path (``QFileDialog`` →
+        ``shutil.copy2``, preserving mtime). No-op with a gentle notice when there's no library yet
+        (nothing analyzed) or the user cancels the dialog. Guarded — a failed copy just informs the
+        user via the status bar (a backup failure must never disrupt the app)."""
+        src = library.library_path()
+        if not os.path.exists(src):
+            self.statusBar().showMessage("no library to back up yet — analyze a recording first")
+            return
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Back up library", os.path.join(os.path.expanduser("~"), "library.json"),
+            "Library index (*.json)")
+        if not dest:
+            return  # user cancelled
+        try:
+            shutil.copy2(src, dest)
+        except OSError as exc:
+            print(f"studio: could not back up the library ({exc!r}).", flush=True)
+            self.statusBar().showMessage(f"could not back up the library: {exc}")
+            return
+        self.statusBar().showMessage(f"library backed up to {dest}")
 
     # Open Recent: recently analyzed recordings (most-recent-first), each re-opened via the guarded
     # `_load`. Sourced from the session-library index rather than a separate MRU list.

@@ -182,6 +182,50 @@ def test_undo_history_is_bounded():
     assert len(s._timing_history()) == Session._UNDO_DEPTH
 
 
+# A start line FAR north of the circle — it never crosses the trace, so a replay of it yields NO
+# valid laps and apply_timing_lines_latlon's revert guard REJECTS it (returns False).
+_FAR_START = [[_CLAT + 1000.0 / _M_PER_DEG_LAT, _CLON],
+              [_CLAT + 1000.0 / _M_PER_DEG_LAT + 1e-3, _CLON]]
+
+
+def test_undo_rejected_replay_keeps_history_and_state():
+    """SEAM: undo must honour apply_timing_lines_latlon's revert guard. If the popped snapshot
+    replays to NO valid laps (a corrupt / mismatched snapshot), undo_timing_lines must:
+      * return False (so the caller doesn't re-persist a broken segmentation),
+      * NOT consume the history entry (Undo stays available for a later good undo), and
+      * leave the session on its prior GOOD lines + laps."""
+    s = _make_session()
+    good_start, _good_sectors = s.timing_lines_latlon()
+    good_valid = s.valid_lap_ids()
+    assert len(good_valid) >= 2
+    # Inject a BAD snapshot directly onto the stack (stands in for a corrupt persisted state);
+    # a normal push snapshots the current good lines, which wouldn't be rejected.
+    s._timing_history().append((_FAR_START, [], True))
+    assert s.can_undo_timing() is True
+
+    assert s.undo_timing_lines() is False       # the guard rejected the replay
+    assert s.can_undo_timing() is True          # the snapshot was NOT consumed
+    assert s.valid_lap_ids() == good_valid       # still on the prior good segmentation
+    assert s.timing_lines_latlon()[0] == good_start
+
+
+def test_undo_accepted_replay_after_a_rejected_one():
+    """After a rejected undo leaves the (bad) snapshot in place, popping it explicitly and undoing a
+    GOOD snapshot beneath it still works — the rejected path didn't corrupt the stack."""
+    s = _make_session()
+    # Good snapshot underneath (the state to restore), then a bad one on top.
+    s.push_timing_history()                       # snapshots the current good lines
+    good_after_push = s.timing_lines_latlon()[0]
+    s.set_timing_lines(_start_line_at(s.cs, _THETA_ALT), [])  # move away so the undo is observable
+    s._timing_history().append((_FAR_START, [], True))        # a bad snapshot on top
+
+    assert s.undo_timing_lines() is False         # rejects, leaves the bad snapshot
+    del s._timing_history()[-1]                    # user/app discards the un-appliable snapshot
+    assert s.undo_timing_lines() is True          # the good one beneath restores cleanly
+    for a, b in zip(s.timing_lines_latlon()[0], good_after_push, strict=True):
+        assert abs(a[0] - b[0]) < 1e-3 and abs(a[1] - b[1]) < 1e-3
+
+
 # ============================================================ B. library privacy: forget / clear
 def _entry(stem, *, track="Daytona MK", date="2024-05-01", laps=12,
            best=68.4, theo=67.9, paths=None):
@@ -335,6 +379,133 @@ def test_dialog_without_privacy_callbacks_is_browse_only():
     dlg = LibraryDialog(index, open_recording=lambda _p: None)
     assert getattr(dlg, "clear_btn", None) is None
     assert dlg.table.rowCount() == 1
+
+
+# =============================================== C. forget-the-OPEN-recording sidecar seam (app)
+def _stub_window():
+    """A bare StudioWindow (no __init__) for exercising the pure forget/sidecar seam methods with a
+    fabricated view — the same idiom test_library uses for _update_library."""
+    from studio import app as studio_app
+    return studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+
+
+def test_forget_open_recording_clears_live_sidecar_and_blocks_renudge():
+    """SEAM: forgetting the CURRENTLY-OPEN recording must null the live sidecar path (window + view)
+    so a subsequent passive timing nudge can't RE-CREATE the just-deleted .pacer.json. Drives the
+    app's _disable_sidecar_if_open against a real temp sidecar, then replays CentralView._save_sidecar's
+    guard to prove a nudge no-ops on the cleared path."""
+    from studio import app as studio_app
+    from studio import sidecar as sc
+    with tempfile.TemporaryDirectory() as d:
+        media = os.path.join(d, "GX010042.MP4")
+        side = sc.sidecar_path(media)
+        with open(side, "w") as f:
+            f.write("{}")
+
+        win = _stub_window()
+        win._sidecar_path = side
+        win.view = type("V", (), {})()          # a stand-in central view holding the same path
+        win.view._sidecar_path = side
+
+        # Forget THIS open recording: clear the live link, then the app deletes the file.
+        studio_app.StudioWindow._disable_sidecar_if_open(win, side)
+        assert win._sidecar_path is None
+        assert win.view._sidecar_path is None
+        os.remove(side)                          # the app's guarded deletion (already tested elsewhere)
+        assert not os.path.exists(side)
+
+        # A subsequent passive nudge = CentralView._save_sidecar's guard: it no-ops on an empty path,
+        # so the forgotten sidecar is NOT resurrected.
+        def save_sidecar_guard(view):
+            path = getattr(view, "_sidecar_path", None)
+            if not path:
+                return False
+            with open(path, "w") as f:            # would re-create the file
+                f.write("{}")
+            return True
+
+        assert save_sidecar_guard(win.view) is False
+        assert not os.path.exists(side)          # still gone — no resurrection
+
+
+def test_forget_a_different_recording_leaves_open_sidecar_intact():
+    """Forgetting a DIFFERENT recording must NOT clear the open session's sidecar path (only a
+    path match clears it) — the live session keeps persisting its own edits."""
+    from studio import app as studio_app
+    with tempfile.TemporaryDirectory() as d:
+        open_side = os.path.join(d, "GX010042.pacer.json")
+        other_side = os.path.join(d, "GX010099.pacer.json")
+        win = _stub_window()
+        win._sidecar_path = open_side
+        win.view = type("V", (), {})()
+        win.view._sidecar_path = open_side
+        studio_app.StudioWindow._disable_sidecar_if_open(win, other_side)
+        assert win._sidecar_path == open_side        # untouched — different recording
+        assert win.view._sidecar_path == open_side
+
+
+# =============================================== D. reveal / back-up DI wiring (dialog + app)
+def test_dialog_reveal_and_backup_route_through_callbacks(monkeypatch):
+    """The reveal / back-up controls are dependency-injected (like forget/clear): the dialog exposes
+    the buttons only when the callbacks are wired, and clicking each fires exactly that callback."""
+    index = {"version": library.VERSION, "entries": [_entry("GX010001")]}
+    revealed, backed_up = [], []
+    dlg = LibraryDialog(index, open_recording=lambda _p: None,
+                        forget_recording=lambda e: index, clear_library=lambda: index,
+                        reveal_library=lambda: revealed.append(True),
+                        backup_library=lambda: backed_up.append(True))
+    assert dlg.reveal_btn is not None and dlg.backup_btn is not None
+    dlg.reveal_btn.click()
+    dlg.backup_btn.click()
+    assert revealed == [True] and backed_up == [True]
+
+
+def test_dialog_without_portability_callbacks_hides_those_buttons():
+    """No reveal/backup callbacks → no reveal/backup buttons (browse-only degrades cleanly, matching
+    the forget/clear DI contract)."""
+    index = {"version": library.VERSION, "entries": [_entry("GX010001")]}
+    dlg = LibraryDialog(index, open_recording=lambda _p: None)
+    assert getattr(dlg, "reveal_btn", None) is None
+    assert getattr(dlg, "backup_btn", None) is None
+
+
+def test_app_backup_library_copies_index_to_chosen_path(monkeypatch):
+    """The app's _backup_library copies library.json to the QFileDialog-chosen path via shutil.copy2.
+    Drives the method on a stub window with the save dialog + library path stubbed."""
+    from studio import app as studio_app
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        library.save({"version": library.VERSION, "entries": [_entry("GX010001")]})
+        src = library.library_path()
+        assert os.path.exists(src)
+        dest = os.path.join(d, "backup_copy.json")
+        # Stub the modal save dialog to return our destination, and the status bar to a sink.
+        monkeypatch.setattr(studio_app.QFileDialog, "getSaveFileName",
+                            staticmethod(lambda *a, **k: (dest, "")))
+        win = _stub_window()
+        win.statusBar = lambda: type("SB", (), {"showMessage": staticmethod(lambda *a: None)})()
+        studio_app.StudioWindow._backup_library(win)
+        assert os.path.exists(dest)
+        with open(dest) as f, open(src) as g:
+            assert f.read() == g.read()          # a faithful copy of the index
+
+
+def test_app_backup_library_noop_when_no_library(monkeypatch):
+    """_backup_library is a gentle no-op (no dialog, a status note) when there's no library yet —
+    it must never raise on a fresh install with nothing analyzed."""
+    from studio import app as studio_app
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)  # empty dir, no library.json
+        opened = []
+        monkeypatch.setattr(studio_app.QFileDialog, "getSaveFileName",
+                            staticmethod(lambda *a, **k: opened.append(True) or ("", "")))
+        win = _stub_window()
+        messages = []
+        win.statusBar = lambda: type(
+            "SB", (), {"showMessage": staticmethod(lambda m: messages.append(m))})()
+        studio_app.StudioWindow._backup_library(win)
+        assert opened == []                       # the save dialog was never opened
+        assert messages and "no library" in messages[0]
 
 
 # ============================================================ runner
