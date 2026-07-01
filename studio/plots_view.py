@@ -125,9 +125,9 @@ class PlotsView(QWidget):
         self.ideal_btn.setIcon(icon("ph.star-four"))
         self.ideal_btn.setCheckable(True)
         self.ideal_btn.setToolTip(
-            "Ideal lap: overlay the SYNTHETIC theoretical-best Δ — the lower envelope of your "
-            "clean laps' per-distance times (dashed purple, dips below the y=0 best-lap line). "
-            "No single lap drove it; it shows where your achievable lap is faster than your best.")
+            "Ideal lap: overlay the SYNTHETIC theoretical ideal Δ — the best you've driven at each "
+            "point on track, stitched together (dashed purple, dips below the y=0 best-lap line). "
+            "Not a single drivable lap; it shows where your achievable lap is faster than your best.")
         self.ideal_btn.toggled.connect(self._on_ideal_toggled)
 
         # D3 opt-in: a SYNTHETIC brake/throttle band under the speed curve. Default off so the

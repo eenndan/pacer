@@ -787,9 +787,17 @@ QLabel#DiffBox {{
     font-weight: 600;
     padding: 2px 8px;
 }}
-/* provisional-timing trust banner: a persistent warning strip over the map while the lap timing
-   references an auto-fitted (unconfirmed) start line. Amber left-rule + tint so it reads as a
-   call-to-action, not an error; clears once the timing is Verified. */
+/* trust strip over the map — one strip, two tiers. The ACTIONABLE line (place the start/finish
+   line, #ProvisionalBanner) wears the amber call-to-action treatment: amber left-rule + tint so it
+   reads as "do this to fix it". The INFORMATIONAL line (data-quality FYI, #InfoBanner) is a CALMER
+   style — no amber, a quiet surface tint + a muted left-rule + dimmed text — so a pure "for your
+   information" note never mis-signals a call to action. Single-sourced here; both clear once their
+   concern resolves. The container (#TrustStrip) carries only the shared bottom hairline so the two
+   lines read as one strip. */
+QWidget#TrustStrip {{
+    background: transparent;
+    border-bottom: 1px solid {C.border};
+}}
 QLabel#ProvisionalBanner {{
     background-color: {C.accent_tint};
     color: {C.text};
@@ -797,7 +805,14 @@ QLabel#ProvisionalBanner {{
     font-weight: 600;
     padding: 5px 12px;
     border-left: 3px solid {C.accent};
-    border-bottom: 1px solid {C.border};
+}}
+QLabel#InfoBanner {{
+    background-color: {C.surface};
+    color: {C.text_dim};
+    font-size: {CAPTION}px;
+    font-weight: 500;
+    padding: 5px 12px;
+    border-left: 3px solid {C.border_strong};
 }}
 /* "new personal best!" celebration toast — a transient, tasteful card overlaid on the window when a
    freshly-analysed session beats the track's prior PB (verified timing only). Amber accent so it

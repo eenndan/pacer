@@ -44,7 +44,10 @@ BEST_LAP_MARK = "★ "     # prefixes the best lap's Lap cell (after any ▶ cur
 BEST_SECTOR_MARK = " ★"  # suffixes a session-best split cell's value
 DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
 PROVISIONAL_COLOR = QColor(theme.PROVISIONAL_COLOR)  # muted text for unverified timing
-PROVISIONAL_TOOLTIP = "Provisional — start/finish line not set for this track."
+# A short, non-duplicative hint: the actionable "drag the start/finish line" call-to-action lives
+# once on the map (the on-canvas cue + the trust strip), so the table tooltip just points there
+# rather than repeating the whole sentence a third time.
+PROVISIONAL_TOOLTIP = "Provisional timing — see the map to set the start/finish line."
 # Degraded TIMING ACCURACY (the data-quality axis, orthogonal to the start-line trust above): the
 # start line is fine but the per-sample clock is estimated (media-clock fallback) or many fixes
 # were rejected, so the lap Time / S-split cells are estimated — muted like provisional, but the

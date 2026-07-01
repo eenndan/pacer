@@ -608,12 +608,14 @@ def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):
         studio_app.StudioWindow._update_library(win, [studio_app.DEFAULT_SAMPLE])
         assert upserts == []
 
-        # A real recording WITH laps → indexed. timing_verified is read by _update_library for the
-        # PB-moment gate (a provisional/unverified start line never celebrates); True here so the
-        # index path runs normally.
+        # A real recording WITH laps → indexed. Both timing axes are read by _update_library for the
+        # PB-moment gate (a provisional/unverified start line OR a data-quality-degraded clock never
+        # celebrates); Verified + not-degraded here so the index path runs normally.
+        from types import SimpleNamespace
         win.session = type("S", (), {
             "valid_lap_ids": staticmethod(lambda: [0, 1]),
             "timing_verified": True,
+            "timing_quality": SimpleNamespace(degraded=False),
             "library_entry": staticmethod(
                 lambda paths: _entry("GX010060", track="MK", laps=2)),
         })()

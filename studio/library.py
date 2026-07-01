@@ -235,12 +235,20 @@ def pb_moment(index: dict, track: str | None, best: float | None) -> dict | None
 
 
 def pb_moment_for(verified: bool, index: dict, track: str | None,
-                  best: float | None) -> dict | None:
-    """``pb_moment`` gated on TIMING TRUST: returns None (never celebrates) when `verified` is False,
-    because a lap number referenced to an arbitrary provisional start line is meaningless. The one
-    place both halves of the celebration decision (trust gate + PB comparison) live, so the app just
-    passes ``session.timing_verified`` + the entry's track/best and the gate stays tested in one spot."""
-    if not verified:
+                  best: float | None, degraded: bool = False) -> dict | None:
+    """``pb_moment`` gated on BOTH timing axes: returns None (never celebrates) when either
+
+      * `verified` is False (TIMING TRUST) — a lap number referenced to an arbitrary provisional
+        start line is meaningless; or
+      * `degraded` is True (DATA QUALITY — ``session.timing_quality.degraded``) — the app itself
+        calls the absolute timing ESTIMATED (media-clock fallback / low GPS quality), so don't
+        celebrate a PB whose time it won't fully stand behind.
+
+    The one place every half of the celebration decision (both trust gates + the PB comparison)
+    lives, so the app just passes ``session.timing_verified`` / ``session.timing_quality.degraded``
+    + the entry's track/best and the gate stays tested in one spot. `degraded` defaults False so the
+    common high-quality path is unchanged."""
+    if not verified or degraded:
         return None
     return pb_moment(index, track, best)
 
