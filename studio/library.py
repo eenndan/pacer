@@ -208,6 +208,77 @@ def clear(path: str | None = None) -> None:
     save(empty_index(), path)
 
 
+def pb_moment(index: dict, track: str | None, best: float | None) -> dict | None:
+    """Decide the "new personal best" moment for a freshly-analysed session, comparing its `best`
+    lap (seconds) against `track`'s ``prior_best`` in the CURRENT index (BEFORE this session is
+    upserted). Pacer-free — the caller (app) supplies the values from Session accessors and owns the
+    timing-trust gate (never celebrate PROVISIONAL timing). Returns:
+
+      * ``{"kind": "beat", "track", "best", "prior", "improvement"}`` when there IS a prior best and
+        this session beats it (``best < prior``) — the real celebration; ``improvement`` = prior−best (>0);
+      * ``{"kind": "first", "track", "best"}`` when the track has NO prior best (first session logged
+        here) — a gentler acknowledgement, not a "PB beaten";
+      * ``None`` when there's nothing to celebrate: no track, no valid best, or a session that ties /
+        is slower than the existing PB.
+
+    A tie or a re-open of the same recording (its own entry is the prior best) reports None, so the
+    banner never fires on an unimproved number."""
+    if not track or best is None or not math.isfinite(best):
+        return None
+    prior = prior_best(index, track)
+    if prior is None:
+        return {"kind": "first", "track": track, "best": float(best)}
+    if best < prior:
+        return {"kind": "beat", "track": track, "best": float(best),
+                "prior": float(prior), "improvement": float(prior) - float(best)}
+    return None
+
+
+def pb_moment_for(verified: bool, index: dict, track: str | None,
+                  best: float | None) -> dict | None:
+    """``pb_moment`` gated on TIMING TRUST: returns None (never celebrates) when `verified` is False,
+    because a lap number referenced to an arbitrary provisional start line is meaningless. The one
+    place both halves of the celebration decision (trust gate + PB comparison) live, so the app just
+    passes ``session.timing_verified`` + the entry's track/best and the gate stays tested in one spot."""
+    if not verified:
+        return None
+    return pb_moment(index, track, best)
+
+
+def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
+    """(title, body) copy for a ``pb_moment`` result, formatting lap times through the injected
+    `fmt_time` (studio._signal.fmt_time — kept out of this pacer-free module so it stays Qt/format-
+    agnostic and testable). A "beat" leads with the celebration + the gap to the old PB; a "first"
+    is a gentler acknowledgement. The one place the celebration wording lives."""
+    track = moment["track"]
+    best = fmt_time(moment["best"])
+    if moment["kind"] == "beat":
+        gap = moment["improvement"]
+        return (
+            "New personal best! 🏁",
+            f"{track} — {best}, {gap:.2f} s faster than your previous best "
+            f"({fmt_time(moment['prior'])}).",
+        )
+    return (
+        "First lap logged here",
+        f"{track} — {best}. Your first session on this track; beat it next time.",
+    )
+
+
+def prior_best(index: dict, track: str) -> float | None:
+    """The fastest recorded best lap for `track` across the CURRENT index (seconds), or None when
+    the track has no prior dated-or-undated best yet. Used to decide the "new personal best" moment:
+    the caller compares a freshly-analysed session's best against this BEFORE upserting the session,
+    so a genuine improvement is a PB beat and the first-ever session on a track has no prior to beat.
+    Unlike pb_series this does NOT require a date (a PB is a PB even on a GPS5 no-date recording)."""
+    bests = [
+        float(e["best"])
+        for e in index.get("entries", [])
+        if e.get("track") == track and e.get("best") is not None
+    ]
+    return min(bests) if bests else None
+
+
 def pb_series(index: dict, track: str) -> list[tuple[str, float]]:
     """The PB-progression series for one `track`: ``[(date, best), ...]`` over every entry of that
     track that has BOTH a date and a best lap, sorted ascending by date (then by best, so two

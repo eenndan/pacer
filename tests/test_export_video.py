@@ -1125,13 +1125,17 @@ def test_export_delta_colour_equivalent_to_old_inlined_rule():
 
 
 def _old_diff_box_text_and_colour(d, sp, lap_id):
-    """The PRE-refactor inlined live #DiffBox formatter (copied verbatim from the old
-    app._update_diff_box) — the byte-for-byte reference theme.format_delta_speed must reproduce."""
+    """The live #DiffBox formatter as a standalone reference (originally a verbatim copy of the old
+    app._update_diff_box) — the byte-for-byte contract theme.format_delta_speed must reproduce.
+    Updated for the accessibility ▲/▼ direction arrow now paired with the signed Δ (the NON-COLOUR
+    redundancy so ahead/behind survives greyscale); the even dead-band still emits NO arrow, so the
+    neutral readout is unchanged."""
     from studio import theme
     if d is None:
         delta_txt = "Δ —"
     else:
-        delta_txt = f"Δ {d:+.2f} s"
+        arrow = theme.delta_arrow(d)
+        delta_txt = f"Δ {d:+.2f} s" + (f" {arrow}" if arrow else "")
     speed_txt = f"{sp:.0f} km/h" if (sp is not None and lap_id is not None) else "— km/h"
     colour = theme.delta_colour(d) or theme.C.text
     return f"{delta_txt}     {speed_txt}", colour
@@ -1168,11 +1172,15 @@ def test_format_delta_speed_exact_strings_and_spacing():
     caught even if the inlined reference above were also edited."""
     from studio import theme
     assert theme.format_delta_speed(None, None, None)[0] == "Δ —     — km/h"
+    # Even Δ (dead-band): no direction arrow, so the neutral readout is unchanged.
     assert theme.format_delta_speed(0.0, 73.4, 2)[0] == "Δ +0.00 s     73 km/h"
-    assert theme.format_delta_speed(-0.31, 88.0, 2)[0] == "Δ -0.31 s     88 km/h"
-    # export-side fragments: tight Δ run (no " s"), bare speed number under the SAME no-lap gate.
-    assert theme.format_delta_run(-0.31, units=False) == "Δ -0.31"
-    assert theme.format_delta_run(None, units=False) == "Δ —"
+    # Ahead/behind carry the accessibility ▲/▼ arrow (non-colour redundancy) after the signed value.
+    assert theme.format_delta_speed(-0.31, 88.0, 2)[0] == "Δ -0.31 s ▲     88 km/h"
+    assert theme.format_delta_speed(0.62, 64.0, 2)[0] == "Δ +0.62 s ▼     64 km/h"
+    # export-side fragments: tight Δ run (no " s", no arrow — the burned overlay passes arrow=False),
+    # bare speed number under the SAME no-lap gate.
+    assert theme.format_delta_run(-0.31, units=False, arrow=False) == "Δ -0.31"
+    assert theme.format_delta_run(None, units=False, arrow=False) == "Δ —"
     assert theme.speed_number(73.4, 2) == "73"
     assert theme.speed_number(73.4, None) == "—"        # no lap -> em dash (the honesty rule)
     assert theme.speed_number(None, 2) == "—"

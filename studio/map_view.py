@@ -174,6 +174,14 @@ class _RainbowOverlay:
         for it in self._items:
             it.setData(np.empty(0), np.empty(0))
 
+    def recolor(self):
+        """Re-pen each bucket item from the ACTIVE palette's rainbow (after a colour-blind-palette
+        flip). No-op before the items exist; the caller re-fills their data via _apply_rainbow."""
+        if self._items is None:
+            return
+        for it, color in zip(self._items, rainbow_colors(MAP_RAINBOW_N), strict=True):
+            it.setPen(pg.mkPen(color, width=RAINBOW_WIDTH))
+
 
 class _GradientStrip(QWidget):
     """The legend's colour bar: paints the EXACT bucket colours, low→high, edge to edge —
@@ -183,6 +191,11 @@ class _GradientStrip(QWidget):
         super().__init__()
         self._colors = colors
         self.setFixedHeight(8)
+
+    def set_colors(self, colors: list[QColor]):
+        """Swap the painted bucket colours (palette flip) and repaint."""
+        self._colors = colors
+        self.update()
 
     def paintEvent(self, _event):
         p = QPainter(self)
@@ -202,16 +215,21 @@ class _RainbowLegend(QWidget):
         self.hi_label = QLabel("")
         for lab in (self.lo_label, self.hi_label):
             lab.setProperty("role", "BarLabel")  # the dimmed small header type from the QSS
+        self._strip = _GradientStrip([QColor(c) for c in rainbow_colors(MAP_RAINBOW_N)])
         lay = QHBoxLayout(self)
         lay.setContentsMargins(8, 2, 8, 2)
         lay.setSpacing(8)
         lay.addWidget(self.lo_label)
-        lay.addWidget(_GradientStrip([QColor(c) for c in rainbow_colors(MAP_RAINBOW_N)]), 1)
+        lay.addWidget(self._strip, 1)
         lay.addWidget(self.hi_label)
 
     def set_labels(self, lo_text: str, hi_text: str):
         self.lo_label.setText(lo_text)
         self.hi_label.setText(hi_text)
+
+    def recolor(self):
+        """Repaint the legend strip in the ACTIVE palette's rainbow (after a palette flip)."""
+        self._strip.set_colors([QColor(c) for c in rainbow_colors(MAP_RAINBOW_N)])
 
 
 # --------------------------------------------------------------- map key/legend (C3)
@@ -883,6 +901,14 @@ class MapView(QWidget):
             self._rainbow.clear()
         self._legend.setVisible(painted)
         self._current_overlay.set_visible(not painted)
+
+    def refresh_palette(self):
+        """Re-render the rainbow + legend in the ACTIVE semantic palette (after a colour-blind-
+        palette flip): re-pen the bucket items + legend strip, then re-apply so the fill + labels
+        pick up the new ahead/behind endpoints. Cheap and safe when no rainbow is painted."""
+        self._rainbow.recolor()
+        self._legend.recolor()
+        self._apply_rainbow()
 
     def _build_rainbow(self, lap_id: int, mode: str) -> bool:
         """Fill the bucket items for `lap_id`'s channel (speed / Δ-vs-best / grip); returns False

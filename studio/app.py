@@ -156,6 +156,83 @@ class _WelcomeView(QWidget):
             root.addWidget(err)
 
 
+class _PBToast(QWidget):
+    """A transient "new personal best!" celebration card overlaid on the window (top-centre) when a
+    freshly-analysed session beats its track's prior PB on verified timing. Tasteful, not modal: an
+    amber-accented card that auto-dismisses after a few seconds, carries a "See your progress →" link
+    (opens the per-track PB-progression chart — the retention surface) and a × to dismiss now.
+
+    Purely presentational — the caller decides WHEN to show it (library.pb_moment) and passes the
+    formatted `title`/`body` + the `on_progress` callback. Exposed attributes (title_label / link_btn
+    / close_btn) let the suite assert the wording + that the link routes to the progression."""
+
+    AUTO_DISMISS_MS = 6000  # generous but transient — long enough to read, short enough to not nag
+
+    def __init__(self, title: str, body: str, on_progress, parent=None):
+        super().__init__(parent)
+        self.setObjectName("PBToast")
+        self._on_progress = on_progress
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(2)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("PBToastTitle")
+        top.addWidget(self.title_label)
+        top.addStretch(1)
+        self.close_btn = QPushButton("✕")
+        self.close_btn.setObjectName("PBToastClose")
+        self.close_btn.setCursor(Qt.PointingHandCursor)
+        self.close_btn.setToolTip("Dismiss")
+        self.close_btn.clicked.connect(self.dismiss)
+        top.addWidget(self.close_btn)
+        lay.addLayout(top)
+
+        self.body_label = QLabel(body)
+        self.body_label.setObjectName("PBToastBody")
+        self.body_label.setWordWrap(True)
+        lay.addWidget(self.body_label)
+
+        self.link_btn = QPushButton("See your progress →")
+        self.link_btn.setObjectName("PBToastLink")
+        self.link_btn.setCursor(Qt.PointingHandCursor)
+        self.link_btn.setToolTip("Open this track's personal-best progression chart")
+        self.link_btn.clicked.connect(self._on_link)
+        link_row = QHBoxLayout()
+        link_row.setContentsMargins(0, 0, 0, 0)
+        link_row.addStretch(1)
+        link_row.addWidget(self.link_btn)
+        lay.addLayout(link_row)
+
+        # Auto-dismiss after a beat (window-owned QTimer so it's cleaned up with the toast).
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.dismiss)
+
+    def show_for(self, parent: QWidget):
+        """Position the toast top-centre over `parent`, show it on top, and start the auto-dismiss."""
+        self.adjustSize()
+        pw = parent.width()
+        x = max(0, (pw - self.width()) // 2)
+        self.move(x, 16)
+        self.raise_()
+        self.show()
+        self._timer.start(self.AUTO_DISMISS_MS)
+
+    def _on_link(self):
+        """Route to the PB-progression surface, then dismiss (the chart is the destination now)."""
+        self.dismiss()
+        if self._on_progress is not None:
+            self._on_progress()
+
+    def dismiss(self):
+        self._timer.stop()
+        self.hide()
+        self.deleteLater()
+
+
 class StudioWindow(QMainWindow):
     # Emitted after every load settles (on the UI thread, after _on_session_loaded /
     # _on_load_failed have run) — a clean way for tests/smoke to wait for the now-async load.
@@ -182,6 +259,11 @@ class StudioWindow(QMainWindow):
         # Speed display unit (km/h default), loaded from the persisted prefs so the choice survives
         # a relaunch; passed into each fresh CentralView + the video/coaching exports.
         self._speed_unit = prefs.speed_unit()
+        # Colour-blind-safe semantic palette (default off = the original red/green cues). Applied to
+        # the global theme palette selector at startup so every surface built below (and the View-
+        # menu checkmark) reflects the persisted choice; the toggle lives in View ▸ Accessibility.
+        self._colorblind = prefs.colorblind_palette()
+        theme.set_palette(theme.PALETTE_COLORBLIND if self._colorblind else theme.PALETTE_STANDARD)
         self._build_menu()
         self._build_shortcuts()
         # --full on the CLI auto-discovers the first file's sibling chapters; explicit multiple
@@ -371,8 +453,11 @@ class StudioWindow(QMainWindow):
         else:
             self.statusBar().clearMessage()
 
-        # Record this recording in the local session library (see _update_library).
-        self._update_library(paths)
+        # Record this recording in the local session library (see _update_library) and, if this
+        # session's best lap beats the track's prior PB on verified timing, celebrate it.
+        moment = self._update_library(paths)
+        if moment is not None:
+            self._show_pb_moment(moment)
         self.loadFinished.emit()
 
     def _on_load_failed_async(self, token: int, paths: list[str], exc: Exception):
@@ -621,6 +706,18 @@ class StudioWindow(QMainWindow):
             self._unit_actions[unit] = act
             act.triggered.connect(lambda checked, u=unit: checked and self._on_unit_selected(u))
 
+        # View ▸ Colour-blind-safe cues: swap the red/green delta + best colours for a blue/orange
+        # deuteranopia-safe pair across the delta readout, lap table and rainbow map. Off by default
+        # (no change for existing users); the choice persists across relaunches (prefs).
+        self._colorblind_action = view_menu.addAction("Colour-blind-safe cues")
+        self._colorblind_action.setCheckable(True)
+        self._colorblind_action.setChecked(self._colorblind)
+        self._colorblind_action.setToolTip(
+            "Swap the red/green ahead/behind + best-lap colours for a colour-blind-safe blue/orange "
+            "palette (across the Δ readout, lap table and track-map rainbow). The non-colour cues "
+            "(± sign, ▲/▼ arrows, ★ best marks) are always shown regardless of this setting.")
+        self._colorblind_action.toggled.connect(self._on_colorblind_toggled)
+
         # Help menu: the shortcut reference (also F1 / ?) and an About card (help_dialog.py).
         help_menu = self.menuBar().addMenu("&Help")
         self._shortcuts_action = help_menu.addAction("Keyboard shortcuts")
@@ -736,19 +833,50 @@ class StudioWindow(QMainWindow):
             self._load(sibs)
 
     # ----------------------------------------------------------- session library (F8)
-    def _update_library(self, paths: list[str]):
+    def _update_library(self, paths: list[str]) -> dict | None:
         """Upsert the just-loaded recording into the local session-library index. Fully guarded: a
         library write must never disrupt a load. Skips the bundled DEFAULT_SAMPLE and any recording
-        with no valid laps (a junk row the library would surface forever)."""
+        with no valid laps (a junk row the library would surface forever).
+
+        Returns the "new personal best" MOMENT (a library.pb_moment dict) or None. The moment is
+        decided against the index AS IT IS BEFORE THIS SESSION IS UPSERTED (so the recording being
+        added can't be its own prior PB), and ONLY when the timing is VERIFIED — a PB against an
+        arbitrary provisional start line is meaningless, so we never celebrate it. The caller shows
+        the celebratory banner from the returned moment; a library-write failure still returns the
+        moment (the comparison already succeeded)."""
         if any(os.path.abspath(p) == os.path.abspath(DEFAULT_SAMPLE) for p in paths):
-            return
+            return None
         if not self.session.valid_lap_ids():
-            return
+            return None
+        moment = None
         try:
             entry = self.session.library_entry(paths)
+            # Decide the PB moment against the PRIOR index (before the upsert), gated on verified
+            # timing — a provisional/unconfirmed start line makes the lap number meaningless
+            # (library.pb_moment_for returns None for unverified timing).
+            prior_index = library.load()
+            moment = library.pb_moment_for(
+                self.session.timing_verified, prior_index, entry.get("track"), entry.get("best"))
             library.upsert_and_save(entry)
         except Exception as exc:  # noqa: BLE001 — the index is additive; never break a load
             print(f"studio: session library not updated ({exc!r}).", flush=True)
+        return moment
+
+    def _show_pb_moment(self, moment: dict):
+        """Show the transient "new personal best!" toast for a ``library.pb_moment`` result. Fully
+        guarded — a celebration must never disrupt a load. The toast's "See your progress →" link
+        opens the Library dialog's per-track PB-progression chart (the retention surface), and it
+        auto-dismisses. Held on the window (self._pb_toast) so a rapid reload replaces the old one."""
+        try:
+            title, body = library.pb_moment_text(moment, fmt_time)
+            old = getattr(self, "_pb_toast", None)
+            if old is not None:
+                old.dismiss()
+            toast = _PBToast(title, body, on_progress=self._open_library, parent=self)
+            self._pb_toast = toast
+            toast.show_for(self)
+        except Exception as exc:  # noqa: BLE001 — a celebration must never break a load
+            print(f"studio: personal-best moment not shown ({exc!r}).", flush=True)
 
     def _open_library(self):
         """File ▸ Library…: open the session-library dialog (a sortable list of analyzed
@@ -917,6 +1045,21 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             view.set_speed_unit(unit)
+
+    def _on_colorblind_toggled(self, on: bool):
+        """View ▸ Colour-blind-safe cues: flip the global semantic palette (theme.set_palette),
+        persist the choice (guarded — a write failure must never disrupt the app), and re-render the
+        open view's delta / lap table / rainbow map in the new palette. No-op before the first load
+        keeps the global palette in sync so the next-built view adopts it."""
+        self._colorblind = bool(on)
+        theme.set_palette(theme.PALETTE_COLORBLIND if on else theme.PALETTE_STANDARD)
+        try:
+            prefs.set_colorblind_palette(self._colorblind)
+        except OSError as exc:
+            print(f"studio: could not persist colour-blind palette ({exc!r}).", flush=True)
+        view = getattr(self, "view", None)
+        if view is not None:
+            view.refresh_palette()
 
     # ----------------------------------------------------------- data export (F11)
     # File ▸ Export Qt side (the writers are Qt-free in export_data.py).

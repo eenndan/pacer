@@ -650,16 +650,17 @@ class EXPORT:
     grid = "#FFFFFF"            # g-dial rings / crosshair — white at moderate alpha (set per use)
 
 
-# Remap theme.delta_colour semantic tokens to the punchier EXPORT palette (the 3-way decision stays
-# in theme).
-_DELTA_THEME_TO_EXPORT = {theme.C.ahead: EXPORT.ahead, theme.C.behind: EXPORT.behind}
-
-
 def export_delta_colour(d: float | None) -> str:
-    """Export 3-way delta colour: theme.delta_colour decides ahead/behind/even; we remap its token
-    to the vivid EXPORT palette (a neutral/None Δ -> EXPORT white)."""
+    """Export 3-way delta colour in the vivid EXPORT palette: theme.delta_colour decides the 3-way
+    ahead/behind/even split (its even-dead-band stays the single source), then we map ahead/behind
+    to the punchy EXPORT green/red — deliberately palette-INDEPENDENT: the burned-in overlay always
+    uses its own vivid pair regardless of the interactive colour-blind option (an exported clip has
+    no live toggle, so it keeps the one legible high-contrast look)."""
     sem = theme.delta_colour(d)
-    return EXPORT.neutral if sem is None else _DELTA_THEME_TO_EXPORT[sem]
+    if sem is None:
+        return EXPORT.neutral
+    # ahead == faster == negative Δ (theme.delta_colour already applied the even dead-band).
+    return EXPORT.ahead if d < 0 else EXPORT.behind
 
 
 def _draw_text(p: QPainter, pos, text: str, font: QFont, colour: str,
@@ -906,8 +907,10 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues,
     x += fm_unit.horizontalAdvance(unit_label) + 16 * k
     # --- Δ cue: punchy vivid colour ---
     # theme.format_delta_run(units=False) = the export's tight "Δ +0.00" form (shared with the live
-    # box, so no drift); colour from export_delta_colour.
-    delta_txt = theme.format_delta_run(vals.delta_s, units=False)
+    # box, so no drift); colour from export_delta_colour. arrow=False here: the burned-in overlay
+    # font isn't guaranteed to carry the ▲/▼ glyphs and the export keeps its own vivid palette — the
+    # accessibility arrow lives on the interactive Δ readout, not the video export.
+    delta_txt = theme.format_delta_run(vals.delta_s, units=False, arrow=False)
     dcol = export_delta_colour(vals.delta_s)
     dfont = _font(box.height() * 0.50, bold=True)
     fm_d = QFontMetricsF(dfont)

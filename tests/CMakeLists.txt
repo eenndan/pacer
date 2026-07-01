@@ -250,6 +250,17 @@ add_test(NAME test_units
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_units.py)
 set_tests_properties(test_units PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Accessible cues + the "new personal best!" moment (feat/accessible-cues-pb-moment): the
+# non-colour Δ arrow (▲/▼) + lap-table ★ best marks, theme's colour-blind PALETTE selector (one
+# source: delta_colour / best_lap/best_sector colours / rainbow endpoints flip, default byte-
+# identical) + its prefs round-trip, the LapTable best-cell recolour through the selector, and the
+# library.pb_moment/pb_moment_for/pb_moment_text decision (beats prior PB on verified timing; NOT
+# on provisional / first-ever / tie / slower) + the _PBToast wording & progression-link routing.
+# Imports the LapTable + the app toast -> Qt, so run offscreen. No telemetry file.
+add_test(NAME test_accessible_cues
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_accessible_cues.py)
+set_tests_properties(test_accessible_cues PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
@@ -268,7 +279,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video
-                        test_data_safety test_units)
+                        test_data_safety test_units test_accessible_cues)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

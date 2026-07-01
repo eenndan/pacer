@@ -24,6 +24,9 @@ VERSION = 1
 
 # Preference keys.
 SPEED_UNIT = "speed_unit"
+# The accessible/colour-blind-safe semantic palette toggle (studio/theme.py). Stored as a bool;
+# False (default) keeps the original red/green cues, True swaps in the blue/orange CB-safe axis.
+COLORBLIND_PALETTE = "colorblind_palette"
 
 
 def _app_support_dir() -> str:
@@ -91,3 +94,15 @@ def speed_unit(path: str | None = None) -> str:
 def set_speed_unit(unit: str, path: str | None = None) -> None:
     """Persist the speed unit (normalized first)."""
     set(SPEED_UNIT, units.normalize_unit(unit), path)
+
+
+def colorblind_palette(path: str | None = None) -> bool:
+    """Whether the colour-blind-safe semantic palette is enabled (default False = the original
+    red/green cues). A garbage stored value coerces to bool, so a corrupt file never crashes the
+    toggle — it just reads as off."""
+    return bool(get(COLORBLIND_PALETTE, False, path))
+
+
+def set_colorblind_palette(on: bool, path: str | None = None) -> None:
+    """Persist the colour-blind-safe palette toggle."""
+    set(COLORBLIND_PALETTE, bool(on), path)

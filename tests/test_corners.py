@@ -389,15 +389,20 @@ def test_corner_table_populates_and_highlights():
     table.set_lap(1)
     assert table.table.rowCount() == len(cs)
     assert table.table.columnCount() == len(CORNER_COLUMNS)
+    from studio.lap_table import BEST_SECTOR_MARK
     for r, s in enumerate(st):
         assert table.table.item(r, 0).text().startswith(cs[r].label)
-        assert table.table.item(r, 1).text() == f"{s.time:.2f}"
+        # A session-best corner time carries the trailing ★ non-colour mark (matches the lap
+        # table's best-split cells); a non-best time is the bare number.
+        is_best = abs(s.time - bests[r]) < 1e-9
+        expected_time = f"{s.time:.2f}" + (BEST_SECTOR_MARK if is_best else "")
+        assert table.table.item(r, 1).text() == expected_time
         assert table.table.item(r, 2).text() == f"{s.delta:+.2f}"
         assert table.table.item(r, 3).text() == f"{s.apex_speed:.1f}"
-        # purple+bold Time cell iff this lap holds the session best for that corner
-        is_best = abs(s.time - bests[r]) < 1e-9
+        # best-sector-coloured + bold Time cell iff this lap holds the session best for that corner
+        # (default palette: best_sector_colour() == C.best purple)
         item = table.table.item(r, 1)
-        assert (item.foreground().color() == QColor(theme.C.best)) == is_best
+        assert (item.foreground().color() == QColor(theme.best_sector_colour())) == is_best
         assert item.font().bold() == is_best
     # set_lap is a no-op when unchanged (cheap on the auto-follow path)
     n = stub.calls
