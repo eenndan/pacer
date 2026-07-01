@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import units
 from .corners import project_boundaries
 
 # Min clean laps before coaching; the per-corner loss is a MEDIAN, ill-defined/unstable below 3.
@@ -435,13 +436,15 @@ def dominant_phase_clause(opp: Opportunity) -> str:
 
 
 # ------------------------------------------------------------------ UI sentence helper
-def reason_sentence(opp: Opportunity) -> str:
+def reason_sentence(opp: Opportunity, unit: str | None = None) -> str:
     """The human, numbers-only coaching sentence for one opportunity's dominant reason. Kept
     here (next to the model) so the panel and any export read ONE phrasing and can't drift. When
-    a clear dominant phase exists (D2) it is appended ("… — most of it on exit")."""
+    a clear dominant phase exists (D2) it is appended ("… — most of it on exit"). `unit` (km/h
+    default) converts the apex-speed deficit at the DISPLAY boundary — the deficit stays km/h."""
     r = opp.reason
     if r.kind == REASON_APEX:
-        base = f"carry more apex speed (−{r.apex_speed_deficit:.1f} km/h)"
+        deficit = units.convert_speed(r.apex_speed_deficit, unit)
+        base = f"carry more apex speed (−{deficit:.1f} {units.speed_label(unit)})"
     elif r.kind == REASON_BRAKING:
         base = f"brake later / shorter (+{r.brake_extra_s:.2f} s on the brakes)"
     elif r.kind == REASON_COASTING:

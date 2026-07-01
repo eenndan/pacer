@@ -44,7 +44,7 @@ from PySide6.QtGui import (
     QRadialGradient,
 )
 
-from . import gmeter_overlay, theme
+from . import gmeter_overlay, theme, units
 from ._signal import fmt_time
 
 
@@ -257,6 +257,10 @@ class OverlayConfig:
     readout_h_frac: float = 0.040
     # lap/sector strip: a slim bar across the TOP-LEFT.
     strip_h_frac: float = 0.040
+    # Speed display unit for the burned-in readout ("kmh"/"mph"); km/h default. The app passes the
+    # persisted choice so the export matches what's on screen. Speed VALUES stay km/h — converted
+    # only at the paint boundary (units.convert_speed).
+    speed_unit: str = units.DEFAULT_UNIT
 
 
 # --------------------------------------------------------------------------- chaptered source
@@ -873,9 +877,11 @@ class _MapInset:
         p.drawEllipse(m, 4.6 * k, 4.6 * k)
 
 
-def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues) -> None:
-    """Bottom-left delta/speed readout: a hero speed number + small km/h unit and a vivid delta cue
-    (export_delta_colour), all haloed, on a slim dark pill."""
+def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues,
+                   unit: str | None = None) -> None:
+    """Bottom-left delta/speed readout: a hero speed number + small unit label ("km/h"/"mph") and a
+    vivid delta cue (export_delta_colour), all haloed, on a slim dark pill. `unit` (km/h default)
+    converts the speed number + names the unit — matching what's on screen."""
     k = box.height() / 44.0   # the readout box is ~44 px tall at 1080p; scale radii/strokes with it
     p.setBrush(_c(EXPORT.halo, 165))
     p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
@@ -883,20 +889,21 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues) -> None:
     pad = box.height() * 0.26
     inner = box.adjusted(pad, 0, -pad, 0)
     # --- HERO speed: big number + small unit ---
-    # theme.speed_number is the shared formatter the live #DiffBox uses (real km/h only while a lap
-    # is current, else dash) — kept identical, no drift.
-    speed_num = theme.speed_number(vals.speed_kmh, vals.lap_id)
+    # theme.speed_number is the shared formatter the live #DiffBox uses (real speed only while a lap
+    # is current, else dash) — kept identical, no drift; `unit` converts + names it (km/h default).
+    speed_num = theme.speed_number(vals.speed_kmh, vals.lap_id, unit)
+    unit_label = units.speed_label(unit)
     big = _font(box.height() * 0.74, bold=True)
-    unit = _font(box.height() * 0.34, bold=True)
+    unit_font = _font(box.height() * 0.34, bold=True)
     fm_big = QFontMetricsF(big)
     base_y = inner.y() + (inner.height() + fm_big.ascent() - fm_big.descent()) / 2.0
     x = inner.x()
     _draw_text(p, QPointF(x, base_y), speed_num, big, EXPORT.text, halo=2.4 * k)
     x += fm_big.horizontalAdvance(speed_num) + 4 * k
-    fm_unit = QFontMetricsF(unit)
+    fm_unit = QFontMetricsF(unit_font)
     _draw_text(p, QPointF(x, base_y - (fm_big.ascent() - fm_unit.ascent()) * 0.15),
-               "km/h", unit, EXPORT.text_dim, halo=1.8 * k)
-    x += fm_unit.horizontalAdvance("km/h") + 16 * k
+               unit_label, unit_font, EXPORT.text_dim, halo=1.8 * k)
+    x += fm_unit.horizontalAdvance(unit_label) + 16 * k
     # --- Δ cue: punchy vivid colour ---
     # theme.format_delta_run(units=False) = the export's tight "Δ +0.00" form (shared with the live
     # box, so no drift); colour from export_delta_colour.
@@ -1005,7 +1012,7 @@ class OverlayPainter:
                                   export=True, scale_k=self._g_rect.width() / 280.0)
         p.restore()
         self._map.paint(p, vals.marker_index)
-        _paint_readout(p, self._readout_rect, vals)
+        _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
         _paint_strip(p, self._strip_rect, self._session, vals, self._spec.t0)
         p.end()
 

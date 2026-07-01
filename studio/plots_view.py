@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme
+from . import theme, units
 from ._signal import fmt_time
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
 from .theme import C, icon
@@ -82,6 +82,10 @@ class PlotsView(QWidget):
     def __init__(self, session: Session):
         super().__init__()
         self.session = session
+        # Speed-axis display unit (km/h default); the app pushes the persisted choice via
+        # set_speed_unit. Speed VALUES stay km/h — the y-axis label is the only conversion here
+        # (the plotted curves are the raw km/h arrays; only the axis LABEL names the unit).
+        self._speed_unit = units.DEFAULT_UNIT
         self._lap_ids: list[int] = []
         self._curves: list[tuple[object, object]] = []
         self._delta_curves: list[tuple] = []  # [(lid, xs, ys)] cached for the hover-dot snap
@@ -145,7 +149,7 @@ class PlotsView(QWidget):
         # Speed 58 / delta 42 row stretch - delta legible, speed dominant.
         self.glw.ci.layout.setRowStretchFactor(0, 58)
         self.glw.ci.layout.setRowStretchFactor(1, 42)
-        self.p_speed.setLabel("left", "speed (km/h)")
+        self._apply_speed_axis_label()
         # Hide the speed plot's bottom axis: the shared x ticks/label live on the Δ plot only.
         self.p_speed.hideAxis("bottom")
         # Faint gridlines (alpha 0.10) so they read as a quiet backdrop, not a foreground grid.
@@ -447,6 +451,20 @@ class PlotsView(QWidget):
                 best_y = float(np.interp(x, sx, spd))
         return best_y
 
+    def _apply_speed_axis_label(self):
+        """Name the speed y-axis in the current display unit ('speed (km/h)' / 'speed (mph)')."""
+        self.p_speed.setLabel("left", f"speed ({units.speed_label(self._speed_unit)})")
+
+    def set_speed_unit(self, unit: str):
+        """Switch the speed display unit live: re-label the y-axis and re-plot so the curves carry
+        the converted values. Called by the window's Units toggle. No-op if unchanged."""
+        unit = units.normalize_unit(unit)
+        if unit == self._speed_unit:
+            return
+        self._speed_unit = unit
+        self._apply_speed_axis_label()
+        self.refresh()
+
     def refresh(self):
         for plot, curve in self._curves:
             plot.removeItem(curve)
@@ -505,6 +523,10 @@ class PlotsView(QWidget):
             name = self._curve_label(lid, is_best)
             if lid in speed:
                 sx, spd = speed[lid]
+                # Convert km/h → the display unit at the plot boundary (identity for km/h). The
+                # CACHED curve is the displayed one so the brake/throttle band + hover-snap ride
+                # the visible line; analysis math elsewhere keeps the raw km/h.
+                spd = units.convert_speed(spd, self._speed_unit)
                 c = self.p_speed.plot(sx, spd, pen=pen, name=name)
                 # Monotonic x -> downsample + clip-to-view is valid; cuts per-tick re-render.
                 c.setDownsampling(auto=True)

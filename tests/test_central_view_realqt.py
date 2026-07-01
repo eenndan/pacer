@@ -166,6 +166,7 @@ def test_real_qtimer_fires_view_tick_through_studiowindow():
     win.view = None
     win._tick_timer = None
     win._consistency_visible = False
+    win._speed_unit = "kmh"  # speed display unit (km/h default); _build_ui passes it into the view
     win.session = s
     win._paths = ["/tmp/stadium.MP4"]
     win._sidecar_path = None

@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme
+from . import theme, units
 from .map_render import (
     bucket_polylines,
     bucketize,  # noqa: F401  (re-exported for tests importing from map_view)
@@ -509,6 +509,9 @@ class MapView(QWidget):
     def __init__(self, session: Session):
         super().__init__()
         self.session = session
+        # Speed display unit (km/h default); app pushes the persisted choice via set_speed_unit.
+        # Only the "speed" rainbow legend end-labels use it — the bucket COLOURS are km/h-invariant.
+        self._speed_unit = units.DEFAULT_UNIT
         self._suppress_marker = False
         self._current_lap: int | None = None  # F3: scope the marker drag to this lap
         # Latest pending marker-drag seek time; the 30 Hz tick drains one per tick via
@@ -813,6 +816,16 @@ class MapView(QWidget):
             self._ghost = None
 
     # --------------------------------------------------------------- rainbow (F3)
+    def set_speed_unit(self, unit: str):
+        """Switch the speed display unit live: re-render so the SPEED rainbow legend re-labels in
+        the new unit. No-op if unchanged; only the speed channel is affected (Δ/grip are unitless)."""
+        unit = units.normalize_unit(unit)
+        if unit == self._speed_unit:
+            return
+        self._speed_unit = unit
+        if self._rainbow_mode == "speed":
+            self._apply_rainbow()
+
     def set_rainbow_mode(self, mode: str):
         """Set the painted channel to `mode` (one of _RAINBOW_ORDER) and re-render. The single seam
         the labelled combo and the cycle API both route through, so the mode, the combo selection
@@ -880,7 +893,8 @@ class MapView(QWidget):
             got = self.session.delta([lap_id])
             if got is not None and lap_id in got[2]:
                 delta_grid = got[2][lap_id][1]
-        result = rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid)
+        result = rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
+                                 self._speed_unit)
         if result is None:
             return False
         seg_buckets, lo_txt, hi_txt = result

@@ -8,7 +8,7 @@ import sys
 import time
 
 from PySide6.QtCore import QBuffer, QIODevice, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -27,7 +27,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, demo, export_data, export_video, library, sidecar, theme, track_db
+from . import (
+    chapters,
+    demo,
+    export_data,
+    export_video,
+    library,
+    prefs,
+    sidecar,
+    theme,
+    track_db,
+    units,
+)
 from .central_view import CentralView
 from .coaching_panel import OpportunitiesDialog
 from .help_dialog import AboutDialog, ShortcutsDialog
@@ -168,6 +179,9 @@ class StudioWindow(QMainWindow):
         self._tick_timer = None  # created on the first _build_ui; reused across reloads (window-owned)
         # Persisted on the window so the View-menu choice survives a reload (passed into each view).
         self._consistency_visible = False
+        # Speed display unit (km/h default), loaded from the persisted prefs so the choice survives
+        # a relaunch; passed into each fresh CentralView + the video/coaching exports.
+        self._speed_unit = prefs.speed_unit()
         self._build_menu()
         self._build_shortcuts()
         # --full on the CLI auto-discovers the first file's sibling chapters; explicit multiple
@@ -450,7 +464,8 @@ class StudioWindow(QMainWindow):
             old_view.dispose()  # stop the old decoder + close its g-meter overlay before the swap
         # The view holds a read alias of session + the paths (banner) + the sidecar path.
         self.view = CentralView(self.session, self._paths, self._sidecar_path,
-                                self._consistency_visible, parent=self)
+                                self._consistency_visible, parent=self,
+                                speed_unit=getattr(self, "_speed_unit", units.DEFAULT_UNIT))
         self.setCentralWidget(self.view)
         # One ~30 Hz tick timer for the window's lifetime, created once and reused across reloads (a
         # second would double the tick rate); the swap just re-points which view tick() drives.
@@ -571,6 +586,22 @@ class StudioWindow(QMainWindow):
             "Show the consistency strip under the lap table: the lap-time trend sparkline and the "
             "top-5 most inconsistent corners.")
         self._consistency_action.toggled.connect(self._on_consistency_toggled)
+
+        # View ▸ Units: the speed display unit (km/h default). Two mutually-exclusive checkable
+        # items in a QActionGroup; flipping one persists the choice + refreshes the open views live.
+        units_menu = view_menu.addMenu("Units")
+        units_menu.setToolTip("Speed display unit (km/h ↔ mph). Distances stay in metres.")
+        self._unit_group = QActionGroup(self)
+        self._unit_group.setExclusive(True)
+        self._unit_actions: dict[str, object] = {}
+        for unit, label in ((units.KMH, "km/h"), (units.MPH, "mph")):
+            act = units_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(self._speed_unit == unit)
+            act.setData(unit)
+            self._unit_group.addAction(act)
+            self._unit_actions[unit] = act
+            act.triggered.connect(lambda checked, u=unit: checked and self._on_unit_selected(u))
 
         # Help menu: the shortcut reference (also F1 / ?) and an About card (help_dialog.py).
         help_menu = self.menuBar().addMenu("&Help")
@@ -748,7 +779,8 @@ class StudioWindow(QMainWindow):
         # Shared with the persistent panel via session.coaching_brake_points (one source).
         brake_points = self.session.coaching_brake_points()
         dlg = OpportunitiesDialog(opps, jump_to=self._jump_to_opportunity,
-                                  brake_points=brake_points, parent=self)
+                                  brake_points=brake_points, parent=self,
+                                  speed_unit=self._speed_unit)
         dlg.exec()
 
     def _jump_to_opportunity(self, cid: int, _entry_dist: float):
@@ -779,6 +811,22 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             view.set_consistency_visible(self._consistency_visible)
+
+    def _on_unit_selected(self, unit: str):
+        """View ▸ Units: remember the chosen speed unit on the window (survives a reload), PERSIST
+        it (guarded — a write failure must never disrupt the app), and refresh the open views
+        live. No behaviour change when re-selecting the current unit."""
+        unit = units.normalize_unit(unit)
+        if unit == self._speed_unit:
+            return
+        self._speed_unit = unit
+        try:
+            prefs.set_speed_unit(unit)
+        except OSError as exc:
+            print(f"studio: could not persist speed unit ({exc!r}).", flush=True)
+        view = getattr(self, "view", None)
+        if view is not None:
+            view.set_speed_unit(unit)
 
     # ----------------------------------------------------------- data export (F11)
     # File ▸ Export Qt side (the writers are Qt-free in export_data.py).
@@ -1009,7 +1057,9 @@ class StudioWindow(QMainWindow):
         self._export_res_idx, self._export_quality_idx = ri, qi   # remember for next time
         out_height = self._EXPORT_RES_OPTIONS[ri][1]
         quality = self._EXPORT_QUALITY_OPTIONS[qi][1]
-        return export_video.OverlayConfig(out_height=out_height, quality=quality)
+        # Burn the current display unit into the overlay so the export matches the on-screen readout.
+        return export_video.OverlayConfig(out_height=out_height, quality=quality,
+                                          speed_unit=self._speed_unit)
 
     def _export_overlay_video(self):
         if not hasattr(self, "session"):
