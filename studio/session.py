@@ -36,6 +36,7 @@ from . import (
     library,
     render_cache,
     timeline,
+    track_match,
     tracks,
 )
 from ._signal import (
@@ -301,14 +302,12 @@ class Session:
         """Adopt an already-loaded `Session` as the reference (the guard + extraction half of
         `load_reference`, split out so tests can pass a synthetic reference Session without a
         telemetry file). Returns None on success or the refusal reason."""
-        # Track guard: both sides must be the SAME detected track. Compared on the registry
-        # name; if EITHER side is an unknown track (name None) we can't prove they match, so
-        # refuse rather than overlay two possibly-different tracks. (Same-track-or-bust.)
-        if self.track_name is None or ref.track_name is None or self.track_name != ref.track_name:
-            mine = self.track_name or "unknown"
-            theirs = ref.track_name or "unknown"
-            return (f"reference is a different track ({theirs}) than this session ({mine}); "
-                    "keeping the local best lap")
+        # Track guard: prove the two recordings are the SAME circuit before overlaying them (a
+        # wrong match overlays two DIFFERENT tracks — worse than refusing). See _track_admits_
+        # reference for the two-path decision (confirmed name-match vs geometry fallback).
+        ok, is_geometric, reason = self._track_admits_reference(ref)
+        if not ok:
+            return reason
         ref_best = ref.best_lap_id()
         if ref_best is None:
             return "reference recording has no valid laps; keeping the local best lap"
@@ -325,6 +324,7 @@ class Session:
             dist=dist, speed_kmh=speed_kmh, elapsed=elapsed,
             loop_xy=ref_loop, primary_loop_xy=primary_loop,
             source_label=source_label or "reference", lap_id=ref_best,
+            is_geometric=is_geometric,
         )
         # F7 Phase B: keep the live reference Session so pane B can play its footage with its own
         # telemetry.
@@ -333,6 +333,43 @@ class Session:
         # invalidate_stats() drops only those (detection windows unchanged), recomputed lazily.
         self.corners.invalidate_stats()
         return None
+
+    def _track_admits_reference(self, ref: Session) -> tuple[bool, bool, str | None]:
+        """Decide whether `ref` may overlay this session, and HOW it was matched. Returns
+        `(ok, is_geometric, reason)`: `ok` False => refuse with `reason`; `ok` True with
+        `is_geometric` True => admitted by GPS geometry (unknown track name, flagged UNVERIFIED
+        in the UI) rather than a confirmed same-named track.
+
+        Two paths:
+          * BOTH sides carry a detected registry `track_name` — admit iff the names are EQUAL
+            (the confirmed-track path, byte-identical to the pre-fallback behaviour: no caveat).
+            Different names => refuse (a name mismatch is authoritative).
+          * EITHER side is an unknown track (name None — the common case, since the shipped DB
+            holds ~one track) — there is no name to compare, so fall back to GEOMETRY: match on
+            the GPS centroid distance + footprint size (studio/track_match.py). Same place =>
+            admit as UNVERIFIED; else refuse. This is the "race a friend's GoPro off an unknown
+            track" path — the moat feature, previously dead on every unnamed track."""
+        mine, theirs = self.track_name, ref.track_name
+        if mine is not None and theirs is not None:
+            if mine == theirs:
+                return True, False, None  # confirmed same named track — unchanged behaviour
+            return (False, False,
+                    f"reference is a different track ({theirs}) than this session ({mine}); "
+                    "keeping the local best lap")
+        # Unknown track on at least one side: decide by geometry.
+        try:
+            my_centroid, my_bbox = self.track_location()
+            ref_centroid, ref_bbox = ref.track_location()
+        except Exception:  # noqa: BLE001 — a footprint we can't measure can't be matched: refuse.
+            return (False, False,
+                    "these don't look like the same track (could not read the reference's GPS "
+                    "location); keeping the local best lap")
+        verdict = track_match.match(my_centroid, my_bbox, ref_centroid, ref_bbox)
+        if not verdict.same_track:
+            return (False, False,
+                    "these don't look like the same track (different location); "
+                    "keeping the local best lap")
+        return True, True, None  # same place, unknown name -> admit but flag UNVERIFIED
 
     def clear_reference(self) -> None:
         """Drop the cross-recording reference — every "vs best" output reverts to the local
@@ -475,6 +512,15 @@ class Session:
         None when dormant."""
         ref = self._ref
         return ref.source_label if ref is not None else None
+
+    def reference_match_is_geometric(self) -> bool:
+        """True iff the active reference was admitted by GPS-GEOMETRY match (an unknown track name,
+        matched on location/size) rather than a confirmed same-named track. Such an overlay is
+        valid but UNVERIFIED — both recordings' start lines may be provisional, so the aligned Δ
+        phase can be off until the user sets both start lines. The UI surfaces a short caveat on
+        it (see app.py's reference status). False when dormant or a confirmed same-named match."""
+        ref = self._ref
+        return bool(ref is not None and getattr(ref, "is_geometric", False))
 
     def reference_lap_time(self) -> float | None:
         """The active reference lap's total time (seconds), or None when dormant."""

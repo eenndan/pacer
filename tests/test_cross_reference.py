@@ -52,6 +52,28 @@ def loop_xy(n=120, scale=10.0, cx=0.0, cy=0.0):
     return np.column_stack([cx + r * np.cos(th), cy + r * np.sin(th)])
 
 
+class _Pt:
+    """A min_max() corner point: .x = LONGITUDE, .y = LATITUDE (the pacer Point convention that
+    Session.track_location() reads — see load.py `clat,clon = (mn.y+mx.y)/2, (mn.x+mx.x)/2`)."""
+
+    def __init__(self, lon, lat):
+        self.x, self.y = float(lon), float(lat)
+
+
+def set_location(session, *, clat, clon, half_lat=0.0009, half_lon=0.0009):
+    """Give a bare Session a GPS footprint so `track_location()` (and the geometry track-match) can
+    read it, WITHOUT a telemetry file: stub `laps.min_max()` to return the bbox corners centred on
+    (clat, clon) with the given half-extents (degrees). Keeps the existing `laps_count` stub so the
+    delta range checks still pass. ~0.0009° ≈ 100 m, a kart-track scale by default."""
+    laps_count = session.laps.laps_count  # preserve the delta() range-check stub already installed
+    mn = _Pt(clon - half_lon, clat - half_lat)
+    mx = _Pt(clon + half_lon, clat + half_lat)
+    session.laps = type("L", (), {
+        "laps_count": staticmethod(laps_count),
+        "min_max": staticmethod(lambda mn=mn, mx=mx: (mn, mx)),
+    })()
+
+
 # ---------------------------------------------------------------- the delta-endpoint contract
 def test_delta_endpoint_equals_cross_recording_laptime_diff():
     # Primary best lap: 60.0 s over 1000 m. Reference (another recording): 58.0 s over 1040 m —
@@ -123,15 +145,92 @@ def test_track_mismatch_guard_refuses_and_keeps_local_best():
     print(f"test_track_mismatch_guard OK: refused with {reason!r}")
 
 
-def test_unknown_track_refused():
-    # If EITHER side has an unknown track (name None) the match can't be proven -> refuse.
-    p_times, p_dists = odometer(100, 0.5, 0.0, 800.0)
-    primary = make_session({1: (p_times, p_dists)}, best=1, valid=[1], track="Track A")
-    ref = make_session({1: odometer(100, 0.5, 0.0, 800.0)}, best=1, valid=[1], track=None)
+# ----------------------------------------- geometry track-match fallback (unknown track)
+# When EITHER side has no detected track NAME (the common case — the DB ships ~one track), the
+# gate can no longer compare names, so it falls back to GPS GEOMETRY: same location (haversine
+# centroid distance) AND comparable footprint size => admit as UNVERIFIED, else refuse. These
+# stub `laps.min_max()` (via set_location) + `track_name` so the match runs without a telemetry
+# file. A geometry-admitted reference must ALSO be flagged geometric (reference_match_is_geometric).
+def _stub_loops(primary, ref):
+    """The overlay-fit inputs aren't what these gate tests exercise; stub them so build() runs but
+    produces no overlay (identical to the existing delta-endpoint tests)."""
+    primary._reference_fit_loop = lambda: None
+    ref.lap_trace_xy = lambda _lid: (np.zeros(0), np.zeros(0))
+
+
+def test_geometry_match_allows_and_flags_unverified():
+    # Two UNKNOWN-track recordings whose centroids nearly coincide (a few metres apart) and whose
+    # footprints are the same size -> same circuit -> ALLOW, flagged UNVERIFIED (geometry match).
+    p_times, p_dists = odometer(120, 0.4, 0.0, 900.0)
+    primary = make_session({1: (p_times, p_dists)}, best=1, valid=[1], track=None)
+    ref = make_session({2: odometer(120, 0.4, 0.0, 900.0)}, best=2, valid=[2], track=None)
+    set_location(primary, clat=52.0403, clon=-0.7847)
+    set_location(ref, clat=52.04035, clon=-0.78475)  # ~6 m away, same ~100 m footprint
+    _stub_loops(primary, ref)
+    reason = primary.set_reference_session(ref, source_label="friend")
+    assert reason is None, reason
+    assert primary.has_reference()
+    assert primary.reference_match_is_geometric(), "a location-only match must be flagged unverified"
+    assert primary.reference_label() == "friend"
+    print("test_geometry_match_allows_and_flags_unverified OK")
+
+
+def test_geometry_match_far_apart_refuses():
+    # Same unknown-track setup but the centroids are ~30 km apart (different circuits) -> REFUSE.
+    p_times, p_dists = odometer(120, 0.4, 0.0, 900.0)
+    primary = make_session({1: (p_times, p_dists)}, best=1, valid=[1], track=None)
+    ref = make_session({2: odometer(120, 0.4, 0.0, 900.0)}, best=2, valid=[2], track=None)
+    set_location(primary, clat=52.0403, clon=-0.7847)
+    set_location(ref, clat=52.30, clon=-0.7847)  # ~0.26° lat ≈ 29 km north
+    _stub_loops(primary, ref)
     reason = primary.set_reference_session(ref)
-    assert reason is not None and "different track" in reason
+    assert reason is not None and "different location" in reason, reason
     assert not primary.has_reference()
-    print("test_unknown_track_refused OK")
+    print("test_geometry_match_far_apart_refuses OK")
+
+
+def test_geometry_match_same_centroid_different_size_refuses():
+    # Centroids coincide but the footprints differ ~10× in extent (a tiny kart track vs a big
+    # course sharing the centroid region) -> REFUSE (the size check).
+    p_times, p_dists = odometer(120, 0.4, 0.0, 900.0)
+    primary = make_session({1: (p_times, p_dists)}, best=1, valid=[1], track=None)
+    ref = make_session({2: odometer(120, 0.4, 0.0, 900.0)}, best=2, valid=[2], track=None)
+    set_location(primary, clat=52.0403, clon=-0.7847, half_lat=0.0009, half_lon=0.0009)   # ~100 m
+    set_location(ref, clat=52.0403, clon=-0.7847, half_lat=0.009, half_lon=0.009)          # ~1 km
+    _stub_loops(primary, ref)
+    reason = primary.set_reference_session(ref)
+    assert reason is not None and "different location" in reason, reason
+    assert not primary.has_reference()
+    print("test_geometry_match_same_centroid_different_size_refuses OK")
+
+
+def test_both_named_same_track_allows_without_caveat():
+    # BOTH sides carry the SAME detected track name -> confirmed match: ALLOW with NO caveat
+    # (byte-identical to the pre-fallback behaviour; not flagged geometric).
+    p_times, p_dists = odometer(120, 0.4, 0.0, 900.0)
+    primary = make_session({1: (p_times, p_dists)}, best=1, valid=[1], track="Daytona MK")
+    ref = make_session({2: odometer(120, 0.4, 0.0, 900.0)}, best=2, valid=[2], track="Daytona MK")
+    _stub_loops(primary, ref)
+    reason = primary.set_reference_session(ref)
+    assert reason is None, reason
+    assert primary.has_reference()
+    assert not primary.reference_match_is_geometric(), "a confirmed named match carries NO caveat"
+    print("test_both_named_same_track_allows_without_caveat OK")
+
+
+def test_named_vs_different_named_still_refuses():
+    # BOTH named but DIFFERENT names -> a name mismatch is authoritative -> REFUSE (no geometry).
+    p_times, p_dists = odometer(120, 0.4, 0.0, 900.0)
+    primary = make_session({1: (p_times, p_dists)}, best=1, valid=[1], track="Track A")
+    ref = make_session({2: odometer(120, 0.4, 0.0, 900.0)}, best=2, valid=[2], track="Track B")
+    # Even with coincident centroids, a name mismatch must win (never reaches geometry).
+    set_location(primary, clat=52.0403, clon=-0.7847)
+    set_location(ref, clat=52.0403, clon=-0.7847)
+    _stub_loops(primary, ref)
+    reason = primary.set_reference_session(ref)
+    assert reason is not None and "different track" in reason, reason
+    assert not primary.has_reference()
+    print("test_named_vs_different_named_still_refuses OK")
 
 
 def test_no_valid_laps_reference_refused():

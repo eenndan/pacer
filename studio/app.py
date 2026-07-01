@@ -673,8 +673,10 @@ class StudioWindow(QMainWindow):
         coaching_menu = self.menuBar().addMenu("&Coaching")
         self._ref_action = coaching_menu.addAction("Load reference recording…")
         self._ref_action.setToolTip(
-            "Pick another recording of the SAME track; its best lap becomes the Δ / map / table "
-            "reference (instead of this session's own best lap)")
+            "Race a friend's GoPro: pick another recording of this track (yours or a friend's) to "
+            "compare side-by-side — its best lap becomes the Δ / map / table reference instead of "
+            "this session's own best lap. The track is matched by GPS location, so it works even "
+            "when the track isn't in the database.")
         self._ref_action.triggered.connect(self._load_reference_file)
         self._clear_ref_action = coaching_menu.addAction("Clear reference")
         self._clear_ref_action.setToolTip("Revert the Δ / map / table reference to this "
@@ -1539,7 +1541,22 @@ class StudioWindow(QMainWindow):
         if chip is None:
             return
         if active:
-            chip.setText(f"  ▶ reference: {self.session.reference_label()}  ")
+            label = self.session.reference_label()
+            # A geometry-matched reference (unknown track name, matched by GPS location) is a valid
+            # overlay but UNVERIFIED: both start lines may be provisional, so the aligned Δ phase can
+            # be off. Flag it with the shared PROVISIONAL trust-tier colour (no hardcoded colour) and
+            # a short caveat tooltip; a confirmed same-named match is unchanged (no caveat, no tint).
+            if self.session.reference_match_is_geometric():
+                chip.setText(f"  ▶ reference: {label} · matched by location — unverified  ")
+                chip.setStyleSheet(f"color: {theme.PROVISIONAL_COLOR};")
+                chip.setToolTip(
+                    "This reference was matched to your session by GPS location, not a confirmed "
+                    "track name. The overlay is valid, but set BOTH recordings' start/finish lines "
+                    "for exact Δ alignment.")
+            else:
+                chip.setText(f"  ▶ reference: {label}  ")
+                chip.setStyleSheet("")   # clear any prior caveat tint (chip is reused across loads)
+                chip.setToolTip("")
             chip.setVisible(True)
         else:
             chip.setVisible(False)
