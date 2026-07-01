@@ -7,6 +7,7 @@ feeds it numpy arrays/markers. The compare ghost exists only during compare mode
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -718,6 +719,31 @@ class MapView(QWidget):
         m = 8  # px inset from the panel edges
         host = self.widget
         self._map_key.move(m, host.height() - self._map_key.height() - m)
+
+    @contextmanager
+    def grab_clean(self):
+        """Temporarily hide the map's pure-INTERACTION chrome — the "Map key" legend (and the
+        zero-lap empty-state placeholder) — so a caller can ``grab()`` the plot as a clean image
+        for a social share (the shareable lap card). Dev/interaction affordances like the key have
+        no place on a share image; the SPEED rainbow colouring and everything else stay. Restores
+        each widget's prior visibility on exit (even on error), so the live map is untouched.
+
+        The provisional start-line cue is not hidden here: it only shows on unverified timing, which
+        already blocks the card upstream, so it never reaches a real grab."""
+        chrome = [w for w in (getattr(self, "_map_key", None), getattr(self, "_empty_state", None))
+                  if w is not None]
+        # Save the EXPLICIT hide flag (isHidden), not effective isVisible: a child reads
+        # not-visible whenever its top-level window isn't shown yet, so restoring from isVisible
+        # would wrongly leave the key hidden on an off-screen/grab-only map (the empty-state's
+        # isHidden idiom). isHidden is True only when hide() was actually called.
+        prev = [(w, w.isHidden()) for w in chrome]
+        for w in chrome:
+            w.hide()
+        try:
+            yield self
+        finally:
+            for w, was_hidden in prev:
+                w.setVisible(not was_hidden)
 
     def _reposition_empty_state(self):
         """Keep the zero-lap empty-state placeholder centred over the plot, spanning a comfortable

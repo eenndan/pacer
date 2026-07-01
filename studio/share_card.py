@@ -51,6 +51,18 @@ IDEAL_LABEL = "vs your ideal lap"
 IDEAL_SUBLABEL = "synthetic best-at-each-point — not a single drivable lap"
 
 
+def hero_delta_line(gap: float) -> str:
+    """The Δ-to-ideal hero line, one coherent voice across both branches.
+
+    A positive gap reads as time still on the table ("+0.31 s vs your ideal lap"); a gap at (or
+    below) the even-epsilon means the best lap already sits ON the synthetic per-point envelope, so
+    it reads plainly as "level with your ideal lap" — never the doubled "on your ideal lap vs your
+    ideal lap" template bug the two-branch string concat used to produce."""
+    if gap > theme.DELTA_EVEN_EPS_S:
+        return f"+{gap:.2f} s {IDEAL_LABEL}"
+    return "level with your ideal lap"
+
+
 @dataclass(frozen=True)
 class TopOpp:
     """The #1 coaching opportunity as the card shows it (already resolved to display strings)."""
@@ -207,8 +219,7 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
         # A gap of 0 reads even (green/ahead), a positive gap reads "time left" (behind hue).
         gap = data.delta_to_ideal_s
         colour = theme.behind_colour() if gap > theme.DELTA_EVEN_EPS_S else theme.ahead_colour()
-        gap_txt = f"+{gap:.2f} s {IDEAL_LABEL}" if gap > theme.DELTA_EVEN_EPS_S \
-            else f"on your ideal lap {IDEAL_LABEL}"
+        gap_txt = hero_delta_line(gap)
         _draw_text(p, pad, 424, gap_txt, _font(38, theme.W_SEMIBOLD), colour)
         _draw_text(p, pad, 460, IDEAL_SUBLABEL, _font(24), theme.C.text_muted)
 
