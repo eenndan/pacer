@@ -40,6 +40,8 @@ import pacer  # noqa: E402
 from studio._signal import (  # noqa: E402
     LAP_BAND_HI,
     LAP_BAND_LO,
+    LAP_DIST_BAND_HI,
+    LAP_DIST_BAND_LO,
     MIN_LAP_SAMPLES,
     MIN_LAP_TIME,
     _band_lap_ids,
@@ -57,12 +59,18 @@ from studio.session import Session  # noqa: E402
 
 class _FakeBandLaps:
     """The pacer.Laps READ surface `_band_lap_ids` touches — laps_count / lap_time /
-    sample_count only (the existing _FakeLaps doubles elsewhere lack sample_count)."""
+    sample_count, and OPTIONALLY get_lap_distance (the distance band).
 
-    def __init__(self, times, samples=None):
+    Distances are passed as ``dists``; when omitted the double does NOT expose
+    get_lap_distance at all (via __getattr__ raising AttributeError), so `_band_lap_ids`'
+    getattr guard falls back to the unchanged time-only path — the way the real fake test
+    doubles (and any pre-distance-band caller) drive it."""
+
+    def __init__(self, times, samples=None, dists=None):
         self._times = list(times)
         # Sample-rich by default so the time band is what's under test.
         self._samples = list(samples) if samples is not None else [1000] * len(self._times)
+        self._dists = list(dists) if dists is not None else None
 
     def laps_count(self):
         return len(self._times)
@@ -72,6 +80,13 @@ class _FakeBandLaps:
 
     def sample_count(self, i):
         return self._samples[i]
+
+    def __getattr__(self, name):
+        # Only surface get_lap_distance when distances were supplied — otherwise it must be
+        # absent so the getattr(laps, "get_lap_distance", None) guard hits its fallback.
+        if name == "get_lap_distance" and self.__dict__.get("_dists") is not None:
+            return lambda i: self._dists[i]
+        raise AttributeError(name)
 
 
 def _seg(x1, y1, x2, y2):
@@ -115,6 +130,58 @@ def test_band_lap_ids_edges():
     # All laps failing the basic gate is the other route to []: `basic` is empty.
     assert _band_lap_ids(_FakeBandLaps([2.0, 3.0, 4.0])) == []
     print("test_band_lap_ids_edges OK")
+
+
+def test_band_lap_ids_distance_band_drops_short_mis_segmented_lap():
+    """THE real-recording bug (a fixed circuit, ~1060 m / ~1:08 laps): ONE lap was
+    mis-segmented SHORT (921 m / 0:59) — 0.87x the median in BOTH time and distance, so it sat
+    INSIDE the time band and was crowned 'best', poisoning best/baseline/coaching/map. The
+    distance band (±10% of the median lap distance) catches it: its distance is out-of-band even
+    though its TIME passed. Real laps (distance varies only a few %) all survive."""
+    # Five laps: times all in-band (median 68 -> band [34, 108.8]); distances all ~1060 m
+    # EXCEPT lap 3 at 921 m (the phantom). Median distance 1060 -> band [954, 1166].
+    times = [68.0, 68.5, 67.5, 59.0, 68.2]
+    dists = [1060.0, 1058.0, 1062.0, 921.0, 1059.0]
+    med_t = float(np.median(times))
+    med_d = float(np.median(dists))
+    # The phantom passes the TIME band ...
+    assert LAP_BAND_LO * med_t <= times[3] <= LAP_BAND_HI * med_t
+    # ... but its distance is BELOW the distance band, while every real lap is inside it.
+    assert dists[3] < LAP_DIST_BAND_LO * med_d
+    for d in (dists[0], dists[1], dists[2], dists[4]):
+        assert LAP_DIST_BAND_LO * med_d <= d <= LAP_DIST_BAND_HI * med_d
+    assert _band_lap_ids(_FakeBandLaps(times, dists=dists)) == [0, 1, 2, 4]
+    print("test_band_lap_ids_distance_band_drops_short_mis_segmented_lap OK")
+
+
+def test_band_lap_ids_distance_band_noop_on_clean_recording():
+    """No-op guarantee: a clean recording where every lap's distance clusters within a few % of
+    the median (only racing-line / GPS variation) keeps EVERY lap — the distance band never
+    excludes a real lap. Times vary a bit more (as on a real circuit); all stay in both bands."""
+    times = [67.0, 69.0, 68.0, 70.0, 66.5]
+    dists = [1055.0, 1062.0, 1058.0, 1049.0, 1067.0]  # spread ~1.7% — all within ±10%
+    assert _band_lap_ids(_FakeBandLaps(times, dists=dists)) == [0, 1, 2, 3, 4]
+    # A LONG mis-segmented lap (extra loop, ~1.5x distance) is also caught by the distance band.
+    times2 = [68.0, 68.0, 68.0, 90.0]           # 90 s is still inside the time band [34, ...]
+    dists2 = [1060.0, 1060.0, 1060.0, 1600.0]   # but 1600 m is way above the distance band
+    assert _band_lap_ids(_FakeBandLaps(times2, dists=dists2)) == [0, 1, 2]
+    print("test_band_lap_ids_distance_band_noop_on_clean_recording OK")
+
+
+def test_band_lap_ids_falls_back_when_no_distance_accessor():
+    """CRITICAL back-compat: a `laps` double with NO get_lap_distance (the pre-distance-band
+    fake, and any caller that never exposed distances) falls back to the unchanged time-only
+    result — the distance band only applies when real distances exist."""
+    times = [60.0, 61.0, 62.0, 200.0, 25.0]     # same case as the time-band test
+    # No dists -> _FakeBandLaps hides get_lap_distance -> getattr guard -> time-only result.
+    assert not hasattr(_FakeBandLaps(times), "get_lap_distance")
+    assert _band_lap_ids(_FakeBandLaps(times)) == [0, 1, 2]
+    # A double that DOES expose get_lap_distance but reports only non-finite / non-positive
+    # distances (no usable median to band against) ALSO falls back to the time-only result.
+    bad = _FakeBandLaps([68.0, 68.0, 68.0], dists=[float("nan"), 0.0, -5.0])
+    assert hasattr(bad, "get_lap_distance")
+    assert _band_lap_ids(bad) == [0, 1, 2]
+    print("test_band_lap_ids_falls_back_when_no_distance_accessor OK")
 
 
 # ------------------------------------------------------------------------- 2) load._clean
