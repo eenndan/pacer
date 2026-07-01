@@ -135,7 +135,7 @@ _RAINBOW_ORDER = ("off", "speed", "delta", "grip")
 # Short, legible per-channel labels for the map-header dropdown (each channel visible + one click),
 # replacing the old blind-cycle button captions (where Grip was an undiscoverable 4th step).
 _RAINBOW_COMBO_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ to best",
-                         "grip": "Line: Grip (est)"}
+                         "grip": theme.estimated_label("Line: Grip")}
 # The per-channel rainbow value/bucket math (incl. the grip fixed scale + Δ/grip negation + the
 # GPS-dropout NaN-mask) lives in the Qt-free studio/map_render.py (rainbow_channel + helpers).
 

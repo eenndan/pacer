@@ -128,9 +128,12 @@ def _brake_point_hint(bp) -> str | None:
     m = float(bp.metres_later)
     if abs(m) < BRAKE_HINT_MIN_M:
         return None
+    # theme.ESTIMATED_MARK is the ONE canonical inline "estimated" badge (was a stray "(EST)" here) —
+    # so the brake-point hint reads the same "(est)" as the grip column / brake-throttle legend.
+    mark = theme.ESTIMATED_MARK
     if m > 0:
-        return f"Brake ~{m:.0f} m later into C{bp.cid} (EST)"
-    return f"Brake ~{abs(m):.0f} m earlier into C{bp.cid} (EST)"
+        return f"Brake ~{m:.0f} m later into C{bp.cid} {mark}"
+    return f"Brake ~{abs(m):.0f} m earlier into C{bp.cid} {mark}"
 
 
 # --- shared per-row cell builders (the modal dialog AND the persistent panel render rows the SAME
@@ -315,9 +318,9 @@ class OpportunitiesPanel(QWidget):
     Reads ONLY session accessors (``coaching_opportunities`` + ``coaching_brake_points``) — no
     analysis here. Refreshed on load / lap-selection / re-segmentation (never on the 30 Hz tick).
     A row click emits ``corner_clicked(cid)`` so the app can ring the corner's apex on the map (the
-    Jump-to-corner detail action stays in the modal dialog). Honours the existing ESTIMATED
-    labelling (the ``(EST)`` brake-point lines via ``_reason_cell``) and the friendly "need more
-    laps" state when there aren't enough clean laps."""
+    Jump-to-corner detail action stays in the modal dialog). Honours the shared ESTIMATED labelling
+    (the ``(est)`` brake-point lines via ``_reason_cell``, from ``theme.ESTIMATED_MARK``) and the
+    friendly "need more laps" state when there aren't enough clean laps."""
 
     # Clicked corner cid (None on deselect) -> the map apex-ring highlight (wired in central_view).
     corner_clicked = Signal(object)

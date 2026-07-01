@@ -39,13 +39,21 @@ TOP_N = 5            # ranked corners shown — the actionable shortlist, not th
 BODY_HEIGHT = 150    # px; the strip's natural/default height (splitter starts here)
 BODY_MIN_HEIGHT = 70   # px; below this the corner list scrolls instead of vanishing
 ROW_HEIGHT = 22
-# Trend: dim line + dots; PB (running-min) laps green.
+# Trend: dim line + dots; PB (running-min) laps carry the "best/ahead" hue.
 TREND_PEN = pg.mkPen(C.text_dim, width=1)
 TREND_DOT_BRUSH = pg.mkBrush(C.text_muted)
-PB_DOT_BRUSH = pg.mkBrush(C.ahead)
 PB_DOT_PEN = pg.mkPen(C.canvas, width=1)
-# Dashed green baseline at session best.
-BASELINE_PEN = pg.mkPen(C.ahead, width=1, style=Qt.DashLine)
+
+
+# The PB-dot fill + the dashed session-best baseline carry the "best lap == success == ahead" hue,
+# so they must follow the active palette (green by default, blue in the colour-blind palette) rather
+# than freeze C.ahead at import. Built at RENDER time via the accessor + re-applied in refresh_palette.
+def _pb_dot_brush():
+    return pg.mkBrush(theme.best_lap_colour())
+
+
+def _baseline_pen():
+    return pg.mkPen(theme.best_lap_colour(), width=1, style=Qt.DashLine)
 SPARK_AXIS_FONT = 10  # tabular tick font for the minimal min/max + first/last labels
 # Vertical headroom so extreme dots/labels aren't clipped.
 SPARK_Y_PAD_FRAC = 0.12
@@ -107,15 +115,15 @@ class ConsistencyPanel(QWidget):
         plot.setMenuEnabled(False)
         plot.hideButtons()
         self.spark.setBackground(None)  # transparent: panel surface shows through
-        # Baseline (set in refresh): the session-best floor.
-        self._baseline = pg.InfiniteLine(angle=0, pen=BASELINE_PEN, movable=False)
+        # Baseline (set in refresh): the session-best floor. Palette-aware pen (see _baseline_pen).
+        self._baseline = pg.InfiniteLine(angle=0, pen=_baseline_pen(), movable=False)
         plot.addItem(self._baseline)
         # Trend curve + dots; data set in refresh.
         self._curve = self.spark.plot([], [], pen=TREND_PEN)
         self._curve.setDownsampling(auto=True)
         self._curve.setClipToView(True)
         self._dots = pg.ScatterPlotItem(size=4, pen=None, brush=TREND_DOT_BRUSH, pxMode=True)
-        self._pb_dots = pg.ScatterPlotItem(size=7, pen=PB_DOT_PEN, brush=PB_DOT_BRUSH,
+        self._pb_dots = pg.ScatterPlotItem(size=7, pen=PB_DOT_PEN, brush=_pb_dot_brush(),
                                            pxMode=True)
         plot.addItem(self._dots)
         plot.addItem(self._pb_dots)
@@ -194,6 +202,14 @@ class ConsistencyPanel(QWidget):
                     item.setFont(self._num_font)
                 self.table.setItem(r, col, item)
         self.table.blockSignals(False)
+
+    def refresh_palette(self):
+        """Re-pen the semantic-hue sparkline items after a colour-blind-palette flip: the PB dots +
+        the session-best baseline carry the "best/ahead" hue (green → blue), so re-read the accessor
+        into their brush/pen. The trend line + non-PB dots are neutral (palette-independent). Cheap:
+        two in-place re-pens, no session recompute."""
+        self._pb_dots.setBrush(_pb_dot_brush())
+        self._baseline.setPen(_baseline_pen())
 
     def _refresh_spark_context(self, ids: list[int], times: list[float]):
         """Set the sparkline's baseline + 2-tick axes (fastest/slowest y, first/last lap x).

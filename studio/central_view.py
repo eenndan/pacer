@@ -509,14 +509,26 @@ class CentralView(QWidget):
                               self._last_diff_lap)
 
     def refresh_palette(self):
-        """Re-render every surface that carries an ahead/behind or best colour after the active
-        semantic palette changed (the window has already called theme.set_palette). The lap /
-        corner tables recompute their best + Δ foregrounds; the map re-pens its rainbow + legend;
-        the hero Δ readout re-styles from the last moment. Cheap: a handful of in-place repaints,
-        no session recompute."""
+        """Re-render EVERY surface that carries an ahead/behind or best colour after the active
+        semantic palette changed (the window has already called theme.set_palette), so a colour-blind
+        flip recolours the whole app live with no reload:
+
+          * lap / corner tables — recompute their best + Δ foregrounds;
+          * the map — re-pen its rainbow + legend;
+          * the always-on Opportunities panel — its time-lost cells go through theme.delta_colour, so
+            a re-render re-colours them (the CPO gap: the coaching front-door stayed red/green);
+          * the consistency panel — its PB dots + session-best baseline carry the best/ahead hue;
+          * the charts — the brake/throttle band (behind/ahead fills) + the synthetic ideal-lap line
+            (best-sector hue) read the palette at draw time, so a refresh re-pens them;
+          * the hero Δ readout — re-style from the last moment.
+
+        Cheap: a handful of in-place repaints / redraws, no session recompute."""
         self.table.refresh()
         self.corner_table.refresh()
         self.map.refresh_palette()
+        self.opportunities.refresh()
+        self.consistency.refresh_palette()
+        self.plots.refresh_palette()
         # Force a Δ-box restyle even if the number is unchanged: the palette flip changes the colour
         # for the SAME delta, so clear the cached colour first.
         self._diff_colour = None

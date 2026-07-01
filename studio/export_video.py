@@ -261,6 +261,11 @@ class OverlayConfig:
     # persisted choice so the export matches what's on screen. Speed VALUES stay km/h — converted
     # only at the paint boundary (units.convert_speed).
     speed_unit: str = units.DEFAULT_UNIT
+    # Active semantic palette (theme.PALETTE_STANDARD / PALETTE_COLORBLIND) baked into the burned-in
+    # Δ cue's hue axis. The app passes the user's live colour-blind choice so the EXPORTED clip — the
+    # artifact they share — follows it (the render runs on a worker QThread that must not read the
+    # global theme.active_palette() live; export_semantic_pair resolves the vivid EXPORT pair from it).
+    palette: str = theme.PALETTE_STANDARD
 
 
 # --------------------------------------------------------------------------- chaptered source
@@ -650,17 +655,39 @@ class EXPORT:
     grid = "#FFFFFF"            # g-dial rings / crosshair — white at moderate alpha (set per use)
 
 
-def export_delta_colour(d: float | None) -> str:
+# Colour-blind-safe EXPORT semantics: the SAME vivid-for-legibility intent as EXPORT.ahead/behind,
+# but on a deuteranopia-safe blue/orange hue axis (matching the interactive PALETTE_COLORBLIND). A
+# colour-blind user's EXPORTED clip — the artifact they share — must not stay red/green just because
+# the export keeps its own punchy palette; we swap only the hue axis, not the vividness. Blue =
+# ahead/gaining, orange = behind/losing (distinct under red-green colour blindness AND greyscale).
+_EXPORT_AHEAD_CB = "#2E90FF"    # ahead / gaining — vivid blue
+_EXPORT_BEHIND_CB = "#FF9A1F"   # behind / losing — vivid orange
+
+
+def export_semantic_pair(palette: str | None = None) -> tuple[str, str]:
+    """The (ahead, behind) vivid EXPORT colour pair for `palette` (theme.active_palette() when None):
+    the punchy green/red for the standard palette, the deuteranopia-safe blue/orange for the
+    colour-blind palette. The ONE place the export's ahead/behind hue axis is chosen, so the burned
+    overlay follows the user's colour-blind option while keeping its high-contrast look."""
+    name = palette or theme.active_palette()
+    if name == theme.PALETTE_COLORBLIND:
+        return _EXPORT_AHEAD_CB, _EXPORT_BEHIND_CB
+    return EXPORT.ahead, EXPORT.behind
+
+
+def export_delta_colour(d: float | None, palette: str | None = None) -> str:
     """Export 3-way delta colour in the vivid EXPORT palette: theme.delta_colour decides the 3-way
     ahead/behind/even split (its even-dead-band stays the single source), then we map ahead/behind
-    to the punchy EXPORT green/red — deliberately palette-INDEPENDENT: the burned-in overlay always
-    uses its own vivid pair regardless of the interactive colour-blind option (an exported clip has
-    no live toggle, so it keeps the one legible high-contrast look)."""
+    to the vivid EXPORT pair for `palette` (the active palette when None). Standard → punchy
+    green/red; colour-blind → the vivid blue/orange axis, so a colour-blind user's EXPORTED clip
+    follows their choice while keeping the high-contrast, footage-legible look. An exported clip has
+    no live toggle, so the palette is baked in at render time (threaded via OverlayConfig.palette)."""
     sem = theme.delta_colour(d)
     if sem is None:
         return EXPORT.neutral
+    ahead, behind = export_semantic_pair(palette)
     # ahead == faster == negative Δ (theme.delta_colour already applied the even dead-band).
-    return EXPORT.ahead if d < 0 else EXPORT.behind
+    return ahead if d < 0 else behind
 
 
 def _draw_text(p: QPainter, pos, text: str, font: QFont, colour: str,
@@ -879,10 +906,11 @@ class _MapInset:
 
 
 def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues,
-                   unit: str | None = None) -> None:
+                   unit: str | None = None, palette: str | None = None) -> None:
     """Bottom-left delta/speed readout: a hero speed number + small unit label ("km/h"/"mph") and a
-    vivid delta cue (export_delta_colour), all haloed, on a slim dark pill. `unit` (km/h default)
-    converts the speed number + names the unit — matching what's on screen."""
+    vivid delta cue (export_delta_colour in `palette`'s hue axis), all haloed, on a slim dark pill.
+    `unit` (km/h default) converts the speed number + names the unit — matching what's on screen;
+    `palette` (the active palette when None) picks the vivid green/red vs blue/orange Δ pair."""
     k = box.height() / 44.0   # the readout box is ~44 px tall at 1080p; scale radii/strokes with it
     p.setBrush(_c(EXPORT.halo, 165))
     p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
@@ -911,7 +939,7 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues,
     # font isn't guaranteed to carry the ▲/▼ glyphs and the export keeps its own vivid palette — the
     # accessibility arrow lives on the interactive Δ readout, not the video export.
     delta_txt = theme.format_delta_run(vals.delta_s, units=False, arrow=False)
-    dcol = export_delta_colour(vals.delta_s)
+    dcol = export_delta_colour(vals.delta_s, palette)
     dfont = _font(box.height() * 0.50, bold=True)
     fm_d = QFontMetricsF(dfont)
     dy = inner.y() + (inner.height() + fm_d.ascent() - fm_d.descent()) / 2.0
@@ -1015,7 +1043,8 @@ class OverlayPainter:
                                   export=True, scale_k=self._g_rect.width() / 280.0)
         p.restore()
         self._map.paint(p, vals.marker_index)
-        _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
+        _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit,
+                       self._spec.config.palette)
         _paint_strip(p, self._strip_rect, self._session, vals, self._spec.t0)
         p.end()
 

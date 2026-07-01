@@ -236,6 +236,247 @@ def test_lap_table_best_colours_follow_the_palette_selector():
     print("test_lap_table_best_colours_follow_the_palette_selector OK")
 
 
+# ============================================ A2. every semantic surface follows the palette selector
+# PR fix/palette-estimated-consistency: PR #48 wired the palette into only SOME surfaces. These pin
+# that the brake/throttle band, the consistency PB dots, and the EXPORT delta cue now follow it too
+# (not just the lap table / map / Δ readout), and that the always-on Opportunities panel + charts
+# re-render on a flip. Default (STANDARD) output stays byte-identical (the accessors already return
+# the standard values; we just stopped FREEZING them at import).
+import numpy as np  # noqa: E402
+
+
+class _FakeChartSession:
+    """Minimal duck-typed session for a bare PlotsView: one flat lap curve, no reference/sectors."""
+
+    def best_lap_id(self):
+        return 0
+
+    def has_reference(self):
+        return False
+
+    def lap_time(self, i):
+        return 70.0
+
+    def delta(self, ids, x_mode="distance"):
+        sx = np.linspace(0.0, 200.0, 100)
+        return 0, {0: (sx, np.full(100, 60.0))}, {0: (sx, np.zeros(100))}
+
+    def sector_plot_positions(self, m):
+        return []
+
+
+def _bt_fill_colours(pv):
+    """The (brake, throttle) FillBetweenItem brush hex names currently drawn in the band, upper-cased.
+    The band draws the brake fill (min side) before the throttle fill (max side) per lap."""
+    from pyqtgraph import FillBetweenItem
+    fills = [it for it in pv._brake_throttle_items if isinstance(it, FillBetweenItem)]
+    return [f.brush().color().name().upper() for f in fills]
+
+
+def test_brake_throttle_band_colour_follows_the_palette():
+    """The synthetic brake/throttle band's fills read theme.behind_colour()/ahead_colour() at DRAW
+    time (not frozen C.behind/C.ahead at import), so a colour-blind flip recolours the band. Standard
+    stays the original red/green; a flip changes BOTH fills."""
+    _APP  # noqa: B018  (ensure the QApplication exists)
+    from PySide6.QtGui import QColor
+
+    from studio.plots_view import PlotsView
+    try:
+        theme.set_palette(theme.PALETTE_STANDARD)
+        pv = PlotsView(_FakeChartSession())
+        pv.set_laps([0])
+        xs = np.linspace(0.0, 200.0, 100)
+        inten = np.zeros(100)
+        inten[20:40] = -0.9   # a braking stretch (fills toward "behind")
+        inten[60:80] = 0.5    # a throttle stretch (fills toward "ahead")
+        pv.set_brake_throttle([(xs, inten)])
+        pv.brake_throttle_btn.setChecked(True)   # draw the band
+
+        std = _bt_fill_colours(pv)
+        assert len(std) == 2, std
+        brake_std, thr_std = std
+        # Standard palette == the original red/green (RGB unchanged; the fills carry an alpha).
+        assert brake_std == QColor(theme.C.behind).name().upper()
+        assert thr_std == QColor(theme.C.ahead).name().upper()
+
+        theme.set_palette(theme.PALETTE_COLORBLIND)
+        pv.refresh_palette()   # the fan-out redraw the app does on a flip
+        brake_cb, thr_cb = _bt_fill_colours(pv)
+        assert brake_cb == QColor(theme.behind_colour()).name().upper()
+        assert thr_cb == QColor(theme.ahead_colour()).name().upper()
+        # Genuinely changed — the CPO gap (the band stayed red/green) is closed.
+        assert brake_cb != brake_std and thr_cb != thr_std
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+    print("test_brake_throttle_band_colour_follows_the_palette OK")
+
+
+class _StubConsistencySession:
+    """The read surface ConsistencyPanel touches: a small lap-time trend + no sectors/corners."""
+
+    def __init__(self):
+        self.corners = type("C", (), {"corner_list": staticmethod(lambda: [])})()
+
+    def lap_time_trend(self):
+        return [(0, 70.0), (1, 71.2), (2, 69.8)]  # lap 2 is a new PB (running min)
+
+    def sector_sigmas(self):
+        return []
+
+    def corner_consistency(self):
+        return []
+
+
+def test_consistency_pb_dot_colour_follows_the_palette():
+    """The consistency panel's PB dots + session-best baseline carry the best/ahead hue via the
+    accessors (not frozen C.ahead), so refresh_palette re-pens them on a colour-blind flip. Standard
+    stays green; the flip changes them to the palette's ahead hue."""
+    _APP  # noqa: B018
+    from PySide6.QtGui import QColor
+
+    from studio.consistency_panel import ConsistencyPanel
+    try:
+        theme.set_palette(theme.PALETTE_STANDARD)
+        panel = ConsistencyPanel(_StubConsistencySession())
+
+        def _pb_brush():
+            return panel._pb_dots.opts["brush"].color().name().upper()
+
+        def _baseline_pen():
+            return panel._baseline.pen.color().name().upper()
+
+        assert _pb_brush() == QColor(theme.C.ahead).name().upper()
+        assert _baseline_pen() == QColor(theme.C.ahead).name().upper()
+
+        theme.set_palette(theme.PALETTE_COLORBLIND)
+        panel.refresh_palette()
+        assert _pb_brush() == QColor(theme.best_lap_colour()).name().upper()
+        assert _baseline_pen() == QColor(theme.best_lap_colour()).name().upper()
+        assert _pb_brush() != QColor(theme.C.ahead).name().upper()  # actually changed
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+    print("test_consistency_pb_dot_colour_follows_the_palette OK")
+
+
+def test_export_delta_colour_follows_the_palette():
+    """The burned-in video export's Δ cue follows the active palette: standard → the punchy vivid
+    green/red EXPORT pair; colour-blind → a VIVID deuteranopia-safe blue/orange pair (same
+    legibility intent, swapped hue axis). Default (no palette arg) is byte-identical to before."""
+    from studio import export_video as ev
+    try:
+        theme.set_palette(theme.PALETTE_STANDARD)
+        # Standard: unchanged vivid green/red (byte-identical to pre-PR).
+        assert ev.export_delta_colour(-0.20) == ev.EXPORT.ahead
+        assert ev.export_delta_colour(+0.20) == ev.EXPORT.behind
+        assert ev.export_semantic_pair() == (ev.EXPORT.ahead, ev.EXPORT.behind)
+
+        # Colour-blind: a DIFFERENT, still-vivid pair (blue/orange), distinct from each other + green/red.
+        ahead_cb, behind_cb = ev.export_semantic_pair(theme.PALETTE_COLORBLIND)
+        assert ahead_cb != ev.EXPORT.ahead and behind_cb != ev.EXPORT.behind
+        assert ahead_cb != behind_cb
+        assert ev.export_delta_colour(-0.20, theme.PALETTE_COLORBLIND) == ahead_cb
+        assert ev.export_delta_colour(+0.20, theme.PALETTE_COLORBLIND) == behind_cb
+        # Selecting from the ACTIVE palette (the worker path passes OverlayConfig.palette, but the
+        # default None resolves theme.active_palette()).
+        theme.set_palette(theme.PALETTE_COLORBLIND)
+        assert ev.export_delta_colour(-0.20) == ahead_cb
+        assert ev.export_delta_colour(+0.20) == behind_cb
+        # Neutral/dead-even stays white in both palettes.
+        assert ev.export_delta_colour(None, theme.PALETTE_COLORBLIND) == ev.EXPORT.neutral
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+    print("test_export_delta_colour_follows_the_palette OK")
+
+
+def test_overlay_config_carries_the_palette():
+    """OverlayConfig threads the active palette into the render (a worker QThread mustn't read the
+    global live), defaulting to STANDARD; _paint_readout selects the export Δ pair from it."""
+    from studio import export_video as ev
+    assert ev.OverlayConfig().palette == theme.PALETTE_STANDARD
+    cfg = ev.OverlayConfig(palette=theme.PALETTE_COLORBLIND)
+    assert cfg.palette == theme.PALETTE_COLORBLIND
+    print("test_overlay_config_carries_the_palette OK")
+
+
+def test_opportunities_panel_rerenders_on_palette_flip():
+    """The always-on Opportunities panel's time-lost cells go through theme.delta_colour, so a
+    palette flip must re-render them (the CPO gap: the coaching front-door stayed red/green). Here we
+    pin that a refresh() after a flip repaints the lost cell in the new 'behind' hue."""
+    _APP  # noqa: B018
+    from PySide6.QtGui import QColor
+
+    from studio import coaching
+    from studio.coaching_panel import OpportunitiesPanel
+
+    # A tiny opportunities set with one losing corner (time_lost > 0 -> the 'behind' hue). Real
+    # dataclasses so reason_sentence / _reason_cell read them exactly as in production.
+    reason = coaching.Reason(kind=coaching.REASON_APEX, contribution=0.35,
+                             apex_speed_deficit=2.4, brake_extra_s=0.0, coast_extra_s=0.0,
+                             sigma=0.12)
+    phases = coaching.PhaseLoss(entry=0.1, apex=0.2, exit=0.05)
+    opp = coaching.Opportunity(cid=3, direction=1, time_lost=0.35, entry_dist=40.0,
+                               reason=reason, phases=phases)
+    opps = coaching.Opportunities(rows=[opp], enough=True, n_laps=5, median_lap_id=2)
+
+    class _S:
+        def coaching_opportunities(self):
+            return opps
+
+        def coaching_brake_points(self):
+            return {}
+
+    try:
+        theme.set_palette(theme.PALETTE_STANDARD)
+        panel = OpportunitiesPanel(_S())
+
+        def _lost_fg():
+            return panel.table.item(0, 1).foreground().color().name().upper()
+
+        assert _lost_fg() == QColor(theme.delta_colour(0.35)).name().upper()
+        std = _lost_fg()
+
+        theme.set_palette(theme.PALETTE_COLORBLIND)
+        panel.refresh()   # what CentralView.refresh_palette calls for this panel
+        assert _lost_fg() == QColor(theme.delta_colour(0.35)).name().upper()
+        assert _lost_fg() != std  # the coaching front-door recoloured
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+    print("test_opportunities_panel_rerenders_on_palette_flip OK")
+
+
+# ============================================ B. unified "estimated" labelling + the ESTIMATED chip
+def test_estimated_short_label_is_one_canonical_form():
+    """The inline "estimated" marker is spelled ONE way everywhere: theme.ESTIMATED_MARK == "(est)",
+    and estimated_label appends exactly that. The brake-point coaching hint (was a stray "(EST)") and
+    the grip column both read it, so the app no longer spells estimated four ways."""
+    from types import SimpleNamespace
+
+    from studio import theme as th
+    from studio.coaching_panel import _brake_point_hint
+    assert th.ESTIMATED_MARK == "(est)"
+    assert th.ESTIMATED_SUFFIX == " (est)"
+    assert th.estimated_label("Grip") == "Grip (est)"
+    # The brake-point hint uses the canonical mark (no more "(EST)").
+    bp = SimpleNamespace(cid=3, metres_later=6.4)
+    hint = _brake_point_hint(bp)
+    assert hint == "Brake ~6 m later into C3 (est)", hint
+    assert "(EST)" not in hint and "(est.)" not in hint
+    print("test_estimated_short_label_is_one_canonical_form OK")
+
+
+def test_estimated_quality_badge_is_a_real_chip():
+    """The central-view ESTIMATED QualityBadge (objectName #QualityBadge) has a real QSS chip rule
+    (padding + rounded + tinted), not plain text — the whole stylesheet carries a #QualityBadge block
+    with border-radius + padding so the badge renders as the chip the code claims."""
+    qss = theme._build_qss()
+    assert "QLabel#QualityBadge" in qss, "no QSS rule for the ESTIMATED quality badge"
+    # Pull the rule body and check it's a padded/rounded/tinted chip.
+    block = qss.split("QLabel#QualityBadge", 1)[1].split("}", 1)[0]
+    assert "border-radius" in block and "padding" in block, block
+    assert theme.C.accent_tint in block or theme.C.accent in block, block
+    print("test_estimated_quality_badge_is_a_real_chip OK")
+
+
 # ===================================================================== B. PB moment
 def _index(*entries):
     return {"version": 1, "entries": list(entries)}
@@ -326,6 +567,13 @@ if __name__ == "__main__":
     test_lap_table_best_cells_carry_non_colour_star_marks()
     test_lap_table_best_star_survives_a_sort()
     test_lap_table_best_colours_follow_the_palette_selector()
+    test_brake_throttle_band_colour_follows_the_palette()
+    test_consistency_pb_dot_colour_follows_the_palette()
+    test_export_delta_colour_follows_the_palette()
+    test_overlay_config_carries_the_palette()
+    test_opportunities_panel_rerenders_on_palette_flip()
+    test_estimated_short_label_is_one_canonical_form()
+    test_estimated_quality_badge_is_a_real_chip()
     test_pb_moment_beats_prior_best_on_verified_timing()
     test_pb_moment_does_not_fire_on_provisional_timing()
     test_pb_moment_first_session_is_not_a_beat()
