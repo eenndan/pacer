@@ -3,7 +3,10 @@
 Cells sort by their numeric Qt.UserRole key, not text (so "1:08.408" sorts as 68.408 s).
 Row/cell highlights are keyed by lap id so they survive sorts: ▶ playing marker, green best
 lap, blue Qt selection, purple per-sector session-best cells, ⚠ GPS-dropout flag. The
-SESSION-BESTS footer is plain labels below the table, immune to sort/selection.
+SESSION-BESTS footer is plain labels below the table, immune to sort/selection. A muted ⊘
+EXCLUDED strip below the table lists substantial laps the median band left out of the
+times/bests (a mis-segmented short/long lap, an out-lap, or an in-lap) — kept out of the
+sortable rows so a short excluded lap can't sort to the top as the "fastest".
 """
 
 from __future__ import annotations
@@ -43,6 +46,17 @@ DROPOUT_SUFFIX = " ⚠"  # GPS-dropout lap (low-confidence)
 BEST_LAP_MARK = "★ "     # prefixes the best lap's Lap cell (after any ▶ current marker)
 BEST_SECTOR_MARK = " ★"  # suffixes a session-best split cell's value
 DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
+# EXCLUDED laps: substantial laps the median band left OUT of the times / bests (a mis-segmented
+# short/long lap, an out-lap, or an in-lap). They're shown in a muted strip BELOW the table rather
+# than injected as rows — a short excluded lap would otherwise sort to the top as the "fastest" row
+# and re-create the exact confusion the band filter removes. ⊘ reads as "left out" (distinct from
+# the ⚠ dropout flag, which marks a lap that IS still counted).
+EXCLUDED_MARK = "⊘"
+EXCLUDED_TOOLTIP = (
+    "These laps were left out of your times, bests and coaching. Their distance is off this "
+    "session's median lap — usually a mis-segmented start/finish crossing, an out-lap, or an "
+    "in-lap. If a real lap was dropped, drag the start/finish line on the map.")
+EXCLUDED_MAX_SHOWN = 6  # cap the listed laps; the rest collapse to a "+N more" line
 PROVISIONAL_COLOR = QColor(theme.PROVISIONAL_COLOR)  # muted text for unverified timing
 # A short, non-duplicative hint: the actionable "drag the start/finish line" call-to-action lives
 # once on the map (the on-canvas cue + the trust strip), so the table tooltip just points there
@@ -169,6 +183,7 @@ class LapTable(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(self._stack)
+        lay.addWidget(self._build_excluded_strip())  # between the table and the SESSION-BESTS footer
         lay.addWidget(self._build_footer())
         self.refresh()
 
@@ -218,6 +233,51 @@ class LapTable(QWidget):
         tiles.addStretch(1)
         outer.addLayout(tiles)
         return footer
+
+    def _build_excluded_strip(self) -> QWidget:
+        """A muted strip listing laps LEFT OUT of the times/bests by the median band (see
+        EXCLUDED_MARK). Hidden entirely when there are none (the clean, common case), so it adds
+        no chrome to a normal recording. Kept OUT of the sortable table on purpose — a short
+        excluded lap injected as a row would sort to the top as the 'fastest' and re-create the
+        very confusion the band filter removes."""
+        strip = QWidget()
+        strip.setObjectName("LapExcludedStrip")
+        strip.setStyleSheet(
+            f"QWidget#LapExcludedStrip {{ border-top: 1px solid {theme.C.border}; }}")
+        box = QVBoxLayout(strip)
+        box.setContentsMargins(10, 6, 10, 8)
+        box.setSpacing(2)
+        header = QLabel(f"{EXCLUDED_MARK} EXCLUDED")
+        header.setProperty("role", "BarLabel")  # the same small uppercase dimmed section type
+        header.setToolTip(EXCLUDED_TOOLTIP)
+        self._excluded_body = QLabel("")
+        self._excluded_body.setWordWrap(True)
+        self._excluded_body.setToolTip(EXCLUDED_TOOLTIP)
+        # Muted + italic — the provisional/degraded treatment used everywhere else for
+        # de-emphasised timing, so "not counted" reads consistently.
+        self._excluded_body.setStyleSheet(
+            f"color: {theme.PROVISIONAL_COLOR}; font-style: italic;")
+        box.addWidget(header)
+        box.addWidget(self._excluded_body)
+        self._excluded_strip = strip
+        strip.setVisible(False)
+        return strip
+
+    def _refresh_excluded(self):
+        """Populate / hide the excluded-laps strip from Session.excluded_lap_rows (getattr-guarded
+        so the lighter test doubles, which don't expose it, simply show no strip). One line per
+        excluded lap ("Lap 47 — 0:59.091 · 921 m"), capped at EXCLUDED_MAX_SHOWN with a "+N more"
+        tail; the whole strip hides when there are none."""
+        rows = getattr(self.session, "excluded_lap_rows", lambda: [])()
+        self._excluded_strip.setVisible(bool(rows))
+        if not rows:
+            self._excluded_body.clear()
+            return
+        lines = [f"Lap {r['idx']} — {fmt_time(r['time'])} · {r['dist']:.0f} m" for r in rows]
+        if len(lines) > EXCLUDED_MAX_SHOWN:
+            hidden = len(lines) - EXCLUDED_MAX_SHOWN
+            lines = [*lines[:EXCLUDED_MAX_SHOWN], f"+{hidden} more"]
+        self._excluded_body.setText("\n".join(lines))
 
     def _refresh_footer(self):
         """Rewrite footer values from Session; None → em-dash. The SESSION-BESTS tiles (theoretical
@@ -316,8 +376,10 @@ class LapTable(QWidget):
         # dropout lap ids, keyed by lap id so the ⚠ flag follows the lap across sorts
         self._dropout_ids = self.session.dropout_lap_ids()
         self._apply_highlights()
-        # The summary footer (theoretical best / best rolling) follows every refresh — i.e.
-        # also after a timing-line edit re-segments the laps.
+        # The excluded-laps strip + summary footer (theoretical best / best rolling) follow every
+        # refresh — i.e. also after a timing-line edit re-segments the laps (which shifts both the
+        # valid and the excluded sets).
+        self._refresh_excluded()
         self._refresh_footer()
 
     # ------------------------------------------------------------- highlights
