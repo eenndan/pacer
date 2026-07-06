@@ -5,10 +5,9 @@
 build/
 __pycache__/
 xcode-build/
-*.ini
 
-# local, machine-specific telemetry input config (see pacer.example.json)
-pacer.json
+# pyqtgraph window-state scratch (leftover from the removed C++ ImGui timeline GUI)
+Pacer_Timeline.ini
 
 pacer-ios/
 
