@@ -45,6 +45,7 @@ from studio._signal import (  # noqa: E402
     MIN_LAP_SAMPLES,
     MIN_LAP_TIME,
     _band_lap_ids,
+    _banded_out_lap_ids,
 )
 from studio.load import (  # noqa: E402
     _HEURISTIC_HALF_M,
@@ -182,6 +183,51 @@ def test_band_lap_ids_falls_back_when_no_distance_accessor():
     assert hasattr(bad, "get_lap_distance")
     assert _band_lap_ids(bad) == [0, 1, 2]
     print("test_band_lap_ids_falls_back_when_no_distance_accessor OK")
+
+
+def test_banded_out_lap_ids_reports_the_short_mis_segmented_lap():
+    """The complement of the valid set: the SAME short-lap scenario as the distance-band test —
+    lap 3 (921 m / 0:59) is banded out, so it shows up in the EXCLUDED set (and, being invalid, in
+    neither the valid set nor overlapping it). This is what the lap panel surfaces so a dropped
+    real-looking lap isn't invisible."""
+    times = [68.0, 68.5, 67.5, 59.0, 68.2]
+    dists = [1060.0, 1058.0, 1062.0, 921.0, 1059.0]
+    valid = _band_lap_ids(_FakeBandLaps(times, dists=dists))
+    excluded = _banded_out_lap_ids(_FakeBandLaps(times, dists=dists))
+    assert valid == [0, 1, 2, 4]
+    assert excluded == [3]
+    assert set(valid).isdisjoint(excluded)
+    print("test_banded_out_lap_ids_reports_the_short_mis_segmented_lap OK")
+
+
+def test_banded_out_lap_ids_empty_on_clean_recording():
+    """No-op guarantee mirroring the band's: when every substantial lap is in-band nothing is
+    excluded (so a clean recording shows no EXCLUDED strip)."""
+    times = [67.0, 69.0, 68.0, 70.0, 66.5]
+    dists = [1055.0, 1062.0, 1058.0, 1049.0, 1067.0]
+    assert _banded_out_lap_ids(_FakeBandLaps(times, dists=dists)) == []
+    print("test_banded_out_lap_ids_empty_on_clean_recording OK")
+
+
+def test_banded_out_lap_ids_also_catches_a_time_band_reject():
+    """A merged double-lap clears the coarse gate but is way over the TIME band (no distances
+    supplied → time-only path); it is banded out of the valid set and reported as excluded."""
+    times = [68.0, 68.5, 67.5, 140.0]  # lap 3 ~2x the median → outside [0.5, 1.6]x
+    assert _band_lap_ids(_FakeBandLaps(times)) == [0, 1, 2]
+    assert _banded_out_lap_ids(_FakeBandLaps(times)) == [3]
+    print("test_banded_out_lap_ids_also_catches_a_time_band_reject OK")
+
+
+def test_banded_out_lap_ids_ignores_sub_gate_fragments():
+    """A brief start/end sliver (too few samples AND under MIN_LAP_TIME) is NOT a 'substantial
+    excluded lap' — it fails the coarse gate, so it's in neither the valid nor the excluded set
+    and never clutters the strip."""
+    laps = _FakeBandLaps([68.0, 68.5, 2.0],
+                         samples=[1000, 1000, MIN_LAP_SAMPLES - 1],
+                         dists=[1060.0, 1058.0, 30.0])
+    assert _band_lap_ids(laps) == [0, 1]
+    assert _banded_out_lap_ids(laps) == []
+    print("test_banded_out_lap_ids_ignores_sub_gate_fragments OK")
 
 
 # ------------------------------------------------------------------------- 2) load._clean

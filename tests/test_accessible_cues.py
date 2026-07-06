@@ -199,6 +199,30 @@ def test_lap_table_best_star_survives_a_sort():
     print("test_lap_table_best_star_survives_a_sort OK")
 
 
+def test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip():
+    """A substantial lap the median band left out (a mis-segmented 921 m / 0:59 short lap) is
+    surfaced in the muted ⊘ EXCLUDED strip — NOT injected into the sortable rows (where it would
+    sort to the top as the 'fastest'), so a dropped lap isn't invisible."""
+    sess = _FakeLapSession()
+    sess.excluded_lap_rows = lambda: [{"idx": 47, "time": 59.091, "dist": 921.0, "entry": 40.0}]
+    table = LapTable(sess)
+    # It is NOT one of the sortable lap rows ...
+    assert 47 not in [table._lap_id(r) for r in range(table.table.rowCount())]
+    # ... it's in the visible strip, showing its lap id + time + distance.
+    assert not table._excluded_strip.isHidden()
+    body = table._excluded_body.text()
+    assert "47" in body and "0:59.091" in body and "921" in body, body
+    print("test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip OK")
+
+
+def test_lap_table_excluded_strip_hidden_on_a_clean_recording():
+    """No excluded laps (the common case) → the strip is hidden, adding no chrome. The plain
+    _FakeLapSession exposes no excluded_lap_rows, exercising the getattr fallback too."""
+    table = LapTable(_FakeLapSession())
+    assert table._excluded_strip.isHidden()
+    print("test_lap_table_excluded_strip_hidden_on_a_clean_recording OK")
+
+
 def test_lap_table_best_colours_follow_the_palette_selector():
     """A palette flip recolours the best cells THROUGH theme's selector: the best-lap cell's
     foreground is best_lap_colour() and the best-sector cell's is best_sector_colour(), which change
@@ -577,6 +601,8 @@ if __name__ == "__main__":
     test_colorblind_palette_pref_roundtrip()
     test_lap_table_best_cells_carry_non_colour_star_marks()
     test_lap_table_best_star_survives_a_sort()
+    test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip()
+    test_lap_table_excluded_strip_hidden_on_a_clean_recording()
     test_lap_table_best_colours_follow_the_palette_selector()
     test_brake_throttle_band_colour_follows_the_palette()
     test_consistency_pb_dot_colour_follows_the_palette()

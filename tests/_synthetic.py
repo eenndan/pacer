@@ -86,7 +86,7 @@ def reset_driving_caches(session):
     dc.invalidate()
 
 
-def bare_session(laps=None, *, best=None, valid=None):
+def bare_session(laps=None, *, best=None, valid=None, excluded=None):
     """A bare Session (Session.__new__ — no pacer, no telemetry file, no Qt event loop).
 
     laps:  optional {lap_id: (times, dists)} seeded into `_dist_cache` (see `seed_lap`) —
@@ -95,7 +95,9 @@ def bare_session(laps=None, *, best=None, valid=None):
     best:  optional best-lap id — seeds the `best_lap_id()` memo (`_best_cache`), which also
            drives `best_lap_total_distance()` off the seeded cache.
     valid: optional iterable of valid lap ids — seeds the `valid_lap_ids()` memo
-           (`_valid_cache`)."""
+           (`_valid_cache`).
+    excluded: optional iterable of banded-out substantial lap ids — seeds the
+           `excluded_lap_ids()` memo (`_excluded_cache`); defaults to none."""
     s = Session.__new__(Session)
     s._dist_cache = {}
     for lap_id, (times, dists) in (laps or {}).items():
@@ -104,4 +106,8 @@ def bare_session(laps=None, *, best=None, valid=None):
         s._best_cache = best
     if valid is not None:
         s._valid_cache = list(valid)
+    # Excluded (banded-out) laps default to none: a bare/synthetic session seeds a clean valid set,
+    # and computing this lazily would touch the (often minimal) fake `laps`. Seed the memo so
+    # Session.excluded_lap_ids / _rows resolve without reaching self.laps (mirrors _valid_cache).
+    s._excluded_cache = list(excluded) if excluded is not None else []
     return s

@@ -42,6 +42,7 @@ from . import (
 from ._signal import (
     SMOOTH_WINDOW,
     _band_lap_ids,
+    _banded_out_lap_ids,
     fmt_time,  # noqa: F401  (re-export for call sites; lives in _signal now)
 )
 from .load import load_recording
@@ -157,6 +158,7 @@ class Session:
         self._dist_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         self._xyt_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}  # (xs, ys, times) local m
         self._valid_cache: list[int] | None = None  # memoized "real lap" set
+        self._excluded_cache: list[int] | None = None  # memoized banded-out substantial laps
         self._best_cache: object = _UNSET   # sentinel: None is a legal "no best lap" result
         # Detected registry track name, or None for an unknown track (start line auto-fitted).
         # Persisted into the timing-line sidecar and used by the app's "unknown track" notice.
@@ -731,6 +733,7 @@ class Session:
         # table is now stale (lap ids / times shifted), so drop them. They lazily recompute on next
         # access.
         self._valid_cache = None
+        self._excluded_cache = None
         self._best_cache = _UNSET
         self._drop_ideal_cache()  # the ideal envelope is a min over the (now-shifted) lap arrays
         self.timeline.invalidate()
@@ -979,15 +982,35 @@ class Session:
         return baseline.total if baseline is not None else None
 
     def lap_rows(self) -> list[LapRow]:
-        return [
-            {
-                "idx": i,
-                "time": self.laps.lap_time(i),
-                "dist": self.laps.get_lap_distance(i),
-                "entry": self.laps.lap_entry_speed(i) * 3.6,
-            }
-            for i in self.valid_lap_ids()
-        ]
+        return [self._lap_row(i) for i in self.valid_lap_ids()]
+
+    def _lap_row(self, i: int) -> LapRow:
+        """One LapRow (idx/time/dist/entry) for a lap id — the row shape both the valid-lap table
+        and the excluded-lap strip render, so they format identically."""
+        return {
+            "idx": i,
+            "time": self.laps.lap_time(i),
+            "dist": self.laps.get_lap_distance(i),
+            "entry": self.laps.lap_entry_speed(i) * 3.6,
+        }
+
+    def excluded_lap_ids(self) -> list[int]:
+        """Substantial laps LEFT OUT of `valid_lap_ids` by the median time/distance band — a
+        mis-segmented short/long lap, an out-lap, or an in-lap. They cleared the coarse
+        sample/time gate (so they look like laps the driver ran, not a brief sliver) but their
+        time/distance is off the session median, so they feed NO time / best / coaching / map
+        value. Surfaced by the lap panel so a dropped lap isn't invisible. Memoized like
+        `valid_lap_ids`, cleared on re-segmentation; single-sourced in
+        `_signal._banded_out_lap_ids`."""
+        if self._excluded_cache is not None:
+            return self._excluded_cache
+        self._excluded_cache = _banded_out_lap_ids(self.laps)
+        return self._excluded_cache
+
+    def excluded_lap_rows(self) -> list[LapRow]:
+        """`LapRow` dicts (idx/time/dist/entry) for `excluded_lap_ids` — same shape as `lap_rows`
+        so the lap panel formats an excluded lap with the same helper, just demoted + flagged."""
+        return [self._lap_row(i) for i in self.excluded_lap_ids()]
 
     def _lap_point_times(self, lap_id: int) -> np.ndarray:
         """The media-clock times of a lap's KEPT GPS points, in order. Quality-gated / cleaned

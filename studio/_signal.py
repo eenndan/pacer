@@ -202,3 +202,22 @@ def _band_lap_ids(laps) -> list[int]:
     lo_d, hi_d = LAP_DIST_BAND_LO * med_d, LAP_DIST_BAND_HI * med_d
     return [i for i in timed
             if math.isfinite(dists[i]) and dists[i] > 0 and lo_d <= dists[i] <= hi_d]
+
+
+def _banded_out_lap_ids(laps) -> list[int]:
+    """The ids of SUBSTANTIAL laps the band filter REJECTED: laps that clear the coarse gate
+    (>= MIN_LAP_SAMPLES samples and >= MIN_LAP_TIME seconds — so they look like a lap the driver
+    actually ran, not a brief start/end sliver) but fell outside the median TIME or DISTANCE band
+    in `_band_lap_ids` — a mis-segmented short/long lap, an out-lap, or an in-lap.
+
+    Returned so the UI can SHOW that a real-looking lap was left out of the times / bests instead
+    of silently dropping it (the `_band_lap_ids` filter removes such a lap so it can't be crowned
+    'best' and poison the analysis — but the driver still ran it and may wonder where it went).
+    Reuses `_band_lap_ids` unchanged (so `valid_lap_ids` stays byte-identical), touching only the
+    same read accessors — it imports no pacer and stays pure. The single source for
+    Session.excluded_lap_ids."""
+    substantial = [i for i in range(laps.laps_count())
+                   if laps.sample_count(i) >= MIN_LAP_SAMPLES
+                   and laps.lap_time(i) >= MIN_LAP_TIME]
+    valid = set(_band_lap_ids(laps))
+    return [i for i in substantial if i not in valid]
