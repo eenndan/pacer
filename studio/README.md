@@ -324,19 +324,7 @@ accelerometer** (`ACCL`), synced to playback. Toggle with the **`G`** button und
 
 ## Tests
 
-Pure-Python studio tests live under [`tests/`](../tests/) and are registered with CTest (so
-`pixi run test` runs them with the C++ suite — 27 CTest entries total: 5 C++ + 22 Python):
-`test_gapfill`, `test_scrub_conversion`, `test_studio_features` (the auto-follow edge + numeric
-sort / lap-scoped nearest / per-column min), `test_chapters`, `test_lap_timing`,
-`test_gps_source_bindings`, `test_ingest_equivalence` (single-pass ingest == two-pass reads),
-`test_compare`, `test_controllers` (the extracted scrub/compare controllers on a bare Session +
-fake views), `test_map_ghost` (the F4 compare-mode map ghost: controller emit on a real MapView,
-exit restores the item state byte-identically, zero ghost work outside compare),
-`test_validate_wallclock`, `test_gmeter`, `test_gmeter_overlay`, `test_export_data`,
-`test_export_video` (the F9 video-export pure logic: trim math, per-frame overlay-value lookup,
-ffmpeg-cmd construction + the mocked render pump — no ffmpeg needed; the real render is gated).
-
-## State & next ideas
-
-Next up: more tracks in `tracks.py` (+ real auto-detection), persist sector/start-line config per
-file, and polish (keyboard shortcuts, optional snap toggle).
+Pure-Python studio tests live under [`tests/`](../tests/), each registered with CTest, so
+`pixi run test` runs them alongside the C++ Catch2 suites. For fast iteration run one directly:
+`pixi run python tests/test_<name>.py`. The registration list in
+[`tests/CMakeLists.txt`](../tests/CMakeLists.txt) is the source of truth for what exists.
