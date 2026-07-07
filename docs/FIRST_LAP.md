@@ -8,7 +8,8 @@ the reason Pacer exists.
 ## 1 · Open a recording
 
 Drag a GoPro `.MP4` onto the window, or **File ▸ Open**. GoPro chapter siblings (`GX01…`, `GX02…`)
-are chained automatically. Don't have footage yet? **File ▸ Open demo** loads a real lapping clip.
+are chained automatically. Don't have footage yet? The **Open demo** button on the welcome screen
+(or the `--demo` flag) loads a real lapping clip.
 
 Pacer reads the GPS9 + motion data the camera already recorded — no transponder, no extra sensors.
 

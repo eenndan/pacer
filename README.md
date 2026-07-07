@@ -84,12 +84,9 @@ codesign + notarize + staple steps for distribution.
 
 ## Development
 
-```bash
-pixi run build   # configure + build everything (cmake + Ninja)
-pixi run test    # C++ (Catch2) + Python tests via ctest
-pixi run fmt     # clang-format the C/C++ sources
-pixi run lint    # ruff
-```
+**[AGENTS.md](AGENTS.md)** is the authoritative developer reference — the full build / test / lint
+workflow, the architecture and studio module maps, the conventions, and the core-math golden gate.
+Start there for any code change.
 
 ## Acknowledgements
 
