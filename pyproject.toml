@@ -31,6 +31,14 @@ build = { cmd = "cmake --build build/Release", depends-on = ["configure"] }
 # --output-on-failure), surfacing the in-test faulthandler watchdog dump instead of an opaque
 # 20-min job cancel that shows nothing (what made the C1 off-thread-load CI hang diagnosable).
 test = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 480", depends-on = ["build"] }
+# Fast inner loop for agents: the full suite minus the one slow test (test_export_video,
+# ~110 s ffmpeg encode). ~18 s for the other 45 — run this while iterating, `test` before a PR.
+test-fast = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 120 -E test_export_video", depends-on = ["build"] }
+# One-command core-math equivalence gate: the SYNTHETIC golden fingerprint (the CI half of the
+# golden gate). Run after any Session/timing/geometry/delta change; expects EQUIVALENT.
+golden = { cmd = "ctest --test-dir build/Release -R test_golden_synthetic --output-on-failure", depends-on = ["build"] }
+# The CI E2E gate as a task: build the whole StudioWindow offscreen on the bundled GoPro sample.
+smoke = { cmd = "python -m studio.dev._smoke --no-video", depends-on = ["build"] }
 gen-bindings = "python bindings/pacer/generate-bindings.py"
 studio = { cmd = "python -m studio", depends-on = ["build"] }
 # fmt excludes the litgen-GENERATED nanobind_pacer.cpp: the CI regen-drift gate
