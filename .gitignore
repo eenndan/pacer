@@ -3,6 +3,8 @@
 .vscode
 .claude/
 build/
+# PyInstaller output (packaging/build_macos.sh): the .app / .dmg — never committed
+dist/
 __pycache__/
 xcode-build/
 

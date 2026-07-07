@@ -5,7 +5,9 @@ on:
   # unrestricted push trigger would run every PR's CI twice.
   push:
     branches: [main]
+    tags: ['v*']          # a release tag also fires the packaging smoke below
   pull_request:
+  workflow_dispatch:      # manual trigger for the (slow) packaging smoke
 
 # Cancel an in-progress run when a newer commit is pushed to the same ref.
 concurrency:
@@ -87,3 +89,45 @@ jobs:
           else
             echo "::warning::demo asset unreachable (HTTP $CODE) — 'Open demo' / --demo will fail until it's uploaded: $URL"
           fi
+
+  package-smoke:
+    name: package .app build-only smoke (tag / manual)
+    # A full PyInstaller build is slow and only matters at release, so this runs ONLY on a version
+    # tag or a manual dispatch — never on a PR. BUILD-ONLY: it does NOT launch the .app (the app
+    # blocks in exec(), it would hang) and does NOT build/upload a .dmg — it just proves the bundle
+    # is well-formed, so spec rot (a hidden-import miss, a datas typo, a dropped QtMultimedia plugin)
+    # can't ship a .app that crashes on launch with the rest of CI green.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Set up pixi
+        uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          pixi-version: v0.70.1
+          cache: true
+      - name: Build the C++ core + bindings
+        run: pixi run build
+      - name: Build the .app (PyInstaller — no .dmg)
+        # Same rationale as the ctest/smoke PYTHONPATH: point `import pacer` at the cmake-deployed
+        # bindings package so the spec bundles the real _pacer.so on a fresh CI env.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/bindings/pacer
+        run: |
+          pixi run python -m pip install pyinstaller
+          pixi run pyinstaller --noconfirm --clean packaging/pacer.spec
+      - name: Assert the .app bundle is well-formed
+        run: |
+          APP="dist/Pacer Studio.app"
+          test -d "$APP" || { echo "::error::PyInstaller produced no $APP"; exit 1; }
+          find "$APP/Contents/MacOS" -maxdepth 1 -type f -perm +111 | grep -q . \
+            || { echo "::error::no executable in $APP/Contents/MacOS"; exit 1; }
+          find "$APP" -name '_pacer*.so' | grep -q . \
+            || { echo "::error::the compiled _pacer core is missing from the bundle"; exit 1; }
+          find "$APP" -name 'ffmpeg' | grep -q . \
+            || { echo "::error::ffmpeg is missing from the bundle (video export would break)"; exit 1; }
+          echo "bundle OK ($(du -sh "$APP" | cut -f1))"
