@@ -38,7 +38,6 @@ pacer/                         # repo root
 ├── studio/                    # ── THE STUDIO APP (PySide6 + pyqtgraph; pure Python on the core) ──
 │   │                          #   see studio/README.md (modules)
 │   ├── dev/                   #   developer / validation scripts (diagnose, _validate_wallclock, …)
-│   │   └── research/          #   frozen GPS-accuracy evidence scripts (historical record)
 │   └── docs/                  #   GPS-accuracy / start-line / g-meter investigation write-ups
 │
 ├── bindings/                  # ── PYTHON BINDINGS (litgen-generated, nanobind runtime) ──
@@ -177,6 +176,20 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/d
   gates every future Session-math change in CI. Regenerate the baseline only after an intentional,
   reviewed change: `python tests/test_golden_synthetic.py --write-baseline`.
 
+Run the **manual D24 gate** around a core-math change (the fixture is hardcoded at
+`~/Desktop/D24/GX010060.MP4` — a ~11.8 GB dev-Desktop-only recording, **not committed**; CI never
+sees it and runs the synthetic gate above instead):
+
+```bash
+pixi run python -m studio.dev.golden_session_dump /tmp/before.json   # BEFORE the change
+# … make the change, then: pixi run build …
+pixi run python -m studio.dev.golden_session_dump /tmp/after.json    # AFTER
+pixi run python -m studio.dev.golden_compare /tmp/before.json /tmp/after.json   # expect max|Δ| = 0
+```
+
+**Run one test** (fast iteration, skips the full ctest sweep): `pixi run python tests/test_<name>.py`
+— that is exactly how each Python suite is registered with CTest.
+
 **Inputs:** the studio app takes file paths on the CLI (`pixi run studio -- a.MP4`).
 
 ---
@@ -194,6 +207,29 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/d
   them and feed samples into the engine.
 - **Designated initializers** (`{.lat=…}`) used throughout the C++.
 - **Units:** angles in degrees; speeds in m/s (×3.6 → km/h only at display).
+
+---
+
+## PR workflow (the CI sequence)
+
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs these **in order**, each gating the
+next — run them locally first to avoid a red build:
+
+1. **`pixi run build`** — compiles the core and regenerates the bindings.
+2. **Bindings drift gate** — any edit to a `pacer/**/*.hpp` header (even a comment) regenerates
+   `bindings/pacer/nanobind_pacer.cpp` + `bindings/pacer/pacer/__init__.pyi`; **commit BOTH** or CI's
+   `git diff --exit-code -- bindings/` fails.
+3. **`pixi run test`** — the full ctest suite (Catch2 C++ + Python studio) must be green.
+4. **E2E smoke** — `pixi run python -m studio.dev._smoke --no-video` builds the real app headless.
+5. **`pixi run lint`** — `ruff check .` clean.
+6. **`pixi run fmt-check`** — `clang-format` non-mutating check (`pixi run fmt` auto-fixes).
+
+Change conventions: **one focused change per PR**; match the surrounding comment density / naming /
+idiom (favour "why" comments over restating the code); **add or update a test** for any behaviour
+change (pure logic → a Qt-free module with a synthetic-data test in
+[tests/_synthetic.py](tests/_synthetic.py); real-widget paths → an offscreen-Qt test); and
+**core-math changes (timing / geometry / delta) must preserve the validated numbers** — pin them with
+the golden gate above.
 
 ---
 
@@ -223,10 +259,10 @@ them; an interrupted `pixi add` once pruned them and broke the build mid-session
    litgen markers) — change the header + litgen options and regenerate. The `#include` preamble at the
    very top of that file is the one hand-kept region.
 
-For studio-specific architecture rules an agent must respect (local-meter coordinate space, the
-"only `session.py`, `load.py` (the load pipeline), `tracks.py`, and `ingest.py` (the GoPro/GPMF
-data-loading layer) touch `pacer`; views stay pacer-free" rule, perf invariants), see
-[studio/README.md](studio/README.md).
+The studio app layers **ingest → load → session → controllers → views** (only `session.py`,
+`load.py`, `ingest.py`, and `tracks.py` may import `pacer`; views stay pacer-free). For the full
+studio architecture rules an agent must respect (local-meter coordinate space, that pacer-free-views
+contract, perf invariants), see [studio/README.md](studio/README.md).
 
 ---
 
