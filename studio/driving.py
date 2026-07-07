@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._signal import boxcar
+from ._signal import G, boxcar
 
 # --- model constants -------------------------------------------------------------------
 SMOOTH_S = 0.10           # boxcar on the longitudinal g before thresholding
@@ -142,15 +142,32 @@ def estimate_a_max(peak_decels, *, floor_g: float = AMAX_FLOOR_G) -> float:
     return max(float(np.percentile(peaks, AMAX_PCT)), float(floor_g))
 
 
-def optimal_brake_distance(v_entry: float, v_apex: float, a_max: float) -> float | None:
-    """The constant-decel braking distance d (m) needed to slow from `v_entry` to `v_apex` at
-    `a_max`: d = (v_entry^2 - v_apex^2) / (2 * a_max). ALL SI: speeds in m/s, a_max in m/s^2.
+# Hill-compensated braking (elevation Phase 2) — OFF by default. When on, optimal_brake_distance
+# adds the along-track gravity component to the demonstrated decel (a_eff = a_max + G·sinθ): braking
+# UPHILL is aided by gravity (shorter distance → brake later), DOWNHILL is opposed (brake earlier).
+# OPT-IN + still labelled ESTIMATED: the slope comes from GPS altitude (the noisiest GPS axis) and
+# has NOT been validated against a known-correct undulating recording (the D24 gate is near-flat), so
+# it stays off until such a recording confirms it improves the hint rather than adding noise. The
+# DEFAULT path (flag off, gradient_rad=0) is byte-identical to the original flat-ground physics.
+HILL_COMPENSATE_BRAKING = False
 
-    Defensive: returns None (no answer) when v_apex >= v_entry (no braking needed -> d <= 0) or
-    a_max <= 0 (no demonstrated braking -> the physics is undefined). Otherwise a positive d."""
-    if not (a_max > 0.0) or v_apex >= v_entry:
+
+def optimal_brake_distance(v_entry: float, v_apex: float, a_max: float,
+                           gradient_rad: float = 0.0) -> float | None:
+    """The constant-decel braking distance d (m) needed to slow from `v_entry` to `v_apex`:
+    d = (v_entry^2 - v_apex^2) / (2 * a_eff), where `a_eff = a_max + G·sin(gradient_rad)` folds in the
+    along-track gravity component (uphill `gradient_rad`>0 aids braking → shorter d; downhill opposes
+    → longer d). ALL SI: speeds m/s, a_max m/s^2, gradient_rad the incline angle (rad, +uphill).
+    `gradient_rad=0.0` (the default + the flat-ground path) is byte-identical to the original physics.
+
+    Defensive: None (no answer) when v_apex >= v_entry (no braking needed) or the effective decel
+    `a_eff` <= 0 (undefined physics). Otherwise a positive d."""
+    if v_apex >= v_entry:
         return None
-    return (float(v_entry) ** 2 - float(v_apex) ** 2) / (2.0 * float(a_max))
+    a_eff = float(a_max) + G * float(np.sin(gradient_rad))
+    if not (a_eff > 0.0):
+        return None
+    return (float(v_entry) ** 2 - float(v_apex) ** 2) / (2.0 * a_eff)
 
 
 def _win(t: np.ndarray, seconds: float) -> int:
