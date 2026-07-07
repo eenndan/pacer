@@ -89,6 +89,8 @@ xcrun stapler staple "dist/Pacer-Studio-<version>.dmg"
 spctl --assess --type execute --verbose=4 "dist/Pacer Studio.app"
 ```
 
+## Gatekeeper
+
 If you skip notarization, a user can still open the unsigned app via **right-click ▸ Open** (or
 `xattr -dr com.apple.quarantine "Pacer Studio.app"`), but Gatekeeper will warn on first launch.
 
