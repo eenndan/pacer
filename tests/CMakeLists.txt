@@ -36,6 +36,11 @@ add_test(NAME test_import_ergonomics
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_import_ergonomics.py)
 set_tests_properties(test_import_ergonomics PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Layering contract (test/layering-contract): ONLY session/load/ingest/tracks may import the pacer
+# core — every view/controller/helper stays pacer-free. A pure `ast` walk of studio/*.py: no pacer,
+# no Qt, no telemetry file, so it needs neither the offscreen env nor the PYTHONPATH block below.
+add_test(NAME test_layering
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_layering.py)
 # MAP-ONLY GPS-gap reconstruction (studio.gapfill): pure Python + numpy, no telemetry file.
 add_test(NAME test_gapfill
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gapfill.py)
