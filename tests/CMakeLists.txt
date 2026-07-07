@@ -109,6 +109,12 @@ add_test(NAME test_load_pipeline
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_pipeline.py)
 set_tests_properties(test_load_pipeline PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Start-line widen decision (test/fit-start-line-widen): load._fit_start_line keeps a sufficient
+# registry line but widens (1.15/1.3/1.5 about the midpoint) to recover band-laps a too-short line
+# missed — it sets known-track lap segmentation. Both branches pinned on a synthetic circle Laps.
+# Imports pacer (no Qt).
+add_test(NAME test_fit_start_line
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_fit_start_line.py)
 # F1 god-object decomposition (studio.corner_model.CornerModel + studio.driving_channels.
 # DrivingChannels): Session composes + DELEGATES to the per-domain services, and the cache
 # invalidation (set_timing_lines drives both invalidate()s; the reference set/clear drives the
@@ -335,7 +341,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
                         test_sidecar test_track_db test_session_pure test_load_internals
-                        test_load_pipeline test_session_services
+                        test_load_pipeline test_fit_start_line test_session_services
                         test_golden_synthetic
                         test_studio_features test_rainbow_map test_map_render
                         test_compare test_map_ghost test_cross_reference test_delta_engine
