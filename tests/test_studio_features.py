@@ -627,6 +627,47 @@ def test_failed_reload_preserves_paths_title_and_session():
     print("test_failed_reload_preserves_paths_title_and_session OK")
 
 
+def test_on_load_failed_async_drops_a_stale_token():
+    """The async failed-load slot guards on the load token: a STALE async failure (superseded by a
+    newer load) must be dropped — not pop an error dialog, not emit loadFinished, and not reseed the
+    welcome/_paths (which on a first-load failure would clobber the current good state). The
+    loaded()-drop half is already covered (test_reentrant_load_applies_only_latest); this pins the
+    FAILED-path guard (app._on_load_failed_async), which had no test."""
+    from PySide6.QtWidgets import QMainWindow
+
+    from studio.app import StudioWindow
+
+    def _bare():
+        w = StudioWindow.__new__(StudioWindow)
+        QMainWindow.__init__(w)
+        return w
+
+    # (1) STALE token (< current) -> the whole handler is a no-op.
+    w = _bare()
+    w._load_token = 5
+    w._paths = ["/keep/CURRENT.MP4"]
+    w.session = object()
+    kept_paths, kept_session = list(w._paths), w.session
+    ran = {"failed": 0, "finished": 0}
+    w._on_load_failed = lambda paths, exc: ran.__setitem__("failed", ran["failed"] + 1)
+    w.loadFinished.connect(lambda: ran.__setitem__("finished", ran["finished"] + 1))
+    w._on_load_failed_async(3, ["/stale/OLD.MP4"], RuntimeError("stale boom"))
+    assert ran["failed"] == 0, "stale async failure must not surface an error"
+    assert ran["finished"] == 0, "stale async failure must not emit loadFinished"
+    assert w._paths == kept_paths and w.session is kept_session, "stale failure clobbered good state"
+
+    # (2) CURRENT token (== current) -> the failure IS surfaced once + loadFinished emitted.
+    w2 = _bare()
+    w2._load_token = 7
+    ran2 = {"failed": 0, "finished": 0}
+    w2._on_load_failed = lambda paths, exc: ran2.__setitem__("failed", ran2["failed"] + 1)
+    w2.loadFinished.connect(lambda: ran2.__setitem__("finished", ran2["finished"] + 1))
+    w2._on_load_failed_async(7, ["/current/NEW.MP4"], RuntimeError("real boom"))
+    assert ran2["failed"] == 1, "a current async failure must surface via _on_load_failed once"
+    assert ran2["finished"] == 1, "a current async failure must emit loadFinished"
+    print("test_on_load_failed_async_drops_a_stale_token OK")
+
+
 def test_load_failure_message_is_plain_language():
     """The honest-failure-UX fix: _load_failure_message maps the actionable load failures to plain
     sentences and NEVER leaks a raw Python class name (RuntimeError/KeyError/…) into the headline.
