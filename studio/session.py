@@ -1257,6 +1257,14 @@ class Session:
     # The export writers (studio/export_data.py) are pacer-free, so the two accessors below own
     # the export's only pacer crossings (per-sample channel arrays + the GPS9 wall-clock date).
 
+    def lap_elevation_channel(self, lap_id: int) -> np.ndarray:
+        """Per-sample smoothed altitude (metres) for one lap, index-aligned with lap_channels.
+        Altitude is a first-class GPS9 field, boxcar-smoothed at load (load._smooth_track) like
+        lat/lon. A pacer-free read; used by the map Elevation channel (F3). Not fingerprinted (a
+        pure display accessor over data the core already carries)."""
+        pts = self.laps.get_lap(lap_id).points
+        return np.asarray([p.point.altitude for p in pts], dtype=float)
+
     def lap_channels(self, lap_id: int) -> dict[str, np.ndarray]:
         """Index-aligned per-sample channel arrays for ONE lap — the single pacer-free view over
         the cached `_lap_columns` fetch, shared by the channels-CSV export and the map rainbow

@@ -196,6 +196,9 @@ def _stub_session(n=60):
     # set the backing _driving slot since session.driving is a (settable-only-via-slot) property.
     grip = np.linspace(0.1, 1.1, n)
     s._driving = SimpleNamespace(lap_grip_utilization=lambda lid: grip)
+    # F3 Line: Elevation — a synthetic altitude ramp (metres), aligned to xy.
+    elev = np.linspace(10.0, 40.0, n)
+    s.lap_elevation_channel = lambda lid: elev
     return s
 
 
@@ -228,7 +231,10 @@ def test_toggle_off_restores_exact_items_and_pens():
     mv._cycle_rainbow()  # delta → grip
     assert mv._rainbow_mode == "grip"
     assert sum(it.xData.size for it in mv._rainbow._items) > 0, "grip rainbow must hold data"
-    mv._cycle_rainbow()  # grip → off
+    mv._cycle_rainbow()  # grip → elevation
+    assert mv._rainbow_mode == "elevation"
+    assert sum(it.xData.size for it in mv._rainbow._items) > 0, "elevation rainbow must hold data"
+    mv._cycle_rainbow()  # elevation → off
     assert mv._rainbow_mode == "off"
     after_items = list(mv._current_overlay._items)
     assert [id(a) for a in after_items] == [id(b) for b in before_items], "items rebuilt!"
@@ -294,11 +300,11 @@ def test_default_channel_is_speed_and_combo_reads_speed():
     assert mv._legend.isVisibleTo(mv), "the speed legend shows on load"
     # Cycling still visits every channel in order, combo mirroring the mode each step.
     seen = [mv._rainbow_mode]
-    for _ in range(4):
+    for _ in range(5):
         mv._cycle_rainbow()
         assert mv.rainbow_combo.currentData() == mv._rainbow_mode, "combo must stay in sync"
         seen.append(mv._rainbow_mode)
-    assert seen == ["speed", "delta", "grip", "off", "speed"], seen
+    assert seen == ["speed", "delta", "grip", "elevation", "off", "speed"], seen
     print("test_default_channel_is_speed_and_combo_reads_speed OK")
 
 
