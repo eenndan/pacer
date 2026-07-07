@@ -89,6 +89,12 @@ add_test(NAME test_track_db
 # only (session/load chain has no Qt, verified), no telemetry file.
 add_test(NAME test_session_pure
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_session_pure.py)
+# Load-pipeline internals (test/load-pipeline-coverage): the clock-provenance decision
+# (load._used_gps9_trueclock, behind the degraded-timing banner) and the no-average-across-a-gap
+# smoothing contract (_signal._gap_segments / _smooth_segments) — pure functions that ran only
+# through the manual D24 dump before. Imports pacer via studio.load; no Qt, no telemetry file.
+add_test(NAME test_load_internals
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_internals.py)
 # F1 god-object decomposition (studio.corner_model.CornerModel + studio.driving_channels.
 # DrivingChannels): Session composes + DELEGATES to the per-domain services, and the cache
 # invalidation (set_timing_lines drives both invalidate()s; the reference set/clear drives the
@@ -314,7 +320,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_import_ergonomics
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
-                        test_sidecar test_track_db test_session_pure test_session_services
+                        test_sidecar test_track_db test_session_pure test_load_internals test_session_services
                         test_golden_synthetic
                         test_studio_features test_rainbow_map test_map_render
                         test_compare test_map_ghost test_cross_reference test_delta_engine
