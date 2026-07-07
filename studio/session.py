@@ -1602,6 +1602,11 @@ class Session:
         return dist, speed_kmh, elapsed
 
     _DELTA_GRID_N = 400  # samples on the normalized-distance grid (smooth + cheap to render)
+    # The grid itself is CONSTANT — build it once as a class attribute, not per call: the ~30 Hz
+    # tick's delta_to_ideal_at was rebuilding this np.linspace every frame. Read-only so the shared
+    # array can't be mutated (every use is np.interp or a fresh `s_grid * total`, none in-place).
+    _DELTA_S_GRID = np.linspace(0.0, 1.0, _DELTA_GRID_N)
+    _DELTA_S_GRID.flags.writeable = False
 
     def delta(self, lap_ids, x_mode: str = "distance") -> tuple[int, LapSeries, LapSeries] | None:
         """Returns (best_lap_id, speed_series, delta_series) for the speed + delta plots, which
@@ -1647,7 +1652,7 @@ class Session:
 
         # Common grid in normalized distance fraction [0,1]; the same fraction is the same
         # track position on every lap, so the last point (s=1) is the finish line for all.
-        s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
+        s_grid = self._DELTA_S_GRID
         best_dist, _, best_elapsed = arrays[best]
         # Distance mode keeps the x-axis in metres via the baseline lap's distance (one shared
         # x): the local best normally, or the cross-recording reference's distance when active.
@@ -1687,7 +1692,7 @@ class Session:
         Independent of any cross-recording reference: the ideal is always the DRIVER's own best
         achievable, so it ignores `_ref_arrays`.
         """
-        s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
+        s_grid = self._DELTA_S_GRID
         env: np.ndarray | None = None
         for lid in self.consistency_lap_ids():
             dist, _speed_kmh, elapsed = self._lap_arrays(lid)
@@ -1729,7 +1734,7 @@ class Session:
         b_dist, b_elapsed = base.dist, base.elapsed
         if len(b_dist) < 2 or b_dist[-1] <= 0:
             return None
-        s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
+        s_grid = self._DELTA_S_GRID
         best_elapsed_on_grid = np.interp(s_grid, b_dist / b_dist[-1], b_elapsed)
         if x_mode == "time":
             x = best_elapsed_on_grid  # the best/baseline lap's own elapsed, matching delta()
@@ -1756,7 +1761,7 @@ class Session:
         ids = [i for i in lap_ids if 0 <= i < self.laps.laps_count()]
         if not ids:
             return None
-        s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
+        s_grid = self._DELTA_S_GRID
         # Distance mode shares delta()'s x basis (active baseline total) so the two Δ curves line
         # up on one axis; fall back to None-safe 0 only when no baseline exists (no curve drawn).
         base_total = self.active_baseline_total_distance() if x_mode != "time" else None
@@ -1891,7 +1896,7 @@ class Session:
         s = src.fraction_at_time(t)              # normalized fraction [0,1]
         elapsed_lap = src.elapsed_at_time(t)     # = t − lap_start, clamped to the lap
         # ideal_elapsed at the SAME track fraction s (the envelope is on the uniform s-grid).
-        s_grid = np.linspace(0.0, 1.0, self._DELTA_GRID_N)
+        s_grid = self._DELTA_S_GRID
         ideal_here = float(np.interp(s, s_grid, ideal))
         return elapsed_lap - ideal_here
 
