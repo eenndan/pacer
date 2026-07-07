@@ -1,0 +1,52 @@
+{
+ "active_baseline_total_distance": null,
+ "best_lap_id": null,
+ "best_lap_total_distance": null,
+ "best_rolling_lap": null,
+ "coaching_opportunities": {
+  "enough": false,
+  "median_lap_id": null,
+  "n_laps": 0,
+  "rows": []
+ },
+ "consistency_lap_ids": [],
+ "corner_consistency": [],
+ "corner_map_markers": [],
+ "corner_session_bests": [],
+ "corners": [],
+ "delta": {
+  "distance": null,
+  "time": null
+ },
+ "driving_thresholds": {
+  "brake_max": 2.0,
+  "brake_p75": 2.0,
+  "brake_p90": 2.0,
+  "n_moving": 23,
+  "theta_b": 0.3
+ },
+ "dropout_lap_ids": [],
+ "gmeter_source": "gps",
+ "has_gmeter": true,
+ "has_reference": false,
+ "lap_count": 1,
+ "lap_rows": [],
+ "lap_time_trend": [],
+ "per_lap": {},
+ "point_count": 175,
+ "reference_label": null,
+ "reference_lap_id": null,
+ "reference_lap_time": null,
+ "reference_overlay_xy_shape": null,
+ "sector_count": 0,
+ "sector_plot_positions_distance": [],
+ "sector_plot_positions_time": [],
+ "sector_sigmas": [],
+ "session_best_splits": [
+  null
+ ],
+ "session_date": "2018-01-24",
+ "theoretical_best": null,
+ "track_name": null,
+ "valid_lap_ids": []
+}
