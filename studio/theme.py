@@ -138,6 +138,16 @@ def _hex_rgb(h: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
+def qcolor(token: str, alpha: int | None = None) -> QColor:
+    """A `QColor` from a theme hex token, with an optional alpha override (0-255). The one shared
+    home for this primitive — the g-meter overlay and the video-export compositor both had a
+    byte-identical local `_c`."""
+    col = QColor(token)
+    if alpha is not None:
+        col.setAlpha(alpha)
+    return col
+
+
 def rainbow_colors(n: int = MAP_RAINBOW_N) -> list[str]:
     """`n` hex colours low→high along the behind → accent → ahead ramp (index 0 = slow/losing,
     n-1 = fast/gaining). The behind/ahead endpoints follow the ACTIVE palette, so the map ramp

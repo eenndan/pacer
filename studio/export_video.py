@@ -33,7 +33,6 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
-    QColor,
     QFont,
     QFontMetricsF,
     QImage,
@@ -618,11 +617,7 @@ def guard_validate_window(spec: ExportSpec) -> None:
 
 
 # --------------------------------------------------------------------------- compositing
-def _c(token: str, alpha: int | None = None) -> QColor:
-    col = QColor(token)
-    if alpha is not None:
-        col.setAlpha(alpha)
-    return col
+_c = theme.qcolor  # QColor from a theme hex token (+ optional alpha) — shared home in theme.py
 
 
 def _font(px: float, bold: bool = False) -> QFont:
@@ -1174,14 +1169,6 @@ class Renderer:
     @property
     def total_frames(self) -> int:
         return len(self._times)
-
-    @property
-    def frames_done(self) -> int:
-        return self._i
-
-    @property
-    def out_size(self) -> tuple[int, int]:
-        return self._out_w, self._out_h
 
     @property
     def fps(self) -> float:
