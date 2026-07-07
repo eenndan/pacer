@@ -54,6 +54,11 @@ add_test(NAME test_timeline
 # verdict + banner concern lines. Pure value object — no Qt, no pacer.
 add_test(NAME test_data_quality
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_data_quality.py)
+# Demo-download resolution (fix/demo-download-timeout): the fetch passes a finite timeout (a stalled
+# TCP must not hang the UI thread) + is atomic (stream to .part, rename; no leftover on failure).
+# studio.demo is pacer-free AND Qt-free (urlopen stubbed) — no pacer, no Qt, no network.
+add_test(NAME test_demo
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_demo.py)
 # Reference-centerline closed-loop fit (studio.reference): pure Python + numpy, synthetic
 # loops with known similarity transforms (incl. cyclic offset / reversal / reflection).
 add_test(NAME test_reference
