@@ -20,7 +20,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from studio import driving as D  # noqa: E402
-from studio._signal import G  # noqa: E402
+from studio._signal import MAX_LONG_G, G, speed_long_g  # noqa: E402
 
 
 # --------------------------------------------------------------- synthetic g traces
@@ -37,6 +37,35 @@ def _lap_trace(n=1000, dur=20.0, total_dist=400.0):
 # from the threshold-DERIVATION logic (tested separately below) — the way the real pipeline
 # splits the two (Session derives once, brake_events takes the threshold).
 THETA_B = 0.20
+
+
+def test_speed_long_g_survives_run_seam_duplicate_timestamp():
+    """A run/chapter seam clamps the time axis monotonic (load._gps9_times -> maximum.accumulate),
+    leaving a duplicated instant (dt == 0). speed_long_g must not divide that into NaN — else the
+    brake / coast / grip channels near the seam silently vanish (the sibling gmeter.py GPS path
+    already guards it). Also pins the NO-OP on clean input so the golden gate stays byte-identical."""
+    n = 60
+    speed = np.full(n, 100.0)                     # km/h cruise
+    speed[30:45] = np.linspace(100.0, 55.0, 15)   # a real brake straddling the seam below
+
+    # (a) clean strictly-increasing axis -> byte-identical to the raw np.gradient path (the guard
+    # branch never fires), so this fix cannot move any golden-swept value on clean data.
+    t = np.linspace(0.0, 6.0, n)
+    raw = np.clip(np.gradient(np.asarray(speed, float) / 3.6, t) / G, -MAX_LONG_G, MAX_LONG_G)
+    np.testing.assert_array_equal(speed_long_g(speed, t), raw)
+
+    # (b) a duplicated seam timestamp (dt == 0 at 36->37) -> every sample finite, never NaN.
+    t_seam = t.copy()
+    t_seam[37:] -= (t_seam[37] - t_seam[36])      # clamp sample 37 onto 36's instant (one dt == 0)
+    assert (np.diff(t_seam) <= 0).any()           # the anomaly the fix must survive is present
+    out = speed_long_g(speed, t_seam)
+    assert np.isfinite(out).all(), out[~np.isfinite(out)]
+
+    # (c) end-to-end: the seam-straddling brake is still detected (the buggy NaN dropped it to 0).
+    dist = np.linspace(0.0, 300.0, n)
+    events = D.brake_events(dist, t_seam, out, 0.15)
+    assert len(events) >= 1, "seam-straddling brake must survive the dt==0 guard"
+    print(f"ok speed_long_g: clean no-op + seam all-finite + {len(events)} brake across the seam")
 
 
 def test_known_brake_pulse_is_detected():
