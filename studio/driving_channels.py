@@ -48,8 +48,12 @@ class DrivingChannels:
                  valid_lap_ids: Callable[[], list[int]],
                  active_baseline_total_distance: Callable[[], float | None],
                  corner_basis: Callable[[], tuple | None],
-                 lap_corner_stats: Callable[[int], list]):
+                 lap_corner_stats: Callable[[int], list],
+                 lap_elevation: Callable[[int], np.ndarray] | None = None):
         self._gmeter = gmeter
+        # Per-sample altitude for the lap (for the OPT-IN hill-compensated braking, driving.py);
+        # optional so a bare/old construction still works — a None just keeps braking flat-ground.
+        self._lap_elevation = lap_elevation
         self._trace_times = trace_times
         self._trace_speed_kmh = trace_speed_kmh
         self._lap_arrays = lap_arrays
@@ -357,6 +361,11 @@ class DrivingChannels:
             return []
         total_lap = float(dists[-1])
         a_max_ms2 = a_max_g * G
+        # Opt-in hill-compensated braking (driving.HILL_COMPENSATE_BRAKING, OFF by default): the
+        # per-sample altitude for this lap, else None (flat-ground physics — the byte-identical default).
+        elevation = (self._lap_elevation(lap_id)
+                     if driving.HILL_COMPENSATE_BRAKING and self._lap_elevation is not None
+                     else None)
         events = self.lap_brake_events(lap_id)
         # Project every corner's [enter, exit] onto THIS lap's odometer via the drift-gated alignment
         # (corners.project_boundaries — the SAME gate lap_corner_stats / grip use: normalized within
@@ -380,7 +389,15 @@ class DrivingChannels:
             onset = float(matched[-1].onset_dist)
             v_entry = float(np.interp(onset, dists, speed_kmh)) / 3.6  # km/h -> m/s
             v_apex = float(st.apex_speed) / 3.6
-            d = driving.optimal_brake_distance(v_entry, v_apex, a_max_ms2)
+            gradient_rad = 0.0
+            if elevation is not None and len(elevation) >= len(dists):
+                # slope of the braking zone [onset → apex]: Δaltitude / Δodometer → incline angle.
+                a_alt, apex_alt = np.interp(
+                    [onset, float(st.apex_dist)], dists, elevation[:len(dists)])
+                dx = float(st.apex_dist) - onset
+                if dx > 0:
+                    gradient_rad = float(np.arctan2(apex_alt - a_alt, dx))
+            d = driving.optimal_brake_distance(v_entry, v_apex, a_max_ms2, gradient_rad)
             if d is None:  # v_apex >= v_entry (no braking needed) -> N/A for this corner
                 continue
             optimal = float(st.apex_dist) - d

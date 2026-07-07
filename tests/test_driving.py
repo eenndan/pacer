@@ -392,6 +392,28 @@ def test_optimal_brake_distance_guards():
     print("ok D4 physics: guards (apex>=entry, a_max<=0) -> None")
 
 
+def test_optimal_brake_distance_hill_compensation():
+    """Elevation Phase 2: a_eff = a_max + G·sin(gradient). gradient=0 is byte-identical to the
+    flat-ground formula (the default + all existing 3-arg callers); uphill (gravity aids braking)
+    SHORTENS d, downhill LENGTHENS it — checked against the closed form with a hand-computed a_eff."""
+    v_e, v_a, a_max = 30.0, 15.0, 9.0
+    flat = D.optimal_brake_distance(v_e, v_a, a_max)
+    # (a) gradient=0 == the flat-ground formula, byte-identical
+    assert D.optimal_brake_distance(v_e, v_a, a_max, 0.0) == flat == (v_e**2 - v_a**2) / (2 * a_max)
+    theta = float(np.radians(6.0))
+    # (b) uphill: a_eff = a_max + G·sinθ > a_max -> shorter d, matching the closed form
+    up = D.optimal_brake_distance(v_e, v_a, a_max, theta)
+    assert abs(up - (v_e**2 - v_a**2) / (2 * (a_max + G * np.sin(theta)))) < 1e-9
+    assert up < flat
+    # (c) downhill: a_eff < a_max -> longer d
+    down = D.optimal_brake_distance(v_e, v_a, a_max, -theta)
+    assert abs(down - (v_e**2 - v_a**2) / (2 * (a_max - G * np.sin(theta)))) < 1e-9
+    assert down > flat
+    # (d) a downhill steep enough to cancel the demonstrated decel -> a_eff <= 0 -> None (undefined)
+    assert D.optimal_brake_distance(v_e, v_a, 0.5, float(np.radians(-90.0))) is None
+    print(f"ok hill braking: flat={flat:.1f} m, uphill={up:.1f} < flat < downhill={down:.1f}")
+
+
 def test_estimate_a_max_percentile_and_floor():
     """a_max = the AMAX_PCT percentile of the per-event peak decels (g), floored — the session's
     DEMONSTRATED peak braking, not the detection threshold."""

@@ -422,6 +422,7 @@ class Session:
             active_baseline_total_distance=self.active_baseline_total_distance,
             corner_basis=lambda: self.corners.basis(),
             lap_corner_stats=lambda lap_id: self.corners.lap_corner_stats(lap_id),
+            lap_elevation=self.lap_elevation_channel,
         )
 
     def _build_bests(self) -> bests_service.Bests:
