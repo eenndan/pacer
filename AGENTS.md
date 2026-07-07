@@ -142,7 +142,10 @@ Pixi tasks (`[tool.pixi.tasks]` in [pyproject.toml](pyproject.toml)):
 | task | does |
 |---|---|
 | `pixi run build` | configure + build everything (cmake + Ninja → `build/Release`) |
-| `pixi run test` | CTest: the C++ Catch2 suites **and** the registered Python studio tests |
+| `pixi run test` | CTest: the C++ Catch2 suites **and** the registered Python studio tests (the pre-PR gate) |
+| `pixi run test-fast` | the fast inner loop: `test` minus the one slow test (`test_export_video`, ~110 s) — ~18 s |
+| `pixi run golden` | run **only** the synthetic core-math equivalence gate (`test_golden_synthetic`) — sub-second |
+| `pixi run smoke` | the CI E2E gate: full `StudioWindow` offscreen on the bundled sample (`_smoke --no-video`) |
 | `pixi run studio [-- files]` | the studio app (PySide6) — depends on `build` |
 | `pixi run gen-bindings` | regenerate the `pacer` Python bindings |
 | `pixi run fmt` / `pixi run fmt-check` | clang-format (env-pinned) the hand-maintained C/C++ in place / non-mutating check (CI gate). Both exclude the litgen-generated `nanobind_pacer.cpp` — it must stay byte-identical to the generator's output (regen-drift gate) |
@@ -187,8 +190,10 @@ pixi run python -m studio.dev.golden_session_dump /tmp/after.json    # AFTER
 pixi run python -m studio.dev.golden_compare /tmp/before.json /tmp/after.json   # expect max|Δ| = 0
 ```
 
-**Run one test** (fast iteration, skips the full ctest sweep): `pixi run python tests/test_<name>.py`
-— that is exactly how each Python suite is registered with CTest.
+**Run one test:** `pixi run ctest --test-dir build/Release -R test_<name>` — CTest injects the
+`PYTHONPATH=bindings/pacer` + `QT_QPA_PLATFORM=offscreen` env each suite needs (a bare
+`pixi run python tests/test_<name>.py` can miss it on a fresh checkout / for the offscreen-Qt
+suites). For the whole suite minus the slow video-export test, use `pixi run test-fast`.
 
 **Inputs:** the studio app takes file paths on the CLI (`pixi run studio -- a.MP4`).
 
