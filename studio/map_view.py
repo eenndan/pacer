@@ -137,11 +137,11 @@ def _inferred_pen(color, base_width):
 RAINBOW_WIDTH = 3  # same width as the current-lap overlay, so the painted line reads identically
 # Cycle order for the channel control: off → speed → Δ → grip → off (kept for the cycle API the
 # tests drive; the labelled combo lists the SAME modes, so no channel is hidden behind a blind cycle).
-_RAINBOW_ORDER = ("off", "speed", "delta", "grip")
+_RAINBOW_ORDER = ("off", "speed", "delta", "grip", "elevation")
 # Short, legible per-channel labels for the map-header dropdown (each channel visible + one click),
 # replacing the old blind-cycle button captions (where Grip was an undiscoverable 4th step).
 _RAINBOW_COMBO_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ to best",
-                         "grip": theme.estimated_label("Line: Grip")}
+                         "grip": theme.estimated_label("Line: Grip"), "elevation": "Line: Elevation"}
 # The per-channel rainbow value/bucket math (incl. the grip fixed scale + Δ/grip negation + the
 # GPS-dropout NaN-mask) lives in the Qt-free studio/map_render.py (rainbow_channel + helpers).
 
@@ -1002,6 +1002,7 @@ class MapView(QWidget):
         times, xs, ys, speed_kmh, cum = (
             ch["t_media_s"], ch["x_m"], ch["y_m"], ch["speed_kmh"], ch["dist_m"])
         grip_util = self.session.driving.lap_grip_utilization(lap_id) if mode == "grip" else None
+        elevation = self.session.lap_elevation_channel(lap_id) if mode == "elevation" else None
         # Δ-vs-best on the 400-grid (delta()'s y-series); None when no best lap / lap absent.
         delta_grid = None
         if mode == "delta":
@@ -1009,7 +1010,7 @@ class MapView(QWidget):
             if got is not None and lap_id in got[2]:
                 delta_grid = got[2][lap_id][1]
         result = rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
-                                 self._speed_unit)
+                                 self._speed_unit, elevation=elevation)
         if result is None:
             return False
         seg_buckets, lo_txt, hi_txt = result

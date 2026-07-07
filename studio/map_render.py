@@ -86,7 +86,7 @@ def _seg_buckets(times, vals, lo=None, hi=None):
 
 
 def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
-                    speed_unit=None):
+                    speed_unit=None, elevation=None):
     """Compute the per-segment bucket ids + legend texts for one rainbow channel. Pure numpy.
 
     Inputs are the lap's already-fetched per-sample arrays (the map fetches them from Session):
@@ -124,6 +124,13 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
         # own, so the labelled endpoints + this warning glyph carry the "at limit vs grip left"
         # meaning without relying on the red/green hue (colour blindness / greyscale).
         return seg_buckets, "⚠ on limit", "unused (est.)"
+    if mode == "elevation":
+        # Altitude along the lap (metres, boxcar-smoothed at load). Informational — no good/bad
+        # direction — so it rides this lap's own min→max range: low = low (red) bucket, high = green.
+        if elevation is None or len(elevation) < len(xs):
+            return None
+        vals = np.asarray(elevation[:len(xs)], float)
+        return _seg_buckets(times, vals), f"{float(np.min(vals)):.0f} m", f"{float(np.max(vals)):.0f} m"
     # Δ-vs-best, resampled from the 400-grid delta() onto this lap's point distances
     if delta_grid is None or float(cum[-1]) <= 0:
         return None
