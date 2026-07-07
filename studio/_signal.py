@@ -101,7 +101,19 @@ def speed_long_g(speed_kmh, t) -> np.ndarray:
     n = min(len(v), len(t))
     if n < 3:
         return np.zeros(n)
-    g = np.gradient(v[:n], t[:n]) / G
+    tt = t[:n]
+    dt = np.diff(tt)
+    if (dt <= 0).any():
+        # A run/chapter seam clamps the time axis monotonic (load._gps9_times -> maximum.accumulate),
+        # leaving a duplicated instant (dt == 0) that np.gradient would divide by -> NaN across the
+        # longitudinal g, silently dropping brake/coast events near the seam (the sibling GPS path in
+        # gmeter.py already guards this). Rebuild a strictly-increasing axis, each non-positive gap
+        # replaced by the median positive gap. A no-op on clean strictly-increasing input.
+        pos = dt[dt > 0]
+        med = np.median(pos) if pos.size else 1.0
+        dt = np.where(dt <= 0, med, dt)
+        tt = np.concatenate([tt[:1], tt[:1] + np.cumsum(dt)])
+    g = np.gradient(v[:n], tt) / G
     return np.clip(g, -MAX_LONG_G, MAX_LONG_G)
 
 
