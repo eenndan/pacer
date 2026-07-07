@@ -1,5 +1,6 @@
 # Ruff config for pacer's Python: the studio app + binding generators.
-# Generated bindings and the conda env are excluded. Run: ruff check / ruff format
+# Generated bindings and the conda env are excluded. Lint gate: `pixi run lint` (ruff check).
+# Python formatting is intentionally NOT gated (the tree predates `ruff format`).
 line-length = 100
 target-version = "py311"
 

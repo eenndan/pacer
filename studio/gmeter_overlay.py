@@ -31,7 +31,6 @@ from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
-    QColor,
     QFont,
     QFontMetricsF,
     QPainter,
@@ -46,13 +45,7 @@ from PySide6.QtWidgets import QWidget
 from . import theme
 from .theme import C
 
-
-def _c(token: str, alpha: int | None = None) -> QColor:
-    """QColor from a theme hex token, optional alpha override (0-255)."""
-    col = QColor(token)
-    if alpha is not None:
-        col.setAlpha(alpha)
-    return col
+_c = theme.qcolor  # QColor from a theme hex token (+ optional alpha) — shared home in theme.py
 
 # Outer ring g; a 1.0 g corner sits well inside and a ~1.5 g spike still lands within the dial.
 _FULL_SCALE_G = 1.6

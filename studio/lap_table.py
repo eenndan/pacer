@@ -577,9 +577,6 @@ class LapTable(QWidget):
 # move to per-column header tooltips (_corner_col_tips).
 CORNER_COLUMNS = ["Corner", "Time", "Δ best", "Apex", "Δ apex", "Entry", "Exit",
                   theme.estimated_label("Grip")]
-# The 4 speed columns whose per-corner VALUES convert km/h → the display unit (Apex, Δ apex,
-# Entry, Exit). Δ apex is a speed DIFFERENCE, so it scales by the same factor.
-CORNER_SPEED_COLS = (3, 4, 5, 6)
 
 
 def _corner_col_tips(unit: str | None) -> list[str]:
