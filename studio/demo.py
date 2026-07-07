@@ -33,6 +33,9 @@ _DEMO_URL = (
 )
 _DEMO_FILENAME = "pacer-demo-lap.mp4"
 _APP_DIR_NAME = "pacer"
+# Bound every socket op of the demo fetch so a stalled/half-open TCP connection can't hang the UI
+# thread forever (urlretrieve took no timeout; urlopen does). Applies per connect/read, not total.
+_DEMO_TIMEOUT_S = 15.0
 
 
 def _app_support_dir() -> str:
@@ -52,15 +55,20 @@ def _try_download_demo(dest: str, url: str | None = None) -> bool:
     """Best-effort download of the demo recording to `dest`: network/IO failures are swallowed and
     return False. Writes to a temp sibling then renames so a half-download never looks like a valid
     cache hit."""
+    import shutil
     import urllib.request
 
     url = url or os.environ.get("PACER_DEMO_URL") or _DEMO_URL
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     tmp = dest + ".part"
     try:
-        urllib.request.urlretrieve(url, tmp)  # noqa: S310 (pinned GitHub release asset)
+        # urlopen (unlike urlretrieve) takes a timeout, so a stalled connection fails instead of
+        # hanging the UI thread; stream to a temp sibling then rename so a partial/failed download
+        # never looks like a valid cache hit.
+        with urllib.request.urlopen(url, timeout=_DEMO_TIMEOUT_S) as resp, open(tmp, "wb") as out:  # noqa: S310
+            shutil.copyfileobj(resp, out)
         os.replace(tmp, dest)
-    except Exception as exc:  # network / IO — degrade gracefully to the empty welcome state
+    except Exception as exc:  # network / IO / timeout — degrade gracefully to the empty welcome state
         print(f"demo: download failed ({exc}); launching the empty welcome state.", flush=True)
         if os.path.exists(tmp):
             os.remove(tmp)
