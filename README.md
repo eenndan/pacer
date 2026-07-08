@@ -16,8 +16,8 @@ No transponder, no extra hardware.
   transponder. Older GPS5 cameras (Hero 5–7) carry no per-sample clock, so Pacer falls back to
   the video clock (approximate — it runs ~0.1% fast); the app flags this so the times read as
   estimates.
-- **Track map** — the racing line coloured by speed, with brake points and the
-  start/sector lines you can drag to re-segment.
+- **Track map** — the racing line coloured by **speed, Δ-to-best, grip, or elevation**, with brake
+  points and the start/sector lines you can drag to re-segment.
 - **Δ-to-best charts** — speed and cumulative time delta against your best lap,
   distance-aligned so corners line up.
 - **Lap table** — every lap and its sector splits, sortable, best-lap highlighted.
@@ -32,13 +32,14 @@ No transponder, no extra hardware.
 
 ## Get Pacer
 
-**A Mac (Apple Silicon) and a GoPro is all you need.**
+**A Mac (Apple Silicon) and a GoPro is all you need.** Today Pacer installs **from source** — one
+command with [pixi](https://pixi.sh), no manual toolchain setup. A prebuilt, double-clickable
+`Pacer Studio.app` (`.dmg`) is planned but **not yet published** to
+[Releases](https://github.com/eenndan/pacer/releases) — the packaging is done and CI-checked
+(`docs/PACKAGING.md`), it just needs a signed build uploaded.
 
-1. **Download** the latest **`Pacer Studio.app`** (`.dmg`) from the
-   [**Releases**](https://github.com/eenndan/pacer/releases) page — no pixi, Python, or build
-   tools required on your Mac. *(The build is currently unsigned, so on first launch **right-click
-   the app ▸ Open** to get past Gatekeeper — see [docs/PACKAGING.md](docs/PACKAGING.md#gatekeeper).
-   No release binary yet? Build one yourself in one command — see [Build from source](#build-from-source).)*
+1. **Build & launch** — `pixi run studio -- /path/to/GX010060.MP4` (see
+   [Build from source](#build-from-source); the first run resolves the environment automatically).
 2. **Open a GoPro `.MP4`** — drag it onto the window, or `File ▸ Open`.
 3. **Read your first lap** — the [**First lap walkthrough**](docs/FIRST_LAP.md) shows you the
    30-second path from footage to "where am I losing time?"
@@ -71,9 +72,10 @@ pixi run studio -- /path/to/GX010060.MP4  # build + launch on a recording
 
 GoPro chapter siblings (`GX01…`, `GX02…`) are chained automatically.
 
-To explore without your own footage, `pixi run studio -- --demo` opens a real demo lapping
-recording (fetched once at runtime — nothing large is committed). See
-[docs/PACKAGING.md](docs/PACKAGING.md#demo-data).
+To explore without your own footage, `pixi run studio -- --demo` fetches a real demo lapping
+recording at runtime (nothing large is committed). *(The demo clip isn't uploaded to the release
+yet, so `--demo` currently falls back to the empty welcome screen — see
+[docs/PACKAGING.md](docs/PACKAGING.md#demo-data).)*
 
 ## Install / Packaging
 
