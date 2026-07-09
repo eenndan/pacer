@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QProgressDialog,
     QVBoxLayout,
     QWidget,
@@ -402,10 +403,22 @@ class StudioWindow(QMainWindow):
         "Loading telemetry…" card, show the window, and force one synchronous paint so it appears
         right away. Replaced by the real UI in _build_ui."""
         label = chapters.recording_label(paths)
-        placeholder = QLabel(f"Loading telemetry…\n\n{label}" if label else "Loading telemetry…")
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.setWordWrap(True)
-        self.setCentralWidget(placeholder)
+        container = QWidget()
+        v = QVBoxLayout(container)
+        v.setAlignment(Qt.AlignCenter)
+        v.setSpacing(18)
+        title = QLabel(f"Loading telemetry…\n\n{label}" if label else "Loading telemetry…")
+        title.setProperty("role", "LoadingTitle")
+        title.setAlignment(Qt.AlignCenter)
+        title.setWordWrap(True)
+        v.addWidget(title, 0, Qt.AlignCenter)
+        bar = QProgressBar()
+        bar.setObjectName("LoadingBar")
+        bar.setRange(0, 0)          # indeterminate: self-animates, no timer to leak, dies with the widget
+        bar.setTextVisible(False)
+        bar.setFixedWidth(220)
+        v.addWidget(bar, 0, Qt.AlignCenter)
+        self.setCentralWidget(container)
         if not self.isVisible():
             self.show()
         app = QApplication.instance()

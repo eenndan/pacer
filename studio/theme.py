@@ -932,6 +932,24 @@ QLabel[role="WelcomeError"] {{
     color: {C.text_muted};
     font-size: {CAPTION}px;
 }}
+/* load busy state: a muted "Loading telemetry…" title over an INDETERMINATE bar (QProgressBar
+   range 0,0) — a multi-second GoPro ingest reads as "working", not frozen. The bar self-animates,
+   so there's no timer to leak; it dies when _build_ui swaps in the real UI. */
+QLabel[role="LoadingTitle"] {{
+    background: transparent;
+    color: {C.text_dim};
+    font-size: {BODY}px;
+}}
+QProgressBar#LoadingBar {{
+    background-color: {C.surface};
+    border: none;
+    border-radius: 3px;
+    max-height: 6px;
+}}
+QProgressBar#LoadingBar::chunk {{
+    background-color: {C.accent};
+    border-radius: 3px;
+}}
 /* ESTIMATED data-quality badge (central_view QualityBadge): a small padded/rounded/tinted chip
    next to the LAPS label when the timing quality is degraded — so it reads as a chip, not plain
    text. Amber-tinted like the other trust affordances (the provisional banner / accent), sized
