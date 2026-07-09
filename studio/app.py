@@ -7,9 +7,10 @@ import os
 import shutil
 import sys
 import time
+from pathlib import Path
 
 from PySide6.QtCore import QBuffer, QIODevice, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QActionGroup, QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtGui import QActionGroup, QDesktopServices, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -1680,7 +1681,18 @@ def main(argv: list[str] | None = None) -> int:
             paths = [path]
         else:
             demo_startup = True  # demo requested but unavailable — open the welcome state honestly
-    app = QApplication(sys.argv)
+    app = QApplication([sys.argv[0], *argv])  # keep argv[0] as the program name
+    # Brand the running app: the Dock/window icon and the app name Qt reports. NOTE the macOS
+    # menu-bar showing "Python" in a NON-FROZEN dev run is expected — AppKit reads the menu-bar
+    # app name from the running bundle's Info.plist (here the python interpreter's) before Qt can
+    # override it. The shipped .app sets CFBundleName="Pacer Studio" (packaging/pacer.spec) so the
+    # product is correct; we do NOT pull in pyobjc/Foundation just to fix a cosmetic dev-only label.
+    app.setApplicationName("Pacer Studio")
+    app.setApplicationDisplayName("Pacer Studio")
+    app.setOrganizationName("pacer")  # additive; the library.json path is built from a hard-coded _APP_DIR_NAME, so this cannot move it
+    _icon = Path(__file__).resolve().parent / "assets" / "pacer.icns"
+    if _icon.exists():
+        app.setWindowIcon(QIcon(str(_icon)))  # dev Dock + window proxy icon; frozen Dock icon comes from the bundle
     # Install the top-level exception handler now the QApplication exists: an unhandled exception in
     # any signal handler surfaces a themed Report-a-problem dialog (and a stderr trace) instead of
     # silently killing the app. Must be AFTER QApplication() so the handler can show a dialog.
