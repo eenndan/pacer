@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
+    APP_NAME,
     chapters,
     demo,
     export_data,
@@ -67,7 +68,7 @@ def _show_error_report(exc_type, exc, tb):
     summary = f"{exc_type.__name__}: {exc}" if exc is not None else exc_type.__name__
     detail = "".join(traceback.format_exception(exc_type, exc, tb))
     box = QMessageBox(
-        QMessageBox.Critical, "pacer studio — something went wrong",
+        QMessageBox.Critical, f"{APP_NAME} — something went wrong",
         "Something went wrong and pacer hit an unexpected error.\n\n"
         "The app is still running — you can keep working, but if this keeps happening, "
         "please report it so it can be fixed.\n\n"
@@ -231,7 +232,7 @@ class StudioWindow(QMainWindow):
     def _show_welcome(self, error: str | None = None):
         """Install the no-recording welcome empty state (also the first-load-failure fallback)."""
         self._paths = getattr(self, "_paths", [])
-        self.setWindowTitle("pacer studio")
+        self.setWindowTitle(APP_NAME)
         self.setCentralWidget(WelcomeView(self._open_file, self._open_demo, error, parent=self))
         if getattr(self, "_full_action", None) is not None:
             self._full_action.setEnabled(False)
@@ -371,7 +372,7 @@ class StudioWindow(QMainWindow):
                       "locked, or the recording is too short")
 
         label = chapters.recording_label(paths)
-        self.setWindowTitle(f"pacer studio — {label}" if label else "pacer studio")
+        self.setWindowTitle(f"{APP_NAME} — {label}" if label else APP_NAME)
         self._build_ui()
         # One-line, non-fatal: the statusbar mirrors the console "studio:" notice style.
         if notice:
@@ -424,7 +425,7 @@ class StudioWindow(QMainWindow):
         detail = f"{type(exc).__name__}: {exc}"
         message = self._load_failure_message(paths, exc)
         print(f"studio: failed to load {offending}: {detail}", flush=True)
-        box = QMessageBox(QMessageBox.Critical, "pacer studio — could not load recording",
+        box = QMessageBox(QMessageBox.Critical, f"{APP_NAME} — could not load recording",
                           f"{message}\n\n{offending}\n\n"
                           "The previously loaded session (if any) is unchanged.", parent=self)
         # Raw exception text lives in the collapsible details, not the headline.
@@ -685,8 +686,8 @@ class StudioWindow(QMainWindow):
         self._privacy_action.setToolTip(
             "What pacer stores on this Mac (all local/offline) and how to remove it")
         self._privacy_action.triggered.connect(self._show_privacy)
-        self._about_action = help_menu.addAction("About pacer studio")
-        self._about_action.setToolTip("What pacer studio is and what it does")
+        self._about_action = help_menu.addAction(f"About {APP_NAME}")
+        self._about_action.setToolTip(f"What {APP_NAME} is and what it does")
         self._about_action.triggered.connect(self._show_about)
         self._report_action = help_menu.addAction("Report a problem…")
         self._report_action.setToolTip(
@@ -1571,7 +1572,7 @@ class StudioWindow(QMainWindow):
         if reason is not None:
             print(f"studio: reference not loaded — {reason}", flush=True)
             self.statusBar().clearMessage()
-            QMessageBox.information(self, "pacer studio — reference not loaded", reason)
+            QMessageBox.information(self, f"{APP_NAME} — reference not loaded", reason)
             return
         self.statusBar().clearMessage()
         self._apply_reference_change()
@@ -1585,7 +1586,7 @@ class StudioWindow(QMainWindow):
         reason = f"could not load the reference recording ({type(exc).__name__}: {exc})"
         print(f"studio: reference not loaded — {reason}", flush=True)
         self.statusBar().clearMessage()
-        QMessageBox.information(self, "pacer studio — reference not loaded", reason)
+        QMessageBox.information(self, f"{APP_NAME} — reference not loaded", reason)
 
     def _clear_reference(self):
         """Coaching ▸ "Clear reference": drop the cross-recording reference; everything reverts to the
@@ -1606,14 +1607,14 @@ class StudioWindow(QMainWindow):
         playing its own footage. No-op (with a notice) if no reference is loaded."""
         if not hasattr(self, "session") or self.session.reference_session() is None:
             QMessageBox.information(
-                self, "pacer studio — no reference recording",
+                self, f"{APP_NAME} — no reference recording",
                 "Load a reference recording first (File ▸ Load reference recording…), then "
                 "compare against it.")
             return
         # The compare controller lives on the live central view.
         if not self.view.compare.enter_cross():
             QMessageBox.information(
-                self, "pacer studio — cross-recording compare unavailable",
+                self, f"{APP_NAME} — cross-recording compare unavailable",
                 "The reference recording's lap could not be set up for compare.")
 
     def _apply_reference_change(self):

@@ -2,6 +2,7 @@
 authors = [{ name = "eenndan" }]
 dependencies = ["litgen @ git+https://github.com/pthom/litgen@b83e0ca75952031dbab328e230ff866f8076d14a"]
 description = "Race-telemetry analysis studio (GoPro GPS/IMU → laps, deltas, synced video)"
+license = { text = "CC BY-NC-SA 4.0" }
 name = "pacer"
 requires-python = ">= 3.11"
 version = "0.1.0"

@@ -22,6 +22,7 @@ import base64
 import csv
 import html
 
+from . import APP_NAME
 from ._signal import fmt_time
 
 # laps.csv `flag` column value mirroring the lap table's ⚠ low-confidence marker (a GPS
@@ -177,9 +178,9 @@ def write_report_html(path: str, session, source_label: str = "",
     out = [
         "<!DOCTYPE html>",
         '<html lang="en"><head><meta charset="utf-8"/>',
-        f"<title>pacer studio — {esc(source_label) or 'session report'}</title>",
+        f"<title>{APP_NAME} — {esc(source_label) or 'session report'}</title>",
         f"<style>{_REPORT_CSS}</style></head><body>",
-        "<h1>pacer studio — session report</h1>",
+        f"<h1>{APP_NAME} — session report</h1>",
         '<table class="meta">',
         *(f"<tr><th>{esc(k)}</th><td>{esc(v)}</td></tr>" for k, v in meta),
         "</table>",

@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import coaching, theme, units
+from . import APP_NAME, coaching, theme, units
 from .lap_table import CORNER_DIR_GLYPH
 from .theme import C
 
@@ -203,7 +203,7 @@ class OpportunitiesDialog(QDialog):
                  brake_points: dict | None = None,
                  parent=None, speed_unit: str | None = None):
         super().__init__(parent)
-        self.setWindowTitle("pacer studio — opportunities")
+        self.setWindowTitle(f"{APP_NAME} — opportunities")
         # A wider default than the persistent panel: the modal carries two extra columns the panel
         # doesn't (the fixed ~150-px Entry·Apex·Exit PhaseBar + the per-row Jump button), which
         # squeeze the stretch reason column into a sliver that truncates ("brake …", "find tim…").

@@ -9,3 +9,10 @@ Single-language Python, optimized for fast iteration. Panels:
 
 Run:  pixi run studio [GoPro.MP4 ...]   (or: python -m studio [files])
 """
+
+# Canonical version + wordmark — the single source of truth for both (the About dialog reads
+# these, the PyInstaller spec regex-reads __version__, and every user-facing title/label imports
+# APP_NAME via `from . import APP_NAME`). Keep this a leaf: no submodule imports here, so
+# `from . import APP_NAME` can never cycle.
+__version__ = "0.1.0"
+APP_NAME = "Pacer Studio"

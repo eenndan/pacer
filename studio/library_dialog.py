@@ -55,8 +55,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from . import APP_NAME, theme
 from . import library as _library
-from . import theme
 from ._signal import fmt_time
 from .theme import C
 
@@ -161,7 +161,7 @@ class LibraryDialog(QDialog):
                  reveal_library: Callable[[], None] | None = None,
                  backup_library: Callable[[], None] | None = None):
         super().__init__(parent)
-        self.setWindowTitle("pacer studio — session library")
+        self.setWindowTitle(f"{APP_NAME} — session library")
         self.resize(720, 600)
         self._index = index
         self._open_recording = open_recording

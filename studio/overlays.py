@@ -50,6 +50,7 @@ class WelcomeView(QWidget):
         self.drop_icon.setAlignment(Qt.AlignCenter)
         zone.addWidget(self.drop_icon)
 
+        # Intentional short brand lockup on the welcome screen — NOT the full APP_NAME wordmark.
         title = QLabel("Pacer")
         title.setProperty("role", "WelcomeTitle")
         title.setAlignment(Qt.AlignCenter)
