@@ -1374,6 +1374,29 @@ def test_welcome_state_when_no_recording():
     print("test_welcome_state_when_no_recording OK")
 
 
+def test_loading_placeholder_shows_indeterminate_busy_bar():
+    """While Session.load parses a recording, _show_loading_placeholder installs a centred card with
+    a role'd "Loading telemetry…" title over an INDETERMINATE QProgressBar (range 0,0) — so a
+    multi-second GoPro ingest reads as "working", not frozen. Asserts the bar exists and is
+    indeterminate (min == max == 0), and the title carries role "LoadingTitle" for the QSS."""
+    from PySide6.QtWidgets import QLabel, QProgressBar
+
+    from studio.app import StudioWindow
+    w = StudioWindow([])  # welcome state; no in-flight load
+    try:
+        w._show_loading_placeholder(["/nonexistent/GX010060.MP4"])
+        cw = w.centralWidget()
+        bar = cw.findChild(QProgressBar)
+        assert bar is not None, "loading placeholder must carry a busy bar"
+        assert bar.minimum() == 0 and bar.maximum() == 0, "bar must be INDETERMINATE (range 0,0)"
+        titles = [lab for lab in cw.findChildren(QLabel)
+                  if lab.property("role") == "LoadingTitle"]
+        assert titles, "loading title must carry role 'LoadingTitle' for the theme"
+    finally:
+        w.deleteLater()
+    print("test_loading_placeholder_shows_indeterminate_busy_bar OK")
+
+
 def test_welcome_view_shows_a_drop_zone():
     """The first-run WelcomeView frames its centred content in a VISIBLE dashed-border drop zone
     (objectName "WelcomeDropZone"), so the drag-and-drop affordance reads on screen instead of only
