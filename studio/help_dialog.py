@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import APP_NAME, __version__
 from .theme import C
 
 # ---------------------------------------------------------------- shortcut catalogue
@@ -58,7 +59,7 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
 # about copy) as the single source of the app's Help-menu text.
 PRIVACY_TITLE = "Your data & privacy"
 PRIVACY_PARAGRAPHS = [
-    "pacer studio runs entirely on your Mac. It does not upload, sync or share anything — no "
+    "Pacer Studio runs entirely on your Mac. It does not upload, sync or share anything — no "
     "account, no network, no telemetry. Everything below stays on this computer, offline.",
     "What it stores, and where:",
     "•  Timing-line sidecar — when you place or drag a start/finish or sector line, pacer saves "
@@ -72,10 +73,9 @@ PRIVACY_PARAGRAPHS = [
     "\"Clear library\" to wipe the whole index. Your video files are never touched.",
 ]
 
-APP_NAME = "pacer studio"
 APP_TAGLINE = "Race-telemetry analysis for GoPro footage."
 APP_BLURB = (
-    "Open a GoPro recording and pacer studio reconstructs the laps from its embedded GPS — then "
+    "Open a GoPro recording and Pacer Studio reconstructs the laps from its embedded GPS — then "
     "lets you scrub the footage against the map, speed / Δ charts and a g-meter overlay, compare "
     "your laps (and other recordings) side by side, and find where the time goes."
 )
@@ -153,6 +153,10 @@ class AboutDialog(QDialog):
         name = QLabel(APP_NAME)
         name.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {C.text};")
         root.addWidget(name)
+
+        version = QLabel(f"v{__version__}")
+        version.setStyleSheet(f"color: {C.text_dim};")
+        root.addWidget(version)
 
         tagline = QLabel(APP_TAGLINE)
         tagline.setStyleSheet(f"color: {C.accent}; font-weight: 600;")

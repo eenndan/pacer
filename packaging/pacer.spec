@@ -34,6 +34,24 @@ def _repo(*parts):
     return os.path.join(REPO_ROOT, *parts)
 
 
+# Single-source the version: regex-read studio.__version__ from disk (this build interpreter may
+# not be able to `import studio`), mirroring build_macos.sh's grep of pyproject.toml. Keeps the
+# .app's CFBundle*Version in lockstep with the canonical studio/__init__.py.
+import re  # noqa: E402
+
+
+def _studio_version():
+    try:
+        txt = open(_repo("studio", "__init__.py"), encoding="utf-8").read()
+        m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', txt)
+        return m.group(1) if m else "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+_VERSION = _studio_version()
+
+
 # --- the compiled pacer extension + package -----------------------------------------------------
 # Locate the installed `pacer` package (editable-installed in the pixi env) so we bundle the SAME
 # _pacer.*.so the app imports, plus the package's __init__/.pyi, without hard-coding a build path.
@@ -131,11 +149,11 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "Pacer Studio",
         "CFBundleDisplayName": "Pacer Studio",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "0.1.0",
+        "CFBundleShortVersionString": _VERSION,
+        "CFBundleVersion": _VERSION,
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "12.0",
         # The app reads GoPro files the user picks; no special entitlements needed unsigned.
-        "NSHumanReadableCopyright": "© eenndan — CC BY-NC-SA 4.0",
+        "NSHumanReadableCopyright": "© 2025-2026 eenndan — CC BY-NC-SA 4.0",
     },
 )
