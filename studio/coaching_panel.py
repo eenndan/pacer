@@ -38,7 +38,25 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
 
 # column indices
 _COL_CORNER, _COL_LOST, _COL_SIGMA, _COL_PHASES, _COL_REASON, _COL_GO = range(6)
-_HEADERS = ["Corner", "Time lost", "±σ", "Entry · Apex · Exit", "How to find it", ""]
+# NB (M4): "Time lost" is the cross-lap MEDIAN per-corner delta; the Entry·Apex·Exit column is a
+# DIFFERENT statistic — the typical lap's Δt profile across the corner (where in the corner it wins
+# or loses), which does NOT sum to "Time lost" and can even net faster. Its header must not also
+# claim to be "time lost", or the two columns read as self-contradictory.
+_HEADERS = ["Corner", "Time lost", "±σ", "Entry · Apex · Exit Δt", "How to find it", ""]
+
+# L2: the time-lost cells render at 2 dp ("+{t:.2f} s"), so any loss under half a centisecond rounds
+# to "+0.00 s" — an informationless "opportunity" with a live Jump button. summarize() keeps the raw
+# 1e-9 ranking (used by the golden fingerprint + share card), but the DISPLAYED opportunity lists
+# (dialog + panel) drop rows below the shown resolution so no "+0.00 s" row ever appears.
+DISPLAY_MIN_LOST_S = 0.005  # < this rounds to +0.00 s at 2 dp — not a shown opportunity
+
+
+def _shown_rows(opps: coaching.Opportunity) -> list[coaching.Opportunity]:
+    """The opportunity rows worth SHOWING: those whose time_lost does not round to +0.00 s at the
+    2-dp display resolution (L2). Ranking/order is preserved; only sub-resolution rows are dropped.
+    Takes an ``Opportunities`` (typed loosely to avoid a runtime import cycle)."""
+    return [r for r in opps.rows if r.time_lost >= DISPLAY_MIN_LOST_S]
+
 
 # Human label per coaching.PHASE_* id, in track order (for the breakdown bar segments + tooltip).
 _PHASE_LABEL = {coaching.PHASE_ENTRY: "Entry", coaching.PHASE_APEX: "Apex",
@@ -60,11 +78,13 @@ _REASON_TIP = {
 
 
 class PhaseBar(QWidget):
-    """A tiny horizontal entry/apex/exit Δt-vs-best breakdown for one corner (D2): three
-    proportional segments (widths ∝ each third's seconds of loss) over the row's three numbers.
-    Only the phases LOSING time (positive Δt) get a coloured segment; faster-than-best thirds are
-    shown as a near-zero sliver. Read-only; the segment widths are the visual cue, the small
-    numbers underneath the precise values, the tooltip the full breakdown."""
+    """A tiny horizontal entry/apex/exit Δt-profile for one corner on the TYPICAL lap (D2): three
+    proportional segments (widths ∝ each third's seconds slower than best) over the row's three
+    numbers. This is a WHERE-in-the-corner profile of the typical lap vs best — NOT the row's
+    "Time lost" (a cross-lap median), which it need not sum to or even agree in sign with. Only the
+    phases slower than best (positive Δt) get a coloured segment; faster-than-best thirds are shown
+    as a near-zero sliver. Read-only; the segment widths are the visual cue, the small numbers
+    underneath the precise values, the tooltip the full breakdown."""
 
     _BAR_H = 6  # px; the proportional bar's height (the numbers sit below it)
 
@@ -111,10 +131,25 @@ class PhaseBar(QWidget):
             nums.addWidget(lbl, 1)
         lay.addLayout(nums)
 
+        # M4: this bar is the TYPICAL lap's Δt profile across the corner (where in the corner it is
+        # faster/slower than best), a DIFFERENT statistic from the row's "Time lost" (a cross-lap
+        # median). Label it as a profile, call the sum the typical-lap NET (not "time lost"), and —
+        # when that net is ≤ 0 (the typical lap is net faster over the window) — say so plainly so a
+        # positive-loss headline row never reads as if the corner were net faster overall.
+        net = phases.total
+        if net > 1e-6:
+            net_line = (f"Typical-lap net {net:+.2f} s over the window "
+                        f"— slowest third: {_PHASE_LABEL[dominant].lower()}.")
+        elif net < -1e-6:
+            net_line = (f"Typical-lap net {net:+.2f} s over the window (net faster than best here) "
+                        "— the row's Time lost is the cross-lap median, a different measure.")
+        else:
+            net_line = "Typical-lap net ~0 s over the window (on your best-lap pace here)."
         self.setToolTip(
-            "Time lost vs your best lap, split across the corner (s):\n"
+            "Where in the corner your typical lap is faster/slower than your best lap "
+            "(Δt per third, s) — NOT the same as the row's Time lost:\n"
             + "   ".join(f"{_PHASE_LABEL[p]} {v:+.2f}" for p, v in zip(ids, vals, strict=True))
-            + f"\nTotal {phases.total:+.2f} s — biggest loss on {_PHASE_LABEL[dominant].lower()}.")
+            + "\n" + net_line)
 
 
 # D4: below this many metres the brake-point delta is within the estimate's noise — show no hint.
@@ -222,7 +257,10 @@ class OpportunitiesDialog(QDialog):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        if opportunities.enough and opportunities.rows:
+        # L2: drop rows whose loss rounds to +0.00 s at the shown 2-dp resolution so no
+        # informationless "+0.00 s" row (with a live Jump button) is listed as an opportunity.
+        shown = _shown_rows(opportunities)
+        if opportunities.enough and shown:
             n = opportunities.n_laps
             lap = opportunities.median_lap_id
             # `n` is a COUNT (stays as-is); `lap` is a lap ID, so it renders 1-based (lap_label).
@@ -234,10 +272,10 @@ class OpportunitiesDialog(QDialog):
         title.setWordWrap(True)
         root.addWidget(title)
 
-        if not (opportunities.enough and opportunities.rows):
+        if not (opportunities.enough and shown):
             root.addWidget(self._empty_state(opportunities), 1)
         else:
-            root.addWidget(self._build_table(opportunities), 1)
+            root.addWidget(self._build_table(shown), 1)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -263,8 +301,8 @@ class OpportunitiesDialog(QDialog):
         label.setStyleSheet(f"color: {C.text_dim};")
         return label
 
-    def _build_table(self, opps: coaching.Opportunities) -> QWidget:
-        table = QTableWidget(len(opps.rows), len(_HEADERS))
+    def _build_table(self, rows: list[coaching.Opportunity]) -> QWidget:
+        table = QTableWidget(len(rows), len(_HEADERS))
         table.setHorizontalHeaderLabels(_HEADERS)
         table.verticalHeader().setVisible(False)
         table.setSelectionMode(QAbstractItemView.NoSelection)  # read-only; Jump is the only action
@@ -287,7 +325,7 @@ class OpportunitiesDialog(QDialog):
         table.setColumnWidth(_COL_PHASES, 150)
         num_font = theme.mono_font(theme.TABLE)
 
-        for r, opp in enumerate(opps.rows):
+        for r, opp in enumerate(rows):
             table.setItem(r, _COL_CORNER, _corner_cell(opp))
             table.setItem(r, _COL_LOST, _lost_cell(opp, num_font))
             table.setItem(r, _COL_SIGMA, _sigma_cell(opp, num_font))  # lap-to-lap consistency σ
@@ -420,7 +458,8 @@ class OpportunitiesPanel(QWidget):
         Clears any held row selection (a stale cid would mis-ring the map)."""
         opps = self.session.coaching_opportunities()
         brake_points = self.session.coaching_brake_points()
-        if opps.enough and opps.rows:
+        # L2: only rows above the shown resolution count as opportunities (no "+0.00 s" rows).
+        if opps.enough and _shown_rows(opps):
             self._fill_rows(opps, brake_points)
         else:
             self._show_excluded(opps)
@@ -437,9 +476,15 @@ class OpportunitiesPanel(QWidget):
     def _fill_rows(self, opps: coaching.Opportunities, brake_points: dict):
         """Populate the compact top-3 table from `opps.rows` (shared cell builders, so a row reads
         identically to the modal dialog) and the headline summary."""
-        rows = opps.rows[:PANEL_TOP_N]
+        # L2: only shown-resolution rows are opportunities (drop the "+0.00 s" rows).
+        rows = _shown_rows(opps)[:PANEL_TOP_N]
         total = sum(r.time_lost for r in rows)
-        self.summary_label.setText(f"{total:.2f} s across the top {len(rows)}")
+        # P1: phrase the headline by COUNT — "in your worst corner" reads right for one, "across your
+        # top N corners" for several, so it never says the ungrammatical "across the top 1".
+        if len(rows) == 1:
+            self.summary_label.setText(f"{total:.2f} s in your worst corner")
+        else:
+            self.summary_label.setText(f"{total:.2f} s across your top {len(rows)} corners")
 
         self.table.blockSignals(True)
         self.table.clearSelection()

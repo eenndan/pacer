@@ -68,10 +68,13 @@ class Reason:
 
 @dataclass(frozen=True)
 class PhaseLoss:
-    """D2: the entry / apex(mid) / exit Δt-vs-best decomposition of ONE corner's loss (s). The
-    three thirds sum (within interpolation tolerance) to the corner's total Δt-vs-best — the same
-    statistic as the delta-chart bleed across the window. Each is positive when the comparison lap
-    is slower than best over that third, negative when faster."""
+    """D2: the entry / apex(mid) / exit Δt-vs-best decomposition of ONE corner on the TYPICAL
+    (median) lap (s). This is a WHERE-IN-THE-CORNER profile of the typical lap vs best — it is NOT
+    the Opportunity's ``time_lost`` and does NOT sum to it. ``time_lost`` is the cross-lap MEDIAN
+    per-corner delta over the consistency laps; these thirds are a single-lap ∫ds/v integral of the
+    typical lap alone, so the two are different statistics and can disagree in sign (a typical lap
+    can be net faster over the window than the corner's median loss). Each third is positive when
+    the typical lap is slower than best over that third, negative when faster."""
 
     entry: float             # Δt over the entry third (first 1/3 of the corner window, s)
     apex: float              # Δt over the apex/mid third (s)
@@ -79,7 +82,9 @@ class PhaseLoss:
 
     @property
     def total(self) -> float:
-        """The corner's total Δt-vs-best (≈ the measured per-corner loss): the thirds telescope."""
+        """The typical lap's NET Δt-vs-best across the whole corner window (the thirds telescope to
+        it). NOT the same statistic as the Opportunity's ``time_lost`` (a cross-lap median) — do not
+        present it as 'time lost'; it is the typical-lap net over the window and can be negative."""
         return self.entry + self.apex + self.exit
 
     @property
@@ -106,7 +111,9 @@ class Opportunity:
     time_lost: float         # median time lost vs the best lap's same corner (s, > 0)
     entry_dist: float        # the corner's enter odometer on the BEST lap (m) — the jump-to seek
     reason: Reason           # the dominant measured reason + numbers (only on the top-N rows)
-    phases: PhaseLoss = _NO_PHASES   # D2: entry/apex/exit Δt-vs-best thirds (s); sum ≈ time_lost
+    # D2: typical-lap entry/apex/exit Δt-vs-best thirds (s) — a WHERE-in-the-corner profile, a
+    # DIFFERENT statistic from time_lost (their sum is the typical lap's net, not the median loss).
+    phases: PhaseLoss = _NO_PHASES
 
 
 @dataclass(frozen=True)
@@ -194,7 +201,8 @@ def _coast_extra(med_spans, best_spans, med_win: tuple[float, float],
 # Δt = ∫ (1/v_lap(s) − 1/v_best(s)) ds  (positive ⇒ slower than best, negative ⇒ faster). A
 # corner window [enter, exit] is split into three equal-distance thirds (entry, apex/mid, exit)
 # and Δt is integrated over each on a shared fine distance grid, so the three telescope to the
-# corner's total Δt-vs-best (the same statistic as the delta-chart bleed across the window).
+# TYPICAL lap's net Δt-vs-best across the window (a WHERE-in-the-corner profile of one lap; NOT the
+# Opportunity's cross-lap-median time_lost, which is a different statistic and need not agree).
 
 _V_FLOOR_KMH = 1.0  # km/h; a defensive floor on v before 1/v — laps are MOVING in corners, but a
                     # stray non-positive/near-zero sample would blow up the reciprocal. ~0.28 m/s.
@@ -232,7 +240,8 @@ def corner_phase_losses(
     nearest-point match above it, the SAME alignment lap_corner_stats uses), so the third boundaries
     land on the same TRACK positions on both laps. Each lap's window is split into three
     equal-distance thirds; per third Δt = ∫ds/v_lap − ∫ds/v_best on a shared fine grid (so the
-    thirds telescope to the corner's total Δt-vs-best). Positive ⇒ the lap is slower than best over
+    thirds telescope to THIS lap's net Δt-vs-best across the window — a where-in-the-corner profile
+    of one lap, NOT the cross-lap-median time_lost). Positive ⇒ the lap is slower than best over
     that third.
 
     `lap_traces`/`best_traces` (Session-fed (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum) for
@@ -418,12 +427,31 @@ def summarize(
 # Names for the dominant phase in the coaching sentence (PHASE_* → human words).
 _PHASE_WORD = {PHASE_ENTRY: "entry", PHASE_APEX: "the apex", PHASE_EXIT: "exit"}
 
+# M5: the phase each reason's LEVER naturally lives on. The "most of it on <phase>" clause reads as
+# a FIX LOCATION, so it only makes sense appended to a reason whose lever acts on that phase — a
+# braking (entry/approach) fix pointed at the EXIT third reads as nonsense. When the dominant third
+# is NOT in a reason's compatible set the clause is rephrased as a CONSEQUENCE ("…and it carries to
+# exit"), not a fix location. LINE/NONE have no single lever phase → they take the plain clause on
+# any dominant third (the σ/"find time" sentence is phase-agnostic, so a location cue is fine).
+_REASON_PHASES = {
+    REASON_APEX: {PHASE_APEX},              # apex speed is an apex-third lever
+    REASON_BRAKING: {PHASE_ENTRY},          # brake later/shorter acts on entry/approach
+    REASON_COASTING: {PHASE_APEX, PHASE_EXIT},  # coasting → back-to-throttle is apex/exit
+    REASON_LINE: set(PHASES),               # phase-agnostic → any dominant third is fine
+    REASON_NONE: set(PHASES),
+}
+
 
 def dominant_phase_clause(opp: Opportunity) -> str:
-    """A short "most of it on <phase>" clause for the opportunity's worst third, or "" when the
-    decomposition is absent/flat or no phase is clearly losing time. Surfaces the D2 attribution
-    in the human sentence without overclaiming: only when the dominant third is positive AND holds
-    a clear majority (≥ half) of the total loss."""
+    """A short clause naming the corner's worst (slowest-vs-best) third, or "" when the
+    decomposition is absent/flat or no phase is clearly losing time. Surfaces the D2 attribution in
+    the human sentence without overclaiming: only when the dominant third is positive AND holds a
+    clear majority (≥ half) of the typical-lap window Δt.
+
+    M5: the clause is REASON-AWARE. When the dominant third matches the reason's natural lever phase
+    (_REASON_PHASES) it reads as the fix location ("… — most of it on entry"). When it does NOT
+    (e.g. a braking/entry fix but the exit third dominates) it reads as a CONSEQUENCE instead
+    ("… and it carries to exit"), so an entry lever is never phrased as an exit fix."""
     ph = opp.phases
     total = ph.total
     if total <= 1e-6:
@@ -432,23 +460,36 @@ def dominant_phase_clause(opp: Opportunity) -> str:
     worst_dt = {PHASE_ENTRY: ph.entry, PHASE_APEX: ph.apex, PHASE_EXIT: ph.exit}[worst]
     if worst_dt <= 1e-6 or worst_dt < 0.5 * total:
         return ""
-    return f" — most of it on {_PHASE_WORD[worst]}"
+    compatible = worst in _REASON_PHASES.get(opp.reason.kind, set(PHASES))
+    if compatible:
+        return f" — most of it on {_PHASE_WORD[worst]}"
+    # The lever's phase and the dominant third disagree: phrase as where the loss SHOWS, not where
+    # to fix it, so a braking (entry) reason no longer reads "brake … — most of it on exit".
+    return f", and it carries to {_PHASE_WORD[worst]}"
 
 
 # ------------------------------------------------------------------ UI sentence helper
 def reason_sentence(opp: Opportunity, unit: str | None = None) -> str:
     """The human, numbers-only coaching sentence for one opportunity's dominant reason. Kept
     here (next to the model) so the panel and any export read ONE phrasing and can't drift. When
-    a clear dominant phase exists (D2) it is appended ("… — most of it on exit"). `unit` (km/h
-    default) converts the apex-speed deficit at the DISPLAY boundary — the deficit stays km/h."""
+    a clear dominant phase exists (D2) a reason-aware clause is appended (a fix-location "… — most
+    of it on the apex" when the phase matches the lever, else a consequence "… and it carries to
+    exit"). Raw driving-channel numbers (brake/coast) are phrased as a CAUSE ("~X s longer on the
+    brakes"), never as recoverable time. `unit` (km/h default) converts the apex-speed deficit at
+    the DISPLAY boundary — the deficit stays km/h."""
     r = opp.reason
     if r.kind == REASON_APEX:
         deficit = units.convert_speed(r.apex_speed_deficit, unit)
         base = f"carry more apex speed (−{deficit:.1f} {units.speed_label(unit)})"
     elif r.kind == REASON_BRAKING:
-        base = f"brake later / shorter (+{r.brake_extra_s:.2f} s on the brakes)"
+        # M6: brake_extra_s is a raw driving-channel CAUSE (extra seconds on the brakes vs best) and
+        # can exceed the corner's whole time_lost — it is NOT recoverable time. Phrase it explicitly
+        # as a cause ("~X s longer on the brakes") so the sentence never advertises a gain larger
+        # than the corner's measured loss (the bounded recoverable estimate is reason.contribution).
+        base = f"brake later / shorter (~{r.brake_extra_s:.2f} s longer on the brakes)"
     elif r.kind == REASON_COASTING:
-        base = f"back to throttle sooner (+{r.coast_extra_s:.2f} s coasting)"
+        # M6 (same pathology): coast_extra_s is a raw cause, not recoverable time — phrase as cause.
+        base = f"back to throttle sooner (~{r.coast_extra_s:.2f} s longer coasting)"
     elif r.kind == REASON_LINE:
         base = f"be consistent here (σ {r.sigma:.2f} s)"
     else:

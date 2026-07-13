@@ -120,7 +120,11 @@ def test_coasting_picks_coasting_reason():
     assert r.reason.kind == K.REASON_COASTING, r.reason
     assert abs(r.reason.coast_extra_s - 0.6) < 1e-9
     assert "throttle sooner" in K.reason_sentence(r)
-    print(f"ok coasting reason: {K.reason_sentence(r)} (contrib {r.reason.contribution:.2f}s)")
+    # M6 (same as braking): the raw coast_extra_s is a cause ("~N s longer coasting"), not a "+N s"
+    # recoverable gain.
+    sent = K.reason_sentence(r)
+    assert "longer coasting" in sent and "+" not in sent, sent
+    print(f"ok coasting reason: {sent} (contrib {r.reason.contribution:.2f}s)")
 
 
 def test_braking_picks_braking_reason():
@@ -137,7 +141,12 @@ def test_braking_picks_braking_reason():
     assert r.reason.kind == K.REASON_BRAKING, r.reason
     assert abs(r.reason.brake_extra_s - 0.6) < 1e-9  # 0.9 - 0.3
     assert "brake later" in K.reason_sentence(r)
-    print(f"ok braking reason: {K.reason_sentence(r)} (contrib {r.reason.contribution:.2f}s)")
+    # M6: the raw brake_extra_s is a CAUSE (extra seconds on the brakes), not recoverable time — the
+    # sentence now phrases it "~N s longer on the brakes" so it can't read as a recoverable gain
+    # larger than the corner's whole loss (the old "+N s on the brakes" advertised a gain).
+    sent = K.reason_sentence(r)
+    assert "longer on the brakes" in sent and "+" not in sent, sent
+    print(f"ok braking reason: {sent} (contrib {r.reason.contribution:.2f}s)")
 
 
 def test_line_sigma_is_the_fallback_reason():
@@ -287,6 +296,61 @@ def test_summarize_attaches_phase_decomposition():
     flat_sentence = K.reason_sentence(opp0.rows[0])  # no phases -> no clause
     assert "most of it on" not in flat_sentence
     print(f"ok summarize-phases: row Δt={pl.total:.3f}s (thirds {pl.as_tuple()}); absent⇒zero")
+
+
+def _opp_with(reason_kind: str, phases: "K.PhaseLoss", *, time_lost: float = 0.30,
+              **reason_kw) -> "K.Opportunity":
+    """A hand-built Opportunity with a chosen reason kind + phase decomposition, for the copy
+    (M4/M5/M6) guards that must be deterministic regardless of the summarize plumbing."""
+    reason = K.Reason(kind=reason_kind, contribution=reason_kw.pop("contribution", 0.1),
+                      apex_speed_deficit=reason_kw.pop("apex_speed_deficit", 0.0),
+                      brake_extra_s=reason_kw.pop("brake_extra_s", 0.0),
+                      coast_extra_s=reason_kw.pop("coast_extra_s", 0.0),
+                      sigma=reason_kw.pop("sigma", 0.05))
+    return K.Opportunity(cid=1, direction=-1, time_lost=time_lost, entry_dist=50.0,
+                         reason=reason, phases=phases)
+
+
+def test_m5_phase_clause_is_reason_aware():
+    """M5: the "most of it on <phase>" clause reads as a FIX LOCATION, so it must only be appended
+    when the dominant third matches the reason's natural lever phase. A BRAKING (entry/approach)
+    reason whose EXIT third dominates must NOT read "brake … — most of it on exit" (nonsense — an
+    entry fix pointed at the exit); it must read as a consequence instead ("… and it carries to
+    exit"). The matching case (braking + entry-dominant) keeps the fix-location clause."""
+    # Exit dominates (>= half of the positive total) but the reason is a braking/entry lever.
+    exit_dom = K.PhaseLoss(entry=0.02, apex=0.02, exit=0.20)
+    brake_opp = _opp_with(K.REASON_BRAKING, exit_dom, brake_extra_s=0.5)
+    sent = K.reason_sentence(brake_opp)
+    assert "most of it on exit" not in sent, ("an entry fix must not point at the exit", sent)
+    assert "carries to exit" in sent, ("the incompatible phase reads as a consequence", sent)
+    assert sent.startswith("brake later"), sent
+    # The compatible case: braking reason with the ENTRY third dominant -> the fix-location clause.
+    entry_dom = K.PhaseLoss(entry=0.20, apex=0.02, exit=0.02)
+    brake_entry = _opp_with(K.REASON_BRAKING, entry_dom, brake_extra_s=0.5)
+    assert "most of it on entry" in K.reason_sentence(brake_entry), K.reason_sentence(brake_entry)
+    # An APEX reason with the apex third dominant -> "most of it on the apex" (compatible).
+    apex_dom = K.PhaseLoss(entry=0.02, apex=0.20, exit=0.02)
+    apex_opp = _opp_with(K.REASON_APEX, apex_dom, apex_speed_deficit=5.0)
+    assert "most of it on the apex" in K.reason_sentence(apex_opp), K.reason_sentence(apex_opp)
+    # A LINE reason is phase-agnostic -> the plain fix-location clause on any dominant third.
+    line_opp = _opp_with(K.REASON_LINE, exit_dom, sigma=0.2)
+    assert "most of it on exit" in K.reason_sentence(line_opp), K.reason_sentence(line_opp)
+    print("ok M5 reason-aware clause: entry fix never 'most of it on exit'; compatible phases keep it")
+
+
+def test_m6_raw_channel_number_is_a_cause_not_a_gain():
+    """M6: brake_extra_s / coast_extra_s are raw driving-channel CAUSES that can exceed the corner's
+    whole time_lost — the sentence must phrase them as a cause ("~N s longer on the brakes"), never
+    as a "+N s" recoverable gain larger than the corner's own measured loss."""
+    # brake_extra_s (1.40 s) is 8.5x the corner's whole loss (0.16 s) — the M6 fixture shape.
+    opp = _opp_with(K.REASON_BRAKING, K._NO_PHASES, time_lost=0.16, brake_extra_s=1.40)
+    sent = K.reason_sentence(opp)
+    assert "1.40 s longer on the brakes" in sent, sent
+    assert "+1.40" not in sent and "+" not in sent, ("the raw cause must not read as a +gain", sent)
+    # coasting mirrors it.
+    opp_c = _opp_with(K.REASON_COASTING, K._NO_PHASES, time_lost=0.16, coast_extra_s=1.40)
+    assert "1.40 s longer coasting" in K.reason_sentence(opp_c), K.reason_sentence(opp_c)
+    print("ok M6: raw brake/coast seconds read as a cause, never a +gain above the corner's loss")
 
 
 def test_brake_approach_window_and_coast_only_when_best_lacks_it():
@@ -661,6 +725,121 @@ def test_dialog_reason_cell_is_not_truncated():
         f"a wrapped 2-line reason must grow the row, not clip: {dlg.table.rowHeight(0)}px")
     print(f"ok dialog: reason cell not truncated (reason col w={dlg.table.columnWidth(_COL_REASON)}px, "
           f"row0 h={dlg.table.rowHeight(0)}px, wrap+auto-height)")
+
+
+def test_m4_phasebar_tooltip_does_not_claim_time_lost_and_guards_sign_flip():
+    """M4: the Entry·Apex·Exit PhaseBar is a WHERE-in-the-corner Δt PROFILE of the typical lap, a
+    DIFFERENT statistic from the row's "Time lost" (a cross-lap median). Its tooltip must NOT label
+    itself "time lost", and when its net is <= 0 (the typical lap is net FASTER over the window) on
+    a row whose headline shows a positive loss, the tooltip must not read as if the corner were net
+    faster overall — it says so plainly and points back to Time lost as the different measure."""
+    _qapp()
+    from studio.coaching_panel import _PHASE_LABEL, PhaseBar  # noqa: F401
+    # The C12-shaped case: headline +0.31 s loss (cross-lap median) but the typical-lap phase net is
+    # NEGATIVE (−0.21 s, net faster over the window). The tooltip must not read as "time lost".
+    flip = K.PhaseLoss(entry=-0.30, apex=0.05, exit=0.04)   # total = -0.21
+    assert flip.total < 0
+    tip = PhaseBar(flip).toolTip()
+    assert "Time lost" not in tip.split(":")[0].title() or "NOT the same" in tip, tip
+    # It must NOT claim to BE the time lost — the header line explicitly distances itself.
+    assert "NOT the same as the row's Time lost" in tip, tip
+    # A negative net is stated as "net faster than best here", never as a loss.
+    assert "net faster than best here" in tip, tip
+    assert "Typical-lap net -0.21 s" in tip, tip
+    # And a positive net still names the slowest third (the normal case), still not "time lost".
+    pos = K.PhaseLoss(entry=0.05, apex=0.20, exit=0.03)     # total +0.28, apex slowest
+    tip_pos = PhaseBar(pos).toolTip()
+    assert "Typical-lap net +0.28 s" in tip_pos, tip_pos
+    assert "slowest third: apex" in tip_pos, tip_pos
+    assert "Time lost vs your best lap, split" not in tip_pos, ("old 'time lost' label removed",
+                                                                tip_pos)
+    print("ok M4: phase-bar tooltip is a profile (not 'time lost') + guards the net-faster sign flip")
+
+
+def test_l2_zero_rounding_rows_are_not_shown_opportunities():
+    """L2: summarize keeps the internal 1e-9 ranking (golden fingerprint + share card), but the
+    DISPLAYED opportunity lists (dialog + panel) drop rows whose time_lost rounds to "+0.00 s" at
+    the shown 2-dp resolution (< 0.005 s) — no informationless row with a live Jump button."""
+    _qapp()
+    from studio.coaching_panel import (
+        DISPLAY_MIN_LOST_S,
+        OpportunitiesDialog,
+        OpportunitiesPanel,
+        _shown_rows,
+    )
+    corners = _corners(4)
+    best = [5.0, 6.0, 7.0, 4.0]
+    # Two REAL losers (C1 ~0.30 s, C3 ~0.10 s) and two sub-resolution "losers" (C2 0.0043 s,
+    # C4 0.0026 s) that summarize still ranks (> 1e-9) but that round to +0.00 s on screen.
+    plan = [0.30, 0.0043, 0.10, 0.0026]
+    times = [[best[j] + plan[j] for j in range(4)] for _ in range(4)]
+    lap_times = [sum(r) for r in times]
+    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+                      sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02, 4: 0.02},
+                      median_brake_events=[], best_brake_events=[], median_coast_spans=[],
+                      best_coast_spans=[], median_apex_deltas=[-5.0, 0.0, 0.0, 0.0])
+    # summarize still RANKS all four (the internal 1e-9 threshold is unchanged).
+    assert [r.cid for r in opp.rows] == [1, 3, 2, 4], [r.cid for r in opp.rows]
+    # but the shown rows drop the two that round to +0.00 s.
+    shown = _shown_rows(opp)
+    assert [r.cid for r in shown] == [1, 3], [r.cid for r in shown]
+    assert all(r.time_lost >= DISPLAY_MIN_LOST_S for r in shown)
+    # DIALOG: only the two real rows are built, and none renders "+0.00 s".
+    dlg = OpportunitiesDialog(opp, jump_to=None)
+    assert dlg.table.rowCount() == 2, dlg.table.rowCount()
+    lost_texts = [dlg.table.item(r, 1).text() for r in range(dlg.table.rowCount())]
+    assert all(t != "+0.00 s" for t in lost_texts), lost_texts
+
+    # PANEL: same filter — the "+0.00 s" corners never appear, and the summary counts only shown rows.
+    class _S:
+        def coaching_opportunities(self):
+            return opp
+
+        def coaching_brake_points(self):
+            return {}
+
+    panel = OpportunitiesPanel(_S())
+    assert panel.body.currentIndex() == 0
+    assert panel.table.rowCount() == 2, panel.table.rowCount()
+    panel_lost = [panel.table.item(r, 1).text() for r in range(panel.table.rowCount())]
+    assert all(t != "+0.00 s" for t in panel_lost), panel_lost
+    print("ok L2: sub-0.005 s rows ranked internally but dropped from the shown dialog + panel")
+
+
+def test_p1_summary_grammar_by_count():
+    """P1: the panel's headline summary phrases by COUNT — one shown corner reads "in your worst
+    corner" (never the ungrammatical "across the top 1"); several read "across your top N corners"."""
+    _qapp()
+    from studio.coaching_panel import OpportunitiesPanel
+    corners = _corners(3)
+    best = [5.0, 6.0, 7.0]
+
+    def _panel_for(plan):
+        times = [[best[j] + plan[j] for j in range(3)] for _ in range(4)]
+        lap_times = [sum(r) for r in times]
+        o = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+                        sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02},
+                        median_brake_events=[], best_brake_events=[], median_coast_spans=[],
+                        best_coast_spans=[], median_apex_deltas=[0.0, 0.0, 0.0])
+
+        class _S:
+            def coaching_opportunities(self):
+                return o
+
+            def coaching_brake_points(self):
+                return {}
+
+        return OpportunitiesPanel(_S())
+
+    # exactly ONE shown corner -> "in your worst corner", NOT "across the top 1".
+    p1 = _panel_for([0.30, 0.0, 0.0])   # keep a ref so Qt doesn't GC the C++ label
+    one = p1.summary_label.text()
+    assert "in your worst corner" in one and "across the top 1" not in one, one
+    # several shown corners -> "across your top N corners".
+    p3 = _panel_for([0.30, 0.20, 0.10])
+    many = p3.summary_label.text()
+    assert "across your top 3 corners" in many, many
+    print(f"ok P1: 1-corner => '{one}'; many => '{many}'")
 
 
 def test_dialog_excluded_state_has_no_table():
