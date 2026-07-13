@@ -23,7 +23,7 @@ import csv
 import html
 
 from . import APP_NAME
-from ._signal import fmt_time
+from ._signal import fmt_time, lap_label
 
 # laps.csv `flag` column value mirroring the lap table's ⚠ low-confidence marker (a GPS
 # dropout inside the lap — its time/distance are less reliable). Clean laps carry "".
@@ -72,7 +72,9 @@ def laps_table(session) -> tuple[list[str], list[tuple[int, list[str]]]]:
     rows: list[tuple[int, list[str]]] = []
     for r in rows_meta:
         lap_id = r["idx"]
-        cells = [str(lap_id), _f3(r["time"]), _f3(r["dist"]), _f3(r["entry"]),
+        # `lap` column is the 1-based lap NUMBER (lap_label), matching the app's Lap column;
+        # the 0-based lap_id stays the internal key (row tuple / best-lap green class below).
+        cells = [lap_label(lap_id), _f3(r["time"]), _f3(r["dist"]), _f3(r["entry"]),
                  DROPOUT_FLAG if lap_id in dropout_ids else ""]
         splits = session.lap_sector_splits(lap_id) if n_splits else []
         for i in range(n_splits):
@@ -92,9 +94,17 @@ def laps_summary(session) -> list[tuple[str, str]]:
     value is 3-decimal seconds (the same `_f3` precision as the lap rows' time_s column) or ""
     when the accessor returns None (no valid laps / an all-partial sector column) — the app's
     footer shows the em-dash there. Read straight from `Session.theoretical_best` /
-    `best_rolling_lap`, so the trailer always equals what the app's footer displays."""
+    `best_rolling_lap`, so the trailer always equals what the app's footer displays.
+
+    On a 0-sector track the "Theoretical best" row is DROPPED (M2): with no sector lines it
+    degenerates to the best lap time — a bare duplicate that can read slower than "Best rolling" —
+    and the export has no tooltip to explain the clash, so (like the app footer, which hides the
+    tile) it's simply omitted. It returns once the track has sector lines."""
+    has_sectors = session.sector_count() > 0
     out: list[tuple[str, str]] = []
     for label, accessor in SUMMARY_ROWS:
+        if accessor == "theoretical_best" and not has_sectors:
+            continue  # omit the degenerate = best-lap duplicate on a 0-sector track
         v = getattr(session, accessor)()
         out.append((label, _f3(v) if v is not None else ""))
     return out
@@ -166,7 +176,7 @@ def write_report_html(path: str, session, source_label: str = "",
     best = session.best_lap_id()
     best_txt = "—"
     if best is not None:
-        best_txt = f"{fmt_time(session.lap_time(best))} (lap {best})"
+        best_txt = f"{fmt_time(session.lap_time(best))} (lap {lap_label(best)})"
     meta = [
         ("Recording", source_label or "—"),
         ("Track", session.track_name or "unknown"),

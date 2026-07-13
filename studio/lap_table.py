@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme, units
-from ._signal import fmt_time
+from ._signal import fmt_time, lap_label
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -102,6 +102,11 @@ LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the La
 # Session (theoretical_best / best_rolling_lap) so the footer and the purple per-sector cells share
 # one computation and can't disagree. The callable accessor (vs a method-name string) makes a
 # renamed Session method a load-time error, not a silent footer miss.
+# Index of the "Theoretical best" tile in FOOTER_ROWS. It's a genuine sum-of-best-sectors metric
+# only when the track HAS sector lines; with none it degenerates to the best lap time (a bare
+# duplicate of the ★ starred best, and it can even read SLOWER than "Best rolling"), so the whole
+# tile is hidden on a 0-sector track (see _refresh_footer) — it carries no information there.
+_THEORETICAL_IDX = 0
 FOOTER_ROWS = (
     ("Theoretical", lambda s: s.theoretical_best(),
      "Theoretical best — sum of the session-best sector splits (the purple cells): the lap "
@@ -227,8 +232,12 @@ class LapTable(QWidget):
         tiles.setSpacing(20)
         hero_num = theme.mono_font(theme.HERO - 5, theme.W_SEMIBOLD)  # a clear step up from 13px
         self._footer_values: list[QLabel] = []
+        # The per-tile container widgets (caption + value), kept so a whole tile can be shown/hidden
+        # in one call — the Theoretical tile hides on a 0-sector track (see _refresh_footer).
+        self._footer_tiles: list[QWidget] = []
         for title, _accessor, tip in FOOTER_ROWS:  # _accessor (the value callable) used in _refresh_footer
-            tile = QVBoxLayout()
+            tile_w = QWidget()
+            tile = QVBoxLayout(tile_w)
             tile.setContentsMargins(0, 0, 0, 0)
             tile.setSpacing(0)
             caption = QLabel(title)
@@ -241,8 +250,9 @@ class LapTable(QWidget):
             value.setToolTip(tip)
             tile.addWidget(caption)
             tile.addWidget(value)
-            tiles.addLayout(tile)
+            tiles.addWidget(tile_w)
             self._footer_values.append(value)
+            self._footer_tiles.append(tile_w)
         tiles.addStretch(1)
         outer.addLayout(tiles)
         return footer
@@ -286,7 +296,9 @@ class LapTable(QWidget):
         if not rows:
             self._excluded_body.clear()
             return
-        lines = [f"Lap {r['idx']} — {fmt_time(r['time'])} · {r['dist']:.0f} m" for r in rows]
+        # 1-based lap number (lap_label) so the excluded strip matches the table's Lap column.
+        lines = [f"Lap {lap_label(r['idx'])} — {fmt_time(r['time'])} · {r['dist']:.0f} m"
+                 for r in rows]
         if len(lines) > EXCLUDED_MAX_SHOWN:
             hidden = len(lines) - EXCLUDED_MAX_SHOWN
             lines = [*lines[:EXCLUDED_MAX_SHOWN], f"+{hidden} more"]
@@ -297,12 +309,20 @@ class LapTable(QWidget):
         best / best rolling) are reference targets stitched from the session's best splits/loops, so
         they share the lap timing's authority: while the timing is PROVISIONAL (arbitrary start
         line) OR the clock is DEGRADED (media-clock / low-GPS estimate) they're muted + italic with
-        the matching tooltip, restored to the normal hero value once Verified AND high-quality."""
+        the matching tooltip, restored to the normal hero value once Verified AND high-quality.
+
+        The Theoretical tile is HIDDEN on a 0-sector track: with no sector lines theoretical_best
+        degenerates to the best lap time — a bare duplicate of the ★ starred best that can even read
+        slower than 'Best rolling' — so it carries no information there (M2). It's a genuine
+        sum-of-best-sectors metric, and shown, only once the track has sector lines."""
         provisional = not self.session.timing_verified
         degraded = self.session.timing_quality.degraded
         muted = provisional or degraded
         note = (PROVISIONAL_TOOLTIP if provisional
                 else estimated_timing_tooltip(self.session.timing_quality))
+        # Hide the Theoretical tile with no sectors (see docstring); recomputed each refresh so a
+        # later sector-line edit reveals it.
+        self._footer_tiles[_THEORETICAL_IDX].setVisible(self.session.sector_count() > 0)
         for (_title, accessor, tip), label in zip(FOOTER_ROWS, self._footer_values,
                                                    strict=True):
             v = accessor(self.session)
@@ -356,9 +376,11 @@ class LapTable(QWidget):
         for r, row in enumerate(rows):
             lap_id = row["idx"]
             splits = splits_by_lap[lap_id]
-            # (text, numeric-sort-key) per column.
+            # (text, numeric-sort-key) per column. The Lap cell DISPLAYS the 1-based lap number
+            # (lap_label) but KEEPS the 0-based lap id as its numeric sort key, so the column
+            # still sorts by true lap order and the ★/▶/⚠ markers (keyed on lap_id) are unchanged.
             cells: list[tuple[str, float]] = [
-                (str(lap_id), float(lap_id)),
+                (lap_label(lap_id), float(lap_id)),
                 (fmt_time(row["time"]), float(row["time"])),
                 (f"{row['dist']:.0f}", float(row["dist"])),
                 # Entry speed: convert km/h → the display unit for BOTH the shown text and the
@@ -522,7 +544,7 @@ class LapTable(QWidget):
         prefix = CURRENT_PREFIX if on else ""
         best = BEST_LAP_MARK if lap_id == self._best_lap_id else ""
         suffix = DROPOUT_SUFFIX if lap_id in self._dropout_ids else ""
-        return f"{prefix}{best}{lap_id}{suffix}"
+        return f"{prefix}{best}{lap_label(lap_id)}{suffix}"  # 1-based display number
 
     def _set_row_current(self, r: int, on: bool):
         """Apply/clear the ▶ prefix + bold on ONE row's Lap cell (the only per-lap-change cue)."""
