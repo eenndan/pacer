@@ -53,6 +53,17 @@ def fmt_time(seconds: float) -> str:
     return f"{int(m)}:{s:06.3f}"
 
 
+def lap_label(lap_id: int) -> str:
+    """The 1-based lap NUMBER for display (`str(lap_id + 1)`). Lap ids are 0-based internally
+    (indices, sort keys, sector-split column keys — all left untouched), but racers and every
+    lap-timing tool count from 1, so every USER-FACING lap number is rendered through this one
+    helper. Lives here — the pacer-free/Qt-free helpers module already imported by lap_table /
+    plots_view / coaching_panel — so all three share one definition with no import cycle. Only a
+    lap ID gets +1; COUNTS/QUANTITIES (e.g. "median of 13 clean laps") are not lap ids and must
+    not pass through here."""
+    return str(int(lap_id) + 1)
+
+
 def _boxcar_core(a, w):
     """The edge-corrected boxcar moving average itself, given a float array `a` and a window
     `w` already known to be valid (2 <= w <= len(a)). Normalised at the ends so the first/last

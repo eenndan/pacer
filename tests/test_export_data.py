@@ -138,10 +138,13 @@ def test_laps_table_schema_and_values():
     headers, rows = export_data.laps_table(s)
     assert headers == ["lap", "time_s", "dist_m", "entry_kmh", "flag", "S1_s", "S2_s",
                        "C1_time_s", "C1_apex_kmh", "C2_time_s", "C2_apex_kmh"], headers
-    assert [lap_id for lap_id, _ in rows] == [0, 1, 2]
+    assert [lap_id for lap_id, _ in rows] == [0, 1, 2]  # internal 0-based lap ids (row keys)
     by_id = dict(rows)
     for r in s.lap_rows():
         cells = by_id[r["idx"]]
+        # M9: the exported `lap` column is the 1-based lap NUMBER (id + 1), matching the app's
+        # Lap column; the row key stays the 0-based id (asserted just above).
+        assert cells[0] == str(r["idx"] + 1)
         assert cells[1] == f"{r['time']:.3f}"
         assert cells[2] == f"{r['dist']:.3f}"
         assert cells[3] == f"{r['entry']:.3f}"
@@ -194,6 +197,31 @@ def test_write_laps_csv_matches_table():
     best = s.lap_time(s.best_lap_id())
     assert th is not None and ro is not None
     assert th <= ro + 1e-9 and ro <= best + 1e-9
+
+
+def test_laps_summary_drops_theoretical_without_sectors():
+    """M2: on a 0-sector track theoretical_best degenerates to the best lap time — a bare
+    duplicate that can read slower than 'Best rolling', with no tooltip in the export to explain
+    it — so the CSV/HTML summary DROPS the Theoretical-best row (mirrors the app hiding the tile).
+    Only 'Best rolling' remains. With sectors present both rows return."""
+    s0 = make_session(with_sectors=False)
+    summary0 = export_data.laps_summary(s0)
+    assert [label for label, _v in summary0] == ["Best rolling"], summary0
+    # Cross-check it lands in the written CSV trailer: exactly one summary row after the mini-header.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "laps.csv")
+        export_data.write_laps_csv(path, s0)
+        with open(path, newline="", encoding="utf-8") as f:
+            got = list(csv.reader(f))
+    n_data = len(s0.valid_lap_ids())
+    assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s"]
+    trailer = got[3 + n_data:]
+    assert len(trailer) == 1
+    assert trailer[0][0] == f"{export_data.SUMMARY_MARKER}: Best rolling"
+    # With sectors, both summary rows return (the Theoretical row is a real sum-of-best-sectors).
+    s1 = make_session(with_sectors=True)
+    assert [label for label, _v in export_data.laps_summary(s1)] == [
+        "Theoretical best", "Best rolling"]
 
 
 # ------------------------------------------------------------------------- channels CSV
@@ -344,6 +372,7 @@ if __name__ == "__main__":
     test_laps_table_schema_and_values()
     test_laps_table_degenerate_schema()
     test_write_laps_csv_matches_table()
+    test_laps_summary_drops_theoretical_without_sectors()
     test_channels_csv_roundtrip_exact()
     test_channels_csv_without_g_signal()
     test_channels_csv_g_long_is_clean_gps_not_raw_imu()

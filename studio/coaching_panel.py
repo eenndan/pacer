@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME, coaching, theme, units
+from ._signal import lap_label
 from .lap_table import CORNER_DIR_GLYPH
 from .theme import C
 
@@ -224,8 +225,9 @@ class OpportunitiesDialog(QDialog):
         if opportunities.enough and opportunities.rows:
             n = opportunities.n_laps
             lap = opportunities.median_lap_id
+            # `n` is a COUNT (stays as-is); `lap` is a lap ID, so it renders 1-based (lap_label).
             title = QLabel(f"Biggest gains vs your best lap — median of {n} clean laps"
-                           + (f" (typical lap {lap})" if lap is not None else ""))
+                           + (f" (typical lap {lap_label(lap)})" if lap is not None else ""))
         else:
             title = QLabel("Opportunities")
         title.setProperty("role", "PanelHeader")

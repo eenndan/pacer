@@ -567,6 +567,14 @@ def test_dialog_populates_and_go_calls_jump_to():
     calls = []
     dlg = OpportunitiesDialog(opp, jump_to=lambda c, d: calls.append((c, d)))
     assert dlg.table.rowCount() == len(opp.rows)
+    # M9: the header's "typical lap N" is the 1-based lap NUMBER (median_lap_id + 1), while the
+    # "median of N clean laps" count stays the raw n_laps (a quantity, NOT a lap id). Find the
+    # PanelHeader title label and check both.
+    from PySide6.QtWidgets import QLabel
+    title = next(w for w in dlg.findChildren(QLabel) if w.property("role") == "PanelHeader")
+    assert opp.median_lap_id is not None
+    assert f"typical lap {opp.median_lap_id + 1}" in title.text(), title.text()
+    assert f"median of {opp.n_laps} clean laps" in title.text(), title.text()
     # columns: 0 Corner, 1 Time-lost, 2 ±σ, 3 Phases (D2 cell widget), 4 Reason, 5 Go.
     # row 0: the biggest-loss corner (C1), with the apex sentence + the time-lost format
     assert dlg.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")

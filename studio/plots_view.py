@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme, units
-from ._signal import fmt_time
+from ._signal import fmt_time, lap_label
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
 from .theme import C, icon
 
@@ -602,7 +602,7 @@ class PlotsView(QWidget):
             t = self.session.reference_lap_time() or 0.0
             tag = self.session.reference_label() or "reference"
             return f"ref {tag} {fmt_time(t)} · best"
-        return (f"lap {lid} {fmt_time(self.session.lap_time(lid))}"
+        return (f"lap {lap_label(lid)} {fmt_time(self.session.lap_time(lid))}"
                 + (" · best" if is_baseline else ""))
 
     def set_playhead_time(self, t: float, *, force: bool = False):
@@ -672,7 +672,7 @@ class PlotsView(QWidget):
         _, lid, xi, yi = best
         self.hover_dot.setData([xi], [yi])
         unit = self._axis_unit()
-        self.hover_label.setText(f"lap {lid}  Δ {yi:+.3f} s\n@ {xi:.0f} {unit}")
+        self.hover_label.setText(f"lap {lap_label(lid)}  Δ {yi:+.3f} s\n@ {xi:.0f} {unit}")
         self.hover_label.setPos(xi, yi)
         self.hover_dot.setVisible(True)
         self.hover_label.setVisible(True)

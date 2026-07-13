@@ -242,6 +242,11 @@ def test_lap_table_footer_rows_present_styled_and_valued():
     # Footer is NOT table rows: the table holds exactly the 3 laps.
     assert table.table.rowCount() == 3
     assert _footer_texts(table) == [fmt_time(68.2), fmt_time(68.3)]
+    # This session HAS a sector line, so the Theoretical tile is a genuine sum-of-best-sectors
+    # metric and stays shown (M2 only hides it on a 0-sector track).
+    table.show()
+    assert table._footer_tiles[0].isVisible(), \
+        "Theoretical tile must stay visible when the track has sectors"
     # Neutral text colour (NOT purple) + a tooltip on every value label.
     for label in table._footer_values:
         assert isinstance(label, QLabel)
@@ -480,8 +485,15 @@ def test_lap_table_shows_empty_state_when_no_laps():
     assert table._stack.currentIndex() == 1, "lap table must show the empty state, not the grid"
     assert table._empty.property("role") == "EmptyState"
     assert table._empty.text(), "empty-state placeholder must carry a message"
-    # The footer survives (outside the table) and reads em-dashes with no laps.
+    # The footer survives (outside the table) and reads em-dashes with no laps. The label texts are
+    # still ["—", "—"], but on this 0-sector session the Theoretical tile is HIDDEN (M2) — with no
+    # sector lines theoretical_best is a bare best-lap duplicate, so it carries no info; only the
+    # Best rolling tile is visible. (Visibility needs the widget shown; check the tile widgets.)
     assert _footer_texts(table) == ["—", "—"]
+    table.show()
+    assert not table._footer_tiles[0].isVisible(), \
+        "Theoretical tile must hide on a 0-sector track (M2)"
+    assert table._footer_tiles[1].isVisible(), "Best rolling tile must stay visible"
 
     # And with laps it flips BACK to the table (no sticky empty state).
     table.session = _FakeFooterSession()

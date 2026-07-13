@@ -206,12 +206,13 @@ def test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip():
     sess = _FakeLapSession()
     sess.excluded_lap_rows = lambda: [{"idx": 47, "time": 59.091, "dist": 921.0, "entry": 40.0}]
     table = LapTable(sess)
-    # It is NOT one of the sortable lap rows ...
+    # It is NOT one of the sortable lap rows ... (the internal lap id / row key stays 0-based)
     assert 47 not in [table._lap_id(r) for r in range(table.table.rowCount())]
-    # ... it's in the visible strip, showing its lap id + time + distance.
+    # ... it's in the visible strip, showing its lap NUMBER + time + distance. M9: the strip shows
+    # the 1-based lap number (id 47 → "Lap 48"), matching the table's Lap column — NOT the raw id.
     assert not table._excluded_strip.isHidden()
     body = table._excluded_body.text()
-    assert "47" in body and "0:59.091" in body and "921" in body, body
+    assert "Lap 48" in body and "0:59.091" in body and "921" in body, body
     print("test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip OK")
 
 
