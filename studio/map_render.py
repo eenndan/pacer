@@ -24,6 +24,23 @@ from .theme import MAP_RAINBOW_N
 # physical 0..limit range, not stretched to a lap's own max (a low-load lap then reads honestly low).
 GRIP_UTIL_DISPLAY_MAX = 1.2
 
+# Δ-to-best channel: below this |Δ| span (s) across the whole lap the delta is informationless — the
+# selected lap IS (essentially) the best lap, so every segment lands in the middle bucket and both
+# legend ends would read "+0.00 s". At/under this the channel reports the DELTA_BEST_LAP hint
+# instead of painting a flat mid-colour line with a duplicate-zero legend (L1). 5 ms = the display
+# resolution ("+0.00 s" already rounds anything smaller to zero).
+DELTA_FLAT_EPS_S = 0.005
+# Sentinel legend the widget maps to a "best lap — no delta" hint (lo text) + a blank hi text.
+DELTA_BEST_LAP_HINT = "this is your best lap — no delta"
+
+
+def _fmt_delta(x: float) -> str:
+    """Format a signed Δ in seconds, normalizing a tiny negative to +0.00 (never "-0.00 s") (P2).
+    Anything with |x| under the 5 ms display floor renders as the unsigned "0.00 s"."""
+    if abs(x) < DELTA_FLAT_EPS_S:
+        return "0.00 s"
+    return f"{x:+.2f} s"
+
 
 def bucketize(values, n_buckets: int, lo: float | None = None, hi: float | None = None):
     """Quantize values into bucket ids 0..n_buckets-1 over [lo,hi] (default: finite min/max).
@@ -137,7 +154,13 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
     d_pts = resample_grid_to_points(cum, delta_grid)
     # Negated so ahead (negative Δ) lands in the high (green) buckets.
     vals = -d_pts
-    # Legend shows the signed Δ at each end (red = most-behind, green = most-ahead).
-    lo_txt = f"{-float(np.min(vals)):+.2f} s"
-    hi_txt = f"{-float(np.max(vals)):+.2f} s"
+    d_min, d_max = -float(np.max(vals)), -float(np.min(vals))  # signed Δ extremes (min ≤ max)
+    # L1: when the Δ span across the whole lap is ~0 the selected lap IS the best lap — painting a
+    # flat mid-bucket line with a duplicate "+0.00 s → +0.00 s" legend says nothing. Report the
+    # best-lap hint instead (the widget greys the strip / shows "no delta"), skipping the flat paint.
+    if d_max - d_min < DELTA_FLAT_EPS_S:
+        return None, DELTA_BEST_LAP_HINT, ""
+    # Legend shows the signed Δ at each end (red = most-behind, green = most-ahead); -0.00 normalized.
+    lo_txt = _fmt_delta(d_max)   # low (red) bucket = most-behind = the max signed Δ
+    hi_txt = _fmt_delta(d_min)   # high (green) bucket = most-ahead = the min signed Δ
     return _seg_buckets(times, vals), lo_txt, hi_txt
