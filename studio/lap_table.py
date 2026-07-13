@@ -64,11 +64,24 @@ PROVISIONAL_COLOR = QColor(theme.PROVISIONAL_COLOR)  # muted text for unverified
 PROVISIONAL_TOOLTIP = "Provisional timing — see the map to set the start/finish line."
 # Degraded TIMING ACCURACY (the data-quality axis, orthogonal to the start-line trust above): the
 # start line is fine but the per-sample clock is estimated (media-clock fallback) or many fixes
-# were rejected, so the lap Time / S-split cells are estimated — muted like provisional, but the
+# were rejected, so the lap Time / S-split cells are demoted — muted like provisional, but the
 # best/purple authority is NOT suppressed (the bests are still valid RELATIVE to each other; only
-# the absolute timing accuracy is degraded).
-ESTIMATED_TIMING_TOOLTIP = ("Timing accuracy degraded — these times are estimated and may be less "
-                            "accurate (see the data-quality note over the map).")
+# the absolute timing accuracy is degraded). The tooltip copy is CLOCK-AWARE and derives from the
+# SHARED data_quality.TimingQuality.detail() (the same source the map banner + header chip read),
+# so the table and map can never disagree and the wording doesn't overclaim "estimated" on a
+# true-clock recording whose only concern is rejected fixes (M3). A blank fallback keeps the lighter
+# test doubles (which expose no timing_quality) working.
+_ESTIMATED_TIMING_FALLBACK = ("Timing accuracy degraded — these times may be less accurate "
+                              "(see the data-quality note over the map).")
+
+
+def estimated_timing_tooltip(timing_quality) -> str:
+    """The degraded-timing Time/footer tooltip for `timing_quality`, from the shared clock-aware
+    detail() so the table matches the map banner + header chip. Falls back to a generic line if a
+    (test-double) session exposes no detail()/summary()."""
+    detail = getattr(timing_quality, "detail", None)
+    text = detail() if callable(detail) else ""
+    return text or _ESTIMATED_TIMING_FALLBACK
 COLUMNS = ["Lap", "Time", "Dist (m)", "Entry (km/h)"]
 _ENTRY_COL = len(COLUMNS) - 1  # the Entry-speed column (last base column); its header names the unit
 
@@ -288,7 +301,8 @@ class LapTable(QWidget):
         provisional = not self.session.timing_verified
         degraded = self.session.timing_quality.degraded
         muted = provisional or degraded
-        note = PROVISIONAL_TOOLTIP if provisional else ESTIMATED_TIMING_TOOLTIP
+        note = (PROVISIONAL_TOOLTIP if provisional
+                else estimated_timing_tooltip(self.session.timing_quality))
         for (_title, accessor, tip), label in zip(FOOTER_ROWS, self._footer_values,
                                                    strict=True):
             v = accessor(self.session)
@@ -423,6 +437,9 @@ class LapTable(QWidget):
             return
         verified = self.session.timing_verified
         degraded = self.session.timing_quality.degraded
+        # The degraded-timing cell tooltip, from the shared clock-aware copy (matches the map banner
+        # + header chip); computed once — it's the same for every estimated cell.
+        estimated_note = estimated_timing_tooltip(self.session.timing_quality)
         # Overall best lap = the valid lap with the min time (foreground green on all cells) —
         # suppressed entirely while the timing is provisional (but NOT for a merely-degraded clock).
         best_lap = self.session.best_lap_id() if verified else None
@@ -453,16 +470,23 @@ class LapTable(QWidget):
                 estimated_cell = verified and degraded and c in timing_cols
                 muted_cell = provisional_cell or estimated_cell
                 # base off-white; green (best lap) / muted (provisional or estimated timing) / purple.
-                if muted_cell:
+                # BEST-LAP wins the COLOUR over degraded muting: on a degraded (but verified)
+                # recording the estimated grey would otherwise repaint the best lap's Time cell —
+                # the one cell answering "which lap was fastest" — so it reads like every other row.
+                # Keep the best-lap green there (the italic + estimated tooltip below still carry the
+                # accuracy cue). Provisional muting still wins: it suppresses the bests entirely, so
+                # `is_best` is already False under provisional (best_lap is None while unverified).
+                if muted_cell and not (estimated_cell and is_best):
                     item.setForeground(PROVISIONAL_COLOR)
                 else:
                     item.setForeground(best_color if is_best else BASE_COLOR)
-                # Muted+italic on any demoted timing cell; the dropout tooltip wins (it flags a
-                # per-lap issue), else the provisional note, else the estimated-timing note, else clear.
+                # Muted+italic on any demoted timing cell (the best-lap cell stays green but still
+                # italic, keeping the estimated cue); the dropout tooltip wins (it flags a per-lap
+                # issue), else the provisional note, else the estimated-timing note, else clear.
                 theme.apply_provisional_style(item, muted_cell)
                 item.setToolTip(DROPOUT_TOOLTIP if is_dropout
                                 else PROVISIONAL_TOOLTIP if provisional_cell
-                                else ESTIMATED_TIMING_TOOLTIP if estimated_cell else "")
+                                else estimated_note if estimated_cell else "")
             # per-sector best → purple+bold + a ★ mark (outranks green for this cell) — but ONLY on
             # verified timing; a "validated best" on an arbitrary start line would mislead. The ★ is
             # the NON-COLOUR redundancy (bold alone is weak); the split text is rebuilt from the

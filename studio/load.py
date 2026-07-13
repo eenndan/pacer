@@ -261,14 +261,18 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
 
     # Single-pass: one chain read for both GPS and IMU (see ingest.read_recording).
     samples, spans, naive, durations, accl, grav, cori = read_recording(paths)
-    n_raw = len(samples)
     # The offset table for the video layer: each chapter's media duration on one global axis.
     chapter_map = chapters.ChapterMap(list(paths), durations)
-    samples, spans, naive, dropped = _gate_quality(samples, spans, naive)
+    # The dropped-fix fraction is judged over the RETAINED MOVING trace (fixes with full_speed >
+    # MIN_START_SPEED), NOT the raw fix count. The raw count includes the stationary GPS-acquisition
+    # lead-in the pipeline trims, and low-quality fixes cluster in that warm-up — so raw/n_raw flags
+    # a clean recording as "degraded" purely on how it was opened (D24 chapter 1 read 0.12 while the
+    # SAME footage as all 3 chapters read 0.04). Judging quality on the fixes taken WHILE DRIVING
+    # makes the verdict consistent; a recording that drops many fixes DURING MOTION still flags.
+    # (_gate_quality still logs the raw dropped count; `dropped` is unused past the log.)
+    samples, spans, naive, _dropped, dropped_fraction = _gate_quality(
+        samples, spans, naive, moving_speed=MIN_START_SPEED)
     samples, spans, naive = _clean(samples, spans, naive)
-    # Dropped-fix fraction is over the RAW fix count (pre-gate) — the share the quality gate
-    # rejected, independent of how many later survived the geometric cleaner.
-    dropped_fraction = dropped / n_raw if n_raw else 0.0
     if not samples:
         return laps, empty, video_path, chapter_map, None, None, quality
 

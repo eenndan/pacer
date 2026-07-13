@@ -382,20 +382,33 @@ class _DegradedClockSession(_FakeFooterSession):
 
 
 def test_lap_table_degraded_clock_mutes_times_but_keeps_bests():
-    """DATA-QUALITY degraded (media-clock fallback) on a VERIFIED table: the Time cells are muted
-    (italic + the dimmed colour) with the ESTIMATED-timing tooltip, the footer tiles are muted —
+    """DATA-QUALITY degraded (media-clock fallback) on a VERIFIED table: the NON-best Time cells are
+    muted (italic + the dimmed colour) with the estimated-timing tooltip, the footer tiles are muted —
     BUT, unlike provisional timing, the best authority cues are PRESERVED (purple per-sector best /
     green best lap still painted), because the start line is trusted. This is the orthogonal axis to
-    test_lap_table_provisional_* (which DROPS the bests)."""
-    from studio.lap_table import ESTIMATED_TIMING_TOOLTIP
+    test_lap_table_provisional_* (which DROPS the bests).
 
-    table = LapTable(_DegradedClockSession())
+    M1: the BEST lap's Time cell keeps its best-lap GREEN even under degraded (is_best wins the colour
+    over the estimated muting) — otherwise the one cell answering "which lap was fastest" reads like
+    every other row. It stays italic + carries the estimated tooltip so the accuracy cue survives."""
+    from studio.lap_table import estimated_timing_tooltip
+
+    sess = _DegradedClockSession()
+    table = LapTable(sess)
+    tip = estimated_timing_tooltip(sess.timing_quality)
     prov = theme.PROVISIONAL_COLOR.upper()
-    # The Time column (never a best-sector cell) is muted + italic with the ESTIMATED tooltip.
-    for it in _time_col_items(table):
-        assert it.foreground().color().name().upper() == prov, "degraded time cell must be muted"
+    green = theme.best_lap_colour().upper()
+    best_lap = sess.best_lap_id()
+    # Every Time cell is italic + carries the estimated tooltip (the accuracy cue), best or not.
+    for r, it in enumerate(_time_col_items(table)):
+        lap_id = table._lap_id(r)
         assert it.font().italic(), "degraded time cell must be italic (estimated)"
-        assert it.toolTip() == ESTIMATED_TIMING_TOOLTIP, it.toolTip()
+        assert it.toolTip() == tip, it.toolTip()
+        if lap_id == best_lap:
+            # M1: best lap's Time cell keeps green (not muted grey) so it's still identifiable.
+            assert it.foreground().color().name().upper() == green, "best Time cell must stay green"
+        else:
+            assert it.foreground().color().name().upper() == prov, "degraded time cell must be muted"
     # The bests are KEPT (the key difference from provisional): purple/green still present.
     assert _any_purple_or_green(table), "degraded (but verified) timing must keep the best highlights"
     # Footer tiles muted + italic (they share the timing's authority).

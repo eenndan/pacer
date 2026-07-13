@@ -162,19 +162,39 @@ def _quality_ok(s) -> bool:
     return True
 
 
-def _gate_quality(samples, spans, naive):
+def _gate_quality(samples, spans, naive, moving_speed: float = 0.0):
     """Drop low-quality fixes (no 3D lock / high DOP) using the GPS9 quality fields. Conservative
-    — sentinels (unknown quality) are kept. Returns ``(samples, spans, naive, dropped)`` where
-    ``dropped`` is the rejected-fix COUNT: the load path threads it into the recording's
-    data-quality signal (a large fraction degrades the timing accuracy), and still logs it."""
+    — sentinels (unknown quality) are kept. Returns
+    ``(samples, spans, naive, dropped, moving_dropped_fraction)`` where:
+
+      * ``dropped`` is the rejected-fix COUNT (still logged), and
+      * ``moving_dropped_fraction`` is the fraction of the MOVING trace the gate rejected — the
+        share of fixes with ``full_speed > moving_speed`` that were dropped, over the count of
+        such moving fixes. This is what the data-quality signal reads: a recording's GPS quality
+        is judged on the fixes it took WHILE DRIVING, not on the stationary GPS-acquisition
+        lead-in (which the pipeline trims anyway). Low-quality fixes cluster in that warm-up, so
+        dividing the fixed lead-in drop count by the RAW total flags a clean recording as
+        "degraded" purely on how it was opened (see the D24 chapter-1-vs-all-3 artifact). A
+        recording that genuinely drops many fixes DURING MOTION still flags. ``moving_speed=0``
+        (the default) keeps the fraction over every fix — the historical behaviour."""
     keep = [i for i, s in enumerate(samples) if _quality_ok(s)]
     dropped = len(samples) - len(keep)
     if dropped:
         pct = 100.0 * dropped / max(len(samples), 1)
         print(f"studio: quality gate dropped {dropped}/{len(samples)} fixes ({pct:.1f}%) "
               f"(fix<{MIN_FIX} or dop>{MAX_DOP})", flush=True)
+    # Judge GPS quality over the MOVING trace only (exclude the stationary lead-in from BOTH the
+    # dropped numerator and the denominator). A dropped MOVING fix = rejected AND full_speed above
+    # the threshold; the finite-position guard in _quality_ok means a NaN-speed fix can't count as
+    # moving. moving_speed=0 reduces to dropped/len(samples).
+    kept = set(keep)
+    moving = [i for i, s in enumerate(samples)
+              if math.isfinite(s.full_speed) and s.full_speed > moving_speed]
+    n_moving = len(moving)
+    moving_dropped = sum(1 for i in moving if i not in kept)
+    moving_dropped_fraction = moving_dropped / n_moving if n_moving else 0.0
     return ([samples[i] for i in keep], [spans[i] for i in keep], [naive[i] for i in keep],
-            dropped)
+            dropped, moving_dropped_fraction)
 
 
 def _band_lap_ids(laps) -> list[int]:
