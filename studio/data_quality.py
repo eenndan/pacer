@@ -56,6 +56,11 @@ class TimingQuality:
         """True when ANY data-quality concern applies — the views demote the timing only then."""
         return self.media_clock or self.low_gps_quality
 
+    def dropped_pct(self) -> int:
+        """The rejected-fix percentage (rounded) surfaced to the user — the exact figure the
+        low-GPS concern reports, so no consumer has to re-derive or collapse it to "some fixes"."""
+        return round(self.dropped_fraction * 100)
+
     def concerns(self) -> list[str]:
         """Human-readable concern lines (most-significant first), one per active issue — the
         text the data-quality banner stacks. Empty when the timing is fully high-quality."""
@@ -65,7 +70,49 @@ class TimingQuality:
                 "Timing estimated from the video clock (older GoPro without GPS9) — "
                 "lap times may drift ~0.1%.")
         if self.low_gps_quality:
-            pct = round(self.dropped_fraction * 100)
             out.append(
-                f"GPS quality low — {pct}% of fixes were rejected; times may be less accurate.")
+                f"GPS quality low — {self.dropped_pct()}% of fixes were rejected; "
+                "times may be less accurate.")
         return out
+
+    # --- SHARED degraded-timing copy (one source, so the map banner, the lap-table Time tooltip,
+    # the footer tiles and the header chip can never disagree — the M3 fix). Both derive from the
+    # SAME flags/percent, and both split by CLOCK PROVENANCE: "estimated"/"video clock" wording is
+    # reserved for the media-clock fallback that actually estimates the times; a low-GPS-only,
+    # true-clock recording says "GPS quality low — some fixes rejected" (no "estimated", which
+    # overclaimed on true-clock footage). Empty string when not degraded.
+    def summary(self) -> str:
+        """A single COMPACT line summarising the active data-quality concern(s) — the map banner's
+        FYI line, and the same wording every other degraded-timing surface shows. One concern reads
+        as its own short summary (the low-GPS case surfaces the exact rejected-fix %); both collapse
+        to a combined one-liner."""
+        media, low = self.media_clock, self.low_gps_quality
+        if media and low:
+            return (f"Timing estimated (video clock) and GPS quality low — "
+                    f"{self.dropped_pct()}% of fixes rejected; times may be less accurate.")
+        if media:
+            return "Timing estimated from the video clock — lap times may drift ~0.1%."
+        if low:
+            return (f"GPS quality low — {self.dropped_pct()}% of fixes rejected; "
+                    "times may be less accurate.")
+        return ""
+
+    def detail(self) -> str:
+        """The fuller TOOLTIP prose for the degraded-timing surfaces (lap-table Time cells + footer
+        tiles + the header chip) — the same clock-aware split as summary(), one paragraph. Reserves
+        the "estimated"/"video clock" language for the media-clock fallback; a true-clock recording
+        whose only concern is rejected fixes gets the low-GPS wording (no "estimated"). Empty string
+        when not degraded."""
+        media, low = self.media_clock, self.low_gps_quality
+        if media:
+            base = ("Lap times are estimated from the video clock (an older GoPro without GPS9), "
+                    "which runs ~0.1% fast — treat the absolute times as approximate.")
+            if low:
+                base += (f" GPS quality is also low: {self.dropped_pct()}% of fixes were rejected, "
+                         "so the positions are less accurate too.")
+            return base + " See the note over the map."
+        if low:
+            return (f"GPS quality low for this recording — {self.dropped_pct()}% of fixes were "
+                    "rejected, so the positions (and the times derived from them) may be less "
+                    "accurate. See the note over the map.")
+        return ""

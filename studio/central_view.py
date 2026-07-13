@@ -214,16 +214,15 @@ class CentralView(QWidget):
             "Per-corner analysis of the selected lap: time-in-corner, Δ vs the best lap, "
             "apex/entry/exit speeds. Corners are detected from the track's own curvature.")
         self.corners_btn.toggled.connect(self._on_corners_toggled)
-        # Small data-quality badge in the table header: an "ESTIMATED" chip shown next to the LAPS
-        # label only when Session.timing_quality is degraded (media-clock / low GPS), so the lap
-        # times the table shows carry a visible "these are estimates" cue right where they're read.
-        # Hidden (no layout footprint visible) on a normal GPS9, clean-fix recording.
+        # Small data-quality chip in the table header, shown next to the LAPS label only when
+        # Session.timing_quality is degraded, so the lap times carry a visible cue right where they're
+        # read. Its LABEL + TOOLTIP are set live by _refresh_quality_badge from the shared
+        # timing_quality copy (clock-aware: "ESTIMATED" only on the media-clock fallback, "GPS LOW"
+        # on a true-clock recording whose only concern is rejected fixes — the old static "ESTIMATED"
+        # overclaimed on true-clock footage, M3). Hidden on a normal GPS9, clean-fix recording.
         self.quality_badge = QLabel("ESTIMATED")
         self.quality_badge.setObjectName("QualityBadge")
         self.quality_badge.setVisible(False)
-        self.quality_badge.setToolTip(
-            "Lap times are ESTIMATED — the timing accuracy is degraded for this recording "
-            "(see the note over the map). Most reliable on a GPS9 camera (Hero 9 and newer).")
         self.table_stack = QStackedWidget()
         self.table_stack.addWidget(self.table)         # index 0 — Laps (default)
         self.table_stack.addWidget(self.corner_table)  # index 1 — Corners
@@ -907,27 +906,33 @@ class CentralView(QWidget):
         if strip is None:  # partially-built view (no banner chrome) — nothing to refresh
             return
         provisional = not self.session.timing_verified
-        concerns = self.session.timing_quality.concerns()
+        quality = self.session.timing_quality
+        degraded = quality.degraded
+        # The map banner + the table header chip read the SAME shared summary/detail off
+        # timing_quality (data_quality.summary()/detail()), so the two surfaces can never disagree
+        # on wording or on the rejected-fix % (the M3 fix). The chip label/tooltip are also
+        # clock-aware: it only claims "estimated" on the media-clock fallback.
         self.provisional_banner.setVisible(provisional)
-        self.quality_banner.setText(self._quality_summary(concerns))
-        self.quality_banner.setVisible(bool(concerns))
+        self.quality_banner.setText(quality.summary())
+        self.quality_banner.setVisible(degraded)
+        self._refresh_quality_badge(quality)
         # The strip (its shared hairline) shows only while a concern is live.
-        strip.setVisible(provisional or bool(concerns))
+        strip.setVisible(provisional or degraded)
 
-    @staticmethod
-    def _quality_summary(concerns: list[str]) -> str:
-        """A single compact FYI line summarising the active data-quality concern(s) — so the strip
-        never grows to a per-concern paragraph over the map (the full prose stays in the tooltip).
-        One concern reads as its own short summary; both collapse to a combined one-liner."""
-        if not concerns:
-            return ""
-        media = any("video clock" in c.lower() for c in concerns)
-        low_gps = any("gps quality" in c.lower() for c in concerns)
-        if media and low_gps:
-            return "Timing estimated (video clock) and GPS quality low — times may be less accurate."
-        if media:
-            return "Timing estimated from the video clock — lap times may drift ~0.1%."
-        return "GPS quality low — some fixes rejected; times may be less accurate."
+    def _refresh_quality_badge(self, quality) -> None:
+        """Drive the table-header data-quality chip from the shared timing_quality copy so it agrees
+        with the map banner. Clock-aware: "ESTIMATED" only when the times really are estimated (the
+        media-clock fallback); a true-clock recording whose only concern is rejected fixes reads
+        "GPS LOW" — the old static "ESTIMATED" overclaimed on true-clock footage (M3). Hidden on a
+        clean recording. Guarded so a partially-built view (no chip) is a no-op."""
+        badge = getattr(self, "quality_badge", None)
+        if badge is None:
+            return
+        badge.setVisible(quality.degraded)
+        if not quality.degraded:
+            return
+        badge.setText("ESTIMATED" if quality.media_clock else "GPS LOW")
+        badge.setToolTip(quality.detail())
 
     # ------------------------------------------------------------- timing-line edits
     def _on_lines(self, start, sectors):

@@ -270,11 +270,17 @@ def test_gate_quality_drops_nonfinite_position_and_speed():
     samples = [good[0], bad[0], good[1], bad[1], good[2], bad[2], good[3]]
     n = len(samples)
     spans = [(float(i), float(i) + 0.1) for i in range(n)]
-    s2, sp2, kept, dropped = _gate_quality(samples, spans, list(range(n)))
-    assert kept == [0, 2, 4, 6], kept     # only the finite samples survive
+    # _gate_quality now returns a 5th value: the dropped fraction over the MOVING trace (the share of
+    # fixes with full_speed > moving_speed that the gate rejected), which the load path threads into
+    # the data-quality signal instead of dropped/raw (see the D24 stationary-lead-in artifact fix).
+    s2, sp2, naive2, dropped, moving_frac = _gate_quality(samples, spans, list(range(n)))
+    assert naive2 == [0, 2, 4, 6], naive2  # only the finite samples survive (naive kept in step)
     assert len(s2) == len(sp2) == 4
-    assert dropped == 3, dropped          # the 3 non-finite fixes were rejected — the count the
-    #                                       load path threads into the recording's data-quality signal
+    assert dropped == 3, dropped          # the 3 non-finite fixes were rejected (raw count, logged)
+    # With the default moving_speed=0.0, the "moving" set is every finite-positive-speed fix: the 4
+    # good (10 m/s) + bad[0]/bad[1] (10 m/s but non-finite position) = 6; bad[2] has a NaN speed so it
+    # can't count as moving. Of those 6 moving fixes 2 were dropped (bad[0], bad[1]) → 2/6.
+    assert abs(moving_frac - 2 / 6) < 1e-12, moving_frac
     print("test_gate_quality_drops_nonfinite_position_and_speed OK")
 
 
