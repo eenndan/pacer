@@ -449,7 +449,8 @@ def test_map_corner_labels_declutter_offset_and_no_overlap():
     # near-start cluster the audit flagged. Every label must move off its apex and off its neighbours.
     apexes = {"C1": (0.0, 0.0), "C11": (0.1, 0.0), "C12": (0.0, 0.1)}
     markers = [("C1", 0.0, 0.0, 1), ("C11", 0.1, 0.0, -1), ("C12", 0.0, 0.1, 1)]
-    cm.set_corners(markers, start_xy=(0.0, 0.0))
+    # start_anchors is now a LIST of (x,y) exclusion points (start-line endpoints + video marker).
+    cm.set_corners(markers, start_anchors=[(0.0, 0.0)])
     texts = {it.textItem.toPlainText(): it for it in cm._items if isinstance(it, pg.TextItem)}
     assert set(texts) == {"C1", "C11", "C12"}, "every corner keeps a label (none dropped)"
     positions = []
@@ -461,6 +462,46 @@ def test_map_corner_labels_declutter_offset_and_no_overlap():
     # (b) no two labels share the exact same position — the near-coincident cluster is separated.
     assert len(set(positions)) == len(positions), positions
     print(f"ok label declutter: 3 near-coincident labels offset off-apex + distinct {positions}")
+
+
+def test_map_corner_label_cleared_from_start_line_endpoint_not_just_midpoint():
+    """M7 regression guard: the near-start push must fire off EITHER start-line ENDPOINT (and the
+    video-position marker), not only the midpoint. A corner apex sitting near an endpoint handle —
+    but well past CORNER_START_CLEAR_PX from the midpoint (the old single anchor) — must still be
+    pushed the extra CORNER_START_NUDGE_PX outward, so the amber crosshair stops piercing the glyph
+    (the real 'C11 on the h2 endpoint' collision). Compared against feeding ONLY the midpoint."""
+    _qapp()
+    import pyqtgraph as pg
+
+    from studio.map_view import CORNER_START_NUDGE_PX, _CornerMarkers
+    widget = pg.PlotWidget()
+    widget.resize(400, 400)
+    widget.getPlotItem().getViewBox().setRange(xRange=(-20, 20), yRange=(-20, 20), padding=0)
+    # px-per-data ≈ 400/40 = 10 px/m. Start line (-4,0)→(4,0): midpoint (0,0), endpoints ±4 m.
+    # The target apex at x=4 m sits ON the h2 endpoint (0 px away) but 40 px from the midpoint — far
+    # past CORNER_START_CLEAR_PX (26). A second, distant corner gives a real outward direction (a
+    # single-corner cloud has no outward normal). The push shifts the target's label further from its
+    # apex; we compare the SAME geometry decluttered off the midpoint-only vs off the endpoints.
+    markers = [("C11", 4.0, 0.0, -1), ("C5", 12.0, 12.0, 1)]
+
+    def target_label_offset_px(anchors):
+        cm = _CornerMarkers(widget.getPlotItem())
+        cm.set_corners(markers, start_anchors=anchors)
+        text = next(it for it in cm._items
+                    if isinstance(it, pg.TextItem) and it.textItem.toPlainText() == "C11")
+        pos = text.pos()
+        sx, sy = cm._px_per_data()
+        return (((pos.x() - 4.0) * sx) ** 2 + ((pos.y() - 0.0) * sy) ** 2) ** 0.5
+
+    # Midpoint-only (the OLD single anchor): the target is 40 px from it → NO extra push.
+    mid_off = target_label_offset_px([(0.0, 0.0)])
+    # Endpoints (the FIX): the target is on the h2 endpoint → the extra push fires.
+    end_off = target_label_offset_px([(-4.0, 0.0), (4.0, 0.0)])
+    assert end_off > mid_off + CORNER_START_NUDGE_PX - 2.0, (mid_off, end_off)
+    # The video-position marker is also a valid anchor: a marker sitting on the apex pushes too.
+    marker_off = target_label_offset_px([(4.0, 0.0)])
+    assert marker_off > mid_off + CORNER_START_NUDGE_PX - 2.0, (mid_off, marker_off)
+    print(f"ok M7 endpoint declutter: midpoint-only {mid_off:.1f}px < endpoints {end_off:.1f}px")
 
 
 if __name__ == "__main__":

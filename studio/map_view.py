@@ -115,8 +115,14 @@ class _TimingLine:
         p1, p2 = self.h1.pos(), self.h2.pos()
         return Seg(p1.x(), p1.y(), p2.x(), p2.y())
 
+    def chrome_items(self):
+        """The interaction chrome items (the segment line + both draggable handles) — the pieces a
+        clean share grab must hide so the app's editing crosshairs never burn into the brag image.
+        A single accessor so a future timing-line piece can't be missed by grab_clean (H2)."""
+        return (self.line, self.h1, self.h2)
+
     def remove(self):
-        for item in (self.line, self.h1, self.h2):
+        for item in self.chrome_items():
             self.plot.removeItem(item)
 
 
@@ -230,8 +236,14 @@ class _RainbowLegend(QWidget):
         lay.addWidget(self.hi_label)
 
     def set_labels(self, lo_text: str, hi_text: str):
+        """Set the min/max end labels. A HINT (empty hi_text) reads as a single message (e.g. the
+        best-lap "no delta" note): the gradient strip + max label are hidden so we don't imply a live
+        colour gradient that isn't painted (L1)."""
+        hint = hi_text == ""
         self.lo_label.setText(lo_text)
         self.hi_label.setText(hi_text)
+        self.hi_label.setVisible(not hint)
+        self._strip.setVisible(not hint)
 
     def recolor(self):
         """Repaint the legend strip in the ACTIVE palette's rainbow (after a palette flip)."""
@@ -404,6 +416,21 @@ class _LapOverlay:
         self.set_lap(session, lap_id)
 
 
+def _point_seg_dist(p, a, b) -> float:
+    """Euclidean distance from point ``p`` to the segment a→b (all 2-tuples). Used to test whether a
+    corner label sits on the whole start-line segment, not just near an endpoint (M7 declutter)."""
+    px, py = p
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    denom = dx * dx + dy * dy
+    if denom <= 0:  # degenerate segment → distance to the (coincident) endpoint
+        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / denom))
+    qx, qy = ax + t * dx, ay + t * dy
+    return ((px - qx) ** 2 + (py - qy) ** 2) ** 0.5
+
+
 class _CornerMarkers:
     """Corner C# labels + direction-coloured apex dots (cyan=left, coral=right), rebuilt wholesale
     from (label,x,y,direction) tuples. Rebuilt only on corner-set change; zero per-tick cost."""
@@ -427,11 +454,12 @@ class _CornerMarkers:
             return 1.0, 1.0
         return size.width() / rect.width(), size.height() / rect.height()
 
-    def set_corners(self, markers, start_xy=None):
+    def set_corners(self, markers, start_anchors=None):
         """(Re)build labels + apex dots from (label,x,y,direction) markers ([] clears; also clears
         any highlight). Labels are nudged outward from the corner-cloud centroid, pushed clear of the
-        start/finish crosshair (``start_xy`` = its local-metre midpoint, or None), and de-cluttered
-        so overlapping labels are separated rather than dropped; dots are always drawn."""
+        start/finish cluster (``start_anchors`` = local-metre (x,y) points a label must clear — the
+        start line's two endpoints + the video-position marker, or None/[]), and de-cluttered so
+        overlapping labels are separated rather than dropped; dots are always drawn."""
         self.set_highlight(None)
         self._markers = list(markers)
         for it in self._items:
@@ -451,7 +479,7 @@ class _CornerMarkers:
             self.plot.addItem(dots)
             self._items.append(dots)
         for label, (lx, ly) in zip(
-                [m[0] for m in markers], self._label_positions(markers, start_xy), strict=True):
+                [m[0] for m in markers], self._label_positions(markers, start_anchors), strict=True):
             # fill = a translucent dark plate behind the glyphs (the "halo"); border None keeps
             # it subtle. Anchor centred on the offset point so the nudge reads symmetrically.
             text = pg.TextItem(text=label, color=CORNER_LABEL_COLOR, anchor=(0.5, 0.5),
@@ -462,20 +490,26 @@ class _CornerMarkers:
             self.plot.addItem(text)
             self._items.append(text)
 
-    def _label_positions(self, markers, start_xy):
+    def _label_positions(self, markers, start_anchors):
         """Compute the (lx, ly) draw position for each corner label in data units, decluttered.
 
-        Each label starts nudged outward from the apex-cloud centroid; a label whose apex sits atop
-        the start/finish crosshair gets an extra outward push so the amber crosshair stays readable;
-        then any two labels whose px boxes overlap are separated (both slid apart along the line
-        joining them) rather than one being dropped — every corner keeps a visible label. All the
-        collision reasoning is in PX space; the returned positions are back in data units."""
+        Each label starts nudged outward from the apex-cloud centroid; a label whose apex sits near
+        the start/finish cluster (within CORNER_START_CLEAR_PX px of EITHER start-line endpoint, the
+        whole start-line segment, or the video-position marker — ``start_anchors``) gets an extra
+        outward push so the amber crosshairs stay readable (M7: keying only on the line midpoint let
+        C11 sit on the h2 endpoint handle); then any two labels whose px boxes overlap are separated
+        (both slid apart along the line joining them) rather than one being dropped — every corner
+        keeps a visible label. All the collision reasoning is in PX space; the returned positions are
+        back in data units."""
         cx = float(np.mean([x for _l, x, _y, _d in markers]))
         cy = float(np.mean([y for _l, _x, y, _d in markers]))
         sx, sy = self._px_per_data()
         bw, bh = CORNER_LABEL_BOX_PX
-        start_px = None if start_xy is None else (start_xy[0] * sx, start_xy[1] * sy)
-        # Initial px placement: outward-normal offset from the centroid, plus a start-line push.
+        # Start/finish exclusion anchors in PX space: each anchor point, plus (when there are two
+        # endpoints) the whole start-line SEGMENT between them, so a label mid-segment also clears.
+        anchors_px = [(float(ax) * sx, float(ay) * sy) for ax, ay in (start_anchors or [])]
+        seg_px = tuple(anchors_px[:2]) if len(anchors_px) >= 2 else None
+        # Initial px placement: outward-normal offset from the centroid, plus a start-cluster push.
         px_pts: list[list[float]] = []
         for _label, x, y, _d in markers:
             apex_px = (float(x) * sx, float(y) * sy)
@@ -483,12 +517,15 @@ class _CornerMarkers:
             norm = (dx * dx + dy * dy) ** 0.5 or 1.0
             ux, uy = dx / norm, dy / norm  # outward unit vector (data-space direction)
             off = CORNER_LABEL_OFFSET_PX
-            # Start-line exclusion: a corner apex near the crosshair gets an extra outward nudge so
-            # its label clears the amber start/finish glyph (a common cluster near the start).
-            if start_px is not None:
-                spx, spy = apex_px[0] - start_px[0], apex_px[1] - start_px[1]
-                if (spx * spx + spy * spy) ** 0.5 < CORNER_START_CLEAR_PX:
-                    off += CORNER_START_NUDGE_PX
+            # Start-cluster exclusion: a corner apex near ANY anchor point (or the start-line
+            # segment) gets an extra outward nudge so its label clears the amber crosshairs +
+            # video-position marker (the common cluster near the start).
+            near = any((apex_px[0] - apx) ** 2 + (apex_px[1] - apy) ** 2 < CORNER_START_CLEAR_PX ** 2
+                       for apx, apy in anchors_px)
+            if not near and seg_px is not None:
+                near = _point_seg_dist(apex_px, seg_px[0], seg_px[1]) < CORNER_START_CLEAR_PX
+            if near:
+                off += CORNER_START_NUDGE_PX
             px_pts.append([apex_px[0] + ux * off, apex_px[1] + uy * off])
         # Iteratively separate overlapping label boxes (a few passes settle the near-start cluster;
         # this is a tasteful nudge, not a physics sim). Two overlapping boxes are pushed apart along
@@ -722,28 +759,50 @@ class MapView(QWidget):
 
     @contextmanager
     def grab_clean(self):
-        """Temporarily hide the map's pure-INTERACTION chrome — the "Map key" legend (and the
-        zero-lap empty-state placeholder) — so a caller can ``grab()`` the plot as a clean image
-        for a social share (the shareable lap card). Dev/interaction affordances like the key have
-        no place on a share image; the SPEED rainbow colouring and everything else stay. Restores
-        each widget's prior visibility on exit (even on error), so the live map is untouched.
+        """Temporarily hide the map's pure-INTERACTION chrome so a caller can ``grab()`` the plot as
+        a clean image for a social share (the shareable lap card). Dev/interaction affordances have
+        no place on a share image; the SPEED rainbow colouring, corner labels and track line stay.
+        Restores each item's prior visibility on exit (even on error), so the live map is untouched.
+
+        Hidden for the grab (H2 — otherwise the app's editing crosshairs burn into the brag image):
+          * the "Map key" legend + the zero-lap empty-state placeholder (Qt widgets);
+          * the coral video-position ``marker`` (the amber "+" crosshair on the track);
+          * every timing line's segment + drag handles — the start line and each sector line — plus
+            the compare ghost, all via each ``_TimingLine.chrome_items()`` so a future line type is
+            hidden automatically.
 
         The provisional start-line cue is not hidden here: it only shows on unverified timing, which
         already blocks the card upstream, so it never reaches a real grab."""
-        chrome = [w for w in (getattr(self, "_map_key", None), getattr(self, "_empty_state", None))
-                  if w is not None]
-        # Save the EXPLICIT hide flag (isHidden), not effective isVisible: a child reads
-        # not-visible whenever its top-level window isn't shown yet, so restoring from isVisible
-        # would wrongly leave the key hidden on an off-screen/grab-only map (the empty-state's
-        # isHidden idiom). isHidden is True only when hide() was actually called.
-        prev = [(w, w.isHidden()) for w in chrome]
-        for w in chrome:
-            w.hide()
+        # Qt widget chrome: save the EXPLICIT hide flag (isHidden), not effective isVisible — a child
+        # reads not-visible whenever its top-level window isn't shown yet, so restoring from isVisible
+        # would wrongly leave the key hidden on an off-screen/grab-only map. isHidden is True only when
+        # hide() was actually called.
+        widgets = [w for w in (getattr(self, "_map_key", None), getattr(self, "_empty_state", None))
+                   if w is not None]
+        widget_prev = [(w, w.isHidden()) for w in widgets]
+        # pyqtgraph plot items (marker, timing-line segments/handles, compare ghost). These are not
+        # top-level-gated Qt widget children, so isVisible() is the honest current flag for them.
+        items = []
+        if getattr(self, "marker", None) is not None:
+            items.append(self.marker)
+        timing_lines = [getattr(self, "_start", None), *(getattr(self, "_sectors", None) or [])]
+        for tl in timing_lines:
+            if tl is not None:
+                items.extend(tl.chrome_items())
+        if getattr(self, "_ghost", None) is not None:
+            items.append(self._ghost)
+        item_prev = [(it, it.isVisible()) for it in items]
         try:
+            for w in widgets:
+                w.hide()
+            for it in items:
+                it.setVisible(False)
             yield self
         finally:
-            for w, was_hidden in prev:
+            for w, was_hidden in widget_prev:
                 w.setVisible(not was_hidden)
+            for it, was_visible in item_prev:
+                it.setVisible(was_visible)
 
     def _reposition_empty_state(self):
         """Keep the zero-lap empty-state placeholder centred over the plot, spanning a comfortable
@@ -974,14 +1033,17 @@ class MapView(QWidget):
 
     def _apply_rainbow(self):
         """(Re)build or clear the rainbow for the current lap+mode. The only path that fills the
-        bucket items; hides the normal overlay while painting and restores it otherwise."""
-        painted = False
+        bucket items; hides the normal overlay while painting and restores it otherwise. A "hint"
+        status (Δ on the best lap — no delta to paint) shows the legend hint but keeps the plain
+        overlay so the map still reads (L1)."""
+        status = "none"
         if self._rainbow_mode != "off" and self._current_lap is not None:
-            painted = self._build_rainbow(self._current_lap, self._rainbow_mode)
-        if not painted:
+            status = self._build_rainbow(self._current_lap, self._rainbow_mode)
+        if status != "painted":
             self._rainbow.clear()
-        self._legend.setVisible(painted)
-        self._current_overlay.set_visible(not painted)
+        # Legend visible while painting OR while showing a hint (e.g. "best lap — no delta").
+        self._legend.setVisible(status in ("painted", "hint"))
+        self._current_overlay.set_visible(status != "painted")
 
     def refresh_palette(self):
         """Re-render the rainbow + legend in the ACTIVE semantic palette (after a colour-blind-
@@ -991,13 +1053,16 @@ class MapView(QWidget):
         self._legend.recolor()
         self._apply_rainbow()
 
-    def _build_rainbow(self, lap_id: int, mode: str) -> bool:
-        """Fill the bucket items for `lap_id`'s channel (speed / Δ-vs-best / grip); returns False
-        when it can't be computed (degenerate lap, no best lap for Δ, no g signal for grip).
+    def _build_rainbow(self, lap_id: int, mode: str) -> str:
+        """Fill the bucket items for `lap_id`'s channel (speed / Δ-vs-best / grip). Returns a status:
+          * "painted" — the rainbow was filled + the legend set;
+          * "hint"    — nothing painted, but the legend carries a hint (Δ on the best lap: no delta
+                        to paint — L1); the caller keeps the plain overlay and shows the legend;
+          * "none"    — can't be computed (degenerate lap, no best lap for Δ, no g signal for grip).
 
         The widget only fetches the lap's per-sample arrays from the session here; the per-channel
-        value/bucket math (negation, grip fixed scale, GPS-dropout NaN-mask) is the Qt-free
-        map_render.rainbow_channel pure function."""
+        value/bucket math (negation, grip fixed scale, GPS-dropout NaN-mask, the best-lap Δ hint) is
+        the Qt-free map_render.rainbow_channel pure function."""
         ch = self.session.lap_channels(lap_id)
         times, xs, ys, speed_kmh, cum = (
             ch["t_media_s"], ch["x_m"], ch["y_m"], ch["speed_kmh"], ch["dist_m"])
@@ -1012,11 +1077,14 @@ class MapView(QWidget):
         result = rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
                                  self._speed_unit, elevation=elevation)
         if result is None:
-            return False
+            return "none"
         seg_buckets, lo_txt, hi_txt = result
-        self._rainbow.set_data(xs, ys, seg_buckets)
         self._legend.set_labels(lo_txt, hi_txt)
-        return True
+        # A None seg_buckets with a legend = the best-lap Δ hint: don't paint, just show the hint.
+        if seg_buckets is None:
+            return "hint"
+        self._rainbow.set_data(xs, ys, seg_buckets)
+        return "painted"
 
     # --------------------------------------------------------------- lap overlays
     def _refresh_best(self):
@@ -1071,17 +1139,27 @@ class MapView(QWidget):
     # ------------------------------------------------------------- corner labels (F-corner)
     def set_corners(self, markers):
         """Show corner labels at the given (label, x, y, direction) apex markers ([] clears).
-        Pushed by the app. The start/finish line's midpoint is handed down so labels near the
-        crosshair are nudged clear of it (declutter)."""
-        self._corner_markers.set_corners(markers, start_xy=self._start_line_midpoint())
+        Pushed by the app. The start/finish cluster's exclusion anchors (both start-line ENDPOINTS
+        + the live video-position marker) are handed down so labels near that cluster are nudged
+        clear of it (declutter) — not just the line midpoint (M7: C11 collided with the h2 endpoint,
+        31 px from the midpoint but only 15 px from the handle it pierced)."""
+        self._corner_markers.set_corners(markers, start_anchors=self._start_clear_anchors())
 
-    def _start_line_midpoint(self):
-        """(x, y) midpoint of the session's start/finish line in local metres, or None if it isn't
-        available (bare-Session test paths). Drives the corner-label start-line declutter push."""
+    def _start_clear_anchors(self):
+        """The local-metre points a corner label must clear near the start/finish: the start line's
+        two ENDPOINT handle positions AND the current video-position marker (per QA item #21, so C1/
+        C11 slide clear of the whole start/finish + marker cluster). Returns [] when nothing is
+        available (bare-Session test paths). Each is an (x, y) tuple in local metres."""
+        anchors: list[tuple[float, float]] = []
         seg = getattr(self.session, "start_line", None)
-        if seg is None:
-            return None
-        return ((seg.x1 + seg.x2) / 2.0, (seg.y1 + seg.y2) / 2.0)
+        if seg is not None:
+            anchors.append((seg.x1, seg.y1))
+            anchors.append((seg.x2, seg.y2))
+        marker = getattr(self, "marker", None)
+        if marker is not None:
+            p = marker.pos()
+            anchors.append((p.x(), p.y()))
+        return anchors
 
     def highlight_corner(self, cid: int | None):
         """Ring-highlight one corner's apex marker by 1-based cid (None clears) — driven by

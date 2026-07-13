@@ -286,6 +286,34 @@ def test_map_view_grab_clean_hides_the_map_key_legend():
     print("test_map_view_grab_clean_hides_the_map_key_legend OK")
 
 
+def test_map_view_grab_clean_hides_the_marker_and_start_line_handles():
+    """H2 regression guard: grab_clean() must ALSO hide the app's editing chrome that used to burn
+    into the shareable card — the coral video-position ``marker`` and every timing line's segment +
+    drag handles (start line here; sectors iterate the same way) — for the duration of the grab, and
+    restore each item's prior visibility on exit. Otherwise the amber "+" crosshairs + coral marker
+    circle land on the social brag image (pixel-confirmed on the flagship D24 card)."""
+    from studio.map_view import MapView
+    mv = MapView(_map_view_session())
+    # The pyqtgraph plot items that must vanish for a clean grab (marker + start-line line/handles).
+    marker = mv.marker
+    start = mv._start
+    chrome = [marker, start.line, start.h1, start.h2]
+    for it in chrome:
+        it.setVisible(True)
+        assert it.isVisible(), "precondition: the editing chrome is shown on the live map"
+    during = {}
+    with mv.grab_clean():
+        during["marker"] = marker.isVisible()
+        during["line"] = start.line.isVisible()
+        during["h1"] = start.h1.isVisible()
+        during["h2"] = start.h2.isVisible()
+    assert during == {"marker": False, "line": False, "h1": False, "h2": False}, during
+    # restored on exit (the live map keeps its marker + draggable start line)
+    for it in chrome:
+        assert it.isVisible(), "the editing chrome must be restored after the clean grab"
+    print("test_map_view_grab_clean_hides_the_marker_and_start_line_handles OK")
+
+
 # --------------------------------------------------------------------- app-wiring tests (DI)
 def _bare_window(session):
     """A StudioWindow with just enough state for the share-card actions (no heavy __init__): the
@@ -483,6 +511,7 @@ if __name__ == "__main__":
     test_render_card_without_thumbnail_and_on_both_palettes()
     test_render_card_stamped_and_degraded_still_renders()
     test_map_view_grab_clean_hides_the_map_key_legend()
+    test_map_view_grab_clean_hides_the_marker_and_start_line_handles()
     test_export_share_card_saves_png_through_the_dialog()
     test_export_share_card_cancel_writes_nothing()
     test_copy_share_card_sets_clipboard_image()

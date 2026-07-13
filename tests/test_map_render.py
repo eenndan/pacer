@@ -186,6 +186,30 @@ def test_rainbow_channel_delta_negated_and_gated():
     print("test_rainbow_channel_delta_negated_and_gated OK")
 
 
+def test_rainbow_channel_delta_best_lap_hint_and_no_negative_zero():
+    """L1/P2: selecting the best lap gives Δ≈0 everywhere. Instead of painting a flat mid-colour
+    line with a duplicate "+0.00 s → +0.00 s" legend, the delta channel returns (None seg_buckets,
+    best-lap HINT, "") — the widget then shows the hint and keeps the plain overlay. And no Δ legend
+    ever renders a negative zero ("-0.00 s"); a tiny negative normalizes to "0.00 s"."""
+    from studio.map_render import DELTA_BEST_LAP_HINT, DELTA_FLAT_EPS_S, _fmt_delta
+    t, xs, ys, speed, cum = _lap_arrays()
+    # A dead-flat (all-zero) Δ grid = the best lap vs itself.
+    flat = np.zeros(400)
+    seg, lo, hi = rainbow_channel("delta", t, xs, ys, speed, cum, None, flat)
+    assert seg is None, "the best lap must not paint a flat mid-colour delta line"
+    assert lo == DELTA_BEST_LAP_HINT and hi == "", (lo, hi)
+    # A sub-5ms wobble still counts as "no delta" (under the display floor).
+    tiny = np.full(400, -0.001)
+    seg2, lo2, hi2 = rainbow_channel("delta", t, xs, ys, speed, cum, None, tiny)
+    assert seg2 is None and lo2 == DELTA_BEST_LAP_HINT and hi2 == ""
+    # _fmt_delta never emits "-0.00 s": a tiny negative → the unsigned "0.00 s".
+    assert _fmt_delta(-0.0) == "0.00 s"
+    assert _fmt_delta(-0.001) == "0.00 s"
+    assert _fmt_delta(DELTA_FLAT_EPS_S / 2) == "0.00 s"
+    assert _fmt_delta(0.31) == "+0.31 s" and _fmt_delta(-0.31) == "-0.31 s"
+    print("test_rainbow_channel_delta_best_lap_hint_and_no_negative_zero OK")
+
+
 def test_rainbow_channel_grip_fixed_scale_and_negation():
     """Grip is NEGATED on a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale (not the lap's own max): a
     rising util ramp paints monotonically redder (more grip used = redder), the unused end is
