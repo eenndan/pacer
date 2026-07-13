@@ -63,16 +63,30 @@ def _ideal_line_pen():
 # F5: brake glyphs (sized by peak decel) ride the speed curve; coast spans shade a neutral band.
 COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
 COAST_PEN = pg.mkPen(None)
-# D3: the SYNTHETIC brake/throttle band — a thin sub-track pinned to the bottom of the speed
-# plot. Brake fills toward red (C.behind), throttle toward green (C.ahead); subtle alpha so it
+# D3: the SYNTHETIC brake/throttle band — a thin sub-track in dedicated space BELOW the speed
+# curves. Brake fills toward red (C.behind), throttle toward green (C.ahead); subtle alpha so it
 # reads as a secondary backdrop, never competing with the speed curves. ESTIMATED (legend-labelled).
+# M8: the band no longer overlays the data range (where the speed trace legitimately dips into it at
+# every braking trough). Instead refresh() drops the speed plot's y lower bound so the band lives in
+# reserved empty space UNDER the lowest speed trough — the curve can never enter it.
 BT_FILL_ALPHA = 110                    # 0-255: the filled pedal band (more present than coast, still quiet)
-BT_TRACK_FRAC = 0.16                   # the band occupies the bottom ~16% of the speed plot's y-range
+BT_TRACK_FRAC = 0.16                   # the reserved band's height as a fraction of the SPEED-curve y-span
+BT_GAP_FRAC = 0.04                     # a small clear gap between the lowest speed trough and the band top
 # Brake fills toward the "behind" hue, throttle toward the "ahead" hue. Resolved at DRAW time via
 # the palette accessors (not frozen at import) so the band follows the active palette — red/green by
 # default, orange/blue in the colour-blind palette (matching the Δ readout + rainbow map).
 BT_PEN = pg.mkPen(None)
 BT_BASELINE_PEN = pg.mkPen(C.border, width=1, style=Qt.DotLine)  # the band's zero (lift/cruise) line
+# L3: the speed legend is fixed top-left over the x=0 curve region; above this many curves it would
+# blanket that region (and pyqtgraph's column would overflow the plot / truncate late entries), so
+# refresh() hides it past the threshold. The lap-table selection is itself capped (MAX_COMPARE_LAPS),
+# so a legitimate multi-select stays under this and keeps its legend; only a pathological set hides it.
+LEGEND_MAX_ROWS = 8
+# P3: when the synthetic ideal-lap band is on together with a much-slower lap, that lap's large
+# positive Δ dominates the shared Δ y-range and squashes the sub-zero ideal to a barely-visible dip.
+# Guard: keep the ideal trough at least this fraction of the visible Δ span below zero, so the ideal
+# band always reads. Purely a display clamp on the Δ y-range — the curves/values are untouched.
+IDEAL_MIN_VISIBLE_FRAC = 0.18
 
 
 class PlotsView(QWidget):
@@ -111,6 +125,13 @@ class PlotsView(QWidget):
         # at the bottom of the speed plot when the toggle is on.
         self._brake_throttle_items: list = []
         self._brake_throttle_data: list = []  # [(xs, intensity)]
+        # P3: the synthetic ideal-lap trough (most-negative Δ), captured in _draw_ideal so refresh()
+        # can keep the sub-zero ideal band visible when a much-slower lap's Δ dominates the y-range.
+        self._ideal_min: float | None = None
+        # M8: the reserved (band_bottom, band_top) y-range the brake/throttle strip draws into,
+        # computed in refresh() from the fitted SPEED-curve span and sitting BELOW the lowest speed
+        # trough (None until refresh() has run with the toggle on).
+        self._bt_band_range: tuple[float, float] | None = None
 
         # x-axis toggle (distance/time). Exposed but mounted by app.py in its consolidated bar.
         self.x_mode_combo = QComboBox()
@@ -159,6 +180,7 @@ class PlotsView(QWidget):
         # Faint gridlines (alpha 0.10) so they read as a quiet backdrop, not a foreground grid.
         self.p_speed.showGrid(x=True, y=True, alpha=0.10)
         leg = self.p_speed.addLegend(offset=(8, 8))
+        self._speed_legend = leg  # L3: kept so refresh() can hide it past LEGEND_MAX_ROWS curves
         # D1: a legend on the Δ plot too, used ONLY by the synthetic ideal-lap entry (lap Δ curves
         # are drawn unnamed there, so it stays a single quiet line item explaining the dashed line).
         self._delta_legend = self.p_delta.addLegend(offset=(8, 8))
@@ -246,10 +268,13 @@ class PlotsView(QWidget):
         self.refresh()
 
     def _on_brake_throttle_toggled(self, on: bool):
-        """D3: toggle the synthetic brake/throttle band under the speed curve."""
+        """D3: toggle the synthetic brake/throttle band under the speed curve. A full refresh() (not
+        just _draw_brake_throttle) because M8 reserves dedicated y-space below the curves for the
+        band — the y-range has to be re-fitted (widened when on, tightened back when off), which only
+        happens in refresh()'s autorange step."""
         self._show_brake_throttle = on
         self.brake_throttle_btn.setIcon(icon("ph.gauge", color=C.accent if on else C.text))
-        self._draw_brake_throttle()
+        self.refresh()
 
     # ----------------------------------------------------------- cursor scrub
     def is_dragging(self) -> bool:
@@ -332,7 +357,12 @@ class PlotsView(QWidget):
 
     # ----------------------------------------------------- driving channels (F5)
     def set_brake_markers(self, brake_data):
-        """Set brake glyphs. brake_data = [(positions=[(x,decel)], colour)]; [] clears."""
+        """Set brake glyphs. brake_data = [(positions=[(x,decel)], colour[, lap_id])]; [] clears.
+
+        L4: each entry MAY carry the lap id it belongs to (3-tuple). When present the glyphs ride
+        THAT lap's own cached speed curve, so in a multi-lap overlay every lap's glyphs sit on their
+        own line (a glyph can't land on a neighbour's trough). Without the id (2-tuple, legacy /
+        single-lap) they fall back to the nearest cached curve as before."""
         self._brake_data = list(brake_data or [])
         self._draw_driving()
 
@@ -345,7 +375,12 @@ class PlotsView(QWidget):
         """D3: set the synthetic brake/throttle band data. bt_data = [(xs, intensity[-1..1])] per
         lap (xs on the shared axis); [] clears. Only rendered while the toggle is on."""
         self._brake_throttle_data = list(bt_data or [])
-        self._draw_brake_throttle()
+        # M8: while the band is ON, new data changes the reserved-space decision (empty ↔ present),
+        # so re-fit the y-range via refresh() to (re)reserve the strip. Off: a cheap draw no-op.
+        if self._show_brake_throttle:
+            self.refresh()
+        else:
+            self._draw_brake_throttle()
 
     def _clear_driving(self):
         for item in self._brake_items:
@@ -369,13 +404,17 @@ class PlotsView(QWidget):
                 region.setZValue(-4)  # above sector lines, below the curves
                 self.p_speed.addItem(region)
                 self._coast_items.append(region)
-        for positions, colour in self._brake_data:
+        for entry in self._brake_data:
+            # L4: entries are (positions, colour) or (positions, colour, lap_id). With a lap id the
+            # glyphs ride THAT lap's own cached curve; without one they fall back to the nearest curve.
+            positions, colour = entry[0], entry[1]
+            lap_id = entry[2] if len(entry) > 2 else None
             if not positions:
                 continue
             spots = []
             for x, decel in positions:
-                # Glyph y = speed at this x (riding the curve).
-                y = self._speed_at_x(float(x))
+                # Glyph y = speed at this x, on this lap's own curve (or nearest as a fallback).
+                y = self._speed_at_x(float(x), lap_id=lap_id)
                 if y is None:
                     continue
                 spots.append({"pos": (float(x), y), "size": theme.brake_glyph_size(decel)})
@@ -392,23 +431,69 @@ class PlotsView(QWidget):
             self.p_speed.removeItem(item)
         self._brake_throttle_items = []
 
+    def _keep_ideal_visible(self):
+        """P3: on the freshly-fitted Δ range, guarantee the synthetic ideal band keeps a minimum
+        visible depth below zero. A much-slower lap's large positive Δ otherwise dominates the shared
+        y-range and squashes the sub-zero ideal to a barely-visible dip. When the ideal trough sits
+        shallower than IDEAL_MIN_VISIBLE_FRAC of the visible Δ span below zero, drop the lower bound so
+        it does. Purely a display clamp — no-op when the ideal is off or already comfortably visible."""
+        if not self._show_ideal or self._ideal_min is None or self._ideal_min >= 0:
+            return
+        vb = self.p_delta.getViewBox()
+        (dmin, dmax) = vb.viewRange()[1]
+        if dmax - dmin <= 0:
+            return
+        # The ideal band runs 0 → ideal_min (negative). Require its depth (|ideal_min|) to be at least
+        # IDEAL_MIN_VISIBLE_FRAC of the total visible span (dmax − wanted_min):
+        #   |ideal_min| / (dmax − wanted_min) ≥ frac  ⇒  wanted_min ≤ dmax − |ideal_min|/frac.
+        depth = -self._ideal_min
+        wanted_min = dmax - depth / IDEAL_MIN_VISIBLE_FRAC
+        if wanted_min < dmin:
+            vb.setYRange(wanted_min, dmax, padding=0)
+
+    def _reserve_brake_throttle_space(self):
+        """M8: when the brake/throttle band is on, drop the speed plot's y lower bound so the band
+        gets its OWN empty strip below the lowest speed trough — the speed curve can never enter it.
+
+        Runs on the freshly-fitted (autoRange'd) speed range, so `smin` is the true speed minimum
+        (plus pyqtgraph's small padding). Reserves a gap + a band-height slice, both fractions of the
+        FITTED speed span, and widens the view down to `smin - gap - height`. Caches the reserved
+        (band_bottom, band_top) window for _draw_brake_throttle. No-op (and clears the cache) when the
+        toggle is off or there's nothing to draw, so a normal refresh keeps the tight autorange fit."""
+        self._bt_band_range = None
+        if not self._show_brake_throttle or not self._brake_throttle_data:
+            return
+        vb = self.p_speed.getViewBox()
+        (smin, smax) = vb.viewRange()[1]
+        span = smax - smin
+        if span <= 0:
+            return
+        gap = BT_GAP_FRAC * span
+        height = BT_TRACK_FRAC * span
+        band_top = smin - gap          # a clear gap under the lowest speed trough
+        band_bottom = band_top - height
+        self._bt_band_range = (band_bottom, band_top)
+        # Widen the frozen view down to include the reserved strip; keep the top pinned to smax.
+        vb.setYRange(band_bottom, smax, padding=0)
+
     def _draw_brake_throttle(self):
-        """D3: (re)draw the synthetic brake/throttle band as a sub-track pinned to the BOTTOM of the
-        speed plot's current y-range. Intensity in [-1,1] maps onto a thin strip (height BT_TRACK_FRAC
-        of the y-span): brake fills DOWN from the strip's mid-line toward red, throttle fills UP
-        toward green, so it reads like a pedal trace under the speed curve. No-op when the toggle is
-        off or there's no data. Drawn after the autorange fit (called from refresh) so the strip is
-        placed on the frozen axes; re-pinned each refresh."""
+        """D3: (re)draw the synthetic brake/throttle band as a sub-track in its OWN reserved strip
+        below the speed curves (see _reserve_brake_throttle_space, M8). Intensity in [-1,1] maps onto
+        the strip: brake fills DOWN from the strip's mid-line toward red, throttle fills UP toward
+        green, so it reads like a pedal trace under the speed curve. No-op when the toggle is off or
+        there's no data. Drawn after the reservation + autorange freeze (called from refresh) so the
+        strip is placed in the frozen reserved window; re-pinned each refresh."""
         self._clear_brake_throttle()
         if not self._show_brake_throttle or not self._brake_throttle_data:
             return
-        (y0, y1) = self.p_speed.getViewBox().viewRange()[1]
-        span = y1 - y0
-        if span <= 0:
+        band = self._bt_band_range
+        if band is None:
             return
-        # The strip: a band of height BT_TRACK_FRAC*span sitting just above the x-axis, with its
-        # zero (lift/cruise) line through the middle so brake fills below it and throttle above.
-        half = 0.5 * BT_TRACK_FRAC * span
+        band_bottom, band_top = band
+        # The strip: the reserved [band_bottom, band_top] window, with its zero (lift/cruise) line
+        # through the middle so brake fills below it and throttle above. half spans mid→edge.
+        y0 = band_bottom
+        half = 0.5 * (band_top - band_bottom)
         mid = y0 + half
         # Resolve the fill hues from the ACTIVE palette at draw time so the band follows a
         # colour-blind flip (behind=red/orange, ahead=green/blue) — matching the Δ readout + rainbow.
@@ -443,8 +528,16 @@ class PlotsView(QWidget):
         self.p_speed.addItem(zero)
         self._brake_throttle_items.append(zero)
 
-    def _speed_at_x(self, x: float):
-        """Interpolated speed-curve y at plot-x x (nearest curve when several drawn); None if none."""
+    def _speed_at_x(self, x: float, lap_id: int | None = None):
+        """Interpolated speed-curve y at plot-x x. L4: with a lap_id, anchor to THAT lap's own cached
+        curve (so a multi-lap overlay's glyphs each ride their own line, not a neighbour's trough);
+        without one, fall back to the nearest cached curve. None if the target curve isn't drawn."""
+        if lap_id is not None:
+            sx_spd = self._speed_curves.get(lap_id)
+            if sx_spd is None or len(sx_spd[0]) < 2:
+                return None
+            sx, spd = sx_spd
+            return float(np.interp(x, sx, spd))
         best_y = None
         best_dx = None
         for sx, spd in self._speed_curves.values():
@@ -488,6 +581,7 @@ class PlotsView(QWidget):
         self._hide_hover()
         self._delta_curves = []  # [(lid, xs, ys)] for the hover-dot nearest-sample snap
         self._speed_curves = {}  # {lid: (sx, spd)} rebuilt below; F5 brake glyphs ride these
+        self._ideal_min = None   # P3: recaptured in _draw_ideal when the ideal band is on
         # Clear sector lines + driving items up front: a stale item left in place would be caught
         # by the autoRange fit below (like the cursor) and stretch the frozen range; both are
         # redrawn at the end on the fitted axes.
@@ -554,6 +648,13 @@ class PlotsView(QWidget):
                 self._curves.append((self.p_delta, c))
                 self._delta_curves.append((lid, dd, dl))
 
+        # L3: hide the speed legend once it would blanket the x=0 curve region / overflow the plot
+        # (past LEGEND_MAX_ROWS named curves). Under the threshold — the common capped case — it
+        # stays visible; the lap-table cap keeps a legitimate multi-select below it.
+        if self._speed_legend is not None:
+            n_named = sum(1 for lid in draw_ids if lid in speed)
+            self._speed_legend.setVisible(n_named <= LEGEND_MAX_ROWS)
+
         # D1: optional synthetic ideal-lap baseline, drawn on the SAME Δ-to-best axis (it dips
         # below the y=0 best-lap line). Drawn before the fit so its trough is in the y-range; not
         # added to _delta_curves so the scrub hover-dot stays on real laps.
@@ -563,6 +664,15 @@ class PlotsView(QWidget):
         self.glw.scene().update()
         self.p_speed.autoRange()
         self.p_delta.autoRange()
+        # P3: keep the sub-zero ideal band visible when a much-slower lap's Δ dominates the fit.
+        self._keep_ideal_visible()
+        # M8: with the brake/throttle band on, reserve dedicated empty space BELOW the fitted speed
+        # range so the strip never overlaps the curves (the speed trace legitimately dips into the
+        # old bottom-16% strip at every braking trough). Extend the speed y lower bound down by a
+        # small gap + the band height (fractions of the fitted speed span), and remember that
+        # reserved (bottom, top) window for _draw_brake_throttle to fill. Done BEFORE freezing so the
+        # widened range is what gets frozen; a plain refresh with the toggle off leaves the fit as-is.
+        self._reserve_brake_throttle_space()
         self.p_speed.disableAutoRange()
         self.p_delta.disableAutoRange()
 
@@ -594,6 +704,13 @@ class PlotsView(QWidget):
         c.setClipToView(True)
         self._curves.append((self.p_delta, c))
         self._delta_legend.setVisible(True)
+        # P3: remember the ideal trough (most-negative Δ) so refresh() can keep it visible when a
+        # much-slower lap's positive Δ dominates the shared y-range and would squash the ideal flat.
+        iy = np.asarray(iy, float)
+        if iy.size:
+            finite = iy[np.isfinite(iy)]
+            if finite.size:
+                self._ideal_min = float(finite.min())
 
     def _curve_label(self, lid: int, is_baseline: bool) -> str:
         """Legend label for a curve: 'lap N m:ss.mmm' (+ ' · best' on the baseline), or

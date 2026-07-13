@@ -673,7 +673,16 @@ class CentralView(QWidget):
         self.plots.set_laps(ids)
         # Corners view follows the primary selected lap (ids[0]: the lowest-id selection —
         # the same lap a user-click seek jumps to — or the fastest from _select_default).
-        self._set_corner_lap(ids[0] if ids else None)
+        primary = ids[0] if ids else None
+        primary_changed = primary != getattr(self, "_corner_lap", None)
+        self._set_corner_lap(primary)
+        # L4: the speed-chart brake glyphs now cover EVERY overlaid lap, so a selection change that
+        # keeps the same PRIMARY lap (which _set_corner_lap early-outs on) must still refresh them.
+        # Only when _set_corner_lap didn't already refresh (primary unchanged), and not while
+        # comparing (the pinned pair drives glyphs via on_pair_changed).
+        if (not primary_changed and getattr(self, "map", None) is not None
+                and not self._comparing()):
+            self._refresh_driving_channels()
         # F1 seeks ONLY on user selection — not on programmatic re-select from
         # _select_default()/_on_lines(), or dragging a timing line would yank the video.
         if seek and ids:
@@ -832,25 +841,39 @@ class CentralView(QWidget):
         return theme.CHART_SERIES[k % len(theme.CHART_SERIES)]
 
     def _refresh_driving_channels(self):
-        """Push brake glyphs (map + speed chart) and coast spans for the shown lap(s) — both laps in
-        compare, the current/selected lap otherwise, in the chart's draw order so colours line up."""
+        """Push brake glyphs + coast spans + the synthetic brake/throttle band for the shown lap(s).
+
+        The MAP shows one racing line (current/primary lap, or both in compare), so its brake markers
+        stay scoped to that same lap set. The SPEED CHART overlays every SELECTED lap, so L4 pushes a
+        brake-glyph series PER plotted lap, each tagged with its lap id so the glyphs ride that lap's
+        OWN curve in plots_view (not the nearest neighbour's trough). Coast spans + the estimated
+        brake/throttle band stay on the primary/compare set — the band is a single estimated backdrop
+        and stacked coast shading across many laps would be unreadable. Draw order sets the colours."""
         if self._comparing() and self.compare.lap_a is not None and self.compare.lap_b is not None:
-            lap_ids = [self.compare.lap_a, self.compare.lap_b]
+            map_ids = [self.compare.lap_a, self.compare.lap_b]
         elif self._corner_lap is not None:
-            lap_ids = [self._corner_lap]
+            map_ids = [self._corner_lap]
         else:
-            lap_ids = []
+            map_ids = []
         mode = self.plots.axis_mode()
-        map_markers, brake_plot, coast_plot, bt_plot = [], [], [], []
-        for k, lid in enumerate(lap_ids):
+        map_markers, coast_plot, bt_plot = [], [], []
+        for k, lid in enumerate(map_ids):
             colour = self._driving_lap_colour(lid, k)
             map_markers.append((self.session.driving.lap_brake_map_markers(lid), colour))
-            brake_plot.append((self.session.driving.lap_brake_plot_positions(lid, mode), colour))
             coast_plot.append((self.session.driving.lap_coasting_plot_spans(lid, mode), colour))
             # D3: the synthetic brake/throttle band (its own red/green fill, not the lap colour).
             xs, inten = self.session.driving.lap_brake_throttle_plot(lid, mode)
             if xs is not None:
                 bt_plot.append((xs, inten))
+        # L4: the speed-chart brake glyphs cover every OVERLAID lap (compare's pinned pair, else the
+        # multi-select). Each series is tagged with its lap id so plots_view anchors it to that lap's
+        # own cached curve; a lap not actually drawn there is harmlessly skipped (no cached curve).
+        plot_ids = map_ids if self._comparing() else self.plots.selected_lap_ids()
+        brake_plot = [
+            (self.session.driving.lap_brake_plot_positions(lid, mode),
+             self._driving_lap_colour(lid, k), lid)
+            for k, lid in enumerate(plot_ids)
+        ]
         self.map.set_brake_markers(map_markers)
         self.plots.set_brake_markers(brake_plot)
         self.plots.set_coasting_spans(coast_plot)
