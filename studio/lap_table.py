@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -57,6 +57,11 @@ EXCLUDED_TOOLTIP = (
     "session's median lap — usually a mis-segmented start/finish crossing, an out-lap, or an "
     "in-lap. If a real lap was dropped, drag the start/finish line on the map.")
 EXCLUDED_MAX_SHOWN = 6  # cap the listed laps; the rest collapse to a "+N more" line
+# L3: the most laps that can be overlaid on the speed/Δ charts at once. Beyond this the speed-plot
+# legend silently overflows/truncates (laps past ~13 get no entry) and the curves blanket each other,
+# so a larger selection is TRIMMED to the fastest MAX_COMPARE_LAPS — a visible cap in the table (the
+# excess rows deselect), never a silent chart-side drop. 6 is the sensible side-by-side count.
+MAX_COMPARE_LAPS = 6
 PROVISIONAL_COLOR = QColor(theme.PROVISIONAL_COLOR)  # muted text for unverified timing
 # A short, non-duplicative hint: the actionable "drag the start/finish line" call-to-action lives
 # once on the map (the on-canvas cue + the trust strip), so the table tooltip just points there
@@ -599,11 +604,22 @@ class LapTable(QWidget):
         self.table.blockSignals(False)
 
     def select(self, idxs: list[int]):
-        self.table.blockSignals(True)
-        self.table.clearSelection()
+        # Build ONE QItemSelection over every matching row and apply it in a single model call.
+        # A per-row selectRow() loop would REPLACE the selection each call under ExtendedSelection
+        # (each acts like a plain click), leaving only the last row selected — so a multi-lap
+        # select() must go through the selection model at once (L3: the cap re-applies via this).
+        want = set(idxs)
+        model = self.table.model()
+        sel = QItemSelection()
         for r in range(self.table.rowCount()):
-            if self._lap_id(r) in idxs:
-                self.table.selectRow(r)
+            if self._lap_id(r) in want:
+                idx = model.index(r, 0)
+                sel.select(idx, idx)
+        self.table.blockSignals(True)
+        sm = self.table.selectionModel()
+        sm.clearSelection()
+        if not sel.isEmpty():
+            sm.select(sel, QItemSelectionModel.Select | QItemSelectionModel.Rows)
         self.table.blockSignals(False)
 
     def selected_lap_ids(self) -> list[int]:
@@ -612,8 +628,28 @@ class LapTable(QWidget):
         return sorted({self._lap_id(idx.row())
                        for idx in self.table.selectionModel().selectedRows()})
 
+    def _capped_selection(self, ids: list[int]) -> list[int]:
+        """L3: trim an over-large selection to the fastest MAX_COMPARE_LAPS laps so the charts never
+        overlay more than can legibly draw (the legend truncates past ~13, and the curves blanket
+        each other). Fewer than the cap passes through unchanged. Falls back to a plain head-slice if
+        a (test-double) session exposes no lap_time."""
+        if len(ids) <= MAX_COMPARE_LAPS:
+            return ids
+        lap_time = getattr(self.session, "lap_time", None)
+        if callable(lap_time):
+            # Keep the fastest cap laps (ties broken by lap id for a stable, deterministic pick).
+            ranked = sorted(ids, key=lambda lid: (lap_time(lid), lid))
+            return sorted(ranked[:MAX_COMPARE_LAPS])
+        return ids[:MAX_COMPARE_LAPS]
+
     def _on_selection(self):
-        self.laps_selected.emit(self.selected_lap_ids())
+        ids = self.selected_lap_ids()
+        capped = self._capped_selection(ids)
+        if capped != ids:
+            # Re-apply the trimmed selection so the deselected rows visibly clear (no silent
+            # chart-side drop). select() blocks signals, so re-emit the capped set ourselves.
+            self.select(capped)
+        self.laps_selected.emit(capped)
 
 
 # ===================================================================== Corners mode

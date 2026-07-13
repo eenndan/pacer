@@ -842,11 +842,119 @@ def test_plots_brake_and_coast_overlays():
     print("ok plots overlay: brake glyph rides the curve, coast band drawn, survives refresh")
 
 
-def test_plots_brake_throttle_band_toggle():
-    """D3: the brake/throttle band is OFF by default (no items) even when data is pushed; turning
-    the toggle on draws the sub-track and turning it off clears it. Survives a selection refresh."""
+def test_plots_brake_glyphs_ride_their_own_lap_curve():
+    """L4: in a MULTI-lap overlay each lap's brake glyph must ride ITS OWN cached speed curve, not
+    the nearest one. With a tagged (positions, colour, lap_id) series, a glyph for lap B at an x
+    where lap A dips lower must sit on B's speed there — the old nearest-curve anchoring would have
+    snapped it onto A's trough. An unknown lap id draws nothing (no cached curve)."""
     _qapp()
     from studio.plots_view import PlotsView
+
+    sx = np.linspace(0.0, 200.0, 100)
+    # Two clearly-separated curves: lap 0 flat at 40, lap 1 flat at 80, so "nearest" vs "own" differ.
+    spd0 = np.full(100, 40.0)
+    spd1 = np.full(100, 80.0)
+
+    class FakeSession:
+        def best_lap_id(self):
+            return 0
+
+        def has_reference(self):
+            return False
+
+        def lap_time(self, i):
+            return 70.0 + i
+
+        def delta(self, ids, x_mode="distance"):
+            speed = {0: (sx, spd0.copy()), 1: (sx, spd1.copy())}
+            dl = {i: (sx, np.zeros(100)) for i in ids}
+            return 0, {i: speed[i] for i in ids if i in speed}, dl
+
+        def sector_plot_positions(self, m):
+            return []
+
+    pv = PlotsView(FakeSession())
+    pv.set_laps([0, 1])
+    # Tagged per-lap glyphs: lap 0 at x=100 (its curve is 40), lap 1 at x=100 (its curve is 80).
+    pv.set_brake_markers([
+        ([(100.0, 0.4)], "#F5A623", 0),
+        ([(100.0, 0.4)], "#7FB3D5", 1),
+    ])
+    assert len(pv._brake_items) == 2, pv._brake_items
+    y_lap0 = pv._brake_items[0].points()[0].pos().y()
+    y_lap1 = pv._brake_items[1].points()[0].pos().y()
+    assert abs(y_lap0 - 40.0) < 1e-6, y_lap0  # rides lap 0's own curve, not lap 1's
+    assert abs(y_lap1 - 80.0) < 1e-6, y_lap1  # rides lap 1's own curve, not the nearest
+
+    # An unknown lap id has no cached curve -> its glyph series draws nothing (safely skipped).
+    pv.set_brake_markers([([(100.0, 0.4)], "#F5A623", 999)])
+    assert pv._brake_items == [], pv._brake_items
+
+    # Back-compat: a 2-tuple (no lap id) still rides the nearest cached curve.
+    pv.set_brake_markers([([(100.0, 0.4)], "#F5A623")])
+    assert len(pv._brake_items) == 1
+    print("ok plots overlay: multi-lap brake glyphs ride their own lap curve (L4)")
+
+
+def test_plots_speed_legend_hides_past_threshold_no_truncation():
+    """L3: the fixed top-left speed legend is hidden once it would blanket the x=0 curve region /
+    overflow the plot (past LEGEND_MAX_ROWS curves) — never a silently-truncated legend. Under the
+    threshold it stays visible; a large overlay hides it (the capped selection keeps it under in
+    practice, this guards the defensive fallback)."""
+    _qapp()
+    from studio.plots_view import LEGEND_MAX_ROWS, PlotsView
+
+    sx = np.linspace(0.0, 200.0, 50)
+
+    class FakeSession:
+        def __init__(self, n):
+            self.n = n
+
+        def best_lap_id(self):
+            return 0
+
+        def has_reference(self):
+            return False
+
+        def lap_time(self, i):
+            return 60.0 + i
+
+        def delta(self, ids, x_mode="distance"):
+            speed = {i: (sx, np.full(50, 60.0 + i)) for i in ids}
+            dl = {i: (sx, np.zeros(50)) for i in ids}
+            return 0, speed, dl
+
+        def sector_plot_positions(self, m):
+            return []
+
+    # Under the threshold: legend visible.
+    small = PlotsView(FakeSession(LEGEND_MAX_ROWS))
+    small.set_laps(list(range(LEGEND_MAX_ROWS)))
+    assert small._speed_legend.isVisible(), "legend must show for a small overlay"
+
+    # Past the threshold: legend hidden (no blanket / no silent truncation).
+    big = PlotsView(FakeSession(LEGEND_MAX_ROWS + 4))
+    big.set_laps(list(range(LEGEND_MAX_ROWS + 4)))
+    assert not big._speed_legend.isVisible(), "legend must hide past LEGEND_MAX_ROWS curves"
+    print("ok plots overlay: speed legend hides past the threshold, never truncates (L3)")
+
+
+def test_plots_brake_throttle_band_toggle():
+    """D3: the brake/throttle band is OFF by default (no items) even when data is pushed; turning
+    the toggle on draws the sub-track and turning it off clears it. Survives a selection refresh.
+
+    M8: the band now lives in RESERVED space entirely BELOW the lowest speed trough — it must never
+    overlap the data range (where the speed trace legitimately dips at every braking corner). We
+    assert the reserved band window's TOP is below the minimum plotted speed, and that toggling the
+    band off restores the tight y-range (no leftover reserved gap)."""
+    _qapp()
+    from studio.plots_view import PlotsView
+
+    # A curve with a real trough (down to 20) so the OLD bottom-16% strip would have overlapped it.
+    sx = np.linspace(0.0, 200.0, 100)
+    spd = np.full(100, 60.0)
+    spd[45:55] = 20.0  # a braking-zone dip — the exact place the band used to collide with the curve
+    speed_min = float(spd.min())
 
     class FakeSession:
         def best_lap_id(self):
@@ -859,8 +967,7 @@ def test_plots_brake_throttle_band_toggle():
             return 70.0
 
         def delta(self, ids, x_mode="distance"):
-            sx = np.linspace(0.0, 200.0, 100)
-            return 0, {0: (sx, np.full(100, 60.0))}, {0: (sx, np.zeros(100))}
+            return 0, {0: (sx, spd.copy())}, {0: (sx, np.zeros(100))}
 
         def sector_plot_positions(self, m):
             return []
@@ -873,13 +980,28 @@ def test_plots_brake_throttle_band_toggle():
     inten[60:80] = 0.5    # throttle
     pv.set_brake_throttle([(xs, inten)])
     assert pv._brake_throttle_items == [], "band must stay off until toggled on"
-    pv.brake_throttle_btn.setChecked(True)  # toggled -> _draw_brake_throttle
+    pv.brake_throttle_btn.setChecked(True)  # toggled -> refresh (reserves space) -> _draw_brake_throttle
     assert pv._show_brake_throttle and len(pv._brake_throttle_items) > 0
+    # M8: the reserved band window sits BELOW the lowest speed trough (its top < speed min), so the
+    # speed curve can never enter it. Before the fix the strip's TOP sat well ABOVE this trough.
+    assert pv._bt_band_range is not None, "band-on refresh must reserve a band window"
+    band_bottom, band_top = pv._bt_band_range
+    assert band_top < speed_min, (band_top, speed_min)
+    assert band_bottom < band_top
+    # And the frozen speed y-range was widened down to include the reserved strip.
+    y0, _y1 = pv.p_speed.getViewBox().viewRange()[1]
+    assert y0 <= band_bottom + 1e-6, (y0, band_bottom)
+
     pv.refresh()  # a selection refresh re-pins the band on the fitted axes
-    assert len(pv._brake_throttle_items) > 0
+    assert len(pv._brake_throttle_items) > 0 and pv._bt_band_range is not None
+
     pv.brake_throttle_btn.setChecked(False)
     assert not pv._show_brake_throttle and pv._brake_throttle_items == []
-    print("ok plots overlay: brake/throttle band off by default, toggles on/off, survives refresh")
+    # Off: the reserved-space cache clears and the y-range tightens back to the data (no dead gap).
+    assert pv._bt_band_range is None
+    y0_off, _ = pv.p_speed.getViewBox().viewRange()[1]
+    assert y0_off > band_bottom, (y0_off, band_bottom)  # bottom rose back toward the speed min
+    print("ok plots overlay: brake/throttle band reserved below the speed min, toggles cleanly (M8)")
 
 
 def test_corner_table_has_grip_column():

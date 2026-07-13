@@ -286,6 +286,82 @@ def test_lap_table_footer_survives_sort_and_updates_on_refresh():
     print("test_lap_table_footer_survives_sort_and_updates_on_refresh OK")
 
 
+# ------------------------------------- L3: multi-select cap (no silent chart truncation)
+class _ManyLapSession:
+    """A minimal LapTable read surface with N laps, each with a distinct lap_time so the L3 cap
+    can pick the fastest MAX_COMPARE_LAPS. lap i has time 60+i, dist ~1000, entry ~50."""
+
+    timing_verified = True
+    timing_quality = data_quality.TimingQuality()
+
+    def __init__(self, n):
+        self.n = n
+
+    def lap_rows(self):
+        return [{"idx": i, "time": 60.0 + i, "dist": 1000.0, "entry": 50.0}
+                for i in range(self.n)]
+
+    def lap_time(self, lid):
+        return 60.0 + lid
+
+    def sector_count(self):
+        return 0
+
+    def lap_sector_splits(self, lap_id):
+        return []
+
+    def session_best_splits(self):
+        return []
+
+    def theoretical_best(self):
+        return None
+
+    def best_rolling_lap(self):
+        return None
+
+    def best_lap_id(self):
+        return 0
+
+    def dropout_lap_ids(self):
+        return set()
+
+
+def test_lap_table_caps_multiselect_to_fastest_no_silent_truncation():
+    """L3: selecting more laps than can legibly overlay (past MAX_COMPARE_LAPS) is TRIMMED to the
+    fastest MAX_COMPARE_LAPS — and the trim is VISIBLE (the excess rows deselect) and the emitted
+    signal carries exactly the capped set, never a silent chart-side drop. Under the cap passes
+    through unchanged."""
+    from studio.lap_table import MAX_COMPARE_LAPS, LapTable
+
+    sess = _ManyLapSession(n=19)  # the D24-scale count that used to overflow the legend past ~13
+    table = LapTable(sess)
+
+    # The pure cap: an over-large set trims to the fastest MAX_COMPARE_LAPS (lowest lap_time).
+    over = list(range(19))
+    capped = table._capped_selection(over)
+    assert len(capped) == MAX_COMPARE_LAPS, capped
+    assert capped == list(range(MAX_COMPARE_LAPS)), capped  # laps 0..5 = the fastest (times 60..65)
+    # A shuffled over-large set still keeps the fastest MAX_COMPARE_LAPS (not just the first N seen).
+    # Times are 60+id, so the 6 fastest of these ten ids are {0,1,2,3,7,14} (returned sorted).
+    assert table._capped_selection([18, 3, 17, 2, 16, 1, 15, 0, 14, 7]) == [0, 1, 2, 3, 7, 14], \
+        "cap must keep the FASTEST laps, not a head slice"
+    # At/under the cap: unchanged (no churn).
+    assert table._capped_selection([2, 5, 9]) == [2, 5, 9]
+    assert table._capped_selection(list(range(MAX_COMPARE_LAPS))) == list(range(MAX_COMPARE_LAPS))
+
+    # End-to-end through _on_selection: an over-large selection emits the CAPPED set (no silent drop)
+    # and visibly re-applies it in the table. select() puts all 19 rows into the model selection.
+    emitted = []
+    table.laps_selected.connect(lambda ids: emitted.append(list(ids)))
+    table.select(list(range(19)))
+    assert table.selected_lap_ids() == list(range(19)), "sanity: all 19 rows model-selected pre-cap"
+    table._on_selection()  # select() blocks signals, so drive the handler as a real selection would
+    assert emitted and emitted[-1] == list(range(MAX_COMPARE_LAPS)), emitted
+    # The trim is VISIBLE: exactly MAX_COMPARE_LAPS rows stay selected (no silent chart-side drop).
+    assert table.selected_lap_ids() == list(range(MAX_COMPARE_LAPS)), table.selected_lap_ids()
+    print("test_lap_table_caps_multiselect_to_fastest_no_silent_truncation OK")
+
+
 # ------------------------------------- timing-trust: provisional lap-table treatment
 class _TrustSession(_FakeFooterSession):
     """A footer session whose timing-trust is togglable, to drive LapTable's provisional vs
