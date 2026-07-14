@@ -134,6 +134,35 @@ def test_trail_brake_merges_to_one_point():
     print(f"ok merge: trail-brake fused to 1 @ {events[0].onset_dist:.0f} m, peak {events[0].peak_decel:.2f} g")
 
 
+def test_seam_blip_does_not_anchor_merged_onset():
+    """M11: a sub-MIN_BRAKE_S lead-in blip (a start/finish-seam graze where the smoothed long-g just
+    kisses -theta_b for a sample or two) must NOT set the merged event's onset. The blip still folds
+    into the following real brake (one event), but the reported onset is the SUSTAINED brake's onset,
+    not the noise on the S/F line. Regression for the misplaced first-brake glyph ~22 m too early."""
+    # Fine sampling so a 2-sample blip is genuinely << MIN_BRAKE_S (0.25 s) while the real brake is
+    # comfortably above it. 3000 samples over 30 s -> 0.01 s/sample.
+    dist, elapsed = _lap_trace(n=3000, dur=30.0, total_dist=1000.0)
+    n = len(dist)
+    g = np.zeros(n)
+    # The seam blip: 2 samples grazing just past -theta_b, right at the S/F line (~1 m in).
+    g[3:5] = -0.22
+    # The real T1 brake ~75 m in, well within MERGE_TROUGH_GAP_M of the blip so they FUSE into one
+    # group — the blip must not drag the onset back onto the S/F line.
+    g[225:340] = -0.45
+    events = D.brake_events(dist, elapsed, g, THETA_B)
+    assert len(events) == 1, [(e.onset_dist, e.duration) for e in events]
+    e = events[0]
+    # onset must land on the SUSTAINED brake (~index 225 -> 75 m), NOT the seam blip (~1 m).
+    assert abs(e.onset_dist - dist[225]) < 5.0, e.onset_dist
+    assert e.onset_dist > 50.0, f"onset must not sit on the S/F seam blip, got {e.onset_dist:.1f} m"
+    assert abs(e.peak_decel - 0.45) < 0.02, e.peak_decel
+    # A blip with NO following sustained brake is simply dropped (the merged-span floor).
+    g_blip = np.zeros(n)
+    g_blip[3:5] = -0.30
+    assert D.brake_events(dist, elapsed, g_blip, THETA_B) == []
+    print(f"ok M11: seam blip folded in but onset anchored on the real brake @ {e.onset_dist:.0f} m")
+
+
 def test_chicane_throttle_squirt_stays_two():
     """Two genuine brake points with a clear hard re-throttle between them (a chicane) stay TWO —
     the throttle-sign safety (smoothed g above +MERGE_ACCEL_G) blocks the merge."""

@@ -424,6 +424,37 @@ def test_source_change_invalidates_static_layer():
     assert ov._env_version > v0, "a source change must invalidate the static layer"
 
 
+def test_source_label_names_axis_provenance():
+    """L6: the corner tag must name the dial's AXIS provenance, not one source. The usual meter is
+    IMU-lateral + GPS-longitudinal (the IMU forward axis is vibration-inflated), so a bare "ACCL"
+    misattributes the braking axis to the IMU. source_label reads "IMU lat · GPS long" when mixed,
+    and the plain source name when both axes share one sensor."""
+    from studio.gmeter_overlay import source_label
+    # The real D24 case: IMU lateral, GPS-derived longitudinal.
+    assert source_label("accl", "gps") == "IMU lat · GPS long"
+    # No IMU at all (GPS-only fallback meter): both axes GPS -> plain "GPS".
+    assert source_label("gps", "gps") == "GPS"
+    assert source_label("gps") == "GPS"
+    # Degenerate/absent longitudinal source (older callers) -> just the lateral name, never "ACCL".
+    assert source_label("accl") == "IMU"
+    assert source_label("accl", "accl") == "IMU"
+
+
+def test_set_source_stores_the_mixed_label_and_invalidates():
+    """set_source(lat, long) stores the resolved display label (not the raw id) and only invalidates
+    the cached static layer when the LABEL changes. IMU-lat/GPS-long -> the mixed tag."""
+    ov = _fresh()
+    _seed(ov)
+    ov.set_source("accl", "gps")
+    assert ov._source == "IMU lat · GPS long", ov._source
+    v0 = ov._env_version
+    ov.set_source("accl", "gps")        # same resolved label -> no bump
+    assert ov._env_version == v0
+    ov.set_source("gps", "gps")         # GPS-only fallback -> label changes -> bump
+    assert ov._source == "GPS" and ov._env_version > v0
+    print("ok L6: g-meter tag labels IMU-lat/GPS-long provenance, not a bare source")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

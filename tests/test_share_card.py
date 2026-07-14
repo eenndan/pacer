@@ -238,6 +238,102 @@ def test_render_card_stamped_and_degraded_still_renders():
     print("test_render_card_stamped_and_degraded_still_renders OK")
 
 
+# --------------------------------------------------------- M10: long-title elision + no collision
+def _title_fit(text: str, avail: int):
+    """Run share_card._fit_title against a real QPainter on a card-sized image (fontMetrics need a
+    live paint device). Returns (fitted_text, font_pixel_size)."""
+    from PySide6.QtGui import QPainter
+    img = QImage(share_card.CARD_W, share_card.CARD_H, QImage.Format_ARGB32)
+    p = QPainter(img)
+    try:
+        txt, font = share_card._fit_title(p, text, avail)
+        return txt, font.pixelSize()
+    finally:
+        p.end()
+
+
+def test_title_fit_shrinks_then_elides_long_names_keeps_short_unchanged():
+    """M10: the flagship short name renders whole at the biggest step; a very long user-typed name
+    (‘_save_as_track’ accepts any length) is shrunk a step or two and then elided-right so it can
+    never smear off the header / into the stamp. The fit must never exceed the available width."""
+    biggest, smallest = share_card._TITLE_PX_STEPS[0], share_card._TITLE_PX_STEPS[-1]
+    # Short flagship name: whole, at the biggest size, untouched.
+    txt, px = _title_fit("Daytona Milton Keynes", avail=800)
+    assert txt == "Daytona Milton Keynes" and px == biggest, (txt, px)
+    # A pathologically long name into a NARROW column: shrunk to the smallest step and elided.
+    long_name = "Silverstone International Circuit Grand Prix Layout"
+    txt, px = _title_fit(long_name, avail=560)
+    assert px == smallest, px
+    assert txt != long_name and txt.endswith("…"), txt   # elided, not the full string
+    assert txt != "" and long_name.startswith(txt.rstrip("…").rstrip()[:6])  # keeps the leading name
+    print(f"M10 title fit: short stays {biggest}px whole; long -> {px}px elided '{txt}'")
+
+
+def test_title_does_not_collide_with_the_stamp_on_a_degraded_long_name():
+    """M10 (render): a long track name on a DEGRADED (stamped) session must fit in the width LEFT of
+    the amber '(est)' stamp — the two share the header band. We measure the fitted title at its
+    chosen size and assert its right edge clears the stamp's left edge with the reserved gap."""
+    from PySide6.QtGui import QPainter
+    long_name = "Silverstone International Circuit Grand Prix Layout"
+    d = share_card.card_data(FakeSession(track=long_name, degraded=True), unit="kmh")
+    assert d.stamp == "estimated timing"
+    # Reconstruct the header geometry the render uses (pad=72, right=CARD_W-72).
+    pad, right = 72, share_card.CARD_W - 72
+    img = QImage(share_card.CARD_W, share_card.CARD_H, QImage.Format_ARGB32)
+    p = QPainter(img)
+    try:
+        stamp_txt = f"{d.stamp} {theme.ESTIMATED_MARK}"
+        p.setFont(share_card._font(26, theme.W_SEMIBOLD))
+        stamp_w = p.fontMetrics().horizontalAdvance(stamp_txt)
+        stamp_left = right - stamp_w
+        avail = (right - (stamp_w + 24)) - pad
+        txt, font = share_card._fit_title(p, long_name, avail)
+        p.setFont(font)
+        title_right = pad + p.fontMetrics().horizontalAdvance(txt)
+        assert title_right <= stamp_left, (title_right, stamp_left)   # no smear into the stamp
+    finally:
+        p.end()
+    # And the whole card still renders (with a map thumbnail) without error.
+    img2 = share_card.render_card(d, _one_px_png(), palette=theme.PALETTE_STANDARD)
+    assert not img2.isNull() and img2.width() == share_card.CARD_W
+    print("M10 render: long degraded title elided, clears the (est) stamp")
+
+
+# --------------------------------------------------------- L5: map plate hugs the thumbnail aspect
+def _landscape_png(w: int, h: int) -> bytes:
+    img = QImage(w, h, QImage.Format_ARGB32)
+    img.fill(0xFF204060)
+    return share_card.card_to_png(img)
+
+
+def test_map_plate_height_hugs_the_thumbnail_aspect():
+    """L5: the map plate height follows the thumbnail's scaled-to-width height, so a WIDE landscape
+    grab yields a SHORT plate (no ~40% dead band) while a near-square grab keeps the tall plate —
+    always within [MIN, MAX]. Pure geometry (map_plate_height)."""
+    lo, hi = share_card.MAP_PLATE_H_MIN, share_card.MAP_PLATE_H_MAX
+    # A wide 16:6 landscape map (the real MapView pane shape) -> a plate well short of the 512 max.
+    wide = share_card.map_plate_height(1600, 600)
+    assert lo <= wide < hi, wide
+    # A very wide/thin grab floors at MIN (never a sliver plate).
+    assert share_card.map_plate_height(2000, 200) == lo
+    # A near-square grab fills the full-height plate (clamped at MAX).
+    assert share_card.map_plate_height(900, 900) == hi
+    # Degenerate sizes fall back to the max plate (never a zero/negative rect).
+    assert share_card.map_plate_height(0, 0) == hi
+    # A wider map -> a shorter plate (monotone in aspect): more landscape, less dead space.
+    assert share_card.map_plate_height(1800, 600) < share_card.map_plate_height(1200, 600)
+    print(f"L5 map plate: wide 16:6 -> {wide}px (was fixed {hi}px); square -> {hi}px, floored {lo}px")
+
+
+def test_render_card_with_a_wide_landscape_thumbnail():
+    """L5 (render): a card built with a wide landscape map thumbnail renders fine end-to-end, and the
+    opportunity block below the (now shorter) plate stays on-canvas (never pushed off the card)."""
+    d = share_card.card_data(FakeSession(), unit="kmh")
+    img = share_card.render_card(d, _landscape_png(1600, 600), palette=theme.PALETTE_STANDARD)
+    assert not img.isNull() and img.height() == share_card.CARD_H
+    print("L5 render: wide landscape thumbnail composites without dead-band letterboxing")
+
+
 # ---------------------------------------------------------- clean map grab (legend off the card)
 def _map_view_session():
     """A bare Session with just enough surface for MapView.__init__ (trace arrays + a start-line
@@ -510,6 +606,10 @@ if __name__ == "__main__":
     test_render_card_is_a_nonempty_image_of_the_right_size()
     test_render_card_without_thumbnail_and_on_both_palettes()
     test_render_card_stamped_and_degraded_still_renders()
+    test_title_fit_shrinks_then_elides_long_names_keeps_short_unchanged()
+    test_title_does_not_collide_with_the_stamp_on_a_degraded_long_name()
+    test_map_plate_height_hugs_the_thumbnail_aspect()
+    test_render_card_with_a_wide_landscape_thumbnail()
     test_map_view_grab_clean_hides_the_map_key_legend()
     test_map_view_grab_clean_hides_the_marker_and_start_line_handles()
     test_export_share_card_saves_png_through_the_dialog()

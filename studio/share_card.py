@@ -160,6 +160,48 @@ def _font(size: int, weight: QFont.Weight = theme.W_REGULAR) -> QFont:
     return f
 
 
+# Title auto-fit: try these pixel sizes (biggest first) before falling back to eliding the smallest.
+_TITLE_PX_STEPS = (58, 50, 44)
+
+# Map plate: the thumbnail scales to this width; the plate's height then hugs the scaled thumbnail
+# (L5 — a wide landscape grab no longer letterboxes into a fixed-tall plate), within these bounds.
+MAP_PLATE_W = CARD_W - 2 * 72     # plate width == the card content width (pad = 72)
+MAP_PLATE_H_MAX = 512
+MAP_PLATE_H_MIN = 300
+MAP_PLATE_INNER = 24              # inner margin between the thumbnail and the plate edge
+
+
+def map_plate_height(thumb_w: int, thumb_h: int) -> int:
+    """L5: the map plate's height for a thumbnail of native size (thumb_w × thumb_h). The thumbnail
+    is fit to the plate WIDTH (aspect-preserved); the plate is then made just tall enough to hug it
+    (plus the inner margin), clamped to [MIN, MAX]. A wide landscape map → a short plate (little dead
+    space); a near-square/portrait map → the full-height plate. Pure, so the geometry is testable."""
+    if thumb_w <= 0 or thumb_h <= 0:
+        return MAP_PLATE_H_MAX
+    avail_w = MAP_PLATE_W - MAP_PLATE_INNER
+    scaled_h = thumb_h * (avail_w / thumb_w)
+    scaled_h = min(scaled_h, MAP_PLATE_H_MAX - MAP_PLATE_INNER)  # never taller than the max plate
+    return int(min(MAP_PLATE_H_MAX, max(MAP_PLATE_H_MIN, scaled_h + MAP_PLATE_INNER)))
+
+
+def _fit_title(p: QPainter, text: str, avail: int) -> tuple[str, QFont]:
+    """Fit the track title into `avail` px of header width (M10). Try progressively smaller title
+    fonts; the first that fits whole wins (a moderately long name just shrinks). If even the
+    smallest still overruns, elide-right at that size so the tail is cut with an ellipsis instead of
+    smearing off the edge / into the stamp. Short names take the first (biggest) size unchanged."""
+    if avail <= 0:
+        avail = 1
+    font = _font(_TITLE_PX_STEPS[-1], theme.W_SEMIBOLD)
+    for px in _TITLE_PX_STEPS:
+        font = _font(px, theme.W_SEMIBOLD)
+        p.setFont(font)
+        if p.fontMetrics().horizontalAdvance(text) <= avail:
+            return text, font
+    # Still too wide at the smallest step -> elide at that size.
+    p.setFont(font)
+    return p.fontMetrics().elidedText(text, Qt.ElideRight, avail), font
+
+
 def _draw_text(p: QPainter, x: int, y: int, text: str, font: QFont, colour: str,
                *, align_right_at: int | None = None) -> None:
     """Draw one baseline-anchored line; when ``align_right_at`` is given the text is right-aligned
@@ -198,17 +240,28 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
     pad = 72
     right = CARD_W - pad
 
-    # --- header: track + date ---
-    _draw_text(p, pad, 128, data.track, _font(58, theme.W_SEMIBOLD), theme.C.text)
-    if data.date:
-        _draw_text(p, pad, 176, data.date, _font(30), theme.C.text_dim)
-
     # --- honesty stamp (data-quality degraded): a small "estimated timing (est)" chip up top so
     # the number is never passed off as exact. Palette-neutral amber, right-aligned in the header.
+    # Drawn BEFORE the title so we can measure it and reserve its width when eliding the title.
+    stamp_w = 0
     if data.stamp:
         stamp_txt = f"{data.stamp} {theme.ESTIMATED_MARK}"
-        _draw_text(p, 0, 128, stamp_txt, _font(26, theme.W_SEMIBOLD), theme.C.accent,
-                   align_right_at=right)
+        stamp_font = _font(26, theme.W_SEMIBOLD)
+        p.setFont(stamp_font)
+        stamp_w = p.fontMetrics().horizontalAdvance(stamp_txt)
+        _draw_text(p, 0, 128, stamp_txt, stamp_font, theme.C.accent, align_right_at=right)
+
+    # --- header: track + date ---
+    # M10: fit a long user-typed track name to the width left of the stamp (a ~24px gap keeps it from
+    # touching the stamp), auto-shrinking the 58px font a step or two first so a moderately long name
+    # still reads big before it has to be cut, then eliding what still overruns. `_save_as_track`
+    # accepts any length, so the flagship short name is unchanged while "Silverstone International
+    # Circuit Grand Prix Layout" no longer smears into the stamp.
+    title_avail = (right - (stamp_w + 24) if data.stamp else right) - pad
+    title, title_font = _fit_title(p, data.track, title_avail)
+    _draw_text(p, pad, 128, title, title_font, theme.C.text)
+    if data.date:
+        _draw_text(p, pad, 176, data.date, _font(30), theme.C.text_dim)
 
     # --- hero: the best lap, big ---
     _draw_text(p, pad, 240, "BEST LAP", _font(28, theme.W_SEMIBOLD), theme.C.text_muted)
@@ -224,22 +277,29 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
         _draw_text(p, pad, 460, IDEAL_SUBLABEL, _font(24), theme.C.text_muted)
 
     # --- map thumbnail (speed-coloured): composited from the grabbed MapView PNG ---
+    # L5: a wide landscape MapView grab fits the plate by WIDTH, so a fixed-tall (512 px) plate
+    # letterboxed the thumbnail with ~40% vertical dead space. Instead size the plate to the scaled
+    # thumbnail (map_plate_height): scale to the plate width first, then make the plate exactly as
+    # tall as that scaled map needs so the rainbow line fills the plate top-to-bottom.
     map_top = 512
-    map_h = 512
-    map_rect = QRectF(pad, map_top, CARD_W - 2 * pad, map_h)
-    p.setPen(QColor(theme.C.border))
-    p.setBrush(QColor(theme.C.surface))
-    p.drawRoundedRect(map_rect, 20, 20)
+    map_h = MAP_PLATE_H_MAX
+    scaled: QPixmap | None = None
     if map_png:
         pm = QPixmap()
         if pm.loadFromData(map_png, "PNG") and not pm.isNull():
-            # Fit inside the rounded plate, centred, preserving aspect (never upscaled past the
-            # plate — a small map just centres).
-            scaled = pm.scaled(int(map_rect.width()) - 24, int(map_rect.height()) - 24,
+            map_h = map_plate_height(pm.width(), pm.height())
+            # Fit to the (now plate-hugging) rect, preserving aspect.
+            scaled = pm.scaled(MAP_PLATE_W - MAP_PLATE_INNER, map_h - MAP_PLATE_INNER,
                                Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            dx = int(map_rect.x() + (map_rect.width() - scaled.width()) / 2)
-            dy = int(map_rect.y() + (map_rect.height() - scaled.height()) / 2)
-            p.drawPixmap(dx, dy, scaled)
+    map_rect = QRectF(pad, map_top, MAP_PLATE_W, map_h)
+    p.setPen(QColor(theme.C.border))
+    p.setBrush(QColor(theme.C.surface))
+    p.drawRoundedRect(map_rect, 20, 20)
+    if scaled is not None:
+        # Centre the (now plate-hugging) thumbnail; still never upscaled past the plate.
+        dx = int(map_rect.x() + (map_rect.width() - scaled.width()) / 2)
+        dy = int(map_rect.y() + (map_rect.height() - scaled.height()) / 2)
+        p.drawPixmap(dx, dy, scaled)
 
     # --- #1 coaching opportunity (ESTIMATED-safe reason sentence) ---
     opp_top = map_top + map_h + 56

@@ -352,8 +352,8 @@ class PlayerPane(QWidget):
             self._position_gmeter()
             self.gmeter.set_g(g)
 
-    def set_gmeter_source(self, source: str):
-        self.gmeter.set_source(source)
+    def set_gmeter_source(self, source: str, long_source: str | None = None):
+        self.gmeter.set_source(source, long_source)
 
     def set_gmeter_lap(self, lap_id):
         """Tell the overlay which lap drives it so its max-G envelope resets at the lap boundary."""
