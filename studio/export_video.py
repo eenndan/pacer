@@ -1004,9 +1004,12 @@ class OverlayPainter:
         # lap strip: TOP-LEFT.
         sh = max(cfg.strip_h_frac * out_h, 20.0)
         self._strip_rect = QRectF(m, m, max(out_w * 0.26, 220.0), sh)
-        # Headless g-meter dial, driven exactly like the live overlay so its filtering matches.
+        # Headless g-meter dial, driven exactly like the live overlay so its filtering matches (incl.
+        # the axis-provenance tag: IMU lateral · GPS longitudinal, not a bare source name).
         self._dial = gmeter_overlay.GMeterOverlay()
-        self._dial.set_source(session.gmeter_source() if hasattr(session, "gmeter_source") else "accl")
+        _src = session.gmeter_source() if hasattr(session, "gmeter_source") else "accl"
+        _long = session.gmeter_long_source() if hasattr(session, "gmeter_long_source") else None
+        self._dial.set_source(_src, _long)
 
     def feed_g(self, vals: OverlayValues) -> None:
         """Advance the headless g-meter dial by one tick with this frame's lap + g — the same

@@ -270,6 +270,7 @@ class VideoView(QWidget):
         self._chapter_video_ms: dict[int, int] = {}
         # last g-meter source + visibility, so a lazily-created secondary pane is seeded on entry.
         self._gmeter_source: str | None = None
+        self._gmeter_long_source: str | None = None
         self._gmeter_visible = False
         self.secondary: PlayerPane | None = None
         # the source the live secondary opened on (normally self._source; the reference ChapterMap
@@ -534,7 +535,7 @@ class VideoView(QWidget):
             # g-meter ON *then* entering compare shows the overlay on BOTH panes with the right
             # source (the secondary missed the earlier set_gmeter_source / set_gmeter_visible).
             if self._gmeter_source is not None:
-                self.secondary.set_gmeter_source(self._gmeter_source)
+                self.secondary.set_gmeter_source(self._gmeter_source, self._gmeter_long_source)
             self.secondary.set_gmeter_visible(self._gmeter_visible)
             # Wire the secondary's playback state so the transport glyph reflects BOTH panes (they
             # auto-pause at different lap ends; the glyph must not lie — see _on_state).
@@ -722,12 +723,15 @@ class VideoView(QWidget):
         if pane is not None:
             pane.set_g(g)
 
-    def set_gmeter_source(self, source: str):
+    def set_gmeter_source(self, source: str, long_source: str | None = None):
         # Remember the source so a LAZILY-created secondary pane can be seeded with it on entry
-        # (set_compare), so the overlay reads the right sensor label on BOTH panes.
+        # (set_compare), so the overlay reads the right sensor label on BOTH panes. `long_source`
+        # is the longitudinal-axis provenance (GPS speed-derivative), tagged distinctly from the
+        # IMU lateral axis.
         self._gmeter_source = source
+        self._gmeter_long_source = long_source
         for pane in self._panes():
-            pane.set_gmeter_source(source)
+            pane.set_gmeter_source(source, long_source)
 
     def set_gmeter_lap(self, lap_id):
         """Tell the PRIMARY overlay which lap is being driven (per-lap max-G envelope scope). In

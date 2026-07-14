@@ -66,6 +66,24 @@ def _font(pt: float, bold: bool = False) -> QFont:
     return f
 
 
+# Human names for the sensor behind each dial axis. The IMU (GoPro accelerometer) is trusted for
+# LATERAL g (r~0.9); the LONGITUDINAL axis reads the GPS speed-derivative because the IMU forward
+# axis is vibration-inflated (r~0.36). So the tag must name the axis provenance, not one source.
+_SRC_NAME = {"accl": "IMU", "gps": "GPS"}
+
+
+def source_label(lat_source: str, long_source: str | None = None) -> str:
+    """The tiny corner tag naming the dial's axis provenance. Same source both axes -> that name
+    ("IMU" / "GPS"); mixed (the usual IMU-lateral + GPS-longitudinal meter) -> "IMU lat · GPS long"
+    so the braking/accel axis the driver reads is labelled by where it actually comes from — not a
+    bare "ACCL" that misattributes the GPS-derived longitudinal to the IMU."""
+    lat = _SRC_NAME.get(lat_source, lat_source.upper())
+    if long_source is None or long_source == lat_source:
+        return lat
+    lon = _SRC_NAME.get(long_source, long_source.upper())
+    return f"{lat} lat · {lon} long"
+
+
 @dataclass
 class DialState:
     """Pure draw state for paint_dial; snapshotted by both the live widget and the offline
@@ -239,10 +257,12 @@ def _paint_dial_static(p: QPainter, w: float, h: float, st: DialState) -> None:
     p.drawText(QRectF(cx + r + off - 22, cy - 6, 44, 12), Qt.AlignLeft | Qt.AlignVCenter,
                f"{st.peak_right:.1f}")
 
-    # source tag (tiny, bottom-right)
+    # source tag (tiny, bottom-right): names the dial's axis provenance (IMU lateral · GPS
+    # longitudinal), not one source — `st.source` is already the display label (see source_label).
     p.setPen(QPen(_c(C.text_muted, 160)))
     p.setFont(_font(6.0))
-    p.drawText(QRectF(w - 44, h - 13, 40, 11), Qt.AlignRight, st.source.upper())
+    # a wider box so "IMU lat · GPS long" isn't clipped (still bottom-right anchored)
+    p.drawText(QRectF(w - 96, h - 13, 92, 11), Qt.AlignRight, st.source)
 
 
 def _paint_dial_dot(p: QPainter, w: float, h: float, st: DialState) -> None:
@@ -358,7 +378,7 @@ class GMeterOverlay(QWidget):
         self._fy = 0.0
         self._have = False
         self._ema_init = False
-        self._source = "accl"
+        self._source = source_label("accl")   # display label (see source_label); default IMU-only
         self._hull_pts: list[tuple[float, float]] = []     # filtered felt points (ring buffer)
         self._recent: list[tuple[float, float]] = []       # rolling window for percentile peaks
         self._peak_fwd = 0.0
@@ -442,11 +462,15 @@ class GMeterOverlay(QWidget):
             self.reset_envelope()
         self._lap = lap_id
 
-    def set_source(self, source: str) -> None:
-        """Label which sensor drives the meter ("accl" or "gps"); shown small in the corner."""
-        if source == self._source:
+    def set_source(self, source: str, long_source: str | None = None) -> None:
+        """Label the dial's axis provenance, shown small in the corner. `source` is the lateral
+        (IMU) source id ("accl"/"gps"); `long_source` the longitudinal one (the GPS speed-derivative
+        when present) — the two usually differ, so the tag reads "IMU lat · GPS long" rather than a
+        bare "ACCL" that would misattribute the GPS-derived braking axis to the IMU."""
+        label = source_label(source, long_source)
+        if label == self._source:
             return
-        self._source = source
+        self._source = label
         self._env_version += 1   # the source tag lives in the cached static layer — invalidate it
         self.update()
 

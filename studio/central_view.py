@@ -149,7 +149,8 @@ class CentralView(QWidget):
         # session and playback auto-advances across chapters.
         self.video = VideoView(self.session.chapters or self.session.video_path)
         # Only offer the g-meter toggle when a g signal was computed (IMU present).
-        self.video.set_gmeter_source(self.session.gmeter_source())
+        self.video.set_gmeter_source(self.session.gmeter_source(),
+                                     self.session.gmeter_long_source())
         self.video.gmeter_btn.setEnabled(self.session.has_gmeter)
         if not self.session.has_gmeter:
             self.video.gmeter_btn.setToolTip("No accelerometer data in this recording")

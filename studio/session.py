@@ -1814,9 +1814,17 @@ class Session:
         return self._gmeter.has_data
 
     def gmeter_source(self) -> str:
-        """Which sensor drives the live g signal: "accl" (the GoPro accelerometer, the default)
-        or "gps" (the GPS-derived fallback, used if the IMU is absent or proved unreliable)."""
+        """Which sensor drives the live g signal's LATERAL axis: "accl" (the GoPro accelerometer,
+        the default) or "gps" (the GPS-derived fallback, used if the IMU is absent or proved
+        unreliable)."""
         return self._gmeter.source
+
+    def gmeter_long_source(self) -> str:
+        """Which sensor drives the dial's LONGITUDINAL (braking/accel) axis: "gps" (the validated
+        speed-derivative, the default when a GPS trajectory exists) or "accl" (the raw IMU forward
+        axis, only when there's no GPS). The IMU forward axis is vibration-inflated (r~0.36), so the
+        dial reads GPS-long even on an otherwise IMU-driven meter — the overlay tag labels this."""
+        return self._gmeter.long_source
 
     def delta_at_time(self, t: float) -> float | None:
         """Δ-to-best (seconds) at media-clock time `t`: how far ahead (−) / behind (+) the lap

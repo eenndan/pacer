@@ -261,9 +261,16 @@ def merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows=None) -> list[Bra
     smoothed signed g. Two fragments stay SEPARATE iff: more than MERGE_TROUGH_GAP_M of coast
     separates them (the primary distance cut), OR (block-only guard) they sit in two different corner
     windows, OR (coarse safety) a clear hard re-throttle (smoothed g above +MERGE_ACCEL_G) sits
-    between them. A merged group keeps the EARLIEST onset verbatim (so recall + onset accuracy are
-    untouched), peak = max, duration = the true onset->release span; MIN_BRAKE_S is applied to the
-    merged span."""
+    between them.
+
+    Onset anchoring (M11 fix): a merged group's onset is the EARLIEST onset of a *SUSTAINED*
+    sub-fragment — one whose OWN onset->release span is >= MIN_BRAKE_S. A shorter lead-in blip (e.g.
+    a single-sample S/F-seam graze where the smoothed long-g just kisses -theta_b) still folds into
+    the maneuver (peak/release/duration), but it does NOT get to set the brake point: that would
+    yank the onset back onto the noise. The group keeps the EARLIEST onset overall only as a
+    fallback (no sub-fragment reached the floor) — such a group is then dropped by the merged-span
+    test below anyway. peak = max, duration = the true onset->release span; MIN_BRAKE_S also gates
+    the merged span."""
     def corner_of(d):
         if corner_windows is None:
             return None
@@ -272,7 +279,12 @@ def merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows=None) -> list[Bra
                 return k
         return None  # out of all windows -> the guard stays inert for this event
 
-    groups = [list(raw[0])]
+    def sustained(ev) -> bool:
+        # A fragment whose OWN onset->release span clears the shortest-real-brake floor.
+        return float(elapsed[ev[1]] - elapsed[ev[0]]) >= MIN_BRAKE_S
+
+    # Each group carries a trailing flag: has it yet locked its onset from a sustained sub-fragment?
+    groups = [list(raw[0]) + [sustained(raw[0])]]
     for ev in raw[1:]:
         a = groups[-1]
         if ev[0] > a[1]:  # samples between a's release and ev's onset
@@ -287,9 +299,14 @@ def merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows=None) -> list[Bra
             a[1] = ev[1]                 # extend the group's release index
             a[4] = max(a[4], ev[4])      # peak = deepest sub-phase
             a[5] = ev[5]                 # extend the group's end distance
-            # onset (a[2]/a[3]) kept verbatim -> the first hard decel = the brake point
+            # If the group's current onset came from a sub-floor lead-in blip and THIS sub-fragment
+            # is sustained, adopt its onset (index + dist/time) — the first REAL brake application,
+            # not the noise, becomes the brake point (and anchors the reported duration).
+            if not a[6] and sustained(ev):
+                a[0], a[2], a[3] = ev[0], ev[2], ev[3]
+                a[6] = True
         else:
-            groups.append(list(ev))
+            groups.append(list(ev) + [sustained(ev)])
     out: list[BrakeEvent] = []
     for grp in groups:
         span = float(elapsed[grp[1]] - elapsed[grp[0]])
