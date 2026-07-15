@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pacer Studio — transponder-accurate race telemetry from a GoPro you already own</title>
+<meta name="description" content="Pacer turns a single GoPro recording into a full telemetry workstation — transponder-validated lap timing, track map, deltas, synced video, coaching. Free, 100% local, private.">
+
+<!-- Open Graph / Twitter -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Pacer Studio — transponder-accurate race telemetry from a GoPro you already own">
+<meta property="og:description" content="Free, 100% local, private race telemetry. Transponder-validated lap timing (mean within ±0.003 s) from the GPS your GoPro already records.">
+<meta property="og:image" content="media/og.png">
+<meta property="og:url" content="https://eenndan.github.io/pacer/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Pacer Studio — transponder-accurate race telemetry from a GoPro you already own">
+<meta name="twitter:description" content="Free, 100% local, private race telemetry. Transponder-validated lap timing (mean within ±0.003 s) from the GPS your GoPro already records.">
+<meta name="twitter:image" content="media/og.png">
+
+<style>
+  :root {
+    --canvas:  #15181E;
+    --panel:   #21252E;
+    --border:  #2D323C;
+    --text:    #DDE1E8;
+    --dim:     #9AA1AD;
+    --accent:  #F5A623;
+    --accent-h:#FFB838;
+    --green:   #5DD6A0;
+    --maxw:    1080px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--text);
+    font-family: -apple-system, "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--accent-h); }
+
+  img { max-width: 100%; height: auto; display: block; }
+
+  .wrap {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* ---------- header ---------- */
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: rgba(21, 24, 30, 0.85);
+    backdrop-filter: saturate(140%) blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  .navbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 60px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: 0.2px;
+    color: var(--text);
+  }
+  .brand:hover { color: var(--text); }
+  .brand svg { display: block; }
+  .btn {
+    display: inline-block;
+    padding: 9px 16px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: #1a1206;
+    border-color: var(--accent);
+  }
+  .btn-primary:hover {
+    background: var(--accent-h);
+    border-color: var(--accent-h);
+    color: #1a1206;
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text);
+  }
+  .btn-ghost:hover {
+    border-color: var(--accent);
+    color: var(--accent-h);
+    background: rgba(245, 166, 35, 0.06);
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: 72px 0; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: 0; }
+
+  .eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 1.6px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(30px, 5vw, 46px);
+    line-height: 1.12;
+    letter-spacing: -0.5px;
+    margin: 0 0 18px;
+    font-weight: 800;
+  }
+  h2 {
+    font-size: clamp(24px, 3.4vw, 32px);
+    line-height: 1.18;
+    letter-spacing: -0.3px;
+    margin: 0 0 16px;
+    font-weight: 800;
+  }
+  h3 { font-size: 18px; margin: 0 0 8px; font-weight: 700; }
+  p.lead { font-size: 18px; color: var(--dim); max-width: 720px; }
+  .muted { color: var(--dim); }
+
+  /* ---------- hero ---------- */
+  .hero { padding-top: 64px; }
+  .hero h1 { max-width: 900px; }
+  .hero .accent { color: var(--accent); }
+  .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 26px 0 22px;
+  }
+  .cta-row .btn { padding: 12px 22px; font-size: 15px; }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 34px;
+  }
+  .chip {
+    font-size: 13px;
+    color: var(--dim);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 5px 12px;
+    border-radius: 999px;
+  }
+  .chip strong { color: var(--text); font-weight: 600; }
+  .figure {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--panel);
+    box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+  }
+  .figure img { width: 100%; }
+
+  /* ---------- accuracy ---------- */
+  .accuracy-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    align-items: center;
+  }
+  .stat-list {
+    list-style: none;
+    padding: 0;
+    margin: 22px 0 0;
+  }
+  .stat-list li {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 12px 0;
+    border-top: 1px solid var(--border);
+  }
+  .stat-list li:last-child { border-bottom: 1px solid var(--border); }
+  .stat-val {
+    color: var(--green);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    min-width: 128px;
+    font-size: 17px;
+  }
+  .stat-label { color: var(--dim); font-size: 15px; }
+
+  /* ---------- features ---------- */
+  .feature-gallery {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    margin-bottom: 40px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .card img { width: 100%; border-bottom: 1px solid var(--border); }
+  .card .card-body { padding: 16px 18px 20px; }
+  .card p { margin: 0; color: var(--dim); font-size: 14px; }
+
+  .feature-list {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px 28px;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .feature-list li {
+    padding-left: 24px;
+    position: relative;
+    color: var(--dim);
+    font-size: 15px;
+  }
+  .feature-list li::before {
+    content: "›";
+    position: absolute;
+    left: 6px;
+    top: -1px;
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 17px;
+  }
+  .feature-list li strong { color: var(--text); font-weight: 600; }
+
+  /* ---------- built ---------- */
+  .built-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    margin-top: 8px;
+  }
+  .built-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 22px 24px;
+  }
+  .built-card.wide { grid-column: 1 / -1; }
+  .built-card h3 { color: var(--text); }
+  .built-card p { margin: 0; color: var(--dim); font-size: 15px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 0.92em;
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    color: var(--text);
+  }
+  .gate-highlight {
+    color: var(--green);
+    font-weight: 600;
+  }
+
+  /* ---------- non-goals ---------- */
+  .nongoals {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0 0;
+    display: grid;
+    gap: 12px;
+    max-width: 780px;
+  }
+  .nongoals li {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--dim);
+    border-radius: 8px;
+    padding: 14px 18px;
+    color: var(--dim);
+    font-size: 15px;
+  }
+  .nongoals li strong { color: var(--text); }
+
+  /* ---------- build block ---------- */
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    margin: 18px 0 0;
+  }
+  pre code { background: none; border: 0; padding: 0; color: inherit; }
+  .comment { color: var(--dim); }
+
+  .note {
+    margin-top: 22px;
+    font-size: 14px;
+    color: var(--dim);
+    border-left: 3px solid var(--accent);
+    padding: 4px 0 4px 16px;
+  }
+
+  /* ---------- footer ---------- */
+  footer {
+    padding: 40px 0 56px;
+    color: var(--dim);
+    font-size: 14px;
+  }
+  footer .foot-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    margin-bottom: 14px;
+  }
+  footer p { margin: 6px 0; max-width: 760px; }
+
+  .section-head { max-width: 760px; margin-bottom: 34px; }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 860px) {
+    .accuracy-grid { grid-template-columns: 1fr; gap: 28px; }
+    .feature-gallery { grid-template-columns: 1fr; }
+    .feature-list { grid-template-columns: 1fr; }
+    .built-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 520px) {
+    section { padding: 52px 0; }
+    .navbar .btn span.long { display: none; }
+    .stat-val { min-width: 110px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== HEADER ===================== -->
+<header>
+  <div class="wrap navbar">
+    <a class="brand" href="#top" aria-label="Pacer Studio">
+      <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+        <path d="M4 5 L12 13 L4 21" stroke="#F5A623" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M12 5 L20 13 L12 21" stroke="#F5A623" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+      </svg>
+      Pacer Studio
+    </a>
+    <a class="btn btn-ghost" href="https://github.com/eenndan/pacer">View on <span class="long">GitHub</span></a>
+  </div>
+</header>
+
+<a id="top"></a>
+
+<!-- ===================== HERO ===================== -->
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Race telemetry · GoPro-native · macOS</p>
+    <h1>Transponder-accurate race telemetry from a GoPro you already own — <span class="accent">free, 100% local, private.</span></h1>
+    <p class="lead">Pacer turns a single GoPro recording into a full telemetry workstation — track map, lap-by-lap deltas, synced video, driving analysis, and a g-meter — from the GPS and motion data the camera already records. No transponder, no data logger, no cloud, no extra hardware.</p>
+
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/eenndan/pacer">View on GitHub</a>
+      <a class="btn btn-ghost" href="#build">Build from source</a>
+    </div>
+
+    <div class="chips">
+      <span class="chip"><strong>100% local</strong></span>
+      <span class="chip"><strong>private</strong></span>
+      <span class="chip"><strong>free</strong></span>
+      <span class="chip"><strong>GoPro-native</strong></span>
+      <span class="chip"><strong>macOS</strong></span>
+    </div>
+
+    <figure class="figure" style="margin:0">
+      <img src="media/hero.png" width="1600" height="1000"
+           alt="Pacer — dark-theme desktop app on real footage: speed-coloured track map with brake points, synced GoPro video, distance-aligned Δ-to-best charts, sortable lap table, and coaching">
+    </figure>
+  </div>
+</section>
+
+<!-- ===================== ACCURACY ===================== -->
+<section id="accuracy">
+  <div class="wrap">
+    <div class="accuracy-grid">
+      <div>
+        <p class="eyebrow">Accuracy — the moat</p>
+        <h2>Validated out-of-sample against a real transponder.</h2>
+        <p class="muted">Pacer times laps on the camera's own <strong>GPS true-clock</strong> instead of the video/sample clock that consumer tools use (which drifts ~0.1%). The result sits at the noise floor of 10 Hz GPS — and we can show, with data, that it's irreducible from the streams a GoPro records.</p>
+        <ul class="stat-list">
+          <li><span class="stat-val">±0.003 s</span><span class="stat-label">mean error — essentially unbiased</span></li>
+          <li><span class="stat-val">σ ≈ 0.05–0.09 s</span><span class="stat-label">spread ≈ 0.13% of a ~68 s kart lap</span></li>
+          <li><span class="stat-val">r ≥ 0.99</span><span class="stat-label">per-lap correlation to the transponder</span></li>
+          <li><span class="stat-val">1,150+ laps</span><span class="stat-label">compared across two recordings</span></li>
+        </ul>
+        <p style="margin-top:26px">
+          <a href="https://github.com/eenndan/pacer/blob/main/docs/ACCURACY.md">Read the full accuracy analysis →</a>
+        </p>
+      </div>
+      <figure class="figure" style="margin:0">
+        <img src="media/accuracy.png" width="1200" height="560"
+             alt="Pacer lap-time error vs a real transponder — mean within ±0.003 s, σ ≈ 0.05–0.09 s">
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FEATURES ===================== -->
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Features</p>
+      <h2>The analysis a dedicated data logger would give you.</h2>
+      <p class="muted">Lap and sector times, a racing line you can pick apart, deltas to your best lap, braking and grip — without buying or wiring anything.</p>
+    </div>
+
+    <div class="feature-gallery">
+      <div class="card">
+        <img src="media/map.png" alt="Track map — racing line coloured by speed, with brake points and sector lines">
+        <div class="card-body">
+          <h3>Track map</h3>
+          <p>Racing line coloured by speed, Δ-to-best, grip, or elevation — with brake points and draggable start/sector lines you can re-position to re-segment the session.</p>
+        </div>
+      </div>
+      <div class="card">
+        <img src="media/plots.png" alt="Distance-aligned speed and Δ-to-best charts">
+        <div class="card-body">
+          <h3>Δ-to-best charts</h3>
+          <p>Speed and cumulative time delta against your best lap, distance-aligned so corners line up.</p>
+        </div>
+      </div>
+      <div class="card">
+        <img src="media/coaching.png" alt="Coaching — corner-by-corner time loss vs your best lap">
+        <div class="card-body">
+          <h3>Coaching</h3>
+          <p>Where you're losing time to your best lap, corner by corner.</p>
+        </div>
+      </div>
+    </div>
+
+    <ul class="feature-list">
+      <li><strong>True-clock lap &amp; sector timing</strong> — GPS9 cameras (Hero 9+) time on the camera clock; older GPS5 cameras fall back to the video clock and flag estimates.</li>
+      <li><strong>Synced GoPro video</strong> — scrub the lap and the footage follows, frame-accurate.</li>
+      <li><strong>Dual-lap &amp; cross-recording compare</strong> — play two laps side by side, including the best lap of another recording of the same track.</li>
+      <li><strong>Sortable lap table</strong> — every lap and its sector splits, session best highlighted.</li>
+      <li><strong>G-meter</strong> — a live accelerometer overlay driven by the camera's IMU.</li>
+      <li><strong>Driving channels</strong> — brake events, coasting, and per-corner grip utilization from the validated vehicle-frame g.</li>
+      <li><strong>Shareable lap card</strong> — a clean image summary of a lap to post or send.</li>
+      <li><strong>Video-overlay export</strong> — burn the telemetry overlay onto the footage (via ffmpeg).</li>
+      <li><strong>Session library</strong> — a local index of everything you've analysed.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================== HOW IT'S BUILT ===================== -->
+<section id="built">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">How it's built</p>
+      <h2>One desktop app on a small, fast C++ core — chosen to stay legible and correct rather than clever.</h2>
+    </div>
+
+    <div class="built-grid">
+      <div class="built-card">
+        <h3>C++23 core</h3>
+        <p>A small, fast core (<code>pacer/</code>) does the load-bearing work — GPMF ingest, geometry, lap/sector segmentation, and GPS9 true-clock timing. It's a clean-room, independently authored implementation.</p>
+      </div>
+      <div class="built-card">
+        <h3>nanobind + PySide6</h3>
+        <p>The core's types are bound to Python via nanobind (litgen-generated), consumed by a PySide6 + pyqtgraph desktop UI (<code>studio/</code>) that does the draggable map handles and frame-accurate video↔telemetry sync natively.</p>
+      </div>
+      <div class="built-card wide">
+        <h3>The golden-equivalence gate</h3>
+        <p>Every core-math refactor is proven <span class="gate-highlight">byte-identical (max|Δ| = 0)</span> against a dense fingerprint of a real recording's whole analysis API before it lands — and CI runs the same machinery over a deterministic synthetic session. <strong style="color:var(--text)">Correctness is a gate, not a hope.</strong></p>
+      </div>
+      <div class="built-card wide">
+        <h3>Built solo, with LLM coding agents under discipline</h3>
+        <p>Pacer is developed solo, with the implementation handed to LLM coding agents under a strict discipline: every change is one focused pull request, gated by the golden-equivalence check (<code>max|Δ| = 0</code> on real footage) and the full ctest suite before it merges. The rigor above — transponder validation, the byte-identical core-math gate, the out-of-sample research — is what makes that workflow safe. The guardrails do the trusting so the agents can do the typing.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== NON-GOALS ===================== -->
+<section id="non-goals">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Non-goals</p>
+      <h2>What Pacer deliberately isn't.</h2>
+      <p class="muted">Stating the boundaries is part of the design.</p>
+    </div>
+    <ul class="nongoals">
+      <li><strong>Not a mobile app.</strong> It's an offline desktop deep-analysis tool, for sitting down with a session after the fact.</li>
+      <li><strong>Not a live / in-car system.</strong> No real-time HUD, no OBD-II or CAN, no in-session telemetry — Pacer reads recorded GoPro footage.</li>
+      <li><strong>macOS Apple Silicon only, today.</strong> The build and app target arm64 macOS.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================== BUILD ===================== -->
+<section id="build">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Get Pacer</p>
+      <h2>A Mac (Apple Silicon) and a GoPro is all you need.</h2>
+      <p class="muted">Today Pacer installs from source — one command with <a href="https://pixi.sh">pixi</a>, no manual toolchain setup. A prebuilt, double-clickable <code>Pacer Studio.app</code> (<code>.dmg</code>) is planned but not yet published.</p>
+    </div>
+<pre><code><span class="comment"># 3rdparty deps (gpmf-parser, nanobind)</span>
+git submodule update --init --recursive
+
+<span class="comment"># environment + editable Python bindings</span>
+pixi install
+
+<span class="comment"># build + launch on a recording</span>
+pixi run studio -- /path/to/GX010060.MP4</code></pre>
+    <p class="note">GoPro chapter siblings (<code>GX01…</code>, <code>GX02…</code>) are chained automatically. On a track Pacer doesn't know yet, it places a sensible start/finish line and flags the timing as provisional — drag the line on the map to where a lap begins and it's remembered for that recording.</p>
+  </div>
+</section>
+
+<!-- ===================== FOOTER ===================== -->
+<footer>
+  <div class="wrap">
+    <div class="foot-links">
+      <a href="https://github.com/eenndan/pacer">GitHub repository</a>
+      <a href="https://github.com/eenndan/pacer/blob/main/docs/ACCURACY.md">Accuracy analysis</a>
+      <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">License (CC BY-NC-SA 4.0)</a>
+    </div>
+    <p>Pacer © 2025–2026 eenndan, licensed under <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>. NonCommercial use only; derivatives must be shared alike.</p>
+    <p class="muted">Pacer installs from source today — the prebuilt <code>.dmg</code> is not yet published. GPS/IMU parsing uses GoPro's <a href="https://github.com/gopro/gpmf-parser">gpmf-parser</a>.</p>
+  </div>
+</footer>
+
+</body>
+</html>
