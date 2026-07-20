@@ -1140,6 +1140,80 @@ def test_consistency_panel_hidden_by_default_and_toggle_refreshes():
     print("test_consistency_panel_hidden_by_default_and_toggle_refreshes OK")
 
 
+class _StubVisible:
+    """A stand-in panel/strip that only tracks its setVisible() state, so the CentralView show/hide
+    toggles (coaching / excluded) can be tested without a real Qt widget build."""
+    def __init__(self):
+        self._visible = True
+
+    def setVisible(self, on):
+        self._visible = bool(on)
+
+    def isVisible(self):
+        return self._visible
+
+
+class _StubExcludedTable:
+    """A stand-in LapTable that records set_excluded_visible() calls, so the CentralView
+    excluded-visible toggle can be tested without the real table build."""
+    def __init__(self):
+        self.excluded_visible = None
+
+    def set_excluded_visible(self, on):
+        self.excluded_visible = bool(on)
+
+
+def test_coaching_panel_view_toggle_hides_and_shows_whole_panel():
+    """Declutter PR: View ▸ Show coaching panel fully shows/hides the whole OpportunitiesPanel
+    (header included) via CentralView.set_coaching_visible — the window records + persists the
+    choice and delegates here. Drives the view method directly (the build-time apply + the toggle),
+    mirroring the consistency test. The chevron-collapse is a SEPARATE concern (tested in
+    test_coaching)."""
+    from studio.central_view import CentralView
+
+    w = CentralView.__new__(CentralView)
+    w._coaching_visible = True
+    panel = _StubVisible()
+    w.opportunities = panel
+    # Build-time apply reflects the window default (shown).
+    w._apply_coaching_visible()
+    assert panel.isVisible() is True, "coaching panel is shown by default (collapsed, but present)"
+
+    # Menu-hide it entirely.
+    w.set_coaching_visible(False)
+    assert w._coaching_visible is False
+    assert panel.isVisible() is False, "the menu toggle must hide the whole panel"
+
+    # Re-show it.
+    w.set_coaching_visible(True)
+    assert w._coaching_visible is True
+    assert panel.isVisible() is True
+    print("test_coaching_panel_view_toggle_hides_and_shows_whole_panel OK")
+
+
+def test_excluded_strip_view_toggle_delegates_to_lap_table():
+    """Declutter PR: View ▸ Show excluded laps delegates to LapTable.set_excluded_visible via
+    CentralView.set_excluded_visible. Drives the view method directly (the build-time apply + the
+    toggle)."""
+    from studio.central_view import CentralView
+
+    w = CentralView.__new__(CentralView)
+    w._excluded_visible = True
+    table = _StubExcludedTable()
+    w.table = table
+    # Build-time apply pushes the window default onto the table.
+    w._apply_excluded_visible()
+    assert table.excluded_visible is True
+
+    w.set_excluded_visible(False)
+    assert w._excluded_visible is False
+    assert table.excluded_visible is False
+
+    w.set_excluded_visible(True)
+    assert table.excluded_visible is True
+    print("test_excluded_strip_view_toggle_delegates_to_lap_table OK")
+
+
 # ----------------------------------------------------- F3: the single rebuild-derived-views seam
 class _ViewSpy:
     """A stand-in for a derived-view collaborator (table / corner_table / map / consistency /
@@ -1320,9 +1394,11 @@ class _FakeView:
         type(self).n_built += 1
         self.disposed = False
         self.video = SimpleNamespace(name=f"video#{type(self).n_built}")
-        # The real CentralView exposes a `timingEdited` signal that _build_ui connects to keep
-        # Edit ▸ Undo's enabled state in sync; the swap test only needs a .connect() no-op here.
+        # The real CentralView exposes `timingEdited` + `coachingCollapsedChanged` signals that
+        # _build_ui connects (Edit ▸ Undo enablement / persisting the coaching collapse); the swap
+        # test only needs a .connect() no-op for each.
         self.timingEdited = SimpleNamespace(connect=lambda *_a, **_k: None)
+        self.coachingCollapsedChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
 
     def dispose(self):
         self.disposed = True
@@ -1349,6 +1425,11 @@ def test_build_ui_atomic_swap_disposes_old_reuses_timer_and_rechromes():
     w._paths = ["/x/REC.MP4"]
     w._sidecar_path = None
     w._consistency_visible = False
+    # Declutter PR: the window seeds the coaching/excluded show/hide + coaching-collapse state into
+    # each fresh view too (persisted prefs on the real window); _FakeView swallows the kwargs.
+    w._coaching_visible = True
+    w._coaching_collapsed = True
+    w._excluded_visible = True
     # Stub the chrome-seed methods _build_ui calls after the swap (they touch the real menu / status
     # bar, irrelevant to the swap mechanics).
     w._sync_full_recording_action = lambda: None

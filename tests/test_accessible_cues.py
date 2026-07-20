@@ -202,15 +202,29 @@ def test_lap_table_best_star_survives_a_sort():
 def test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip():
     """A substantial lap the median band left out (a mis-segmented 921 m / 0:59 short lap) is
     surfaced in the muted ⊘ EXCLUDED strip — NOT injected into the sortable rows (where it would
-    sort to the top as the 'fastest'), so a dropped lap isn't invisible."""
+    sort to the top as the 'fastest'), so a dropped lap isn't invisible.
+
+    Declutter PR: the strip now ships COLLAPSED to a "⊘ N excluded ▸" one-liner (the count in the
+    header, the full list hidden), and expands to the per-lap detail on a header click. So the
+    default state shows the count in the HEADER and an empty body; expanding reveals the lap line."""
     sess = _FakeLapSession()
     sess.excluded_lap_rows = lambda: [{"idx": 47, "time": 59.091, "dist": 921.0, "entry": 40.0}]
     table = LapTable(sess)
     # It is NOT one of the sortable lap rows ... (the internal lap id / row key stays 0-based)
     assert 47 not in [table._lap_id(r) for r in range(table.table.rowCount())]
-    # ... it's in the visible strip, showing its lap NUMBER + time + distance. M9: the strip shows
-    # the 1-based lap number (id 47 → "Lap 48"), matching the table's Lap column — NOT the raw id.
+    # ... the strip is visible (there's an excluded lap) and COLLAPSED by default: the header reads
+    # "⊘ 1 excluded ▸" and the detail body is empty until expanded.
     assert not table._excluded_strip.isHidden()
+    assert table._excluded_collapsed, "the excluded strip must ship collapsed (the one-liner)"
+    header = table._excluded_header.text()
+    assert "⊘" in header and "1 excluded" in header and "▸" in header, header
+    assert table._excluded_body.text() == "", "collapsed: the full list stays hidden"
+    # Expand it (a header click): the full per-lap line appears, showing the 1-based lap NUMBER
+    # (id 47 → "Lap 48", matching the table's Lap column — NOT the raw id) + time + distance, and the
+    # header chevron flips to ▾.
+    table._toggle_excluded_collapsed()
+    assert not table._excluded_collapsed
+    assert "▾" in table._excluded_header.text()
     body = table._excluded_body.text()
     assert "Lap 48" in body and "0:59.091" in body and "921" in body, body
     print("test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip OK")
@@ -222,6 +236,34 @@ def test_lap_table_excluded_strip_hidden_on_a_clean_recording():
     table = LapTable(_FakeLapSession())
     assert table._excluded_strip.isHidden()
     print("test_lap_table_excluded_strip_hidden_on_a_clean_recording OK")
+
+
+def test_lap_table_excluded_strip_menu_hide_is_orthogonal_to_collapse():
+    """Declutter PR: View ▸ Show excluded laps fully hides the whole ⊘ strip (set_excluded_visible),
+    orthogonally to its own collapse — a menu-hidden strip stays hidden regardless of collapse
+    state, and re-showing it (when there ARE excluded laps) brings it back. The auto-hide when the
+    session has no excluded laps still wins over 'shown'."""
+    sess = _FakeLapSession()
+    sess.excluded_lap_rows = lambda: [{"idx": 47, "time": 59.091, "dist": 921.0, "entry": 40.0}]
+    table = LapTable(sess)
+    assert not table._excluded_strip.isHidden(), "shown by default when there are excluded laps"
+
+    # Menu-hide it entirely: the whole strip (header included) disappears.
+    table.set_excluded_visible(False)
+    assert table._excluded_strip.isHidden(), "the menu toggle must hide the whole strip"
+    # Expanding while menu-hidden must not re-show it (the two flags are orthogonal).
+    table._toggle_excluded_collapsed()
+    assert table._excluded_strip.isHidden(), "menu-hidden stays hidden regardless of collapse"
+
+    # Re-show via the menu: it comes back (there are still excluded laps).
+    table.set_excluded_visible(True)
+    assert not table._excluded_strip.isHidden(), "re-showing restores the strip"
+
+    # A session with NO excluded laps auto-hides even when the menu flag is 'shown'.
+    sess.excluded_lap_rows = lambda: []
+    table.refresh()
+    assert table._excluded_strip.isHidden(), "no excluded laps -> auto-hidden even when menu-shown"
+    print("test_lap_table_excluded_strip_menu_hide_is_orthogonal_to_collapse OK")
 
 
 def test_lap_table_best_colours_follow_the_palette_selector():
@@ -604,6 +646,7 @@ if __name__ == "__main__":
     test_lap_table_best_star_survives_a_sort()
     test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip()
     test_lap_table_excluded_strip_hidden_on_a_clean_recording()
+    test_lap_table_excluded_strip_menu_hide_is_orthogonal_to_collapse()
     test_lap_table_best_colours_follow_the_palette_selector()
     test_brake_throttle_band_colour_follows_the_palette()
     test_consistency_pb_dot_colour_follows_the_palette()

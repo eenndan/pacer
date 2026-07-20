@@ -48,16 +48,29 @@ class CentralView(QWidget):
     # Emitted after any timing-line change (a user drag OR an Undo) so the window can refresh the
     # Edit ▸ Undo action's enabled state from the session's undo stack.
     timingEdited = Signal()
+    # Emitted (True = now collapsed) when the user collapses/expands the coaching panel in-place
+    # (chevron or header click), so the window can persist the choice across reloads. Re-emitted
+    # from the OpportunitiesPanel's own collapsed_changed.
+    coachingCollapsedChanged = Signal(bool)
 
     def __init__(self, session, paths: list[str], sidecar_path: str | None,
                  consistency_visible: bool, parent: QWidget | None = None,
-                 speed_unit: str | None = None):
+                 speed_unit: str | None = None, coaching_visible: bool = True,
+                 coaching_collapsed: bool = True, excluded_visible: bool = True):
         super().__init__(parent)
         # Read aliases of window-owned state; the view never reassigns these.
         self.session = session
         self._paths = list(paths)
         self._sidecar_path = sidecar_path
         self._consistency_visible = consistency_visible
+        # Left-column declutter (the "calm default"): the window holds the persisted show/hide +
+        # coaching-collapsed choices and passes them into each fresh view. Coaching ships shown but
+        # collapsed by default (so the calm default still exposes the one-click re-open header); the
+        # excluded strip ships shown (as its own collapsed one-liner). See _apply_coaching_visible /
+        # _apply_excluded_visible + the OpportunitiesPanel/LapTable collapse affordances.
+        self._coaching_visible = coaching_visible
+        self._coaching_collapsed = coaching_collapsed
+        self._excluded_visible = excluded_visible
         # Speed display unit (km/h default). The window passes the persisted choice and pushes
         # later flips via set_speed_unit; the hero #DiffBox reads it, sub-views hold their own copy.
         self._speed_unit = units.normalize_unit(speed_unit)
@@ -80,6 +93,11 @@ class CentralView(QWidget):
         self._poster_seek()
         # Apply the window-held consistency-visible choice to the fresh panel.
         self._apply_consistency_visible(refresh=False)
+        # Apply the window-held declutter choices (calm default): the coaching panel's whole-panel
+        # visibility (the chevron/collapse was already seeded at construction) and the excluded
+        # strip's visibility.
+        self._apply_coaching_visible()
+        self._apply_excluded_visible()
 
     # ------------------------------------------------------------------ lifecycle
     def dispose(self):
@@ -232,8 +250,11 @@ class CentralView(QWidget):
         # lost · reason) under the lap table, the same data the modal dialog shows. Visible by
         # default (the moat made the default screen), compact + collapsible. A corner-row click
         # ring-highlights its apex on the map (the Jump-to-corner detail action stays in the dialog).
-        self.opportunities = OpportunitiesPanel(self.session)
+        self.opportunities = OpportunitiesPanel(self.session,
+                                                collapsed=self._coaching_collapsed)
         self.opportunities.corner_clicked.connect(self.map.highlight_corner)
+        # Re-emit the in-place collapse so the window persists it (survives a reload).
+        self.opportunities.collapsed_changed.connect(self.coachingCollapsedChanged)
         # F6: the collapsible consistency strip under the opportunities panel (trend sparkline +
         # top-5 inconsistent corners); a corner-row click ring-highlights its apex on the map only.
         self.consistency = ConsistencyPanel(self.session)
@@ -567,6 +588,37 @@ class CentralView(QWidget):
         if refresh and self._consistency_visible:
             panel.refresh()  # ensure the shown stats are current for this session
         panel.setVisible(self._consistency_visible)
+
+    def set_coaching_visible(self, on: bool):
+        """Fully show/hide the whole coaching (Opportunities) panel — header included — from the
+        persistent View-menu item on the window. This composes cleanly with the in-place chevron:
+        a menu-hidden panel stays hidden regardless of its collapsed/expanded state, and re-showing
+        it restores whatever collapse state it held. Driven by the window's persisted choice."""
+        self._coaching_visible = bool(on)
+        self._apply_coaching_visible()
+
+    def _apply_coaching_visible(self):
+        """Apply _coaching_visible to the live coaching panel. No-op for a partially-built view."""
+        panel = getattr(self, "opportunities", None)
+        if panel is None:
+            return
+        panel.setVisible(self._coaching_visible)
+
+    def set_excluded_visible(self, on: bool):
+        """Fully show/hide the ⊘ excluded-laps strip from the persistent View-menu item on the
+        window. Independent of the strip's own collapsed/expanded one-liner: a menu-hidden strip
+        stays hidden regardless (and the strip is still auto-hidden when the session has no excluded
+        laps — see LapTable._refresh_excluded)."""
+        self._excluded_visible = bool(on)
+        self._apply_excluded_visible()
+
+    def _apply_excluded_visible(self):
+        """Push _excluded_visible to the lap table's excluded strip. No-op for a partially-built
+        view without the table."""
+        table = getattr(self, "table", None)
+        if table is None:
+            return
+        table.set_excluded_visible(self._excluded_visible)
 
     # --------------------------------------------------------- chapter banner
     def _update_chapter_label(self, chapter_index: int):

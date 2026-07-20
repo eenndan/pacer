@@ -808,7 +808,11 @@ def test_l2_zero_rounding_rows_are_not_shown_opportunities():
 
 def test_p1_summary_grammar_by_count():
     """P1: the panel's headline summary phrases by COUNT — one shown corner reads "in your worst
-    corner" (never the ungrammatical "across the top 1"); several read "across your top N corners"."""
+    corner" (never the ungrammatical "across the top 1"); several read "across your top N corners".
+
+    Declutter PR: the panel now ships COLLAPSED by default, so its summary label leads with a
+    "Coaching · " prefix (the thin header is a self-labelling re-open affordance). The COUNT phrasing
+    is unchanged and is what we assert as a substring."""
     _qapp()
     from studio.coaching_panel import OpportunitiesPanel
     corners = _corners(3)
@@ -947,6 +951,60 @@ def test_panel_refresh_swaps_between_states():
     assert panel.body.currentIndex() == 0, "refresh must surface the rows once the laps qualify"
     assert panel.table.rowCount() >= 1
     print("ok panel: refresh swaps excluded <-> populated off the live session")
+
+
+def test_panel_collapsed_by_default_and_chevron_toggles_it():
+    """Declutter PR (the "calm default"): the coaching panel ships COLLAPSED — its body hidden, the
+    header (with the "Coaching · <headline>" summary) still visible as the one-click re-open
+    affordance. Clicking the chevron expands it (body shown, summary drops the prefix) and collapses
+    it again, and each in-place toggle emits collapsed_changed so the window can persist the choice."""
+    _qapp()
+    from studio.coaching_panel import OpportunitiesPanel
+    s = _stadium_session()
+    panel = OpportunitiesPanel(s)  # default collapsed=True
+    # Collapsed by default: body hidden, header still visible, summary carries the re-open prefix.
+    # isVisibleTo(panel) reports RELATIVE visibility (the body/header vs the panel), independent of
+    # whether the unparented panel itself is shown on screen — so it reflects the collapse state.
+    assert panel.is_collapsed(), "the coaching panel must ship collapsed (the calm default)"
+    assert not panel.body.isVisibleTo(panel), "collapsed -> the body is hidden"
+    assert panel._header.isVisibleTo(panel), "the header stays as the re-open affordance"
+    assert panel.summary_label.text().startswith("Coaching · "), panel.summary_label.text()
+    assert "corner" in panel.summary_label.text(), "the collapsed summary reads the headline"
+
+    # Each toggle emits collapsed_changed (the window persists it).
+    seen = []
+    panel.collapsed_changed.connect(lambda c: seen.append(c))
+
+    # Expand via the chevron: body shown, summary drops the "Coaching · " prefix (title says it).
+    panel.collapse_btn.setChecked(False)
+    assert not panel.is_collapsed()
+    assert panel.body.isVisibleTo(panel), "expanded -> the body is shown"
+    assert not panel.summary_label.text().startswith("Coaching · "), panel.summary_label.text()
+    assert seen == [False], seen
+
+    # Collapse again via the header click (the whole bar is a click target).
+    panel._toggle_collapsed()
+    assert panel.is_collapsed()
+    assert not panel.body.isVisibleTo(panel)
+    assert panel.summary_label.text().startswith("Coaching · ")
+    assert seen == [False, True], seen
+    print("ok panel: collapsed-by-default; chevron/header toggle + collapsed_changed emitted")
+
+
+def test_panel_built_expanded_when_asked():
+    """The collapsed default is a PARAMETER, not hard-wired: OpportunitiesPanel(s, collapsed=False)
+    builds expanded (body visible) and fires NO collapsed_changed at construction (the initial state
+    is applied quietly)."""
+    _qapp()
+    from studio.coaching_panel import OpportunitiesPanel
+    s = _stadium_session()
+    seen = []
+    panel = OpportunitiesPanel(s, collapsed=False)
+    panel.collapsed_changed.connect(lambda c: seen.append(c))
+    assert not panel.is_collapsed(), "collapsed=False must build expanded"
+    assert panel.body.isVisibleTo(panel)
+    assert seen == [], "building must not emit collapsed_changed"
+    print("ok panel: collapsed=False builds expanded, no construction-time signal")
 
 
 def _gate_session():
