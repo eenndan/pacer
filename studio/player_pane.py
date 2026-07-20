@@ -117,6 +117,9 @@ class PlayerPane(QWidget):
     durationChanged = Signal("qlonglong")
     # True while a cross-chapter switch is reopening the next chapter (shell shows a brief loading hint).
     seamLoading = Signal(bool)
+    # A double-click landed on the VIDEO CONTENT itself (not a panel header) — the shell turns this
+    # into the "make the video fill the screen" (video-focus) toggle, like a normal video player.
+    videoDoubleClicked = Signal()
 
     def __init__(self, source: str | chapters.ChapterMap | None):
         super().__init__()
@@ -377,6 +380,12 @@ class PlayerPane(QWidget):
         # re-pin on video widget resize/move
         if obj is self.video and event.type() in (QEvent.Resize, QEvent.Move):
             self._sync_gmeter()
+        # A double-click on the video CONTENT (the QVideoWidget surface / its null stand-in) is the
+        # "make the video fill the screen" gesture — emit it for the shell to route (mirrors the
+        # panel-header dblclick-to-maximize, but on the video itself, like a normal player).
+        elif obj is self.video and event.type() == QEvent.MouseButtonDblClick:
+            self.videoDoubleClicked.emit()
+            return True
         return super().eventFilter(obj, event)
 
     def moveEvent(self, event):

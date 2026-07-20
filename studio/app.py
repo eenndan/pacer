@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QActionGroup, QDesktopServices, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -506,6 +506,9 @@ class StudioWindow(QMainWindow):
         self.view.timingEdited.connect(self._sync_edit_menu)
         # Persist an in-place coaching collapse/expand (chevron or header click) across reloads.
         self.view.coachingCollapsedChanged.connect(self._on_coaching_collapsed)
+        # Video focus (⤢ / double-click the video): the view maximized the video panel; the window
+        # goes native-fullscreen (True) / normal (False) so the video fills the whole screen.
+        self.view.videoFocusChanged.connect(self._on_video_focus_changed)
         self._sync_edit_menu()  # a fresh load has no prior edit -> Undo disabled
         self.setCentralWidget(self.view)
         # One ~30 Hz tick timer for the window's lifetime, created once and reused across reloads (a
@@ -668,6 +671,16 @@ class StudioWindow(QMainWindow):
         # its body. Both default SHOWN (the calm default keeps the re-open header visible) — coaching
         # ships collapsed, excluded ships as its own one-liner.
         view_menu = self.menuBar().addMenu("&View")
+        # Whole-window full screen (the native macOS ⌘⌃F): a checkable toggle whose text flips
+        # Enter/Exit. The macOS green traffic-light already gives native fullscreen for a QMainWindow;
+        # this is the menu item + keyboard shortcut on top of it, kept in sync via changeEvent. Esc
+        # also exits (keyPressEvent). Parented to the persistent window so it survives every view swap.
+        self._fullscreen_action = view_menu.addAction("Enter Full Screen")
+        self._fullscreen_action.setShortcut(QKeySequence.FullScreen)  # ⌘⌃F on macOS
+        self._fullscreen_action.setToolTip(
+            "Show pacer full screen (⌘⌃F). Press Esc or ⌘⌃F again to exit.")
+        self._fullscreen_action.triggered.connect(self._toggle_fullscreen)
+        view_menu.addSeparator()
         self._coaching_action = view_menu.addAction("Show coaching panel")
         self._coaching_action.setCheckable(True)
         self._coaching_action.setChecked(self._coaching_visible)
@@ -809,9 +822,64 @@ class StudioWindow(QMainWindow):
         if view is not None:
             fn(view.video)
 
+    # ----------------------------------------------------- full screen (window + video focus)
+    def _toggle_fullscreen(self):
+        """View ▸ Enter/Exit Full Screen (⌘⌃F): flip the whole window between fullscreen and normal.
+        The menu text + the native state stay in sync via changeEvent (which fires for both this and
+        the green traffic-light button / a video-focus exit)."""
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def _sync_fullscreen_action_text(self):
+        """Keep the View menu item's text (Enter/Exit Full Screen) matching the window's real state —
+        driven from changeEvent so it tracks the menu item, the green button, ⌘⌃F, Esc and a
+        video-focus exit alike. Guarded: changeEvent can fire before the menu is built."""
+        action = getattr(self, "_fullscreen_action", None)
+        if action is not None:
+            action.setText("Exit Full Screen" if self.isFullScreen() else "Enter Full Screen")
+
+    def _on_video_focus_changed(self, focused: bool):
+        """The current view toggled VIDEO FOCUS (⤢ / double-click the video): it has already
+        maximized the video panel; put the WINDOW into fullscreen (True) / normal (False) so the
+        maximized video fills the whole screen with no chrome. Only ever touches the window's own
+        fullscreen state — the panel maximize/restore lives entirely in the view."""
+        if focused:
+            if not self.isFullScreen():
+                self.showFullScreen()
+        else:
+            if self.isFullScreen():
+                self.showNormal()
+
+    def changeEvent(self, event):
+        """Track window-state changes so the View menu's Enter/Exit text (and, when the user leaves
+        fullscreen by any means while video focus is on, the view's focus state) stay consistent —
+        whichever path toggled fullscreen (menu, ⌘⌃F, the green button, Esc, or the ⤢ gesture)."""
+        if event.type() == QEvent.WindowStateChange:
+            self._sync_fullscreen_action_text()
+            # If the user left fullscreen by a native means (green button / window manager) while
+            # video focus was on, the video is still panel-maximized — restore it so the two never
+            # drift apart. set_video_focus(False) is a no-op when focus wasn't active.
+            view = getattr(self, "view", None)
+            if (view is not None and not self.isFullScreen()
+                    and getattr(view, "is_video_focused", lambda: False)()):
+                view.set_video_focus(False)
+        super().changeEvent(event)
+
     def keyPressEvent(self, event):
-        """←/→ step the video ±1 s (Shift ±5 s). Handled here, not as a QShortcut, so the lap table
-        keeps arrow nav; keyPressEvent only fires when the focus widget didn't use the key."""
+        """←/→ step the video ±1 s (Shift ±5 s). Esc exits fullscreen / video focus. Handled here,
+        not as a QShortcut, so the lap table keeps arrow nav; keyPressEvent only fires when the focus
+        widget didn't use the key."""
+        if event.key() == Qt.Key_Escape and self.isFullScreen():
+            # Exit video focus if it's on (which also leaves fullscreen), else just leave fullscreen.
+            view = getattr(self, "view", None)
+            if view is not None and view.is_video_focused():
+                view.set_video_focus(False)
+            else:
+                self.showNormal()
+            event.accept()
+            return
         if event.key() in (Qt.Key_Left, Qt.Key_Right):
             step = 5.0 if event.modifiers() & Qt.ShiftModifier else 1.0
             sign = 1.0 if event.key() == Qt.Key_Right else -1.0

@@ -1394,11 +1394,13 @@ class _FakeView:
         type(self).n_built += 1
         self.disposed = False
         self.video = SimpleNamespace(name=f"video#{type(self).n_built}")
-        # The real CentralView exposes `timingEdited` + `coachingCollapsedChanged` signals that
-        # _build_ui connects (Edit ▸ Undo enablement / persisting the coaching collapse); the swap
-        # test only needs a .connect() no-op for each.
+        # The real CentralView exposes `timingEdited` + `coachingCollapsedChanged` +
+        # `videoFocusChanged` signals that _build_ui connects (Edit ▸ Undo enablement / persisting the
+        # coaching collapse / driving the window fullscreen for video focus); the swap test only needs
+        # a .connect() no-op for each.
         self.timingEdited = SimpleNamespace(connect=lambda *_a, **_k: None)
         self.coachingCollapsedChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
+        self.videoFocusChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
 
     def dispose(self):
         self.disposed = True

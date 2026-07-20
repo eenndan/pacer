@@ -561,7 +561,11 @@ QMenu::separator {{
     margin: 4px 8px;
 }}
 
-/* ---------------------------------------------------------------- splitter */
+/* ---------------------------------------------------------------- splitter
+   Wider handles (10px) with a visible centred GRIP so every divider — the video/table split,
+   the map/plots split, the left/right split — reads as draggable (the user "couldn't resize the
+   video" partly because the old 6px hairline was hard to grab). The grip is a short, strong
+   centred bar drawn as the handle's own border block; hover brightens it. Kept subtle + on-theme. */
 QSplitter {{
     background-color: {C.canvas};
 }}
@@ -569,16 +573,18 @@ QSplitter::handle {{
     background-color: {C.canvas};
 }}
 QSplitter::handle:horizontal {{
-    width: 6px;
-    /* a thin visible hairline centred in the 6px hit area */
-    border-left: 1px solid {C.border};
+    width: 10px;
+    /* a strong centred grip bar (border block) inset top/bottom so it reads as a short handle */
+    border-left: 3px solid {C.border_strong};
+    margin: 24px 3px;
 }}
 QSplitter::handle:vertical {{
-    height: 6px;
-    border-top: 1px solid {C.border};
+    height: 10px;
+    border-top: 3px solid {C.border_strong};
+    margin: 3px 24px;
 }}
 QSplitter::handle:hover {{
-    border-color: {C.border_strong};
+    border-color: {C.accent};
 }}
 
 /* ---------------------------------------------------------------- scrollbars */

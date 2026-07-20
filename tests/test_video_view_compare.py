@@ -345,6 +345,42 @@ def test_d1_step_routes_through_fanout():
     print(f"test_d1_step_routes_through_fanout OK: step fanned {fanned}")
 
 
+# --------------------------------------------------------------- fullscreen-video (⤢) transport button
+def test_fullscreen_button_present_and_emits_video_focus_intent():
+    """The transport bar carries a checkable ⤢ button whose CLICK emits videoFocusRequested (the
+    pure input intent, like compare_btn), and set_video_focus_visual reflects the on/off state back
+    WITHOUT re-emitting (the controller→view reflection, mirroring _set_compare_visual). A double-click
+    on the primary video content also emits the same intent."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    view = VideoView(_cmap("PRIMARY"))
+    assert hasattr(view, "fullscreen_btn"), "the transport bar must carry the ⤢ button"
+    assert view.fullscreen_btn.isCheckable()
+
+    intents = []
+    view.videoFocusRequested.connect(lambda: intents.append(True))
+
+    # A genuine click emits the intent exactly once.
+    view.fullscreen_btn.click()
+    assert intents == [True], f"the ⤢ click must emit videoFocusRequested once (got {intents})"
+
+    # The visual-reflection setter must NOT re-emit the intent (no feedback loop).
+    intents.clear()
+    view.set_video_focus_visual(True)
+    assert intents == [], "set_video_focus_visual must not re-emit videoFocusRequested"
+    assert view.fullscreen_btn.isChecked() is True
+    view.set_video_focus_visual(False)
+    assert view.fullscreen_btn.isChecked() is False and intents == []
+
+    # A double-click on the PRIMARY video content emits the same intent (the pane's event filter).
+    intents.clear()
+    _APP.sendEvent(view.pane.video, QMouseEvent(
+        QEvent.MouseButtonDblClick, QPointF(4, 4), Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    assert intents == [True], f"a video-content double-click must emit the intent (got {intents})"
+    print("test_fullscreen_button_present_and_emits_video_focus_intent OK")
+
+
 # --------------------------------------------------------------- Issue 1+3 real media (opt-in)
 def _d24():
     """The D24 cross-recording media for the OPT-IN real-media proof. Skipped unless
@@ -439,6 +475,7 @@ def _run_all():
     # D1: the global slider + ←/→ arrows fan the seek out to pane B (distance-lock entry point).
     test_d1_slider_move_fans_out_to_pane_b_in_compare()
     test_d1_step_routes_through_fanout()
+    test_fullscreen_button_present_and_emits_video_focus_intent()
     test_real_media_pane_b_is_reference_at_lap_start()
     print("ALL VIDEO-VIEW COMPARE TESTS PASSED")
 
