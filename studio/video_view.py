@@ -247,6 +247,10 @@ class VideoView(QWidget):
     # A pane's lap picker was used: (side, lap_id) — app repoints that side (lap+window+caption+
     # chart overlay + badge). side is PRIMARY (0) or SECONDARY (1).
     paneRepointRequested = Signal(int, int)
+    # User asked to toggle "video focus" — make the video fill the whole screen (the ⤢ transport
+    # button OR a double-click on the video content). CentralView owns the enter/exit; the shell only
+    # forwards the intent (mirrors compareToggled's input-only contract).
+    videoFocusRequested = Signal()
 
     def __init__(self, source: str | chapters.ChapterMap | None):
         super().__init__()
@@ -259,6 +263,9 @@ class VideoView(QWidget):
         self.pane.playbackStateChanged.connect(self._on_state)
         # Forward only the PRIMARY pane's seam-reopen hint (the secondary is video-only).
         self.pane.seamLoading.connect(self.seamLoading)
+        # A double-click on the PRIMARY video content requests video focus (make the video fill the
+        # screen). Only the primary drives it; the secondary is video-only and never toggles focus.
+        self.pane.videoDoubleClicked.connect(self.videoFocusRequested)
 
         # PRIMARY pane's lap window while in compare mode, else None. Confines the scrub slider to
         # lap A; the pair stays in sync only via _compare_seek_fanout (the window alone doesn't).
@@ -323,6 +330,16 @@ class VideoView(QWidget):
         self.compare_btn.toggled.connect(self.compareToggled)               # emit the user intent
         self._set_compare_btn_appearance(False)
 
+        # "Fullscreen video" toggle (⤢): make the video fill the whole screen, like a normal player.
+        # A pure INPUT (mirrors compare_btn): a click just emits videoFocusRequested; CentralView owns
+        # the enter/exit and reflects the resulting on/off appearance back via set_video_focus_visual.
+        self.fullscreen_btn = QPushButton()
+        self.fullscreen_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
+        self.fullscreen_btn.setFixedSize(_ICON_BTN)
+        self.fullscreen_btn.setCheckable(True)
+        self.fullscreen_btn.clicked.connect(self.videoFocusRequested)  # a genuine click = the intent
+        self._set_fullscreen_btn_appearance(False)
+
         # global-ms scrub slider over the whole session (multi-chapter summed); _LapRulerSlider
         # paints lap ticks.
         self.slider = _LapRulerSlider(Qt.Horizontal)
@@ -339,7 +356,8 @@ class VideoView(QWidget):
 
         # The transport controls must never take keyboard focus, or they'd swallow Space/arrows and
         # break the window-level shortcuts (mouse interaction needs no focus).
-        for w in (self.play_btn, self.mute_btn, self.gmeter_btn, self.compare_btn, self.slider):
+        for w in (self.play_btn, self.mute_btn, self.gmeter_btn, self.compare_btn,
+                  self.fullscreen_btn, self.slider):
             w.setFocusPolicy(Qt.NoFocus)
 
         row = QHBoxLayout()
@@ -347,6 +365,7 @@ class VideoView(QWidget):
         row.addWidget(self.mute_btn)
         row.addWidget(self.gmeter_btn)
         row.addWidget(self.compare_btn)
+        row.addWidget(self.fullscreen_btn)
         row.addWidget(self.slider, 1)
 
         self.readout = QLabel("")  # F2: time / speed / current lap, driven by app
@@ -505,6 +524,27 @@ class VideoView(QWidget):
             self.compare_btn.setChecked(on)
             self.compare_btn.blockSignals(False)
         self._set_compare_btn_appearance(on)
+
+    # ------------------------------------------------------------- fullscreen-video toggle
+    def _set_fullscreen_btn_appearance(self, on: bool):
+        """Drive the ⤢ button's OFF/ON glyph + tooltip to track video-focus state. `ph.arrows-in`
+        (contract) reads as "exit fullscreen" while on; `ph.arrows-out` (expand) as "enter"."""
+        self.fullscreen_btn.setIcon(theme.icon(
+            "ph.arrows-in" if on else "ph.arrows-out",
+            color=theme.C.accent if on else None))
+        self.fullscreen_btn.setToolTip(
+            "Exit fullscreen video (Esc, or double-click the video)" if on else
+            "Make the video fill the screen (or double-click the video)")
+
+    def set_video_focus_visual(self, on: bool):
+        """Reflect CentralView's video-focus state onto the ⤢ button WITHOUT re-emitting
+        videoFocusRequested (a live emit would re-enter the toggle). Called only by the shell when it
+        drives the enter/exit — mirrors _set_compare_visual's controller→view reflection."""
+        if self.fullscreen_btn.isChecked() != on:
+            self.fullscreen_btn.blockSignals(True)
+            self.fullscreen_btn.setChecked(on)
+            self.fullscreen_btn.blockSignals(False)
+        self._set_fullscreen_btn_appearance(on)
 
     def set_compare(self, pane_a: PaneSpec, pane_b: PaneSpec):
         """Enter or re-seed compare mode: swap the single pane for a 2-pane QSplitter. pane_a is the

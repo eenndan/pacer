@@ -163,6 +163,36 @@ def _pump(deadline_s: float, until):
     return until()
 
 
+def _studiowindow_with_view(*, build_menu: bool = False):
+    """A REAL StudioWindow around the synthetic 2-lap CentralView, built exactly as the QTimer test
+    does (StudioWindow.__new__ + the real _build_ui, so the production tick timer + video-focus
+    wiring are present) — optionally with the real _build_menu so the View ▸ Full Screen action
+    exists. Returns (win, view). No real Session.load / media file (PACER_NO_MEDIA)."""
+    from studio.app import StudioWindow
+
+    _view, s, _t0, _t1 = _real_central_view()
+    win = StudioWindow.__new__(StudioWindow)
+    QMainWindow.__init__(win)
+    win.view = None
+    win._tick_timer = None
+    win._consistency_visible = False
+    win._coaching_visible = True
+    win._coaching_collapsed = True
+    win._excluded_visible = True
+    win._speed_unit = "kmh"
+    win._colorblind = False           # _build_menu reads this for the colour-blind toggle
+    win.session = s
+    win._paths = ["/tmp/stadium.MP4"]
+    win._sidecar_path = None
+    win._ref_chip = None
+    win._sync_full_recording_action = lambda: None
+    win._update_reference_status = lambda: None
+    if build_menu:
+        win._build_menu()             # the persistent menu bar (incl. View ▸ Enter Full Screen)
+    win._build_ui()                   # fresh real CentralView + the production tick timer + wiring
+    return win, win.view
+
+
 # ============================================================ real QTimer + real tick
 def test_real_qtimer_fires_view_tick_through_studiowindow():
     """The ~30 Hz tick is a REAL QTimer on StudioWindow (33 ms, started in _build_ui) delegating to
@@ -561,6 +591,169 @@ def test_opportunities_panel_persistent_and_visible_by_default():
     print("test_opportunities_panel_persistent_and_visible_by_default OK")
 
 
+# ============================================================ full screen (window + video focus)
+def test_window_fullscreen_toggle_and_menu_text_and_esc():
+    """View ▸ Enter/Exit Full Screen (⌘⌃F): the menu action flips the window's real fullscreen state,
+    its TEXT toggles Enter↔Exit (kept in sync via changeEvent), and Esc exits fullscreen. Built with
+    the real menu so the _fullscreen_action exists (⌘⌃F = QKeySequence.FullScreen)."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent, QKeySequence
+
+    win, _view = _studiowindow_with_view(build_menu=True)
+    act = win._fullscreen_action
+    assert act.text() == "Enter Full Screen", act.text()
+    # The native fullscreen shortcut is bound (⌘⌃F on macOS).
+    assert act.shortcut() == QKeySequence(QKeySequence.FullScreen), act.shortcut().toString()
+    assert not win.isFullScreen()
+
+    # Trigger the menu action -> window goes fullscreen, text flips to Exit (changeEvent synced it).
+    act.trigger()
+    _APP.processEvents()
+    assert win.isFullScreen(), "the menu action must put the window into full screen"
+    assert act.text() == "Exit Full Screen", act.text()
+
+    # Esc exits fullscreen (keyPressEvent), text flips back to Enter.
+    esc = QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
+    win.keyPressEvent(esc)
+    _APP.processEvents()
+    assert not win.isFullScreen(), "Esc must exit full screen"
+    assert act.text() == "Enter Full Screen", act.text()
+
+    # Triggering again re-enters, and a second trigger exits (idempotent toggle).
+    act.trigger()
+    _APP.processEvents()
+    assert win.isFullScreen()
+    act.trigger()
+    _APP.processEvents()
+    assert not win.isFullScreen()
+    print("test_window_fullscreen_toggle_and_menu_text_and_esc OK")
+
+
+def test_video_focus_enters_and_restores_cleanly():
+    """The "fullscreen video" gesture (the ⤢ button / a double-click on the video): entering
+    MAXIMIZES the video panel into the grid + puts the window fullscreen; exiting RESTORES the video
+    panel back into _left_splitter at index 0 at its original sizes, clears the maximize snapshot, and
+    leaves the window normal — no crash, clean restore (mechanics only; the media frame is inert
+    under PACER_NO_MEDIA)."""
+    win, view = _studiowindow_with_view()
+    win.resize(1400, 900)
+    win.show()
+    _APP.processEvents()
+    vp = view._video_panel
+    # BEFORE: the video panel is index 0 of the left splitter, nothing maximized, focus off.
+    assert view._left_splitter.indexOf(vp) == 0
+    assert view._maximized_panel is None
+    assert view.is_video_focused() is False
+    assert view.video.fullscreen_btn.isChecked() is False
+    left_before = view._left_splitter.sizes()
+    main_before = view._main_splitter.sizes()
+
+    # ENTER video focus (the toggle the ⤢ button + double-click both call).
+    view.toggle_video_focus()
+    _APP.processEvents()
+    assert view.is_video_focused() is True
+    assert win.isFullScreen() is True, "entering video focus must put the window full screen"
+    assert view._maximized_panel is vp, "the video panel must be maximized in the grid"
+    assert view.video.fullscreen_btn.isChecked() is True, "the ⤢ button reflects the on state"
+    # The video quadrant now fills its column + row (the sibling sections collapsed to 0).
+    assert view._left_splitter.sizes()[1] == 0, view._left_splitter.sizes()
+    assert view._main_splitter.sizes()[1] == 0, view._main_splitter.sizes()
+
+    # EXIT video focus -> clean restore of geometry + parenting + window state.
+    view.toggle_video_focus()
+    _APP.processEvents()
+    assert view.is_video_focused() is False
+    assert win.isFullScreen() is False, "exiting video focus must return the window to normal"
+    assert view._left_splitter.indexOf(vp) == 0, "the video panel is back in its splitter slot"
+    assert vp.parent() is view._left_splitter, "the video panel is re-homed in the left splitter"
+    assert view._maximized_panel is None, "the maximize snapshot is cleared on exit"
+    assert view._saved_splitter_sizes is None
+    # The grid is restored (not the collapsed [x, 0]) — both sections carry height/width again. The
+    # load-bearing invariant is that the sibling is UN-COLLAPSED and the grid ratio matches the
+    # pre-focus grid; absolute pixels aren't asserted because showFullScreen/showNormal rescales the
+    # window, so Qt proportionally re-flows the splitters on the way back.
+    left_after = view._left_splitter.sizes()
+    main_after = view._main_splitter.sizes()
+    assert left_after[1] > 0 and main_after[1] > 0, "the collapsed siblings must be restored"
+
+    def _ratio(sizes):
+        total = sum(sizes) or 1
+        return sizes[0] / total
+    assert abs(_ratio(left_after) - _ratio(left_before)) < 0.1, (left_after, left_before)
+    assert abs(_ratio(main_after) - _ratio(main_before)) < 0.1, (main_after, main_before)
+    assert view.video.fullscreen_btn.isChecked() is False
+    print("test_video_focus_enters_and_restores_cleanly OK")
+
+
+def test_transport_fullscreen_button_and_video_dblclick_trigger_focus():
+    """The ⤢ transport button AND a double-click on the video CONTENT both toggle video focus (the
+    two affordances the user reaches for). Each enters + exits, restoring cleanly, with the button
+    state reflecting the mode."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    win, view = _studiowindow_with_view()
+    btn = view.video.fullscreen_btn
+    vp = view._video_panel
+
+    # The transport ⤢ button: a click enters, a second click exits.
+    btn.click()
+    _APP.processEvents()
+    assert view.is_video_focused() is True and win.isFullScreen() is True
+    assert btn.isChecked() is True
+    btn.click()
+    _APP.processEvents()
+    assert view.is_video_focused() is False and win.isFullScreen() is False
+    assert view._left_splitter.indexOf(vp) == 0 and view._maximized_panel is None
+
+    # A double-click on the video content (routed through the pane's event filter -> videoDoubleClicked
+    # -> VideoView.videoFocusRequested -> CentralView.toggle_video_focus) enters focus.
+    dbl = QMouseEvent(QEvent.MouseButtonDblClick, QPointF(5, 5),
+                      Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    _APP.sendEvent(view.video.pane.video, dbl)
+    _APP.processEvents()
+    assert view.is_video_focused() is True, "double-clicking the video content must enter focus"
+    assert win.isFullScreen() is True and btn.isChecked() is True
+    # Another double-click exits + restores.
+    _APP.sendEvent(view.video.pane.video, QMouseEvent(
+        QEvent.MouseButtonDblClick, QPointF(5, 5), Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    _APP.processEvents()
+    assert view.is_video_focused() is False and win.isFullScreen() is False
+    assert view._left_splitter.indexOf(vp) == 0 and view._maximized_panel is None
+    print("test_transport_fullscreen_button_and_video_dblclick_trigger_focus OK")
+
+
+def test_video_focus_disabled_while_comparing():
+    """Video focus is single-video only: while comparing (the two-pane stage), the ⤢ gesture is a
+    no-op, and turning compare ON while focused exits focus first (the maximize can't frame the
+    compare stage)."""
+    win, view = _studiowindow_with_view()
+    # Enter compare, then try to focus -> no-op (stays a two-pane stage, not fullscreen).
+    view.video.compare_btn.click()
+    _APP.processEvents()
+    assert view.compare.active is True
+    view.toggle_video_focus()
+    assert view.is_video_focused() is False, "video focus must be a no-op while comparing"
+    assert win.isFullScreen() is False
+
+    # Exit compare, focus, then entering compare again must exit focus + restore the window.
+    view.video.compare_btn.click()
+    _APP.processEvents()
+    assert view.compare.active is False
+    view.toggle_video_focus()
+    _APP.processEvents()
+    assert view.is_video_focused() is True and win.isFullScreen() is True
+    view.video.compare_btn.click()  # compare ON -> must drop focus
+    _APP.processEvents()
+    assert view.compare.active is True
+    assert view.is_video_focused() is False, "entering compare must exit video focus"
+    assert win.isFullScreen() is False, "exiting focus for compare returns the window to normal"
+    assert view._maximized_panel is None, "the video maximize is restored when focus drops"
+    view.video.compare_btn.click()  # tidy: leave compare
+    _APP.processEvents()
+    print("test_video_focus_disabled_while_comparing OK")
+
+
 def _run_all():
     test_real_qtimer_fires_view_tick_through_studiowindow()
     test_position_signal_then_real_tick_applies_once_and_is_stable()
@@ -574,6 +767,10 @@ def _run_all():
     test_delta_to_ideal_tooltips_are_honest_not_best_sector()
     test_grip_map_reachable_via_labelled_combo()
     test_opportunities_panel_persistent_and_visible_by_default()
+    test_window_fullscreen_toggle_and_menu_text_and_esc()
+    test_video_focus_enters_and_restores_cleanly()
+    test_transport_fullscreen_button_and_video_dblclick_trigger_focus()
+    test_video_focus_disabled_while_comparing()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 

@@ -52,6 +52,12 @@ class CentralView(QWidget):
     # (chevron or header click), so the window can persist the choice across reloads. Re-emitted
     # from the OpportunitiesPanel's own collapsed_changed.
     coachingCollapsedChanged = Signal(bool)
+    # Emitted (True = entering) when the user toggles VIDEO FOCUS (the ⤢ button / a double-click on
+    # the video). The view has already maximized the video panel into the grid; the window responds
+    # by going fullscreen (True) / normal (False) so the maximized video fills the whole SCREEN with
+    # no window chrome — the "fullscreen video" gesture, built on the proven maximize + native-
+    # fullscreen paths (no risky reparenting of the live media surface).
+    videoFocusChanged = Signal(bool)
 
     def __init__(self, session, paths: list[str], sidecar_path: str | None,
                  consistency_visible: bool, parent: QWidget | None = None,
@@ -409,6 +415,10 @@ class CentralView(QWidget):
         self.video.positionChanged.connect(self._on_position)
         self.map.timing_lines_changed.connect(self._on_lines)
         self.table.laps_selected.connect(self._on_user_select)
+        # Video focus (the ⤢ button / a double-click on the video): toggle the "fill the screen"
+        # gesture. False until the user asks for it.
+        self._video_focused = False
+        self.video.videoFocusRequested.connect(self.toggle_video_focus)
 
     # ----------------------------------------------------- build phase 4: controllers
     def _build_controllers(self):
@@ -448,6 +458,10 @@ class CentralView(QWidget):
         # no-ops outside compare, so wiring it once here is safe).
         self.video.set_compare_seek_fanout(self.compare.fanout_seek_b)
         self.video.compareToggled.connect(self.compare.on_toggled)
+        # Compare owns the two-pane stage, which the video-focus maximize can't sensibly frame, so a
+        # compare-ON exits video focus first (wired AFTER on_toggled so compare has already entered
+        # when this runs, and set_video_focus's compare-guard no longer blocks the exit).
+        self.video.compareToggled.connect(self._exit_video_focus_on_compare)
         self.video.paneRepointRequested.connect(self.compare.on_pane_repoint)
         self.plots.scrubStarted.connect(self.scrub.on_started)
         self.plots.scrubMoved.connect(self.scrub.on_moved)
@@ -527,6 +541,55 @@ class CentralView(QWidget):
         self._right_splitter.setSizes(sizes[2])
         self._maximized_panel = None
         self._saved_splitter_sizes = None
+
+    # ----------------------------------------------------- video focus ("fullscreen video")
+    def toggle_video_focus(self):
+        """Toggle "video focus" — make the video fill the whole SCREEN (a normal-player gesture),
+        reached from the ⤢ transport button OR a double-click on the video content, and exited by
+        either of those again (or Esc, via the window).
+
+        Approach (the ROBUST one, no risky reparenting of the live media surface): MAXIMIZE the video
+        panel into the existing grid via the proven `_toggle_panel_maximized(self._video_panel)` AND
+        ask the window to go native-fullscreen (videoFocusChanged). Together the video fills the
+        screen with no chrome; the inverse restores the exact pre-focus grid + window state. Both
+        paths already restore cleanly (the maximize snapshots/restores splitter sizes; native
+        fullscreen is symmetric), and the g-meter overlay — pinned to the video corner by the pane's
+        own hooks — re-pins on the resulting resize.
+
+        DISABLED while comparing: compare owns the two-pane stage + the maximize machinery would only
+        grow the video quadrant of the grid, not the compare stage — so keep the gesture single-video
+        only (the simplest sane behaviour). No-op then."""
+        self.set_video_focus(not self._video_focused)
+
+    def set_video_focus(self, on: bool):
+        """Enter (True) / exit (False) video focus. Idempotent; a no-op enter while comparing (see
+        toggle_video_focus). Drives the panel maximize + the window fullscreen together and reflects
+        the resulting state onto the ⤢ button."""
+        on = bool(on)
+        if on == self._video_focused:
+            return
+        if on and self._comparing():
+            return  # single-video only — compare owns the stage
+        # MAXIMIZE/RESTORE the video panel in the grid (the proven path; toggles to the same state).
+        # Guarded: only drive the maximize when it actually needs to change so a stale snapshot can't
+        # leak (enter maximizes iff not already maximized to the video; exit restores iff it is).
+        if on and self._maximized_panel is not self._video_panel:
+            self._toggle_panel_maximized(self._video_panel)
+        elif not on and self._maximized_panel is self._video_panel:
+            self._toggle_panel_maximized(self._video_panel)
+        self._video_focused = on
+        self.video.set_video_focus_visual(on)   # reflect onto the ⤢ button (no re-emit)
+        self.videoFocusChanged.emit(on)          # window goes fullscreen / normal
+
+    def is_video_focused(self) -> bool:
+        """True while video focus is active (the video is filling the screen)."""
+        return self._video_focused
+
+    def _exit_video_focus_on_compare(self, on: bool):
+        """Leave video focus when compare turns ON (the compare stage can't be framed by the
+        single-video maximize). No-op on compare-OFF or when focus wasn't active."""
+        if on and self._video_focused:
+            self.set_video_focus(False)
 
     # --------------------------------------------------------- consistency panel (F6)
     def set_speed_unit(self, unit: str):
