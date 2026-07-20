@@ -754,6 +754,72 @@ def test_video_focus_disabled_while_comparing():
     print("test_video_focus_disabled_while_comparing OK")
 
 
+def test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_state():
+    """Discoverable panel-maximize (the visible affordance for the dblclick-header gesture): each of
+    the four panel headers (video / table / map / plots) carries a maximize button wired to
+    _toggle_panel_maximized. Clicking it maximizes that panel (_maximized_panel becomes it) and the
+    button flips to the RESTORE glyph + tooltip; clicking again restores the grid (_maximized_panel
+    is None) and the button reverts to the MAXIMIZE glyph. The button's action stays DISTINCT from
+    the video transport's fullscreen ⤢ button (different glyph)."""
+    from studio.central_view import (
+        _MAXIMIZE_GLYPH,
+        _RESTORE_GLYPH,
+    )
+
+    view, _s, _t0, _t1 = _real_central_view()
+
+    # Every panel exposes a maximize button, registered against its own panel container.
+    pairs = [
+        (view._video_max_btn, view._video_panel),
+        (view._table_max_btn, view._table_panel),
+        (view._map_max_btn, view._map_panel),
+        (view._plots_max_btn, view._plots_panel),
+    ]
+    for btn, panel in pairs:
+        assert view._maximize_buttons.get(btn) is panel, "button must be registered to its panel"
+
+    # The panel-maximize button must NOT be the same action as the video transport's fullscreen ⤢
+    # button — a distinct glyph (fill the WINDOW quadrant vs fill the SCREEN).
+    assert _MAXIMIZE_GLYPH != "ph.arrows-out" and _RESTORE_GLYPH != "ph.arrows-in"
+
+    for btn, panel in pairs:
+        assert view._maximized_panel is None
+        max_tip = btn.toolTip()
+        assert "Maximize" in max_tip, max_tip
+
+        # Click -> this panel maximizes; the button reflects the restore state.
+        btn.click()
+        _APP.processEvents()
+        assert view._maximized_panel is panel, "clicking the header button maximizes that panel"
+        # Every OTHER button stays in the maximize state; only this one shows restore.
+        assert btn.toolTip() != max_tip and "Restore" in btn.toolTip(), btn.toolTip()
+        for other, _p in pairs:
+            if other is not btn:
+                assert "Maximize" in other.toolTip(), "siblings keep the maximize affordance"
+
+        # Click again -> restore; the button reverts.
+        btn.click()
+        _APP.processEvents()
+        assert view._maximized_panel is None, "clicking again restores the grid"
+        assert btn.toolTip() == max_tip, "the button reverts to the maximize tooltip"
+
+    # Double-clicking a header still maximizes the same panel (the pre-existing gesture the button
+    # merely makes visible) and the button reflects it.
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    header = view._map_panel.layout().itemAt(0).widget()
+    _APP.sendEvent(header, QMouseEvent(QEvent.MouseButtonDblClick, QPointF(2, 2),
+                                       Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    _APP.processEvents()
+    assert view._maximized_panel is view._map_panel, "dblclick-header still maximizes"
+    assert "Restore" in view._map_max_btn.toolTip(), "the button tracks a dblclick maximize too"
+    # tidy: restore
+    view._map_max_btn.click()
+    _APP.processEvents()
+    assert view._maximized_panel is None
+    print("test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_state OK")
+
+
 def _run_all():
     test_real_qtimer_fires_view_tick_through_studiowindow()
     test_position_signal_then_real_tick_applies_once_and_is_stable()
@@ -771,6 +837,7 @@ def _run_all():
     test_video_focus_enters_and_restores_cleanly()
     test_transport_fullscreen_button_and_video_dblclick_trigger_focus()
     test_video_focus_disabled_while_comparing()
+    test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_state()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 
