@@ -151,6 +151,25 @@ class _NumItem(QTableWidgetItem):
         return float(a) < float(b)
 
 
+class _ExcludedStrip(QWidget):
+    """The ⊘ excluded-laps strip container whose WHOLE surface is a click target: a left-click
+    toggles it between the collapsed one-liner and the full list (via the injected ``on_click``).
+    A plain, muted info strip — deliberately NOT a sortable lap row (a short excluded lap injected
+    as a row would sort to the top as the 'fastest')."""
+
+    def __init__(self, on_click):
+        super().__init__()
+        self._on_click = on_click
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._on_click()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class LapTable(QWidget):
     laps_selected = Signal(object)  # list[int]
 
@@ -264,20 +283,28 @@ class LapTable(QWidget):
 
     def _build_excluded_strip(self) -> QWidget:
         """A muted strip listing laps LEFT OUT of the times/bests by the median band (see
-        EXCLUDED_MARK). Hidden entirely when there are none (the clean, common case), so it adds
-        no chrome to a normal recording. Kept OUT of the sortable table on purpose — a short
-        excluded lap injected as a row would sort to the top as the 'fastest' and re-create the
-        very confusion the band filter removes."""
-        strip = QWidget()
+        EXCLUDED_MARK). COLLAPSED by default to a single muted one-liner ("⊘ N excluded ▸"); a
+        click on the header expands it to the full per-lap list and back. Hidden entirely when there
+        are none (the clean, common case), so it adds no chrome to a normal recording. Kept OUT of
+        the sortable table on purpose — a short excluded lap injected as a row would sort to the top
+        as the 'fastest' and re-create the very confusion the band filter removes.
+
+        The header is a click target (a plain muted info strip, NOT a sortable lap row): clicking it
+        toggles the collapse. The whole strip's VISIBILITY is a separate, orthogonal concern — the
+        View ▸ Show excluded laps menu toggle (set_excluded_visible) and the auto-hide when there
+        are no excluded laps — so a menu-hidden strip stays hidden regardless of collapse state."""
+        strip = _ExcludedStrip(self._toggle_excluded_collapsed)
         strip.setObjectName("LapExcludedStrip")
         strip.setStyleSheet(
             f"QWidget#LapExcludedStrip {{ border-top: 1px solid {theme.C.border}; }}")
         box = QVBoxLayout(strip)
         box.setContentsMargins(10, 6, 10, 8)
         box.setSpacing(2)
-        header = QLabel(f"{EXCLUDED_MARK} EXCLUDED")
-        header.setProperty("role", "BarLabel")  # the same small uppercase dimmed section type
-        header.setToolTip(EXCLUDED_TOOLTIP)
+        # The collapsed one-liner header ("⊘ N excluded ▸"): muted, uppercase section type, with the
+        # ▸/▾ chevron glyph telling which way a click goes. Text is set live by _refresh_excluded.
+        self._excluded_header = QLabel("")
+        self._excluded_header.setProperty("role", "BarLabel")
+        self._excluded_header.setToolTip(EXCLUDED_TOOLTIP)
         self._excluded_body = QLabel("")
         self._excluded_body.setWordWrap(True)
         self._excluded_body.setToolTip(EXCLUDED_TOOLTIP)
@@ -285,20 +312,50 @@ class LapTable(QWidget):
         # de-emphasised timing, so "not counted" reads consistently.
         self._excluded_body.setStyleSheet(
             f"color: {theme.PROVISIONAL_COLOR}; font-style: italic;")
-        box.addWidget(header)
+        box.addWidget(self._excluded_header)
         box.addWidget(self._excluded_body)
         self._excluded_strip = strip
+        # Two orthogonal flags: the median band produced excluded laps AND the user hasn't hidden the
+        # strip via the View menu. Default collapsed (the one-liner) + shown (when there are any).
+        self._excluded_collapsed = True     # the ⊘ N excluded ▸ one-liner (click to expand)
+        self._excluded_menu_visible = True  # the View ▸ Show excluded laps toggle
         strip.setVisible(False)
         return strip
 
+    def _toggle_excluded_collapsed(self):
+        """Header-click handler: flip the excluded strip between the collapsed one-liner and the
+        full per-lap list, then re-render. A plain info-strip affordance — it never selects a lap
+        or touches the sortable table."""
+        self._excluded_collapsed = not self._excluded_collapsed
+        self._refresh_excluded()
+
+    def set_excluded_visible(self, on: bool):
+        """View ▸ Show excluded laps: fully show/hide the ⊘ excluded strip (header included). Kept
+        distinct from the header's own collapse: this is the "hide it entirely" menu toggle, so a
+        hidden strip stays hidden regardless of collapse state (and the strip is still auto-hidden
+        when the session has no excluded laps). Driven by the window's persisted choice."""
+        self._excluded_menu_visible = bool(on)
+        self._refresh_excluded()
+
     def _refresh_excluded(self):
         """Populate / hide the excluded-laps strip from Session.excluded_lap_rows (getattr-guarded
-        so the lighter test doubles, which don't expose it, simply show no strip). One line per
-        excluded lap ("Lap 47 — 0:59.091 · 921 m"), capped at EXCLUDED_MAX_SHOWN with a "+N more"
-        tail; the whole strip hides when there are none."""
+        so the lighter test doubles, which don't expose it, simply show no strip). COLLAPSED (the
+        default) shows just the "⊘ N excluded ▸" one-liner; EXPANDED shows one line per excluded lap
+        ("Lap 47 — 0:59.091 · 921 m"), capped at EXCLUDED_MAX_SHOWN with a "+N more" tail. The whole
+        strip hides when there are none OR when the View-menu toggle hid it."""
         rows = getattr(self.session, "excluded_lap_rows", lambda: [])()
-        self._excluded_strip.setVisible(bool(rows))
+        # Shown only when there ARE excluded laps AND the user hasn't hidden the strip via the menu.
+        self._excluded_strip.setVisible(bool(rows) and self._excluded_menu_visible)
         if not rows:
+            self._excluded_header.setText("")
+            self._excluded_body.clear()
+            return
+        # The one-liner header: count + a chevron pointing the way a click goes (▸ expand / ▾ collapse).
+        chevron = "▸" if self._excluded_collapsed else "▾"
+        self._excluded_header.setText(f"{EXCLUDED_MARK} {len(rows)} excluded {chevron}")
+        # The body (the full list) shows only when expanded; collapsed, the one-liner header is all.
+        self._excluded_body.setVisible(not self._excluded_collapsed)
+        if self._excluded_collapsed:
             self._excluded_body.clear()
             return
         # 1-based lap number (lap_label) so the excluded strip matches the table's Lap column.

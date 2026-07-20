@@ -31,6 +31,17 @@ COLORBLIND_PALETTE = "colorblind_palette"
 # lives instead of a useless default each session. Stored as an absolute path string; the accessor
 # only returns it when it still exists on disk (an old drive gets unmounted), else "" (today's fallback).
 LAST_DIR = "last_dir"
+# Left-column declutter (the "calm default"): three UI-state bools that survive a relaunch, so a
+# user who tidied their layout finds it the way they left it. All default to the calm posture:
+#   * COACHING_COLLAPSED — the coaching (Opportunities) panel body starts collapsed to its header
+#     bar (the summary line still reads as the re-open affordance). Default True = collapsed.
+#   * COACHING_VISIBLE — whether the whole coaching panel (header included) is shown. Default True =
+#     shown-but-collapsed, so the calm default still exposes the one-click re-open header.
+#   * EXCLUDED_VISIBLE — whether the ⊘ excluded-laps strip is shown at all. Default True = shown
+#     (as its own collapsed one-liner). A garbage stored value coerces to bool (never crashes).
+COACHING_COLLAPSED = "coaching_collapsed"
+COACHING_VISIBLE = "coaching_visible"
+EXCLUDED_VISIBLE = "excluded_visible"
 
 
 def _app_support_dir() -> str:
@@ -110,6 +121,41 @@ def colorblind_palette(path: str | None = None) -> bool:
 def set_colorblind_palette(on: bool, path: str | None = None) -> None:
     """Persist the colour-blind-safe palette toggle."""
     set(COLORBLIND_PALETTE, bool(on), path)
+
+
+def coaching_collapsed(path: str | None = None) -> bool:
+    """Whether the coaching (Opportunities) panel starts COLLAPSED to its header bar (default True —
+    the calm default). A garbage stored value coerces to bool, so a corrupt file never crashes the
+    toggle — it just reads as collapsed."""
+    return bool(get(COACHING_COLLAPSED, True, path))
+
+
+def set_coaching_collapsed(on: bool, path: str | None = None) -> None:
+    """Persist the coaching-panel collapsed state."""
+    set(COACHING_COLLAPSED, bool(on), path)
+
+
+def coaching_visible(path: str | None = None) -> bool:
+    """Whether the whole coaching (Opportunities) panel is shown (default True — shown, but
+    collapsed by default, so the calm default still exposes the one-click re-open header). Coerced
+    to bool so a corrupt file never crashes the toggle."""
+    return bool(get(COACHING_VISIBLE, True, path))
+
+
+def set_coaching_visible(on: bool, path: str | None = None) -> None:
+    """Persist the coaching-panel visibility (the View-menu hide toggle)."""
+    set(COACHING_VISIBLE, bool(on), path)
+
+
+def excluded_visible(path: str | None = None) -> bool:
+    """Whether the ⊘ excluded-laps strip is shown (default True — shown, as its own collapsed
+    one-liner). Coerced to bool so a corrupt file never crashes the toggle."""
+    return bool(get(EXCLUDED_VISIBLE, True, path))
+
+
+def set_excluded_visible(on: bool, path: str | None = None) -> None:
+    """Persist the excluded-strip visibility (the View-menu hide toggle)."""
+    set(EXCLUDED_VISIBLE, bool(on), path)
 
 
 def last_dir(path: str | None = None) -> str:

@@ -178,6 +178,11 @@ def test_real_qtimer_fires_view_tick_through_studiowindow():
     win.view = None
     win._tick_timer = None
     win._consistency_visible = False
+    # Declutter PR: the window passes the coaching/excluded show/hide + coaching-collapse choices
+    # into each fresh view (persisted on the real window); seed the calm defaults here.
+    win._coaching_visible = True
+    win._coaching_collapsed = True
+    win._excluded_visible = True
     win._speed_unit = "kmh"  # speed display unit (km/h default); _build_ui passes it into the view
     win.session = s
     win._paths = ["/tmp/stadium.MP4"]
@@ -533,13 +538,20 @@ def test_grip_map_reachable_via_labelled_combo():
 # ============================================================ persistent opportunities panel
 def test_opportunities_panel_persistent_and_visible_by_default():
     """The coaching front-door is an ALWAYS-ON in-window panel (not just the modal dialog): the real
-    CentralView builds an OpportunitiesPanel under the lap table, visible by default. On the 2-lap
-    synthetic (< MIN_LAPS clean laps) it shows the friendly excluded state, not an empty box."""
+    CentralView builds an OpportunitiesPanel under the lap table, present by default. On the 2-lap
+    synthetic (< MIN_LAPS clean laps) it shows the friendly excluded state, not an empty box.
+
+    Declutter PR (the "calm default"): the panel is still PRESENT (its header is the re-open
+    affordance) but ships COLLAPSED — the whole-panel VIEW-menu hide is a separate concern
+    (coaching_visible), so the panel widget itself stays visibleTo the view here."""
     from studio.coaching_panel import OpportunitiesPanel
 
     view, _s, _t0, _t1 = _real_central_view()
     assert isinstance(view.opportunities, OpportunitiesPanel), "the panel must be built into the view"
-    assert view.opportunities.isVisibleTo(view), "the opportunities panel is visible by default"
+    assert view.opportunities.isVisibleTo(view), "the opportunities panel is present by default"
+    # Calm default: the panel ships COLLAPSED (body hidden, header — the re-open affordance — shown).
+    assert view.opportunities.is_collapsed(), "the coaching panel ships collapsed (calm default)"
+    assert not view.opportunities.body.isVisibleTo(view), "collapsed -> the body is hidden"
     # 2-lap synthetic -> friendly 'need more laps' excluded page (index 1), never an empty table.
     assert view.opportunities.body.currentIndex() == 1, "too few clean laps -> the friendly state"
     assert view.opportunities.empty_label.text(), "the excluded state must carry a friendly message"

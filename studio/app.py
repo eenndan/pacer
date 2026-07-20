@@ -152,6 +152,13 @@ class StudioWindow(QMainWindow):
         self._tick_timer = None  # created on the first _build_ui; reused across reloads (window-owned)
         # Persisted on the window so the View-menu choice survives a reload (passed into each view).
         self._consistency_visible = False
+        # Left-column declutter (the "calm default"), loaded from the persisted prefs so the choices
+        # survive a relaunch; passed into each fresh CentralView. Defaults: coaching SHOWN but
+        # COLLAPSED (the calm default still exposes the one-click re-open header), excluded SHOWN
+        # (as its own collapsed one-liner). Each is guarded to a safe bool inside prefs.
+        self._coaching_visible = prefs.coaching_visible()
+        self._coaching_collapsed = prefs.coaching_collapsed()
+        self._excluded_visible = prefs.excluded_visible()
         # Speed display unit (km/h default), loaded from the persisted prefs so the choice survives
         # a relaunch; passed into each fresh CentralView + the video/coaching exports.
         self._speed_unit = prefs.speed_unit()
@@ -491,9 +498,14 @@ class StudioWindow(QMainWindow):
         # The view holds a read alias of session + the paths (banner) + the sidecar path.
         self.view = CentralView(self.session, self._paths, self._sidecar_path,
                                 self._consistency_visible, parent=self,
-                                speed_unit=getattr(self, "_speed_unit", units.DEFAULT_UNIT))
+                                speed_unit=getattr(self, "_speed_unit", units.DEFAULT_UNIT),
+                                coaching_visible=self._coaching_visible,
+                                coaching_collapsed=self._coaching_collapsed,
+                                excluded_visible=self._excluded_visible)
         # Keep Edit ▸ Undo's enabled state in sync with the session's undo stack as lines are dragged.
         self.view.timingEdited.connect(self._sync_edit_menu)
+        # Persist an in-place coaching collapse/expand (chevron or header click) across reloads.
+        self.view.coachingCollapsedChanged.connect(self._on_coaching_collapsed)
         self._sync_edit_menu()  # a fresh load has no prior edit -> Undo disabled
         self.setCentralWidget(self.view)
         # One ~30 Hz tick timer for the window's lifetime, created once and reused across reloads (a
@@ -649,8 +661,31 @@ class StudioWindow(QMainWindow):
             "(median of your clean laps), each with the measured reason and a jump-to.")
         self._opportunities_action.triggered.connect(self._open_opportunities)
 
-        # F6 View ▸ Show consistency panel (unchecked by default; choice persists across reloads).
+        # Left-column declutter (the "calm default"): fully show/hide the coaching panel and the
+        # excluded strip. Mirrors the consistency toggle EXACTLY — a checkable QAction whose state is
+        # persisted on the window (via prefs) and applied to each fresh CentralView on reload. These
+        # HIDE the whole panel (header included); the in-place chevron on each panel only collapses
+        # its body. Both default SHOWN (the calm default keeps the re-open header visible) — coaching
+        # ships collapsed, excluded ships as its own one-liner.
         view_menu = self.menuBar().addMenu("&View")
+        self._coaching_action = view_menu.addAction("Show coaching panel")
+        self._coaching_action.setCheckable(True)
+        self._coaching_action.setChecked(self._coaching_visible)
+        self._coaching_action.setToolTip(
+            "Show the coaching (Opportunities) panel under the lap table — the top corners where "
+            "you're losing time vs your own best lap. Collapse it in place with the ▸ chevron on "
+            "its header; uncheck this to hide it entirely.")
+        self._coaching_action.toggled.connect(self._on_coaching_toggled)
+        self._excluded_action = view_menu.addAction("Show excluded laps")
+        self._excluded_action.setCheckable(True)
+        self._excluded_action.setChecked(self._excluded_visible)
+        self._excluded_action.setToolTip(
+            "Show the ⊘ excluded-laps strip under the lap table — laps the median band left out of "
+            "your times and bests (a mis-segmented, out- or in-lap). Only ever shown when there are "
+            "any; click its header to expand the list.")
+        self._excluded_action.toggled.connect(self._on_excluded_toggled)
+
+        # F6 View ▸ Show consistency panel (unchecked by default; choice persists across reloads).
         self._consistency_action = view_menu.addAction("Show consistency panel")
         self._consistency_action.setCheckable(True)
         self._consistency_action.setChecked(self._consistency_visible)
@@ -1086,6 +1121,41 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             view.set_consistency_visible(self._consistency_visible)
+
+    def _on_coaching_toggled(self, on: bool):
+        """View ▸ Show coaching panel: remember the choice on the window, PERSIST it (guarded — a
+        write failure must never disrupt the app), and delegate the whole-panel show/hide to the
+        view. No-op before the first load (the persisted choice still applies to the next view)."""
+        self._coaching_visible = bool(on)
+        try:
+            prefs.set_coaching_visible(self._coaching_visible)
+        except OSError as exc:
+            print(f"studio: could not persist coaching-panel visibility ({exc!r}).", flush=True)
+        view = getattr(self, "view", None)
+        if view is not None:
+            view.set_coaching_visible(self._coaching_visible)
+
+    def _on_excluded_toggled(self, on: bool):
+        """View ▸ Show excluded laps: remember + persist (guarded) the choice, and delegate the
+        strip's show/hide to the view. No-op before the first load."""
+        self._excluded_visible = bool(on)
+        try:
+            prefs.set_excluded_visible(self._excluded_visible)
+        except OSError as exc:
+            print(f"studio: could not persist excluded-strip visibility ({exc!r}).", flush=True)
+        view = getattr(self, "view", None)
+        if view is not None:
+            view.set_excluded_visible(self._excluded_visible)
+
+    def _on_coaching_collapsed(self, collapsed: bool):
+        """The coaching panel was collapsed/expanded IN PLACE (chevron or header click in the view):
+        remember + persist (guarded) the collapsed state so the calm-default collapse survives a
+        reload. The view already applied the visual change; this only records the choice."""
+        self._coaching_collapsed = bool(collapsed)
+        try:
+            prefs.set_coaching_collapsed(self._coaching_collapsed)
+        except OSError as exc:
+            print(f"studio: could not persist coaching-panel collapse state ({exc!r}).", flush=True)
 
     def _on_unit_selected(self, unit: str):
         """View ▸ Units: remember the chosen speed unit on the window (survives a reload), PERSIST
