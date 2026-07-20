@@ -8,10 +8,13 @@ set start/finish" cue, so that one IS discoverable on the recordings where it ma
 
 Single source of truth: SHORTCUT_GROUPS below is the ONE place the shortcut text lives. The keys
 listed here MUST stay in lockstep with the actual bindings, which are defined in
-``StudioWindow._build_shortcuts`` (Space / M / G / C) and ``StudioWindow.keyPressEvent`` (the
-←/→ ± stepping). The drag interactions have no key binding — they're handled in MapView (the
-draggable start/finish line) and ScrubController (the chart cursor) — so they're documented here
-as the only place a user can learn them. If you change a binding in app.py, change it HERE too.
+``StudioWindow._build_shortcuts`` (Space / M / G / C), ``StudioWindow.keyPressEvent`` (the ←/→ ±
+stepping) and the View menu (⌘⌃F = ``QKeySequence.FullScreen`` on the ``_fullscreen_action``). The
+drag / double-click interactions have no key binding — they're handled in MapView (the draggable
+start/finish line), ScrubController (the chart cursor), CentralView (double-click a panel header
+or the ⛶ button to maximize that panel) and VideoView (double-click the video / the ⤢ transport
+button to fill the screen) — so they're documented here as the only place a user can learn them.
+If you change a binding in app.py, change it HERE too.
 """
 
 from __future__ import annotations
@@ -48,6 +51,12 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Analysis", [
         ("G", "Toggle the g-meter overlay"),
         ("C", "Toggle compare mode (two laps side by side)"),
+    ]),
+    ("Layout", [
+        ("Double-click header  ·  ⛶", "Maximize a panel to fill the window (Esc / again to restore)"),
+        ("⌘⌃F", "Enter / exit full screen"),
+        ("Double-click video  ·  ⤢", "Make the video fill the screen (Esc / again to restore)"),
+        ("View menu", "Show / hide the Coaching, Excluded and Consistency panels"),
     ]),
     ("Help", [
         ("F1  ·  ?", "Show this shortcut reference"),

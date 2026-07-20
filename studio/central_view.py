@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -40,6 +40,17 @@ from .plots_view import PlotsView
 from .scrub_controller import ScrubController
 from .session import fmt_time
 from .video_view import VideoView
+
+# The maximize-button glyphs. DELIBERATELY DISTINCT from the video transport's fullscreen ⤢ button
+# (ph.arrows-out / ph.arrows-in — "fill the SCREEN"): the corners glyphs read as "fill this WINDOW
+# quadrant", a different action, so the two never collide on the video header. Maximize glyph while
+# the panel is in the grid, restore glyph while it's maximized.
+_MAXIMIZE_GLYPH = "ph.corners-out"   # expand this panel to fill the window
+_RESTORE_GLYPH = "ph.corners-in"     # shown while maximized — click/Esc to restore the grid
+# The header maximize button is sized like the video transport's icon buttons so the whole app's
+# header controls read as one family (video_view._ICON_PX / _ICON_BTN).
+_HDR_ICON_PX = 15
+_HDR_ICON_BTN = QSize(26, 22)
 
 
 class CentralView(QWidget):
@@ -149,6 +160,44 @@ class CentralView(QWidget):
                 row.addWidget(seg)
         return bar
 
+    def _maximize_button(self) -> QPushButton:
+        """A small right-aligned header button that maximizes/restores its panel — the VISIBLE
+        affordance for the same action as double-clicking the header. Styled like the video
+        transport's icon buttons so every header control reads as one family. Wired to its panel
+        later by _wire_maximize_button (the panel container doesn't exist yet when the header is
+        built); its glyph/tooltip track the maximized state via _sync_maximize_buttons."""
+        btn = QPushButton()
+        btn.setIconSize(QSize(_HDR_ICON_PX, _HDR_ICON_PX))
+        btn.setFixedSize(_HDR_ICON_BTN)
+        btn.setFlat(True)
+        btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        btn.setIcon(theme.icon(_MAXIMIZE_GLYPH))
+        btn.setToolTip("Maximize panel (or double-click the header) — Esc / click again to restore")
+        return btn
+
+    def _wire_maximize_button(self, btn: QPushButton, panel: QWidget) -> None:
+        """Connect a header maximize button to its panel's toggle + register it so its glyph/tooltip
+        can be synced to the maximized state. Called once the panel container exists."""
+        buttons = self.__dict__.setdefault("_maximize_buttons", {})
+        buttons[btn] = panel
+        btn.clicked.connect(lambda: self._toggle_panel_maximized(panel))
+
+    def _sync_maximize_buttons(self) -> None:
+        """Point every header maximize button at the current state: the panel that IS maximized shows
+        the restore glyph (accent-tinted) + a restore tooltip; the others show the maximize glyph.
+        No-op before the buttons/state are built (phase 1 vs phase 2). Called on every toggle/restore."""
+        buttons = getattr(self, "_maximize_buttons", None)
+        if not buttons:
+            return
+        maxed = getattr(self, "_maximized_panel", None)
+        for btn, panel in buttons.items():
+            is_max = panel is maxed
+            btn.setIcon(theme.icon(_RESTORE_GLYPH if is_max else _MAXIMIZE_GLYPH,
+                                   color=theme.C.accent if is_max else None))
+            btn.setToolTip(
+                "Restore panel to the grid (or Esc / double-click the header)" if is_max else
+                "Maximize panel (or double-click the header) — Esc / click again to restore")
+
     @staticmethod
     def _headered(header: QWidget, *contents) -> QWidget:
         """Stack a header widget above contents (like _panel but with a widget header). Each entry is
@@ -226,7 +275,14 @@ class CentralView(QWidget):
         self.video.seamLoading.connect(self._on_seam_loading)
         self.chapter_label.setVisible(self.video.is_multi)
 
-        video_panel = self._panel("VIDEO", self.chapter_label, (self.video, 1))
+        # VIDEO panel: a header BAR (title + right-aligned maximize button) so the panel-maximize
+        # affordance sits on the header like the other three; the ⤢ *fullscreen-video* button stays
+        # on the transport bar below (a DIFFERENT action — fill the SCREEN, not this window quadrant).
+        video_label = QLabel("VIDEO")
+        video_label.setProperty("role", "BarLabel")
+        self._video_max_btn = self._maximize_button()
+        video_header = self._header_bar(video_label, 1, self._video_max_btn)
+        video_panel = self._headered(video_header, self.chapter_label, (self.video, 1))
 
         # TABLE panel: a header bar (mode label + Corners toggle) above a QStackedWidget of the two
         # tables (Laps at index 0, Corners at index 1).
@@ -251,7 +307,9 @@ class CentralView(QWidget):
         self.table_stack = QStackedWidget()
         self.table_stack.addWidget(self.table)         # index 0 — Laps (default)
         self.table_stack.addWidget(self.corner_table)  # index 1 — Corners
-        table_header = self._header_bar(self._table_label, self.quality_badge, 1, self.corners_btn)
+        self._table_max_btn = self._maximize_button()
+        table_header = self._header_bar(self._table_label, self.quality_badge, 1, self.corners_btn,
+                                        self._table_max_btn)
         # The PERSISTENT, always-on coaching front-door: the top-3 opportunities (corner · time
         # lost · reason) under the lap table, the same data the modal dialog shows. Visible by
         # default (the moat made the default screen), compact + collapsible. A corner-row click
@@ -289,8 +347,10 @@ class CentralView(QWidget):
         self.map.rainbow_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         map_label = QLabel("MAP")
         map_label.setProperty("role", "BarLabel")
+        self._map_max_btn = self._maximize_button()
         map_header = self._header_bar(map_label, 1, self.map.rainbow_combo, self.map.snap_btn,
-                                      self.map.add_sector_btn, self.map.reset_sectors_btn)
+                                      self.map.add_sector_btn, self.map.reset_sectors_btn,
+                                      self._map_max_btn)
         # Trust strip over the map: ONE compact strip, two tiers of concern, so it never eats a
         # third of the ≤320px map (the common first-run case: unknown track + older GoPro would
         # stack two word-wrapped banners). The ACTIONABLE line leads (provisional_banner — "place
@@ -344,10 +404,11 @@ class CentralView(QWidget):
         self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.ideal_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.brake_throttle_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self._plots_max_btn = self._maximize_button()
         plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0),
                                         self.ideal_readout_btn, 1,
                                         self.plots.brake_throttle_btn, self.plots.ideal_btn,
-                                        self.plots.x_mode_combo)
+                                        self.plots.x_mode_combo, self._plots_max_btn)
         plots_panel = self._headered(plots_header, (self.plots, 1))
 
         # Stash the four panel containers for _layout_panels.
@@ -355,6 +416,14 @@ class CentralView(QWidget):
         self._table_panel = table_panel
         self._map_panel = map_panel
         self._plots_panel = plots_panel
+
+        # Wire each header's maximize button to its panel now that the containers exist (the buttons
+        # were built into the headers above). Same action as the dblclick-header filter, made visible.
+        self._maximize_buttons: dict[QPushButton, QWidget] = {}
+        self._wire_maximize_button(self._video_max_btn, video_panel)
+        self._wire_maximize_button(self._table_max_btn, table_panel)
+        self._wire_maximize_button(self._map_max_btn, map_panel)
+        self._wire_maximize_button(self._plots_max_btn, plots_panel)
 
     # ----------------------------------------------------- build phase 2: layout
     def _layout_panels(self):
@@ -529,6 +598,7 @@ class CentralView(QWidget):
         full_h = sum(column.sizes()) or column.height()
         column.setSizes([full_h, 0] if panel in top_panels else [0, full_h])
         self._maximized_panel = panel
+        self._sync_maximize_buttons()  # this panel's button now shows the restore glyph
 
     def _restore_splitter_sizes(self):
         """Put the pre-maximize grid sizes back (the inverse of _toggle_panel_maximized's collapse)
@@ -541,6 +611,7 @@ class CentralView(QWidget):
         self._right_splitter.setSizes(sizes[2])
         self._maximized_panel = None
         self._saved_splitter_sizes = None
+        self._sync_maximize_buttons()  # every button reverts to the maximize glyph
 
     # ----------------------------------------------------- video focus ("fullscreen video")
     def toggle_video_focus(self):
