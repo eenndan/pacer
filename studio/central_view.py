@@ -734,13 +734,16 @@ class CentralView(QWidget):
 
     def _apply_consistency_visible(self, *, refresh: bool):
         """Apply _consistency_visible to the live panel (refresh its stats first when showing).
-        No-op for a partially-built view without the panel."""
+        Suppressed while the Stats page is active (the dashboard carries the same content —
+        see _apply_table_mode); leaving Stats re-applies the persisted choice. No-op for a
+        partially-built view without the panel."""
         panel = getattr(self, "consistency", None)
         if panel is None:
             return
-        if refresh and self._consistency_visible:
+        visible = self._consistency_visible and not self._stats_page_active()
+        if refresh and visible:
             panel.refresh()  # ensure the shown stats are current for this session
-        panel.setVisible(self._consistency_visible)
+        panel.setVisible(visible)
 
     def set_coaching_visible(self, on: bool):
         """Fully show/hide the whole coaching (Opportunities) panel — header included — from the
@@ -751,11 +754,12 @@ class CentralView(QWidget):
         self._apply_coaching_visible()
 
     def _apply_coaching_visible(self):
-        """Apply _coaching_visible to the live coaching panel. No-op for a partially-built view."""
+        """Apply _coaching_visible to the live coaching panel. Suppressed while the Stats page
+        is active (see _apply_table_mode). No-op for a partially-built view."""
         panel = getattr(self, "opportunities", None)
         if panel is None:
             return
-        panel.setVisible(self._coaching_visible)
+        panel.setVisible(self._coaching_visible and not self._stats_page_active())
 
     def set_excluded_visible(self, on: bool):
         """Fully show/hide the ⊘ excluded-laps strip from the persistent View-menu item on the
@@ -871,7 +875,32 @@ class CentralView(QWidget):
         self.table_stack.setCurrentIndex(idx)
         if idx == 1:
             self.corner_table.set_lap(self._corner_lap)
+        # Stats mode owns the whole panel: the under-table coaching/consistency strips would
+        # duplicate the dashboard's own content (and ride along into the maximized dashboard),
+        # so they hide while Stats is active. The two _apply helpers read BOTH the persisted
+        # View-menu choice and the page mode, so leaving Stats restores exactly the user's
+        # choices (and a View-menu flip while ON Stats can't resurrect a strip under it).
+        self._apply_coaching_visible()
+        self._apply_consistency_visible(refresh=False)
         self._update_table_header()
+
+    def _stats_page_active(self) -> bool:
+        """True while the Stats page is the visible table-stack page. The under-table strips
+        hide then — see _apply_table_mode. Defensive getattr for a partially-built view."""
+        btn = getattr(self, "stats_btn", None)
+        return btn is not None and btn.isChecked()
+
+    def show_stats_maximized(self):
+        """One action to the full-window statistics dashboard (View ▸ Session statistics):
+        flip the lap panel to its Stats page and maximize that panel. Invoked again while
+        already showing it, it restores the grid (a true toggle, mirroring the ⤢ button);
+        the page itself stays on Stats — the header toggle flips it back."""
+        if self.stats_btn.isChecked() and self._maximized_panel is self._table_panel:
+            self._restore_splitter_sizes()
+            return
+        self.stats_btn.setChecked(True)
+        if self._maximized_panel is not self._table_panel:
+            self._toggle_panel_maximized(self._table_panel)
 
     def _set_corner_lap(self, lap_id: int | None):
         """Track the lap the Corners view describes — the PRIMARY selected/followed lap.

@@ -680,6 +680,16 @@ class StudioWindow(QMainWindow):
         self._fullscreen_action.setToolTip(
             "Show pacer full screen (⌘⌃F). Press Esc or ⌘⌃F again to exit.")
         self._fullscreen_action.triggered.connect(self._toggle_fullscreen)
+        # One-action route to the full-window statistics dashboard: flip the lap panel to its
+        # Stats page + maximize it (CentralView.show_stats_maximized; a second trigger restores
+        # the grid). Parented to the persistent window; a no-op before a session is loaded.
+        self._stats_action = view_menu.addAction("Session statistics")
+        self._stats_action.setShortcut(QKeySequence("Ctrl+Shift+S"))  # ⌘⇧S on macOS
+        self._stats_action.setToolTip(
+            "Open the session-statistics dashboard full-window (⌘⇧S): totals, pace "
+            "distribution, top speed, peak g, the g-g friction circle, brake/coast totals "
+            "and a per-lap table. Press again (or ⤢) to restore the grid.")
+        self._stats_action.triggered.connect(self._show_session_statistics)
         view_menu.addSeparator()
         self._coaching_action = view_menu.addAction("Show coaching panel")
         self._coaching_action.setCheckable(True)
@@ -831,6 +841,15 @@ class StudioWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
+
+    def _show_session_statistics(self):
+        """View ▸ Session statistics (⌘⇧S): one action to the full-window statistics dashboard
+        — flip the lap panel to its Stats page and maximize it (a second trigger restores the
+        grid; CentralView.show_stats_maximized owns the toggle). No-op on the welcome screen
+        (no session view yet)."""
+        view = getattr(self, "view", None)
+        if view is not None and hasattr(view, "show_stats_maximized"):
+            view.show_stats_maximized()
 
     def _sync_fullscreen_action_text(self):
         """Keep the View menu item's text (Enter/Exit Full Screen) matching the window's real state —

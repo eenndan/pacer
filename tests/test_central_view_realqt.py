@@ -838,7 +838,56 @@ def _run_all():
     test_transport_fullscreen_button_and_video_dblclick_trigger_focus()
     test_video_focus_disabled_while_comparing()
     test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_state()
+    test_stats_page_suppresses_under_table_strips_and_restores_them()
+    test_show_stats_maximized_is_a_true_toggle()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
+
+
+def test_stats_page_suppresses_under_table_strips_and_restores_them():
+    """The Stats page owns the whole lap panel: while it is active the under-table coaching +
+    consistency strips hide (the dashboard carries their content — no duplicate surfaces on
+    the maximized dashboard), and a View-menu flip while ON Stats cannot resurrect a strip.
+    Leaving Stats restores exactly the user's persisted View choices."""
+    view, _s, _t0, _t1 = _real_central_view()
+    assert view._coaching_visible and not view.opportunities.isHidden()
+
+    view.stats_btn.setChecked(True)
+    _APP.processEvents()
+    assert view.table_stack.currentIndex() == 2
+    assert view._table_label.text() == "STATISTICS"
+    assert view.opportunities.isHidden(), "coaching strip must hide under the Stats page"
+    assert view.consistency.isHidden()
+    # A View-menu show while ON Stats must not resurrect the strip under the dashboard…
+    view.set_consistency_visible(True)
+    assert view.consistency.isHidden(), "View toggle resurrected a strip under Stats"
+
+    view.stats_btn.setChecked(False)
+    _APP.processEvents()
+    assert view.table_stack.currentIndex() == 0
+    # …but leaving Stats applies it (and the coaching default comes back untouched).
+    assert not view.opportunities.isHidden(), "coaching strip must restore on leaving Stats"
+    assert not view.consistency.isHidden(), "the View choice made during Stats applies on exit"
+    print("test_stats_page_suppresses_under_table_strips_and_restores_them OK")
+
+
+def test_show_stats_maximized_is_a_true_toggle():
+    """View ▸ Session statistics (⌘⇧S): one action flips the lap panel to Stats AND maximizes
+    it; the same action again restores the grid but stays on the Stats page (mirroring the ⤢
+    button's restore). Corners and Stats stay mutually exclusive through the flip."""
+    view, _s, _t0, _t1 = _real_central_view()
+    view.corners_btn.setChecked(True)  # start from Corners to prove the exclusive flip
+
+    view.show_stats_maximized()
+    _APP.processEvents()
+    assert view.stats_btn.isChecked() and not view.corners_btn.isChecked()
+    assert view.table_stack.currentIndex() == 2
+    assert view._maximized_panel is view._table_panel, "one action must maximize the panel"
+
+    view.show_stats_maximized()
+    _APP.processEvents()
+    assert view._maximized_panel is None, "second invocation restores the grid"
+    assert view.stats_btn.isChecked(), "the page itself stays on Stats"
+    print("test_show_stats_maximized_is_a_true_toggle OK")
 
 
 if __name__ == "__main__":
