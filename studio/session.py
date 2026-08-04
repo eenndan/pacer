@@ -39,6 +39,9 @@ from . import (
     track_match,
     tracks,
 )
+from . import (
+    stats as stats_service,
+)
 from ._signal import (
     SMOOTH_WINDOW,
     _band_lap_ids,
@@ -188,6 +191,10 @@ class Session:
         # Stateless apart from best_lap_id's memo, which stays in Session._best_cache (cleared in
         # set_timing_lines, seeded by tests) via injected cache accessors — nothing to invalidate here.
         self._bests = self._build_bests()
+        # Session-statistics service (the Stats page: whole-recording totals + per-lap
+        # speed/g/brake-coast reductions + the g-g cloud). The trace totals survive a
+        # re-segment; the lap-level caches clear via invalidate() (set_timing_lines).
+        self._stats = self._build_session_stats()
 
         # Cross-recording reference lap (F7): a lap from another recording that REPLACES the local
         # best as the Δ baseline everywhere a delta is drawn. None = DORMANT (every "vs best" path
@@ -480,6 +487,34 @@ class Session:
             self._driving = dc
         return dc
 
+    def _build_session_stats(self) -> stats_service.SessionStats:
+        return stats_service.SessionStats(
+            gmeter=lambda: self._gmeter,
+            trace_times=lambda: self.tt,
+            trace_speed_kmh=lambda: self.tv,
+            trace_xy=lambda: (self.tx, self.ty),
+            wall_clock_ms=self._wall_clock_ms,
+            valid_lap_ids=self.valid_lap_ids,
+            consistency_lap_ids=self.consistency_lap_ids,
+            lap_time=lambda i: self.laps.lap_time(i),
+            lap_arrays=self._lap_arrays,
+            lap_window=self.lap_window,
+            brake_events=lambda i: self.driving.lap_brake_events(i),
+            coast_spans=lambda i: self.driving.lap_coasting_spans(i),
+        )
+
+    @property
+    def stats(self) -> stats_service.SessionStats:
+        """The session-statistics service (the Stats page: whole-recording totals, per-lap
+        speed/g/brake-coast reductions, the pace distribution + the g-g cloud, studio/stats.py)
+        — call session.stats.totals() / .lap_stats() / .pace() / .gg_cloud() directly. Lazily
+        created; getattr-guarded for the bare-Session (no-__init__) test path — see _ref."""
+        st = getattr(self, "_stats", None)
+        if st is None:
+            st = self._build_session_stats()
+            self._stats = st
+        return st
+
     def _build_timeline(self) -> timeline.Timeline:
         # All inputs are live-reading lambdas (not bound-method snapshots) so the extracted
         # conversions resolve Session's primitives exactly when the originals did — incl. tests
@@ -745,6 +780,7 @@ class Session:
         # they survive), replacing the ~7 hand-cleared cache slots this block used to enumerate.
         self.corners.invalidate()
         self.driving.invalidate()
+        self.stats.invalidate()
 
     # ------------------------------------------ timing-line persistence (sidecar glue)
     # The sidecar (studio/sidecar.py, pacer-free) stores the user's timing lines as ABSOLUTE
@@ -1301,6 +1337,17 @@ class Session:
             out["g_long"] = np.interp(times, gm.times, long_src)
             out["g_lat"] = np.interp(times, gm.times, gm.lat_g)
         return out
+
+    def _wall_clock_ms(self) -> tuple[int, int]:
+        """(first, last) kept GPS fix wall-clock epoch-ms — the stats service's session
+        start/end clock source. (0, 0) when the trace is empty; a GPS5 stream reports 0 per
+        point (no wall clock), which stats.clock_hhmm maps to None — the same sentinel
+        convention as session_date below."""
+        n = self.laps.point_count()
+        if n == 0:
+            return 0, 0
+        return (int(self.laps.get_point(0).point.timestamp_ms),
+                int(self.laps.get_point(n - 1).point.timestamp_ms))
 
     def session_date(self) -> str | None:
         """The recording's LOCAL calendar date ("YYYY-MM-DD") — the day the driver actually drove —

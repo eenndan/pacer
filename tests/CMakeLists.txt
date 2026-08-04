@@ -329,6 +329,18 @@ add_test(NAME test_share_card
 set_tests_properties(test_share_card PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Session statistics (studio/stats.py, the Stats page): the pure reducers (moving time with
+# the dropout-gap skip, path distance, wall-clock rendering, pace distribution, peak-g
+# conventions, the half-open lap-window mask, sector medians) + the SessionStats service over
+# fake DI callables (totals caching, per-lap speed/g/brake-coast reductions with the None-not-0
+# no-signal rule, session Vmax, the g-g cloud's window restriction + stride cap, invalidate()
+# dropping exactly the lap-level caches) + the Session.stats property wiring on a bare Session.
+# Pure numpy on stubs; offscreen for the (future) panel tests' shared registration.
+add_test(NAME test_stats
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_stats.py)
+set_tests_properties(test_stats PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
 # `pacer` in the interpreter's site-packages — on a fresh CI env there is none, and
@@ -349,7 +361,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video
-                        test_data_safety test_units test_accessible_cues test_share_card)
+                        test_data_safety test_units test_accessible_cues test_share_card
+                        test_stats)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

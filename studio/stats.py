@@ -1,0 +1,310 @@
+"""Session-level statistics (the Stats page): pure reducers + the SessionStats service.
+
+PACER-FREE BY CONTRACT (numpy only, no Qt). Two layers, mirroring the established split
+(studio/consistency.py for the pure math, studio/driving_channels.py for the DI service):
+
+  * module functions — pure numpy reducers over plain arrays/lists, unit-tested directly;
+  * SessionStats — the Session-composed service. All inputs are Session-bound callables
+    (Session owns the pacer side + the g-meter), so NO method here reaches a `_`-private
+    attribute of Session. Trace-level results (totals) depend only on the constant trace and
+    survive a re-segment; lap-level results are projected through the segmentation and are
+    dropped by invalidate() (Session.set_timing_lines), exactly like the driving channels.
+
+Everything here is a REDUCTION of channels the app already computes and trusts — lap arrays,
+the validated g-meter series, the brake/coast event lists — never a new estimate. Peak
+longitudinal g reads the GPS speed-derivative (long_g_gps) when present, the same validated
+signal the dial/brake channels use (the IMU forward axis is vibration-inflated)."""
+
+from __future__ import annotations
+
+import datetime
+from collections.abc import Callable
+from dataclasses import dataclass
+
+import numpy as np
+
+from .consistency import sigma
+
+# "moving" threshold, m/s — the SAME cutoff the g-meter/thresholds use for their moving
+# masks (gmeter._MOVING_MS), so "time moving" and every g statistic agree on what counts
+# as driving vs sitting in the pits.
+MOVING_MS = 4.0
+# A media-clock step longer than this is a GPS dropout / chapter seam, not a real 10 Hz
+# sample interval — moving time skips such steps (conservative: a gap while moving is NOT
+# counted as time on track, because nothing was measured there).
+MAX_SAMPLE_GAP_S = 1.0
+
+
+# --------------------------------------------------------------------- value objects
+@dataclass(frozen=True)
+class SessionTotals:
+    """Whole-recording totals (trace-level — independent of the lap segmentation)."""
+
+    duration_s: float        # recorded span, first→last kept sample (media clock, incl. gaps)
+    moving_s: float          # time with speed ≥ MOVING_MS (dropout gaps excluded)
+    distance_m: float        # path length of the smoothed trace (sum of chords)
+    start_clock: str | None  # local wall-clock "HH:MM" of the first kept fix (GPS9); None on GPS5
+    end_clock: str | None    # …and of the last kept fix
+
+
+@dataclass(frozen=True)
+class LapStat:
+    """One valid lap's statistics row. None = the underlying signal is absent (no g-meter),
+    NOT a zero — the view renders those as a dash, never as 0."""
+
+    idx: int                    # lap id (0-based, same as LapRow["idx"])
+    time: float                 # lap time (s)
+    vmax_kmh: float | None      # max full_speed on the lap
+    avg_kmh: float | None       # odometer / lap time — the distance-true average
+    peak_lat_g: float | None    # max |lateral g| (IMU lateral — the trusted axis)
+    peak_brake_g: float | None  # max deceleration, reported positive (validated GPS-derived long)
+    brake_s: float | None       # total time in brake events
+    brake_n: int | None         # number of brake events
+    coast_s: float | None       # total time coasting
+    coast_frac: float | None    # coast_s / lap time
+
+
+@dataclass(frozen=True)
+class PaceStats:
+    """Lap-time distribution over the consistency laps (valid ∧ dropout-free)."""
+
+    n: int                # laps in the distribution
+    best: float           # min lap time (s)
+    median: float         # median lap time (s)
+    sigma: float | None   # sample σ (ddof=1; None with <2 laps — consistency.sigma)
+    spread: float         # median − best: what the TYPICAL lap gives away (s, ≥ 0)
+
+
+# --------------------------------------------------------------------- pure reducers
+def moving_time_s(times, speed_ms, threshold_ms: float = MOVING_MS) -> float:
+    """Seconds spent at speed ≥ `threshold_ms`. Each inter-sample interval is attributed to
+    its LEADING sample's speed; intervals longer than MAX_SAMPLE_GAP_S (dropouts / chapter
+    seams) are skipped — nothing was measured there, so they count as neither moving nor
+    stopped (see the module constant)."""
+    t = np.asarray(times, float)
+    v = np.asarray(speed_ms, float)
+    n = min(len(t), len(v))
+    if n < 2:
+        return 0.0
+    dt = np.diff(t[:n])
+    keep = (dt > 0) & (dt <= MAX_SAMPLE_GAP_S) & (v[: n - 1] >= threshold_ms)
+    return float(np.sum(dt[keep]))
+
+
+def path_distance_m(xs, ys) -> float:
+    """Path length of a local-metre trace: the sum of chords between consecutive samples —
+    the same convention as the core's cum_distances odometer. A dropout gap contributes its
+    straight-line chord (a slight under-count of the real path, never an over-count)."""
+    x = np.asarray(xs, float)
+    y = np.asarray(ys, float)
+    n = min(len(x), len(y))
+    if n < 2:
+        return 0.0
+    d = np.hypot(np.diff(x[:n]), np.diff(y[:n]))
+    return float(np.sum(d[np.isfinite(d)]))
+
+
+def clock_hhmm(epoch_ms) -> str | None:
+    """LOCAL wall-clock "HH:MM" for a GPS9 epoch-ms timestamp, or None when the stream has
+    no wall clock (GPS5 reports 0 — the same sentinel session_date() checks). Local for the
+    same reason as session_date: the time of day the driver actually experienced."""
+    ms = int(epoch_ms)
+    if ms <= 0:
+        return None
+    return datetime.datetime.fromtimestamp(ms / 1000.0).strftime("%H:%M")
+
+
+def pace_stats(lap_times) -> PaceStats | None:
+    """The lap-time distribution summary, or None with no laps. σ via consistency.sigma
+    (sample σ, ddof=1) so this can never disagree with the consistency panel."""
+    a = np.asarray(list(lap_times), float)
+    a = a[np.isfinite(a)]
+    if len(a) == 0:
+        return None
+    best = float(np.min(a))
+    med = float(np.median(a))
+    return PaceStats(n=len(a), best=best, median=med, sigma=sigma(a), spread=med - best)
+
+
+def peak_g(lat_g, long_g) -> tuple[float | None, float | None]:
+    """(peak |lateral| g, peak braking g) over a g series — braking is the most NEGATIVE
+    longitudinal sample, reported positive, floored at 0 (an all-throttle span brakes 0 g,
+    not negative). (None, None) for an empty series."""
+    lat = np.asarray(lat_g, float)
+    lon = np.asarray(long_g, float)
+    lat = lat[np.isfinite(lat)]
+    lon = lon[np.isfinite(lon)]
+    if len(lat) == 0 or len(lon) == 0:
+        return None, None
+    return float(np.max(np.abs(lat))), float(max(0.0, -np.min(lon)))
+
+
+def in_windows_mask(times, windows) -> np.ndarray:
+    """Boolean mask: which of `times` fall inside ANY of the (t0, t1) media-clock `windows`
+    (t0 inclusive, t1 exclusive — a lap's end instant belongs to the next lap, matching
+    lap_window's (start, start + lap_time) convention)."""
+    t = np.asarray(times, float)
+    mask = np.zeros(len(t), dtype=bool)
+    for t0, t1 in windows:
+        mask |= (t >= t0) & (t < t1)
+    return mask
+
+
+def sector_medians(splits_by_lap: list[list[float]]) -> list[float | None]:
+    """Per-sector-column MEDIAN split over the included laps — the "typical" companion to
+    consistency.sector_sigmas, same column convention (widest lap defines the count, a
+    column with no finite split reads None)."""
+    n_cols = max((len(sp) for sp in splits_by_lap), default=0)
+    out: list[float | None] = []
+    for k in range(n_cols):
+        vals = np.asarray([sp[k] for sp in splits_by_lap if k < len(sp)], float)
+        vals = vals[np.isfinite(vals)]
+        out.append(float(np.median(vals)) if len(vals) else None)
+    return out
+
+
+# --------------------------------------------------------------------- the service
+class SessionStats:
+    """Session statistics over Session-bound primitives (see the module docstring).
+
+    `gmeter` returns the live GMeter (built after construction, so it must be a callable);
+    `trace_times` / `trace_speed_kmh` / `trace_xy` return the full smoothed trace (Session.tt /
+    .tv / (.tx, .ty)); `wall_clock_ms` the (first, last) kept-fix GPS9 epoch timestamps;
+    `valid_lap_ids` / `consistency_lap_ids` the memoized lap sets; `lap_time` / `lap_arrays` /
+    `lap_window` the per-lap fetches; `brake_events` / `coast_spans` the driving-channel
+    event lists (already cached per lap by DrivingChannels)."""
+
+    def __init__(self, *,
+                 gmeter: Callable[[], object],
+                 trace_times: Callable[[], np.ndarray],
+                 trace_speed_kmh: Callable[[], np.ndarray],
+                 trace_xy: Callable[[], tuple[np.ndarray, np.ndarray]],
+                 wall_clock_ms: Callable[[], tuple[int, int]],
+                 valid_lap_ids: Callable[[], list[int]],
+                 consistency_lap_ids: Callable[[], list[int]],
+                 lap_time: Callable[[int], float],
+                 lap_arrays: Callable[[int], tuple],
+                 lap_window: Callable[[int], tuple[float, float] | None],
+                 brake_events: Callable[[int], list],
+                 coast_spans: Callable[[int], list]):
+        self._gmeter = gmeter
+        self._trace_times = trace_times
+        self._trace_speed_kmh = trace_speed_kmh
+        self._trace_xy = trace_xy
+        self._wall_clock_ms = wall_clock_ms
+        self._valid_lap_ids = valid_lap_ids
+        self._consistency_lap_ids = consistency_lap_ids
+        self._lap_time = lap_time
+        self._lap_arrays = lap_arrays
+        self._lap_window = lap_window
+        self._brake_events = brake_events
+        self._coast_spans = coast_spans
+        # totals depend only on the constant trace → computed once, survives re-segments.
+        self._totals_cache: SessionTotals | None = None
+        # lap-level results are projected through the segmentation → dropped by invalidate().
+        self._lap_stats_cache: list[LapStat] | None = None
+        self._gg_cache: tuple[np.ndarray, np.ndarray] | None = None
+
+    def invalidate(self) -> None:
+        """Drop the segmentation-derived caches on re-segment (Session.set_timing_lines);
+        the trace totals are unchanged by a timing-line edit and are kept."""
+        self._lap_stats_cache = None
+        self._gg_cache = None
+
+    # ------------------------------------------------------------------ trace level
+    def totals(self) -> SessionTotals:
+        """Whole-recording totals; cached (the trace never changes for a loaded session)."""
+        if self._totals_cache is not None:
+            return self._totals_cache
+        t = np.asarray(self._trace_times(), float)
+        v = np.asarray(self._trace_speed_kmh(), float) / 3.6
+        xs, ys = self._trace_xy()
+        w0, w1 = self._wall_clock_ms()
+        self._totals_cache = SessionTotals(
+            duration_s=float(t[-1] - t[0]) if len(t) >= 2 else 0.0,
+            moving_s=moving_time_s(t, v),
+            distance_m=path_distance_m(xs, ys),
+            start_clock=clock_hhmm(w0),
+            end_clock=clock_hhmm(w1),
+        )
+        return self._totals_cache
+
+    # ------------------------------------------------------------------ lap level
+    def lap_stats(self) -> list[LapStat]:
+        """One LapStat per VALID lap, in session order; cached per segmentation. Speed stats
+        come from the lap's own arrays; g peaks slice the g-meter by the lap's media window;
+        brake/coast reduce the driving-channel event lists. Signal-absent fields are None
+        (never 0) — see LapStat."""
+        if self._lap_stats_cache is not None:
+            return self._lap_stats_cache
+        gm = self._gmeter()
+        has_g = bool(getattr(gm, "has_data", False))
+        if has_g:
+            long_src = gm.long_g_gps if gm.long_g_gps is not None else gm.long_g
+        out: list[LapStat] = []
+        for i in self._valid_lap_ids():
+            lap_time = float(self._lap_time(i))
+            dist, speed_kmh, elapsed = self._lap_arrays(i)
+            vmax = float(np.max(speed_kmh)) if len(speed_kmh) else None
+            avg = (float(dist[-1]) / lap_time * 3.6
+                   if len(dist) and lap_time > 0 else None)
+            lat_pk = brake_pk = None
+            if has_g:
+                win = self._lap_window(i)
+                if win is not None:
+                    m = in_windows_mask(gm.times, [win])
+                    lat_pk, brake_pk = peak_g(gm.lat_g[m], long_src[m])
+            brake_s = brake_n = coast_s = coast_frac = None
+            if has_g:
+                events = self._brake_events(i)
+                spans = self._coast_spans(i)
+                brake_s = float(sum(e.duration for e in events))
+                brake_n = len(events)
+                coast_s = float(sum(sp.duration for sp in spans))
+                coast_frac = coast_s / lap_time if lap_time > 0 else None
+            out.append(LapStat(idx=i, time=lap_time, vmax_kmh=vmax, avg_kmh=avg,
+                               peak_lat_g=lat_pk, peak_brake_g=brake_pk,
+                               brake_s=brake_s, brake_n=brake_n,
+                               coast_s=coast_s, coast_frac=coast_frac))
+        self._lap_stats_cache = out
+        return out
+
+    def pace(self) -> PaceStats | None:
+        """Lap-time distribution over the CONSISTENCY laps (valid ∧ dropout-free — the same
+        set every σ statistic runs over, so Pace and the consistency panel always agree).
+        Cheap (a handful of floats) → not cached, like Session's consistency assemblers."""
+        return pace_stats([self._lap_time(i) for i in self._consistency_lap_ids()])
+
+    def session_vmax(self) -> tuple[float, int] | None:
+        """(top speed km/h, lap id) over the valid laps — the session's headline Vmax and
+        where it happened. None when no lap has a speed sample."""
+        best: tuple[float, int] | None = None
+        for st in self.lap_stats():
+            if st.vmax_kmh is not None and (best is None or st.vmax_kmh > best[0]):
+                best = (st.vmax_kmh, st.idx)
+        return best
+
+    def gg_cloud(self, max_points: int = 4000) -> tuple[np.ndarray, np.ndarray] | None:
+        """The friction-circle scatter: (lat_g, long_g) samples restricted to the VALID laps'
+        media windows (no pit/out-lap noise), evenly strided down to ≤ `max_points` so the
+        view never draws an unbounded cloud. Longitudinal is the validated GPS-derived signal
+        when present (the same axis convention as the dial / grip envelope). None when there
+        is no g signal or no valid lap. Cached per segmentation."""
+        if self._gg_cache is not None:
+            return self._gg_cache
+        gm = self._gmeter()
+        if not getattr(gm, "has_data", False):
+            return None
+        windows = [w for w in (self._lap_window(i) for i in self._valid_lap_ids())
+                   if w is not None]
+        if not windows:
+            return None
+        mask = in_windows_mask(gm.times, windows)
+        long_src = gm.long_g_gps if gm.long_g_gps is not None else gm.long_g
+        lat = np.asarray(gm.lat_g[mask], float)
+        lon = np.asarray(long_src[mask], float)
+        if len(lat) == 0:
+            return None
+        stride = max(1, int(np.ceil(len(lat) / max_points)))
+        self._gg_cache = (lat[::stride], lon[::stride])
+        return self._gg_cache
