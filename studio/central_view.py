@@ -39,6 +39,7 @@ from .playback_state import PlaybackState
 from .plots_view import PlotsView
 from .scrub_controller import ScrubController
 from .session import fmt_time
+from .stats_panel import StatsView
 from .video_view import VideoView
 
 # The maximize-button glyphs. DELIBERATELY DISTINCT from the video transport's fullscreen ⤢ button
@@ -97,7 +98,8 @@ class CentralView(QWidget):
         # Seed each speed-bearing sub-view's unit BEFORE the first rebuild fills them (set the
         # field directly — set_speed_unit would trigger a redundant pre-build refresh). The plots
         # axis label needs re-applying since it was set at km/h in the sub-view's own __init__.
-        for w in (self.plots, self.table, self.corner_table, self.map, self.opportunities):
+        for w in (self.plots, self.table, self.corner_table, self.map, self.opportunities,
+                  self.stats_view):
             w._speed_unit = self._speed_unit
         self.plots._apply_speed_axis_label()
         self._layout_panels()
@@ -235,6 +237,8 @@ class CentralView(QWidget):
         # Corners mode: a 2nd table stacked under the same panel (per-corner rows for the selected lap).
         self.corner_table = CornerTable(self.session)
         self._corner_lap: int | None = None  # the lap the Corners view describes
+        # Stats mode: the 3rd page — the session-statistics dashboard (studio/stats_panel.py).
+        self.stats_view = StatsView(self.session)
 
         # Always-on Δ/speed readout for the current moment (hero #DiffBox; Δ colour set per-tick).
         # By default it LEADS with Δ-to-IDEAL (the moat number: how far off your own achievable lap
@@ -295,6 +299,18 @@ class CentralView(QWidget):
             "Per-corner analysis of the selected lap: time-in-corner, Δ vs the best lap, "
             "apex/entry/exit speeds. Corners are detected from the track's own curvature.")
         self.corners_btn.toggled.connect(self._on_corners_toggled)
+        # Stats toggle: the 3rd page of the same stack. Mutually exclusive with Corners (one
+        # checked button = one visible page; both off = Laps). ⤢ maximize turns the compact
+        # in-pane dashboard into a full-window one — no extra chrome for the calm default.
+        self.stats_btn = QPushButton("Stats")
+        self.stats_btn.setCheckable(True)
+        self.stats_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.stats_btn.setToolTip(
+            "Session statistics: totals (time on track, distance, wall clock), the lap-time "
+            "distribution, top speed, peak g, the g-g friction circle, brake/coast totals, "
+            "per-sector spread and a per-lap statistics table. Maximize the panel (⤢ or "
+            "double-click the header) for the full dashboard.")
+        self.stats_btn.toggled.connect(self._on_stats_toggled)
         # Small data-quality chip in the table header, shown next to the LAPS label only when
         # Session.timing_quality is degraded, so the lap times carry a visible cue right where they're
         # read. Its LABEL + TOOLTIP are set live by _refresh_quality_badge from the shared
@@ -307,9 +323,10 @@ class CentralView(QWidget):
         self.table_stack = QStackedWidget()
         self.table_stack.addWidget(self.table)         # index 0 — Laps (default)
         self.table_stack.addWidget(self.corner_table)  # index 1 — Corners
+        self.table_stack.addWidget(self.stats_view)    # index 2 — Stats
         self._table_max_btn = self._maximize_button()
         table_header = self._header_bar(self._table_label, self.quality_badge, 1, self.corners_btn,
-                                        self._table_max_btn)
+                                        self.stats_btn, self._table_max_btn)
         # The PERSISTENT, always-on coaching front-door: the top-3 opportunities (corner · time
         # lost · reason) under the lap table, the same data the modal dialog shows. Visible by
         # default (the moat made the default screen), compact + collapsible. A corner-row click
@@ -676,6 +693,7 @@ class CentralView(QWidget):
         self.corner_table.set_speed_unit(unit)
         self.map.set_speed_unit(unit)
         self.opportunities.set_speed_unit(unit)
+        self.stats_view.set_speed_unit(unit)
         # Re-render the readout in place from the last stashed moment (no tick needed).
         self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
                               self._last_diff_lap)
@@ -700,6 +718,7 @@ class CentralView(QWidget):
         self.map.refresh_palette()
         self.opportunities.refresh()
         self.consistency.refresh_palette()
+        self.stats_view.refresh_palette()
         self.plots.refresh_palette()
         # Force a Δ-box restyle even if the number is unchanged: the palette flip changes the colour
         # for the SAME delta, so clear the cached colour first.
@@ -819,11 +838,38 @@ class CentralView(QWidget):
 
     # --------------------------------------------------------- corners view (F-corner)
     def _on_corners_toggled(self, on: bool):
-        """Flip the table panel between Laps mode (the untouched LapTable) and Corners mode.
-        The corner table is (re)pointed at the current selection lazily on entry, so an
-        unused Corners view costs nothing."""
-        self.table_stack.setCurrentIndex(1 if on else 0)
-        if on:
+        """Flip the table panel into/out of Corners mode. The corner table is (re)pointed at
+        the current selection lazily on entry, so an unused Corners view costs nothing.
+        Corners and Stats are mutually exclusive — checking one silently unchecks the other
+        (blockSignals: the uncheck must not re-run the other handler mid-flip)."""
+        if on and self.stats_btn.isChecked():
+            self.stats_btn.blockSignals(True)
+            self.stats_btn.setChecked(False)
+            self.stats_btn.blockSignals(False)
+        self._apply_table_mode()
+
+    def _on_stats_toggled(self, on: bool):
+        """Flip the table panel into/out of Stats mode (see _on_corners_toggled for the
+        mutual-exclusion contract). The dashboard itself refreshes on the rebuild seam, not
+        here — entering the page is a pure stack flip."""
+        if on and self.corners_btn.isChecked():
+            self.corners_btn.blockSignals(True)
+            self.corners_btn.setChecked(False)
+            self.corners_btn.blockSignals(False)
+        self._apply_table_mode()
+
+    def _apply_table_mode(self):
+        """One place that maps the two checkable header buttons onto the stack page (Stats >
+        Corners > Laps) + the mode label, so the toggle handlers can never disagree on the
+        resulting page."""
+        if self.stats_btn.isChecked():
+            idx = 2
+        elif self.corners_btn.isChecked():
+            idx = 1
+        else:
+            idx = 0
+        self.table_stack.setCurrentIndex(idx)
+        if idx == 1:
             self.corner_table.set_lap(self._corner_lap)
         self._update_table_header()
 
@@ -846,9 +892,11 @@ class CentralView(QWidget):
             self._refresh_driving_channels()
 
     def _update_table_header(self):
-        """The table panel's mode label: "LAPS", or "CORNERS · LAP n" while in Corners mode
-        (so it is always explicit WHICH lap the per-corner rows describe)."""
-        if self.corners_btn.isChecked():
+        """The table panel's mode label: "LAPS", "CORNERS · LAP n" (always explicit WHICH lap
+        the per-corner rows describe), or "STATISTICS"."""
+        if self.stats_btn.isChecked():
+            self._table_label.setText("STATISTICS")
+        elif self.corners_btn.isChecked():
             lap = self._corner_lap
             self._table_label.setText(f"CORNERS · LAP {lap}" if lap is not None else "CORNERS")
         else:
@@ -1082,6 +1130,7 @@ class CentralView(QWidget):
         # corner losses shift on a re-segmentation; recomputed per build, never on the 30 Hz tick).
         self.opportunities.refresh()
         self.consistency.refresh()
+        self.stats_view.refresh()
         # Re-push driving channels explicitly: the selection step below can early-out on an
         # unchanged primary-lap id while the channels did change.
         self._refresh_driving_channels()

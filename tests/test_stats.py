@@ -18,8 +18,11 @@ Pins the Stats-page math on synthetic inputs (no telemetry file, no Qt):
     session_vmax, gg_cloud (valid-window restriction + the stride cap + no-g → None), and
     invalidate() dropping exactly the lap-level caches (totals survive, like the driving
     thresholds surviving a re-segment);
-  * the Session.stats property wiring on a bare Session (lazy build + degenerate trace).
-Run: python tests/test_stats.py
+  * the Session.stats property wiring on a bare Session (lazy build + degenerate trace);
+  * the StatsView page (offscreen Qt on a stubbed session): tiles + per-lap table populated
+    from real dataclasses, the None → em-dash rule, signal-absent sections hidden (no g →
+    no DRIVING/FRICTION CIRCLE; no sectors → no SECTORS), and the km/h → mph unit flip.
+Run: QT_QPA_PLATFORM=offscreen python tests/test_stats.py
 """
 import datetime
 import math
@@ -29,6 +32,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _synthetic import bare_session, seed_cols  # noqa: E402
@@ -317,6 +321,107 @@ def test_bare_session_stats_property_wires_the_service():
     assert r.idx == 0 and r.time == 70.0
     assert r.peak_lat_g is None                # no g meter on the bare session
     print("test_bare_session_stats_property_wires_the_service OK")
+
+
+# --------------------------------------------------------------- the StatsView page (Qt)
+def _app():
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
+
+
+def _fake_stats_service(*, has_g=True):
+    from studio.stats import LapStat, PaceStats, SessionTotals
+    rows = [
+        LapStat(idx=0, time=70.0, vmax_kmh=95.0, avg_kmh=54.0,
+                peak_lat_g=1.4 if has_g else None, peak_brake_g=1.1 if has_g else None,
+                brake_s=28.0 if has_g else None, brake_n=12 if has_g else None,
+                coast_s=0.5 if has_g else None, coast_frac=0.007 if has_g else None),
+        LapStat(idx=1, time=68.2, vmax_kmh=97.5, avg_kmh=55.5,
+                peak_lat_g=1.6 if has_g else None, peak_brake_g=0.9 if has_g else None,
+                brake_s=26.0 if has_g else None, brake_n=11 if has_g else None,
+                coast_s=0.0 if has_g else None, coast_frac=0.0 if has_g else None),
+    ]
+    gg = ((np.array([0.5, -0.8]), np.array([-0.4, 0.2])) if has_g else None)
+    return SimpleNamespace(
+        totals=lambda: SessionTotals(duration_s=4406.8, moving_s=4261.2, distance_m=65560.0,
+                                     start_clock="19:16", end_clock="20:30"),
+        pace=lambda: PaceStats(n=2, best=68.2, median=69.1, sigma=1.27, spread=0.9),
+        lap_stats=lambda: rows,
+        session_vmax=lambda: (97.5, 1),
+        gg_cloud=lambda max_points=4000: gg,
+    )
+
+
+def _fake_view_session(*, has_g=True, sectors=True):
+    """The duck-typed read surface StatsView touches — a stub session, no Session machinery."""
+    from studio.data_quality import TimingQuality
+    from studio.gmeter import CrossCheck
+    cross = CrossCheck(n=1000, lat_corr=0.9, long_corr=0.4, lat_rms_accl=0.5, lat_rms_gps=0.5,
+                       long_rms_accl=0.3, long_rms_gps=0.3, align_yaw_deg=10.0,
+                       align_reflect=False, ok=True)
+    return SimpleNamespace(
+        stats=_fake_stats_service(has_g=has_g),
+        valid_lap_ids=lambda: [0, 1],
+        excluded_lap_ids=lambda: [5],
+        dropout_lap_ids=lambda: {1},
+        sector_sigmas=lambda: ([0.15, None] if sectors else []),
+        session_best_splits=lambda: ([30.0, 38.0] if sectors else []),
+        sector_medians=lambda: ([30.5, None] if sectors else []),
+        timing_quality=TimingQuality(),
+        has_gmeter=has_g,
+        gmeter_source=lambda: "accl",
+        gmeter_long_source=lambda: "gps",
+        gmeter_cross=lambda: (cross if has_g else None),
+        best_lap_id=lambda: 1,
+    )
+
+
+def test_stats_view_renders_every_group():
+    _app()
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session())
+    assert v.t_laps.value.text() == "2 · 1⊘ · 1⚠"          # valid · excluded · dropout
+    assert v.t_duration.value.text() == "1:13:27"
+    assert v.t_distance.value.text() == "65.6 km"
+    assert v.t_clock.value.text() == "19:16–20:30"
+    assert v.t_best.value.text() == "1:08.200"
+    assert "97.5 km/h" in v.t_vmax.value.text()
+    assert "lap 2" in v.t_vmax.caption.text()                # 1-based, the app-wide rule
+    assert v.t_peak_lat.value.text() == "1.60 g"             # max over the laps
+    assert not v._driving_section.isHidden() and not v.gg.isHidden()
+    assert v.lap_table.rowCount() == 2
+    assert v.lap_table.item(1, 0).text().startswith("★ ")    # best lap starred…
+    assert v.lap_table.item(1, 0).text().endswith("2")       # …and 1-based
+    assert v.sector_table.rowCount() == 2
+    assert v.sector_table.item(1, 2).text() == "—"           # None median -> em-dash
+    assert "agree" in v.trust_label.text()                   # the cross-check's first UI surface
+    assert "GPS9 true clock" in v.trust_label.text()
+    print("test_stats_view_renders_every_group OK")
+
+
+def test_stats_view_hides_signal_absent_sections():
+    _app()
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session(has_g=False, sectors=False))
+    assert v._driving_section.isHidden() and v.gg.isHidden()     # no g -> no g sections
+    assert v._sector_section.isHidden() and v.sector_table.isHidden()
+    assert v.t_peak_lat.value.text() == "—"                      # None, never a fake 0
+    assert v.lap_table.item(0, 4).text() == "—"                  # per-lap g cells dash too
+    assert v.lap_table.item(0, 2).text() == "95.0"               # speed needs no g signal
+    print("test_stats_view_hides_signal_absent_sections OK")
+
+
+def test_stats_view_unit_flip():
+    _app()
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session())
+    v.set_speed_unit("mph")
+    assert "60.6 mph" in v.t_vmax.value.text()                   # 97.5 km/h -> mph
+    assert "speeds in mph" in v._laps_section.text()
+    assert v.lap_table.item(0, 2).text() == "59.0"               # 95.0 km/h -> mph
+    v.set_speed_unit("kmh")
+    assert "97.5 km/h" in v.t_vmax.value.text()
+    print("test_stats_view_unit_flip OK")
 
 
 if __name__ == "__main__":

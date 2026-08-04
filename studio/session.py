@@ -1343,9 +1343,11 @@ class Session:
         start/end clock source. (0, 0) when the trace is empty; a GPS5 stream reports 0 per
         point (no wall clock), which stats.clock_hhmm maps to None — the same sentinel
         convention as session_date below."""
-        n = self.laps.point_count()
-        if n == 0:
+        # Defensive hasattr: a synthetic/test `laps` (SimpleNamespace-grade) has no point API;
+        # the stats page then just shows no wall clock (the honest degenerate).
+        if not hasattr(self.laps, "point_count") or self.laps.point_count() == 0:
             return 0, 0
+        n = self.laps.point_count()
         return (int(self.laps.get_point(0).point.timestamp_ms),
                 int(self.laps.get_point(n - 1).point.timestamp_ms))
 
@@ -1394,6 +1396,16 @@ class Session:
         if not self.laps.sectors.sector_lines:
             return []
         return consistency.sector_sigmas(
+            [self.lap_sector_splits(i) for i in self.consistency_lap_ids()])
+
+    def sector_medians(self) -> list[float | None]:
+        """Per-sub-sector MEDIAN split (s) over the consistency laps — the Stats page's
+        "typical" column between best (session_best_splits) and σ (sector_sigmas). Same
+        column convention + lap set as sector_sigmas, so the three can never disagree.
+        [] when no sector lines are placed."""
+        if not self.laps.sectors.sector_lines:
+            return []
+        return stats_service.sector_medians(
             [self.lap_sector_splits(i) for i in self.consistency_lap_ids()])
 
     def corner_consistency(self) -> list[consistency.CornerSpread]:
@@ -1872,6 +1884,15 @@ class Session:
         axis, only when there's no GPS). The IMU forward axis is vibration-inflated (r~0.36), so the
         dial reads GPS-long even on an otherwise IMU-driven meter — the overlay tag labels this."""
         return self._gmeter.long_source
+
+    def gmeter_cross(self):
+        """The IMU↔GPS g cross-check computed at load (gmeter.CrossCheck: per-channel
+        correlation + RMS + the mount-calibration fit + the trust verdict), or None (no IMU,
+        or no GPS trajectory to check against). Printed to stdout since the g-meter shipped;
+        the Stats page's DATA TRUST card is its first in-app surface. getattr-guarded for
+        the bare-Session (no-__init__) test path — see _ref."""
+        gm = getattr(self, "_gmeter", None)
+        return None if gm is None else gm.cross
 
     def delta_at_time(self, t: float) -> float | None:
         """Δ-to-best (seconds) at media-clock time `t`: how far ahead (−) / behind (+) the lap
