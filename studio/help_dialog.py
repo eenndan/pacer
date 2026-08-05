@@ -51,13 +51,14 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Analysis", [
         ("G", "Toggle the g-meter overlay"),
         ("C", "Toggle compare mode (two laps side by side)"),
+        ("1 · 2 · 3 · 4", "Lap-panel tabs: Laps · Corners · Stats · Coaching"),
         ("⌘⇧S", "Session statistics, full-window (again / ⛶ to restore)"),
     ]),
     ("Layout", [
         ("Double-click header  ·  ⛶", "Maximize a panel to fill the window (Esc / again to restore)"),
         ("⌘⌃F", "Enter / exit full screen"),
         ("Double-click video  ·  ⤢", "Make the video fill the screen (Esc / again to restore)"),
-        ("View menu", "Show / hide the Coaching, Excluded and Consistency panels"),
+        ("Drag any splitter", "Resize the panels (the layout is remembered)"),
     ]),
     ("Help", [
         ("F1  ·  ?", "Show this shortcut reference"),

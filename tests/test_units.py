@@ -81,6 +81,34 @@ def test_prefs_roundtrip_and_default(tmp_path=None):
     print("test_prefs_roundtrip_and_default OK")
 
 
+def test_prefs_lap_panel_tab_and_grid_sizes_roundtrip():
+    """Tabbed-panel PR: the lap panel's active tab + the grid-splitter sizes round-trip through
+    the JSON store; missing/garbage/out-of-range values fall back to the safe defaults (tab 0 /
+    None = built-in layout) — a corrupt file can never open a blank page or a broken grid."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "prefs.json")
+        # Missing file → defaults.
+        assert prefs.lap_panel_tab(path) == 0
+        assert prefs.grid_sizes(path) is None
+        # Round-trip.
+        prefs.set_lap_panel_tab(2, path)
+        assert prefs.lap_panel_tab(path) == 2
+        prefs.set_grid_sizes([[500, 900], [400, 450], [300, 550]], path)
+        assert prefs.grid_sizes(path) == [[500, 900], [400, 450], [300, 550]]
+        # Out-of-range tab / malformed sizes read as the safe defaults.
+        prefs.set(prefs.LAP_PANEL_TAB, 9, path)
+        assert prefs.lap_panel_tab(path) == 0
+        prefs.set(prefs.LAP_PANEL_TAB, "stats", path)
+        assert prefs.lap_panel_tab(path) == 0
+        prefs.set(prefs.GRID_SIZES, [[1, 2], [3, 4]], path)     # only two lists
+        assert prefs.grid_sizes(path) is None
+        prefs.set(prefs.GRID_SIZES, "bogus", path)
+        assert prefs.grid_sizes(path) is None
+    print("test_prefs_lap_panel_tab_and_grid_sizes_roundtrip OK")
+
+
 def test_prefs_app_support_seam_matches_library():
     """prefs stores next to the library (same app-support dir), so both survive a relaunch the
     same way — the persistence mechanism the toggle mirrors."""

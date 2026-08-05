@@ -224,7 +224,10 @@ class LapTable(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(self._stack)
+        # Stretch 1 on the lap grid: the excluded strip + footer keep their compact size and
+        # every extra pixel of panel height becomes visible lap rows (without this, Qt split
+        # spare height between them and the grid never grew).
+        lay.addWidget(self._stack, 1)
         lay.addWidget(self._build_excluded_strip())  # between the table and the SESSION-BESTS footer
         lay.addWidget(self._build_footer())
         self.refresh()

@@ -783,6 +783,30 @@ QWidget[role="PanelHeader"] {{
     background-color: {C.surface};
     border-bottom: 1px solid {C.border};
 }}
+/* the lap panel's tab bar (Laps · Corners · Stats · Coaching) — lives INSIDE a PanelHeader
+   bar, so no base/bg of its own; tabs use the header type scale with the selected tab lifted
+   to full text + an accent underline (the app's one selected-state cue). Functional styling:
+   Qt's default tab chrome is illegible on the dark palette. */
+QTabBar {{
+    background: transparent;
+}}
+QTabBar::tab {{
+    background: transparent;
+    color: {C.text_dim};
+    font-size: {PANEL_HEADER}px;
+    font-weight: 600;
+    padding: 6px 10px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-right: 2px;
+}}
+QTabBar::tab:hover {{
+    color: {C.text};
+}}
+QTabBar::tab:selected {{
+    color: {C.text};
+    border-bottom: 2px solid {C.accent};
+}}
 /* section label that sits INSIDE a widget header bar — the dimmed small header type, but no
    bg/border of its own (the parent bar already provides them). */
 QLabel[role="BarLabel"] {{

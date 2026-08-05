@@ -68,7 +68,7 @@ def _real_central_view():
       * a consistent FULL-trace tx/ty/tt/tv (so the map marker index_at_time -> tx[i] is in bounds);
       * a real LapRenderCache (MapView's best-overlay draw segments);
       * lap_window / lap_at_time / lap_time (the global-clock windows the tick + scrub resolve);
-      * lap_rows / dropout / sector splits / consistency stubs (the LapTable + consistency strip);
+      * lap_rows / dropout / sector splits / consistency stubs (the LapTable + the Stats page);
       * a tiny pacer Sectors (real start_line Segment) so the Session.start_line property resolves.
     Returns (central_view, session, t0, t1) where t0/t1 are the two laps' media-clock time arrays.
     """
@@ -149,7 +149,7 @@ def _real_central_view():
     s.chapters = chapters.ChapterMap(["/tmp/stadium.MP4"], [float(t1[-1] - t0[0] + 5.0)])
     s.video_path = None
 
-    view = CentralView(s, ["/tmp/stadium.MP4"], sidecar_path=None, consistency_visible=False)
+    view = CentralView(s, ["/tmp/stadium.MP4"], sidecar_path=None)
     return view, s, t0, t1
 
 
@@ -175,10 +175,9 @@ def _studiowindow_with_view(*, build_menu: bool = False):
     QMainWindow.__init__(win)
     win.view = None
     win._tick_timer = None
-    win._consistency_visible = False
-    win._coaching_visible = True
-    win._coaching_collapsed = True
     win._excluded_visible = True
+    win._lap_panel_tab = 0
+    win._grid_sizes = None
     win._speed_unit = "kmh"
     win._colorblind = False           # _build_menu reads this for the colour-blind toggle
     win.session = s
@@ -207,12 +206,11 @@ def test_real_qtimer_fires_view_tick_through_studiowindow():
     QMainWindow.__init__(win)
     win.view = None
     win._tick_timer = None
-    win._consistency_visible = False
-    # Declutter PR: the window passes the coaching/excluded show/hide + coaching-collapse choices
-    # into each fresh view (persisted on the real window); seed the calm defaults here.
-    win._coaching_visible = True
-    win._coaching_collapsed = True
+    # Tabbed-panel PR: the window passes the excluded-strip choice + persisted tab/grid sizes
+    # into each fresh view (persisted on the real window); seed the defaults here.
     win._excluded_visible = True
+    win._lap_panel_tab = 0
+    win._grid_sizes = None
     win._speed_unit = "kmh"  # speed display unit (km/h default); _build_ui passes it into the view
     win.session = s
     win._paths = ["/tmp/stadium.MP4"]
@@ -565,30 +563,22 @@ def test_grip_map_reachable_via_labelled_combo():
     print("test_grip_map_reachable_via_labelled_combo OK")
 
 
-# ============================================================ persistent opportunities panel
-def test_opportunities_panel_persistent_and_visible_by_default():
-    """The coaching front-door is an ALWAYS-ON in-window panel (not just the modal dialog): the real
-    CentralView builds an OpportunitiesPanel under the lap table, present by default. On the 2-lap
-    synthetic (< MIN_LAPS clean laps) it shows the friendly excluded state, not an empty box.
-
-    Declutter PR (the "calm default"): the panel is still PRESENT (its header is the re-open
-    affordance) but ships COLLAPSED — the whole-panel VIEW-menu hide is a separate concern
-    (coaching_visible), so the panel widget itself stays visibleTo the view here."""
+# ============================================================ the Coaching tab page
+def test_opportunities_panel_is_the_coaching_tab_page():
+    """Coaching is a FULL page of the lap panel's tab stack (index 3) — no strip, no collapse,
+    no height cap: selecting the tab shows the whole panel; on the 2-lap stadium synthetic
+    (below coaching.MIN_LAPS) it shows the friendly need-more-laps state."""
     from studio.coaching_panel import OpportunitiesPanel
 
     view, _s, _t0, _t1 = _real_central_view()
-    assert isinstance(view.opportunities, OpportunitiesPanel), "the panel must be built into the view"
-    assert view.opportunities.isVisibleTo(view), "the opportunities panel is present by default"
-    # Calm default: the panel ships COLLAPSED (body hidden, header — the re-open affordance — shown).
-    assert view.opportunities.is_collapsed(), "the coaching panel ships collapsed (calm default)"
-    assert not view.opportunities.body.isVisibleTo(view), "collapsed -> the body is hidden"
-    # 2-lap synthetic -> friendly 'need more laps' excluded page (index 1), never an empty table.
+    assert isinstance(view.opportunities, OpportunitiesPanel), "the page must be built into the view"
+    assert view.table_stack.widget(3) is view.opportunities, "coaching is stack page 3"
+    assert view.opportunities.body.maximumHeight() > 10_000, "the old 132px cap must be gone"
+    view.select_lap_tab(3)
+    assert view.table_stack.currentIndex() == 3
     assert view.opportunities.body.currentIndex() == 1, "too few clean laps -> the friendly state"
     assert view.opportunities.empty_label.text(), "the excluded state must carry a friendly message"
-    # The rebuild seam refreshes it without error (the re-segmentation / reference path).
-    view.rebuild_derived_views(reselect=True)
-    assert view.opportunities.isVisibleTo(view)
-    print("test_opportunities_panel_persistent_and_visible_by_default OK")
+    print("test_opportunities_panel_is_the_coaching_tab_page OK")
 
 
 # ============================================================ full screen (window + video focus)
@@ -832,62 +822,54 @@ def _run_all():
     test_hero_readout_leads_with_labelled_delta_to_ideal()
     test_delta_to_ideal_tooltips_are_honest_not_best_sector()
     test_grip_map_reachable_via_labelled_combo()
-    test_opportunities_panel_persistent_and_visible_by_default()
+    test_opportunities_panel_is_the_coaching_tab_page()
     test_window_fullscreen_toggle_and_menu_text_and_esc()
     test_video_focus_enters_and_restores_cleanly()
     test_transport_fullscreen_button_and_video_dblclick_trigger_focus()
     test_video_focus_disabled_while_comparing()
     test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_state()
-    test_stats_page_suppresses_under_table_strips_and_restores_them()
+    test_tab_bar_switches_pages_and_names_the_corners_lap()
     test_show_stats_maximized_is_a_true_toggle()
     test_stats_corner_row_click_restores_grid_then_rings_map()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 
-def test_stats_page_suppresses_under_table_strips_and_restores_them():
-    """The Stats page owns the whole lap panel: while it is active the under-table coaching +
-    consistency strips hide (the dashboard carries their content — no duplicate surfaces on
-    the maximized dashboard), and a View-menu flip while ON Stats cannot resurrect a strip.
-    Leaving Stats restores exactly the user's persisted View choices."""
+def test_tab_bar_switches_pages_and_names_the_corners_lap():
+    """The lap panel's QTabBar is the ONE page switcher: tab index == stack index for all four
+    pages, and the Corners tab text always names the lap its rows describe (1-BASED, the
+    app-wide display rule — the old mode label leaked the 0-based id)."""
     view, _s, _t0, _t1 = _real_central_view()
-    assert view._coaching_visible and not view.opportunities.isHidden()
-
-    view.stats_btn.setChecked(True)
-    _APP.processEvents()
-    assert view.table_stack.currentIndex() == 2
-    assert view._table_label.text() == "STATISTICS"
-    assert view.opportunities.isHidden(), "coaching strip must hide under the Stats page"
-    assert view.consistency.isHidden()
-    # A View-menu show while ON Stats must not resurrect the strip under the dashboard…
-    view.set_consistency_visible(True)
-    assert view.consistency.isHidden(), "View toggle resurrected a strip under Stats"
-
-    view.stats_btn.setChecked(False)
-    _APP.processEvents()
+    assert view.tab_bar.count() == 4
+    assert [view.tab_bar.tabText(i) for i in (0, 2, 3)] == ["Laps", "Stats", "Coaching"]
+    for idx in (1, 2, 3, 0):
+        view.select_lap_tab(idx)
+        _APP.processEvents()
+        assert view.table_stack.currentIndex() == idx, f"tab {idx} must show page {idx}"
+    # The Corners tab names the primary lap, 1-based ("· L1" for lap id 0 / "· L2" for id 1).
+    lap = view._corner_lap
+    assert view.tab_bar.tabText(1) == (f"Corners · L{lap + 1}" if lap is not None else "Corners")
+    # Out-of-range selects are ignored, never a blank page.
+    view.select_lap_tab(9)
     assert view.table_stack.currentIndex() == 0
-    # …but leaving Stats applies it (and the coaching default comes back untouched).
-    assert not view.opportunities.isHidden(), "coaching strip must restore on leaving Stats"
-    assert not view.consistency.isHidden(), "the View choice made during Stats applies on exit"
-    print("test_stats_page_suppresses_under_table_strips_and_restores_them OK")
+    print("test_tab_bar_switches_pages_and_names_the_corners_lap OK")
 
 
 def test_show_stats_maximized_is_a_true_toggle():
     """View ▸ Session statistics (⌘⇧S): one action flips the lap panel to Stats AND maximizes
     it; the same action again restores the grid but stays on the Stats page (mirroring the ⤢
-    button's restore). Corners and Stats stay mutually exclusive through the flip."""
+    button's restore)."""
     view, _s, _t0, _t1 = _real_central_view()
-    view.corners_btn.setChecked(True)  # start from Corners to prove the exclusive flip
+    view.select_lap_tab(1)  # start from Corners to prove the flip
 
     view.show_stats_maximized()
     _APP.processEvents()
-    assert view.stats_btn.isChecked() and not view.corners_btn.isChecked()
-    assert view.table_stack.currentIndex() == 2
+    assert view.tab_bar.currentIndex() == 2 and view.table_stack.currentIndex() == 2
     assert view._maximized_panel is view._table_panel, "one action must maximize the panel"
 
     view.show_stats_maximized()
     _APP.processEvents()
     assert view._maximized_panel is None, "second invocation restores the grid"
-    assert view.stats_btn.isChecked(), "the page itself stays on Stats"
+    assert view.tab_bar.currentIndex() == 2, "the page itself stays on Stats"
     print("test_show_stats_maximized_is_a_true_toggle OK")
 
 

@@ -355,96 +355,55 @@ class OpportunitiesDialog(QDialog):
         return btn
 
 
-# How many opportunities the always-on panel surfaces (the actionable shortlist — the full ranking
-# stays in the modal dialog). Compact by design so it never crowds the 2x2 studio.
+# How many opportunities the coaching page surfaces (the actionable shortlist — the full ranking
+# + jump-to stays in the modal dialog).
 PANEL_TOP_N = 3
-# Panel body height bounds (resizable splitter section in central_view, like the consistency strip).
-PANEL_BODY_HEIGHT = 132   # px; natural/default height (~3 rows + a slim column header)
-PANEL_BODY_MIN_HEIGHT = 64   # px; below this the list scrolls instead of vanishing
-
-
-class _HeaderBar(QWidget):
-    """A PanelHeader-styled strip whose WHOLE surface is a click target: a left-click anywhere on
-    the bar toggles the panel collapsed/expanded (the chevron is just the visible affordance), so a
-    user re-opens the calm-collapsed coaching panel by clicking its header. The click is forwarded
-    to the injected ``on_click`` only when it lands on the bar's own background — a press on a child
-    button (the chevron) is handled by that child, so the two don't double-fire."""
-
-    def __init__(self, on_click):
-        super().__init__()
-        self._on_click = on_click
-        self.setCursor(Qt.PointingHandCursor)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._on_click()
-            event.accept()
-            return
-        super().mousePressEvent(event)
 
 
 class OpportunitiesPanel(QWidget):
-    """The PERSISTENT, always-on coaching summary (the front-door surface): a compact collapsible
-    strip showing the TOP-3 opportunities (corner · time lost · dominant reason) over a freshly
-    computed ``coaching.Opportunities``. Mirrors the consistency strip's pattern (header + chevron +
-    bounded body); the full modal ``OpportunitiesDialog`` stays available for the detail.
+    """The Coaching page of the lap panel's tab stack: the TOP-3 opportunities (corner · time
+    lost · dominant reason) over a freshly computed ``coaching.Opportunities``, at the panel's
+    FULL height — the full reason sentences get room to breathe (this replaced the old capped
+    under-table strip whose whole drag range was 68 px). The modal ``OpportunitiesDialog``
+    stays available for the full ranking + jump-to.
 
     Reads ONLY session accessors (``coaching_opportunities`` + ``coaching_brake_points``) — no
     analysis here. Refreshed on load / lap-selection / re-segmentation (never on the 30 Hz tick).
-    A row click emits ``corner_clicked(cid)`` so the app can ring the corner's apex on the map (the
-    Jump-to-corner detail action stays in the modal dialog). Honours the shared ESTIMATED labelling
-    (the ``(est)`` brake-point lines via ``_reason_cell``, from ``theme.ESTIMATED_MARK``) and the
-    friendly "need more laps" state when there aren't enough clean laps."""
+    A row click emits ``corner_clicked(cid)`` so the app can ring the corner's apex on the map.
+    Honours the shared ESTIMATED labelling (the ``(est)`` brake-point lines via ``_reason_cell``,
+    from ``theme.ESTIMATED_MARK``) and the friendly "need more laps" state when there aren't
+    enough clean laps."""
 
     # Clicked corner cid (None on deselect) -> the map apex-ring highlight (wired in central_view).
     corner_clicked = Signal(object)
-    # Emitted after the user collapses/expands the panel (via the chevron OR a header click), True =
-    # now collapsed. The window persists it so the calm-default collapsed state survives a reload.
-    collapsed_changed = Signal(bool)
 
     _COLUMNS = ["Corner", "Time lost", "±σ", "How to find it"]
 
-    def __init__(self, session: Session, collapsed: bool = True):
+    def __init__(self, session: Session):
         super().__init__()
         self.session = session
         self._num_font = theme.mono_font(theme.TABLE)
         self._cids: list[int] = []  # row -> corner cid, set in refresh()
-        # The last headline (e.g. "0.60 s across your top 3 corners"), stashed so the collapsed
-        # header can read "Coaching · <headline>" — an obvious re-open affordance (P1 wording kept).
+        # The headline (e.g. "0.60 s across your top 3 corners") — the page's one-line framing.
         self._headline = ""
         # Speed display unit (km/h default) for the reason sentence's apex deficit; pushed by the
         # window's Units toggle via set_speed_unit.
         self._speed_unit = units.DEFAULT_UNIT
 
-        # --- header: title · headline summary · collapse chevron (the consistency-strip pattern).
-        # The WHOLE header bar is a click target (the chevron is just the visible affordance), so a
-        # user re-opens the calm-collapsed panel by clicking anywhere on its header — see
-        # _HeaderBar.mousePressEvent below. The title reads "COACHING" (the product word the menu +
-        # docs use) rather than the internal "OPPORTUNITIES".
-        self._title = QLabel("COACHING")
-        self._title.setProperty("role", "BarLabel")
-        self.summary_label = QLabel("")  # "0.42 s in 3 corners …" — set in refresh()/_apply_collapsed
+        # --- the headline strip: the tab bar already names the page, so this is just the
+        # summary sentence (no title, no chevron — a tab you leave costs nothing).
+        self.summary_label = QLabel("")  # "0.42 s in 3 corners …" — set in refresh()
         self.summary_label.setProperty("role", "BarLabel")
         self.summary_label.setToolTip(
             "The biggest realistic time gains vs your own best lap (median of your clean, "
             "GPS-dropout-free laps). Open Coaching ▸ Opportunities… for the full ranking + jump-to.")
-        # Chevron: the ph.caret-* icon (matches the rest of the app's chevrons) rather than a bare
-        # unicode glyph. checked = collapsed; the icon + a click both flow through _set_collapsed.
-        self.collapse_btn = QPushButton()
-        self.collapse_btn.setCheckable(True)  # checked = collapsed
-        self.collapse_btn.setFlat(True)
-        self.collapse_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        self.collapse_btn.setToolTip("Collapse / expand the coaching panel")
-        self.collapse_btn.toggled.connect(self._set_collapsed)
-        header = _HeaderBar(self._toggle_collapsed)
+        header = QWidget()
         header.setProperty("role", "PanelHeader")
         row = QHBoxLayout(header)
         row.setContentsMargins(8, 4, 8, 4)
         row.setSpacing(8)
-        row.addWidget(self._title)
-        row.addStretch(1)
         row.addWidget(self.summary_label)
-        row.addWidget(self.collapse_btn)
+        row.addStretch(1)
         self._header = header
 
         # --- body: a stack of {top-3 table, friendly "need more laps" label}, swapped in refresh().
@@ -457,9 +416,9 @@ class OpportunitiesPanel(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(True)
         # Let each row grow to fit its wrapped "How to find it" cell instead of a fixed 34-px row
-        # that clips a 2nd line at a narrow panel width (the ellipsis-truncation bug). The body's
-        # max-height cap still keeps the panel compact — it scrolls once the auto-height rows exceed
-        # it, rather than cutting off the coaching sentence.
+        # that clips a 2nd line at a narrow panel width (the ellipsis-truncation bug). As a full
+        # tab page there is normally room for all rows; the table scrolls only when the panel is
+        # dragged very short.
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         hdr = self.table.horizontalHeader()
         hdr.setStretchLastSection(True)  # the reason column takes the slack
@@ -475,22 +434,13 @@ class OpportunitiesPanel(QWidget):
         self.body = QStackedWidget()
         self.body.addWidget(self.table)        # index 0 — the top-3 rows
         self.body.addWidget(self.empty_label)  # index 1 — the friendly excluded state
-        self.body.setMinimumHeight(PANEL_BODY_MIN_HEIGHT)
-        self.body.setMaximumHeight(PANEL_BODY_HEIGHT)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(header)
-        lay.addWidget(self.body)
+        lay.addWidget(self.body, 1)  # the rows take the page's full height
         self.refresh()
-        # Apply the initial collapsed state LAST (after refresh() has set the headline), so the
-        # collapsed header already reads "Coaching · <headline>". Set the button quietly (no signal)
-        # then apply directly, so building collapsed doesn't fire collapsed_changed at construction.
-        self.collapse_btn.blockSignals(True)
-        self.collapse_btn.setChecked(bool(collapsed))
-        self.collapse_btn.blockSignals(False)
-        self._apply_collapsed(bool(collapsed))
 
     # ------------------------------------------------------------------ build
     def refresh(self):
@@ -576,43 +526,7 @@ class OpportunitiesPanel(QWidget):
         else:
             self.corner_clicked.emit(None)
 
-    def is_collapsed(self) -> bool:
-        """True when the panel body is collapsed to just its header bar."""
-        return self.collapse_btn.isChecked()
-
-    def _toggle_collapsed(self):
-        """Flip the collapsed state (driven by a click anywhere on the header bar). Routes through
-        the checkable chevron so the button state, the icon and the body all stay in one truth; the
-        button's toggled signal then calls _set_collapsed."""
-        self.collapse_btn.setChecked(not self.collapse_btn.isChecked())
-
-    def _set_collapsed(self, collapsed: bool):
-        """The user collapsed/expanded the panel (chevron toggle OR header click): apply it, then
-        emit collapsed_changed so the window can persist the choice (survives a reload)."""
-        self._apply_collapsed(collapsed)
-        self.collapsed_changed.emit(bool(collapsed))
-
-    def _apply_collapsed(self, collapsed: bool):
-        """Hide/show the body; the header strip (with the headline summary) stays as the re-open
-        affordance. Swap the chevron icon (▸ collapsed / ▾ expanded, via the themed ph.caret glyph)
-        and refresh the summary label so it reads "Coaching · <headline>" while collapsed. The
-        uppercase COACHING title is hidden while collapsed so the bar doesn't say "Coaching" twice
-        (the sentence-case "Coaching · " summary carries the identity); expanded, the title returns
-        and the summary drops the prefix."""
-        self.body.setVisible(not collapsed)
-        self._title.setVisible(not collapsed)
-        self.collapse_btn.setIcon(
-            theme.icon("ph.caret-right" if collapsed else "ph.caret-down", color=C.text_dim))
-        self._refresh_summary_label()
-
     def _refresh_summary_label(self):
-        """Set the header summary text from the stashed headline. Collapsed, it leads with the
-        "Coaching · " prefix so the thin header bar is an obvious, self-labelling re-open affordance
-        ("Coaching · 0.60 s across your top 3 corners") — the uppercase title is hidden there;
-        expanded, the title reads COACHING so the summary is just the headline. Empty headline (the
-        friendly no-opportunity state) → no summary either way."""
-        if not self._headline:
-            self.summary_label.setText("")
-            return
-        collapsed = self.collapse_btn.isChecked()
-        self.summary_label.setText(f"Coaching · {self._headline}" if collapsed else self._headline)
+        """Set the headline-strip text from the stashed headline ("0.60 s across your top 3
+        corners"). Empty headline (the friendly no-opportunity state) → no summary."""
+        self.summary_label.setText(self._headline)

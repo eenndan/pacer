@@ -735,6 +735,24 @@ def test_stats_view_straights_table_and_fix_first_tile():
     print("test_stats_view_straights_table_and_fix_first_tile OK")
 
 
+def test_stats_view_trend_sparkline_shows_and_hides():
+    _app()
+    from studio.stats_panel import StatsView
+    sess = _fake_view_session()
+    sess.lap_time_trend = lambda: [(0, 70.0), (1, 68.2), (2, 69.0)]
+    v = StatsView(sess)
+    assert not v.spark.isHidden(), "the sparkline shows with >=2 clean laps"
+    # x is the 1-BASED lap number (the app-wide display rule): first tick reads "1", last "3".
+    ticks = v.spark.getPlotItem().getAxis("bottom")._tickLevels
+    labels = [lab for _pos, lab in ticks[0]]
+    assert labels == ["1", "3"], labels
+    # A one-lap session hides the sparkline (a one-dot trend is noise).
+    sess.lap_time_trend = lambda: [(0, 70.0)]
+    v.refresh()
+    assert v.spark.isHidden()
+    print("test_stats_view_trend_sparkline_shows_and_hides OK")
+
+
 def test_stats_view_corners_table_hidden_without_corners():
     _app()
     from studio.stats_panel import StatsView

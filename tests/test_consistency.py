@@ -1,4 +1,4 @@
-"""Synthetic unit tests for studio.consistency + the ConsistencyPanel (F6).
+"""Synthetic unit tests for studio.consistency (F6) + the map corner-ring.
 
 The statistics must equal direct numpy on the same arrays EXACTLY (σ = np.std(ddof=1),
 median loss = np.median − np.min, score = the documented σ × median-loss product) and the
@@ -149,93 +149,6 @@ def test_session_wiring_excludes_dropouts_and_matches_numpy():
 def _qapp():
     from PySide6.QtWidgets import QApplication
     return QApplication.instance() or QApplication([])
-
-
-class _StubSession:
-    """Duck-typed stand-in for ConsistencyPanel: the accessors it reads."""
-
-    def __init__(self, trend, sector_sigs, ranked, corner_list):
-        self._trend = trend
-        self._sigs = sector_sigs
-        self._ranked = ranked
-        # session.corners service face (the panel reads session.corners.corner_list()).
-        self.corners = SimpleNamespace(corner_list=lambda: corner_list)
-
-    def lap_time_trend(self):
-        return self._trend
-
-    def sector_sigmas(self):
-        return self._sigs
-
-    def corner_consistency(self):
-        return self._ranked
-
-
-def _stub_panel():
-    from studio.consistency_panel import TOP_N, ConsistencyPanel
-    trend = [(0, 70.0), (1, 71.2), (2, 69.8), (4, 69.5), (5, 70.4)]  # lap 3 invalid (gap in x)
-    sigs = [0.11, 0.32]
-    # 7 ranked corners -> the panel must show only TOP_N
-    ranked = [Y.CornerSpread(cid=c, sigma=0.5 - 0.05 * i, median_loss=0.4 - 0.04 * i,
-                             score=(0.5 - 0.05 * i) * (0.4 - 0.04 * i), n=5)
-              for i, c in enumerate((3, 7, 1, 5, 2, 4, 6))]
-    corner_list = [SimpleNamespace(cid=c, direction=1 if c % 2 else -1)
-                   for c in range(1, 8)]
-    panel = ConsistencyPanel(_StubSession(trend, sigs, ranked, corner_list))
-    return panel, trend, ranked, TOP_N
-
-
-def test_panel_populates_trend_and_top5():
-    _qapp()
-    panel, trend, ranked, top_n = _stub_panel()
-    # trend curve carries exactly the (lap id, time) series; PB dots = running minima
-    xs, ys = panel._curve.getData()
-    assert list(xs) == [i for i, _t in trend] and list(ys) == [t for _i, t in trend]
-    pb = Y.pb_mask([t for _i, t in trend])
-    px, py = panel._pb_dots.getData()
-    assert list(px) == [i for (i, _t), on in zip(trend, pb, strict=True) if on]
-    assert list(py) == [t for (_i, t), on in zip(trend, pb, strict=True) if on]
-    # σ summary: lap σ == np.std(ddof=1) of the trend times + one entry per sector column
-    times = [t for _i, t in trend]
-    assert f"{np.std(times, ddof=1):.2f}" in panel.sigma_label.text()
-    assert "S1 0.11" in panel.sigma_label.text() and "S2 0.32" in panel.sigma_label.text()
-    # top-N rows in ranked order with the documented formats
-    assert panel.table.rowCount() == top_n
-    for r in range(top_n):
-        sp = ranked[r]
-        assert panel.table.item(r, 0).text().startswith(f"C{sp.cid}")
-        assert panel.table.item(r, 1).text() == f"{sp.sigma:.2f}"
-        assert panel.table.item(r, 2).text() == f"{sp.median_loss:+.2f}"
-    print("ok panel: trend series + PB dots + sigma summary + top-5 ranked rows")
-
-
-def test_panel_click_emits_cid_and_only_cid():
-    _qapp()
-    panel, _trend, ranked, _top_n = _stub_panel()
-    got = []
-    panel.corner_clicked.connect(got.append)
-    panel.table.selectRow(1)
-    assert got == [ranked[1].cid], got
-    panel.table.selectRow(3)
-    assert got == [ranked[1].cid, ranked[3].cid], got
-    panel.table.clearSelection()
-    assert got[-1] is None, "deselect must clear (emit None)"
-    # refresh keeps quiet: rebuilding rows must not emit stale clicks
-    n = len(got)
-    panel.refresh()
-    assert len(got) == n
-    print("ok panel clicks: row -> cid, deselect -> None, refresh emits nothing")
-
-
-def test_panel_collapse_roundtrip():
-    _qapp()
-    panel, _trend, _ranked, _top_n = _stub_panel()
-    assert panel.body.isVisibleTo(panel) and panel.collapse_btn.text() == "▾"
-    panel.collapse_btn.setChecked(True)
-    assert not panel.body.isVisibleTo(panel) and panel.collapse_btn.text() == "▸"
-    panel.collapse_btn.setChecked(False)
-    assert panel.body.isVisibleTo(panel) and panel.collapse_btn.text() == "▾"
-    print("ok collapse: body hides/shows, chevron flips, round-trip clean")
 
 
 def test_map_corner_highlight_ring():

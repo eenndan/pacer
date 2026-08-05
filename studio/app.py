@@ -150,14 +150,12 @@ class StudioWindow(QMainWindow):
         self._ref_load_token = 0
         self._ref_load_worker = None
         self._tick_timer = None  # created on the first _build_ui; reused across reloads (window-owned)
-        # Persisted on the window so the View-menu choice survives a reload (passed into each view).
-        self._consistency_visible = False
-        # Left-column declutter (the "calm default"), loaded from the persisted prefs so the choices
-        # survive a relaunch; passed into each fresh CentralView. Defaults: coaching SHOWN but
-        # COLLAPSED (the calm default still exposes the one-click re-open header), excluded SHOWN
-        # (as its own collapsed one-liner). Each is guarded to a safe bool inside prefs.
-        self._coaching_visible = prefs.coaching_visible()
-        self._coaching_collapsed = prefs.coaching_collapsed()
+        # Persisted lap-panel state, loaded from prefs so the choices survive a relaunch and
+        # passed into each fresh CentralView: the active tab (Laps/Corners/Stats/Coaching), the
+        # grid-splitter sizes (None until the user drags one), and the excluded-strip choice
+        # (the strip lives inside the Laps page). Each is guarded to a safe value inside prefs.
+        self._lap_panel_tab = prefs.lap_panel_tab()
+        self._grid_sizes = prefs.grid_sizes()
         self._excluded_visible = prefs.excluded_visible()
         # Speed display unit (km/h default), loaded from the persisted prefs so the choice survives
         # a relaunch; passed into each fresh CentralView + the video/coaching exports.
@@ -497,15 +495,16 @@ class StudioWindow(QMainWindow):
             old_view.dispose()  # stop the old decoder + close its g-meter overlay before the swap
         # The view holds a read alias of session + the paths (banner) + the sidecar path.
         self.view = CentralView(self.session, self._paths, self._sidecar_path,
-                                self._consistency_visible, parent=self,
+                                parent=self,
                                 speed_unit=getattr(self, "_speed_unit", units.DEFAULT_UNIT),
-                                coaching_visible=self._coaching_visible,
-                                coaching_collapsed=self._coaching_collapsed,
-                                excluded_visible=self._excluded_visible)
+                                excluded_visible=self._excluded_visible,
+                                lap_tab=self._lap_panel_tab,
+                                grid_sizes=self._grid_sizes)
         # Keep Edit ▸ Undo's enabled state in sync with the session's undo stack as lines are dragged.
         self.view.timingEdited.connect(self._sync_edit_menu)
-        # Persist an in-place coaching collapse/expand (chevron or header click) across reloads.
-        self.view.coachingCollapsedChanged.connect(self._on_coaching_collapsed)
+        # Persist the lap-panel tab + any grid-splitter drag across reloads/relaunches.
+        self.view.lapTabChanged.connect(self._on_lap_tab_changed)
+        self.view.gridSizesChanged.connect(self._on_grid_sizes_changed)
         # Video focus (⤢ / double-click the video): the view maximized the video panel; the window
         # goes native-fullscreen (True) / normal (False) so the video fills the whole screen.
         self.view.videoFocusChanged.connect(self._on_video_focus_changed)
@@ -691,14 +690,9 @@ class StudioWindow(QMainWindow):
             "and a per-lap table. Press again (or ⤢) to restore the grid.")
         self._stats_action.triggered.connect(self._show_session_statistics)
         view_menu.addSeparator()
-        self._coaching_action = view_menu.addAction("Show coaching panel")
-        self._coaching_action.setCheckable(True)
-        self._coaching_action.setChecked(self._coaching_visible)
-        self._coaching_action.setToolTip(
-            "Show the coaching (Opportunities) panel under the lap table — the top corners where "
-            "you're losing time vs your own best lap. Collapse it in place with the ▸ chevron on "
-            "its header; uncheck this to hide it entirely.")
-        self._coaching_action.toggled.connect(self._on_coaching_toggled)
+        # The lap panel's pages are REAL tabs now (Laps · Corners · Stats · Coaching, digits
+        # 1-4) — the old show/hide toggles for the coaching + consistency strips died with the
+        # strips themselves. Only the excluded strip (inside the Laps page) keeps a toggle.
         self._excluded_action = view_menu.addAction("Show excluded laps")
         self._excluded_action.setCheckable(True)
         self._excluded_action.setChecked(self._excluded_visible)
@@ -707,15 +701,6 @@ class StudioWindow(QMainWindow):
             "your times and bests (a mis-segmented, out- or in-lap). Only ever shown when there are "
             "any; click its header to expand the list.")
         self._excluded_action.toggled.connect(self._on_excluded_toggled)
-
-        # F6 View ▸ Show consistency panel (unchecked by default; choice persists across reloads).
-        self._consistency_action = view_menu.addAction("Show consistency panel")
-        self._consistency_action.setCheckable(True)
-        self._consistency_action.setChecked(self._consistency_visible)
-        self._consistency_action.setToolTip(
-            "Show the consistency strip under the lap table: the lap-time trend sparkline and the "
-            "top-5 most inconsistent corners.")
-        self._consistency_action.toggled.connect(self._on_consistency_toggled)
 
         # View ▸ Units: the speed display unit (km/h default). Two mutually-exclusive checkable
         # items in a QActionGroup; flipping one persists the choice + refreshes the open views live.
@@ -822,6 +807,9 @@ class StudioWindow(QMainWindow):
         shortcut(Qt.Key_M, lambda: self._video_do(lambda v: v.toggle_mute()))
         shortcut(Qt.Key_G, lambda: self._video_do(lambda v: v.gmeter_btn.click()))
         shortcut(Qt.Key_C, lambda: self._video_do(lambda v: v.compare_btn.click()))
+        # 1-4 → the lap panel's tabs (Laps · Corners · Stats · Coaching); no-op before a load.
+        for digit, tab in ((Qt.Key_1, 0), (Qt.Key_2, 1), (Qt.Key_3, 2), (Qt.Key_4, 3)):
+            shortcut(digit, lambda t=tab: self._select_lap_tab(t))
         # ? → shortcut reference (keep in sync with help_dialog.SHORTCUT_GROUPS).
         shortcut(Qt.Key_Question, self._show_shortcuts)
 
@@ -831,6 +819,13 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             fn(view.video)
+
+    def _select_lap_tab(self, index: int):
+        """Digit shortcut 1-4 → the lap panel's tab, resolved at call time; no-op before the
+        first load (the persisted choice still seeds the next view)."""
+        view = getattr(self, "view", None)
+        if view is not None:
+            view.select_lap_tab(index)
 
     # ----------------------------------------------------- full screen (window + video focus)
     def _toggle_fullscreen(self):
@@ -1192,8 +1187,7 @@ class StudioWindow(QMainWindow):
         # we own the seek below, to the corner entry rather than the lap start.
         view.table.select([best])
         view._on_laps_selected([best])
-        if not view.corners_btn.isChecked():
-            view.corners_btn.setChecked(True)
+        view.select_lap_tab(1)  # the Corners tab shows the per-corner rows for the jump target
         view.map.highlight_corner(cid)
         target = self.session.corners.corner_entry_media_time(best, cid)
         if target is not None:
@@ -1201,26 +1195,23 @@ class StudioWindow(QMainWindow):
             # Seed auto-follow to the seek's lap so the post-seek tick isn't a lap-change edge.
             view._playback.followed_lap = self.session.lap_at_time(target)
 
-    def _on_consistency_toggled(self, on: bool):
-        """View ▸ Show consistency panel: remember the choice on the window (survives a reload) and
-        delegate the show/hide to the view. No-op before the first load."""
-        self._consistency_visible = bool(on)
-        view = getattr(self, "view", None)
-        if view is not None:
-            view.set_consistency_visible(self._consistency_visible)
-
-    def _on_coaching_toggled(self, on: bool):
-        """View ▸ Show coaching panel: remember the choice on the window, PERSIST it (guarded — a
-        write failure must never disrupt the app), and delegate the whole-panel show/hide to the
-        view. No-op before the first load (the persisted choice still applies to the next view)."""
-        self._coaching_visible = bool(on)
+    def _on_lap_tab_changed(self, index: int):
+        """The lap panel's tab changed (a tab click, a digit shortcut, or ⌘⇧S): remember +
+        persist (guarded) so the panel reopens on the same page after a reload/relaunch."""
+        self._lap_panel_tab = int(index)
         try:
-            prefs.set_coaching_visible(self._coaching_visible)
+            prefs.set_lap_panel_tab(self._lap_panel_tab)
         except OSError as exc:
-            print(f"studio: could not persist coaching-panel visibility ({exc!r}).", flush=True)
-        view = getattr(self, "view", None)
-        if view is not None:
-            view.set_coaching_visible(self._coaching_visible)
+            print(f"studio: could not persist the lap-panel tab ({exc!r}).", flush=True)
+
+    def _on_grid_sizes_changed(self, sizes: list):
+        """A grid splitter was dragged (debounced in the view): remember + persist (guarded)
+        the [main, left, right] sizes so the user's layout survives reloads/relaunches."""
+        self._grid_sizes = sizes
+        try:
+            prefs.set_grid_sizes(sizes)
+        except OSError as exc:
+            print(f"studio: could not persist the grid layout ({exc!r}).", flush=True)
 
     def _on_excluded_toggled(self, on: bool):
         """View ▸ Show excluded laps: remember + persist (guarded) the choice, and delegate the
@@ -1233,16 +1224,6 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             view.set_excluded_visible(self._excluded_visible)
-
-    def _on_coaching_collapsed(self, collapsed: bool):
-        """The coaching panel was collapsed/expanded IN PLACE (chevron or header click in the view):
-        remember + persist (guarded) the collapsed state so the calm-default collapse survives a
-        reload. The view already applied the visual change; this only records the choice."""
-        self._coaching_collapsed = bool(collapsed)
-        try:
-            prefs.set_coaching_collapsed(self._coaching_collapsed)
-        except OSError as exc:
-            print(f"studio: could not persist coaching-panel collapse state ({exc!r}).", flush=True)
 
     def _on_unit_selected(self, unit: str):
         """View ▸ Units: remember the chosen speed unit on the window (survives a reload), PERSIST
