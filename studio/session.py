@@ -1501,6 +1501,38 @@ class Session:
             return None
         return stats_service.phase_matrix([c.cid for c in corner_list], triples_by_lap)
 
+    def brake_report(self) -> list[stats_service.BrakeConsistency]:
+        """Per-corner braking repeatability + commitment over the consistency laps (the
+        Stats page's BRAKING table): each lap's matched brake onset from the D4 brake-point
+        model (driving.lap_brake_points — the same corner-window matching the coaching
+        braking signal uses), projected into the reference odometer (× ref_total/lap_total,
+        the house normalized projection) so cross-lap σ measures driver scatter, not
+        lap-length drift. [] without corners / g signal / clean laps. Not cached (read on
+        load / re-segment only)."""
+        ids = self.consistency_lap_ids()
+        corner_list = self.corners.corner_list()
+        basis = self.corners.basis()
+        if not corner_list or not ids or basis is None:
+            return []
+        ref_total = float(basis[1])
+        rows: list[dict] = []
+        for i in ids:
+            bps = self.driving.lap_brake_points(i)
+            if not bps:
+                continue  # no g signal or nothing matched on this lap
+            td = self._lap_time_dist(i)
+            lap_total = float(td[1][-1]) if td is not None else 0.0
+            scale = ref_total / lap_total if ref_total > 0 and lap_total > 0 else 1.0
+            rows.append({
+                bp.cid: (bp.actual_brake_dist * scale,
+                         (bp.peak_decel_g / bp.a_max_g) if bp.a_max_g > 0 else None,
+                         bp.metres_later)
+                for bp in bps
+            })
+        if not rows:
+            return []
+        return stats_service.brake_consistency([c.cid for c in corner_list], rows)
+
     # ------------------------------------------------------ auto coaching summary (F10)
     # Composes the corner model, driving channels and consistency stats into the ranked
     # "opportunities". The math lives in studio/coaching.py; this accessor owns the pacer-side

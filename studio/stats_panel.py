@@ -58,6 +58,15 @@ CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median 
                    "utilization. The worst 3 loss cells (by σ × median-loss — erratic AND "
                    "slow) are tinted: that's where practice pays first. Click a row to ring "
                    "the corner's apex on the map; click a column header to sort.")
+BRAKE_COLUMNS = ["Corner", "n", "Onset σ m", "Span m", "Commit %", "m later"]
+BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the cross-lap "
+                   "scatter of your brake-onset POINT (σ and max−min span, metres, compared "
+                   "in the reference lap's odometer) plus commitment — the median event's "
+                   "peak decel as a % of the session's demonstrated maximum — and the "
+                   "ESTIMATED median metres you could brake later (the D4 brake-point "
+                   "model). Corners with no matched brake event are omitted. Honesty floor: "
+                   "10 Hz GPS quantizes the onset by ~1.5 m — a σ at or below that is "
+                   "measurement, not driving. Click a row to ring the corner on the map.")
 # Pace-trend verdict band: a fitted slope within ±this (s/lap) reads "steady" — don't
 # narrate noise as a trend.
 TREND_STEADY_BAND = 0.02
@@ -264,6 +273,20 @@ class StatsView(QWidget):
         self.corners_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         col.addWidget(self.corners_table)
 
+        # --- braking repeatability + commitment (hidden without corners / a g signal)
+        self._braking_section = self._section("BRAKING")
+        col.addWidget(self._braking_section)
+        self.braking_table = self._make_table(BRAKE_COLUMNS)
+        self.braking_table.setToolTip(BRAKING_TOOLTIP)
+        self.braking_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.braking_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.braking_table.setFocusPolicy(Qt.ClickFocus)
+        self.braking_table.itemSelectionChanged.connect(self._on_brake_row_selected)
+        self.braking_table.horizontalHeader().sortIndicatorChanged.connect(
+            self._on_corner_sort)
+        self.braking_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
+        col.addWidget(self.braking_table)
+
         # --- DATA TRUST (the timing-quality + g-provenance + IMU↔GPS cross-check card)
         col.addWidget(self._section("DATA TRUST"))
         self.trust_label = QLabel("")
@@ -412,6 +435,7 @@ class StatsView(QWidget):
         self._refresh_driving(st, rows)
         self._refresh_sectors(session)
         self._refresh_corners(session, unit, u_label)
+        self._refresh_braking(session)
         self._refresh_trust(session)
         self._refresh_lap_table(session, rows, unit, u_label)
 
@@ -638,6 +662,53 @@ class StatsView(QWidget):
         for t, f, s, cap in zip(tiles, fr, secs, caps, strict=True):
             t.setVisible(True)
             t.set(f"{f * 100.0:.0f} %", f"{cap} · {s:.1f} s")
+
+    def _refresh_braking(self, session):
+        """The BRAKING table: one row per corner WITH a matched brake event (an unbraked
+        kink adds noise, not signal). Same sort/click idiom as the CORNERS table."""
+        report = [r for r in (getattr(session, "brake_report", list)() or []) if r.n > 0]
+        has = bool(report)
+        self._braking_section.setVisible(has)
+        self.braking_table.setVisible(has)
+        if not has:
+            self.braking_table.setRowCount(0)
+            return
+        mono = theme.mono_font(theme.TABLE)
+
+        def cell(val, fmtstr):
+            item = _NumItem(fmtstr.format(val) if val is not None else DASH)
+            item.setData(NUM_ROLE, val)
+            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item.setFont(mono)
+            return item
+
+        t = self.braking_table
+        t.setSortingEnabled(False)
+        t.blockSignals(True)
+        t.clearSelection()
+        t.setRowCount(len(report))
+        for r, bc in enumerate(report):
+            name = _NumItem(f"C{bc.cid}")
+            name.setData(NUM_ROLE, bc.cid)
+            t.setItem(r, 0, name)
+            t.setItem(r, 1, cell(bc.n, "{:d}"))
+            t.setItem(r, 2, cell(bc.sigma_m, "{:.1f}"))
+            t.setItem(r, 3, cell(bc.span_m, "{:.1f}"))
+            t.setItem(r, 4, cell(bc.commit_pct, "{:.0f}"))
+            t.setItem(r, 5, cell(bc.metres_later_med, "{:+.1f}"))
+        t.blockSignals(False)
+        t.setSortingEnabled(True)
+        self._fit_table(t)
+
+    def _on_brake_row_selected(self):
+        """A BRAKING-table row is a corner too — emit the same corner_clicked the CORNERS
+        table does (one map-ring pathway, maximize-aware in CentralView)."""
+        rows = self.braking_table.selectionModel().selectedRows()
+        if rows:
+            item = self.braking_table.item(rows[0].row(), 0)
+            self.corner_clicked.emit(item.data(NUM_ROLE) if item else None)
+        else:
+            self.corner_clicked.emit(None)
 
     def _on_corner_row_selected(self):
         """Emit the selected row's corner cid (None on deselect) — read from the row's own

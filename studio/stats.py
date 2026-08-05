@@ -96,6 +96,24 @@ class CornerReport:
 
 
 @dataclass(frozen=True)
+class BrakeConsistency:
+    """One corner's braking repeatability + commitment over the included laps (the BRAKING
+    table). Onsets are compared in the REFERENCE odometer (each lap's onset scaled by
+    ref_total/lap_total — the house normalized projection), so cross-lap σ measures the
+    DRIVER's scatter, not lap-length drift. Honesty floor: at 10 Hz a ~15 m/s kart moves
+    ~1.5 m per fix, so a σ at or below that is measurement quantization, not driving."""
+
+    cid: int                        # Corner.cid (1-based, track order)
+    n: int                          # laps with a matched brake event into this corner
+    median_dist_m: float | None     # median onset (reference odometer)
+    sigma_m: float | None           # cross-lap σ of the onset (m); None with <2 laps
+    span_m: float | None            # max − min onset spread (m)
+    commit_pct: float | None        # median (event peak decel / session a_max) × 100
+    metres_later_med: float | None  # median metres-left-on-table (optimal − actual; + = can
+    #                                 brake later). ESTIMATED, from the D4 brake-point model.
+
+
+@dataclass(frozen=True)
 class PhaseShare:
     """Where the session's corner time goes: the POSITIVE-part column sums of the per-corner
     median (entry, apex, exit) losses — seconds a typical lap gives away per phase. Positive
@@ -260,6 +278,33 @@ def corner_report(cids, directions, times_by_lap, apex_by_lap,
             apex_median_kmh=float(np.median(apex)) if len(apex) else None,
             grip_median=float(np.median(grip)) if len(grip) else None,
             score=(sig * loss) if sig is not None and loss is not None else 0.0,
+        ))
+    return out
+
+
+def brake_consistency(cids, rows_by_lap) -> list[BrakeConsistency]:
+    """Aggregate per-lap braking rows into per-corner repeatability + commitment stats.
+
+    `rows_by_lap`: one dict per included lap, cid → (onset_ref_m, commit_frac | None,
+    metres_later | None) — a corner absent from a lap's dict simply had no matched brake
+    event there (an unbraked or undetected pass; it lowers n, it does not fake a 0)."""
+    out: list[BrakeConsistency] = []
+    for cid in cids:
+        vals = [r[cid] for r in rows_by_lap if cid in r]
+        if not vals:
+            out.append(BrakeConsistency(cid=int(cid), n=0, median_dist_m=None, sigma_m=None,
+                                        span_m=None, commit_pct=None, metres_later_med=None))
+            continue
+        onsets = np.asarray([v[0] for v in vals], float)
+        commits = [v[1] for v in vals if v[1] is not None]
+        laters = [v[2] for v in vals if v[2] is not None]
+        out.append(BrakeConsistency(
+            cid=int(cid), n=len(vals),
+            median_dist_m=float(np.median(onsets)),
+            sigma_m=sigma(onsets),
+            span_m=float(np.max(onsets) - np.min(onsets)),
+            commit_pct=float(np.median(commits)) * 100.0 if commits else None,
+            metres_later_med=float(np.median(laters)) if laters else None,
         ))
     return out
 

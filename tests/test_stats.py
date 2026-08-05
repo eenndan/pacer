@@ -41,6 +41,7 @@ from studio.stats import (  # noqa: E402
     MOVING_MS,
     SessionStats,
     best_consecutive_mean,
+    brake_consistency,
     clock_hhmm,
     corner_report,
     cov_pct,
@@ -151,6 +152,26 @@ def test_corner_report_composes_columns():
     assert r2.grip_median is None and r1.grip_median is None
     assert corner_report([], [], [], [], []) == []
     print("test_corner_report_composes_columns OK")
+
+
+def test_brake_consistency_aggregates_matched_corners():
+    rows = [
+        {1: (100.0, 0.90, 2.0), 2: (300.0, 0.80, -1.0)},
+        {1: (104.0, 0.95, 3.0)},                       # lap 2 never braked into corner 2
+        {1: (102.0, None, None), 2: (306.0, 0.70, 5.0)},
+    ]
+    c1, c2, c3 = brake_consistency([1, 2, 3], rows)
+    assert c1.n == 3 and c1.median_dist_m == 102.0
+    assert abs(c1.sigma_m - float(np.std([100.0, 104.0, 102.0], ddof=1))) < 1e-12
+    assert c1.span_m == 4.0
+    assert abs(c1.commit_pct - 92.5) < 1e-9            # median of the two known commits
+    assert c1.metres_later_med == 2.5                  # None entries lower n, never fake 0
+    assert c2.n == 2 and c2.span_m == 6.0 and c2.metres_later_med == 2.0
+    assert c3.n == 0 and c3.sigma_m is None and c3.commit_pct is None
+    # single-lap corner: σ undefined, the rest still reported
+    (only,) = brake_consistency([7], [{7: (50.0, 0.5, 1.0)}])
+    assert only.n == 1 and only.sigma_m is None and only.span_m == 0.0
+    print("test_brake_consistency_aggregates_matched_corners OK")
 
 
 def test_phase_matrix_medians_and_positive_part_share():
@@ -625,6 +646,37 @@ def test_stats_view_phase_tiles_and_loss_tooltips():
     v.refresh()
     assert v.t_phase_entry.isHidden() and v.t_phase_exit.isHidden()
     print("test_stats_view_phase_tiles_and_loss_tooltips OK")
+
+
+def test_stats_view_braking_table_filters_unbraked_and_emits_clicks():
+    _app()
+    from studio.stats import BrakeConsistency
+    from studio.stats_panel import StatsView
+    sess = _fake_view_session()
+    sess.brake_report = lambda: [
+        BrakeConsistency(cid=1, n=10, median_dist_m=102.0, sigma_m=2.1, span_m=6.0,
+                         commit_pct=88.0, metres_later_med=3.5),
+        BrakeConsistency(cid=2, n=0, median_dist_m=None, sigma_m=None, span_m=None,
+                         commit_pct=None, metres_later_med=None),
+        BrakeConsistency(cid=3, n=1, median_dist_m=400.0, sigma_m=None, span_m=0.0,
+                         commit_pct=None, metres_later_med=-1.2),
+    ]
+    v = StatsView(sess)
+    t = v.braking_table
+    assert not t.isHidden() and t.rowCount() == 2       # the unbraked corner (n=0) is omitted
+    assert t.item(0, 0).text() == "C1" and t.item(0, 2).text() == "2.1"
+    assert t.item(0, 4).text() == "88" and t.item(0, 5).text() == "+3.5"
+    assert t.item(1, 2).text() == "—"                   # single-lap σ: dash, never 0
+    assert t.item(1, 5).text() == "-1.2"
+    fired = []
+    v.corner_clicked.connect(fired.append)
+    t.selectRow(1)
+    assert fired and fired[-1] == 3                     # the SAME signal the CORNERS table uses
+    # No braking data at all -> section hidden.
+    sess.brake_report = lambda: []
+    v.refresh()
+    assert v._braking_section.isHidden() and v.braking_table.isHidden()
+    print("test_stats_view_braking_table_filters_unbraked_and_emits_clicks OK")
 
 
 def test_stats_view_corners_table_hidden_without_corners():

@@ -126,6 +126,9 @@ class BrakePoint:
     optimal_brake_dist: float   # apex_dist - braking distance d (the latest sustainable brake point)
     metres_later: float         # optimal - actual; positive => you can brake LATER
     a_max_g: float              # the session's demonstrated peak braking used (g, positive)
+    # The matched event's own peak deceleration (g, positive) — the braking-commitment
+    # numerator (peak / a_max). Defaulted so pre-existing constructions stay valid.
+    peak_decel_g: float = 0.0
 
 
 def estimate_a_max(peak_decels, *, floor_g: float = AMAX_FLOOR_G) -> float:
