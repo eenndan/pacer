@@ -32,4 +32,7 @@ pacer-ios/
 # internal review / planning notes (kept locally in the product root, never committed)
 CPO_REVIEW.md
 ROADMAP.md
-EXECUTION_PLAN.mdTesting/
+EXECUTION_PLAN.md
+
+# ctest scratch output (running ctest from the repo root drops it here)
+Testing/

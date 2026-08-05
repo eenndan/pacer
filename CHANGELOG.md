@@ -6,7 +6,72 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
-_Nothing yet._
+Everything merged since v0.1.0 (~100 PRs), grouped by theme.
+
+### Added
+
+- **Session Statistics page** — a third page on the lap panel's **Laps | Corners | Stats**
+  toggle (⌘⇧S or View ▸ Session statistics opens it as a full-window dashboard): session
+  totals (time on track, moving time, distance, wall-clock window), the pace distribution
+  (best / median / σ / race pace / consistency rating / laps-within-1% / a robust
+  Theil–Sen trend), top-speed & peak-g tiles, a **g-g friction circle** with the
+  demonstrated-envelope ring, brake/coast reductions, per-sector best/median/σ, a per-lap
+  channel table, a sortable **corner-by-corner report** (worst corners tinted; rows ring
+  the corner on the map), the **entry/apex/exit phase-loss** headline ("where the corner
+  time goes"), **braking repeatability + commitment** per corner, the **straight-line
+  report** with trap speeds and the exit-leverage **FIX FIRST** tile, a coaching digest
+  ("fix your top 3 → projected lap"), and a **DATA TRUST card** surfacing the IMU↔GPS
+  cross-check that was previously stdout-only.
+- **Coaching front door** — the persistent top-3 opportunities panel under the lap table,
+  the Δ-to-ideal hero readout, corner time-loss attribution (entry/apex/exit thirds), the
+  braking-point optimizer ("you can brake ~N m later"), a synthetic brake/throttle band
+  under the speed chart, the continuous ideal-lap delta, and grip-utilization map
+  colouring.
+- **Trust & honesty surfaces** — provisional-timing chrome for unverified start lines, the
+  data-quality signal (media-clock fallback / dropped-fix fraction), honest ESTIMATED
+  labelling on derived channels, colour-blind-safe cues, the "new personal best!" moment,
+  and 1-based lap numbers everywhere.
+- **Sharing** — the one-tap shareable lap-card image (with an honesty gate) and clean map
+  exports.
+- **Library v2** — trustworthy PB history per track, search, schema-bump backups,
+  last-folder memory, and a guard against merging unrelated dropped recordings.
+- **Tracks** — the track database (auto-detect + File ▸ Save as track), geometry
+  track-match for unknown tracks, the peak-speed start-line heuristic, opt-in
+  hill-compensated brake coaching, and an Elevation map channel.
+- **Layout** — per-panel maximize (⛶ / double-click a header), window full screen (⌘⌃F),
+  the fullscreen-video gesture, the calm-default left column (collapsible coaching +
+  View-menu hide toggles), the ⊘ excluded-laps strip, and the welcome drop-zone with
+  drag-and-drop import.
+- **Speed units** toggle (km/h ↔ mph), persisted preferences, and an undo for start-line
+  edits + a privacy disclosure / forget-recording flow.
+- **Packaging & infra** — macOS .app/.dmg packaging (PyInstaller) with a build-only CI
+  smoke, off-thread cancellable session load, bulk IMU bindings, the synthetic
+  golden-equivalence CI gate, and the branded app icon + QApplication identity.
+
+### Changed
+
+- `Session` decomposed into injected services (`Bests`, `CornerModel`, `DrivingChannels`,
+  `Timeline`, `SessionStats`, the map render cache); `app.py` slimmed via extracted
+  workers/overlays; compare-mode ownership unified under `CompareController`.
+- Docs pivoted to the portfolio/craft showcase: the moat-first README, the GitHub Pages
+  landing, `docs/ACCURACY.md` (the transponder-validation story), `AGENTS.md` as the
+  single agent front door, and `studio/README.md` as a full module map.
+- Contributor-governance boilerplate and dead ImGui-era config removed (the solo-dev +
+  agents posture).
+
+### Fixed
+
+- A short mis-segmented lap can no longer be crowned session best (the lap-distance band
+  in the real-lap filter); band-excluded laps are surfaced instead of silently vanishing.
+- False "GPS quality low" on clean recordings (the dropped-fix denominator counted the
+  trimmed stationary lead-in); clock-aware degraded-timing copy.
+- `speed_long_g` run-seam NaN that silently dropped brake/coast events; the brake-onset
+  seam blip.
+- Library wipe on a schema bump (now backs up + reveals); undo/forget seam bugs.
+- Share-card overflow, leaked chrome in map grabs, plot-overlay and corner-label
+  collisions, and self-contradicting coaching copy.
+- Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker
+  drain (CI deadlocks); the drift-gated per-corner loss alignment.
 
 ## [0.1.0] — 2026-06-22
 
