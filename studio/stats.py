@@ -76,6 +76,26 @@ class LapStat:
 
 
 @dataclass(frozen=True)
+class CornerReport:
+    """One corner's whole-session statistics row (the Stats page's CORNERS table): the
+    session's demonstrated best/typical/spread through the corner, the apex speeds, and
+    the median grip utilization. None = not derivable (no g signal / <2 laps), never 0."""
+
+    cid: int                        # Corner.cid (1-based, track order)
+    direction: int                  # +1 left / -1 right (Corner.direction)
+    n: int                          # included laps with a finite time in this corner
+    best_s: float | None            # session-best time-in-corner
+    median_s: float | None          # the typical lap's time-in-corner
+    sigma_s: float | None           # sample σ (ddof=1; None with <2 laps)
+    median_loss_s: float | None     # median − best (≥ 0): what the typical lap gives away
+    apex_best_kmh: float | None     # the fastest apex speed carried through
+    apex_median_kmh: float | None
+    grip_median: float | None       # median per-lap grip utilization (0..~1.1); None w/o g
+    score: float                    # σ × median_loss — the inconsistency weight (0.0 when
+    #                                 either input is missing), same product as consistency.py
+
+
+@dataclass(frozen=True)
 class PaceStats:
     """Lap-time distribution over the consistency laps (valid ∧ dropout-free)."""
 
@@ -171,6 +191,41 @@ def sector_medians(splits_by_lap: list[list[float]]) -> list[float | None]:
         vals = np.asarray([sp[k] for sp in splits_by_lap if k < len(sp)], float)
         vals = vals[np.isfinite(vals)]
         out.append(float(np.median(vals)) if len(vals) else None)
+    return out
+
+
+def corner_report(cids, directions, times_by_lap, apex_by_lap,
+                  grip_by_lap) -> list[CornerReport]:
+    """The corner-by-corner session report: one CornerReport per corner (track order).
+
+    Each *_by_lap input is one row per included lap, aligned to `cids` (ragged rows are
+    tolerated — column k reads only rows long enough). σ via consistency.sigma (ddof=1);
+    score = σ × median_loss, the same both-erratic-AND-slow product the consistency
+    ranking uses (rationale in studio/consistency.py) — 0.0 when either input is missing
+    so an under-sampled corner never outranks a measured one."""
+
+    def column(rows, k):
+        vals = np.asarray([r[k] for r in rows if k < len(r)], float)
+        return vals[np.isfinite(vals)]
+
+    out: list[CornerReport] = []
+    for k, (cid, direction) in enumerate(zip(cids, directions, strict=True)):
+        times = column(times_by_lap, k)
+        apex = column(apex_by_lap, k)
+        grip = column(grip_by_lap, k)
+        n = len(times)
+        best = float(np.min(times)) if n else None
+        med = float(np.median(times)) if n else None
+        sig = sigma(times)
+        loss = med - best if n else None
+        out.append(CornerReport(
+            cid=int(cid), direction=int(direction), n=n,
+            best_s=best, median_s=med, sigma_s=sig, median_loss_s=loss,
+            apex_best_kmh=float(np.max(apex)) if len(apex) else None,
+            apex_median_kmh=float(np.median(apex)) if len(apex) else None,
+            grip_median=float(np.median(grip)) if len(grip) else None,
+            score=(sig * loss) if sig is not None and loss is not None else 0.0,
+        ))
     return out
 
 
