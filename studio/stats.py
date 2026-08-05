@@ -33,6 +33,16 @@ MOVING_MS = 4.0
 # sample interval — moving time skips such steps (conservative: a gap while moving is NOT
 # counted as time on track, because nothing was measured there).
 MAX_SAMPLE_GAP_S = 1.0
+# Pace-trend gate: below this many clean laps a fitted slope is noise dressed as insight,
+# so the trend statistic reports None and the tile shows a dash.
+TREND_MIN_LAPS = 6
+# "Race pace" window: the best mean of this many CONSECUTIVE clean laps — the sustained-run
+# number next to the single glory lap.
+RACE_PACE_N = 3
+# The demonstrated combined-g envelope percentile — the SAME robust p98 convention as the
+# driving channels' friction-circle envelope (driving.grip_envelope), so the dashed ring on
+# the g-g plot and the per-corner grip normalisation can never disagree in spirit.
+ENVELOPE_PCT = 98.0
 
 
 # --------------------------------------------------------------------- value objects
@@ -56,6 +66,7 @@ class LapStat:
     time: float                 # lap time (s)
     vmax_kmh: float | None      # max full_speed on the lap
     avg_kmh: float | None       # odometer / lap time — the distance-true average
+    vmin_kmh: float | None      # min full_speed on the lap — the slowest-corner speed
     peak_lat_g: float | None    # max |lateral g| (IMU lateral — the trusted axis)
     peak_brake_g: float | None  # max deceleration, reported positive (validated GPS-derived long)
     brake_s: float | None       # total time in brake events
@@ -163,6 +174,75 @@ def sector_medians(splits_by_lap: list[list[float]]) -> list[float | None]:
     return out
 
 
+def theil_sen_slope(values) -> float | None:
+    """Robust trend: the MEDIAN of all pairwise slopes (Theil–Sen), in units per index step
+    (here: seconds per lap). Outlier-immune — one traffic lap can't fake a trend the way it
+    drags a least-squares fit. None with fewer than 2 finite values. O(n²) pairs is nothing
+    at session lap counts."""
+    a = np.asarray(list(values), float)
+    a = a[np.isfinite(a)]
+    n = len(a)
+    if n < 2:
+        return None
+    i, j = np.triu_indices(n, k=1)
+    return float(np.median((a[j] - a[i]) / (j - i)))
+
+
+def best_consecutive_mean(values, n: int = RACE_PACE_N) -> float | None:
+    """The best (lowest) mean over `n` CONSECUTIVE values — "race pace": the best sustained
+    n-lap run, the honest companion to the single best lap. Windows containing a non-finite
+    value are skipped (NaN propagates through the window sum); None when no full window
+    exists."""
+    a = np.asarray(list(values), float)
+    if len(a) < n:
+        return None
+    means = np.convolve(a, np.ones(n) / n, mode="valid")  # NaN poisons its windows only
+    if not np.any(np.isfinite(means)):
+        return None
+    return float(np.nanmin(means))
+
+
+def within_pct_of_best(values, pct: float) -> int:
+    """How many values sit within `pct` percent of the best (minimum) — the "banked pace"
+    count (the best itself counts). 0 for an empty/all-NaN input."""
+    a = np.asarray(list(values), float)
+    a = a[np.isfinite(a)]
+    if len(a) == 0:
+        return 0
+    return int(np.sum(a <= float(np.min(a)) * (1.0 + pct / 100.0)))
+
+
+def cov_pct(values) -> float | None:
+    """Coefficient of variation as a percent: sample σ / median × 100 — the one-number,
+    scale-free consistency rating (comparable across tracks/lap lengths, unlike raw σ).
+    σ via consistency.sigma (ddof=1); None with <2 finite values or a degenerate median."""
+    a = np.asarray(list(values), float)
+    a = a[np.isfinite(a)]
+    s = sigma(a)
+    if s is None:
+        return None
+    med = float(np.median(a))
+    if med <= 0:
+        return None
+    return s / med * 100.0
+
+
+def envelope_g(lat_g, long_g, pct: float = ENVELOPE_PCT) -> float | None:
+    """The demonstrated combined-g envelope: the `pct`th percentile of hypot(lat, long) —
+    robust to lone spikes (the same p98 convention as the driving channels' grip envelope).
+    None on an empty series."""
+    lat = np.asarray(lat_g, float)
+    lon = np.asarray(long_g, float)
+    m = min(len(lat), len(lon))
+    if m == 0:
+        return None
+    combined = np.hypot(lat[:m], lon[:m])
+    combined = combined[np.isfinite(combined)]
+    if len(combined) == 0:
+        return None
+    return float(np.percentile(combined, pct))
+
+
 # --------------------------------------------------------------------- the service
 class SessionStats:
     """Session statistics over Session-bound primitives (see the module docstring).
@@ -246,6 +326,7 @@ class SessionStats:
             lap_time = float(self._lap_time(i))
             dist, speed_kmh, elapsed = self._lap_arrays(i)
             vmax = float(np.max(speed_kmh)) if len(speed_kmh) else None
+            vmin = float(np.min(speed_kmh)) if len(speed_kmh) else None
             avg = (float(dist[-1]) / lap_time * 3.6
                    if len(dist) and lap_time > 0 else None)
             lat_pk = brake_pk = None
@@ -263,7 +344,7 @@ class SessionStats:
                 coast_s = float(sum(sp.duration for sp in spans))
                 coast_frac = coast_s / lap_time if lap_time > 0 else None
             out.append(LapStat(idx=i, time=lap_time, vmax_kmh=vmax, avg_kmh=avg,
-                               peak_lat_g=lat_pk, peak_brake_g=brake_pk,
+                               vmin_kmh=vmin, peak_lat_g=lat_pk, peak_brake_g=brake_pk,
                                brake_s=brake_s, brake_n=brake_n,
                                coast_s=coast_s, coast_frac=coast_frac))
         self._lap_stats_cache = out
@@ -274,6 +355,58 @@ class SessionStats:
         set every σ statistic runs over, so Pace and the consistency panel always agree).
         Cheap (a handful of floats) → not cached, like Session's consistency assemblers."""
         return pace_stats([self._lap_time(i) for i in self._consistency_lap_ids()])
+
+    def _clean_times(self) -> list[float]:
+        """The consistency laps' times in session order — the one series every pace-quality
+        statistic below runs over (same set as pace(), so the tiles can never disagree)."""
+        return [self._lap_time(i) for i in self._consistency_lap_ids()]
+
+    def pace_trend(self) -> float | None:
+        """The robust lap-time trend (Theil–Sen median slope, s/lap; negative = getting
+        faster) over the clean laps IN SESSION ORDER. Gated at TREND_MIN_LAPS — a slope
+        fitted to five laps is noise, so short sessions honestly report None."""
+        times = self._clean_times()
+        if len(times) < TREND_MIN_LAPS:
+            return None
+        return theil_sen_slope(times)
+
+    def race_pace(self) -> float | None:
+        """The best mean of RACE_PACE_N consecutive clean laps — the sustained-run pace next
+        to the single glory lap. None with fewer than a full window of clean laps."""
+        return best_consecutive_mean(self._clean_times())
+
+    def pace_cov(self) -> float | None:
+        """The consistency rating: coefficient of variation (σ/median %) of the clean lap
+        times — scale-free, so it is comparable across tracks. None with <2 laps."""
+        return cov_pct(self._clean_times())
+
+    def laps_within_pct(self, pct: float = 1.0) -> tuple[int, int]:
+        """(count, n): how many of the n clean laps sit within `pct` % of the session best —
+        the "banked pace" count (the best lap itself counts)."""
+        times = self._clean_times()
+        return within_pct_of_best(times, pct), len(times)
+
+    def longest_coast_s(self) -> float | None:
+        """The longest single coasting span (s) across the valid laps — the headline "where
+        seconds hide" number next to the median coast tile. None without a g signal; 0.0 is
+        a real (and good) zero with one."""
+        gm = self._gmeter()
+        if not getattr(gm, "has_data", False):
+            return None
+        longest = 0.0
+        for i in self._valid_lap_ids():
+            for sp in self._coast_spans(i):
+                longest = max(longest, float(sp.duration))
+        return longest
+
+    def gg_envelope(self) -> float | None:
+        """The demonstrated combined-g envelope (p98 of hypot over the valid-lap g cloud) —
+        the dashed ring on the friction circle and the "grip ceiling" tile. None without a
+        g signal / valid laps."""
+        cloud = self.gg_cloud()
+        if cloud is None:
+            return None
+        return envelope_g(cloud[0], cloud[1])
 
     def session_vmax(self) -> tuple[float, int] | None:
         """(top speed km/h, lap id) over the valid laps — the session's headline Vmax and

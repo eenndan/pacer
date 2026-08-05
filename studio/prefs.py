@@ -5,9 +5,10 @@ Mirrors ``studio/library.py``'s persistence exactly: the same app-support direct
 so the suite never touches the real file), and the same atomic write (temp file + ``os.replace``).
 Kept separate from the library index (that file is a data catalogue; this is UI state).
 
-Today it holds one key — the speed display unit (``studio/units.py``) — but it's a generic
-get/set dict so future toggles can join it without a new file. Every read is guarded and defaults
-to the safe value, so a missing / corrupt file is never fatal (the toggle just starts at km/h).
+A generic get/set dict of persisted UI choices: the speed display unit (``studio/units.py``),
+the colour-blind palette, the last-opened folder, and the declutter toggles (coaching /
+excluded / consistency visibility). Every read is guarded and defaults to the safe value, so
+a missing / corrupt file is never fatal (each toggle just starts at its default).
 """
 
 from __future__ import annotations

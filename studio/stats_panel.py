@@ -49,7 +49,10 @@ GG_RING_STEP = 0.5        # g; concentric reference rings every half g
 ROW_HEIGHT = 22           # per-lap/sector table row height (the consistency-table convention)
 # Speed units live in the PER-LAP section label (one place), keeping the columns narrow
 # enough that the whole table fits the quadrant with no clipped column.
-LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Lat g", "Brk g", "Brake s", "Coast s"]
+LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s", "Coast s"]
+# Pace-trend verdict band: a fitted slope within ±this (s/lap) reads "steady" — don't
+# narrate noise as a trend.
+TREND_STEADY_BAND = 0.02
 SECTOR_COLUMNS = ["Sector", "Best", "Median", "σ (s)"]
 
 GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — lateral g across, "
@@ -126,16 +129,45 @@ class StatsView(QWidget):
         col.addWidget(pace_hdr)
         self.t_best = _Tile("best lap")
         self.t_median = _Tile("median lap")
+        self.t_race_pace = _Tile("race pace · best 3 straight")
+        self.t_race_pace.setToolTip(
+            "The best average of 3 CONSECUTIVE clean laps — your sustained pace, next to "
+            "the single glory lap.")
+        self.t_digest = _Tile("fix your top 3 →")
         self.t_sigma = _Tile("σ lap")
         self.t_spread = _Tile("median − best")
-        col.addLayout(self._grid(self.t_best, self.t_median, self.t_sigma, self.t_spread))
+        self.t_cov = _Tile("consistency · σ/median")
+        self.t_cov.setToolTip(
+            "Coefficient of variation: sample σ of the clean lap times over the median, as "
+            "a percent. Scale-free, so it is comparable across tracks — lower is steadier.")
+        self.t_within = _Tile("within 1% of best")
+        self.t_trend = _Tile("trend")
+        self.t_trend.setToolTip(
+            "Robust lap-time trend over the session (Theil–Sen median slope — one traffic "
+            "lap can't fake it). Negative = getting faster. Shown from 6 clean laps up.")
+        col.addLayout(self._grid(self.t_best, self.t_median, self.t_race_pace, self.t_digest,
+                                 self.t_sigma, self.t_spread, self.t_cov, self.t_within,
+                                 self.t_trend))
 
         # --- SPEED & G peaks
         col.addWidget(self._section("SPEED · G"))
         self.t_vmax = _Tile("top speed")
+        self.t_vmax.setToolTip("Max 3D GPS speed across the valid laps (10 Hz).")
+        self.t_vmin = _Tile("slowest point")
+        self.t_vmin.setToolTip(
+            "The slowest on-lap speed across the valid laps — typically the tightest "
+            "corner (a traffic or off-line lap can dip lower).")
         self.t_peak_lat = _Tile("peak lateral g")
+        self.t_peak_lat.setToolTip(
+            "Peak |lateral g| over the valid laps — IMU lateral, the GPS-cross-checked axis "
+            "(see DATA TRUST).")
         self.t_peak_brake = _Tile("peak braking g")
-        col.addLayout(self._grid(self.t_vmax, self.t_peak_lat, self.t_peak_brake))
+        self.t_peak_brake.setToolTip(
+            "Peak deceleration — from the smoothed GPS speed derivative (the validated "
+            "longitudinal; the raw IMU forward axis is vibration-inflated). 10 Hz GPS "
+            "quantizes brake onsets by ~1.5 m.")
+        col.addLayout(self._grid(self.t_vmax, self.t_vmin, self.t_peak_lat,
+                                 self.t_peak_brake))
 
         # --- the g-g friction circle
         self._gg_section = self._section("FRICTION CIRCLE")
@@ -170,7 +202,15 @@ class StatsView(QWidget):
         self.t_brake = _Tile("braking / lap · median")
         self.t_brake_n = _Tile("brake events / lap")
         self.t_coast = _Tile("coasting / lap · median")
-        self._driving_grid = self._grid(self.t_brake, self.t_brake_n, self.t_coast)
+        self.t_longest_coast = _Tile("longest coast")
+        self.t_grip_ceiling = _Tile("grip envelope · p98")
+        self.t_grip_ceiling.setToolTip(
+            "The session's demonstrated combined-g ceiling: the 98th percentile of "
+            "hypot(lateral, longitudinal) over the valid laps — the dashed ring on the "
+            "friction circle, and the same robust convention the per-corner grip "
+            "normalises to. ESTIMATED (lateral-dominant).")
+        self._driving_grid = self._grid(self.t_brake, self.t_brake_n, self.t_coast,
+                                        self.t_longest_coast, self.t_grip_ceiling)
         col.addLayout(self._driving_grid)
 
         # --- per-SECTOR best/median/σ (hidden without sector lines)
@@ -294,9 +334,18 @@ class StatsView(QWidget):
             self.t_median.set(fmt_time(pace.median), f"median · {pace.n} clean laps")
             self.t_sigma.set(f"{pace.sigma:.2f} s" if pace.sigma is not None else None)
             self.t_spread.set(f"+{pace.spread:.2f} s")
+            rp = st.race_pace()
+            self.t_race_pace.set(fmt_time(rp) if rp is not None else None)
+            cov = st.pace_cov()
+            self.t_cov.set(f"{cov:.1f} %" if cov is not None else None)
+            count, n = st.laps_within_pct(1.0)
+            self.t_within.set(f"{count} / {n}" if n else None)
+            self._set_trend(st.pace_trend())
         else:
-            for t in (self.t_best, self.t_median, self.t_sigma, self.t_spread):
+            for t in (self.t_best, self.t_median, self.t_sigma, self.t_spread,
+                      self.t_race_pace, self.t_cov, self.t_within, self.t_trend):
                 t.set(None)
+        self._set_digest(session, pace)
 
         # SPEED · G — session peaks over the per-lap stats
         rows = st.lap_stats() if st is not None else []
@@ -306,16 +355,57 @@ class StatsView(QWidget):
                             f"top speed · lap {vmax[1] + 1}")
         else:
             self.t_vmax.set(None, "top speed")
+        vmins = [r.vmin_kmh for r in rows if r.vmin_kmh is not None]
+        self.t_vmin.set(f"{units.convert_speed(min(vmins), unit):.1f} {u_label}"
+                        if vmins else None)
         lat_peaks = [r.peak_lat_g for r in rows if r.peak_lat_g is not None]
         brk_peaks = [r.peak_brake_g for r in rows if r.peak_brake_g is not None]
         self.t_peak_lat.set(f"{max(lat_peaks):.2f} g" if lat_peaks else None)
         self.t_peak_brake.set(f"{max(brk_peaks):.2f} g" if brk_peaks else None)
 
         self._refresh_gg(st)
-        self._refresh_driving(rows)
+        self._refresh_driving(st, rows)
         self._refresh_sectors(session)
         self._refresh_trust(session)
         self._refresh_lap_table(session, rows, unit, u_label)
+
+    def _set_trend(self, slope: float | None):
+        """The trend tile: signed s/lap + a plain-language verdict caption. A slope inside
+        ±TREND_STEADY_BAND reads "steady" (don't narrate noise); None (short session) is a
+        dash with the base caption."""
+        if slope is None:
+            self.t_trend.set(None, "trend")
+            return
+        if slope <= -TREND_STEADY_BAND:
+            verdict = "improving"
+        elif slope >= TREND_STEADY_BAND:
+            verdict = "fading"
+        else:
+            verdict = "steady"
+        # A ±0.00 display (signed near-zero) reads as a glitch — flatten it for "steady".
+        text = "0.00 s/lap" if round(slope, 2) == 0 else f"{slope:+.2f} s/lap"
+        self.t_trend.set(text, f"trend · {verdict}")
+
+    def _set_digest(self, session, pace):
+        """The coaching digest tile: the projected lap if the top-3 corner losses were fixed,
+        anchored to the MEDIAN lap (the honesty rule — the best lap already banks some of
+        those corners, so best − losses would overclaim). Dash without enough clean laps /
+        no coaching data."""
+        opp_fn = getattr(session, "coaching_opportunities", None)
+        opp = opp_fn() if opp_fn is not None else None
+        rows = getattr(opp, "rows", None) if getattr(opp, "enough", False) else None
+        if pace is None or not rows:
+            self.t_digest.set(None)
+            self.t_digest.setToolTip("")
+            return
+        saved = sum(r.time_lost for r in rows[:3])
+        projected = pace.median - saved
+        self.t_digest.set(fmt_time(projected))
+        self.t_digest.setToolTip(
+            f"Projected from your MEDIAN lap ({fmt_time(pace.median)}) minus the top-"
+            f"{min(len(rows), 3)} corner losses ({saved:.2f} s, measured vs your best "
+            "lap's corners — see the coaching panel). Anchored to the typical lap, not "
+            "best-minus-losses: your best lap already banks some of those corners.")
 
     def refresh_palette(self):
         """Re-render after a colour-blind-palette flip: the best-lap ★ row tint + the purple
@@ -364,6 +454,13 @@ class StatsView(QWidget):
             line = pg.InfiniteLine(pos=(0, 0), angle=angle, pen=ring_pen, movable=False)
             plot.addItem(line)
             self._gg_rings.append(line)
+        # The demonstrated grip envelope (p98 of combined g): a dashed accent ring — the
+        # "ceiling you actually reached", vs the neutral 0.5 g reference rings.
+        env = st.gg_envelope() if st is not None else None
+        if env:
+            env_pen = pg.mkPen(C.accent, width=1, style=Qt.DashLine)
+            ring = plot.plot(env * np.cos(angles), env * np.sin(angles), pen=env_pen)
+            self._gg_rings.append(ring)
         ticks = [(v, f"{v:+.1f}") for v in (-r_max, 0.0, r_max)]
         plot.getAxis("left").setTicks([ticks])
         plot.getAxis("bottom").setTicks([ticks])
@@ -371,19 +468,24 @@ class StatsView(QWidget):
         plot.setXRange(-r_max - pad, r_max + pad, padding=0)
         plot.setYRange(-r_max - pad, r_max + pad, padding=0)
 
-    def _refresh_driving(self, rows):
+    def _refresh_driving(self, st, rows):
         brake = [r.brake_s for r in rows if r.brake_s is not None]
         counts = [r.brake_n for r in rows if r.brake_n is not None]
         coast = [r.coast_s for r in rows if r.coast_s is not None]
         has = bool(brake or counts or coast)
         self._driving_section.setVisible(has)
-        for t in (self.t_brake, self.t_brake_n, self.t_coast):
+        for t in (self.t_brake, self.t_brake_n, self.t_coast, self.t_longest_coast,
+                  self.t_grip_ceiling):
             t.setVisible(has)
         if not has:
             return
         self.t_brake.set(f"{np.median(brake):.1f} s" if brake else None)
         self.t_brake_n.set(f"{np.median(counts):.0f}" if counts else None)
         self.t_coast.set(f"{np.median(coast):.1f} s" if coast else None)
+        longest = st.longest_coast_s() if st is not None else None
+        self.t_longest_coast.set(f"{longest:.1f} s" if longest is not None else None)
+        env = st.gg_envelope() if st is not None else None
+        self.t_grip_ceiling.set(f"{env:.2f} g" if env is not None else None)
 
     def _refresh_sectors(self, session):
         sigmas = session.sector_sigmas() if hasattr(session, "sector_sigmas") else []
@@ -426,6 +528,13 @@ class StatsView(QWidget):
             lat_src = src.get(session.gmeter_source(), session.gmeter_source())
             long_src = src.get(session.gmeter_long_source(), session.gmeter_long_source())
             lines.append(f"g-meter: {lat_src} lateral · {long_src}-derived longitudinal")
+        # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for
+        # the statistics on this page (those laps feed no best/σ/pace number).
+        valid = session.valid_lap_ids() if hasattr(session, "valid_lap_ids") else []
+        dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+        if dropouts:
+            lines.append(f"GPS dropout inside {len(dropouts)} of {len(valid)} laps — "
+                         "flagged ⚠ and left out of bests, σ and pace")
         cross = session.gmeter_cross() if hasattr(session, "gmeter_cross") else None
         if cross is not None:
             verdict = "agree" if cross.ok else "DISAGREE"
@@ -452,14 +561,12 @@ class StatsView(QWidget):
             def num(v, fmtstr):
                 return self._num_item(fmtstr.format(v) if v is not None else DASH)
             self.lap_table.setItem(r, 1, self._num_item(fmt_time(s.time)))
-            self.lap_table.setItem(
-                r, 2, num(units.convert_speed(s.vmax_kmh, unit)
-                          if s.vmax_kmh is not None else None, "{:.1f}"))
-            self.lap_table.setItem(
-                r, 3, num(units.convert_speed(s.avg_kmh, unit)
-                          if s.avg_kmh is not None else None, "{:.1f}"))
-            self.lap_table.setItem(r, 4, num(s.peak_lat_g, "{:.2f}"))
-            self.lap_table.setItem(r, 5, num(s.peak_brake_g, "{:.2f}"))
-            self.lap_table.setItem(r, 6, num(s.brake_s, "{:.1f}"))
-            self.lap_table.setItem(r, 7, num(s.coast_s, "{:.1f}"))
+            for c, kmh in ((2, s.vmax_kmh), (3, s.avg_kmh), (4, s.vmin_kmh)):
+                self.lap_table.setItem(
+                    r, c, num(units.convert_speed(kmh, unit)
+                              if kmh is not None else None, "{:.1f}"))
+            self.lap_table.setItem(r, 5, num(s.peak_lat_g, "{:.2f}"))
+            self.lap_table.setItem(r, 6, num(s.peak_brake_g, "{:.2f}"))
+            self.lap_table.setItem(r, 7, num(s.brake_s, "{:.1f}"))
+            self.lap_table.setItem(r, 8, num(s.coast_s, "{:.1f}"))
         self._fit_table(self.lap_table)
