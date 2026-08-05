@@ -53,6 +53,7 @@ from studio.stats import (  # noqa: E402
     peak_g,
     phase_matrix,
     sector_medians,
+    straights_report,
     theil_sen_slope,
     within_pct_of_best,
 )
@@ -172,6 +173,27 @@ def test_brake_consistency_aggregates_matched_corners():
     (only,) = brake_consistency([7], [{7: (50.0, 0.5, 1.0)}])
     assert only.n == 1 and only.sigma_m is None and only.span_m == 0.0
     print("test_brake_consistency_aggregates_matched_corners OK")
+
+
+def test_straights_report_labels_deltas_and_leverage():
+    # 2 corners -> 3 straights. Times (s) per lap down each straight; traps at each end;
+    # exits per corner; the best lap exits fastest at corner 1 (the field is 2 km/h down).
+    times = [[5.0, 8.0, 4.0], [5.2, 8.6, 4.1], [5.1, 8.3, 4.05]]
+    traps = [[70.0, 90.0, 60.0], [69.0, 88.0, 59.0], [71.0, 89.0, 61.0]]
+    exits = [[50.0, 40.0], [48.0, 41.0], [49.0, 40.5]]
+    best_exits = [51.0, 40.0]
+    s0, s1, s2 = straights_report([1, 2], times, traps, exits, best_exits)
+    assert s0.label == "S/F → C1" and s0.ring_cid == 2       # the wrap: C2 feeds S/F
+    assert s1.label == "C1 → C2" and s1.ring_cid == 1
+    assert s2.label == "C2 → S/F" and s2.ring_cid == 2
+    assert s0.exit_delta_kmh is None                          # no double-count with s2
+    assert s1.best_s == 8.0 and s1.median_s == 8.3
+    assert s1.trap_best_kmh == 90.0 and s1.trap_median_kmh == 89.0
+    assert abs(s1.exit_delta_kmh - (49.0 - 51.0)) < 1e-12     # median exit − best exit
+    assert abs(s1.leverage - 2.0 * 0.3) < 1e-9                # deficit 2 km/h × spread 0.3 s
+    assert abs(s2.exit_delta_kmh - 0.5) < 1e-12               # field FASTER than best ->
+    assert s2.leverage == 0.0                                 # no leverage claim
+    print("test_straights_report_labels_deltas_and_leverage OK")
 
 
 def test_phase_matrix_medians_and_positive_part_share():
@@ -677,6 +699,40 @@ def test_stats_view_braking_table_filters_unbraked_and_emits_clicks():
     v.refresh()
     assert v._braking_section.isHidden() and v.braking_table.isHidden()
     print("test_stats_view_braking_table_filters_unbraked_and_emits_clicks OK")
+
+
+def test_stats_view_straights_table_and_fix_first_tile():
+    _app()
+    from studio.stats import StraightStat
+    from studio.stats_panel import RING_ROLE, StatsView
+    sess = _fake_view_session()
+    sess.straights_report = lambda: [
+        StraightStat(index=0, label="S/F → C1", ring_cid=2, n=3, best_s=5.0, median_s=5.1,
+                     sigma_s=0.1, trap_best_kmh=71.0, trap_median_kmh=70.0,
+                     exit_delta_kmh=None, leverage=0.0),
+        StraightStat(index=1, label="C1 → C2", ring_cid=1, n=3, best_s=8.0, median_s=8.3,
+                     sigma_s=0.3, trap_best_kmh=90.0, trap_median_kmh=89.0,
+                     exit_delta_kmh=-2.0, leverage=0.6),
+    ]
+    v = StatsView(sess)
+    t = v.straights_table
+    assert not t.isHidden() and t.rowCount() == 2
+    assert t.item(0, 0).text() == "S/F → C1"
+    assert t.item(0, 6).text() == "—"                      # k=0 exit delta: no double-count
+    assert t.item(1, 6).text() == "-2.0"
+    assert t.item(1, 0).data(RING_ROLE) == 1
+    assert not v.t_fix_first.isHidden()
+    assert v.t_fix_first.value.text() == "C1"              # the top-leverage corner
+    assert "-2.0 km/h" in v.t_fix_first.caption.text()
+    fired = []
+    v.corner_clicked.connect(fired.append)
+    t.selectRow(0)
+    assert fired and fired[-1] == 2                        # the wrap straight rings C2
+    # No straights data -> section + tile hidden.
+    sess.straights_report = lambda: []
+    v.refresh()
+    assert v._straights_section.isHidden() and v.t_fix_first.isHidden()
+    print("test_stats_view_straights_table_and_fix_first_tile OK")
 
 
 def test_stats_view_corners_table_hidden_without_corners():
