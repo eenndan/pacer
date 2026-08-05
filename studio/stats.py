@@ -96,6 +96,41 @@ class CornerReport:
 
 
 @dataclass(frozen=True)
+class PhaseShare:
+    """Where the session's corner time goes: the POSITIVE-part column sums of the per-corner
+    median (entry, apex, exit) losses — seconds a typical lap gives away per phase. Positive
+    part on purpose: this is "where time is LOST" accounting, so a phase the driver GAINS in
+    (negative median) must not cancel losses elsewhere."""
+
+    entry_s: float
+    apex_s: float
+    exit_s: float
+
+    @property
+    def total_s(self) -> float:
+        return self.entry_s + self.apex_s + self.exit_s
+
+    def fracs(self) -> tuple[float, float, float] | None:
+        """(entry, apex, exit) as fractions of the lost total — the "you lose 61% of your
+        corner time on entry" headline. None when nothing is lost (degenerate)."""
+        t = self.total_s
+        if t <= 0:
+            return None
+        return (self.entry_s / t, self.apex_s / t, self.exit_s / t)
+
+
+@dataclass(frozen=True)
+class PhaseReport:
+    """The session phase-loss matrix: per corner (aligned to `cids`) the MEDIAN
+    (entry, apex, exit) Δt-vs-best triple over the included laps (None where no lap had a
+    finite triple), plus the session-wide PhaseShare (None when nothing is lost)."""
+
+    cids: list[int]
+    rows: list[tuple[float, float, float] | None]
+    share: PhaseShare | None
+
+
+@dataclass(frozen=True)
 class PaceStats:
     """Lap-time distribution over the consistency laps (valid ∧ dropout-free)."""
 
@@ -227,6 +262,30 @@ def corner_report(cids, directions, times_by_lap, apex_by_lap,
             score=(sig * loss) if sig is not None and loss is not None else 0.0,
         ))
     return out
+
+
+def phase_matrix(cids, triples_by_lap) -> PhaseReport:
+    """Aggregate per-lap per-corner (entry, apex, exit) Δt-vs-best triples into the session
+    phase-loss matrix: per corner the MEDIAN triple (element-wise, over laps with a fully
+    finite triple; ragged rows tolerated), plus the positive-part PhaseShare (see the
+    dataclass for why positive-part). The per-lap triples come from the SAME drift-gated
+    coaching.corner_phase_losses decomposition the coaching reasons use."""
+    rows: list[tuple[float, float, float] | None] = []
+    e_sum = a_sum = x_sum = 0.0
+    for k in range(len(cids)):
+        tri = np.asarray([row[k] for row in triples_by_lap if k < len(row)], float)
+        if len(tri):
+            tri = tri[np.all(np.isfinite(tri), axis=1)]
+        if len(tri) == 0:
+            rows.append(None)
+            continue
+        med = np.median(tri, axis=0)
+        rows.append((float(med[0]), float(med[1]), float(med[2])))
+        e_sum += max(0.0, float(med[0]))
+        a_sum += max(0.0, float(med[1]))
+        x_sum += max(0.0, float(med[2]))
+    share = PhaseShare(e_sum, a_sum, x_sum) if (e_sum + a_sum + x_sum) > 0 else None
+    return PhaseReport(cids=list(cids), rows=rows, share=share)
 
 
 def theil_sen_slope(values) -> float | None:

@@ -234,6 +234,20 @@ class StatsView(QWidget):
         # --- the corner-by-corner session report (hidden without detected corners)
         self._corners_section = self._section("CORNERS")
         col.addWidget(self._corners_section)
+        # The phase-loss headline: where the session's corner time goes (entry/apex/exit),
+        # from the per-lap drift-gated thirds decomposition — coach-grade, and computed, not
+        # modeled. Hidden with the section / without phase data.
+        phase_tip = ("Every clean lap's Δt-vs-best through each corner, split into "
+                     "equal-distance entry / apex / exit thirds (the same decomposition the "
+                     "coaching reasons use), medianed per corner, positive parts summed. "
+                     "Seconds = what a typical lap gives away in that phase across the whole "
+                     "track; hover a corner's loss cell for its own triple.")
+        self.t_phase_entry = _Tile("lost on entry")
+        self.t_phase_apex = _Tile("lost at apex")
+        self.t_phase_exit = _Tile("lost on exit")
+        for t in (self.t_phase_entry, self.t_phase_apex, self.t_phase_exit):
+            t.setToolTip(phase_tip)
+        col.addLayout(self._grid(self.t_phase_entry, self.t_phase_apex, self.t_phase_exit))
         self.corners_table = self._make_table(CORNER_COLUMNS)
         self.corners_table.setToolTip(CORNERS_TOOLTIP)
         # Unlike the other stats tables this one is interactive: row-select → map ring,
@@ -553,6 +567,10 @@ class StatsView(QWidget):
         has = bool(report)
         self._corners_section.setVisible(has)
         self.corners_table.setVisible(has)
+        phase = (getattr(session, "phase_report", lambda: None)() if has else None)
+        phase_rows = (dict(zip(phase.cids, phase.rows, strict=True))
+                      if phase is not None else {})
+        self._refresh_phase_tiles(phase)
         if not has:
             self.corners_table.setRowCount(0)
             return
@@ -587,6 +605,12 @@ class StatsView(QWidget):
             loss = cell(cr.median_loss_s, "+{:.2f}")
             if cr.cid in worst:
                 loss.setForeground(behind)
+            tri = phase_rows.get(cr.cid)
+            if tri is not None:
+                # The corner's own phase matrix, on hover — where INSIDE this corner the
+                # typical lap loses (positive = slower than best over that third).
+                loss.setToolTip(f"Median vs best — entry {tri[0]:+.2f} · "
+                                f"apex {tri[1]:+.2f} · exit {tri[2]:+.2f} s")
             t.setItem(r, 4, loss)
             t.setItem(r, 5, cell(units.convert_speed(cr.apex_best_kmh, unit)
                                  if cr.apex_best_kmh is not None else None, "{:.1f}"))
@@ -597,6 +621,23 @@ class StatsView(QWidget):
         t.blockSignals(False)
         t.setSortingEnabled(True)
         self._fit_table(t)
+
+    def _refresh_phase_tiles(self, phase):
+        """The where-the-time-goes headline tiles: percent of the lost corner time per phase
+        + the seconds behind it. Hidden when there is no phase data (no corners / no best /
+        nothing lost)."""
+        tiles = (self.t_phase_entry, self.t_phase_apex, self.t_phase_exit)
+        share = getattr(phase, "share", None)
+        fr = share.fracs() if share is not None else None
+        if fr is None:
+            for t in tiles:
+                t.setVisible(False)
+            return
+        secs = (share.entry_s, share.apex_s, share.exit_s)
+        caps = ("lost on entry", "lost at apex", "lost on exit")
+        for t, f, s, cap in zip(tiles, fr, secs, caps, strict=True):
+            t.setVisible(True)
+            t.set(f"{f * 100.0:.0f} %", f"{cap} · {s:.1f} s")
 
     def _on_corner_row_selected(self):
         """Emit the selected row's corner cid (None on deselect) — read from the row's own

@@ -1453,6 +1453,54 @@ class Session:
             [c.cid for c in corner_list], [c.direction for c in corner_list],
             times_by_lap, apex_by_lap, grip_by_lap)
 
+    def phase_report(self) -> stats_service.PhaseReport | None:
+        """The session-wide entry/apex/exit loss decomposition (the Stats page's
+        "where the time goes" headline + the per-corner phase tooltips): for EVERY
+        consistency lap except the best (its self-delta is zero), each corner's Δt-vs-best
+        split into thirds via the SAME drift-gated coaching.corner_phase_losses the coaching
+        reasons use — then the per-corner MEDIAN triple + the positive-part session share
+        (stats_service.phase_matrix). Generalizes the D2 extraction that previously ran for
+        the median lap only. None without corners / a best lap / any comparable lap. Not
+        cached (read on load / re-segment only, never per-tick)."""
+        ids = self.consistency_lap_ids()
+        corner_list = self.corners.corner_list()
+        best = self.best_lap_id()
+        if not corner_list or best is None:
+            return None
+        basis = self.corners.basis()
+        corner_dist_total = float(basis[1]) if basis is not None else None
+        best_dist, best_speed_kmh, _be = self._lap_arrays(best)
+        if len(best_dist) < 2:
+            return None
+        # The corner windows live in the BEST lap's frame — its trace is the fixed reference
+        # half of every drift-gate pair (the same pairing coaching_opportunities builds).
+        _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
+        best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
+        best_total = self.best_lap_total_distance()
+        triples_by_lap: list[list[tuple[float, float, float]]] = []
+        for i in ids:
+            if i == best:
+                continue
+            dist, speed_kmh, _e = self._lap_arrays(i)
+            if len(dist) < 2:
+                continue
+            _lt, lap_xs, lap_ys, _lv, lap_cum = self._lap_columns(i)
+            lap_traces = (best_xs, best_ys, best_cum, lap_xs, lap_ys, lap_cum)
+            lap_total = float(dist[-1])
+            row: list[tuple[float, float, float]] = []
+            for c in corner_list:
+                ph = coaching.corner_phase_losses(
+                    dist, speed_kmh, best_dist, best_speed_kmh,
+                    float(c.enter), float(c.exit),
+                    corner_dist_total=corner_dist_total, lap_total=lap_total,
+                    best_total=best_total,
+                    lap_traces=lap_traces, best_traces=best_traces)
+                row.append((ph.entry, ph.apex, ph.exit))
+            triples_by_lap.append(row)
+        if not triples_by_lap:
+            return None
+        return stats_service.phase_matrix([c.cid for c in corner_list], triples_by_lap)
+
     # ------------------------------------------------------ auto coaching summary (F10)
     # Composes the corner model, driving channels and consistency stats into the ranked
     # "opportunities". The math lives in studio/coaching.py; this accessor owns the pacer-side
