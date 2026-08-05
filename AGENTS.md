@@ -236,6 +236,15 @@ change (pure logic → a Qt-free module with a synthetic-data test in
 **core-math changes (timing / geometry / delta) must preserve the validated numbers** — pin them with
 the golden gate above.
 
+**Changelog:** a user-visible change (feature, fix, behaviour tweak) gets a line under
+`[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) in the same PR — grouped Added/Changed/Fixed, one
+scannable line, no per-commit noise. Internal refactors/tests/docs don't.
+
+**Release recipe:** the version lives in TWO places that must move together —
+[studio/\_\_init\_\_.py](studio/__init__.py) `__version__` (regex-read by `packaging/pacer.spec`,
+shown in the About card) and [pyproject.toml](pyproject.toml) `version` (pip metadata). Bump BOTH,
+retitle `[Unreleased]` → `[x.y.z] — date` in the changelog, then tag.
+
 ---
 
 ## Key dependencies
