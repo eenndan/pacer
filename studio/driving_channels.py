@@ -403,7 +403,8 @@ class DrivingChannels:
             optimal = float(st.apex_dist) - d
             out.append(driving.BrakePoint(
                 cid=c.cid, actual_brake_dist=onset, optimal_brake_dist=optimal,
-                metres_later=optimal - onset, a_max_g=a_max_g))
+                metres_later=optimal - onset, a_max_g=a_max_g,
+                peak_decel_g=float(matched[-1].peak_decel)))
         self._brake_points_cache[lap_id] = out
         return out
 
