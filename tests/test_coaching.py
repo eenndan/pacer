@@ -953,58 +953,24 @@ def test_panel_refresh_swaps_between_states():
     print("ok panel: refresh swaps excluded <-> populated off the live session")
 
 
-def test_panel_collapsed_by_default_and_chevron_toggles_it():
-    """Declutter PR (the "calm default"): the coaching panel ships COLLAPSED — its body hidden, the
-    header (with the "Coaching · <headline>" summary) still visible as the one-click re-open
-    affordance. Clicking the chevron expands it (body shown, summary drops the prefix) and collapses
-    it again, and each in-place toggle emits collapsed_changed so the window can persist the choice."""
+def test_panel_is_a_full_uncapped_page_with_headline():
+    """Tabbed-panel PR: the coaching panel is a FULL tab page now — no collapse machinery, no
+    height cap (the old strip's body was clamped to 132 px; its entire splitter drag range was
+    68 px). The body is always visible, takes the page's height, and the headline strip reads
+    the plain summary (no "Coaching · " re-open prefix — the tab bar names the page)."""
     _qapp()
     from studio.coaching_panel import OpportunitiesPanel
     s = _stadium_session()
-    panel = OpportunitiesPanel(s)  # default collapsed=True
-    # Collapsed by default: body hidden, header still visible, summary carries the re-open prefix.
-    # isVisibleTo(panel) reports RELATIVE visibility (the body/header vs the panel), independent of
-    # whether the unparented panel itself is shown on screen — so it reflects the collapse state.
-    assert panel.is_collapsed(), "the coaching panel must ship collapsed (the calm default)"
-    assert not panel.body.isVisibleTo(panel), "collapsed -> the body is hidden"
-    assert panel._header.isVisibleTo(panel), "the header stays as the re-open affordance"
-    assert panel.summary_label.text().startswith("Coaching · "), panel.summary_label.text()
-    assert "corner" in panel.summary_label.text(), "the collapsed summary reads the headline"
-
-    # Each toggle emits collapsed_changed (the window persists it).
-    seen = []
-    panel.collapsed_changed.connect(lambda c: seen.append(c))
-
-    # Expand via the chevron: body shown, summary drops the "Coaching · " prefix (title says it).
-    panel.collapse_btn.setChecked(False)
-    assert not panel.is_collapsed()
-    assert panel.body.isVisibleTo(panel), "expanded -> the body is shown"
-    assert not panel.summary_label.text().startswith("Coaching · "), panel.summary_label.text()
-    assert seen == [False], seen
-
-    # Collapse again via the header click (the whole bar is a click target).
-    panel._toggle_collapsed()
-    assert panel.is_collapsed()
-    assert not panel.body.isVisibleTo(panel)
-    assert panel.summary_label.text().startswith("Coaching · ")
-    assert seen == [False, True], seen
-    print("ok panel: collapsed-by-default; chevron/header toggle + collapsed_changed emitted")
-
-
-def test_panel_built_expanded_when_asked():
-    """The collapsed default is a PARAMETER, not hard-wired: OpportunitiesPanel(s, collapsed=False)
-    builds expanded (body visible) and fires NO collapsed_changed at construction (the initial state
-    is applied quietly)."""
-    _qapp()
-    from studio.coaching_panel import OpportunitiesPanel
-    s = _stadium_session()
-    seen = []
-    panel = OpportunitiesPanel(s, collapsed=False)
-    panel.collapsed_changed.connect(lambda c: seen.append(c))
-    assert not panel.is_collapsed(), "collapsed=False must build expanded"
-    assert panel.body.isVisibleTo(panel)
-    assert seen == [], "building must not emit collapsed_changed"
-    print("ok panel: collapsed=False builds expanded, no construction-time signal")
+    panel = OpportunitiesPanel(s)
+    assert panel.body.isVisibleTo(panel), "the body is always visible (no collapse state)"
+    assert panel._header.isVisibleTo(panel), "the headline strip frames the page"
+    assert panel.body.maximumHeight() > 10_000, "the old 132 px cap must be gone"
+    assert panel.body.minimumHeight() == 0, "…and the old 64 px floor with it"
+    assert not hasattr(panel, "collapse_btn"), "no chevron — a tab you leave costs nothing"
+    txt = panel.summary_label.text()
+    assert txt and not txt.startswith("Coaching · "), txt
+    assert "corner" in txt, "the headline reads the summary sentence"
+    print("ok panel: full uncapped page, plain headline, no collapse machinery")
 
 
 def _gate_session():

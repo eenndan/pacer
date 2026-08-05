@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from . import theme, units
 from ._signal import fmt_time
+from .consistency import pb_mask
 from .lap_table import BEST_LAP_MARK, CORNER_DIR_GLYPH, NUM_ROLE, _NumItem
 from .theme import C
 
@@ -44,6 +45,13 @@ DASH = "—"                # the "no signal" cell/tile — an em-dash, never a 
 TILE_VALUE_PT = 15        # tile value type size (between BODY 13 and HERO 22)
 TILES_PER_ROW = 4         # tile-grid width — 4 fits the quadrant, still calm maximized
 GG_HEIGHT = 220           # px; the friction-circle plot's fixed height
+SPARK_HEIGHT = 96         # px; the PACE trend sparkline (absorbed from the retired
+#                           ConsistencyPanel — its content lives here now)
+SPARK_AXIS_FONT = 10      # tabular tick font for the sparkline's min/max + first/last labels
+SPARK_Y_PAD_FRAC = 0.12   # vertical headroom so extreme dots/labels aren't clipped
+SPARK_TOOLTIP = ("Lap-time trend over the clean laps (GPS-dropout ⚠ laps excluded). "
+                 "Highlighted dots mark session-best (PB) laps; the dashed line is the "
+                 "session best (the floor). Y labels: fastest / slowest lap.")
 GG_DOT_ALPHA = 90         # scatter alpha (0-255): a cloud, not 4000 opaque dots
 GG_RING_STEP = 0.5        # g; concentric reference rings every half g
 ROW_HEIGHT = 22           # per-lap/sector table row height (the consistency-table convention)
@@ -179,6 +187,36 @@ class StatsView(QWidget):
         col.addLayout(self._grid(self.t_best, self.t_median, self.t_race_pace, self.t_digest,
                                  self.t_sigma, self.t_spread, self.t_cov, self.t_within,
                                  self.t_trend))
+        # The lap-time trend sparkline (PB dots + session-best baseline) — absorbed from the
+        # retired ConsistencyPanel strip; hidden with <2 clean laps.
+        self.spark = pg.PlotWidget()
+        self.spark.setToolTip(SPARK_TOOLTIP)
+        spark_plot = self.spark.getPlotItem()
+        for side in ("left", "bottom"):
+            ax = spark_plot.getAxis(side)
+            ax.setPen(C.border)
+            ax.setTextPen(C.text_dim)
+            ax.setTickFont(theme.mono_font(SPARK_AXIS_FONT))
+            ax.setStyle(maxTickLevel=0, tickLength=3)
+        # Fixed left-axis width for an "m:ss.mmm" label so the curve doesn't jump across sessions.
+        spark_plot.getAxis("left").setWidth(58)
+        spark_plot.setMouseEnabled(x=False, y=False)
+        spark_plot.setMenuEnabled(False)
+        spark_plot.hideButtons()
+        self.spark.setBackground(None)
+        self.spark.setFixedHeight(SPARK_HEIGHT)
+        self._spark_baseline = pg.InfiniteLine(angle=0, movable=False)
+        spark_plot.addItem(self._spark_baseline)
+        self._spark_curve = self.spark.plot([], [], pen=pg.mkPen(C.text_dim, width=1))
+        self._spark_curve.setDownsampling(auto=True)
+        self._spark_curve.setClipToView(True)
+        self._spark_dots = pg.ScatterPlotItem(size=4, pen=None,
+                                              brush=pg.mkBrush(C.text_muted), pxMode=True)
+        self._spark_pb_dots = pg.ScatterPlotItem(size=7, pen=pg.mkPen(C.canvas, width=1),
+                                                 pxMode=True)
+        spark_plot.addItem(self._spark_dots)
+        spark_plot.addItem(self._spark_pb_dots)
+        col.addWidget(self.spark)
 
         # --- SPEED & G peaks
         col.addWidget(self._section("SPEED · G"))
@@ -336,7 +374,9 @@ class StatsView(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # AsNeeded (not AlwaysOff): the report tables are content-sized, so in a narrow pane
+        # the page h-scrolls instead of silently clipping their rightmost columns.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setWidget(body)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -444,6 +484,7 @@ class StatsView(QWidget):
                       self.t_race_pace, self.t_cov, self.t_within, self.t_trend):
                 t.set(None)
         self._set_digest(session, pace)
+        self._refresh_spark(session)
 
         # SPEED · G — session peaks over the per-lap stats
         rows = st.lap_stats() if st is not None else []
@@ -469,6 +510,36 @@ class StatsView(QWidget):
         self._refresh_straights(session, unit, u_label)
         self._refresh_trust(session)
         self._refresh_lap_table(session, rows, unit, u_label)
+
+    def _refresh_spark(self, session):
+        """The PACE trend sparkline: lap time per clean lap (x = the 1-BASED lap number, the
+        same number every table shows), PB laps in the best-lap hue, the session best as a
+        dashed baseline. Hidden with <2 clean laps (a one-dot trend is noise)."""
+        trend = getattr(session, "lap_time_trend", list)() or []
+        visible = len(trend) >= 2
+        self.spark.setVisible(visible)
+        if not visible:
+            return
+        laps = [i + 1 for i, _t in trend]   # 1-based, the app-wide display rule
+        times = [t for _i, t in trend]
+        pb = pb_mask(times)
+        best_colour = QColor(theme.best_lap_colour())  # palette-aware at render time
+        self._spark_curve.setData(laps, times)
+        self._spark_dots.setData([n for n, on in zip(laps, pb, strict=True) if not on],
+                                 [t for t, on in zip(times, pb, strict=True) if not on])
+        self._spark_pb_dots.setBrush(pg.mkBrush(best_colour))
+        self._spark_pb_dots.setData([n for n, on in zip(laps, pb, strict=True) if on],
+                                    [t for t, on in zip(times, pb, strict=True) if on])
+        lo, hi = min(times), max(times)
+        self._spark_baseline.setPen(pg.mkPen(best_colour, width=1, style=Qt.DashLine))
+        self._spark_baseline.setValue(lo)
+        plot = self.spark.getPlotItem()
+        pad = max((hi - lo) * SPARK_Y_PAD_FRAC, 1e-3)
+        plot.setYRange(lo - pad, hi + pad, padding=0)
+        plot.setXRange(laps[0], laps[-1], padding=0.04)
+        plot.getAxis("left").setTicks([[(lo, fmt_time(lo)), (hi, fmt_time(hi))]])
+        plot.getAxis("bottom").setTicks([[(laps[0], str(laps[0])),
+                                          (laps[-1], str(laps[-1]))]])
 
     def _set_trend(self, slope: float | None):
         """The trend tile: signed s/lap + a plain-language verdict caption. A slope inside

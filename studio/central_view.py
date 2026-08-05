@@ -1,6 +1,7 @@
 """CentralView: the session-scoped central widget for ONE loaded recording.
 
-Owns the panels (video/map/plots/table/corner_table/consistency/diff_box/chapter banner), the
+Owns the panels — video / map / plots / the TABBED lap panel (Laps · Corners · Stats · Coaching,
+one QTabBar over one QStackedWidget; every page full-height) / diff_box / chapter banner — the
 compare + scrub controllers, the shared PlaybackState and the per-frame ``tick()`` — all built
 atomically in ``__init__``. StudioWindow holds one ``self.view`` and ``setCentralWidget()``s a
 fresh CentralView per load (the old one disposed + dropped as a unit), so a window reference into
@@ -17,7 +18,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QTabBar,
     QVBoxLayout,
     QWidget,
 )
@@ -32,7 +34,6 @@ from PySide6.QtWidgets import (
 from . import chapters, sidecar, theme, units
 from .coaching_panel import OpportunitiesPanel
 from .compare_controller import CompareController
-from .consistency_panel import ConsistencyPanel
 from .lap_table import CornerTable, LapTable
 from .map_view import MapView
 from .playback_state import PlaybackState
@@ -60,10 +61,12 @@ class CentralView(QWidget):
     # Emitted after any timing-line change (a user drag OR an Undo) so the window can refresh the
     # Edit ▸ Undo action's enabled state from the session's undo stack.
     timingEdited = Signal()
-    # Emitted (True = now collapsed) when the user collapses/expands the coaching panel in-place
-    # (chevron or header click), so the window can persist the choice across reloads. Re-emitted
-    # from the OpportunitiesPanel's own collapsed_changed.
-    coachingCollapsedChanged = Signal(bool)
+    # Emitted when the user switches the lap panel's tab (Laps/Corners/Stats/Coaching), so the
+    # window can persist the choice across reloads.
+    lapTabChanged = Signal(int)
+    # Emitted (debounced) after the user drags any of the three GRID splitters, with the
+    # [main, left, right] sizes — the window persists them so a layout survives reloads.
+    gridSizesChanged = Signal(list)
     # Emitted (True = entering) when the user toggles VIDEO FOCUS (the ⤢ button / a double-click on
     # the video). The view has already maximized the video panel into the grid; the window responds
     # by going fullscreen (True) / normal (False) so the maximized video fills the whole SCREEN with
@@ -72,23 +75,21 @@ class CentralView(QWidget):
     videoFocusChanged = Signal(bool)
 
     def __init__(self, session, paths: list[str], sidecar_path: str | None,
-                 consistency_visible: bool, parent: QWidget | None = None,
-                 speed_unit: str | None = None, coaching_visible: bool = True,
-                 coaching_collapsed: bool = True, excluded_visible: bool = True):
+                 parent: QWidget | None = None,
+                 speed_unit: str | None = None, excluded_visible: bool = True,
+                 lap_tab: int = 0, grid_sizes: list | None = None):
         super().__init__(parent)
         # Read aliases of window-owned state; the view never reassigns these.
         self.session = session
         self._paths = list(paths)
         self._sidecar_path = sidecar_path
-        self._consistency_visible = consistency_visible
-        # Left-column declutter (the "calm default"): the window holds the persisted show/hide +
-        # coaching-collapsed choices and passes them into each fresh view. Coaching ships shown but
-        # collapsed by default (so the calm default still exposes the one-click re-open header); the
-        # excluded strip ships shown (as its own collapsed one-liner). See _apply_coaching_visible /
-        # _apply_excluded_visible + the OpportunitiesPanel/LapTable collapse affordances.
-        self._coaching_visible = coaching_visible
-        self._coaching_collapsed = coaching_collapsed
+        # The excluded strip lives inside the Laps page; its View-menu choice is persisted by
+        # the window and passed into each fresh view (see _apply_excluded_visible).
         self._excluded_visible = excluded_visible
+        # The lap panel's persisted tab (Laps 0 / Corners 1 / Stats 2 / Coaching 3) + the
+        # persisted grid-splitter sizes ([main, left, right]; None = the built-in defaults).
+        self._initial_lap_tab = int(lap_tab)
+        self._initial_grid_sizes = grid_sizes
         # Speed display unit (km/h default). The window passes the persisted choice and pushes
         # later flips via set_speed_unit; the hero #DiffBox reads it, sub-views hold their own copy.
         self._speed_unit = units.normalize_unit(speed_unit)
@@ -110,15 +111,39 @@ class CentralView(QWidget):
         self.rebuild_derived_views(reselect=True)
         # Poster the best-lap first frame so the video isn't a black void at launch.
         self._poster_seek()
-        # Apply the window-held consistency-visible choice to the fresh panel.
-        self._apply_consistency_visible(refresh=False)
-        # Apply the window-held declutter choices (calm default): the coaching panel's whole-panel
-        # visibility (the chevron/collapse was already seeded at construction) and the excluded
-        # strip's visibility.
-        self._apply_coaching_visible()
+        # Apply the window-held declutter choice (the excluded strip inside the Laps page) and
+        # restore the persisted lap-panel tab (a no-op re-select for the default Laps).
         self._apply_excluded_visible()
+        if 0 <= self._initial_lap_tab < self.tab_bar.count():
+            self.tab_bar.setCurrentIndex(self._initial_lap_tab)
 
     # ------------------------------------------------------------------ lifecycle
+    def showEvent(self, event):
+        """First show: restore the persisted grid-splitter sizes (deferred one event-loop turn
+        so the splitters carry their REAL post-layout sizes — a pre-show setSizes gets warped
+        by min-size clamping at the unshown widget's tiny default geometry)."""
+        super().showEvent(event)
+        pending = getattr(self, "_pending_grid_sizes", None)
+        if pending is not None:
+            self._pending_grid_sizes = None
+            # Twice, idempotently: once right after this event burst, once after the deferred
+            # top-level layout passes (which re-split by stretch factor and would otherwise
+            # override the restore of whichever splitter they touch last).
+            QTimer.singleShot(0, lambda: self._apply_grid_sizes(pending))
+            QTimer.singleShot(120, lambda: self._apply_grid_sizes(pending))
+
+    def _apply_grid_sizes(self, stored: list):
+        """Apply persisted [main, left, right] splitter sizes. Each list is applied only if it
+        matches its splitter's section count — a stale/corrupt pref falls back cleanly to the
+        built-in defaults (already set)."""
+        for splitter, sizes in zip(
+                (self._main_splitter, self._left_splitter, self._right_splitter),
+                stored, strict=False):
+            if (isinstance(sizes, (list, tuple)) and len(sizes) == splitter.count()
+                    and all(isinstance(v, (int, float)) and v >= 0 for v in sizes)
+                    and sum(sizes) > 0):
+                splitter.setSizes([int(v) for v in sizes])
+
     def dispose(self):
         """Stop decoder(s) + close the g-meter overlay before this view is dropped on reload. Called
         by StudioWindow on the outgoing view. No-op if no video."""
@@ -288,76 +313,61 @@ class CentralView(QWidget):
         video_header = self._header_bar(video_label, 1, self._video_max_btn)
         video_panel = self._headered(video_header, self.chapter_label, (self.video, 1))
 
-        # TABLE panel: a header bar (mode label + Corners toggle) above a QStackedWidget of the two
-        # tables (Laps at index 0, Corners at index 1).
-        self._table_label = QLabel("LAPS")
-        self._table_label.setProperty("role", "BarLabel")
-        self.corners_btn = QPushButton("Corners")
-        self.corners_btn.setCheckable(True)
-        self.corners_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        self.corners_btn.setToolTip(
-            "Per-corner analysis of the selected lap: time-in-corner, Δ vs the best lap, "
-            "apex/entry/exit speeds. Corners are detected from the track's own curvature.")
-        self.corners_btn.toggled.connect(self._on_corners_toggled)
-        # Stats toggle: the 3rd page of the same stack. Mutually exclusive with Corners (one
-        # checked button = one visible page; both off = Laps). ⤢ maximize turns the compact
-        # in-pane dashboard into a full-window one — no extra chrome for the calm default.
-        self.stats_btn = QPushButton("Stats")
-        self.stats_btn.setCheckable(True)
-        self.stats_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        self.stats_btn.setToolTip(
-            "Session statistics: totals (time on track, distance, wall clock), the lap-time "
-            "distribution, top speed, peak g, the g-g friction circle, brake/coast totals, "
-            "per-sector spread and a per-lap statistics table. Maximize the panel (⤢ or "
-            "double-click the header) for the full dashboard.")
-        self.stats_btn.toggled.connect(self._on_stats_toggled)
-        # Small data-quality chip in the table header, shown next to the LAPS label only when
-        # Session.timing_quality is degraded, so the lap times carry a visible cue right where they're
-        # read. Its LABEL + TOOLTIP are set live by _refresh_quality_badge from the shared
+        # LAP panel: ONE native tab bar (Laps · Corners · Stats · Coaching) over a QStackedWidget
+        # — the page switcher IS the tab bar, and every page gets the panel's FULL height. This
+        # replaced the checkable-button pseudo-tabs + the two min/max-capped under-table strips
+        # (coaching + consistency), whose aggregate minimum could exceed the panel's allocation
+        # (over-constrained: nothing was resizable and everything starved). Tab index == stack
+        # index, 1:1. Digits 1-4 select tabs (window-level shortcuts).
+        self.tab_bar = QTabBar()
+        self.tab_bar.setDocumentMode(True)
+        self.tab_bar.setExpanding(False)
+        self.tab_bar.setDrawBase(False)
+        self.tab_bar.setUsesScrollButtons(False)
+        self.tab_bar.setElideMode(Qt.ElideNone)  # never "Coach…" — the four names are short
+        self.tab_bar.setFocusPolicy(Qt.NoFocus)
+        for name, tip in (
+            ("Laps", "Every valid lap: times, splits, session bests. Press 1."),
+            ("Corners", "Per-corner analysis of the selected lap: time-in-corner, Δ vs the "
+                        "best lap, apex/entry/exit speeds. Corners are detected from the "
+                        "track's own curvature. Press 2."),
+            ("Stats", "Session statistics: totals, the pace distribution, top speed, peak g, "
+                      "the g-g friction circle, corner/braking/straights reports and the "
+                      "data-trust card. Press 3; ⌘⇧S opens it full-window."),
+            ("Coaching", "Your top opportunities: the corners losing the most time vs your "
+                         "own best lap, with the measured reason for each. Press 4."),
+        ):
+            idx = self.tab_bar.addTab(name)
+            self.tab_bar.setTabToolTip(idx, tip)
+        self.tab_bar.currentChanged.connect(self._apply_table_mode)
+        # Small data-quality chip in the panel header, shown next to the tabs only when
+        # Session.timing_quality is degraded, so the lap times carry a visible cue right where
+        # they're read. Its LABEL + TOOLTIP are set live by _refresh_quality_badge from the shared
         # timing_quality copy (clock-aware: "ESTIMATED" only on the media-clock fallback, "GPS LOW"
-        # on a true-clock recording whose only concern is rejected fixes — the old static "ESTIMATED"
-        # overclaimed on true-clock footage, M3). Hidden on a normal GPS9, clean-fix recording.
+        # on a true-clock recording whose only concern is rejected fixes — the old static
+        # "ESTIMATED" overclaimed on true-clock footage, M3). Hidden on a clean GPS9 recording.
         self.quality_badge = QLabel("ESTIMATED")
         self.quality_badge.setObjectName("QualityBadge")
         self.quality_badge.setVisible(False)
-        self.table_stack = QStackedWidget()
-        self.table_stack.addWidget(self.table)         # index 0 — Laps (default)
-        self.table_stack.addWidget(self.corner_table)  # index 1 — Corners
-        self.table_stack.addWidget(self.stats_view)    # index 2 — Stats
-        self._table_max_btn = self._maximize_button()
-        table_header = self._header_bar(self._table_label, self.quality_badge, 1, self.corners_btn,
-                                        self.stats_btn, self._table_max_btn)
-        # The PERSISTENT, always-on coaching front-door: the top-3 opportunities (corner · time
-        # lost · reason) under the lap table, the same data the modal dialog shows. Visible by
-        # default (the moat made the default screen), compact + collapsible. A corner-row click
-        # ring-highlights its apex on the map (the Jump-to-corner detail action stays in the dialog).
-        self.opportunities = OpportunitiesPanel(self.session,
-                                                collapsed=self._coaching_collapsed)
+        # The coaching page: the top opportunities (corner · time lost · reason), full height —
+        # no strip, no collapse, no height cap. A corner-row click ring-highlights its apex on
+        # the map (the Jump-to-corner detail action stays in the modal dialog).
+        self.opportunities = OpportunitiesPanel(self.session)
         self.opportunities.corner_clicked.connect(self.map.highlight_corner)
-        # Re-emit the in-place collapse so the window persists it (survives a reload).
-        self.opportunities.collapsed_changed.connect(self.coachingCollapsedChanged)
-        # F6: the collapsible consistency strip under the opportunities panel (trend sparkline +
-        # top-5 inconsistent corners); a corner-row click ring-highlights its apex on the map only.
-        self.consistency = ConsistencyPanel(self.session)
-        self.consistency.corner_clicked.connect(self.map.highlight_corner)
-        # Stats CORNERS row → the same apex ring, but maximize-aware: restore the grid
-        # first — a ring on a zero-width collapsed map helps no one (the N10 rule).
+        # Stats CORNERS/BRAKING/STRAIGHTS rows → the same apex ring, but maximize-aware: restore
+        # the grid first — a ring on a zero-width collapsed map helps no one (the N10 rule).
         self.stats_view.corner_clicked.connect(self._on_stats_corner_clicked)
-        # Both strips share a vertical splitter with the table stack so they shrink the
-        # (min/max-capped) strips, never the lap table; the table stack gets a ~5-row min-height so
-        # it stays usable. Opportunities sits directly under the table (the front-door), consistency
-        # below it.
+        self.table_stack = QStackedWidget()
+        self.table_stack.addWidget(self.table)          # index 0 — Laps (default)
+        self.table_stack.addWidget(self.corner_table)   # index 1 — Corners
+        self.table_stack.addWidget(self.stats_view)     # index 2 — Stats
+        self.table_stack.addWidget(self.opportunities)  # index 3 — Coaching
         rows_h = self.table.table.verticalHeader().defaultSectionSize()
-        self.table_stack.setMinimumHeight(rows_h * 5 + 56)  # ~5 rows + column header + footer
-        table_body = QSplitter(Qt.Vertical)
-        table_body.addWidget(self.table_stack)
-        table_body.addWidget(self.opportunities)
-        table_body.addWidget(self.consistency)
-        table_body.setStretchFactor(0, 1)   # the lap table takes any extra height
-        table_body.setStretchFactor(1, 0)   # the opportunities strip keeps its compact size
-        table_body.setStretchFactor(2, 0)   # the consistency strip keeps its compact size
-        table_body.setCollapsible(0, False)  # never collapse the lap table away
-        table_panel = self._headered(table_header, (table_body, 1))
+        self.table_stack.setMinimumHeight(rows_h * 5 + 56)  # ~5-row floor so a drag can't zero it
+        self._table_max_btn = self._maximize_button()
+        table_header = self._header_bar(self.tab_bar, self.quality_badge, 1,
+                                        self._table_max_btn)
+        table_panel = self._headered(table_header, (self.table_stack, 1))
 
         # MAP header: title (left) + the line-channel dropdown / snap / sector controls (right);
         # handlers live in MapView. The rainbow channel is a LABELLED combo (Off · Speed · Δ · Grip)
@@ -421,6 +431,10 @@ class CentralView(QWidget):
         # CHARTS consolidated bar: section label (left) · the Δ/speed readout (centre) · the x-mode toggle (right).
         plots_label = QLabel("SPEED · Δ TO BEST")
         plots_label.setProperty("role", "BarLabel")
+        # The DECORATIVE label is the bar's first casualty when the column narrows: an explicit
+        # tiny minimum lets it clip before the hero readout / controls do (without this, the
+        # bar's derived minimum propagates up and pins the main splitter).
+        plots_label.setMinimumWidth(40)
         self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.ideal_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.brake_throttle_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
@@ -455,13 +469,14 @@ class CentralView(QWidget):
         plots_panel = self._plots_panel
 
         # Layout favours the analytical core over the video: left column ~40% / right ~60%, and
-        # within them the table and charts get the majority.
+        # within them the tabbed lap panel and the charts get the majority. The video's default
+        # is ~16:9 at the default column width; the reclaimed height goes to the tabs.
         left = QSplitter(Qt.Vertical)
         left.addWidget(video_panel)
         left.addWidget(table_panel)
-        left.setStretchFactor(0, 52)
-        left.setStretchFactor(1, 48)
-        left.setSizes([440, 400])
+        left.setStretchFactor(0, 46)
+        left.setStretchFactor(1, 54)
+        left.setSizes([390, 450])
 
         right = QSplitter(Qt.Vertical)
         right.addWidget(map_panel)
@@ -470,12 +485,43 @@ class CentralView(QWidget):
         right.setStretchFactor(1, 62)
         right.setSizes([320, 520])
 
+        # Explicit column minimums: without them each column inherits its WIDEST header bar's
+        # minimumSizeHint (the charts' hero Δ readout + buttons ≈ 980 px), which silently
+        # pinned the main splitter — the lap panel could never be dragged wider than ~390 px
+        # and a persisted layout could not restore. Squeezed headers degrade gracefully.
+        left.setMinimumWidth(280)
+        right.setMinimumWidth(360)
+
         main = QSplitter(Qt.Horizontal)
         main.addWidget(left)
         main.addWidget(right)
         main.setStretchFactor(0, 40)
         main.setStretchFactor(1, 60)
-        main.setSizes([576, 864])
+        # 456/917 (the sum matches the real usable width at the 1440 default window): the lap
+        # panel gets enough width for every Laps column (no horizontal scrollbar) while the
+        # charts' consolidated header (hero readout + controls, measured minimum 917) fits
+        # exactly. The old [576, 864] was aspirational — the right column's hidden minimum
+        # overrode it to ~[394, 1046] on every launch. The explicit column minimums above let
+        # the USER trade either way; only the default has to be clip-free.
+        main.setSizes([456, 917])
+        # The user's persisted grid layout (a drag used to be lost on every reload, which read
+        # as "the panels cannot be resized") is applied on FIRST SHOW, not here: before the
+        # window sizes this widget, the splitters sit at tiny defaults and min-size clamping
+        # would distort the restored ratios. See showEvent/_apply_grid_sizes.
+        self._pending_grid_sizes = (self._initial_grid_sizes
+                                    if self._initial_grid_sizes
+                                    and len(self._initial_grid_sizes) == 3 else None)
+        # Debounced persistence: splitterMoved fires continuously during a drag, so coalesce
+        # into one gridSizesChanged after the drag goes quiet (the window writes prefs).
+        self._grid_save_timer = QTimer(self)
+        self._grid_save_timer.setSingleShot(True)
+        self._grid_save_timer.setInterval(400)
+        self._grid_save_timer.timeout.connect(
+            lambda: self.gridSizesChanged.emit(
+                [main.sizes(), left.sizes(), right.sizes()]))
+        for splitter in (main, left, right):
+            splitter.splitterMoved.connect(
+                lambda *_a: self._grid_save_timer.start())
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -682,7 +728,7 @@ class CentralView(QWidget):
         if on and self._video_focused:
             self.set_video_focus(False)
 
-    # --------------------------------------------------------- consistency panel (F6)
+    # --------------------------------------------------------- unit / palette fan-out
     def set_speed_unit(self, unit: str):
         """Switch the speed display unit live across every session-derived surface: the plots
         speed axis, the lap + corner tables, and the hero #DiffBox readout. Driven by the
@@ -708,9 +754,9 @@ class CentralView(QWidget):
 
           * lap / corner tables — recompute their best + Δ foregrounds;
           * the map — re-pen its rainbow + legend;
-          * the always-on Opportunities panel — its time-lost cells go through theme.delta_colour, so
-            a re-render re-colours them (the CPO gap: the coaching front-door stayed red/green);
-          * the consistency panel — its PB dots + session-best baseline carry the best/ahead hue;
+          * the Coaching page — its time-lost cells go through theme.delta_colour, so a
+            re-render re-colours them (the CPO gap: the coaching front-door stayed red/green);
+          * the Stats page — best-lap ★ tint, purple sector bests, the trend sparkline's PB hue;
           * the charts — the brake/throttle band (behind/ahead fills) + the synthetic ideal-lap line
             (best-sector hue) read the palette at draw time, so a refresh re-pens them;
           * the hero Δ readout — re-style from the last moment.
@@ -720,7 +766,6 @@ class CentralView(QWidget):
         self.corner_table.refresh()
         self.map.refresh_palette()
         self.opportunities.refresh()
-        self.consistency.refresh_palette()
         self.stats_view.refresh_palette()
         self.plots.refresh_palette()
         # Force a Δ-box restyle even if the number is unchanged: the palette flip changes the colour
@@ -728,41 +773,6 @@ class CentralView(QWidget):
         self._diff_colour = None
         self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
                               self._last_diff_lap)
-
-    def set_consistency_visible(self, on: bool):
-        """Show/hide the consistency strip; refreshes its stats when showing. Driven by the
-        persistent View-menu item on the window."""
-        self._consistency_visible = bool(on)
-        self._apply_consistency_visible(refresh=self._consistency_visible)
-
-    def _apply_consistency_visible(self, *, refresh: bool):
-        """Apply _consistency_visible to the live panel (refresh its stats first when showing).
-        Suppressed while the Stats page is active (the dashboard carries the same content —
-        see _apply_table_mode); leaving Stats re-applies the persisted choice. No-op for a
-        partially-built view without the panel."""
-        panel = getattr(self, "consistency", None)
-        if panel is None:
-            return
-        visible = self._consistency_visible and not self._stats_page_active()
-        if refresh and visible:
-            panel.refresh()  # ensure the shown stats are current for this session
-        panel.setVisible(visible)
-
-    def set_coaching_visible(self, on: bool):
-        """Fully show/hide the whole coaching (Opportunities) panel — header included — from the
-        persistent View-menu item on the window. This composes cleanly with the in-place chevron:
-        a menu-hidden panel stays hidden regardless of its collapsed/expanded state, and re-showing
-        it restores whatever collapse state it held. Driven by the window's persisted choice."""
-        self._coaching_visible = bool(on)
-        self._apply_coaching_visible()
-
-    def _apply_coaching_visible(self):
-        """Apply _coaching_visible to the live coaching panel. Suppressed while the Stats page
-        is active (see _apply_table_mode). No-op for a partially-built view."""
-        panel = getattr(self, "opportunities", None)
-        if panel is None:
-            return
-        panel.setVisible(self._coaching_visible and not self._stats_page_active())
 
     def set_excluded_visible(self, on: bool):
         """Fully show/hide the ⊘ excluded-laps strip from the persistent View-menu item on the
@@ -843,49 +853,22 @@ class CentralView(QWidget):
         # A genuine user click in the lap table also jumps the video to that lap (F1).
         self._on_laps_selected(ids, seek=True)
 
-    # --------------------------------------------------------- corners view (F-corner)
-    def _on_corners_toggled(self, on: bool):
-        """Flip the table panel into/out of Corners mode. The corner table is (re)pointed at
-        the current selection lazily on entry, so an unused Corners view costs nothing.
-        Corners and Stats are mutually exclusive — checking one silently unchecks the other
-        (blockSignals: the uncheck must not re-run the other handler mid-flip)."""
-        if on and self.stats_btn.isChecked():
-            self.stats_btn.blockSignals(True)
-            self.stats_btn.setChecked(False)
-            self.stats_btn.blockSignals(False)
-        self._apply_table_mode()
-
-    def _on_stats_toggled(self, on: bool):
-        """Flip the table panel into/out of Stats mode (see _on_corners_toggled for the
-        mutual-exclusion contract). The dashboard itself refreshes on the rebuild seam, not
-        here — entering the page is a pure stack flip."""
-        if on and self.corners_btn.isChecked():
-            self.corners_btn.blockSignals(True)
-            self.corners_btn.setChecked(False)
-            self.corners_btn.blockSignals(False)
-        self._apply_table_mode()
-
-    def _apply_table_mode(self):
-        """One place that maps the two checkable header buttons onto the stack page (Stats >
-        Corners > Laps) + the mode label, so the toggle handlers can never disagree on the
-        resulting page."""
-        if self.stats_btn.isChecked():
-            idx = 2
-        elif self.corners_btn.isChecked():
-            idx = 1
-        else:
-            idx = 0
-        self.table_stack.setCurrentIndex(idx)
-        if idx == 1:
+    # --------------------------------------------------------- lap-panel tabs
+    def _apply_table_mode(self, index: int):
+        """One tab = one page: mirror the tab index onto the stack, point the Corners page at
+        the current selection lazily on entry (an unvisited Corners page costs nothing), and
+        let the window persist the choice."""
+        self.table_stack.setCurrentIndex(index)
+        if index == 1:
             self.corner_table.set_lap(self._corner_lap)
-        # Stats mode owns the whole panel: the under-table coaching/consistency strips would
-        # duplicate the dashboard's own content (and ride along into the maximized dashboard),
-        # so they hide while Stats is active. The two _apply helpers read BOTH the persisted
-        # View-menu choice and the page mode, so leaving Stats restores exactly the user's
-        # choices (and a View-menu flip while ON Stats can't resurrect a strip under it).
-        self._apply_coaching_visible()
-        self._apply_consistency_visible(refresh=False)
         self._update_table_header()
+        self.lapTabChanged.emit(index)
+
+    def select_lap_tab(self, index: int):
+        """Select a lap-panel tab by index (Laps 0 / Corners 1 / Stats 2 / Coaching 3) — the
+        window's digit-shortcut + restore entry point. Out-of-range indexes are ignored."""
+        if 0 <= index < self.tab_bar.count():
+            self.tab_bar.setCurrentIndex(index)
 
     def _on_stats_corner_clicked(self, cid):
         """A Stats CORNERS-table row click → ring that corner's apex on the map. If the lap
@@ -895,21 +878,15 @@ class CentralView(QWidget):
             self._restore_splitter_sizes()
         self.map.highlight_corner(cid)
 
-    def _stats_page_active(self) -> bool:
-        """True while the Stats page is the visible table-stack page. The under-table strips
-        hide then — see _apply_table_mode. Defensive getattr for a partially-built view."""
-        btn = getattr(self, "stats_btn", None)
-        return btn is not None and btn.isChecked()
-
     def show_stats_maximized(self):
         """One action to the full-window statistics dashboard (View ▸ Session statistics):
-        flip the lap panel to its Stats page and maximize that panel. Invoked again while
-        already showing it, it restores the grid (a true toggle, mirroring the ⤢ button);
-        the page itself stays on Stats — the header toggle flips it back."""
-        if self.stats_btn.isChecked() and self._maximized_panel is self._table_panel:
+        select the Stats tab and maximize the lap panel. Invoked again while already showing
+        it, it restores the grid (a true toggle, mirroring the ⤢ button); the page itself
+        stays on Stats — the tab bar flips it back."""
+        if self.tab_bar.currentIndex() == 2 and self._maximized_panel is self._table_panel:
             self._restore_splitter_sizes()
             return
-        self.stats_btn.setChecked(True)
+        self.tab_bar.setCurrentIndex(2)
         if self._maximized_panel is not self._table_panel:
             self._toggle_panel_maximized(self._table_panel)
 
@@ -932,15 +909,14 @@ class CentralView(QWidget):
             self._refresh_driving_channels()
 
     def _update_table_header(self):
-        """The table panel's mode label: "LAPS", "CORNERS · LAP n" (always explicit WHICH lap
-        the per-corner rows describe), or "STATISTICS"."""
-        if self.stats_btn.isChecked():
-            self._table_label.setText("STATISTICS")
-        elif self.corners_btn.isChecked():
-            lap = self._corner_lap
-            self._table_label.setText(f"CORNERS · LAP {lap}" if lap is not None else "CORNERS")
-        else:
-            self._table_label.setText("LAPS")
+        """The Corners tab always names WHICH lap its per-corner rows describe — directly on
+        the tab text ("Corners · L7", 1-based like every lap number in the app; the old mode
+        label showed the raw 0-based id). Defensive getattr for a partially-built view."""
+        bar = getattr(self, "tab_bar", None)
+        if bar is None:
+            return
+        lap = getattr(self, "_corner_lap", None)
+        bar.setTabText(1, f"Corners · L{lap + 1}" if lap is not None else "Corners")
 
     def _on_laps_selected(self, ids, seek=False):
         # The table multi-selection drives the PLOTS only; the map's current-lap overlay
@@ -1157,7 +1133,7 @@ class CentralView(QWidget):
     # ------------------------------------------------------------- the shared rebuild seam
     def rebuild_derived_views(self, *, reselect: bool = True):
         """The single seam that rebuilds every session-derived surface (table, map overlays/corners,
-        corner table, opportunities, consistency, driving channels, selection, sector lines) in a
+        corner table, opportunities, stats, driving channels, selection, sector lines) in a
         load-bearing order — three drifted copies were unified here. Shared by re-segmentation, a
         reference load/clear, and the initial build; each call site keeps only its own extras inline."""
         self.table.refresh()
@@ -1169,7 +1145,6 @@ class CentralView(QWidget):
         # The persistent coaching front-door: recompute the top-3 opportunities (the clean-lap set /
         # corner losses shift on a re-segmentation; recomputed per build, never on the 30 Hz tick).
         self.opportunities.refresh()
-        self.consistency.refresh()
         self.stats_view.refresh()
         # Re-push driving channels explicitly: the selection step below can early-out on an
         # unchanged primary-lap id while the channels did change.

@@ -6,9 +6,9 @@ so the suite never touches the real file), and the same atomic write (temp file 
 Kept separate from the library index (that file is a data catalogue; this is UI state).
 
 A generic get/set dict of persisted UI choices: the speed display unit (``studio/units.py``),
-the colour-blind palette, the last-opened folder, and the declutter toggles (coaching /
-excluded / consistency visibility). Every read is guarded and defaults to the safe value, so
-a missing / corrupt file is never fatal (each toggle just starts at its default).
+the colour-blind palette, the last-opened folder, the excluded-strip toggle, the lap panel's
+active tab and the grid-splitter sizes. Every read is guarded and defaults to the safe value,
+so a missing / corrupt file is never fatal (each choice just starts at its default).
 """
 
 from __future__ import annotations
@@ -32,17 +32,20 @@ COLORBLIND_PALETTE = "colorblind_palette"
 # lives instead of a useless default each session. Stored as an absolute path string; the accessor
 # only returns it when it still exists on disk (an old drive gets unmounted), else "" (today's fallback).
 LAST_DIR = "last_dir"
-# Left-column declutter (the "calm default"): three UI-state bools that survive a relaunch, so a
-# user who tidied their layout finds it the way they left it. All default to the calm posture:
-#   * COACHING_COLLAPSED — the coaching (Opportunities) panel body starts collapsed to its header
-#     bar (the summary line still reads as the re-open affordance). Default True = collapsed.
-#   * COACHING_VISIBLE — whether the whole coaching panel (header included) is shown. Default True =
-#     shown-but-collapsed, so the calm default still exposes the one-click re-open header.
-#   * EXCLUDED_VISIBLE — whether the ⊘ excluded-laps strip is shown at all. Default True = shown
-#     (as its own collapsed one-liner). A garbage stored value coerces to bool (never crashes).
-COACHING_COLLAPSED = "coaching_collapsed"
-COACHING_VISIBLE = "coaching_visible"
+# Lap-panel layout state that survives a relaunch, so a user who tidied their layout finds it
+# the way they left it:
+#   * EXCLUDED_VISIBLE — whether the ⊘ excluded-laps strip (inside the Laps page) is shown at
+#     all. Default True = shown (as its own collapsed one-liner). Coerced to bool.
+#   * LAP_PANEL_TAB — the lap panel's active tab (Laps 0 · Corners 1 · Stats 2 · Coaching 3).
+#     Default 0; anything out of range reads as 0 (never crashes, never a blank page).
+#   * GRID_SIZES — the [main, left, right] grid-splitter sizes as three int lists, or None
+#     until the user drags a splitter (the built-in defaults apply then). The view validates
+#     shape/section counts before applying, so a stale/corrupt value falls back cleanly.
+# (COACHING_COLLAPSED / COACHING_VISIBLE were retired with the under-table strips — coaching is
+# a full tab now; stale keys in an existing prefs file are simply ignored.)
 EXCLUDED_VISIBLE = "excluded_visible"
+LAP_PANEL_TAB = "lap_panel_tab"
+GRID_SIZES = "grid_sizes"
 
 
 def _app_support_dir() -> str:
@@ -124,28 +127,32 @@ def set_colorblind_palette(on: bool, path: str | None = None) -> None:
     set(COLORBLIND_PALETTE, bool(on), path)
 
 
-def coaching_collapsed(path: str | None = None) -> bool:
-    """Whether the coaching (Opportunities) panel starts COLLAPSED to its header bar (default True —
-    the calm default). A garbage stored value coerces to bool, so a corrupt file never crashes the
-    toggle — it just reads as collapsed."""
-    return bool(get(COACHING_COLLAPSED, True, path))
+def lap_panel_tab(path: str | None = None) -> int:
+    """The lap panel's persisted active tab (Laps 0 · Corners 1 · Stats 2 · Coaching 3).
+    Anything non-int or out of range reads as 0 — a corrupt file never opens a blank page."""
+    val = get(LAP_PANEL_TAB, 0, path)
+    return int(val) if isinstance(val, int) and 0 <= val <= 3 else 0
 
 
-def set_coaching_collapsed(on: bool, path: str | None = None) -> None:
-    """Persist the coaching-panel collapsed state."""
-    set(COACHING_COLLAPSED, bool(on), path)
+def set_lap_panel_tab(index: int, path: str | None = None) -> None:
+    """Persist the lap panel's active tab."""
+    set(LAP_PANEL_TAB, int(index), path)
 
 
-def coaching_visible(path: str | None = None) -> bool:
-    """Whether the whole coaching (Opportunities) panel is shown (default True — shown, but
-    collapsed by default, so the calm default still exposes the one-click re-open header). Coerced
-    to bool so a corrupt file never crashes the toggle."""
-    return bool(get(COACHING_VISIBLE, True, path))
+def grid_sizes(path: str | None = None) -> list | None:
+    """The persisted [main, left, right] grid-splitter sizes (three lists of ints), or None
+    when unset / malformed — the view then keeps its built-in defaults. Shape-guarded here;
+    the view additionally checks each list against its splitter's section count."""
+    val = get(GRID_SIZES, None, path)
+    if (isinstance(val, list) and len(val) == 3
+            and all(isinstance(s, list) and s for s in val)):
+        return val
+    return None
 
 
-def set_coaching_visible(on: bool, path: str | None = None) -> None:
-    """Persist the coaching-panel visibility (the View-menu hide toggle)."""
-    set(COACHING_VISIBLE, bool(on), path)
+def set_grid_sizes(sizes: list, path: str | None = None) -> None:
+    """Persist the grid-splitter sizes (the view emits them debounced after a drag)."""
+    set(GRID_SIZES, [[int(v) for v in s] for s in sizes], path)
 
 
 def excluded_visible(path: str | None = None) -> bool:

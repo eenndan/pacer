@@ -1090,56 +1090,6 @@ def test_follow_current_is_best_shows_single_lap():
     print("test_follow_current_is_best_shows_single_lap OK")
 
 
-class _StubConsistency:
-    """A stand-in ConsistencyPanel that records refresh()/setVisible() + reports isVisible(), so the
-    F6 default-hidden + View-toggle handler can be tested without the pyqtgraph panel build."""
-    def __init__(self):
-        self._visible = True   # built shown like the real widget; _build_ui hides it per the flag
-        self.refreshed = 0
-
-    def refresh(self):
-        self.refreshed += 1
-
-    def setVisible(self, on):
-        self._visible = bool(on)
-
-    def isVisible(self):
-        return self._visible
-
-
-def test_consistency_panel_hidden_by_default_and_toggle_refreshes():
-    """F6: the consistency strip is HIDDEN by default and the View toggle shows it (refreshing its
-    stats) / hides it again. F7: the show/hide + stats-refresh body moved onto CentralView
-    (set_consistency_visible / _apply_consistency_visible); the persistent View toggle on the window
-    just records the choice on the window and delegates here. This drives the view method directly:
-    the build-time default-hide (refresh=False) then the toggle (refresh iff showing)."""
-    from studio.central_view import CentralView
-
-    w = CentralView.__new__(CentralView)
-    # The window default (passed into the view at construction): the panel is hidden until the View
-    # toggle turns it on.
-    w._consistency_visible = False
-    panel = _StubConsistency()
-    w.consistency = panel
-    # __init__ applies the flag to the freshly-built (shown) panel via _apply_consistency_visible:
-    w._apply_consistency_visible(refresh=False)
-    assert panel.isVisible() is False, "consistency panel must be hidden by default"
-    assert panel.refreshed == 0
-
-    # Toggle ON via the real (moved) handler: it refreshes the stats then shows the panel.
-    w.set_consistency_visible(True)
-    assert w._consistency_visible is True
-    assert panel.isVisible() is True
-    assert panel.refreshed == 1, "showing must refresh the stats"
-
-    # Toggle OFF: hidden again, no extra refresh.
-    w.set_consistency_visible(False)
-    assert w._consistency_visible is False
-    assert panel.isVisible() is False
-    assert panel.refreshed == 1
-    print("test_consistency_panel_hidden_by_default_and_toggle_refreshes OK")
-
-
 class _StubVisible:
     """A stand-in panel/strip that only tracks its setVisible() state, so the CentralView show/hide
     toggles (coaching / excluded) can be tested without a real Qt widget build."""
@@ -1161,34 +1111,6 @@ class _StubExcludedTable:
 
     def set_excluded_visible(self, on):
         self.excluded_visible = bool(on)
-
-
-def test_coaching_panel_view_toggle_hides_and_shows_whole_panel():
-    """Declutter PR: View ▸ Show coaching panel fully shows/hides the whole OpportunitiesPanel
-    (header included) via CentralView.set_coaching_visible — the window records + persists the
-    choice and delegates here. Drives the view method directly (the build-time apply + the toggle),
-    mirroring the consistency test. The chevron-collapse is a SEPARATE concern (tested in
-    test_coaching)."""
-    from studio.central_view import CentralView
-
-    w = CentralView.__new__(CentralView)
-    w._coaching_visible = True
-    panel = _StubVisible()
-    w.opportunities = panel
-    # Build-time apply reflects the window default (shown).
-    w._apply_coaching_visible()
-    assert panel.isVisible() is True, "coaching panel is shown by default (collapsed, but present)"
-
-    # Menu-hide it entirely.
-    w.set_coaching_visible(False)
-    assert w._coaching_visible is False
-    assert panel.isVisible() is False, "the menu toggle must hide the whole panel"
-
-    # Re-show it.
-    w.set_coaching_visible(True)
-    assert w._coaching_visible is True
-    assert panel.isVisible() is True
-    print("test_coaching_panel_view_toggle_hides_and_shows_whole_panel OK")
 
 
 def test_excluded_strip_view_toggle_delegates_to_lap_table():
@@ -1216,7 +1138,7 @@ def test_excluded_strip_view_toggle_delegates_to_lap_table():
 
 # ----------------------------------------------------- F3: the single rebuild-derived-views seam
 class _ViewSpy:
-    """A stand-in for a derived-view collaborator (table / corner_table / map / consistency /
+    """A stand-in for a derived-view collaborator (table / corner_table / map / stats /
     plots) that records which of its refresh methods were invoked, so we can assert the rebuild
     seam touches the UNION of views — without building any real pyqtgraph/Qt panels."""
 
@@ -1251,7 +1173,6 @@ def _rebuild_window(comparing=False):
     w.corner_table = _ViewSpy()
     w.map = _ViewSpy()
     w.opportunities = _ViewSpy()
-    w.consistency = _ViewSpy()
     w.stats_view = _ViewSpy()
     w.plots = _ViewSpy()
 
@@ -1308,7 +1229,7 @@ def _ref_window(comparing=False):
 def test_rebuild_derived_views_refreshes_the_union_of_views():
     """rebuild_derived_views(reselect=True) must refresh the FULL union of session-derived views:
     table.refresh, map.refresh_overlays, map.set_corners, corner_table.refresh,
-    consistency.refresh, the driving-channel refresh, the default re-selection and the sector-line
+    the stats/opportunities refreshes, the driving-channel refresh, the default re-selection and the sector-line
     refresh — the single seam every refresh path now routes through."""
     w, rec = _rebuild_window(comparing=False)
 
@@ -1319,7 +1240,6 @@ def test_rebuild_derived_views_refreshes_the_union_of_views():
     assert "set_corners" in w.map.calls, "map corners not re-pushed"
     assert "refresh" in w.corner_table.calls, "corner table not refreshed"
     assert "refresh" in w.opportunities.calls, "opportunities panel not refreshed"
-    assert "refresh" in w.consistency.calls, "consistency strip not refreshed"
     assert "refresh" in w.stats_view.calls, "stats page not refreshed"
     assert rec.driving == 1, "driving channels not refreshed"
     assert rec.sector == 1, "sector lines not refreshed"
@@ -1346,7 +1266,7 @@ def test_rebuild_derived_views_compare_branch_refreshes_plots_not_reselect():
     assert "refresh" in w.plots.calls, "compare overlay (plots.refresh) not refreshed"
     # The rest of the union is still refreshed regardless of the selection branch.
     assert "refresh" in w.table.calls and "set_corners" in w.map.calls
-    assert "refresh" in w.consistency.calls and rec.driving == 1 and rec.sector == 1
+    assert rec.driving == 1 and rec.sector == 1
     print("test_rebuild_derived_views_compare_branch_refreshes_plots_not_reselect OK")
 
 
@@ -1364,7 +1284,7 @@ def test_apply_reference_change_now_refreshes_corners_and_driving_channels():
     assert rec.driving == 1, "FIX REGRESSED: reference path skips _refresh_driving_channels"
     # And it still does everything the old path did (plus updates the reference status chip last).
     assert "refresh" in w.view.table.calls and "refresh_overlays" in w.view.map.calls
-    assert "refresh" in w.view.corner_table.calls and "refresh" in w.view.consistency.calls
+    assert "refresh" in w.view.corner_table.calls
     assert rec.select == 1 and rec.sector == 1
     assert rec.update_ref == 1, "_update_reference_status not called after the rebuild"
     print("test_apply_reference_change_now_refreshes_corners_and_driving_channels OK")
@@ -1396,12 +1316,13 @@ class _FakeView:
         type(self).n_built += 1
         self.disposed = False
         self.video = SimpleNamespace(name=f"video#{type(self).n_built}")
-        # The real CentralView exposes `timingEdited` + `coachingCollapsedChanged` +
+        # The real CentralView exposes `timingEdited` + `lapTabChanged` + `gridSizesChanged` +
         # `videoFocusChanged` signals that _build_ui connects (Edit ▸ Undo enablement / persisting the
         # coaching collapse / driving the window fullscreen for video focus); the swap test only needs
         # a .connect() no-op for each.
         self.timingEdited = SimpleNamespace(connect=lambda *_a, **_k: None)
-        self.coachingCollapsedChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
+        self.lapTabChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
+        self.gridSizesChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
         self.videoFocusChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
 
     def dispose(self):
@@ -1428,12 +1349,12 @@ def test_build_ui_atomic_swap_disposes_old_reuses_timer_and_rechromes():
     w.session = object()
     w._paths = ["/x/REC.MP4"]
     w._sidecar_path = None
-    w._consistency_visible = False
-    # Declutter PR: the window seeds the coaching/excluded show/hide + coaching-collapse state into
-    # each fresh view too (persisted prefs on the real window); _FakeView swallows the kwargs.
-    w._coaching_visible = True
-    w._coaching_collapsed = True
+    # Tabbed-panel PR: the window seeds the excluded-strip choice + the persisted lap tab and
+    # grid sizes into each fresh view (persisted prefs on the real window); _FakeView swallows
+    # the kwargs.
     w._excluded_visible = True
+    w._lap_panel_tab = 0
+    w._grid_sizes = None
     # Stub the chrome-seed methods _build_ui calls after the swap (they touch the real menu / status
     # bar, irrelevant to the swap mechanics).
     w._sync_full_recording_action = lambda: None

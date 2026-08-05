@@ -378,51 +378,40 @@ def test_brake_throttle_band_colour_follows_the_palette():
     print("test_brake_throttle_band_colour_follows_the_palette OK")
 
 
-class _StubConsistencySession:
-    """The read surface ConsistencyPanel touches: a small lap-time trend + no sectors/corners."""
-
-    def __init__(self):
-        self.corners = type("C", (), {"corner_list": staticmethod(lambda: [])})()
-
-    def lap_time_trend(self):
-        return [(0, 70.0), (1, 71.2), (2, 69.8)]  # lap 2 is a new PB (running min)
-
-    def sector_sigmas(self):
-        return []
-
-    def corner_consistency(self):
-        return []
-
-
-def test_consistency_pb_dot_colour_follows_the_palette():
-    """The consistency panel's PB dots + session-best baseline carry the best/ahead hue via the
-    accessors (not frozen C.ahead), so refresh_palette re-pens them on a colour-blind flip. Standard
-    stays green; the flip changes them to the palette's ahead hue."""
+def test_stats_spark_pb_colour_follows_the_palette():
+    """The Stats page's trend sparkline (the retired consistency strip's successor) carries the
+    PB dots + session-best baseline in the best/ahead hue via the accessors (not frozen
+    C.ahead), re-penned on refresh_palette. Standard stays green; the colour-blind flip
+    changes them to the palette's hue."""
     _APP  # noqa: B018
     from PySide6.QtGui import QColor
+    from test_stats import _fake_view_session
 
-    from studio.consistency_panel import ConsistencyPanel
+    from studio.stats_panel import StatsView
     try:
         theme.set_palette(theme.PALETTE_STANDARD)
-        panel = ConsistencyPanel(_StubConsistencySession())
+        sess = _fake_view_session()
+        sess.lap_time_trend = lambda: [(0, 70.0), (1, 71.2), (2, 69.8)]  # lap 3 = a new PB
+        view = StatsView(sess)
+        assert view.spark.isVisibleTo(view), "the sparkline shows with >=2 clean laps"
 
         def _pb_brush():
-            return panel._pb_dots.opts["brush"].color().name().upper()
+            return view._spark_pb_dots.opts["brush"].color().name().upper()
 
         def _baseline_pen():
-            return panel._baseline.pen.color().name().upper()
+            return view._spark_baseline.pen.color().name().upper()
 
         assert _pb_brush() == QColor(theme.C.ahead).name().upper()
         assert _baseline_pen() == QColor(theme.C.ahead).name().upper()
 
         theme.set_palette(theme.PALETTE_COLORBLIND)
-        panel.refresh_palette()
+        view.refresh_palette()
         assert _pb_brush() == QColor(theme.best_lap_colour()).name().upper()
         assert _baseline_pen() == QColor(theme.best_lap_colour()).name().upper()
         assert _pb_brush() != QColor(theme.C.ahead).name().upper()  # actually changed
     finally:
         theme.set_palette(theme.PALETTE_STANDARD)
-    print("test_consistency_pb_dot_colour_follows_the_palette OK")
+    print("test_stats_spark_pb_colour_follows_the_palette OK")
 
 
 def test_export_delta_colour_follows_the_palette():
@@ -649,7 +638,7 @@ if __name__ == "__main__":
     test_lap_table_excluded_strip_menu_hide_is_orthogonal_to_collapse()
     test_lap_table_best_colours_follow_the_palette_selector()
     test_brake_throttle_band_colour_follows_the_palette()
-    test_consistency_pb_dot_colour_follows_the_palette()
+    test_stats_spark_pb_colour_follows_the_palette()
     test_export_delta_colour_follows_the_palette()
     test_overlay_config_carries_the_palette()
     test_opportunities_panel_rerenders_on_palette_flip()

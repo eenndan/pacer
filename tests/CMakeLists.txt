@@ -232,9 +232,9 @@ set_tests_properties(test_corners PROPERTIES
 # Imports pacer transitively (the session chain), no Qt, no telemetry file.
 add_test(NAME test_export_data
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_data.py)
-# Consistency stats + panel (studio.consistency / consistency_panel, F6): σ / median-loss /
-# ranking exactness vs direct numpy, the ⚠ dropout-lap exclusion on a bare Session, and the
-# panel + map-highlight UI (offscreen Qt on stubs: populate, click→signal, collapse).
+# Consistency stats (studio.consistency, F6): σ / median-loss / ranking exactness vs direct
+# numpy, the ⚠ dropout-lap exclusion on a bare Session, and the map corner-ring highlight
+# (offscreen Qt). The old ConsistencyPanel UI moved into the Stats page — see test_stats.
 add_test(NAME test_consistency
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_consistency.py)
 set_tests_properties(test_consistency PROPERTIES

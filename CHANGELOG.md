@@ -50,6 +50,12 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Changed
 
+- **The lap panel is a real tabbed panel** — one native tab bar (**Laps · Corners · Stats ·
+  Coaching**, digits 1–4), every page at the panel's full height. The under-table coaching +
+  consistency strips (and their height caps, collapse chevrons and View-menu hide toggles)
+  are gone: coaching is a full tab, the consistency content lives in Stats (trend sparkline +
+  the corner σ/tint columns). The active tab and any grid-splitter drag now persist across
+  reloads and relaunches.
 - `Session` decomposed into injected services (`Bests`, `CornerModel`, `DrivingChannels`,
   `Timeline`, `SessionStats`, the map render cache); `app.py` slimmed via extracted
   workers/overlays; compare-mode ownership unified under `CompareController`.
