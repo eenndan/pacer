@@ -50,6 +50,7 @@ from studio.stats import (  # noqa: E402
     pace_stats,
     path_distance_m,
     peak_g,
+    phase_matrix,
     sector_medians,
     theil_sen_slope,
     within_pct_of_best,
@@ -150,6 +151,34 @@ def test_corner_report_composes_columns():
     assert r2.grip_median is None and r1.grip_median is None
     assert corner_report([], [], [], [], []) == []
     print("test_corner_report_composes_columns OK")
+
+
+def test_phase_matrix_medians_and_positive_part_share():
+    # Two corners × three laps; corner 2's exit phase is a median GAIN (negative) and must
+    # NOT cancel losses elsewhere in the share (positive-part accounting).
+    triples = [
+        [(0.30, 0.10, 0.05), (0.20, 0.05, -0.10)],
+        [(0.40, 0.20, 0.15), (0.10, 0.15, -0.20)],
+        [(0.20, 0.30, 0.10), (0.30, 0.10, -0.30)],
+    ]
+    rep = phase_matrix([1, 2], triples)
+    assert rep.rows[0] == (0.30, 0.20, 0.10)          # element-wise medians
+    assert rep.rows[1] == (0.20, 0.10, -0.20)
+    sh = rep.share
+    assert abs(sh.entry_s - 0.50) < 1e-12             # 0.30 + 0.20
+    assert abs(sh.apex_s - 0.30) < 1e-12
+    assert abs(sh.exit_s - 0.10) < 1e-12              # 0.10 + max(0, -0.20)
+    fr = sh.fracs()
+    assert abs(sum(fr) - 1.0) < 1e-12 and abs(fr[0] - 0.50 / 0.90) < 1e-12
+    # Ragged: a lap missing corner 2 → corner 2 medians over the remaining laps.
+    rep2 = phase_matrix([1, 2], [[(0.1, 0.1, 0.1)], [(0.2, 0.2, 0.2), (0.3, 0.3, 0.3)]])
+    assert rep2.rows[1] == (0.3, 0.3, 0.3)
+    # All gains -> no share (nothing lost), rows still reported.
+    rep3 = phase_matrix([1], [[(-0.1, -0.2, -0.1)]])
+    assert rep3.share is None and rep3.rows[0] == (-0.1, -0.2, -0.1)
+    # No data at all for a corner -> None row.
+    assert phase_matrix([1], [[]]).rows == [None]
+    print("test_phase_matrix_medians_and_positive_part_share OK")
 
 
 def test_theil_sen_slope_exact_and_degenerate():
@@ -570,6 +599,32 @@ def test_stats_view_corners_table_tint_sort_and_click():
     t.sortItems(4, Qt.DescendingOrder)
     assert t.item(0, 0).text().startswith("C2")
     print("test_stats_view_corners_table_tint_sort_and_click OK")
+
+
+def test_stats_view_phase_tiles_and_loss_tooltips():
+    _app()
+    from studio.stats import CornerReport, PhaseReport, PhaseShare
+    from studio.stats_panel import StatsView
+    sess = _fake_view_session()
+    sess.corner_report = lambda: [
+        CornerReport(cid=1, direction=1, n=10, best_s=3.20, median_s=3.30, sigma_s=0.05,
+                     median_loss_s=0.10, apex_best_kmh=62.0, apex_median_kmh=60.0,
+                     grip_median=0.95, score=0.005),
+    ]
+    sess.phase_report = lambda: PhaseReport(
+        cids=[1], rows=[(0.61, 0.24, 0.15)], share=PhaseShare(6.1, 2.4, 1.5))
+    v = StatsView(sess)
+    assert not v.t_phase_entry.isHidden()
+    assert v.t_phase_entry.value.text() == "61 %"
+    assert "6.1 s" in v.t_phase_entry.caption.text()
+    assert v.t_phase_exit.value.text() == "15 %"
+    tip = v.corners_table.item(0, 4).toolTip()
+    assert "entry +0.61" in tip and "exit +0.15" in tip
+    # No phase data -> the tiles hide, the table stands alone.
+    sess.phase_report = lambda: None
+    v.refresh()
+    assert v.t_phase_entry.isHidden() and v.t_phase_exit.isHidden()
+    print("test_stats_view_phase_tiles_and_loss_tooltips OK")
 
 
 def test_stats_view_corners_table_hidden_without_corners():
