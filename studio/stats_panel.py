@@ -59,6 +59,16 @@ CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median 
                    "slow) are tinted: that's where practice pays first. Click a row to ring "
                    "the corner's apex on the map; click a column header to sort.")
 BRAKE_COLUMNS = ["Corner", "n", "Onset σ m", "Span m", "Commit %", "m later"]
+STRAIGHT_COLUMNS = ["Straight", "Best", "Median", "σ (s)", "Trap best", "Trap med", "Exit Δ"]
+RING_ROLE = NUM_ROLE + 1   # the map-ring corner cid stored on a straight row's label item
+STRAIGHTS_TOOLTIP = ("Straight-by-straight over the clean laps (the corner/straight "
+                     "partition — segments sum to the lap time exactly): best/median/σ "
+                     "time, the trap speed at the straight's END, and Exit Δ — the "
+                     "preceding corner's median exit speed vs your best lap's (+ is "
+                     "faster). A slow exit ahead of a long straight is the costliest "
+                     "mistake on track: the FIX FIRST tile ranks exit deficit × straight "
+                     "time spread. Trap speed doubles as a gearing/engine-health proxy. "
+                     "Click a row to ring the corner feeding that straight.")
 BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the cross-lap "
                    "scatter of your brake-onset POINT (σ and max−min span, metres, compared "
                    "in the reference lap's odometer) plus commitment — the median event's "
@@ -287,6 +297,26 @@ class StatsView(QWidget):
         self.braking_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         col.addWidget(self.braking_table)
 
+        # --- the straight-line report (hidden without corners / a best lap)
+        self._straights_section = self._section("STRAIGHTS")
+        col.addWidget(self._straights_section)
+        self.t_fix_first = _Tile("fix first")
+        self.t_fix_first.setToolTip(
+            "The corner whose exit deficit costs the most down the following straight "
+            "(exit-speed deficit × the straight's median−best time spread) — measured, "
+            "not modeled. Fix this one before chasing apex speed elsewhere.")
+        col.addLayout(self._grid(self.t_fix_first))
+        self.straights_table = self._make_table(STRAIGHT_COLUMNS)
+        self.straights_table.setToolTip(STRAIGHTS_TOOLTIP)
+        self.straights_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.straights_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.straights_table.setFocusPolicy(Qt.ClickFocus)
+        self.straights_table.itemSelectionChanged.connect(self._on_straight_row_selected)
+        self.straights_table.horizontalHeader().sortIndicatorChanged.connect(
+            self._on_corner_sort)
+        self.straights_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
+        col.addWidget(self.straights_table)
+
         # --- DATA TRUST (the timing-quality + g-provenance + IMU↔GPS cross-check card)
         col.addWidget(self._section("DATA TRUST"))
         self.trust_label = QLabel("")
@@ -436,6 +466,7 @@ class StatsView(QWidget):
         self._refresh_sectors(session)
         self._refresh_corners(session, unit, u_label)
         self._refresh_braking(session)
+        self._refresh_straights(session, unit, u_label)
         self._refresh_trust(session)
         self._refresh_lap_table(session, rows, unit, u_label)
 
@@ -699,6 +730,68 @@ class StatsView(QWidget):
         t.blockSignals(False)
         t.setSortingEnabled(True)
         self._fit_table(t)
+
+    def _refresh_straights(self, session, unit, u_label):
+        report = getattr(session, "straights_report", list)() or []
+        has = bool(report)
+        self._straights_section.setVisible(has)
+        self.straights_table.setVisible(has)
+        if not has:
+            self.t_fix_first.setVisible(False)
+            self.straights_table.setRowCount(0)
+            return
+        self._straights_section.setText(f"STRAIGHTS · speeds in {u_label}")
+        # The FIX FIRST tile: the biggest exit-deficit × straight-spread product.
+        top = max(report, key=lambda s: s.leverage)
+        if top.leverage > 0:
+            self.t_fix_first.setVisible(True)
+            self.t_fix_first.set(
+                f"C{top.ring_cid}",
+                f"fix first · exit {units.convert_speed(top.exit_delta_kmh, unit):+.1f} "
+                f"{u_label} → +{top.median_s - top.best_s:.2f} s straight")
+        else:
+            self.t_fix_first.setVisible(False)
+        mono = theme.mono_font(theme.TABLE)
+
+        def cell(val, fmtstr):
+            item = _NumItem(fmtstr.format(val) if val is not None else DASH)
+            item.setData(NUM_ROLE, val)
+            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item.setFont(mono)
+            return item
+
+        t = self.straights_table
+        t.setSortingEnabled(False)
+        t.blockSignals(True)
+        t.clearSelection()
+        t.setRowCount(len(report))
+        for r, st in enumerate(report):
+            name = _NumItem(st.label)
+            name.setData(NUM_ROLE, st.index)      # sort key: track order
+            name.setData(RING_ROLE, st.ring_cid)  # the corner feeding this straight
+            t.setItem(r, 0, name)
+            t.setItem(r, 1, cell(st.best_s, "{:.2f}"))
+            t.setItem(r, 2, cell(st.median_s, "{:.2f}"))
+            t.setItem(r, 3, cell(st.sigma_s, "{:.2f}"))
+            t.setItem(r, 4, cell(units.convert_speed(st.trap_best_kmh, unit)
+                                 if st.trap_best_kmh is not None else None, "{:.1f}"))
+            t.setItem(r, 5, cell(units.convert_speed(st.trap_median_kmh, unit)
+                                 if st.trap_median_kmh is not None else None, "{:.1f}"))
+            t.setItem(r, 6, cell(units.convert_speed(st.exit_delta_kmh, unit)
+                                 if st.exit_delta_kmh is not None else None, "{:+.1f}"))
+        t.blockSignals(False)
+        t.setSortingEnabled(True)
+        self._fit_table(t)
+
+    def _on_straight_row_selected(self):
+        """A straight row rings the CORNER FEEDING it (its exit sets the straight's story);
+        same corner_clicked pathway as the other tables."""
+        rows = self.straights_table.selectionModel().selectedRows()
+        if rows:
+            item = self.straights_table.item(rows[0].row(), 0)
+            self.corner_clicked.emit(item.data(RING_ROLE) if item else None)
+        else:
+            self.corner_clicked.emit(None)
 
     def _on_brake_row_selected(self):
         """A BRAKING-table row is a corner too — emit the same corner_clicked the CORNERS

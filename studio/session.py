@@ -40,6 +40,9 @@ from . import (
     tracks,
 )
 from . import (
+    corners as corners_alg,  # the pure algorithm module; `self.corners` is the service
+)
+from . import (
     stats as stats_service,
 )
 from ._signal import (
@@ -1532,6 +1535,48 @@ class Session:
         if not rows:
             return []
         return stats_service.brake_consistency([c.cid for c in corner_list], rows)
+
+    def straights_report(self) -> list[stats_service.StraightStat]:
+        """The straight-line report (the Stats page's STRAIGHTS table): per straight of the
+        corner/straight partition, the session best/median/σ time + trap-speed stats + the
+        preceding corner's exit-speed delta and leverage. Resurrects corners.segment_times'
+        EVEN entries — computed since the corner model shipped, discarded until now (only
+        the odd/corner entries were read). Same drift-gated projection + trace pairing as
+        lap_corner_stats. [] without corners / a best lap / clean laps. Not cached (read on
+        load / re-segment only)."""
+        ids = self.consistency_lap_ids()
+        corner_list = self.corners.corner_list()
+        best = self.best_lap_id()
+        basis = self.corners.basis()
+        if not corner_list or best is None or basis is None or not ids:
+            return []
+        total_ref = float(basis[1])
+        n = len(corner_list)
+        _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
+        times_by_lap: list[list[float]] = []
+        traps_by_lap: list[list[float]] = []
+        exits_by_lap: list[list[float]] = []
+        for i in ids:
+            dist, speed_kmh, elapsed = self._lap_arrays(i)
+            st = self.corners.lap_corner_stats(i)
+            if len(dist) < 2 or len(st) != n:
+                continue
+            _lt, lap_xs, lap_ys, _lv, lap_cum = self._lap_columns(i)
+            traces = (best_xs, best_ys, best_cum, lap_xs, lap_ys, lap_cum)
+            seg = corners_alg.segment_times(corner_list, total_ref, dist, elapsed, traces)
+            times_by_lap.append([float(x) for x in seg[0::2]])  # the discarded even entries
+            # Trap = the speed at each straight's END: the next corner's entry, and the
+            # lap's own final-sample speed for the straight into the timing line.
+            traps_by_lap.append([s.entry_speed for s in st] + [float(speed_kmh[-1])])
+            exits_by_lap.append([s.exit_speed for s in st])
+        best_stats = self.corners.lap_corner_stats(best)
+        best_exits = ([s.exit_speed for s in best_stats]
+                      if len(best_stats) == n else [float("nan")] * n)
+        if not times_by_lap:
+            return []
+        return stats_service.straights_report(
+            [c.cid for c in corner_list], times_by_lap, traps_by_lap,
+            exits_by_lap, best_exits)
 
     # ------------------------------------------------------ auto coaching summary (F10)
     # Composes the corner model, driving channels and consistency stats into the ranked

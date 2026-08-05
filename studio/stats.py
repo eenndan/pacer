@@ -114,6 +114,30 @@ class BrakeConsistency:
 
 
 @dataclass(frozen=True)
+class StraightStat:
+    """One straight's session stats (the STRAIGHTS table). Straight k runs corner k's exit →
+    corner k+1's entry; k=0 is start line → C1 and k=N is C_N → start line — on a circuit
+    those two are ONE physical straight split by the timing line. Trap speed = the speed at
+    the straight's END (the next corner's entry; the finish-line speed for the last).
+    exit_delta_kmh is the PRECEDING corner's median exit speed vs the best lap's (+ = the
+    field exits faster than best); leverage = how much a slow exit costs down THIS straight
+    (positive deficit × positive time spread) — 'fix the corner before the long straight
+    first', measured not modeled."""
+
+    index: int                      # 0-based straight index (0 = start line → C1)
+    label: str                      # "S/F → C1", "C3 → C4", "C12 → S/F"
+    ring_cid: int                   # the corner feeding this straight (wraps: straight 0 ← C_N)
+    n: int                          # laps included
+    best_s: float | None            # fastest time down the straight
+    median_s: float | None
+    sigma_s: float | None           # cross-lap σ (None with <2)
+    trap_best_kmh: float | None     # best end-of-straight speed
+    trap_median_kmh: float | None
+    exit_delta_kmh: float | None    # preceding corner: median exit − best lap's exit (None k=0)
+    leverage: float                 # max(0, −exit_delta) × max(0, median − best); 0 when N/A
+
+
+@dataclass(frozen=True)
 class PhaseShare:
     """Where the session's corner time goes: the POSITIVE-part column sums of the per-corner
     median (entry, apex, exit) losses — seconds a typical lap gives away per phase. Positive
@@ -305,6 +329,56 @@ def brake_consistency(cids, rows_by_lap) -> list[BrakeConsistency]:
             span_m=float(np.max(onsets) - np.min(onsets)),
             commit_pct=float(np.median(commits)) * 100.0 if commits else None,
             metres_later_med=float(np.median(laters)) if laters else None,
+        ))
+    return out
+
+
+def straights_report(cids, times_by_lap, traps_by_lap, exits_by_lap,
+                     best_exits) -> list[StraightStat]:
+    """The straight-line report: per straight (N corners → N+1 straights) the session's
+    best/median/σ time + trap-speed best/median, and the preceding corner's exit-speed
+    delta + leverage (see StraightStat). `times_by_lap`/`traps_by_lap` rows are aligned to
+    the N+1 straights; `exits_by_lap` rows + `best_exits` to the N corners. Ragged rows are
+    tolerated (a degenerate lap contributes only the columns it has)."""
+    n_corners = len(cids)
+
+    def column(rows, k):
+        vals = np.asarray([r[k] for r in rows if k < len(r)], float)
+        return vals[np.isfinite(vals)]
+
+    out: list[StraightStat] = []
+    for k in range(n_corners + 1):
+        times = column(times_by_lap, k)
+        traps = column(traps_by_lap, k)
+        n = len(times)
+        best = float(np.min(times)) if n else None
+        med = float(np.median(times)) if n else None
+        # The preceding corner's exit delta (median vs the best lap's own exit). k=0's
+        # preceding corner is C_N across the timing line — its delta is reported on the
+        # LAST straight (same physical exit), so k=0 reads None rather than double-counting.
+        delta = None
+        if k >= 1:
+            exits = column(exits_by_lap, k - 1)
+            if len(exits) and k - 1 < len(best_exits) and np.isfinite(best_exits[k - 1]):
+                delta = float(np.median(exits)) - float(best_exits[k - 1])
+        spread = (med - best) if n else None
+        leverage = (max(0.0, -delta) * max(0.0, spread)
+                    if delta is not None and spread is not None else 0.0)
+        if k == 0:
+            label = f"S/F → C{cids[0]}" if n_corners else "S/F"
+            ring = int(cids[-1]) if n_corners else 0  # the wrap: C_N feeds the S/F straight
+        elif k == n_corners:
+            label = f"C{cids[-1]} → S/F"
+            ring = int(cids[-1])
+        else:
+            label = f"C{cids[k - 1]} → C{cids[k]}"
+            ring = int(cids[k - 1])
+        out.append(StraightStat(
+            index=k, label=label, ring_cid=ring, n=n,
+            best_s=best, median_s=med, sigma_s=sigma(times),
+            trap_best_kmh=float(np.max(traps)) if len(traps) else None,
+            trap_median_kmh=float(np.median(traps)) if len(traps) else None,
+            exit_delta_kmh=delta, leverage=leverage,
         ))
     return out
 
