@@ -1425,6 +1425,34 @@ class Session:
         return consistency.rank_corners(
             consistency.corner_spreads([c.cid for c in corner_list], times_by_lap))
 
+    def corner_report(self) -> list[stats_service.CornerReport]:
+        """The corner-by-corner SESSION report (the Stats page's CORNERS table): per corner
+        over the consistency laps — best/median/σ time-in-corner + median loss, apex-speed
+        best/median, and the median grip utilization. Composes the corner model + driving
+        channels WITHOUT recomputing them (the coaching.py discipline); the math lives in
+        stats_service.corner_report. [] without corners or clean laps. Not cached (read on
+        load / re-segment only, never per-tick)."""
+        ids = self.consistency_lap_ids()
+        corner_list = self.corners.corner_list()
+        if not corner_list or not ids:
+            return []
+        n = len(corner_list)
+        times_by_lap: list[list[float]] = []
+        apex_by_lap: list[list[float]] = []
+        grip_by_lap: list[list[float]] = []
+        for i in ids:
+            st = self.corners.lap_corner_stats(i)
+            if len(st) != n:  # degenerate laps project to [] — same skip as corner_consistency
+                continue
+            times_by_lap.append([s.time for s in st])
+            apex_by_lap.append([s.apex_speed for s in st])
+            grip = self.driving.lap_corner_grip(i)
+            if len(grip) == n:  # [] without a g signal — the report's grip column reads None
+                grip_by_lap.append(grip)
+        return stats_service.corner_report(
+            [c.cid for c in corner_list], [c.direction for c in corner_list],
+            times_by_lap, apex_by_lap, grip_by_lap)
+
     # ------------------------------------------------------ auto coaching summary (F10)
     # Composes the corner model, driving channels and consistency stats into the ranked
     # "opportunities". The math lives in studio/coaching.py; this accessor owns the pacer-side

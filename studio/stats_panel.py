@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 
 from . import theme, units
 from ._signal import fmt_time
-from .lap_table import BEST_LAP_MARK
+from .lap_table import BEST_LAP_MARK, CORNER_DIR_GLYPH, NUM_ROLE, _NumItem
 from .theme import C
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
@@ -50,6 +50,14 @@ ROW_HEIGHT = 22           # per-lap/sector table row height (the consistency-tab
 # Speed units live in the PER-LAP section label (one place), keeping the columns narrow
 # enough that the whole table fits the quadrant with no clipped column.
 LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s", "Coast s"]
+CORNER_COLUMNS = ["Corner", "Best", "Median", "σ (s)", "Med loss", "Apex best", "Apex med",
+                  "Grip %"]
+WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss cell tinted
+CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median / σ "
+                   "time-in-corner, the median loss vs best, apex speeds and median grip "
+                   "utilization. The worst 3 loss cells (by σ × median-loss — erratic AND "
+                   "slow) are tinted: that's where practice pays first. Click a row to ring "
+                   "the corner's apex on the map; click a column header to sort.")
 # Pace-trend verdict band: a fitted slope within ±this (s/lap) reads "steady" — don't
 # narrate noise as a trend.
 TREND_STEADY_BAND = 0.02
@@ -101,6 +109,10 @@ class _Tile(QWidget):
 class StatsView(QWidget):
     """The Stats page (see the module docstring). Contract: refresh() on load/re-segment,
     refresh_palette() after a palette flip, set_speed_unit() from the View ▸ Units toggle."""
+
+    # Clicked CORNERS-table row's cid (None on deselect) -> the map apex ring, via the
+    # maximize-aware CentralView handler (restore the grid first, then ring).
+    corner_clicked = Signal(object)
 
     def __init__(self, session: Session):
         super().__init__()
@@ -218,6 +230,25 @@ class StatsView(QWidget):
         col.addWidget(self._sector_section)
         self.sector_table = self._make_table(SECTOR_COLUMNS)
         col.addWidget(self.sector_table)
+
+        # --- the corner-by-corner session report (hidden without detected corners)
+        self._corners_section = self._section("CORNERS")
+        col.addWidget(self._corners_section)
+        self.corners_table = self._make_table(CORNER_COLUMNS)
+        self.corners_table.setToolTip(CORNERS_TOOLTIP)
+        # Unlike the other stats tables this one is interactive: row-select → map ring,
+        # header-click → sort (numeric via _NumItem, the lap-table idiom).
+        self.corners_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.corners_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.corners_table.setFocusPolicy(Qt.ClickFocus)
+        self.corners_table.itemSelectionChanged.connect(self._on_corner_row_selected)
+        self.corners_table.horizontalHeader().sortIndicatorChanged.connect(
+            self._on_corner_sort)
+        # Explicit initial indicator: TRACK ORDER (corner id ascending). Without this, Qt's
+        # untouched default indicator is column-0 DESCENDING and the first fill's
+        # setSortingEnabled(True) would silently reverse the track.
+        self.corners_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
+        col.addWidget(self.corners_table)
 
         # --- DATA TRUST (the timing-quality + g-provenance + IMU↔GPS cross-check card)
         col.addWidget(self._section("DATA TRUST"))
@@ -366,6 +397,7 @@ class StatsView(QWidget):
         self._refresh_gg(st)
         self._refresh_driving(st, rows)
         self._refresh_sectors(session)
+        self._refresh_corners(session, unit, u_label)
         self._refresh_trust(session)
         self._refresh_lap_table(session, rows, unit, u_label)
 
@@ -515,6 +547,72 @@ class StatsView(QWidget):
             self.sector_table.setItem(
                 k, 3, self._num_item(f"{sig:.2f}" if sig is not None else DASH))
         self._fit_table(self.sector_table)
+
+    def _refresh_corners(self, session, unit, u_label):
+        report = getattr(session, "corner_report", list)() or []
+        has = bool(report)
+        self._corners_section.setVisible(has)
+        self.corners_table.setVisible(has)
+        if not has:
+            self.corners_table.setRowCount(0)
+            return
+        self._corners_section.setText(f"CORNERS · speeds in {u_label}")
+        # The worst corners by σ × median-loss get their loss cell tinted in the "behind"
+        # hue — erratic AND slow is where practice pays first. Capped at WORST_TINT_N and
+        # at half the field: a tint that covers every row highlights nothing.
+        k = min(WORST_TINT_N, max(1, len(report) // 2))
+        worst = {r.cid for r in sorted(report, key=lambda r: -r.score)[:k] if r.score > 0}
+        behind = QColor(theme.behind_colour())
+        mono = theme.mono_font(theme.TABLE)
+
+        def cell(val, fmtstr):
+            item = _NumItem(fmtstr.format(val) if val is not None else DASH)
+            item.setData(NUM_ROLE, val)
+            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item.setFont(mono)
+            return item
+
+        t = self.corners_table
+        t.setSortingEnabled(False)   # Qt requirement: never fill a live-sorting table
+        t.blockSignals(True)
+        t.clearSelection()
+        t.setRowCount(len(report))
+        for r, cr in enumerate(report):
+            name = _NumItem(f"C{cr.cid} {CORNER_DIR_GLYPH.get(cr.direction, '')}")
+            name.setData(NUM_ROLE, cr.cid)   # numeric key: C10 must not sort before C2
+            t.setItem(r, 0, name)
+            t.setItem(r, 1, cell(cr.best_s, "{:.2f}"))
+            t.setItem(r, 2, cell(cr.median_s, "{:.2f}"))
+            t.setItem(r, 3, cell(cr.sigma_s, "{:.2f}"))
+            loss = cell(cr.median_loss_s, "+{:.2f}")
+            if cr.cid in worst:
+                loss.setForeground(behind)
+            t.setItem(r, 4, loss)
+            t.setItem(r, 5, cell(units.convert_speed(cr.apex_best_kmh, unit)
+                                 if cr.apex_best_kmh is not None else None, "{:.1f}"))
+            t.setItem(r, 6, cell(units.convert_speed(cr.apex_median_kmh, unit)
+                                 if cr.apex_median_kmh is not None else None, "{:.1f}"))
+            t.setItem(r, 7, cell(cr.grip_median * 100.0
+                                 if cr.grip_median is not None else None, "{:.0f}"))
+        t.blockSignals(False)
+        t.setSortingEnabled(True)
+        self._fit_table(t)
+
+    def _on_corner_row_selected(self):
+        """Emit the selected row's corner cid (None on deselect) — read from the row's own
+        item (sorting reorders rows, so a row→cid list would go stale)."""
+        rows = self.corners_table.selectionModel().selectedRows()
+        if rows:
+            item = self.corners_table.item(rows[0].row(), 0)
+            self.corner_clicked.emit(item.data(NUM_ROLE) if item else None)
+        else:
+            self.corner_clicked.emit(None)
+
+    @staticmethod
+    def _on_corner_sort(_index, order):
+        """Keep _NumItem's blanks-last convention through descending sorts (the lap-table
+        idiom: the class flag flips before Qt reverses the order)."""
+        _NumItem._descending = order == Qt.DescendingOrder
 
     def _refresh_trust(self, session):
         lines: list[str] = []

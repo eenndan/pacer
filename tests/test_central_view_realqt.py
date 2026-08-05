@@ -840,6 +840,7 @@ def _run_all():
     test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_state()
     test_stats_page_suppresses_under_table_strips_and_restores_them()
     test_show_stats_maximized_is_a_true_toggle()
+    test_stats_corner_row_click_restores_grid_then_rings_map()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 
@@ -888,6 +889,23 @@ def test_show_stats_maximized_is_a_true_toggle():
     assert view._maximized_panel is None, "second invocation restores the grid"
     assert view.stats_btn.isChecked(), "the page itself stays on Stats"
     print("test_show_stats_maximized_is_a_true_toggle OK")
+
+
+def test_stats_corner_row_click_restores_grid_then_rings_map():
+    """N10 continuity: a CORNERS-table row click while the dashboard is maximized must
+    restore the grid FIRST (the apex ring would otherwise paint on a zero-width map), then
+    ring the corner. Runs on the stadium synthetic's REAL corner detection."""
+    view, _s, _t0, _t1 = _real_central_view()
+    view.show_stats_maximized()
+    _APP.processEvents()
+    assert view._maximized_panel is view._table_panel
+    t = view.stats_view.corners_table
+    assert t.rowCount() > 0, "stadium fixture must yield a corner report"
+
+    t.selectRow(0)
+    _APP.processEvents()
+    assert view._maximized_panel is None, "row click must restore the grid before ringing"
+    print("test_stats_corner_row_click_restores_grid_then_rings_map OK")
 
 
 if __name__ == "__main__":

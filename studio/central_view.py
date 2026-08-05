@@ -340,6 +340,9 @@ class CentralView(QWidget):
         # top-5 inconsistent corners); a corner-row click ring-highlights its apex on the map only.
         self.consistency = ConsistencyPanel(self.session)
         self.consistency.corner_clicked.connect(self.map.highlight_corner)
+        # Stats CORNERS row → the same apex ring, but maximize-aware: restore the grid
+        # first — a ring on a zero-width collapsed map helps no one (the N10 rule).
+        self.stats_view.corner_clicked.connect(self._on_stats_corner_clicked)
         # Both strips share a vertical splitter with the table stack so they shrink the
         # (min/max-capped) strips, never the lap table; the table stack gets a ~5-row min-height so
         # it stays usable. Opportunities sits directly under the table (the front-door), consistency
@@ -883,6 +886,14 @@ class CentralView(QWidget):
         self._apply_coaching_visible()
         self._apply_consistency_visible(refresh=False)
         self._update_table_header()
+
+    def _on_stats_corner_clicked(self, cid):
+        """A Stats CORNERS-table row click → ring that corner's apex on the map. If the lap
+        panel is maximized (the full-window dashboard), restore the grid first so the map
+        the ring paints on actually has pixels; a deselect (None) just clears the ring."""
+        if cid is not None and getattr(self, "_maximized_panel", None) is self._table_panel:
+            self._restore_splitter_sizes()
+        self.map.highlight_corner(cid)
 
     def _stats_page_active(self) -> bool:
         """True while the Stats page is the visible table-stack page. The under-table strips

@@ -42,6 +42,7 @@ from studio.stats import (  # noqa: E402
     SessionStats,
     best_consecutive_mean,
     clock_hhmm,
+    corner_report,
     cov_pct,
     envelope_g,
     in_windows_mask,
@@ -128,6 +129,27 @@ def test_sector_medians_column_convention():
     assert sector_medians([]) == []
     assert sector_medians([[math.nan]]) == [None]  # a column with no finite split
     print("test_sector_medians_column_convention OK")
+
+
+def test_corner_report_composes_columns():
+    rows_t = [[3.0, 5.0], [3.2, 5.4], [3.4, 5.8]]
+    rows_a = [[60.0, 44.0], [58.0, 42.0], [56.0, 40.0]]
+    rows_g = [[0.9, 0.8], [1.0, 0.7]]                  # only 2 laps carried grip
+    c1, c2 = corner_report([1, 2], [1, -1], rows_t, rows_a, rows_g)
+    assert c1.n == 3 and c1.best_s == 3.0 and c1.median_s == 3.2
+    assert abs(c1.median_loss_s - 0.2) < 1e-9
+    assert abs(c1.sigma_s - float(np.std([3.0, 3.2, 3.4], ddof=1))) < 1e-12
+    assert c1.apex_best_kmh == 60.0 and c1.apex_median_kmh == 58.0
+    assert abs(c1.grip_median - 0.95) < 1e-12
+    assert abs(c1.score - c1.sigma_s * c1.median_loss_s) < 1e-15
+    assert c1.direction == 1 and c2.direction == -1
+    # Ragged rows: a lap that never reached corner 2 + no grip anywhere.
+    r1, r2 = corner_report([1, 2], [1, -1], [[3.0, 5.0], [3.2]], [[60.0, 44.0], [58.0]], [])
+    assert r2.n == 1 and r2.sigma_s is None
+    assert r2.score == 0.0                              # under-sampled never outranks measured
+    assert r2.grip_median is None and r1.grip_median is None
+    assert corner_report([], [], [], [], []) == []
+    print("test_corner_report_composes_columns OK")
 
 
 def test_theil_sen_slope_exact_and_degenerate():
@@ -509,6 +531,53 @@ def test_stats_view_hides_signal_absent_sections():
     assert v.lap_table.item(0, 2).text() == "95.0"               # speed needs no g signal
     assert v.lap_table.item(0, 4).text() == "48.0"               # Min speed needs no g either
     print("test_stats_view_hides_signal_absent_sections OK")
+
+
+def test_stats_view_corners_table_tint_sort_and_click():
+    _app()
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor
+
+    from studio import theme
+    from studio.stats import CornerReport
+    from studio.stats_panel import StatsView
+    sess = _fake_view_session()
+    sess.corner_report = lambda: [
+        CornerReport(cid=1, direction=1, n=10, best_s=3.20, median_s=3.30, sigma_s=0.05,
+                     median_loss_s=0.10, apex_best_kmh=62.0, apex_median_kmh=60.0,
+                     grip_median=0.95, score=0.005),
+        CornerReport(cid=2, direction=-1, n=10, best_s=5.10, median_s=5.50, sigma_s=0.20,
+                     median_loss_s=0.40, apex_best_kmh=45.0, apex_median_kmh=43.0,
+                     grip_median=None, score=0.08),
+    ]
+    v = StatsView(sess)
+    t = v.corners_table
+    assert not t.isHidden() and t.rowCount() == 2
+    assert t.item(0, 0).text().startswith("C1")
+    assert t.item(1, 7).text() == "—"                       # grip None -> dash, never 0
+    # The worst corner (higher σ × loss) carries the behind hue on its loss cell; C1 doesn't.
+    behind = QColor(theme.behind_colour())
+    assert t.item(1, 4).foreground().color() == behind
+    assert t.item(0, 4).foreground().color() != behind
+    # Row click emits the cid read from the ROW'S OWN item (sort-stable); deselect -> None.
+    fired = []
+    v.corner_clicked.connect(fired.append)
+    t.selectRow(1)
+    assert fired and fired[-1] == 2
+    t.clearSelection()
+    assert fired[-1] is None
+    # Numeric header sort: descending by Med loss puts C2 (0.40) first.
+    t.sortItems(4, Qt.DescendingOrder)
+    assert t.item(0, 0).text().startswith("C2")
+    print("test_stats_view_corners_table_tint_sort_and_click OK")
+
+
+def test_stats_view_corners_table_hidden_without_corners():
+    _app()
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session())      # no corner_report attr -> getattr default []
+    assert v._corners_section.isHidden() and v.corners_table.isHidden()
+    print("test_stats_view_corners_table_hidden_without_corners OK")
 
 
 def test_stats_view_unit_flip():
