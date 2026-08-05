@@ -51,6 +51,7 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Analysis", [
         ("G", "Toggle the g-meter overlay"),
         ("C", "Toggle compare mode (two laps side by side)"),
+        ("⌘⇧S", "Session statistics, full-window (again / ⛶ to restore)"),
     ]),
     ("Layout", [
         ("Double-click header  ·  ⛶", "Maximize a panel to fill the window (Esc / again to restore)"),

@@ -1,0 +1,465 @@
+"""StatsView (the Stats page): the session-statistics dashboard behind the Laps|Corners|Stats
+header toggle.
+
+A read-only, scrollable column of stat groups over studio/stats.py's SessionStats service +
+the existing Session accessors — SESSION totals, PACE distribution, SPEED & G peaks, the g-g
+friction circle, DRIVING (brake/coast reductions), per-SECTOR best/median/σ, the DATA TRUST
+card (the IMU↔GPS cross-check's first in-app surface — until now stdout-only), and a per-lap
+statistics table. Compact in the quadrant; the panel-maximize button (⤢) turns it into a
+full-window dashboard.
+
+Pacer-free; refreshed on load / re-segmentation, never on the 30 Hz tick. Numbers render in
+the mono stack (tabular figures); a signal-absent statistic shows an em-dash, never a fake 0."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import numpy as np
+import pyqtgraph as pg
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QFrame,
+    QGridLayout,
+    QLabel,
+    QScrollArea,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from . import theme, units
+from ._signal import fmt_time
+from .lap_table import BEST_LAP_MARK
+from .theme import C
+
+if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
+    from .session import Session
+
+DASH = "—"                # the "no signal" cell/tile — an em-dash, never a fake 0
+TILE_VALUE_PT = 15        # tile value type size (between BODY 13 and HERO 22)
+TILES_PER_ROW = 4         # tile-grid width — 4 fits the quadrant, still calm maximized
+GG_HEIGHT = 220           # px; the friction-circle plot's fixed height
+GG_DOT_ALPHA = 90         # scatter alpha (0-255): a cloud, not 4000 opaque dots
+GG_RING_STEP = 0.5        # g; concentric reference rings every half g
+ROW_HEIGHT = 22           # per-lap/sector table row height (the consistency-table convention)
+# Speed units live in the PER-LAP section label (one place), keeping the columns narrow
+# enough that the whole table fits the quadrant with no clipped column.
+LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Lat g", "Brk g", "Brake s", "Coast s"]
+SECTOR_COLUMNS = ["Sector", "Best", "Median", "σ (s)"]
+
+GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — lateral g across, "
+              "longitudinal g up (accelerating) / down (braking). A driver using the tyre "
+              "fills the rim of the circle; rings every 0.5 g. Longitudinal is the validated "
+              "GPS-derived signal (the IMU forward axis is vibration-inflated).")
+LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
+                     "speed; peak g from the g-meter (lateral IMU, longitudinal GPS-derived); "
+                     "Brake/Coast are the summed detected events — the same events the map "
+                     "glyphs and coaching read. ★ marks the session-best lap.")
+PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropout — the same "
+                "set every σ statistic uses). Spread = median − best: what the typical lap "
+                "gives away to your demonstrated pace.")
+
+
+def _fmt_hms(seconds: float) -> str:
+    """A duration as m:ss, or h:mm:ss from an hour up — session totals span both."""
+    s = max(int(round(seconds)), 0)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+class _Tile(QWidget):
+    """One stat tile: a mono value over a dim caption. set() rewrites both in place."""
+
+    def __init__(self, caption: str):
+        super().__init__()
+        self.value = QLabel(DASH)
+        self.value.setFont(theme.mono_font(TILE_VALUE_PT, theme.W_SEMIBOLD))
+        self.caption = QLabel(caption)
+        self.caption.setFont(theme.ui_font(theme.CAPTION))
+        self.caption.setStyleSheet(f"color: {C.text_dim};")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(1)
+        lay.addWidget(self.value)
+        lay.addWidget(self.caption)
+
+    def set(self, value: str | None, caption: str | None = None):
+        self.value.setText(value if value else DASH)
+        if caption is not None:
+            self.caption.setText(caption)
+
+
+class StatsView(QWidget):
+    """The Stats page (see the module docstring). Contract: refresh() on load/re-segment,
+    refresh_palette() after a palette flip, set_speed_unit() from the View ▸ Units toggle."""
+
+    def __init__(self, session: Session):
+        super().__init__()
+        self.session = session
+        self._speed_unit = getattr(self, "_speed_unit", units.DEFAULT_UNIT)
+
+        body = QWidget()
+        col = QVBoxLayout(body)
+        col.setContentsMargins(12, 8, 12, 12)
+        col.setSpacing(6)
+
+        # --- SESSION totals
+        col.addWidget(self._section("SESSION"))
+        self.t_laps = _Tile("laps")
+        self.t_laps.setToolTip("Valid laps · ⊘ band-excluded · ⚠ laps with a GPS dropout")
+        self.t_duration = _Tile("recorded")
+        self.t_moving = _Tile("moving")
+        self.t_distance = _Tile("distance")
+        self.t_clock = _Tile("on track")
+        col.addLayout(self._grid(self.t_laps, self.t_duration, self.t_moving,
+                                 self.t_distance, self.t_clock))
+
+        # --- PACE distribution
+        pace_hdr = self._section("PACE")
+        pace_hdr.setToolTip(PACE_TOOLTIP)
+        col.addWidget(pace_hdr)
+        self.t_best = _Tile("best lap")
+        self.t_median = _Tile("median lap")
+        self.t_sigma = _Tile("σ lap")
+        self.t_spread = _Tile("median − best")
+        col.addLayout(self._grid(self.t_best, self.t_median, self.t_sigma, self.t_spread))
+
+        # --- SPEED & G peaks
+        col.addWidget(self._section("SPEED · G"))
+        self.t_vmax = _Tile("top speed")
+        self.t_peak_lat = _Tile("peak lateral g")
+        self.t_peak_brake = _Tile("peak braking g")
+        col.addLayout(self._grid(self.t_vmax, self.t_peak_lat, self.t_peak_brake))
+
+        # --- the g-g friction circle
+        self._gg_section = self._section("FRICTION CIRCLE")
+        col.addWidget(self._gg_section)
+        self.gg = pg.PlotWidget()
+        self.gg.setToolTip(GG_TOOLTIP)
+        plot = self.gg.getPlotItem()
+        plot.setAspectLocked(True)  # a circle must render round, whatever the pane shape
+        for side in ("left", "bottom"):
+            ax = plot.getAxis(side)
+            ax.setPen(C.border)
+            ax.setTextPen(C.text_dim)
+            ax.setTickFont(theme.mono_font(10))
+            ax.setStyle(maxTickLevel=0, tickLength=3)
+        plot.setMouseEnabled(x=False, y=False)
+        plot.setMenuEnabled(False)
+        plot.hideButtons()
+        self.gg.setBackground(None)
+        self.gg.setFixedHeight(GG_HEIGHT)
+        # Compact + left-aligned (like the tiles/tables): a maximized panel widens the pane,
+        # not the plot — the circle stays a circle with no vacant flanks.
+        self.gg.setMaximumWidth(GG_HEIGHT * 2)
+        # Reference geometry (rings + axes) is drawn per-refresh, sized to the cloud.
+        self._gg_rings: list = []
+        self._gg_dots = pg.ScatterPlotItem(size=3, pen=None, pxMode=True)
+        plot.addItem(self._gg_dots)
+        col.addWidget(self.gg, 0, Qt.AlignLeft)
+
+        # --- DRIVING reductions (hidden without a g signal)
+        self._driving_section = self._section("DRIVING")
+        col.addWidget(self._driving_section)
+        self.t_brake = _Tile("braking / lap · median")
+        self.t_brake_n = _Tile("brake events / lap")
+        self.t_coast = _Tile("coasting / lap · median")
+        self._driving_grid = self._grid(self.t_brake, self.t_brake_n, self.t_coast)
+        col.addLayout(self._driving_grid)
+
+        # --- per-SECTOR best/median/σ (hidden without sector lines)
+        self._sector_section = self._section("SECTORS")
+        col.addWidget(self._sector_section)
+        self.sector_table = self._make_table(SECTOR_COLUMNS)
+        col.addWidget(self.sector_table)
+
+        # --- DATA TRUST (the timing-quality + g-provenance + IMU↔GPS cross-check card)
+        col.addWidget(self._section("DATA TRUST"))
+        self.trust_label = QLabel("")
+        self.trust_label.setWordWrap(True)
+        self.trust_label.setStyleSheet(f"color: {C.text_dim};")
+        self.trust_label.setFont(theme.ui_font(theme.CAPTION))
+        col.addWidget(self.trust_label)
+
+        # --- per-lap statistics table
+        self._laps_section = self._section("PER LAP")
+        col.addWidget(self._laps_section)
+        self.lap_table = self._make_table(LAP_COLUMNS)
+        self.lap_table.setToolTip(LAP_TABLE_TOOLTIP)
+        col.addWidget(self.lap_table)
+        col.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(body)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(scroll)
+        self.refresh()
+
+    # ------------------------------------------------------------------ scaffolding
+    @staticmethod
+    def _section(title: str) -> QLabel:
+        lab = QLabel(title)
+        lab.setProperty("role", "BarLabel")
+        return lab
+
+    @staticmethod
+    def _grid(*tiles: _Tile) -> QGridLayout:
+        g = QGridLayout()
+        g.setContentsMargins(0, 0, 0, 4)
+        g.setHorizontalSpacing(18)
+        g.setVerticalSpacing(8)
+        for i, t in enumerate(tiles):
+            g.addWidget(t, i // TILES_PER_ROW, i % TILES_PER_ROW)
+        g.setColumnStretch(TILES_PER_ROW, 1)  # left-pack the tiles; slack stays right
+        return g
+
+    def _make_table(self, columns: list[str]) -> QTableWidget:
+        t = QTableWidget(0, len(columns))
+        t.setHorizontalHeaderLabels(columns)
+        t.verticalHeader().setVisible(False)
+        t.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
+        t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        t.setSelectionMode(QAbstractItemView.NoSelection)
+        t.setAlternatingRowColors(True)
+        t.setFocusPolicy(Qt.NoFocus)
+        # The OUTER scroll column owns scrolling; each table is sized to its content (no
+        # stretched last column — it clips in the quadrant and balloons maximized).
+        t.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        t.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        t.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        return t
+
+    @staticmethod
+    def _fit_table(t: QTableWidget):
+        """Pin the table's size to its content so the outer scroll column does the scrolling
+        and the table reads left-packed (like the tiles) when the panel is maximized."""
+        t.resizeColumnsToContents()
+        header_h = t.horizontalHeader().height()
+        t.setFixedHeight(header_h + ROW_HEIGHT * t.rowCount() + 2 * t.frameWidth())
+        width = sum(t.columnWidth(c) for c in range(t.columnCount()))
+        t.setFixedWidth(width + 2 * t.frameWidth() + 2)
+
+    def _num_item(self, text: str) -> QTableWidgetItem:
+        item = QTableWidgetItem(text)
+        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        item.setFont(theme.mono_font(theme.TABLE))
+        return item
+
+    # ------------------------------------------------------------------ contract
+    def refresh(self):
+        """Rebuild every group from the session (load / re-segmentation / unit or palette
+        flip — the reads are cached on the service side, so a re-render is cheap)."""
+        session = self.session
+        st = getattr(session, "stats", None)
+        unit = self._speed_unit
+        u_label = units.speed_label(unit)
+
+        # SESSION totals
+        valid = session.valid_lap_ids()
+        excluded = getattr(session, "excluded_lap_ids", list)() or []
+        dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+        lap_bits = [str(len(valid))]
+        if excluded:
+            lap_bits.append(f"{len(excluded)}⊘")
+        if dropouts:
+            lap_bits.append(f"{len(dropouts)}⚠")
+        self.t_laps.set(" · ".join(lap_bits) if valid else None)
+        tot = st.totals() if st is not None else None
+        if tot is not None and tot.duration_s > 0:
+            self.t_duration.set(_fmt_hms(tot.duration_s))
+            self.t_moving.set(_fmt_hms(tot.moving_s))
+            self.t_distance.set(f"{tot.distance_m / 1000.0:.1f} km")
+            clock = (f"{tot.start_clock}–{tot.end_clock}"
+                     if tot.start_clock and tot.end_clock else None)
+            self.t_clock.set(clock)
+        else:
+            for t in (self.t_duration, self.t_moving, self.t_distance, self.t_clock):
+                t.set(None)
+
+        # PACE
+        pace = st.pace() if st is not None else None
+        if pace is not None:
+            self.t_best.set(fmt_time(pace.best))
+            self.t_median.set(fmt_time(pace.median), f"median · {pace.n} clean laps")
+            self.t_sigma.set(f"{pace.sigma:.2f} s" if pace.sigma is not None else None)
+            self.t_spread.set(f"+{pace.spread:.2f} s")
+        else:
+            for t in (self.t_best, self.t_median, self.t_sigma, self.t_spread):
+                t.set(None)
+
+        # SPEED · G — session peaks over the per-lap stats
+        rows = st.lap_stats() if st is not None else []
+        vmax = st.session_vmax() if st is not None else None
+        if vmax is not None:
+            self.t_vmax.set(f"{units.convert_speed(vmax[0], unit):.1f} {u_label}",
+                            f"top speed · lap {vmax[1] + 1}")
+        else:
+            self.t_vmax.set(None, "top speed")
+        lat_peaks = [r.peak_lat_g for r in rows if r.peak_lat_g is not None]
+        brk_peaks = [r.peak_brake_g for r in rows if r.peak_brake_g is not None]
+        self.t_peak_lat.set(f"{max(lat_peaks):.2f} g" if lat_peaks else None)
+        self.t_peak_brake.set(f"{max(brk_peaks):.2f} g" if brk_peaks else None)
+
+        self._refresh_gg(st)
+        self._refresh_driving(rows)
+        self._refresh_sectors(session)
+        self._refresh_trust(session)
+        self._refresh_lap_table(session, rows, unit, u_label)
+
+    def refresh_palette(self):
+        """Re-render after a colour-blind-palette flip: the best-lap ★ row tint + the purple
+        best-sector cells go through the palette accessors, so a re-render recolours them.
+        Cheap — every service read is cached."""
+        self.refresh()
+
+    def set_speed_unit(self, unit: str):
+        """Re-render the speed-bearing tiles/columns in the new display unit (View ▸ Units)."""
+        unit = units.normalize_unit(unit)
+        if unit == self._speed_unit:
+            return
+        self._speed_unit = unit
+        self.refresh()
+
+    # ------------------------------------------------------------------ groups
+    def _refresh_gg(self, st):
+        cloud = st.gg_cloud() if st is not None else None
+        plot = self.gg.getPlotItem()
+        for ring in self._gg_rings:
+            plot.removeItem(ring)
+        self._gg_rings = []
+        has = cloud is not None and len(cloud[0]) > 0
+        self._gg_section.setVisible(has)
+        self.gg.setVisible(has)
+        if not has:
+            self._gg_dots.setData([], [])
+            return
+        lat, lon = cloud
+        # Identity (non-semantic) cloud colour — the first chart-series hue, translucent.
+        colour = pg.mkColor(theme.CHART_SERIES[0])
+        colour.setAlpha(GG_DOT_ALPHA)
+        self._gg_dots.setData(np.asarray(lat), np.asarray(lon), brush=pg.mkBrush(colour))
+        # Reference rings every 0.5 g out to the cloud's envelope, + hairline axes.
+        r_max = float(np.ceil(max(np.max(np.abs(lat)), np.max(np.abs(lon))) / GG_RING_STEP)
+                      ) * GG_RING_STEP
+        r_max = max(r_max, GG_RING_STEP)
+        angles = np.linspace(0.0, 2.0 * np.pi, 90)
+        ring_pen = pg.mkPen(C.border, width=1)
+        r = GG_RING_STEP
+        while r <= r_max + 1e-9:
+            ring = plot.plot(r * np.cos(angles), r * np.sin(angles), pen=ring_pen)
+            self._gg_rings.append(ring)
+            r += GG_RING_STEP
+        for angle in (0, 90):
+            line = pg.InfiniteLine(pos=(0, 0), angle=angle, pen=ring_pen, movable=False)
+            plot.addItem(line)
+            self._gg_rings.append(line)
+        ticks = [(v, f"{v:+.1f}") for v in (-r_max, 0.0, r_max)]
+        plot.getAxis("left").setTicks([ticks])
+        plot.getAxis("bottom").setTicks([ticks])
+        pad = 0.1 * r_max
+        plot.setXRange(-r_max - pad, r_max + pad, padding=0)
+        plot.setYRange(-r_max - pad, r_max + pad, padding=0)
+
+    def _refresh_driving(self, rows):
+        brake = [r.brake_s for r in rows if r.brake_s is not None]
+        counts = [r.brake_n for r in rows if r.brake_n is not None]
+        coast = [r.coast_s for r in rows if r.coast_s is not None]
+        has = bool(brake or counts or coast)
+        self._driving_section.setVisible(has)
+        for t in (self.t_brake, self.t_brake_n, self.t_coast):
+            t.setVisible(has)
+        if not has:
+            return
+        self.t_brake.set(f"{np.median(brake):.1f} s" if brake else None)
+        self.t_brake_n.set(f"{np.median(counts):.0f}" if counts else None)
+        self.t_coast.set(f"{np.median(coast):.1f} s" if coast else None)
+
+    def _refresh_sectors(self, session):
+        sigmas = session.sector_sigmas() if hasattr(session, "sector_sigmas") else []
+        has = bool(sigmas)
+        self._sector_section.setVisible(has)
+        self.sector_table.setVisible(has)
+        if not has:
+            self.sector_table.setRowCount(0)
+            return
+        bests = session.session_best_splits()
+        medians = (session.sector_medians()
+                   if hasattr(session, "sector_medians") else [None] * len(sigmas))
+        best_colour = QColor(theme.best_sector_colour())
+        self.sector_table.setRowCount(len(sigmas))
+        for k in range(len(sigmas)):
+            name = QTableWidgetItem(f"S{k + 1}")
+            self.sector_table.setItem(k, 0, name)
+            best = bests[k] if k < len(bests) else None
+            best_item = self._num_item(fmt_time(best) if best is not None else DASH)
+            if best is not None:
+                best_item.setForeground(best_colour)  # the purple session-best hue
+            self.sector_table.setItem(k, 1, best_item)
+            med = medians[k] if k < len(medians) else None
+            self.sector_table.setItem(
+                k, 2, self._num_item(fmt_time(med) if med is not None else DASH))
+            sig = sigmas[k]
+            self.sector_table.setItem(
+                k, 3, self._num_item(f"{sig:.2f}" if sig is not None else DASH))
+        self._fit_table(self.sector_table)
+
+    def _refresh_trust(self, session):
+        lines: list[str] = []
+        quality = getattr(session, "timing_quality", None)  # a Session @property
+        if quality is not None:
+            clock = ("video clock (estimated)" if quality.media_clock
+                     else "GPS9 true clock")
+            lines.append(f"Timing: {clock} · {quality.dropped_pct()}% of fixes rejected")
+        if getattr(session, "has_gmeter", False):
+            src = {"accl": "IMU", "gps": "GPS"}
+            lat_src = src.get(session.gmeter_source(), session.gmeter_source())
+            long_src = src.get(session.gmeter_long_source(), session.gmeter_long_source())
+            lines.append(f"g-meter: {lat_src} lateral · {long_src}-derived longitudinal")
+        cross = session.gmeter_cross() if hasattr(session, "gmeter_cross") else None
+        if cross is not None:
+            verdict = "agree" if cross.ok else "DISAGREE"
+            lines.append(f"IMU↔GPS cross-check: {verdict} · lateral r={cross.lat_corr:+.2f} · "
+                         f"longitudinal r={cross.long_corr:+.2f} · {cross.n} samples")
+            self.trust_label.setToolTip(cross.summary())
+        self.trust_label.setText("\n".join(lines) if lines else DASH)
+
+    def _refresh_lap_table(self, session, rows, unit, u_label):
+        has = bool(rows)
+        self._laps_section.setVisible(has)
+        self.lap_table.setVisible(has)
+        self._laps_section.setText(f"PER LAP · speeds in {u_label}")
+        best = session.best_lap_id() if hasattr(session, "best_lap_id") else None
+        self.lap_table.setRowCount(len(rows))
+        best_colour = QColor(theme.best_lap_colour())
+        for r, s in enumerate(rows):
+            mark = BEST_LAP_MARK if s.idx == best else ""
+            lap_item = QTableWidgetItem(f"{mark}{s.idx + 1}")  # 1-based, the app-wide rule
+            if s.idx == best:
+                lap_item.setForeground(best_colour)
+            self.lap_table.setItem(r, 0, lap_item)
+
+            def num(v, fmtstr):
+                return self._num_item(fmtstr.format(v) if v is not None else DASH)
+            self.lap_table.setItem(r, 1, self._num_item(fmt_time(s.time)))
+            self.lap_table.setItem(
+                r, 2, num(units.convert_speed(s.vmax_kmh, unit)
+                          if s.vmax_kmh is not None else None, "{:.1f}"))
+            self.lap_table.setItem(
+                r, 3, num(units.convert_speed(s.avg_kmh, unit)
+                          if s.avg_kmh is not None else None, "{:.1f}"))
+            self.lap_table.setItem(r, 4, num(s.peak_lat_g, "{:.2f}"))
+            self.lap_table.setItem(r, 5, num(s.peak_brake_g, "{:.2f}"))
+            self.lap_table.setItem(r, 6, num(s.brake_s, "{:.1f}"))
+            self.lap_table.setItem(r, 7, num(s.coast_s, "{:.1f}"))
+        self._fit_table(self.lap_table)
