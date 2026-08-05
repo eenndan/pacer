@@ -40,13 +40,18 @@ from _synthetic import bare_session, seed_cols  # noqa: E402
 from studio.stats import (  # noqa: E402
     MOVING_MS,
     SessionStats,
+    best_consecutive_mean,
     clock_hhmm,
+    cov_pct,
+    envelope_g,
     in_windows_mask,
     moving_time_s,
     pace_stats,
     path_distance_m,
     peak_g,
     sector_medians,
+    theil_sen_slope,
+    within_pct_of_best,
 )
 
 
@@ -123,6 +128,44 @@ def test_sector_medians_column_convention():
     assert sector_medians([]) == []
     assert sector_medians([[math.nan]]) == [None]  # a column with no finite split
     print("test_sector_medians_column_convention OK")
+
+
+def test_theil_sen_slope_exact_and_degenerate():
+    assert abs(theil_sen_slope([70.0, 69.0, 68.0, 67.0]) - (-1.0)) < 1e-12  # every pair -1
+    assert theil_sen_slope([70.0]) is None
+    assert theil_sen_slope([]) is None
+    print("test_theil_sen_slope_exact_and_degenerate OK")
+
+
+def test_best_consecutive_mean_windows_and_nan_poisoning():
+    assert abs(best_consecutive_mean([70.0, 68.0, 69.0, 72.0], 3) - 69.0) < 1e-12
+    assert best_consecutive_mean([70.0, 68.0], 3) is None          # no full window
+    # A NaN poisons ITS windows only; the clean trailing window still counts.
+    v = best_consecutive_mean([70.0, math.nan, 68.0, 69.0, 70.0], 3)
+    assert abs(v - 69.0) < 1e-12
+    assert best_consecutive_mean([math.nan, math.nan, math.nan], 3) is None
+    print("test_best_consecutive_mean_windows_and_nan_poisoning OK")
+
+
+def test_within_pct_of_best_counts_the_best_itself():
+    assert within_pct_of_best([68.0, 68.5, 68.68, 70.0], 1.0) == 3  # cutoff 68.68 inclusive
+    assert within_pct_of_best([], 1.0) == 0
+    assert within_pct_of_best([70.0], 1.0) == 1
+    print("test_within_pct_of_best_counts_the_best_itself OK")
+
+
+def test_cov_pct_is_sigma_over_median():
+    v = cov_pct([68.0, 69.0, 70.0])  # sample sigma = 1.0, median = 69
+    assert abs(v - 100.0 / 69.0) < 1e-9
+    assert cov_pct([70.0]) is None
+    print("test_cov_pct_is_sigma_over_median OK")
+
+
+def test_envelope_g_percentile_of_combined():
+    # Constant 3-4-5 samples: hypot == 1.0 everywhere -> any percentile is 1.0.
+    assert abs(envelope_g([0.6] * 50, [0.8] * 50) - 1.0) < 1e-12
+    assert envelope_g([], []) is None
+    print("test_envelope_g_percentile_of_combined OK")
 
 
 # --------------------------------------------------------------- the SessionStats service
@@ -298,6 +341,40 @@ def test_invalidate_drops_lap_level_keeps_totals():
     print("test_invalidate_drops_lap_level_keeps_totals OK")
 
 
+def test_pace_quality_service_methods():
+    """pace_trend gating (None under TREND_MIN_LAPS), race pace over the consistency order,
+    CoV and within-1% — all over the SAME clean-lap series as pace()."""
+    times = {i: t for i, t in enumerate([70.0, 68.0, 69.0, 72.0])}
+    st = _service(valid=list(times), cons=list(times), lap_times=times,
+                  arrays={i: (np.array([0.0, 1000.0]), np.array([60.0, 90.0]),
+                              np.array([0.0, 70.0])) for i in times})
+    assert st.pace_trend() is None                       # 4 laps < TREND_MIN_LAPS(6): noise
+    assert abs(st.race_pace() - 69.0) < 1e-12            # best 3-consecutive window
+    assert st.laps_within_pct(1.0) == (1, 4)             # only 68.0 within 1% of 68.0
+    assert st.pace_cov() is not None
+    six = {i: 70.0 - i for i in range(6)}                # 70..65: exact -1 s/lap trend
+    st6 = _service(valid=list(six), cons=list(six), lap_times=six)
+    assert abs(st6.pace_trend() - (-1.0)) < 1e-12
+    print("test_pace_quality_service_methods OK")
+
+
+def test_longest_coast_and_gg_envelope():
+    n = 200
+    gm = _fake_gmeter(times=np.linspace(0.0, 100.0, n), lat_g=np.full(n, 0.6),
+                      long_g=np.full(n, 9.9), long_g_gps=np.full(n, -0.8))
+    st = _service(gm=gm, valid=[0], lap_times={0: 50.0},
+                  arrays={0: (np.array([0.0, 1.0]), np.array([0.0, 1.0]),
+                              np.array([0.0, 50.0]))},
+                  windows={0: (0.0, 100.0)},
+                  spans={0: [SimpleNamespace(duration=1.5), SimpleNamespace(duration=3.5)]})
+    assert st.longest_coast_s() == 3.5
+    assert abs(st.gg_envelope() - 1.0) < 1e-12           # hypot(0.6, -0.8) == 1.0 everywhere
+    # no g signal -> None (unknown), never 0
+    assert _service(valid=[0], lap_times={0: 50.0}).longest_coast_s() is None
+    assert _service(valid=[0], lap_times={0: 50.0}).gg_envelope() is None
+    print("test_longest_coast_and_gg_envelope OK")
+
+
 # --------------------------------------------------------------- Session property wiring
 def test_bare_session_stats_property_wires_the_service():
     """The Session.stats property lazily builds a real SessionStats over the session's own
@@ -332,11 +409,11 @@ def _app():
 def _fake_stats_service(*, has_g=True):
     from studio.stats import LapStat, PaceStats, SessionTotals
     rows = [
-        LapStat(idx=0, time=70.0, vmax_kmh=95.0, avg_kmh=54.0,
+        LapStat(idx=0, time=70.0, vmax_kmh=95.0, avg_kmh=54.0, vmin_kmh=48.0,
                 peak_lat_g=1.4 if has_g else None, peak_brake_g=1.1 if has_g else None,
                 brake_s=28.0 if has_g else None, brake_n=12 if has_g else None,
                 coast_s=0.5 if has_g else None, coast_frac=0.007 if has_g else None),
-        LapStat(idx=1, time=68.2, vmax_kmh=97.5, avg_kmh=55.5,
+        LapStat(idx=1, time=68.2, vmax_kmh=97.5, avg_kmh=55.5, vmin_kmh=50.0,
                 peak_lat_g=1.6 if has_g else None, peak_brake_g=0.9 if has_g else None,
                 brake_s=26.0 if has_g else None, brake_n=11 if has_g else None,
                 coast_s=0.0 if has_g else None, coast_frac=0.0 if has_g else None),
@@ -349,6 +426,12 @@ def _fake_stats_service(*, has_g=True):
         lap_stats=lambda: rows,
         session_vmax=lambda: (97.5, 1),
         gg_cloud=lambda max_points=4000: gg,
+        pace_trend=lambda: -0.05,
+        race_pace=lambda: 68.9,
+        pace_cov=lambda: 1.8,
+        laps_within_pct=lambda pct=1.0: (2, 2),
+        longest_coast_s=lambda: (1.4 if has_g else None),
+        gg_envelope=lambda: (1.55 if has_g else None),
     )
 
 
@@ -373,6 +456,10 @@ def _fake_view_session(*, has_g=True, sectors=True):
         gmeter_long_source=lambda: "gps",
         gmeter_cross=lambda: (cross if has_g else None),
         best_lap_id=lambda: 1,
+        coaching_opportunities=lambda: SimpleNamespace(
+            enough=True,
+            rows=[SimpleNamespace(time_lost=0.4), SimpleNamespace(time_lost=0.3),
+                  SimpleNamespace(time_lost=0.2), SimpleNamespace(time_lost=0.1)]),
     )
 
 
@@ -387,7 +474,19 @@ def test_stats_view_renders_every_group():
     assert v.t_best.value.text() == "1:08.200"
     assert "97.5 km/h" in v.t_vmax.value.text()
     assert "lap 2" in v.t_vmax.caption.text()                # 1-based, the app-wide rule
+    assert "48.0" in v.t_vmin.value.text()                   # session slowest point
     assert v.t_peak_lat.value.text() == "1.60 g"             # max over the laps
+    # v1.1 pace-quality tiles
+    assert v.t_race_pace.value.text() == "1:08.900"
+    assert v.t_cov.value.text() == "1.8 %"
+    assert v.t_within.value.text() == "2 / 2"
+    assert v.t_trend.value.text() == "-0.05 s/lap"
+    assert "improving" in v.t_trend.caption.text()
+    # The coaching digest: MEDIAN-anchored (69.1 - top-3 losses 0.9 = 68.2), honesty in tip.
+    assert v.t_digest.value.text() == "1:08.200"
+    assert "MEDIAN" in v.t_digest.toolTip()
+    assert v.t_longest_coast.value.text() == "1.4 s"
+    assert v.t_grip_ceiling.value.text() == "1.55 g"
     assert not v._driving_section.isHidden() and not v.gg.isHidden()
     assert v.lap_table.rowCount() == 2
     assert v.lap_table.item(1, 0).text().startswith("★ ")    # best lap starred…
@@ -406,8 +505,9 @@ def test_stats_view_hides_signal_absent_sections():
     assert v._driving_section.isHidden() and v.gg.isHidden()     # no g -> no g sections
     assert v._sector_section.isHidden() and v.sector_table.isHidden()
     assert v.t_peak_lat.value.text() == "—"                      # None, never a fake 0
-    assert v.lap_table.item(0, 4).text() == "—"                  # per-lap g cells dash too
+    assert v.lap_table.item(0, 5).text() == "—"                  # per-lap g cells dash too
     assert v.lap_table.item(0, 2).text() == "95.0"               # speed needs no g signal
+    assert v.lap_table.item(0, 4).text() == "48.0"               # Min speed needs no g either
     print("test_stats_view_hides_signal_absent_sections OK")
 
 

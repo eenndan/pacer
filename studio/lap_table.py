@@ -769,9 +769,17 @@ class CornerTable(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(28)
         self._num_font = theme.mono_font(theme.TABLE)
+        # Empty state (was a bare header grid — the one surface without one): says WHY there
+        # are no rows (no lap selected vs no corners detected) instead of a silent void.
+        self.empty = QLabel("")
+        self.empty.setProperty("role", "EmptyState")
+        self.empty.setAlignment(Qt.AlignCenter)
+        self.empty.setWordWrap(True)
+        self.empty.setVisible(False)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.table)
+        lay.addWidget(self.empty, 1)
 
     def _apply_corner_tips(self):
         """(Re)apply the per-column header tooltips for the current speed unit."""
@@ -804,6 +812,15 @@ class CornerTable(QWidget):
         # still holds the previous selection (app re-selects right after; until then, empty).
         ok = self._lap_id is not None and 0 <= self._lap_id < self.session.lap_count()
         stats = self.session.corners.lap_corner_stats(self._lap_id) if ok else []
+        # Empty state: name the reason (no selected lap vs nothing detected) — a bare grid
+        # reads as broken. The table hides so the message owns the pane.
+        self.table.setVisible(bool(stats))
+        self.empty.setVisible(not stats)
+        if not stats:
+            self.empty.setText(
+                "Select a lap to see its corners." if not ok else
+                "No corners detected for this session yet — corner analysis needs a few "
+                "clean laps of track shape.")
         corner_list = self.session.corners.corner_list() if stats else []
         bests = self.session.corners.corner_session_bests() if stats else []
         # Per-corner grip utilisation (%); [] when there's no g signal → the column shows a dash.
