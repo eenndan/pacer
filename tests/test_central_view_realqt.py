@@ -848,6 +848,9 @@ def test_tab_bar_switches_pages_and_names_the_corners_lap():
     # The Corners tab names the primary lap, 1-based ("· L1" for lap id 0 / "· L2" for id 1).
     lap = view._corner_lap
     assert view.tab_bar.tabText(1) == (f"Corners · L{lap + 1}" if lap is not None else "Corners")
+    # C3: the corner IDENTITY column keeps a readable floor (the old Stretch mode crushed it
+    # to a 42px sliver at the default panel width).
+    assert view.corner_table.table.columnWidth(0) >= 88
     # Out-of-range selects are ignored, never a blank page.
     view.select_lap_tab(9)
     assert view.table_stack.currentIndex() == 0

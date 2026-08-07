@@ -195,6 +195,11 @@ class LapTable(QWidget):
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
+        # B7: the stretched last column's CENTERED header drifted ~250px away from its
+        # right-aligned values on wide panels — anchor the header text right too.
+        entry_hdr = self.table.horizontalHeaderItem(len(COLUMNS) - 1)
+        if entry_hdr is not None:
+            entry_hdr.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(28)
         self._num_font = theme.mono_font(theme.TABLE)
@@ -743,6 +748,9 @@ def _corner_col_tips(unit: str | None) -> list[str]:
         "session's grip limit. Normalised session-wide so a slower lap reads lower.",
     ]
 CORNER_DIR_GLYPH = {1: "⟲", -1: "⟳"}  # left / right (turn sense), shown after the C-label
+# Corner identity column start width: "C12 ⟳" + the "Corner" header, fully readable (C3 —
+# the old Stretch mode crushed this row-identity column to a 42px sliver at default width).
+CORNER_NAME_COL_PX = 88
 
 
 class CornerTable(QWidget):
@@ -764,11 +772,19 @@ class CornerTable(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        # Corner name stretches; numeric columns size to content so all 8 fit with no scrollbar.
+        # Column sizing (UI-scrutiny C3+B5): the old col-0 Stretch let Qt crush the row's
+        # IDENTITY column to a 42px "orne" sliver at the default panel width (the "all 8 fit"
+        # assumption rotted as columns grew) and balloon it to a 959px void when maximized.
+        # Now: col 0 is Interactive with a readable fixed start (fits "C12 ⟳" + the header),
+        # numeric columns size to content, and the existing h-scrollbar absorbs any overflow.
         hdr = self.table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(0, QHeaderView.Interactive)
         for c in range(1, len(CORNER_COLUMNS)):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        hdr.resizeSection(0, CORNER_NAME_COL_PX)
+        # B6: the table is deliberately unsortable (track order IS the meaning) — no pressed
+        # feedback on headers that do nothing.
+        hdr.setSectionsClickable(False)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(28)
         self._num_font = theme.mono_font(theme.TABLE)
