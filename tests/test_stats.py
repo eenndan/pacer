@@ -583,8 +583,10 @@ def test_stats_view_renders_every_group():
     assert v.t_grip_ceiling.value.text() == "1.55 g"
     assert not v._driving_section.isHidden() and not v.gg.isHidden()
     assert v.lap_table.rowCount() == 2
-    assert v.lap_table.item(1, 0).text().startswith("★ ")    # best lap starred…
-    assert v.lap_table.item(1, 0).text().endswith("2")       # …and 1-based
+    # Best lap starred, 1-based, AND carrying the ⚠ its page's DATA TRUST card promises
+    # (the fake session flags lap id 1 as a dropout — C7).
+    assert v.lap_table.item(1, 0).text() == "★ 2 ⚠"
+    assert v.lap_table.item(0, 0).text() == "1"              # clean lap: no suffix
     assert v.sector_table.rowCount() == 2
     assert v.sector_table.item(1, 2).text() == "—"           # None median -> em-dash
     assert "agree" in v.trust_label.text()                   # the cross-check's first UI surface
@@ -713,10 +715,14 @@ def test_stats_view_straights_table_and_fix_first_tile():
         StraightStat(index=1, label="C1 → C2", ring_cid=1, n=3, best_s=8.0, median_s=8.3,
                      sigma_s=0.3, trap_best_kmh=90.0, trap_median_kmh=89.0,
                      exit_delta_kmh=-2.0, leverage=0.6),
+        # B8: a start line inside a corner section yields a ~0-duration stub — must be omitted.
+        StraightStat(index=2, label="C2 → S/F", ring_cid=2, n=3, best_s=0.0, median_s=0.01,
+                     sigma_s=0.0, trap_best_kmh=71.0, trap_median_kmh=70.0,
+                     exit_delta_kmh=0.5, leverage=0.0),
     ]
     v = StatsView(sess)
     t = v.straights_table
-    assert not t.isHidden() and t.rowCount() == 2
+    assert not t.isHidden() and t.rowCount() == 2            # the ~0s stub is omitted (B8)
     assert t.item(0, 0).text() == "S/F → C1"
     assert t.item(0, 6).text() == "—"                      # k=0 exit delta: no double-count
     assert t.item(1, 6).text() == "-2.0"
@@ -751,6 +757,34 @@ def test_stats_view_trend_sparkline_shows_and_hides():
     v.refresh()
     assert v.spark.isHidden()
     print("test_stats_view_trend_sparkline_shows_and_hides OK")
+
+
+def test_stats_view_tiles_reflow_with_pane_width():
+    """C6: the tile grids reflow — 4 columns wide, down to 2 in a narrow quadrant — so the
+    4th column (incl. the 'fix your top 3' digest) can never sit off-pane."""
+    _app()
+    from studio.stats_panel import TILES_PER_ROW, StatsView
+    v = StatsView(_fake_view_session())
+    v.show()
+    v.resize(1000, 800)
+    _pump()
+    assert v._tile_cols == TILES_PER_ROW
+    v.resize(420, 800)
+    _pump()
+    assert v._tile_cols == 2, v._tile_cols
+    # The digest tile sits within the first two columns now (row-major re-place).
+    g, tiles = v._tile_grids[1]                    # the PACE grid
+    idx = tiles.index(v.t_digest)
+    r, c = idx // 2, idx % 2
+    assert g.itemAtPosition(r, c) is not None and g.itemAtPosition(r, c).widget() is v.t_digest
+    v.hide()
+    print("test_stats_view_tiles_reflow_with_pane_width OK")
+
+
+def _pump(n=40):
+    from PySide6.QtWidgets import QApplication
+    for _ in range(n):
+        QApplication.instance().processEvents()
 
 
 def test_stats_view_corners_table_hidden_without_corners():
