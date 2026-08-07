@@ -502,7 +502,8 @@ def test_app_backup_library_noop_when_no_library(monkeypatch):
         win = _stub_window()
         messages = []
         win.statusBar = lambda: type(
-            "SB", (), {"showMessage": staticmethod(lambda m: messages.append(m))})()
+            # (the app passes a STATUS_MS timeout — swallow it: this asserts the TEXT)
+            "SB", (), {"showMessage": staticmethod(lambda m, *_a: messages.append(m))})()
         studio_app.StudioWindow._backup_library(win)
         assert opened == []                       # the save dialog was never opened
         assert messages and "no library" in messages[0]

@@ -54,6 +54,10 @@ from .workers import SessionLoadWorker, VideoExportWorker
 # Help ▸ Report a problem… opens this GitHub new-issue page (the only support channel; no crash
 # reporting / telemetry — nothing is sent without the user opening this).
 ISSUES_URL = "https://github.com/eenndan/pacer/issues/new"
+# How long a transient status-bar confirmation stays up (ms). Every showMessage here reports
+# something that JUST happened ("saved…", "reverted…"); with no timeout Qt leaves the last one
+# up indefinitely, so minutes later the bar still asserts a stale fact about the session (B20).
+STATUS_MS = 6000
 
 
 def _show_error_report(exc_type, exc, tb):
@@ -234,7 +238,7 @@ class StudioWindow(QMainWindow):
         if len(groups) > 1:
             self.statusBar().showMessage(
                 f"Dropped {len(groups)} recordings — opened {chapters.recording_label(to_load)}. "
-                "Open the others one at a time.")
+                "Open the others one at a time.", STATUS_MS)
 
     def _show_welcome(self, error: str | None = None):
         """Install the no-recording welcome empty state (also the first-load-failure fallback)."""
@@ -384,6 +388,9 @@ class StudioWindow(QMainWindow):
         # One-line, non-fatal: the statusbar mirrors the console "studio:" notice style.
         if notice:
             print(f"studio: {notice}", flush=True)
+            # DELIBERATELY untimed (unlike the transient confirmations, B20): this describes the
+            # LOADED SESSION, stays true until the next load, and is explicitly cleared below when
+            # the next recording has no concern.
             self.statusBar().showMessage(notice)
         else:
             self.statusBar().clearMessage()
@@ -656,11 +663,12 @@ class StudioWindow(QMainWindow):
             "(right), each playing its own footage. Load a reference recording first.")
         self._cross_compare_action.triggered.connect(self._enter_cross_compare)
         self._cross_compare_action.setEnabled(False)
-        # F10 Opportunities: top-3 corners by time lost vs your own best lap (recomputed per open).
+        # F10 Opportunities: every corner ranked by time lost vs your own best lap (recomputed
+        # per open; the Coaching TAB carries the top-3 shortlist).
         coaching_menu.addSeparator()
         self._opportunities_action = coaching_menu.addAction("Opportunities…")
         self._opportunities_action.setToolTip(
-            "Where to find time vs your own best lap: the top-3 corners by realistic time lost "
+            "Where to find time vs your own best lap: every corner ranked by realistic time lost "
             "(median of your clean laps), each with the measured reason and a jump-to.")
         self._opportunities_action.triggered.connect(self._open_opportunities)
 
@@ -790,7 +798,7 @@ class StudioWindow(QMainWindow):
         if view is None:
             return
         if view.undo_timing_lines():
-            self.statusBar().showMessage("reverted the last start/finish-line edit")
+            self.statusBar().showMessage("reverted the last start/finish-line edit", STATUS_MS)
 
     # ----------------------------------------------------- keyboard shortcuts
     def _build_shortcuts(self):
@@ -1086,7 +1094,7 @@ class StudioWindow(QMainWindow):
         user via the status bar (a backup failure must never disrupt the app)."""
         src = library.library_path()
         if not os.path.exists(src):
-            self.statusBar().showMessage("no library to back up yet — analyze a recording first")
+            self.statusBar().showMessage("no library to back up yet — analyze a recording first", STATUS_MS)
             return
         dest, _ = QFileDialog.getSaveFileName(
             self, "Back up library", os.path.join(os.path.expanduser("~"), "library.json"),
@@ -1097,9 +1105,9 @@ class StudioWindow(QMainWindow):
             shutil.copy2(src, dest)
         except OSError as exc:
             print(f"studio: could not back up the library ({exc!r}).", flush=True)
-            self.statusBar().showMessage(f"could not back up the library: {exc}")
+            self.statusBar().showMessage(f"could not back up the library: {exc}", STATUS_MS)
             return
-        self.statusBar().showMessage(f"library backed up to {dest}")
+        self.statusBar().showMessage(f"library backed up to {dest}", STATUS_MS)
 
     # Open Recent: recently analyzed recordings (most-recent-first), each re-opened via the guarded
     # `_load`. Sourced from the session-library index rather than a separate MRU list.
@@ -1303,7 +1311,7 @@ class StudioWindow(QMainWindow):
         guarded — a DB write must never disrupt the session (mirror library.upsert_and_save's
         defensive style)."""
         if not self._can_save_track():  # defensive: action fired with nothing usable loaded
-            self.statusBar().showMessage("no usable timing lines to save as a track")
+            self.statusBar().showMessage("no usable timing lines to save as a track", STATUS_MS)
             return
         suggested = self.session.track_name or chapters.recording_label(self._paths) or ""
         name, ok = QInputDialog.getText(
@@ -1318,7 +1326,7 @@ class StudioWindow(QMainWindow):
             track_db.save_track(entry)
         except (OSError, ValueError) as exc:
             print(f"studio: could not save track {name!r}: {exc}", flush=True)
-            self.statusBar().showMessage(f"could not save track: {exc}")
+            self.statusBar().showMessage(f"could not save track: {exc}", STATUS_MS)
             return
         # The freshly-saved track now wins detection for THIS session's name on the next load —
         # and it makes the timing VERIFIED (a named track is a trusted start line), so refresh the
@@ -1326,7 +1334,7 @@ class StudioWindow(QMainWindow):
         self.session.track_name = name
         if getattr(self, "view", None) is not None:
             self.view.refresh_timing_trust()
-        self.statusBar().showMessage(f"saved track '{name}' — future recordings here auto-detect it")
+        self.statusBar().showMessage(f"saved track '{name}' — future recordings here auto-detect it", STATUS_MS)
         print(f"studio: saved track {name!r} to the track database", flush=True)
 
     def _export_default(self, suffix: str) -> str:
@@ -1358,21 +1366,21 @@ class StudioWindow(QMainWindow):
         if not path:
             return
         if self._run_export(lambda: export_data.write_laps_csv(path, self.session), path):
-            self.statusBar().showMessage(f"exported {os.path.basename(path)}")
+            self.statusBar().showMessage(f"exported {os.path.basename(path)}", STATUS_MS)
 
     def _export_channels_csv(self):
         if not hasattr(self, "session"):
             return
         lap = self._export_lap_id()
         if lap is None:
-            self.statusBar().showMessage("no valid lap to export channels for")
+            self.statusBar().showMessage("no valid lap to export channels for", STATUS_MS)
             return
         path = self._export_save_path(f"Export lap {lap_label(lap)} channels",
                                       f"_lap{lap_label(lap)}_channels.csv", "CSV files (*.csv)")
         if not path:
             return
         if self._run_export(lambda: export_data.write_channels_csv(path, self.session, lap), path):
-            self.statusBar().showMessage(f"exported {os.path.basename(path)}")
+            self.statusBar().showMessage(f"exported {os.path.basename(path)}", STATUS_MS)
 
     def _export_report(self):
         if not hasattr(self, "session"):
@@ -1390,7 +1398,7 @@ class StudioWindow(QMainWindow):
                 path, self.session,
                 source_label=chapters.recording_label(self._paths) or "session",
                 images=images), path):
-            self.statusBar().showMessage(f"exported {os.path.basename(path)}")
+            self.statusBar().showMessage(f"exported {os.path.basename(path)}", STATUS_MS)
 
     def _run_export(self, write, path: str) -> bool:
         """Run a writer (`write()`) under an OSError guard; on failure show a warning dialog +
@@ -1400,7 +1408,7 @@ class StudioWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.warning(self, "Export failed",
                                 f"Could not write {os.path.basename(path)}:\n{exc}")
-            self.statusBar().showMessage(f"export failed: {exc}")
+            self.statusBar().showMessage(f"export failed: {exc}", STATUS_MS)
             return False
         return True
 
@@ -1452,13 +1460,13 @@ class StudioWindow(QMainWindow):
         """File ▸ Export ▸ "Lap card (image)…": render the card and save it as a PNG."""
         image = self._build_share_card()
         if image is None:
-            self.statusBar().showMessage("no verified lap to make a shareable card for")
+            self.statusBar().showMessage("no verified lap to make a shareable card for", STATUS_MS)
             return
         path = self._export_save_path("Export lap card", "_lap_card.png", "PNG images (*.png)")
         if not path:
             return
         if self._run_export(lambda: self._save_card_png(image, path), path):
-            self.statusBar().showMessage(f"saved {os.path.basename(path)}")
+            self.statusBar().showMessage(f"saved {os.path.basename(path)}", STATUS_MS)
 
     @staticmethod
     def _save_card_png(image, path: str) -> None:
@@ -1473,15 +1481,15 @@ class StudioWindow(QMainWindow):
         the offscreen test); guarded so a clipboard hiccup never crashes the app."""
         image = self._build_share_card()
         if image is None:
-            self.statusBar().showMessage("no verified lap to make a shareable card for")
+            self.statusBar().showMessage("no verified lap to make a shareable card for", STATUS_MS)
             return
         try:
             QApplication.clipboard().setImage(image)
         except Exception as exc:  # noqa: BLE001 — a clipboard failure must not disrupt the app
             print(f"studio: lap card not copied ({exc!r}).", flush=True)
-            self.statusBar().showMessage("could not copy the lap card")
+            self.statusBar().showMessage("could not copy the lap card", STATUS_MS)
             return
-        self.statusBar().showMessage("lap card copied — paste it into a chat")
+        self.statusBar().showMessage("lap card copied — paste it into a chat", STATUS_MS)
 
     def _share_pb_card(self):
         """The PB toast's one-tap share: save the shareable lap card at the personal-best moment
@@ -1599,7 +1607,7 @@ class StudioWindow(QMainWindow):
         lap = self._export_lap_id()  # the primary/selected lap, falling back to the best lap
         win = export_video.lap_window_for_export(self.session, lap) if lap is not None else None
         if win is None:
-            self.statusBar().showMessage("no usable lap to export video for")
+            self.statusBar().showMessage("no usable lap to export video for", STATUS_MS)
             return
         # Pick resolution + quality FIRST (so a cancel here writes nothing), then the save path.
         config = self._ask_export_options(lap)
@@ -1649,9 +1657,9 @@ class StudioWindow(QMainWindow):
             self._video_worker = None
             spec.source.cleanup()  # free any temp concat-list file the chapter resolution wrote
             if ok:
-                self.statusBar().showMessage(f"exported {os.path.basename(spec.out_path)}")
+                self.statusBar().showMessage(f"exported {os.path.basename(spec.out_path)}", STATUS_MS)
             elif message == "cancelled":
-                self.statusBar().showMessage("video export cancelled")
+                self.statusBar().showMessage("video export cancelled", STATUS_MS)
             else:
                 QMessageBox.warning(self, "Export overlay video",
                                     f"The render failed:\n{message}")
@@ -1691,7 +1699,7 @@ class StudioWindow(QMainWindow):
         reference worker's result is ignored) and, if one is already in flight, supersede it rather than
         launch a concurrent second load."""
         print(f"studio: loading reference recording — {len(paths)} chapter(s)…", flush=True)
-        self.statusBar().showMessage("Loading reference…")
+        self.statusBar().showMessage("Loading reference…", STATUS_MS)
         # Bump the token: any in-flight reference worker started earlier is now stale; its result is
         # ignored when it finishes (see _on_reference_loaded / _on_reference_load_failed).
         self._ref_load_token += 1

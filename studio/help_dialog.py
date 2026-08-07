@@ -54,6 +54,9 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("1 · 2 · 3 · 4", "Lap-panel tabs: Laps · Corners · Stats · Coaching"),
         ("⌘⇧S", "Session statistics, full-window (again / ⛶ to restore)"),
     ]),
+    ("Editing", [
+        ("⌘Z", "Undo the last start/finish-line edit"),
+    ]),
     ("Layout", [
         ("Double-click header  ·  ⛶", "Maximize a panel to fill the window (Esc / again to restore)"),
         ("⌘⌃F", "Enter / exit full screen"),
@@ -101,7 +104,7 @@ class ShortcutsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — keyboard shortcuts")
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(560)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
