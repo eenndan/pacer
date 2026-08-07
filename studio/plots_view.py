@@ -82,13 +82,6 @@ BT_BASELINE_PEN = pg.mkPen(C.border, width=1, style=Qt.DotLine)  # the band's ze
 # refresh() hides it past the threshold. The lap-table selection is itself capped (MAX_COMPARE_LAPS),
 # so a legitimate multi-select stays under this and keeps its legend; only a pathological set hides it.
 LEGEND_MAX_ROWS = 8
-# P3: when the synthetic ideal-lap band is on together with a much-slower lap, that lap's large
-# positive Δ dominates the shared Δ y-range and squashes the sub-zero ideal to a barely-visible dip.
-# Guard: keep the ideal trough at least this fraction of the visible Δ span below zero, so the ideal
-# band always reads. Purely a display clamp on the Δ y-range — the curves/values are untouched.
-IDEAL_MIN_VISIBLE_FRAC = 0.18
-
-
 class PlotsView(QWidget):
     # Scrub signals (pacer-free: emit raw plot-x; app converts/seeks).
     scrubStarted = Signal()
@@ -127,7 +120,6 @@ class PlotsView(QWidget):
         self._brake_throttle_data: list = []  # [(xs, intensity)]
         # P3: the synthetic ideal-lap trough (most-negative Δ), captured in _draw_ideal so refresh()
         # can keep the sub-zero ideal band visible when a much-slower lap's Δ dominates the y-range.
-        self._ideal_min: float | None = None
         # M8: the reserved (band_bottom, band_top) y-range the brake/throttle strip draws into,
         # computed in refresh() from the fitted SPEED-curve span and sitting BELOW the lowest speed
         # trough (None until refresh() has run with the toggle on).
@@ -431,26 +423,6 @@ class PlotsView(QWidget):
             self.p_speed.removeItem(item)
         self._brake_throttle_items = []
 
-    def _keep_ideal_visible(self):
-        """P3: on the freshly-fitted Δ range, guarantee the synthetic ideal band keeps a minimum
-        visible depth below zero. A much-slower lap's large positive Δ otherwise dominates the shared
-        y-range and squashes the sub-zero ideal to a barely-visible dip. When the ideal trough sits
-        shallower than IDEAL_MIN_VISIBLE_FRAC of the visible Δ span below zero, drop the lower bound so
-        it does. Purely a display clamp — no-op when the ideal is off or already comfortably visible."""
-        if not self._show_ideal or self._ideal_min is None or self._ideal_min >= 0:
-            return
-        vb = self.p_delta.getViewBox()
-        (dmin, dmax) = vb.viewRange()[1]
-        if dmax - dmin <= 0:
-            return
-        # The ideal band runs 0 → ideal_min (negative). Require its depth (|ideal_min|) to be at least
-        # IDEAL_MIN_VISIBLE_FRAC of the total visible span (dmax − wanted_min):
-        #   |ideal_min| / (dmax − wanted_min) ≥ frac  ⇒  wanted_min ≤ dmax − |ideal_min|/frac.
-        depth = -self._ideal_min
-        wanted_min = dmax - depth / IDEAL_MIN_VISIBLE_FRAC
-        if wanted_min < dmin:
-            vb.setYRange(wanted_min, dmax, padding=0)
-
     def _reserve_brake_throttle_space(self):
         """M8: when the brake/throttle band is on, drop the speed plot's y lower bound so the band
         gets its OWN empty strip below the lowest speed trough — the speed curve can never enter it.
@@ -581,7 +553,6 @@ class PlotsView(QWidget):
         self._hide_hover()
         self._delta_curves = []  # [(lid, xs, ys)] for the hover-dot nearest-sample snap
         self._speed_curves = {}  # {lid: (sx, spd)} rebuilt below; F5 brake glyphs ride these
-        self._ideal_min = None   # P3: recaptured in _draw_ideal when the ideal band is on
         # Clear sector lines + driving items up front: a stale item left in place would be caught
         # by the autoRange fit below (like the cursor) and stretch the frozen range; both are
         # redrawn at the end on the fitted axes.
@@ -664,8 +635,11 @@ class PlotsView(QWidget):
         self.glw.scene().update()
         self.p_speed.autoRange()
         self.p_delta.autoRange()
-        # P3: keep the sub-zero ideal band visible when a much-slower lap's Δ dominates the fit.
-        self._keep_ideal_visible()
+        # (The old P3 "_keep_ideal_visible" clamp was DELETED: its inequality was inverted — it
+        # exploded the fitted Δ range whenever the ideal was already comfortably visible (forcing
+        # the trough to exactly 18% of a hugely padded span, squashing the content into the top
+        # ~18%) and did nothing in the squashed case it was written for. _draw_ideal runs before
+        # the autoRange above, so the trough is always inside the natural fit.)
         # M8: with the brake/throttle band on, reserve dedicated empty space BELOW the fitted speed
         # range so the strip never overlaps the curves (the speed trace legitimately dips into the
         # old bottom-16% strip at every braking trough). Extend the speed y lower bound down by a
@@ -704,13 +678,6 @@ class PlotsView(QWidget):
         c.setClipToView(True)
         self._curves.append((self.p_delta, c))
         self._delta_legend.setVisible(True)
-        # P3: remember the ideal trough (most-negative Δ) so refresh() can keep it visible when a
-        # much-slower lap's positive Δ dominates the shared y-range and would squash the ideal flat.
-        iy = np.asarray(iy, float)
-        if iy.size:
-            finite = iy[np.isfinite(iy)]
-            if finite.size:
-                self._ideal_min = float(finite.min())
 
     def _curve_label(self, lid: int, is_baseline: bool) -> str:
         """Legend label for a curve: 'lap N m:ss.mmm' (+ ' · best' on the baseline), or
