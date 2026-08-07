@@ -1730,8 +1730,9 @@ class Session:
         TRUST flags (library schema v2) are sourced from the live Session here (pacer stays on this
         side of the seam): ``verified`` = ``timing_verified`` (a trusted start/finish line),
         ``degraded`` = ``timing_quality.degraded`` (ESTIMATED absolute timing), and ``dropout`` =
-        this recording has ANY valid lap with an interior GPS dropout. The library uses them to keep
-        an untrustworthy "best" OUT of the per-track PB progression (see library.is_trustworthy)."""
+        THIS ENTRY'S BEST LAP had an interior GPS dropout. All three describe the ``best`` the
+        entry carries, because that is the only value the library gates on — it keeps an
+        untrustworthy "best" out of the per-track PB progression (see library.is_trustworthy)."""
         first = chapters.discover_siblings(paths[0])[0] if paths else ""
         stem = os.path.splitext(os.path.basename(first))[0] if first else ""
         best_id = self.best_lap_id()
@@ -1746,7 +1747,14 @@ class Session:
             "theoretical": self.theoretical_best(),
             "verified": bool(self.timing_verified),
             "degraded": bool(self.timing_quality.degraded),
-            "dropout": bool(self.dropout_lap_ids()),
+            # Whether the entry's BEST lap itself had a GPS dropout — the exact question the
+            # consumer asks (library.is_trustworthy / trust_label: "a GPS dropout BEST").
+            # This used to be "ANY valid lap has a dropout", which excluded a perfectly clean
+            # best from the PB history whenever any OTHER lap dropped a fix — the app then
+            # celebrated a PB the library simultaneously rejected, showed an empty progression
+            # chart, and would crown a slower clean session as the track PB later. Normally
+            # False, since bests.best_candidate_ids already excludes dropout laps.
+            "dropout": bool(best is not None and best_id in self.dropout_lap_ids()),
             "paths": [os.path.abspath(p) for p in paths],
         }
 

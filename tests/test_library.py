@@ -892,6 +892,42 @@ def test_library_entry_stores_absolute_paths():
     assert entry["dropout"] is False
 
 
+def test_library_entry_dropout_flag_describes_the_BEST_lap_only():
+    """UI-scrutiny C5: the `dropout` flag is read by library.is_trustworthy as "a GPS dropout
+    BEST", so the writer must mean exactly that. It used to be "ANY valid lap has a dropout",
+    which excluded a perfectly clean best from the PB history the moment any OTHER lap dropped
+    a fix — the app then celebrated a PB toast the library simultaneously rejected (empty
+    progression chart, and a slower clean session could later be crowned track PB)."""
+    if not _pacer_available():
+        print("skip test_library_entry_dropout_flag_describes_the_BEST_lap_only (no pacer)")
+        return
+    from studio.session import Session
+
+    def _bare(best_id, dropouts):
+        s = Session.__new__(Session)
+        s._valid_cache = [0, 1, 2]
+        s._best_cache = best_id
+        s.track_name = "Daytona MK"
+        s.laps = type("L", (), {"lap_time": staticmethod(lambda i: 68.4)})()
+        s.session_date = lambda: "2024-05-01"
+        s.theoretical_best = lambda: 67.9
+        s.dropout_lap_ids = lambda: set(dropouts)
+        return s
+
+    # OTHER laps dropped fixes; the best (lap 1) is clean → trustworthy, stays in the PB set.
+    entry = Session.library_entry(_bare(1, {0, 2}), ["GX010062.MP4"])
+    assert entry["dropout"] is False
+    assert library.is_trustworthy(entry), "a clean best must stay PB-eligible"
+    # The BEST lap itself dropped fixes → flagged, and correctly excluded from the PB set.
+    entry = Session.library_entry(_bare(1, {1}), ["GX010062.MP4"])
+    assert entry["dropout"] is True
+    assert not library.is_trustworthy(entry)
+    assert library.trust_label(entry) == "dropout"
+    # No best at all (no valid lap) → nothing to flag.
+    assert Session.library_entry(_bare(None, {0}), ["GX010062.MP4"])["dropout"] is False
+    print("test_library_entry_dropout_flag_describes_the_BEST_lap_only OK")
+
+
 def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):
     """The app's _update_library does NOT index a 0-lap open or the bundled DEFAULT_SAMPLE — so a
     no-file launch (or an unsegmented recording) can't leave a permanent junk row in the library."""
