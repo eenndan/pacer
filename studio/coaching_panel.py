@@ -347,11 +347,21 @@ class OpportunitiesDialog(QDialog):
         btn.setMinimumWidth(88)
         btn.setToolTip(f"Select C{opp.cid} on the map and jump the video to your best lap's "
                        "entry to this corner")
+        # B10 (belt+braces with the theme.icon color_active fix): never the focused-default
+        # styling that repainted the arrow amber-on-amber.
+        btn.setAutoDefault(False)
+        btn.setDefault(False)
         if self._jump_to is None:
             btn.setEnabled(False)
         else:
             cid, entry = opp.cid, opp.entry_dist
-            btn.clicked.connect(lambda _checked=False, c=cid, d=entry: self._jump_to(c, d))
+            # C8: close the modal FIRST, then jump — the ApplicationModal dialog otherwise
+            # stays centred over exactly the map/corner state the jump just changed, making
+            # the CTA read as doing nothing.
+            def _jump(_checked=False, c=cid, d=entry):
+                self.accept()
+                self._jump_to(c, d)
+            btn.clicked.connect(_jump)
         return btn
 
 
@@ -469,7 +479,10 @@ class OpportunitiesPanel(QWidget):
         identically to the modal dialog) and the headline summary."""
         # L2: only shown-resolution rows are opportunities (drop the "+0.00 s" rows).
         rows = _shown_rows(opps)[:PANEL_TOP_N]
-        total = sum(r.time_lost for r in rows)
+        # B12: sum the 2-dp DISPLAYED values, not the raw floats — the headline ("0.56 s")
+        # and the visible rows (+0.26 +0.20 +0.11 = 0.57) must never disagree by a rounding
+        # penny; the header is an aggregate of what the user can check by eye.
+        total = sum(round(r.time_lost, 2) for r in rows)
         # P1: phrase the headline by COUNT — "in your worst corner" reads right for one, "across your
         # top N corners" for several, so it never says the ungrammatical "across the top 1".
         if len(rows) == 1:
