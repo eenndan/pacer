@@ -68,6 +68,14 @@ CORNER_LABEL_BOX_PX = (22.0, 16.0)
 # start/finish crosshair, so the amber crosshair and its clustered C-labels stop colliding.
 CORNER_START_CLEAR_PX = 26.0
 CORNER_START_NUDGE_PX = 12.0
+# The video-position marker MOVES every video frame while the label layout above is computed ONCE
+# per corner-set change, so a label the marker wanders onto is simply painted over (marker z=10 vs
+# label z=6) and becomes unreadable. Per tick we run an O(n) axis-aligned box test (n = corners,
+# ~10-20 floats) of the marker against each label's laid-out position and nudge ONLY the labels it
+# actually covers, radially away from the marker; the full declutter layout stays off the tick.
+CORNER_MARKER_CLEAR_PX = 12.0   # marker half-extent (a size-15 TargetItem) plus a little air
+CORNER_MARKER_PAD_PX = 2.0      # extra px so a nudged label clears the marker rather than kissing it
+CORNER_MARKER_EPS_PX = 0.5      # sub-px moves aren't worth a setPos/repaint
 # Click-to-locate cue: a hollow accent ring slightly larger than the apex dot.
 CORNER_HIGHLIGHT_PEN_W = 2
 CORNER_HIGHLIGHT_SIZE = 18
@@ -433,7 +441,9 @@ def _point_seg_dist(p, a, b) -> float:
 
 class _CornerMarkers:
     """Corner C# labels + direction-coloured apex dots (cyan=left, coral=right), rebuilt wholesale
-    from (label,x,y,direction) tuples. Rebuilt only on corner-set change; zero per-tick cost."""
+    from (label,x,y,direction) tuples. The LAYOUT (the declutter pass) runs only on corner-set
+    change; the per-tick path is `avoid_point`, an O(n) box test that nudges only the label the
+    moving video marker is currently sitting on."""
 
     def __init__(self, plot):
         self.plot = plot
@@ -443,6 +453,13 @@ class _CornerMarkers:
         self._markers: list = []
         self._highlight_item = None
         self.highlighted: str | None = None
+        # Per-tick marker-avoidance state, parallel lists over the label TextItems (see avoid_point):
+        # the item, its LAID-OUT home position (data units), the outward unit vector used to place it
+        # (the degenerate-overlap fallback direction), and the position currently applied to the item.
+        self._texts: list = []
+        self._home: list[tuple[float, float]] = []
+        self._outward: list[tuple[float, float]] = []
+        self._applied: list[tuple[float, float]] = []
 
     def _px_per_data(self) -> tuple[float, float]:
         """(px-per-data-x, px-per-data-y) from the viewbox, to convert px offsets into data coords.
@@ -465,6 +482,7 @@ class _CornerMarkers:
         for it in self._items:
             self.plot.removeItem(it)
         self._items = []
+        self._texts, self._home, self._outward, self._applied = [], [], [], []
         if not markers:
             return
         for direction, colour in ((1, CORNER_LEFT_COLOR), (-1, CORNER_RIGHT_COLOR)):
@@ -489,6 +507,9 @@ class _CornerMarkers:
             text.setZValue(6)
             self.plot.addItem(text)
             self._items.append(text)
+            self._texts.append(text)
+            self._home.append((lx, ly))
+            self._applied.append((lx, ly))
 
     def _label_positions(self, markers, start_anchors):
         """Compute the (lx, ly) draw position for each corner label in data units, decluttered.
@@ -511,11 +532,13 @@ class _CornerMarkers:
         seg_px = tuple(anchors_px[:2]) if len(anchors_px) >= 2 else None
         # Initial px placement: outward-normal offset from the centroid, plus a start-cluster push.
         px_pts: list[list[float]] = []
+        self._outward = []
         for _label, x, y, _d in markers:
             apex_px = (float(x) * sx, float(y) * sy)
             dx, dy = float(x) - cx, float(y) - cy
             norm = (dx * dx + dy * dy) ** 0.5 or 1.0
             ux, uy = dx / norm, dy / norm  # outward unit vector (data-space direction)
+            self._outward.append((ux, uy))  # reused by avoid_point as the degenerate-overlap direction
             off = CORNER_LABEL_OFFSET_PX
             # Start-cluster exclusion: a corner apex near ANY anchor point (or the start-line
             # segment) gets an extra outward nudge so its label clears the amber crosshairs +
@@ -555,6 +578,64 @@ class _CornerMarkers:
             if not moved:
                 break
         return [(px / sx, py / sy) for px, py in px_pts]
+
+    def avoid_point(self, mx: float, my: float) -> int:
+        """Keep the corner labels out from under the moving video-position marker at data point
+        (mx, my). Returns the number of labels currently nudged (for tests/telemetry).
+
+        THE PER-TICK PATH — it must stay O(n) in the corner count and touch Qt only when something
+        actually changed. The declutter LAYOUT (`_label_positions`) runs once per corner-set change
+        and cannot see the marker move, so a label can end up buried under the marker (which paints
+        over it: z=10 vs z=6). Here each label costs two absolute-difference compares against the
+        marker's px box; the drawn position is a pure function of (laid-out home, marker) — clear of
+        the marker means "sit at home", colliding means "sit pushed radially away from the marker,
+        just past the box". The push tends to CORNER_MARKER_PAD_PX as the marker reaches the box
+        edge, so the label slides out of the way and back continuously — no state machine, no
+        flicker, and never a laid-out position lost. Steady state: n float compares, zero Qt calls."""
+        if not self._texts:
+            return 0
+        sx, sy = self._px_per_data()
+        if sx <= 0 or sy <= 0:
+            return 0
+        mpx, mpy = mx * sx, my * sy
+        # Combined half-extents: half the label box plus the marker's own half-extent.
+        half_w = CORNER_LABEL_BOX_PX[0] / 2.0 + CORNER_MARKER_CLEAR_PX
+        half_h = CORNER_LABEL_BOX_PX[1] / 2.0 + CORNER_MARKER_CLEAR_PX
+        nudged = 0
+        for i, text in enumerate(self._texts):
+            hx, hy = self._home[i]
+            dx, dy = hx * sx - mpx, hy * sy - mpy
+            adx, ady = abs(dx), abs(dy)
+            if adx >= half_w or ady >= half_h:          # the fast path: no collision, sit at home
+                tx_, ty_ = hx, hy
+            else:
+                nudged += 1
+                norm = (dx * dx + dy * dy) ** 0.5
+                if norm < 1e-9:  # label dead-centre on the marker — fall back to its outward normal
+                    ux, uy = self._outward[i] if i < len(self._outward) else (1.0, 0.0)
+                    n2 = (ux * ux + uy * uy) ** 0.5 or 1.0
+                    ux, uy = ux / n2, uy / n2
+                else:
+                    ux, uy = dx / norm, dy / norm
+                # u shares d's signs, so |d + t*u| = |d| + t*|u| and the clearing t per axis is exact.
+                px_t = (half_w - adx) / abs(ux) if abs(ux) > 1e-9 else float("inf")
+                py_t = (half_h - ady) / abs(uy) if abs(uy) > 1e-9 else float("inf")
+                t = min(px_t, py_t) + CORNER_MARKER_PAD_PX
+                tx_, ty_ = (hx * sx + ux * t) / sx, (hy * sy + uy * t) / sy
+            ax, ay = self._applied[i]
+            if abs(tx_ - ax) * sx > CORNER_MARKER_EPS_PX or abs(ty_ - ay) * sy > CORNER_MARKER_EPS_PX:
+                text.setPos(tx_, ty_)
+                self._applied[i] = (tx_, ty_)
+        return nudged
+
+    def reset_positions(self):
+        """Put every label back at its laid-out home, undoing any marker nudge. For the share-card
+        grab, where the marker is hidden: a label dodging a marker nobody can see just reads as a
+        mis-placed label."""
+        for i, text in enumerate(self._texts):
+            if self._applied[i] != self._home[i]:
+                text.setPos(*self._home[i])
+                self._applied[i] = self._home[i]
 
     def set_highlight(self, label: str | None):
         """Ring-highlight one corner's apex by label (None / unknown clears). Display-only."""
@@ -624,6 +705,13 @@ class MapView(QWidget):
         self.widget = pg.PlotWidget()
         self.plot = self.widget.getPlotItem()
         self.plot.setAspectLocked(True)  # equal aspect -> a true-shape track map
+        # Drop pyqtgraph's developer chrome from this user-facing surface: the "A" auto-range button
+        # that fades in over the bottom-left of the track on hover, and the raw right-click menu
+        # (Transforms / Downsample / Average / Export…). Neither belongs on a track map. This touches
+        # DISPLAY only — mouse interaction (pan/zoom drag, and the draggable timing-line + marker
+        # handles) is deliberately left exactly as it was. Same treatment as the stats sparklines.
+        self.plot.hideButtons()
+        self.plot.setMenuEnabled(False)
         # Hide axes/grid: a track map is a shape, not a chart.
         self.plot.showGrid(x=False, y=False)
         for side in ("left", "bottom", "top", "right"):
@@ -655,12 +743,14 @@ class MapView(QWidget):
         )
         self.plot.addItem(self.marker)
         self.marker.setZValue(10)  # canonical z-order: lap overlays/rainbow ≤5, corner/brake 5-7, ghost 9, marker 10
-        self.marker.sigPositionChanged.connect(self._marker_dragged)
 
         # Self-contained overlays; the app pushes corner/brake markers via set_corners /
         # set_brake_markers (both laps for brakes in compare mode).
         self._corner_markers = _CornerMarkers(self.plot)
         self._brake_markers = _BrakeMarkers(self.plot)
+        # Wired AFTER the overlays exist: _marker_dragged also keeps the corner labels clear of the
+        # marker, so _corner_markers must be constructed before the first emission can reach it.
+        self.marker.sigPositionChanged.connect(self._marker_dragged)
 
         # Compare ghost (lap B's kart position); created lazily on first compare tick, removed on exit.
         # ghost_updates counts placements for the per-tick perf-invariant tests.
@@ -797,12 +887,19 @@ class MapView(QWidget):
                 w.hide()
             for it in items:
                 it.setVisible(False)
+            # The marker is hidden for the grab, so drop any marker-dodge nudge the labels are
+            # holding (see _CornerMarkers.avoid_point): on a card with no marker, a nudged label
+            # just looks mis-placed. Restored below from the marker's live position.
+            self._corner_markers.reset_positions()
             yield self
         finally:
             for w, was_hidden in widget_prev:
                 w.setVisible(not was_hidden)
             for it, was_visible in item_prev:
                 it.setVisible(was_visible)
+            if getattr(self, "marker", None) is not None:
+                p = self.marker.pos()
+                self._corner_markers.avoid_point(p.x(), p.y())
 
     def _reposition_empty_state(self):
         """Keep the zero-lap empty-state placeholder centred over the plot, spanning a comfortable
@@ -919,11 +1016,17 @@ class MapView(QWidget):
 
     # --------------------------------------------------------------- video sync
     def _marker_dragged(self, *_):
+        p = self.marker.pos()
+        # The marker paints OVER the corner labels (z=10 vs z=6) and moves every video frame, while
+        # the label layout is computed once per corner set — so nudge any label it has landed on out
+        # from under it. Deliberately BEFORE the suppress guard: sigPositionChanged fires for the
+        # per-tick programmatic setPos (set_marker_index) as well as for a user drag, so this one
+        # call covers both paths. O(n corners) float compares; no re-layout. See avoid_point.
+        self._corner_markers.avoid_point(p.x(), p.y())
         # Constrain the seek to the current lap (nearest_time_in_lap) so spatially-overlapping laps
         # don't snap; fall back to whole-trace nearest in the lead-in.
         if self._suppress_marker:
             return
-        p = self.marker.pos()
         t = None
         if self._current_lap is not None:
             t = self.session.nearest_time_in_lap(self._current_lap, p.x(), p.y())
@@ -1142,8 +1245,16 @@ class MapView(QWidget):
         Pushed by the app. The start/finish cluster's exclusion anchors (both start-line ENDPOINTS
         + the live video-position marker) are handed down so labels near that cluster are nudged
         clear of it (declutter) — not just the line midpoint (M7: C11 collided with the h2 endpoint,
-        31 px from the midpoint but only 15 px from the handle it pierced)."""
+        31 px from the midpoint but only 15 px from the handle it pierced).
+
+        The layout's marker anchor is a SNAPSHOT (the marker moves every video frame), so the fresh
+        labels are immediately re-checked against the marker's live position — the same O(n) test the
+        30 Hz tick runs (_marker_dragged → _CornerMarkers.avoid_point)."""
         self._corner_markers.set_corners(markers, start_anchors=self._start_clear_anchors())
+        marker = getattr(self, "marker", None)
+        if marker is not None:
+            p = marker.pos()
+            self._corner_markers.avoid_point(p.x(), p.y())
 
     def _start_clear_anchors(self):
         """The local-metre points a corner label must clear near the start/finish: the start line's
