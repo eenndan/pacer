@@ -54,7 +54,7 @@ _APP = QApplication.instance() or QApplication([])
 # its own import); reuse its REAL-corner-detection stadium fixture instead of re-deriving one.
 from test_session_services import _synthetic_session  # noqa: E402
 
-from studio import chapters, data_quality, render_cache, tracks  # noqa: E402
+from studio import chapters, data_quality, render_cache, theme, tracks  # noqa: E402
 from studio.central_view import CentralView  # noqa: E402
 
 
@@ -514,6 +514,50 @@ def test_hero_readout_leads_with_labelled_delta_to_ideal():
     print(f"test_hero_readout_leads_with_labelled_delta_to_ideal OK ({text!r} / {best_text!r})")
 
 
+def test_hero_readout_keeps_every_character_when_the_charts_header_is_squeezed():
+    """The hero #DiffBox is a QLabel — QLabels never elide, they HARD-CLIP — and the charts header's
+    natural minimum is far wider than the column minimum the splitter allows, so Qt squeezes every
+    item proportionally. Centred, that ate BOTH ends of the live number (".deal +0.00 s" / "74 km,").
+    The number must survive intact at any column width: it carries an explicit floor sized to the
+    widest readout it can render, it is LEFT-aligned so any residual squeeze costs the tail rather
+    than the leading Δ, and the secondary controls yield first.
+
+    Measured against the PAINTED font (the QSS styles #DiffBox in the mono stack, not in the font
+    the widget was constructed with), so the theme is applied for the duration and restored after."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFontMetrics
+
+    view, _s, t0, _t1 = _real_central_view()
+    assert view.diff_box.alignment() & Qt.AlignLeft, "a centred hero readout clips at BOTH ends"
+
+    view.resize(1511, 940)
+    view.show()
+    prior = (_APP.styleSheet(), _APP.font(), _APP.palette())
+    theme.apply_theme(_APP)
+    try:
+        view.video.positionChanged.emit(float(t0[len(t0) // 2]))
+        view.tick()
+        _APP.processEvents()
+        box = view.diff_box
+        fm = QFontMetrics(box.font())
+        pad = 16  # the QSS's `#DiffBox { padding: 2px 8px }`
+        # The user's own layout (a WIDE left column) first, then well past it.
+        for right_w in (931, 700, 460):
+            view._main_splitter.setSizes([1511 - right_w, right_w])
+            _APP.processEvents()
+            room = box.width() - pad
+            assert room >= fm.horizontalAdvance(box.text()), (
+                right_w, box.width(), box.text(), fm.horizontalAdvance(box.text()))
+        # The controls beside it are the ones that gave way.
+        assert view.plots.ideal_btn.width() < view.plots.ideal_btn.sizeHint().width()
+    finally:
+        _APP.setStyleSheet(prior[0])
+        _APP.setFont(prior[1])
+        _APP.setPalette(prior[2])
+        view.hide()
+    print("test_hero_readout_keeps_every_character_when_the_charts_header_is_squeezed OK")
+
+
 def test_delta_to_ideal_tooltips_are_honest_not_best_sector():
     """Δ-to-ideal is a 400-point per-distance lower envelope — a synthetic curve no human drives in
     one pass — so its labels must describe it as a stitched-together theoretical ideal, NOT mis-sell
@@ -820,6 +864,7 @@ def _run_all():
     test_quality_banner_is_informational_and_independent()
     test_provisional_and_degraded_share_one_trust_strip()
     test_hero_readout_leads_with_labelled_delta_to_ideal()
+    test_hero_readout_keeps_every_character_when_the_charts_header_is_squeezed()
     test_delta_to_ideal_tooltips_are_honest_not_best_sector()
     test_grip_map_reachable_via_labelled_combo()
     test_opportunities_panel_is_the_coaching_tab_page()
@@ -829,6 +874,7 @@ def _run_all():
     test_video_focus_disabled_while_comparing()
     test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_state()
     test_tab_bar_switches_pages_and_names_the_corners_lap()
+    test_one_chapter_phrasing_on_the_banner_and_the_transport()
     test_corner_row_click_rings_the_map()
     test_show_stats_maximized_is_a_true_toggle()
     test_stats_corner_row_click_restores_grid_then_rings_map()
@@ -855,23 +901,57 @@ def test_tab_bar_switches_pages_and_names_the_corners_lap():
     # Out-of-range selects are ignored, never a blank page.
     view.select_lap_tab(9)
     assert view.table_stack.currentIndex() == 0
-    # B1: the load-time Corners rename widened the bar's size hint AFTER the header had been
-    # laid out, and a QTabBar doesn't re-request layout on its own — so the last tab shipped
-    # clipped to "Coach" until a tab click happened to heal it. At a realistic panel width
-    # every tab must now be laid out fully inside the bar.
+    # B1/B2: every tab must PAINT its whole name at a realistic panel width. Assert that on the
+    # painted string, not on the tab geometry: the previous tabRect() >= text-advance check passed
+    # (71 >= 56) while all four labels rendered as "La…" / "Corners ·…" / "St…" / "Coac…", because
+    # the elision happens further in — QTabBar::initStyleOption applies the elide mode to the
+    # style's TEXT sub-rect, which the QSS's own `padding: 6px 10px` has already been deducted
+    # from a second time. opt.text is literally what the style draws.
+    #
+    # This runs under the REAL theme QSS (that padding IS the trigger — a stock unstyled QTabBar
+    # never elides here, so an unstyled test could not see the bug), then restores the app's
+    # default chrome so the later tests keep theirs.
     view.resize(576, 460)
     view.show()
-    _APP.processEvents()
-    from PySide6.QtGui import QFontMetrics
-    bar = view.tab_bar
-    assert bar.tabText(3) == "Coaching"
-    # The tab must be wide enough to render its whole label (Qt elides when it isn't — the
-    # symptom was a permanent "Coach"). Compare against the text's own advance width; the
-    # QSS adds ~20px of horizontal padding, so a >= text-width tab cannot be eliding.
-    text_px = QFontMetrics(bar.font()).horizontalAdvance("Coaching")
-    assert bar.tabRect(3).width() >= text_px, (bar.tabRect(3).width(), text_px)
+    from PySide6.QtWidgets import QStyleOptionTab
+    prior = (_APP.styleSheet(), _APP.font(), _APP.palette())
+    theme.apply_theme(_APP)
+    try:
+        _APP.processEvents()
+        bar = view.tab_bar
+        assert bar.tabText(3) == "Coaching"
+        for i in range(bar.count()):
+            opt = QStyleOptionTab()
+            bar.initStyleOption(opt, i)
+            assert opt.text == bar.tabText(i), (i, opt.text, bar.tabText(i))
+    finally:
+        _APP.setStyleSheet(prior[0])
+        _APP.setFont(prior[1])
+        _APP.setPalette(prior[2])
     view.hide()
     print("test_tab_bar_switches_pages_and_names_the_corners_lap OK")
+
+
+def test_one_chapter_phrasing_on_the_banner_and_the_transport():
+    """P4: the chapter banner (above the video) and the transport timecode (below it) are visible
+    at the SAME time, so they must speak ONE format. The transport used to compress it to
+    "chapter 2/3" against the banner's "chapter 2 of 3", which reads as two different facts; both
+    now render through chapters.format_chapter."""
+    view, s, _t0, _t1 = _real_central_view()
+    dur = s.chapters.total_duration / 3.0
+    # A real 3-chapter load: the session carries the map (transport readout) and so does the
+    # player pane (which is what makes video.is_multi — the banner's gate — true).
+    s.chapters = chapters.ChapterMap(["/tmp/a.MP4", "/tmp/b.MP4", "/tmp/c.MP4"], [dur] * 3)
+    view.video.pane._chapters = s.chapters
+
+    view._update_chapter_label(1)                       # 0-based index 1 == the 2nd chapter
+    banner = view.chapter_label.text()
+    transport = view._transport_readout(dur * 1.5)      # a moment inside the 2nd chapter
+
+    assert "chapter 2 of 3" in banner, banner
+    assert "chapter 2 of 3" in transport, transport
+    assert "2/3" not in transport, transport
+    print("test_one_chapter_phrasing_on_the_banner_and_the_transport OK")
 
 
 def test_corner_row_click_rings_the_map():

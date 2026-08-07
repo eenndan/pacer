@@ -170,6 +170,14 @@ def recording_label(paths: list[str]) -> str:
     return f"{rec} · {n} chapters" if n > 1 else rec
 
 
+def format_chapter(index0: int, total: int) -> str:
+    """The app's ONE phrasing for "which chapter am I in", e.g. ``"chapter 2 of 3"`` from the
+    0-based index (displayed 1-based, the app-wide rule). Single-sourced because the video banner
+    and the transport timecode sit on the SAME screen — they read as two different facts the moment
+    one of them says "2/3" instead."""
+    return f"chapter {index0 + 1} of {total}"
+
+
 @dataclass(frozen=True)
 class Chapter:
     """One chapter on the global time axis: its file, its 0-based media duration, and its

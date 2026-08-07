@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -53,6 +54,30 @@ _RESTORE_GLYPH = "ph.corners-in"     # shown while maximized — click/Esc to re
 # header controls read as one family (video_view._ICON_PX / _ICON_BTN).
 _HDR_ICON_PX = 15
 _HDR_ICON_BTN = QSize(26, 22)
+
+# The widest readouts the hero #DiffBox can ever render (theme.format_ideal_readout /
+# format_delta_speed at their longest realistic values), used to derive its layout floor below.
+_HERO_TEMPLATES = (
+    "Δideal +10.00 s     188 km/h",   # leading with Δ-to-ideal — the default reference
+    "Δ -10.00 s ▼     188 km/h",      # leading with Δ-to-best, plus its direction arrow
+)
+_HERO_PAD_PX = 20   # the QSS's `#DiffBox { padding: 2px 8px }` (16) + a rounding px per side
+
+
+def _hero_min_width() -> int:
+    """Layout floor for the hero Δ/speed readout: the widest text it can show + its QSS padding.
+
+    A QLabel never elides — it HARD-CLIPS — so without a floor the charts header's proportional
+    squeeze eats characters off the live number itself. Measured in the font the QSS actually
+    PAINTS #DiffBox in (the mono stack at HERO/600); theme.mono_font() resolves to Inter+tnum and
+    measures ~80 px narrower, which would under-size the floor by exactly that much."""
+    families = [name.strip(' "') for name in theme.MONO_STACK.split(",")]
+    f = QFont()
+    f.setFamilies(families)
+    f.setPixelSize(theme.HERO)
+    f.setWeight(theme.W_SEMIBOLD)
+    fm = QFontMetrics(f)
+    return max(fm.horizontalAdvance(t) for t in _HERO_TEMPLATES) + _HERO_PAD_PX
 
 
 class CentralView(QWidget):
@@ -277,8 +302,15 @@ class CentralView(QWidget):
         # when the app is set to mph (the live readout re-renders on the first _update_diff_box).
         self.diff_box = QLabel(f"Δideal —    — {units.speed_label(self._speed_unit)}")
         self.diff_box.setObjectName("DiffBox")
-        self.diff_box.setAlignment(Qt.AlignCenter)
+        # LEFT-aligned, not centred: a centred QLabel that is squeezed clips at BOTH ends, so the
+        # leading "Δ" was the first thing lost. Left alignment spends any residual clip on the tail.
+        self.diff_box.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self.diff_box.setFont(theme.mono_font(theme.HERO, theme.W_SEMIBOLD))
+        # …and the hero number never gives up characters at all: an explicit minimum sized to the
+        # widest readout. On a QLabel setMinimumWidth SETS the layout minimum (qSmartMinSize takes an
+        # explicit minimum over the size hint) — the same lever plots_label uses to volunteer itself
+        # as the header's first casualty.
+        self.diff_box.setMinimumWidth(_hero_min_width())
         self._diff_colour = None  # last applied Δ-value colour (per-tick recolor guard)
         # Last (speed, lap) the readout rendered — so toggling the reference re-renders without a tick.
         self._last_diff_speed: float | None = None
@@ -326,10 +358,16 @@ class CentralView(QWidget):
         self.tab_bar.setDocumentMode(True)
         self.tab_bar.setExpanding(False)
         self.tab_bar.setDrawBase(False)
-        # B2: keep the four short names intact when there's room, but let Qt elide + offer
-        # scroll buttons instead of sliding a tab under the ⛶ button on a narrow window.
+        # B2: on a narrow window the bar offers SCROLL BUTTONS rather than sliding a tab under the
+        # ⛶ button. Elide must stay OFF: the QSS gives every tab `padding: 6px 10px`, which Qt
+        # deducts a SECOND time when it derives SE_TabBarTabText from the tab rect, so the text rect
+        # comes out a few px NARROWER than the label's own advance and ElideRight then elides all
+        # four names unconditionally, at ANY width ("La…", "Corners ·…", "St…", "Coac…"). Scroll
+        # buttons also drop minimumSizeHint to ~half the sizeHint, so pin a Minimum h-policy: a
+        # layout may grow the bar but never squeeze it below the width its four names need.
         self.tab_bar.setUsesScrollButtons(True)
-        self.tab_bar.setElideMode(Qt.ElideRight)
+        self.tab_bar.setElideMode(Qt.ElideNone)
+        self.tab_bar.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         self.tab_bar.setFocusPolicy(Qt.NoFocus)
         for name, tip in (
             ("Laps", "Every valid lap: times, splits, session bests. Press 1."),
@@ -443,6 +481,12 @@ class CentralView(QWidget):
         self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.ideal_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.brake_throttle_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        # Maximum only lets these shrink to their FULL-text hint, so the squeeze still reached the
+        # hero readout. Explicit small minimums make the secondary controls yield FIRST — they elide
+        # to their icon (meaning intact in the tooltip) long before the live number loses a digit.
+        self.plots.brake_throttle_btn.setMinimumWidth(34)
+        self.plots.ideal_btn.setMinimumWidth(34)
+        self.plots.x_mode_combo.setMinimumWidth(60)
         self._plots_max_btn = self._maximize_button()
         plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0),
                                         self.ideal_readout_btn, 1,
@@ -804,8 +848,8 @@ class CentralView(QWidget):
             return
         label = chapters.recording_label(self._paths)
         if self.video.is_multi:
-            self.chapter_label.setText(f"{label}  —  chapter {chapter_index + 1} of "
-                                       f"{len(self.session.chapters)}")
+            self.chapter_label.setText(
+                f"{label}  —  {chapters.format_chapter(chapter_index, len(self.session.chapters))}")
         else:
             self.chapter_label.setText(label)
 
@@ -1013,7 +1057,7 @@ class CentralView(QWidget):
         single source of the live moment."""
         chs = self.session.chapters
         if chs is not None and chs.is_multi:
-            return f"{fmt_time(t)}   ·   chapter {chs.chapter_at(t) + 1}/{len(chs)}"
+            return f"{fmt_time(t)}   ·   {chapters.format_chapter(chs.chapter_at(t), len(chs))}"
         return fmt_time(t)
 
     def _follow_current_lap(self, lap_id: int | None, t: float):
