@@ -31,7 +31,11 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-REAL = os.path.expanduser("~/Desktop/D24/GX010060.MP4")
+# The gate's reference recording. Overridable, because the default path is only a convention —
+# and a truncated/partially-copied chapter (an interrupted SD-card transfer) still EXISTS while
+# failing to parse, which used to surface as a bare "Failed to open file". Point PACER_GOLDEN_MP4
+# at any real recording; both sides of a before/after comparison just have to use the same one.
+REAL = os.path.expanduser(os.environ.get("PACER_GOLDEN_MP4", "~/Desktop/D24/GX010060.MP4"))
 
 
 def _round(v):
@@ -263,7 +267,15 @@ def _lap_clock_span(s, lap_id):
 def main():
     out_path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/claude/pacer-review/golden_session.json"
     if not os.path.exists(REAL):
-        print(f"FATAL: real session not found at {REAL}", file=sys.stderr)
+        print(f"FATAL: real session not found at {REAL} "
+              "(set PACER_GOLDEN_MP4 to another recording)", file=sys.stderr)
+        sys.exit(2)
+    try:  # a present-but-unparseable file (truncated copy) → say so, don't raise from deep inside
+        import pacer
+        pacer.GPMFSource(REAL)
+    except Exception as exc:  # noqa: BLE001
+        print(f"FATAL: {REAL} exists but is not readable as GPMF ({exc}) — a truncated copy? "
+              "Set PACER_GOLDEN_MP4 to a complete recording.", file=sys.stderr)
         sys.exit(2)
 
     # Redirect the library app-support dir to a temp dir so nothing touches the user's data.

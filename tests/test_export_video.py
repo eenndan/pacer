@@ -41,6 +41,28 @@ from studio import chapters  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 
 REAL_MP4 = os.path.expanduser(os.environ.get("PACER_REAL_MP4", "~/Desktop/D24/GX010060.MP4"))
+
+
+def _real_media_usable() -> bool:
+    """Whether the opt-in real-media file is present AND actually PARSEABLE. Existence alone is
+    not enough: a truncated / partially-copied recording (an interrupted SD-card transfer — seen
+    in the wild on this very path) opens as a file but raises inside the GPMF parser, which would
+    turn these deliberately-optional tests into hard failures on a developer machine. Cached so
+    the probe runs once per session."""
+    global _REAL_MEDIA_OK
+    if _REAL_MEDIA_OK is None:
+        _REAL_MEDIA_OK = False
+        if os.path.exists(REAL_MP4):
+            try:
+                import pacer
+                pacer.GPMFSource(REAL_MP4)
+                _REAL_MEDIA_OK = True
+            except Exception as exc:  # noqa: BLE001 — any parser failure = "not usable"
+                print(f"skip real-media tests: {REAL_MP4} is present but unreadable ({exc})")
+    return _REAL_MEDIA_OK
+
+
+_REAL_MEDIA_OK: bool | None = None
 # The chaptered D24 recording (GX010060 + GX020060 + GX030060) for the gated real chaptered render.
 REAL_CHAPTER_DIR = os.path.dirname(REAL_MP4)
 
@@ -617,7 +639,7 @@ def test_real_render_smoke_if_ffmpeg_and_media():
     """End-to-end on the real D24 media — GATED: skipped (not failed) unless ffmpeg/ffprobe AND
     the media file are present, so CI without them still passes. Renders a SHORT 2 s window of the
     best lap at 360p and asserts the output is a non-empty valid file with a couple of frames."""
-    if not ev.ffmpeg_available() or not os.path.exists(REAL_MP4):
+    if not ev.ffmpeg_available() or not _real_media_usable():
         print("skip real_render_smoke (no ffmpeg or media)")
         return
     from studio.session import Session
@@ -646,7 +668,7 @@ def test_real_chaptered_non_first_chapter_render_if_media():
     bar. The fix resolves the window to the right chapter file at the file-LOCAL offset, so this
     must produce REAL frames. We ALSO assert the resolved source is NOT the first chapter file +
     that its local seek is the global-minus-offset (the precise gap)."""
-    if not ev.ffmpeg_available() or not os.path.exists(REAL_MP4):
+    if not ev.ffmpeg_available() or not _real_media_usable():
         print("skip real_chaptered_non_first_chapter_render (no ffmpeg or media)")
         return
     sibs = chapters.discover_siblings(REAL_MP4)
@@ -1310,7 +1332,7 @@ def test_real_render_quality_levels_if_media():
     """The quality picker end-to-end — GATED on ffmpeg + media (skipped, not failed, without them).
     Renders the SAME short window at 720p-standard and 1080p-high and asserts both are valid files
     whose resolution differs and whose bitrate differs (the picker actually changes the encode)."""
-    if not ev.ffmpeg_available() or not os.path.exists(REAL_MP4):
+    if not ev.ffmpeg_available() or not _real_media_usable():
         print("skip real_render_quality_levels (no ffmpeg or media)")
         return
     from studio.session import Session
