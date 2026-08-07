@@ -539,6 +539,11 @@ def _fake_view_session(*, has_g=True, sectors=True):
     return SimpleNamespace(
         stats=_fake_stats_service(has_g=has_g),
         valid_lap_ids=lambda: [0, 1],
+        # The two stitched TARGETS moved here from the Laps tab's SESSION-BESTS footer:
+        # theoretical (sum of the session-best splits) renders inside SECTORS, rolling in PACE.
+        theoretical_best=lambda: (68.0 if sectors else None),
+        best_rolling_lap=lambda: 68.15,
+        timing_verified=True,
         excluded_lap_ids=lambda: [5],
         dropout_lap_ids=lambda: {1},
         sector_sigmas=lambda: ([0.15, None] if sectors else []),
@@ -589,6 +594,18 @@ def test_stats_view_renders_every_group():
     assert v.lap_table.item(0, 0).text() == "1"              # clean lap: no suffix
     assert v.sector_table.rowCount() == 2
     assert v.sector_table.item(1, 2).text() == "—"           # None median -> em-dash
+    # The two stitched targets, each beside the data it comes from (they used to live in a
+    # SESSION-BESTS footer on the Laps tab, which cost that grid two lap rows).
+    assert v.t_rolling.value.text() == "1:08.150"            # PACE, next to best/median/race pace
+    assert v.t_theoretical.value.text() == "1:08.000"        # SECTORS, above the per-sector table
+    # Shown here (this fake HAS sector lines) — the counterpart of the 0-sector hide asserted in
+    # test_stats_view_hides_signal_absent_sections, so neither direction is vacuous.
+    assert not v.t_theoretical.isHidden() and not v._sector_section.isHidden()
+    # Verified + high-quality timing: rendered as normal tiles, never the provisional muting.
+    assert not v.t_rolling.value.font().italic()
+    assert not v.t_theoretical.value.font().italic()
+    assert "not a lap you drove" in v.t_theoretical.toolTip()
+    assert "not a lap you drove" in v.t_rolling.toolTip()
     assert "agree" in v.trust_label.text()                   # the cross-check's first UI surface
     assert "GPS9 true clock" in v.trust_label.text()
     print("test_stats_view_renders_every_group OK")
@@ -600,11 +617,66 @@ def test_stats_view_hides_signal_absent_sections():
     v = StatsView(_fake_view_session(has_g=False, sectors=False))
     assert v._driving_section.isHidden() and v.gg.isHidden()     # no g -> no g sections
     assert v._sector_section.isHidden() and v.sector_table.isHidden()
+    # The theoretical best hides WITH its section: on a 0-sector track it degenerates to the best
+    # lap time (a duplicate of the starred best that can even read slower than the rolling best),
+    # so it carries no information — the rule the Laps footer used to hand-code. Rolling stays.
+    assert v.t_theoretical.isHidden()
+    assert not v.t_rolling.isHidden() and v.t_rolling.value.text() == "1:08.150"
     assert v.t_peak_lat.value.text() == "—"                      # None, never a fake 0
     assert v.lap_table.item(0, 5).text() == "—"                  # per-lap g cells dash too
     assert v.lap_table.item(0, 2).text() == "95.0"               # speed needs no g signal
     assert v.lap_table.item(0, 4).text() == "48.0"               # Min speed needs no g either
     print("test_stats_view_hides_signal_absent_sections OK")
+
+
+def test_stats_view_target_tiles_mute_on_provisional_and_degraded_timing():
+    """The theoretical / rolling tiles are stitched TARGETS, not laps anyone drove, so they share
+    the lap timing's authority — the behaviour they carried in the Laps footer they moved from.
+
+    PROVISIONAL timing (an arbitrary start line) or a DEGRADED clock (media-clock fallback /
+    low-GPS estimate) renders them muted + italic with the explaining note prepended to the
+    tooltip; Verified AND high-quality renders them as normal tiles. The measured PACE tiles
+    beside them stay unmuted — those ARE laps you drove."""
+    _app()
+    from studio.data_quality import MEDIA_CLOCK_FALLBACK, TimingQuality
+    from studio.lap_table import PROVISIONAL_TOOLTIP, estimated_timing_tooltip
+    from studio.stats_panel import StatsView
+    from studio.theme import PROVISIONAL_COLOR, C
+
+    targets = lambda v: (v.t_theoretical, v.t_rolling)  # noqa: E731 — a local alias, not a def
+
+    # Verified + clean clock: normal tiles.
+    v = StatsView(_fake_view_session())
+    for t in targets(v):
+        assert not t.value.font().italic()
+        assert C.text in t.value.styleSheet(), t.value.styleSheet()
+    assert not v.t_best.value.font().italic(), "a measured lap time must never mute"
+
+    # Provisional start line: muted + italic, tooltip led by the provisional note.
+    sess = _fake_view_session()
+    sess.timing_verified = False
+    v = StatsView(sess)
+    for t in targets(v):
+        assert t.value.font().italic(), "provisional target tile must be italic"
+        assert PROVISIONAL_COLOR in t.value.styleSheet(), t.value.styleSheet()
+        assert t.toolTip().startswith(PROVISIONAL_TOOLTIP), t.toolTip()
+    assert not v.t_best.value.font().italic(), "the measured best lap stays unmuted"
+
+    # Verified but DEGRADED clock: the orthogonal axis — muted with the estimated note instead.
+    sess = _fake_view_session()
+    sess.timing_quality = TimingQuality(clock=MEDIA_CLOCK_FALLBACK)
+    v = StatsView(sess)
+    for t in targets(v):
+        assert t.value.font().italic(), "degraded target tile must be italic"
+        assert t.toolTip().startswith(estimated_timing_tooltip(sess.timing_quality)), t.toolTip()
+
+    # And it RESTORES: flipping back to verified + clean and refreshing un-mutes in place.
+    sess.timing_quality = TimingQuality()
+    v.refresh()
+    for t in targets(v):
+        assert not t.value.font().italic(), "restored target tile must not stay italic"
+        assert C.text in t.value.styleSheet(), t.value.styleSheet()
+    print("test_stats_view_target_tiles_mute_on_provisional_and_degraded_timing OK")
 
 
 def test_stats_view_corners_table_tint_sort_and_click():

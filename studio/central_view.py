@@ -373,7 +373,8 @@ class CentralView(QWidget):
         self.tab_bar.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         self.tab_bar.setFocusPolicy(Qt.NoFocus)
         for name, tip in (
-            ("Laps", "Every valid lap: times, splits, session bests. Press 1."),
+            ("Laps", "Every valid lap: times, distance, entry speed and sector splits "
+                     "(session-best splits in purple). Press 1."),
             ("Corners", "Per-corner analysis of the selected lap: time-in-corner, Δ vs the "
                         "best lap, apex/entry/exit speeds. Corners are detected from the "
                         "track's own curvature. Press 2."),

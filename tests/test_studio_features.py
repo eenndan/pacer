@@ -7,12 +7,11 @@ These exercise the load-bearing pure logic directly on synthetic data:
     to ONE lap's points and clamped to its time window (built on a bare Session, no pacer).
   * F5 — per-sector session-best = the per-column MINIMUM split across valid laps (now
     `Session.session_best_splits`, hoisted from lap_table so the purple cells and the
-    theoretical-best footer share one computation).
-  * Theoretical/rolling footer (F1-roadmap; C10 redesign) — a real offscreen LapTable on a
-    fake session: the two SESSION-BESTS tiles exist OUTSIDE the sortable table, carry NEUTRAL
-    (not purple — the purple is the per-sector best cells') values + defining tooltips, show
-    fmt_time'd session values, survive a sort, and update on refresh() after a (simulated)
-    timing-line move.
+    theoretical-best tile share one computation).
+  * The Laps page's composition — a real offscreen LapTable on a fake session holds the lap grid
+    and the excluded strip and NOTHING else: the SESSION-BESTS footer that used to cost the grid
+    two lap rows moved to the Stats page (theoretical into SECTORS, rolling into PACE — see
+    tests/test_stats.py), and this pins that it did not come back.
   * Auto-follow — `CentralView._follow_current_lap` (F7: moved off StudioWindow onto the
     session-scoped central view): the speed+delta charts switch to the playhead's lap (vs best)
     only on a lap-change EDGE; None (lead-in) HOLDS the last lap; the table re-select uses the
@@ -49,9 +48,7 @@ _APP = QApplication.instance() or QApplication([])
 from _synthetic import bare_session, odometer, seed_cols  # noqa: E402
 
 from studio import data_quality, gapfill, theme  # noqa: E402
-from studio._signal import fmt_time  # noqa: E402
 from studio.lap_table import (  # noqa: E402
-    FOOTER_ROWS,
     NUM_ROLE,
     LapTable,
     _NumItem,
@@ -178,13 +175,17 @@ def test_best_split_per_sector_is_column_min():
     print("test_best_split_per_sector_is_column_min OK")
 
 
-# -------------------------------------- theoretical / rolling footer rows (F1-roadmap)
-class _FakeFooterSession:
+# -------------------------------------- the LapTable read surface + the purple session bests
+class _FakeLapSession:
     """The full read surface LapTable touches, with adjustable summary values so a refresh()
-    after a (simulated) timing-line move shows new footer numbers. 1 sector line -> 2 S-columns;
-    lap 1 is the best lap; the seeded splits make the per-column minima [33.8, 34.4]."""
+    after a (simulated) timing-line move re-reads them. 1 sector line -> 2 S-columns;
+    lap 1 is the best lap; the seeded splits make the per-column minima [33.8, 34.4].
 
-    # Verified timing (a detected/confirmed track) so the footer + purple-best assertions below
+    theoretical_best / best_rolling_lap stay on the fake because they are part of the session
+    contract the export + Stats page read — the LapTable itself no longer displays them (they
+    moved to Stats ▸ SECTORS / ▸ PACE; see tests/test_stats.py)."""
+
+    # Verified timing (a detected/confirmed track) so the purple-best assertions below
     # read the authoritative styling, not the provisional muting (see test_lap_table_provisional_*).
     timing_verified = True
     # High data-quality by default (GPS9 true clock, no dropped fixes) — the orthogonal timing-
@@ -224,66 +225,33 @@ class _FakeFooterSession:
         return set()
 
 
-def _footer_texts(table):
-    return [label.text() for label in table._footer_values]
+def test_laps_page_is_grid_plus_excluded_strip_only():
+    """The Laps page carries the lap grid and the excluded strip — nothing else.
 
-
-def test_lap_table_footer_rows_present_styled_and_valued():
-    """The two SESSION-BESTS tiles exist BELOW the table (never as sortable table rows), read the
-    session's theoretical/rolling values through fmt_time, and carry a defining tooltip each.
-
-    C10: the values are styled in the NEUTRAL primary text — NOT the C.best purple — so the
-    purple is reserved strictly for the per-sector best cells (a former semantic-colour
-    collision); the block instead gets hierarchy from a "SESSION BESTS" section header."""
+    It used to end in a SESSION-BESTS footer (theoretical best / best rolling) that cost the grid
+    63px — two lap rows — on every recording, with no collapse and no View toggle. Both numbers now
+    live on the Stats page beside the data they come from (theoretical inside SECTORS, whose bests
+    it sums; rolling in PACE) — see tests/test_stats.py. This pins that they did not come back, and
+    that the purple per-sector contract the table DOES own is untouched."""
     from PySide6.QtWidgets import QLabel
 
-    sess = _FakeFooterSession()
+    sess = _FakeLapSession()
     table = LapTable(sess)
-    # Footer is NOT table rows: the table holds exactly the 3 laps.
     assert table.table.rowCount() == 3
-    assert _footer_texts(table) == [fmt_time(68.2), fmt_time(68.3)]
-    # This session HAS a sector line, so the Theoretical tile is a genuine sum-of-best-sectors
-    # metric and stays shown (M2 only hides it on a 0-sector track).
-    table.show()
-    assert table._footer_tiles[0].isVisible(), \
-        "Theoretical tile must stay visible when the track has sectors"
-    # Neutral text colour (NOT purple) + a tooltip on every value label.
-    for label in table._footer_values:
-        assert isinstance(label, QLabel)
-        assert theme.C.text in label.styleSheet(), label.styleSheet()
-        assert theme.C.best not in label.styleSheet(), \
-            "footer value must NOT reuse the per-sector best purple (C10)"
-        assert label.toolTip(), "footer tile must carry its defining tooltip"
-    # The purple-cell target the table paints is the SAME accessor the footer sums.
+    # Two children in the page layout: the table/empty-state stack, then the excluded strip.
+    lay = table.layout()
+    assert lay.count() == 2, [lay.itemAt(i).widget() for i in range(lay.count())]
+    assert lay.itemAt(0).widget() is table._stack
+    # No stray "SESSION BESTS" caption, and no footer attributes to render one from.
+    labels = [w.text() for w in table.findChildren(QLabel)]
+    assert not any("SESSION BESTS" in t for t in labels), labels
+    for gone in ("_build_footer", "_refresh_footer", "_footer_values", "_footer_tiles"):
+        assert not hasattr(table, gone), f"{gone} must not survive the move to Stats"
+    # The purple-cell target the table paints is still the session's own accessor.
     assert table._best_split == sess.session_best_splits()
     # And the fake's numbers respect the sandwich the real session guarantees.
     assert sess.theoretical_best() <= sess.best_rolling_lap() <= 68.4
-    print("test_lap_table_footer_rows_present_styled_and_valued OK")
-
-
-def test_lap_table_footer_survives_sort_and_updates_on_refresh():
-    """Sorting any column must not move/change the footer (it lives outside the QTableWidget);
-    a refresh() after the session's values changed (what a start-line move triggers via
-    app._on_lines -> table.refresh()) rewrites the footer numbers."""
-    from PySide6.QtCore import Qt
-
-    sess = _FakeFooterSession()
-    table = LapTable(sess)
-    before = _footer_texts(table)
-    table.table.sortByColumn(1, Qt.DescendingOrder)  # sort by Time, descending
-    assert table.table.rowCount() == 3               # footer never became a table row
-    assert _footer_texts(table) == before, "sort must not disturb the footer"
-
-    # Simulate a start-line move: the re-segmentation changes the summary values; the app's
-    # _on_lines handler then calls table.refresh(), which must rewrite the footer.
-    sess.theo, sess.rolling = 67.9, 68.05
-    table.refresh()
-    assert _footer_texts(table) == [fmt_time(67.9), fmt_time(68.05)]
-    # None (e.g. no valid laps after a bad edit) renders as the em-dash.
-    sess.theo, sess.rolling = None, None
-    table.refresh()
-    assert _footer_texts(table) == ["—", "—"]
-    print("test_lap_table_footer_survives_sort_and_updates_on_refresh OK")
+    print("test_laps_page_is_grid_plus_excluded_strip_only OK")
 
 
 # ------------------------------------- L3: multi-select cap (no silent chart truncation)
@@ -363,9 +331,9 @@ def test_lap_table_caps_multiselect_to_fastest_no_silent_truncation():
 
 
 # ------------------------------------- timing-trust: provisional lap-table treatment
-class _TrustSession(_FakeFooterSession):
-    """A footer session whose timing-trust is togglable, to drive LapTable's provisional vs
-    verified rendering (the rest of the read surface is _FakeFooterSession's)."""
+class _TrustSession(_FakeLapSession):
+    """A lap session whose timing-trust is togglable, to drive LapTable's provisional vs
+    verified rendering (the rest of the read surface is _FakeLapSession's)."""
 
     def __init__(self, verified):
         super().__init__()
@@ -402,7 +370,7 @@ def test_lap_table_provisional_mutes_times_and_drops_bests():
     """PROVISIONAL timing (timing_verified False): the Time + S-split cells are muted (italic +
     the dimmed provisional colour) with the 'Provisional' tooltip, and NEITHER the purple
     session-best splits NOR the green best-lap are painted — a 'best' on an arbitrary start line is
-    meaningless. The footer tiles are likewise muted (italic). Dist/Entry stay normal."""
+    meaningless. Dist/Entry stay normal."""
     from studio.lap_table import BASE_COLOR, PROVISIONAL_TOOLTIP
 
     table = LapTable(_TrustSession(verified=False))
@@ -418,17 +386,13 @@ def test_lap_table_provisional_mutes_times_and_drops_bests():
     dist = table.table.item(0, 2)
     assert dist.foreground().color().name().upper() == BASE_COLOR.name().upper()
     assert not dist.font().italic()
-    # Footer tiles muted + italic.
-    for label in table._footer_values:
-        assert label.font().italic(), "provisional footer tile must be italic"
-        assert theme.PROVISIONAL_COLOR in label.styleSheet(), label.styleSheet()
     print("test_lap_table_provisional_mutes_times_and_drops_bests OK")
 
 
 def test_lap_table_verified_restores_bests_and_unmutes():
     """VERIFIED timing renders exactly as before the trust surface: the purple per-sector best +
     green best lap ARE painted, the Time/S cells are NOT italic and carry no provisional tooltip,
-    and the footer tiles are non-italic neutral text. This is the behaviour-preserving Verified
+    This is the behaviour-preserving Verified
     path; flipping a provisional table to Verified (a confirmed drag) restores it live."""
     # Start Provisional, then flip to Verified and refresh — mirrors a confirming drag.
     sess = _TrustSession(verified=False)
@@ -443,14 +407,11 @@ def test_lap_table_verified_restores_bests_and_unmutes():
     for it in _time_col_items(table) + _sector_col_items(table):
         assert not it.font().italic(), "verified timing cell must not be italic"
         assert it.toolTip() == "", it.toolTip()
-    # Footer tiles non-italic.
-    for label in table._footer_values:
-        assert not label.font().italic(), "verified footer tile must not be italic"
     print("test_lap_table_verified_restores_bests_and_unmutes OK")
 
 
 # ------------------------------------- data quality: degraded-clock estimated treatment
-class _DegradedClockSession(_FakeFooterSession):
+class _DegradedClockSession(_FakeLapSession):
     """A VERIFIED (trusted start line) session whose timing ACCURACY is degraded — a media-clock
     fallback (older GPS5 camera). Drives LapTable's estimated-timing treatment: the timing cells
     mute like provisional, but the bests are NOT suppressed (the start line is trusted, so the bests
@@ -464,7 +425,7 @@ class _DegradedClockSession(_FakeFooterSession):
 
 def test_lap_table_degraded_clock_mutes_times_but_keeps_bests():
     """DATA-QUALITY degraded (media-clock fallback) on a VERIFIED table: the NON-best Time cells are
-    muted (italic + the dimmed colour) with the estimated-timing tooltip, the footer tiles are muted —
+    muted (italic + the dimmed colour) with the estimated-timing tooltip —
     BUT, unlike provisional timing, the best authority cues are PRESERVED (purple per-sector best /
     green best lap still painted), because the start line is trusted. This is the orthogonal axis to
     test_lap_table_provisional_* (which DROPS the bests).
@@ -492,33 +453,7 @@ def test_lap_table_degraded_clock_mutes_times_but_keeps_bests():
             assert it.foreground().color().name().upper() == prov, "degraded time cell must be muted"
     # The bests are KEPT (the key difference from provisional): purple/green still present.
     assert _any_purple_or_green(table), "degraded (but verified) timing must keep the best highlights"
-    # Footer tiles muted + italic (they share the timing's authority).
-    for label in table._footer_values:
-        assert label.font().italic(), "degraded footer tile must be italic"
-        assert theme.PROVISIONAL_COLOR in label.styleSheet(), label.styleSheet()
     print("test_lap_table_degraded_clock_mutes_times_but_keeps_bests OK")
-
-
-def test_lap_table_footer_accessors_are_callables():
-    """F8a: each FOOTER_ROWS accessor is a CALLABLE `session -> value` (not a method-NAME string
-    resolved via getattr). It must resolve directly off the session and produce the SAME values the
-    footer shows — so a renamed Session method is a real reference error, not a silent footer miss.
-
-    Guards both: that the accessors are callable (the regression the string form invited), and that
-    calling them maps 1:1 onto the rendered tiles. Also flips the session's numbers to confirm the
-    callable re-reads live state (no cached name lookup)."""
-    sess = _FakeFooterSession()
-    # The accessors are callables — calling each yields the same numbers the rendered footer shows.
-    by_call = [acc(sess) for _title, acc, _tip in FOOTER_ROWS]
-    assert all(callable(acc) for _t, acc, _tip in FOOTER_ROWS), "FOOTER_ROWS accessors must be callables"
-    assert by_call == [sess.theoretical_best(), sess.best_rolling_lap()] == [68.2, 68.3]
-    # The rendered tiles equal fmt_time of those callable results (1:1 with FOOTER_ROWS order).
-    table = LapTable(sess)
-    assert _footer_texts(table) == [fmt_time(v) for v in by_call]
-    # The callables read LIVE state: change the session, re-call, the values track.
-    sess.theo, sess.rolling = 67.5, 67.9
-    assert [acc(sess) for _t, acc, _tip in FOOTER_ROWS] == [67.5, 67.9]
-    print("test_lap_table_footer_accessors_are_callables OK")
 
 
 # ------------------------------------------------ E1: zero-valid-lap empty states
@@ -526,8 +461,8 @@ class _FakeEmptySession:
     """A loaded session that reports ZERO valid laps (short clip / no GPS lock). Exposes only the
     read surface LapTable.refresh() touches; lap_rows() is [] so every per-lap accessor is unused."""
 
-    timing_verified = True  # part of the read surface (the footer reads it); no rows to mute anyway
-    timing_quality = data_quality.TimingQuality()  # high-quality default (the footer reads .degraded)
+    timing_verified = True  # part of the read surface; no rows to mute anyway
+    timing_quality = data_quality.TimingQuality()  # high-quality default (.degraded is read)
 
     def lap_rows(self):
         return []
@@ -553,26 +488,17 @@ class _FakeEmptySession:
 
 def test_lap_table_shows_empty_state_when_no_laps():
     """E1: a recording with zero valid laps must NOT render a blank grid. refresh() flips the
-    stacked widget to the centred, dimmed empty-state placeholder (index 1, the EmptyState role),
-    the table holds zero rows, and the summary footer reads em-dashes — an explained state, not a
-    broken-looking app. A subsequent refresh with rows would flip back (index 0)."""
+    stacked widget to the centred, dimmed empty-state placeholder (index 1, the EmptyState role)
+    and the table holds zero rows — an explained state, not a broken-looking app. A subsequent
+    refresh with rows flips back (index 0)."""
     table = LapTable(_FakeEmptySession())
     assert table.table.rowCount() == 0
     assert table._stack.currentIndex() == 1, "lap table must show the empty state, not the grid"
     assert table._empty.property("role") == "EmptyState"
     assert table._empty.text(), "empty-state placeholder must carry a message"
-    # The footer survives (outside the table) and reads em-dashes with no laps. The label texts are
-    # still ["—", "—"], but on this 0-sector session the Theoretical tile is HIDDEN (M2) — with no
-    # sector lines theoretical_best is a bare best-lap duplicate, so it carries no info; only the
-    # Best rolling tile is visible. (Visibility needs the widget shown; check the tile widgets.)
-    assert _footer_texts(table) == ["—", "—"]
-    table.show()
-    assert not table._footer_tiles[0].isVisible(), \
-        "Theoretical tile must hide on a 0-sector track (M2)"
-    assert table._footer_tiles[1].isVisible(), "Best rolling tile must stay visible"
 
     # And with laps it flips BACK to the table (no sticky empty state).
-    table.session = _FakeFooterSession()
+    table.session = _FakeLapSession()
     table.refresh()
     assert table._stack.currentIndex() == 0
     assert table.table.rowCount() == 3

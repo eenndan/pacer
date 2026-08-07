@@ -89,17 +89,18 @@ def laps_table(session) -> tuple[list[str], list[tuple[int, list[str]]]]:
 
 def laps_summary(session) -> list[tuple[str, str]]:
     """The session-summary footer values for the laps.csv trailer — `(label, value_str)` per
-    SUMMARY_ROWS, mirroring the lap table's footer (F1): "Theoretical best" (the sum of the
-    session-best sector splits) and "Best rolling" (the fastest start-anywhere full loop). The
-    value is 3-decimal seconds (the same `_f3` precision as the lap rows' time_s column) or ""
-    when the accessor returns None (no valid laps / an all-partial sector column) — the app's
-    footer shows the em-dash there. Read straight from `Session.theoretical_best` /
-    `best_rolling_lap`, so the trailer always equals what the app's footer displays.
+    SUMMARY_ROWS, mirroring the app's two stitched targets (F1): "Theoretical best" (the sum of the
+    session-best sector splits, shown in Stats ▸ SECTORS) and "Best rolling" (the fastest
+    start-anywhere full loop, shown in Stats ▸ PACE). The value is 3-decimal seconds (the same
+    `_f3` precision as the lap rows' time_s column) or "" when the accessor returns None (no valid
+    laps / an all-partial sector column) — the app's tile shows the em-dash there. Read straight
+    from `Session.theoretical_best` / `best_rolling_lap`, so the trailer always equals what the app
+    displays.
 
     On a 0-sector track the "Theoretical best" row is DROPPED (M2): with no sector lines it
     degenerates to the best lap time — a bare duplicate that can read slower than "Best rolling" —
-    and the export has no tooltip to explain the clash, so (like the app footer, which hides the
-    tile) it's simply omitted. It returns once the track has sector lines."""
+    and the export has no tooltip to explain the clash, so (like the app, which hides the tile with
+    its SECTORS section) it's simply omitted. It returns once the track has sector lines."""
     has_sectors = session.sector_count() > 0
     out: list[tuple[str, str]] = []
     for label, accessor in SUMMARY_ROWS:

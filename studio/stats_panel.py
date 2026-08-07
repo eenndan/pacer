@@ -41,7 +41,9 @@ from .lap_table import (
     DROPOUT_SUFFIX,
     DROPOUT_TOOLTIP,
     NUM_ROLE,
+    PROVISIONAL_TOOLTIP,
     _NumItem,
+    estimated_timing_tooltip,
 )
 from .theme import C
 
@@ -111,6 +113,18 @@ LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the 
 PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropout — the same "
                 "set every σ statistic uses). Spread = median − best: what the typical lap "
                 "gives away to your demonstrated pace.")
+# The two stitched TARGETS (moved here from the Laps tab's SESSION-BESTS footer, which cost the
+# lap grid 63px — two lap rows — on every recording). Each now sits with the data it is derived
+# from: the rolling best beside the other lap-time paces, the theoretical best inside SECTORS,
+# whose per-sector bests it literally sums.
+ROLLING_TOOLTIP = ("Best rolling — the fastest single complete loop regardless of where it "
+                   "starts: the minimum time from passing any track position to passing it "
+                   "again one lap later (windows spanning a GPS-dropout ⚠ lap are excluded). "
+                   "A reference target, not a lap you drove.")
+THEORETICAL_TOOLTIP = ("Theoretical best — the sum of the session-best sector splits (the purple "
+                       "cells on the Laps tab): the lap you'd drive by stitching every best "
+                       "sector together. A reference target, not a lap you drove. Shown only "
+                       "with sector lines — without them it degenerates to the best lap time.")
 
 
 def _fmt_hms(seconds: float) -> str:
@@ -187,6 +201,8 @@ class StatsView(QWidget):
         self.t_race_pace.setToolTip(
             "The best average of 3 CONSECUTIVE clean laps — your sustained pace, next to "
             "the single glory lap.")
+        self.t_rolling = _Tile("best rolling")
+        self.t_rolling.setToolTip(ROLLING_TOOLTIP)
         self.t_digest = _Tile("fix your top 3 →")
         self.t_sigma = _Tile("σ lap")
         self.t_spread = _Tile("median − best")
@@ -199,9 +215,9 @@ class StatsView(QWidget):
         self.t_trend.setToolTip(
             "Robust lap-time trend over the session (Theil–Sen median slope — one traffic "
             "lap can't fake it). Negative = getting faster. Shown from 6 clean laps up.")
-        col.addLayout(self._grid(self.t_best, self.t_median, self.t_race_pace, self.t_digest,
-                                 self.t_sigma, self.t_spread, self.t_cov, self.t_within,
-                                 self.t_trend))
+        col.addLayout(self._grid(self.t_best, self.t_median, self.t_race_pace, self.t_rolling,
+                                 self.t_digest, self.t_sigma, self.t_spread, self.t_cov,
+                                 self.t_within, self.t_trend))
         # The lap-time trend sparkline (PB dots + session-best baseline) — absorbed from the
         # retired ConsistencyPanel strip; hidden with <2 clean laps.
         self.spark = pg.PlotWidget()
@@ -300,6 +316,14 @@ class StatsView(QWidget):
         # --- per-SECTOR best/median/σ (hidden without sector lines)
         self._sector_section = self._section("SECTORS")
         col.addWidget(self._sector_section)
+        # The sum of THIS section's best splits. It lives here rather than in PACE because these
+        # are literally its inputs — and it inherits the section's 0-sector hide for free: with no
+        # sector lines it degenerates to the best lap time (a duplicate of the ★ starred best that
+        # can even read slower than the rolling best), so it carries no information there.
+        self.t_theoretical = _Tile("theoretical best")
+        self.t_theoretical.setToolTip(THEORETICAL_TOOLTIP)
+        self._sector_target_grid = self._grid(self.t_theoretical)
+        col.addLayout(self._sector_target_grid)
         self.sector_table = self._make_table(SECTOR_COLUMNS)
         col.addWidget(self.sector_table)
 
@@ -474,6 +498,31 @@ class StatsView(QWidget):
         item.setFont(theme.mono_font(theme.TABLE))
         return item
 
+    def _set_target_tile(self, tile: _Tile, value, tip: str):
+        """Render a stitched TARGET tile (theoretical best / best rolling).
+
+        These are not laps anyone drove — they are composed from the session's best splits and
+        loops — so they share the lap timing's authority: while the timing is PROVISIONAL (an
+        arbitrary start line) OR the clock is DEGRADED (media-clock / low-GPS estimate) the value
+        is muted + italic and carries the explaining note, restored to the normal tile once
+        Verified AND high-quality. Kept byte-for-byte in spirit with the Laps footer this moved
+        from; the measured PACE tiles beside it are unmuted because they ARE laps you drove."""
+        session = self.session
+        tile.set(fmt_time(value) if value is not None else None)
+        provisional = not getattr(session, "timing_verified", True)
+        quality = getattr(session, "timing_quality", None)
+        muted = provisional or bool(quality is not None and quality.degraded)
+        font = tile.value.font()
+        font.setItalic(muted)
+        tile.value.setFont(font)
+        tile.value.setStyleSheet(
+            f"color: {theme.PROVISIONAL_COLOR if muted else C.text};")
+        if not muted:
+            tile.setToolTip(tip)
+            return
+        note = PROVISIONAL_TOOLTIP if provisional else estimated_timing_tooltip(quality)
+        tile.setToolTip(f"{note}\n\n{tip}")
+
     # ------------------------------------------------------------------ contract
     def refresh(self):
         """Rebuild every group from the session (load / re-segmentation / unit or palette
@@ -523,6 +572,11 @@ class StatsView(QWidget):
             for t in (self.t_best, self.t_median, self.t_sigma, self.t_spread,
                       self.t_race_pace, self.t_cov, self.t_within, self.t_trend):
                 t.set(None)
+        # The rolling best is a stitched target, not a measured lap — it reads straight off
+        # Session (never the pace summary) so it survives a session with no clean-lap stats.
+        rolling = (session.best_rolling_lap()
+                   if hasattr(session, "best_rolling_lap") else None)
+        self._set_target_tile(self.t_rolling, rolling, ROLLING_TOOLTIP)
         self._set_digest(session, pace)
         self._refresh_spark(session)
 
@@ -704,6 +758,14 @@ class StatsView(QWidget):
         has = bool(sigmas)
         self._sector_section.setVisible(has)
         self.sector_table.setVisible(has)
+        # The theoretical best hides WITH the section — the 0-sector rule, for free (see the
+        # tile's comment in __init__). Recomputed each refresh so a later sector-line edit
+        # reveals it.
+        self.t_theoretical.setVisible(has)
+        self._set_target_tile(
+            self.t_theoretical,
+            session.theoretical_best() if hasattr(session, "theoretical_best") else None,
+            THEORETICAL_TOOLTIP)
         if not has:
             self.sector_table.setRowCount(0)
             return
