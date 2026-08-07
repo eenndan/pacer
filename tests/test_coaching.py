@@ -649,10 +649,15 @@ def test_dialog_populates_and_go_calls_jump_to():
     from studio.coaching_panel import PhaseBar
     assert isinstance(dlg.table.cellWidget(0, 3), PhaseBar)
     assert "apex speed" in dlg.table.item(0, 4).text()
-    # the Go button routes to jump_to(cid, entry_dist)
-    dlg.table.cellWidget(0, 5).click()
+    # the Go button routes to jump_to(cid, entry_dist) AND closes the modal (C8: the dialog
+    # otherwise sits over exactly the map/corner state the jump just changed).
+    go = dlg.table.cellWidget(0, 5)
+    assert not go.autoDefault(), "B10: focused-default styling repainted the arrow amber-on-amber"
+    go.click()
     assert calls == [(opp.rows[0].cid, opp.rows[0].entry_dist)], calls
-    print(f"ok dialog: {dlg.table.rowCount()} rows, Go -> jump_to{calls[0]}")
+    assert not dlg.isVisible(), "C8: Jump must close the dialog it acts behind"
+    assert dlg.result() == dlg.DialogCode.Accepted
+    print(f"ok dialog: {dlg.table.rowCount()} rows, Go -> jump_to{calls[0]} + dialog closed")
 
 
 def test_brake_point_hint_text():

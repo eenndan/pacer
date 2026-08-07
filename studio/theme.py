@@ -414,7 +414,11 @@ def mono_font(size: int = TABLE, weight: QFont.Weight = W_REGULAR) -> QFont:
 # ====================================================================== icons
 def icon(name: str, color: str | None = None) -> QIcon:
     """Themed QIcon from qtawesome's Phosphor set (e.g. 'ph.play-fill'), tinted to color
-    (default C.text) and C.accent when active. Lazy import: returns a blank QIcon if qtawesome
+    (default C.text). ACTIVE tint: when the caller chose an explicit color, keep it for the
+    active state too — the old unconditional C.accent turned an explicitly-tinted glyph
+    invisible on an accent background the moment its button was focused/default (B10: the
+    coaching Jump arrow — C.on_accent on the amber primary — went amber-on-amber). The
+    default-tinted case keeps the accent active state. Lazy import: blank QIcon if qtawesome
     is missing."""
     try:
         import qtawesome as qta
@@ -422,7 +426,7 @@ def icon(name: str, color: str | None = None) -> QIcon:
         print(f"theme: qtawesome unavailable ({exc}); icon '{name}' will be blank. "
               "Install it via `pixi install` (the qtawesome pypi dependency).", flush=True)
         return QIcon()
-    return qta.icon(name, color=color or C.text, color_active=C.accent)
+    return qta.icon(name, color=color or C.text, color_active=color or C.accent)
 
 
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
