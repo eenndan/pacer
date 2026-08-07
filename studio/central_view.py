@@ -48,6 +48,9 @@ from .video_view import VideoView
 # (ph.arrows-out / ph.arrows-in — "fill the SCREEN"): the corners glyphs read as "fill this WINDOW
 # quadrant", a different action, so the two never collide on the video header. Maximize glyph while
 # the panel is in the grid, restore glyph while it's maximized.
+# The charts panel's section label, per Δ baseline (see plots_view.deltaBaselineChanged).
+_PLOTS_LABEL_BEST = "SPEED · Δ TO BEST"
+_PLOTS_LABEL_IDEAL = "SPEED · Δ TO IDEAL"
 _MAXIMIZE_GLYPH = "ph.corners-out"   # expand this panel to fill the window
 _RESTORE_GLYPH = "ph.corners-in"     # shown while maximized — click/Esc to restore the grid
 # The header maximize button is sized like the video transport's icon buttons so the whole app's
@@ -472,12 +475,16 @@ class CentralView(QWidget):
         map_panel = self._headered(map_header, (self._trust_strip, 0), (self.map, 1))
 
         # CHARTS consolidated bar: section label (left) · the Δ/speed readout (centre) · the x-mode toggle (right).
-        plots_label = QLabel("SPEED · Δ TO BEST")
+        # The Δ half of this label tracks the chart's actual baseline (plots_view flips to
+        # Δ-to-ideal when the best lap is selected alone) — a static "Δ TO BEST" would contradict
+        # the axis. Text set by _set_delta_baseline_label, driven by deltaBaselineChanged.
+        self._plots_label = QLabel(_PLOTS_LABEL_BEST)
+        plots_label = self._plots_label
         plots_label.setProperty("role", "BarLabel")
         # The DECORATIVE label is the bar's first casualty when the column narrows: an explicit
         # tiny minimum lets it clip before the hero readout / controls do (without this, the
         # bar's derived minimum propagates up and pins the main splitter).
-        plots_label.setMinimumWidth(40)
+        plots_label.setMinimumWidth(0)   # it HIDES when cramped (below), never clips to "Δ TO I"
         self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.ideal_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.brake_throttle_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
@@ -488,10 +495,17 @@ class CentralView(QWidget):
         self.plots.ideal_btn.setMinimumWidth(34)
         self.plots.x_mode_combo.setMinimumWidth(60)
         self._plots_max_btn = self._maximize_button()
+        # A hard-clipped section label ("SPEED · Δ TO I") reads as breakage; the two axes already
+        # name both charts, so the label is the one PURELY DECORATIVE item here — hide it outright
+        # when the bar can't fit everything, which also hands its width back to the controls so
+        # they keep their text. Re-shown as soon as there's room (see _fit_plots_header).
         plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0),
                                         self.ideal_readout_btn, 1,
                                         self.plots.brake_throttle_btn, self.plots.ideal_btn,
                                         self.plots.x_mode_combo, self._plots_max_btn)
+        # Watch the bar's width so the decorative label can step aside when it's cramped.
+        self._plots_header_widget = plots_header
+        plots_header.installEventFilter(self)
         plots_panel = self._headered(plots_header, (self.plots, 1))
 
         # Stash the four panel containers for _layout_panels.
@@ -653,6 +667,7 @@ class CentralView(QWidget):
         # F2: keep the sector guide lines in sync; plots_view is pacer-free, so we compute the
         # boundary positions via session and recompute when the axis mode flips (units change).
         self.plots.modeChanged.connect(self._refresh_sector_lines)
+        self.plots.deltaBaselineChanged.connect(self._set_delta_baseline_label)
 
     # ----------------------------------------------------- panel focus / maximize
     def _install_header_dblclick(self, panel: QWidget, column: QSplitter, main: QSplitter):
@@ -666,8 +681,13 @@ class CentralView(QWidget):
         header.installEventFilter(self)
 
     def eventFilter(self, obj, event):
-        """Catch a double-click on any registered panel header and toggle that panel's maximize.
+        """Catch a double-click on any registered panel header and toggle that panel's maximize,
+        and a resize of the charts header so its decorative label can step aside when cramped.
         Everything else passes through untouched (return the base implementation)."""
+        if (event.type() == QEvent.Resize
+                and obj is getattr(self, "_plots_header_widget", None)):
+            self._fit_plots_header()
+            return False          # observe only — the header still lays itself out normally
         if (event.type() == QEvent.MouseButtonDblClick
                 and obj in getattr(self, "_header_routes", {})):
             panel, _column, _main = self._header_routes[obj]
@@ -956,6 +976,28 @@ class CentralView(QWidget):
         # lap). Defensive: a __new__'d test view without the views has no map/plots to push to.
         if getattr(self, "map", None) is not None and not self._comparing():
             self._refresh_driving_channels()
+
+    def _fit_plots_header(self):
+        """Show the charts panel's decorative section label only when the bar has room for it on
+        top of everything that carries meaning (the live readout + the controls). Cheap: one
+        sizeHint sum per resize, no layout thrash — and it keeps a clipped half-word off screen."""
+        header = getattr(self, "_plots_header_widget", None)
+        label = getattr(self, "_plots_label", None)
+        if header is None or label is None:
+            return
+        needed = sum(w.sizeHint().width() for w in (
+            self.diff_box, self.ideal_readout_btn, self.plots.brake_throttle_btn,
+            self.plots.ideal_btn, self.plots.x_mode_combo, self._plots_max_btn))
+        needed += 16 + 8 * 6                      # _header_bar margins + inter-item spacing
+        label.setVisible(header.width() >= needed + label.sizeHint().width() + 8)
+
+    def _set_delta_baseline_label(self, ideal: bool):
+        """Keep the charts panel's section label honest about which baseline the lower chart is
+        drawing (plots_view swaps to Δ-to-ideal when the best lap is selected alone)."""
+        label = getattr(self, "_plots_label", None)
+        if label is not None:
+            label.setText(_PLOTS_LABEL_IDEAL if ideal else _PLOTS_LABEL_BEST)
+            self._fit_plots_header()   # the ideal wording is longer — re-check the fit
 
     def _update_table_header(self):
         """The Corners tab always names WHICH lap its per-corner rows describe — directly on

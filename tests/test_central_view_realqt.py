@@ -876,6 +876,7 @@ def _run_all():
     test_tab_bar_switches_pages_and_names_the_corners_lap()
     test_one_chapter_phrasing_on_the_banner_and_the_transport()
     test_corner_row_click_rings_the_map()
+    test_charts_header_drops_its_label_before_clipping_controls()
     test_show_stats_maximized_is_a_true_toggle()
     test_stats_corner_row_click_restores_grid_then_rings_map()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
@@ -952,6 +953,31 @@ def test_one_chapter_phrasing_on_the_banner_and_the_transport():
     assert "chapter 2 of 3" in transport, transport
     assert "2/3" not in transport, transport
     print("test_one_chapter_phrasing_on_the_banner_and_the_transport OK")
+
+
+def test_charts_header_drops_its_label_before_clipping_controls():
+    """The charts header is genuinely cramped at a narrow right column. The decorative section
+    label ("SPEED · Δ TO BEST" — both charts are already named by their axes) must step ASIDE so
+    the meaning-bearing controls keep their text; a hard-clipped "SPEED · Δ TO I" over a
+    "Brake/Thrott" button reads as breakage. Wide: the label is back."""
+    view, _s, _t0, _t1 = _real_central_view()
+    view.resize(1511, 940)
+    view.show()
+    _APP.processEvents()
+
+    view._main_splitter.setSizes([580, 931])       # the reporter's layout — header is cramped
+    for _ in range(4):
+        _APP.processEvents()
+    assert not view._plots_label.isVisibleTo(view), "the decorative label must yield when cramped"
+    for w in (view.plots.brake_throttle_btn, view.plots.ideal_btn, view.plots.x_mode_combo):
+        assert w.width() >= w.sizeHint().width(), (w.text() if hasattr(w, "text") else w, w.width())
+
+    view._main_splitter.setSizes([300, 1211])      # plenty of room again
+    for _ in range(4):
+        _APP.processEvents()
+    assert view._plots_label.isVisibleTo(view), "…and come back when there is room"
+    view.hide()
+    print("test_charts_header_drops_its_label_before_clipping_controls OK")
 
 
 def test_corner_row_click_rings_the_map():

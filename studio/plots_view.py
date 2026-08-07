@@ -98,6 +98,10 @@ class PlotsView(QWidget):
     scrubEnded = Signal()
     # Fired when the shared x-axis mode flips; app re-pushes sector positions for the new mode (F2).
     modeChanged = Signal(str)  # the new mode: 'time' | 'distance'
+    # True when the lower chart switched to Δ-to-IDEAL (the best lap alone would be a flat zero
+    # line — P7). The panel HEADER must follow it, or the bar claims "Δ TO BEST" over an axis
+    # that reads "Δ to ideal (s)".
+    deltaBaselineChanged = Signal(bool)
 
     def __init__(self, session: Session):
         super().__init__()
@@ -612,9 +616,12 @@ class PlotsView(QWidget):
         # best lap is alone and its Δ to itself would be a flat zero line). Refresh-time only — the
         # ~30 Hz tick only moves cursors — and presentation-only: both series come from the
         # session's existing accessors, so no computed value changes.
+        was_ideal = self._delta_ideal_mode
         delta, self._delta_ideal_mode = self._delta_series(draw_ids, baseline, delta, x_mode)
         self.p_delta.setLabel(
             "left", DELTA_LABEL_IDEAL if self._delta_ideal_mode else DELTA_LABEL_BEST)
+        if self._delta_ideal_mode != was_ideal:
+            self.deltaBaselineChanged.emit(self._delta_ideal_mode)
         for k, lid in enumerate(draw_ids):
             # Best lap green (matches lap table); others cycle CHART_SERIES. Always-on best drawn
             # thinner so a selected lap reads primary.
