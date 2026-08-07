@@ -341,6 +341,17 @@ add_test(NAME test_stats
 set_tests_properties(test_stats PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# LapTable COLUMN LAYOUT (fix/lap-table-columns, P5): the data columns are content-tight and one
+# blank trailing SPACER column absorbs the panel's leftover width (the old stretched last section
+# left a dead band with the Entry column pinned far right). Pins the sizing modes, the wide/narrow
+# widths, the Lap column fitting its ▶/★/⚠ markers, the spacer staying LAST across sector-line
+# adds/removes (holding no cell) and the unit flip, and sorting being untouched (both directions +
+# the blank spacer header refusing to sort). Builds a real LapTable -> Qt, so run offscreen.
+add_test(NAME test_lap_table_columns
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_table_columns.py)
+set_tests_properties(test_lap_table_columns PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
 # `pacer` in the interpreter's site-packages — on a fresh CI env there is none, and
@@ -362,7 +373,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card
-                        test_stats)
+                        test_stats test_lap_table_columns)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
