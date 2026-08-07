@@ -457,6 +457,29 @@ def test_play_mid_window_does_not_reseek():
     print("test_play_mid_window_does_not_reseek OK")
 
 
+def test_compare_captions_and_picker_labels_are_one_based():
+    """UI-scrutiny C2: the compare pickers/captions numbered laps from 0 — 'lap 36' beside the
+    chart legend's 'lap 37' for the SAME lap on one screen. All three formatters must render
+    through _signal.lap_label (1-based) while keeping 0-based ids as the API arguments."""
+    from types import SimpleNamespace
+
+    from studio.compare_controller import CompareController
+
+    c = CompareController.__new__(CompareController)
+    c.session = SimpleNamespace(
+        best_lap_id=lambda: 36,
+        lap_time=lambda i: 68.228 if i == 36 else 70.0,
+        reference_label=lambda: "ref 0059",
+    )
+    assert c._lap_caption(36) == "lap 37 · 1:08.228 ★"
+    assert c._lap_caption(0).startswith("lap 1 · ")
+    labels = c._lap_choice_labels([0, 36])
+    assert labels[0].startswith("lap 1  (") and "lap 37  (" in labels[1] and "★" in labels[1]
+    ref_sess = SimpleNamespace(lap_time=lambda i: 65.5)
+    assert c._cross_caption_b(ref_sess, 0) == "ref 0059 · lap 1 · 1:05.500"
+    print("test_compare_captions_and_picker_labels_are_one_based OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

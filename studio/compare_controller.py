@@ -14,7 +14,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from . import theme
-from ._signal import fmt_time
+from ._signal import fmt_time, lap_label
 from .video_view import PaneSpec
 
 if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported at runtime
@@ -275,7 +275,7 @@ class CompareController:
     def _cross_caption_b(self, ref_sess: Session, ref_lap: int) -> str:
         """Pane B caption for cross compare: reference label + lap id + lap time."""
         label = self.session.reference_label() or "reference"
-        return f"{label} · lap {ref_lap} · {fmt_time(ref_sess.lap_time(ref_lap))}"
+        return f"{label} · lap {lap_label(ref_lap)} · {fmt_time(ref_sess.lap_time(ref_lap))}"
 
     def exit(self) -> None:
         self._cross = False
@@ -356,11 +356,11 @@ class CompareController:
         """Per-pane caption "lap N · m:ss.mmm" for a lap id, marking the best lap with a ★, so the
         user can confirm which lap is loaded in each pane without opening the picker."""
         star = " ★" if lap_id == self.session.best_lap_id() else ""
-        return f"lap {lap_id} · {fmt_time(self.session.lap_time(lap_id))}{star}"
+        return f"lap {lap_label(lap_id)} · {fmt_time(self.session.lap_time(lap_id))}{star}"
 
     def _lap_choice_labels(self, lap_ids: list[int]) -> list[str]:
         """Picker item labels "lap N  (m:ss.mmm)" (★ on the best lap) so picking the right lap
         doesn't require guessing. Parallel to `lap_ids`; computed once per (re)seed, not per tick."""
         best = self.session.best_lap_id()
-        return [f"lap {lid}  ({fmt_time(self.session.lap_time(lid))})"
+        return [f"lap {lap_label(lid)}  ({fmt_time(self.session.lap_time(lid))})"
                 f"{'  ★' if lid == best else ''}" for lid in lap_ids]

@@ -42,6 +42,7 @@ from . import (
     track_db,
     units,
 )
+from ._signal import lap_label
 from .central_view import CentralView
 from .coaching_panel import OpportunitiesDialog
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
@@ -1366,8 +1367,8 @@ class StudioWindow(QMainWindow):
         if lap is None:
             self.statusBar().showMessage("no valid lap to export channels for")
             return
-        path = self._export_save_path(f"Export lap {lap} channels",
-                                      f"_lap{lap}_channels.csv", "CSV files (*.csv)")
+        path = self._export_save_path(f"Export lap {lap_label(lap)} channels",
+                                      f"_lap{lap_label(lap)}_channels.csv", "CSV files (*.csv)")
         if not path:
             return
         if self._run_export(lambda: export_data.write_channels_csv(path, self.session, lap), path):
@@ -1504,14 +1505,14 @@ class StudioWindow(QMainWindow):
         """Modal resolution + quality picker returning an export_video.OverlayConfig, or None on
         cancel. The last choice is remembered on the window."""
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"Export overlay video — lap {lap}")
+        dlg.setWindowTitle(f"Export overlay video — lap {lap_label(lap)}")
         dlg.setMinimumWidth(400)
 
         root = QVBoxLayout(dlg)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        header = QLabel(f"Export overlay video — lap {lap}")
+        header = QLabel(f"Export overlay video — lap {lap_label(lap)}")
         header.setProperty("role", "PanelHeader")
         root.addWidget(header)
 
@@ -1529,7 +1530,7 @@ class StudioWindow(QMainWindow):
 
         # lap_time is a cheap pacer-free accessor (no ffprobe).
         dur = self.session.lap_time(lap) if hasattr(self, "session") else float("nan")
-        lap_line = QLabel(f"Lap {lap}  ·  {fmt_time(dur)}")
+        lap_line = QLabel(f"Lap {lap_label(lap)}  ·  {fmt_time(dur)}")
         lap_line.setStyleSheet(f"color: {theme.C.text_dim};")
         col.addWidget(lap_line)
 
@@ -1604,8 +1605,8 @@ class StudioWindow(QMainWindow):
         config = self._ask_export_options(lap)
         if config is None:
             return
-        out = self._export_save_path(f"Export overlay video — lap {lap}",
-                                     f"_lap{lap}_overlay.mp4", "MP4 video (*.mp4)")
+        out = self._export_save_path(f"Export overlay video — lap {lap_label(lap)}",
+                                     f"_lap{lap_label(lap)}_overlay.mp4", "MP4 video (*.mp4)")
         if not out:
             return
         # Resolve the lap window to its chapter file(s) + local seek; refuses a bad window with a
@@ -1621,7 +1622,7 @@ class StudioWindow(QMainWindow):
     def _run_video_export(self, spec, lap: int):
         """Run the render on a worker QThread behind a cancellable modal dialog. Starts indeterminate
         ("Preparing…"), flips to a determinate bar on the first frame's progress."""
-        dlg = QProgressDialog(f"Preparing lap {lap} overlay video…", "Cancel", 0, 0, self)
+        dlg = QProgressDialog(f"Preparing lap {lap_label(lap)} overlay video…", "Cancel", 0, 0, self)
         dlg.setWindowTitle("Export overlay video")
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
@@ -1638,7 +1639,7 @@ class StudioWindow(QMainWindow):
                 if not started["first"]:
                     # First real frame: switch from the busy "Preparing…" bar to a determinate one.
                     started["first"] = True
-                    dlg.setLabelText(f"Rendering lap {lap} overlay video…")
+                    dlg.setLabelText(f"Rendering lap {lap_label(lap)} overlay video…")
                 dlg.setMaximum(total)
                 dlg.setValue(done)
 

@@ -44,7 +44,7 @@ from PySide6.QtGui import (
 )
 
 from . import gmeter_overlay, theme, units
-from ._signal import fmt_time
+from ._signal import fmt_time, lap_label
 
 
 # --------------------------------------------------------------------------- ffmpeg discovery
@@ -968,7 +968,7 @@ def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: flo
         elapsed = max(0.0, vals.t - ls)
     else:
         elapsed = max(0.0, vals.t - t0)
-    label = f"LAP {vals.lap_id}   {fmt_time(elapsed)}"
+    label = f"LAP {lap_label(vals.lap_id)}   {fmt_time(elapsed)}"
     inner = box.adjusted(box.height() * 0.42, 0, -box.height() * 0.2, 0)
     _text_at(p, inner, Qt.AlignVCenter | Qt.AlignLeft, label,
              _font(box.height() * 0.54, bold=True), EXPORT.text, halo=2.2 * k)
