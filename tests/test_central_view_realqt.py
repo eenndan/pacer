@@ -879,6 +879,7 @@ def _run_all():
     test_charts_header_drops_its_label_before_clipping_controls()
     test_show_stats_maximized_is_a_true_toggle()
     test_stats_corner_row_click_restores_grid_then_rings_map()
+    test_splitter_handles_stay_thin_under_the_theme()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 
@@ -1031,6 +1032,72 @@ def test_stats_corner_row_click_restores_grid_then_rings_map():
     _APP.processEvents()
     assert view._maximized_panel is None, "row click must restore the grid before ringing"
     print("test_stats_corner_row_click_restores_grid_then_rings_map OK")
+
+
+def test_splitter_handles_stay_thin_under_the_theme():
+    """A panel divider is a HIT AREA, not a gutter: under the real theme QSS a handle must stay
+    thin on its split axis, paint a centred grip, and turn amber on hover.
+
+    Asserted on laid-out GEOMETRY, because geometry is exactly what broke. The old rule inset a
+    short grip with `margin: 24px 3px`, but Qt's stylesheet box model adds a handle rule's margins
+    to BOTH axes of its sizeHint and QSplitter lays the handle out at that sizeHint — so the
+    left/right divider rendered as a 67px dead band down the middle of the window (28px for each
+    horizontal seam) while handleWidth() and PM_SplitterWidth both kept reporting 19. No property
+    the code could read exposed it; only the pixels did.
+
+    Runs under the REAL theme — the QSS IS the bug surface, a stock unstyled QSplitter never had
+    this — then restores the app's default chrome for the tests that follow.
+    """
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QHoverEvent
+    from PySide6.QtWidgets import QSplitter, QWidget
+
+    def centre_pixel(w):
+        img = w.grab().toImage()
+        return f"#{img.pixel(img.width() // 2, img.height() // 2) & 0xFFFFFF:06X}"
+
+    view, _s, _t0, _t1 = _real_central_view()
+    prior = (_APP.styleSheet(), _APP.font(), _APP.palette())
+    theme.apply_theme(_APP)
+    try:
+        for orientation, span_of in ((Qt.Horizontal, lambda sz: sz.width()),
+                                     (Qt.Vertical, lambda sz: sz.height())):
+            sp = QSplitter(orientation)
+            sp.addWidget(QWidget())
+            sp.addWidget(QWidget())
+            sp.resize(600, 300)
+            sp.show()
+            _APP.processEvents()
+            handle = sp.handle(1)
+            span = span_of(handle.sizeHint())
+            assert span <= 10, f"{orientation} handle is {span}px — a gutter, not a divider"
+            # The grip must still be visible (that is what the margins were for) ...
+            assert centre_pixel(handle) == theme.C.border_strong, centre_pixel(handle)
+            # ... and still brighten on hover: `border-color` hover no longer applies once the
+            # grip is a gradient, so the hover rule has to restate the gradient.
+            _APP.sendEvent(handle, QHoverEvent(QEvent.Type.HoverEnter, QPointF(4, 4),
+                                               QPointF(-1, -1), QPointF(4, 4)))
+            _APP.processEvents()
+            assert centre_pixel(handle) == theme.C.accent, centre_pixel(handle)
+            sp.hide()
+
+        # The whole point, on the real window: the two columns must be flush. Anything the
+        # splitter withholds from sizes() is bare canvas the user sees as a grey band.
+        view.resize(1440, 900)
+        view.show()
+        _APP.processEvents()
+        main = view._main_splitter
+        band = main.width() - sum(main.sizes())
+        assert band <= 10, f"{band}px of dead canvas between the left and right columns"
+        for column in (view._left_splitter, view._right_splitter):
+            seam = column.height() - sum(column.sizes())
+            assert seam <= 10, f"{seam}px of dead canvas between stacked panels"
+    finally:
+        _APP.setStyleSheet(prior[0])
+        _APP.setFont(prior[1])
+        _APP.setPalette(prior[2])
+    view.hide()
+    print("test_splitter_handles_stay_thin_under_the_theme OK")
 
 
 if __name__ == "__main__":

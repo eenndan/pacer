@@ -492,6 +492,21 @@ def _palette() -> QPalette:
 
 
 # ====================================================================== QSS
+# Splitter handle geometry. NEVER express the grip with margin/padding — see the splitter section of
+# the stylesheet for what that costs; _splitter_grip draws it with a gradient, which is size-free.
+SPLITTER_HANDLE_PX = 8
+
+
+def _splitter_grip(orientation: str, colour: str) -> str:
+    """`background` value painting a thin `colour` grip bar centred across an otherwise-canvas
+    splitter handle. A gradient paints INSIDE the handle box, so unlike a border/margin grip it
+    adds nothing to the handle's size hint."""
+    axis = "x2:1, y2:0" if orientation == "horizontal" else "x2:0, y2:1"
+    return (f"qlineargradient(x1:0, y1:0, {axis}, "
+            f"stop:0 {C.canvas}, stop:0.374 {C.canvas}, stop:0.375 {colour}, "
+            f"stop:0.625 {colour}, stop:0.626 {C.canvas}, stop:1 {C.canvas})")
+
+
 def _build_qss() -> str:
     """Assemble the global stylesheet from tokens, in editable sections.
 
@@ -566,29 +581,37 @@ QMenu::separator {{
 }}
 
 /* ---------------------------------------------------------------- splitter
-   Wider handles (10px) with a visible centred GRIP so every divider — the video/table split,
-   the map/plots split, the left/right split — reads as draggable (the user "couldn't resize the
-   video" partly because the old 6px hairline was hard to grab). The grip is a short, strong
-   centred bar drawn as the handle's own border block; hover brightens it. Kept subtle + on-theme. */
+   An {SPLITTER_HANDLE_PX}px hit area with a grip bar centred in it, so every divider — the
+   video/table split, the map/plots split, the left/right split — reads as draggable (the user
+   "couldn't resize the video" partly because the old 6px hairline was hard to grab). Hover turns
+   the grip amber.
+
+   NEVER give a handle rule a `margin` or `padding`. Qt's stylesheet box model adds them to BOTH
+   axes of the handle's sizeHint, and QSplitter lays the handle out at that sizeHint — not at
+   handleWidth(). The previous rule used `margin: 24px 3px` purely to inset a short grip
+   vertically; those 48px landed in the WIDTH as well and turned the left/right divider into a
+   67px dead band down the middle of the window. Nothing in code could see it: handleWidth() and
+   PM_SplitterWidth both kept reporting 19. Draw the grip with a gradient instead (_splitter_grip)
+   — it paints inside the box and costs no size. Pinned by
+   tests/test_central_view_realqt.py::test_splitter_handles_stay_thin_under_the_theme. */
 QSplitter {{
     background-color: {C.canvas};
 }}
-QSplitter::handle {{
-    background-color: {C.canvas};
-}}
 QSplitter::handle:horizontal {{
-    width: 10px;
-    /* a strong centred grip bar (border block) inset top/bottom so it reads as a short handle */
-    border-left: 3px solid {C.border_strong};
-    margin: 24px 3px;
+    width: {SPLITTER_HANDLE_PX}px;
+    border: none; margin: 0; padding: 0;
+    background: {_splitter_grip("horizontal", C.border_strong)};
 }}
 QSplitter::handle:vertical {{
-    height: 10px;
-    border-top: 3px solid {C.border_strong};
-    margin: 3px 24px;
+    height: {SPLITTER_HANDLE_PX}px;
+    border: none; margin: 0; padding: 0;
+    background: {_splitter_grip("vertical", C.border_strong)};
 }}
-QSplitter::handle:hover {{
-    border-color: {C.accent};
+QSplitter::handle:horizontal:hover {{
+    background: {_splitter_grip("horizontal", C.accent)};
+}}
+QSplitter::handle:vertical:hover {{
+    background: {_splitter_grip("vertical", C.accent)};
 }}
 
 /* ---------------------------------------------------------------- scrollbars */
