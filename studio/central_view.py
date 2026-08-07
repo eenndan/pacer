@@ -560,13 +560,14 @@ class CentralView(QWidget):
         main.addWidget(right)
         main.setStretchFactor(0, 40)
         main.setStretchFactor(1, 60)
-        # 456/917 (the sum matches the real usable width at the 1440 default window): the lap
-        # panel gets enough width for every Laps column (no horizontal scrollbar) while the
-        # charts' consolidated header (hero readout + controls, measured minimum 917) fits
-        # exactly. The old [576, 864] was aspirational — the right column's hidden minimum
-        # overrode it to ~[394, 1046] on every launch. The explicit column minimums above let
-        # the USER trade either way; only the default has to be clip-free.
-        main.setSizes([456, 917])
+        # 515/917 sums to 1432 = the real usable width at the 1440 default window (1440 minus the
+        # 8px splitter handle). The charts column's MEASURED minimum is 675 — it was 917 before the
+        # header learned to hide its decorative label and shrink its controls — so 917 is a comfort
+        # target with headroom, not a floor, and the lap panel takes the rest: enough width for
+        # every Laps column with no horizontal scrollbar. The old [576, 864] was aspirational — the
+        # right column's hidden minimum overrode it to ~[394, 1046] on every launch. The explicit
+        # column minimums above let the USER trade either way; only the default has to be clip-free.
+        main.setSizes([515, 917])
         # The user's persisted grid layout (a drag used to be lost on every reload, which read
         # as "the panels cannot be resized") is applied on FIRST SHOW, not here: before the
         # window sizes this widget, the splitters sit at tiny defaults and min-size clamping
