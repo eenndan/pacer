@@ -16,6 +16,11 @@ MapView-level (offscreen, stub session — no pacer laps, no telemetry file):
     pen objects (they were only hidden, never rebuilt) and the rainbow items emptied.
   * the 30 Hz tick path (set_current_lap with an unchanged lap + marker moves) performs ZERO
     bucket rebuilds; a genuine lap change rebuilds exactly once.
+  * (fix/map-chrome-and-labels) pyqtgraph's developer chrome — the "A" auto-range button and the
+    raw right-click menu — is off the user-facing track map, while its mouse interaction (pan/zoom,
+    the draggable timing-line handles + video marker) is preserved exactly; and no corner label is
+    ever left buried under the MOVING video-position marker, which the once-per-corner-set declutter
+    layout could not see — enforced with the layout itself still off the ~30 Hz tick.
 Run: python tests/test_rainbow_map.py
 """
 import math
@@ -458,6 +463,164 @@ def test_map_empty_state_shown_only_with_zero_valid_laps():
     mv2.refresh_overlays()
     assert not mv2._empty_state.isVisibleTo(mv2.widget), "recovering laps must hide the empty state"
     print("test_map_empty_state_shown_only_with_zero_valid_laps OK")
+
+
+# ------------------------------------------------- pyqtgraph dev chrome off the track map
+def test_map_plot_hides_pyqtgraph_dev_chrome_without_touching_mouse_interaction():
+    """fix/map-chrome-and-labels, defect 1. The track map is a USER-FACING picture, not a plotting
+    scratchpad: pyqtgraph's "A" auto-range button (which fades in over the bottom-left of the track
+    on hover) and its raw right-click developer menu (Transforms / Downsample / Average / Export…)
+    must both be off — the same treatment the stats sparklines already get.
+
+    Equally load-bearing: this is a DISPLAY-only change. The map's mouse interaction is intentional
+    (drag the timing-line handles, drag the video marker to seek, pan/zoom the trace) and must be
+    preserved EXACTLY, so the mouse-enabled axes, the drag mode, and every draggable handle are
+    pinned here too — a future `setMouseEnabled(False)` copied from stats_panel would fail this."""
+    mv = MapView(_stub_session())
+    plot, vb = mv.plot, mv.plot.getViewBox()
+    # (a) the "A" auto-range button is hidden, and pyqtgraph agrees it should not be shown.
+    assert plot.buttonsHidden is True, "the 'A' auto-range button must be hidden on the track map"
+    assert not plot.autoBtn.isVisible(), "the auto-range button must not be showing"
+    # (b) no raw developer context menu — on the PlotItem OR the ViewBox underneath it.
+    assert plot.menuEnabled() is False, "the PlotItem right-click menu must be off"
+    assert vb.menuEnabled() is False, "the ViewBox right-click menu must be off"
+    # (c) mouse interaction UNCHANGED: both axes still draggable/zoomable, still rect-free pan mode.
+    assert list(vb.state["mouseEnabled"]) == [True, True], vb.state["mouseEnabled"]
+    assert vb.state["mouseMode"] == pg.ViewBox.PanMode
+    # (d) every drag handle the user actually uses is still movable.
+    assert mv.marker.movable is True, "the video marker must stay drag-to-seek"
+    assert mv._start.h1.movable is True and mv._start.h2.movable is True, \
+        "the start-line handles must stay draggable"
+    print("test_map_plot_hides_pyqtgraph_dev_chrome_without_touching_mouse_interaction OK")
+
+
+# ------------------------------------------- corner labels vs the moving video marker (P6)
+def _label_boxes_vs_marker(mv):
+    """[(label, dx_px, dy_px)] between every corner label and the video marker, in px."""
+    cm = mv._corner_markers
+    sx, sy = cm._px_per_data()
+    m = mv.marker.pos()
+    out = []
+    for text in cm._texts:
+        p = text.pos()
+        out.append((text.textItem.toPlainText(),
+                    abs(p.x() - m.x()) * sx, abs(p.y() - m.y()) * sy))
+    return out
+
+
+def _sized_map(session, w=700, h=560):
+    """A MapView with a REAL px viewbox size, so px-per-data (and therefore every px-space
+    clearance test) is meaningful rather than the 1.0 fallback."""
+    mv = MapView(session)
+    mv.resize(w, h)
+    mv.show()
+    _APP.processEvents()
+    return mv
+
+
+def test_corner_labels_stay_clear_of_the_moving_video_marker():
+    """fix/map-chrome-and-labels, defect 2 — THE BUG: the corner-label declutter runs ONCE per
+    corner set (set_corners → _label_positions), and its video-marker clearance anchor is a single
+    SNAPSHOT of marker.pos(). The marker then moves every video frame, so a label it wanders onto is
+    simply painted over (marker z=10 vs label z=6) — the reported "C2 buried under the red marker".
+
+    THE INVARIANT: at EVERY position the marker takes along the trace, no corner label's box may
+    overlap the marker's box. Driven through the production path (set_marker_index, exactly what the
+    ~30 Hz tick calls), with the corners planted ON the trace so the marker must run over them."""
+    from studio.map_view import (
+        CORNER_LABEL_BOX_PX,
+        CORNER_MARKER_CLEAR_PX,
+    )
+    s = _stub_session()
+    mv = _sized_map(s)
+    half_w = CORNER_LABEL_BOX_PX[0] / 2.0 + CORNER_MARKER_CLEAR_PX
+    half_h = CORNER_LABEL_BOX_PX[1] / 2.0 + CORNER_MARKER_CLEAR_PX
+    # Corners planted on trace samples the marker will pass straight through.
+    idx = [5, 17, 29, 41, 53]
+    markers = [(f"C{k + 1}", float(s.tx[i]), float(s.ty[i]), 1 if k % 2 else -1)
+               for k, i in enumerate(idx)]
+    mv.set_corners(markers)
+    assert len(mv._corner_markers._texts) == len(markers)
+
+    # Baseline: the OLD behaviour is reproducible by freezing the labels at their laid-out homes.
+    homes = list(mv._corner_markers._home)
+    collided_at_home = 0
+    for i in range(len(s.tx)):
+        mv.set_marker_index(i)
+        m = mv.marker.pos()
+        sx, sy = mv._corner_markers._px_per_data()
+        for hx, hy in homes:
+            if (abs(hx - m.x()) * sx < half_w and abs(hy - m.y()) * sy < half_h):
+                collided_at_home += 1
+        # THE ASSERTION: with the fix, the DRAWN label positions never overlap the marker box.
+        for label, dx, dy in _label_boxes_vs_marker(mv):
+            assert dx >= half_w or dy >= half_h, (
+                f"label {label} is buried under the video marker at trace index {i}: "
+                f"dx={dx:.1f}px dy={dy:.1f}px (needs dx>={half_w} or dy>={half_h})")
+    assert collided_at_home > 0, (
+        "the fixture no longer reproduces the bug — the marker never reaches a laid-out label box, "
+        "so this test would pass even with the fix reverted")
+
+    # And the nudge is TRANSIENT: parked far from every corner, each label sits back at the exact
+    # position the declutter laid out (the fix must not permanently relocate anything).
+    mv.set_marker_index(int(np.argmax(s.ty)))
+    for text, home in zip(mv._corner_markers._texts, homes, strict=True):
+        p = text.pos()
+        if (abs(home[0] - mv.marker.pos().x()) * mv._corner_markers._px_per_data()[0] >= half_w * 3):
+            assert (p.x(), p.y()) == home, ("a label away from the marker must sit at its laid-out "
+                                            f"home {home}, not {(p.x(), p.y())}")
+    print(f"test_corner_labels_stay_clear_of_the_moving_video_marker OK "
+          f"({collided_at_home} home-position collisions dodged)")
+
+
+def test_share_grab_drops_the_marker_dodge_and_restores_it():
+    """grab_clean hides the video marker for the share card, so the labels must also drop the nudge
+    they were holding to dodge it — otherwise the card shows a label shoved off its apex with
+    nothing on screen to explain why. The live map gets the dodge back when the grab ends."""
+    s = _stub_session()
+    mv = _sized_map(s)
+    markers = [(f"C{k + 1}", float(s.tx[i]), float(s.ty[i]), 1)
+               for k, i in enumerate((5, 17, 29, 41, 53))]
+    mv.set_corners(markers)
+    cm = mv._corner_markers
+    # Park the marker right on top of a label so at least one is actively nudged.
+    home = cm._home[0]
+    mv.marker.setPos(pg.Point(*home))
+    nudged = [i for i in range(len(cm._texts)) if cm._applied[i] != cm._home[i]]
+    assert nudged, "fixture failed to put the marker on a label"
+    with mv.grab_clean():
+        assert not mv.marker.isVisible(), "the grab must still hide the marker"
+        for text, h in zip(cm._texts, cm._home, strict=True):
+            assert (text.pos().x(), text.pos().y()) == h, \
+                "a marker-dodge nudge must not survive into the share card"
+    assert [i for i in range(len(cm._texts)) if cm._applied[i] != cm._home[i]] == nudged, \
+        "leaving the grab must restore the live map's marker dodge"
+    print("test_share_grab_drops_the_marker_dodge_and_restores_it OK")
+
+
+def test_marker_tick_never_relayouts_the_corner_labels():
+    """The PERF contract the fix had to respect: the declutter LAYOUT (`_label_positions`, an
+    O(n²)-ish iterative separation pass that also rebuilds nothing cheaply) must stay OFF the ~30 Hz
+    tick. Sweeping the marker over the whole trace may run only the O(n) box test — `_label_positions`
+    must be called exactly ONCE, by set_corners, and the label TextItems must never be rebuilt."""
+    s = _stub_session()
+    mv = _sized_map(s)
+    cm = mv._corner_markers
+    calls = []
+    real = cm._label_positions
+    cm._label_positions = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+    markers = [(f"C{k + 1}", float(s.tx[i]), float(s.ty[i]), 1)
+               for k, i in enumerate((5, 17, 29, 41, 53))]
+    mv.set_corners(markers)
+    assert len(calls) == 1, calls
+    items_after_build = list(mv.plot.items)
+    text_ids = [id(t) for t in cm._texts]
+    for i in range(len(s.tx)):
+        mv.set_marker_index(i)
+    assert len(calls) == 1, f"the marker tick re-ran the label layout {len(calls) - 1} times"
+    assert [id(t) for t in cm._texts] == text_ids, "the tick rebuilt label items"
+    assert mv.plot.items == items_after_build, "the tick added/removed plot items"
+    print("test_marker_tick_never_relayouts_the_corner_labels OK")
 
 
 if __name__ == "__main__":
