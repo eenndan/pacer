@@ -35,7 +35,14 @@ from PySide6.QtWidgets import (
 from . import theme, units
 from ._signal import fmt_time
 from .consistency import pb_mask
-from .lap_table import BEST_LAP_MARK, CORNER_DIR_GLYPH, NUM_ROLE, _NumItem
+from .lap_table import (
+    BEST_LAP_MARK,
+    CORNER_DIR_GLYPH,
+    DROPOUT_SUFFIX,
+    DROPOUT_TOOLTIP,
+    NUM_ROLE,
+    _NumItem,
+)
 from .theme import C
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
@@ -43,7 +50,10 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
 
 DASH = "—"                # the "no signal" cell/tile — an em-dash, never a fake 0
 TILE_VALUE_PT = 15        # tile value type size (between BODY 13 and HERO 22)
-TILES_PER_ROW = 4         # tile-grid width — 4 fits the quadrant, still calm maximized
+TILES_PER_ROW = 4         # tile-grid MAX columns (wide/maximized panels)
+TILE_MIN_PX = 148         # reflow threshold: columns = viewport width // this, clamped 2..4
+#                           (C6 — the hard-coded 4 pushed the 4th tile column, incl. the
+#                           "fix your top 3" digest, off-pane at the default quadrant width)
 GG_HEIGHT = 220           # px; the friction-circle plot's fixed height
 SPARK_HEIGHT = 96         # px; the PACE trend sparkline (absorbed from the retired
 #                           ConsistencyPanel — its content lives here now)
@@ -145,6 +155,11 @@ class StatsView(QWidget):
         super().__init__()
         self.session = session
         self._speed_unit = getattr(self, "_speed_unit", units.DEFAULT_UNIT)
+        # C6 responsive tiles: every _grid registers here; _reflow_tiles re-places them when
+        # the pane crosses a column threshold. Built at max columns, reflowed on first resize.
+        self._tile_grids: list = []
+        self._tile_cols = TILES_PER_ROW
+        self._scroll = None
 
         body = QWidget()
         col = QVBoxLayout(body)
@@ -168,7 +183,7 @@ class StatsView(QWidget):
         col.addWidget(pace_hdr)
         self.t_best = _Tile("best lap")
         self.t_median = _Tile("median lap")
-        self.t_race_pace = _Tile("race pace · best 3 straight")
+        self.t_race_pace = _Tile("race pace · best 3-lap run")
         self.t_race_pace.setToolTip(
             "The best average of 3 CONSECUTIVE clean laps — your sustained pace, next to "
             "the single glory lap.")
@@ -378,6 +393,7 @@ class StatsView(QWidget):
         # the page h-scrolls instead of silently clipping their rightmost columns.
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setWidget(body)
+        self._scroll = scroll
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -391,16 +407,40 @@ class StatsView(QWidget):
         lab.setProperty("role", "BarLabel")
         return lab
 
-    @staticmethod
-    def _grid(*tiles: _Tile) -> QGridLayout:
+    def _grid(self, *tiles: _Tile) -> QGridLayout:
         g = QGridLayout()
         g.setContentsMargins(0, 0, 0, 4)
         g.setHorizontalSpacing(18)
         g.setVerticalSpacing(8)
-        for i, t in enumerate(tiles):
-            g.addWidget(t, i // TILES_PER_ROW, i % TILES_PER_ROW)
-        g.setColumnStretch(TILES_PER_ROW, 1)  # left-pack the tiles; slack stays right
+        self._place_tiles(g, list(tiles), self._tile_cols)
+        # Registered for the responsive reflow (C6): a narrow quadrant re-places every grid
+        # at fewer columns instead of pushing the 4th column off-pane.
+        self._tile_grids.append((g, list(tiles)))
         return g
+
+    @staticmethod
+    def _place_tiles(g: QGridLayout, tiles: list, cols: int):
+        for i, t in enumerate(tiles):
+            g.addWidget(t, i // cols, i % cols)
+        for c in range(TILES_PER_ROW + 1):
+            g.setColumnStretch(c, 0)
+        g.setColumnStretch(cols, 1)  # left-pack the tiles; slack stays right
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reflow_tiles()
+
+    def _reflow_tiles(self):
+        """C6: fit the tile grids to the actual pane — columns = width // TILE_MIN_PX,
+        clamped 2..TILES_PER_ROW. Re-places widgets only when the count changes (cheap; a
+        resize otherwise costs nothing)."""
+        width = self._scroll.viewport().width() if self._scroll is not None else self.width()
+        cols = max(2, min(TILES_PER_ROW, width // TILE_MIN_PX))
+        if cols == self._tile_cols:
+            return
+        self._tile_cols = cols
+        for g, tiles in self._tile_grids:
+            self._place_tiles(g, tiles, cols)
 
     def _make_table(self, columns: list[str]) -> QTableWidget:
         t = QTableWidget(0, len(columns))
@@ -804,6 +844,10 @@ class StatsView(QWidget):
 
     def _refresh_straights(self, session, unit, u_label):
         report = getattr(session, "straights_report", list)() or []
+        # B8: a start line inside a corner section produces ~0-duration S/F stubs — noise
+        # rows with no driving content (BRAKING already omits unmatched corners the same way).
+        report = [st for st in report
+                  if max(st.best_s or 0.0, st.median_s or 0.0) >= 0.05]
         has = bool(report)
         self._straights_section.setVisible(has)
         self.straights_table.setVisible(has)
@@ -923,11 +967,17 @@ class StatsView(QWidget):
         self.lap_table.setVisible(has)
         self._laps_section.setText(f"PER LAP · speeds in {u_label}")
         best = session.best_lap_id() if hasattr(session, "best_lap_id") else None
+        # C7: the page's DATA TRUST card says dropout laps are "flagged ⚠" — flag them HERE
+        # too (the Laps tab already does), or the promise reads as broken.
+        dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
         self.lap_table.setRowCount(len(rows))
         best_colour = QColor(theme.best_lap_colour())
         for r, s in enumerate(rows):
             mark = BEST_LAP_MARK if s.idx == best else ""
-            lap_item = QTableWidgetItem(f"{mark}{s.idx + 1}")  # 1-based, the app-wide rule
+            warn = DROPOUT_SUFFIX if s.idx in dropouts else ""
+            lap_item = QTableWidgetItem(f"{mark}{s.idx + 1}{warn}")  # 1-based, the app-wide rule
+            if warn:
+                lap_item.setToolTip(DROPOUT_TOOLTIP)
             if s.idx == best:
                 lap_item.setForeground(best_colour)
             self.lap_table.setItem(r, 0, lap_item)
