@@ -757,12 +757,18 @@ class CornerTable(QWidget):
     """Corners-mode table: one row per detected corner for the selected lap.
 
     Session-best corner time is purple+bold; Δ columns use the shared delta colour.
-    Read-only/unsorted — track order is the meaning."""
+    Read-only/unsorted — track order is the meaning. A row click emits ``corner_clicked``
+    so the app can ring that corner's apex on the map (B4: the Stats CORNERS and Coaching
+    rows already did this — these rows were the odd surface out)."""
+
+    # Clicked corner cid -> the map apex-ring highlight (wired in central_view).
+    corner_clicked = Signal(object)
 
     def __init__(self, session: Session):
         super().__init__()
         self.session = session
         self._lap_id: int | None = None
+        self._cids: list[int] = []   # row -> corner cid, set in refresh() (B4 map-ring click)
         # Speed display unit (km/h default); app pushes the persisted choice via set_speed_unit.
         # Drives the Apex/Δ apex/Entry/Exit value conversion + the per-column tooltips' unit name.
         self._speed_unit = units.DEFAULT_UNIT
@@ -782,6 +788,7 @@ class CornerTable(QWidget):
         for c in range(1, len(CORNER_COLUMNS)):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         hdr.resizeSection(0, CORNER_NAME_COL_PX)
+        self.table.cellClicked.connect(self._on_cell_clicked)
         # B6: the table is deliberately unsortable (track order IS the meaning) — no pressed
         # feedback on headers that do nothing.
         hdr.setSectionsClickable(False)
@@ -799,6 +806,12 @@ class CornerTable(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.table)
         lay.addWidget(self.empty, 1)
+
+    def _on_cell_clicked(self, row: int, _col: int):
+        """B4: ring the clicked row's corner on the map — the same corner_clicked pathway the
+        Stats CORNERS and Coaching rows use, so all three surfaces behave identically."""
+        if 0 <= row < len(self._cids):
+            self.corner_clicked.emit(self._cids[row])
 
     def _apply_corner_tips(self):
         """(Re)apply the per-column header tooltips for the current speed unit."""
@@ -845,6 +858,7 @@ class CornerTable(QWidget):
         # Per-corner grip utilisation (%); [] when there's no g signal → the column shows a dash.
         grip = self.session.driving.lap_corner_grip(self._lap_id) if stats else []
         self.table.setRowCount(len(stats))
+        self._cids = [c.cid for c in corner_list]  # row -> cid for the map-ring click (B4)
         for r, st in enumerate(stats):
             c = corner_list[r]
             grip_pct = f"{grip[r] * 100:.0f}" if r < len(grip) else "–"

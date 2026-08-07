@@ -261,6 +261,9 @@ class CentralView(QWidget):
         self.table = LapTable(self.session)
         # Corners mode: a 2nd table stacked under the same panel (per-corner rows for the selected lap).
         self.corner_table = CornerTable(self.session)
+        # B4: a Corners row rings its apex on the map, like the Stats CORNERS and Coaching
+        # rows — the same maximize-aware handler, so the three surfaces behave identically.
+        self.corner_table.corner_clicked.connect(self._on_stats_corner_clicked)
         self._corner_lap: int | None = None  # the lap the Corners view describes
         # Stats mode: the 3rd page — the session-statistics dashboard (studio/stats_panel.py).
         self.stats_view = StatsView(self.session)
@@ -323,8 +326,10 @@ class CentralView(QWidget):
         self.tab_bar.setDocumentMode(True)
         self.tab_bar.setExpanding(False)
         self.tab_bar.setDrawBase(False)
-        self.tab_bar.setUsesScrollButtons(False)
-        self.tab_bar.setElideMode(Qt.ElideNone)  # never "Coach…" — the four names are short
+        # B2: keep the four short names intact when there's room, but let Qt elide + offer
+        # scroll buttons instead of sliding a tab under the ⛶ button on a narrow window.
+        self.tab_bar.setUsesScrollButtons(True)
+        self.tab_bar.setElideMode(Qt.ElideRight)
         self.tab_bar.setFocusPolicy(Qt.NoFocus)
         for name, tip in (
             ("Laps", "Every valid lap: times, splits, session bests. Press 1."),
@@ -917,6 +922,13 @@ class CentralView(QWidget):
             return
         lap = getattr(self, "_corner_lap", None)
         bar.setTabText(1, f"Corners · L{lap + 1}" if lap is not None else "Corners")
+        # B1: the header bar was laid out BEFORE this load-time rename widened the tab bar's
+        # size hint, and a QTabBar doesn't re-request layout on its own — so the last tab
+        # ("Coaching") shipped clipped to "Coach" until the user happened to click a tab.
+        bar.updateGeometry()
+        header = bar.parentWidget()
+        if header is not None and header.layout() is not None:
+            header.layout().activate()
 
     def _on_laps_selected(self, ids, seek=False):
         # The table multi-selection drives the PLOTS only; the map's current-lap overlay
