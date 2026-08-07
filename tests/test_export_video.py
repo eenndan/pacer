@@ -45,10 +45,10 @@ REAL_MP4 = os.path.expanduser(os.environ.get("PACER_REAL_MP4", "~/Desktop/D24/GX
 
 def _real_media_usable() -> bool:
     """Whether the opt-in real-media file is present AND actually PARSEABLE. Existence alone is
-    not enough: a truncated / partially-copied recording (an interrupted SD-card transfer — seen
-    in the wild on this very path) opens as a file but raises inside the GPMF parser, which would
-    turn these deliberately-optional tests into hard failures on a developer machine. Cached so
-    the probe runs once per session."""
+    not enough: a file that exists but does not PARSE (a partial copy, or a path some tool
+    overwrote — which is exactly what happened to this default path on the dev machine) raises
+    inside the GPMF parser, turning these deliberately-optional tests into hard failures. Cached
+    so the probe runs once per session."""
     global _REAL_MEDIA_OK
     if _REAL_MEDIA_OK is None:
         _REAL_MEDIA_OK = False

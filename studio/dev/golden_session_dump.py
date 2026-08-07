@@ -16,7 +16,9 @@ fingerprinted too:
 
 Run BEFORE refactoring to write golden_session.json, then AFTER to write a candidate and diff
 (via studio.dev.golden_compare). This was the F1 god-object-decomposition equivalence gate.
-Usage:  python -m studio.dev.golden_session_dump <out.json>
+Usage:  python -m studio.dev.golden_session_dump <out.json> [--force]
+        The argument is the OUTPUT file (must end in .json, must not already exist).
+        The RECORDING to dump is REAL / $PACER_GOLDEN_MP4 — never a CLI argument.
 """
 from __future__ import annotations
 
@@ -264,18 +266,43 @@ def _lap_clock_span(s, lap_id):
     return float(times[0]), float(times[-1])
 
 
+def _resolve_out_path(argv: list[str]) -> str:
+    """The dump's DESTINATION, validated before a single byte is written.
+
+    This tool's first positional argument is the OUTPUT path, which reads like an INPUT to anyone
+    who doesn't check (the recording it dumps comes from REAL / PACER_GOLDEN_MP4, not the CLI).
+    That misreading already cost an 11.9 GB recording on a dev machine: the file was passed here
+    positionally and silently overwritten with JSON. So the destination now has to earn the write:
+    it must be a .json path and it must not already exist (--force to replace a previous dump).
+    A dev tool that can clobber an arbitrary path on a typo has no business existing."""
+    args = [a for a in argv[1:] if a != "--force"]
+    force = "--force" in argv[1:]
+    out_path = args[0] if args else "/tmp/claude/pacer-review/golden_session.json"
+    if not out_path.endswith(".json"):
+        print(f"FATAL: refusing to write the dump to {out_path!r} — the output path must end in "
+              ".json (this argument is the DESTINATION, not the recording to dump; the recording "
+              "comes from PACER_GOLDEN_MP4).", file=sys.stderr)
+        sys.exit(2)
+    if os.path.exists(out_path) and not force:
+        print(f"FATAL: {out_path} already exists — refusing to overwrite it. Pass --force to "
+              "replace a previous dump, or choose a new path.", file=sys.stderr)
+        sys.exit(2)
+    return out_path
+
+
 def main():
-    out_path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/claude/pacer-review/golden_session.json"
+    out_path = _resolve_out_path(sys.argv)
     if not os.path.exists(REAL):
         print(f"FATAL: real session not found at {REAL} "
               "(set PACER_GOLDEN_MP4 to another recording)", file=sys.stderr)
         sys.exit(2)
-    try:  # a present-but-unparseable file (truncated copy) → say so, don't raise from deep inside
+    try:  # present-but-unparseable → say so here, don't raise from deep inside the loader
         import pacer
         pacer.GPMFSource(REAL)
     except Exception as exc:  # noqa: BLE001
-        print(f"FATAL: {REAL} exists but is not readable as GPMF ({exc}) — a truncated copy? "
-              "Set PACER_GOLDEN_MP4 to a complete recording.", file=sys.stderr)
+        print(f"FATAL: {REAL} exists but is not readable as GPMF ({exc}) — a partial copy, or a "
+              "file some tool overwrote. Set PACER_GOLDEN_MP4 to a complete recording.",
+              file=sys.stderr)
         sys.exit(2)
 
     # Redirect the library app-support dir to a temp dir so nothing touches the user's data.
