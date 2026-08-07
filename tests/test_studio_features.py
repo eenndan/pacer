@@ -46,7 +46,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
-from _synthetic import bare_session, seed_cols  # noqa: E402
+from _synthetic import bare_session, odometer, seed_cols  # noqa: E402
 
 from studio import data_quality, gapfill, theme  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
@@ -608,6 +608,9 @@ def test_plots_view_shows_empty_state_when_no_laps():
         def lap_window(self, lid):
             return None
 
+        def delta_to_ideal(self, ids, x_mode="distance"):
+            return None  # P7: no ideal envelope here → the Δ chart keeps its Δ-to-best baseline
+
     pv = PlotsView(_Sess(has_laps=False))
     pv.refresh()
     assert pv._stack.currentIndex() == 1, "plots must show the empty state with no laps"
@@ -646,6 +649,9 @@ def test_plots_view_ideal_toggle_adds_labeled_curve():
             xs = np.linspace(0, 100, 5)
             return xs, xs * -0.01  # ≤ 0, the ideal-vs-best shape
 
+        def delta_to_ideal(self, ids, x_mode="distance"):
+            return None  # P7: this test pins the D1 OVERLAY, so keep the Δ-to-best baseline
+
         def lap_time(self, lid):
             return 60.0
 
@@ -673,6 +679,93 @@ def test_plots_view_ideal_toggle_adds_labeled_curve():
     assert len(pv._curves) == base_curves
     assert not pv._delta_legend.isVisible()
     print("test_plots_view_ideal_toggle_adds_labeled_curve OK")
+
+
+def _ideal_chart_session():
+    """A REAL (bare) Session with three seeded laps, driving the REAL delta / ideal-envelope math.
+
+    Lap 0 is the session best; lap 1 is slower overall but covers the first half FASTER, so the
+    synthetic ideal envelope (the pointwise min over the clean laps) dips strictly below lap 0 —
+    i.e. lap 0's Δ-to-ideal is a genuine non-zero curve while its Δ-to-best is identically 0."""
+    specs = {  # lap_id: (n, dt, t0, total_dist, speed profile over u ∈ [0, π])
+        0: (200, 0.10, 100.0, 1000.0, None),                                  # the best lap
+        1: (200, 0.11, 400.0, 1000.0, lambda u: 1.0 + 3.0 * np.cos(u / 2) ** 2),  # fast start
+        2: (200, 0.13, 700.0, 1000.0, None),                                  # a slow lap
+    }
+    laps = {lid: odometer(n, dt, t0, total, prof)
+            for lid, (n, dt, t0, total, prof) in specs.items()}
+    s = bare_session(laps=laps, best=0, valid=list(laps))
+    s._cols_cache = {}
+    for lid, (times, dists) in laps.items():
+        seed_cols(s, lid, times, dists)
+    times_by_lap = {lid: laps[lid][0] for lid in laps}
+    # The only pacer-backed reads the charts make (lap count / time / window) — the rest of the
+    # Δ math runs on the seeded arrays through the REAL Session methods.
+    s.laps = SimpleNamespace(
+        laps_count=lambda: len(laps),
+        lap_time=lambda i: float(times_by_lap[i][-1] - times_by_lap[i][0]),
+        start_timestamp=lambda i: float(times_by_lap[i][0]),
+    )
+    return s
+
+
+def test_plots_view_best_only_selection_plots_delta_to_ideal():
+    """P7: selecting ONLY the best lap used to leave the lower chart a flat zero line (a lap's Δ
+    against itself). It now re-references that curve to the SYNTHETIC ideal-lap envelope, and says
+    so on BOTH the y-axis and the legend. A second selected lap reverts to Δ-to-best; a session
+    with no ideal envelope falls back silently. Presentation only — the plotted values are exactly
+    the session's own delta_to_ideal / delta output."""
+    from studio.plots_view import DELTA_LABEL_BEST, DELTA_LABEL_IDEAL, PlotsView
+
+    sess = _ideal_chart_session()
+    best = sess.best_lap_id()
+    y_axis = lambda pv: pv.p_delta.getAxis("left").labelText  # noqa: E731
+    legend_texts = lambda pv: [lbl.text for _s, lbl in pv._delta_legend.items]  # noqa: E731
+
+    pv = PlotsView(sess)
+    pv.set_laps([best])
+    assert pv._delta_ideal_mode, "a best-lap-only selection must switch the Δ chart to the ideal"
+    assert y_axis(pv) == DELTA_LABEL_IDEAL, y_axis(pv)
+    assert pv._delta_legend.isVisible(), "ideal mode must name its baseline in the legend"
+    assert any("ideal" in t.lower() for t in legend_texts(pv)), legend_texts(pv)
+    # The drawn curve IS session.delta_to_ideal — not a flat line, and not new math.
+    (lid, xs, ys), = pv._delta_curves
+    want = sess.delta_to_ideal([best])[best]
+    assert lid == best
+    assert np.array_equal(xs, want[0]) and np.array_equal(ys, want[1])
+    assert not np.allclose(ys, 0.0), "the whole point: the lower chart is no longer flat zero"
+
+    # A second lap reverts to the normal Δ-to-best baseline (axis + legend back to normal).
+    pv.set_laps([best, 2])
+    assert not pv._delta_ideal_mode
+    assert y_axis(pv) == DELTA_LABEL_BEST, y_axis(pv)
+    assert not pv._delta_legend.isVisible() and legend_texts(pv) == []
+    _b, _speed, delta = sess.delta([best, 2])
+    drawn = {i: (x, y) for i, x, y in pv._delta_curves}
+    assert np.array_equal(drawn[2][1], delta[2][1])
+    assert np.allclose(drawn[best][1], 0.0), "the best lap's Δ to itself stays zero in normal mode"
+
+    # No ideal envelope (too few clean laps) -> silent fallback to today's behaviour.
+    sess.delta_to_ideal = lambda ids, x_mode="distance": None
+    pv.set_laps([best])
+    assert not pv._delta_ideal_mode and y_axis(pv) == DELTA_LABEL_BEST
+    print("test_plots_view_best_only_selection_plots_delta_to_ideal OK")
+
+
+def test_plots_view_hides_pyqtgraph_hover_chrome():
+    """P3: neither chart shows pyqtgraph's own chrome — the little "A" auto-range button (which
+    appears on hover precisely because refresh() FREEZES the range) or the right-click plot menu.
+    Mouse pan/zoom stays enabled: that interaction is intentional on these charts."""
+    from studio.plots_view import PlotsView
+
+    pv = PlotsView(_ideal_chart_session())
+    pv.set_laps([0])
+    for plot, which in ((pv.p_speed, "speed"), (pv.p_delta, "delta")):
+        assert plot.buttonsHidden, f"{which} chart still shows the auto-range button"
+        assert not plot.menuEnabled(), f"{which} chart still has the pyqtgraph context menu"
+        assert plot.getViewBox().state["mouseEnabled"] == [True, True], (
+            f"{which} chart lost its intentional pan/zoom")
+    print("test_plots_view_hides_pyqtgraph_hover_chrome OK")
 
 
 # -------------------------------------- D2: a failed RELOAD must not corrupt _paths/title/session

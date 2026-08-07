@@ -328,6 +328,9 @@ class _FakeChartSession:
         sx = np.linspace(0.0, 200.0, 100)
         return 0, {0: (sx, np.full(100, 60.0))}, {0: (sx, np.zeros(100))}
 
+    def delta_to_ideal(self, ids, x_mode="distance"):
+        return None  # P7: no ideal envelope here → the Δ chart keeps its Δ-to-best baseline
+
     def sector_plot_positions(self, m):
         return []
 
