@@ -120,7 +120,7 @@ def test_multi_recording_drop_loads_only_first_and_does_not_merge(monkeypatch):
         else ["/foot/GX010060.MP4", "/foot/GX020060.MP4"])
     messages = []
     monkeypatch.setattr(w, "statusBar", lambda: type("B", (), {
-        "showMessage": lambda self, m: messages.append(m)})())
+        "showMessage": lambda self, m, *_a: messages.append(m)})())
 
     # Three distinct recordings dropped at once (two different NNNN + a non-GoPro clip).
     dropped = ["/foot/GX010060.MP4", "/foot/GX010062.MP4", "/foot/hero6.mp4"]
@@ -147,7 +147,7 @@ def test_single_recording_drop_is_unchanged(monkeypatch):
         lambda p: ["/foot/GX010060.MP4", "/foot/GX020060.MP4"])
     messages = []
     monkeypatch.setattr(w, "statusBar", lambda: type("B", (), {
-        "showMessage": lambda self, m: messages.append(m)})())
+        "showMessage": lambda self, m, *_a: messages.append(m)})())
 
     # The two chapters of ONE recording -> one load of the chained siblings, NO multi-drop message.
     w._open_recordings(["/foot/GX010060.MP4", "/foot/GX020060.MP4"])
