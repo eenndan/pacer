@@ -1,7 +1,9 @@
 """PlotsView: speed (top) and lap-vs-best delta (bottom) on one shared, x-linked x-axis.
 
 The best lap is always drawn green as the Δ baseline (added to a draw set at refresh time only;
-the selection `self._lap_ids` is never mutated). Distance mode x = normalized-distance ×
+the selection `self._lap_ids` is never mutated) — except when it is the ONLY lap drawn, where its
+Δ against itself is a flat zero line, so the lower chart switches to Δ-to-IDEAL and says so on its
+y-axis + legend (see `_delta_series`). Distance mode x = normalized-distance ×
 best-lap distance; time mode x = time-into-lap. A draggable cursor on both plots scrubs the
 video; the delta plot also shows a hover dot riding the delta curve. Stays pacer-free — emits
 raw plot-x + axis mode; app.py owns session/video and all conversion.
@@ -82,6 +84,13 @@ BT_BASELINE_PEN = pg.mkPen(C.border, width=1, style=Qt.DotLine)  # the band's ze
 # refresh() hides it past the threshold. The lap-table selection is itself capped (MAX_COMPARE_LAPS),
 # so a legitimate multi-select stays under this and keeps its legend; only a pathological set hides it.
 LEGEND_MAX_ROWS = 8
+# P7: the lower chart's two possible baselines. Δ-to-best is the normal one; when the BEST lap is
+# the only thing drawn its Δ against itself is identically zero — a flat, empty chart — so that one
+# case re-references the curve to the SYNTHETIC ideal-lap envelope (the same Δideal the hero
+# readout leads with). The y-axis label always names the active baseline, so the two can't be
+# confused; the legend entry (see _delta_curve_label) repeats it on the curve itself.
+DELTA_LABEL_BEST = "Δ to best (s)"
+DELTA_LABEL_IDEAL = "Δ to ideal (s)"
 class PlotsView(QWidget):
     # Scrub signals (pacer-free: emit raw plot-x; app converts/seeks).
     scrubStarted = Signal()
@@ -176,7 +185,10 @@ class PlotsView(QWidget):
         # D1: a legend on the Δ plot too, used ONLY by the synthetic ideal-lap entry (lap Δ curves
         # are drawn unnamed there, so it stays a single quiet line item explaining the dashed line).
         self._delta_legend = self.p_delta.addLegend(offset=(8, 8))
-        self.p_delta.setLabel("left", "Δ to best (s)")
+        # P7: True while the Δ chart is referenced to the ideal lap instead of the best lap
+        # (decided per refresh() — never on the ~30 Hz tick). Drives the y-label + legend wording.
+        self._delta_ideal_mode = False
+        self.p_delta.setLabel("left", DELTA_LABEL_BEST)
         self.p_delta.setLabel("bottom", "distance (m)")
         # Sub-second deltas otherwise auto-scale to a "(x0.001)" SI prefix; keep plain seconds.
         self.p_delta.getAxis("left").enableAutoSIPrefix(False)
@@ -201,6 +213,12 @@ class PlotsView(QWidget):
                 lg.setPen(LEGEND_PEN)
         for plot in (self.p_speed, self.p_delta):
             plot.titleLabel.setAttr("color", C.text_dim)
+            # P3: drop pyqtgraph's own chrome — the little "A" auto-range button (refresh()
+            # FREEZES the range with disableAutoRange, which is exactly what makes pyqtgraph
+            # reveal that button on hover) and the right-click plot menu. Mouse pan/zoom stays
+            # ON: dragging/scrolling into a corner of the trace is intentional here.
+            plot.hideButtons()
+            plot.setMenuEnabled(False)
 
         # Draggable scrub cursors; hoverPen makes the thin dashed line easy to grab.
         self.cur_speed = pg.InfiniteLine(angle=90, movable=True, pen=CURSOR_PEN,
@@ -590,6 +608,13 @@ class PlotsView(QWidget):
             return
         self._stack.setCurrentIndex(0)
         best, speed, delta = result
+        # P7: pick the lower chart's baseline for THIS selection (Δ-to-best, or Δ-to-ideal when the
+        # best lap is alone and its Δ to itself would be a flat zero line). Refresh-time only — the
+        # ~30 Hz tick only moves cursors — and presentation-only: both series come from the
+        # session's existing accessors, so no computed value changes.
+        delta, self._delta_ideal_mode = self._delta_series(draw_ids, baseline, delta, x_mode)
+        self.p_delta.setLabel(
+            "left", DELTA_LABEL_IDEAL if self._delta_ideal_mode else DELTA_LABEL_BEST)
         for k, lid in enumerate(draw_ids):
             # Best lap green (matches lap table); others cycle CHART_SERIES. Always-on best drawn
             # thinner so a selected lap reads primary.
@@ -613,11 +638,17 @@ class PlotsView(QWidget):
                 self._speed_curves[lid] = (sx, spd)  # F5: brake glyphs ride this curve
             if lid in delta:
                 dd, dl = delta[lid]
-                c = self.p_delta.plot(dd, dl, pen=pen)
+                # Δ curves are normally unnamed (the speed legend already identifies every lap).
+                # P7 ideal mode names this one, so the swapped baseline is stated on the curve
+                # itself and not only on the y-axis.
+                d_name = self._delta_curve_label(lid) if self._delta_ideal_mode else None
+                c = self.p_delta.plot(dd, dl, pen=pen, name=d_name)
                 c.setDownsampling(auto=True)
                 c.setClipToView(True)
                 self._curves.append((self.p_delta, c))
                 self._delta_curves.append((lid, dd, dl))
+        if self._delta_ideal_mode:
+            self._delta_legend.setVisible(True)  # reveal the "· Δ to ideal" entry added above
 
         # L3: hide the speed legend once it would blanket the x=0 curve region / overflow the plot
         # (past LEGEND_MAX_ROWS named curves). Under the threshold — the common capped case — it
@@ -659,6 +690,31 @@ class PlotsView(QWidget):
         self._draw_driving()
         self._draw_brake_throttle()
 
+    def _delta_series(self, draw_ids, baseline, delta, x_mode: str):
+        """P7: the Δ series the lower chart draws + whether it is the IDEAL-referenced one.
+
+        Normally `delta()`'s Δ-to-best. But when the ONLY curve drawn is the baseline itself, every
+        Δ is `lap − lap` ≡ 0: a flat line on an otherwise empty chart (a third of the charts panel
+        saying nothing — the common case, since clicking the session best is exactly what a driver
+        does). That one case returns `delta_to_ideal` instead — the SAME lap on the SAME shared
+        x-axis, referenced to the synthetic ideal-lap envelope the session already computes (the
+        Δideal the hero readout leads with), so it is a baseline swap, not new math.
+
+        Falls back silently to Δ-to-best when a second lap is selected, when the ideal can't be
+        built (too few clean laps), or when the baseline is the cross-recording REFERENCE — a local
+        lap already reads a real curve against that, and the sentinel has no local lap arrays."""
+        if len(draw_ids) != 1 or draw_ids[0] != baseline or baseline == REFERENCE_ID:
+            return delta, False
+        ideal = self.session.delta_to_ideal(draw_ids, x_mode=x_mode)
+        if not ideal:
+            return delta, False
+        return ideal, True
+
+    def _delta_curve_label(self, lid: int) -> str:
+        """P7 legend text for the ideal-referenced Δ curve: the normal lap label plus the baseline
+        it is measured against, so the swap is legible without reading the y-axis."""
+        return f"{self._curve_label(lid, False)} · Δ to ideal (synthetic)"
+
     def _draw_ideal(self, x_mode: str):
         """D1: draw the synthetic ideal-lap baseline on the Δ plot when the toggle is on.
 
@@ -666,8 +722,10 @@ class PlotsView(QWidget):
         axis (ideal − best ≤ 0), so it lays under the existing curves in the same reference frame
         and honors both x-modes. Dashed purple + a clearly-synthetic legend entry so it can't be
         mistaken for a real driven lap. No-op (and no legend entry) when the ideal can't be built
-        (e.g. no clean lap)."""
-        if not self._show_ideal:
+        (e.g. no clean lap). P7: also skipped in ideal mode — there the y=0 line already IS the
+        ideal envelope, so this overlay (ideal − best) would draw a second, differently-referenced
+        copy of the same curve."""
+        if not self._show_ideal or self._delta_ideal_mode:
             return
         series = self.session.ideal_delta_to_best(x_mode=x_mode)
         if series is None:

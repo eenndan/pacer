@@ -246,6 +246,10 @@ class LibraryDialog(QDialog):
         self.pb_plot.setLabel("left", "best lap (s)")
         self.pb_plot.getAxis("left").enableAutoSIPrefix(False)
         self.pb_plot.showGrid(x=True, y=True, alpha=0.12)
+        # No pyqtgraph chrome on a read-only mini-chart: the hover "A" auto-range button and the
+        # right-click plot menu are developer affordances, not part of this dialog.
+        self.pb_plot.getPlotItem().hideButtons()
+        self.pb_plot.setMenuEnabled(False)
         for side in ("left", "bottom"):
             ax = self.pb_plot.getAxis(side)
             ax.setPen(C.border)

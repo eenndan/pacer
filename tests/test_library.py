@@ -575,6 +575,18 @@ def test_dialog_lists_both_entries_sorted():
         dlg.deleteLater()
 
 
+def test_dialog_pb_chart_hides_pyqtgraph_chrome():
+    """P3: the PB-progression mini-chart is a read-only display, so it must not sprout pyqtgraph's
+    developer chrome — the little "A" auto-range button that appears under the cursor, or the
+    right-click plot menu."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx, _, _ = _two_entry_index([real.name])
+        dlg = LibraryDialog(idx, _OpenSpy())
+        assert dlg.pb_plot.getPlotItem().buttonsHidden, "PB chart still shows the 'A' button"
+        assert not dlg.pb_plot.getPlotItem().menuEnabled(), "PB chart still has the plot menu"
+        dlg.deleteLater()
+
+
 def test_dialog_sort_by_best_orders_numerically():
     """Sorting the Best column ascending puts the fastest lap first (68.0 < 70.0) — numeric, not
     lexical."""
