@@ -829,6 +829,7 @@ def _run_all():
     test_video_focus_disabled_while_comparing()
     test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_state()
     test_tab_bar_switches_pages_and_names_the_corners_lap()
+    test_corner_row_click_rings_the_map()
     test_show_stats_maximized_is_a_true_toggle()
     test_stats_corner_row_click_restores_grid_then_rings_map()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
@@ -854,7 +855,40 @@ def test_tab_bar_switches_pages_and_names_the_corners_lap():
     # Out-of-range selects are ignored, never a blank page.
     view.select_lap_tab(9)
     assert view.table_stack.currentIndex() == 0
+    # B1: the load-time Corners rename widened the bar's size hint AFTER the header had been
+    # laid out, and a QTabBar doesn't re-request layout on its own — so the last tab shipped
+    # clipped to "Coach" until a tab click happened to heal it. At a realistic panel width
+    # every tab must now be laid out fully inside the bar.
+    view.resize(576, 460)
+    view.show()
+    _APP.processEvents()
+    from PySide6.QtGui import QFontMetrics
+    bar = view.tab_bar
+    assert bar.tabText(3) == "Coaching"
+    # The tab must be wide enough to render its whole label (Qt elides when it isn't — the
+    # symptom was a permanent "Coach"). Compare against the text's own advance width; the
+    # QSS adds ~20px of horizontal padding, so a >= text-width tab cannot be eliding.
+    text_px = QFontMetrics(bar.font()).horizontalAdvance("Coaching")
+    assert bar.tabRect(3).width() >= text_px, (bar.tabRect(3).width(), text_px)
+    view.hide()
     print("test_tab_bar_switches_pages_and_names_the_corners_lap OK")
+
+
+def test_corner_row_click_rings_the_map():
+    """B4: a Corners-tab row rings that corner's apex on the map — the same corner_clicked
+    pathway the Stats CORNERS and Coaching rows use, so the three surfaces behave alike."""
+    view, _s, _t0, _t1 = _real_central_view()
+    view.select_lap_tab(1)
+    _APP.processEvents()
+    table = view.corner_table
+    assert table.table.rowCount() > 0 and table._cids, "stadium fixture must project corners"
+    seen = []
+    table.corner_clicked.connect(seen.append)
+    table.table.cellClicked.emit(0, 0)
+    _APP.processEvents()
+    assert seen == [table._cids[0]]
+    assert view.map._corner_markers.highlighted == f"C{table._cids[0]}"
+    print("test_corner_row_click_rings_the_map OK")
 
 
 def test_show_stats_maximized_is_a_true_toggle():
