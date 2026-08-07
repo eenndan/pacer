@@ -89,6 +89,24 @@ def estimated_timing_tooltip(timing_quality) -> str:
     return text or _ESTIMATED_TIMING_FALLBACK
 COLUMNS = ["Lap", "Time", "Dist (m)", "Entry (km/h)"]
 _ENTRY_COL = len(COLUMNS) - 1  # the Entry-speed column (last base column); its header names the unit
+# COLUMN SIZING (P5). The data columns are CONTENT-TIGHT and one blank trailing SPACER column
+# absorbs every leftover pixel, so a wide panel keeps the real columns adjacent + left-packed
+# instead of flinging the last one to the far right across a dead band (what setStretchLastSection
+# did: on a wide panel the Entry column ballooned past 300px with its values pinned right).
+# The spacer holds no cells; it exists purely to eat the slack (and to carry the alternating row
+# stripe + row selection across the full table width). It is ALWAYS the last column, so it moves
+# as the dynamic S-split columns come and go — see _n_real_cols / _apply_column_sizing.
+SPACER_HEADER = ""
+# How far the spacer may COLLAPSE when the panel has no slack to give it. Qt's default minimum
+# section size (~17px here) is enough to push a table that would otherwise just fit into a
+# horizontal scrollbar — the spacer must never be the thing that summons one. It only floors
+# hand-dragged sections (the data columns size themselves), so a few pixels is safe.
+MIN_SECTION_PX = 4
+# The Lap column is Interactive with a fixed start width (the CornerTable precedent below), NOT
+# ResizeToContents: its text carries the ▶ current-lap marker, which appears/disappears every lap
+# during playback and would make a content-sized column visibly jitter. The width fits the widest
+# decorated label — "▶ ★ 100 ⚠" — with room to spare.
+LAP_COL_PX = 92
 
 
 def _columns(unit: str | None) -> list[str]:
@@ -194,12 +212,18 @@ class LapTable(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        # B7: the stretched last column's CENTERED header drifted ~250px away from its
-        # right-aligned values on wide panels — anchor the header text right too.
-        entry_hdr = self.table.horizontalHeaderItem(len(COLUMNS) - 1)
-        if entry_hdr is not None:
-            entry_hdr.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # P5: no stretched last section — the data columns are content-tight and the blank trailing
+        # spacer column takes the slack (see SPACER_HEADER / _apply_column_sizing). The Lap column's
+        # start width is set once here so a later user drag survives every refresh().
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setMinimumSectionSize(MIN_SECTION_PX)
+        # Qt falls back to the DEFAULT section size for a Stretch section when there's nothing left
+        # to stretch (a table already wide enough to scroll), which would append a phantom 100px of
+        # empty scroll range past the last data column. Every data column sizes itself, so the
+        # default only ever applies to the spacer — make it collapse instead.
+        self.table.horizontalHeader().setDefaultSectionSize(MIN_SECTION_PX)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
+        self.table.horizontalHeader().resizeSection(0, LAP_COL_PX)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(28)
         self._num_font = theme.mono_font(theme.TABLE)
@@ -409,6 +433,25 @@ class LapTable(QWidget):
         n = self.session.sector_count()
         return n + 1 if n else 0
 
+    def _n_real_cols(self) -> int:
+        """The DATA columns: the base COLUMNS + today's S-splits. The blank spacer column sits at
+        exactly this index (it's always last), so every caller stays right as sectors change."""
+        return len(COLUMNS) + self._n_split_cols()
+
+    def _apply_column_sizing(self):
+        """Content-tight data columns + a stretching blank spacer (P5). Re-applied after every
+        column-count change: Qt gives newly-added sections the header's default mode, so a fresh
+        S-column (or a shifted spacer) would otherwise keep the old sizing."""
+        hdr = self.table.horizontalHeader()
+        real = self._n_real_cols()
+        # Lap = Interactive (fixed start width, no ▶-marker jitter — see LAP_COL_PX); the numeric
+        # columns size to their content + header, so each header sits over its own column.
+        hdr.setSectionResizeMode(0, QHeaderView.Interactive)
+        for c in range(1, real):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        # The trailing blank column eats all leftover width, keeping the data columns left-packed.
+        hdr.setSectionResizeMode(real, QHeaderView.Stretch)
+
     def set_speed_unit(self, unit: str):
         """Switch the Entry-speed display unit live: re-header + re-fill (converts the Entry cells).
         No-op if unchanged."""
@@ -429,8 +472,11 @@ class LapTable(QWidget):
         # N sector lines split each lap into N+1 sub-sectors; show one split column per
         # sub-sector (none by default = today's 4 columns). Column count depends on this,
         # so set the headers here — refresh() runs on selection and after sectors change.
+        # The blank SPACER column is appended LAST (after any S-splits) — it absorbs the panel's
+        # leftover width so the data columns stay adjacent and left-packed (P5).
         n_splits = self._n_split_cols()
-        headers = _columns(self._speed_unit) + [f"S{i + 1}" for i in range(n_splits)]
+        headers = [*_columns(self._speed_unit),
+                   *(f"S{i + 1}" for i in range(n_splits)), SPACER_HEADER]
 
         # Per-lap splits + per-column session-best (same accessor the footer sums, so cells/footer agree).
         splits_by_lap = {row["idx"]: self.session.lap_sector_splits(row["idx"]) for row in rows}
@@ -472,8 +518,22 @@ class LapTable(QWidget):
                 self.table.setItem(r, c, item)
             # Stash the lap id on the Lap cell so row<->lap stays correct across any sort.
             self.table.item(r, 0).setData(LAP_ROLE, lap_id)
+        # Losing sector lines SHRINKS the column count, and setColumnCount only drops the TRAILING
+        # sections — so the old S-column items can survive in what is now the blank spacer column
+        # (the fill above writes the data columns only). Empty it, or stale splits would show under
+        # a blank header.
+        spacer = self._n_real_cols()
+        for r in range(self.table.rowCount()):
+            if self.table.item(r, spacer) is not None:
+                self.table.takeItem(r, spacer)
         self.table.blockSignals(False)
+        # Size the columns once the rows are in (ResizeToContents then measures real content).
+        self._apply_column_sizing()
         # Re-apply the user's chosen sort (lap-ascending by default) on the freshly-filled rows.
+        # A remembered S-column can VANISH when sector lines are removed (and must never be the
+        # blank spacer) — fall back to lap order rather than sorting a gone/blank column.
+        if self._sort_col >= self._n_real_cols():
+            self._sort_col, self._sort_order = 0, Qt.AscendingOrder
         # Tell _NumItem the direction first so blanks land LAST after any descending reversal.
         _NumItem._descending = self._sort_order == Qt.DescendingOrder
         self.table.setSortingEnabled(True)
@@ -639,6 +699,12 @@ class LapTable(QWidget):
         self.table.blockSignals(False)
 
     def _on_sorted(self, col, order):
+        # The blank trailing SPACER column holds no cells, so a click on it can't order anything —
+        # it would just park the sort indicator on an empty header and forget the user's sort.
+        # Bounce the indicator back to the live sort column (which re-applies that sort).
+        if col >= self._n_real_cols():
+            self.table.horizontalHeader().setSortIndicator(self._sort_col, self._sort_order)
+            return
         # A header click re-ordered the rows; remember the chosen column/direction so a later
         # refresh() (e.g. a sector edit) keeps the user's sort, and re-apply the highlights
         # keyed by lap id so they follow the laps to their new rows.
