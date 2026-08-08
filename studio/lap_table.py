@@ -18,7 +18,6 @@ from PySide6.QtCore import QItemSelection, QItemSelectionModel, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QHBoxLayout,
     QHeaderView,
     QLabel,
     QStackedWidget,
@@ -121,25 +120,11 @@ NUMERIC_COL_START = 1
 NUM_ROLE = Qt.UserRole  # the numeric sort key stored on every cell
 LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the Lap cell
 
-# (title, accessor s->value|None, tooltip) for the SESSION-BESTS footer tiles. Values come from
-# Session (theoretical_best / best_rolling_lap) so the footer and the purple per-sector cells share
-# one computation and can't disagree. The callable accessor (vs a method-name string) makes a
-# renamed Session method a load-time error, not a silent footer miss.
-# Index of the "Theoretical best" tile in FOOTER_ROWS. It's a genuine sum-of-best-sectors metric
-# only when the track HAS sector lines; with none it degenerates to the best lap time (a bare
-# duplicate of the ★ starred best, and it can even read SLOWER than "Best rolling"), so the whole
-# tile is hidden on a 0-sector track (see _refresh_footer) — it carries no information there.
-_THEORETICAL_IDX = 0
-FOOTER_ROWS = (
-    ("Theoretical", lambda s: s.theoretical_best(),
-     "Theoretical best — sum of the session-best sector splits (the purple cells): the lap "
-     "you'd drive by stitching every best sector together. With no sector lines this equals "
-     "the best lap time."),
-    ("Best rolling", lambda s: s.best_rolling_lap(),
-     "Best rolling — the fastest single complete loop regardless of where it starts: the "
-     "minimum time from passing any track position to passing it again one lap later (windows "
-     "spanning a GPS-dropout ⚠ lap are excluded)."),
-)
+# The two stitched targets that used to sit in a SESSION-BESTS footer below this table
+# (theoretical best / best rolling) now live on the Stats page, each beside the data it is derived
+# from: `stats_panel.t_theoretical` inside SECTORS (whose bests it sums) and `t_rolling` in PACE.
+# The footer cost this grid 63px — two lap rows — on every recording, could not be collapsed or
+# hidden, and repeated numbers the Stats page was already the home for.
 
 
 def _is_blank(v) -> bool:
@@ -253,66 +238,14 @@ class LapTable(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        # Stretch 1 on the lap grid: the excluded strip + footer keep their compact size and
-        # every extra pixel of panel height becomes visible lap rows (without this, Qt split
-        # spare height between them and the grid never grew).
+        # Stretch 1 on the lap grid: the excluded strip keeps its compact size and every extra
+        # pixel of panel height becomes visible lap rows (without this, Qt split spare height
+        # between them and the grid never grew).
         lay.addWidget(self._stack, 1)
-        lay.addWidget(self._build_excluded_strip())  # between the table and the SESSION-BESTS footer
-        lay.addWidget(self._build_footer())
+        lay.addWidget(self._build_excluded_strip())
         self.refresh()
 
     # ------------------------------------------------------------------ build
-    def _build_footer(self) -> QWidget:
-        """Build the SESSION-BESTS footer: a section divider over one stat tile per FOOTER_ROWS
-        entry (dim caption + hero value). Plain labels below the table so values can never
-        sort/select. Values use neutral text (purple is reserved for the sector-best cells)."""
-        footer = QWidget()
-        footer.setObjectName("LapTableFooter")
-        # hairline + surface bg so it reads as a designed footer
-        footer.setStyleSheet(
-            f"QWidget#LapTableFooter {{ border-top: 1px solid {theme.C.border}; "
-            f"background-color: {theme.C.surface}; }}")
-        outer = QVBoxLayout(footer)
-        outer.setContentsMargins(10, 6, 10, 8)
-        outer.setSpacing(4)
-        # Section divider: the small uppercase dimmed header type (the panel's BarLabel role) so
-        # the block announces itself the way every other panel section does.
-        header = QLabel("SESSION BESTS")
-        header.setProperty("role", "BarLabel")
-        header.setToolTip("Reference targets composed from this session's best sectors / loops "
-                          "— not lap times you actually drove.")
-        outer.addWidget(header)
-
-        tiles = QHBoxLayout()
-        tiles.setContentsMargins(0, 0, 0, 0)
-        tiles.setSpacing(20)
-        hero_num = theme.mono_font(theme.HERO - 5, theme.W_SEMIBOLD)  # a clear step up from 13px
-        self._footer_values: list[QLabel] = []
-        # The per-tile container widgets (caption + value), kept so a whole tile can be shown/hidden
-        # in one call — the Theoretical tile hides on a 0-sector track (see _refresh_footer).
-        self._footer_tiles: list[QWidget] = []
-        for title, _accessor, tip in FOOTER_ROWS:  # _accessor (the value callable) used in _refresh_footer
-            tile_w = QWidget()
-            tile = QVBoxLayout(tile_w)
-            tile.setContentsMargins(0, 0, 0, 0)
-            tile.setSpacing(0)
-            caption = QLabel(title)
-            caption.setStyleSheet(
-                f"color: {theme.C.text_dim}; font-size: {theme.CAPTION}px;")
-            caption.setToolTip(tip)
-            value = QLabel(fmt_time(float("nan")))
-            value.setFont(hero_num)
-            value.setStyleSheet(f"color: {theme.C.text};")  # neutral, not the sector-best purple
-            value.setToolTip(tip)
-            tile.addWidget(caption)
-            tile.addWidget(value)
-            tiles.addWidget(tile_w)
-            self._footer_values.append(value)
-            self._footer_tiles.append(tile_w)
-        tiles.addStretch(1)
-        outer.addLayout(tiles)
-        return footer
-
     def _build_excluded_strip(self) -> QWidget:
         """A muted strip listing laps LEFT OUT of the times/bests by the median band (see
         EXCLUDED_MARK). COLLAPSED by default to a single muted one-liner ("⊘ N excluded ▸"); a
@@ -398,35 +331,6 @@ class LapTable(QWidget):
             lines = [*lines[:EXCLUDED_MAX_SHOWN], f"+{hidden} more"]
         self._excluded_body.setText("\n".join(lines))
 
-    def _refresh_footer(self):
-        """Rewrite footer values from Session; None → em-dash. The SESSION-BESTS tiles (theoretical
-        best / best rolling) are reference targets stitched from the session's best splits/loops, so
-        they share the lap timing's authority: while the timing is PROVISIONAL (arbitrary start
-        line) OR the clock is DEGRADED (media-clock / low-GPS estimate) they're muted + italic with
-        the matching tooltip, restored to the normal hero value once Verified AND high-quality.
-
-        The Theoretical tile is HIDDEN on a 0-sector track: with no sector lines theoretical_best
-        degenerates to the best lap time — a bare duplicate of the ★ starred best that can even read
-        slower than 'Best rolling' — so it carries no information there (M2). It's a genuine
-        sum-of-best-sectors metric, and shown, only once the track has sector lines."""
-        provisional = not self.session.timing_verified
-        degraded = self.session.timing_quality.degraded
-        muted = provisional or degraded
-        note = (PROVISIONAL_TOOLTIP if provisional
-                else estimated_timing_tooltip(self.session.timing_quality))
-        # Hide the Theoretical tile with no sectors (see docstring); recomputed each refresh so a
-        # later sector-line edit reveals it.
-        self._footer_tiles[_THEORETICAL_IDX].setVisible(self.session.sector_count() > 0)
-        for (_title, accessor, tip), label in zip(FOOTER_ROWS, self._footer_values,
-                                                   strict=True):
-            v = accessor(self.session)
-            label.setText(fmt_time(v if v is not None else float("nan")))
-            font = label.font()
-            font.setItalic(muted)
-            label.setFont(font)
-            colour = theme.PROVISIONAL_COLOR if muted else theme.C.text
-            label.setStyleSheet(f"color: {colour};")
-            label.setToolTip(f"{note}\n\n{tip}" if muted else tip)
 
     def _n_split_cols(self) -> int:
         """Number of S-split columns: sector_count()+1 if any sector lines, else 0."""
@@ -542,11 +446,9 @@ class LapTable(QWidget):
         # dropout lap ids, keyed by lap id so the ⚠ flag follows the lap across sorts
         self._dropout_ids = self.session.dropout_lap_ids()
         self._apply_highlights()
-        # The excluded-laps strip + summary footer (theoretical best / best rolling) follow every
-        # refresh — i.e. also after a timing-line edit re-segments the laps (which shifts both the
-        # valid and the excluded sets).
+        # The excluded-laps strip follows every refresh — i.e. also after a timing-line edit
+        # re-segments the laps (which shifts both the valid and the excluded sets).
         self._refresh_excluded()
-        self._refresh_footer()
 
     # ------------------------------------------------------------- highlights
     def _lap_id(self, r: int) -> int:
