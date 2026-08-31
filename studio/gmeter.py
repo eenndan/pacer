@@ -49,6 +49,33 @@ _MOVING_MS = 4.0     # m/s; heading is ill-defined at a standstill (used for fit
 # smoother than the raw IMU. Lateral g (which the IMU gets right, r~0.9) is unchanged.
 _DIAL_LONG_SMOOTH_S = 0.35
 
+# --- CORI yaw DRIFT ---------------------------------------------------------------------------
+# The GoPro derives CORI's world frame by integrating its gyro, with no magnetometer to hold it, so
+# the "world" yaw DRIFTS steadily through a chapter — measured at ~0.08 deg/s on a D24 recording and
+# ~0.15 deg/s on a Sandown one, i.e. 130-200 deg end to end over a ~27 min chapter. ONE Procrustes
+# fit per chapter can therefore only be right where the drift crosses its mean (the middle laps);
+# towards either end the g vector comes out rotated by the accumulated error, which SHRINKS the
+# lateral g the driver reads by cos(error) and eventually INVERTS it. Measured per lap, the observed
+# lateral gain tracked cos(residual yaw) to within a few percent across every lap of both
+# recordings — a pure rotation error, not noise.
+#
+# So the yaw is fitted in WINDOWS across the chapter and interpolated per sample. The window is a
+# compromise: long enough that a window holds several corners in both directions (a fit needs both
+# to be conditioned), short enough to track the drift within a few degrees.
+_YAW_WIN_S = 90.0          # window length for one yaw fit
+_YAW_HOP_S = 45.0          # hop between window centres (50% overlap)
+_YAW_MIN_SAMPLES = 200     # moving samples a window needs before its fit is trusted
+_YAW_MIN_LAT_RMS = 0.15    # g; a window with no real cornering can't fit a yaw — skip it
+_YAW_MIN_WINDOWS = 3       # below this, keep the single whole-chapter fit (nothing to interpolate)
+# A rotation is only determined if the reference vectors point in a SPREAD of directions. If they
+# are near-collinear — a single long corner, or a slalom whose lateral acceleration always lies on
+# one world axis — every rotation mapping that line onto itself fits equally well and the fit
+# returns noise, which would corrupt an alignment that was already correct. Gate on the 2x2
+# direction scatter's singular-value ratio; a real lap sweeps the full circle and clears this
+# easily. (Measured: without the gate, a collinear synthetic drove a clean fixture from
+# lateral r=+0.69 down to -0.05.)
+_YAW_MIN_COND = 0.08
+
 
 def _norm_rows(a):
     return a / np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-12)
@@ -250,24 +277,46 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
         if not np.any(seg):
             continue
         R, reflect, cross = (np.eye(2), False, None)
-        if long_gps is not None and moving is not None:
-            seg_g = (gps_t >= t0) & (gps_t < t1)
-            if np.any(moving & seg_g):
-                R, reflect, cross = _fit_segment(
-                    ta[seg], h1[seg], h2[seg], gps_t[seg_g],
-                    long_gps[seg_g], lat_gps[seg_g], fwd[seg_g], left[seg_g],
-                    moving[seg_g])
-                if cross is not None:
-                    crosses.append(cross)
+        have_ref = long_gps is not None and moving is not None
+        seg_g = ((gps_t >= t0) & (gps_t < t1)) if have_ref else None
+        if have_ref and np.any(moving & seg_g):
+            R, reflect, cross = _fit_segment(
+                ta[seg], h1[seg], h2[seg], gps_t[seg_g],
+                long_gps[seg_g], lat_gps[seg_g], fwd[seg_g], left[seg_g],
+                moving[seg_g])
         P = np.column_stack([h1[seg], h2[seg]]) / G
         if reflect:
             P = np.column_stack([P[:, 0], -P[:, 1]])
         P_enu = P @ R.T
+        # Undo the CORI gyro's yaw drift WITHIN this chapter (see the _YAW_* constants). Without
+        # this the single fit above is only right near the drift's midpoint; the first and last
+        # laps come out rotated by 60-110 deg, which is what shrank the lateral g the driver reads
+        # by cos(error) and eventually inverted it.
+        if cross is not None:
+            drift = _yaw_drift_correction(
+                ta[seg], P_enu, gps_t[seg_g], long_gps[seg_g], lat_gps[seg_g],
+                fwd[seg_g], left[seg_g], moving[seg_g])
+            if drift is not None:
+                P_enu = _rotate(P_enu, drift)
+                # Report the yaw this chapter actually used at its midpoint, drift included.
+                cross.align_yaw_deg += float(np.degrees(drift[len(drift) // 2]))
         if fwd_a is not None:
             long_g[seg] = np.sum(P_enu * fwd_a[seg], axis=1)
             lat_g[seg] = np.sum(P_enu * left_a[seg], axis=1)
         else:
             long_g[seg], lat_g[seg] = P_enu[:, 0], P_enu[:, 1]
+        # Re-derive the trust verdict from the CORRECTED series: the pre-correction correlation was
+        # averaged over a chapter whose ends were badly rotated, so it understated a good mount and
+        # its reported rms described a signal nobody ever sees.
+        if cross is not None and fwd_a is not None:
+            fixed = _cross_check(
+                long_g[seg], lat_g[seg],
+                np.interp(ta[seg], gps_t, long_gps), np.interp(ta[seg], gps_t, lat_gps),
+                np.interp(ta[seg], gps_t, moving.astype(float)) > 0.5,
+                cross.align_yaw_deg, reflect)
+            cross = fixed if fixed is not None else cross
+        if cross is not None:
+            crosses.append(cross)
 
     cross = _merge_crosses(crosses)
     times, lat_g, long_g = _resample(ta, lat_g, long_g)
@@ -369,6 +418,99 @@ def _fit_segment(ta, h1, h2, gps_t, long_gps, lat_gps, fwd, left, moving):
         long_rms_gps=float(np.sqrt(np.mean(long_gps[m]**2))),
         align_yaw_deg=yaw, align_reflect=reflect, ok=ok)
     return R, reflect, cross
+
+
+def _fit_yaw(A, B, weights):
+    """Best-fit rotation angle (radians) taking the 2-D vectors `A` onto `B`, sample-weighted.
+
+    Weighted Procrustes restricted to a pure rotation — the mount is rigid, so only the angle is
+    free (a free scale would silently absorb a genuinely mis-scaled axis). Weighting exists because
+    the IMU's FORWARD axis is vibration-dominated garbage (r~0.1-0.3): left unweighted its noise
+    dominates the least squares and drags the angle off the true mount yaw."""
+    wa = A * weights[:, None]
+    h = wa.T @ (B * weights[:, None])
+    u, _s, vt = np.linalg.svd(h)
+    r = vt.T @ u.T
+    return float(np.arctan2(r[1, 0], r[0, 0]))
+
+
+def _yaw_drift_correction(ta, p_enu, gps_t, long_gps, lat_gps, fwd, left, moving):
+    """Per-sample residual yaw (radians) undoing the CORI gyro drift across one chapter.
+
+    Fits the leftover rotation between the chapter-aligned IMU vector and the GPS-derived one in
+    overlapping windows (see _YAW_WIN_S), then interpolates the unwrapped angle onto `ta`. Windows
+    without enough moving samples or without real cornering are dropped — their angle comes from
+    the neighbours the interpolation spans. Returns None when too few windows survive, in which
+    case the caller keeps the single whole-chapter fit.
+
+    Note the interpolation is over TIME, not sample index, so a GPS gap can't skew the ramp."""
+    if len(gps_t) < 2:
+        return None
+    a_imu = np.column_stack([np.interp(gps_t, ta, p_enu[:, 0]),
+                             np.interp(gps_t, ta, p_enu[:, 1])])
+    a_gps = long_gps[:, None] * fwd + lat_gps[:, None] * left
+    centres, angles = [], []
+    t_first, t_last = float(gps_t[0]), float(gps_t[-1])
+    starts = np.arange(t_first, max(t_last - _YAW_WIN_S, t_first) + _YAW_HOP_S, _YAW_HOP_S)
+    for t0 in starts:
+        win = moving & (gps_t >= t0) & (gps_t < t0 + _YAW_WIN_S)
+        n = int(np.sum(win))
+        if n < _YAW_MIN_SAMPLES:
+            continue
+        lat_w = lat_gps[win]
+        if float(np.sqrt(np.mean(lat_w**2))) < _YAW_MIN_LAT_RMS:
+            continue          # a straight/parade stint pins nothing down
+        b = a_gps[win] * np.abs(lat_w)[:, None]
+        sv = np.linalg.svd(b, compute_uv=False)
+        if sv[0] <= 0 or sv[1] / sv[0] < _YAW_MIN_COND:
+            continue          # near-collinear: no rotation is determined (see _YAW_MIN_COND)
+        centres.append(float(np.mean(gps_t[win])))
+        angles.append(_fit_yaw(a_imu[win], a_gps[win], np.abs(lat_w)))
+    if len(centres) < _YAW_MIN_WINDOWS:
+        return None
+    order = np.argsort(centres)
+    centres = np.asarray(centres)[order]
+    # Unwrap before interpolating: consecutive fits can straddle +-pi mid-drift, and a naive
+    # interpolation across that seam would sweep the correction the wrong way round the circle.
+    angles = np.unwrap(np.asarray(angles)[order])
+    theta = np.interp(ta, centres, angles)
+    # Linear EXTRAPOLATION past the first/last window CENTRE. np.interp clamps there, which would
+    # freeze the correction across the half-window at each end of the chapter — i.e. the first and
+    # last laps, precisely where the accumulated drift is largest (measured: it left ~20 deg on the
+    # table). The drift is a gyro bias integrating, so continuing the end slope is the right model.
+    for mask, i0, i1 in ((ta < centres[0], 0, 1), (ta > centres[-1], -1, -2)):
+        if not np.any(mask):
+            continue
+        span = centres[i0] - centres[i1]
+        if abs(span) < 1e-9:
+            continue
+        slope = (angles[i0] - angles[i1]) / span
+        theta[mask] = angles[i0] + slope * (ta[mask] - centres[i0])
+    return theta
+
+
+def _rotate(p, theta):
+    """Rotate each row of the (n,2) array `p` by its own angle `theta[i]` (radians)."""
+    c, s = np.cos(theta), np.sin(theta)
+    return np.column_stack([c * p[:, 0] - s * p[:, 1], s * p[:, 0] + c * p[:, 1]])
+
+
+def _cross_check(along, lat, long_gps, lat_gps, moving, yaw_deg, reflect):
+    """The IMU-vs-GPS trust verdict, built from the FINAL aligned series (post drift correction) so
+    the reported correlations describe the g the app actually shows."""
+    m = moving & np.isfinite(along) & np.isfinite(lat)
+    if int(np.sum(m)) < 10:
+        return None
+    cl = _corr(lat[m], lat_gps[m])
+    ca = _corr(along[m], long_gps[m])
+    return CrossCheck(
+        n=int(np.sum(m)), lat_corr=float(cl), long_corr=float(ca),
+        lat_rms_accl=float(np.sqrt(np.mean(lat[m]**2))),
+        lat_rms_gps=float(np.sqrt(np.mean(lat_gps[m]**2))),
+        long_rms_accl=float(np.sqrt(np.mean(along[m]**2))),
+        long_rms_gps=float(np.sqrt(np.mean(long_gps[m]**2))),
+        align_yaw_deg=float(yaw_deg), align_reflect=bool(reflect),
+        ok=bool(cl >= 0.4 and np.isfinite(cl)))
 
 
 def _merge_crosses(crosses):

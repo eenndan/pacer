@@ -38,16 +38,38 @@ The three streams use *different* element conventions; these were pinned against
    confirming camera→world. The naïve (non-conjugated) rotation gave std ≈0.7 (wrong). CORI's
    axis convention matches GRAV's, so ACCL-frame vectors are permuted by `PERM` before rotating.
 
-3. **CORI yaw is NOT GPS north, and RESETS each chapter.** Camera heading does not track GPS
-   heading (the optical-axis-vs-velocity offset has ~uniform multi-radian spread), and chapter 1
-   begins at the identity quaternion — CORI is referenced to *each chapter's own* capture start.
-   So the one remaining unknown — the constant yaw+handedness between CORI's world plane and GPS
-   ENU — is fit **per chapter** by Procrustes (SVD) against the GPS-derived horizontal accel (a
-   one-time per-chapter mount calibration). A single global fit across chapters fails (see below).
+3. **CORI yaw is NOT GPS north, RESETS each chapter, and DRIFTS within one.** Camera heading does
+   not track GPS heading (the optical-axis-vs-velocity offset has ~uniform multi-radian spread),
+   and chapter 1 begins at the identity quaternion — CORI is referenced to *each chapter's own*
+   capture start. So the yaw+handedness between CORI's world plane and GPS ENU is fit **per
+   chapter** by Procrustes (SVD) against the GPS-derived horizontal accel. A single global fit
+   across chapters fails (see below).
+
+   That yaw is **not constant within a chapter**. CORI comes from integrating the gyro with no
+   magnetometer, so its world reference creeps: measured **+0.08 °/s** on a D24 recording and
+   **+0.15 °/s** on a Sandown one — 130–200° end to end over a ~27 min chapter. One fit per chapter
+   is therefore only correct where the drift crosses its mean (the middle laps); towards either end
+   the g vector comes out rotated by the accumulated error, which scales the lateral g by
+   cos(error) and eventually inverts it. Per lap, the observed lateral gain tracked cos(residual
+   yaw) on **every** lap of both recordings — a pure rotation error, not noise:
+
+   | recording | lap 1 | middle laps | last lap |
+   |---|---|---|---|
+   | Sandown GX010065 (before) | r −0.73, gain −0.33 | r +0.97, gain 1.03 | r +0.04, gain 0.01 |
+   | Sandown GX010065 (after)  | r +0.97, gain 1.06 | r +0.97, gain 1.06 | r +0.98, gain 1.03 |
+   | D24 GX020060 (before) | r +0.60, gain 0.28 | r +0.96, gain 1.04 | r +0.85, gain 0.57 |
+   | D24 GX020060 (after)  | r +0.96, gain 1.05 | r +0.96, gain 1.04 | r +0.96, gain 1.04 |
+
+   So the yaw is fitted in **overlapping 90 s windows** and interpolated per sample (linearly
+   extrapolated past the first/last window centre, since the drift is a ramp). A window is used
+   only if it holds enough moving samples, real cornering, and an acceleration-direction spread
+   that actually determines a rotation — near-collinear vectors (one long corner) fit noise and
+   would corrupt an alignment that was already right.
 
 The pipeline: `ACCL − gravity → rotate by conj(CORI) → project onto the horizontal plane
-(⊥ constant world-gravity) → align (per chapter) to ENU → split per-sample into forward
-(along GPS velocity) and lateral (perpendicular)`. `long_g = a_fwd/9.81`, `lat_g = a_left/9.81`.
+(⊥ constant world-gravity) → align (per chapter) to ENU → de-drift the yaw across the chapter →
+split per-sample into forward (along GPS velocity) and lateral (perpendicular)`.
+`long_g = a_fwd/9.81`, `lat_g = a_left/9.81`.
 
 ## Cross-check results (ACCL-derived vs GPS-derived g)
 

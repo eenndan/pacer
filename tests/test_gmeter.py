@@ -214,6 +214,159 @@ def test_at_time_uses_gps_longitudinal_and_reports_source():
     print("ok at_time: GPS longitudinal preferred, IMU lateral kept, long_source reported")
 
 
+def _build_weave(dur=320.0, lat_amp_g=0.6, period_s=20.0):
+    """A kart weaving left/right at constant speed, with a FIXED camera mount.
+
+    Mirrors `_build_synthetic`'s straight-line branch exactly — same world frame, same specific-force
+    convention, same ACCL/GRAV/CORI element orders — but with a time-VARYING lateral acceleration.
+    A varying lateral is what makes the IMU-vs-GPS correlation meaningful: on a steady circle the
+    lateral g is constant, Pearson r is ~0, and `compute` falls back to the GPS meter, so the IMU
+    path under test is never exercised.
+    """
+    left_w = np.array([0.0, 1.0, 0.0])
+    up_w = np.array([0.0, 0.0, 1.0])
+    w = 2.0 * np.pi / period_s
+
+    def lat_of(t):
+        return lat_amp_g * np.sin(w * t)
+
+    ta = np.linspace(0.0, dur, int(dur * 200))
+    # Specific force in WORLD coords: the lateral swing plus the +g up reaction (a stationary
+    # accelerometer reads +g UP), exactly as _build_synthetic does.
+    meas_w = left_w * (lat_of(ta) * G)[:, None] + up_w * G
+
+    q_yaw = _quat_from_axis_angle(up_w, np.radians(50.0))
+    q_pitch = _quat_from_axis_angle([0, 1, 0], np.radians(10.0))
+    q_cam_to_world = _quat_mul(q_yaw, q_pitch)
+    q_world_to_cam = np.array([q_cam_to_world[0], -q_cam_to_world[1],
+                               -q_cam_to_world[2], -q_cam_to_world[3]])
+    meas_cam = np.array([_rot_by_quat(q_world_to_cam, m) for m in meas_w])
+    grav_dir_cam = _rot_by_quat(q_world_to_cam, up_w)
+
+    accl = np.column_stack([ta, meas_cam[:, 2], meas_cam[:, 0], meas_cam[:, 1]])  # (z,x,y)
+    tg = np.linspace(0.0, dur, int(dur * 60))
+    grav = np.column_stack([tg] + [np.full(len(tg), c) for c in grav_dir_cam])    # (x,y,z)
+    cori = np.column_stack([tg] + [np.full(len(tg), q_world_to_cam[k]) for k in range(4)])
+
+    # GPS: integrate the same world motion at 10 Hz. vx stays v0; vy is the lateral integral.
+    gt = np.linspace(0.0, dur, int(dur * 10))
+    v0 = 22.0
+    vy = (lat_amp_g * G / w) * (1.0 - np.cos(w * gt))
+    gx = v0 * gt
+    gy = (lat_amp_g * G / w) * (gt - np.sin(w * gt) / w)
+    gspeed = np.hypot(np.full_like(gt, v0), vy)
+    return accl, grav, cori, gt, gx, gy, gspeed
+
+
+def _add_cori_yaw_drift(cori, drift_deg, dur):
+    """Return a copy of `cori` whose reported world YAW drifts linearly by `drift_deg` over `dur`.
+
+    The real GoPro defect in miniature: CORI's world frame comes from integrating the gyro with no
+    magnetometer, so its yaw reference creeps (measured 0.08-0.15 deg/s on real recordings). The
+    physics — ACCL and GRAV — is untouched; only the ORIENTATION the camera reports slides. Built
+    by re-expressing the EXISTING fixture's quaternion rather than re-deriving the mount, so this
+    isolates exactly one variable against a fixture the other tests already prove correct.
+    """
+    up_w = np.array([0.0, 0.0, 1.0])
+    out = cori.copy()
+    t = cori[:, 0]
+    drift = np.radians(drift_deg) * (t / dur - 0.5)
+    for i in range(len(t)):
+        q_w2c = cori[i, 1:]
+        q_c2w = np.array([q_w2c[0], -q_w2c[1], -q_w2c[2], -q_w2c[3]])
+        q_rep = _quat_mul(_quat_from_axis_angle(up_w, -drift[i]), q_c2w)
+        out[i, 1:] = [q_rep[0], -q_rep[1], -q_rep[2], -q_rep[3]]
+    return out
+
+
+def _lapping_reference(dur=400.0, hz=10.0, lat_amp=1.0, collinear=False):
+    """A GPS-derived reference whose acceleration DIRECTION sweeps the full circle, as a lap does.
+
+    Returns (gps_t, long_gps, lat_gps, fwd, left, moving). `collinear=True` pins the heading, so
+    every acceleration vector lies on one line — the ill-conditioned case a yaw fit must refuse.
+    """
+    t = np.arange(0.0, dur, 1.0 / hz)
+    heading = np.zeros_like(t) if collinear else (2.0 * np.pi * t / 40.0)  # a lap every 40 s
+    fwd = np.column_stack([np.cos(heading), np.sin(heading)])
+    left = np.column_stack([-fwd[:, 1], fwd[:, 0]])
+    lat_gps = lat_amp * np.sin(2.0 * np.pi * t / 7.0)   # corners come and go within the lap
+    long_gps = np.zeros_like(t)
+    return t, long_gps, lat_gps, fwd, left, np.ones_like(t, dtype=bool)
+
+
+def test_yaw_drift_correction_recovers_a_known_ramp():
+    """The heart of the fix: a CORI world-yaw that creeps linearly must be recovered per sample.
+
+    Real GoPro CORI has no magnetometer, so its world yaw is an integrated gyro that drifts —
+    measured at 0.08 deg/s on a D24 recording and 0.15 deg/s on a Sandown one, i.e. 130-200 deg end
+    to end. ONE Procrustes fit per chapter is then only right where the drift crosses its mean; the
+    first and last laps came out rotated by 60-110 deg, which scaled the lateral g the driver reads
+    by cos(error) and eventually INVERTED it (Sandown lap 23 peaked at 0.77 g against a GPS-measured
+    1.42 g; lap 1 of the same recording correlated -0.73 with the truth).
+
+    Here the IMU vector IS the reference pre-rotated by a known ramp, so the correction must come
+    back as its negative.
+    """
+    gps_t, long_gps, lat_gps, fwd, left, moving = _lapping_reference()
+    a_gps = long_gps[:, None] * fwd + lat_gps[:, None] * left
+    ramp = np.radians(140.0) * (gps_t / gps_t[-1] - 0.5)          # +-70 deg across the run
+    c, s = np.cos(ramp), np.sin(ramp)
+    a_imu = np.column_stack([c * a_gps[:, 0] - s * a_gps[:, 1],
+                             s * a_gps[:, 0] + c * a_gps[:, 1]])
+
+    ta = np.linspace(gps_t[0], gps_t[-1], 4000)                    # the IMU's own denser grid
+    p_enu = np.column_stack([np.interp(ta, gps_t, a_imu[:, 0]),
+                             np.interp(ta, gps_t, a_imu[:, 1])])
+    got = gmeter._yaw_drift_correction(ta, p_enu, gps_t, long_gps, lat_gps, fwd, left, moving)
+    assert got is not None, "a full recording of laps must yield a drift fit"
+    want = -np.interp(ta, gps_t, ramp)
+    err = np.degrees(np.abs(got - want))
+    assert err.max() < 8.0, f"worst residual {err.max():.1f} deg (mean {err.mean():.1f})"
+    # And specifically at the ENDS, where np.interp would otherwise clamp to the first/last window
+    # centre and freeze the correction across the recording's first and last laps.
+    assert err[:len(err) // 10].mean() < 8.0, "start of the recording under-corrected"
+    assert err[-len(err) // 10:].mean() < 8.0, "end of the recording under-corrected"
+    print("ok yaw drift: a +-70 deg ramp recovered to within 8 deg, ends included")
+
+
+def test_yaw_drift_correction_refuses_ill_conditioned_windows():
+    """Collinear acceleration (one long corner, or a slalom on a single axis) determines NO
+    rotation — every angle mapping that line onto itself fits equally. The fit must decline rather
+    than return noise: measured, an unguarded fit drove a clean synthetic from lateral r=+0.69 to
+    -0.05, i.e. it BROKE an alignment that was already correct."""
+    gps_t, long_gps, lat_gps, fwd, left, moving = _lapping_reference(collinear=True)
+    a_gps = long_gps[:, None] * fwd + lat_gps[:, None] * left
+    ta = np.linspace(gps_t[0], gps_t[-1], 4000)
+    p_enu = np.column_stack([np.interp(ta, gps_t, a_gps[:, 0]),
+                             np.interp(ta, gps_t, a_gps[:, 1])])
+    assert gmeter._yaw_drift_correction(
+        ta, p_enu, gps_t, long_gps, lat_gps, fwd, left, moving) is None
+    print("ok yaw drift: collinear windows are refused, not fitted to noise")
+
+
+def test_cori_yaw_drift_survives_the_full_pipeline():
+    """End to end: a drifting CORI through gmeter.compute still yields a usable meter (finite,
+    right length, IMU-sourced) — the guard rails around the correction, on top of the unit tests
+    above that pin the angle itself."""
+    dur = 320.0
+    accl, grav, cori, gt, gx, gy, gs = _build_weave(dur=dur)
+    gm = gmeter.compute(accl, grav, _add_cori_yaw_drift(cori, 140.0, dur), gt, gx, gy, gs)
+    assert gm.has_data and np.isfinite(gm.lat_g).all() and np.isfinite(gm.long_g).all()
+    assert len(gm.times) == len(gm.lat_g) == len(gm.long_g)
+    print("ok drifting CORI through compute(): finite, well-formed meter")
+
+
+def test_yaw_drift_correction_declines_gracefully_without_enough_windows():
+    """Too short to fit several windows -> keep the single whole-chapter fit rather than
+    extrapolating a drift from one noisy sample. A 40 s run holds under _YAW_WIN_S, so
+    _yaw_drift_correction must return None and the meter must still be produced."""
+    accl, grav, cori, gt, gx, gy, gs = _build_synthetic(lateral_g=0.5, dur=40.0)
+    gm = gmeter.compute(accl, grav, cori, gt, gx, gy, gs)
+    assert gm.has_data and len(gm) > 0
+    assert np.isfinite(gm.lat_g).all()
+    print("ok short recording: single-fit fallback, still a valid meter")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
