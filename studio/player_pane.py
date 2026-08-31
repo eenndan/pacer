@@ -155,10 +155,14 @@ class PlayerPane(QWidget):
         # the macOS why).
         self.gmeter = GMeterOverlay(self)
         self.gmeter.hide()  # off by default; the toggle reveals it
+        # The USER's intent (the toggle button), NOT the overlay's on-screen state: the dial also
+        # has to stand down whenever the video can't host it (a collapsed panel), and come back
+        # when it can. _position_gmeter is the single authority over what's actually shown.
         self._gmeter_on = False
         # watch the video widget's move/resize to re-pin the overlay (the pane's own move/resize are
-        # caught in moveEvent/resizeEvent).
+        # caught in moveEvent/resizeEvent; the top-level window's in _watch_top_level).
         self.video.installEventFilter(self)
+        self._watched_top: QWidget | None = None
         if no_media:
             self.player = _NullMediaPlayer()
             self.audio = _NullAudioOutput()
@@ -322,12 +326,13 @@ class PlayerPane(QWidget):
 
     # ------------------------------------------------------------- g-meter overlay
     def set_gmeter_visible(self, on: bool):
-        """Show/hide the friction-circle g-meter overlay (driven by the shell's toggle button)."""
+        """Record the user's g-meter toggle. Whether the dial is actually on screen is decided by
+        _position_gmeter — turning it on over a collapsed video shows nothing until the video is
+        back, rather than parking a stray always-on-top window off-screen."""
         self._gmeter_on = bool(on)
         if self._gmeter_on:
+            self._watch_top_level()
             self._position_gmeter()
-            self.gmeter.show()
-            self.gmeter.raise_()
         else:
             self.gmeter.hide()
 
@@ -342,10 +347,11 @@ class PlayerPane(QWidget):
 
     def _sync_gmeter(self):
         """Re-pin the overlay window to the video corner if it's on (cheap; called on any geometry
-        change of the video widget or this pane)."""
+        change of the video widget, this pane, or the app window)."""
         if self._gmeter_on:
             self._position_gmeter()
-            self.gmeter.raise_()
+            if self.gmeter.isVisible():
+                self.gmeter.raise_()
 
     def set_g(self, g):
         """Feed (lat_g, long_g, total_g) to the overlay (None blanks the dot); no-op cost when
@@ -362,23 +368,85 @@ class PlayerPane(QWidget):
         """Tell the overlay which lap drives it so its max-G envelope resets at the lap boundary."""
         self.gmeter.set_lap(lap_id)
 
-    def _position_gmeter(self):
-        """Pin the overlay to the video top-right corner (global screen coords), sized as a fraction
-        of the video."""
+    def _video_is_on_screen(self) -> bool:
+        """True when the video widget is genuinely displayed, not merely `isVisible()`.
+
+        A collapsed panel — what the ⛶ maximize button and the double-click-header gesture do by
+        zeroing a splitter section — does NOT leave a tidy zero-sized widget. Measured on the real
+        window: maximizing the lap table gave `video 1432x0`, while maximizing the charts left the
+        video a healthy `280x471` inside a column Qt had simply MOVED to `pos=(-1, -855)`, with
+        every widget still `isVisible()` and no zero-sized ancestor anywhere. Both mapped to a
+        global corner far outside the window, so the dial was parked at negative screen
+        coordinates (-251, 37) / (149, -787) as a stray always-on-top window instead of standing
+        down with its video.
+
+        So the test is: the video is on screen when it has a real size AND its global rect
+        actually intersects the app window's. That catches the moved-off column and the zeroed one
+        alike, and — unlike `visibleRegion()`, the other candidate — it can be confused neither by
+        the QVideoWidget's native macOS surface nor by the video child obscuring its own parent."""
         vw, vh = self.video.width(), self.video.height()
-        w = int(min(max(vw * _OVERLAY_FRAC, _OVERLAY_MIN_W), _OVERLAY_MAX_W,
-                    max(vw - 2 * _OVERLAY_PAD, 1)))
-        h = int(min(w * _OVERLAY_ASPECT, max(vh - 2 * _OVERLAY_PAD, 1)))
+        if self.video.isHidden() or vw <= 0 or vh <= 0:
+            return False
+        top = self.window()
+        if top is None or top is self.video:
+            return True
+        top_left = self.video.mapToGlobal(QPoint(0, 0))
+        return top.geometry().intersects(QRect(top_left.x(), top_left.y(), vw, vh))
+
+    def _gmeter_target_rect(self) -> QRect | None:
+        """The overlay's pinned rect in GLOBAL screen coords, or None when the video cannot host
+        a legible dial — the video is off screen (see _video_is_on_screen) or smaller than the
+        overlay's own minimum plus its corner inset. The old code clamped the dial to whatever
+        space there was, so a 1 px-tall video still got a 240x140 window (the overlay's
+        minimumSize floors it) hanging outside the video."""
+        if not self._video_is_on_screen():
+            return None
+        vw, vh = self.video.width(), self.video.height()
+        w = int(min(max(vw * _OVERLAY_FRAC, _OVERLAY_MIN_W), _OVERLAY_MAX_W))
+        h = int(w * _OVERLAY_ASPECT)
+        if (max(w, self.gmeter.minimumWidth()) + 2 * _OVERLAY_PAD > vw
+                or max(h, self.gmeter.minimumHeight()) + 2 * _OVERLAY_PAD > vh):
+            return None
         corner = self.video.mapToGlobal(QPoint(vw - w - _OVERLAY_PAD, _OVERLAY_PAD))
-        rect = QRect(corner.x(), corner.y(), w, h)
+        return QRect(corner.x(), corner.y(), w, h)
+
+    def _position_gmeter(self):
+        """Pin the overlay to the video's top-right corner (global screen coords) — or hide it when
+        the video can't host it. The SINGLE authority over the dial's on-screen state, so a
+        collapsed panel takes the dial with it and restoring the panel brings it straight back."""
+        rect = self._gmeter_target_rect()
+        if rect is None:
+            self.gmeter.hide()
+            return
         # only move on change — runs every 30 Hz tick.
         if self.gmeter.geometry() != rect:
             self.gmeter.setGeometry(rect)
+        if not self.gmeter.isVisible():
+            self.gmeter.show()
+            self.gmeter.raise_()
+
+    def _watch_top_level(self):
+        """Watch the APP WINDOW for move/resize so the overlay follows it.
+
+        A child widget receives no Move event when its top-level is dragged across the screen, and
+        the only other re-pin — the ~30 Hz one in set_g — runs solely when playback advances. So
+        dragging the window while PAUSED used to strand the dial at its old screen coordinates,
+        detached from the video and floating over whatever was underneath. Re-resolved on show
+        because the pane is built before it is parented into the window."""
+        top = self.window()
+        if top is self._watched_top:
+            return
+        if self._watched_top is not None:
+            self._watched_top.removeEventFilter(self)
+        self._watched_top = top
+        if top is not None and top is not self:
+            top.installEventFilter(self)
 
     # --- hooks keeping the top-level overlay pinned to the video corner (+ the per-tick re-pin in set_g) ---
     def eventFilter(self, obj, event):
-        # re-pin on video widget resize/move
-        if obj is self.video and event.type() in (QEvent.Resize, QEvent.Move):
+        # re-pin on video widget resize/move, and on the APP WINDOW's (a child gets no Move when
+        # its top-level is dragged, and the per-tick re-pin stops while playback is paused).
+        if obj in (self.video, self._watched_top) and event.type() in (QEvent.Resize, QEvent.Move):
             self._sync_gmeter()
         # A double-click on the video CONTENT (the QVideoWidget surface / its null stand-in) is the
         # "make the video fill the screen" gesture — emit it for the shell to route (mirrors the
@@ -398,11 +466,11 @@ class PlayerPane(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # re-show + re-pin (hideEvent hid it; a bare _sync_gmeter wouldn't bring it back)
+        # The pane is built before it is parented into the window, so this is where the top-level
+        # to follow becomes known. _position_gmeter re-shows the dial (hideEvent hid it).
+        self._watch_top_level()
         if self._gmeter_on:
             self._position_gmeter()
-            self.gmeter.show()
-            self.gmeter.raise_()
 
     def hideEvent(self, event):
         super().hideEvent(event)
