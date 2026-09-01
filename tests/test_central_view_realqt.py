@@ -880,6 +880,7 @@ def _run_all():
     test_show_stats_maximized_is_a_true_toggle()
     test_stats_corner_row_click_restores_grid_then_rings_map()
     test_splitter_handles_stay_thin_under_the_theme()
+    test_gmeter_overlay_stays_pinned_to_its_video_and_stands_down_with_it()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 
@@ -1032,6 +1033,72 @@ def test_stats_corner_row_click_restores_grid_then_rings_map():
     _APP.processEvents()
     assert view._maximized_panel is None, "row click must restore the grid before ringing"
     print("test_stats_corner_row_click_restores_grid_then_rings_map OK")
+
+
+def test_gmeter_overlay_stays_pinned_to_its_video_and_stands_down_with_it():
+    """The g-meter dial is a frameless ALWAYS-ON-TOP window (a child widget would be hidden behind
+    the QVideoWidget's native macOS surface), so nothing in Qt keeps it attached — the pane has to
+    do it. Two ways it came adrift, both measured on the real window:
+
+      * MAXIMIZING ANY OTHER PANEL. A collapsed splitter section is not a tidy zero-sized widget:
+        maximizing the lap table left `video 1432x0`, and maximizing the charts left a healthy
+        `280x471` inside a column Qt had simply MOVED to pos=(-1,-855) — every widget still
+        isVisible(), no zero-sized ancestor. mapToGlobal then put the dial at (-251, 37) and
+        (149, -787): a stray always-on-top window sitting outside the app, over the desktop.
+      * DRAGGING THE APP WINDOW WHILE PAUSED. A child gets no Move event when its top-level moves,
+        and the only other re-pin (set_g, ~30 Hz) runs solely when the playhead ADVANCES — so a
+        paused window drag stranded the dial at its old screen coordinates.
+
+    Assertions are on real geometry after real clicks: visible ⇒ inside the window's rect."""
+    view, _s, _t0, _t1 = _real_central_view()
+    win = QMainWindow()
+    win.setCentralWidget(view)
+    win.resize(1200, 800)
+    win.move(80, 80)
+    win.show()
+    _APP.processEvents()
+    overlay = view.video.pane.gmeter
+    try:
+        view.video.gmeter_btn.click()
+        _APP.processEvents()
+        assert overlay.isVisible(), "the toggle must show the dial"
+        assert win.geometry().contains(overlay.geometry()), overlay.geometry()
+
+        # A window drag with NO tick: the dial must travel with the video, not stay behind.
+        before = overlay.geometry()
+        win.move(360, 300)
+        _APP.processEvents()
+        assert overlay.geometry() != before, "the dial must follow a paused window drag"
+        assert win.geometry().contains(overlay.geometry()), overlay.geometry()
+
+        # Maximizing any OTHER panel collapses the video: the dial stands down, and comes back
+        # (still inside the window) when the grid is restored.
+        for btn in (view._table_max_btn, view._plots_max_btn, view._map_max_btn):
+            btn.click()
+            _APP.processEvents()
+            assert not overlay.isVisible(), (
+                f"the dial must hide when the video is collapsed, not float at "
+                f"{overlay.geometry().getRect()}")
+            btn.click()
+            _APP.processEvents()
+            assert overlay.isVisible(), "restoring the grid must bring the dial back"
+            assert win.geometry().contains(overlay.geometry()), overlay.geometry()
+
+        # Maximizing the VIDEO itself keeps it — that is the one panel that can host the dial.
+        view._video_max_btn.click()
+        _APP.processEvents()
+        assert overlay.isVisible() and win.geometry().contains(overlay.geometry())
+        view._video_max_btn.click()
+        _APP.processEvents()
+
+        # And the toggle still wins: off means off.
+        view.video.gmeter_btn.click()
+        _APP.processEvents()
+        assert not overlay.isVisible()
+    finally:
+        overlay.hide()
+        win.hide()
+    print("test_gmeter_overlay_stays_pinned_to_its_video_and_stands_down_with_it OK")
 
 
 def test_splitter_handles_stay_thin_under_the_theme():
