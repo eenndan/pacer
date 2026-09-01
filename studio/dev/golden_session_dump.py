@@ -33,10 +33,11 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-# The gate's reference recording. Overridable, because the default path is only a convention —
-# and a truncated/partially-copied chapter (an interrupted SD-card transfer) still EXISTS while
-# failing to parse, which used to surface as a bare "Failed to open file". Point PACER_GOLDEN_MP4
-# at any real recording; both sides of a before/after comparison just have to use the same one.
+# The gate's reference recording. Overridable, because the default path is only a convention — and
+# a file that EXISTS while failing to parse used to surface as a bare "Failed to open file". (The
+# default path is in fact such a file: this tool's own CLI destroyed it, writing a JSON dump over
+# 11.9 GB of the owner's footage. Its argument is the OUTPUT — see the usage note above.) Point
+# PACER_GOLDEN_MP4 at any real recording; both sides of a comparison just have to use the same one.
 REAL = os.path.expanduser(os.environ.get("PACER_GOLDEN_MP4", "~/Desktop/D24/GX010060.MP4"))
 
 
