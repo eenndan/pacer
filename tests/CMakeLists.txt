@@ -428,6 +428,19 @@ add_test(NAME test_grid_and_timing_guards
 set_tests_properties(test_grid_and_timing_guards PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# CHARTS/MAP header width budget (fix/qa-charts-header-budget, QA sweep B02): the bar must name
+# the baseline the LOWER CHART draws at the app's own 1440x900 (the #125 regression hid it at every
+# shipped width), no control may be centre-clipped at 1280x800 or at the column minimum (measured
+# from the real QStyle content rects, never a padding estimate), the header's children may never
+# overlap — the chip painting through the hero readout is the trap the naive fix walks into — the
+# ⛶ buttons must clear 24x24, the map's sector buttons must name themselves on hover, and the hero
+# must explain the Δideal zero it is structurally pinned to on the best lap. Real themed CentralView
+# -> Qt (the QSS supplies the fonts every number depends on), so run offscreen.
+add_test(NAME test_charts_header_budget
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_charts_header_budget.py)
+set_tests_properties(test_charts_header_budget PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Help-menu dialogs (fix/qa-help-dialogs): the shortcut card's wrapping rows must get the height
 # their text needs at ANY card width (the #119 regression painted a wrapped row's second line
 # outside the row), every live binding on the window must have a card row (⌘O had none) with the
@@ -463,7 +476,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card
                         test_stats test_lap_table_columns test_help_dialog
-                        test_grid_and_timing_guards test_lap_table_empty_states)
+                        test_grid_and_timing_guards test_lap_table_empty_states
+                        test_charts_header_budget)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

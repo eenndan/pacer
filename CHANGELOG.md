@@ -67,6 +67,27 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- The CHARTS header no longer leads with a different Δ baseline from the chart underneath it.
+  It used to say `Δideal` while the lower chart plotted Δ-to-best, with the one label that
+  reconciles them hidden at every window size the app ships at (it needed a ~1633 px window;
+  the default is 1440). The bar now spends its width on meaning first: the baseline naming
+  survives, and the **Brake/Throttle** and **Ideal lap** toggles fall back to their icon —
+  with the full label on hover and in their accessible name — instead of being centre-clipped
+  into `Brake/Thrott` and `Ideal la`. The x-axis combo, which had no tooltip at all, keeps its
+  full text at every width and now says what it switches.
+- The MAP/CHARTS column can no longer be dragged narrower than its own header. At the old
+  360 px minimum the header's children overlapped: the hero readout ran past the panel edge and
+  the amber "vs ideal" chip painted straight through the live Δ number, while the map's buttons
+  clipped at both ends into `ld sect` / `et sec`. **Add sector** and **Reset sectors** also
+  gained the tooltips they never had — the destructive one included.
+- The ⛶ panel-maximize buttons are 26×24, clearing the 24×24 hit-target floor. They are the only
+  always-visible way back from a maximized panel.
+- The hero Δideal readout — the largest text in the window — now explains on hover why it cannot
+  move on the lap the app opens on: that lap is your best, and the theoretical ideal is stitched
+  from its own sections, so the gap is near zero by construction.
+- A discarded lap/corner table could raise `AttributeError` out of its Qt event filter during
+  teardown (the filter outlives the object's Python attributes), turning an unrelated widget
+  construction into a crash.
 - The Stats page no longer presents PROVISIONAL lap statistics as verified. The full-window
   dashboard hides the map — and with it the app's only "Lap timing is unverified" banner — so
   the page now carries its own, and the PER LAP **Time** column mutes exactly like the Laps
