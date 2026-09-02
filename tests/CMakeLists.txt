@@ -390,6 +390,20 @@ add_test(NAME test_lap_table_columns
 set_tests_properties(test_lap_table_columns PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# LapTable / CornerTable EMPTY + BASELINE + EXCLUDED states (fix/qa-lap-table-empty-states, QA
+# sweep B11): the Corners page dashes the two Δ columns and names the lap when it is showing the Δ
+# BASELINE itself (the model's documented ref=None self-zeros, not measurements — and a loaded
+# cross-recording reference keeps every local Δ); a recording with no valid lap gets the Laps
+# grid's wording instead of an unfollowable "Select a lap", both placeholders ending on one next
+# action; the ⊘ excluded strip escalates to a warning voice above EXCLUDED_WARN_RATIO with the
+# ratio in the words and both median distances on screen, reconciles its count against lap_count(),
+# and expands to the COMPLETE list in a height-bounded scroll instead of 6 laps and a dead
+# "+N more". Builds real LapTable/CornerTable widgets -> Qt, so run offscreen.
+add_test(NAME test_lap_table_empty_states
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_table_empty_states.py)
+set_tests_properties(test_lap_table_empty_states PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Grid + timing-line write guards (fix/qa-grid-splitter-collapse, QA sweep B01): no splitter DRAG
 # can collapse a panel to 0 px and no persisted zero can resurrect one, while the maximize gesture
 # still collapses for real (it opts back in via _collapse_sizes — without that, non-collapsible
@@ -439,7 +453,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card
                         test_stats test_lap_table_columns test_help_dialog
-                        test_grid_and_timing_guards)
+                        test_grid_and_timing_guards test_lap_table_empty_states)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

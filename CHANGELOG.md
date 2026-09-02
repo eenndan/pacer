@@ -86,6 +86,22 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   replaced by one block carrying the explanation and the next action.
 - A short mis-segmented lap can no longer be crowned session best (the lap-distance band
   in the real-lap filter); band-excluded laps are surfaced instead of silently vanishing.
+- The Corners page no longer opens on a quarter-table of `+0.00`. It opens on the session
+  best — the lap the Δ columns measure *against* — so both Δ columns were the model's
+  documented self-zeros rather than measurements. They now read "—", with a caption naming
+  the lap ("Lap 42 is the session best — Δ is against itself"). A loaded cross-recording
+  reference is the baseline instead, so every local lap keeps its numbers.
+- On a recording with **no** complete lap the Corners page asked you to "Select a lap" —
+  an instruction that cannot be followed. It now states the fact and the reason, in the
+  Laps grid's own words, and both placeholders end on one next action.
+- The ⊘ excluded-laps strip scales with the problem. Half a session going missing was
+  reported by the same muted one-liner as one stray out-lap: past a fifth of the laps it
+  now takes the warning voice, states the share in words, and puts the kept-vs-excluded
+  distance comparison on screen instead of only in a tooltip. Its count also reconciles
+  ("24 excluded of 49 laps", with any brief sub-lap crossings accounted for) — the panel
+  used to show 25 rows and "24 excluded" on a 50-lap recording.
+- Expanding that strip lists **every** excluded lap in a height-bounded scroll, instead of
+  6 of 24 plus a dead "+18 more" naming laps no surface in the app would show.
 - False "GPS quality low" on clean recordings (the dropped-fix denominator counted the
   trimmed stationary lead-in); clock-aware degraded-timing copy.
 - `speed_long_g` run-seam NaN that silently dropped brake/coast events; the brake-onset
