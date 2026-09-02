@@ -20,8 +20,8 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   the corner on the map), the **entry/apex/exit phase-loss** headline ("where the corner
   time goes"), **braking repeatability + commitment** per corner, the **straight-line
   report** with trap speeds and the exit-leverage **FIX FIRST** tile, a coaching digest
-  ("fix your top 3 → projected lap"), and a **DATA TRUST card** surfacing the IMU↔GPS
-  cross-check that was previously stdout-only.
+  ("median lap · top 3 fixed" — the projected lap), and a **DATA TRUST card** surfacing
+  the IMU↔GPS cross-check that was previously stdout-only.
 - **Coaching front door** — the persistent top-3 opportunities panel under the lap table,
   the Δ-to-ideal hero readout, corner time-loss attribution (entry/apex/exit thirds), the
   braking-point optimizer ("you can brake ~N m later"), a synthetic brake/throttle band
@@ -84,6 +84,18 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   missing. It now states the absence, and repeats it beside the em-dashed SPEED · G tiles.
 - The 0-lap Stats page was 15 em-dashes with no on-page reason. The dash-only groups are
   replaced by one block carrying the explanation and the next action.
+- Stats and Coaching stated **different totals for the same three corners** (0.31 s vs
+  0.32 s): Stats summed the raw losses while the Coaching headline sums the 2-dp rows you
+  can add up by eye — and the Stats tile then subtracted 0.3134 while printing 0.31. The
+  digest now runs the Coaching panel's own arithmetic (its rows, its count, its rounding),
+  so the two pages agree and the tile agrees with itself.
+- The Stats coaching-digest tile now names its base — **"median lap · top 3 fixed"**. It is
+  the median lap rebased (deliberately: best − losses would overclaim, because your best lap
+  already banks some of those corners), so it can read slower than the "best lap" tile a row
+  above; uncaptioned that looked like a target you had already beaten. Its tooltip says so.
+- That tile also stopped painting a "→" it could not honour: it had no click handler, no
+  pointing cursor and no focus, so pressing it did nothing. It points at the Coaching tab in
+  words instead.
 - A short mis-segmented lap can no longer be crowned session best (the lap-distance band
   in the real-lap filter); band-excluded laps are surfaced instead of silently vanishing.
 - False "GPS quality low" on clean recordings (the dropped-fix denominator counted the
