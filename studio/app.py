@@ -634,6 +634,23 @@ class StudioWindow(QMainWindow):
         self._on_load_failed(paths, exc)
         self.loadFinished.emit()
 
+    def _dispose_view(self):
+        """Release the current view's decoder + g-meter overlay and drop the reference. Idempotent,
+        and safe on a view whose C++ object Qt has already deleted — a teardown that can raise is a
+        teardown that strands the window, which is exactly how an ordinary reload used to brick it.
+
+        `self.view` becomes None, so it is no longer a reliable "a session is on screen" flag: the
+        two restore paths (`_cancel_load`, `_on_load_failed`) key off `self.session` instead, which
+        still holds the OUTGOING session all the way through a reload."""
+        view = getattr(self, "view", None)
+        self.view = None
+        if view is None:
+            return
+        try:
+            view.dispose()
+        except RuntimeError as exc:  # already deleted by a setCentralWidget somewhere
+            print(f"studio: view already torn down at dispose ({exc})", flush=True)
+
     def _show_loading_placeholder(self, paths: list[str], title: str | None = None,
                                   on_cancel=None):
         """Immediate visual feedback while Session.load runs on a worker thread: install a centered
@@ -668,6 +685,19 @@ class StudioWindow(QMainWindow):
             cancel.setObjectName("LoadingCancel")
             cancel.clicked.connect(on_cancel)
             v.addWidget(cancel, 0, Qt.AlignCenter)
+        # setCentralWidget DELETES the widget it replaces, so the live view's C++ object dies on
+        # the next line. Dispose it HERE, while it is still alive, and forget the Python wrapper.
+        #
+        # _build_ui's contract is "dispose the outgoing view, then swap" — but on a reload the card
+        # gets there first, so by the time _build_ui ran, `self.view` was a deleted C++ object and
+        # `old_view.dispose()` raised straight out of _on_session_loaded. _build_ui never reached
+        # its setCentralWidget, and the window stayed on "Loading telemetry…" FOREVER with the
+        # freshly-loaded session unreachable behind it — the L10-01 shape, through the one path
+        # that reaches it: an ordinary second File ▸ Open over a working session.
+        #
+        # Disposing here also restores what that dispose was FOR: the outgoing decoder is stopped
+        # and the g-meter overlay closed at a defined moment, rather than left to Qt's deletion.
+        self._dispose_view()
         self.setCentralWidget(container)
         if not self.isVisible():
             self.show()
@@ -690,7 +720,11 @@ class StudioWindow(QMainWindow):
         self._loading_token = None
         self._pending_load = None    # and nothing queued behind it starts either
         self._cancel_placeholder_timer()
-        if getattr(self, "session", None) is not None and self.view is not None:
+        # Keyed off the SESSION, not self.view: the loading card disposes the outgoing view and
+        # sets self.view to None, so a view test here would send a cancelled reload to the welcome
+        # screen and throw away the working session it promises to keep. self.session still holds
+        # the outgoing session throughout a reload, and is None only before the first one lands.
+        if getattr(self, "session", None) is not None:
             self._build_ui()
             message = "Load cancelled — kept the recording already open."
         else:
@@ -719,8 +753,12 @@ class StudioWindow(QMainWindow):
         message = self._load_failure_message(paths, exc)
         print(f"studio: failed to load {offending}: {detail}", flush=True)
         reload_failed = hasattr(self, "session")
+        # "The loading card is up over a still-good session" — tested against the CENTRAL WIDGET,
+        # because installing that card is what disposes the view and clears self.view. A fast
+        # failure that never raised the card leaves self.view live and central, so this is False
+        # and the view is left untouched, exactly as before.
         view = getattr(self, "view", None)  # guarded: partial harnesses set session without a view
-        if reload_failed and view is not None and self.centralWidget() is not view:
+        if reload_failed and self.centralWidget() is not view:
             # The loading card is up over a still-good session: put the session's UI back.
             self._build_ui()
             self._apply_session_notice()
@@ -799,9 +837,8 @@ class StudioWindow(QMainWindow):
 
         Disposing the outgoing view first stops its decoder + closes the g-meter overlay before the
         central widget is replaced."""
-        old_view = getattr(self, "view", None)
-        if old_view is not None:
-            old_view.dispose()  # stop the old decoder + close its g-meter overlay before the swap
+        self._dispose_view()  # stop the old decoder + close its g-meter overlay before the swap
+        #                       (a no-op when the loading card already disposed and dropped it)
         # The view holds a read alias of session + the paths (banner) + the sidecar path.
         self.view = CentralView(self.session, self._paths, self._sidecar_path,
                                 parent=self,
