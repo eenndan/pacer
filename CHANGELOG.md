@@ -78,6 +78,20 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   collisions, and self-contradicting coaching copy.
 - Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker
   drain (CI deadlocks); the drift-gated per-corner loss alignment.
+- **Lap and Corners tables now fit their panel.** Content-tight columns left a maximized
+  Laps panel 79% empty (382 px of data, 1050 px parked in a blank spacer) and, at the
+  default quadrant, pushed the Corners table's "Grip (est)" column and the sector columns
+  the map's own "Add sector" button creates clean off the viewport. Spare width is now
+  shared across the data columns (capped), a short panel gives the slack back down to each
+  column's own values, headers elide to a tooltip instead of centre-clipping, and every lap
+  and corner header carries its full text on hover.
+- **Provisional timing demotes every start-line-derived column**, not the lap Time alone —
+  Dist (the distance between crossings) and Entry (the speed at one) move with the start
+  line too, and used to render at full confidence beside a greyed-out time. A degraded
+  *clock* still demotes only the durations.
+- **The pre-selected best lap is scrolled into view.** The app opens on your best lap and
+  draws four panels from it, but the row itself sat below the viewport at every window
+  size, so the lap table read as "nothing selected".
 
 ## [0.1.0] — 2026-06-22
 
