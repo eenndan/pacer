@@ -385,6 +385,18 @@ add_test(NAME test_focus_cues
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_focus_cues.py)
 set_tests_properties(test_focus_cues PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Charts-panel honesty + legibility (fix/qa-charts-panel): the "Ideal lap" toggle live only where a
+# click can draw (it was a 0-pixel no-op in the app's own default state), a dash pattern per identity
+# slot so the legend still maps to a curve under deuteranopia WITHOUT recolouring the deliberately
+# palette-independent CHART_SERIES, no km/h tick inside the ESTIMATED pedal strip (plus its on-chart
+# caption), the legend anchored to the measured-emptiest corner with a stated drag affordance and a
+# reachable hide threshold, and an empty state that names the next action while the three inert chart
+# controls go dead. Real PlotsView + real pyqtgraph draw over a narrow stub Session; needs the real
+# theme QSS, so run offscreen. No telemetry file.
+add_test(NAME test_charts_panel
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_charts_panel.py)
+set_tests_properties(test_charts_panel PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Shareable lap card (image) (feat/shareable-lap-card): the PURE card_data field extraction off
 # Session accessors (best lap / Δ-to-ideal / top opportunity / track / date / unit), the km/h↔mph
 # unit flip in the reason sentence, and the HONESTY verdict (provisional/no-lap ⇒ blocked;

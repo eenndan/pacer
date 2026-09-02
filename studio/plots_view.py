@@ -38,6 +38,32 @@ pg.setConfigOptions(antialias=False)
 
 # Lap-curve palette: best is recoloured green at draw time (matches the lap table); rest cycle.
 PALETTE = theme.CHART_SERIES
+# L6-03: a SECOND, palette-independent identity channel. CHART_SERIES is deliberately not swapped by
+# set_palette (it encodes WHICH LAP, not ahead/behind — theme.py:144-147, and U10-01 left it alone on
+# purpose), but hue was until now the ONLY thing mapping a legend row to a curve, and two of the six
+# hues collapse for a deuteranope: #B794F6 vs #7FA8F5 is CIE76 dE 1.27 under the Machado-1.0 matrix
+# tests/test_contrast.py already uses (JND ~2.3), and #5BC8E0 vs #7FA8F5 is 2.8 under the Vienot-style
+# one. So each palette slot also owns a dash pattern (Qt's units-of-pen-width form), which pyqtgraph
+# strokes into its 20 px legend sample as well as the curve — the legend keeps mapping to a curve with
+# no colour vision at all. Periods are kept under ~20 px at the drawn width 2 so every pattern is
+# still distinguishable inside that sample. Slot 0 stays SOLID, so the one-lap default draws exactly
+# what it always drew; the best lap is solid too (it is the baseline, and its hue is the one that
+# DOES follow the palette).
+SERIES_DASH = [
+    None,                 # slot 0  solid
+    [5, 3],               # slot 1  long dash
+    [1, 2],               # slot 2  dot
+    [5, 2, 1, 2],         # slot 3  dash-dot
+    [2, 2],               # slot 4  short dash
+    [1, 2, 1, 2, 5, 2],   # slot 5  dot-dot-dash
+]
+
+
+def _apply_series_dash(pen, k: int) -> None:
+    """Give an identity pen the dash pattern of its palette slot (L6-03). No-op on the solid slot."""
+    dash = SERIES_DASH[k % len(SERIES_DASH)]
+    if dash:
+        pen.setDashPattern(dash)
 # Scrub cursor: thin neutral dashed (quiet); brighter accent + thicker on hover so it reads as
 # grabbable. Pens built once.
 CURSOR_PEN = pg.mkPen(C.text_dim, width=1, style=Qt.DashLine)
@@ -79,11 +105,18 @@ BT_GAP_FRAC = 0.04                     # a small clear gap between the lowest sp
 # default, orange/blue in the colour-blind palette (matching the Δ readout + rainbow map).
 BT_PEN = pg.mkPen(None)
 BT_BASELINE_PEN = pg.mkPen(C.border, width=1, style=Qt.DotLine)  # the band's zero (lift/cruise) line
-# L3: the speed legend is fixed top-left over the x=0 curve region; above this many curves it would
-# blanket that region (and pyqtgraph's column would overflow the plot / truncate late entries), so
-# refresh() hides it past the threshold. The lap-table selection is itself capped (MAX_COMPARE_LAPS),
-# so a legitimate multi-select stays under this and keeps its legend; only a pathological set hides it.
-LEGEND_MAX_ROWS = 8
+# L6-06: the speed legend is a near-opaque plate INSIDE the plot, so wherever it sits it hides trace.
+# It used to sit top-left, which is the worst corner on every fixture measured (the start of a lap is
+# flat out, so the trace is high and to the left): at a full 6-lap selection it covered 413 of 2800
+# plotted samples (14.8%) on F.A, 11.9% on F.D, 7.8% on F.C. Top-RIGHT measured best or equal-best in
+# all six of those states — 9.6% / 0.0% / 0.0% — so that is where it is anchored (a negative offset
+# anchors to the far edge and follows resizes). The plate is also draggable, which nothing said: see
+# the cursor + tooltip in __init__.
+LEGEND_OFFSET = (-8, 8)
+# ...and past this many rows it is hidden outright rather than blanketing the chart. 7 = the lap
+# table's own MAX_COMPARE_LAPS (6) plus the always-on best lap, i.e. the largest legend the app can
+# legitimately produce; the previous 8 sat one row ABOVE that ceiling, so the guard could never fire.
+LEGEND_MAX_ROWS = 7
 # P7: the lower chart's two possible baselines. Δ-to-best is the normal one; when the BEST lap is
 # the only thing drawn its Δ against itself is identically zero — a flat, empty chart — so that one
 # case re-references the curve to the SYNTHETIC ideal-lap envelope (the same Δideal the hero
@@ -91,6 +124,46 @@ LEGEND_MAX_ROWS = 8
 # confused; the legend entry (see _delta_curve_label) repeats it on the curve itself.
 DELTA_LABEL_BEST = "Δ to best (s)"
 DELTA_LABEL_IDEAL = "Δ to ideal (s)"
+# L6-04: the strip's own caption, drawn INSIDE the reserved band. The left axis is titled
+# "speed (km/h)" and it is the only thing that used to say anything about this region — but the band
+# is a pedal ESTIMATE derived from the speed derivative, not a speed.
+BT_CAPTION = theme.estimated_label("brake / throttle")
+# L6-07 / L6-02: the reasons the three chart controls go dead. APPENDED to whatever the control
+# already said (see _set_control_enabled) rather than replacing it — the charts header elides these
+# controls to their icons and recovers the label from the tooltip (L2-02), so a disabled control has
+# to keep saying what it is as well as why it cannot be used.
+NO_DATA_TIP = ("Unavailable: this recording has no complete laps, so there is nothing to plot. Drag "
+               "the start/finish line on the map to set where a lap begins.")
+IDEAL_IS_BASELINE_TIP = (
+    "Unavailable here: with only the best lap drawn, the lower chart is ALREADY Δ to the ideal — the "
+    "y = 0 line IS the synthetic ideal envelope, so there is nothing left to overlay. Select a "
+    "second lap and this overlays the ideal on the Δ-to-best chart.")
+# L6-07: the empty state names the cause AND the way out, in the same words map_view's zero-lap
+# placeholder uses (the only one of the four zero-lap surfaces that offered a next action).
+EMPTY_TEXT = ("No lap data to plot.\n\n"
+              "This recording has no complete laps — the speed and Δ-to-best charts need at least "
+              "one finished lap.\n\n"
+              "If this is the right track, drag the start/finish line on the map to set where a "
+              "lap begins.")
+class _SpeedAxis(pg.AxisItem):
+    """The speed plot's left axis, with the ESTIMATED pedal strip's slice of the range de-ticked.
+
+    L6-04: with the brake/throttle band on, `_reserve_brake_throttle_space` widens the speed y-range
+    downward to give the strip its own empty space — but the axis kept ticking that space in km/h, so
+    pyqtgraph printed a `20` label straight through a pedal trace, BELOW the lap's true 28.5 km/h
+    minimum. Ticks at or under `band_top` are dropped here, which removes the mark and its label
+    together and keeps working after a user pan/zoom (a fixed `setTicks()` list would not).
+    `band_top = None` (the toggle off) leaves pyqtgraph's own tick choice completely untouched."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.band_top: float | None = None
+
+    def tickValues(self, minVal, maxVal, size):  # noqa: N802 (pyqtgraph override)
+        levels = super().tickValues(minVal, maxVal, size)
+        if self.band_top is None:
+            return levels
+        return [(spacing, [v for v in vals if v > self.band_top]) for spacing, vals in levels]
 class PlotsView(QWidget):
     # Scrub signals (pacer-free: emit raw plot-x; app converts/seeks).
     scrubStarted = Signal()
@@ -137,6 +210,10 @@ class PlotsView(QWidget):
         # computed in refresh() from the fitted SPEED-curve span and sitting BELOW the lowest speed
         # trough (None until refresh() has run with the toggle on).
         self._bt_band_range: tuple[float, float] | None = None
+        # L6-07/L6-02: the tooltip each chart control carried before _set_control_enabled swapped in
+        # a REASON, so the original comes back when the control does. Stashing the live value (rather
+        # than a copy of the constructor's string) keeps a tooltip set by whoever mounts the control.
+        self._saved_tips: dict = {}
 
         # x-axis toggle (distance/time). Exposed but mounted by app.py in its consolidated bar.
         self.x_mode_combo = QComboBox()
@@ -174,7 +251,9 @@ class PlotsView(QWidget):
         # Tight margins so the charts fill the panel.
         self.glw.ci.layout.setContentsMargins(2, 2, 2, 2)
         self.glw.ci.layout.setSpacing(4)
-        self.p_speed = self.glw.addPlot(row=0, col=0)
+        # L6-04: the speed plot's own left axis, so the reserved pedal strip can be de-ticked.
+        self._speed_axis = _SpeedAxis(orientation="left")
+        self.p_speed = self.glw.addPlot(row=0, col=0, axisItems={"left": self._speed_axis})
         self.p_delta = self.glw.addPlot(row=1, col=0)
         # Speed 58 / delta 42 row stretch - delta legible, speed dominant.
         self.glw.ci.layout.setRowStretchFactor(0, 58)
@@ -184,7 +263,7 @@ class PlotsView(QWidget):
         self.p_speed.hideAxis("bottom")
         # Faint gridlines (alpha 0.10) so they read as a quiet backdrop, not a foreground grid.
         self.p_speed.showGrid(x=True, y=True, alpha=0.10)
-        leg = self.p_speed.addLegend(offset=(8, 8))
+        leg = self.p_speed.addLegend(offset=LEGEND_OFFSET)  # L6-06: top-RIGHT, the measured-emptiest corner
         self._speed_legend = leg  # L3: kept so refresh() can hide it past LEGEND_MAX_ROWS curves
         # D1: a legend on the Δ plot too, used ONLY by the synthetic ideal-lap entry (lap Δ curves
         # are drawn unnamed there, so it stays a single quiet line item explaining the dashed line).
@@ -215,6 +294,11 @@ class PlotsView(QWidget):
                 lg.setLabelTextColor(C.text_dim)
                 lg.setBrush(LEGEND_BRUSH)
                 lg.setPen(LEGEND_PEN)
+                # L6-06: pyqtgraph implements mouseDragEvent on LegendItem, so the plate has always
+                # been movable — but the cursor never changed and nothing said so, which makes the
+                # one escape from a plate over your trace completely unhinted.
+                lg.setCursor(Qt.OpenHandCursor)
+                lg.setToolTip("Drag to move this legend")
         for plot in (self.p_speed, self.p_delta):
             plot.titleLabel.setAttr("color", C.text_dim)
             # P3: drop pyqtgraph's own chrome — the little "A" auto-range button (refresh()
@@ -252,11 +336,10 @@ class PlotsView(QWidget):
         self.p_delta.addItem(self.hover_label)
         self.p_delta.scene().sigMouseMoved.connect(self._on_delta_hover)
 
-        # E1: empty-state placeholder shown (via the stack) when there are no laps to plot.
-        self._empty = QLabel(
-            "No lap data to plot.\n\n"
-            "This recording has no complete laps — the speed and Δ-to-best "
-            "charts need at least one finished lap.")
+        # E1: empty-state placeholder shown (via the stack) when there are no laps to plot. L6-07:
+        # it names the recovery action too, and refresh() switches the three chart controls off with
+        # it — they were staying live and inert over a chart that cannot draw anything.
+        self._empty = QLabel(EMPTY_TEXT)
         self._empty.setProperty("role", "EmptyState")
         self._empty.setAlignment(Qt.AlignCenter)
         self._empty.setWordWrap(True)
@@ -296,6 +379,36 @@ class PlotsView(QWidget):
         self._show_brake_throttle = on
         self.brake_throttle_btn.setIcon(icon("ph.gauge", color=C.accent if on else C.text))
         self.refresh()
+
+    # ------------------------------------------------------- chart-control enablement
+    def _set_control_enabled(self, widget, enabled: bool, reason: str):
+        """Enable/disable one chart control, APPENDING `reason` to its tooltip while it is off and
+        restoring exactly what it said before when it comes back. Appending, not replacing: the
+        charts header elides these controls to their icons and recovers the label from the tooltip,
+        so a dead control still has to say what it is."""
+        if enabled:
+            if widget in self._saved_tips:
+                widget.setToolTip(self._saved_tips.pop(widget))
+        else:
+            base = self._saved_tips.setdefault(widget, widget.toolTip())
+            widget.setToolTip(f"{base}\n\n{reason}" if base else reason)
+        widget.setEnabled(enabled)
+
+    def _sync_chart_controls(self, *, plotted: bool):
+        """The ONE owner of the three chart controls' enabled state (called from refresh(), both
+        branches), so a control is live exactly when clicking it would change the chart.
+
+        L6-07: with the empty-state placeholder up, all three stayed enabled and latched on over a
+        page that cannot redraw — the whole panel was byte-identical after toggling both buttons and
+        switching the axis. L6-02: the `Ideal lap` toggle is the same dead end in ONE more state —
+        when the best lap is drawn alone the lower chart is ALREADY referenced to the ideal, so
+        `_draw_ideal` early-returns and the click changed 0 of 441 077 pixels while the button lit
+        amber. Both now go grey and say why in their own tooltip."""
+        self._set_control_enabled(self.x_mode_combo, plotted, NO_DATA_TIP)
+        self._set_control_enabled(self.brake_throttle_btn, plotted, NO_DATA_TIP)
+        self._set_control_enabled(
+            self.ideal_btn, plotted and not self._delta_ideal_mode,
+            NO_DATA_TIP if not plotted else IDEAL_IS_BASELINE_TIP)
 
     # ----------------------------------------------------------- cursor scrub
     def is_dragging(self) -> bool:
@@ -462,6 +575,7 @@ class PlotsView(QWidget):
         (band_bottom, band_top) window for _draw_brake_throttle. No-op (and clears the cache) when the
         toggle is off or there's nothing to draw, so a normal refresh keeps the tight autorange fit."""
         self._bt_band_range = None
+        self._speed_axis.band_top = None  # L6-04: no strip -> pyqtgraph's own ticks, untouched
         if not self._show_brake_throttle or not self._brake_throttle_data:
             return
         vb = self.p_speed.getViewBox()
@@ -474,6 +588,8 @@ class PlotsView(QWidget):
         band_top = smin - gap          # a clear gap under the lowest speed trough
         band_bottom = band_top - height
         self._bt_band_range = (band_bottom, band_top)
+        # L6-04: the strip is a pedal estimate, not a speed — stop the km/h axis ticking through it.
+        self._speed_axis.band_top = band_top
         # Widen the frozen view down to include the reserved strip; keep the top pinned to smax.
         vb.setYRange(band_bottom, smax, padding=0)
 
@@ -528,6 +644,15 @@ class PlotsView(QWidget):
         zero.setZValue(-3)
         self.p_speed.addItem(zero)
         self._brake_throttle_items.append(zero)
+        # L6-04: caption the strip in its own space, now that the de-ticked axis no longer labels it.
+        # Anchored bottom-left INSIDE the band, on the same surface plate the legend uses so it stays
+        # readable over the fills. Positioned in view coords on the already-frozen range.
+        x0, x1 = self.p_speed.getViewBox().viewRange()[0]
+        caption = pg.TextItem(BT_CAPTION, color=C.text_dim, anchor=(0, 1), fill=LEGEND_BRUSH)
+        caption.setPos(x0 + 0.015 * (x1 - x0), band_bottom)
+        caption.setZValue(-1)  # above the fills + the band curve, below the speed traces
+        self.p_speed.addItem(caption)
+        self._brake_throttle_items.append(caption)
 
     def _speed_at_x(self, x: float, lap_id: int | None = None):
         """Interpolated speed-curve y at plot-x x. L4: with a lap_id, anchor to THAT lap's own cached
@@ -569,9 +694,11 @@ class PlotsView(QWidget):
         """Re-render the charts after a colour-blind-palette flip so the SEMANTIC-hue surfaces follow
         it: the BEST-LAP curve, the brake/throttle band (behind/ahead fills) and the synthetic
         ideal-lap line (best-sector hue) all read the palette accessors at draw time, so a plain
-        refresh() re-pens them. The identity lap-curve palette (CHART_SERIES) is palette-independent,
-        so those curves are just redrawn. The ideal-button star is an ICON, not a drawn item, so it
-        needs its own re-tint."""
+        refresh() re-pens them. The identity lap-curve palette (CHART_SERIES) is palette-independent
+        BY DESIGN — it says which lap, not who is faster — so those curves are just redrawn; their
+        accessibility comes from the per-slot dash pattern instead (SERIES_DASH, L6-03), which needs
+        no palette at all. The ideal-button star is an ICON, not a drawn item, so it needs its own
+        re-tint."""
         self._apply_ideal_icon()
         self.refresh()
 
@@ -619,6 +746,7 @@ class PlotsView(QWidget):
         result = self.session.delta(draw_ids, x_mode=x_mode)
         if not result:
             self._stack.setCurrentIndex(1)  # E1: no laps -> empty-state placeholder
+            self._sync_chart_controls(plotted=False)  # L6-07: nothing to toggle on a blank page
             return
         self._stack.setCurrentIndex(0)
         best, speed, delta = result
@@ -632,6 +760,9 @@ class PlotsView(QWidget):
             "left", DELTA_LABEL_IDEAL if self._delta_ideal_mode else DELTA_LABEL_BEST)
         if self._delta_ideal_mode != was_ideal:
             self.deltaBaselineChanged.emit(self._delta_ideal_mode)
+        # L6-02: the ideal toggle is inert exactly while that baseline is active — decided here, with
+        # the mode, so the button can never disagree with the chart under it.
+        self._sync_chart_controls(plotted=True)
         for k, lid in enumerate(draw_ids):
             # Best lap in the palette's best-lap hue (matches the lap table in BOTH palettes —
             # resolved HERE, at draw time, so a colour-blind flip + refresh() repens it); others
@@ -640,6 +771,11 @@ class PlotsView(QWidget):
             color = theme.best_lap_colour() if is_best else PALETTE[k % len(PALETTE)]
             width = 1 if (is_best and best_always_on) else 2
             pen = pg.mkPen(color, width=width)
+            # L6-03: identity slots also carry their slot's dash pattern, so the legend still maps
+            # to a curve for a deuteranope (two of the six hues are under the JND for one). The best
+            # lap stays solid: it is the baseline, and its hue is the one that follows the palette.
+            if not is_best:
+                _apply_series_dash(pen, k)
             # Legend label folds in the lap time (see _curve_label).
             name = self._curve_label(lid, is_best)
             if lid in speed:
