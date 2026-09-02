@@ -33,6 +33,21 @@ MOVING_MS = 4.0
 # sample interval — moving time skips such steps (conservative: a gap while moving is NOT
 # counted as time on track, because nothing was measured there).
 MAX_SAMPLE_GAP_S = 1.0
+# Path-distance chord gate. A GPS fix can jump: on one 9.6 s clip a single 177.8 m chord spanned
+# 56 ms (~11 500 km/h) and, summed un-gated, rendered 2.3 km of "distance" for a trace whose own
+# speed channel caps it at 72 m. The lap/speed/g pipelines all reject such a fix; the session
+# total was the one place it still landed. So each chord is weighed against what the trace's OWN
+# speed says was possible over the same interval. The tolerance is slack, not licence: the trace
+# is position-smoothed while `speed` is the GPS-reported scalar, so the two disagree by a few
+# percent on a hard corner — 1.5x covers that with room, and a teleport misses it by 100x.
+CHORD_SPEED_TOL = 1.5
+# Below this share of the raw chord LENGTH surviving the gate, what is left is not a measurement
+# of a path — the view says so with a dash instead of printing a number.
+MIN_KEPT_FRAC = 0.5
+# Sample floor for any statistic that describes a DISTRIBUTION of laps (spread, banked-pace
+# count) — the same floor consistency.sigma applies. One lap has no spread and is trivially
+# within 1% of itself; printing "+0.00 s" and "1 / 1" dresses that up as a measurement.
+MIN_DIST_LAPS = 2
 # Pace-trend gate: below this many clean laps a fitted slope is noise dressed as insight,
 # so the trend statistic reports None and the tile shows a dash.
 TREND_MIN_LAPS = 6
@@ -50,11 +65,23 @@ ENVELOPE_PCT = 98.0
 class SessionTotals:
     """Whole-recording totals (trace-level — independent of the lap segmentation)."""
 
-    duration_s: float        # recorded span, first→last kept sample (media clock, incl. gaps)
-    moving_s: float          # time with speed ≥ MOVING_MS (dropout gaps excluded)
-    distance_m: float        # path length of the smoothed trace (sum of chords)
-    start_clock: str | None  # local wall-clock "HH:MM" of the first kept fix (GPS9); None on GPS5
-    end_clock: str | None    # …and of the last kept fix
+    duration_s: float          # recorded span, first→last kept sample (media clock, incl. gaps)
+    moving_s: float            # time with speed ≥ MOVING_MS (dropout gaps excluded)
+    distance_m: float | None   # speed-gated path length of the smoothed trace (sum of chords);
+    #                            None when too little of it survived the gate to mean anything
+    distance_kept_frac: float  # share of the raw chord length the gate kept (1.0 = a clean trace)
+    start_clock: str | None    # local wall-clock "HH:MM" of the first kept fix (GPS9); None GPS5
+    end_clock: str | None      # …and of the last kept fix
+
+
+@dataclass(frozen=True)
+class PathDistance:
+    """A gated path length plus how much of the raw chord sum it threw away — so a caller can
+    tell "the trace is 2.1 km" from "the trace is mostly GPS glitches" (see CHORD_SPEED_TOL)."""
+
+    metres: float        # the chords that passed the speed gate
+    kept_frac: float     # metres / (the un-gated chord sum); 1.0 when nothing was rejected
+    rejected_n: int      # how many chords the gate refused
 
 
 @dataclass(frozen=True)
@@ -180,7 +207,9 @@ class PaceStats:
     best: float           # min lap time (s)
     median: float         # median lap time (s)
     sigma: float | None   # sample σ (ddof=1; None with <2 laps — consistency.sigma)
-    spread: float         # median − best: what the TYPICAL lap gives away (s, ≥ 0)
+    spread: float | None  # median − best: what the TYPICAL lap gives away (s, ≥ 0). None below
+    #                       MIN_DIST_LAPS — with one lap the median IS the best and the honest
+    #                       answer is "unknown", not the +0.00 s that reads as a measurement.
 
 
 # --------------------------------------------------------------------- pure reducers
@@ -199,17 +228,42 @@ def moving_time_s(times, speed_ms, threshold_ms: float = MOVING_MS) -> float:
     return float(np.sum(dt[keep]))
 
 
-def path_distance_m(xs, ys) -> float:
-    """Path length of a local-metre trace: the sum of chords between consecutive samples —
-    the same convention as the core's cum_distances odometer. A dropout gap contributes its
-    straight-line chord (a slight under-count of the real path, never an over-count)."""
+def path_distance(xs, ys, times=None, speed_ms=None) -> PathDistance:
+    """Path length of a local-metre trace: the sum of chords between consecutive samples — the
+    same convention as the core's cum_distances odometer. A dropout gap contributes its
+    straight-line chord (a slight under-count of the real path, never an over-count).
+
+    With `times` and `speed_ms` supplied, each chord is GATED against what the trace's own speed
+    channel allows over that interval (`CHORD_SPEED_TOL × max(v_i, v_i+1) × dt`): a GPS fix that
+    teleports is not driving, and un-gated it can dominate the total by 30x (see the constant).
+    The bound uses the FASTER of the two endpoint speeds, so a real hard-braking step is never
+    clipped. Without them the sum is un-gated, exactly as before."""
     x = np.asarray(xs, float)
     y = np.asarray(ys, float)
     n = min(len(x), len(y))
     if n < 2:
-        return 0.0
+        return PathDistance(metres=0.0, kept_frac=1.0, rejected_n=0)
     d = np.hypot(np.diff(x[:n]), np.diff(y[:n]))
-    return float(np.sum(d[np.isfinite(d)]))
+    keep = np.isfinite(d)
+    raw = float(np.sum(d[keep]))
+    if times is not None and speed_ms is not None:
+        t = np.asarray(times, float)
+        v = np.asarray(speed_ms, float)
+        if len(t) >= n and len(v) >= n:
+            dt = np.diff(t[:n])
+            v_hi = np.maximum(v[:n - 1], v[1:n])
+            limit = CHORD_SPEED_TOL * np.abs(v_hi) * np.abs(dt)
+            keep &= np.isfinite(dt) & np.isfinite(v_hi) & (d <= limit)
+    kept = float(np.sum(d[keep]))
+    return PathDistance(metres=kept,
+                        kept_frac=(kept / raw) if raw > 0 else 1.0,
+                        rejected_n=int(np.sum(np.isfinite(d)) - np.sum(keep)))
+
+
+def path_distance_m(xs, ys, times=None, speed_ms=None) -> float:
+    """`path_distance(...).metres` — the plain number, for callers that don't need the gate's
+    rejection accounting."""
+    return path_distance(xs, ys, times, speed_ms).metres
 
 
 def clock_hhmm(epoch_ms) -> str | None:
@@ -224,14 +278,17 @@ def clock_hhmm(epoch_ms) -> str | None:
 
 def pace_stats(lap_times) -> PaceStats | None:
     """The lap-time distribution summary, or None with no laps. σ via consistency.sigma
-    (sample σ, ddof=1) so this can never disagree with the consistency panel."""
+    (sample σ, ddof=1) so this can never disagree with the consistency panel. `spread` carries
+    the SAME minimum-sample gate as σ (MIN_DIST_LAPS) — gating it here rather than in the view
+    is what stops one tile dashing while its neighbour prints a number from the same one lap."""
     a = np.asarray(list(lap_times), float)
     a = a[np.isfinite(a)]
     if len(a) == 0:
         return None
     best = float(np.min(a))
     med = float(np.median(a))
-    return PaceStats(n=len(a), best=best, median=med, sigma=sigma(a), spread=med - best)
+    return PaceStats(n=len(a), best=best, median=med, sigma=sigma(a),
+                     spread=(med - best) if len(a) >= MIN_DIST_LAPS else None)
 
 
 def peak_g(lat_g, long_g) -> tuple[float | None, float | None]:
@@ -435,13 +492,17 @@ def best_consecutive_mean(values, n: int = RACE_PACE_N) -> float | None:
     return float(np.nanmin(means))
 
 
-def within_pct_of_best(values, pct: float) -> int:
+def within_pct_of_best(values, pct: float) -> int | None:
     """How many values sit within `pct` percent of the best (minimum) — the "banked pace"
-    count (the best itself counts). 0 for an empty/all-NaN input."""
+    count (the best itself counts). 0 for an empty/all-NaN input; None below MIN_DIST_LAPS,
+    where the answer is always "all of them" and so measures nothing (the same gate σ and
+    `spread` carry — see MIN_DIST_LAPS)."""
     a = np.asarray(list(values), float)
     a = a[np.isfinite(a)]
     if len(a) == 0:
         return 0
+    if len(a) < MIN_DIST_LAPS:
+        return None
     return int(np.sum(a <= float(np.min(a)) * (1.0 + pct / 100.0)))
 
 
@@ -533,10 +594,14 @@ class SessionStats:
         v = np.asarray(self._trace_speed_kmh(), float) / 3.6
         xs, ys = self._trace_xy()
         w0, w1 = self._wall_clock_ms()
+        # The trace's own clock + speed gate the chords: a teleporting GPS fix is not distance
+        # driven, and it used to be summed straight into this headline (see CHORD_SPEED_TOL).
+        dist = path_distance(xs, ys, t, v)
         self._totals_cache = SessionTotals(
             duration_s=float(t[-1] - t[0]) if len(t) >= 2 else 0.0,
             moving_s=moving_time_s(t, v),
-            distance_m=path_distance_m(xs, ys),
+            distance_m=dist.metres if dist.kept_frac >= MIN_KEPT_FRAC else None,
+            distance_kept_frac=dist.kept_frac,
             start_clock=clock_hhmm(w0),
             end_clock=clock_hhmm(w1),
         )
@@ -613,9 +678,10 @@ class SessionStats:
         times — scale-free, so it is comparable across tracks. None with <2 laps."""
         return cov_pct(self._clean_times())
 
-    def laps_within_pct(self, pct: float = 1.0) -> tuple[int, int]:
+    def laps_within_pct(self, pct: float = 1.0) -> tuple[int | None, int]:
         """(count, n): how many of the n clean laps sit within `pct` % of the session best —
-        the "banked pace" count (the best lap itself counts)."""
+        the "banked pace" count (the best lap itself counts). count is None below MIN_DIST_LAPS
+        (one lap is trivially within 1% of itself), so the tile dashes like σ does."""
         times = self._clean_times()
         return within_pct_of_best(times, pct), len(times)
 
