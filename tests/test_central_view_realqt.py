@@ -416,6 +416,67 @@ def test_provisional_banner_shows_and_clears_with_trust_state():
     print("test_provisional_banner_shows_and_clears_with_trust_state OK")
 
 
+def test_trust_flip_without_a_rebuild_refreshes_the_table_and_the_map_cue():
+    """QA W7-03: a trust flip that does NOT re-segment must still reach every surface that renders
+    it. File ▸ Save as track… promotes the current lines into a named track — Provisional → Verified
+    with no re-segmentation, so nothing rebuilds itself — and it only ever refreshed the trust strip.
+    The strip cleared while the map canvas still painted "lap timing provisional" and the Laps table
+    still rendered the lap in provisional italics with the ★ best mark withheld: three surfaces, two
+    verdicts, one frame. refresh_timing_trust now drives the strip, the canvas cue and the table.
+
+    Reproduces the gesture EXACTLY as app._save_as_track performs it (set track_name, then call
+    refresh_timing_trust) — no rebuild_derived_views anywhere after the flip."""
+    from studio import theme as _theme
+    view, s, _t0, _t1 = _real_central_view()
+    green, purple = _theme.C.ahead.upper(), _theme.C.best.upper()
+    tbl = view.table.table
+
+    def _italic_cells():
+        return [(r, c) for r in range(tbl.rowCount()) for c in range(1, tbl.columnCount())
+                if tbl.item(r, c) is not None and tbl.item(r, c).font().italic()]
+
+    def _best_painted():
+        return any(tbl.item(r, c) is not None
+                   and tbl.item(r, c).foreground().color().name().upper() in (green, purple)
+                   for r in range(tbl.rowCount()) for c in range(tbl.columnCount()))
+
+    def _starred():
+        return [tbl.item(r, 0).text() for r in range(tbl.rowCount())
+                if tbl.item(r, 0) is not None and "★" in tbl.item(r, 0).text()]
+
+    # Provisional, reached the load-time way (a rebuild) so all three surfaces genuinely agree.
+    s.track_name = None
+    s._timing_user_confirmed = False
+    view.rebuild_derived_views(reselect=True)
+    assert s.timing_verified is False
+    assert view.provisional_banner.isVisibleTo(view)
+    assert view.map._provisional_label is not None, "provisional timing must paint the canvas cue"
+    assert _italic_cells(), "provisional timing must mute the start-line-derived cells"
+    assert not _starred(), "no ★ may claim a best against an arbitrary start line"
+    assert not _best_painted(), "no green/purple best while provisional"
+
+    # THE GESTURE — exactly what _save_as_track does, and nothing else.
+    s.track_name = "Sandown Park"
+    assert s.timing_verified is True, "a named track IS a trusted start line"
+    view.refresh_timing_trust()
+
+    # One verdict per frame: the strip, the canvas caption and the table all say Verified. Collected
+    # rather than asserted one at a time, so a regression names the WHOLE self-contradiction.
+    assert not view._trust_strip.isVisibleTo(view), "the strip must clear"
+    stale = []
+    if view.map._provisional_label is not None or view.map._provisional_line is not None:
+        stale.append("the map canvas still paints the 'lap timing provisional' cue")
+    if _italic_cells():
+        stale.append(f"the Laps table still mutes {len(_italic_cells())} cells in provisional "
+                     "italics")
+    if not _starred():
+        stale.append("the ★ best-lap mark is still withheld")
+    if not _best_painted():
+        stale.append("the best-lap colour is still suppressed")
+    assert not stale, ("the trust strip has cleared, but in the SAME frame: " + "; ".join(stale))
+    print("test_trust_flip_without_a_rebuild_refreshes_the_table_and_the_map_cue OK")
+
+
 def test_quality_banner_is_informational_and_independent():
     """The INFORMATIONAL tier — timing ACCURACY (Session.timing_quality) — tracks a degraded clock
     end-to-end AND wears the calmer (non-CTA) style, independent of the start-line trust:
@@ -879,6 +940,7 @@ def _run_all():
     test_compare_scrub_fans_one_seek_to_each_real_pane_per_tick()
     test_compare_tick_keeps_panes_consistent_no_reentry()
     test_provisional_banner_shows_and_clears_with_trust_state()
+    test_trust_flip_without_a_rebuild_refreshes_the_table_and_the_map_cue()
     test_quality_banner_is_informational_and_independent()
     test_provisional_and_degraded_share_one_trust_strip()
     test_hero_readout_leads_with_labelled_delta_to_ideal()

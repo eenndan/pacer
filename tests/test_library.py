@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import tempfile
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1377,7 +1378,6 @@ def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):
         # A real recording WITH laps → indexed. Both timing axes are read by _update_library for the
         # PB-moment gate (a provisional/unverified start line OR a data-quality-degraded clock never
         # celebrates); Verified + not-degraded here so the index path runs normally.
-        from types import SimpleNamespace
         win.session = type("S", (), {
             "valid_lap_ids": staticmethod(lambda: [0, 1]),
             "timing_verified": True,
@@ -1387,6 +1387,173 @@ def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):
         })()
         studio_app.StudioWindow._update_library(win, ["/m/GX010060.MP4"])
         assert len(upserts) == 1 and upserts[0]["fingerprint"] == "GX0060"
+
+
+# ---------------------------------------------------- the entry must not freeze at load time (W7-02)
+class _TrustSession:
+    """The slice of Session that File ▸ Save as track… and the library upsert actually read, with
+    the REAL trust rule: a named track IS a trusted start line (Session.timing_verified), and
+    library_entry sources its track/verified fields from the live session — so an entry built after
+    the save differs from one built before it."""
+
+    def __init__(self):
+        self.track_name = None
+        self.confirmed = False
+
+    @property
+    def timing_verified(self):
+        return self.track_name is not None or self.confirmed
+
+    def valid_lap_ids(self):
+        return [0, 1]
+
+    def point_count(self):
+        return 500
+
+    def track_location(self):
+        return ((-37.95, 145.10), (-37.96, 145.09, -37.94, 145.11))
+
+    def timing_lines_latlon(self):
+        return (((-37.95, 145.10), (-37.95, 145.11)), [])
+
+    def library_entry(self, paths):
+        return _entry("GX030059", track=self.track_name, laps=2, best=23.231,
+                      verified=self.timing_verified, paths=list(paths))
+
+
+def _save_track_window(monkeypatch, upserts):
+    """A fabricated StudioWindow wired for _save_as_track — the same __new__ idiom the
+    _update_library test above uses, plus the three collaborators that gesture touches: a stubbed
+    track_db (no DB write), a spy library.upsert_and_save, and a status bar / view double."""
+    from studio import app as studio_app
+    monkeypatch.setattr(library, "upsert_and_save", lambda entry, *a, **k: upserts.append(entry))
+    monkeypatch.setattr(studio_app.track_db, "make_entry",
+                        lambda name, *a, **k: {"name": name})
+    monkeypatch.setattr(studio_app.track_db, "replaces", lambda entry: None)
+    monkeypatch.setattr(studio_app.track_db, "save_track", lambda entry, replace=False: None)
+    monkeypatch.setattr(studio_app.QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: ("Sandown Park", True)))
+
+    win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+    win.session = _TrustSession()
+    win._paths = ["/media/GX030059.MP4"]
+    win.view = SimpleNamespace(refreshed=0)
+    win.view.refresh_timing_trust = lambda: setattr(win.view, "refreshed",
+                                                    win.view.refreshed + 1)
+    # Instance attributes shadow the QMainWindow methods (never __init__'d, so no C++ status bar).
+    bar = SimpleNamespace(messages=[], current="")
+    bar.showMessage = lambda m, *a: (bar.messages.append(m), setattr(bar, "current", m))[0]
+    bar.currentMessage = lambda: bar.current
+    bar.clearMessage = lambda: setattr(bar, "current", "")
+    win.statusBar = lambda: bar
+    return win, bar
+
+
+def test_save_as_track_rewrites_the_library_entry(monkeypatch):
+    """QA W7-02: File ▸ Save as track… names the circuit and makes the session Verified, but the
+    library entry was written ONLY on the load path — so it froze at load time. The row kept reading
+    "unknown track · provisional", is_trustworthy stayed False, and the lap was silently ABSENT from
+    the PB progression of the track it had just created (prior_best/pb_series empty) until the user
+    happened to re-open the file. The save must re-upsert from the session as it now stands."""
+    if not _pacer_available():
+        print("skip test_save_as_track_rewrites_the_library_entry (no pacer)")
+        return
+    from studio import app as studio_app
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        upserts = []
+        win, bar = _save_track_window(monkeypatch, upserts)
+
+        # Pre-condition: this is exactly the state the QA repro starts from.
+        assert win.session.timing_verified is False
+        before = win.session.library_entry(win._paths)
+        assert before["track"] is None and before["verified"] is False
+        assert library.trust_label(before) == "provisional"
+        assert not library.is_trustworthy(before)
+
+        studio_app.StudioWindow._save_as_track(win)
+
+        # The gesture verified the session AND wrote the track…
+        assert win.session.track_name == "Sandown Park"
+        assert win.session.timing_verified is True
+        assert win.view.refreshed == 1, "the views must be refreshed off the trust flip"
+        assert "Sandown Park" in bar.current
+        # …and it must have carried BOTH facts into the index, in one upsert.
+        assert len(upserts) == 1, f"the save must re-upsert the library entry, got {upserts!r}"
+        after = upserts[0]
+        assert after["track"] == "Sandown Park", after
+        assert after["verified"] is True, after
+        assert library.trust_label(after) is None and library.is_trustworthy(after)
+        # The consequence the user sees: the lap is now IN that track's PB progression.
+        idx = library.empty_index()
+        library.upsert(idx, after)
+        assert library.prior_best(idx, "Sandown Park") == 23.231
+        assert library.pb_series(idx, "Sandown Park") == [(after["date"], 23.231)]
+
+
+def test_save_as_track_survives_a_library_write_failure(monkeypatch):
+    """Saving a track must never become a way to crash: the index is additive, so a library-write
+    failure logs and is swallowed, exactly as on the load path. The new upsert must be REACHED (or
+    this pins nothing — a save that never touches the library trivially survives one that fails),
+    the exception must not escape, and the track + trust flip must still stand."""
+    if not _pacer_available():
+        print("skip test_save_as_track_survives_a_library_write_failure (no pacer)")
+        return
+    from studio import app as studio_app
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        win, bar = _save_track_window(monkeypatch, [])
+        attempts = []
+
+        def _boom(entry, *a, **k):
+            attempts.append(entry)
+            raise OSError("read-only volume")
+
+        monkeypatch.setattr(library, "upsert_and_save", _boom)
+        studio_app.StudioWindow._save_as_track(win)  # must not raise
+        assert len(attempts) == 1, f"the save must attempt the library write, got {attempts!r}"
+        assert win.session.track_name == "Sandown Park"
+        assert win.session.timing_verified is True
+        assert "Sandown Park" in bar.current, "the save is still confirmed to the user"
+
+
+def test_refresh_library_entry_keeps_the_load_path_exclusions(monkeypatch):
+    """The later refreshes admit exactly what the load-time upsert admits (_library_excludes is
+    shared): a 0-lap session and the bundled DEFAULT_SAMPLE are still never indexed, so a drag on an
+    unsegmentable recording can't leave a permanent junk row the load path refused to create."""
+    if not _pacer_available():
+        print("skip test_refresh_library_entry_keeps_the_load_path_exclusions (no pacer)")
+        return
+    from studio import app as studio_app
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        upserts = []
+        monkeypatch.setattr(library, "upsert_and_save", lambda e, *a, **k: upserts.append(e))
+        win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+
+        # No loaded recording at all → nothing to refresh.
+        win.session = _TrustSession()
+        win._paths = []
+        studio_app.StudioWindow._refresh_library_entry(win)
+        assert upserts == []
+
+        # 0 valid laps → skipped, same as the load path.
+        win._paths = ["/media/GX030059.MP4"]
+        win.session.valid_lap_ids = lambda: []
+        studio_app.StudioWindow._refresh_library_entry(win)
+        assert upserts == []
+
+        # The bundled sample → skipped even with laps.
+        win.session = _TrustSession()
+        win._paths = [studio_app.DEFAULT_SAMPLE]
+        studio_app.StudioWindow._refresh_library_entry(win)
+        assert upserts == []
+
+        # A real recording with laps → indexed, carrying the session's CURRENT trust state.
+        win._paths = ["/media/GX030059.MP4"]
+        win.session.confirmed = True          # what a start/finish drag does
+        studio_app.StudioWindow._refresh_library_entry(win)
+        assert len(upserts) == 1 and upserts[0]["verified"] is True
 
 
 def test_recent_entries_include_an_unknown_track_recording(monkeypatch):
