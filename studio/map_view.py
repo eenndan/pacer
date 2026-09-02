@@ -865,7 +865,7 @@ class MapView(QWidget):
         self.ghost_updates = 0
 
         # E2: provisional start cue; declared before _rebuild (which may refresh it). None = track
-        # known, no cue. See _refresh_provisional_cue.
+        # known, no cue. See refresh_provisional_cue.
         self._provisional_line: pg.PlotDataItem | None = None
         self._provisional_label: pg.TextItem | None = None
         self._start: _TimingLine | None = None
@@ -1186,14 +1186,20 @@ class MapView(QWidget):
         self._sectors = [_TimingLine(self.plot, s, SECTOR_COLOR, self._emit, self._snap_to_trace)
                          for s in sectors]
         # Re-pin the provisional cue (or remove it if the track is known).
-        self._refresh_provisional_cue()
+        self.refresh_provisional_cue()
 
-    def _refresh_provisional_cue(self):
+    def refresh_provisional_cue(self):
         """Overlay a dashed accent start line + "drag to set start/finish — lap timing provisional"
         callout while the session's timing is PROVISIONAL (start line auto-fitted, not user-
         confirmed — see Session.timing_verified); remove it when the timing is Verified (a detected
         track OR a user-confirmed start line). Re-run on build and on every start-line move (_emit),
-        so dragging the line into place (which confirms the timing) clears the cue live."""
+        so dragging the line into place (which confirms the timing) clears the cue live.
+
+        PUBLIC because the trust flag can flip without a re-segmentation: File ▸ Save as track…
+        promotes these very lines into a named track, which makes the session Verified while every
+        line stays exactly where it is. CentralView.refresh_timing_trust drives this method so that
+        path clears the cue too — it used to leave the canvas shouting "lap timing provisional" in
+        the same frame the trust strip above it had already cleared (QA W7-03)."""
         provisional = (not getattr(self.session, "timing_verified", True)
                        and self._start is not None)
         if not provisional:
@@ -1273,7 +1279,7 @@ class MapView(QWidget):
 
     def _emit(self):
         start, sectors = self._current()
-        self._refresh_provisional_cue()  # keep the cue glued to the start handle while dragging
+        self.refresh_provisional_cue()  # keep the cue glued to the start handle while dragging
         self.timing_lines_changed.emit(start, sectors)
 
     def _add_sector(self):
@@ -1541,7 +1547,7 @@ class MapView(QWidget):
         self._refresh_empty_state()
         # A user drag re-segments AND confirms the timing (Provisional → Verified), so re-evaluate
         # the on-canvas provisional cue here — by now session.timing_verified reflects the edit.
-        self._refresh_provisional_cue()
+        self.refresh_provisional_cue()
         # Re-frame what is now drawn (a re-segmentation can swap in a different best lap, or an F7
         # reference ring that reaches outside the trace) — but only while our own fit still stands.
         if self._view_fitted:

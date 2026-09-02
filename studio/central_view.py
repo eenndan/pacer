@@ -1484,10 +1484,42 @@ class CentralView(QWidget):
             self.plots.refresh()
         # After the selection: the sector lines + their units track the axis and new selection.
         self._refresh_sector_lines()
-        # The provisional-timing banner tracks the trust state (a re-segment can confirm it).
-        self.refresh_timing_trust()
+        # The provisional-timing banner tracks the trust state (a re-segment can confirm it). Only
+        # the BANNER tier here: the table, the map cue and the stats page are the very surfaces this
+        # method just rebuilt, so the full refresh_timing_trust() seam would redo all three.
+        self._refresh_trust_banners()
 
     def refresh_timing_trust(self):
+        """Refresh EVERY surface keyed on the session's timing-trust flags, for the callers that
+        flip those flags WITHOUT re-segmenting: the trust strip over the map, the map canvas's own
+        provisional cue, the Laps table's provisional muting/★, and the Stats page's banner + muted
+        tiles.
+
+        WHY it drives all four rather than just the strip. `timing_verified` normally flips inside a
+        re-segmentation (a start-line drag), and rebuild_derived_views rebuilds every consumer on
+        its way past — so for years the strip was the only thing left to refresh here. File ▸ Save
+        as track… broke that assumption: it promotes the current lines into a named track, which
+        makes the session Verified with no re-segmentation and nothing rebuilt. The strip cleared
+        while the canvas still painted "lap timing provisional" and the Laps table still rendered
+        the lap in provisional italics with the ★ withheld — three surfaces, two verdicts, one
+        frame (QA W7-03). Fixing only that call site would rot at the next such path, so the seam
+        itself now owns the whole set: flip a trust flag, call this, and the frame agrees.
+
+        The rebuild seam calls _refresh_trust_banners() instead (it has just rebuilt the other
+        three); every other caller wants this one."""
+        self._refresh_trust_banners()
+        # Each guarded: a CentralView.__new__'d for a unit test has none of these children.
+        table = getattr(self, "table", None)
+        if table is not None:
+            table.refresh_timing_trust()
+        mp = getattr(self, "map", None)
+        if mp is not None:
+            mp.refresh_provisional_cue()
+        stats = getattr(self, "stats_view", None)
+        if stats is not None:
+            stats.refresh()
+
+    def _refresh_trust_banners(self):
         """Refresh the ONE trust strip over the map from the session's two orthogonal axes, as two
         tiers within a single compact strip:
 
@@ -1500,8 +1532,13 @@ class CentralView(QWidget):
             both concerns apply.
 
         The whole strip is hidden when neither concern applies (a normal GPS9, verified-track
-        recording — the common good case — so the map reads identically to today). Run from the
-        rebuild seam. The lap table's muting + the map's dashed cue refresh on their own rebuilds.
+        recording — the common good case — so the map reads identically to today).
+
+        The BANNER tier only — the other trust-keyed surfaces (the lap table's muting, the map's
+        dashed cue, the Stats page) belong to refresh_timing_trust, which calls this first. Called
+        directly ONLY from the rebuild seam, which has just rebuilt those three anyway; anything
+        that flips a trust flag on its own calls refresh_timing_trust instead.
+
         Defensive: a CentralView.__new__'d for a unit test drives the seam without building the
         banner widgets, so the session reads stay behind the widget-presence guard (as before)."""
         strip = getattr(self, "_trust_strip", None)

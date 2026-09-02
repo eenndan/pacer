@@ -852,6 +852,10 @@ class StudioWindow(QMainWindow):
         # placing the start/finish line retracts the "drag it into place" line instead of leaving it
         # asserting a state the drag just answered (QA MAP-06).
         self.view.timingEdited.connect(self._apply_session_notice)
+        # A drag re-times every lap AND confirms the start line, so the library's frozen-at-load row
+        # (its `best`, and its provisional flag) is stale the moment the handle is released — the
+        # same gap Save-as-track had (QA W7-02). Re-upsert from the same seam; guarded, never a PB.
+        self.view.timingEdited.connect(self._refresh_library_entry)
         # Persist the lap-panel tab + any grid-splitter drag across reloads/relaunches.
         self.view.lapTabChanged.connect(self._on_lap_tab_changed)
         self.view.gridSizesChanged.connect(self._on_grid_sizes_changed)
@@ -1378,9 +1382,7 @@ class StudioWindow(QMainWindow):
         celebrate, so we never celebrate either. The caller shows the celebratory banner from the
         returned moment; a library-write failure still returns the moment (the comparison already
         succeeded)."""
-        if any(os.path.abspath(p) == os.path.abspath(DEFAULT_SAMPLE) for p in paths):
-            return None
-        if not self.session.valid_lap_ids():
+        if self._library_excludes(paths):
             return None
         moment = None
         try:
@@ -1397,6 +1399,48 @@ class StudioWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001 — the index is additive; never break a load
             print(f"studio: session library not updated ({exc!r}).", flush=True)
         return moment
+
+    def _library_excludes(self, paths: list[str]) -> bool:
+        """True when this recording must stay OUT of the session library: the bundled DEFAULT_SAMPLE
+        (not the user's driving) or a recording with no valid lap (a junk row the library would
+        surface forever). Shared by the load-time upsert and every later refresh so a recording can
+        never be admitted by one and refused by the other."""
+        if any(os.path.abspath(p) == os.path.abspath(DEFAULT_SAMPLE) for p in paths):
+            return True
+        return not self.session.valid_lap_ids()
+
+    def _refresh_library_entry(self):
+        """Re-write the loaded recording's library entry from the session AS IT NOW STANDS.
+
+        The entry — track name, the three trust flags, the best/theoretical lap times — used to be
+        written ONLY on the load path, so it froze at load time and every later gesture that changed
+        what `Session.library_entry()` reports silently desynced the index from the app:
+
+          * File ▸ Save as track… names the circuit and makes the session Verified. The Library row
+            kept painting "unknown track · provisional" in italics, `is_trustworthy` stayed False,
+            and the lap was silently ABSENT from the PB progression of the track it had just created
+            — `prior_best`/`pb_series` for that name were empty until the user happened to re-open
+            the file (QA W7-02).
+          * A start/finish drag confirms the timing AND re-times every lap. The entry kept both the
+            provisional flag and the pre-drag `best`, so the library's PB history was quoting lap
+            times the app no longer shows anywhere.
+
+        Deliberately NOT a PB moment: the celebration is decided once, on load, against the index as
+        it stood BEFORE this session entered it (see _update_library). Re-deciding it here would
+        re-fire the toast on every drag, and against an index that already contains this session.
+
+        Fully guarded, like the load path: the index is additive, so a library-write failure logs
+        and is never allowed to disrupt the session (saving a track must not become a way to crash).
+        """
+        paths = getattr(self, "_paths", None)
+        if not paths or not hasattr(self, "session"):
+            return
+        try:
+            if self._library_excludes(paths):
+                return
+            library.upsert_and_save(self.session.library_entry(paths))
+        except Exception as exc:  # noqa: BLE001 — the index is additive; never break the session
+            print(f"studio: session library not updated ({exc!r}).", flush=True)
 
     def _show_pb_moment(self, moment: dict):
         """Show the transient "new personal best!" toast for a ``library.pb_moment`` result. Fully
@@ -1868,11 +1912,20 @@ class StudioWindow(QMainWindow):
             self.statusBar().showMessage(f"could not save track: {exc}", STATUS_MS)
             return
         # The freshly-saved track now wins detection for THIS session's name on the next load —
-        # and it makes the timing VERIFIED (a named track is a trusted start line), so refresh the
-        # derived views to drop the provisional banner / muting and restore the purple session-bests.
+        # and it makes the timing VERIFIED (a named track is a trusted start line). Nothing was
+        # re-segmented, so nothing rebuilt itself: this gesture owns propagating the flip to every
+        # surface that reads it, or the app contradicts itself in one frame (QA W7-02/W7-03).
         self.session.track_name = name
+        # 1. the views: trust strip, the map's on-canvas provisional cue, the Laps table's muting +
+        #    ★ best mark, the Stats page's banner and muted tiles.
         if getattr(self, "view", None) is not None:
             self.view.refresh_timing_trust()
+        # 2. the session library: the row's track name + trust flags, and with them this lap's place
+        #    in the PB progression of the track it has just created.
+        self._refresh_library_entry()
+        # 3. the untimed status notice, which was still asserting "unknown track — start/finish line
+        #    was auto-fitted". Retracted BEFORE the transient confirmation below so that one shows.
+        self._apply_session_notice()
         # A replace and a create used to read identically; the message now says which happened, so
         # the one that destroyed another circuit's lines is visible after the fact too.
         verb = "replaced" if at_risk is not None else "saved"

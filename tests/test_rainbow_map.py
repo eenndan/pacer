@@ -416,16 +416,16 @@ def test_provisional_cue_clears_when_timing_confirmed():
 
 
 def test_provisional_cue_repins_not_duplicates_on_refresh():
-    """Re-pinning (a start-line move / rebuild re-runs _refresh_provisional_cue) REPOSITIONS the
-    one cue rather than stacking a second: the same line+label OBJECTS persist and the plot gains
-    no extra items. A drift on each move would litter the map with stale 'provisional' callouts."""
+    """Re-pinning (a start-line move / rebuild / trust flip re-runs refresh_provisional_cue)
+    REPOSITIONS the one cue rather than stacking a second: the same line+label OBJECTS persist and
+    the plot gains no extra items. A drift on each move would litter the map with stale callouts."""
     s = _stub_session()
     mv = MapView(s)
     line0, label0 = mv._provisional_line, mv._provisional_label
     n_items = len(mv.plot.items)
     n_labels = sum(isinstance(it, pg.TextItem) for it in mv.plot.items)
-    mv._refresh_provisional_cue()
-    mv._refresh_provisional_cue()
+    mv.refresh_provisional_cue()
+    mv.refresh_provisional_cue()
     assert mv._provisional_line is line0, "the cue line must be repositioned, not rebuilt"
     assert mv._provisional_label is label0, "the callout must be repositioned, not rebuilt"
     assert len(mv.plot.items) == n_items, "re-pinning must not add plot items"

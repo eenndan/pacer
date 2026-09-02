@@ -67,6 +67,16 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Saving a recording as a track now updates everything it changes.** `File ▸ Save as track…`
+  named the circuit and made the lap timing trusted, but only the trust strip over the map
+  noticed. In the same frame the map canvas still painted the amber “drag to set start/finish —
+  lap timing provisional” callout, the Laps table still showed the lap in provisional italics with
+  its ★ best mark withheld, and the Library row still read “unknown track · provisional” — so the
+  lap was silently missing from the PB progression of the track it had just created, until you
+  happened to re-open the file. The same stale-library gap applied to a start/finish drag, which
+  also left the library quoting the pre-drag lap times. Every one of those surfaces now refreshes
+  with the trust flag.
+
 - **A reference recording must now hold a lap the same LENGTH as yours.** "Load reference
   recording…" only ever checked that the other file was the same *track* — so a recording of the
   same circuit whose start line was in a different place, cutting it into laps 3.7× longer, was
