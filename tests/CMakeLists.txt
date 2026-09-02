@@ -537,6 +537,18 @@ add_test(NAME test_pb_toast
 set_tests_properties(test_pb_toast PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Export + library entry points (fix/qa-app-export-plumbing, QA sweep L12-02/L1-03/L12-04/L12-07/
+# L12-08/L11-08): the overlay MP4 obeys the same timing-trust verdict as the lap card, a 0-valid-lap
+# recording can no longer write a header-only CSV and reports success, the report's map grab keeps
+# its key and loses the editing chrome, the options dialog quantifies both combos and persists them,
+# Reveal-in-Finder reports either outcome, and Save-as-track asks before replacing another circuit.
+# Real StudioWindow menus on the real theme (the tooltips are the assertion), so run offscreen; the
+# prefs / library / track-DB / sidecar seams are redirected to a temp tree inside the test.
+add_test(NAME test_export_gates
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_gates.py)
+set_tests_properties(test_export_gates PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
 # `pacer` in the interpreter's site-packages — on a fresh CI env there is none, and
@@ -559,7 +571,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_lap_table_columns test_help_dialog test_grid_and_timing_guards
                         test_lap_table_empty_states test_charts_header_budget
                         test_coaching_panel_layout test_focus_cues test_pb_toast test_app_chrome
-                        test_charts_panel test_lap_table_affordances)
+                        test_charts_panel test_lap_table_affordances test_export_gates)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

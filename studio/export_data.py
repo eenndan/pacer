@@ -22,7 +22,7 @@ import base64
 import csv
 import html
 
-from . import APP_NAME
+from . import APP_NAME, units
 from ._signal import fmt_time, lap_label
 
 # laps.csv `flag` column value mirroring the lap table's ⚠ low-confidence marker (a GPS
@@ -44,10 +44,26 @@ def _f3(v) -> str:
     return f"{float(v):.3f}"
 
 
-def laps_table(session) -> tuple[list[str], list[tuple[int, list[str]]]]:
+def _speed_column(unit: str | None):
+    """`(header suffix, km/h → column value)` for the table's speed columns.
+
+    ``unit=None`` is the CANONICAL SI mode: km/h headers, km/h values, byte-for-byte what this
+    module has always written. That is the CSVs' deliberate machine-readable contract (every
+    column self-describing, never following the screen) and `write_laps_csv` must keep passing
+    None. A unit id switches the columns to that DISPLAY unit — used ONLY by the report, which
+    embeds unit-following chart/map images and so cannot label its table in a different unit from
+    the picture 100 px above it (L12-01)."""
+    if unit is None:
+        return "kmh", lambda v: v
+    u = units.normalize_unit(unit)  # the id doubles as the header suffix ("kmh" / "mph")
+    return u, lambda v, _u=u: units.convert_speed(v, _u)
+
+
+def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[int, list[str]]]]:
     """(headers, rows) of the lap table — single-sourced for BOTH `write_laps_csv` and the
-    report's HTML table, so the two always agree. One row per lap shown in the app's lap
-    table (`session.lap_rows()` — the valid laps), as `(lap_id, cells)`; columns:
+    report's HTML table, so the two always agree on rows, ordering and precision. One row per lap
+    shown in the app's lap table (`session.lap_rows()` — the valid laps), as `(lap_id, cells)`;
+    columns:
 
       lap, time_s, dist_m, entry_kmh, flag      the table's base columns; `flag` is the ⚠
                                                 GPS-dropout marker (DROPOUT_FLAG / "")
@@ -57,24 +73,30 @@ def laps_table(session) -> tuple[list[str], list[tuple[int, list[str]]]]:
       C1_time_s, C1_apex_kmh, … per corner      time-in-corner + apex (min) speed from
                                                 `session.lap_corner_stats` (the F2 corner
                                                 model); blank when a lap has no stats
-    """
+
+    `unit` selects the SPEED columns' unit and header suffix (see `_speed_column`): None — the
+    default and the ONLY thing the CSV writer passes — keeps the canonical SI km/h; "mph"/"kmh"
+    renders `entry_mph` / `C1_apex_mph` for the report's display-unit copy. Distances and times
+    are SI in both modes (the app shows them in the same units on screen)."""
     rows_meta = session.lap_rows()
     n_sect = session.sector_count()
     n_splits = n_sect + 1 if n_sect else 0  # N lines -> N+1 sub-sectors; 0 lines -> none
     corner_list = session.corners.corner_list()
     dropout_ids = session.dropout_lap_ids()
 
-    headers = ["lap", "time_s", "dist_m", "entry_kmh", "flag"]
+    sfx, speed = _speed_column(unit)
+
+    headers = ["lap", "time_s", "dist_m", f"entry_{sfx}", "flag"]
     headers += [f"S{i + 1}_s" for i in range(n_splits)]
     for c in corner_list:
-        headers += [f"{c.label}_time_s", f"{c.label}_apex_kmh"]
+        headers += [f"{c.label}_time_s", f"{c.label}_apex_{sfx}"]
 
     rows: list[tuple[int, list[str]]] = []
     for r in rows_meta:
         lap_id = r["idx"]
         # `lap` column is the 1-based lap NUMBER (lap_label), matching the app's Lap column;
         # the 0-based lap_id stays the internal key (row tuple / best-lap green class below).
-        cells = [lap_label(lap_id), _f3(r["time"]), _f3(r["dist"]), _f3(r["entry"]),
+        cells = [lap_label(lap_id), _f3(r["time"]), _f3(r["dist"]), _f3(speed(r["entry"])),
                  DROPOUT_FLAG if lap_id in dropout_ids else ""]
         splits = session.lap_sector_splits(lap_id) if n_splits else []
         for i in range(n_splits):
@@ -82,7 +104,7 @@ def laps_table(session) -> tuple[list[str], list[tuple[int, list[str]]]]:
         stats = {s.cid: s for s in session.corners.lap_corner_stats(lap_id)}
         for c in corner_list:
             s = stats.get(c.cid)
-            cells += [_f3(s.time), _f3(s.apex_speed)] if s is not None else ["", ""]
+            cells += [_f3(s.time), _f3(speed(s.apex_speed))] if s is not None else ["", ""]
         rows.append((lap_id, cells))
     return headers, rows
 
@@ -117,7 +139,12 @@ def write_laps_csv(path: str, session) -> None:
     (theoretical-best / best-rolling, see `laps_summary`): a blank separator row, a
     `summary,time_s` mini-header, then one labeled row per summary value. Human 3-decimal
     floats (see module doc); the trailer keeps the file cleanly parseable (split on the blank
-    row, or filter the leading `summary` marker)."""
+    row, or filter the leading `summary` marker).
+
+    ALWAYS SI (km/h / m / s), never the app's display unit: this file is the machine-readable
+    contract, so `laps_table` is called with no `unit` and every column stays self-describing
+    (`entry_kmh`). The display unit belongs to surfaces a HUMAN reads — the app and the HTML
+    report."""
     headers, rows = laps_table(session)
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -165,15 +192,21 @@ img { max-width: 100%; border: 1px solid #ccc; margin: 0.5em 0; }
 
 
 def write_report_html(path: str, session, source_label: str = "",
-                      images: list[tuple[str, bytes]] = ()) -> None:
+                      images: list[tuple[str, bytes]] = (), unit: str | None = None) -> None:
     """One SELF-CONTAINED page: the session header (recording, track, date, lap count,
     best lap), the laps table (same rows/columns as `write_laps_csv`, via `laps_table`),
     and the passed PNG snapshots embedded as base64 data URIs. `images` is an iterable of
     `(title, png_bytes)` — app.py grabs the map/plots widgets (QWidget.grab → QImage →
     PNG bytes), so this module stays Qt-free. Deliberately dead-simple, WELL-FORMED
-    (XML-parseable) markup with a little inline CSS and NO JavaScript."""
+    (XML-parseable) markup with a little inline CSS and NO JavaScript.
+
+    `unit` is the reader's DISPLAY speed unit, passed straight to `laps_table`. The app passes its
+    live choice because the embedded images already follow it: the grabbed chart axis reads
+    "speed (mph)" and the map colour bar "17 … 54 mph", so a km/h table under them put two
+    different numbers for the same lap on one page (L12-01). None keeps the SI headers — the shape
+    the CSV writer uses, and the right default for a caller with no display unit."""
     esc = html.escape
-    headers, rows = laps_table(session)
+    headers, rows = laps_table(session, unit)
     best = session.best_lap_id()
     best_txt = "—"
     if best is not None:
