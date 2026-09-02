@@ -48,6 +48,23 @@ def _fail_fast(_parent, title, text, *args, **kwargs):
 QMessageBox.critical = _fail_fast
 QMessageBox.warning = _fail_fast
 
+
+# ...but the STATIC helpers are only half the modals: the load-failure path builds a QMessageBox
+# INSTANCE and calls box.exec() on it (studio/app._on_load_failed), which no static patch can see.
+# That blind spot is what turned a 1-second failure into an ~11-minute hang — the run sat on an
+# undismissable modal until CI killed the step, with the reason still inside the dialog. Patch the
+# BOUND exec() too, and print what it would have said, details and all.
+def _fail_fast_exec(self, *args, **kwargs):
+    detail = self.detailedText()
+    title = self.windowTitle() or type(self).__name__  # macOS drops a message box's window title
+    print(f"SMOKE FAILED — modal suppressed: [{title}] {self.text()}"
+          + (f"\n  details: {detail}" if detail else ""), file=sys.stderr)
+    sys.exit(1)
+
+
+QMessageBox.exec = _fail_fast_exec
+QMessageBox.exec_ = _fail_fast_exec
+
 w = StudioWindow(["3rdparty/gpmf-parser/samples/hero6.mp4"])
 
 # C1: Session.load now runs on a worker QThread (the window stays responsive), so the session isn't
