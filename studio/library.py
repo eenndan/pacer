@@ -46,6 +46,11 @@ Load self-heals WITHOUT destroying durable history:
     non-list ``entries``) falls back to an empty index — and even then, before any write would
     overwrite the unparseable/newer file, ``save`` first copies it to a ``library.json.bak`` sidecar
     so nothing is ever silently lost.
+
+The DELIBERATE wipe is held to the same rule: ``clear`` copies the index to that same
+``library.json.bak`` sidecar BEFORE emptying it, and ``restore`` puts the backup back (swapping the
+replaced index into the sidecar, so a restore is itself reversible). ``backup_summary`` reports what
+the sidecar holds, for a confirm that can name both sides of the swap.
 """
 
 from __future__ import annotations
@@ -243,16 +248,22 @@ def load(path: str | None = None) -> dict:
     return {"version": VERSION, "entries": [_norm_entry(e) for e in entries]}
 
 
+def backup_path(path: str | None = None) -> str:
+    """Absolute path of the index's backup sidecar (``<library.json>.bak``) — the ONE slot every
+    backup here writes and ``restore`` reads, so "where the copy went" is stated in one place.
+    `path` defaults to ``library_path()``."""
+    if path is None:
+        path = library_path()
+    return path + ".bak"
+
+
 def _backup_unsafe(path: str) -> None:
     """Before ``save`` would OVERWRITE an existing on-disk library it could not safely round-trip
     (genuine corruption, or a NEWER un-migratable file), copy it to a ``<path>.bak`` sidecar so the
     user's original bytes are never silently lost. Called only for the un-round-trippable cases:
-    a healthy current/older file that ``load`` migrated is rewritten normally (no backup churn).
-
-    Backup is best-effort and MUST NOT block the write: any failure to back up just logs (a write
-    that keeps the app usable beats refusing to save because the backup slot is unwritable). Uses
-    ``shutil.copy2`` (preserves mtime); the ``.bak`` is overwritten each time so it always mirrors
-    the last replaced-yet-unparseable file rather than accumulating."""
+    a healthy current/older file that ``load`` migrated is rewritten normally (no backup churn), and
+    a healthy file being WIPED is ``clear``'s business, not this hook's. The copy itself (best-effort,
+    same slot, never blocking the write) is ``_copy_to_backup``."""
     if not os.path.exists(path):
         return
     ok, data = _is_loadable_dict(path)
@@ -264,12 +275,24 @@ def _backup_unsafe(path: str) -> None:
     )
     if not unsafe:
         return
+    _copy_to_backup(path, "an unreadable/newer index")
+
+
+def _copy_to_backup(path: str, what: str) -> bool:
+    """Copy `path` to its ``.bak`` sidecar, best-effort. Returns True on success. Shared by the two
+    reasons a backup is taken — an un-round-trippable file about to be overwritten
+    (``_backup_unsafe``) and a deliberate wipe (``clear``) — so both land in the same slot with the
+    same guarantees: ``shutil.copy2`` (mtime preserved), the ``.bak`` overwritten rather than
+    accumulating, and ANY failure logged instead of raised (a backup must never be the reason a
+    write the user asked for doesn't happen)."""
     try:
-        shutil.copy2(path, path + ".bak")
-        _log.warning("library: backed up an unreadable/newer index to %s before overwriting",
-                     os.path.basename(path) + ".bak")
+        shutil.copy2(path, backup_path(path))
+        _log.warning("library: backed up %s to %s", what,
+                     os.path.basename(backup_path(path)))
+        return True
     except OSError as exc:
         _log.warning("library: could not back up %s before overwrite (%r)", path, exc)
+        return False
 
 
 def save(index: dict, path: str | None = None) -> None:
@@ -332,11 +355,87 @@ def remove(index: dict, fingerprint_key: str) -> bool:
 
 
 def clear(path: str | None = None) -> None:
-    """Wipe the whole library index to an empty one and write it back atomically. Removes ONLY the
-    app-support index (the personal history of what/where you recorded) — the actual media files and
-    their per-video ``.pacer.json`` sidecars are left untouched. `path` defaults to
-    ``library_path()``; raises OSError on an unwritable destination."""
+    """Wipe the whole library index to an empty one and write it back atomically, KEEPING A COPY.
+    Removes ONLY the app-support index (the personal history of what/where you recorded) — the
+    actual media files and their per-video ``.pacer.json`` sidecars are left untouched. `path`
+    defaults to ``library_path()``; raises OSError on an unwritable destination.
+
+    DATA-SAFETY: this is the one destructive act a user can reach from the UI, and it used to be the
+    one write path with NO copy — ``save``'s backup hook (``_backup_unsafe``) fires only for an
+    unparseable or newer-version file, which a deliberate wipe of a perfectly healthy index is not.
+    So the index is copied to its ``library.json.bak`` sidecar FIRST: a mis-clicked "Clear library"
+    is recoverable, by ``restore`` or by hand from the folder "Reveal in Finder" opens. The copy is
+    best-effort like every other backup here — a failed copy logs and the wipe still proceeds (the
+    ``.bak`` sits in the same directory as the index, so a slot too unwritable to copy into is one
+    the wipe itself is about to fail on; refusing to clear would be the worse failure)."""
+    if path is None:
+        path = library_path()
+    if os.path.exists(path):
+        _copy_to_backup(path, "the library index before clearing it")
     save(empty_index(), path)
+
+
+def backup_summary(path: str | None = None) -> dict | None:
+    """What the ``.bak`` backup sidecar holds, or None when there is nothing worth restoring (no
+    backup, an unreadable one, or one with zero entries). Returns::
+
+        {"path": <the .bak path>, "entries": <int >= 1>, "mtime": <float POSIX seconds | None>}
+
+    The read half of the backup slot: a caller shows this in its confirm so the user sees BOTH sides
+    of a restore before it happens. Kept format-free (a raw mtime, not a date string) so this module
+    stays display-agnostic — the dialog formats it."""
+    bak = backup_path(path)
+    if not os.path.exists(bak):
+        return None
+    entries = load(bak).get("entries", [])
+    if not entries:
+        return None
+    try:
+        mtime = os.path.getmtime(bak)
+    except OSError:
+        mtime = None
+    return {"path": bak, "entries": len(entries), "mtime": mtime}
+
+
+def restore(path: str | None = None) -> dict:
+    """Put the ``.bak`` backup back as the live index, and return the resulting index.
+
+    The missing inverse: the app could WRITE a backup ("Back up…") and ``clear`` now leaves one, but
+    nothing could READ one — a backup you cannot restore is half a feature, and the one destructive
+    control had no way back.
+
+    A restore is a SWAP: the index it replaces becomes the new ``.bak``, so restoring is itself
+    reversible and a restore fired at the wrong moment can be taken back exactly the way it was
+    made. (It also keeps the invariant that the sidecar always holds "the library as it was before
+    the last destructive act".)
+
+    REFUSES to act — returns the current index unchanged — when the backup is missing, unreadable or
+    holds no entries: replacing a live library with nothing would be the very data loss this
+    function exists to undo. Callers show ``backup_summary`` in their confirm so the user sees both
+    counts first. `path` defaults to ``library_path()``; raises OSError on an unwritable
+    destination (the swap half is best-effort and only logs)."""
+    if path is None:
+        path = library_path()
+    index = load(backup_path(path))
+    if not index["entries"]:
+        return load(path)
+    # Keep the index we are about to replace, so the swap can put it back. Copied BEFORE the write
+    # and moved into the .bak slot after it, so a crash mid-restore leaves the backup intact.
+    swap = path + ".swap"
+    kept = False
+    if os.path.exists(path):
+        try:
+            shutil.copy2(path, swap)
+            kept = True
+        except OSError as exc:
+            _log.warning("library: could not keep the replaced index before restoring (%r)", exc)
+    save(index, path)
+    if kept:
+        try:
+            os.replace(swap, backup_path(path))
+        except OSError as exc:
+            _log.warning("library: restored the index but could not swap the backup (%r)", exc)
+    return load(path)
 
 
 def pb_moment(index: dict, track: str | None, best: float | None) -> dict | None:

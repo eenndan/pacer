@@ -67,6 +67,19 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Clearing the library can be undone.** “Clear library” wiped the whole analyzed history —
+  every recording, track, best lap and PB progression — and kept no copy of it. The index
+  backup only ever ran for a file the app couldn’t read or a newer one it couldn’t migrate, so
+  the one destructive button you can reach from the UI was the one write with no way back — two
+  buttons along from a “Back up…” that had no “Restore”. The wipe now copies the index to
+  `library.json.bak` first, and the confirm says so and names the folder “Reveal in Finder”
+  opens, so a mis-click is recoverable.
+- **The library opens big enough to browse.** With 200 analyzed recordings the list was given a
+  139-pixel viewport — 4.6 rows, 2.3% of the library — while the PB chart sat on its 150-pixel
+  floor and then took a share of every pixel the window gained (260 px at 860 tall) to draw the
+  same handful of dots; and a window you enlarged opened back at 720×600 the next time. The
+  library now opens at 880×860 (clamped to your screen), the PB chart is held to a 150–200
+  pixel band so the list keeps the rest, and a size you change is remembered.
 - **Saving a recording as a track now updates everything it changes.** `File ▸ Save as track…`
   named the circuit and made the lap timing trusted, but only the trust strip over the map
   noticed. In the same frame the map canvas still painted the amber “drag to set start/finish —

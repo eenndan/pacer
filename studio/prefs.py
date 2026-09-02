@@ -7,8 +7,9 @@ Kept separate from the library index (that file is a data catalogue; this is UI 
 
 A generic get/set dict of persisted UI choices: the speed display unit (``studio/units.py``),
 the colour-blind palette, the last-opened folder, the excluded-strip toggle, the lap panel's
-active tab and the grid-splitter sizes. Every read is guarded and defaults to the safe value,
-so a missing / corrupt file is never fatal (each choice just starts at its default).
+active tab, the grid-splitter sizes and the Library dialog's size. Every read is guarded and
+defaults to the safe value, so a missing / corrupt file is never fatal (each choice just starts
+at its default).
 """
 
 from __future__ import annotations
@@ -46,6 +47,11 @@ LAST_DIR = "last_dir"
 EXCLUDED_VISIBLE = "excluded_visible"
 LAP_PANEL_TAB = "lap_panel_tab"
 GRID_SIZES = "grid_sizes"
+# The Library dialog's size as [width, height] in logical px, or absent until the user actually
+# resizes it (so a later change to the dialog's own default still reaches everyone who never
+# touched it). Shape-guarded on read; the dialog additionally clamps whatever comes back to the
+# screen it is opening on, so a size saved on an external monitor can't open off-screen.
+LIBRARY_SIZE = "library_size"
 
 
 def _app_support_dir() -> str:
@@ -164,6 +170,33 @@ def excluded_visible(path: str | None = None) -> bool:
 def set_excluded_visible(on: bool, path: str | None = None) -> None:
     """Persist the excluded-strip visibility (the View-menu hide toggle)."""
     set(EXCLUDED_VISIBLE, bool(on), path)
+
+
+def library_size(path: str | None = None) -> tuple[int, int] | None:
+    """The persisted Library-dialog size as ``(width, height)``, or None when unset / malformed —
+    the dialog then uses its own default. Shape-guarded here (two positive real ints, bool
+    rejected); the dialog clamps the result to the screen it opens on."""
+    val = get(LIBRARY_SIZE, None, path)
+    if (isinstance(val, list) and len(val) == 2
+            and all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in val)):
+        return (val[0], val[1])
+    return None
+
+
+def set_library_size(width: int, height: int, path: str | None = None) -> None:
+    """Persist the Library dialog's size. Fully guarded — remembering a window size must never
+    disrupt the UI — so a non-numeric/non-positive size or an unwritable prefs file is swallowed
+    (mirrors ``set_last_dir``)."""
+    try:
+        w, h = int(width), int(height)
+    except (TypeError, ValueError):
+        return
+    if w <= 0 or h <= 0:
+        return
+    try:
+        set(LIBRARY_SIZE, [w, h], path)
+    except OSError:
+        pass
 
 
 def last_dir(path: str | None = None) -> str:
