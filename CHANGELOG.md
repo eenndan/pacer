@@ -74,6 +74,17 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 - `speed_long_g` run-seam NaN that silently dropped brake/coast events; the brake-onset
   seam blip.
 - Library wipe on a schema bump (now backs up + reveals); undo/forget seam bugs.
+- Unknown-track recordings are no longer quarantined in the Library: a recording with valid
+  laps is listed, selectable, openable and offered in Open Recent whether or not its circuit
+  is in your track database — it just carries the usual "provisional" tag instead of a
+  bogus "(no laps)" beside its own best lap.
+- The Library names the recording FILE: every row hovers to its filename + full path, and
+  the "forget this recording" confirm leads with it, so two sessions from the same day on
+  the same unknown track are told apart before a sidecar is deleted.
+- The PB chart's explanatory empty-state sentence is actually visible (it was positioned in
+  data coordinates on a pixel-space item, ~1.8e9 px off-screen) and stays centred on resize.
+- The library's progress line no longer counts your FIRST session on a track as a personal
+  best ("1 session · 1 PB"); PBs now count only sessions that beat the running best.
 - Share-card overflow, leaked chrome in map grabs, plot-overlay and corner-label
   collisions, and self-contradicting coaching copy.
 - Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker

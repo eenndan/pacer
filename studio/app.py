@@ -1275,8 +1275,10 @@ class StudioWindow(QMainWindow):
     _RECENT_LIMIT = 8
 
     def _recent_entries(self) -> list[dict]:
-        """Open Recent candidates: openable library entries (real track + laps, file present),
-        most-recent-first by date, capped at _RECENT_LIMIT. Guarded: any failure yields []."""
+        """Open Recent candidates: openable library entries (valid laps, file present),
+        most-recent-first by date, capped at _RECENT_LIMIT. Guarded: any failure yields [].
+        An UNKNOWN-TRACK recording is a candidate like any other (it re-opens fine, and
+        `_recent_label` already names it "unknown track") — matching library_dialog._entry_junk."""
         try:
             entries = library.load().get("entries", [])
         except Exception as exc:  # noqa: BLE001 — the recents list is additive; never break the menu
@@ -1284,7 +1286,7 @@ class StudioWindow(QMainWindow):
             return []
         usable = [
             e for e in entries
-            if e.get("track") and e.get("lap_count")
+            if e.get("lap_count")
             and any(os.path.exists(p) for p in (e.get("paths") or []))
         ]
         # Newest first; missing date sorts last.
