@@ -355,6 +355,17 @@ add_test(NAME test_contrast
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_contrast.py)
 set_tests_properties(test_contrast PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Keyboard focus cues (fix/qa-theme-focus-cues): every one of the 15 tab stops must change PIXELS
+# when it takes focus — four of them (the lap table, any CHECKED toggle, and the two pyqtgraph
+# canvases) used to change none — the lap table's ring must paint on all FOUR edges rather than the
+# 189px left-edge sliver a naive `:focus { border }` over a `border: none` base produces, and no
+# control may change geometry / size hint / viewport / style contents rect between the two states
+# (the ring is RESERVED, not added on focus). Real CentralView over the stadium synthetic, RGB
+# frame diffs; needs the real theme QSS, so run offscreen. No telemetry file.
+add_test(NAME test_focus_cues
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_focus_cues.py)
+set_tests_properties(test_focus_cues PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Shareable lap card (image) (feat/shareable-lap-card): the PURE card_data field extraction off
 # Session accessors (best lap / Δ-to-ideal / top opportunity / track / date / unit), the km/h↔mph
 # unit flip in the reason sentence, and the HONESTY verdict (provisional/no-lap ⇒ blocked;
@@ -439,7 +450,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card
                         test_stats test_lap_table_columns test_help_dialog
-                        test_grid_and_timing_guards)
+                        test_grid_and_timing_guards test_focus_cues)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

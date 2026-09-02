@@ -114,6 +114,14 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   colour-blind "behind" orange, which made half the ramp indistinguishable (adjacent
   buckets stepped 0.90–1.16 in deuteranopia-simulated CIE76 ΔE, worse than leaving the
   option off); the palette has its own mid anchor now, with a minimum step of 7.01.
+- Keyboard focus is visible again. Four of the app's fifteen tab stops painted **nothing** when
+  the keyboard arrived — the lap table (0 changed pixels of 213,725), any toggle that happened to
+  be **checked** (`:focus` and `:checked` both drew the same 1 px amber border, so all four
+  checkable buttons showed a 0-pixel difference), and both plot canvases. They all share one
+  focus ring now — 2 px, in the brighter accent the checked state does not use — and it is
+  reserved in the resting state, so arriving recolours pixels instead of resizing the control.
+  The lap table also gets its current-cell marker back, replacing the dotted rectangle the
+  stylesheet had suppressed as illegible.
 - Text contrast: four roles that borrowed the disabled-chrome grey (the empty-state body,
   the welcome subtitle and error, and placeholder text) were below WCAG AA at 3.17–3.68:1
   and now clear it at 5.90–9.35:1.

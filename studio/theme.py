@@ -535,6 +535,10 @@ def _palette() -> QPalette:
 # the stylesheet for what that costs; _splitter_grip draws it with a gradient, which is size-free.
 SPLITTER_HANDLE_PX = 8
 
+# Width of the keyboard focus ring (see the "focus ring" section of the stylesheet). One number, so
+# the reserved and the coloured state can never drift apart and start resizing controls on focus.
+FOCUS_RING_PX = 2
+
 
 def _splitter_grip(orientation: str, colour: str) -> str:
     """`background` value painting a thin `colour` grip bar centred across an otherwise-canvas
@@ -706,9 +710,6 @@ QPushButton:disabled {{
     border-color: {C.border};
     background-color: {C.surface};
 }}
-QPushButton:focus {{
-    border: 1px solid {C.accent};
-}}
 /* checked toggle: amber tint + accent border (glyph also recoloured in code) */
 QPushButton:checked {{
     background-color: {C.accent_tint};
@@ -741,9 +742,6 @@ QComboBox {{
 QComboBox:hover {{
     border-color: {C.border_strong};
 }}
-QComboBox:focus {{
-    border: 1px solid {C.accent};
-}}
 QComboBox::drop-down {{
     border: none;
     width: 20px;
@@ -756,6 +754,61 @@ QComboBox QAbstractItemView {{
     selection-background-color: {C.accent_tint};
     selection-color: {C.text};
     outline: none;
+}}
+
+/* ---------------------------------------------------------------- focus ring
+   ONE focus language for every place the keyboard can land: a {FOCUS_RING_PX}px {C.accent_hover}
+   ring. It lives here, after the button/combo sections, so it also wins over :hover. Two
+   properties of it are load-bearing and easy to lose again:
+
+   (1) THE RING IS RESERVED IN BOTH STATES — each rule below either takes the extra border pixel
+       back out of the padding (buttons, combos) or reserves an invisible border in the resting
+       state (tables, plot canvases), so arriving only ever RECOLOURS pixels. The obvious
+       one-liner — a bare `:focus {{ border: … }}` over a `border: none` base — is not a fix: on
+       the lap table it painted exactly 189 px down the LEFT EDGE ONLY (the header covers the
+       top, the scrollbar the right, and the frame is only 1 px wide) and it resized the content
+       box under the user every time focus arrived.
+
+   (2) IT IS {FOCUS_RING_PX}px {C.accent_hover}, NOT the 1px {C.accent} that `QPushButton:checked`
+       already owns. While the two matched, all four checkable toggles in the app changed by
+       exactly ZERO pixels on focus — the controls that are ON were the one class a keyboard user
+       could not see they had landed on, while the same buttons unchecked moved 222-512 px.
+
+   tests/test_focus_cues.py pins both halves: every tab stop must change pixels when focused,
+   checked included, and nothing may change size or position between the two states. */
+QPushButton:focus, QPushButton:checked:focus {{
+    border: {FOCUS_RING_PX}px solid {C.accent_hover};
+    padding: 5px 11px;   /* base 6px 12px, minus the extra border px — identical outer box */
+}}
+/* an amber ring on the amber primary fill is invisible, so that one variant rings in its own
+   ink colour instead (the same dark the label already uses). */
+QPushButton[variant="primary"]:focus {{
+    border: {FOCUS_RING_PX}px solid {C.on_accent};
+    padding: 5px 11px;
+}}
+/* flat text buttons (the PB toast) have no border to ring — they take the hover treatment. */
+QPushButton#PBToastLink:focus, QPushButton#PBToastClose:focus {{
+    color: {C.accent_hover};
+    text-decoration: underline;
+}}
+QComboBox:focus {{
+    border: {FOCUS_RING_PX}px solid {C.accent_hover};
+    padding: 4px 9px;    /* base 5px 10px — same trade */
+}}
+QTableView:focus, QTableWidget:focus {{
+    border: {FOCUS_RING_PX}px solid {C.accent_hover};
+}}
+/* the pyqtgraph canvases (charts, map, the stats spark/g-g, the library PB plot) are QGraphicsView
+   subclasses and full tab stops, and they painted nothing at all when focused. They reserve the
+   ring in {C.surface} rather than `transparent`: pyqtgraph paints its background INSIDE the
+   viewport, so a transparent frame would expose the {C.canvas} window colour as a dark gutter.
+   The reservation costs each canvas {FOCUS_RING_PX}px of viewport per side — paid once, in the
+   resting state, so that focus never re-lays the plot out. */
+QGraphicsView {{
+    border: {FOCUS_RING_PX}px solid {C.surface};
+}}
+QGraphicsView:focus {{
+    border: {FOCUS_RING_PX}px solid {C.accent_hover};
 }}
 
 /* scrub bar = primary seek target: 8px groove + 18px handle for grabbability and lap-ruler tick room. */
@@ -805,8 +858,16 @@ QTableView, QTableWidget {{
     color: {C.text};
     selection-background-color: {C.sel_bg};
     selection-color: {C.text};
-    border: none;
-    outline: none;
+    /* the focus ring, reserved: transparent shows the table's own background through it, so the
+       resting table looks exactly as it did while the :focus rule in the focus-ring section above
+       has a frame to colour in. Was `border: none`, which left the ring nowhere to paint. */
+    border: {FOCUS_RING_PX}px solid transparent;
+    /* Qt's dotted current-item rect is unreadable on the dark palette, so it is replaced rather
+       than merely suppressed: a hairline in the accent, drawn INSIDE the cell (negative offset)
+       so it can't overlap the row above. It only paints while the view has focus, which is what
+       makes it a current-CELL cue on top of the whole-table ring. */
+    outline: 1px solid {C.accent};
+    outline-offset: -1px;
 }}
 QTableView::item, QTableWidget::item {{
     padding: 4px 8px;
