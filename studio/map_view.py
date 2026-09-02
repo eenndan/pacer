@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QComboBox,
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme, units
+from . import gapfill, theme, units
 from .map_render import (
     bucket_polylines,
     bucketize,  # noqa: F401  (re-exported for tests importing from map_view)
@@ -44,6 +44,10 @@ SECTOR_COLOR = C.text_dim           # sector lines — visible but quieter than 
 BEST_COLOR = C.text_dim
 BEST_WIDTH = 1.5
 CURRENT_COLOR = C.accent            # highlighted current-lap trace (the racing line — pops)
+# Whole-recording trace = the quietest layer of all (muted grey, hairline), drawn UNDER both laps:
+# context and drag target, never competing with the two laps that carry the analysis.
+TRACE_COLOR = C.text_muted
+TRACE_WIDTH = 1.0
 MARKER_COLOR = C.behind             # video position marker — warm coral, reads on the trace
 _MARKER_RGB = QColor(C.behind)      # for the translucent marker brush below
 # Compare ghost = lap-B accent (cyan), the canonical "other lap" colour.
@@ -423,6 +427,87 @@ class _LapOverlay:
         lap_id, self.lap_id = self.lap_id, None
         self.set_lap(session, lap_id)
 
+    def bounds(self):
+        """NaN-safe (x_lo, x_hi, y_lo, y_hi) over the drawn items, or None if nothing is drawn."""
+        return _items_bounds(self._items)
+
+
+def _xy_bounds(xs, ys):
+    """NaN-safe (x_lo, x_hi, y_lo, y_hi) over one x/y pair, or None if it holds no finite point.
+    NaN-safe matters: inferred gap-fill runs are NaN-padded, so a plain min/max poisons the box with
+    nan and every downstream comparison silently goes False."""
+    if xs is None or ys is None:
+        return None
+    xs, ys = np.asarray(xs, float), np.asarray(ys, float)
+    if len(xs) == 0 or len(ys) != len(xs):
+        return None
+    ok = np.isfinite(xs) & np.isfinite(ys)
+    if not ok.any():
+        return None
+    return (float(xs[ok].min()), float(xs[ok].max()), float(ys[ok].min()), float(ys[ok].max()))
+
+
+def _union_bounds(boxes):
+    """The bounding box of some (x_lo, x_hi, y_lo, y_hi) boxes; Nones are skipped, all-None → None."""
+    boxes = [b for b in boxes if b is not None]
+    if not boxes:
+        return None
+    return (min(b[0] for b in boxes), max(b[1] for b in boxes),
+            min(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def _items_bounds(items):
+    """NaN-safe bounds over a list of pyqtgraph data items, or None when none of them draw."""
+    return _union_bounds(_xy_bounds(*it.getData()) for it in items)
+
+
+def _trace_runs(session) -> list[tuple[np.ndarray, np.ndarray]]:
+    """The whole recording's trace split into contiguous runs at GPS dropouts.
+
+    A dropout is a hole in the KEPT-point clock (gapfill.find_gaps), so a missing corner draws as a
+    break rather than a straight chord across it — the same honesty the per-lap overlay buys with
+    its dashed inferred runs, minus the reconstruction (that stays a per-lap concern). Runs shorter
+    than 2 points are dropped: a lone point draws nothing."""
+    xs, ys = np.asarray(session.tx, float), np.asarray(session.ty, float)
+    tt = np.asarray(getattr(session, "tt", []), float)
+    if len(xs) < 2 or len(ys) != len(xs):
+        return []
+    cuts = [g["j"] for g in gapfill.find_gaps(tt)] if len(tt) == len(xs) else []
+    return [(xs[a:b], ys[a:b])
+            for a, b in zip([0, *cuts], [*cuts, len(xs)], strict=True) if b - a >= 2]
+
+
+class _TraceOverlay:
+    """The whole recording's driven trace, drawn once, faintly, under everything else.
+
+    Two jobs. (1) It is the map's only ALWAYS-drawn track: the lap overlays hold at most two laps
+    and are both empty when no lap is complete — which is exactly the state whose placeholder tells
+    the user to "drag the start/finish line on the map", with nothing on the canvas to drag it onto.
+    (2) It is the map's stable extent, so _fit_view frames the whole drive instead of whichever lap
+    happens to be selected. Deliberately NOT part of the rainbow: one muted grey, never in the speed
+    colour bar, so the legend keeps meaning exactly what it says.
+
+    Built once — the trace is the recording; re-segmentation moves lap boundaries, never points.
+    Undecimated: measured at +1.6 ms per FULL map repaint on the richest fixture (65 laps, 46 761
+    points, offscreen dpr 1), and the 30 Hz marker tick only damages the marker's own rect."""
+
+    def __init__(self, plot, session: Session):
+        self.plot = plot
+        self._items: list = []
+        self._bounds = None  # memo: the items are built once and never move
+        pen = pg.mkPen(TRACE_COLOR, width=TRACE_WIDTH)
+        for xs, ys in _trace_runs(session):
+            item = plot.plot(xs, ys, pen=pen)
+            item.setZValue(-5)  # below the lap overlays/rainbow (see the marker's z-order note)
+            self._items.append(item)
+
+    def bounds(self):
+        """NaN-safe (x_lo, x_hi, y_lo, y_hi) over the drawn trace, or None if nothing is drawn.
+        Memoized: _fit_view runs on every resize, and this is the widest array of the three."""
+        if self._bounds is None:
+            self._bounds = _items_bounds(self._items)
+        return self._bounds
+
 
 def _point_seg_dist(p, a, b) -> float:
     """Euclidean distance from point ``p`` to the segment a→b (all 2-tuples). Used to test whether a
@@ -725,16 +810,17 @@ class MapView(QWidget):
         self._best_lap_id: int | None = None
         self._current_overlay = _LapOverlay(self.plot, CURRENT_COLOR, base_width=3)
 
-        # Freeze the view to the track bbox so marker moves never autorange.
-        if len(session.tx) and len(session.ty):
-            x_lo, x_hi = float(session.tx.min()), float(session.tx.max())
-            y_lo, y_hi = float(session.ty.min()), float(session.ty.max())
-            # 2% pad so the aspect-locked track fills the panel without handles flush to the edge.
-            px = max(x_hi - x_lo, 1.0) * 0.02
-            py = max(y_hi - y_lo, 1.0) * 0.02
-            vb = self.plot.getViewBox()
-            vb.setRange(xRange=(x_lo - px, x_hi + px), yRange=(y_lo - py, y_hi + py), padding=0)
-            vb.disableAutoRange()
+        # The always-on faint layer under both laps: every point of the drive (see _TraceOverlay).
+        self._trace_overlay = _TraceOverlay(self.plot, session)
+
+        # Freeze the view to the drawn content so marker moves never autorange. _view_fitted tracks
+        # whether the view still IS that fit: True until the user pans/zooms, so nothing we redraw
+        # later ever yanks a view they moved deliberately.
+        self._view_fitted = True
+        self._fit_view()
+        # pyqtgraph emits this from wheelEvent/mouseDragEvent only — i.e. exactly when the USER
+        # moved the view, never from our own setRange. It is what raises the Fit affordance.
+        self.plot.getViewBox().sigRangeChangedManually.connect(self._on_manual_range)
 
         self.marker = pg.TargetItem(
             (session.tx[0] if len(session.tx) else 0, session.ty[0] if len(session.ty) else 0),
@@ -829,6 +915,21 @@ class MapView(QWidget):
         self._empty_state.hide()
         self._refresh_empty_state()
 
+        # The app's own way back from a pan/zoom. pyqtgraph's auto-range "A" button and its
+        # right-click "View All" stay gone (dev chrome — see hideButtons/setMenuEnabled above);
+        # this is an ordinary app button floated over the plot's top-right, and it appears ONLY
+        # once the view has actually been moved off the fit, so a framed map carries no chrome.
+        self.fit_btn = QPushButton("Fit", self.widget)
+        self.fit_btn.setIcon(icon("ph.frame-corners"))
+        self.fit_btn.setToolTip("Fit the whole track back into view (or double-click the map)")
+        self.fit_btn.setCursor(Qt.PointingHandCursor)
+        self.fit_btn.clicked.connect(self._fit_view)
+        self.fit_btn.hide()
+        self._sync_fit_btn()
+        # Double-click anywhere on the canvas does the same thing — the gesture a user tries first,
+        # which until now did nothing at all. Filtered on the viewport: no pyqtgraph chrome involved.
+        self.widget.viewport().installEventFilter(self)
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.widget, 1)
@@ -838,6 +939,77 @@ class MapView(QWidget):
         super().resizeEvent(event)
         self._reposition_key()
         self._reposition_empty_state()
+        self._reposition_fit_btn()
+        # A panel that changed shape re-frames the track (the map fills whatever room it is given),
+        # but only while the view is still OUR fit — never on top of a view the user moved.
+        if getattr(self, "_view_fitted", False):
+            self._fit_view()
+
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.MouseButtonDblClick and obj is self.widget.viewport()
+                and event.button() == Qt.LeftButton):
+            self._fit_view()
+            return True
+        return super().eventFilter(obj, event)
+
+    # ------------------------------------------------------------------ view fit
+    def _content_bbox(self):
+        """NaN-safe (x_lo, x_hi, y_lo, y_hi) over everything the map draws as track: the session
+        trace UNION both lap overlays.
+
+        Union, never either alone. The trace alone would clip an F7 cross-recording reference ring
+        (another recording's polyline, drawn into _best_overlay by set_polyline). The overlays alone
+        would drop the trace — and with it the draggable video marker, which rides session.tx/ty and
+        would sit off-canvas for most of any recording whose complete laps cover a fraction of the
+        drive (on the unknown-track fixture that is 77.7% of the points).
+
+        The trace term falls back to the raw points when the overlay drew none of them (a trace too
+        short to be a polyline is still somewhere the marker can sit)."""
+        trace = self._trace_overlay.bounds() or _xy_bounds(self.session.tx, self.session.ty)
+        return _union_bounds((trace, self._best_overlay.bounds(),
+                              self._current_overlay.bounds()))
+
+    def _fit_view(self):
+        """Frame the map on its content and freeze it there (autorange off, so the video marker
+        moving never drags the view around). The one place a range is set — called at build, from
+        the Fit button / canvas double-click, and after a redraw or resize that left our own fit
+        standing."""
+        box = self._content_bbox()
+        if box is None:
+            return
+        x_lo, x_hi, y_lo, y_hi = box
+        # 2% pad so the aspect-locked track fills the panel without handles flush to the edge.
+        px = max(x_hi - x_lo, 1.0) * 0.02
+        py = max(y_hi - y_lo, 1.0) * 0.02
+        vb = self.plot.getViewBox()
+        vb.setRange(xRange=(x_lo - px, x_hi + px), yRange=(y_lo - py, y_hi + py), padding=0)
+        vb.disableAutoRange()
+        self._view_fitted = True
+        self._sync_fit_btn()
+
+    def _on_manual_range(self, *_):
+        """The user panned or zoomed: stop re-fitting behind their back, and surface the way back."""
+        self._view_fitted = False
+        self._sync_fit_btn()
+
+    def _sync_fit_btn(self):
+        """Show the Fit button iff the view has been moved off the fitted frame."""
+        btn = getattr(self, "fit_btn", None)
+        if btn is None:  # called from _fit_view during __init__, before the button exists
+            return
+        btn.setVisible(not self._view_fitted)
+        if not self._view_fitted:
+            self._reposition_fit_btn()
+            btn.raise_()
+
+    def _reposition_fit_btn(self):
+        """Keep the Fit button pinned to the plot's top-right, mirroring the map key's inset."""
+        btn = getattr(self, "fit_btn", None)
+        if btn is None:
+            return
+        m = 8  # px inset from the panel edges (same as _reposition_key)
+        btn.adjustSize()
+        btn.move(self.widget.width() - btn.width() - m, m)
 
     def _reposition_key(self):
         """Keep the floating map key pinned to the plot's bottom-left, just inside the edge."""
@@ -855,7 +1027,8 @@ class MapView(QWidget):
         Restores each item's prior visibility on exit (even on error), so the live map is untouched.
 
         Hidden for the grab (H2 — otherwise the app's editing crosshairs burn into the brag image):
-          * the "Map key" legend + the zero-lap empty-state placeholder (Qt widgets);
+          * the "Map key" legend + the zero-lap empty-state placeholder + the Fit button (Qt
+            widgets — the Fit button is pure interaction chrome, and is usually hidden anyway);
           * the coral video-position ``marker`` (the amber "+" crosshair on the track);
           * every timing line's segment + drag handles — the start line and each sector line — plus
             the compare ghost, all via each ``_TimingLine.chrome_items()`` so a future line type is
@@ -867,8 +1040,8 @@ class MapView(QWidget):
         # reads not-visible whenever its top-level window isn't shown yet, so restoring from isVisible
         # would wrongly leave the key hidden on an off-screen/grab-only map. isHidden is True only when
         # hide() was actually called.
-        widgets = [w for w in (getattr(self, "_map_key", None), getattr(self, "_empty_state", None))
-                   if w is not None]
+        widgets = [w for w in (getattr(self, "_map_key", None), getattr(self, "_empty_state", None),
+                               getattr(self, "fit_btn", None)) if w is not None]
         widget_prev = [(w, w.isHidden()) for w in widgets]
         # pyqtgraph plot items (marker, timing-line segments/handles, compare ghost). These are not
         # top-level-gated Qt widget children, so isVisible() is the honest current flag for them.
@@ -1238,6 +1411,10 @@ class MapView(QWidget):
         # A user drag re-segments AND confirms the timing (Provisional → Verified), so re-evaluate
         # the on-canvas provisional cue here — by now session.timing_verified reflects the edit.
         self._refresh_provisional_cue()
+        # Re-frame what is now drawn (a re-segmentation can swap in a different best lap, or an F7
+        # reference ring that reaches outside the trace) — but only while our own fit still stands.
+        if self._view_fitted:
+            self._fit_view()
 
     # ------------------------------------------------------------- corner labels (F-corner)
     def set_corners(self, markers):

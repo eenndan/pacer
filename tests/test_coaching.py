@@ -149,6 +149,76 @@ def test_braking_picks_braking_reason():
     print(f"ok braking reason: {sent} (contrib {r.reason.contribution:.2f}s)")
 
 
+def _flat_lap(total=300.0, v_mps=20.0):
+    """A constant-20 m/s lap as the (dist, elapsed) pair the overlap integral runs on: 1 m
+    samples, so 20 m of odometer is exactly 1.0 s and every expected value below is exact."""
+    dist = np.linspace(0.0, total, int(total) + 1)
+    return dist, dist / v_mps
+
+
+def test_brake_event_is_counted_by_overlap_not_by_its_onset():
+    """L5-01. Corner 1's window is [50, 90] m, so the approach cut is at 50 − BRAKE_APPROACH_M
+    = 20 m. A 2.0 s application that STARTS at 10 m (upstream of the cut) and releases at 50 m
+    spends 30 m == 1.5 s of itself inside the window; the onset rule scored the whole event
+    0.00 s. This is the D24 shape: the best lap's 2.2 s brake into C3 began 14.5 m upstream."""
+    dist, elapsed = _flat_lap()
+    straddling = [_brake(onset_dist=10.0, onset_time=0.5, duration=2.0)]  # releases at 50 m
+    assert K._window_brake_time(straddling, 50.0, 90.0) == 0.0, "the onset rule drops it whole"
+    got = K._window_brake_time(straddling, 50.0, 90.0, dist, elapsed)
+    assert abs(got - 1.5) < 1e-6, got
+    # A lap that braked EARLIER and LONGER than another can therefore never score 0.00 against it.
+    assert K._window_brake_time(straddling, 50.0, 90.0, dist, elapsed) > K._window_brake_time(
+        [_brake(onset_dist=30.0, onset_time=1.5, duration=0.5)], 50.0, 90.0, dist, elapsed)
+    # An event that releases before the cut still scores 0 (no overlap) …
+    early = [_brake(onset_dist=0.0, onset_time=0.0, duration=0.5)]      # releases at 10 m
+    assert K._window_brake_time(early, 50.0, 90.0, dist, elapsed) == 0.0
+    # … and one running past the exit is clipped there (80→90 m = 0.5 s of a 2.0 s application).
+    late = [_brake(onset_dist=80.0, onset_time=4.0, duration=2.0)]      # releases at 120 m
+    assert abs(K._window_brake_time(late, 50.0, 90.0, dist, elapsed) - 0.5) < 1e-6
+    print("ok brake overlap: straddling 2.0 s application scores its in-window 1.5 s, not 0.00")
+
+
+def test_braking_extra_measures_only_the_in_window_part():
+    """L5-01 end to end: the best lap's straddling application is no longer invisible, so the
+    printed cause shrinks from the whole-event difference to the in-window one."""
+    corners, best, times, lap_times = _one_corner_lossy(0.5)
+    dist, elapsed = _flat_lap()
+    med_brakes = [_brake(onset_dist=50.0, onset_time=2.5, duration=1.4)]   # wholly inside [20,90]
+    best_brakes = [_brake(onset_dist=10.0, onset_time=0.5, duration=1.5)]  # onset upstream of 20
+    assert K._window_brake_time(best_brakes, 50.0, 90.0) == 0.0, "the pre-fix rule saw nothing"
+    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+                      sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
+                      best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
+                      median_apex_deltas=[0.0],
+                      median_dist=dist, median_elapsed=elapsed,
+                      best_dist=dist, best_elapsed=elapsed)
+    r = opp.rows[0]
+    assert r.reason.kind == K.REASON_BRAKING, r.reason
+    assert abs(r.reason.brake_extra_s - 0.4) < 1e-6, r.reason  # 1.4 − 1.0, not 1.4 − 0.0
+    print(f"ok in-window braking: {K.reason_sentence(r)} (was ~1.40 s under the onset rule)")
+
+
+def test_every_ranked_row_is_analysed_not_only_the_first_three():
+    """L5-04: a row below the old top-3 cut carried REASON_NONE because it was never analysed,
+    so it printed "find time here" under a "How to find it" header while its own ±σ column held
+    a usable signal. Every ranked row now gets the same measured pick; `top_n` still caps it."""
+    corners = _corners(5)
+    best = [5.0] * 5
+    times = [[best[j] + (0.50 - 0.10 * j) for j in range(5)] for _ in range(4)]
+    lap_times = [sum(r) for r in times]
+    kw = dict(sigmas_by_cid={c.cid: 0.20 for c in corners},
+              median_brake_events=[], best_brake_events=[], median_coast_spans=[],
+              best_coast_spans=[], median_apex_deltas=[0.0] * 5)
+    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best, **kw)
+    assert len(opp.rows) == 5
+    kinds = [r.reason.kind for r in opp.rows]
+    assert kinds == [K.REASON_LINE] * 5, kinds
+    assert all("find time here" not in K.reason_sentence(r) for r in opp.rows)
+    capped = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best, top_n=3, **kw)
+    assert [r.reason.kind for r in capped.rows] == [K.REASON_LINE] * 3 + [K.REASON_NONE] * 2
+    print(f"ok all rows analysed: {kinds} (top_n=3 still caps at 3)")
+
+
 def test_line_sigma_is_the_fallback_reason():
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     # no apex/brake/coast signal at all, but real cross-lap spread -> LINE
@@ -898,7 +968,7 @@ def test_panel_reason_cell_is_not_truncated():
     _qapp()
     from PySide6.QtWidgets import QHeaderView
 
-    from studio.coaching_panel import OpportunitiesPanel
+    from studio.coaching_panel import _PANEL_COL_REASON, OpportunitiesPanel, _fit_reason_rows
     s = _stadium_session()
     panel = OpportunitiesPanel(s)
     assert panel.table.wordWrap() is True, "the reason cell must word-wrap, not elide"
@@ -913,7 +983,9 @@ def test_panel_reason_cell_is_not_truncated():
     long_reason = ("Carry more apex speed here — your typical lap is ~5 km/h slower than your "
                    "best through the slowest point.\nBrake ~4 m later into C2 (est)")
     panel.table.item(0, 3).setText(long_reason)
-    panel.table.resizeRowsToContents()
+    # L5-03: row heights come from the panel's own fit pass now (it measures the width the delegate
+    # PAINTS into, which a bare resizeRowsToContents does not) — drive the same call the panel does.
+    _fit_reason_rows(panel.table, _PANEL_COL_REASON)
     assert panel.table.rowHeight(0) > 34, (
         f"a wrapped 2-line reason must grow the row, not clip: {panel.table.rowHeight(0)}px")
     print(f"ok panel: reason cell not truncated (row0 h={panel.table.rowHeight(0)}px, "
@@ -976,6 +1048,125 @@ def test_panel_is_a_full_uncapped_page_with_headline():
     assert txt and not txt.startswith("Coaching · "), txt
     assert "corner" in txt, "the headline reads the summary sentence"
     print("ok panel: full uncapped page, plain headline, no collapse machinery")
+
+
+def test_ia01_panel_headline_names_its_session_scope():
+    """IA-01: the Coaching page is SESSION-scoped — `coaching_opportunities()` takes no lap, so it
+    cannot re-scope to your selection the way the sibling Corners tab does (which renames itself
+    "Corners · L6"). Its headline therefore has to SAY so, or the number reads as the selected lap's
+    and understates it (on D24 lap 6: "0.21 s" beside the lap's own +2.08 s). Pin that the headline
+    leads with the scope AND carries the sample it is a median over, and that the tooltip says
+    plainly that these rows do not follow the selection."""
+    _qapp()
+    from studio.coaching_panel import _SCOPE_PREFIX, OpportunitiesPanel
+    s = _stadium_session()
+    opp = s.coaching_opportunities()
+    assert opp.enough and opp.rows, "fixture must produce real opportunities"
+    panel = OpportunitiesPanel(s)
+    txt = panel.summary_label.text()
+    assert txt.startswith(_SCOPE_PREFIX), f"the headline must LEAD with the scope: {txt!r}"
+    assert f"median of {opp.n_laps} clean lap" in txt, f"…and carry its own denominator: {txt!r}"
+    tip = panel.summary_label.toolTip().lower()
+    assert "whole session" in tip and "do not follow the lap you select" in tip, tip
+    # The rows are a pure function of the session: nothing about a lap selection is an input, so a
+    # panel built twice off the same session is identical — the honest label is the whole fix.
+    again = OpportunitiesPanel(s)
+    assert again.summary_label.text() == txt, "session-scoped => stable headline"
+    print(f"ok IA-01: headline scoped => {txt!r}")
+
+
+def test_l5_03_reason_row_is_tall_enough_for_the_painted_wrap():
+    """L5-03: the row height must cover the wrap the delegate PAINTS, not the wider one it measures.
+    QTableWidget sizes rows from the delegate's sizeHint, which the stylesheet style computes at the
+    full section width and then ADDS `QTableWidget::item {padding: 4px 8px}` to, while the paint pass
+    DEDUCTS that padding — so a sentence that fits the section but not the text rect is measured as
+    one line and painted as two, silently dropping the row's "(est)" brake line.
+
+    Asserted on rowHeight vs the painter's own wrapped boundingRect — NEVER on an elide probe, which
+    reports this exact cell as *not* elided (a false negative: the text is dropped, not clipped)."""
+    _qapp()
+    from PySide6.QtCore import QRect, Qt
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+
+    from studio.coaching_panel import _PANEL_COL_REASON, OpportunitiesPanel, _fit_reason_rows
+    panel = OpportunitiesPanel(_stadium_session())
+    # The cause is the app's own cell padding (theme.py's `QTableView::item, QTableWidget::item
+    # {padding: 4px 8px}`), which the sizeHint adds and the painter deducts. Apply that one rule to
+    # THIS widget only — the suite shares a QApplication, so setting the app stylesheet here would
+    # silently change every later test's metrics.
+    panel.setStyleSheet("QTableWidget::item { padding: 4px 8px; }")
+    panel.resize(515, 320)          # the app's own default left-column width
+    panel.layout().activate()
+    t, col = panel.table, _PANEL_COL_REASON
+
+    # The width the delegate really paints into (QSS padding included), from the style itself.
+    opt = QStyleOptionViewItem()
+    opt.initFrom(t)
+    opt.features = QStyleOptionViewItem.HasDisplay
+    opt.rect = QRect(0, 0, t.columnWidth(col), 100)
+    paint_w = t.style().subElementRect(QStyle.SE_ItemViewItemText, opt, t).width()
+    assert 0 < paint_w < t.columnWidth(col), (paint_w, t.columnWidth(col))
+    fm = t.fontMetrics()
+
+    # Craft the defect: a first sentence that FITS the width Qt MEASURES but not the one it PAINTS,
+    # plus the "(est)" line that used to disappear. Search for that band rather than assume its
+    # width — Qt's own measuring inset is a style detail, the 2-16 px gap is the point.
+    head = "brake later / shorter"
+    while fm.horizontalAdvance(head) <= paint_w:
+        head += " and a little more"
+    naive = need = 0
+    while len(head) > 24:
+        head = head[:-1]
+        text = f"{head}\nBrake ~7 m later into C12 (est)"
+        t.item(0, col).setText(text)
+        t.item(0, col).setData(Qt.SizeHintRole, None)   # Qt's own answer, unpinned
+        t.resizeRowsToContents()
+        naive = t.rowHeight(0)
+        need = fm.boundingRect(QRect(0, 0, paint_w, 0), Qt.TextWordWrap, text).height()
+        if naive < need:
+            break
+    assert naive < need, "the defect band must exist between the measured and painted widths"
+
+    _fit_reason_rows(t, col)
+    assert t.rowHeight(0) >= need, (
+        f"the reason row must fit its PAINTED wrap: {t.rowHeight(0)}px < {need}px")
+    assert t.rowHeight(0) > naive, "…and that must be more than Qt's own short answer"
+    # Every other row stays fitted too (and is not gratuitously grown).
+    for r in range(t.rowCount()):
+        own = fm.boundingRect(QRect(0, 0, paint_w, 0), Qt.TextWordWrap,
+                              t.item(r, col).text()).height()
+        assert t.rowHeight(r) >= own, (r, t.rowHeight(r), own)
+    print(f"ok L5-03: row0 {naive}px -> {t.rowHeight(0)}px for a {need}px painted wrap")
+
+
+def test_l5_05_all_faster_phase_bar_is_visible_not_a_border_sliver():
+    """L5-05: a corner whose typical lap is FASTER than best through all three thirds used to paint
+    three `C.border` slivers — 1.19:1 against the row — so a row headlined "+0.08 s" (a cross-lap
+    median, a different statistic) looked self-contradictory with nothing on screen to reconcile it
+    but a tooltip. The thirds now take the palette's ahead colour, are sized by |Δt|, and the
+    window's net is stated on the row face."""
+    _qapp()
+    from PySide6.QtWidgets import QLabel
+
+    from studio import theme
+    from studio.coaching_panel import PhaseBar
+    from studio.theme import C
+    bar = PhaseBar(K.PhaseLoss(entry=-0.0283, apex=-0.0441, exit=-0.0207))   # the measured C12 row
+    segs = bar.layout().itemAt(0).layout()
+    widths, colours = [], []
+    for i in range(segs.count()):
+        colours.append(segs.itemAt(i).widget().styleSheet())
+        widths.append(segs.stretch(i))   # the proportional-bar stretch == the third's |Δt| share
+    ahead = theme.ahead_colour()
+    assert all(ahead in c for c in colours), f"faster thirds must be the ahead hue, got {colours}"
+    assert all(C.border not in c for c in colours), f"never the 1.19:1 border grey: {colours}"
+    # sized by |Δt|: the apex (biggest |Δ|) takes the widest stretch, the exit the narrowest.
+    assert widths[1] > widths[0] > widths[2], widths
+    # …and the net sign is on the row FACE, not only in the tooltip.
+    face = [lb.text() for lb in bar.findChildren(QLabel) if lb.text().startswith("net ")]
+    assert face == ["net -0.09 s"], face
+    assert "net faster than best here" in bar.toolTip()
+    print(f"ok L5-05: faster thirds {ahead} sized {widths}, row face says {face[0]!r}")
 
 
 def _gate_session():
