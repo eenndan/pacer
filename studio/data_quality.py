@@ -27,6 +27,21 @@ MEDIA_CLOCK_FALLBACK = "media_clock_fallback"  # naive media clock (older GPS5 c
 # stream rejected — conservative, so the badge only fires on a genuinely degraded recording.
 DROPPED_FIX_CONCERN_FRAC = 0.08
 
+# --- SHARED no-complete-laps copy (one source, same reason as the degraded-timing copy below).
+# A 0-valid-lap recording is stated by EVERY panel at once, and each call site authored its own
+# sentence: the lap table said "No complete laps in this recording.", the map "No complete laps
+# found in this recording.", the charts "No lap data to plot." and the status bar "no complete laps
+# detected in this recording — the GPS may not have locked, or the recording is too short" — four
+# phrasings of one fact in a single frame, with the status bar restating the table's reason almost
+# verbatim (QA L10-08). Each surface now states the HEADLINE and appends only what it can add:
+# the panels have room for the REASON, the map owns the NEXT ACTION (it is the surface the
+# start/finish line is dragged on), and the status bar carries the headline alone.
+NO_LAPS_HEADLINE = "No complete laps in this recording."
+NO_LAPS_REASON = ("The GPS may not have locked, or the recording is too short to cross the "
+                  "start/finish line.")
+NO_LAPS_NEXT_ACTION = ("If this is the right track, drag the start/finish line on the map to set "
+                       "where a lap begins.")
+
 
 @dataclass(frozen=True)
 class TimingQuality:

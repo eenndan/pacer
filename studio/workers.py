@@ -1,6 +1,6 @@
-"""Off-UI-thread QThread workers used by StudioWindow: the video-export renderer and the
-Session.load pipeline. Self-contained (DI via constructor args + queued Qt signals) — no reach
-into StudioWindow internals."""
+"""Off-UI-thread QThread workers used by StudioWindow: the video-export renderer, the Session.load
+pipeline and the demo-clip fetch. Self-contained (DI via constructor args + queued Qt signals) —
+no reach into StudioWindow internals."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import os
 
 from PySide6.QtCore import QThread, Signal
 
-from . import export_video
+from . import demo, export_video
 from .session import Session
 
 
@@ -77,3 +77,32 @@ class SessionLoadWorker(QThread):
             self.failed.emit(self._token, self._paths, exc)
             return
         self.loaded.emit(self._token, self._paths, session)
+
+
+class DemoResolveWorker(QThread):
+    """QThread wrapper running demo.resolve_demo_recording() off the UI thread.
+
+    Resolution is a path lookup that FALLS THROUGH TO THE NETWORK: a first run with no cache does
+    urllib.request.urlopen() + a streaming shutil.copyfileobj of the release asset. Called from the
+    welcome button's slot it froze the whole window — 0 of ~125 expected 16 ms timer ticks were
+    delivered, with no busy affordance of any kind (QA L10-03) — and demo._DEMO_TIMEOUT_S bounds
+    each SOCKET OP, not the fetch, so the freeze had no useful upper bound. Same reason the
+    ~1.4-4 s Session.load runs on SessionLoadWorker.
+
+    `token` is the window's load token at the moment the button was clicked: the window drops the
+    result if anything else started loading meanwhile (the user opened their own recording while
+    the fetch ran), matching how a stale SessionLoadWorker result is dropped."""
+
+    resolved = Signal(int, object)   # (token, path str | None)
+
+    def __init__(self, token: int):
+        super().__init__()
+        self._token = token
+
+    def run(self):
+        try:
+            path = demo.resolve_demo_recording()
+        except Exception as exc:  # noqa: BLE001 — a demo fetch must never take the app down
+            print(f"demo: resolve failed ({exc!r}); showing the welcome state.", flush=True)
+            path = None
+        self.resolved.emit(self._token, path)
