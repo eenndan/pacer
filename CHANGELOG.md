@@ -226,6 +226,17 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   documented removal route.
 - **About / Your data & privacy** can no longer be shrunk below their own copy — both cards
   refuse the shrink and scroll if the text ever outgrows the display.
+- The developer gates hold their own weight again. `pixi run smoke` works in a clean
+  checkout: it now sets the same `PYTHONPATH` every Python test already gets, because the
+  build drops the compiled module into a `pacer/` directory with no `__init__.py`, so a bare
+  `import pacer` resolved to an empty namespace package and the run died inside `Session.load`
+  with "module 'pacer' has no attribute 'Laps'". That failure then took ~11 minutes to
+  surface — the smoke harness suppressed only the *static* `QMessageBox` helpers, so the load
+  error's `box.exec()` on a message-box INSTANCE sat on an undismissable modal until CI killed
+  the step; it now exits in ~1 s printing what the dialog said. And the reentrant-load test
+  waits for both load workers to report in rather than for a view to appear, so its "a
+  superseded result is never applied" assertion can no longer run against a half-settled
+  window.
 
 ## [0.1.0] — 2026-06-22
 
