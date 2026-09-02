@@ -490,7 +490,13 @@ class LapTable(QWidget):
         # stack, so a page can be given its real width without this container ever seeing a
         # resizeEvent — which is how the corner columns came to be fitted to Qt's stock 640px
         # default and overflowed the 447px quadrant by MORE than before the fit existed.
-        if obj is self.table.viewport() and event.type() == QEvent.Resize:
+        # getattr, not self.table: the filter outlives this object's Python __dict__. When Qt tears
+        # a discarded LapTable down (or Shiboken invalidates the wrapper because a new C++ object
+        # reused its address), the attributes are cleared BEFORE the C++ children are destroyed, so
+        # the viewport's own teardown events arrive here on a stripped instance and a bare
+        # self.table raises AttributeError out of a QWidget::eventFilter override.
+        table = getattr(self, "table", None)
+        if table is not None and obj is table.viewport() and event.type() == QEvent.Resize:
             self._fit_columns()
             self._keep_selection_visible()
         return super().eventFilter(obj, event)
@@ -1024,8 +1030,10 @@ class CornerTable(QWidget):
 
     def eventFilter(self, obj, event):
         # See LapTable.eventFilter: this page lives in a tab stack, so the container's own
-        # resizeEvent is not a reliable signal that the table finally has its real width.
-        if obj is self.table.viewport() and event.type() == QEvent.Resize:
+        # resizeEvent is not a reliable signal that the table finally has its real width — and the
+        # same teardown guard applies (the filter outlives this object's Python __dict__).
+        table = getattr(self, "table", None)
+        if table is not None and obj is table.viewport() and event.type() == QEvent.Resize:
             self._fit_columns()
         return super().eventFilter(obj, event)
 
