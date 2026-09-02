@@ -385,6 +385,18 @@ add_test(NAME test_focus_cues
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_focus_cues.py)
 set_tests_properties(test_focus_cues PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Window chrome / menus (fix/qa-app-chrome): Escape must restore a MAXIMIZED PANEL — the state four
+# surfaces promise it restores and whose Escape branch was gated on isFullScreen() — at three window
+# sizes × four panels, asserted on the splitter sizes, while still leaving video focus and window
+# fullscreen; the welcome screen must not offer the four actions whose handlers early-return with no
+# session (their menus had ZERO aboutToShow receivers) and must re-enable them at _build_ui, not on
+# the next pull-down; a coaching Jump must mark + scroll to the corner row it landed on and must not
+# persist its navigation as the user's tab preference; and the crash dialog must name APP_NAME
+# (macOS gives it no window title). Real StudioWindow over the stadium synthetic; run offscreen.
+add_test(NAME test_app_chrome
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_app_chrome.py)
+set_tests_properties(test_app_chrome PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Shareable lap card (image) (feat/shareable-lap-card): the PURE card_data field extraction off
 # Session accessors (best lap / Δ-to-ideal / top opportunity / track / date / unit), the km/h↔mph
 # unit flip in the reason sentence, and the HONESTY verdict (provisional/no-lap ⇒ blocked;
@@ -512,7 +524,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_data_safety test_units test_accessible_cues test_share_card
                         test_stats test_lap_table_columns test_help_dialog
                         test_grid_and_timing_guards test_lap_table_empty_states
-                        test_charts_header_budget test_coaching_panel_layout test_focus_cues)
+                        test_charts_header_budget test_coaching_panel_layout test_focus_cues
+                        test_app_chrome)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
