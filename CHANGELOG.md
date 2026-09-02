@@ -106,6 +106,13 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   collisions, and self-contradicting coaching copy.
 - Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker
   drain (CI deadlocks); the drift-gated per-corner loss alignment.
+- The **g-meter dial burned into an exported video** now carries the provenance tag the
+  exporter always set ("IMU lat · GPS long") — it was snapshotted and never painted, so a
+  shared clip showed four bare numbers with nothing saying where they came from. The dial
+  also states its unit (labelled 0.5 g / 1.0 g rings) and names all four cardinal peaks
+  (BRAKE / ACCEL / TURN R / TURN L, in the dial's felt-force convention), on screen and in
+  the export alike; the live dial's source tag has its own reserved band so it can no
+  longer overprint the bottom peak number, and reads at 5.2:1 instead of 2.2:1.
 - The track map is no longer a one-way door: a scroll-wheel zoom or a drag left it at an
   arbitrary view — up to fully blank — that nothing in the app could undo. A **Fit** button
   now appears over the map the moment the view is moved (double-clicking the canvas does the
