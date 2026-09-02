@@ -367,25 +367,34 @@ def _any_purple_or_green(table):
 
 
 def test_lap_table_provisional_mutes_times_and_drops_bests():
-    """PROVISIONAL timing (timing_verified False): the Time + S-split cells are muted (italic +
+    """PROVISIONAL timing (timing_verified False): EVERY start-line-derived cell is muted (italic +
     the dimmed provisional colour) with the 'Provisional' tooltip, and NEITHER the purple
     session-best splits NOR the green best-lap are painted — a 'best' on an arbitrary start line is
-    meaningless. Dist/Entry stay normal."""
+    meaningless.
+
+    QA L3-02 widened this from Time+S-splits alone: Dist is the distance BETWEEN crossings and Entry
+    the speed AT one, so moving the line moves both. This test used to assert Dist stayed at
+    BASE_COLOR, which is exactly the contradiction the sweep filed (the kept laps read 200-204m
+    against 534-543m for the excluded ones, off the same odometer, at full confidence). Only the Lap
+    NUMBER — which the line cannot move — stays normal."""
     from studio.lap_table import BASE_COLOR, PROVISIONAL_TOOLTIP
 
     table = LapTable(_TrustSession(verified=False))
     prov = theme.PROVISIONAL_COLOR.upper()
-    # Time + sector cells: muted colour, italic font, provisional tooltip.
-    for it in _time_col_items(table) + _sector_col_items(table):
-        assert it.foreground().color().name().upper() == prov, "timing cell must be muted"
-        assert it.font().italic(), "timing cell must be italic (provisional)"
-        assert it.toolTip() == PROVISIONAL_TOOLTIP, it.toolTip()
+    real = table._n_real_cols()
+    for c in range(1, real):
+        for r in range(table.table.rowCount()):
+            it = table.table.item(r, c)
+            name = table.table.horizontalHeaderItem(c).text()
+            assert it.foreground().color().name().upper() == prov, f"{name} cell must be muted"
+            assert it.font().italic(), f"{name} cell must be italic (provisional)"
+            assert it.toolTip() == PROVISIONAL_TOOLTIP, (name, it.toolTip())
     # No purple-best / green-best authority anywhere.
     assert not _any_purple_or_green(table), "provisional timing must paint no purple/green bests"
-    # Dist column (2) untouched: base colour, not italic.
-    dist = table.table.item(0, 2)
-    assert dist.foreground().color().name().upper() == BASE_COLOR.name().upper()
-    assert not dist.font().italic()
+    # The Lap number is the one column the start line does not place.
+    lap = table.table.item(0, 0)
+    assert lap.foreground().color().name().upper() == BASE_COLOR.name().upper()
+    assert not lap.font().italic()
     print("test_lap_table_provisional_mutes_times_and_drops_bests OK")
 
 
