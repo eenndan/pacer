@@ -67,6 +67,25 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- The Coaching page now uses the room it is given. Maximized it used to be **3 rows in 808 px**
+  — 78% dead canvas — while the ranking behind it held **11** corners; it now shows as many
+  ranked corners as the page can hold (still at least the top 3 the headline sums). And every
+  column header sits over its own data instead of being centred: "How to find it" floated
+  **611 px** away from the sentences it labels.
+- At the app's own minimum window the Coaching page no longer starves the one column carrying
+  words. The three numeric columns took 198 of the 270 px available and the reason column fell
+  back to 100 px, overflowing into a **horizontal scrollbar** with the header hard-clipped to
+  "How to find". ±σ now yields first (its value is spelled out in the reason sentence anyway),
+  the reason column keeps what it frees (**100 → 128 px**), a shortened header says so with an
+  ellipsis, and all four headers — which carried none — explain themselves on hover.
+- The **±σ** column said `±0.12` while the sentence in the same row said `σ 0.12 s`. It is
+  seconds, and now says so, matching the `+0.13 s` cell beside it.
+- The ESTIMATED brake-point hint no longer recommends braking from inside the corner. The
+  optimum is constant-decel, straight-line physics, which only holds on the approach — on one
+  D24 corner it landed **59 m into a 79.6 m corner window, 19.4 m before the apex**, and the
+  cell asked to "Brake ~50 m later" next to its own measured "~0.36 s longer on the brakes". A
+  target more than one brake zone past turn-in now shows no metres, and the hints that remain
+  name their target against the corner's turn-in instead of a bare lap-odometer reading.
 - The CHARTS header no longer leads with a different Δ baseline from the chart underneath it.
   It used to say `Δideal` while the lower chart plotted Δ-to-best, with the one label that
   reconciles them hidden at every window size the app ships at (it needed a ~1633 px window;
@@ -151,6 +170,21 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   data coordinates on a pixel-space item, ~1.8e9 px off-screen) and stays centred on resize.
 - The library's progress line no longer counts your FIRST session on a track as a personal
   best ("1 session · 1 PB"); PBs now count only sessions that beat the running best.
+- The PB chart's axis reads lap times, not decimal seconds — it printed "69" / "70.5" under
+  "best lap (s)" while the Best lap column 40 px above it read "1:09.905". Both now come from
+  the app's one time formatter.
+- A library search that matches nothing no longer blanks the dialog. It says which term matched
+  none and how to get back, the header counts what is on screen ("0 of 3 analyzed recordings"
+  rather than still claiming 3), and the chart drops the de-selected recording's axis range
+  instead of leaving its numbers labelling an empty grid.
+- The track filter can reach unknown-track recordings. It listed only named circuits, so on a
+  typical library — where the registry knows about one track — most rows could not be filtered
+  to at all; there is now an "Unknown track" bucket, and the search box matches the label those
+  rows actually show.
+- A Track cell that is too narrow for its label now hovers to the whole thing (it elides by 31 px
+  at the dialog's own minimum width, and its tooltip previously named only the file).
+- The library header and the Clear-library confirm say "3 analyzed recordings" / "Forget all 3
+  recordings" instead of the "(s)" placeholder plural, matching the summary line below them.
 - Share-card overflow, leaked chrome in map grabs, plot-overlay and corner-label
   collisions, and self-contradicting coaching copy.
 - Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker
