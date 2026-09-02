@@ -78,6 +78,15 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   collisions, and self-contradicting coaching copy.
 - Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker
   drain (CI deadlocks); the drift-gated per-corner loss alignment.
+- The track map is no longer a one-way door: a scroll-wheel zoom or a drag left it at an
+  arbitrary view — up to fully blank — that nothing in the app could undo. A **Fit** button
+  now appears over the map the moment the view is moved (double-clicking the canvas does the
+  same), and the map re-frames itself after a redraw or a panel resize.
+- The map now draws the **whole recording's trace** as a faint layer under the two lap
+  overlays, so a recording with no complete laps finally has a track to drag the
+  start/finish line onto — the exact state where the app asks you to do that — and the view
+  is framed on the trace and the lap overlays together, which also keeps the draggable video
+  marker on canvas when the complete laps cover only part of the drive.
 
 ## [0.1.0] — 2026-06-22
 
