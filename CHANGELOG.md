@@ -92,6 +92,13 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 - **The "start/finish line was auto-fitted — drag it into place" status line retracts when
   you place the line**, re-decided from the same seam that rebuilds the derived views (it
   used to survive byte-identical across the very drag that answered it).
+- Coaching's "~N s longer on the brakes" no longer counts whole brake events by their onset
+  alone: the time each application spends *inside* the corner window is integrated on the
+  lap's own clock, so a brake that begins a few metres before the window is no longer scored
+  as zero. On the D24 session the C3 advice drops from "~0.90 s" to "~0.67 s" against a
+  corner losing 0.109 s.
+- Every ranked corner in the Opportunities list now carries a measured reason; rows below
+  the top three used to print "find time here" because they were never analysed.
 
 ## [0.1.0] — 2026-06-22
 

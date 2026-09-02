@@ -1586,7 +1586,7 @@ class Session:
     def coaching_opportunities(self) -> coaching.Opportunities:
         """The ranked coaching opportunities (F10): per corner, the MEDIAN time lost vs the
         best lap over the consistency laps (biggest first), with the dominant measured reason
-        attached to the top-N. Deterministic and explainable (see studio/coaching.py).
+        attached to every ranked row. Deterministic and explainable (see studio/coaching.py).
 
         Returns an Opportunities with `enough=False` (empty rows) when there are fewer than
         coaching.MIN_LAPS valid, dropout-free laps — the friendly "need more laps" state, no
@@ -1659,9 +1659,12 @@ class Session:
         # D2: the typical lap's + best lap's speed-vs-distance traces so summarize can decompose
         # each corner's Δt-vs-best into entry/apex/exit thirds (∫ds/v over each, the typical lap
         # vs best — the SAME comparison the loss/reasons use). Same projection as lap_corner_stats.
-        med_dist, med_speed_kmh, _med_elapsed = (
+        # The matching `elapsed` (seconds-from-lap-start) arrays go with them: a BrakeEvent carries
+        # no release odometer, so summarize needs each lap's own clock to integrate a brake event's
+        # OVERLAP with a corner window instead of taking or dropping it whole by its onset.
+        med_dist, med_speed_kmh, med_elapsed = (
             self._lap_arrays(med_id) if med_id is not None else (None, None, None))
-        best_dist, best_speed_kmh, _best_elapsed = self._lap_arrays(best)
+        best_dist, best_speed_kmh, best_elapsed = self._lap_arrays(best)
 
         # Drift-gate spatial traces for the phase decomposition (the same alignment lap_corner_stats
         # uses): the corner windows live in the BEST lap's frame, so its (xs, ys, cum) is the fixed
@@ -1693,8 +1696,10 @@ class Session:
             best_lap_total=best_lap_total,
             median_dist=med_dist,
             median_speed_kmh=med_speed_kmh,
+            median_elapsed=med_elapsed,
             best_dist=best_dist,
             best_speed_kmh=best_speed_kmh,
+            best_elapsed=best_elapsed,
             median_traces=median_traces,
             best_traces=best_traces,
         )
