@@ -98,10 +98,12 @@ _UNKNOWN_LABEL = "unknown track"
 PRIVACY_NOTE = (
     "Everything pacer analyzes stays on this Mac — nothing is uploaded or shared. "
     "It stores your start/finish + sector lines in a small \"<name>.pacer.json\" file next to "
-    "each video, and this library index (file paths, track names and GPS dates) under "
-    "~/Library/Application Support/pacer. Right-click a recording to forget it, or use "
-    "\"Clear library\" to wipe the whole index — a copy of the index is kept beside it as "
-    "library.json.bak, so a wipe can be undone."
+    "each video, and under ~/Library/Application Support/pacer it keeps this library index (file "
+    "paths, track names and GPS dates) and your saved tracks (tracks.json — each circuit's name "
+    "and coordinates). Right-click a recording to forget it, or use \"Clear library\" to wipe the "
+    "whole index — a copy of the index is kept beside it as library.json.bak, so a wipe can be "
+    "undone. Your saved tracks are separate: \"Clear library\" leaves tracks.json untouched, and "
+    "\"Back up…\" does not copy it."
 )
 
 # A PlotDataItem pen/brush for the PB line + its markers (amber accent, the app's primary).

@@ -67,6 +67,12 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **The two ways back from a destroyed library or track database are now reachable, and the app
+  says when it uses one.** Rewriting a `tracks.json` pacer could not fully read now warns and
+  names the copy it kept, instead of reporting a successful save while the circuit list quietly
+  got shorter; the Library's `Restore…` — the other half of `Back up…` — is now built and wired;
+  and the privacy note names `tracks.json`, the file holding every saved circuit's coordinates,
+  which `Clear library` leaves alone and `Back up…` does not copy.
 - **Clearing the library can be undone.** “Clear library” wiped the whole analyzed history —
   every recording, track, best lap and PB progression — and kept no copy of it. The index
   backup only ever ran for a file the app couldn’t read or a newer one it couldn’t migrate, so

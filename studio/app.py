@@ -1472,8 +1472,29 @@ class StudioWindow(QMainWindow):
                             forget_recording=self._forget_recording,
                             clear_library=self._clear_library,
                             reveal_library=self._reveal_library,
-                            backup_library=self._backup_library)
+                            backup_library=self._backup_library,
+                            # The way back from "Clear library". Without these two the dialog
+                            # builds no Restore… at all, and PR #168's backup is a file the app
+                            # can write and never read — the half-feature its own docstring
+                            # names. `backup_info` is what the confirm shows, so the user sees
+                            # both sides of the swap before it happens.
+                            restore_library=self._restore_library,
+                            backup_info=library.backup_summary)
         dlg.exec()
+
+    def _restore_library(self) -> dict:
+        """Put the automatic backup back as the live index and return the result, for the dialog to
+        re-render. Mirrors `_clear_library`, its inverse, exactly: guarded, returns an index either
+        way, and never raises into the dialog.
+
+        `library.restore` refuses a missing, unreadable or empty backup by returning the current
+        index unchanged — so a refusal here is silent by design, and the dialog only offers the
+        button when `backup_summary` reports something restorable."""
+        try:
+            return library.restore()
+        except OSError as exc:
+            print(f"studio: could not restore the library index ({exc!r}).", flush=True)
+        return library.load()
 
     def _forget_recording(self, entry: dict) -> dict:
         """Privacy "forget this recording": drop `entry` from the library index AND delete its
@@ -1906,7 +1927,14 @@ class StudioWindow(QMainWindow):
                 self.statusBar().showMessage(
                     f"kept the track already saved as '{name}'", STATUS_MS)
                 return
+            # Ask BEFORE the save whether this write is about to rewrite a track DB this build
+            # could not read in full (PR #165 makes that survivable by copying the original bytes
+            # aside; it cannot make it visible). Asked before, because after the save the file is
+            # healthy and the question answers None.
+            rescued = track_db.backup_pending()
             track_db.save_track(entry, replace=at_risk is not None)
+            if rescued:
+                self._warn_track_db_rescued(rescued)
         except (OSError, ValueError) as exc:
             print(f"studio: could not save track {name!r}: {exc}", flush=True)
             self.statusBar().showMessage(f"could not save track: {exc}", STATUS_MS)
@@ -1955,6 +1983,36 @@ class StudioWindow(QMainWindow):
             "and recordings from that circuit will stop auto-detecting their timing lines.\n\n"
             "Replace it?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+
+    def _warn_track_db_rescued(self, bak_path: str) -> None:
+        """Tell the user their track database could not be read in full, and where the copy went.
+
+        PR #165 made this survivable: a save that is about to rewrite a `tracks.json` this build
+        could not fully parse copies the original bytes to `tracks.json.bak` first. That makes the
+        loss RECOVERABLE. It does not make it VISIBLE — and a rescue nobody is told about is one
+        the user will never act on, because from the outside a healed track DB and a wiped one look
+        the same: the save reports success and the circuit list is shorter.
+
+        A modal, not a status line, and deliberately so. The status bar is where this app puts
+        things you may miss; "your track database could not be read in full" is not one of those.
+        Its sibling `_confirm_replace_track` already uses a modal for a comparable stake.
+        Information-only, so a single OK — the save has already happened and there is nothing to
+        decide; the actionable part is the path, so the path is the last thing said.
+
+        The wording states only what `backup_pending` actually knows. It answers ONE question —
+        "would rewriting this file lose something it holds?" — and that covers three different
+        shapes: a file that does not parse (every circuit gone), a version this build does not
+        know (unknown FIELDS dropped, the circuits themselves fine), and a single malformed entry
+        (that one dropped). A message asserting "your circuits are missing" would be false in the
+        commonest of the three, so it says what is true in all of them and points at the copy."""
+        box = QMessageBox(QMessageBox.Warning, f"{APP_NAME} — saved tracks rewritten",
+                          "Your saved-track database could not be read in full, so pacer has "
+                          "rewritten it in the format this version understands. Some circuits, or "
+                          "some of their details, may be missing from it now.\n\nNothing was "
+                          "thrown away: the file as it was before this save is kept beside it.",
+                          parent=self)
+        box.setDetailedText(bak_path)
+        box.exec()
 
     def _export_default(self, suffix: str) -> str:
         """Default save path: next to the recording, named `<stem><suffix>` (e.g.
