@@ -968,7 +968,7 @@ def test_panel_reason_cell_is_not_truncated():
     _qapp()
     from PySide6.QtWidgets import QHeaderView
 
-    from studio.coaching_panel import OpportunitiesPanel
+    from studio.coaching_panel import _PANEL_COL_REASON, OpportunitiesPanel, _fit_reason_rows
     s = _stadium_session()
     panel = OpportunitiesPanel(s)
     assert panel.table.wordWrap() is True, "the reason cell must word-wrap, not elide"
@@ -983,7 +983,9 @@ def test_panel_reason_cell_is_not_truncated():
     long_reason = ("Carry more apex speed here — your typical lap is ~5 km/h slower than your "
                    "best through the slowest point.\nBrake ~4 m later into C2 (est)")
     panel.table.item(0, 3).setText(long_reason)
-    panel.table.resizeRowsToContents()
+    # L5-03: row heights come from the panel's own fit pass now (it measures the width the delegate
+    # PAINTS into, which a bare resizeRowsToContents does not) — drive the same call the panel does.
+    _fit_reason_rows(panel.table, _PANEL_COL_REASON)
     assert panel.table.rowHeight(0) > 34, (
         f"a wrapped 2-line reason must grow the row, not clip: {panel.table.rowHeight(0)}px")
     print(f"ok panel: reason cell not truncated (row0 h={panel.table.rowHeight(0)}px, "
@@ -1046,6 +1048,125 @@ def test_panel_is_a_full_uncapped_page_with_headline():
     assert txt and not txt.startswith("Coaching · "), txt
     assert "corner" in txt, "the headline reads the summary sentence"
     print("ok panel: full uncapped page, plain headline, no collapse machinery")
+
+
+def test_ia01_panel_headline_names_its_session_scope():
+    """IA-01: the Coaching page is SESSION-scoped — `coaching_opportunities()` takes no lap, so it
+    cannot re-scope to your selection the way the sibling Corners tab does (which renames itself
+    "Corners · L6"). Its headline therefore has to SAY so, or the number reads as the selected lap's
+    and understates it (on D24 lap 6: "0.21 s" beside the lap's own +2.08 s). Pin that the headline
+    leads with the scope AND carries the sample it is a median over, and that the tooltip says
+    plainly that these rows do not follow the selection."""
+    _qapp()
+    from studio.coaching_panel import _SCOPE_PREFIX, OpportunitiesPanel
+    s = _stadium_session()
+    opp = s.coaching_opportunities()
+    assert opp.enough and opp.rows, "fixture must produce real opportunities"
+    panel = OpportunitiesPanel(s)
+    txt = panel.summary_label.text()
+    assert txt.startswith(_SCOPE_PREFIX), f"the headline must LEAD with the scope: {txt!r}"
+    assert f"median of {opp.n_laps} clean lap" in txt, f"…and carry its own denominator: {txt!r}"
+    tip = panel.summary_label.toolTip().lower()
+    assert "whole session" in tip and "do not follow the lap you select" in tip, tip
+    # The rows are a pure function of the session: nothing about a lap selection is an input, so a
+    # panel built twice off the same session is identical — the honest label is the whole fix.
+    again = OpportunitiesPanel(s)
+    assert again.summary_label.text() == txt, "session-scoped => stable headline"
+    print(f"ok IA-01: headline scoped => {txt!r}")
+
+
+def test_l5_03_reason_row_is_tall_enough_for_the_painted_wrap():
+    """L5-03: the row height must cover the wrap the delegate PAINTS, not the wider one it measures.
+    QTableWidget sizes rows from the delegate's sizeHint, which the stylesheet style computes at the
+    full section width and then ADDS `QTableWidget::item {padding: 4px 8px}` to, while the paint pass
+    DEDUCTS that padding — so a sentence that fits the section but not the text rect is measured as
+    one line and painted as two, silently dropping the row's "(est)" brake line.
+
+    Asserted on rowHeight vs the painter's own wrapped boundingRect — NEVER on an elide probe, which
+    reports this exact cell as *not* elided (a false negative: the text is dropped, not clipped)."""
+    _qapp()
+    from PySide6.QtCore import QRect, Qt
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+
+    from studio.coaching_panel import _PANEL_COL_REASON, OpportunitiesPanel, _fit_reason_rows
+    panel = OpportunitiesPanel(_stadium_session())
+    # The cause is the app's own cell padding (theme.py's `QTableView::item, QTableWidget::item
+    # {padding: 4px 8px}`), which the sizeHint adds and the painter deducts. Apply that one rule to
+    # THIS widget only — the suite shares a QApplication, so setting the app stylesheet here would
+    # silently change every later test's metrics.
+    panel.setStyleSheet("QTableWidget::item { padding: 4px 8px; }")
+    panel.resize(515, 320)          # the app's own default left-column width
+    panel.layout().activate()
+    t, col = panel.table, _PANEL_COL_REASON
+
+    # The width the delegate really paints into (QSS padding included), from the style itself.
+    opt = QStyleOptionViewItem()
+    opt.initFrom(t)
+    opt.features = QStyleOptionViewItem.HasDisplay
+    opt.rect = QRect(0, 0, t.columnWidth(col), 100)
+    paint_w = t.style().subElementRect(QStyle.SE_ItemViewItemText, opt, t).width()
+    assert 0 < paint_w < t.columnWidth(col), (paint_w, t.columnWidth(col))
+    fm = t.fontMetrics()
+
+    # Craft the defect: a first sentence that FITS the width Qt MEASURES but not the one it PAINTS,
+    # plus the "(est)" line that used to disappear. Search for that band rather than assume its
+    # width — Qt's own measuring inset is a style detail, the 2-16 px gap is the point.
+    head = "brake later / shorter"
+    while fm.horizontalAdvance(head) <= paint_w:
+        head += " and a little more"
+    naive = need = 0
+    while len(head) > 24:
+        head = head[:-1]
+        text = f"{head}\nBrake ~7 m later into C12 (est)"
+        t.item(0, col).setText(text)
+        t.item(0, col).setData(Qt.SizeHintRole, None)   # Qt's own answer, unpinned
+        t.resizeRowsToContents()
+        naive = t.rowHeight(0)
+        need = fm.boundingRect(QRect(0, 0, paint_w, 0), Qt.TextWordWrap, text).height()
+        if naive < need:
+            break
+    assert naive < need, "the defect band must exist between the measured and painted widths"
+
+    _fit_reason_rows(t, col)
+    assert t.rowHeight(0) >= need, (
+        f"the reason row must fit its PAINTED wrap: {t.rowHeight(0)}px < {need}px")
+    assert t.rowHeight(0) > naive, "…and that must be more than Qt's own short answer"
+    # Every other row stays fitted too (and is not gratuitously grown).
+    for r in range(t.rowCount()):
+        own = fm.boundingRect(QRect(0, 0, paint_w, 0), Qt.TextWordWrap,
+                              t.item(r, col).text()).height()
+        assert t.rowHeight(r) >= own, (r, t.rowHeight(r), own)
+    print(f"ok L5-03: row0 {naive}px -> {t.rowHeight(0)}px for a {need}px painted wrap")
+
+
+def test_l5_05_all_faster_phase_bar_is_visible_not_a_border_sliver():
+    """L5-05: a corner whose typical lap is FASTER than best through all three thirds used to paint
+    three `C.border` slivers — 1.19:1 against the row — so a row headlined "+0.08 s" (a cross-lap
+    median, a different statistic) looked self-contradictory with nothing on screen to reconcile it
+    but a tooltip. The thirds now take the palette's ahead colour, are sized by |Δt|, and the
+    window's net is stated on the row face."""
+    _qapp()
+    from PySide6.QtWidgets import QLabel
+
+    from studio import theme
+    from studio.coaching_panel import PhaseBar
+    from studio.theme import C
+    bar = PhaseBar(K.PhaseLoss(entry=-0.0283, apex=-0.0441, exit=-0.0207))   # the measured C12 row
+    segs = bar.layout().itemAt(0).layout()
+    widths, colours = [], []
+    for i in range(segs.count()):
+        colours.append(segs.itemAt(i).widget().styleSheet())
+        widths.append(segs.stretch(i))   # the proportional-bar stretch == the third's |Δt| share
+    ahead = theme.ahead_colour()
+    assert all(ahead in c for c in colours), f"faster thirds must be the ahead hue, got {colours}"
+    assert all(C.border not in c for c in colours), f"never the 1.19:1 border grey: {colours}"
+    # sized by |Δt|: the apex (biggest |Δ|) takes the widest stretch, the exit the narrowest.
+    assert widths[1] > widths[0] > widths[2], widths
+    # …and the net sign is on the row FACE, not only in the tooltip.
+    face = [lb.text() for lb in bar.findChildren(QLabel) if lb.text().startswith("net ")]
+    assert face == ["net -0.09 s"], face
+    assert "net faster than best here" in bar.toolTip()
+    print(f"ok L5-05: faster thirds {ahead} sized {widths}, row face says {face[0]!r}")
 
 
 def _gate_session():

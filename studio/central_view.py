@@ -375,14 +375,20 @@ class CentralView(QWidget):
         for name, tip in (
             ("Laps", "Every valid lap: times, distance, entry speed and sector splits "
                      "(session-best splits in purple). Press 1."),
-            ("Corners", "Per-corner analysis of the selected lap: time-in-corner, Δ vs the "
-                        "best lap, apex/entry/exit speeds. Corners are detected from the "
-                        "track's own curvature. Press 2."),
+            ("Corners", "Per-corner analysis of the ONE lap you select (named on the tab): "
+                        "time-in-corner, that lap's Δ vs the best lap, apex/entry/exit speeds. "
+                        "Follows your selection. Corners are detected from the track's own "
+                        "curvature. Press 2."),
             ("Stats", "Session statistics: totals, the pace distribution, top speed, peak g, "
                       "the g-g friction circle, corner/braking/straights reports and the "
                       "data-trust card. Press 3; ⌘⇧S opens it full-window."),
-            ("Coaching", "Your top opportunities: the corners losing the most time vs your "
-                         "own best lap, with the measured reason for each. Press 4."),
+            # IA-01: the two tooltips used to promise the SAME baseline with no scope word, so the
+            # Coaching page reading a different number from Corners looked like a defect. Corners is
+            # per-lap, Coaching is the whole session's median — each names its own scope.
+            ("Coaching", "Your top opportunities across the WHOLE session: the corners losing the "
+                         "most time vs your own best lap, taken as the median over your clean "
+                         "laps, with the measured reason for each. Does NOT follow your lap "
+                         "selection — the Corners tab is the per-lap view. Press 4."),
         ):
             idx = self.tab_bar.addTab(name)
             self.tab_bar.setTabToolTip(idx, tip)
