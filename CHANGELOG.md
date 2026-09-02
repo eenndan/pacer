@@ -78,6 +78,15 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   collisions, and self-contradicting coaching copy.
 - Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker
   drain (CI deadlocks); the drift-gated per-corner loss alignment.
+- **Video transport chrome** — the compare panes' Δ badge no longer paints on top of the
+  lap picker (it overlapped the lap time by 67 px at the default window size); the strip
+  now budgets its width across the role caption, the lap picker and the Δ. The scrub bar
+  moved to its own full-width row with a 24 px handle, and its lap ruler decimates to
+  every 2nd/5th/10th... lap instead of collapsing into a 4 px hatch on a long session, and
+  its tooltip now says the ticks are lap boundaries. The ⤢ fullscreen-video button no
+  longer latches ON when compare refuses the gesture (it is disabled there, with a reason),
+  gained the **F** shortcut — its first keyboard route anywhere — and the compare toggle
+  gained a visible "Compare" label, the app's first visible use of the word.
 
 ## [0.1.0] — 2026-06-22
 

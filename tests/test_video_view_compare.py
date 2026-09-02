@@ -117,9 +117,10 @@ def test_panespec_round_trips_onto_each_pane():
         _spec(1, (20.0, 30.0), "cap B", [0, 1], choice_labels=["lap 0", "lap 1"]))
     # Windows: pane A confined the global slider to its window (ms); both panes hold their lap window.
     assert (view.slider.minimum(), view.slider.maximum()) == (1_000, 9_000)
-    # Captions surface as the cell-caption TOOLTIP (the visible label is the fixed ROLE word).
-    assert view._cell_a.caption.toolTip() == "cap A"
-    assert view._cell_b.caption.toolTip() == "cap B"
+    # Captions surface as the cell-caption TOOLTIP, behind the FULL role word (the label itself
+    # drops to "THIS"/"REF" when the strip is too narrow for the long form).
+    assert view._cell_a.caption.toolTip() == "THIS LAP — cap A"
+    assert view._cell_b.caption.toolTip() == "REFERENCE — cap B"
     assert view._cell_a.caption.text() == "THIS LAP"  # role label unchanged by the spec caption
     # Pickers: each cell selected the spec's lap_id from the spec's choices/labels (no repoint emit).
     assert view._cell_a.picker.currentData() == 0 and view._cell_a.picker.count() == 2
@@ -128,7 +129,7 @@ def test_panespec_round_trips_onto_each_pane():
     # reseed_pane(side, spec): repoint pane A to lap 1 — its picker + window follow, B untouched.
     view.reseed_pane(0, _spec(1, (3.0, 8.0), "cap A2", [0, 1], choice_labels=["lap 0", "lap 1"]))
     assert view._cell_a.picker.currentData() == 1
-    assert view._cell_a.caption.toolTip() == "cap A2"
+    assert view._cell_a.caption.toolTip() == "THIS LAP — cap A2"
     assert (view.slider.minimum(), view.slider.maximum()) == (3_000, 8_000)
     assert view._cell_b.picker.currentData() == 1, "the other pane must be untouched by the repoint"
     print("test_panespec_round_trips_onto_each_pane OK")
@@ -381,6 +382,235 @@ def test_fullscreen_button_present_and_emits_video_focus_intent():
     print("test_fullscreen_button_present_and_emits_video_focus_intent OK")
 
 
+# --------------------------------------------------------------- B25 transport chrome (QA sweep)
+# These need the REAL theme: every number below (label padding, the picker's content width, the
+# slider handle's box) comes out of the app's own QSS, and Qt's default palette/style gives
+# different ones. apply_theme is global and idempotent — the tests above are geometry-agnostic.
+def _themed():
+    from studio import theme
+    theme.register_fonts()
+    theme.apply_theme(_APP)
+
+
+def _settle(n=8):
+    for _ in range(n):
+        _APP.processEvents()
+
+
+# Views built by the tests below are kept alive to the end of the run: a garbage-collected
+# VideoView leaves its PlayerPane's event filter installed on a half-destroyed widget, which
+# prints a Qt override traceback from an unrelated later test.
+_ALIVE = []
+
+
+def _compare_view(width, labels_a=("lap 42  (1:08.201)  ★",), labels_b=("lap 51  (1:08.384)",)):
+    """A shown VideoView in compare mode at `width`, with realistic picker labels + Δ badges."""
+    _themed()
+    view = VideoView(_cmap("PRIMARY"))
+    view.resize(width, 420)
+    view.show()
+    view.set_compare(_spec(0, (0.0, 10.0), "lap 42 · 1:08.201 ★", [0], choice_labels=list(labels_a)),
+                     _spec(0, (20.0, 30.0), "lap 51 · 1:08.384", [0], choice_labels=list(labels_b)))
+    view.set_pane_badge(0, "Δ -0.19 s", None)
+    view.set_pane_badge(1, "Δ +0.19 s", None)
+    _settle()
+    _ALIVE.append(view)
+    return view
+
+
+def _overlap(cell):
+    """The widest intersection between any two of the strip's three children (0 = they never touch).
+    Hidden children are skipped — they paint nothing, and a hidden widget keeps its last geometry."""
+    rects = [w.geometry() for w in (cell.caption, cell.picker, cell.badge) if w.isVisibleTo(cell)]
+    worst = 0
+    for i in range(len(rects)):
+        for j in range(i + 1, len(rects)):
+            inter = rects[i].intersected(rects[j])
+            if not inter.isEmpty():
+                worst = max(worst, inter.width())
+    return worst
+
+
+def test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time():
+    """L8-01: at the app's own default size the compare strip's three children demanded 316 px in a
+    243 px box, and QHBoxLayout resolved the shortfall by painting the Δ badge 67 px ON TOP of the
+    lap picker — with no tooltip, so the covered lap time was unrecoverable. The strip now budgets
+    its width: no two children may overlap at ANY width, and the picker always gets at least the
+    width its own content needs, so the lap TIME is never the thing that yields."""
+    # 620/520/380 px of VideoView = compare cells of 306/256/186 px, i.e. windows from ~1700 down to
+    # ~1050 px wide. 300 is below the width the lap label itself needs (168 px) — there the only
+    # promise left is that nothing is painted on top of anything else.
+    for width in (620, 520, 380, 300):
+        view = _compare_view(width)
+        for side, cell in ((0, view._cell_a), (1, view._cell_b)):
+            assert _overlap(cell) == 0, (
+                f"side {side} at view width {width}: the strip's children overlap by "
+                f"{_overlap(cell)} px (cell {cell.width()} px)")
+            if width < 380:
+                continue
+            # The lap text is the one thing that never yields: the picker got at least its own
+            # content width (QComboBox elides the current item below that).
+            assert cell.picker.width() >= cell.picker.sizeHint().width(), (
+                f"side {side} at view width {width}: picker {cell.picker.width()} px < the "
+                f"{cell.picker.sizeHint().width()} px its lap label needs -> the time is elided")
+            # ... and neither Δ nor the role word is clipped.
+            assert cell.badge.width() >= cell.badge.sizeHint().width(), (side, width)
+            fm = cell.caption.fontMetrics()
+            assert fm.horizontalAdvance(cell.caption.text()) <= cell.caption.width(), (
+                f"side {side} at view width {width}: the role caption is clipped")
+        _ALIVE.append(view)
+    print("test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time OK: 0 px overlap at "
+          "620/520/380/300 px with the lap time intact")
+
+
+def test_l8_01_narrow_strip_falls_back_to_the_short_role_word():
+    """The width budget's last step, made explicit: when the full role word cannot share a row with
+    the Δ badge it drops to its short form (never a mid-word clip), and the FULL word stays in the
+    tooltip beside the app's rich lap text."""
+    wide = _compare_view(620)
+    assert wide._cell_b.caption.text() == "REFERENCE"
+    _ALIVE.append(wide)
+    narrow = _compare_view(340)
+    assert narrow._cell_b.caption.text() == "REF", narrow._cell_b.caption.text()
+    assert narrow._cell_b.caption.toolTip().startswith("REFERENCE — "), (
+        narrow._cell_b.caption.toolTip())
+    assert _overlap(narrow._cell_b) == 0
+    _ALIVE.append(narrow)
+    print("test_l8_01_narrow_strip_falls_back_to_the_short_role_word OK")
+
+
+def test_l8_02_lap_ruler_decimates_instead_of_hatching():
+    """L8-02: 66 lap boundaries painted one line each collapsed into a 4 px-pitch hatch (26 % ink)
+    where no lap was identifiable. The ruler now decimates to the width it has: at most one tick per
+    _MIN_PITCH px, every 5th promoted to a major, and the tooltip says the ticks are lap
+    boundaries (and at which step) instead of leaving them unexplained."""
+    _themed()
+    view = VideoView(_cmap("PRIMARY"))
+    view.resize(560, 420)
+    view.show()
+    _settle()
+    sl = view.slider
+    sl.setRange(0, 5_330_000)                       # ~89 min, the F.B 3-chapter session
+    view.set_lap_ticks([i * 80.0 for i in range(66)])   # 66 boundaries, ~80 s apart
+    _settle()
+    plan = sl.tick_plan()
+    drawn = sorted(plan["minor"] + plan["major"])
+    assert len(drawn) <= sl.width() // 8, (
+        f"{len(drawn)} ticks drawn in {sl.width()} px — over the 1-per-8px budget "
+        f"({sl.width() // 8})")
+    pitches = [b - a for a, b in zip(drawn, drawn[1:], strict=False)]
+    assert min(pitches) >= sl._MIN_PITCH, f"ticks {min(pitches)} px apart: still a hatch"
+    assert plan["step"] > 1, "66 boundaries in 560 px must decimate"
+    assert plan["major"], "no major ticks — nothing for the eye to count laps by"
+    assert "lap" in sl.toolTip().lower(), f"the tooltip never says the ticks are laps: {sl.toolTip()}"
+    # A short session keeps EVERY lap and gets the current-lap bracket (which is suppressed above,
+    # where a lap is narrower than the handle and the bracket would hide under it).
+    view.set_lap_ticks([0.0, 100.0, 200.0, 300.0])
+    sl.setRange(0, 400_000)
+    sl.setValue(150_000)
+    _settle()
+    short = sl.tick_plan()
+    assert short["step"] == 1, short["step"]
+    assert short["bracketable"] and short["current"] is not None, short
+    assert short["current"][0] < sl._x_for(150_000) < short["current"][1], short["current"]
+    _ALIVE.append(view)
+    print("test_l8_02_lap_ruler_decimates_instead_of_hatching OK: "
+          f"66 boundaries -> {len(drawn)} ticks, min pitch {min(pitches)} px")
+
+
+def test_l8_03_fullscreen_button_is_disabled_while_comparing():
+    """L8-03: in compare mode CentralView refuses the ⤢ gesture, but the button is checkable, so Qt
+    had already latched it ON — a checked tint pixel-identical to a genuinely-on toggle, with an
+    unchanged tooltip. The button is now DISABLED while the compare stage is mounted, with a
+    tooltip that says why, so its checked state can never disagree with the app's."""
+    view = _compare_view(620)
+    intents = []
+    view.videoFocusRequested.connect(lambda: intents.append(True))
+    assert not view.fullscreen_btn.isEnabled(), "the ⤢ must be disabled while comparing"
+    assert not view.fullscreen_btn.isChecked()
+    assert "comparing" in view.fullscreen_btn.toolTip(), view.fullscreen_btn.toolTip()
+    view.fullscreen_btn.click()          # the gesture the user makes anyway
+    _settle()
+    assert not view.fullscreen_btn.isChecked(), "a refused ⤢ click must not latch the button"
+    assert intents == [], "a disabled ⤢ must not emit the intent"
+    # ... and the video double-click, the same intent by another route, is gated the same way.
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    _APP.sendEvent(view.pane.video, QMouseEvent(
+        QEvent.MouseButtonDblClick, QPointF(4, 4), Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    _settle()
+    assert intents == [], "the double-click gesture must be refused in compare too"
+    # Leaving compare gives the gesture back.
+    view.exit_compare()
+    _settle()
+    assert view.fullscreen_btn.isEnabled()
+    assert "comparing" not in view.fullscreen_btn.toolTip(), view.fullscreen_btn.toolTip()
+    view.fullscreen_btn.click()
+    assert intents == [True] and view.fullscreen_btn.isChecked()
+    _ALIVE.append(view)
+    print("test_l8_03_fullscreen_button_is_disabled_while_comparing OK")
+
+
+def test_l8_07_scrub_slider_clears_the_hit_target_floor():
+    """L8-07: the scrub bar was 325x20 with an 18x18 handle — the only interactive in the video
+    panel under the 24 px floor, at 16.4 s per pixel. It now has its own full-width row, a >=24 px
+    widget and a >=24x24 handle."""
+    from PySide6.QtWidgets import QStyle, QStyleOptionSlider
+    _themed()
+    view = VideoView(_cmap("PRIMARY"))
+    view.resize(560, 420)
+    view.show()
+    _settle()
+    sl = view.slider
+    assert sl.height() >= 24, f"the scrub slider is {sl.height()} px tall"
+    opt = QStyleOptionSlider()
+    sl.initStyleOption(opt)
+    handle = sl.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, sl)
+    assert handle.width() >= 24 and handle.height() >= 24, (handle.width(), handle.height())
+    # Its own row: the slider spans the panel instead of sharing the row with five buttons.
+    assert sl.width() > view.width() - 120, (
+        f"the slider is only {sl.width()} px in a {view.width()} px panel — it is still sharing "
+        f"the button row")
+    _ALIVE.append(view)
+    print("test_l8_07_scrub_slider_clears_the_hit_target_floor OK")
+
+
+def test_ia_06_compare_button_carries_a_visible_label():
+    """IA-06: no visible string anywhere in the app contained the word "compare" — the capability
+    lived behind an icon-only button whose only text was a tooltip. The button is labelled."""
+    _themed()
+    view = VideoView(_cmap("PRIMARY"))
+    assert "compare" in view.compare_btn.text().lower(), (
+        f"the compare toggle has no visible label (text={view.compare_btn.text()!r})")
+    assert "compare" in view.compare_btn.toolTip().lower()
+    _ALIVE.append(view)
+    print("test_ia_06_compare_button_carries_a_visible_label OK")
+
+
+def test_u9_04_f_key_reaches_the_video_focus_gesture():
+    """U9-04: ⤢ "make the video fill the screen" had NO keyboard route anywhere in the app — only a
+    click or a double-click on the video. F is now bound, routed through the button (like app.py's
+    G / C) so the disabled state gates the key too."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeySequence, QShortcut
+    _themed()
+    view = VideoView(_cmap("PRIMARY"))
+    keys = [sc for sc in view.findChildren(QShortcut) if sc.key() == QKeySequence(Qt.Key_F)]
+    assert len(keys) == 1, f"expected exactly one F binding on the video view, got {keys}"
+    intents = []
+    view.videoFocusRequested.connect(lambda: intents.append(True))
+    keys[0].activated.emit()
+    assert intents == [True], "F must reach the ⤢ intent"
+    assert "(F" in view.fullscreen_btn.toolTip(), view.fullscreen_btn.toolTip()
+    # In compare the button is disabled, so the key is a no-op rather than a silent refusal.
+    view.set_compare(_spec(0, (0.0, 10.0), "A", [0]), _spec(0, (20.0, 30.0), "B", [0]))
+    intents.clear()
+    keys[0].activated.emit()
+    assert intents == [], "F must be inert while the gesture is unavailable"
+    _ALIVE.append(view)
+    print("test_u9_04_f_key_reaches_the_video_focus_gesture OK")
+
+
 # --------------------------------------------------------------- Issue 1+3 real media (opt-in)
 def _d24():
     """The D24 cross-recording media for the OPT-IN real-media proof. Skipped unless
@@ -476,6 +706,15 @@ def _run_all():
     test_d1_slider_move_fans_out_to_pane_b_in_compare()
     test_d1_step_routes_through_fanout()
     test_fullscreen_button_present_and_emits_video_focus_intent()
+    # B25 (QA sweep 2026-09-01): the transport chrome's layout, state and keyboard reach. These
+    # apply the real theme, so they run after the geometry-agnostic wiring tests above.
+    test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time()
+    test_l8_01_narrow_strip_falls_back_to_the_short_role_word()
+    test_l8_02_lap_ruler_decimates_instead_of_hatching()
+    test_l8_03_fullscreen_button_is_disabled_while_comparing()
+    test_l8_07_scrub_slider_clears_the_hit_target_floor()
+    test_ia_06_compare_button_carries_a_visible_label()
+    test_u9_04_f_key_reaches_the_video_focus_gesture()
     test_real_media_pane_b_is_reference_at_lap_start()
     print("ALL VIDEO-VIEW COMPARE TESTS PASSED")
 
