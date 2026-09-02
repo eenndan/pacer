@@ -67,6 +67,25 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- A video seek across a chapter boundary no longer renames the chapter banner to a chapter that
+  has not loaded. Seeking backwards from chapter 2 relabelled the banner "chapter 1 of 3"
+  immediately, with no busy affordance, while the reopen was still in flight — the identical
+  reopen reached by playing off the end of a chapter had always shown "loading next chapter…".
+  Both routes now show the hint, and both clear it when the destination genuinely presents.
+- Compare mode no longer offers to compare a lap with itself. Both lap pickers listed every
+  valid lap, so picking the left pane's lap on the right gave two identical pickers, two
+  `Δ +0.00 s` badges and a chart overlaying one lap on itself, with nothing anywhere saying so.
+  Each picker now drops the lap the other pane holds — in both directions, and again after
+  every repoint — and a pair set to one lap twice reads "same lap" rather than a dead-even Δ.
+- The compare Δ badges carry the ▲/▼ direction glyph again. They hand-rolled their own format
+  and so were the one Δ surface in the app without the non-colour ahead/behind cue: the hero
+  readout showed `Δ +1.46 s ▼` beside a badge reading `Δ +1.22 s`. They now route through the
+  same formatter as every other Δ.
+- The g-meter overlay's "only re-pin on change" guard now actually holds. Its target size was
+  computed from an aspect ratio that disagreed with the dial's own minimum height (120×134
+  against a 120×140 floor), so the guard was false on every tick and re-issued a `setGeometry`
+  Qt clamped straight back — 600 of 600 ticks measured. No rendering change: the overlay
+  received no move or resize events from those calls either way.
 - The **Ideal lap** toggle no longer lights up and does nothing. With the session best selected
   alone — the state the app opens in — the lower chart is already Δ-to-*ideal*, so the overlay had
   nothing to add and the click changed **0 of 441,077 pixels** while the button latched amber. It

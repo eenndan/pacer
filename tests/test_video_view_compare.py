@@ -611,6 +611,52 @@ def test_u9_04_f_key_reaches_the_video_focus_gesture():
     print("test_u9_04_f_key_reaches_the_video_focus_gesture OK")
 
 
+def test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum():
+    """QA L9-02: _position_gmeter's "only move on change" guard NEVER held at the default layout.
+    _OVERLAY_ASPECT put the smallest dial at 120x134 while GMeterOverlay floors itself at 120x140,
+    so the target rect could never equal the dial's geometry and setGeometry was re-issued on every
+    ~30 Hz tick — 600 of 600 in the sweep — for a size Qt clamped straight back.
+
+    This is a latent-trap fix, not a performance one: across those 600 thrashing ticks the overlay
+    received 0 Move and 0 Resize events (Qt early-outs above the platform layer), so there is no
+    measured rendering cost to claim. What is fixed is a self-defeating guard: it now holds, and a
+    REAL geometry change still moves the dial immediately (asserted below)."""
+    _themed()
+    pane = PlayerPane(None)
+    # Small enough that the dial lands on its own minimum (vw * 0.22 < 120), large enough to host it.
+    pane.resize(420, 320)
+    pane.show()
+    _settle()
+    pane.set_gmeter_visible(True)
+    _settle()
+    dial = pane.gmeter
+    target = pane._gmeter_target_rect()
+    assert target is not None, "the video is big enough to host the dial"
+    assert (target.width(), target.height()) == (dial.minimumWidth(), dial.minimumHeight()), (
+        f"target {target.width()}x{target.height()} vs the dial's own minimum "
+        f"{dial.minimumWidth()}x{dial.minimumHeight()} — the guard can never hold")
+    assert target == dial.geometry(), f"{target} vs {dial.geometry()}"
+
+    calls = []
+    real = dial.setGeometry
+    dial.setGeometry = lambda *a: (calls.append(a), real(*a))[1]
+    for _ in range(100):
+        pane.set_g((0.4, -0.2, 0.45))   # the per-tick re-pin
+    assert calls == [], f"a stationary dial re-issued setGeometry {len(calls)} times in 100 ticks"
+
+    # Positive control: a genuine geometry change must still move it, on the very next tick.
+    before = dial.geometry()
+    pane.resize(560, 320)
+    _settle()
+    pane.set_g((0.4, -0.2, 0.45))
+    assert calls, "a real video resize must still re-pin the dial"
+    assert dial.geometry() != before, (before, dial.geometry())
+    dial.setGeometry = real
+    pane.set_gmeter_visible(False)
+    _ALIVE.append(pane)
+    print("test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum OK")
+
+
 # --------------------------------------------------------------- Issue 1+3 real media (opt-in)
 def _d24():
     """The D24 cross-recording media for the OPT-IN real-media proof. Skipped unless

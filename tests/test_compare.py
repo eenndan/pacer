@@ -27,6 +27,7 @@ _APP = QApplication.instance() or QApplication([])
 
 from _synthetic import bare_session, odometer, seed_lap  # noqa: E402
 
+from studio import theme  # noqa: E402
 from studio.player_pane import PlayerPane  # noqa: E402
 
 
@@ -455,6 +456,187 @@ def test_play_mid_window_does_not_reseek():
     assert pane.player.positions == [], "must not reseek mid-window"
     assert pane.player.play_calls == 1 and pane.player.playing is True
     print("test_play_mid_window_does_not_reseek OK")
+
+
+def test_l8_04_cross_chapter_seek_flags_the_seam():
+    """QA L8-04: a cross-chapter SEEK reopens the source exactly like the EndOfMedia auto-advance,
+    but only the auto-advance told the shell about it — so a seek renamed the chapter banner to a
+    chapter that had NOT loaded yet ("chapter 1 of 3", `_pending=(0, 300.0, False)`,
+    `_switching=True`) with no busy affordance, while the identical reopen one path over showed
+    "loading next chapter…". The seek must raise seamLoading(True) BEFORE _set_source, so the
+    shell's hint is up (and its chapterChanged rename suppressed) until the destination genuinely
+    loads and _apply_pending clears it."""
+    pane = _two_chapter_pane()
+    order = []
+    pane.seamLoading.connect(lambda on: order.append(("seam", bool(on))))
+    pane.chapterChanged.connect(lambda i: order.append(("chapter", i)))
+
+    pane.seek(150.0)  # global 150 -> chapter 1, local 50: a CROSS-CHAPTER seek
+    assert ("seam", True) in order, f"cross-chapter seek raised no seam hint: {order}"
+    # Order matters: the shell gates its chapterChanged rename on the hint, so the hint must be up
+    # BEFORE the rename fires, not after.
+    assert order.index(("seam", True)) < order.index(("chapter", 1)), order
+    assert pane._pending == (1, 50.0, True) and pane._switching is True
+
+    # The destination genuinely loads: the hint comes down exactly once, with the deferred seek.
+    pane._on_media_status(_LOADING)
+    pane._on_media_status(_LOADED)
+    assert pane._pending is None
+    assert order[-1] == ("seam", False), order
+    assert [v for k, v in order if k == "seam"] == [True, False], order
+
+    # A SAME-chapter seek is not a reopen and must stay silent (no hint for a plain setPosition).
+    quiet = _two_chapter_pane()
+    seen = []
+    quiet.seamLoading.connect(lambda on: seen.append(bool(on)))
+    quiet.seek(30.0)
+    assert seen == [], f"a same-chapter seek must not raise the seam hint: {seen}"
+    print("test_l8_04_cross_chapter_seek_flags_the_seam OK")
+
+
+# --------------------------------------------- B27: compare pickers + Δ badges (QA L8-05 / L8-06)
+class _RecordingVideo:
+    """Minimal VideoView stand-in recording the compare surfaces CompareController drives: the two
+    PaneSpecs (whose `choices` ARE the pickers' contents) and the two Δ badges."""
+    def __init__(self):
+        self.specs = {}
+        self.badges = {}
+        self.gmeter_laps = {}
+
+    def set_compare(self, spec_a, spec_b):
+        self.specs[0], self.specs[1] = spec_a, spec_b
+
+    def reseed_pane(self, side, spec):
+        self.specs[side] = spec
+
+    def set_pane_badge(self, side, text, colour):
+        self.badges[side] = (text, colour)
+
+    def set_pane_gmeter_lap(self, side, lap_id):
+        self.gmeter_laps[side] = lap_id
+
+    def is_gmeter_visible(self):
+        return False
+
+    def current_pane_time(self, side):
+        return 0.0
+
+    def pause_if_playing(self):
+        pass
+
+    def seek_pane(self, side, t):
+        pass
+
+
+class _RecordingPlots:
+    def __init__(self):
+        self.lap_ids = []
+
+    def set_laps(self, ids):
+        self.lap_ids = list(ids)
+
+    def selected_lap_ids(self):
+        return list(self.lap_ids)
+
+
+class _EmptyTable:
+    def selected_lap_ids(self):
+        return []
+
+
+def _three_lap_compare():
+    """A CompareController over a bare 3-lap Session + recorders. Three laps so a picker can offer
+    a lap that is neither pane's current one. Returns (controller, video, plots, [ids…])."""
+    from studio.compare_controller import CompareController
+    from studio.playback_state import PlaybackState
+
+    ids = [3, 7, 11]
+    spans = {3: (121, 100.0, 520.0), 7: (111, 300.0, 508.0), 11: (131, 600.0, 531.0)}
+    laps = {lid: odometer(n, 0.1, t0, dist) for lid, (n, t0, dist) in spans.items()}
+    s = bare_session(laps, best=7, valid=ids)
+    windows = {lid: (float(t[0]), float(t[-1])) for lid, (t, _d) in laps.items()}
+    s.lap_window = lambda lid: windows.get(lid)
+    s.lap_time = lambda lid: windows[lid][1] - windows[lid][0]
+    s.lap_at_time = lambda t: next((lid for lid, (w0, w1) in windows.items() if w0 <= t <= w1), None)
+    video, plots = _RecordingVideo(), _RecordingPlots()
+    c = CompareController(s, video, plots, _EmptyTable(), PlaybackState(), lambda: None)
+    return c, video, plots, ids
+
+
+def test_l8_05_pickers_cross_exclude_the_other_panes_lap():
+    """QA L8-05: compare mode let a lap be compared with ITSELF — both pickers listed every valid
+    lap, so picking pane A's lap in pane B gave lap_a == lap_b, two `Δ +0.00 s` badges and a chart
+    overlay of [41, 41] (the same series twice), with no warning anywhere. Each picker must drop the
+    lap the OTHER pane holds — in BOTH directions, and again after every repoint (the verifier
+    confirmed the missing cross-exclusion was symmetric)."""
+    c, video, plots, ids = _three_lap_compare()
+    c.enter()
+    a, b = c.lap_a, c.lap_b
+    assert a != b and a in ids and b in ids
+    assert b not in video.specs[0].choices, f"A's picker still offers B's lap: {video.specs[0].choices}"
+    assert a not in video.specs[1].choices, f"B's picker still offers A's lap: {video.specs[1].choices}"
+    # ids and labels stay parallel (video_view zips them strict=True).
+    for side in (0, 1):
+        spec = video.specs[side]
+        assert len(spec.choices) == len(ids) - 1 == len(spec.choice_labels)
+    assert sorted(plots.selected_lap_ids()) == sorted({a, b}), plots.selected_lap_ids()
+
+    # Repoint pane A to the third lap: pane B's picker must now drop THAT lap and re-offer the one
+    # A just left — the direction the original fix missed.
+    third = next(lid for lid in ids if lid not in (a, b))
+    c.on_pane_repoint(0, third)
+    assert (c.lap_a, c.lap_b) == (third, b)
+    assert b not in video.specs[0].choices, video.specs[0].choices
+    assert third not in video.specs[1].choices, f"B still offers A's new lap: {video.specs[1].choices}"
+    assert a in video.specs[1].choices, f"B never got back the lap A left: {video.specs[1].choices}"
+    assert len(set(plots.selected_lap_ids())) == 2, plots.selected_lap_ids()
+
+    # And the same in the other direction, from pane B.
+    c.on_pane_repoint(1, a)
+    assert (c.lap_a, c.lap_b) == (third, a)
+    assert a not in video.specs[0].choices and third not in video.specs[1].choices
+    assert len(set(plots.selected_lap_ids())) == 2, plots.selected_lap_ids()
+    print("test_l8_05_pickers_cross_exclude_the_other_panes_lap OK")
+
+
+def test_l8_05_same_lap_pair_badges_say_so():
+    """QA L8-05 (the second half): if the pair is ever set to one lap twice — which the pickers can
+    no longer produce — the badges must say SO. Two bare `Δ +0.00 s` badges read as a dead-even
+    comparison of two laps, not as one lap measured against itself."""
+    from studio.compare_controller import CompareController
+
+    c, video, _plots, _ids = _three_lap_compare()
+    c.enter()
+    c._compare_b = c._compare_a
+    c._compare_last_t = None
+    c.tick()
+    assert video.badges[0][0] == "same lap", video.badges
+    assert video.badges[1][0] == "same lap", video.badges
+    assert video.badges[0][0] == CompareController.SAME_LAP_BADGE  # the app's one spelling of it
+    assert video.badges[0][1] is None and video.badges[1][1] is None, "same lap is not an ahead/behind"
+    print("test_l8_05_same_lap_pair_badges_say_so OK")
+
+
+def test_l8_06_pane_badges_use_the_shared_delta_formatter():
+    """QA L8-06: the compare Δ badges hand-rolled `f"Δ {d:+.2f} s"` and so dropped the ▲/▼ direction
+    glyph every other Δ surface carries — one frame showed hero `Δ +1.46 s ▼` beside badge
+    `Δ +1.22 s`. The badge must be exactly theme.format_delta_run(d), the app's single Δ formatter,
+    for behind, ahead, dead-even and None alike."""
+    from studio.compare_controller import CompareController
+
+    c = CompareController.__new__(CompareController)
+    c.video = _RecordingVideo()
+    for d in (1.2225, -0.8604, 0.0, None, 1e-9):
+        c._set_pane_badge(0, d)
+        assert c.video.badges[0] == (theme.format_delta_run(d), theme.delta_colour(d)), (d, c.video.badges[0])
+    # The glyph is the point: behind carries ▼, ahead ▲ — and it is NOT colour-only.
+    c._set_pane_badge(0, 1.2225)
+    assert c.video.badges[0][0] == "Δ +1.22 s ▼", c.video.badges[0]
+    c._set_pane_badge(1, -0.8604)
+    assert c.video.badges[1][0] == "Δ -0.86 s ▲", c.video.badges[1]
+    c._set_pane_badge(0, None)
+    assert c.video.badges[0] == ("Δ —", None), c.video.badges[0]
+    print("test_l8_06_pane_badges_use_the_shared_delta_formatter OK")
 
 
 def test_compare_captions_and_picker_labels_are_one_based():
