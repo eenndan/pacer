@@ -67,6 +67,17 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **A reference recording must now hold a lap the same LENGTH as yours.** "Load reference
+  recording…" only ever checked that the other file was the same *track* — so a recording of the
+  same circuit whose start line was in a different place, cutting it into laps 3.7× longer, was
+  adopted as the Δ baseline anyway. Every "vs best" surface then reported the length difference as
+  time: the session's own best lap plotted at **−35.4 s** on a chart whose x-axis had silently
+  stretched to the reference's 740 m, and the Corners tab showed **7.37 s gained in one corner of
+  a 13-second lap**, in green. The reference lap now has to sit within ±10% of your session's
+  median lap distance — the identical band the app already uses to decide which of your own laps
+  count — and a mismatch is refused with both lengths named ("counted laps here run ~203 m; the
+  reference lap runs ~740 m"), the local best lap left untouched, and the fix pointed at: drag the
+  start/finish line onto the right place and load the reference again.
 - **Timing-line edits now show a wait cursor while they work.** Dragging the start/finish line,
   Add sector, Reset sectors and ⌘Z all re-segment the whole session synchronously — measured
   456–518 ms on a 66-lap three-chapter recording — and the window simply froze, with no cursor
