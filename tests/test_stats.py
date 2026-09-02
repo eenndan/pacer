@@ -21,12 +21,16 @@ Pins the Stats-page math on synthetic inputs (no telemetry file, no Qt):
   * the Session.stats property wiring on a bare Session (lazy build + degenerate trace);
   * the StatsView page (offscreen Qt on a stubbed session): tiles + per-lap table populated
     from real dataclasses, the None → em-dash rule, signal-absent sections hidden (no g →
-    no DRIVING/FRICTION CIRCLE; no sectors → no SECTORS), and the km/h → mph unit flip.
+    no DRIVING/FRICTION CIRCLE; no sectors → no SECTORS), and the km/h → mph unit flip;
+  * the coaching DIGEST tile — its total is the Coaching panel's OWN arithmetic (same rows, same
+    2-dp rounding: the two surfaces may never state different totals for the same corners), its
+    caption names the median anchor, and it paints no arrow it cannot honour.
 Run: QT_QPA_PLATFORM=offscreen python tests/test_stats.py
 """
 import datetime
 import math
 import os
+import re
 import sys
 from types import SimpleNamespace
 
@@ -1053,6 +1057,124 @@ def test_stats_view_trust_card_is_above_the_fold():
     assert y + lab.height() < viewport, "the card must fit whole in the first viewport"
     v.close()
     print("test_stats_view_trust_card_is_above_the_fold OK")
+
+
+# ------------------------------------------------------- the coaching digest tile (L5-02/IA-04/L4-08)
+# The three corners the 3-chapter D24 fixture ranks first (cids 5, 3, 12). Their 2-dp cells read
+# +0.13 +0.11 +0.08 = 0.32 s on the Coaching page; the raw floats sum to 0.3134 -> "0.31 s". The
+# rounding penny between the two surfaces IS the defect these tests pin.
+_D24_TOP3 = [0.12596491489577843, 0.10903147805383018, 0.07835681696116126]
+
+
+def _digest_opportunities(losses, n_laps=65):
+    """Real `coaching` dataclasses for `losses` (s, already ranked) — the exact shape BOTH the
+    Stats digest tile and the Coaching panel consume, so the two can be compared side by side."""
+    from studio import coaching
+    rows = [coaching.Opportunity(
+                cid=i + 1, direction=1 if i % 2 == 0 else -1, time_lost=t,
+                entry_dist=100.0 * (i + 1),
+                reason=coaching.Reason(kind=coaching.REASON_NONE, contribution=t,
+                                       apex_speed_deficit=0.0, brake_extra_s=0.0,
+                                       coast_extra_s=0.0, sigma=0.05))
+            for i, t in enumerate(losses)]
+    return coaching.Opportunities(enough=True, n_laps=n_laps, median_lap_id=3, rows=rows)
+
+
+class _CoachSession:
+    """The two calls OpportunitiesPanel makes on a session — nothing else."""
+
+    def __init__(self, opp):
+        self._opp = opp
+
+    def coaching_opportunities(self):
+        return self._opp
+
+    def coaching_brake_points(self):
+        return {}
+
+
+def _digest_views(opp):
+    """The same opportunities rendered by both surfaces: (StatsView, OpportunitiesPanel)."""
+    from studio.coaching_panel import OpportunitiesPanel
+    from studio.stats_panel import StatsView
+    sess = _fake_view_session()
+    sess.coaching_opportunities = lambda: opp
+    return StatsView(sess), OpportunitiesPanel(_CoachSession(opp))
+
+
+def test_stats_digest_total_equals_the_coaching_headline():
+    """L5-02: the two surfaces must state the SAME total for the same corners.
+
+    Stats summed the raw floats (0.3134 -> "0.31 s") while the Coaching headline sums the 2-dp
+    cells the user can add up by eye (0.13+0.11+0.08 -> "0.32 s"), and the tile then subtracted
+    0.3134 while printing 0.31 — disagreeing with the coaching page AND with its own tooltip.
+    The digest now runs the panel's own arithmetic: its rows (`_shown_rows`), its count
+    (`PANEL_TOP_N`) and its rounding."""
+    _app()
+    from studio._signal import fmt_time
+
+    opp = _digest_opportunities(_D24_TOP3)
+    v, panel = _digest_views(opp)
+    tip, headline = v.t_digest.toolTip(), panel.summary_label.text()
+    stats_total = re.search(r"\(([0-9]+\.[0-9]{2}) s", tip)
+    coach_total = re.search(r"([0-9]+\.[0-9]{2}) s (?:across|in)", headline)
+    assert stats_total and coach_total, (tip, headline)
+    assert stats_total.group(1) == coach_total.group(1) == "0.32", (tip, headline)
+    # ...and the tile's OWN number is that same total: printed == subtracted, no 3 ms slip.
+    median = v.session.stats.pace().median
+    assert v.t_digest.value.text() == fmt_time(median - 0.32) == "1:08.780", \
+        v.t_digest.value.text()
+
+    # The latent second bug: sub-resolution rows (< 0.005 s, rendered "+0.00 s") are ranked by
+    # summarize but never SHOWN, so they must not be spent either. Here only one corner is real.
+    opp = _digest_opportunities([0.30, 0.003, 0.002])
+    v, panel = _digest_views(opp)
+    assert "in your worst corner" in panel.summary_label.text(), panel.summary_label.text()
+    assert v.t_digest.value.text() == fmt_time(69.1 - 0.30) == "1:08.800", v.t_digest.value.text()
+    assert "top-1 corner losses" in v.t_digest.toolTip(), v.t_digest.toolTip()
+    assert "top 1 fixed" in v.t_digest.caption.text(), v.t_digest.caption.text()
+    print("test_stats_digest_total_equals_the_coaching_headline OK")
+
+
+def test_stats_digest_tile_captions_its_base_and_paints_no_dead_link():
+    """IA-04 + L4-08, one tile.
+
+    IA-04: the digest is the MEDIAN lap rebased, so it routinely reads slower than the "best lap"
+    tile a row away — the caption has to say which lap it started from, or a target you have
+    already beaten looks like a contradiction. The anchor itself is deliberate and stays: best −
+    losses would overclaim (the best lap already banks some of those corners).
+
+    L4-08: the caption used to paint a "→" on a tile with no click handler, no PointingHandCursor
+    and no focus — a navigation affordance that navigates nowhere. Either it is clickable or it
+    does not paint the arrow."""
+    _app()
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QWidget
+
+    from studio._signal import fmt_time
+
+    v, _panel = _digest_views(_digest_opportunities(_D24_TOP3))
+    tile = v.t_digest
+    cap = tile.caption.text()
+
+    # IA-04 — the base is named on the tile face, not just in the tooltip.
+    assert "median" in cap.lower(), cap
+    # ...and the anchor is UNCHANGED: still median − losses, never best − losses.
+    pace = v.session.stats.pace()
+    assert tile.value.text() == fmt_time(pace.median - 0.32) != fmt_time(pace.best - 0.32)
+    assert "MEDIAN" in tile.toolTip()
+    assert "slower" in tile.toolTip().lower(), \
+        "the tooltip must say why a target can read slower than your best lap"
+
+    # L4-08 — no arrow unless the tile can actually be pressed.
+    clickable = (type(tile).mousePressEvent is not QWidget.mousePressEvent
+                 or tile.cursor().shape() == Qt.PointingHandCursor
+                 or tile.focusPolicy() != Qt.NoFocus)
+    assert "→" not in cap and not clickable, \
+        f"inert tile still paints a navigation arrow: {cap!r}"
+    # It points at the Coaching tab in WORDS instead.
+    assert "Coaching" in tile.toolTip(), tile.toolTip()
+    print("test_stats_digest_tile_captions_its_base_and_paints_no_dead_link OK")
 
 
 if __name__ == "__main__":
