@@ -5,11 +5,11 @@ math; it COMPOSES the values Session already caches into a ranked, explainable s
 "where to find time vs your own best lap" — every number measured and deterministic (no ML).
 
 What it does: per corner, the median time lost vs your own best over the consistency laps
-(valid, dropout-free); corners ranked by that loss, biggest first. For the top-N corners a
+(valid, dropout-free); corners ranked by that loss, biggest first. For every ranked corner a
 dominant reason (apex / braking / coasting / line) is picked from four signals, each mapped to a
-comparable strength; the strongest wins (ties → a fixed reason priority). summarize returns
-enough=False under MIN_LAPS consistency laps. Pure + deterministic (corners in cid order,
-candidate laps ascending).
+comparable strength; the strongest wins (ties → a fixed reason priority), REASON_NONE when none
+fires. summarize returns enough=False under MIN_LAPS consistency laps. Pure + deterministic
+(corners in cid order, candidate laps ascending).
 """
 
 from __future__ import annotations
@@ -23,9 +23,6 @@ from .corners import project_boundaries
 
 # Min clean laps before coaching; the per-corner loss is a MEDIAN, ill-defined/unstable below 3.
 MIN_LAPS = 3
-
-# How many ranked corners get a dominant-reason attached (the panel's row count).
-TOP_N = 3
 
 # D2: the three equal-distance phases a corner window is split into for the entry/apex/exit
 # Δt-vs-best decomposition, in track order. The dominant phase is named in the reason sentence.
@@ -110,7 +107,7 @@ class Opportunity:
     direction: int           # +1 left / -1 right (for the UI glyph)
     time_lost: float         # median time lost vs the best lap's same corner (s, > 0)
     entry_dist: float        # the corner's enter odometer on the BEST lap (m) — the jump-to seek
-    reason: Reason           # the dominant measured reason + numbers (only on the top-N rows)
+    reason: Reason           # the dominant measured reason + numbers (REASON_NONE = none fired)
     # D2: typical-lap entry/apex/exit Δt-vs-best thirds (s) — a WHERE-in-the-corner profile, a
     # DIFFERENT statistic from time_lost (their sum is the typical lap's net, not the median loss).
     phases: PhaseLoss = _NO_PHASES
@@ -161,21 +158,51 @@ def _saturate(evidence: float, half: float) -> float:
     return e / (e + half) if e > 0 else 0.0
 
 
-def _window_brake_time(events, d_enter: float, d_exit: float) -> float:
-    """Total time on the brakes (s) for the brake events whose onset falls in a corner's
-    approach+window [d_enter − BRAKE_APPROACH_M, d_exit]. `events` is a list with .onset_dist /
-    .duration (driving.BrakeEvent)."""
+def _window_brake_time(events, d_enter: float, d_exit: float,
+                       dist: np.ndarray | None = None,
+                       elapsed: np.ndarray | None = None) -> float:
+    """Time on the brakes (s) spent INSIDE a corner's approach+window
+    [d_enter − BRAKE_APPROACH_M, d_exit], integrating each brake event's OVERLAP with that window.
+    `events` is a list with .onset_dist / .onset_time / .duration (driving.BrakeEvent); `dist` /
+    `elapsed` are the SAME lap's odometer + seconds-from-lap-start arrays the events were detected
+    on (see _brake_extra).
+
+    An event carries no release odometer, so it is recovered by interpolating onset_time + duration
+    through the lap's own clock (which lands back on the detector's release sample exactly, since
+    duration IS elapsed[release] − elapsed[onset]); the clipped span is converted back to seconds
+    the same way, so what is counted is the time the lap actually spent braking between the two
+    distances. Without the arrays the event degenerates to a point at its onset — the pre-overlap
+    rule, kept only for callers that have no trace.
+
+    Matching the sibling _coast_in_window, which already tests OVERLAP. The onset-membership rule
+    scored the SAME brake application as 0.00 s or its full duration depending on which side of an
+    arbitrary cut its onset landed: on D24 the best lap's 2.2 s application into C3 began 14.5 m
+    upstream of the cut and scored 0.00 s, so a corner losing 0.109 s printed "~0.90 s longer on
+    the brakes"."""
     lo = d_enter - BRAKE_APPROACH_M
-    return sum(float(e.duration) for e in events if lo <= e.onset_dist <= d_exit)
+    if dist is None or elapsed is None or len(dist) < 2 or len(elapsed) < 2:
+        return sum(float(e.duration) for e in events if lo <= e.onset_dist <= d_exit)
+    total = 0.0
+    for e in events:
+        d_release = float(np.interp(float(e.onset_time) + float(e.duration), elapsed, dist))
+        a = max(float(e.onset_dist), lo)
+        b = min(d_release, d_exit)
+        if b <= a:  # the event and the window do not overlap
+            continue
+        total += max(float(np.interp(b, dist, elapsed))
+                     - float(np.interp(a, dist, elapsed)), 0.0)
+    return total
 
 
 def _brake_extra(med_events, best_events, med_win: tuple[float, float],
-                 best_win: tuple[float, float]) -> float:
+                 best_win: tuple[float, float],
+                 med_trace: tuple = (None, None), best_trace: tuple = (None, None)) -> float:
     """Extra s on the brakes vs best in the corner approach, floored at 0. An earlier onset shows
     up as more time on the brakes, so this one difference captures both 'earlier' and 'longer'.
-    med_win/best_win are the corner window projected onto each lap's own odometer (see _win)."""
-    return max(_window_brake_time(med_events, *med_win)
-               - _window_brake_time(best_events, *best_win), 0.0)
+    med_win/best_win are the corner window projected onto each lap's own odometer (see _win);
+    med_trace/best_trace are that lap's (dist, elapsed) arrays for the overlap integral."""
+    return max(_window_brake_time(med_events, *med_win, *med_trace)
+               - _window_brake_time(best_events, *best_win, *best_trace), 0.0)
 
 
 def _coast_in_window(spans, d_enter: float, d_exit: float) -> float:
@@ -280,7 +307,8 @@ def corner_phase_losses(
 
 def _pick_reason(time_lost: float, apex_speed_delta: float, sigma: float,
                  med_events, best_events, med_spans, best_spans,
-                 med_win: tuple[float, float], best_win: tuple[float, float]) -> Reason:
+                 med_win: tuple[float, float], best_win: tuple[float, float],
+                 med_trace: tuple = (None, None), best_trace: tuple = (None, None)) -> Reason:
     """Choose the dominant reason for one corner: the strongest of the four comparable strengths
     (largest wins, ties → _REASON_PRIORITY order). All raw evidence is carried on the Reason; the
     contribution is time_lost × the winning strength (≤ time_lost — never overclaims).
@@ -288,7 +316,7 @@ def _pick_reason(time_lost: float, apex_speed_delta: float, sigma: float,
     LINE is the fallback (real spread but no concrete input fires); REASON_NONE when nothing fires
     (the row still shows the time lost)."""
     apex_deficit = max(-float(apex_speed_delta), 0.0)   # km/h slower than best at the apex
-    brake_extra = _brake_extra(med_events, best_events, med_win, best_win)
+    brake_extra = _brake_extra(med_events, best_events, med_win, best_win, med_trace, best_trace)
     coast_extra = _coast_extra(med_spans, best_spans, med_win, best_win)
     sig = max(float(sigma), 0.0)
 
@@ -339,11 +367,13 @@ def summarize(
     best_lap_total: float | None = None,
     median_dist: np.ndarray | None = None,
     median_speed_kmh: np.ndarray | None = None,
+    median_elapsed: np.ndarray | None = None,
     best_dist: np.ndarray | None = None,
     best_speed_kmh: np.ndarray | None = None,
+    best_elapsed: np.ndarray | None = None,
     median_traces: tuple | None = None,
     best_traces: tuple | None = None,
-    top_n: int = TOP_N,
+    top_n: int | None = None,
     min_laps: int = MIN_LAPS,
 ) -> Opportunities:
     """Assemble the ranked opportunities from pre-extracted, pacer-free inputs (Session owns the
@@ -356,9 +386,15 @@ def summarize(
     median_dist/median_speed_kmh + best_dist/best_speed_kmh are the typical-lap and best-lap
     speed-vs-distance traces; when both are present each row gets the D2 entry/apex/exit Δt-vs-best
     decomposition (the typical lap vs best, same comparison the reasons use) — absent → zero phases.
+    median_elapsed/best_elapsed are the matching seconds-from-lap-start arrays; with them a brake
+    event's OVERLAP with the corner window is integrated on the lap's own clock instead of the event
+    being taken or dropped whole by its onset (_window_brake_time) — absent → that degenerate rule.
     median_traces/best_traces are the matching local-frame xy traces ((ref_xs, ref_ys, ref_cum,
     lap_xs, lap_ys, lap_cum) for the typical / best lap); they enable the drift-gated spatial
     boundary alignment in the phase decomposition (omitted → normalized, byte-identical pre-gate).
+    top_n caps how many ranked rows get a dominant reason attached; None (the default) analyses
+    EVERY ranked row, so a REASON_NONE row means "measured, nothing fired" rather than "not looked
+    at" — the rows below any cap are shown too (the Opportunities dialog lists all of them).
     Returns Opportunities; enough=False (empty rows) when < min_laps candidate laps."""
     n_laps = len(candidate_lap_ids)
     med_id = median_lap_id(candidate_lap_ids, lap_times)
@@ -389,6 +425,14 @@ def summarize(
     have_phases = (median_dist is not None and median_speed_kmh is not None
                    and best_dist is not None and best_speed_kmh is not None)
 
+    # L5-01: each lap's (odometer, seconds-from-start) pair, so a brake event's overlap with the
+    # corner window is integrated on that lap's own clock (a BrakeEvent carries no release
+    # odometer). Missing either half → (None, None) → the degenerate onset rule.
+    med_trace = ((median_dist, median_elapsed)
+                 if median_dist is not None and median_elapsed is not None else (None, None))
+    best_trace = ((best_dist, best_elapsed)
+                  if best_dist is not None and best_elapsed is not None else (None, None))
+
     # Build a row per corner with a positive median loss; rank by the loss (biggest first).
     ranked_idx = [i for i in np.argsort(-losses, kind="stable") if losses[i] > 1e-9]
 
@@ -402,8 +446,9 @@ def summarize(
             best_total=best_lap_total,
             lap_traces=median_traces, best_traces=best_traces,
         ) if have_phases else _NO_PHASES)
-        attach_reason = rank < top_n
-        if attach_reason:
+        # L5-04: every ranked row is analysed unless a cap is asked for, so the "How to find it"
+        # cell of a row below any cut is a MEASURED "nothing fired" rather than an un-run analysis.
+        if top_n is None or rank < top_n:
             reason = _pick_reason(
                 time_lost=float(losses[i]),
                 apex_speed_delta=(float(median_apex_deltas[i])
@@ -412,6 +457,7 @@ def summarize(
                 med_events=median_brake_events, best_events=best_brake_events,
                 med_spans=median_coast_spans, best_spans=best_coast_spans,
                 med_win=_win(c, median_lap_total), best_win=_win(c, best_lap_total),
+                med_trace=med_trace, best_trace=best_trace,
             )
         else:
             reason = Reason(kind=REASON_NONE, contribution=0.0, apex_speed_deficit=0.0,
