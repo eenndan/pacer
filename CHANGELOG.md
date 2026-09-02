@@ -67,6 +67,27 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- The **Ideal lap** toggle no longer lights up and does nothing. With the session best selected
+  alone — the state the app opens in — the lower chart is already Δ-to-*ideal*, so the overlay had
+  nothing to add and the click changed **0 of 441,077 pixels** while the button latched amber. It
+  now goes disabled there, and its tooltip keeps its own description *and* gains the reason.
+- The chart's lap curves can be told apart without colour vision. The lap-identity palette is
+  deliberately **not** swapped by the colour-blind option (those colours say *which lap*, not who is
+  faster), but hue was the only cue, and two of the six collapse under deuteranopia — `#B794F6` vs
+  `#7FA8F5` is **CIE76 ΔE 1.27**, half the ~2.3 JND. Each palette slot now also carries a **dash
+  pattern**, which pyqtgraph strokes into the legend swatch as well as the curve, so the legend maps
+  to a curve with no colour at all. The single-lap default is unchanged: slot 0 stays solid.
+- The km/h axis no longer prints a tick through the ESTIMATED brake/throttle strip. The strip gets
+  its own reserved space below the speed trace, but the axis kept ticking it: a **`20` km/h label**
+  inside a pedal band, on a lap whose true minimum was **28.5 km/h**. Ticks inside the strip are
+  suppressed and the strip now names itself on the chart — *brake / throttle (est)*.
+- The speed legend moved off the trace. Pinned top-left, it sat exactly where a lap's data is (you
+  cross the line flat out) and hid **413 of 2,800 plotted samples (14.8%)** at a six-lap selection;
+  anchored to the measured-emptiest corner that is **268 (9.6%)**, and 0.0% on two other fixtures.
+  It has always been draggable — now the cursor and a tooltip say so, and the hide threshold sits at
+  the largest legend the app can actually produce instead of one row above it.
+- The charts empty state says what to do next — *drag the start/finish line on the map* — and the
+  three chart controls no longer stay live and latching over a page that cannot draw anything.
 - **A GPS fix that teleports no longer inflates the session distance.** The SESSION "distance"
   total summed every chord between consecutive fixes with no sanity check, so one dropped fix —
   177.8 m across 56 ms, an implied **11,500 km/h** — put **2.3 km** on a 9.6-second clip whose own
