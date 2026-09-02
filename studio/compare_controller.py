@@ -153,6 +153,12 @@ class CompareController:
             # Cross badge routing: pane A vs the reference, pane B (the reference) vs the primary.
             self._set_pane_badge(0, self.session.delta_at_lap(a, t_a))
             self._set_pane_badge(1, self.session.reference_delta_vs_lap(a, t_b))
+        elif a == b:
+            # Degenerate pair: the pickers cross-exclude, so this is only reachable if the pair is
+            # set programmatically. Say what it is — two "Δ +0.00 s" badges read as a dead-even
+            # comparison of two laps, not as one lap measured against itself.
+            self._set_pane_badge(0, None, same_lap=True)
+            self._set_pane_badge(1, None, same_lap=True)
         else:
             self._set_pane_badge(0, self.session.delta_between(a, b, t_a))
             self._set_pane_badge(1, self.session.delta_between(b, a, t_b))
@@ -167,12 +173,18 @@ class CompareController:
             else:
                 self.map.set_ghost_index(self.session.index_at_time(t_b))
 
-    def _set_pane_badge(self, side: int, d: float | None) -> None:
-        """Format + colour a pane Δ badge via theme.delta_colour (neutral when dead-even)."""
-        if d is None:
-            self.video.set_pane_badge(side, "Δ —", None)
+    # The badge for the degenerate "both panes on the same lap" pair (see tick()).
+    SAME_LAP_BADGE = "same lap"
+
+    def _set_pane_badge(self, side: int, d: float | None, *, same_lap: bool = False) -> None:
+        """Format + colour a pane Δ badge via theme.format_delta_run (the app's SINGLE Δ formatter,
+        so the badge carries the same ▲/▼ non-colour direction cue as the hero readout, the charts
+        and the corner table — hand-rolling the f-string here dropped it) and theme.delta_colour
+        (neutral when dead-even)."""
+        if same_lap:
+            self.video.set_pane_badge(side, self.SAME_LAP_BADGE, None)
         else:
-            self.video.set_pane_badge(side, f"Δ {d:+.2f} s", theme.delta_colour(d))
+            self.video.set_pane_badge(side, theme.format_delta_run(d), theme.delta_colour(d))
 
     # ------------------------------------------------------------------ enter / exit
     def on_toggled(self, on: bool) -> None:
@@ -211,12 +223,14 @@ class CompareController:
         wa, wb = self.session.lap_window(a), self.session.lap_window(b)
         if wa is None or wb is None:
             return  # degenerate window — stay out of compare (flags above are reset, none latched)
-        labels = self._lap_choice_labels(valid)
+        # Each picker lists every valid lap EXCEPT the one the other pane holds (see _picker_items).
+        ids_a, labels_a = self._picker_items(valid, b)
+        ids_b, labels_b = self._picker_items(valid, a)
         # Both panes are laps of this recording; source=None reuses the primary ChapterMap.
         spec_a = PaneSpec(a, wa, self._lap_caption(a), source=None,
-                          choices=valid, choice_labels=labels)
+                          choices=ids_a, choice_labels=labels_a)
         spec_b = PaneSpec(b, wb, self._lap_caption(b), source=None,
-                          choices=valid, choice_labels=labels)
+                          choices=ids_b, choice_labels=labels_b)
         self._enter(spec_a, spec_b)
 
     def _enter(self, spec_a: PaneSpec, spec_b: PaneSpec) -> None:
@@ -263,9 +277,11 @@ class CompareController:
         self._prefer_cross = True  # so a later toggle off/on re-enters cross
         cap_b = self._cross_caption_b(ref_sess, ref_lap)
         # Pane B's spec is the only cross-vs-same difference: reference footage + picker locked to the
-        # single reference lap.
+        # single reference lap. No cross-exclusion here — the two lap ids index DIFFERENT recordings,
+        # so an equal id is not the same lap (see _picker_items / _other_lap).
+        ids_a, labels_a = self._picker_items(valid, None)
         spec_a = PaneSpec(a, wa, self._lap_caption(a), source=None,
-                          choices=valid, choice_labels=self._lap_choice_labels(valid))
+                          choices=ids_a, choice_labels=labels_a)
         spec_b = PaneSpec(ref_lap, wb, cap_b,
                           source=(ref_sess.chapters or ref_sess.video_path),
                           choices=[ref_lap], choice_labels=[cap_b])
@@ -314,10 +330,14 @@ class CompareController:
         if window is None:
             return
         # Fresh PaneSpec for the repointed side; reseed_pane leaves its media source as is.
+        ids, labels = self._picker_items(valid, self._other_lap(side))
         self.video.reseed_pane(side, PaneSpec(
             lap_id, window, self._lap_caption(lap_id),
-            choices=valid, choice_labels=self._lap_choice_labels(valid)))
+            choices=ids, choice_labels=labels))
         self.video.set_pane_gmeter_lap(side, lap_id)
+        # The OTHER pane's picker still lists the lap this side just took — refresh it too, or the
+        # next pick over there lands both panes on the same lap (which the exclusion exists to stop).
+        self._refresh_other_choices(side)
         # realign the whole pair at S/F (see _reset_pair_to_start)
         self._reset_pair_to_start()
         # Refresh the chart overlay ([A] cross, [A,B] same-recording); freeze auto-follow on A.
@@ -329,6 +349,38 @@ class CompareController:
             self.playback.followed_lap = self._compare_a
         self._compare_last_t = None  # force the next tick() to recompute
         self._on_pair_changed()  # refresh the brake glyphs for the new pair
+
+    # ------------------------------------------------------------------ picker contents
+    def _other_lap(self, side: int) -> int | None:
+        """The lap id the OTHER pane holds, or None when it cannot collide with this pane's picker:
+        in a cross-recording compare the two ids index DIFFERENT recordings, so an equal id is a
+        different lap and excluding it would silently drop a legitimate choice."""
+        if self._cross:
+            return None
+        return self._compare_b if side == 0 else self._compare_a
+
+    def _picker_items(self, valid: list[int], exclude: int | None) -> tuple[list[int], list[str]]:
+        """One pane's picker contents (ids + parallel labels): every valid lap EXCEPT `exclude`,
+        the lap the other pane already holds. Comparing a lap with itself is a null comparison —
+        two identical pickers, a "Δ +0.00 s" on both badges and a chart overlay carrying the same
+        series twice — so it is never offered rather than silently allowed."""
+        ids = [lid for lid in valid if lid != exclude]
+        return ids, self._lap_choice_labels(ids)
+
+    def _refresh_other_choices(self, side: int) -> None:
+        """After `side` was repointed, re-list the OTHER pane's picker so it drops the newly-taken
+        lap and re-offers the one this side just left. Same lap, window and caption over there — only
+        the choices move, and set_lap_choices selects without emitting, so no repoint bounces back."""
+        other = 1 - side
+        lap = self._compare_a if other == 0 else self._compare_b
+        if self._cross or lap is None:
+            return  # cross: pane B is locked to the reference lap, pane A excludes nothing
+        window = self.session.lap_window(lap)
+        if window is None:
+            return
+        ids, labels = self._picker_items(self.session.valid_lap_ids(), self._other_lap(other))
+        self.video.reseed_pane(other, PaneSpec(
+            lap, window, self._lap_caption(lap), choices=ids, choice_labels=labels))
 
     # ------------------------------------------------------------------ pane S/F realign
     def _seek_pane_to_lap_start(self, side: int, lap_id: int) -> None:

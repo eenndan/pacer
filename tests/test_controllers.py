@@ -37,6 +37,7 @@ _APP = QApplication.instance() or QApplication([])
 
 from _synthetic import bare_session, odometer  # noqa: E402
 
+from studio import theme  # noqa: E402
 from studio.compare_controller import CompareController  # noqa: E402
 from studio.playback_state import PlaybackState  # noqa: E402
 from studio.scrub_controller import ScrubController  # noqa: E402
@@ -475,8 +476,8 @@ def test_compare_tick_badges_and_g_for_two_laps():
     assert sides == [0, 1], sides
     d_ab = s.delta_between(a, b, video.pane_times[0])
     d_ba = s.delta_between(b, a, video.pane_times[1])
-    assert video.badges[0][1] == f"Δ {d_ab:+.2f} s", video.badges[0]
-    assert video.badges[1][1] == f"Δ {d_ba:+.2f} s", video.badges[1]
+    assert video.badges[0][1] == theme.format_delta_run(d_ab), video.badges[0]
+    assert video.badges[1][1] == theme.format_delta_run(d_ba), video.badges[1]
     # Secondary g fed once, from the secondary pane's own time; primary g NOT touched here.
     assert video.pane_g[-1] == (1, s.g_at_time(video.pane_times[1])), video.pane_g[-1]
     assert video.g == [], "primary g is the readout path's job, not compare.tick()"
@@ -529,8 +530,8 @@ def test_compare_tick_scrub_bypass_uses_drag_targets():
     t_a, t_b = scrub.target, scrub.target_b
     d_ab = s.delta_between(a, b, t_a)
     d_ba = s.delta_between(b, a, t_b)
-    assert video.badges[0][1] == f"Δ {d_ab:+.2f} s", video.badges[0]
-    assert video.badges[1][1] == f"Δ {d_ba:+.2f} s", video.badges[1]
+    assert video.badges[0][1] == theme.format_delta_run(d_ab), video.badges[0]
+    assert video.badges[1][1] == theme.format_delta_run(d_ba), video.badges[1]
     assert video.pane_g[-1] == (1, s.g_at_time(t_b)), "secondary g from the drag target, not pane time"
     # And it does NOT early-out on a second tick (still scrubbing) even with identical targets.
     n = len(video.badges)
@@ -689,8 +690,8 @@ def test_cross_compare_tick_pane_b_feeds_from_reference():
     d_a = s.delta_at_lap(a, t_a)
     d_b = s.reference_delta_vs_lap(a, t_b)
     badge_sides = {side: txt for side, txt, _c in video.badges}
-    assert badge_sides[0] == f"Δ {d_a:+.2f} s", badge_sides[0]
-    assert badge_sides[1] == f"Δ {d_b:+.2f} s", badge_sides[1]
+    assert badge_sides[0] == theme.format_delta_run(d_a), badge_sides[0]
+    assert badge_sides[1] == theme.format_delta_run(d_b), badge_sides[1]
 
     # --- INDEPENDENT expectations (no call to the methods under test) ---
     # The reference lap (see _attach_reference) is the primary lap A's distance curve, elapsed
@@ -821,8 +822,8 @@ def test_same_recording_compare_is_byte_identical_session_b():
     compare.tick()
     d_ab = s.delta_between(a, b, video.pane_times[0])
     d_ba = s.delta_between(b, a, video.pane_times[1])
-    assert video.badges[0][1] == f"Δ {d_ab:+.2f} s"
-    assert video.badges[1][1] == f"Δ {d_ba:+.2f} s"
+    assert video.badges[0][1] == theme.format_delta_run(d_ab)
+    assert video.badges[1][1] == theme.format_delta_run(d_ba)
     assert video.pane_g[-1] == (1, s.g_at_time(video.pane_times[1])), "pane B g from self.session"
     print("test_same_recording_compare_is_byte_identical_session_b OK")
 
@@ -841,11 +842,13 @@ def test_enter_builds_two_panespecs_same_recording():
     assert (spec_a.lap_id, spec_b.lap_id) == (a, b)
     assert spec_a.window == s.lap_window(a) and spec_b.window == s.lap_window(b)
     assert spec_a.source is None and spec_b.source is None, "same-recording -> both panes primary src"
-    # Both pickers list the session's valid laps, with the shared per-lap labels.
+    # Each picker lists the session's valid laps MINUS the lap the other pane holds (QA L8-05: a lap
+    # compared with itself is a null comparison, so it is never offered), with the per-lap labels.
     valid = s.valid_lap_ids()
-    labels = compare._lap_choice_labels(valid)
-    assert spec_a.choices == valid and spec_b.choices == valid
-    assert spec_a.choice_labels == labels and spec_b.choice_labels == labels
+    assert spec_a.choices == [lid for lid in valid if lid != b], spec_a.choices
+    assert spec_b.choices == [lid for lid in valid if lid != a], spec_b.choices
+    assert spec_a.choice_labels == compare._lap_choice_labels(spec_a.choices)
+    assert spec_b.choice_labels == compare._lap_choice_labels(spec_b.choices)
     # Captions are the per-lap "lap N · time" text (★ on best) — A's and B's, distinctly.
     assert spec_a.caption == compare._lap_caption(a) and spec_b.caption == compare._lap_caption(b)
     print("test_enter_builds_two_panespecs_same_recording OK")
