@@ -210,6 +210,112 @@ def test_load_drops_only_malformed_entries_keeps_rest():
         assert {e["name"] for e in track_db.load(p)["tracks"]} == {"A", "B"}
 
 
+# --------------------------------------------------- data safety (QA sweep W7-01)
+# The measured loss: a tracks.json holding three user circuits was truncated (a crash mid-write,
+# or a hand-edit via "Reveal in Finder"). load() mapped that to empty_db(), and ONE ordinary
+# File ▸ Save as track… at a circuit 79 km away rewrote the file from that empty view — 3
+# circuits -> 1, no .bak, no modal, and the status bar reported success. The same shape reached
+# through two more doors: a version stamp the build doesn't know, and a single malformed entry
+# "healed" away. A read fallback must never become a destructive write.
+
+def test_save_backs_up_a_db_it_could_not_read():
+    """W7-01: an ordinary save over an UNREADABLE DB leaves the original bytes beside it, so the
+    circuits the build could not read are recoverable rather than gone — and says so beforehand
+    through ``backup_pending``. A healthy DB is never backed up (no churn)."""
+    circuits = [_entry("Sandown Park", centroid=(51.376, -0.361)),
+                _entry("Buckmore Park", centroid=(51.30, 0.55)),
+                _entry("Whilton Mill", centroid=(52.28, -1.10))]
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        track_db.save({"version": 1, "tracks": circuits}, p)
+        good = open(p).read()
+        # A hand-edit through "Reveal in Finder" that breaks the JSON but keeps every byte: all
+        # three circuits are still IN there, and must still be there after the save.
+        with open(p, "w") as f:
+            f.write(good + "}")
+        assert track_db.load(p) == track_db.empty_db()       # the read fallback, unchanged
+        track_db.save_track(_entry("Daytona Milton Keynes", centroid=(52.0403, -0.7847)), p)
+        assert os.path.exists(p + ".bak"), "an unreadable DB was overwritten with no backup"
+        rescued = open(p + ".bak").read()
+        assert rescued == good + "}", "the .bak is not the original bytes"
+        for name in ("Sandown Park", "Buckmore Park", "Whilton Mill"):
+            assert name in rescued, f"{name} is not recoverable"
+        # The file is healthy again, so later saves neither churn nor clobber that rescue.
+        assert track_db.backup_pending(p) is None
+        track_db.save_track(_entry("Croft", centroid=(54.45, -1.55)), p)
+        assert open(p + ".bak").read() == rescued
+
+        # A TRUNCATION (the crash-mid-write shape the sweep measured) keeps whatever survived it —
+        # the save can no longer take the rest away, and the UI is told BEFORE the write.
+        half = good[: len(good) // 2]
+        with open(p, "w") as f:
+            f.write(half)
+        assert track_db.backup_pending(p) == p + ".bak"
+        track_db.save_track(_entry("Croft", centroid=(54.45, -1.55)), p)
+        assert open(p + ".bak").read() == half
+        assert "Sandown Park" in half
+
+
+def test_newer_schema_version_keeps_its_tracks_and_is_backed_up():
+    """A version stamp this build doesn't know is NOT corruption: load reads it best-effort so
+    every circuit survives a downgrade, and save keeps the newer file before re-stamping it.
+    (The old `!= VERSION` test emptied the DB, and the next save made that permanent.)"""
+    newer = {"version": track_db.VERSION + 1,
+             "tracks": [_entry("A", centroid=(52.0, -0.78)),
+                        _entry("B", centroid=(53.0, -1.78))],
+             "unknown_future_field": {"whatever": 1}}
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        with open(p, "w") as f:
+            json.dump(newer, f)
+        loaded = track_db.load(p)
+        assert {e["name"] for e in loaded["tracks"]} == {"A", "B"}, "a newer DB was emptied"
+        assert loaded["version"] == track_db.VERSION
+        assert track_db.backup_pending(p) == p + ".bak"
+        track_db.save_track(_entry("C", centroid=(54.0, -2.78)), p)
+        # Nothing lost on the way down, and the newer original is still on disk.
+        assert {e["name"] for e in track_db.load(p)["tracks"]} == {"A", "B", "C"}
+        with open(p + ".bak") as f:
+            saved = json.load(f)
+        assert saved["version"] == track_db.VERSION + 1
+        assert saved["unknown_future_field"] == {"whatever": 1}
+
+
+def test_healing_a_malformed_entry_keeps_the_original():
+    """Dropping one bad row and rewriting the survivors is defensible — doing it with no copy is
+    not. The heal still happens; the pre-heal file is now recoverable from the .bak."""
+    bad = {"name": "Bad", "centroid": [200.0, 0.0],           # centroid out of range
+           "bbox": None, "start": [[1.0, 2.0], [3.0, 4.0]], "sectors": []}
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        with open(p, "w") as f:
+            json.dump({"version": 1,
+                       "tracks": [_entry("A", centroid=(52.0, -0.78)), bad,
+                                  _entry("B", centroid=(53.0, -1.78))]}, f)
+        track_db.save(track_db.load(p), p)                    # the heal
+        assert {e["name"] for e in track_db.load(p)["tracks"]} == {"A", "B"}
+        assert os.path.exists(p + ".bak"), "the heal rewrote the file with no copy of the original"
+        with open(p + ".bak") as f:
+            original = json.load(f)
+        assert [e["name"] for e in original["tracks"]] == ["A", "Bad", "B"]
+
+
+def test_backup_is_best_effort_and_never_blocks_the_save(monkeypatch):
+    """An unwritable backup slot must not cost the user their new track: the copy fails, the save
+    still lands (a save that keeps the app usable beats refusing to save)."""
+    def _boom(*a, **k):
+        raise OSError("read-only backup slot")
+
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        with open(p, "w") as f:
+            f.write("{ not json")
+        monkeypatch.setattr(track_db.shutil, "copy2", _boom)
+        track_db.save_track(_entry("A", centroid=(52.0, -0.78)), p)
+        assert {e["name"] for e in track_db.load(p)["tracks"]} == {"A"}
+        assert not os.path.exists(p + ".bak")
+
+
 # --------------------------------------------------- name collisions (QA sweep L12-09)
 # The two REAL anchors the sweep measured: Save as track… under one name from a session at
 # SD_30_08_26, then again from a session at Daytona MK — 79 km apart, entry count 1 → 1, the
