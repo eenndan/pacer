@@ -46,6 +46,8 @@ from . import (
     stats as stats_service,
 )
 from ._signal import (
+    LAP_DIST_BAND_HI,
+    LAP_DIST_BAND_LO,
     SMOOTH_WINDOW,
     _band_lap_ids,
     _banded_out_lap_ids,
@@ -300,7 +302,9 @@ class Session:
         Guards (all non-fatal — a refusal just keeps the current behaviour):
           * the reference must be the SAME detected track as this session (`track_name`); a
             different track would make the normalized-distance overlay meaningless;
-          * the reference must have a valid best lap with a real arc-length curve.
+          * the reference must have a valid best lap with a real arc-length curve;
+          * that lap must be the same LENGTH as a lap here (see `_lap_length_refusal`) — the
+            same track segmented differently is not a comparable lap.
 
         Alignment is by NORMALIZED distance (reusing `delta`'s machinery, not a new scheme):
         only the reference lap's `(dist, speed, elapsed)` curve is needed for the charts/table.
@@ -329,6 +333,16 @@ class Session:
         dist, speed_kmh, elapsed = ref._lap_arrays(ref_best)
         if len(dist) < 2 or float(dist[-1]) <= 0:
             return "reference best lap is degenerate; keeping the local best lap"
+        # Lap-comparability guard: the same TRACK is not the same LAP. The track gate above only
+        # proves both recordings are the same circuit; two recordings segmented at DIFFERENT
+        # start lines still cut that circuit into laps of different lengths, and the
+        # normalized-distance alignment (s = dist/total) then stretches one over the other and
+        # reports the length difference as time gained. `dist[-1]` is exactly the number that
+        # goes wrong: once adopted it IS active_baseline_total_distance() — the Δ chart's x-axis
+        # extent and the denominator of every s. Band it before adopting it.
+        reason = self._lap_length_refusal(float(dist[-1]))
+        if reason is not None:
+            return reason
         # The reference lap's closed (xs, ys) loop in the REFERENCE's local metres, and THIS
         # session's best-lap loop in OUR local metres — the two loops the racing-line overlay
         # is aligned between (see cross_reference.build).
@@ -385,6 +399,53 @@ class Session:
                     "these don't look like the same track (different location); "
                     "keeping the local best lap")
         return True, True, None  # same place, unknown name -> admit but flag UNVERIFIED
+
+    def _median_valid_lap_distance(self) -> float | None:
+        """Median odometer distance (m) over this session's VALID laps — "how long a lap runs
+        here". The same anchor `_signal._band_lap_ids` bands local laps against, and the same
+        number the excluded-laps strip prints ("Counted laps run ~X m"), so a refusal quoting it
+        names a figure the user can already see in the lap panel.
+
+        None when no usable per-lap distances exist, in which case the caller must NOT band:
+        the FAKE `laps` doubles in the tests expose only the time surface (hence the same
+        `get_lap_distance` getattr guard `_band_lap_ids` uses), a bare `Session.__new__` has no
+        `laps` slot at all, and a stream reporting no finite/positive distance gives no median."""
+        get_dist = getattr(getattr(self, "laps", None), "get_lap_distance", None)
+        if get_dist is None:
+            return None
+        finite = [d for d in (float(get_dist(i)) for i in self.valid_lap_ids())
+                  if math.isfinite(d) and d > 0]
+        return float(np.median(finite)) if finite else None
+
+    def _lap_length_refusal(self, ref_total_m: float) -> str | None:
+        """Refuse a reference lap that isn't the same LENGTH as a lap of this session. Returns
+        None to admit, else the human-readable reason (the `set_reference_session` contract).
+
+        The band is `_signal.LAP_DIST_BAND_LO/HI` (±10%) around this session's MEDIAN valid-lap
+        distance — deliberately the identical criterion `_band_lap_ids` applies to a LOCAL lap,
+        so the guard states exactly one thing: *a reference lap must be one this session would
+        itself have counted as a lap*. Sharing the constants keeps the two bands from drifting
+        apart, and the cross-recording case needs no extra slack — measured on three independent
+        Sandown recordings and two D24 segmentations, a genuine same-track pair's lap lengths
+        agree to within 1.4% (a closed loop's arc length barely moves when you cut it in a
+        different place), while the same recordings' own valid laps spread up to 4.2% off their
+        median. The failure this catches is 3.7x, nowhere near the band.
+
+        MEDIAN, not the local best lap: the best is a single sample whose length is whatever the
+        fastest lap happened to measure, so the verdict would wobble with the lap selection;
+        the median is the robust centre over every counted lap, it is what `_band_lap_ids`
+        itself bands against, and it is the number already on screen in the excluded strip.
+        (Measured, best/median runs 0.993–1.000x, so the choice barely moves the threshold — it
+        moves which number the refusal can honestly quote.)"""
+        median_m = self._median_valid_lap_distance()
+        if median_m is None or not math.isfinite(ref_total_m) or ref_total_m <= 0:
+            return None  # nothing to band against: admit, exactly as before
+        if LAP_DIST_BAND_LO * median_m <= ref_total_m <= LAP_DIST_BAND_HI * median_m:
+            return None
+        return (f"reference lap isn't comparable with this session's laps: counted laps here run "
+                f"~{median_m:.0f} m; the reference lap runs ~{ref_total_m:.0f} m "
+                f"({ref_total_m / median_m:.2g}x). Keeping the local best lap — if a start/finish "
+                f"line is in the wrong place, drag it on the map and load the reference again.")
 
     def clear_reference(self) -> None:
         """Drop the cross-recording reference — every "vs best" output reverts to the local

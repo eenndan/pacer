@@ -9,6 +9,8 @@ the asserts are the contract the feature must hold:
   * the same baseline drives the per-tick readout (delta_at_lap) and both x-axis modes;
   * the track-mismatch guard refuses a foreign-track reference (and a no-valid-laps reference)
     without disturbing the local best;
+  * the LAP-LENGTH band refuses a same-track recording segmented into laps of a different length
+    (QA-W2R-02) while still admitting a genuinely comparable one;
   * clear_reference reverts to the local best;
   * DORMANT identity: with no reference, delta() is byte-identical to the pre-feature output (the
     "no change when off" invariant), checked here on a bare Session against a hand-computed baseline;
@@ -25,6 +27,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from studio import cross_reference as xr  # noqa: E402
+from studio._signal import LAP_DIST_BAND_HI, LAP_DIST_BAND_LO  # noqa: E402
 from studio.session import REFERENCE_ID, Session  # noqa: E402
 from tests._synthetic import bare_session, odometer, seed_cols  # noqa: E402
 
@@ -231,6 +234,109 @@ def test_named_vs_different_named_still_refuses():
     assert reason is not None and "different track" in reason, reason
     assert not primary.has_reference()
     print("test_named_vs_different_named_still_refuses OK")
+
+
+# ------------------------------------- lap-length band (the same track, segmented differently)
+# The track gate above only proves both recordings are the same CIRCUIT. A recording whose start
+# line lands somewhere the driver crosses several times a lap is segmented into short fragments,
+# and its "lap" is then stretched over a full lap of the primary by the normalized-distance
+# alignment — the length difference surfacing as seconds gained. So the reference lap must ALSO
+# be the same LENGTH as a lap here: within `_band_lap_ids`' own ±10% distance band around this
+# session's MEDIAN valid-lap distance. These stub `laps.get_lap_distance` (the accessor
+# `_band_lap_ids` getattr-guards) so the band runs without a telemetry file.
+def set_lap_distances(session, dists_by_id):
+    """Give a bare Session per-lap odometer distances, WITHOUT a telemetry file: add a
+    `get_lap_distance` accessor to the existing `laps` stub, preserving whatever `laps_count` /
+    `min_max` stubs make_session / set_location already installed. Call it AFTER `set_location`
+    — that one REBUILDS `laps` from scratch and would drop the accessor."""
+    keep = {n: staticmethod(getattr(session.laps, n))
+            for n in ("laps_count", "min_max") if hasattr(session.laps, n)}
+    keep["get_lap_distance"] = staticmethod(lambda i, d=dict(dists_by_id): float(d[i]))
+    session.laps = type("L", (), keep)()
+
+
+def test_lap_length_band_refuses_a_differently_segmented_same_track_reference():
+    """QA-W2R-02. F.D's auto-fitted start line cuts Sandown into ~203 m fragments; F.C's cuts the
+    SAME circuit into 740 m laps. track_match calls them the same place (4.12 m apart), so the
+    track gate admits — and on main the 739.9 m lap becomes the Δ baseline for 13 s laps, plotting
+    the session's OWN best at −35 s. The lap-length band must refuse instead, naming BOTH lengths."""
+    # Five primary laps at F.D's measured scale: median 202 m, best (197 m) deliberately NOT the
+    # median, so a guard anchored on the best would answer with a different number than this one.
+    lap_m = {1: 199.0, 2: 202.0, 3: 203.0, 4: 197.0, 5: 207.0}
+    laps = {i: odometer(120, 0.11, 0.0, m) for i, m in lap_m.items()}
+    primary = make_session(laps, best=4, valid=sorted(lap_m), track=None)
+    set_location(primary, clat=51.37604, clon=-0.36106)          # F.D's measured centroid
+    set_lap_distances(primary, lap_m)
+    # The reference: F.C's real best lap, 739.9 m / 48.515 s, on the same circuit.
+    ref = make_session({30: odometer(400, 0.1215, 0.0, 739.9)}, best=30, valid=[30], track=None)
+    set_location(ref, clat=51.37604, clon=-0.36096)              # F.C's, ~7 m away
+    set_lap_distances(ref, {30: 739.9})
+    _stub_loops(primary, ref)
+    assert primary._track_admits_reference(ref)[0], "the track gate alone still admits this pair"
+
+    reason = primary.set_reference_session(ref, source_label="friend")
+    assert reason is not None, "a 3.7x-length reference must be refused"
+    assert "202 m" in reason and "740 m" in reason, f"both lengths must be named: {reason!r}"
+    assert not primary.has_reference()
+    # The local best lap is untouched: Δ still baselines on lap 4, and the session's own best
+    # plots at a flat zero rather than the −35 s of the mis-adopted reference.
+    base_id, _speed, delta = primary.delta([4], x_mode="distance")
+    assert base_id == 4 and REFERENCE_ID not in delta
+    assert abs(float(delta[4][1][-1])) < 1e-9
+    print(f"test_lap_length_band_refuses OK: refused with {reason!r}")
+
+
+def test_lap_length_band_admits_a_genuine_same_track_recording():
+    """The band must NOT refuse two recordings of the same circuit that are both segmented sanely
+    — measured, that pair's lap lengths agree to ~1.4%. These are the real figures from two
+    independent Sandown recordings: primary laps 731.9 / 740.5 / 754.2 m (median 740.5) against
+    the other recording's best lap of 730.3 m, i.e. 0.986x."""
+    lap_m = {1: 731.9, 2: 740.5, 3: 754.2}
+    primary = make_session({i: odometer(200, 0.24, 0.0, m) for i, m in lap_m.items()},
+                           best=2, valid=sorted(lap_m), track=None)
+    ref = make_session({31: odometer(200, 0.236, 0.0, 730.3)}, best=31, valid=[31], track=None)
+    set_location(primary, clat=51.37604, clon=-0.36096)
+    set_location(ref, clat=51.37604, clon=-0.36101)
+    set_lap_distances(primary, lap_m)
+    set_lap_distances(ref, {31: 730.3})
+    _stub_loops(primary, ref)
+
+    reason = primary.set_reference_session(ref, source_label="friend")
+    assert reason is None, f"a genuine same-track pair must still be admitted: {reason!r}"
+    assert primary.has_reference() and primary.reference_lap_id() == 31
+    print("test_lap_length_band_admits_genuine_same_track OK: 730.3 m vs 740.5 m median admitted")
+
+
+def test_lap_length_band_edges_are_the_local_band():
+    """The threshold IS `_band_lap_ids`' distance band, so a reference lap is admitted exactly
+    when this session would have counted it as one of its own laps: 1.09x in, 1.11x out."""
+    lap_m = {1: 990.0, 2: 1000.0, 3: 1010.0}      # median 1000 m
+    base = {i: odometer(150, 0.4, 0.0, m) for i, m in lap_m.items()}
+    for total, want_ok in ((1090.0, True), (1110.0, False), (910.0, True), (890.0, False)):
+        primary = make_session(base, best=2, valid=sorted(lap_m), track="T")
+        set_lap_distances(primary, lap_m)
+        ref = make_session({9: odometer(150, 0.4, 0.0, total)}, best=9, valid=[9], track="T")
+        set_lap_distances(ref, {9: total})
+        _stub_loops(primary, ref)
+        reason = primary.set_reference_session(ref)
+        assert (reason is None) is want_ok, (total, reason)
+        assert primary.has_reference() is want_ok
+    print(f"test_lap_length_band_edges OK: band is "
+          f"[{LAP_DIST_BAND_LO:.2f}, {LAP_DIST_BAND_HI:.2f}]x the median valid-lap distance")
+
+
+def test_lap_length_band_is_skipped_when_no_per_lap_distances_exist():
+    """No `get_lap_distance` (the lighter test doubles, and any stream reporting no usable
+    distance) => no median to band against => admit, exactly as before the band existed. The
+    same getattr fallback `_band_lap_ids` takes, so the guard can never refuse on missing data."""
+    primary = make_session({1: odometer(120, 0.4, 0.0, 900.0)}, best=1, valid=[1], track="T")
+    assert not hasattr(primary.laps, "get_lap_distance")
+    assert primary._median_valid_lap_distance() is None
+    ref = make_session({2: odometer(120, 0.4, 0.0, 3000.0)}, best=2, valid=[2], track="T")
+    _stub_loops(primary, ref)
+    assert primary.set_reference_session(ref) is None, "unbandable data must not be refused"
+    assert primary.has_reference()
+    print("test_lap_length_band_skipped_without_distances OK")
 
 
 def test_no_valid_laps_reference_refused():
