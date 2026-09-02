@@ -1,6 +1,7 @@
 """LapTable: lap times / distances / entry speed. Multi-select rows to compare laps.
 
-Cells sort by their numeric Qt.UserRole key, not text (so "1:08.408" sorts as 68.408 s).
+Cells sort by their numeric Qt.UserRole key, not text (so "1:08.408" sorts as 68.408 s), from the
+mouse or the keyboard — the header is a tab stop with its own ring (_KeyboardSortHeader).
 Row/cell highlights are keyed by lap id so they survive sorts: ▶ playing marker, green best
 lap, blue Qt selection, purple per-sector session-best cells, ⚠ GPS-dropout flag. The
 SESSION-BESTS footer is plain labels below the table, immune to sort/selection. A ⊘ EXCLUDED
@@ -19,7 +20,7 @@ import statistics
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, Qt, Signal
-from PySide6.QtGui import QColor, QFontMetrics
+from PySide6.QtGui import QColor, QFontMetrics, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -51,6 +52,15 @@ DROPOUT_SUFFIX = " ⚠"  # GPS-dropout lap (low-confidence)
 # cell. Paired with the existing bold, the star carries the meaning independent of colour.
 BEST_LAP_MARK = "★ "     # prefixes the best lap's Lap cell (after any ▶ current marker)
 BEST_SECTOR_MARK = " ★"  # suffixes a session-best split cell's value
+# The ★ LEGEND (QA IA-07). ONE glyph, ONE convention — "the session best in this context", the rule
+# the two marks above encode — but it was painted with an EMPTY tooltip on every cell that carried
+# it, in two tables, and spelled out in exactly one header tooltip. So the cell wearing the mark
+# answered nothing on hover, and the Corners table, which wears it too, said nothing anywhere.
+# These state the same rule in each place the mark can appear; they are APPENDED to whatever trust
+# note the cell already carries (dropout / provisional / estimated) rather than replacing it.
+BEST_LAP_TIP = "★ Session best — the fastest complete lap in this recording."
+BEST_SPLIT_TIP = "★ Session best — no lap crossed this sector quicker."
+BEST_CORNER_TIP = "★ Session best — no lap took this corner quicker."
 DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
 # EXCLUDED laps: substantial laps the median band left OUT of the times / bests (a mis-segmented
 # short/long lap, an out-lap, or an in-lap). They're shown in a muted strip BELOW the table rather
@@ -89,6 +99,12 @@ NO_LAPS_TEXT = ("No complete laps in this recording.\n\n"
 # recording with no lap at all is usually the wrong recording, not a misplaced line.
 NO_LAPS_ACTION = "Open another recording with ⌘O."
 NO_LAPS_PLACEHOLDER = f"{NO_LAPS_TEXT}\n\n{NO_LAPS_ACTION}"
+
+
+def _with_star(star_tip: str, tip: str) -> str:
+    """The ★ meaning above whatever trust note the cell already carries, blank line between, so
+    neither answer is lost (a dropout lap that is also the best lap has two things to say)."""
+    return f"{star_tip}\n\n{tip}" if tip else star_tip
 
 
 def _too_brief_note(n: int) -> str:
@@ -280,6 +296,121 @@ class _NumItem(QTableWidgetItem):
         return float(a) < float(b)
 
 
+# The keys that sort the focused column, i.e. the two a focused control is expected to activate on.
+_SORT_KEYS = (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter)
+
+
+class _KeyboardSortHeader(QHeaderView):
+    """The Laps grid's horizontal header, usable from the KEYBOARD (QA U9-02).
+
+    Sorting was a mouse-only feature: QHeaderView is `Qt.NoFocus`, so the focus ring never reached
+    the header, and it has no key handling of its own — Space/Return/Enter/Right/Home left the
+    indicator at (0, Ascending) even with focus forced onto it, while a real mouse press moved it
+    in the same process. Nothing else in the app offered a way in either: no menu action mentions
+    sort order and the header has no context menu.
+
+    So the header becomes a real tab stop after the grid: ←/→ (and Home/End) walk the sortable
+    sections, Space/Return/Enter sorts by the focused one — same column flips the direction, a new
+    column starts ascending, exactly what `QHeaderView::mouseReleaseEvent` does — and the focused
+    section paints the app's own focus ring, so a keyboard user can see which column they are about
+    to sort by before they commit to it.
+
+    `sortable(i)` is injected by the owner: the blank trailing SPACER column holds no cells, so
+    walking onto it would park the ring on a header that cannot order anything (the same case
+    `LapTable._on_sorted` bounces a mouse click out of)."""
+
+    def __init__(self, sortable):
+        super().__init__(Qt.Horizontal)
+        self._sortable = sortable
+        self._focus_section = 0
+        # QTableView builds its own header with both of these on; a replacement must carry them or
+        # the MOUSE route (clickable sections) and the selected-column emphasis quietly disappear.
+        self.setSectionsClickable(True)
+        self.setHighlightSections(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def _sections(self) -> list[int]:
+        """The sections the keyboard may land on: visible, and able to order something."""
+        return [c for c in range(self.count())
+                if not self.isSectionHidden(c) and self._sortable(c)]
+
+    def focusInEvent(self, event):
+        # Arrive on the column that IS sorted, so the first Space flips the direction the user is
+        # looking at instead of jumping to wherever the ring was left last time.
+        if self.sortIndicatorSection() in self._sections():
+            self._focus_section = self.sortIndicatorSection()
+        super().focusInEvent(event)
+        self.viewport().update()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.viewport().update()
+
+    def _move_focus(self, to):
+        """Walk the ring to `to` ('first'/'last'/±1), clamped to the sortable sections."""
+        cols = self._sections()
+        if not cols:
+            return
+        if to == "first":
+            i = 0
+        elif to == "last":
+            i = len(cols) - 1
+        else:
+            here = cols.index(self._focus_section) if self._focus_section in cols else 0
+            i = min(max(here + to, 0), len(cols) - 1)
+        self._focus_section = cols[i]
+        self.viewport().update()
+
+    def _sort_focused(self):
+        """Sort by the focused section, exactly as a click on it would: the same column flips
+        direction, a new one starts ascending. `setSortIndicator` is what actually re-orders the
+        rows (QTableView listens to `sortIndicatorChanged`); `sectionClicked` follows so anything
+        wired to a header click sees the keyboard route as one."""
+        if self._focus_section not in self._sections():
+            return
+        flip = (self.sortIndicatorSection() == self._focus_section
+                and self.sortIndicatorOrder() == Qt.AscendingOrder)
+        self.setSortIndicator(self._focus_section,
+                              Qt.DescendingOrder if flip else Qt.AscendingOrder)
+        self.sectionClicked.emit(self._focus_section)
+
+    def event(self, event):
+        # Space is a WINDOW-level QShortcut (video play/pause). Shortcuts are matched BEFORE the
+        # key event reaches the focused widget, so without claiming the ShortcutOverride the press
+        # would toggle the video instead of sorting the column the ring is on. A focused control
+        # owning its own activation key is the standard Qt answer to exactly this.
+        if (event.type() == QEvent.ShortcutOverride and self.hasFocus()
+                and event.key() in _SORT_KEYS):
+            event.accept()
+            return True
+        return super().event(event)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key in _SORT_KEYS:
+            self._sort_focused()
+        elif key in (Qt.Key_Left, Qt.Key_Right):
+            self._move_focus(-1 if key == Qt.Key_Left else 1)
+        elif key in (Qt.Key_Home, Qt.Key_End):
+            self._move_focus("first" if key == Qt.Key_Home else "last")
+        else:
+            super().keyPressEvent(event)
+            return
+        event.accept()
+
+    def paintSection(self, painter, rect, logicalIndex):
+        super().paintSection(painter, rect, logicalIndex)
+        # The app's one focus language (theme's FOCUS_RING_PX accent_hover ring), drawn on the
+        # SECTION rather than the whole header: which column Space would sort by is the thing a
+        # keyboard user needs to see. Inset so the ring sits inside the section it marks.
+        if self.hasFocus() and logicalIndex == self._focus_section:
+            painter.save()
+            painter.setPen(QPen(QColor(theme.C.accent_hover), theme.FOCUS_RING_PX))
+            half = theme.FOCUS_RING_PX // 2
+            painter.drawRect(rect.adjusted(half, half, -half - 1, -half - 1))
+            painter.restore()
+
+
 class _ExcludedStrip(QWidget):
     """The ⊘ excluded-laps strip container whose WHOLE surface is a click target: a left-click
     toggles it between the collapsed one-liner and the full list (via the injected ``on_click``).
@@ -321,6 +452,15 @@ class LapTable(QWidget):
         self._n_splits_shown = 0
 
         self.table = QTableWidget(0, len(COLUMNS))
+        # U9-02: the sort header is a KEYBOARD control too (see _KeyboardSortHeader). Installed
+        # before anything else configures the header, so every setting below lands on this one;
+        # `sortable` keeps the keyboard walk off the blank trailing spacer column.
+        self.table.setHorizontalHeader(_KeyboardSortHeader(lambda c: c < self._n_real_cols()))
+        # ...and Tab must be able to LEAVE the grid to reach it. Qt's default cell-wise Tab
+        # navigation swallowed every Tab press inside the table, which is why a focusable header
+        # alone would still have been unreachable. A read-only grid (NoEditTriggers) has nothing to
+        # tab between cells for; the arrow keys still walk the rows.
+        self.table.setTabKeyNavigation(False)
         self.table.setHorizontalHeaderLabels(_columns(self._speed_unit))
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -692,7 +832,8 @@ class LapTable(QWidget):
             self.table.horizontalHeaderItem(c).setToolTip(tip)
         for i in range(n_splits):
             self.table.horizontalHeaderItem(len(COLUMNS) + i).setToolTip(
-                f"Sector {i + 1} split (s) — time between this lap's sector lines")
+                f"Sector {i + 1} split (s) — time between this lap's sector lines. "
+                f"{BEST_SPLIT_TIP}")
         # Set the section RESIZE MODES now that the rows are in; the widths themselves are fitted
         # at the end of refresh(), once _apply_highlights has finished rewriting the S-split text.
         self._apply_column_sizing()
@@ -823,9 +964,13 @@ class LapTable(QWidget):
                 # italic, keeping the estimated cue); the dropout tooltip wins (it flags a per-lap
                 # issue), else the provisional note, else the estimated-timing note, else clear.
                 theme.apply_provisional_style(item, muted_cell)
-                item.setToolTip(DROPOUT_TOOLTIP if is_dropout
-                                else PROVISIONAL_TOOLTIP if provisional_cell
-                                else estimated_note if estimated_cell else "")
+                tip = (DROPOUT_TOOLTIP if is_dropout
+                       else PROVISIONAL_TOOLTIP if provisional_cell
+                       else estimated_note if estimated_cell else "")
+                # IA-07: the ★ this row's Lap cell wears is a glyph with no legend anywhere unless
+                # the cell carrying it says what it means. Set every pass (the mark moves with the
+                # best lap), and above — never instead of — the trust note.
+                item.setToolTip(_with_star(BEST_LAP_TIP, tip) if is_best and c == 0 else tip)
             # per-sector best → purple+bold + a ★ mark (outranks green for this cell) — but ONLY on
             # verified timing; a "validated best" on an arbitrary start line would mislead. The ★ is
             # the NON-COLOUR redundancy (bold alone is weak); the split text is rebuilt from the
@@ -847,6 +992,9 @@ class LapTable(QWidget):
                 if is_best_split:
                     item.setForeground(best_sector_color)
                     font.setBold(True)
+                    # ...and the same legend on the same glyph (IA-07). The loop above has just
+                    # rewritten this cell's tooltip, so there is nothing stale to append to.
+                    item.setToolTip(_with_star(BEST_SPLIT_TIP, item.toolTip()))
                 else:
                     font.setBold(False)
                 item.setFont(font)
@@ -1027,8 +1175,9 @@ def _corner_col_tips(unit: str | None) -> list[str]:
     tips name the current display unit ("km/h" / "mph"); the rest are unit-independent."""
     u = units.speed_label(unit)
     return [
-        "Detected corner in track order (⟲ left / ⟳ right)",
-        "Time spent in the corner (seconds)",
+        "Detected corner in track order (⟲ left / ⟳ right). Click a row to ring that corner "
+        "on the map.",
+        f"Time spent in the corner (seconds). {BEST_CORNER_TIP}",
         "Δ vs the best lap's same corner (seconds; − is faster)",
         f"Apex (minimum) speed through the corner ({u})",
         f"Δ apex speed vs the best lap ({u}; + is faster)",
@@ -1043,6 +1192,22 @@ def _corner_col_tips(unit: str | None) -> list[str]:
         "envelope (%). Estimated from the clean GPS-derived longitudinal + IMU lateral g; ~100% = at the "
         "session's grip limit. Normalised session-wide so a slower lap reads lower.",
     ]
+
+
+def _corner_unit_caption(unit: str | None) -> str:
+    """The Corners table's UNIT LINE (QA L3-10). Seven of its eight columns are unit-bearing
+    numbers and the abbreviated headers name not one of them — the units live in the header
+    tooltips above, which is hover-only, while the Stats page captions the very same data on
+    screen ("CORNERS · speeds in mph"). This borrows that solution, for the reason the Stats page
+    has it: a caption follows the display unit for free and never elides, where naming the unit in
+    the headers ("Apex (mph)") would widen four columns that are already squeezed at the default
+    quadrant width and then elide the unit away first (see MAX_DATA_COL_PX / _fit_columns).
+
+    Grip's % is here rather than in its cells for the same measured reason: "77 %" instead of "77"
+    raises that column's FLOOR by 16 px (39 -> 55 px), and L3-03 is the finding that these eight
+    columns already wanted 501 px in a 447 px quadrant with 0 of 12 grip cells readable. One
+    caption line states all three unit families and costs the columns nothing."""
+    return f"Times in seconds · speeds in {units.speed_label(unit)} · grip %"
 CORNER_DIR_GLYPH = {1: "⟲", -1: "⟳"}  # left / right (turn sense), shown after the C-label
 # The Δ columns when the shown lap IS the Δ baseline (QA L3-05). `corner_model.lap_corner_stats`
 # passes ref=None for the baseline and `corners.lap_corner_stats`'s docstring documents the result
@@ -1078,9 +1243,9 @@ class CornerTable(QWidget):
         # Speed display unit (km/h default); app pushes the persisted choice via set_speed_unit.
         # Drives the Apex/Δ apex/Entry/Exit value conversion + the per-column tooltips' unit name.
         self._speed_unit = units.DEFAULT_UNIT
+        self._hover_row = -1         # the row under the pointer (L3-07), -1 for none
         self.table = QTableWidget(0, len(CORNER_COLUMNS))
         self.table.setHorizontalHeaderLabels(CORNER_COLUMNS)
-        self._apply_corner_tips()
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -1099,7 +1264,17 @@ class CornerTable(QWidget):
         hdr.resizeSection(0, CORNER_NAME_COL_PX)
         hdr.setTextElideMode(Qt.ElideRight)   # never centre-clip a squeezed header — see LapTable
         self.table.cellClicked.connect(self._on_cell_clicked)
-        self.table.viewport().installEventFilter(self)   # re-fit on every real width change
+        # L3-07: every one of these rows is a click target — it rings the corner on the map and,
+        # from a maximized lap panel, restores the 2x2 grid on the way (deliberate: the map the
+        # ring paints on needs pixels, see central_view._on_stats_corner_clicked). That was
+        # invisible: no cursor change, no hover, nothing in the header, and the panel collapsing
+        # 5.2x smaller was the first feedback a click produced. The strip below the lap grid
+        # already declares itself with a pointing hand; the same declaration here, plus a row-wide
+        # hover fill so the ROW (not the cell) reads as the target it is.
+        self.table.viewport().setCursor(Qt.PointingHandCursor)
+        self.table.viewport().setAttribute(Qt.WA_Hover, True)   # else Qt sends no hover events
+        # ...and one filter for both: the real width changes AND the hovered row.
+        self.table.viewport().installEventFilter(self)
         # B6: the table is deliberately unsortable (track order IS the meaning) — no pressed
         # feedback on headers that do nothing.
         hdr.setSectionsClickable(False)
@@ -1121,9 +1296,19 @@ class CornerTable(QWidget):
         self.baseline_note.setContentsMargins(10, 4, 10, 2)
         self.baseline_note.setToolTip(SELF_DELTA_TOOLTIP)
         self.baseline_note.setVisible(False)
+        # The UNIT caption (L3-10) — see _corner_unit_caption. Directly above the grid it names,
+        # muted, one line, and only while there is a grid to name; text comes from
+        # _apply_corner_tips so the CONSTRUCTOR seam (central_view writes _speed_unit and re-tips
+        # without a unit-changed signal) sets it as surely as the View ▸ Units action does.
+        self.unit_note = QLabel("")
+        self.unit_note.setProperty("role", "BarLabel")
+        self.unit_note.setContentsMargins(10, 2, 10, 2)
+        self.unit_note.setVisible(False)
+        self._apply_corner_tips()
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.baseline_note)
+        lay.addWidget(self.unit_note)
         lay.addWidget(self.table)
         lay.addWidget(self.empty, 1)
 
@@ -1164,15 +1349,39 @@ class CornerTable(QWidget):
         # resizeEvent is not a reliable signal that the table finally has its real width — and the
         # same finalized-instance guard applies.
         table = getattr(self, "table", None)
-        if table is not None and obj is table.viewport() and event.type() == QEvent.Resize:
-            self._fit_columns()
+        if table is not None and obj is table.viewport():
+            if event.type() == QEvent.Resize:
+                self._fit_columns()
+            elif event.type() in (QEvent.HoverMove, QEvent.HoverEnter):
+                self._set_hover_row(table.indexAt(event.position().toPoint()).row())
+            elif event.type() == QEvent.HoverLeave:
+                self._set_hover_row(-1)
         return super().eventFilter(obj, event)
 
+    def _set_hover_row(self, row: int):
+        """Fill the hovered row (L3-07). Qt's own :hover state on an item view is per-CELL, and a
+        cell-wide fill would advertise the wrong target: any of the eight cells does the same one
+        thing. Painted through the items' BackgroundRole, which clears back to the view's
+        alternating colours — no per-row widgets, nothing for refresh() to unwind beyond the reset
+        below (it rebuilds every item, so the old row's fill goes with it)."""
+        if row == self._hover_row:
+            return
+        fill = QColor(theme.C.surface_hover)
+        for r in (self._hover_row, row):
+            for c in range(self.table.columnCount()):
+                item = self.table.item(r, c) if r >= 0 else None
+                if item is not None:
+                    item.setData(Qt.BackgroundRole, fill if r == row else None)
+        self._hover_row = row
+
     def _apply_corner_tips(self):
-        """(Re)apply the per-column header tooltips for the current speed unit."""
+        """(Re)apply the unit-dependent chrome: the per-column header tooltips AND the unit caption
+        above the grid, which name the same units. Called from set_speed_unit and, for the
+        constructor seam that writes `_speed_unit` directly, from central_view."""
         for c, tip in enumerate(_corner_col_tips(self._speed_unit)):
             if tip:
                 self.table.horizontalHeaderItem(c).setToolTip(tip)
+        self.unit_note.setText(_corner_unit_caption(self._speed_unit))
 
     def set_speed_unit(self, unit: str):
         """Switch the corner speed display unit live: re-tooltip + re-fill the speed cells. No-op
@@ -1238,6 +1447,10 @@ class CornerTable(QWidget):
         # that case borrows the Laps grid's own wording + reason. The table hides so the message
         # owns the pane.
         self.table.setVisible(bool(stats))
+        # The unit caption belongs to the GRID: no grid, nothing to caption — the placeholder owns
+        # the pane. (The rows are about to be rebuilt, so any hovered row's fill goes with them.)
+        self.unit_note.setVisible(bool(stats))
+        self._hover_row = -1
         self.empty.setVisible(not stats)
         if not stats:
             self.empty.setText(
@@ -1291,6 +1504,7 @@ class CornerTable(QWidget):
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
+                    item.setToolTip(BEST_CORNER_TIP)   # the ★'s legend, on the ★ (IA-07)
                 elif colour:
                     item.setForeground(QColor(colour))
                 else:

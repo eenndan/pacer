@@ -1063,7 +1063,10 @@ def test_corner_table_has_grip_column():
     t.set_lap(1)
     assert t.table.columnCount() == len(CORNER_COLUMNS)
     assert t.table.item(0, len(CORNER_COLUMNS) - 1).text() == "73"
-    print("ok corner table: Grip % column populated (0.73 -> '73')")
+    # ...with the % named once, in the table's unit caption (QA L3-10) rather than in every cell:
+    # the suffix costs this column 16px of floor width and L3-03 left it none to spend.
+    assert "grip %" in t.unit_note.text(), t.unit_note.text()
+    print("ok corner table: Grip % column populated (0.73 -> '73', unit in the caption)")
 
 
 def test_corner_table_grip_dash_without_g():
