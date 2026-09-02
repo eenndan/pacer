@@ -152,15 +152,16 @@ def test_rainbow_channel_speed_extremes_and_legend():
 
 def test_rainbow_channel_elevation_bucketizes_altitude_with_metre_legend():
     """The Elevation channel (F3) colours the line by per-sample altitude on this lap's own min→max
-    range (low→red, high→green), legend in metres; a missing/too-short elevation yields no channel
-    (degrades, doesn't crash)."""
+    range (low→red, high→green). The legend states that range RELATIVELY — "lowest" → the rise
+    above it — because absolute GPS altitude drifts several metres between laps of the same track
+    (MAP-09); a missing/too-short elevation yields no channel (degrades, doesn't crash)."""
     t, xs, ys, speed, cum = _lap_arrays()
     elev = np.linspace(10.0, 40.0, len(xs))          # a rising 10 m → 40 m slope
     seg, lo, hi = rainbow_channel("elevation", t, xs, ys, speed, cum, None, None, elevation=elev)
     assert len(seg) == len(xs) - 1
     assert (np.diff(seg) >= 0).all(), "rising altitude must paint monotonically greener"
     assert seg[0] == 0 and seg[-1] == MAP_RAINBOW_N - 1
-    assert lo == "10 m" and hi == "40 m", (lo, hi)
+    assert lo == "lowest" and hi == "+30 m", (lo, hi)
     assert rainbow_channel("elevation", t, xs, ys, speed, cum, None, None, elevation=None) is None
     assert rainbow_channel("elevation", t, xs, ys, speed, cum, None, None, elevation=elev[:3]) is None
     print("test_rainbow_channel_elevation_bucketizes_altitude_with_metre_legend OK")

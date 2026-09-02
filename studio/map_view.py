@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QComboBox,
@@ -68,6 +68,15 @@ CORNER_LABEL_HALO.setAlpha(190)
 CORNER_LABEL_OFFSET_PX = 14                    # px the label is nudged outward from the centroid
 # Generous px box for the overlap test (no per-frame metrics; labels are static once built).
 CORNER_LABEL_BOX_PX = (22.0, 16.0)
+# Provisional start-line callout: anchored on the start segment's midpoint, text below it. The X
+# anchor is a STARTING point, not a constant — _clamp_provisional_label slides it so the caption
+# never paints off the canvas (MAP-05). The Y anchor is fixed (the caption hangs under the line).
+PROVISIONAL_ANCHOR = (0.5, -0.25)
+PROVISIONAL_EDGE_PAD_PX = 6.0   # px of air kept between the caption's box and the plot's edge
+# On-canvas action notice (see MapView._post_notice): how long it stays up, and how wide it may
+# grow. NOTICE_MS matches app.STATUS_MS so the map's confirmations and the window's read alike.
+NOTICE_MS = 6000
+NOTICE_MAX_W_PX = 340
 # Extra outward push (px) applied to a label whose apex sits within CORNER_START_CLEAR_PX of the
 # start/finish crosshair, so the amber crosshair and its clustered C-labels stop colliding.
 CORNER_START_CLEAR_PX = 26.0
@@ -136,6 +145,15 @@ class _TimingLine:
     def remove(self):
         for item in self.chrome_items():
             self.plot.removeItem(item)
+
+
+def _segs_equal(a: list[Seg], b: list[Seg], tol: float = 1e-6) -> bool:
+    """Two timing-line lists hold the same endpoints (within a micron). Used to tell an untouched
+    set of suggested sector lines from one the user has dragged."""
+    return len(a) == len(b) and all(
+        abs(u - v) <= tol
+        for s, t in zip(a, b, strict=True)
+        for u, v in ((s.x1, t.x1), (s.y1, t.y1), (s.x2, t.x2), (s.y2, t.y2)))
 
 
 def _inferred_pen(color, base_width):
@@ -821,6 +839,9 @@ class MapView(QWidget):
         # pyqtgraph emits this from wheelEvent/mouseDragEvent only — i.e. exactly when the USER
         # moved the view, never from our own setRange. It is what raises the Fit affordance.
         self.plot.getViewBox().sigRangeChangedManually.connect(self._on_manual_range)
+        # ANY range change (our fit, a wheel zoom, a pan) moves the start line relative to the
+        # panel edges, so the provisional caption re-checks that it still fits (MAP-05).
+        self.plot.getViewBox().sigRangeChanged.connect(lambda *_: self._clamp_provisional_label())
 
         self.marker = pg.TargetItem(
             (session.tx[0] if len(session.tx) else 0, session.ty[0] if len(session.ty) else 0),
@@ -885,9 +906,12 @@ class MapView(QWidget):
             self.rainbow_combo.addItem(_RAINBOW_COMBO_LABELS[mode], userData=mode)
         self.rainbow_combo.setToolTip(
             "Colour the current lap's line by a channel: Speed (red = slow, green = fast), "
-            "Δ to best (red = losing, green = gaining), or Grip (ESTIMATED: red = on the session's "
-            "grip limit, green = grip left unused). Off leaves the plain racing line. The faint "
-            "best-lap reference is unchanged.")
+            "Δ to best (red = losing, green = gaining), Grip (ESTIMATED: red = on the session's "
+            "grip limit, green = grip left unused), or Elevation (red = the lowest point of the "
+            "lap, green = the highest). Elevation is RELATIVE within the lap: GPS altitude drifts "
+            "by several metres between laps of the same track, so only the shape is meaningful — "
+            "the legend reads 'lowest' → the rise above it, never an altitude above sea level. "
+            "Off leaves the plain racing line. The faint best-lap reference is unchanged.")
         # Show the default channel in the combo BEFORE wiring the change signal, so the initial
         # selection reads "Line: Speed" without re-entering _on_rainbow_combo.
         self._sync_rainbow_combo(self._rainbow_mode)
@@ -930,6 +954,23 @@ class MapView(QWidget):
         # which until now did nothing at all. Filtered on the viewport: no pyqtgraph chrome involved.
         self.widget.viewport().installEventFilter(self)
 
+        # Transient confirmation for the map's own destructive/creative actions (MAP-07): the
+        # sector buttons live in the map header and their effect is on this canvas, but the status
+        # bar belongs to the window, which this view has no channel to. So the notice is posted
+        # where the change happened — a small auto-dismissing plate over the plot's top-left, clear
+        # of the Fit button (top-right), the map key (bottom-left) and the centred empty state.
+        self._notice = QLabel("", self.widget)
+        self._notice.setWordWrap(True)
+        self._notice.setStyleSheet(
+            f"background-color: {C.surface_active}; color: {C.text_dim}; "
+            f"border: 1px solid {C.border}; border-radius: 6px; padding: 6px 10px; "
+            f"font-size: {theme.CAPTION}px;")
+        self._notice.hide()
+        self._notice_timer = QTimer(self)
+        self._notice_timer.setSingleShot(True)
+        self._notice_timer.setInterval(NOTICE_MS)
+        self._notice_timer.timeout.connect(self._notice.hide)
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.widget, 1)
@@ -940,6 +981,8 @@ class MapView(QWidget):
         self._reposition_key()
         self._reposition_empty_state()
         self._reposition_fit_btn()
+        self._reposition_notice()
+        self._clamp_provisional_label()  # a reshaped panel can push the cue over an edge (MAP-05)
         # A panel that changed shape re-frames the track (the map fills whatever room it is given),
         # but only while the view is still OUR fit — never on top of a view the user moved.
         if getattr(self, "_view_fitted", False):
@@ -1011,6 +1054,29 @@ class MapView(QWidget):
         btn.adjustSize()
         btn.move(self.widget.width() - btn.width() - m, m)
 
+    # ------------------------------------------------------------ on-canvas notice
+    def _post_notice(self, text: str):
+        """Show a transient confirmation over the plot for NOTICE_MS, replacing any previous one."""
+        notice = getattr(self, "_notice", None)
+        if notice is None:
+            return
+        notice.setText(text)
+        notice.show()             # before the reposition: it skips a hidden plate (the resize path)
+        self._reposition_notice()
+        notice.raise_()
+        self._notice_timer.start()
+
+    def _reposition_notice(self):
+        """Pin the notice plate to the plot's top-left, wrapping within the panel's width."""
+        notice = getattr(self, "_notice", None)
+        if notice is None or notice.isHidden():
+            return
+        m = 8  # px inset from the panel edges (same as _reposition_key)
+        host = self.widget
+        notice.setFixedWidth(max(min(host.width() - 2 * m, NOTICE_MAX_W_PX), 120))
+        notice.adjustSize()
+        notice.move(m, m)
+
     def _reposition_key(self):
         """Keep the floating map key pinned to the plot's bottom-left, just inside the edge."""
         if getattr(self, "_map_key", None) is None:
@@ -1027,8 +1093,9 @@ class MapView(QWidget):
         Restores each item's prior visibility on exit (even on error), so the live map is untouched.
 
         Hidden for the grab (H2 — otherwise the app's editing crosshairs burn into the brag image):
-          * the "Map key" legend + the zero-lap empty-state placeholder + the Fit button (Qt
-            widgets — the Fit button is pure interaction chrome, and is usually hidden anyway);
+          * the "Map key" legend + the zero-lap empty-state placeholder + the Fit button + the
+            transient action notice (Qt widgets — the Fit button and the notice are pure
+            interaction chrome, and both are usually hidden anyway);
           * the coral video-position ``marker`` (the amber "+" crosshair on the track);
           * every timing line's segment + drag handles — the start line and each sector line — plus
             the compare ghost, all via each ``_TimingLine.chrome_items()`` so a future line type is
@@ -1041,7 +1108,8 @@ class MapView(QWidget):
         # would wrongly leave the key hidden on an off-screen/grab-only map. isHidden is True only when
         # hide() was actually called.
         widgets = [w for w in (getattr(self, "_map_key", None), getattr(self, "_empty_state", None),
-                               getattr(self, "fit_btn", None)) if w is not None]
+                               getattr(self, "fit_btn", None), getattr(self, "_notice", None))
+                   if w is not None]
         widget_prev = [(w, w.isHidden()) for w in widgets]
         # pyqtgraph plot items (marker, timing-line segments/handles, compare ghost). These are not
         # top-level-gated Qt widget children, so isVisible() is the honest current flag for them.
@@ -1148,13 +1216,47 @@ class MapView(QWidget):
             halo.setAlpha(200)  # a dark plate so the amber callout reads over the trace
             self._provisional_label = pg.TextItem(
                 text="drag to set start/finish\nlap timing provisional",
-                color=C.accent, anchor=(0.5, -0.25), fill=pg.mkBrush(halo))
+                color=C.accent, anchor=PROVISIONAL_ANCHOR, fill=pg.mkBrush(halo))
             self._provisional_label.setFont(theme.mono_font(theme.CAPTION))
             self._provisional_label.setZValue(8)
             self.plot.addItem(self._provisional_label)
         else:
             self._provisional_line.setData([seg.x1, seg.x2], [seg.y1, seg.y2])
         self._provisional_label.setPos(mx, my)
+        self._clamp_provisional_label()
+
+    def _clamp_provisional_label(self):
+        """Keep the provisional callout's box inside the plot, whatever the start line is near.
+
+        MAP-05: a pg.TextItem draws its box around a data point at a FIXED anchor, so a centred
+        (0.5) caption on a start line near an edge paints its outer half off-canvas — measured at
+        x = −39.8 px in a 1272 px panel, i.e. 30 % of the caption gone and the cue reading
+        "o set start/finish". The caption is chrome, not data, so slide the ANCHOR rather than the
+        position: the box moves into the rect while the cue still points at the same line, and
+        nothing about the string, the dashed line or the timing changes.
+
+        Scene-x is derived from the ViewBox's own view→scene ratio rather than the item's
+        sceneTransform, which pyqtgraph only refreshes lazily (at paint) after a setRange — so this
+        is correct immediately after a fit, not one frame late."""
+        label = getattr(self, "_provisional_label", None)
+        if label is None:
+            return
+        vb = self.plot.getViewBox()
+        view, scene = vb.viewRect(), vb.sceneBoundingRect()
+        w = label.boundingRect().width()
+        if w <= 0 or view.width() <= 0 or scene.width() <= 0:
+            return
+        # The anchored point, in scene px, and the anchor fractions that just fit each edge:
+        # left  edge = x - ax*w >= L + pad  ->  ax <= (x - L - pad) / w
+        # right edge = x + (1-ax)*w <= R - pad  ->  ax >= 1 - (R - pad - x) / w
+        x = scene.left() + (label.pos().x() - view.left()) / view.width() * scene.width()
+        pad = PROVISIONAL_EDGE_PAD_PX
+        ax = PROVISIONAL_ANCHOR[0]
+        ax = max(ax, 1.0 - (scene.right() - pad - x) / w)   # pull the right edge in…
+        ax = min(ax, (x - scene.left() - pad) / w)          # …then the left, which wins if the
+        ax = min(max(ax, 0.0), 1.0)                         # caption is wider than the panel
+        if abs(ax - label.anchor.x()) > 1e-3:
+            label.setAnchor((ax, PROVISIONAL_ANCHOR[1]))
 
     def _snap_to_trace(self, x: float, y: float) -> tuple[float, float] | None:
         """Snap hook for the timing lines: None when the toggle is off, else the nearest trace
@@ -1175,17 +1277,46 @@ class MapView(QWidget):
         self.timing_lines_changed.emit(start, sectors)
 
     def _add_sector(self):
+        """Add one sector line — re-spacing the whole set while the user has not moved any of them.
+
+        `suggest_sector(n)` can only APPEND: it bisects what is left after the lines already there,
+        so three clicks used to give sub-sectors of 49.9 / 16.8 / 8.6 / 24.7 % of the lap (MAP-11) —
+        the third click carving an 8.6 % sliver. `suggest_sectors(n)` places the whole set evenly,
+        but replacing the set unconditionally would silently move lines the user dragged into
+        place, which is the very thing MAP-07 is about. So: re-space only while the placed lines
+        are still exactly what we suggested; the moment one is dragged, fall back to appending and
+        leave the user's placements alone."""
         start, sectors = self._current()
-        # Pass the existing sector count so each suggestion lands at a distinct track position
-        # (evenly subdividing the lap); two identical lines would collapse a split.
-        sectors.append(self.session.suggest_sector(len(sectors)))
+        n = len(sectors)
+        if _segs_equal(sectors, self.session.suggest_sectors(n)):
+            sectors = self.session.suggest_sectors(n + 1)
+            note = (f"Sector line {n + 1} added — the lap is now split into {n + 2} even sectors. "
+                    "Drag any line to move it.")
+        else:
+            sectors.append(self.session.suggest_sector(n))
+            note = (f"Sector line {n + 1} added — drag it into place. "
+                    "(Your other sector lines were left where you put them.)")
         self._rebuild(start, sectors)
         self._emit()
+        self._post_notice(note)
 
     def _reset_sectors(self):
-        start, _ = self._current()
+        """Clear every sector line — and SAY so, naming the way back.
+
+        MAP-07: this discarded three hand-placed lines in 59 ms with no dialog, no status line and
+        nothing on the map that changed except the lines vanishing. It is fully reversible (the
+        edit goes through the same undo stack as a line drag), so the fix is the missing feedback,
+        not a confirmation dialog — the app's only two confirms wipe a whole library index, a
+        different scale from clearing annotations on the session in front of you."""
+        start, sectors = self._current()
+        if not sectors:  # nothing to clear: say so rather than re-segmenting for no reason
+            self._post_notice("No sector lines to clear.")
+            return
         self._rebuild(start, [])
         self._emit()
+        self._post_notice(
+            f"{len(sectors)} sector line{'s' if len(sectors) != 1 else ''} cleared — "
+            "Edit ▸ Undo timing-line edit (⌘Z) puts them back.")
 
     # --------------------------------------------------------------- video sync
     def _marker_dragged(self, *_):
