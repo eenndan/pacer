@@ -254,6 +254,15 @@ add_test(NAME test_load_failure
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_failure.py)
 set_tests_properties(test_load_failure PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# What the app OFFERS while it loads (QA 2026-09-01: L10-03/L10-06/L10-08/L10-10): the demo fetch
+# keeping the event loop alive + saying it is working (a slow resolver, a counted 16 ms heartbeat),
+# the loading card's Cancel handing the session back with the in-flight result dropped, the
+# zero-lap sentence matching ACROSS the status bar and the lap table's own empty state, and a
+# dropped FOLDER of chapters being expanded and accepted. Real Qt + a real worker QThread.
+add_test(NAME test_load_affordances
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_affordances.py)
+set_tests_properties(test_load_affordances PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Corner model (studio.corners, F-corner): synthetic stadium-loop detection (count/
 # positions/directions vs construction), distribution-derived threshold (+ noise
 # stability), the corner/straight partition identity, and the CornerTable + map
@@ -485,6 +494,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_studio_features test_rainbow_map test_map_render test_map_chrome
                         test_compare test_map_ghost test_cross_reference test_delta_engine
                         test_controllers test_central_view_realqt test_load_failure
+                        test_load_affordances
                         test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video

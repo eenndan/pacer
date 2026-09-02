@@ -43,6 +43,7 @@ _APP = QApplication.instance() or QApplication([])
 # reused rather than re-derived — see tests/test_central_view_realqt.py.
 import test_central_view_realqt as _realqt  # noqa: E402
 
+from studio import data_quality  # noqa: E402
 from studio.app import LOAD_PLACEHOLDER_MS, StudioWindow  # noqa: E402
 from studio.central_view import CentralView  # noqa: E402
 from studio.session import Session  # noqa: E402
@@ -333,7 +334,7 @@ def test_zero_lap_notice_still_supersedes_the_timing_notice():
     win.session._timing_user_confirmed = False
     win.session.valid_lap_ids = lambda: []
     notice = win._apply_session_notice()
-    assert "no complete laps detected" in notice, notice
+    assert notice == data_quality.NO_LAPS_HEADLINE, notice  # the SHARED sentence (L10-08)
     assert "auto-fitted" not in notice, notice
     win.close()
     _APP.processEvents()
