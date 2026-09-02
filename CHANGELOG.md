@@ -67,6 +67,12 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Timing-line edits now show a wait cursor while they work.** Dragging the start/finish line,
+  Add sector, Reset sectors and ⌘Z all re-segment the whole session synchronously — measured
+  456–518 ms on a 66-lap three-chapter recording — and the window simply froze, with no cursor
+  change, no status line and nothing on screen moving. The two gestures that *do* post a notice
+  posted it after the freeze it was meant to cover. The cost scales with the session, so the
+  recordings where you most want to place a line are the ones where the app went most quiet.
 - The **overlay-video export** now obeys the same timing-trust verdict as the lap card. On a
   recording whose start line the app auto-fitted, `Lap card (image)…` and `Copy lap card` were
   correctly greyed out — and `Export overlay video…` beside them rendered a 40 MB clip with an

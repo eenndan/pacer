@@ -41,7 +41,7 @@ os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
-from PySide6.QtGui import QMouseEvent  # noqa: E402
+from PySide6.QtGui import QGuiApplication, QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
@@ -267,6 +267,56 @@ def test_a_zero_lap_state_is_never_pushed_onto_the_undo_stack():
     print("test_a_zero_lap_state_is_never_pushed_onto_the_undo_stack OK")
 
 
+# -------------------------------------------------- W1-latency: the busy affordance
+def _cursor_during_rebuild(view_valid_ids, boom=False):
+    """Run CentralView._on_lines over the duck-typed view and report the override cursor Qt was
+    showing at the moment of the expensive rebuild — plus what it is once the call returns."""
+    with tempfile.TemporaryDirectory() as tmp:
+        view = _fake_view(view_valid_ids, os.path.join(tmp, "GX010099.pacer.json"))
+        seen = {}
+
+        def rebuild(reselect=False):
+            cur = QGuiApplication.overrideCursor()
+            seen["shape"] = None if cur is None else cur.shape()
+            if boom:
+                raise RuntimeError("re-segmentation blew up")
+
+        view.rebuild_derived_views = rebuild
+        try:
+            CentralView._on_lines(view, None, [])
+        except RuntimeError:
+            pass
+        seen["after"] = QGuiApplication.overrideCursor()
+        return seen
+
+
+def test_a_timing_edit_is_acknowledged_while_it_blocks():
+    """A start/finish drag release, Add sector, Reset sectors and Cmd+Z all funnel through
+    _on_lines, which re-segments the session synchronously: measured 450-527 ms on a 66-lap
+    three-chapter recording, with the window frozen and NOTHING on screen changing. U11 puts
+    >250 ms with no busy affordance at MEDIUM. The cursor must be the acknowledgement, and it must
+    be up DURING the work — asserting it afterwards would pass on code that sets it too late."""
+    assert QGuiApplication.overrideCursor() is None, "a previous test stranded an override cursor"
+    seen = _cursor_during_rebuild([0, 1])
+    assert seen["shape"] == Qt.CursorShape.WaitCursor, (
+        f"no wait cursor during the re-segmentation (saw {seen['shape']}) — the user gets half a "
+        f"second of frozen window with no acknowledgement at all")
+    assert seen["after"] is None, "the wait cursor outlived the operation"
+    print("test_a_timing_edit_is_acknowledged_while_it_blocks OK")
+
+
+def test_a_failed_timing_edit_does_not_strand_the_wait_cursor():
+    """setOverrideCursor/restoreOverrideCursor is a STACK. A raise between the two leaves the whole
+    application in a permanent wait cursor with no way back — a worse bug than the one the cursor
+    fixes. The restore is in a finally; this is the test that keeps it there."""
+    assert QGuiApplication.overrideCursor() is None
+    seen = _cursor_during_rebuild([0, 1], boom=True)
+    assert seen["shape"] == Qt.CursorShape.WaitCursor
+    assert seen["after"] is None, (
+        "an exception during the re-segmentation left the app stuck in a wait cursor")
+    print("test_a_failed_timing_edit_does_not_strand_the_wait_cursor OK")
+
+
 # ------------------------------------------------------------------------- L3-01
 def _unit_tips(corner_table):
     """The Corners header tooltips that name a speed unit, in column order."""
@@ -311,6 +361,8 @@ def _run_all():
     test_apply_grid_sizes_refuses_a_stored_deleted_panel()
     test_a_zero_lap_placement_is_never_written_to_the_sidecar()
     test_a_zero_lap_state_is_never_pushed_onto_the_undo_stack()
+    test_a_timing_edit_is_acknowledged_while_it_blocks()
+    test_a_failed_timing_edit_does_not_strand_the_wait_cursor()
     print("ALL OK")
 
 

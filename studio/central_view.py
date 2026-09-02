@@ -16,10 +16,11 @@ timing-line save) into the constructor. The ~30 Hz tick TIMER stays on the windo
 
 from __future__ import annotations
 
+import contextlib
 import os
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtGui import QCursor, QFont, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -89,6 +90,35 @@ def _hero_min_width() -> int:
     f.setWeight(theme.W_SEMIBOLD)
     fm = QFontMetrics(f)
     return max(fm.horizontalAdvance(t) for t in _HERO_TEMPLATES) + _HERO_PAD_PX
+
+
+@contextlib.contextmanager
+def _busy():
+    """Wait cursor for the duration of a blocking re-segmentation.
+
+    Every timing-line gesture — a start/finish drag release, Add sector, Reset sectors, ⌘Z —
+    funnels into a synchronous `set_timing_lines` + `rebuild_derived_views`, which re-segments the
+    whole session and recomputes every per-lap cache. On a 66-lap three-chapter recording that
+    measured **450–527 ms** for a drag release, 494–500 ms for Add sector and 469–485 ms for Reset
+    sectors, during which the window was frozen with **no affordance whatsoever** — no cursor
+    change, no status line, nothing. The same gestures cost ~190 ms on a one-chapter session, so
+    the cost scales with the session and the big recordings are exactly where a user does this
+    work.
+
+    The two notice-posting gestures make it worse rather than better: `_add_sector` and
+    `_reset_sectors` call `_emit()` and only THEN `_post_notice()`, so their explanation appears
+    *after* the half-second of dead UI it was meant to cover.
+
+    Qt applies an override cursor to the platform immediately, so it is visible even though the
+    event loop never turns during the work — which is the point: the alternative (moving the
+    recompute off-thread) is a far larger change to the app's most correctness-critical path.
+    `restoreOverrideCursor` is in a `finally` so an exception mid-re-segment cannot strand the
+    application in a permanent wait cursor."""
+    QGuiApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
+    try:
+        yield
+    finally:
+        QGuiApplication.restoreOverrideCursor()
 
 
 class CentralView(QWidget):
@@ -1523,14 +1553,18 @@ class CentralView(QWidget):
         # zero-lap intermediate, and Cmd+Z peeked it forever — measured three presses, all no-ops,
         # leaving the user stranded in an empty session with a lit but dead Undo. Skipping the
         # push keeps the last GOOD placement on top of the stack, so one Cmd+Z recovers.
-        if self.session.valid_lap_ids():
-            self.session.push_timing_history()  # pre-edit state, so a bad drag is undoable
-        if self._comparing():
-            self.video.set_compare_enabled(False)  # un-checks -> compareToggled(False) -> exit
-        self.session.set_timing_lines(start, sectors)
-        self.rebuild_derived_views(reselect=True)
-        self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
-        self._save_sidecar()
+        #
+        # The whole body is synchronous and costs ~0.5 s on a big session, so it runs under a wait
+        # cursor — see _busy().
+        with _busy():
+            if self.session.valid_lap_ids():
+                self.session.push_timing_history()  # pre-edit state, so a bad drag is undoable
+            if self._comparing():
+                self.video.set_compare_enabled(False)  # un-checks -> compareToggled(False) -> exit
+            self.session.set_timing_lines(start, sectors)
+            self.rebuild_derived_views(reselect=True)
+            self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
+            self._save_sidecar()
         self.timingEdited.emit()  # let the window refresh the Edit ▸ Undo enablement
 
     def _save_sidecar(self):
@@ -1568,15 +1602,16 @@ class CentralView(QWidget):
         handles, rebuilds the derived views, and re-persists the restored lines to the sidecar.
         No-op (returns False) when there's no prior edit to undo. Compare mode is torn down first
         (a re-segment shifts lap ids, invalidating any pinned pair) — mirrors _on_lines."""
-        if not self.session.undo_timing_lines():
-            return False
-        if self._comparing():
-            self.video.set_compare_enabled(False)
-        # The session lines are already restored; pull the map's draggable handles onto them WITHOUT
-        # re-emitting timing_lines_changed (that would re-push the undone state onto the stack).
-        self.map.reload_timing_lines()
-        self.rebuild_derived_views(reselect=True)
-        self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
-        self._save_sidecar()  # persist the restored lines so a reload sees the undone state
+        with _busy():  # ~440 ms on a 66-lap session, same re-segment path as _on_lines
+            if not self.session.undo_timing_lines():
+                return False
+            if self._comparing():
+                self.video.set_compare_enabled(False)
+            # The session lines are already restored; pull the map's draggable handles onto them
+            # WITHOUT re-emitting timing_lines_changed (that would re-push the undone state).
+            self.map.reload_timing_lines()
+            self.rebuild_derived_views(reselect=True)
+            self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
+            self._save_sidecar()  # persist the restored lines so a reload sees the undone state
         self.timingEdited.emit()
         return True
