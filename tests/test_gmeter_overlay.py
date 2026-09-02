@@ -455,6 +455,192 @@ def test_set_source_stores_the_mixed_label_and_invalidates():
     print("ok L6: g-meter tag labels IMU-lat/GPS-long provenance, not a bare source")
 
 
+# ------------------------------------------------------------------ what the dial SAYS (labels)
+# The export dial is burned into an MP4 a driver shares: whatever the screen says about where the
+# numbers come from and what they mean, the burn must say too. These pin that contract (the
+# exported dial used to snapshot DialState.source and then never paint it), the reserved tag band
+# that stops the tag overprinting the bottom peak number, and the tag's contrast.
+
+_LABEL_STATE = None
+
+
+def _label_state():
+    """A populated DialState with the real mixed-provenance tag, shared by the label tests."""
+    from studio import gmeter_overlay as g
+    return g.DialState(fx=0.35, fy=-0.22, have=True,
+                       hull_pts=[(0.55, 0.30), (-0.62, 0.22), (0.10, -0.72), (0.34, 0.44)],
+                       peak_fwd=0.9, peak_back=0.5, peak_left=0.8, peak_right=1.1,
+                       source="IMU lat · GPS long")
+
+
+def _painted_strings(export: bool, w=280, h=280, k=1.0, st=None):
+    """Every string the dial actually paints, in either mode. The live dial goes through
+    QPainter.drawText (caught by a Python QPainter subclass — the calls are made from Python, so
+    the override wins); the export dial goes through the module-level _draw_text_outlined, wrapped
+    here. Nothing is inferred from the source text."""
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    from studio import gmeter_overlay as g
+
+    class _Spy(QPainter):
+        def __init__(self, dev):
+            super().__init__(dev)
+            self.texts = []
+
+        def drawText(self, *a):
+            if a and isinstance(a[-1], str):
+                self.texts.append(a[-1])
+            return super().drawText(*a)
+
+    img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+    img.fill(QColor(0, 0, 0, 0))
+    spy = _Spy(img)
+    outlined: list[str] = []
+    orig = g._draw_text_outlined
+
+    def _rec(p, rect, flags, text, font, colour, halo=2.2):
+        outlined.append(text)
+        return orig(p, rect, flags, text, font, colour, halo)
+
+    g._draw_text_outlined = _rec
+    try:
+        g.paint_dial(spy, w, h, st if st is not None else _label_state(),
+                     export=export, scale_k=k)
+    finally:
+        g._draw_text_outlined = orig
+        spy.end()
+    return spy.texts + outlined
+
+
+def test_export_dial_paints_the_same_labels_as_the_live_dial():
+    """L9-03 / L12-05: the burned-in dial must not be more silent than the screen it came from.
+    The exporter sets DialState.source ('IMU lat · GPS long') and snapshots it; the export painter
+    used to drop it, so a shared MP4 carried four bare numbers with no provenance and no unit.
+    Same DialState, same box -> the same SET of strings in both modes, with exactly ONE documented
+    exception: the "G METER" title, dropped on purpose so the export dial fills more of its box
+    (`_export_dial_geom`'s docstring). A second divergence is a regression."""
+    from studio import gmeter_overlay as g
+    st = _label_state()
+    live = set(_painted_strings(False, st=st))
+    exp = set(_painted_strings(True, st=st))
+    assert st.source in live, live
+    assert st.source in exp, f"the EXPORT dial must paint its provenance tag; painted {sorted(exp)}"
+    assert live - exp == {g._TITLE}, f"live-only {sorted(live - exp)} (only the title may differ)"
+    assert exp - live == set(), f"export-only {sorted(exp - live)}"
+
+
+def test_dial_states_its_unit_and_its_four_directions_in_both_modes():
+    """L9-06: the dial used to paint a caption, four bare numbers and a tag — no unit anywhere and
+    nothing saying which direction each peak belonged to (_RINGS was even commented 'labelled
+    rings (g)' while only drawEllipse ran). Both modes must now name all four directions and carry
+    the unit on a labelled ring."""
+    from studio import gmeter_overlay as g
+    for export in (False, True):
+        painted = _painted_strings(export)
+        for word in (g._DIR_BRAKE, g._DIR_ACCEL, g._DIR_TURN_R, g._DIR_TURN_L):
+            assert word in painted, f"export={export}: no {word!r} direction label in {painted}"
+        rings = [s for s in painted if s.endswith(" g")]
+        assert rings, f"export={export}: no labelled ring (the dial's only unit) in {painted}"
+        assert f"{max(g._RINGS):.1f} g" in rings, rings
+
+
+def test_legend_labels_do_not_collide_with_each_other():
+    """The legend is laid out from the dial radius, so it must stay self-consistent at the 120x140
+    minimum as well as at a large dial: ring labels are placed outermost-first and any that would
+    land on one already placed is dropped (a small dial carries the 1.0 g reference only)."""
+    from PySide6.QtGui import QFontMetricsF
+
+    from studio import gmeter_overlay as g
+    for (w, h), want_rings in (((120, 140), 1), ((240, 280), 2)):
+        cx, cy, r = g.dial_geom(w, h)
+        fm = QFontMetricsF(g._font(g._legend_pt(r)))
+        items = g._legend_items(cx, cy, r, fm)
+        assert len([t for _, _, t in items if t.startswith("TURN")]) == 2, items
+        boxes = [fm.boundingRect(rect, int(flags), text) for rect, flags, text in items]
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                hit = boxes[i].intersected(boxes[j])
+                assert hit.width() <= 0 or hit.height() <= 0, (
+                    f"{w}x{h}: {items[i][2]!r} collides with {items[j][2]!r} ({hit})")
+        assert len([t for _, _, t in items if t.endswith(" g")]) == want_rings, items
+
+
+def _render_static(st, w=120, h=140, bg=None):
+    """Render ONLY the static live layer over an opaque backdrop, as a numpy RGB array."""
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    from studio import gmeter_overlay as g
+    from studio import theme
+    img = QImage(w, h, QImage.Format_RGB32)
+    img.fill(QColor(bg or theme.C.canvas))
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    g._paint_dial_static(p, w, h, st)
+    p.end()
+    return np.array(np.frombuffer(img.constBits(), np.uint8,
+                                  count=4 * w * h).reshape(h, w, 4))[:, :, :3].astype(int).copy()
+
+
+def test_source_tag_does_not_overprint_the_bottom_peak_number():
+    """L9-05: at the 120x140 default the tag was drawn last into the same 11 px band as the bottom
+    cardinal number and overprinted it (17.2 px of horizontal overlap; 48 of 216 glyph pixels
+    altered). dial_geom now pays for a dedicated `_TAG_BAND_H` strip, so changing the tag must
+    alter ZERO pixels inside that number.
+
+    The number's glyph box is located empirically (render two dials differing ONLY in peak_back),
+    so the assertion carries no copy of the layout constants."""
+    import dataclasses
+
+    st = _label_state()
+    blank = dataclasses.replace(st, source="")
+    # 1. where the bottom peak number's ink actually is
+    a = _render_static(dataclasses.replace(blank, peak_back=0.5))
+    b = _render_static(dataclasses.replace(blank, peak_back=0.9))
+    ink = np.argwhere(np.abs(a - b).max(axis=2) > 6)
+    assert ink.size, "control render failed: the bottom peak number did not change"
+    y0, x0 = ink.min(axis=0)
+    y1, x1 = ink.max(axis=0)
+    # 2. what the tag alters inside it
+    d = np.abs(_render_static(st) - _render_static(blank)).max(axis=2)
+    hit = int((d[y0:y1 + 1, x0:x1 + 1] > 6).sum())
+    assert hit == 0, (f"the source tag altered {hit} px inside the bottom peak number's glyph box "
+                      f"y {y0}..{y1} x {x0}..{x1}")
+    # and everything it DOES alter lives in the reserved band
+    from studio import gmeter_overlay as g
+    rows = np.argwhere(d > 6)
+    assert rows.size, "the source tag painted nothing"
+    assert int(rows[:, 0].min()) >= 140 - g._TAG_BAND_H, (
+        f"tag ink starts at row {int(rows[:, 0].min())}, above the reserved band")
+
+
+def test_source_tag_contrast_is_legible():
+    """L9-05, second half: the tag was C.text_muted at alpha 160 and 6.0 pt — a smear, not a
+    mangled-but-legible line (2.21:1 measured on the real overlay; 2.01:1 on this synthetic
+    backdrop). The tag's OWN ink is isolated by differencing against a no-tag render, so the much
+    brighter bold peak numbers in the same corner cannot flatter the measurement."""
+    import dataclasses
+
+    from studio import gmeter_overlay as g
+    st = _label_state()
+    with_tag = _render_static(st)
+    no_tag = _render_static(dataclasses.replace(st, source=""))
+    delta = np.abs(with_tag - no_tag).max(axis=2)
+    ys, xs = np.where(delta > 6)
+    assert ys.size, "the source tag painted nothing"
+
+    def lum(c):
+        c = np.asarray(c, float) / 255.0
+        c = np.where(c <= 0.03928, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+        return float(0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2])
+
+    ink = with_tag[ys, xs][int(np.argmax(delta[ys, xs]))]
+    bg = np.median(no_tag[ys, xs], axis=0)
+    lo, hi = sorted([lum(ink), lum(bg)])
+    ratio = (hi + 0.05) / (lo + 0.05)
+    assert ratio >= 3.0, f"source tag contrast {ratio:.2f}:1 (ink {ink.tolist()} bg {bg.tolist()})"
+    print(f"ok source-tag contrast {ratio:.2f}:1 at {g._TAG_PT} pt")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
