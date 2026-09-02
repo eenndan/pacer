@@ -67,6 +67,18 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Save as track…** no longer silently overwrites a different circuit that happens to share a
+  name. Saving one recording's lines as "My Circuit" and then another recording's, from a track
+  **79 km away**, replaced the stored entry in place — start line, sector lines and GPS anchor
+  gone, with no confirmation, no undo and a success message byte-identical to a fresh save. A name
+  reused for somewhere else is now refused and reported by name and distance; refining the lines
+  of the track you are actually at (a built-in included) still saves in one step.
+- The **new personal best** card no longer asks you to hit a 20×19 px target against a running
+  clock. Its dismiss ✕ (20×19) and "See your progress →" (133×19) both sat under the 24×24
+  hit-target floor — on the one card in the app that deletes itself after 6 s — while the
+  "Share your PB →" button beside them cleared it at 130×30. Both now stand 24 px, and the
+  auto-dismiss **holds while the pointer is on the card**, so a celebration cannot disappear
+  from under the click it is asking for.
 - A video seek across a chapter boundary no longer renames the chapter banner to a chapter that
   has not loaded. Seeking backwards from chapter 2 relabelled the banner "chapter 1 of 3"
   immediately, with no busy affordance, while the reopen was still in flight — the identical

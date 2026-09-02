@@ -527,6 +527,16 @@ add_test(NAME test_help_dialog
 set_tests_properties(test_help_dialog PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# PB-toast hit targets + dismiss clock (fix/qa-toast-and-trackdb, QA sweep L10-07): every control
+# on the "new personal best!" card must clear the 24x24 pointer-target floor — the ✕ stood 20x19
+# and the progression link 19px tall, on the one card in the app that deletes itself while you aim
+# at it — and the 6 s auto-dismiss must HOLD while the pointer is on the card. Real PBToast widgets
+# on the REAL theme (the QSS padding is what every measured pixel comes from), so run offscreen.
+add_test(NAME test_pb_toast
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_pb_toast.py)
+set_tests_properties(test_pb_toast PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
 # `pacer` in the interpreter's site-packages — on a fresh CI env there is none, and
@@ -547,6 +557,9 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_export_data test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card test_stats
                         test_lap_table_columns test_help_dialog test_grid_and_timing_guards
+                        test_lap_table_empty_states test_charts_header_budget
+                        test_coaching_panel_layout test_focus_cues test_pb_toast test_app_chrome
+                        test_charts_panel test_lap_table_affordances)
                         test_lap_table_empty_states test_lap_table_affordances
                         test_charts_header_budget test_coaching_panel_layout test_focus_cues
                         test_app_chrome test_charts_panel)

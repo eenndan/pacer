@@ -89,7 +89,8 @@ class WelcomeView(QWidget):
 class PBToast(QWidget):
     """A transient "new personal best!" celebration card overlaid on the window (top-centre) when a
     freshly-analysed session beats its track's prior PB on verified timing. Tasteful, not modal: an
-    amber-accented card that auto-dismisses after a few seconds. At the peak-pride moment it turns
+    amber-accented card that auto-dismisses after a few seconds, holding that clock while the
+    pointer is on it so it never vanishes mid-click. At the peak-pride moment it turns
     into a SHARE loop: the PRIMARY "Share your PB →" button saves the shareable lap card (image),
     and a secondary "See your progress →" link opens the per-track PB-progression chart (retention),
     plus a × to dismiss now.
@@ -100,6 +101,13 @@ class PBToast(QWidget):
     let the suite assert the wording + that each button routes to its injected callback."""
 
     AUTO_DISMISS_MS = 6000  # generous but transient — long enough to read, short enough to not nag
+    # Pointer-target floor for the card's flat controls. They are sized by their QSS text padding
+    # alone, which left the ✕ at 20x19 and the progression link 19px tall — under the 24px minimum,
+    # on the one card in the app you must hit before it deletes itself. Applied ONLY to those two:
+    # the primary share button already stands 30px on its variant's padding, and an explicit
+    # minimum would REPLACE its layout minimum (qSmartMinSize takes an explicit minimumSize
+    # verbatim), letting the row squeeze it down to 24 instead of leaving it alone.
+    MIN_HIT_PX = 24
 
     def __init__(self, title: str, body: str, on_progress, on_share=None, parent=None):
         super().__init__(parent)
@@ -118,6 +126,7 @@ class PBToast(QWidget):
         top.addStretch(1)
         self.close_btn = QPushButton("✕")
         self.close_btn.setObjectName("PBToastClose")
+        self.close_btn.setMinimumSize(self.MIN_HIT_PX, self.MIN_HIT_PX)
         self.close_btn.setCursor(Qt.PointingHandCursor)
         self.close_btn.setToolTip("Dismiss")
         self.close_btn.clicked.connect(self.dismiss)
@@ -146,6 +155,7 @@ class PBToast(QWidget):
             link_row.addWidget(self.share_btn)
         self.link_btn = QPushButton("See your progress →")
         self.link_btn.setObjectName("PBToastLink")
+        self.link_btn.setMinimumHeight(self.MIN_HIT_PX)
         self.link_btn.setCursor(Qt.PointingHandCursor)
         self.link_btn.setToolTip("Open this track's personal-best progression chart")
         self.link_btn.clicked.connect(self._on_link)
@@ -166,6 +176,21 @@ class PBToast(QWidget):
         self.raise_()
         self.show()
         self._timer.start(self.AUTO_DISMISS_MS)
+
+    def enterEvent(self, ev):
+        """Hold the auto-dismiss while the pointer is on the card: someone who has moved onto it is
+        reading it or aiming at one of its actions, and a 6 s clock that fires mid-aim is exactly
+        where a small target hurts. (Qt sends no Leave when the pointer crosses onto a CHILD — the
+        enter/leave pair is dispatched up to the common ancestor — so the hold covers the buttons.)"""
+        self._timer.stop()
+        super().enterEvent(ev)
+
+    def leaveEvent(self, ev):
+        """Start the FULL clock again on leave, not the remainder — the card stays transient, the
+        countdown just begins from when it stopped being read."""
+        if self.isVisible():
+            self._timer.start(self.AUTO_DISMISS_MS)
+        super().leaveEvent(ev)
 
     def _on_link(self):
         """Route to the PB-progression surface, then dismiss (the chart is the destination now)."""
