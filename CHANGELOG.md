@@ -67,6 +67,12 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- The **new personal best** card no longer asks you to hit a 20×19 px target against a running
+  clock. Its dismiss ✕ (20×19) and "See your progress →" (133×19) both sat under the 24×24
+  hit-target floor — on the one card in the app that deletes itself after 6 s — while the
+  "Share your PB →" button beside them cleared it at 130×30. Both now stand 24 px, and the
+  auto-dismiss **holds while the pointer is on the card**, so a celebration cannot disappear
+  from under the click it is asking for.
 - The Coaching page now uses the room it is given. Maximized it used to be **3 rows in 808 px**
   — 78% dead canvas — while the ranking behind it held **11** corners; it now shows as many
   ranked corners as the page can hold (still at least the top 3 the headline sums). And every
