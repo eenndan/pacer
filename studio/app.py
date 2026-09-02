@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QProgressDialog,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
 from . import (
     APP_NAME,
     chapters,
+    data_quality,
     demo,
     export_data,
     export_video,
@@ -49,7 +51,7 @@ from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
 from .overlays import PBToast, WelcomeView
 from .session import DEFAULT_SAMPLE, fmt_time
-from .workers import SessionLoadWorker, VideoExportWorker
+from .workers import DemoResolveWorker, SessionLoadWorker, VideoExportWorker
 
 # Help ▸ Report a problem… opens this GitHub new-issue page (the only support channel; no crash
 # reporting / telemetry — nothing is sent without the user opening this).
@@ -158,6 +160,9 @@ class StudioWindow(QMainWindow):
         # a result, plus the single-shot timer that installs the card if it is still waiting.
         self._loading_token = None
         self._placeholder_timer = None
+        # The in-flight demo-clip fetch (welcome ▸ Open demo), which reaches the network and so runs
+        # off the UI thread like every other multi-second load. None when nothing is fetching.
+        self._demo_worker = None
         # The ONE untimed status-bar line describing the loaded session (see _session_notice): the
         # multi-drop warning carried through the load that started it, whether a sidecar restore was
         # rejected, and the last notice actually put on the bar (so a stale one can be retracted).
@@ -211,14 +216,39 @@ class StudioWindow(QMainWindow):
         """The local .mp4 paths in a drag's mime data, IN DROP ORDER; [] if the drag carries no MP4
         file URLs.
 
+        A dropped FOLDER is expanded one level to the .MP4 files directly inside it. A GoPro card
+        hands the user a folder of chapters, and the welcome copy invites "a GoPro recording" — yet
+        dropping that folder was a total silent no-op: the filter returned [], so dragEnterEvent
+        never accepted the drag and dropEvent never ran (QA L10-10). One level is deliberate: the
+        recording GROUPING is chapters.group_into_recordings' job (and discover_siblings still
+        chains the rest), so this only has to turn "the folder" into "the files in it". A folder
+        with no .MP4s inside still yields [] and is still refused — the drag cursor saying no is
+        the correct answer there.
+
         Order is preserved deliberately: _open_recordings opens the FIRST recording dropped, and
         sorting here silently made that the ALPHABETICALLY first instead (QA L10-02). Nothing
         downstream needs a sorted list — chapters.group_into_recordings orders each recording's
-        chapters by chapter index, and _open_recordings re-orders the merged set again."""
+        chapters by chapter index, and _open_recordings re-orders the merged set again. The entries
+        WITHIN one expanded folder are sorted, because os.listdir order is arbitrary and the user
+        dropped no order for them.
+        """
         if not mime.hasUrls():
             return []
-        out = [u.toLocalFile() for u in mime.urls()]
-        return [p for p in out if p and p.lower().endswith(".mp4")]
+        out: list[str] = []
+        for url in mime.urls():
+            p = url.toLocalFile()
+            if not p:
+                continue
+            if os.path.isdir(p):
+                try:
+                    names = sorted(os.listdir(p))
+                except OSError:  # unreadable folder: nothing to offer, same as an empty one
+                    continue
+                entries = [os.path.join(p, n) for n in names if n.lower().endswith(".mp4")]
+                out += [e for e in entries if os.path.isfile(e)]  # never a .MP4-named subfolder
+            elif p.lower().endswith(".mp4"):
+                out.append(p)
+        return out
 
     def dragEnterEvent(self, event):
         """Accept a drag only if it carries at least one .mp4 (so the cursor shows it's droppable)."""
@@ -281,17 +311,80 @@ class StudioWindow(QMainWindow):
             self._full_action.setEnabled(False)
 
     def _open_demo(self):
-        """Welcome-screen "Open demo": load a real demo lapping recording if one is resolvable
-        (env / cache / a one-time release download — see studio.demo). If it can't be resolved
-        (offline / download failed), DON'T silently load the bundled sample clip — it has zero real
-        laps, so the user would land in a blank-looking studio that reads as broken. Instead keep the
-        welcome screen and say so honestly, so they can retry or open their own footage."""
-        path = demo.resolve_demo_recording()
+        """Welcome-screen "Open demo": resolve a real demo lapping recording OFF the UI thread
+        (env / cache / a one-time release download — see studio.demo), then load it.
+
+        The resolve used to run inline in this slot, so a first run with no cache did a network
+        fetch on the UI thread: the window froze with the welcome screen still painted, the button
+        still enabled and undepressed, no cursor change and no message — nothing on screen said the
+        click had been received (QA L10-03). It runs on a DemoResolveWorker now; the button says
+        what it is doing, and the loading card comes up if the fetch is slow enough to need it.
+
+        If it can't be resolved (offline / download failed), DON'T silently load the bundled sample
+        clip — it has zero real laps, so the user would land in a blank-looking studio that reads as
+        broken. Instead keep the welcome screen and say so honestly, so they can retry or open their
+        own footage."""
+        if self._demo_worker is not None and self._demo_worker.isRunning():
+            return  # already fetching; the button is disabled, but never start a second fetch
+        self._set_demo_busy(True)
+        self._arm_demo_placeholder()
+        worker = DemoResolveWorker(self._load_token)
+        self._demo_worker = worker
+        self._load_workers.add(worker)  # hold it so the QThread isn't GC'd mid-fetch; drained on close
+        worker.resolved.connect(self._on_demo_resolved)
+        worker.finished.connect(lambda w=worker: self._on_demo_worker_finished(w))
+        worker.start()
+
+    def _set_demo_busy(self, busy: bool):
+        """Reflect an in-flight demo fetch on the welcome screen: the button says what it is doing
+        and stops accepting clicks. This is the affordance the synchronous version had none of —
+        and it is on screen for the whole fetch, not just after it. No-op once the welcome view has
+        been replaced (the load it started is now the thing on screen)."""
+        btn = getattr(self.centralWidget(), "demo_btn", None)
+        if btn is None:
+            return
+        btn.setEnabled(not busy)
+        btn.setText("Fetching the demo clip…" if busy else "Open demo")
+
+    def _arm_demo_placeholder(self):
+        """Install the loading card only if the demo fetch is still running LOAD_PLACEHOLDER_MS
+        later — the same grace period a reload gets. A cached/env demo resolves in microseconds and
+        goes straight into a real load, so the card would only ever be a flash there; a cold first
+        run downloads a clip and genuinely needs it."""
+        self._cancel_placeholder_timer()
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._on_demo_placeholder_due)
+        self._placeholder_timer = timer
+        timer.start(LOAD_PLACEHOLDER_MS)
+
+    def _on_demo_placeholder_due(self):
+        """LOAD_PLACEHOLDER_MS elapsed with the demo fetch still running: say so on the card the
+        load itself would use, so the wait reads as one continuous operation."""
+        self._placeholder_timer = None
+        if self._demo_worker is not None and self._demo_worker.isRunning():
+            self._show_loading_placeholder([], title="Fetching the demo clip…")
+
+    def _on_demo_resolved(self, token: int, path):
+        """The demo resolved (on the UI thread, via a queued signal): load it, or re-show the
+        welcome state with an honest message. A result is DROPPED if a load started while the fetch
+        was running (the user opened their own recording rather than waiting) — same token rule the
+        session loads use."""
+        self._cancel_placeholder_timer()
+        if token != self._load_token:
+            return  # superseded: something else is loading, don't yank the window to the demo
+        self._set_demo_busy(False)
         if path is None:
             self._show_welcome(error="Demo clip unavailable — check your connection and retry, "
                                      "or drop your own GoPro .mp4 to get your laps.")
             return
         self._load([path])
+
+    def _on_demo_worker_finished(self, worker):
+        """The demo fetch's QThread finished: drop it from the in-flight set (see _open_demo)."""
+        self._load_workers.discard(worker)
+        if self._demo_worker is worker:
+            self._demo_worker = None
 
     # ------------------------------------------------------------------ loading
     def _load(self, paths: list[str], drop_notice: str | None = None):
@@ -339,7 +432,7 @@ class StudioWindow(QMainWindow):
         up forever with the session unreachable (QA L10-01/L10-06)."""
         self._cancel_placeholder_timer()
         if self.view is None or self.centralWidget() is not self.view:
-            self._show_loading_placeholder(paths)
+            self._show_loading_placeholder(paths, on_cancel=lambda: self._cancel_load(token))
             return
         timer = QTimer(self)
         timer.setSingleShot(True)
@@ -353,7 +446,7 @@ class StudioWindow(QMainWindow):
         _loading_token, and a superseding _load bumped it)."""
         self._placeholder_timer = None
         if token == self._load_token and self._loading_token == token:
-            self._show_loading_placeholder(paths)
+            self._show_loading_placeholder(paths, on_cancel=lambda: self._cancel_load(token))
 
     def _cancel_placeholder_timer(self):
         """Stop the pending loading-card timer, if any (a load settled, was superseded, or the
@@ -388,11 +481,12 @@ class StudioWindow(QMainWindow):
                 self._start_load_worker(token, paths)
 
     def _drain_load_workers(self, deadline_s: float = 60.0):
-        """Let any in-flight load worker finish before teardown, bounded so this can never hang on a
-        stuck worker. Pump the event loop in short slices (so the worker's queued completion signals
-        — incl. _on_worker_finished launching a still-pending load — can drain) and wait briefly per
-        worker, giving up after `deadline_s`. The token is bumped past every in-flight worker, so
-        whatever they emit is ignored regardless."""
+        """Let any in-flight load worker (or the demo fetch, which is held in the same set) finish
+        before teardown, bounded so this can never hang on a stuck worker. Pump the event loop in
+        short slices (so the worker's queued completion signals — incl. _on_worker_finished
+        launching a still-pending load — can drain) and wait briefly per worker, giving up after
+        `deadline_s`. The token is bumped past every in-flight worker, so whatever they emit is
+        ignored regardless."""
         app = QApplication.instance()
         start = time.monotonic()
         while any(w.isRunning() for w in list(self._load_workers)):
@@ -410,6 +504,10 @@ class StudioWindow(QMainWindow):
         token is already bumped past any in-flight worker, so its result is ignored regardless."""
         self._pending_load = None  # don't start a queued load during teardown
         self._cancel_placeholder_timer()  # no loading card can appear mid-teardown
+        # Bump the load token past every in-flight worker so nothing that lands mid-teardown is
+        # applied — in particular a demo fetch that resolves now must not kick off a whole new load
+        # into a window that is closing (_on_demo_resolved drops it on the same token rule).
+        self._load_token += 1
         # Bump the reference token past any in-flight reference worker too, so a reference load that
         # finishes mid-teardown is ignored (its set_reference_session apply is dropped by the token
         # guard) — matching how the primary load's token already supersedes any in-flight worker.
@@ -467,8 +565,12 @@ class StudioWindow(QMainWindow):
         so it can be re-decided at any time (not just at load).
 
         Composed, highest concern first, from:
-          * no valid laps — every panel renders blank, so say why. Supersedes the timing notices
-            (a 0-lap recording has no lap timing to fix either way);
+          * no valid laps — every panel renders blank, so say so. The bar states the SHARED
+            headline (data_quality.NO_LAPS_HEADLINE) and stops there: it used to author its own
+            fourth phrasing of the fact and restate the lap table's reason almost verbatim, so one
+            frame carried four wordings of one sentence (QA L10-08). The reason and the "drag the
+            start/finish line" next action belong to the panels that have room for them. Supersedes
+            the timing notices (a 0-lap recording has no lap timing to fix either way);
           * timing TRUST — a start line that is neither a detected track nor user-placed makes every
             lap time arbitrary. Keyed on `session.timing_verified`, the SAME predicate the map's
             trust strip and provisional cue read, so the bar retracts the "drag it into place" line
@@ -482,8 +584,7 @@ class StudioWindow(QMainWindow):
             return None
         notice = None
         if not session.valid_lap_ids():
-            notice = ("no complete laps detected in this recording — the GPS may not have "
-                      "locked, or the recording is too short")
+            notice = data_quality.NO_LAPS_HEADLINE
         elif not session.timing_verified:
             if getattr(self, "_timing_restore_failed", False):
                 notice = ("saved timing lines don't match this recording — "
@@ -527,32 +628,69 @@ class StudioWindow(QMainWindow):
         self._on_load_failed(paths, exc)
         self.loadFinished.emit()
 
-    def _show_loading_placeholder(self, paths: list[str]):
+    def _show_loading_placeholder(self, paths: list[str], title: str | None = None,
+                                  on_cancel=None):
         """Immediate visual feedback while Session.load runs on a worker thread: install a centered
         "Loading telemetry…" card, show the window, and force one synchronous paint so it appears
-        right away. Replaced by the real UI in _build_ui."""
+        right away. Replaced by the real UI in _build_ui.
+
+        `title` overrides the headline (the demo fetch shows its own on the same card, so a cold
+        first run reads as one continuous wait rather than two unrelated ones). `on_cancel`, when
+        given, adds the Cancel button: the card used to carry ZERO controls, so the app's longest
+        routine wait was the one thing in it a user could not back out of — while its own video
+        export has offered both a determinate bar and a Cancel all along (QA L10-06). The bar stays
+        indeterminate: Session.load reports no progress, and a bar that invents one would be a lie."""
         label = chapters.recording_label(paths)
+        headline = title or "Loading telemetry…"
         container = QWidget()
         v = QVBoxLayout(container)
         v.setAlignment(Qt.AlignCenter)
         v.setSpacing(18)
-        title = QLabel(f"Loading telemetry…\n\n{label}" if label else "Loading telemetry…")
-        title.setProperty("role", "LoadingTitle")
-        title.setAlignment(Qt.AlignCenter)
-        title.setWordWrap(True)
-        v.addWidget(title, 0, Qt.AlignCenter)
+        title_label = QLabel(f"{headline}\n\n{label}" if label else headline)
+        title_label.setProperty("role", "LoadingTitle")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setWordWrap(True)
+        v.addWidget(title_label, 0, Qt.AlignCenter)
         bar = QProgressBar()
         bar.setObjectName("LoadingBar")
         bar.setRange(0, 0)          # indeterminate: self-animates, no timer to leak, dies with the widget
         bar.setTextVisible(False)
         bar.setFixedWidth(220)
         v.addWidget(bar, 0, Qt.AlignCenter)
+        if on_cancel is not None:
+            cancel = QPushButton("Cancel")
+            cancel.setObjectName("LoadingCancel")
+            cancel.clicked.connect(on_cancel)
+            v.addWidget(cancel, 0, Qt.AlignCenter)
         self.setCentralWidget(container)
         if not self.isVisible():
             self.show()
         app = QApplication.instance()
         if app is not None:
             app.processEvents()
+
+    def _cancel_load(self, token: int):
+        """Cancel on the loading card: stop WAITING for load `token` and hand the window back.
+
+        The read is not interrupted — Session.load is one synchronous call inside the worker with
+        no cooperative checkpoint — so the worker runs to completion and its result is dropped by
+        the token guard, exactly as a superseding _load's result already is. What the user gets back
+        immediately is the session they had (rebuilt through the same path a failed reload uses), or
+        the welcome state when there was nothing loaded yet. Ignores a stale click: the card on
+        screen belongs to a load that has already settled or been superseded."""
+        if token != self._load_token:
+            return
+        self._load_token += 1        # the in-flight result is now stale and will be dropped
+        self._loading_token = None
+        self._pending_load = None    # and nothing queued behind it starts either
+        self._cancel_placeholder_timer()
+        if getattr(self, "session", None) is not None and self.view is not None:
+            self._build_ui()
+            message = "Load cancelled — kept the recording already open."
+        else:
+            self._show_welcome()
+            message = "Load cancelled."
+        self.statusBar().showMessage(message, STATUS_MS)
 
     def _on_load_failed(self, paths: list[str], exc: Exception):
         """A session load failed (missing / not-a-GoPro / no-GPS file). Show a clear, non-fatal error
