@@ -501,14 +501,21 @@ def test_track_summary_counts_best_pbs_and_trend():
     s = library.track_summary(idx, "MK")
     assert s["sessions"] == 4                       # every row counts
     assert s["best"] == 68.0 and s["best_date"] == "2024-07-01"   # trustworthy best, NOT 50.0
-    assert s["pb_count"] == 3                        # 70 → 69 → 68 are three improving steps
+    # 70 → 69 → 68: TWO sessions beat the running best. The first seeds it (nothing to beat yet) —
+    # library.pb_moment calls that same session "first", not a PB (QA L11-03).
+    assert s["pb_count"] == 2
     assert s["trend"] == "improving"                 # latest trustworthy session holds the record
-    # A stalled track: the latest session is off the earlier PB.
+    # A stalled track: the latest session is off the earlier PB, so nothing was ever beaten.
     idx2 = library.empty_index()
     library.upsert(idx2, _entry("A", track="MK", date="2024-05-01", best=68.0))
     library.upsert(idx2, _entry("B", track="MK", date="2024-06-01", best=70.0))  # slower → stalled
     s2 = library.track_summary(idx2, "MK")
-    assert s2["best"] == 68.0 and s2["pb_count"] == 1 and s2["trend"] == "stalled"
+    assert s2["best"] == 68.0 and s2["pb_count"] == 0 and s2["trend"] == "stalled"
+    # A brand-new track: one session, no prior best to beat → 0 PBs (it used to report "1 PB").
+    idx4 = library.empty_index()
+    library.upsert(idx4, _entry("A", track="MK", date="2024-05-01", best=68.0))
+    s4 = library.track_summary(idx4, "MK")
+    assert s4["sessions"] == 1 and s4["pb_count"] == 0 and s4["trend"] == "single"
     # A track with no trustworthy dated best → sessions counted, best None, trend "none".
     idx3 = library.empty_index()
     library.upsert(idx3, _entry("X", track="MK", date="2024-05-01", best=60.0, verified=False))
@@ -683,21 +690,67 @@ def test_dialog_empty_index_shows_empty_library():
 # --------------------------------------------------- junk-row quarantine + auto-select + empty-state
 
 def test_entry_junk_classification():
-    """A row is JUNK (quarantined) iff it has no track OR no laps; a real recording
-    (track + laps) is not."""
+    """A row is JUNK (quarantined) iff it has no valid laps. An UNKNOWN TRACK is NOT junk — the
+    track registry ships with ~one circuit, so an unrecognised track is the common case and that
+    recording still has real laps, a real best and a real file to re-open."""
     assert _entry_junk(_entry("hero6", track=None, laps=0))          # no track AND no laps
-    assert _entry_junk(_entry("GX010060", track=None))               # no track
     assert _entry_junk(_entry("GX010060", laps=0))                   # no laps
+    assert not _entry_junk(_entry("GX010060", track=None))           # unknown track, but 12 laps
     assert not _entry_junk(_entry("GX010060", track="MK", laps=5))   # a real recording
 
 
+def test_dialog_unknown_track_row_with_laps_stays_openable():
+    """QA L11-01: an unknown-track recording WITH valid laps is a first-class row — enabled,
+    selectable, current-able and openable, tagged "provisional" (its start line is auto-fitted)
+    rather than quarantined as "(no laps)" while the same row prints its best lap."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        # The F.D shape: no registry track, 25 valid laps, provisional (auto-fitted) start line.
+        library.upsert(idx, _entry("GX010065", track=None, date="2026-08-30", best=13.073,
+                                   theo=13.073, laps=25, verified=False, paths=[real.name]))
+        dlg = LibraryDialog(idx, _OpenSpy())
+        row = _row_with_date(dlg, "2026-08-30")
+        date_item = dlg.table.item(row, _COL_DATE)
+        assert date_item.flags() & Qt.ItemIsEnabled
+        assert date_item.flags() & Qt.ItemIsSelectable
+        assert not bool(date_item.data(MISSING_ROLE))          # not quarantined
+        track_text = dlg.table.item(row, _COL_TRACK).text()
+        assert "(no laps)" not in track_text                   # it HAS laps — 25 of them
+        assert track_text == "unknown track  · provisional"    # named + trust-tagged, not blocked
+        # It is what the dialog auto-selects (the only row), Open is live, and it routes to _load.
+        assert dlg._selected_date_item() is date_item
+        assert dlg.open_btn.isEnabled()
+        spy = _OpenSpy()
+        dlg._open_recording = spy
+        dlg._open_selected()
+        assert spy.calls == [[real.name]]
+        dlg.deleteLater()
+
+
+def test_dialog_pb_empty_state_separates_no_selection_from_unknown_track():
+    """A selectable unknown-track row (QA L11-01) must not leave the chart telling the user to
+    "select a recording" they have already selected: no selection and a selected-but-unknown track
+    are different states and get different sentences."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        library.upsert(idx, _entry("GX010065", track=None, date="2026-08-30", best=13.073,
+                                   theo=13.073, laps=25, verified=False, paths=[real.name]))
+        dlg = LibraryDialog(idx, _OpenSpy())
+        assert dlg._selected_date_item() is not None       # the unknown-track row IS selected
+        assert "isn't in your database" in dlg._pb_empty.toPlainText()
+        dlg.table.clearSelection()
+        dlg._on_selection()
+        assert "Select a recording" in dlg._pb_empty.toPlainText()
+        dlg.deleteLater()
+
+
 def test_dialog_quarantines_junk_row_and_does_not_select_it():
-    """A user's existing library.json may carry a JUNK row (null track / 0 laps — e.g. the legacy
+    """A user's existing library.json may carry a JUNK row (no valid laps — e.g. the legacy
     bundled-sample row). The dialog greys + disables it, never auto-selects it, and the auto-selected
     row is instead the real recording — so the dialog renders cleanly without manual cleanup."""
     with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
         idx = library.empty_index()
-        # A real recording (present file) + a junk row (null track, 0 laps).
+        # A real recording (present file) + a junk row (0 laps).
         library.upsert(idx, _entry("GX010060", track="MK", date="2024-05-01", best=70.0,
                                    laps=8, paths=[real.name]))
         library.upsert(idx, _entry("hero6", track=None, date=None, best=None, theo=None,
@@ -768,6 +821,41 @@ def test_dialog_pb_empty_state_when_fewer_than_two_points():
     dlg.deleteLater()
 
 
+def test_dialog_pb_empty_state_label_stays_centred_in_the_plot_across_a_resize():
+    """QA L11-02: the empty-state label is a CHILD of the ViewBox, so it is positioned in the box's
+    PIXEL space — a data-space viewRect() centre put it ~1.8e9 px off-screen on the date axis (the
+    sentence was never seen). It must also re-centre on resize (a one-shot position drifts 150 px)."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        library.upsert(idx, _entry("GX010060", track="MK", date="2024-05-01", best=68.0,
+                                   laps=8, paths=[real.name]))
+        dlg = LibraryDialog(idx, _OpenSpy())
+        dlg.resize(900, 700)
+        dlg.show()
+        _APP.processEvents()
+        dlg._show_pb("MK")                       # 1 dated best → the explanatory message shows
+        assert dlg._pb_empty.isVisible()
+
+        def _assert_centred(where):
+            """Assert the label sits at the ViewBox's pixel centre, fully inside the plot; returns
+            that centre so the caller can prove the box really did change size."""
+            box = dlg.pb_plot.getPlotItem().getViewBox().boundingRect()
+            assert box.width() > 0 and box.height() > 0, where
+            off = dlg._pb_empty.pos() - box.center()
+            assert abs(off.x()) < 1.0 and abs(off.y()) < 1.0, (where, off)
+            # …and the whole label lands inside the plot, not half off its edge.
+            assert dlg.pb_plot.sceneRect().contains(dlg._pb_empty.sceneBoundingRect()), where
+            return box.center()
+
+        before = _assert_centred("at the opening size")
+        dlg.resize(1200, 820)
+        _APP.processEvents()
+        after = _assert_centred("after a resize")
+        assert after.x() - before.x() > 10.0         # the box really grew — the re-centre is load-bearing
+        dlg.hide()
+        dlg.deleteLater()
+
+
 # ------------------------------------------------ v2 dialog: search / filter / trust tag / summary
 
 def _visible_rows(dlg) -> set[str]:
@@ -834,6 +922,36 @@ def test_dialog_trust_tag_shows_on_untrustworthy_row():
         dlg.deleteLater()
 
 
+def test_dialog_row_tooltip_and_forget_confirm_name_the_recording_file():
+    """QA L11-04: no column names a FILE, so two same-day sessions on an unknown track read as the
+    same row. Every cell hovers to the recording's filename + full path (+ its extra chapters), and
+    the destructive forget confirm — which deletes that recording's sidecar — leads with the name."""
+    from PySide6.QtWidgets import QMessageBox
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        library.upsert(idx, _entry("GX010065", track=None, date="2026-08-30", best=13.073,
+                                   theo=13.073, laps=25, verified=False,
+                                   paths=[real.name, "/media/GX020065.MP4"]))
+        dlg = LibraryDialog(idx, _OpenSpy())
+        name = os.path.basename(real.name)
+        row = _row_with_date(dlg, "2026-08-30")
+        for col in range(dlg.table.columnCount()):
+            tip = dlg.table.item(row, col).toolTip()
+            assert name in tip and real.name in tip, (col, tip)
+        assert "1 more chapter" in dlg.table.item(row, _COL_DATE).toolTip()
+        # The confirm: capture its text and answer No (nothing is forgotten by this test).
+        seen = []
+        orig = QMessageBox.question
+        QMessageBox.question = staticmethod(
+            lambda *a, **k: (seen.append(a[2]), QMessageBox.No)[1])
+        try:
+            dlg._forget_row(dlg.table.item(row, _COL_DATE))
+        finally:
+            QMessageBox.question = orig
+        assert seen and name in seen[0] and "unknown track" in seen[0]
+        dlg.deleteLater()
+
+
 def test_dialog_progress_summary_line_for_selected_track():
     """Selecting a track shows the compact progress summary (session count + trustworthy best +
     PB count) — and a provisional 'best' never inflates it."""
@@ -852,10 +970,25 @@ def test_dialog_progress_summary_line_for_selected_track():
         assert "3 sessions" in text                      # every row counts
         assert "50" not in text                          # the provisional 50.0 never shows as best
         assert fmt_time(68.0) in text                    # the trustworthy best does
-        assert "2 PBs" in text                           # 70 → 68 = two improving steps
+        assert "1 PB" in text                            # 70 → 68 = one session beat the running best
         # No track selected → blank line.
         dlg._show_summary(None)
         assert dlg._summary.text() == ""
+        dlg.deleteLater()
+
+
+def test_dialog_summary_omits_the_pb_clause_on_a_first_session():
+    """QA L11-03: a track's FIRST session has beaten nothing, so the summary says "1 session ·
+    best …" and drops the PB clause entirely rather than claiming "1 PB" (or reading "0 PBs")."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        library.upsert(idx, _entry("GX010060", track="MK", date="2024-05-01", best=68.0,
+                                   laps=8, paths=[real.name]))
+        dlg = LibraryDialog(idx, _OpenSpy())
+        dlg._show_summary("MK")
+        text = dlg._summary.text()
+        assert "1 session" in text and fmt_time(68.0) in text
+        assert "PB" not in text
         dlg.deleteLater()
 
 
@@ -980,6 +1113,33 @@ def test_update_library_skips_zero_lap_and_bundled_sample(monkeypatch):
         })()
         studio_app.StudioWindow._update_library(win, ["/m/GX010060.MP4"])
         assert len(upserts) == 1 and upserts[0]["fingerprint"] == "GX0060"
+
+
+def test_recent_entries_include_an_unknown_track_recording(monkeypatch):
+    """QA L11-01, the Open Recent half: a recording is a recent candidate when it has valid laps and
+    a present file — an UNKNOWN track is fine (it re-opens identically and _recent_label already
+    names it "unknown track"). Requiring a registry track dropped a whole track day from the menu."""
+    if not _pacer_available():
+        print("skip test_recent_entries_include_an_unknown_track_recording (no pacer)")
+        return
+    from studio import app as studio_app
+    with tempfile.TemporaryDirectory() as d, tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        idx = library.empty_index()
+        library.upsert(idx, _entry("GX010065", track=None, date="2026-08-30", best=13.073,
+                                   theo=13.073, laps=25, verified=False, paths=[real.name]))
+        library.upsert(idx, _entry("GX010062", track="MK", date="2026-05-24", best=68.771,
+                                   laps=21, paths=[real.name]))
+        # 0 laps → still NOT a candidate, and neither is a recording whose file has gone.
+        library.upsert(idx, _entry("hero6", track=None, date="2026-08-31", best=None, theo=None,
+                                   laps=0, paths=[real.name]))
+        library.upsert(idx, _entry("GX010099", track="MK", date="2026-09-01", best=70.0,
+                                   laps=4, paths=["/definitely/missing/GX010099.MP4"]))
+        library.save(idx)
+        win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
+        got = studio_app.StudioWindow._recent_entries(win)
+        assert [e["fingerprint"] for e in got] == ["GX0065", "GX0062"]   # newest first
+        assert studio_app.StudioWindow._recent_label(win, got[0]).startswith("unknown track")
 
 
 # ------------------------------------------------------------------ runner

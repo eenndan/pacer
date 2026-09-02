@@ -119,9 +119,35 @@ def _entry_missing(entry: dict) -> bool:
 
 
 def _entry_junk(entry: dict) -> bool:
-    """True iff `entry` has no track or no valid laps — nothing to chart/open, so the dialog
-    greys + quarantines it."""
-    return not entry.get("track") or not entry.get("lap_count")
+    """True iff `entry` has no valid laps — nothing to time, chart or open, so the dialog greys +
+    quarantines it. An UNKNOWN TRACK is NOT junk: the track registry ships with about one circuit,
+    so a recording it doesn't recognise is the COMMON case, and that recording still has real laps,
+    a real best and a real file to re-open. It renders as "unknown track" with the row's usual trust
+    tag (``library.trust_label`` → "provisional" while the start line is auto-fitted)."""
+    return not entry.get("lap_count")
+
+
+def _entry_name(entry: dict) -> str:
+    """The recording's FILENAME — its first chapter's basename, i.e. what the user sees in Finder.
+    Falls back to the stored first-chapter stem when the entry recorded no paths."""
+    paths = entry.get("paths") or []
+    if paths:
+        return os.path.basename(paths[0])
+    return entry.get("stem") or "this recording"
+
+
+def _entry_tooltip(entry: dict) -> str:
+    """Row hover text naming WHICH recording a row is: filename, full path, and the extra-chapter
+    count for a multi-chapter recording. None of the four columns names a file (two same-day
+    sessions on the same unknown track otherwise read as the same row) though the index carries
+    both — this is the affordance Open Recent already gives its entries."""
+    paths = entry.get("paths") or []
+    lines = [_entry_name(entry)]
+    if paths:
+        lines.append(paths[0])
+        if len(paths) > 1:
+            lines.append(f"+ {_plural(len(paths) - 1, 'more chapter')}")
+    return "\n".join(lines)
 
 
 def _date_sort_key(date: str | None) -> float | None:
@@ -260,11 +286,15 @@ class LibraryDialog(QDialog):
             pen=_PB_PEN, symbol="o", symbolSize=7,
             symbolBrush=_PB_BRUSH, symbolPen=pg.mkPen(C.surface, width=1))
         self.pb_plot.addItem(self._pb_curve)
-        # Centred in-chart empty-state label, shown when <2 points to plot (see _show_pb).
-        # Anchored to the view centre so it stays put as the range changes.
+        # Centred in-chart empty-state label, shown when <2 points to plot (see _show_pb). It is a
+        # CHILD of the ViewBox, so it is positioned in the box's PIXEL space (_centre_pb_empty) and
+        # re-centred on every resize — a data-space position would put it ~1.8e9 px off-screen on a
+        # date axis, and a one-shot pixel position drifts ~150 px the first time the dialog resizes.
+        vb = self.pb_plot.getPlotItem().getViewBox()
         self._pb_empty = pg.TextItem(color=C.text_dim, anchor=(0.5, 0.5))
-        self._pb_empty.setParentItem(self.pb_plot.getPlotItem().getViewBox())
+        self._pb_empty.setParentItem(vb)
         self._pb_empty.setVisible(False)
+        vb.sigResized.connect(lambda *_: self._centre_pb_empty())
         root.addWidget(self.pb_plot, 2)
 
         # ----- privacy disclosure (calm, factual: it's all local/offline)
@@ -414,7 +444,11 @@ class LibraryDialog(QDialog):
                       else f"  · {trust}" if trust else "")
 
             items = (date_item, track_item, best_item, theo_item)
+            tooltip = _entry_tooltip(e)
             for col, it in enumerate(items):
+                # Every cell hovers to the recording's file identity — the columns show only track +
+                # date, so hovering anywhere on the row is what tells two same-day sessions apart.
+                it.setToolTip(tooltip)
                 if disabled:
                     it.setForeground(dim)
                     it.setFlags(it.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
@@ -465,7 +499,10 @@ class LibraryDialog(QDialog):
             best = fmt_time(summary["best"])
             date = f" ({summary['best_date']})" if summary["best_date"] else ""
             parts.append(f"best {best}{date}")
-            parts.append(_plural(summary["pb_count"], "PB"))
+            # Only claim PBs once a later session has actually beaten one: the first session on a
+            # track sets the bar rather than clearing it, and "0 PBs" would read as a failure.
+            if summary["pb_count"]:
+                parts.append(_plural(summary["pb_count"], "PB"))
             trend = _TREND_WORD.get(summary["trend"])
             if trend:
                 parts.append(trend)
@@ -473,11 +510,17 @@ class LibraryDialog(QDialog):
 
     def _show_pb(self, track: str | None):
         """Plot best-lap-vs-date for `track`: line for >=2 dated bests, a framed single marker for
-        1, empty-state for 0."""
+        1, empty-state for 0. No track means one of two DIFFERENT states — nothing selected, or a
+        selected recording whose circuit the track database doesn't know (the common case for a new
+        user, and now a selectable row) — so each gets its own sentence instead of asking the user
+        to select what they already selected."""
         if not track:
             self._pb_curve.setData([], [])
             self._pb_title.setText("PB progression")
-            self._set_pb_empty("Select a recording to see its track's PB progression")
+            self._set_pb_empty(
+                "This recording's track isn't in your database yet, so there's nothing to chart"
+                if self._selected_date_item() is not None
+                else "Select a recording to see its track's PB progression")
             return
         series = _library.pb_series(self._index, track)
         xs, ys = [], []
@@ -502,15 +545,21 @@ class LibraryDialog(QDialog):
             self._set_pb_empty("Not enough sessions on this track yet to chart progression")
 
     def _set_pb_empty(self, message: str | None):
-        """Show (or hide on None) the centred empty-state label; re-centred each call as the range
-        changes."""
+        """Show (or hide on None) the centred empty-state label."""
         if not message:
             self._pb_empty.setVisible(False)
             return
         self._pb_empty.setText(message)
         self._pb_empty.setVisible(True)
-        rect = self.pb_plot.getPlotItem().getViewBox().viewRect()
-        self._pb_empty.setPos(rect.center())
+        self._centre_pb_empty()
+
+    def _centre_pb_empty(self):
+        """Put the empty-state label in the middle of the plot. Its pos() is read in the PARENT
+        ITEM's (the ViewBox's) coordinates — PIXELS — so it must come from ``boundingRect()``, never
+        from the data-space ``viewRect()``. Also wired to the ViewBox's ``sigResized`` so the label
+        follows the box when the dialog is resized."""
+        vb = self.pb_plot.getPlotItem().getViewBox()
+        self._pb_empty.setPos(vb.boundingRect().center())
 
     def _frame_single_point(self, x: float, y: float):
         """Set a small PADDED axis range around a single (x, y) point so it's framed centrally (a
@@ -552,9 +601,11 @@ class LibraryDialog(QDialog):
             return
         track = entry.get("track") or "unknown track"
         date = entry.get("date") or "no date"
+        # Lead with the FILENAME: track + date alone can't tell two same-day unknown-track sessions
+        # apart, and this confirm deletes that recording's sidecar.
         ok = QMessageBox.question(
             self, "Forget this recording",
-            f"Forget “{track}” ({date})?\n\n"
+            f"Forget “{_entry_name(entry)}” — {track} ({date})?\n\n"
             "This removes it from the library and deletes its .pacer.json timing-line "
             "sidecar. Your video file is not touched.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
