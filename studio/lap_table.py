@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QItemSelection, QItemSelectionModel, Qt, Signal
+from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -88,6 +88,19 @@ def estimated_timing_tooltip(timing_quality) -> str:
     return text or _ESTIMATED_TIMING_FALLBACK
 COLUMNS = ["Lap", "Time", "Dist (m)", "Entry (km/h)"]
 _ENTRY_COL = len(COLUMNS) - 1  # the Entry-speed column (last base column); its header names the unit
+
+
+def _lap_col_tips(unit: str | None) -> list[str]:
+    """Full meaning + units per base header, shown on hover (1:1 with COLUMNS). A narrow panel
+    ELIDES a header (see _fit_columns), so every header must carry its own full text somewhere —
+    the same contract the Corners table has had since its headers were abbreviated."""
+    u = units.speed_label(unit)
+    return [
+        "Lap number (▶ playing · ★ session best · ⚠ GPS dropout)",
+        "Lap time, measured between start/finish crossings",
+        "Lap distance (m), measured between start/finish crossings",
+        f"Speed at the start/finish crossing ({u})",
+    ]
 # COLUMN SIZING (P5). The data columns are CONTENT-TIGHT and one blank trailing SPACER column
 # absorbs every leftover pixel, so a wide panel keeps the real columns adjacent + left-packed
 # instead of flinging the last one to the far right across a dead band (what setStretchLastSection
@@ -104,8 +117,78 @@ MIN_SECTION_PX = 4
 # The Lap column is Interactive with a fixed start width (the CornerTable precedent below), NOT
 # ResizeToContents: its text carries the ▶ current-lap marker, which appears/disappears every lap
 # during playback and would make a content-sized column visibly jitter. The width fits the widest
-# decorated label — "▶ ★ 100 ⚠" — with room to spare.
+# decorated label — "▶ ★ 100 ⚠" — with room to spare. It is the row IDENTITY column, so the squeeze
+# pass below never takes a pixel off it; only the GROW pass lets it share a wide panel's surplus.
 LAP_COL_PX = 92
+# COLUMN FITTING (QA L2-06 / L3-03 / L3-04). Content-tight columns alone fail at BOTH ends of the
+# size range:
+#   * too wide — a maximized Laps panel parked 1050 of its 1432px in the blank spacer, leaving a
+#     78.6% empty screen (four columns totalling 382px);
+#   * too narrow — the default 447px quadrant could not hold the Corners table's 501px of columns
+#     (the "Grip (est)" header painted "Gr", 0 of 12 grip cells readable) nor the 609px the app's
+#     own "Add sector" button creates (S2 and S3 at ZERO visible pixels).
+# So both tables now FIT their columns to the panel: grow into surplus width up to MAX_DATA_COL_PX,
+# and give slack back down to each column's own CELL width when the panel is short. Headers elide
+# before values do — every header carries its full text as a tooltip (_lap_col_tips /
+# _corner_col_tips), a cell's value has nowhere else to go.
+# The cap is what keeps P5's finding fixed: the old stretched-last-section ballooned ONE column past
+# 300px with its values pinned to the far right. 240px is wide enough to fill a maximized quadrant
+# and narrow enough to keep every header over its own number.
+MAX_DATA_COL_PX = 240
+
+
+def _shrink_to(widths: list[int], floors: list[int], excess: int):
+    """Take `excess` px off `widths` in place, proportionally to each column's slack above its
+    floor, never below the floor. Stops early when every column is at its floor (the panel is
+    genuinely too narrow — the horizontal scrollbar covers the rest)."""
+    while excess > 0:
+        idx = [i for i in range(len(widths)) if widths[i] > floors[i]]
+        if not idx:
+            return
+        pool = sum(widths[i] - floors[i] for i in idx)
+        moved = 0
+        for i in idx:
+            take = min(widths[i] - floors[i], max(1, round(excess * (widths[i] - floors[i]) / pool)),
+                       excess - moved)
+            widths[i] -= take
+            moved += take
+            if moved == excess:
+                break
+        if not moved:
+            return
+        excess -= moved
+
+
+def _grow_to(widths: list[int], caps: list[int], surplus: int):
+    """Share `surplus` px across `widths` in place, evenly, each column capped at its own cap.
+    Leftover (every column capped) is the caller's — the lap table parks it in the blank spacer."""
+    while surplus > 0:
+        idx = [i for i in range(len(widths)) if widths[i] < caps[i]]
+        if not idx:
+            return
+        moved = 0
+        for i in idx:
+            give = min(caps[i] - widths[i], max(1, surplus // len(idx)), surplus - moved)
+            widths[i] += give
+            moved += give
+            if moved == surplus:
+                break
+        if not moved:
+            return
+        surplus -= moved
+
+
+def fit_columns(natural: list[int], floors: list[int], caps: list[int], avail: int) -> list[int]:
+    """The widths `natural` columns should take in `avail` px: grown (capped) when there is spare
+    room, squeezed toward `floors` when there is not, unchanged when it already fits. Pure
+    arithmetic — no Qt — so the layout contract is unit-testable."""
+    widths = list(natural)
+    total = sum(widths)
+    if total > avail:
+        _shrink_to(widths, floors, total - avail)
+    elif total < avail:
+        _grow_to(widths, caps, avail - total)
+    return widths
 
 
 def _columns(unit: str | None) -> list[str]:
@@ -190,6 +273,9 @@ class LapTable(QWidget):
         self._best_split: list = []
         self._dropout_ids: set = set()
         self._best_lap_id = None
+        # How many S-split columns the last refresh() drew, so a NEW one can be scrolled into view
+        # once (L3-04) without every other refresh yanking the horizontal scroll.
+        self._n_splits_shown = 0
 
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(_columns(self._speed_unit))
@@ -202,6 +288,11 @@ class LapTable(QWidget):
         # start width is set once here so a later user drag survives every refresh().
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.horizontalHeader().setMinimumSectionSize(MIN_SECTION_PX)
+        # QHeaderView defaults to ElideNone, so a squeezed header CENTRE-CLIPS its own label
+        # ("Dist (m)" -> "ist (m", "Grip (est)" -> "rip (est") with no cue that anything is
+        # missing — the exact silent-truncation shape L3-03 filed. Elide it instead; the full text
+        # is on the header tooltip (_lap_col_tips / _corner_col_tips).
+        self.table.horizontalHeader().setTextElideMode(Qt.ElideRight)
         # Qt falls back to the DEFAULT section size for a Stretch section when there's nothing left
         # to stretch (a table already wide enough to scroll), which would append a phantom 100px of
         # empty scroll range past the last data column. Every data column sizes itself, so the
@@ -221,6 +312,7 @@ class LapTable(QWidget):
         hdr.setSortIndicator(self._sort_col, self._sort_order)
         hdr.sortIndicatorChanged.connect(self._on_sorted)
         self.table.itemSelectionChanged.connect(self._on_selection)
+        self.table.viewport().installEventFilter(self)   # re-fit on every real width change
 
         # Empty state: zero valid laps would show a blank grid, so stack a placeholder and flip to
         # it in refresh().
@@ -343,18 +435,65 @@ class LapTable(QWidget):
         return len(COLUMNS) + self._n_split_cols()
 
     def _apply_column_sizing(self):
-        """Content-tight data columns + a stretching blank spacer (P5). Re-applied after every
-        column-count change: Qt gives newly-added sections the header's default mode, so a fresh
-        S-column (or a shifted spacer) would otherwise keep the old sizing."""
+        """Panel-fitted data columns + a blank spacer holding whatever they leave. Re-applied after
+        every column-count change: Qt gives newly-added sections the header's default mode, so a
+        fresh S-column (or a shifted spacer) would otherwise keep the old sizing.
+
+        EVERY section is Interactive, spacer included, so _fit_columns can set an explicit width (a
+        ResizeToContents section refuses one, and a Stretch spacer falls back to its own size hint
+        — 42-53px of dead scroll range — exactly when the data columns are already overflowing)."""
+        hdr = self.table.horizontalHeader()
+        for c in range(self._n_real_cols() + 1):
+            hdr.setSectionResizeMode(c, QHeaderView.Interactive)
+        self._fit_columns()
+
+    def _column_budget(self) -> tuple[list[int], list[int], list[int]]:
+        """(natural, floors, caps) for the data columns.
+
+        `natural` is what a column needs to show its header AND its values uncut;
+        `floors` is what its VALUES alone need (a squeezed header elides and falls back to the
+        tooltip _lap_col_tips gives it — a number has no such fallback);
+        `caps` bound the grow pass. The Lap column is the row identity: pinned at LAP_COL_PX so
+        the ▶/★/⚠ markers never jitter or clip, and never squeezed."""
         hdr = self.table.horizontalHeader()
         real = self._n_real_cols()
-        # Lap = Interactive (fixed start width, no ▶-marker jitter — see LAP_COL_PX); the numeric
-        # columns size to their content + header, so each header sits over its own column.
-        hdr.setSectionResizeMode(0, QHeaderView.Interactive)
-        for c in range(1, real):
-            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
-        # The trailing blank column eats all leftover width, keeping the data columns left-packed.
-        hdr.setSectionResizeMode(real, QHeaderView.Stretch)
+        cells = [self.table.sizeHintForColumn(c) if self.table.rowCount() else 0
+                 for c in range(real)]
+        natural = [max(hdr.sectionSizeHint(c), cells[c]) for c in range(real)]
+        floors = [max(MIN_SECTION_PX, cells[c]) for c in range(real)]
+        natural[0] = floors[0] = LAP_COL_PX
+        return natural, floors, [max(n, MAX_DATA_COL_PX) for n in natural]
+
+    def _fit_columns(self):
+        """Size the data columns to the panel (see MAX_DATA_COL_PX). Runs after every refresh and
+        on every viewport resize, so maximizing the panel widens the DATA instead of the blank
+        spacer (L2-06) and a narrow panel keeps its S-split columns on screen (L3-04)."""
+        hdr = self.table.horizontalHeader()
+        real = self._n_real_cols()
+        # MIN_SECTION_PX is reserved for the spacer: it must never be the section that summons a
+        # horizontal scrollbar, so the data columns are fitted to the width that is left after it.
+        width = self.table.viewport().width()
+        avail = width - MIN_SECTION_PX
+        if avail <= 0 or real <= 0:
+            return
+        natural, floors, caps = self._column_budget()
+        fitted = fit_columns(natural, floors, caps, avail)
+        for c, w in enumerate(fitted):
+            hdr.resizeSection(c, w)
+        # The spacer takes EXACTLY the slack the capped data columns left (P5: keep them adjacent
+        # and left-packed instead of flinging the last one across a dead band), and collapses to
+        # MIN_SECTION_PX when there is none.
+        hdr.resizeSection(real, max(MIN_SECTION_PX, width - sum(fitted)))
+
+    def eventFilter(self, obj, event):
+        # The table's VIEWPORT, not this widget: the Corners/Laps pages are laid out inside a tab
+        # stack, so a page can be given its real width without this container ever seeing a
+        # resizeEvent — which is how the corner columns came to be fitted to Qt's stock 640px
+        # default and overflowed the 447px quadrant by MORE than before the fit existed.
+        if obj is self.table.viewport() and event.type() == QEvent.Resize:
+            self._fit_columns()
+            self._keep_selection_visible()
+        return super().eventFilter(obj, event)
 
     def set_speed_unit(self, unit: str):
         """Switch the Entry-speed display unit live: re-header + re-fill (converts the Entry cells).
@@ -431,7 +570,14 @@ class LapTable(QWidget):
             if self.table.item(r, spacer) is not None:
                 self.table.takeItem(r, spacer)
         self.table.blockSignals(False)
-        # Size the columns once the rows are in (ResizeToContents then measures real content).
+        # Full header text lives on the header itself (a narrow panel elides the label — L3-04).
+        for c, tip in enumerate(_lap_col_tips(self._speed_unit)):
+            self.table.horizontalHeaderItem(c).setToolTip(tip)
+        for i in range(n_splits):
+            self.table.horizontalHeaderItem(len(COLUMNS) + i).setToolTip(
+                f"Sector {i + 1} split (s) — time between this lap's sector lines")
+        # Set the section RESIZE MODES now that the rows are in; the widths themselves are fitted
+        # at the end of refresh(), once _apply_highlights has finished rewriting the S-split text.
         self._apply_column_sizing()
         # Re-apply the user's chosen sort (lap-ascending by default) on the freshly-filled rows.
         # A remembered S-column can VANISH when sector lines are removed (and must never be the
@@ -446,6 +592,12 @@ class LapTable(QWidget):
         # dropout lap ids, keyed by lap id so the ⚠ flag follows the lap across sorts
         self._dropout_ids = self.session.dropout_lap_ids()
         self._apply_highlights()
+        # Fit AFTER the highlights: they append the ★ best-sector mark to S-split cells, which is
+        # part of the width those columns need.
+        self._fit_columns()
+        if n_splits > self._n_splits_shown:
+            self._reveal_last_split()
+        self._n_splits_shown = n_splits
         # The excluded-laps strip follows every refresh — i.e. also after a timing-line edit
         # re-segments the laps (which shifts both the valid and the excluded sets).
         self._refresh_excluded()
@@ -462,9 +614,20 @@ class LapTable(QWidget):
                 return r
         return -1
 
-    # The timing columns (Time + the S-split columns) — the cells whose authority depends on the
-    # start/finish line. Provisional timing mutes exactly these (Dist/Entry are line-independent).
-    def _timing_cols(self) -> set[int]:
+    # Two DIFFERENT column sets, for the two orthogonal trust axes (they used to be one, which is
+    # how Dist and Entry came to render at full confidence on a session whose start line was a
+    # guess — QA L3-02):
+    #
+    #  * _start_line_cols — every value the start/finish line places: the lap Time AND the S-splits
+    #    (durations between crossings), Dist (the distance BETWEEN crossings) and Entry (the speed
+    #    AT a crossing). Move the line and all four change. So PROVISIONAL timing demotes all four.
+    #  * _clock_cols — the DURATIONS only. The degraded-clock axis is about how well time itself is
+    #    measured; it has no bearing on an odometer distance or a GPS speed sample, so it must not
+    #    demote Dist/Entry.
+    def _start_line_cols(self) -> set[int]:
+        return set(range(1, self._n_real_cols()))
+
+    def _clock_cols(self) -> set[int]:
         return {1, *(len(COLUMNS) + i for i in range(self._n_split_cols()))}
 
     def _apply_highlights(self):
@@ -475,17 +638,20 @@ class LapTable(QWidget):
         The blue selection is Qt's own row background and is left to the selection model.
 
         TIMING TRUST: when the session's timing is PROVISIONAL (start line auto-fitted, not
-        user-confirmed — see Session.timing_verified) the timing columns (lap Time + the S-split
-        cells) are de-emphasized (muted + italic, with the 'provisional' tooltip) and BOTH "best"
-        authority cues are suppressed — no purple session-best splits and no green best-lap — since
-        a 'best' measured against an arbitrary start line is meaningless. The Dist/Entry columns,
-        which don't depend on the start line, stay normal. Verified timing renders as before.
+        user-confirmed — see Session.timing_verified) EVERY start-line-derived cell — lap Time, the
+        S-splits, Dist and Entry (see _start_line_cols) — is de-emphasized (muted + italic, with the
+        'provisional' tooltip) and BOTH "best" authority cues are suppressed — no purple
+        session-best splits and no green best-lap — since a 'best' measured against an arbitrary
+        start line is meaningless. Only the Lap number, which the line cannot move, stays normal.
+        Verified timing renders as before.
 
         DATA QUALITY (orthogonal — Session.timing_quality): a media-clock-fallback recording or one
-        whose GPS quality gate rejected many fixes ALSO mutes the timing cells (an 'estimated'
-        tooltip), but does NOT suppress the bests — the start line is trusted, so the bests stay
-        valid RELATIVE to each other; only the absolute timing accuracy is degraded. A normal GPS9,
-        clean-fix recording (the common case) leaves both axes untouched."""
+        whose GPS quality gate rejected many fixes ALSO mutes the DURATION cells (_clock_cols: Time
+        + the S-splits) with an 'estimated' tooltip, but leaves Dist/Entry alone (an odometer
+        distance and a GPS speed sample don't get worse when the clock does) and does NOT suppress
+        the bests — the start line is trusted, so the bests stay valid RELATIVE to each other; only
+        the absolute timing accuracy is degraded. A normal GPS9, clean-fix recording (the common
+        case) leaves both axes untouched."""
         rows = self.table.rowCount()
         if not rows:
             return
@@ -502,7 +668,8 @@ class LapTable(QWidget):
         self._best_lap_id = best_lap
         n_splits = self._n_split_cols()
         best_split = self._best_split
-        timing_cols = self._timing_cols()
+        start_line_cols = self._start_line_cols()
+        clock_cols = self._clock_cols()
         # Palette-dependent "best" foregrounds, resolved per-refresh so a colour-blind-palette flip
         # recolours the cells (green→blue best lap, purple→teal best sector) on the next refresh().
         best_color = QColor(theme.best_lap_colour())
@@ -518,10 +685,10 @@ class LapTable(QWidget):
                 item = self.table.item(r, c)
                 if item is None:
                     continue
-                provisional_cell = not verified and c in timing_cols
-                # A degraded-clock timing cell mutes too, but only when NOT already provisional
+                provisional_cell = not verified and c in start_line_cols
+                # A degraded-clock DURATION cell mutes too, but only when NOT already provisional
                 # (provisional is the stronger demotion + suppresses the bests; degraded keeps them).
-                estimated_cell = verified and degraded and c in timing_cols
+                estimated_cell = verified and degraded and c in clock_cols
                 muted_cell = provisional_cell or estimated_cell
                 # base off-white; green (best lap) / muted (provisional or estimated timing) / purple.
                 # BEST-LAP wins the COLOUR over degraded muting: on a degraded (but verified)
@@ -644,16 +811,59 @@ class LapTable(QWidget):
         want = set(idxs)
         model = self.table.model()
         sel = QItemSelection()
+        first = None
         for r in range(self.table.rowCount()):
             if self._lap_id(r) in want:
                 idx = model.index(r, 0)
                 sel.select(idx, idx)
+                if first is None:
+                    first = idx
         self.table.blockSignals(True)
         sm = self.table.selectionModel()
         sm.clearSelection()
         if not sel.isEmpty():
             sm.select(sel, QItemSelectionModel.Select | QItemSelectionModel.Rows)
         self.table.blockSignals(False)
+        self._keep_selection_visible()
+
+    def _reveal_last_split(self):
+        """L3-04: the map's "Add sector" button silently created columns that landed ENTIRELY off
+        the default quadrant (S2 and S3 at zero visible pixels), with nothing but a 1.55:1
+        scrollbar to say so. The fit above claws most of that back; scroll only when the newest S
+        column is STILL completely off screen, because every pixel of that scroll comes off the Lap
+        column — trading the row's identity for a split that is already partly readable is a bad
+        deal. Fires once per column-count increase: a refresh from a sort or a selection must never
+        yank the horizontal scroll."""
+        last = self._n_real_cols() - 1
+        if not self.table.rowCount() or last < 0:
+            return
+        x = self.table.columnViewportPosition(last)
+        if x < self.table.viewport().width():
+            return                                          # already at least partly on screen
+        v = self.table.verticalScrollBar().value()          # a purely HORIZONTAL scroll
+        self.table.scrollTo(self.table.model().index(0, last), QAbstractItemView.EnsureVisible)
+        self.table.verticalScrollBar().setValue(v)
+
+    def _keep_selection_visible(self):
+        """IA-02: a PROGRAMMATIC selection has to be scrolled to, or it isn't a selection the user
+        can see. The app pre-selects the best lap at launch and draws four panels from it, but on a
+        21-lap session that row sat 150px BELOW the viewport at every window size, with the vertical
+        scrollbar still at 0 — the panel that OWNS the selection painted no highlighted row at all.
+
+        Centre it: the laps either side are the context that makes the selected one mean something.
+        Only when it is not already fully visible, so re-fitting or a resize never yanks a table the
+        user has scrolled deliberately — and the horizontal offset is restored afterwards, because
+        scrolling to a column-0 cell would otherwise undo the S-column scroll refresh() just made."""
+        rows = sorted({i.row() for i in self.table.selectionModel().selectedRows()})
+        if not rows:
+            return
+        idx = self.table.model().index(rows[0], 0)
+        rect = self.table.visualRect(idx)
+        if rect.isValid() and self.table.viewport().rect().contains(rect):
+            return
+        h = self.table.horizontalScrollBar().value()
+        self.table.scrollTo(idx, QAbstractItemView.PositionAtCenter)
+        self.table.horizontalScrollBar().setValue(h)
 
     def selected_lap_ids(self) -> list[int]:
         """The lap ids of the currently-selected rows (sorted). Read-only — used to restore the
@@ -749,14 +959,19 @@ class CornerTable(QWidget):
         # Column sizing (UI-scrutiny C3+B5): the old col-0 Stretch let Qt crush the row's
         # IDENTITY column to a 42px "orne" sliver at the default panel width (the "all 8 fit"
         # assumption rotted as columns grew) and balloon it to a 959px void when maximized.
-        # Now: col 0 is Interactive with a readable fixed start (fits "C12 ⟳" + the header),
-        # numeric columns size to content, and the existing h-scrollbar absorbs any overflow.
+        # Now: col 0 starts at a readable CORNER_NAME_COL_PX (fits "C12 ⟳" + the header) and every
+        # column is Interactive so _fit_columns can size the set to the panel.
+        # QA L3-03: leaving the overflow to the h-scrollbar was not enough — at the DEFAULT 447px
+        # quadrant these 8 columns wanted 501px, so "Grip (est)" started at x=422 and 0 of 12 grip
+        # cells rendered a readable value, behind a scrollbar handle at 1.55:1 contrast. The fit
+        # gives the slack back (headers elide to their tooltips; values never do).
         hdr = self.table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.Interactive)
-        for c in range(1, len(CORNER_COLUMNS)):
-            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        for c in range(len(CORNER_COLUMNS)):
+            hdr.setSectionResizeMode(c, QHeaderView.Interactive)
         hdr.resizeSection(0, CORNER_NAME_COL_PX)
+        hdr.setTextElideMode(Qt.ElideRight)   # never centre-clip a squeezed header — see LapTable
         self.table.cellClicked.connect(self._on_cell_clicked)
+        self.table.viewport().installEventFilter(self)   # re-fit on every real width change
         # B6: the table is deliberately unsortable (track order IS the meaning) — no pressed
         # feedback on headers that do nothing.
         hdr.setSectionsClickable(False)
@@ -780,6 +995,39 @@ class CornerTable(QWidget):
         Stats CORNERS and Coaching rows use, so all three surfaces behave identically."""
         if 0 <= row < len(self._cids):
             self.corner_clicked.emit(self._cids[row])
+
+    def _column_budget(self) -> tuple[list[int], list[int], list[int]]:
+        """(natural, floors, caps) for the corner columns — see LapTable._column_budget. Column 0
+        is the row identity, so it opens at CORNER_NAME_COL_PX; unlike the lap number it carries no
+        moving marker, so it may be squeezed back to its own cell width ("C12 ⟳") when the panel
+        is short — 24 of the 54px the default quadrant is missing come from there, the rest from
+        the "Grip (est)" header, whose full wording is already in its tooltip."""
+        hdr = self.table.horizontalHeader()
+        n = self.table.columnCount()
+        cells = [self.table.sizeHintForColumn(c) if self.table.rowCount() else 0 for c in range(n)]
+        natural = [max(hdr.sectionSizeHint(c), cells[c]) for c in range(n)]
+        floors = [max(MIN_SECTION_PX, cells[c]) for c in range(n)]
+        if natural:
+            natural[0] = max(natural[0], CORNER_NAME_COL_PX)
+        return natural, floors, [max(x, MAX_DATA_COL_PX) for x in natural]
+
+    def _fit_columns(self):
+        """Size the 8 corner columns to the panel — every column on screen at the default quadrant,
+        every column sharing the width when the panel is maximized."""
+        hdr = self.table.horizontalHeader()
+        avail = self.table.viewport().width()
+        if avail <= 0 or not self.table.columnCount():
+            return
+        natural, floors, caps = self._column_budget()
+        for c, w in enumerate(fit_columns(natural, floors, caps, avail)):
+            hdr.resizeSection(c, w)
+
+    def eventFilter(self, obj, event):
+        # See LapTable.eventFilter: this page lives in a tab stack, so the container's own
+        # resizeEvent is not a reliable signal that the table finally has its real width.
+        if obj is self.table.viewport() and event.type() == QEvent.Resize:
+            self._fit_columns()
+        return super().eventFilter(obj, event)
 
     def _apply_corner_tips(self):
         """(Re)apply the per-column header tooltips for the current speed unit."""
@@ -869,3 +1117,5 @@ class CornerTable(QWidget):
                 else:
                     item.setForeground(BASE_COLOR)
                 self.table.setItem(r, col, item)
+        # Fit once the rows are in — the column widths depend on the values just written.
+        self._fit_columns()

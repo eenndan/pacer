@@ -166,6 +166,9 @@ class Session:
         self._valid_cache: list[int] | None = None  # memoized "real lap" set
         self._excluded_cache: list[int] | None = None  # memoized banded-out substantial laps
         self._best_cache: object = _UNSET   # sentinel: None is a legal "no best lap" result
+        # Memoized SESSION-WIDE collapsed-sector-line set (see _collapsed_sector_lines); keyed by
+        # the valid-lap tuple + line count so a hand-seeded test memo can never go stale.
+        self._sector_collapse_cache: tuple | None = None
         # Detected registry track name, or None for an unknown track (start line auto-fitted).
         # Persisted into the timing-line sidecar and used by the app's "unknown track" notice.
         self.track_name: str | None = None
@@ -445,7 +448,12 @@ class Session:
             lap_has_dropout=self.lap_has_dropout,
             lap_time=lambda i: self.laps.lap_time(i),
             lap_sector_splits=self.lap_sector_splits,
-            sector_line_count=lambda: len(self.laps.sectors.sector_lines),
+            # The EFFECTIVE count (placed lines minus the session-wide collapsed ones), because it
+            # sets the number of split COLUMNS the bests are computed over. Using the raw line
+            # count would leave a trailing column no lap can fill, which makes theoretical_best
+            # None whenever a line has collapsed; using the effective count keeps every column
+            # filled by every lap and comparable across them.
+            sector_line_count=self.effective_sector_count,
             lap_columns=self._lap_columns,
             best_cache_get=lambda: self._best_cache,
             best_cache_set=self._set_best_cache,
@@ -774,6 +782,9 @@ class Session:
         self._valid_cache = None
         self._excluded_cache = None
         self._best_cache = _UNSET
+        # The session-wide collapsed-line set is a function of the lines AND the valid-lap set —
+        # both just changed.
+        self._sector_collapse_cache = None
         self._drop_ideal_cache()  # the ideal envelope is a min over the (now-shifted) lap arrays
         self.timeline.invalidate()
         # The corner model + driving channels are derived from / projected through the
@@ -904,19 +915,14 @@ class Session:
         bbox = (float(mn.y), float(mn.x), float(mx.y), float(mx.x))
         return centroid, bbox
 
-    def suggest_sector(self, existing: int = 0) -> Seg:
-        """A line perpendicular to the track at a DISTINCT fraction of the way round, so each
-        added sector lands on a different track position. With `existing` sector lines already
-        placed, the new one is the (existing+1)-th of (existing+2) sub-sectors, so put it at
-        fraction (existing+1)/(existing+2) — 1/2, then 2/3, 3/4, … — evenly subdividing the
-        lap and never colliding with an earlier suggestion (which would collapse a split to 0).
+    def _sector_seg_at(self, frac: float) -> Seg:
+        """A line perpendicular to the track at `frac` of the way round the lap.
 
         The fraction is taken along a single representative lap's trace (the best lap), not the
         full multi-lap trace: a fraction of the full trace lands on an arbitrary lap, so two
         suggestions could still map to the same per-lap distance. ±15 m (not ±5) so the line
         reliably registers a crossing every lap — a too-short line gets stepped over, fusing
         sub-sectors and making split times exceed the lap time. Draggable to adjust."""
-        frac = (existing + 1) / (existing + 2)
         best = self.best_lap_id()
         xy = None
         if best is not None:
@@ -936,6 +942,30 @@ class Session:
         nx, ny = -dy / length, dx / length
         cx, cy = xs[i], ys[i]
         return Seg(cx - nx * 15, cy - ny * 15, cx + nx * 15, cy + ny * 15)
+
+    def suggest_sectors(self, count: int) -> list[Seg]:
+        """`count` sector lines that EVENLY subdivide the lap: the k-th (1-based) sits at
+        k/(count+1) of the way round, so the lap becomes count+1 sub-sectors of equal DISTANCE
+        (1 line → 1/2; 2 → 1/3, 2/3; 3 → 1/4, 2/4, 3/4).
+
+        This is the whole SET at once, which is the only way to place evenly-spaced lines:
+        appending one line at a time (`suggest_sector`) cannot re-space the lines already there,
+        so a caller that wants even sectors must replace its whole suggested set with this."""
+        if count < 1:
+            return []
+        return [self._sector_seg_at(k / (count + 1)) for k in range(1, count + 1)]
+
+    def suggest_sector(self, existing: int = 0) -> Seg:
+        """ONE more line to APPEND to `existing` lines already placed, at a DISTINCT fraction of
+        the way round — fraction (existing+1)/(existing+2), i.e. 1/2, then 2/3, 3/4, … — so it
+        never collides with an earlier suggestion (which would collapse a split to 0). Identical
+        to `suggest_sectors(existing + 1)[-1]`.
+
+        It does NOT subdivide the lap evenly for existing > 0, and cannot: each call only
+        bisects what is LEFT after the previous lines, so three appends give sub-sectors of
+        ~50 / 17 / 8 / 25 % rather than four quarters. A caller that wants even sectors must
+        re-space the whole set through `suggest_sectors(n)`."""
+        return self._sector_seg_at((existing + 1) / (existing + 2))
 
     # ------------------------------------------------------------- lap access
     def _lap_columns(self, lap_id: int) -> LapColumns:
@@ -1156,35 +1186,46 @@ class Session:
     # out-of-order splits and poison the theoretical best.
     _SECTOR_DEDUPE_FRAC = 0.002
 
-    def sector_boundary_distances(self, lap_id: int) -> list[float]:
-        """Per-lap odometer distance (metres) of each sector line, found the SAME way
-        `lap_sector_splits` measures the splits: project each sector line's midpoint onto this
-        lap's trace and take the nearest point's cum_distance, then return them ASCENDING. So the
-        boundary guide lines on the charts (F2) land exactly where the split times are measured.
+    def _sector_line_midpoints(self) -> list[tuple[float, float]] | None:
+        """The (x, y) local-metre MIDPOINT of every sector line, index-aligned to
+        `laps.sectors.sector_lines` — the point every projection below snaps to the trace.
 
-        Two robustness guards live here (the single source of every consumer's boundaries):
-          * WINDOWED projection — a plain global argmin over the whole lap snaps a line to its
-            globally-nearest trace point, which on an out-and-back / hairpin (the line's midpoint
-            sits near two passes) or two lines placed close together can pick the WRONG pass and
-            put the boundary at a bogus odometer. So each line is first projected globally to find
-            its lap fraction, then RE-projected within a window around that fraction, breaking
-            wrong-pass ties toward the expected location while leaving a normal, well-separated
-            line on a single-pass section byte-identical to the old global argmin.
-          * DEDUPE — after sorting, boundaries within `_SECTOR_DEDUPE_FRAC` of the previous one
-            are dropped, so a duplicate / mis-snapped line can never yield a zero-length (or, once
-            the sort masks it, out-of-order) split. Returning fewer boundaries than lines is fine:
-            lap_sector_splits derives its split count from THIS list, and the table simply shows a
-            blank in any trailing S-column a deduped lap no longer fills (its highlight/best-split
-            paths already tolerate a short per-lap split list)."""
-        lines = self.laps.sectors.sector_lines
-        if not lines:
-            return []
+        None when a line does not expose pacer's Seg geometry. That is the bare-Session test path
+        (which stubs opaque objects purely to set the sector COUNT); "geometry unknown" makes the
+        session-wide collapse check stand down, so those sessions behave exactly as they did
+        before the check existed."""
+        mids: list[tuple[float, float]] = []
+        for seg in self.laps.sectors.sector_lines:
+            a, b = getattr(seg, "first", None), getattr(seg, "second", None)
+            if a is None or b is None:
+                return None
+            mids.append(((a.x + b.x) / 2.0, (a.y + b.y) / 2.0))
+        return mids
+
+    def _project_sector_lines(self, lap_id: int,
+                              mids: list[tuple[float, float]]) -> tuple[list[float], float] | None:
+        """Project every sector-line midpoint onto ONE lap's trace: `(distances, tol)` where
+        `distances[k]` is line k's odometer metres on this lap (INDEX order, not sorted) and `tol`
+        is that lap's `_SECTOR_DEDUPE_FRAC` collapse tolerance. None when the lap is too short to
+        project onto (< 2 samples).
+
+        WINDOWED projection — a plain global argmin over the whole lap snaps a line to its
+        globally-nearest trace point, which on an out-and-back / hairpin (the line's midpoint sits
+        near two passes) or two lines placed close together can pick the WRONG pass and put the
+        boundary at a bogus odometer. So each line is first projected globally to find its lap
+        fraction, then RE-projected within a window around that fraction, breaking wrong-pass ties
+        toward the expected location while leaving a normal, well-separated line on a single-pass
+        section byte-identical to a plain global argmin.
+
+        The ONE projection both `sector_boundary_distances` (what the user sees) and
+        `_collapsed_sector_lines` (what decides a line is degenerate) read, so the collapse
+        decision can never disagree with the boundaries it governs."""
         # Local-metre xs/ys + cum_distances from the one bulk lap_columns crossing (replacing the
         # per-point self.cs.local loop); all length lap.count(), so m is just that length.
         _times, xs, ys, _full_speed, cum = self._lap_columns(lap_id)
         m = min(len(xs), len(cum))
         if m < 2:
-            return []
+            return None
         xs, ys, cum = xs[:m], ys[:m], cum[:m]
         total = float(cum[-1])
         # Window half-width (in samples) for the wrong-pass guard: a fraction of the lap's
@@ -1194,10 +1235,8 @@ class Session:
         # window is just the global point) on tiny synthetic laps. The arc constant lives with
         # best_rolling_lap in studio/bests.py — one source shared here.
         half = max(1, int(round(bests_service.ROLLING_SEARCH_FRAC * m)))
-        bounds = []
-        for seg in lines:
-            mx = (seg.first.x + seg.second.x) / 2.0
-            my = (seg.first.y + seg.second.y) / 2.0
+        dists: list[float] = []
+        for mx, my in mids:
             d2 = (xs - mx) ** 2 + (ys - my) ** 2
             j_global = int(np.argmin(d2))
             # Re-pick the nearest point WITHIN a window around the global hit. On a single-pass
@@ -1207,18 +1246,101 @@ class Session:
             lo = max(0, j_global - half)
             hi = min(m, j_global + half + 1)
             j = lo + int(np.argmin(d2[lo:hi]))
-            bounds.append(float(cum[j]))
-        bounds.sort()
-        # Collapse boundaries that land on (nearly) the same odometer: keep the first, drop any
-        # follower within the dedupe tolerance of the last KEPT boundary. This is what stops a
-        # degenerate (duplicate / wrong-pass) line from producing a 0 s / out-of-order split that
-        # `lap_sector_splits` would emit and `session_best_splits` could take as a spurious min.
-        tol = self._SECTOR_DEDUPE_FRAC * total if total > 0 else 0.0
-        deduped: list[float] = []
-        for b in bounds:
-            if not deduped or b - deduped[-1] > tol:
-                deduped.append(b)
-        return deduped
+            dists.append(float(cum[j]))
+        return dists, (self._SECTOR_DEDUPE_FRAC * total if total > 0 else 0.0)
+
+    def _collapsed_sector_lines(self) -> frozenset[int]:
+        """The SESSION-WIDE set of sector-line INDICES that collapse onto an earlier line — the
+        indices `sector_boundary_distances` refuses to emit a boundary for, on EVERY lap.
+
+        Why session-wide (the MAP-08-ESC defect). The collapse tolerance is a fraction of the lap
+        odometer (~2.1 m on a 1068 m lap) but each lap projects the lines onto its OWN samples, so
+        in a narrow band a line lands on the same sample as its neighbour on SOME laps and one
+        sample away on others. A per-lap decision then hands different laps a different number of
+        boundaries — and the S columns stop meaning the same stretch of track from row to row:
+        one lap's S2 is a 17 s sector while another's is a 0.2 s sliver, `session_best_splits`
+        takes a per-column min across those incomparable pieces, and `theoretical_best` sums them.
+        Deciding ONCE for the whole session makes that mixed state unreachable: every lap emits
+        the same boundaries, so every S column is the same stretch of track on every row.
+
+        The rule: walk the lines in PLACEMENT order and keep a line unless, on any valid lap, it
+        lands within that lap's tolerance of an already-kept line. Placement order (not per-lap
+        distance order) is what makes the outcome deterministic and keeps the EARLIER line of a
+        colliding pair — exactly one survivor per cluster, never both dropped, and never a
+        different survivor on a different lap.
+
+        The population is `valid_lap_ids()` — the same "real lap" set the lap table renders and
+        the bests are computed over, so every surface that compares rows is covered. A banded-out
+        fragment is not consulted (its odometer is not a lap's) and is left to project as it may;
+        it owns no purple cell and feeds no theoretical best (`best_candidate_ids`).
+
+        Memoized per (valid-lap set, line count); cleared with the rest on re-segmentation."""
+        mids = self._sector_line_midpoints()
+        if not mids or len(mids) < 2:
+            return frozenset()
+        laps = tuple(self.valid_lap_ids())
+        key = (laps, len(mids))
+        cached = getattr(self, "_sector_collapse_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        per_lap = [pr for pr in (self._project_sector_lines(lid, mids) for lid in laps)
+                   if pr is not None]
+        kept: list[int] = []
+        dropped: set[int] = set()
+        for k in range(len(mids)):
+            if any(abs(d[k] - d[j]) <= tol for d, tol in per_lap for j in kept):
+                dropped.add(k)
+            else:
+                kept.append(k)
+        out = frozenset(dropped)
+        self._sector_collapse_cache = (key, out)
+        return out
+
+    def collapsed_sector_lines(self) -> list[int]:
+        """Indices (into `sector_lines`, ascending) of the sector lines this session treats as
+        DEGENERATE: too close to an earlier line to survive on every lap, so they contribute no
+        boundary and no split column anywhere. Empty on a healthy set of lines.
+
+        The session-layer flag a commit path can ask *"did the line I just placed collapse?"* —
+        `set_timing_lines(...)` then `collapsed_sector_lines()`, non-empty meaning the new line is
+        inert and wants moving. Reading it is the caller's business: nothing in the model layer
+        surfaces a message (see the PR that added this)."""
+        return sorted(self._collapsed_sector_lines())
+
+    def effective_sector_count(self) -> int:
+        """The number of sector lines that actually DIVIDE the lap — `sector_count()` minus the
+        collapsed ones. This is the count every split-derived surface must reason in: each lap has
+        exactly `effective_sector_count() + 1` splits, and those columns are comparable across
+        laps. `sector_count()` stays the number of lines the user PLACED (what the map draws, what
+        the sidecar persists), which is >= this."""
+        return len(self.laps.sectors.sector_lines) - len(self._collapsed_sector_lines())
+
+    def sector_boundary_distances(self, lap_id: int) -> list[float]:
+        """Per-lap odometer distance (metres) of each sector line, found the SAME way
+        `lap_sector_splits` measures the splits: project each sector line's midpoint onto this
+        lap's trace and take the nearest point's cum_distance, then return them ASCENDING. So the
+        boundary guide lines on the charts (F2) land exactly where the split times are measured.
+
+        Two robustness guards live here (the single source of every consumer's boundaries):
+          * WINDOWED projection — see `_project_sector_lines`, which owns it.
+          * COLLAPSE — a line that lands within `_SECTOR_DEDUPE_FRAC` of an earlier line emits no
+            boundary, so a duplicate / mis-snapped line can never yield a zero-length (or, once
+            the sort masks it, out-of-order) split. The decision is made ONCE for the session
+            (`_collapsed_sector_lines`), never per lap, so EVERY lap returns the same boundaries
+            and an S column means the same stretch of track on every row. Returning fewer
+            boundaries than lines is fine: lap_sector_splits derives its split count from THIS
+            list, and the table simply shows a blank in the trailing S-columns the collapsed lines
+            would have filled — now uniformly blank for every lap rather than ragged (its
+            highlight/best-split paths already tolerate a short per-lap split list)."""
+        mids = self._sector_line_midpoints()
+        if not mids:
+            return []
+        dropped = self._collapsed_sector_lines()
+        projected = self._project_sector_lines(lap_id, mids)
+        if projected is None:
+            return []
+        dists, _tol = projected
+        return sorted(d for k, d in enumerate(dists) if k not in dropped)
 
     # ------------------------------------- session summaries: theoretical + rolling best (F1)
     # The "best" cluster (candidate set / headline best / session-best splits / theoretical /
@@ -1586,7 +1708,7 @@ class Session:
     def coaching_opportunities(self) -> coaching.Opportunities:
         """The ranked coaching opportunities (F10): per corner, the MEDIAN time lost vs the
         best lap over the consistency laps (biggest first), with the dominant measured reason
-        attached to the top-N. Deterministic and explainable (see studio/coaching.py).
+        attached to every ranked row. Deterministic and explainable (see studio/coaching.py).
 
         Returns an Opportunities with `enough=False` (empty rows) when there are fewer than
         coaching.MIN_LAPS valid, dropout-free laps — the friendly "need more laps" state, no
@@ -1659,9 +1781,12 @@ class Session:
         # D2: the typical lap's + best lap's speed-vs-distance traces so summarize can decompose
         # each corner's Δt-vs-best into entry/apex/exit thirds (∫ds/v over each, the typical lap
         # vs best — the SAME comparison the loss/reasons use). Same projection as lap_corner_stats.
-        med_dist, med_speed_kmh, _med_elapsed = (
+        # The matching `elapsed` (seconds-from-lap-start) arrays go with them: a BrakeEvent carries
+        # no release odometer, so summarize needs each lap's own clock to integrate a brake event's
+        # OVERLAP with a corner window instead of taking or dropping it whole by its onset.
+        med_dist, med_speed_kmh, med_elapsed = (
             self._lap_arrays(med_id) if med_id is not None else (None, None, None))
-        best_dist, best_speed_kmh, _best_elapsed = self._lap_arrays(best)
+        best_dist, best_speed_kmh, best_elapsed = self._lap_arrays(best)
 
         # Drift-gate spatial traces for the phase decomposition (the same alignment lap_corner_stats
         # uses): the corner windows live in the BEST lap's frame, so its (xs, ys, cum) is the fixed
@@ -1693,8 +1818,10 @@ class Session:
             best_lap_total=best_lap_total,
             median_dist=med_dist,
             median_speed_kmh=med_speed_kmh,
+            median_elapsed=med_elapsed,
             best_dist=best_dist,
             best_speed_kmh=best_speed_kmh,
+            best_elapsed=best_elapsed,
             median_traces=median_traces,
             best_traces=best_traces,
         )

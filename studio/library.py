@@ -482,15 +482,16 @@ def track_summary(index: dict, track: str) -> dict | None:
 
         {"track", "sessions",     # total library rows for this track (all, trustworthy or not)
          "best", "best_date",     # the fastest TRUSTWORTHY dated best + its date (None if none)
-         "pb_count",              # count of improving steps in the PB series (new-PB moments)
+         "pb_count",              # count of LATER sessions that BEAT the running best
          "trend"}                 # "improving" | "stalled" | "single" | "none"
 
     ``best``/``pb_count``/``trend`` come from the TRUSTWORTHY dated series only (``pb_series``), so a
     provisional/degraded/dropout "best" never inflates the read; ``sessions`` counts every row so the
     header is honest about the whole library ("12 sessions · best … · 3 PBs"). ``pb_count`` is the
-    number of times a session set a new running best (a genuine improvement step), and ``trend`` is a
-    light "improving" (the latest session is at/within the running best) vs "stalled" verdict — the
-    2nd/3rd-visit hook, not an analytics engine."""
+    number of times a LATER session beat the running best — the FIRST session seeds the baseline and
+    is not itself a PB (there was no prior best to beat), the same first/beat split ``pb_moment``
+    makes — and ``trend`` is a light "improving" (the latest session is at/within the running best)
+    vs "stalled" verdict — the 2nd/3rd-visit hook, not an analytics engine."""
     if not track:
         return None
     sessions = sum(1 for e in index.get("entries", []) if e.get("track") == track)
@@ -500,11 +501,13 @@ def track_summary(index: dict, track: str) -> dict | None:
                 "pb_count": 0, "trend": "none"}
     # Fastest trustworthy dated best + the date it was set (earliest date on a tie).
     best_date, best = min(series, key=lambda p: (p[1], p[0]))
-    # Count improving steps: each time the running best drops, that session set a new PB.
+    # Count improving steps: each time the running best drops, that session set a new PB. The first
+    # session SEEDS the running best rather than counting — it had nothing to beat, so calling it a
+    # PB would report "1 session · 1 PB" on a brand-new track.
     pb_count = 0
-    running = None
-    for _date, b in series:
-        if running is None or b < running:
+    running = series[0][1]
+    for _date, b in series[1:]:
+        if b < running:
             pb_count += 1
             running = b
     if len(series) == 1:

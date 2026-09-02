@@ -21,6 +21,12 @@ back, which also reflect the authoritative checked/appearance state onto the but
 The slider + emitted position are GLOBAL session ms (multi-chapter summed); the pane maps
 global<->chapter and switches sources under the hood. In compare mode the slider spans lap A's
 window via the primary pane's clamp.
+
+Transport layout: the scrub bar has its own full-width row under the video (a media-player
+transport, not a control squeezed in beside five buttons) and the buttons sit under it. Every
+piece of chrome here is width-budgeted rather than assumed to fit — see `_LapRulerSlider.tick_plan`
+(the ruler decimates to the pixels it has) and `_PaneCell._fit_strip` (the compare strip picks a
+form that fits instead of letting Qt overlap the boxes).
 """
 
 from __future__ import annotations
@@ -28,9 +34,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -58,9 +65,21 @@ PRIMARY, SECONDARY = 0, 1
 # composites above sibling chrome) doesn't swallow the splitter handle's mouse events.
 _PANE_INSET = 5
 
-# Floor width (px) for each pane's lap picker (the sole home of the lap text) so it never clips;
-# AdjustToContents grows it past this for a wider current item.
+# Width budget (px) for each pane's lap picker — the SOLE home of the lap text. The floor is the
+# picker's OWN content width (set_lap_choices measures it), never a magic number, so the lap TIME
+# can't be elided away; _PICKER_MAX_W caps a pathological label so one picker can't pin the strip.
 _PICKER_MIN_W = 150
+_PICKER_MAX_W = 260
+# Gap (px) between the compare strip's children, on both of its rows.
+_STRIP_SPACING = 6
+
+# The scrub bar is the video panel's primary hit target and the lap ruler's canvas: it gets its own
+# full-width row under the video, a >=24px handle and a >=26px widget (the 24px hit floor), which
+# also buys the ruler the travel it needs to stay readable on a 65-lap session.
+_SLIDER_H = 26
+_SLIDER_HANDLE = 24
+# Seek tooltip; the ruler appends what the ticks mean (see _LapRulerSlider._refresh_tooltip).
+_SEEK_TIP = "Seek — click or drag · ←/→ step 1 s · Shift+←/→ 5 s"
 
 
 @dataclass
@@ -84,22 +103,49 @@ class PaneSpec:
     choice_labels: list[str] | None = None
 
 
+def _ordinal(n: int) -> str:
+    """1st / 2nd / 3rd / 5th — for the lap ruler's "every Nth lap" tooltip."""
+    suffix = "th" if n % 100 in (11, 12, 13) else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 class _LapRulerSlider(QSlider):
     """Horizontal QSlider that also paints lap-boundary tick marks over the groove (MoTeC-style lap
     ruler). Ticks are global-ms boundaries fed via `set_lap_ticks`; only painting is extended — seek
     wiring is the base slider's. Each tick maps to x via the style's groove rect +
-    sliderPositionFromValue (the handle's own geometry), so ticks and handle agree."""
+    sliderPositionFromValue (the handle's own geometry), so ticks and handle agree.
 
-    _TICK_H = 10   # px tall (centred on the groove), a touch taller than the 8px groove so it reads
+    The ruler is DECIMATED to the width it has (`tick_plan`): a long session (65 laps over ~500 px)
+    painted one line per boundary collapses into a 4 px-pitch hatch where no lap is identifiable, so
+    the plan drops to every 2nd/5th/10th... lap until the ticks are at least `_MIN_PITCH` apart,
+    promotes every `_MAJOR_EVERY`-th survivor to a taller major tick, and brackets the lap the
+    playhead is inside in accent. The tooltip says which of those you are looking at.
+
+    The bracket is drawn only when a lap is WIDER than the handle plus a margin: on a 65-lap session
+    one lap is ~7 px, so the two accent lines would be painted under the 24 px handle, marking
+    nothing while claiming to. There the ruler stays a ruler and the readout keeps naming the lap."""
+
+    _TICK_H = 10        # minor tick, centred on the groove (a touch taller than the 8px groove)
+    _MAJOR_H = 16       # every _MAJOR_EVERY-th drawn tick, so the eye can count laps along the bar
+    _BRACKET_H = 18     # the current lap's two boundaries, in accent
+    _MIN_PITCH = 9      # px: closer than this and the ruler reads as a hatch, so decimate
+    _MAJOR_EVERY = 5    # promote every 5th DRAWN tick
+    # Decimation steps, in laps. Kept "nice" so a tick is always every Nth lap a driver can count.
+    _STEPS = (1, 2, 5, 10, 20, 25, 50, 100, 200)
 
     def __init__(self, orientation):
         super().__init__(orientation)
         self._lap_ticks: list[int] = []  # boundary values in slider units (ms), sorted/unique
+        # The decimation step (and so the tooltip) is a function of the range and the width; both
+        # change under the ruler as chapters load and the panel is resized.
+        self.rangeChanged.connect(lambda *_: self._refresh_tooltip())
+        self._refresh_tooltip()
 
     def set_lap_ticks(self, values: list[int]) -> None:
         """Set lap-boundary ticks (global ms); out-of-range values clamp at paint, empty clears.
         Repaints."""
         self._lap_ticks = sorted({int(v) for v in values})
+        self._refresh_tooltip()
         self.update()
 
     def _groove_rect(self):
@@ -110,43 +156,142 @@ class _LapRulerSlider(QSlider):
         return self.style().subControlRect(
             QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self)
 
-    def paintEvent(self, ev):
-        super().paintEvent(ev)  # base groove + sub/add-page fill + handle (themed QSS) first
-        lo, hi = self.minimum(), self.maximum()
-        if not self._lap_ticks or hi <= lo:
-            return
+    def _travel(self):
+        """(x0, span, handle_w): where value `minimum()` sits and how many pixels the handle travels
+        — the mapping every x below is built on, taken from the handle's own style geometry."""
         groove = self._groove_rect()
-        # handle-travel span = groove minus handle width (matches sliderPositionFromValue)
         opt = QStyleOptionSlider()
         self.initStyleOption(opt)
-        handle = self.style().subControlRect(
-            QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
-        span = groove.width() - handle.width()
-        x0 = groove.x() + handle.width() // 2
-        cy = groove.center().y()
+        handle = self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+        return groove.x() + handle.width() // 2, groove.width() - handle.width(), handle.width()
+
+    def _x_for(self, value: int) -> int:
+        """A slider value as an x pixel, exactly where the handle would place it."""
+        lo, hi = self.minimum(), self.maximum()
+        x0, span, _ = self._travel()
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        return x0 + QStyle.sliderPositionFromValue(lo, hi, min(max(value, lo), hi), span,
+                                                   opt.upsideDown)
+
+    def _tick_xs(self) -> list[int]:
+        """Every lap boundary as an x pixel (clamped into range, de-duplicated, ascending)."""
+        if not self._lap_ticks or self.maximum() <= self.minimum():
+            return []
+        return sorted({self._x_for(v) for v in self._lap_ticks})
+
+    def tick_plan(self) -> dict:
+        """What paintEvent will actually draw, as x pixels — the single source for the painting, the
+        tooltip and the regression test:
+
+          {"step": every Nth lap boundary kept, "minor": [x...], "major": [x...],
+           "current": (x_start, x_end) | None, "bracketable": bool}
+
+        `minor`/`major` are disjoint and at least `_MIN_PITCH` apart, so the drawn tick count can
+        never exceed span/_MIN_PITCH however many laps the session has. `bracketable` is whether a
+        typical lap is wide enough for the current-lap bracket to clear the handle (it is a property
+        of the session + width, not of the playhead, so the tooltip can rely on it)."""
+        xs = self._tick_xs()
+        plan = {"step": 1, "minor": [], "major": [], "current": None, "bracketable": False}
+        if not xs:
+            return plan
+        spans = [b - a for a, b in zip(xs, xs[1:], strict=False)]
+        # A bracket is only honest when its two lines fall OUTSIDE the handle covering the playhead.
+        _, _, handle_w = self._travel()
+        room = handle_w + 2 * self._MIN_PITCH
+        plan["bracketable"] = bool(spans) and sorted(spans)[len(spans) // 2] >= room
+        # The lap the playhead is inside: the boundary pair bracketing the current value.
+        cur = None
+        if plan["bracketable"]:
+            vx = self._x_for(self.value())
+            for a, b in zip(xs, xs[1:], strict=False):
+                if a <= vx <= b and b - a >= room:
+                    cur = (a, b)
+                    break
+        plan["current"] = cur
+        # Smallest "nice" step whose kept ticks clear _MIN_PITCH (the last step is the fallback).
+        step = self._STEPS[-1]
+        for cand in self._STEPS:
+            kept = xs[::cand]
+            pitches = [b - a for a, b in zip(kept, kept[1:], strict=False)]
+            if not pitches or min(pitches) >= self._MIN_PITCH:
+                step = cand
+                break
+        plan["step"] = step
+        # Greedy pitch guarantee on top of the index decimation (laps are not equally long, and a
+        # chapter seam or an out-of-range clamp can still bunch two survivors together).
+        drawn: list[int] = []
+        for x in xs[::step]:
+            if drawn and x - drawn[-1] < self._MIN_PITCH:
+                continue
+            if cur is not None and min(abs(x - cur[0]), abs(x - cur[1])) < self._MIN_PITCH:
+                continue        # the accent bracket already marks this spot
+            drawn.append(x)
+        plan["minor"] = [x for i, x in enumerate(drawn) if i % self._MAJOR_EVERY]
+        plan["major"] = [x for i, x in enumerate(drawn) if not i % self._MAJOR_EVERY]
+        return plan
+
+    def _refresh_tooltip(self) -> None:
+        """Say what the ticks ARE — a bare hatch of lines over a seek bar reads as decoration, and
+        at a decimated step the user has to be told they are not seeing every lap. The bracket
+        clause is added only when a bracket can actually be drawn at this width."""
+        tip = _SEEK_TIP
+        if self._lap_ticks:
+            plan = self.tick_plan()
+            step = plan["step"]
+            which = "every lap boundary" if step == 1 else f"every {_ordinal(step)} lap boundary"
+            tip = f"{tip} · the ticks mark {which}"
+            if plan["bracketable"]:
+                tip = f"{tip}; the lap you are in is bracketed in amber"
+        if tip != self.toolTip():
+            self.setToolTip(tip)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._refresh_tooltip()   # the decimation step is a function of the width
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)  # base groove + sub/add-page fill + handle (themed QSS) first
+        plan = self.tick_plan()
+        if not (plan["minor"] or plan["major"] or plan["current"]):
+            return
+        cy = self._groove_rect().center().y()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, False)
-        pen = QPen(QColor(theme.C.text_dim))
-        pen.setWidth(1)
-        painter.setPen(pen)
-        painter.setOpacity(0.55)
-        seen = set()
-        for v in self._lap_ticks:
-            cv = min(max(v, lo), hi)
-            x = x0 + QStyle.sliderPositionFromValue(lo, hi, cv, span, opt.upsideDown)
-            if x in seen:        # collapse boundaries that map to the same pixel (back-to-back laps)
-                continue
-            seen.add(x)
-            painter.drawLine(x, cy - self._TICK_H // 2, x, cy + self._TICK_H // 2)
+
+        def bars(xs, height, colour, opacity, width=1):
+            pen = QPen(QColor(colour))
+            pen.setWidth(width)
+            painter.setPen(pen)
+            painter.setOpacity(opacity)
+            for x in xs:
+                painter.drawLine(x, cy - height // 2, x, cy + height // 2)
+
+        bars(plan["minor"], self._TICK_H, theme.C.text_dim, 0.55)
+        bars(plan["major"], self._MAJOR_H, theme.C.text_dim, 0.85)
+        if plan["current"] is not None:
+            bars(plan["current"], self._BRACKET_H, theme.C.accent, 1.0, width=2)
         painter.end()
 
 
 class _PaneCell(QWidget):
     """Compare-pane chrome: a strip (fixed role caption · lap picker · Δ badge) above the PlayerPane.
     Owns no playback state. The lap identity lives ONLY in the picker; the caption is a fixed role
-    word, the badge yields width first. Selecting a lap emits `repointRequested(lap_id)`."""
+    word, the badge yields width first. Selecting a lap emits `repointRequested(lap_id)`.
+
+    THE STRIP IS BUDGETED, NOT WISHED FOR (`_fit_strip`). Three width-inflexible children in one
+    QHBoxLayout demanded 316 px inside the 243 px a pane gets at the app's own default window size,
+    and Qt resolves that shortfall by OVERLAPPING the boxes — the Δ badge painted on top of the lap
+    time, unrecoverably. So the strip is a QGridLayout that measures what it has and picks a form
+    that fits: one row while all three fit, otherwise the picker drops to a full-width second row
+    (role + Δ above it), and if even that is too narrow the role word goes to its short form. The
+    lap time is the one thing that never yields."""
 
     repointRequested = Signal(int)  # the newly-picked lap id for this side
+
+    # Role caption per side: (full, short). The short form is used only when the full one cannot fit
+    # beside the Δ badge; the full role is always in the caption's tooltip.
+    _ROLES = {PRIMARY: ("THIS LAP", "THIS"), SECONDARY: ("REFERENCE", "REF")}
 
     def __init__(self, pane: PlayerPane, side: int):
         super().__init__()
@@ -154,14 +299,17 @@ class _PaneCell(QWidget):
         self.side = side
         self._lap_ids: list[int] = []
         self._labels: list[str] = []   # last-applied picker item labels (guards the repopulate)
+        self._role_full, self._role_short = self._ROLES[side]
 
         # fixed role word; Fixed size so the picker (not it) grows
-        self.caption = QLabel("THIS LAP" if side == PRIMARY else "REFERENCE")
+        self.caption = QLabel(self._role_full)
         self.caption.setObjectName("PaneCaption")
         self.caption.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self.caption.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.caption.setToolTip(self._role_full)
 
-        # sole home of lap identity; floor width + AdjustToContents so it never clips
+        # sole home of lap identity; the width floor is re-derived from its own content in
+        # set_lap_choices so the lap TIME can never be elided out of it.
         self.picker = QComboBox()
         self.picker.setToolTip("Pick the lap shown in this pane")
         self.picker.setMinimumWidth(_PICKER_MIN_W)
@@ -174,26 +322,87 @@ class _PaneCell(QWidget):
         self.badge.setObjectName("PaneBadge")
         self.badge.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
         self.badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.badge.setToolTip("This lap against the other pane at the same point")
         self._badge_colour: str | None = None
         self._badge_text = "Δ —"   # last-applied badge text (guards the per-tick setText)
 
-        # caption, picker (grows), a flexible gap, then the badge pinned right — the gap absorbs
-        # spare width and collapses first, so no identifying text clips when width is tight.
-        strip = QHBoxLayout()
-        strip.setContentsMargins(0, 0, 0, 0)
-        strip.setSpacing(6)
-        strip.addWidget(self.caption)
-        strip.addWidget(self.picker)
-        strip.addStretch(1)
-        strip.addWidget(self.badge)
+        # Columns: 0 caption · 1 picker · 2 elastic gap · 3 badge (pinned right). Which cells are
+        # occupied is _fit_strip's call; the gap column carries the stretch in both forms.
+        self._strip = QGridLayout()
+        self._strip.setContentsMargins(0, 0, 0, 0)
+        self._strip.setHorizontalSpacing(_STRIP_SPACING)
+        self._strip.setVerticalSpacing(2)
+        self._strip.setColumnStretch(2, 1)
+        self._two_row: bool | None = None
+        self._apply_strip_rows(False)
 
         lay = QVBoxLayout(self)
         # horizontal inset so the native video surface doesn't swallow the splitter handle (see _PANE_INSET).
         lay.setContentsMargins(_PANE_INSET, 0, _PANE_INSET, 0)
         lay.setSpacing(0)
-        lay.addLayout(strip)
+        lay.addLayout(self._strip)
         lay.addWidget(self.pane, 1)
 
+    # ------------------------------------------------------------------ the strip's width budget
+    def _apply_strip_rows(self, two_row: bool) -> None:
+        """Mount the strip's three children in the one-row or two-row form. Idempotent (a no-op when
+        the form is already the live one), so a resize storm re-parents nothing."""
+        if two_row == self._two_row:
+            return
+        self._two_row = two_row
+        for wdg in (self.caption, self.picker, self.badge):
+            self._strip.removeWidget(wdg)
+        self._strip.addWidget(self.caption, 0, 0)
+        self._strip.addWidget(self.badge, 0, 3)
+        if two_row:
+            self._strip.addWidget(self.picker, 1, 0, 1, 4)   # full width on its own row
+        else:
+            self._strip.addWidget(self.picker, 0, 1)
+
+    def _caption_w(self, text: str) -> int:
+        """What the caption label would be WIDE if it carried `text` (its QSS padding included)."""
+        fm = self.caption.fontMetrics()
+        pad = self.caption.sizeHint().width() - fm.horizontalAdvance(self.caption.text())
+        return fm.horizontalAdvance(text) + max(pad, 0)
+
+    def _fit_strip(self) -> None:
+        """Pick the strip form that FITS the width this cell actually has — the fix for the badge
+        painting over the lap time. Depends only on the cell width and font metrics (never on the
+        children's current geometry), so it converges in one pass and cannot oscillate.
+
+        The ladder, in the order things yield: one row → the picker takes a full-width second row →
+        the role word goes short → the role word goes (it is still in the tooltip, and pane A is
+        always the left one). The lap time and the Δ never yield."""
+        avail = self.width() - 2 * _PANE_INSET
+        if avail <= 0:
+            return
+        gaps = 3 * _STRIP_SPACING          # the grid keeps its column spacing even where a cell is empty
+        full = self._caption_w(self._role_full)
+        short = self._caption_w(self._role_short)
+        badge = self.badge.sizeHint().width()
+        picker = self.picker.minimumWidth()
+        one_row = avail >= full + picker + badge + gaps
+        if one_row or avail >= full + badge + gaps:
+            role, shown = self._role_full, True
+        elif avail >= short + badge + gaps:
+            role, shown = self._role_short, True
+        else:
+            role, shown = self._role_short, False   # too narrow even for "REF" beside the Δ
+        if self.caption.text() != role:
+            self.caption.setText(role)
+        if self.caption.isVisibleTo(self) != shown:
+            self.caption.setVisible(shown)
+        self._apply_strip_rows(not one_row)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._fit_strip()
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        self._fit_strip()   # first real width + a polished (QSS padding applied) caption
+
+    # ------------------------------------------------------------------ content
     def set_lap_choices(self, lap_ids: list[int], current: int,
                         labels: list[str] | None = None):
         """(Re)populate the picker with `lap_ids`/`labels` (labels default "lap {id}") and select
@@ -208,24 +417,32 @@ class _PaneCell(QWidget):
             self.picker.clear()
             for lid, text in zip(ids, labels, strict=True):  # parallel by construction
                 self.picker.addItem(text, lid)
+            # Re-derive the width floor from the content itself: AdjustToContents sizes the hint to
+            # the WIDEST item (frame + arrow included), so this is exactly the width at which the
+            # lap time stops being elided. Capped, so one long label can't pin the whole strip.
+            self.picker.setMinimumWidth(
+                max(_PICKER_MIN_W, min(self.picker.sizeHint().width(), _PICKER_MAX_W)))
         if current in self._lap_ids:
             idx = self._lap_ids.index(current)
             if self.picker.currentIndex() != idx:
                 self.picker.setCurrentIndex(idx)
         self.picker.blockSignals(False)
+        self._fit_strip()
 
     def set_caption(self, text: str):
         """Compat shim: the app passes rich "lap N · time" text; show it as the role caption's
-        TOOLTIP (the label stays the fixed role word — identity lives in the picker)."""
-        self.caption.setToolTip(text)
+        TOOLTIP (the label stays the fixed role word — identity lives in the picker). The tooltip
+        also carries the FULL role word, which the label itself drops at narrow widths."""
+        self.caption.setToolTip(f"{self._role_full} — {text}" if text else self._role_full)
 
     def set_badge(self, text: str, colour: str | None):
         """Set the Δ badge text/colour (app-driven per tick), guarded: re-apply only on an actual
         change so a stable compare view does zero per-tick label work (setText relayout / QSS
-        re-parse)."""
+        re-parse). A changed Δ can change the badge's width, so re-fit the strip with it."""
         if text != self._badge_text:
             self._badge_text = text
             self.badge.setText(text)
+            self._fit_strip()
         if colour != self._badge_colour:
             self._badge_colour = colour
             if colour is None:
@@ -265,7 +482,9 @@ class VideoView(QWidget):
         self.pane.seamLoading.connect(self.seamLoading)
         # A double-click on the PRIMARY video content requests video focus (make the video fill the
         # screen). Only the primary drives it; the secondary is video-only and never toggles focus.
-        self.pane.videoDoubleClicked.connect(self.videoFocusRequested)
+        # Gated on the ⤢ button's enabled state so the gesture and the button agree about when the
+        # request is even available (compare mode refuses it).
+        self.pane.videoDoubleClicked.connect(self._on_video_double_clicked)
 
         # PRIMARY pane's lap window while in compare mode, else None. Confines the scrub slider to
         # lap A; the pair stays in sync only via _compare_seek_fanout (the window alone doesn't).
@@ -321,9 +540,12 @@ class VideoView(QWidget):
         # back set_compare / exit_compare, which render the layout AND reflect the authoritative
         # checked/appearance state onto this button (see _set_compare_visual). The button never holds
         # or mirrors compare state itself.
-        self.compare_btn = QPushButton()
+        # It carries a TEXT LABEL, not just a glyph: compare is one of the app's three headline
+        # capabilities and "compare" appeared in no visible string anywhere in the window — only in
+        # this button's tooltip, which a user has to already suspect the feature exists to find.
+        self.compare_btn = QPushButton("Compare")
         self.compare_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
-        self.compare_btn.setFixedSize(_ICON_BTN)
+        self.compare_btn.setFixedHeight(_ICON_BTN.height())
         self.compare_btn.setCheckable(True)
         self.compare_btn.setEnabled(False)
         self.compare_btn.toggled.connect(self._set_compare_btn_appearance)  # glyph follows checked
@@ -333,20 +555,35 @@ class VideoView(QWidget):
         # "Fullscreen video" toggle (⤢): make the video fill the whole screen, like a normal player.
         # A pure INPUT (mirrors compare_btn): a click just emits videoFocusRequested; CentralView owns
         # the enter/exit and reflects the resulting on/off appearance back via set_video_focus_visual.
+        # It is DISABLED while the compare stage is mounted, because CentralView refuses the gesture
+        # there: a checkable button whose click is silently refused latches into a checked state it
+        # did not earn (indistinguishable from a genuinely-on toggle).
         self.fullscreen_btn = QPushButton()
         self.fullscreen_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
         self.fullscreen_btn.setFixedSize(_ICON_BTN)
         self.fullscreen_btn.setCheckable(True)
         self.fullscreen_btn.clicked.connect(self.videoFocusRequested)  # a genuine click = the intent
         self._set_fullscreen_btn_appearance(False)
+        # F is the ⤢ button's key (it had none anywhere in the app — only a click or a double-click
+        # on the video). Routed through the BUTTON, like app.py's G/C, so a disabled button (compare
+        # mode) makes the key a no-op instead of a silently-refused state change.
+        self._focus_shortcut = QShortcut(QKeySequence(Qt.Key_F), self)
+        self._focus_shortcut.setContext(Qt.WindowShortcut)
+        self._focus_shortcut.activated.connect(self._on_focus_shortcut)
 
         # global-ms scrub slider over the whole session (multi-chapter summed); _LapRulerSlider
         # paints lap ticks.
         self.slider = _LapRulerSlider(Qt.Horizontal)
         self.slider.setRange(0, 0)
-        self.slider.setToolTip("Seek — click or drag · ←/→ step 1 s · Shift+←/→ 5 s")
         self.slider.setSingleStep(1000)   # wheel/←→ step 1s
         self.slider.setPageStep(5000)     # page step 5s
+        # The panel's primary hit target: a 24px handle in a 26px widget clears the 24px floor, and
+        # the widget-level rule only overrides the handle's box (the themed groove/colours cascade).
+        self.slider.setMinimumHeight(_SLIDER_H)
+        self.slider.setStyleSheet(
+            f"QSlider::handle:horizontal {{ width: {_SLIDER_HANDLE}px;"
+            f" height: {_SLIDER_HANDLE}px; margin: -{(_SLIDER_HANDLE - 8) // 2}px 0;"
+            f" border-radius: {_SLIDER_HANDLE // 2}px; }}")
         self.slider.sliderMoved.connect(self._on_slider_moved)
         # groove clicks are actionTriggered not sliderMoved — route them through the same clamped seek.
         self.slider.actionTriggered.connect(self._on_slider_action)
@@ -360,13 +597,17 @@ class VideoView(QWidget):
                   self.fullscreen_btn, self.slider):
             w.setFocusPolicy(Qt.NoFocus)
 
+        # The scrub bar gets its OWN full-width row under the video, the way every media player lays
+        # a transport out. Sharing one row with the buttons cost it ~200px of travel (16.4 s per
+        # pixel on a 65-lap session, an unreadable lap ruler) and left no width for a text label on
+        # the compare button.
         row = QHBoxLayout()
         row.addWidget(self.play_btn)
         row.addWidget(self.mute_btn)
         row.addWidget(self.gmeter_btn)
         row.addWidget(self.compare_btn)
         row.addWidget(self.fullscreen_btn)
-        row.addWidget(self.slider, 1)
+        row.addStretch(1)
 
         self.readout = QLabel("")  # F2: time / speed / current lap, driven by app
         self.readout.setObjectName("Readout")  # caption style, dimmed, tabular (global QSS)
@@ -382,7 +623,9 @@ class VideoView(QWidget):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
         lay.addWidget(self._stage, 1)
+        lay.addWidget(self.slider)
         lay.addLayout(row)
         lay.addWidget(self.readout)
 
@@ -528,13 +771,44 @@ class VideoView(QWidget):
     # ------------------------------------------------------------- fullscreen-video toggle
     def _set_fullscreen_btn_appearance(self, on: bool):
         """Drive the ⤢ button's OFF/ON glyph + tooltip to track video-focus state. `ph.arrows-in`
-        (contract) reads as "exit fullscreen" while on; `ph.arrows-out` (expand) as "enter"."""
+        (contract) reads as "exit fullscreen" while on; `ph.arrows-out` (expand) as "enter". While
+        the gesture is unavailable (compare mode) the tooltip says WHY, in the same shape as the
+        compare button's own "— needs ≥2 valid laps"."""
         self.fullscreen_btn.setIcon(theme.icon(
             "ph.arrows-in" if on else "ph.arrows-out",
             color=theme.C.accent if on else None))
-        self.fullscreen_btn.setToolTip(
-            "Exit fullscreen video (Esc, or double-click the video)" if on else
-            "Make the video fill the screen (or double-click the video)")
+        if not self.fullscreen_btn.isEnabled():
+            tip = "Make the video fill the screen (F) — not while comparing two laps"
+        elif on:
+            tip = "Exit fullscreen video (F, Esc, or double-click the video)"
+        else:
+            tip = "Make the video fill the screen (F, or double-click the video)"
+        self.fullscreen_btn.setToolTip(tip)
+
+    def _sync_fullscreen_enabled(self):
+        """The ⤢ gesture is single-video only (CentralView refuses it while comparing — compare owns
+        the two-pane stage). Reflect that as the button's ENABLED state, so a refused click can no
+        longer leave the button latched checked: Qt toggles a checkable button before anyone can
+        refuse the intent, and the resulting checked tint is pixel-identical to a genuinely-on
+        toggle. Also drops any stale checked state on the way in (no re-emit)."""
+        available = not self._panes_mounted()
+        if self.fullscreen_btn.isEnabled() != available:
+            self.fullscreen_btn.setEnabled(available)
+        if not available and self.fullscreen_btn.isChecked():
+            self.fullscreen_btn.blockSignals(True)
+            self.fullscreen_btn.setChecked(False)
+            self.fullscreen_btn.blockSignals(False)
+        self._set_fullscreen_btn_appearance(self.fullscreen_btn.isChecked())
+
+    def _on_focus_shortcut(self):
+        """F → the ⤢ button's own click (so the disabled state gates the key too)."""
+        if self.fullscreen_btn.isEnabled():
+            self.fullscreen_btn.click()
+
+    def _on_video_double_clicked(self):
+        """Double-click on the video = the same intent as ⤢, and available exactly when it is."""
+        if self.fullscreen_btn.isEnabled():
+            self.videoFocusRequested.emit()
 
     def set_video_focus_visual(self, on: bool):
         """Reflect CentralView's video-focus state onto the ⤢ button WITHOUT re-emitting
@@ -635,6 +909,7 @@ class VideoView(QWidget):
         # Confine the global scrub slider to lap A's window so a drag can't escape the lap.
         self._set_slider_window(pane_a.window)
         self._apply_lap_ticks()  # confined to one lap now -> the whole-session lap ruler is cleared
+        self._sync_fullscreen_enabled()  # the ⤢ gesture is refused while comparing — say so
 
     def reseed_pane(self, side: int, spec: PaneSpec):
         """Repoint ONE pane (after its lap picker was used) from its new `PaneSpec`: update its lap
@@ -683,6 +958,7 @@ class VideoView(QWidget):
                 w.setParent(None)
                 w.deleteLater()
         self._cell_a = self._cell_b = self._splitter = None
+        self._sync_fullscreen_enabled()  # single video again -> the ⤢ gesture is back
 
     def _teardown_secondary(self):
         """STOP + close the secondary pane's overlay and schedule the pane (its player+audio) for

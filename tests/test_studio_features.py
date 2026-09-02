@@ -367,25 +367,34 @@ def _any_purple_or_green(table):
 
 
 def test_lap_table_provisional_mutes_times_and_drops_bests():
-    """PROVISIONAL timing (timing_verified False): the Time + S-split cells are muted (italic +
+    """PROVISIONAL timing (timing_verified False): EVERY start-line-derived cell is muted (italic +
     the dimmed provisional colour) with the 'Provisional' tooltip, and NEITHER the purple
     session-best splits NOR the green best-lap are painted — a 'best' on an arbitrary start line is
-    meaningless. Dist/Entry stay normal."""
+    meaningless.
+
+    QA L3-02 widened this from Time+S-splits alone: Dist is the distance BETWEEN crossings and Entry
+    the speed AT one, so moving the line moves both. This test used to assert Dist stayed at
+    BASE_COLOR, which is exactly the contradiction the sweep filed (the kept laps read 200-204m
+    against 534-543m for the excluded ones, off the same odometer, at full confidence). Only the Lap
+    NUMBER — which the line cannot move — stays normal."""
     from studio.lap_table import BASE_COLOR, PROVISIONAL_TOOLTIP
 
     table = LapTable(_TrustSession(verified=False))
     prov = theme.PROVISIONAL_COLOR.upper()
-    # Time + sector cells: muted colour, italic font, provisional tooltip.
-    for it in _time_col_items(table) + _sector_col_items(table):
-        assert it.foreground().color().name().upper() == prov, "timing cell must be muted"
-        assert it.font().italic(), "timing cell must be italic (provisional)"
-        assert it.toolTip() == PROVISIONAL_TOOLTIP, it.toolTip()
+    real = table._n_real_cols()
+    for c in range(1, real):
+        for r in range(table.table.rowCount()):
+            it = table.table.item(r, c)
+            name = table.table.horizontalHeaderItem(c).text()
+            assert it.foreground().color().name().upper() == prov, f"{name} cell must be muted"
+            assert it.font().italic(), f"{name} cell must be italic (provisional)"
+            assert it.toolTip() == PROVISIONAL_TOOLTIP, (name, it.toolTip())
     # No purple-best / green-best authority anywhere.
     assert not _any_purple_or_green(table), "provisional timing must paint no purple/green bests"
-    # Dist column (2) untouched: base colour, not italic.
-    dist = table.table.item(0, 2)
-    assert dist.foreground().color().name().upper() == BASE_COLOR.name().upper()
-    assert not dist.font().italic()
+    # The Lap number is the one column the start line does not place.
+    lap = table.table.item(0, 0)
+    assert lap.foreground().color().name().upper() == BASE_COLOR.name().upper()
+    assert not lap.font().italic()
     print("test_lap_table_provisional_mutes_times_and_drops_bests OK")
 
 
@@ -791,20 +800,24 @@ def test_on_load_failed_async_drops_a_stale_token():
 def test_load_failure_message_is_plain_language():
     """The honest-failure-UX fix: _load_failure_message maps the actionable load failures to plain
     sentences and NEVER leaks a raw Python class name (RuntimeError/KeyError/…) into the headline.
-    The raw text stays in the dialog details / console log only."""
+    The raw text stays in the dialog details / console log only. (The full per-case classification
+    table — folder / missing / empty / unreadable / truncated-GoPro / non-GoPro — is pinned in
+    tests/test_load_failure.py.)"""
     from studio.app import StudioWindow
     msg = StudioWindow._load_failure_message
 
-    # A real-but-non-GoPro MP4 (exists on disk): GPMFSource raises "Failed to open file: …".
+    # A real-but-non-GoPro MP4 (exists on disk, non-empty): GPMFSource raises "Failed to open file".
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".mp4") as tf:
+        tf.write(b"\x00" * 64)
+        tf.flush()
         m = msg([tf.name], RuntimeError(f"Failed to open file: {tf.name}"))
     assert "GoPro" in m and "GPS" in m, m
     assert "RuntimeError" not in m, f"leaked the class name: {m}"
 
     # A missing file: distinguished from non-GoPro by the path check.
     m_missing = msg(["/nonexistent/gone.MP4"], RuntimeError("Failed to open file: /nonexistent/gone.MP4"))
-    assert "moved or deleted" in m_missing.lower(), m_missing
+    assert "moved" in m_missing.lower() and "deleted" in m_missing.lower(), m_missing
     assert "RuntimeError" not in m_missing, m_missing
 
     # An unexpected cause (e.g. a numpy/binding KeyError): a generic honest message, still no class
@@ -1543,8 +1556,9 @@ def test_welcome_view_shows_a_drop_zone():
 
 
 def test_drag_and_drop_loads_mp4s():
-    """Dropping GoPro MP4s on the window loads them (sorted, so chapter siblings chain in order);
-    a drag with no MP4 is not accepted."""
+    """Dropping GoPro MP4s on the window loads them (chapter siblings still chain in order, now
+    ordered downstream by chapters.group_into_recordings rather than by sorting the drag — see
+    _dropped_mp4s / QA L10-02); a drag with no MP4 is not accepted."""
     from PySide6.QtCore import QMimeData, QUrl
 
     from studio.app import StudioWindow
@@ -1552,14 +1566,14 @@ def test_drag_and_drop_loads_mp4s():
     mime.setUrls([QUrl.fromLocalFile("/x/GX020060.MP4"),
                   QUrl.fromLocalFile("/x/GX010060.MP4"),
                   QUrl.fromLocalFile("/x/notes.txt")])
-    # The pure extractor: only .mp4, sorted; no URLs -> [].
-    assert StudioWindow._dropped_mp4s(mime) == ["/x/GX010060.MP4", "/x/GX020060.MP4"]
+    # The pure extractor: only .mp4, in DROP order; no URLs -> [].
+    assert StudioWindow._dropped_mp4s(mime) == ["/x/GX020060.MP4", "/x/GX010060.MP4"]
     assert StudioWindow._dropped_mp4s(QMimeData()) == []
 
     w = StudioWindow([])
     try:
         loaded = []
-        w._load = lambda paths: loaded.append(list(paths))
+        w._load = lambda paths, drop_notice=None: loaded.append(list(paths))
         enter = _FakeDropEvent(mime)
         w.dragEnterEvent(enter)
         assert enter.accepted, "an MP4 drag should be accepted"

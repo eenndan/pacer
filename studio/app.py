@@ -58,6 +58,13 @@ ISSUES_URL = "https://github.com/eenndan/pacer/issues/new"
 # something that JUST happened ("saved…", "reverted…"); with no timeout Qt leaves the last one
 # up indefinitely, so minutes later the bar still asserts a stale fact about the session (B20).
 STATUS_MS = 6000
+# How long a RELOAD may run before the working UI is replaced by the "Loading telemetry…" card
+# (ms). The load runs off the UI thread, so a live session stays usable while its successor is
+# read; blanking it instantly meant even a 0.36 s reload flashed the whole window to an
+# indeterminate card with zero controls — and a reload that FAILED inside this window left the
+# card up forever (QA L10-01/L10-06). The FIRST load has nothing to keep on screen, so it shows
+# the card immediately (see _arm_loading_placeholder).
+LOAD_PLACEHOLDER_MS = 400
 
 
 def _show_error_report(exc_type, exc, tb):
@@ -147,6 +154,16 @@ class StudioWindow(QMainWindow):
         self._load_worker = None
         self._load_workers = set()
         self._pending_load = None  # single-flight: the latest queued (token, paths) while a load runs
+        # Deferred loading placeholder (LOAD_PLACEHOLDER_MS): the token of the load still waiting for
+        # a result, plus the single-shot timer that installs the card if it is still waiting.
+        self._loading_token = None
+        self._placeholder_timer = None
+        # The ONE untimed status-bar line describing the loaded session (see _session_notice): the
+        # multi-drop warning carried through the load that started it, whether a sidecar restore was
+        # rejected, and the last notice actually put on the bar (so a stale one can be retracted).
+        self._drop_notice = None
+        self._timing_restore_failed = False
+        self._notice = None
         # Reference (cross-recording compare) load bookkeeping — the reference Session.load is the SAME
         # ~1.4–4 s synchronous compute as the primary open, so it too runs on a SessionLoadWorker (a
         # freeze here was the worst kind: it hit the moat "race a friend's GoPro" path). Its own token
@@ -191,12 +208,17 @@ class StudioWindow(QMainWindow):
     # ----------------------------------------------------------- drag-and-drop / welcome
     @staticmethod
     def _dropped_mp4s(mime) -> list[str]:
-        """The local .mp4 paths in a drag's mime data (sorted so chapter siblings load in order);
-        [] if the drag carries no MP4 file URLs."""
+        """The local .mp4 paths in a drag's mime data, IN DROP ORDER; [] if the drag carries no MP4
+        file URLs.
+
+        Order is preserved deliberately: _open_recordings opens the FIRST recording dropped, and
+        sorting here silently made that the ALPHABETICALLY first instead (QA L10-02). Nothing
+        downstream needs a sorted list — chapters.group_into_recordings orders each recording's
+        chapters by chapter index, and _open_recordings re-orders the merged set again."""
         if not mime.hasUrls():
             return []
         out = [u.toLocalFile() for u in mime.urls()]
-        return sorted(p for p in out if p and p.lower().endswith(".mp4"))
+        return [p for p in out if p and p.lower().endswith(".mp4")]
 
     def dragEnterEvent(self, event):
         """Accept a drag only if it carries at least one .mp4 (so the cursor shows it's droppable)."""
@@ -223,7 +245,12 @@ class StudioWindow(QMainWindow):
         Expands the chosen recording's full on-disk chapter set via discover_siblings (so a single
         opened chapter still chains its siblings, matching --full / File ▸ Open), then loads that ONE
         recording. On a multi-recording drop it surfaces a clear, non-modal status message naming what
-        was opened. Shared by dropEvent (and any future multi-selection open path)."""
+        was opened. Shared by dropEvent (and any future multi-selection open path).
+
+        That warning is CARRIED THROUGH the load (drop_notice) rather than left to expire on its own:
+        it used to be a 6 s transient that _on_session_loaded overwrote after 2.5-3.6 s, so the one
+        message naming the recordings that were NOT opened was erased by the load it had just started
+        and nothing in the window mentioned them again (QA L10-02)."""
         groups = chapters.group_into_recordings(paths)
         if not groups:
             return
@@ -234,11 +261,16 @@ class StudioWindow(QMainWindow):
         # an explicitly-dropped chapter nor an on-disk sibling is ever lost — and dropping the two
         # chapters of one recording loads exactly those two (the common case stays unchanged).
         to_load = chapters.order_chapters(first + chapters.discover_siblings(first[0]))
-        self._load(to_load)
+        drop_notice = None
         if len(groups) > 1:
-            self.statusBar().showMessage(
+            drop_notice = (
                 f"Dropped {len(groups)} recordings — opened {chapters.recording_label(to_load)}. "
-                "Open the others one at a time.", STATUS_MS)
+                "Open the others one at a time.")
+        self._load(to_load, drop_notice=drop_notice)
+        if drop_notice:
+            # Transient here so a FAILED load doesn't strand it; the post-load notice re-states it
+            # untimed (see _session_notice), so the fact stays on screen for the whole session.
+            self.statusBar().showMessage(drop_notice, STATUS_MS)
 
     def _show_welcome(self, error: str | None = None):
         """Install the no-recording welcome empty state (also the first-load-failure fallback)."""
@@ -262,10 +294,14 @@ class StudioWindow(QMainWindow):
         self._load([path])
 
     # ------------------------------------------------------------------ loading
-    def _load(self, paths: list[str]):
+    def _load(self, paths: list[str], drop_notice: str | None = None):
         """Load (or reload) the session for `paths` OFF the UI thread, then (in _on_session_loaded)
         build a fresh CentralView and swap it in. The window keeps the load orchestration +
         `session`/`_paths`; each panel captures `session` at construction.
+
+        `drop_notice` is a one-line fact about HOW this load was requested (today: the
+        multi-recording drop warning) that must outlive the load rather than be overwritten by it —
+        see _session_notice. Every other caller passes none, which clears any previous one.
 
         Session.load is a ~1.4–4 s synchronous call, so it runs on a worker QThread: the placeholder
         shows immediately and the window stays responsive. SINGLE-FLIGHT: only ONE load runs at a
@@ -274,13 +310,16 @@ class StudioWindow(QMainWindow):
         clean). It shows the placeholder, bumps the token, and starts when the current worker
         finishes; the older in-flight result is ignored by token (see the completion slots)."""
         print("studio: loading telemetry…", flush=True)
-        # Show the placeholder so the window isn't a black void during the load (the load no longer
-        # blocks the event loop, so the placeholder also stays live/paintable throughout).
-        self._show_loading_placeholder(paths)
+        self._drop_notice = drop_notice
         # Bump the token: any in-flight worker started by a previous _load is now stale and its
         # result will be ignored when it finishes.
         self._load_token += 1
         token = self._load_token
+        self._loading_token = token  # cleared by whichever completion slot applies this result
+        # Show the placeholder so the window isn't a black void during the load (the load no longer
+        # blocks the event loop, so the placeholder also stays live/paintable throughout) — but not
+        # OVER a working session until the load proves slow.
+        self._arm_loading_placeholder(token, paths)
         # Single-flight: if a worker is already running, remember only the LATEST request and start
         # it when the current one finishes — no point running two loads at once, and queuing keeps
         # the supersede ordering clean.
@@ -288,6 +327,41 @@ class StudioWindow(QMainWindow):
             self._pending_load = (token, list(paths))
             return
         self._start_load_worker(token, paths)
+
+    def _arm_loading_placeholder(self, token: int, paths: list[str]):
+        """Decide WHEN the "Loading telemetry…" card replaces what's on screen.
+
+        FIRST load — immediately: there is nothing else to show (and _show_loading_placeholder is
+        what brings the window up). RELOAD over a working session — only if the load is still
+        running LOAD_PLACEHOLDER_MS later. The load is off-thread, so the loaded session stays fully
+        usable meanwhile; blanking it the instant a reload starts meant a 0.36 s reload flashed the
+        whole window to a control-less card, and a reload that failed in that window left the card
+        up forever with the session unreachable (QA L10-01/L10-06)."""
+        self._cancel_placeholder_timer()
+        if self.view is None or self.centralWidget() is not self.view:
+            self._show_loading_placeholder(paths)
+            return
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: self._on_placeholder_due(token, list(paths)))
+        self._placeholder_timer = timer
+        timer.start(LOAD_PLACEHOLDER_MS)
+
+    def _on_placeholder_due(self, token: int, paths: list[str]):
+        """LOAD_PLACEHOLDER_MS elapsed: install the loading card only if THIS load is still the
+        current one and still waiting for its worker (a result that already landed cleared
+        _loading_token, and a superseding _load bumped it)."""
+        self._placeholder_timer = None
+        if token == self._load_token and self._loading_token == token:
+            self._show_loading_placeholder(paths)
+
+    def _cancel_placeholder_timer(self):
+        """Stop the pending loading-card timer, if any (a load settled, was superseded, or the
+        window is closing)."""
+        timer = getattr(self, "_placeholder_timer", None)  # guarded: closeEvent runs in partial harnesses
+        self._placeholder_timer = None
+        if timer is not None:
+            timer.stop()
 
     def _start_load_worker(self, token: int, paths: list[str]):
         """Spawn the single in-flight load worker for `token` (see _load's single-flight rule)."""
@@ -335,6 +409,7 @@ class StudioWindow(QMainWindow):
         would warn/crash). Uses the bounded drain so close can never hang on a stuck worker. The
         token is already bumped past any in-flight worker, so its result is ignored regardless."""
         self._pending_load = None  # don't start a queued load during teardown
+        self._cancel_placeholder_timer()  # no loading card can appear mid-teardown
         # Bump the reference token past any in-flight reference worker too, so a reference load that
         # finishes mid-teardown is ignored (its set_reference_session apply is dropped by the token
         # guard) — matching how the primary load's token already supersedes any in-flight worker.
@@ -348,6 +423,8 @@ class StudioWindow(QMainWindow):
         would clobber the current (good) session. This is the EXACT former post-load body of _load."""
         if token != self._load_token:
             return  # superseded by a newer load; drop this result
+        self._loading_token = None
+        self._cancel_placeholder_timer()  # the result beat the card: never blank the window now
         self.session = session
         # Commit _paths only after a successful load, so a failed reload leaves both self.session
         # and _paths pointing at the still-good recording (every _paths consumer stays in sync).
@@ -360,7 +437,7 @@ class StudioWindow(QMainWindow):
         # is built, so every panel is constructed against the restored segmentation. Applied first
         # so the segmentation is final before any notice below is decided.
         self._sidecar_path = sidecar.sidecar_path(paths[0]) if paths else None
-        notice = None
+        self._timing_restore_failed = False
         data = sidecar.load(self._sidecar_path) if self._sidecar_path else None
         if data is not None:
             if session.apply_timing_lines_latlon(data["start"], data["sectors"],
@@ -368,32 +445,15 @@ class StudioWindow(QMainWindow):
                 print(f"studio: restored saved timing lines from "
                       f"{os.path.basename(self._sidecar_path)}", flush=True)
             else:
-                notice = ("saved timing lines don't match this recording — "
-                          "reverted to the auto-fitted start line")
-        elif session.track_name is None and session.lap_count() > 0:
-            # Unknown track: the start line was auto-fitted, so lap times are arbitrary until the
-            # user drags it into place. To register the track: studio/dev/print_track_entry.py.
-            notice = ("unknown track — start/finish line was auto-fitted; "
-                      "drag it into place to fix lap timing")
-
-        # A zero-valid-lap load renders every panel blank; surface a notice. Highest priority —
-        # supersedes the notices above (a 0-lap recording has no lap timing to fix either way).
-        if not session.valid_lap_ids():
-            notice = ("no complete laps detected in this recording — the GPS may not have "
-                      "locked, or the recording is too short")
+                self._timing_restore_failed = True
 
         label = chapters.recording_label(paths)
         self.setWindowTitle(f"{APP_NAME} — {label}" if label else APP_NAME)
         self._build_ui()
         # One-line, non-fatal: the statusbar mirrors the console "studio:" notice style.
+        notice = self._apply_session_notice()
         if notice:
             print(f"studio: {notice}", flush=True)
-            # DELIBERATELY untimed (unlike the transient confirmations, B20): this describes the
-            # LOADED SESSION, stays true until the next load, and is explicitly cleared below when
-            # the next recording has no concern.
-            self.statusBar().showMessage(notice)
-        else:
-            self.statusBar().clearMessage()
 
         # Record this recording in the local session library (see _update_library) and, if this
         # session's best lap beats the track's prior PB on verified timing, celebrate it.
@@ -402,12 +462,68 @@ class StudioWindow(QMainWindow):
             self._show_pb_moment(moment)
         self.loadFinished.emit()
 
+    def _session_notice(self) -> str | None:
+        """The ONE untimed status-bar line for the CURRENTLY loaded session, derived from live state
+        so it can be re-decided at any time (not just at load).
+
+        Composed, highest concern first, from:
+          * no valid laps — every panel renders blank, so say why. Supersedes the timing notices
+            (a 0-lap recording has no lap timing to fix either way);
+          * timing TRUST — a start line that is neither a detected track nor user-placed makes every
+            lap time arbitrary. Keyed on `session.timing_verified`, the SAME predicate the map's
+            trust strip and provisional cue read, so the bar retracts the "drag it into place" line
+            in the same beat the map does. It used to be decided ONCE at load from `track_name`, so
+            it survived byte-identical across the very drag that answered it (QA MAP-06);
+          * the multi-drop warning carried in from _open_recordings (QA L10-02), appended so the
+            recordings that were NOT opened stay named for the life of the session.
+        getattr-guarded for the partial test harnesses that build a window via __new__."""
+        session = getattr(self, "session", None)
+        if session is None:
+            return None
+        notice = None
+        if not session.valid_lap_ids():
+            notice = ("no complete laps detected in this recording — the GPS may not have "
+                      "locked, or the recording is too short")
+        elif not session.timing_verified:
+            if getattr(self, "_timing_restore_failed", False):
+                notice = ("saved timing lines don't match this recording — "
+                          "reverted to the auto-fitted start line")
+            else:
+                # The start line was auto-fitted, so lap times are arbitrary until the user drags it
+                # into place. To register the track: studio/dev/print_track_entry.py.
+                notice = ("unknown track — start/finish line was auto-fitted; "
+                          "drag it into place to fix lap timing")
+        drop_notice = getattr(self, "_drop_notice", None)
+        return " · ".join(p for p in (notice, drop_notice) if p) or None
+
+    def _apply_session_notice(self) -> str | None:
+        """Put the current _session_notice on the status bar and return it.
+
+        DELIBERATELY untimed (unlike the transient confirmations, B20): it describes the LOADED
+        SESSION and stays true until that changes. Only ever retracts a notice of OUR OWN — a
+        transient confirmation someone else wrote is left to expire on its own timer.
+
+        Connected to the view's timingEdited (in _build_ui) so a timing-line drag or undo re-decides
+        it from the same seam that rebuilds the derived views."""
+        notice = self._session_notice()
+        bar = self.statusBar()
+        previous = getattr(self, "_notice", None)
+        if notice:
+            if bar.currentMessage() != notice:
+                bar.showMessage(notice)
+        elif previous and bar.currentMessage() == previous:
+            bar.clearMessage()
+        self._notice = notice
+        return notice
+
     def _on_load_failed_async(self, token: int, paths: list[str], exc: Exception):
         """Failed load completion (on the UI thread, via a queued signal): drop a STALE result, else
         surface the error via the existing _on_load_failed (welcome-state fallback on first load,
         good session kept on a reload failure)."""
         if token != self._load_token:
             return  # superseded by a newer load; drop this result
+        self._loading_token = None
+        self._cancel_placeholder_timer()  # the failure beat the card: never blank the window now
         self._on_load_failed(paths, exc)
         self.loadFinished.emit()
 
@@ -441,9 +557,16 @@ class StudioWindow(QMainWindow):
     def _on_load_failed(self, paths: list[str], exc: Exception):
         """A session load failed (missing / not-a-GoPro / no-GPS file). Show a clear, non-fatal error
         in PLAIN LANGUAGE (never the raw Python class name as the headline — that reads as amateur)
-        and keep the app open. If a session was already loaded (this was a reload, e.g. "Load full
-        recording"), the working UI is LEFT INTACT — only the dialog shows. On the very first load
-        there is no UI yet, so install the welcome empty state so the window still opens.
+        and keep the app open. On the very first load there is no UI yet, so install the welcome
+        empty state so the window still opens.
+
+        A failed RELOAD hands the working session back BEFORE the dialog claims it is unchanged.
+        Since the load went off-thread, _load may already have swapped the live view out for the
+        loading card, and NOTHING else rebuilt it: the window was stranded on an endless "Loading
+        telemetry…" card with 0 controls and the session unreachable, while the dialog said the
+        previous session was fine (QA L10-01). _build_ui's first act is to dispose the outgoing
+        view, so re-running it is a clean swap; the deferred card (_arm_loading_placeholder) means
+        a fast failure never disturbs the view at all and this rebuild is skipped.
 
         The raw `type(exc).__name__: exc` is logged to the console and tucked behind the dialog's
         "Show details" — diagnostics for a bug report, not the user-facing message."""
@@ -451,15 +574,23 @@ class StudioWindow(QMainWindow):
         detail = f"{type(exc).__name__}: {exc}"
         message = self._load_failure_message(paths, exc)
         print(f"studio: failed to load {offending}: {detail}", flush=True)
+        reload_failed = hasattr(self, "session")
+        view = getattr(self, "view", None)  # guarded: partial harnesses set session without a view
+        if reload_failed and view is not None and self.centralWidget() is not view:
+            # The loading card is up over a still-good session: put the session's UI back.
+            self._build_ui()
+            self._apply_session_notice()
+        # The reassurance is only stated where it is TRUE (and now verifiable on screen behind the
+        # dialog); a first-load failure has no previous session, so the line is dropped there.
+        tail = "\n\nYour loaded session is unchanged." if reload_failed else ""
         box = QMessageBox(QMessageBox.Critical, f"{APP_NAME} — could not load recording",
-                          f"{message}\n\n{offending}\n\n"
-                          "The previously loaded session (if any) is unchanged.", parent=self)
+                          f"{message}\n\n{offending}{tail}", parent=self)
         # Raw exception text lives in the collapsible details, not the headline.
         box.setDetailedText(detail)
         box.exec()
         # First-load failure: no central widget yet — show the welcome empty state (with the plain
         # message) so the window stays open and the user can drop/open another recording.
-        if not hasattr(self, "session"):
+        if not reload_failed:
             # Seed _paths for the failed-first-load case (nothing else has set it, yet readers like
             # "Load full recording" stay reachable). A failed reload keeps the good _paths instead.
             self._paths = list(paths)
@@ -467,28 +598,54 @@ class StudioWindow(QMainWindow):
 
     @staticmethod
     def _load_failure_message(paths: list[str], exc: Exception) -> str:
-        """Map a load failure to a plain-language sentence (no raw Python class name). The load path
-        raises in a few distinguishable ways:
+        """Map a load failure to a plain-language sentence that names the CASE and a next action (no
+        raw Python class name).
 
-          * a non-GoPro / no-GPMF file — GPMFSource's ctor throws RuntimeError("Failed to open
-            file: …") when OpenMP4Source can't find a GPMF track (also covers a file that isn't a
-            valid MP4 at all). We split this from a genuinely-missing file by checking the path.
-          * a missing / unreadable path — the file isn't on disk (or an OSError reading it).
-          * anything else — a generic, honest fallback (still no class name up front).
+        Every ctor failure below GPMFSource surfaces as the same RuntimeError("Failed to open
+        file: …"), so the exception alone cannot tell a folder from an empty file from a truncated
+        real GoPro chapter — five structurally different malformed inputs collapsed onto two
+        headlines, and a truncated REAL GoPro chapter was reported as "not a GoPro recording"
+        (QA L10-04). The path is therefore inspected first, cheapest/most-certain check first:
 
-        A recording that OPENS but has zero GPS fixes does NOT raise — it loads as a 0-valid-lap
-        session (see _on_session_loaded's in-panel empty state), so it never reaches here."""
+          * a directory the user aimed at instead of the chapters inside it;
+          * a path that isn't there at all;
+          * a 0-byte file (an interrupted copy off the SD card);
+          * an OSError — present but unreadable (permissions, still copying);
+          * opens but carries no GPMF/GPS track — split by whether the NAME is a GoPro chapter name
+            (a truncated/incomplete copy of real footage) or not (the wrong file entirely);
+          * anything else — a generic, honest fallback (the raw class name stays in the details/log).
+
+        Pure + static: no Qt, no window state, so the whole table is unit-testable (tests/
+        test_load_failure.py). A recording that OPENS but has zero GPS fixes does NOT raise — it
+        loads as a 0-valid-lap session (see _session_notice), so it never reaches here."""
         offending = paths[0] if paths else None
-        if offending is not None and not os.path.isfile(offending):
-            return "Couldn't open the file — it may have been moved or deleted."
-        text = str(exc).lower()
+        if offending is None:
+            return ("Couldn't read telemetry from this recording — it may be corrupt or "
+                    "unsupported. Try copying it off the SD card again.")
+        if os.path.isdir(offending):
+            return "That's a folder, not a recording — open the .MP4 files inside it."
+        if not os.path.exists(offending):
+            return ("Couldn't find that file — it may have been moved, renamed or deleted. "
+                    "Open it again from where it is now.")
+        try:
+            empty = os.path.getsize(offending) == 0
+        except OSError:
+            empty = False
+        if empty:
+            return "That file is empty (0 bytes) — copy it off the camera's SD card again."
         if isinstance(exc, OSError):
-            return "Couldn't open the file."
-        if isinstance(exc, RuntimeError) and "open file" in text:
+            return ("Couldn't read that file — check it has finished copying and that you have "
+                    "permission to open it.")
+        if isinstance(exc, RuntimeError) and "open file" in str(exc).lower():
             # GPMFSource couldn't find a GPMF/GPS track in this MP4.
-            return "This doesn't look like a GoPro recording with GPS metadata."
+            if chapters.parse_gopro_name(offending) is not None:
+                return ("This is a GoPro file, but its telemetry track couldn't be read — the copy "
+                        "is probably incomplete. Copy it off the SD card again.")
+            return ("This doesn't look like a GoPro recording with GPS metadata — open the "
+                    "original .MP4 the camera wrote.")
         # Unknown cause — honest generic message; the raw class name stays in the details/log only.
-        return "Couldn't read telemetry from this recording — it may be corrupt or unsupported."
+        return ("Couldn't read telemetry from this recording — it may be corrupt or unsupported. "
+                "Try copying it off the SD card again.")
 
     def _build_ui(self):
         """Atomic swap: dispose the outgoing view, build a fresh CentralView for the just-loaded
@@ -510,6 +667,10 @@ class StudioWindow(QMainWindow):
                                 grid_sizes=self._grid_sizes)
         # Keep Edit ▸ Undo's enabled state in sync with the session's undo stack as lines are dragged.
         self.view.timingEdited.connect(self._sync_edit_menu)
+        # Re-decide the untimed load notice from the same seam that rebuilds the derived views, so
+        # placing the start/finish line retracts the "drag it into place" line instead of leaving it
+        # asserting a state the drag just answered (QA MAP-06).
+        self.view.timingEdited.connect(self._apply_session_notice)
         # Persist the lap-panel tab + any grid-splitter drag across reloads/relaunches.
         self.view.lapTabChanged.connect(self._on_lap_tab_changed)
         self.view.gridSizesChanged.connect(self._on_grid_sizes_changed)
@@ -1114,8 +1275,10 @@ class StudioWindow(QMainWindow):
     _RECENT_LIMIT = 8
 
     def _recent_entries(self) -> list[dict]:
-        """Open Recent candidates: openable library entries (real track + laps, file present),
-        most-recent-first by date, capped at _RECENT_LIMIT. Guarded: any failure yields []."""
+        """Open Recent candidates: openable library entries (valid laps, file present),
+        most-recent-first by date, capped at _RECENT_LIMIT. Guarded: any failure yields [].
+        An UNKNOWN-TRACK recording is a candidate like any other (it re-opens fine, and
+        `_recent_label` already names it "unknown track") — matching library_dialog._entry_junk."""
         try:
             entries = library.load().get("entries", [])
         except Exception as exc:  # noqa: BLE001 — the recents list is additive; never break the menu
@@ -1123,7 +1286,7 @@ class StudioWindow(QMainWindow):
             return []
         usable = [
             e for e in entries
-            if e.get("track") and e.get("lap_count")
+            if e.get("lap_count")
             and any(os.path.exists(p) for p in (e.get("paths") or []))
         ]
         # Newest first; missing date sorts last.
