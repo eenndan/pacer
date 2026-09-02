@@ -10,10 +10,12 @@ imports the app.
 Layout::
 
     ┌───────────────────────────────────────────────┐
-    │  [search…]                    [track filter ▾] │  ← live filter row (track/date substring +
-    ├───────────────────────────────────────────────┤     a per-track combo) so it scales to 50–200
-    │  Date │ Track │ Best │ Theoretical             │  ← sortable table (one row / recording);
-    │  …      …       …      …                        │     missing-file rows greyed + disabled; an
+    │  N analyzed recordings  (M of N when filtered) │  ← header count, of what is ON SCREEN
+    │  [search…]                    [track filter ▾] │  ← live filter row (track/date substring + a
+    ├───────────────────────────────────────────────┤     per-track combo, plus an Unknown-track
+    │  Date │ Track │ Best │ Theoretical             │     bucket) so it scales to 50–200
+    │  …      …       …      …                        │  ← sortable table (one row / recording);
+    │  “No recordings match …” when the filter empties│     missing-file rows greyed + disabled; an
     ├───────────────────────────────────────────────┤     UNTRUSTWORTHY row carries a muted trust tag
     │  <selected track> · 12 sessions · best … · …    │  ← light cross-session progress summary line
     │  PB progression — <track>   [best-vs-date plot] │  ← pyqtgraph mini-chart for the selected
@@ -22,7 +24,9 @@ Layout::
     └───────────────────────────────────────────────┘
 
 Date/Best/Theoretical sort numerically via ``_NumItem``; Track sorts as text. The Open button +
-a double-click re-open the selected row's recording (disabled for a missing/junk row).
+a double-click re-open the selected row's recording (disabled for a missing/junk row). Every time
+this dialog prints a lap time — the Best/Theoretical cells, the summary line, the chart's left axis
+(``_LapTimeAxis``) — it goes through ``_signal.fmt_time``, so one frame never carries two formats.
 
 TRUST (library schema v2): the table SHOWS every session, but an untrustworthy one (provisional
 start line / estimated timing / GPS dropout — see ``library.trust_label``) gets a muted tag and is
@@ -72,8 +76,16 @@ MISSING_ROLE = Qt.UserRole + 3  # True if the recording's file(s) are missing (o
 FP_ROLE = Qt.UserRole + 4       # the entry's fingerprint key (on the Date cell), for forget/remove
 FILTER_ROLE = Qt.UserRole + 5   # lower-cased "track date" haystack for the search box (on Date)
 
-# The "all tracks" sentinel for the track-filter combo (index 0). A real track name never equals it.
+# The track-filter combo's two sentinels (a real track name never equals either): "all tracks" at
+# index 0, and an UNKNOWN-TRACK bucket appended when some recording's circuit isn't in the track
+# registry. The registry ships with about one circuit, so those rows are the common case — without
+# the bucket the combo simply cannot reach them (2 of 3 on the QA index).
 _ALL_TRACKS = "All tracks"
+_UNKNOWN_TRACK = "Unknown track"
+
+# What a Track cell reads when the registry doesn't know the circuit — shown in the cell, matched by
+# the search box, and the label the unknown-track filter bucket stands for.
+_UNKNOWN_LABEL = "unknown track"
 
 # Privacy disclosure — a calm, factual note of what pacer stores locally and where. Surfaced in the
 # Library dialog (this is where a user browsing their recorded history would look) and by
@@ -109,6 +121,15 @@ class _NumItem(QTableWidgetItem):
         a = float("inf") if a is None else a
         b = float("inf") if b is None else b
         return a < b
+
+
+class _LapTimeAxis(pg.AxisItem):
+    """The PB chart's left axis, rendering its seconds values as LAP TIMES through the app's one
+    time formatter. A bare numeric axis printed "69" / "70.5" while the Best lap column and the
+    progress summary in the SAME frame read "1:09.905" — two formats for one quantity."""
+
+    def tickStrings(self, values, scale, spacing):  # noqa: N802 (pyqtgraph hook)
+        return [fmt_time(v) for v in values]
 
 
 def _entry_missing(entry: dict) -> bool:
@@ -207,7 +228,7 @@ class LibraryDialog(QDialog):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        self._title = QLabel(f"{len(self._entries)} analyzed recording(s)")
+        self._title = QLabel(_plural(len(self._entries), "analyzed recording"))
         self._title.setProperty("role", "PanelHeader")
         root.addWidget(self._title)
 
@@ -253,6 +274,15 @@ class LibraryDialog(QDialog):
             self.table.customContextMenuRequested.connect(self._on_context_menu)
         root.addWidget(self.table, 3)
 
+        # A filter that matches nothing hides every row, and a table of hidden rows is just blank
+        # space — say so, and name the way back out.
+        self._no_matches = QLabel("")
+        self._no_matches.setProperty("role", "EmptyState")
+        self._no_matches.setWordWrap(True)
+        self._no_matches.setAlignment(Qt.AlignCenter)
+        self._no_matches.setVisible(False)
+        root.addWidget(self._no_matches)
+
         # ----- light cross-session progress summary for the selected track (the 2nd/3rd-visit
         # hook: "N sessions · best … · M PBs · improving"). Reads library.track_summary (trustworthy
         # subset); honest — it never counts a provisional/estimated/dropout best as the best.
@@ -266,10 +296,14 @@ class LibraryDialog(QDialog):
         self._pb_title = QLabel("PB progression")
         self._pb_title.setProperty("role", "PanelHeader")
         root.addWidget(self._pb_title)
-        self.pb_plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem(orientation="bottom")})
+        self.pb_plot = pg.PlotWidget(axisItems={
+            "bottom": pg.DateAxisItem(orientation="bottom"),
+            # Lap times, not decimal seconds — the same formatter the Best lap column uses, so the
+            # axis and the table two rows above it read the same way. Hence no "(s)" in the label.
+            "left": _LapTimeAxis(orientation="left")})
         self.pb_plot.setBackground(C.surface)
         self.pb_plot.setMinimumHeight(150)
-        self.pb_plot.setLabel("left", "best lap (s)")
+        self.pb_plot.setLabel("left", "best lap")
         self.pb_plot.getAxis("left").enableAutoSIPrefix(False)
         self.pb_plot.showGrid(x=True, y=True, alpha=0.12)
         # No pyqtgraph chrome on a read-only mini-chart: the hover "A" auto-range button and the
@@ -361,9 +395,14 @@ class LibraryDialog(QDialog):
 
     # ------------------------------------------------------------------ filter
     def _distinct_tracks(self) -> list[str]:
-        """The sorted distinct track names across the current entries (for the filter combo).
-        Skips null-track (junk) rows — there's no track to filter on."""
-        return sorted({e["track"] for e in self._entries if e.get("track")})
+        """The filter combo's track list: the sorted distinct track names, plus an UNKNOWN-TRACK
+        bucket when any entry's circuit isn't in the registry. Those rows have no name to sort in,
+        but they are real, openable recordings (see ``_entry_junk``) and were the only rows the
+        combo could not reach at all."""
+        names = sorted({e["track"] for e in self._entries if e.get("track")})
+        if any(not e.get("track") for e in self._entries):
+            names.append(_UNKNOWN_TRACK)
+        return names
 
     def _apply_filter(self):
         """Hide rows that don't match the search text (track/date substring) AND the selected track
@@ -372,18 +411,50 @@ class LibraryDialog(QDialog):
         PB chart + summary track the visible set."""
         query = self.search.text().strip().lower() if hasattr(self, "search") else ""
         chosen = self.track_filter.currentText() if hasattr(self, "track_filter") else _ALL_TRACKS
+        visible = 0
         for r in range(self.table.rowCount()):
             date_item = self.table.item(r, _COL_DATE)
             if date_item is None:
                 continue
             hay = date_item.data(FILTER_ROLE) or ""
             track = date_item.data(TRACK_ROLE)
-            hidden = (bool(query) and query not in hay) or (
-                chosen != _ALL_TRACKS and track != chosen)
+            if chosen == _ALL_TRACKS:
+                track_ok = True
+            elif chosen == _UNKNOWN_TRACK:
+                track_ok = not track          # the bucket stands for every unnamed circuit
+            else:
+                track_ok = track == chosen
+            hidden = (bool(query) and query not in hay) or not track_ok
             self.table.setRowHidden(r, hidden)
+            visible += not hidden
+        # The header and the empty-state describe what's ON SCREEN: a header still claiming "3
+        # analyzed recordings" over a table filtered down to nothing is the dialog contradicting
+        # itself, and blank space is not a "no matches" message.
+        self._update_title(visible)
+        self._show_no_matches(visible, query, chosen)
         # Keep a sensible selection: if the selected row got hidden (or none is selected), land on
         # the first VISIBLE usable row so the chart/summary reflect what's on screen.
         self._reselect_visible()
+
+    def _update_title(self, visible: int | None = None):
+        """The header count. Names the FILTERED subset ("0 of 3 analyzed recordings") whenever the
+        filter is hiding rows, so the header can never assert a count the table doesn't show."""
+        total = len(self._entries)
+        whole = _plural(total, "analyzed recording")
+        self._title.setText(whole if visible is None or visible == total
+                            else f"{visible} of {whole}")
+
+    def _show_no_matches(self, visible: int, query: str, chosen: str):
+        """The filtered-to-nothing empty state. Only for a FILTERED empty table — an empty library
+        is a different (and already handled) state, and gets no "no matches" sentence."""
+        filtering = bool(query) or chosen != _ALL_TRACKS
+        show = filtering and not visible and bool(self._entries)
+        if show:
+            term = self.search.text().strip() or chosen
+            self._no_matches.setText(
+                f"No recordings match “{term}”.\nClear the search or pick “{_ALL_TRACKS}” to see "
+                f"all {_plural(len(self._entries), 'recording')}.")
+        self._no_matches.setVisible(show)
 
     def _reselect_visible(self):
         """Select the first VISIBLE, non-disabled row; clear the selection (→ empty chart/summary)
@@ -426,14 +497,10 @@ class LibraryDialog(QDialog):
             # file-missing OR a quarantined junk row, so _on_selection / _open_selected guard both.
             date_item.setData(MISSING_ROLE, disabled)
             # The search haystack: lower-cased "track date" so the box matches either substring.
-            date_item.setData(FILTER_ROLE, f"{track or ''} {date or ''}".strip().lower())
-
-            track_item = QTableWidgetItem(track or "unknown track")
-
-            best_item = _NumItem(fmt_time(best) if best is not None else "—")
-            best_item.setData(NUM_ROLE, best)
-            theo_item = _NumItem(fmt_time(theo) if theo is not None else "—")
-            theo_item.setData(NUM_ROLE, theo)
+            # An unknown-track row is keyed on the label it SHOWS, so typing what's on screen
+            # reaches it (its `track` is null — there is nothing else to match).
+            date_item.setData(
+                FILTER_ROLE, f"{track or _UNKNOWN_LABEL} {date or ''}".strip().lower())
 
             # A junk row says so; a present-but-missing-file row keeps its established label. An
             # UNTRUSTWORTHY-but-openable row gets a muted trust tag (provisional/estimated/dropout)
@@ -442,22 +509,30 @@ class LibraryDialog(QDialog):
             trust = None if disabled else _library.trust_label(e)
             suffix = ("  (no laps)" if junk else "  (file missing)" if missing
                       else f"  · {trust}" if trust else "")
+            track_text = f"{track or _UNKNOWN_LABEL}{suffix}"
+
+            track_item = QTableWidgetItem(track_text)
+
+            best_item = _NumItem(fmt_time(best) if best is not None else "—")
+            best_item.setData(NUM_ROLE, best)
+            theo_item = _NumItem(fmt_time(theo) if theo is not None else "—")
+            theo_item.setData(NUM_ROLE, theo)
 
             items = (date_item, track_item, best_item, theo_item)
             tooltip = _entry_tooltip(e)
             for col, it in enumerate(items):
                 # Every cell hovers to the recording's file identity — the columns show only track +
                 # date, so hovering anywhere on the row is what tells two same-day sessions apart.
-                it.setToolTip(tooltip)
+                # Track is the one STRETCH column, so it is the one that elides (31 px of overflow
+                # at the dialog's own 489 px minimum width): its tooltip LEADS with its own full
+                # label, so the clipped tail is readable rather than merely truncated.
+                it.setToolTip(f"{track_text}\n\n{tooltip}" if col == _COL_TRACK else tooltip)
                 if disabled:
                     it.setForeground(dim)
                     it.setFlags(it.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
-                    if col == _COL_TRACK:
-                        it.setText(f"{track or 'unknown track'}{suffix}")
                 elif col == _COL_TRACK and trust:
                     # Muted + italic across the row's Track cell so the tag reads as demoted, not an
                     # error. The row stays fully selectable/openable — it's just marked, not blocked.
-                    it.setText(f"{track or 'unknown track'}{suffix}")
                     it.setForeground(QBrush(QColor(theme.PROVISIONAL_COLOR)))
                     theme.apply_provisional_style(it, True)
                 self.table.setItem(r, col, it)
@@ -517,6 +592,7 @@ class LibraryDialog(QDialog):
         if not track:
             self._pb_curve.setData([], [])
             self._pb_title.setText("PB progression")
+            self._set_pb_axes(False)
             self._set_pb_empty(
                 "This recording's track isn't in your database yet, so there's nothing to chart"
                 if self._selected_date_item() is not None
@@ -530,6 +606,7 @@ class LibraryDialog(QDialog):
                 xs.append(x)
                 ys.append(best)
         self._pb_curve.setData(xs, ys)
+        self._set_pb_axes(bool(ys))
         if len(ys) >= 2:
             self._pb_title.setText(
                 f"PB progression — {track}  ({fmt_time(min(ys))} best over {len(ys)} sessions)")
@@ -543,6 +620,20 @@ class LibraryDialog(QDialog):
         else:
             self._pb_title.setText(f"PB progression — {track}  (no dated best laps)")
             self._set_pb_empty("Not enough sessions on this track yet to chart progression")
+
+    def _set_pb_axes(self, plotted: bool):
+        """Label the axes only while something is plotted, and drop the range when nothing is.
+        ``_frame_single_point`` disables autorange, so a de-selected row otherwise leaves ITS
+        numbers (67.771–69.771 s) ticking an empty grid — an axis describing a recording the dialog
+        is no longer showing. The empty-state sentence is then the only thing in the plot."""
+        for side in ("left", "bottom"):
+            self.pb_plot.getAxis(side).setStyle(showValues=plotted)
+        if not plotted:
+            # A hard unit range, not autoRange(): with no data pyqtgraph's autorange KEEPS the old
+            # bounds (67.771–69.771 → merely re-padded to 67.386–70.156). The plotting branches
+            # each set their own range back, so nothing has to be restored here.
+            self.pb_plot.getPlotItem().getViewBox().setRange(
+                xRange=(0.0, 1.0), yRange=(0.0, 1.0), padding=0)
 
     def _set_pb_empty(self, message: str | None):
         """Show (or hide on None) the centred empty-state label."""
@@ -621,7 +712,7 @@ class LibraryDialog(QDialog):
             return
         ok = QMessageBox.question(
             self, "Clear library",
-            f"Forget all {len(self._entries)} recording(s) from the library?\n\n"
+            f"Forget all {_plural(len(self._entries), 'recording')} from the library?\n\n"
             "This wipes the library index only — your video files and their .pacer.json "
             "sidecars are left untouched.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -634,7 +725,7 @@ class LibraryDialog(QDialog):
         """Rebuild the table + chart from ``self._index`` after a forget/clear. Rebuilds rather than
         surgically deleting one QTableWidget row so the sort keys / role data stay consistent."""
         self._entries = list(self._index.get("entries", []))
-        self._title.setText(f"{len(self._entries)} analyzed recording(s)")
+        self._update_title()                         # re-run with the visible count by _apply_filter
         self.table.setSortingEnabled(False)
         self.table.clearContents()
         self.table.setRowCount(len(self._entries))
