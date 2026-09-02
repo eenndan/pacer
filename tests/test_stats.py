@@ -500,8 +500,19 @@ def _app():
     return QApplication.instance() or QApplication([])
 
 
-def _fake_stats_service(*, has_g=True):
+def _fake_stats_service(*, has_g=True, laps=True):
     from studio.stats import LapStat, PaceStats, SessionTotals
+    if not laps:
+        # The 0-lap recording: the trace (and so the SESSION totals) is real, every lap-derived
+        # reduction is None/empty — exactly what SessionStats returns with no valid lap window.
+        return SimpleNamespace(
+            totals=lambda: SessionTotals(duration_s=61.0, moving_s=12.0, distance_m=180.0,
+                                         start_clock="19:16", end_clock="19:17"),
+            pace=lambda: None, lap_stats=list, session_vmax=lambda: None,
+            gg_cloud=lambda max_points=4000: None, pace_trend=lambda: None,
+            race_pace=lambda: None, pace_cov=lambda: None,
+            laps_within_pct=lambda pct=1.0: (0, 0),
+            longest_coast_s=lambda: None, gg_envelope=lambda: None)
     rows = [
         LapStat(idx=0, time=70.0, vmax_kmh=95.0, avg_kmh=54.0, vmin_kmh=48.0,
                 peak_lat_g=1.4 if has_g else None, peak_brake_g=1.1 if has_g else None,
@@ -529,24 +540,31 @@ def _fake_stats_service(*, has_g=True):
     )
 
 
-def _fake_view_session(*, has_g=True, sectors=True):
-    """The duck-typed read surface StatsView touches — a stub session, no Session machinery."""
+def _fake_view_session(*, has_g=True, sectors=True, laps=True, track_name="Test Circuit",
+                       excluded=(5,)):
+    """The duck-typed read surface StatsView touches — a stub session, no Session machinery.
+
+    `laps=False` is the 0-lap recording, `track_name=None` the unregistered track, `excluded=()`
+    a session where the median band dropped nothing — the three trust states the DATA TRUST card
+    has to tell apart."""
     from studio.data_quality import TimingQuality
     from studio.gmeter import CrossCheck
     cross = CrossCheck(n=1000, lat_corr=0.9, long_corr=0.4, lat_rms_accl=0.5, lat_rms_gps=0.5,
                        long_rms_accl=0.3, long_rms_gps=0.3, align_yaw_deg=10.0,
                        align_reflect=False, ok=True)
     return SimpleNamespace(
-        stats=_fake_stats_service(has_g=has_g),
-        valid_lap_ids=lambda: [0, 1],
+        stats=_fake_stats_service(has_g=has_g, laps=laps),
+        valid_lap_ids=lambda: ([0, 1] if laps else []),
+        track_name=track_name,
+        lap_count=lambda: (2 + len(excluded) if laps else 1),
         # The two stitched TARGETS moved here from the Laps tab's SESSION-BESTS footer:
         # theoretical (sum of the session-best splits) renders inside SECTORS, rolling in PACE.
-        theoretical_best=lambda: (68.0 if sectors else None),
-        best_rolling_lap=lambda: 68.15,
+        theoretical_best=lambda: (68.0 if sectors and laps else None),
+        best_rolling_lap=lambda: (68.15 if laps else None),
         timing_verified=True,
-        excluded_lap_ids=lambda: [5],
-        dropout_lap_ids=lambda: {1},
-        sector_sigmas=lambda: ([0.15, None] if sectors else []),
+        excluded_lap_ids=lambda: list(excluded),
+        dropout_lap_ids=lambda: ({1} if laps else set()),
+        sector_sigmas=lambda: ([0.15, None] if sectors and laps else []),
         session_best_splits=lambda: ([30.0, 38.0] if sectors else []),
         sector_medians=lambda: ([30.5, None] if sectors else []),
         timing_quality=TimingQuality(),
@@ -878,6 +896,163 @@ def test_stats_view_unit_flip():
     v.set_speed_unit("kmh")
     assert "97.5 km/h" in v.t_vmax.value.text()
     print("test_stats_view_unit_flip OK")
+
+
+def test_stats_view_states_provisional_timing_on_the_page():
+    """The page must SAY the timing is unverified, and demote the PER LAP Time column.
+
+    View ▸ Session statistics maximizes the lap panel, which hides the map — and with it the
+    app's only prominent "Lap timing is unverified" banner. So the statement has to live on the
+    page. The muting is the Time column ONLY: the speed/g cells and the measured PACE tiles are
+    true whatever the start line is, and muting everything would say nothing about WHICH numbers
+    the unverified line moves."""
+    _app()
+    from studio.lap_table import PROVISIONAL_TOOLTIP
+    from studio.stats_panel import StatsView
+
+    v = StatsView(_fake_view_session())                       # verified: no banner, no muting
+    assert not v.provisional_banner.isVisibleTo(v)
+    assert not v.lap_table.item(0, 1).font().italic()
+    assert v.lap_table.item(1, 0).text() == "★ 2 ⚠"           # the ★ stands on verified timing
+
+    sess = _fake_view_session()
+    sess.timing_verified = False
+    v = StatsView(sess)
+    assert v.provisional_banner.isVisibleTo(v)
+    banner = v.provisional_banner.text().lower()
+    assert "unverified" in banner and "start/finish line" in banner
+    for r in range(v.lap_table.rowCount()):                   # every Time cell, like the Laps tab
+        item = v.lap_table.item(r, 1)
+        assert item.font().italic(), f"row {r} Time cell must be italic while provisional"
+        assert item.toolTip() == PROVISIONAL_TOOLTIP
+    # ...and ONLY the Time column: the measured channels keep full authority.
+    assert not v.lap_table.item(0, 2).font().italic(), "Vmax is measured, not start-line derived"
+    assert not v.t_best.value.font().italic(), "the measured PACE tiles must not all mute"
+    assert not v.t_vmax.value.font().italic()
+    # No ★ against an arbitrary start line — the Laps tab suppresses the best there too, and a
+    # starred "best" over a muted Time column would contradict the banner above it.
+    assert not any(v.lap_table.item(r, 0).text().startswith("★")
+                   for r in range(v.lap_table.rowCount()))
+    print("test_stats_view_states_provisional_timing_on_the_page OK")
+
+
+def test_stats_view_trust_card_names_the_sessions_own_problems():
+    """The DATA TRUST card has to VARY with the session's trust state. It used to print
+    provenance only, so a recording with an unconfirmed start line, an unknown track and half
+    its laps dropped rendered the same three lines as a clean one."""
+    _app()
+    from studio.stats_panel import StatsView
+
+    sess = _fake_view_session(excluded=(5, 6, 7))   # 2 valid + 3 dropped = 5 laps found
+    sess.timing_verified = False
+    sess.track_name = None
+    v = StatsView(sess)   # bound, not inlined: a dropped StatsView deletes its own QLabels
+    text = v.trust_label.text().lower()
+    assert "auto-fitted, not confirmed" in text
+    assert "track: unknown" in text
+    # Both counts stated, and the denominator is the laps FOUND (lap_count) — not valid+excluded,
+    # which would be arithmetic invented to make the two numbers meet.
+    assert "statistics use 2 of the 5 laps found" in text and "3 ⊘ excluded" in text
+
+    clean = StatsView(_fake_view_session(excluded=()))  # verified, named track, nothing dropped
+    text = clean.trust_label.text().lower()
+    for phrase in ("auto-fitted", "track: unknown", "excluded"):
+        assert phrase not in text, f"clean session must not claim {phrase!r}"
+    print("test_stats_view_trust_card_names_the_sessions_own_problems OK")
+
+
+def test_stats_view_trust_card_names_the_moving_fix_population():
+    """"0% of fixes rejected" claimed something the number never measured: the fraction is
+    judged over the RETAINED MOVING trace (load.py:266-272 — deliberate, it is what stopped a
+    clean recording reading degraded on its trimmed stationary lead-in). The label names the
+    population; dropped_fraction itself is untouched."""
+    _app()
+    from studio.data_quality import TimingQuality
+    from studio.stats_panel import StatsView
+
+    sess = _fake_view_session()
+    sess.timing_quality = TimingQuality(dropped_fraction=0.0)   # the raw gate DID drop fixes
+    v = StatsView(sess)
+    line = next(ln for ln in v.trust_label.text().split("\n") if ln.startswith("Timing:"))
+    assert line == "Timing: GPS9 true clock · 0% of moving fixes rejected", line
+    assert "WHILE MOVING" in v.trust_label.toolTip()
+    # The measured value is the shipped one — the fix was the sentence, not the maths.
+    assert sess.timing_quality.dropped_pct() == 0
+    print("test_stats_view_trust_card_names_the_moving_fix_population OK")
+
+
+def test_stats_view_states_the_missing_accelerometer():
+    """With no IMU the trust card used to go silent about the g channel — exactly when the peak-g
+    tiles, the per-lap g columns and the Grip column all render em-dashes."""
+    _app()
+    from studio.stats_panel import NO_GMETER_NOTE, StatsView
+
+    v = StatsView(_fake_view_session(has_g=False))
+    assert NO_GMETER_NOTE in v.trust_label.text()
+    assert v.no_gmeter_note.isVisibleTo(v)                  # said again beside the dashes
+    assert v.t_peak_lat.value.text() == "—"                 # the dash it explains
+    v = StatsView(_fake_view_session(has_g=True))
+    assert NO_GMETER_NOTE not in v.trust_label.text()
+    assert not v.no_gmeter_note.isVisibleTo(v)
+    assert "IMU lateral" in v.trust_label.text()
+    print("test_stats_view_states_the_missing_accelerometer OK")
+
+
+def test_stats_view_zero_lap_page_explains_itself():
+    """The 0-lap page was 15 em-dashes across 19 tiles whose only explanation sat in the status
+    bar, outside the maximized panel. The dash-only groups now hide behind one block carrying
+    that copy plus the next action; SESSION (a real recorded trace) and DATA TRUST stay."""
+    _app()
+    from studio.stats_panel import StatsView
+
+    sess = _fake_view_session(laps=False, has_g=False)
+    sess.timing_verified = False
+    v = StatsView(sess)
+    assert v.no_laps_note.isVisibleTo(v)
+    # No provisional banner and no "every lap time BELOW" line when there is nothing below —
+    # the empty-state block already names placing the start line as the next action.
+    assert not v.provisional_banner.isVisibleTo(v)
+    assert "below" not in v.trust_label.text().lower()
+    note = v.no_laps_note.text().lower()
+    assert "no complete laps" in note and "start/finish line" in note   # reason + next action
+    assert not v._pace_section.isVisibleTo(v) and not v._speed_section.isVisibleTo(v)
+    tiles = ("t_best", "t_median", "t_race_pace", "t_rolling", "t_digest", "t_sigma", "t_spread",
+             "t_cov", "t_within", "t_trend", "t_vmax", "t_vmin", "t_peak_lat", "t_peak_brake")
+    dashed = [n for n in tiles
+              if getattr(v, n).isVisibleTo(v) and getattr(v, n).value.text() == "—"]
+    assert dashed == [], f"dash-only tiles still visible: {dashed}"
+    assert v.t_duration.isVisibleTo(v) and v.t_duration.value.text() == "1:01"  # real recording
+    assert v.trust_label.text() != "—"                       # the diagnostic stays on the page
+    # Reversible: a re-segmentation that finds laps restores every group.
+    v.session = _fake_view_session()
+    v.refresh()
+    assert not v.no_laps_note.isVisibleTo(v)
+    assert v._pace_section.isVisibleTo(v) and v.t_best.isVisibleTo(v)
+    assert v.t_best.value.text() == "1:08.200"
+    print("test_stats_view_zero_lap_page_explains_itself OK")
+
+
+def test_stats_view_trust_card_is_above_the_fold():
+    """The card is only worth its new lines if they are read. At the foot of the page it sat
+    ~1200 px down — below the fold of even a 1728x1117 maximized dashboard, so the caveats
+    saying what every number is worth were reachable only by scrolling past all of them."""
+    app = _app()
+    from studio.stats_panel import StatsView
+
+    sess = _fake_view_session()
+    sess.timing_verified = False
+    sess.track_name = None
+    v = StatsView(sess)                       # the worst case: every trust line present
+    v.resize(1728, 1025)
+    v.show()
+    app.processEvents()
+    lab = v.trust_label
+    y = lab.mapTo(v._scroll.widget(), lab.rect().topLeft()).y()
+    viewport = v._scroll.viewport().height()
+    assert 0 < y < viewport, f"trust card at y={y} is outside the first {viewport}px viewport"
+    assert y + lab.height() < viewport, "the card must fit whole in the first viewport"
+    v.close()
+    print("test_stats_view_trust_card_is_above_the_fold OK")
 
 
 if __name__ == "__main__":

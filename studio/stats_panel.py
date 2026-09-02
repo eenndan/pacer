@@ -2,11 +2,17 @@
 header toggle.
 
 A read-only, scrollable column of stat groups over studio/stats.py's SessionStats service +
-the existing Session accessors — SESSION totals, PACE distribution, SPEED & G peaks, the g-g
-friction circle, DRIVING (brake/coast reductions), per-SECTOR best/median/σ, the DATA TRUST
-card (the IMU↔GPS cross-check's first in-app surface — until now stdout-only), and a per-lap
-statistics table. Compact in the quadrant; the panel-maximize button (⤢) turns it into a
-full-window dashboard.
+the existing Session accessors — SESSION totals, the DATA TRUST card (what the page's numbers
+are worth: the start-line/track/exclusion caveats, the timing clock, the g provenance and the
+IMU↔GPS cross-check), PACE distribution, SPEED & G peaks, the g-g friction circle, DRIVING
+(brake/coast reductions), per-SECTOR best/median/σ, and a per-lap statistics table. Compact in
+the quadrant; the panel-maximize button (⤢) turns it into a full-window dashboard.
+
+HONESTY RULES. The maximized dashboard hides the map, so the page carries its OWN unverified-
+timing banner rather than leaning on the map's. Unverified timing mutes the PER LAP Time column
+(the same cells the Laps tab mutes) and the stitched target tiles, and suppresses the ★ best —
+never the measured tiles beside them, which ARE laps you drove. A statistic that cannot exist
+(no accelerometer, no complete lap) says so in words next to the em-dash.
 
 Pacer-free; refreshed on load / re-segmentation, never on the 30 Hz tick. Numbers render in
 the mono stack (tabular figures); a signal-absent statistic shows an em-dash, never a fake 0."""
@@ -41,6 +47,7 @@ from .lap_table import (
     DROPOUT_SUFFIX,
     DROPOUT_TOOLTIP,
     NUM_ROLE,
+    PROVISIONAL_COLOR,
     PROVISIONAL_TOOLTIP,
     _NumItem,
     estimated_timing_tooltip,
@@ -51,6 +58,25 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
     from .session import Session
 
 DASH = "—"                # the "no signal" cell/tile — an em-dash, never a fake 0
+# The page's OWN unverified-timing banner. View ▸ Session statistics maximizes the lap panel, which
+# hides the MAP — and with it the app's one prominent "Lap timing is unverified" strip — exactly on
+# the surface that then paints a full page of bold statistics. So the CTA is repeated here, above
+# SESSION, where it is read before any number. Same opening sentence as the map strip (one wording,
+# two places); the page-specific half names what it invalidates.
+PROVISIONAL_BANNER = ("Lap timing is unverified — every lap time, split and “best” on this page is "
+                      "measured from an auto-fitted start/finish line. Drag it on the map to where "
+                      "a lap begins.")
+# The 0-lap page: the status bar's own copy plus the next action, ON the page. Without it the
+# PACE/SPEED groups render as a wall of em-dashes whose only explanation is a status-bar line
+# outside the maximized panel.
+NO_LAPS_TEXT = ("No complete laps in this recording — so there are no lap statistics to show.\n\n"
+                "The GPS may not have locked, or the recording is too short to cross the "
+                "start/finish line. If the track looks right on the map, drag the start/finish "
+                "line to where a lap begins.")
+# The absent-accelerometer sentence — used BOTH in the DATA TRUST card and under the SPEED · G
+# tiles, so the dashes and the trust card explain themselves in the same words.
+NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
+                  "are unavailable.")
 TILE_VALUE_PT = 15        # tile value type size (between BODY 13 and HERO 22)
 TILES_PER_ROW = 4         # tile-grid MAX columns (wide/maximized panels)
 TILE_MIN_PX = 148         # reflow threshold: columns = viewport width // this, clamped 2..4
@@ -180,6 +206,21 @@ class StatsView(QWidget):
         col.setContentsMargins(12, 8, 12, 12)
         col.setSpacing(6)
 
+        # --- the page's own trust banner + empty state, above everything they qualify.
+        self.provisional_banner = QLabel(PROVISIONAL_BANNER)
+        # The map trust strip's amber call-to-action style, by object name — one QSS rule, so the
+        # two surfaces can never drift apart visually.
+        self.provisional_banner.setObjectName("ProvisionalBanner")
+        self.provisional_banner.setWordWrap(True)
+        self.provisional_banner.setToolTip(PROVISIONAL_TOOLTIP)
+        self.provisional_banner.setVisible(False)
+        col.addWidget(self.provisional_banner)
+        self.no_laps_note = QLabel(NO_LAPS_TEXT)
+        self.no_laps_note.setProperty("role", "EmptyState")  # the lap grid's empty-state styling
+        self.no_laps_note.setWordWrap(True)
+        self.no_laps_note.setVisible(False)
+        col.addWidget(self.no_laps_note)
+
         # --- SESSION totals
         col.addWidget(self._section("SESSION"))
         self.t_laps = _Tile("laps")
@@ -191,10 +232,22 @@ class StatsView(QWidget):
         col.addLayout(self._grid(self.t_laps, self.t_duration, self.t_moving,
                                  self.t_distance, self.t_clock))
 
+        # --- DATA TRUST (the start-line/track/exclusion caveats + the timing-quality,
+        # g-provenance and IMU↔GPS cross-check card). It sits SECOND, right under the session
+        # totals: at the foot of the page it was ~1200px down — below the fold of even a
+        # 1728x1117 maximized dashboard — so the caveats that say how much every number below is
+        # worth were only reachable by scrolling past all of them.
+        col.addWidget(self._section("DATA TRUST"))
+        self.trust_label = QLabel("")
+        self.trust_label.setWordWrap(True)
+        self.trust_label.setStyleSheet(f"color: {C.text_dim};")
+        self.trust_label.setFont(theme.ui_font(theme.CAPTION))
+        col.addWidget(self.trust_label)
+
         # --- PACE distribution
-        pace_hdr = self._section("PACE")
-        pace_hdr.setToolTip(PACE_TOOLTIP)
-        col.addWidget(pace_hdr)
+        self._pace_section = self._section("PACE")
+        self._pace_section.setToolTip(PACE_TOOLTIP)
+        col.addWidget(self._pace_section)
         self.t_best = _Tile("best lap")
         self.t_median = _Tile("median lap")
         self.t_race_pace = _Tile("race pace · best 3-lap run")
@@ -250,7 +303,8 @@ class StatsView(QWidget):
         col.addWidget(self.spark)
 
         # --- SPEED & G peaks
-        col.addWidget(self._section("SPEED · G"))
+        self._speed_section = self._section("SPEED · G")
+        col.addWidget(self._speed_section)
         self.t_vmax = _Tile("top speed")
         self.t_vmax.setToolTip("Max 3D GPS speed across the valid laps (10 Hz).")
         self.t_vmin = _Tile("slowest point")
@@ -268,6 +322,15 @@ class StatsView(QWidget):
             "quantizes brake onsets by ~1.5 m.")
         col.addLayout(self._grid(self.t_vmax, self.t_vmin, self.t_peak_lat,
                                  self.t_peak_brake))
+        # Without an accelerometer two of those four tiles can only ever be em-dashes — say why
+        # WHERE the dashes are, not only in the trust card (the DRIVING and FRICTION CIRCLE
+        # sections hide themselves entirely, so these are the g surfaces left visible).
+        self.no_gmeter_note = QLabel(NO_GMETER_NOTE)
+        self.no_gmeter_note.setWordWrap(True)
+        self.no_gmeter_note.setStyleSheet(f"color: {C.text_dim};")
+        self.no_gmeter_note.setFont(theme.ui_font(theme.CAPTION))
+        self.no_gmeter_note.setVisible(False)
+        col.addWidget(self.no_gmeter_note)
 
         # --- the g-g friction circle
         self._gg_section = self._section("FRICTION CIRCLE")
@@ -393,14 +456,6 @@ class StatsView(QWidget):
             self._on_corner_sort)
         self.straights_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         col.addWidget(self.straights_table)
-
-        # --- DATA TRUST (the timing-quality + g-provenance + IMU↔GPS cross-check card)
-        col.addWidget(self._section("DATA TRUST"))
-        self.trust_label = QLabel("")
-        self.trust_label.setWordWrap(True)
-        self.trust_label.setStyleSheet(f"color: {C.text_dim};")
-        self.trust_label.setFont(theme.ui_font(theme.CAPTION))
-        col.addWidget(self.trust_label)
 
         # --- per-lap statistics table
         self._laps_section = self._section("PER LAP")
@@ -534,6 +589,16 @@ class StatsView(QWidget):
 
         # SESSION totals
         valid = session.valid_lap_ids()
+        # The page's own trust banner: the maximized dashboard has no map to carry the app's
+        # amber "drag the start/finish line" CTA. Pointless with no laps — the empty-state block
+        # below already tells that story (and names the same line as its next action).
+        self.provisional_banner.setVisible(
+            bool(valid) and not getattr(session, "timing_verified", True))
+        self._set_no_laps_state(bool(valid))
+        # The absent-accelerometer note sits under the SPEED · G tiles whose dashes it explains,
+        # so it hides with them on a lapless recording (the empty-state block tells that story).
+        self.no_gmeter_note.setVisible(
+            bool(valid) and not getattr(session, "has_gmeter", False))
         excluded = getattr(session, "excluded_lap_ids", list)() or []
         dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
         lap_bits = [str(len(valid))]
@@ -688,6 +753,20 @@ class StatsView(QWidget):
         self.refresh()
 
     # ------------------------------------------------------------------ groups
+    def _set_no_laps_state(self, has_laps: bool):
+        """With zero valid laps every PACE and SPEED · G tile can only render an em-dash, so hide
+        both groups behind ONE explanatory block carrying the status bar's copy and the next
+        action. SESSION stays (its recorded time/distance/clock are real, lap or no lap) and so
+        does DATA TRUST — it is the diagnostic for why no lap was found. Reversible: a
+        re-segmentation that finds laps restores every tile."""
+        self.no_laps_note.setVisible(not has_laps)
+        for section in (self._pace_section, self._speed_section):
+            section.setVisible(has_laps)
+        for t in (self.t_best, self.t_median, self.t_race_pace, self.t_rolling, self.t_digest,
+                  self.t_sigma, self.t_spread, self.t_cov, self.t_within, self.t_trend,
+                  self.t_vmax, self.t_vmin, self.t_peak_lat, self.t_peak_brake):
+            t.setVisible(has_laps)
+
     def _refresh_gg(self, st):
         cloud = st.gg_cloud() if st is not None else None
         plot = self.gg.getPlotItem()
@@ -997,20 +1076,61 @@ class StatsView(QWidget):
         _NumItem._descending = order == Qt.DescendingOrder
 
     def _refresh_trust(self, session):
+        """The DATA TRUST card: what the numbers on this page are worth.
+
+        The TRUST-BREAKING facts LEAD — an unconfirmed start line, an unknown track, laps left
+        out of every statistic. Without them the card printed provenance only, and read
+        identically on a session where all three were wrong and one where all three were fine.
+        The provenance lines (clock, g source, dropouts, cross-check) follow."""
         lines: list[str] = []
+        tips: list[str] = []
+        valid = session.valid_lap_ids() if hasattr(session, "valid_lap_ids") else []
+        # Gated on having laps, like the banner: with none, "every lap time below" refers to
+        # nothing, and the empty-state block already makes placing the line the next action.
+        if valid and not getattr(session, "timing_verified", True):
+            lines.append("Start/finish line: auto-fitted, not confirmed — every lap time and "
+                         "split below is measured from an arbitrary point. Drag it on the map.")
+        # "" (not None) as the getattr default: a test double that models no track at all must
+        # not be reported as a recording whose track lookup FAILED.
+        if getattr(session, "track_name", "") is None:
+            lines.append("Track: unknown — not in the track database, so the start/finish line "
+                         "could not be placed for you.")
+        excluded = getattr(session, "excluded_lap_ids", list)() or []
+        if excluded:
+            # Denominator = the laps the segmenter FOUND, not valid+excluded: a recording can
+            # also carry slivers that never reached the ⊘ band at all, and "24 of 49" would be
+            # arithmetic invented to make the two numbers meet. State both true counts instead.
+            count = getattr(session, "lap_count", None)
+            total = count() if callable(count) else len(valid) + len(excluded)
+            lines.append(f"Statistics use {len(valid)} of the {total} laps found — "
+                         f"{len(excluded)} ⊘ excluded, their distance off the session median "
+                         "(see the Laps tab).")
         quality = getattr(session, "timing_quality", None)  # a Session @property
         if quality is not None:
             clock = ("video clock (estimated)" if quality.media_clock
                      else "GPS9 true clock")
-            lines.append(f"Timing: {clock} · {quality.dropped_pct()}% of fixes rejected")
+            # "of MOVING fixes" is not padding: the fraction is judged over the RETAINED MOVING
+            # trace, deliberately (load.py:266-272 — the raw count includes the stationary
+            # GPS-acquisition lead-in the pipeline trims, which flagged clean footage as
+            # degraded purely on how many chapters were opened). Naming the population is the
+            # fix; the number itself is the shipped one.
+            lines.append(f"Timing: {clock} · {quality.dropped_pct()}% of moving fixes rejected")
+            tips.append("The rejected-fix share is measured over the fixes taken WHILE MOVING. "
+                        "The stationary lead-in before you drive off is trimmed by the loader "
+                        "and left out of the verdict, so opening one chapter or all of them "
+                        "gives the same answer.")
         if getattr(session, "has_gmeter", False):
             src = {"accl": "IMU", "gps": "GPS"}
             lat_src = src.get(session.gmeter_source(), session.gmeter_source())
             long_src = src.get(session.gmeter_long_source(), session.gmeter_long_source())
             lines.append(f"g-meter: {lat_src} lateral · {long_src}-derived longitudinal")
+        else:
+            # The card used to go SILENT about the g channel exactly when it is missing — while
+            # the peak-g tiles, the per-lap g columns and the corner Grip % all render em-dashes
+            # with no stated reason anywhere on the window.
+            lines.append(NO_GMETER_NOTE)
         # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for
         # the statistics on this page (those laps feed no best/σ/pace number).
-        valid = session.valid_lap_ids() if hasattr(session, "valid_lap_ids") else []
         dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
         if dropouts:
             lines.append(f"GPS dropout inside {len(dropouts)} of {len(valid)} laps — "
@@ -1020,15 +1140,33 @@ class StatsView(QWidget):
             verdict = "agree" if cross.ok else "DISAGREE"
             lines.append(f"IMU↔GPS cross-check: {verdict} · lateral r={cross.lat_corr:+.2f} · "
                          f"longitudinal r={cross.long_corr:+.2f} · {cross.n} samples")
-            self.trust_label.setToolTip(cross.summary())
+            tips.append(cross.summary())
         self.trust_label.setText("\n".join(lines) if lines else DASH)
+        # Set unconditionally (both ways): a stale cross-check summary must not survive a
+        # re-render onto a session that has none.
+        self.trust_label.setToolTip("\n\n".join(tips))
 
     def _refresh_lap_table(self, session, rows, unit, u_label):
         has = bool(rows)
         self._laps_section.setVisible(has)
         self.lap_table.setVisible(has)
         self._laps_section.setText(f"PER LAP · speeds in {u_label}")
+        # These Time cells are literally the laps the Laps tab already demotes, so demote them
+        # identically here: muted + italic + the explaining tooltip while the start line is
+        # PROVISIONAL or the clock is DEGRADED. Only the Time column — Vmax/Avg/g/brake are
+        # measured whatever the start line is, and muting the whole table would tell the reader
+        # nothing about which numbers the unverified line actually moves.
+        verified = getattr(session, "timing_verified", True)
+        quality = getattr(session, "timing_quality", None)
+        timing_note = (PROVISIONAL_TOOLTIP if not verified
+                       else estimated_timing_tooltip(quality)
+                       if quality is not None and quality.degraded else "")
         best = session.best_lap_id() if hasattr(session, "best_lap_id") else None
+        # The Laps tab suppresses the ★/best colour entirely while provisional (a "best" against
+        # an arbitrary start line is meaningless). Match it, or this page would keep vouching for
+        # a fastest lap in the very column it just muted.
+        if not verified:
+            best = None
         # C7: the page's DATA TRUST card says dropout laps are "flagged ⚠" — flag them HERE
         # too (the Laps tab already does), or the promise reads as broken.
         dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
@@ -1046,7 +1184,12 @@ class StatsView(QWidget):
 
             def num(v, fmtstr):
                 return self._num_item(fmtstr.format(v) if v is not None else DASH)
-            self.lap_table.setItem(r, 1, self._num_item(fmt_time(s.time)))
+            time_item = self._num_item(fmt_time(s.time))
+            if timing_note:
+                time_item.setForeground(PROVISIONAL_COLOR)
+                theme.apply_provisional_style(time_item)
+                time_item.setToolTip(timing_note)
+            self.lap_table.setItem(r, 1, time_item)
             for c, kmh in ((2, s.vmax_kmh), (3, s.avg_kmh), (4, s.vmin_kmh)):
                 self.lap_table.setItem(
                     r, c, num(units.convert_speed(kmh, unit)

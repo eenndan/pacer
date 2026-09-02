@@ -67,6 +67,23 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- The Stats page no longer presents PROVISIONAL lap statistics as verified. The full-window
+  dashboard hides the map — and with it the app's only "Lap timing is unverified" banner — so
+  the page now carries its own, and the PER LAP **Time** column mutes exactly like the Laps
+  tab (with no ★ best against an auto-fitted start line). The measured speed/g tiles and
+  columns keep full authority: only the numbers the start line actually moves are demoted.
+- The **DATA TRUST** card now names the session's own trust problems — an unconfirmed
+  start/finish line, an unknown track, and how many laps are ⊘ excluded from every statistic
+  on the page — instead of printing provenance that read identically on a clean session. It
+  also moved directly under SESSION: at the foot of the page it sat below the fold of even a
+  1728×1117 dashboard.
+- DATA TRUST said *"0% of fixes rejected"* on recordings where the loader rejected hundreds.
+  The figure is deliberately measured over the retained **moving** trace, so the card now says
+  so ("N% of moving fixes rejected", with the basis in its tooltip); the number is unchanged.
+- With no accelerometer the trust card went silent about the g channel exactly when it was
+  missing. It now states the absence, and repeats it beside the em-dashed SPEED · G tiles.
+- The 0-lap Stats page was 15 em-dashes with no on-page reason. The dash-only groups are
+  replaced by one block carrying the explanation and the next action.
 - A short mis-segmented lap can no longer be crowned session best (the lap-distance band
   in the real-lap filter); band-excluded laps are surfaced instead of silently vanishing.
 - False "GPS quality low" on clean recordings (the dropped-fix denominator counted the
