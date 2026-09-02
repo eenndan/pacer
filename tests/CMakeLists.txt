@@ -317,6 +317,18 @@ add_test(NAME test_accessible_cues
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_accessible_cues.py)
 set_tests_properties(test_accessible_cues PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Theme colour SEMANTICS + legibility (fix/qa-theme-colour-semantics): an AST guard that no module
+# constant in studio/ freezes a palette-swappable hue (the SERIES_BEST class of bug — the accessors
+# are a CALL-TIME contract), the colour-blind map ramp clearing the CIE76 JND under a Machado-2009
+# deuteranopia simulation and never scoring worse than the default ramp it replaces, WCAG AA on all
+# 33 enabled text styles with C.text_muted confined to the WCAG-1.4.3-exempt disabled chrome, the
+# failed-load message outranking the marketing subtitle (colour + size + ⚠), and the Δ dead-band
+# clamp that stops '-0.00' reaching the screen or an exported frame. numpy + the CVD/Lab maths
+# inline; builds the WelcomeView -> Qt, so run offscreen. No telemetry file.
+add_test(NAME test_contrast
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_contrast.py)
+set_tests_properties(test_contrast PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Shareable lap card (image) (feat/shareable-lap-card): the PURE card_data field extraction off
 # Session accessors (best lap / Δ-to-ideal / top opportunity / track / date / unit), the km/h↔mph
 # unit flip in the reason sentence, and the HONESTY verdict (provisional/no-lap ⇒ blocked;

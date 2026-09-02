@@ -1184,11 +1184,12 @@ class CentralView(QWidget):
 
     def _driving_lap_colour(self, lap_id: int, k: int):
         """The glyph colour for a lap's brake points, matching the speed chart's curve colour:
-        the best lap is green (theme.SERIES_BEST), every other lap cycles theme.CHART_SERIES by
-        its draw-order index `k` — so a brake glyph always sits on its own lap's curve colour
-        (and compare's two laps stay distinguishable, like the curves)."""
+        the best lap takes theme.best_lap_colour() (green, or blue in the colour-blind palette —
+        resolved per call so it follows the flip exactly as the curve does), every other lap cycles
+        theme.CHART_SERIES by its draw-order index `k` — so a brake glyph always sits on its own
+        lap's curve colour (and compare's two laps stay distinguishable, like the curves)."""
         if lap_id == self.session.best_lap_id():
-            return theme.SERIES_BEST
+            return theme.best_lap_colour()
         return theme.CHART_SERIES[k % len(theme.CHART_SERIES)]
 
     def _refresh_driving_channels(self):
