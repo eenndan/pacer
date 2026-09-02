@@ -125,12 +125,17 @@ class CentralView(QWidget):
         # Atomic build: panels -> layout -> signals -> controllers.
         self._construct_panels()
         # Seed each speed-bearing sub-view's unit BEFORE the first rebuild fills them (set the
-        # field directly — set_speed_unit would trigger a redundant pre-build refresh). The plots
-        # axis label needs re-applying since it was set at km/h in the sub-view's own __init__.
+        # field directly — set_speed_unit would trigger a redundant pre-build refresh). Two side
+        # effects were applied at the km/h default in the sub-views' own __init__ and are NOT
+        # re-run by the rebuild below, so they must be re-applied by hand here: the plots y-axis
+        # label, and the Corners table's per-column header tooltips. Every other unit-bearing
+        # string (the Laps headers, the map legend, Stats, Coaching) is rebuilt from _speed_unit
+        # by the refresh that rebuild_derived_views triggers, so it needs nothing.
         for w in (self.plots, self.table, self.corner_table, self.map, self.opportunities,
                   self.stats_view):
             w._speed_unit = self._speed_unit
         self.plots._apply_speed_axis_label()
+        self.corner_table._apply_corner_tips()
         self._layout_panels()
         self._wire_signals()
         self._build_controllers()
@@ -162,14 +167,19 @@ class CentralView(QWidget):
 
     def _apply_grid_sizes(self, stored: list):
         """Apply persisted [main, left, right] splitter sizes. Each list is applied only if it
-        matches its splitter's section count — a stale/corrupt pref falls back cleanly to the
-        built-in defaults (already set)."""
+        matches its splitter's section count AND every section is strictly positive — a
+        stale/corrupt pref falls back cleanly to the built-in defaults (already set).
+
+        The positivity test is what stops a prefs.json written by a build that still let a drag
+        collapse a column (see _layout_panels) from RESURRECTING the deleted panel on every
+        relaunch: a stored [1432, 0] used to pass the old count/non-negative/sum>0 guard and
+        reopen the window with MAP and CHARTS off screen. Rejecting the one bad list leaves the
+        other two splitters free to restore, so a user only loses the layout that was unusable."""
         for splitter, sizes in zip(
                 (self._main_splitter, self._left_splitter, self._right_splitter),
                 stored, strict=False):
             if (isinstance(sizes, (list, tuple)) and len(sizes) == splitter.count()
-                    and all(isinstance(v, (int, float)) and v >= 0 for v in sizes)
-                    and sum(sizes) > 0):
+                    and all(isinstance(v, (int, float)) and v > 0 for v in sizes)):
                 splitter.setSizes([int(v) for v in sizes])
 
     def dispose(self):
@@ -575,6 +585,15 @@ class CentralView(QWidget):
         # right column's hidden minimum overrode it to ~[394, 1046] on every launch. The explicit
         # column minimums above let the USER trade either way; only the default has to be clip-free.
         main.setSizes([515, 917])
+        # Those column minimums are only a floor if Qt is told to honour them. With Qt's default
+        # childrenCollapsible, a drag that overshoots a minimum COLLAPSES the section to 0 instead
+        # of clamping: past about +740 px one ordinary drag of the main handle deleted the whole
+        # right column (MAP + CHARTS), the 400 ms debounce below persisted [1432, 0] to prefs.json,
+        # and every relaunch reopened with those panels gone — recoverable only via the 8 px handle
+        # now pinned against the window's own resize hot zone. Non-collapsible turns that same drag
+        # into a polite clamp at [1072, 360]. (Maximize still needs a real 0 — see _collapse_sizes.)
+        for splitter in (main, left, right):
+            splitter.setChildrenCollapsible(False)
         # The user's persisted grid layout (a drag used to be lost on every reload, which read
         # as "the panels cannot be resized") is applied on FIRST SHOW, not here: before the
         # window sizes this widget, the splitters sit at tiny defaults and min-size clamping
@@ -734,14 +753,27 @@ class CentralView(QWidget):
         in_left = column is self._left_splitter
         # Main split: keep the column that holds `panel`, collapse the other to 0.
         full_w = sum(self._main_splitter.sizes()) or self._main_splitter.width()
-        self._main_splitter.setSizes([full_w, 0] if in_left else [0, full_w])
+        self._collapse_sizes(self._main_splitter, [full_w, 0] if in_left else [0, full_w])
         # The owning column: keep the panel's section, collapse its sibling. video/map are index 0,
         # table/charts are index 1 in their respective columns.
         top_panels = (self._video_panel, self._map_panel)
         full_h = sum(column.sizes()) or column.height()
-        column.setSizes([full_h, 0] if panel in top_panels else [0, full_h])
+        self._collapse_sizes(column, [full_h, 0] if panel in top_panels else [0, full_h])
         self._maximized_panel = panel
         self._sync_maximize_buttons()  # this panel's button now shows the restore glyph
+
+    @staticmethod
+    def _collapse_sizes(splitter: QSplitter, sizes: list[int]):
+        """setSizes for the maximize path, where a 0-width/height section is INTENDED.
+
+        The grid splitters are non-collapsible so no user drag can delete a panel, and Qt applies
+        that flag inside setSizes too — a plain setSizes([1432, 0]) clamps to the column minimum
+        (measured: [1076, 360]), which would leave a "maximized" panel still sharing the window
+        with its sibling. So lift the flag just for this call. Qt latches the collapse on the
+        layout struct, so the 0 survives restoring the flag and every later window resize."""
+        splitter.setChildrenCollapsible(True)
+        splitter.setSizes(sizes)
+        splitter.setChildrenCollapsible(False)
 
     def _restore_splitter_sizes(self):
         """Put the pre-maximize grid sizes back (the inverse of _toggle_panel_maximized's collapse)
@@ -1319,7 +1351,20 @@ class CentralView(QWidget):
         # Re-segmentation shifts lap ids: snapshot the PRIOR lines for Undo, exit compare (stale
         # pair), re-segment, rebuild all derived views (reselect=True), re-check compare
         # availability, persist the edit.
-        self.session.push_timing_history()  # capture the pre-edit state so a bad drag is undoable
+        #
+        # Both of those RECORDS (the undo snapshot here, the sidecar below) are gated on the
+        # segmentation being one the load-time revert guard would accept, i.e. one that leaves at
+        # least one valid lap. Session.apply_timing_lines_latlon rejects a zero-lap placement on
+        # the way back in, and undo_timing_lines deliberately does NOT consume a snapshot the
+        # guard refuses — so recording a zero-lap state does harm and no good in both stores.
+        #
+        # Undo specifically: a start-line drag is TWO edits (one per endpoint handle), and the
+        # FIRST release can already empty the lap set. The second push then snapshotted that
+        # zero-lap intermediate, and Cmd+Z peeked it forever — measured three presses, all no-ops,
+        # leaving the user stranded in an empty session with a lit but dead Undo. Skipping the
+        # push keeps the last GOOD placement on top of the stack, so one Cmd+Z recovers.
+        if self.session.valid_lap_ids():
+            self.session.push_timing_history()  # pre-edit state, so a bad drag is undoable
         if self._comparing():
             self.video.set_compare_enabled(False)  # un-checks -> compareToggled(False) -> exit
         self.session.set_timing_lines(start, sectors)
@@ -1330,10 +1375,22 @@ class CentralView(QWidget):
 
     def _save_sidecar(self):
         """Write the timing lines to the recording's sidecar JSON. Called only from _on_lines (a
-        genuine user edit), so an untouched session never creates the file. Best-effort: an
-        unwritable folder just logs."""
+        genuine user edit) and undo_timing_lines, so an untouched session never creates the file.
+        Best-effort: an unwritable folder just logs.
+
+        NEVER persists a placement that leaves no valid lap. Session.apply_timing_lines_latlon's
+        revert guard throws exactly that sidecar away on the next open, so writing one cannot help
+        and actively destroys: it REPLACED the user's last good saved line with 221 bytes the
+        loader always rejects, pinning the recording to provisional ("saved timing lines don't
+        match this recording") with a line no surface shows and nothing clears. Keeping the last
+        good file instead means quitting after a bad drag reopens on the placement that worked.
+        The edit itself still stands on screen — this refuses the disk copy, not the gesture."""
         path = getattr(self, "_sidecar_path", None)
         if not path:
+            return
+        if not self.session.valid_lap_ids():
+            print("studio: timing lines NOT saved — that placement leaves no complete lap; "
+                  "the last saved lines are unchanged (Edit ▸ Undo reverts the edit)", flush=True)
             return
         start, sectors = self.session.timing_lines_latlon()
         try:
