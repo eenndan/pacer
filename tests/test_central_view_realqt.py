@@ -625,6 +625,21 @@ def test_opportunities_panel_is_the_coaching_tab_page():
     print("test_opportunities_panel_is_the_coaching_tab_page OK")
 
 
+def test_ia01_corners_and_coaching_tabs_declare_different_scopes():
+    """IA-01: Corners is per-LAP (it renames itself "Corners · L6"), Coaching is the whole SESSION's
+    median — but both tooltips used to promise the same "vs the best lap" with no scope word, so the
+    two pages reading different numbers 130 px apart looked like a defect rather than two different
+    questions. Each tooltip must now name its own scope, and Coaching must say it does not follow
+    the selection."""
+    view, _s, _t0, _t1 = _real_central_view()
+    corners, coaching = view.tab_bar.tabToolTip(1), view.tab_bar.tabToolTip(3)
+    assert "lap you select" in corners and "Follows your selection" in corners, corners
+    assert "WHOLE session" in coaching, coaching
+    assert "Does NOT follow your lap selection" in coaching, coaching
+    assert "Corners tab is the per-lap view" in coaching, coaching
+    print("test_ia01_corners_and_coaching_tabs_declare_different_scopes OK")
+
+
 # ============================================================ full screen (window + video focus)
 def test_window_fullscreen_toggle_and_menu_text_and_esc():
     """View ▸ Enter/Exit Full Screen (⌘⌃F): the menu action flips the window's real fullscreen state,

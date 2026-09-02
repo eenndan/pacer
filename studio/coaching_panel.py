@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QStackedWidget,
+    QStyle,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -36,8 +38,10 @@ from .theme import C
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
 
-# column indices
+# column indices — the modal dialog's six, then the panel's reason column (it drops the dialog's
+# PhaseBar + Jump columns, so its "How to find it" sits at 3, not 4).
 _COL_CORNER, _COL_LOST, _COL_SIGMA, _COL_PHASES, _COL_REASON, _COL_GO = range(6)
+_PANEL_COL_REASON = 3
 # NB (M4): "Time lost" is the cross-lap MEDIAN per-corner delta; the Entry·Apex·Exit column is a
 # DIFFERENT statistic — the typical lap's Δt profile across the corner (where in the corner it wins
 # or loses), which does NOT sum to "Time lost" and can even net faster. Its header must not also
@@ -49,6 +53,18 @@ _HEADERS = ["Corner", "Time lost", "±σ", "Entry · Apex · Exit Δt", "How to 
 # 1e-9 ranking (used by the golden fingerprint + share card), but the DISPLAYED opportunity lists
 # (dialog + panel) drop rows below the shown resolution so no "+0.00 s" row ever appears.
 DISPLAY_MIN_LOST_S = 0.005  # < this rounds to +0.00 s at 2 dp — not a shown opportunity
+
+
+# IA-01: the ONE scope word both coaching surfaces lead with. Every opportunity is a median over the
+# session's clean laps — the page does not, and cannot, re-scope to the lap you have selected (see
+# OpportunitiesPanel's scope note), so it says so where the number is read.
+_SCOPE_PREFIX = "Whole session"
+
+
+def _clean_laps_phrase(n: int) -> str:
+    """"median of N clean laps" — the sample the opportunities are a median OVER, so the headline
+    carries its own denominator (singular for the degenerate one-lap case)."""
+    return f"median of {n} clean lap{'' if n == 1 else 's'}"
 
 
 def _shown_rows(opps: coaching.Opportunity) -> list[coaching.Opportunity]:
@@ -79,12 +95,17 @@ _REASON_TIP = {
 
 class PhaseBar(QWidget):
     """A tiny horizontal entry/apex/exit Δt-profile for one corner on the TYPICAL lap (D2): three
-    proportional segments (widths ∝ each third's seconds slower than best) over the row's three
-    numbers. This is a WHERE-in-the-corner profile of the typical lap vs best — NOT the row's
-    "Time lost" (a cross-lap median), which it need not sum to or even agree in sign with. Only the
-    phases slower than best (positive Δt) get a coloured segment; faster-than-best thirds are shown
-    as a near-zero sliver. Read-only; the segment widths are the visual cue, the small numbers
-    underneath the precise values, the tooltip the full breakdown."""
+    proportional segments (widths ∝ each third's |Δt| vs best) over the row's three numbers. This is
+    a WHERE-in-the-corner profile of the typical lap vs best — NOT the row's "Time lost" (a cross-lap
+    median), which it need not sum to or even agree in sign with. Read-only; the segment widths are
+    the visual cue, the small numbers underneath the precise values, the net line the sign of the
+    whole window, the tooltip the full breakdown.
+
+    L5-05: a FASTER-than-best third is a real, readable state, not an absence of one. It used to
+    render as a `C.border` sliver — 1.19:1 against the row, i.e. invisible — so a corner whose three
+    thirds were ALL faster than best looked empty beside its "+0.08 s" Time lost, and only the
+    tooltip reconciled the two measures. Faster thirds now take the palette's ahead colour, are
+    sized by |Δt| like the losing ones, and the window's net is stated on the row face."""
 
     _BAR_H = 6  # px; the proportional bar's height (the numbers sit below it)
 
@@ -100,24 +121,25 @@ class PhaseBar(QWidget):
         vals = phases.as_tuple()                      # (entry, apex, exit) seconds
         dominant = phases.dominant
         ids = (coaching.PHASE_ENTRY, coaching.PHASE_APEX, coaching.PHASE_EXIT)
-        pos = [max(v, 0.0) for v in vals]            # only losses size the bar
-        scale = sum(pos)
+        # L5-05: |Δt| sizes the bar, so a faster-than-best third is as visible as a losing one (the
+        # old sum-of-losses scale gave an all-faster row three 1-px slivers and no readable state).
+        mags = [abs(v) for v in vals]
+        scale = sum(mags)
 
         # proportional bar
         bar = QHBoxLayout()
         bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(1)
-        for pid, v, p in zip(ids, vals, pos, strict=True):
+        for pid, v, m in zip(ids, vals, mags, strict=True):
             seg = QWidget()
             seg.setFixedHeight(self._BAR_H)
-            # stretch ∝ the third's loss; a tiny floor so a flat row still shows three slivers
-            bar.addWidget(seg, max(int(round(p / scale * 100)), 1) if scale > 1e-9 else 1)
-            losing = v > 1e-6
-            col = (C.accent if pid == dominant else C.text_dim) if losing else C.border
-            seg.setStyleSheet(f"background:{col}; border-radius:2px;")
+            # stretch ∝ the third's |Δt|; a tiny floor so a flat row still shows three slivers
+            bar.addWidget(seg, max(int(round(m / scale * 100)), 1) if scale > 1e-9 else 1)
+            seg.setStyleSheet(f"background:{self._phase_colour(pid, v, dominant)}; "
+                              "border-radius:2px;")
         lay.addLayout(bar)
 
-        # the three numbers under the bar (the dominant one accented)
+        # the three numbers under the bar (the dominant loss accented, the faster thirds ahead-hued)
         nums = QHBoxLayout()
         nums.setContentsMargins(0, 0, 0, 0)
         nums.setSpacing(4)
@@ -126,8 +148,7 @@ class PhaseBar(QWidget):
             lbl = QLabel(f"{v:+.2f}")
             lbl.setFont(num_font)
             lbl.setAlignment(Qt.AlignCenter)
-            colour = C.accent if (pid == dominant and v > 1e-6) else C.text_dim
-            lbl.setStyleSheet(f"color:{colour};")
+            lbl.setStyleSheet(f"color:{self._phase_colour(pid, v, dominant)};")
             nums.addWidget(lbl, 1)
         lay.addLayout(nums)
 
@@ -145,11 +166,98 @@ class PhaseBar(QWidget):
                         "— the row's Time lost is the cross-lap median, a different measure.")
         else:
             net_line = "Typical-lap net ~0 s over the window (on your best-lap pace here)."
+
+        # L5-05: the sign of the WINDOW on the row face, not only on hover — a row headlined
+        # "+0.08 s lost" whose typical lap is net faster across the corner must say so where it is
+        # read. Faster reads in the palette's ahead hue, slower stays muted (the accent is reserved
+        # for the dominant losing third above).
+        face = QLabel(f"net {net:+.2f} s" if abs(net) > 1e-6 else "net ~0 s")
+        face.setFont(theme.mono_font(theme.CAPTION))
+        face.setAlignment(Qt.AlignCenter)
+        face.setStyleSheet(f"color:{theme.ahead_colour() if net < -1e-6 else C.text_dim};")
+        lay.addWidget(face)
+
         self.setToolTip(
             "Where in the corner your typical lap is faster/slower than your best lap "
             "(Δt per third, s) — NOT the same as the row's Time lost:\n"
             + "   ".join(f"{_PHASE_LABEL[p]} {v:+.2f}" for p, v in zip(ids, vals, strict=True))
             + "\n" + net_line)
+
+    @staticmethod
+    def _phase_colour(pid: str, v: float, dominant: str) -> str:
+        """One third's colour: the palette's AHEAD hue when it is faster than best (L5-05 — a real
+        state, not an absence of one), the accent for the dominant losing third, muted otherwise.
+        Routes through theme.ahead_colour() so the colour-blind palette recolours it too, and the
+        already-signed number under the bar keeps the cue non-colour."""
+        if v < -1e-6:
+            return theme.ahead_colour()
+        if v > 1e-6 and pid == dominant:
+            return C.accent
+        return C.text_dim if abs(v) > 1e-6 else C.border
+
+
+# L5-03: a QTableWidget wraps the "How to find it" cell NARROWER than it measures it. The row height
+# comes from the delegate's sizeHint, which the stylesheet style computes at the FULL section width
+# and then ADDS the QSS `QTableWidget::item {padding: 4px 8px}` to; the paint pass instead DEDUCTS
+# that padding, so it wraps into 16 fewer px. At the app's own 1440x900 default that 16-px delta
+# costs a whole line — a reason sentence advancing 309 px in a 317-px column is measured as one line
+# and painted as two, and the row's "(est)" brake-point line is silently dropped, cell ending on a
+# literal "…", with no user action at all. So measure each reason cell at the width the delegate
+# really PAINTS into (the style's own SE_ItemViewItemText rect, QSS padding included) and pin the
+# resulting height as the item's explicit sizeHint, which the delegate returns verbatim.
+def _wire_reason_fit(table: QTableWidget, col: int):
+    """Keep `col`'s wrapped rows fitted for the life of `table`, and fit them now.
+
+    The reason column STRETCHES, and the header settles its final width *after* every signal we can
+    hook: `sectionResized` stops firing partway (measured: last emission 189 px against a final
+    445 px) and a build-time fit measures a width the table never uses. So re-fit from a coalesced
+    queued call that lands once the layout pass is over, in addition to the immediate one that keeps
+    headless callers (and the tests) correct without an event loop."""
+    timer = QTimer(table)
+    timer.setSingleShot(True)
+    timer.timeout.connect(lambda: _fit_reason_rows(table, col))
+    table.horizontalHeader().sectionResized.connect(lambda *_: timer.start(0))
+    _fit_reason_rows(table, col)
+    timer.start(0)
+
+
+def _fit_reason_rows(table: QTableWidget, col: int):
+    """Re-height every wrapped reason cell in `col` from the rect the delegate paints into, then
+    re-fit the rows. Idempotent — safe to call on every resize."""
+    # Re-entrancy guard: re-fitting rows can toggle the vertical scrollbar, which re-stretches the
+    # header, which calls back in here. One pass at a time; the next width change refits anyway.
+    if table.property("_fitting_reason"):
+        return
+    opt = QStyleOptionViewItem()
+    opt.initFrom(table)
+    opt.features = QStyleOptionViewItem.HasDisplay
+    opt.rect = QRect(0, 0, table.columnWidth(col), 100)
+    text_rect = table.style().subElementRect(QStyle.SE_ItemViewItemText, opt, table)
+    avail, pad_v = text_rect.width(), 100 - text_rect.height()
+    if avail <= 0:  # a collapsed column: leave Qt's own heights alone rather than pin nonsense
+        return
+    fm = table.fontMetrics()
+    rows = [r for r in range(table.rowCount()) if table.item(r, col) is not None]
+    table.setProperty("_fitting_reason", True)
+    try:
+        # Qt's own answer first (drop any hint pinned by a previous pass, so this shrinks again when
+        # the column widens). We only ever GROW past it — the fix is the dropped line, not a
+        # re-invention of the row metrics, and the pin must stay harmless where there is no
+        # stylesheet padding to mis-measure.
+        for r in rows:
+            table.item(r, col).setData(Qt.SizeHintRole, None)
+        table.resizeRowsToContents()
+        for r in rows:
+            item = table.item(r, col)
+            wrapped = fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap, item.text()).height()
+            # The width must be a REAL one: setSizeHint DISCARDS an invalid QSize (a -1 "don't care"
+            # width clears the role instead of pinning the height). The section stretches, so the
+            # width we pass never drives the layout.
+            item.setSizeHint(QSize(table.columnWidth(col),
+                                   max(wrapped + pad_v, table.rowHeight(r))))
+        table.resizeRowsToContents()
+    finally:
+        table.setProperty("_fitting_reason", False)
 
 
 # D4: below this many metres the brake-point delta is within the estimate's noise — show no hint.
@@ -261,10 +369,12 @@ class OpportunitiesDialog(QDialog):
         # informationless "+0.00 s" row (with a live Jump button) is listed as an opportunity.
         shown = _shown_rows(opportunities)
         if opportunities.enough and shown:
-            n = opportunities.n_laps
             lap = opportunities.median_lap_id
-            # `n` is a COUNT (stays as-is); `lap` is a lap ID, so it renders 1-based (lap_label).
-            title = QLabel(f"Biggest gains vs your best lap — median of {n} clean laps"
+            # `n_laps` is a COUNT (stays as-is); `lap` is a lap ID, so it renders 1-based
+            # (lap_label). IA-01: name the SCOPE here too — this ranking is the whole session's, not
+            # the selected lap's, and the panel it mirrors now says so.
+            title = QLabel(f"Biggest gains vs your best lap — {_SCOPE_PREFIX.lower()}, "
+                           f"{_clean_laps_phrase(opportunities.n_laps)}"
                            + (f" (typical lap {lap_label(lap)})" if lap is not None else ""))
         else:
             title = QLabel("Opportunities")
@@ -333,8 +443,10 @@ class OpportunitiesDialog(QDialog):
             table.setItem(r, _COL_REASON, _reason_cell(opp, self._brake_points, self._speed_unit))
             table.setCellWidget(r, _COL_GO, self._go_button(opp))
         # Fit each row to its wrapped-reason height at the current column widths (the reason is the
-        # stretch column, so a 2-line sentence needs the extra height — same as the panel's fill).
-        table.resizeRowsToContents()
+        # stretch column, so a 2-line sentence needs the extra height — same as the panel's fill),
+        # measured at the width the delegate PAINTS into so no line is dropped, and re-fitted every
+        # time the header re-stretches the column (L5-03).
+        _wire_reason_fit(table, _COL_REASON)
         self.table = table  # exposed for the tests
         return table
 
@@ -377,8 +489,17 @@ class OpportunitiesPanel(QWidget):
     under-table strip whose whole drag range was 68 px). The modal ``OpportunitiesDialog``
     stays available for the full ranking + jump-to.
 
+    SCOPE — WHOLE SESSION, NOT THE SELECTED LAP (IA-01). ``coaching_opportunities()`` takes no lap:
+    every row is the MEDIAN loss vs best over the clean laps, ±σ is the cross-lap σ, and the reason
+    is read off the median lap — none of which a single lap can answer. Its sibling Corners tab IS
+    the per-lap surface (it renames itself "Corners · L6"), so this page must SAY it does not follow
+    the selection rather than look like it silently failed to: the headline leads with the scope and
+    the tab tooltip names it. Do not wire this to ``laps_selected`` — ``refresh()`` recomputes the
+    identical session statistic, so that would repaint the same pixels and change nothing.
+
     Reads ONLY session accessors (``coaching_opportunities`` + ``coaching_brake_points``) — no
-    analysis here. Refreshed on load / lap-selection / re-segmentation (never on the 30 Hz tick).
+    analysis here. Refreshed on load / re-segmentation / unit + palette change (never on the 30 Hz
+    tick, never on selection — see the scope note).
     A row click emits ``corner_clicked(cid)`` so the app can ring the corner's apex on the map.
     Honours the shared ESTIMATED labelling (the ``(est)`` brake-point lines via ``_reason_cell``,
     from ``theme.ESTIMATED_MARK``) and the friendly "need more laps" state when there aren't
@@ -402,11 +523,13 @@ class OpportunitiesPanel(QWidget):
 
         # --- the headline strip: the tab bar already names the page, so this is just the
         # summary sentence (no title, no chevron — a tab you leave costs nothing).
-        self.summary_label = QLabel("")  # "0.42 s in 3 corners …" — set in refresh()
+        self.summary_label = QLabel("")  # "Whole session · 0.42 s in 3 corners …" — set in refresh()
         self.summary_label.setProperty("role", "BarLabel")
         self.summary_label.setToolTip(
-            "The biggest realistic time gains vs your own best lap (median of your clean, "
-            "GPS-dropout-free laps). Open Coaching ▸ Opportunities… for the full ranking + jump-to.")
+            "The biggest realistic time gains vs your own best lap, across the WHOLE session "
+            "(the median over your clean, GPS-dropout-free laps) — these rows do NOT follow the "
+            "lap you select; the Corners tab is the per-lap view. Open Coaching ▸ Opportunities… "
+            "for the full ranking + jump-to.")
         header = QWidget()
         header.setProperty("role", "PanelHeader")
         row = QHBoxLayout(header)
@@ -435,6 +558,9 @@ class OpportunitiesPanel(QWidget):
         for col in (0, 1, 2):  # corner · time-lost · σ size to content; reason (last) stretches
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
+        # L5-03: keep the wrapped reason rows fitted to the width the delegate really paints into,
+        # re-measured whenever the header re-stretches the column.
+        _wire_reason_fit(self.table, _PANEL_COL_REASON)
 
         self.empty_label = QLabel("")
         self.empty_label.setWordWrap(True)
@@ -455,7 +581,8 @@ class OpportunitiesPanel(QWidget):
     # ------------------------------------------------------------------ build
     def refresh(self):
         """Recompute the opportunities from the session and rebuild the top-3 rows (or the friendly
-        excluded state). Called on load / lap-selection / re-segmentation — never on the 30 Hz tick.
+        excluded state). Called on load / re-segmentation / unit + palette change — never on the
+        30 Hz tick, and never on a lap selection (the summary is session-scoped; see the class note).
         Clears any held row selection (a stale cid would mis-ring the map)."""
         opps = self.session.coaching_opportunities()
         brake_points = self.session.coaching_brake_points()
@@ -485,10 +612,14 @@ class OpportunitiesPanel(QWidget):
         total = sum(round(r.time_lost, 2) for r in rows)
         # P1: phrase the headline by COUNT — "in your worst corner" reads right for one, "across your
         # top N corners" for several, so it never says the ungrammatical "across the top 1".
-        if len(rows) == 1:
-            self._headline = f"{total:.2f} s in your worst corner"
-        else:
-            self._headline = f"{total:.2f} s across your top {len(rows)} corners"
+        gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
+                 else f"{total:.2f} s across your top {len(rows)} corners")
+        # IA-01: LEAD with the scope. The tab strip beside this page renames itself "Corners · L6"
+        # on a selection, so a coaching headline that neither moves nor names its scope reads as the
+        # selected lap's number — on D24 lap 6 that understated the lap's own +2.08 s as "0.21 s".
+        # State the session scope and the sample it is a median of, in the same "·" idiom the tabs
+        # use, so the two pages can be told apart at a glance.
+        self._headline = f"{_SCOPE_PREFIX} · {gains} ({_clean_laps_phrase(opps.n_laps)})"
         self._refresh_summary_label()
 
         self.table.blockSignals(True)
@@ -503,7 +634,7 @@ class OpportunitiesPanel(QWidget):
         self.table.blockSignals(False)
         # Grow each row to its wrapped-reason height for the current column widths (the reason is the
         # stretch column, so its width — and thus the wrap — depends on the panel's live size).
-        self.table.resizeRowsToContents()
+        _fit_reason_rows(self.table, _PANEL_COL_REASON)
         self.body.setCurrentIndex(0)
 
     def _show_excluded(self, opps: coaching.Opportunities):
@@ -526,7 +657,7 @@ class OpportunitiesPanel(QWidget):
         re-wraps as the panel narrows, so a row that was one line can become two — auto-height keeps
         the full "How to find it" sentence visible instead of clipping it (the truncation bug)."""
         super().resizeEvent(event)
-        self.table.resizeRowsToContents()
+        _fit_reason_rows(self.table, _PANEL_COL_REASON)
 
     # ------------------------------------------------------------- interaction
     def _on_row_selected(self):

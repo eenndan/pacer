@@ -134,6 +134,18 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   theoretical best was summed from pieces that never tiled a lap. The decision is now made
   once for the whole session, so every lap reports the same boundaries and every S column
   is the same stretch of track on every row.
+- The Coaching tab now states its scope. Its numbers are the whole session's (a median
+  over your clean laps), but its sibling Corners tab re-scopes to the lap you select and
+  both tooltips promised the same "vs the best lap" — so the coaching headline read as the
+  selected lap's number and understated it. The headline and both tab tooltips now name
+  which question each page answers.
+- A Coaching row no longer drops its "(est)" braking line at the default window size: row
+  heights were measured at a width 16 px wider than the one the cell is painted into, so a
+  sentence that fit the measurement wrapped past the paint and lost a whole line.
+- A corner whose typical lap is *faster* than best through all three thirds now shows it —
+  the entry/apex/exit bar painted those thirds at 1.19:1 against the row, so the only cue
+  reconciling them with the row's cross-lap "time lost" was a tooltip. Faster thirds take
+  the ahead colour, segments are sized by |Δt|, and the window's net is on the row face.
 
 ## [0.1.0] — 2026-06-22
 
