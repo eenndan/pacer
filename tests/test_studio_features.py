@@ -1478,12 +1478,26 @@ def test_welcome_state_when_no_recording():
     """Launched with no path, StudioWindow shows the welcome empty state (not a blank/auto-demo
     window); its "Open demo" button loads a RESOLVED demo recording through the guarded _load
     path. It must NOT fall back to the lapless bundled sample when the demo can't be resolved —
-    that produced a blank-looking studio (the honest-first-run-UX fix)."""
-    from PySide6.QtWidgets import QLabel
+    that produced a blank-looking studio (the honest-first-run-UX fix).
+
+    The resolve runs on a DemoResolveWorker (QA L10-03), so each click is awaited rather than
+    asserted on the next line."""
+    import time
+
+    from PySide6.QtWidgets import QApplication, QLabel
 
     from studio import app as app_mod
     from studio.app import StudioWindow
     from studio.overlays import WelcomeView
+    app = QApplication.instance()
+
+    def _await_demo(win, until, deadline_s=20.0):
+        end = time.time() + deadline_s
+        while time.time() < end and not until():
+            app.processEvents()
+            time.sleep(0.004)
+        return until()
+
     w = StudioWindow([])
     try:
         cw = w.centralWidget()
@@ -1495,6 +1509,7 @@ def test_welcome_state_when_no_recording():
         # Demo RESOLVES: "Open demo" loads exactly that path through the guarded _load.
         app_mod.demo.resolve_demo_recording = lambda: "/demo/pacer-demo-lap.mp4"
         cw.demo_btn.click()
+        assert _await_demo(w, lambda: bool(loaded)), "the demo resolve never settled"
         assert loaded == [["/demo/pacer-demo-lap.mp4"]], loaded
 
         # Demo UNAVAILABLE (offline / download failed): no load, and the welcome state is re-shown
@@ -1502,6 +1517,7 @@ def test_welcome_state_when_no_recording():
         loaded.clear()
         app_mod.demo.resolve_demo_recording = lambda: None
         w._open_demo()
+        assert _await_demo(w, lambda: w.centralWidget() is not cw), "the demo resolve never settled"
         assert loaded == [], "must not load anything when the demo can't be resolved"
         cw2 = w.centralWidget()
         assert isinstance(cw2, WelcomeView), type(cw2)
@@ -1509,6 +1525,7 @@ def test_welcome_state_when_no_recording():
                if lab.property("role") == "WelcomeError"]
         assert err and "unavailable" in err[0].text().lower(), "honest demo-unavailable message"
     finally:
+        w.close()
         w.deleteLater()
     print("test_welcome_state_when_no_recording OK")
 
