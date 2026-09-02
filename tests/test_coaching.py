@@ -149,6 +149,76 @@ def test_braking_picks_braking_reason():
     print(f"ok braking reason: {sent} (contrib {r.reason.contribution:.2f}s)")
 
 
+def _flat_lap(total=300.0, v_mps=20.0):
+    """A constant-20 m/s lap as the (dist, elapsed) pair the overlap integral runs on: 1 m
+    samples, so 20 m of odometer is exactly 1.0 s and every expected value below is exact."""
+    dist = np.linspace(0.0, total, int(total) + 1)
+    return dist, dist / v_mps
+
+
+def test_brake_event_is_counted_by_overlap_not_by_its_onset():
+    """L5-01. Corner 1's window is [50, 90] m, so the approach cut is at 50 − BRAKE_APPROACH_M
+    = 20 m. A 2.0 s application that STARTS at 10 m (upstream of the cut) and releases at 50 m
+    spends 30 m == 1.5 s of itself inside the window; the onset rule scored the whole event
+    0.00 s. This is the D24 shape: the best lap's 2.2 s brake into C3 began 14.5 m upstream."""
+    dist, elapsed = _flat_lap()
+    straddling = [_brake(onset_dist=10.0, onset_time=0.5, duration=2.0)]  # releases at 50 m
+    assert K._window_brake_time(straddling, 50.0, 90.0) == 0.0, "the onset rule drops it whole"
+    got = K._window_brake_time(straddling, 50.0, 90.0, dist, elapsed)
+    assert abs(got - 1.5) < 1e-6, got
+    # A lap that braked EARLIER and LONGER than another can therefore never score 0.00 against it.
+    assert K._window_brake_time(straddling, 50.0, 90.0, dist, elapsed) > K._window_brake_time(
+        [_brake(onset_dist=30.0, onset_time=1.5, duration=0.5)], 50.0, 90.0, dist, elapsed)
+    # An event that releases before the cut still scores 0 (no overlap) …
+    early = [_brake(onset_dist=0.0, onset_time=0.0, duration=0.5)]      # releases at 10 m
+    assert K._window_brake_time(early, 50.0, 90.0, dist, elapsed) == 0.0
+    # … and one running past the exit is clipped there (80→90 m = 0.5 s of a 2.0 s application).
+    late = [_brake(onset_dist=80.0, onset_time=4.0, duration=2.0)]      # releases at 120 m
+    assert abs(K._window_brake_time(late, 50.0, 90.0, dist, elapsed) - 0.5) < 1e-6
+    print("ok brake overlap: straddling 2.0 s application scores its in-window 1.5 s, not 0.00")
+
+
+def test_braking_extra_measures_only_the_in_window_part():
+    """L5-01 end to end: the best lap's straddling application is no longer invisible, so the
+    printed cause shrinks from the whole-event difference to the in-window one."""
+    corners, best, times, lap_times = _one_corner_lossy(0.5)
+    dist, elapsed = _flat_lap()
+    med_brakes = [_brake(onset_dist=50.0, onset_time=2.5, duration=1.4)]   # wholly inside [20,90]
+    best_brakes = [_brake(onset_dist=10.0, onset_time=0.5, duration=1.5)]  # onset upstream of 20
+    assert K._window_brake_time(best_brakes, 50.0, 90.0) == 0.0, "the pre-fix rule saw nothing"
+    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+                      sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
+                      best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
+                      median_apex_deltas=[0.0],
+                      median_dist=dist, median_elapsed=elapsed,
+                      best_dist=dist, best_elapsed=elapsed)
+    r = opp.rows[0]
+    assert r.reason.kind == K.REASON_BRAKING, r.reason
+    assert abs(r.reason.brake_extra_s - 0.4) < 1e-6, r.reason  # 1.4 − 1.0, not 1.4 − 0.0
+    print(f"ok in-window braking: {K.reason_sentence(r)} (was ~1.40 s under the onset rule)")
+
+
+def test_every_ranked_row_is_analysed_not_only_the_first_three():
+    """L5-04: a row below the old top-3 cut carried REASON_NONE because it was never analysed,
+    so it printed "find time here" under a "How to find it" header while its own ±σ column held
+    a usable signal. Every ranked row now gets the same measured pick; `top_n` still caps it."""
+    corners = _corners(5)
+    best = [5.0] * 5
+    times = [[best[j] + (0.50 - 0.10 * j) for j in range(5)] for _ in range(4)]
+    lap_times = [sum(r) for r in times]
+    kw = dict(sigmas_by_cid={c.cid: 0.20 for c in corners},
+              median_brake_events=[], best_brake_events=[], median_coast_spans=[],
+              best_coast_spans=[], median_apex_deltas=[0.0] * 5)
+    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best, **kw)
+    assert len(opp.rows) == 5
+    kinds = [r.reason.kind for r in opp.rows]
+    assert kinds == [K.REASON_LINE] * 5, kinds
+    assert all("find time here" not in K.reason_sentence(r) for r in opp.rows)
+    capped = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best, top_n=3, **kw)
+    assert [r.reason.kind for r in capped.rows] == [K.REASON_LINE] * 3 + [K.REASON_NONE] * 2
+    print(f"ok all rows analysed: {kinds} (top_n=3 still caps at 3)")
+
+
 def test_line_sigma_is_the_fallback_reason():
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     # no apex/brake/coast signal at all, but real cross-lap spread -> LINE
