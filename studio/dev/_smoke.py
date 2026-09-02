@@ -77,13 +77,19 @@ if len(s.tt):
     w._tick()
     print("marker/cursor OK, current lap:", w.view.map._current_overlay.lap_id)
 
-# timing-line drag re-segments and re-selects without error; the user edit also writes the
-# timing-line sidecar next to the sample clip — assert it appeared, then remove it so the
-# submodule working tree stays clean (the smoke run must leave no artifacts).
+# timing-line drag re-segments and re-selects without error. The edit does NOT write the timing-
+# line sidecar here, and must not: this fixture has NO valid lap (asserted below), and
+# Session.apply_timing_lines_latlon's revert guard rejects a zero-lap sidecar on every subsequent
+# open — so writing one would leave a file next to the sample that the app always throws away,
+# while destroying whatever placement had worked before. Same junk-row rule the library index
+# applies to this same fixture twelve lines down. A side benefit for the smoke run itself: with
+# nothing written there is nothing to clean up, so the submodule working tree stays clean even if
+# this script dies mid-way.
 w.view._on_lines(s.start_line, s.sector_lines + [s.suggest_sector()])
 print("after add-sector: laps", s.lap_count(), "valid", len(s.valid_lap_ids()))
-assert w._sidecar_path and os.path.exists(w._sidecar_path), "sidecar not written on user edit"
-os.remove(w._sidecar_path)
+assert w._sidecar_path, "the window resolved no sidecar path for the sample"
+assert not os.path.exists(w._sidecar_path), \
+    "a zero-valid-lap edit wrote a sidecar that the load-time revert guard will always reject"
 
 # F8: _update_library deliberately does NOT index the bundled DEFAULT_SAMPLE, nor any open with
 # no valid laps — that guard is what stops a junk row (0 laps, null track) from being persisted
