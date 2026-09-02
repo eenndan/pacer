@@ -352,6 +352,20 @@ add_test(NAME test_lap_table_columns
 set_tests_properties(test_lap_table_columns PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Grid + timing-line write guards (fix/qa-grid-splitter-collapse, QA sweep B01): no splitter DRAG
+# can collapse a panel to 0 px and no persisted zero can resurrect one, while the maximize gesture
+# still collapses for real (it opts back in via _collapse_sizes — without that, non-collapsible
+# splitters silently clamp setSizes([full, 0]) and a "maximized" panel keeps sharing the window);
+# a timing-line placement that leaves no valid lap is written to NEITHER the sidecar (the loader's
+# revert guard always rejects it, so the write only destroyed the last good line) NOR the undo
+# stack (undo_timing_lines refuses to consume such a snapshot, which made Cmd+Z a permanent no-op);
+# and a persisted mph preference reaches the Corners header tooltips through the CONSTRUCTOR seam,
+# the one path where no unit-changed signal fires. Real CentralView -> Qt, so run offscreen.
+add_test(NAME test_grid_and_timing_guards
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_grid_and_timing_guards.py)
+set_tests_properties(test_grid_and_timing_guards PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
 # `pacer` in the interpreter's site-packages — on a fresh CI env there is none, and
@@ -373,7 +387,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card
-                        test_stats test_lap_table_columns)
+                        test_stats test_lap_table_columns test_grid_and_timing_guards)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

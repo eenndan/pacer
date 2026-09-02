@@ -78,6 +78,20 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   collisions, and self-contradicting coaching copy.
 - Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker
   drain (CI deadlocks); the drift-gated per-corner loss alignment.
+- One drag of a grid splitter could **delete a whole column** (past ~740 px the panels
+  collapsed to 0 px instead of clamping at their stated minimum), and the deletion was
+  persisted, so every relaunch reopened with the map and charts — or the video — gone,
+  recoverable only through the 8 px handle left against the window edge. Drags now clamp;
+  a prefs file already holding a deleted panel falls back to the default layout. Maximizing
+  a panel still fills the window.
+- A start/finish drag that left **no complete lap** was saved to the recording's sidecar,
+  replacing the last placement that worked with one the loader always rejects — so the
+  recording reopened as provisional with a saved line nothing on screen could show or
+  clear. It was also pushed onto the undo stack, where the same rejection made **⌘Z a
+  permanent no-op**. Neither store records an unsegmentable placement now: the edit still
+  applies on screen, ⌘Z reverts it, and quitting reopens on the last placement that worked.
+- The Corners table's four speed tooltips said km/h over cells holding mph (wrong by
+  1.61×) whenever mph was the remembered preference rather than a change made in-session.
 
 ## [0.1.0] — 2026-06-22
 
