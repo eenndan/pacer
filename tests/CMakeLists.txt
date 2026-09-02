@@ -147,6 +147,14 @@ add_test(NAME test_golden_synthetic
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_golden_synthetic.py)
 set_tests_properties(test_golden_synthetic PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The OTHER half of the golden gate's credibility: the manual D24 dump must be a pure function of
+# the recording. It redirects every studio _app_support_dir seam; this fails the build if a new
+# seam appears and is not redirected (track_db was missed for months, and made the gate report a
+# 45% leaf diff for no code change). AST-only + one live seam check, no recording needed.
+add_test(NAME test_golden_hermetic
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_golden_hermetic.py)
+set_tests_properties(test_golden_hermetic PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # F3 rainbow track map: pure-numpy bucketization / NaN-break / Δ-resampling helpers + the
 # MapView toggle invariants (OFF restores byte-identical items; zero rebuilds on the tick
 # path) on a stub session. Imports map_view -> Qt, so run offscreen.
@@ -571,7 +579,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_lap_table_columns test_help_dialog test_grid_and_timing_guards
                         test_lap_table_empty_states test_charts_header_budget
                         test_coaching_panel_layout test_focus_cues test_pb_toast test_app_chrome
-                        test_charts_panel test_lap_table_affordances test_export_gates)
+                        test_charts_panel test_lap_table_affordances test_export_gates
+                        test_golden_hermetic)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

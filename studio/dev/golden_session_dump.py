@@ -1,10 +1,11 @@
 """Whole-public-API numerical fingerprint of a real Session — the equivalence gate for the
 F1 god-object decomposition.
 
-Loads the real D24 recording (library redirected to a temp dir so nothing touches the user's
-app-support), then dumps a DENSE fingerprint (thousands of float/int values) of EVERY public
-analysis method the refactor might touch, across a representative sweep of laps + modes + a
-distance/time grid. THREE phases are captured into one JSON so cache-invalidation behaviour is
+Loads the real D24 recording (the `library` AND `track_db` app-support seams redirected to a temp
+dir, so nothing touches the user's app-support and the fingerprint cannot depend on which tracks
+they happen to have saved), then dumps a DENSE fingerprint (thousands of float/int values) of EVERY
+public analysis method the refactor might touch, across a representative sweep of laps + modes + a
+distance/time grid. FIVE phases are captured into one JSON so cache-invalidation behaviour is
 fingerprinted too:
   * "base"   — the freshly-loaded session;
   * "reseg"  — after set_timing_lines(current lines) (a no-op-geometry re-segmentation, which
@@ -12,7 +13,11 @@ fingerprinted too:
                exactly what the old hand-clearing did);
   * "ref"    — after set_reference_session(self) (a SELF reference: same track, valid best lap,
                so it is adopted) — exercises the reference path everywhere a delta is drawn;
-  * "ref_cleared" — after clear_reference() (must revert byte-for-byte to "base").
+  * "ref_cleared" — after clear_reference() (must revert byte-for-byte to "base");
+  * "detected" — a RELOAD after seeding the (hermetic, empty) track DB from this session's own
+               geometry, so the loader takes the detected-track path (stored lines adopted,
+               timing_verified True) instead of the auto-fitted unknown-track path the other four
+               phases exercise.
 
 Run BEFORE refactoring to write golden_session.json, then AFTER to write a candidate and diff
 (via studio.dev.golden_compare). This was the F1 god-object-decomposition equivalence gate.
@@ -306,10 +311,23 @@ def main():
               file=sys.stderr)
         sys.exit(2)
 
-    # Redirect the library app-support dir to a temp dir so nothing touches the user's data.
-    import studio.library as library
+    # Redirect EVERY app-support seam to a temp dir. `library` so nothing touches the user's data —
+    # and `track_db` for a second reason that matters more to a gate: `Session.load` resolves
+    # `track_name` through `tracks.detect_track` -> `track_db.detect`, which reads the user's live
+    # `tracks.json`. Leaving it live makes the fingerprint depend on machine state. A saved track
+    # sets `track_name`, the loader adopts the stored line instead of auto-fitting one, and
+    # `_track_admits_reference` switches from the geometric path to the by-name path. Measured on a
+    # 1.2 GB recording: two runs of IDENTICAL code disagreed on **15,655 of 35,082 leaves** (45%),
+    # the only difference being that a track had been saved in between. A gate that reports a
+    # 45% diff for no code change is worse than no gate — it trains you to ignore it.
+    #
+    # The rule is "all of them", not "the ones Session.load happens to read today": the seams are
+    # cheap to redirect and the next one added would silently reintroduce this. tests/
+    # test_golden_hermetic.py enforces that this list stays complete.
     tmp = tempfile.mkdtemp(prefix="pacer-golden-")
-    library._app_support_dir = lambda: tmp  # type: ignore[attr-defined]
+    from studio import demo, library, prefs, track_db
+    for _mod in (demo, library, prefs, track_db):
+        _mod._app_support_dir = lambda: tmp  # type: ignore[attr-defined]
 
     from studio.session import Session
     s = Session.load([REAL])
@@ -331,6 +349,26 @@ def main():
     # Clear -> must revert to the dormant state, byte-identical to "base" minus session-identity.
     s.clear_reference()
     result["ref_cleared"] = fingerprint(s)
+
+    # DETECTED-TRACK phase. The hermetic DB above means every phase so far ran the unknown-track
+    # path (`track_name is None`, start line auto-fitted). That is half the loader's behaviour, so
+    # seed the empty DB from THIS session's own geometry and load again: `detect` now matches, the
+    # stored lines are adopted instead of auto-fitted, and `timing_verified` is True. Seeding from
+    # the recording keeps it deterministic — the entry is a function of the input file, not of the
+    # machine. A failure here is reported, not raised: the phase is extra coverage, and a gate that
+    # refuses to produce the other four phases because of it would be worse than one without it.
+    try:
+        centroid, bbox = s.track_location()
+        start, sectors = s.timing_lines_latlon()
+        track_db.save_track(track_db.make_entry("golden-seed", centroid, start, sectors, bbox=bbox))
+        s2 = Session.load([REAL])
+        result["detected_track_name"] = s2.track_name
+        result["detected_timing_verified"] = bool(s2.timing_verified)
+        result["detected"] = fingerprint(s2)
+    except Exception as exc:  # noqa: BLE001 — coverage phase, never fatal to the gate
+        result["detected_error"] = f"{type(exc).__name__}: {exc}"
+        print(f"warning: detected-track phase skipped ({type(exc).__name__}: {exc})",
+              file=sys.stderr)
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:
