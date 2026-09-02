@@ -3,23 +3,30 @@
 Cells sort by their numeric Qt.UserRole key, not text (so "1:08.408" sorts as 68.408 s).
 Row/cell highlights are keyed by lap id so they survive sorts: ▶ playing marker, green best
 lap, blue Qt selection, purple per-sector session-best cells, ⚠ GPS-dropout flag. The
-SESSION-BESTS footer is plain labels below the table, immune to sort/selection. A muted ⊘
-EXCLUDED strip below the table lists substantial laps the median band left out of the
-times/bests (a mis-segmented short/long lap, an out-lap, or an in-lap) — kept out of the
-sortable rows so a short excluded lap can't sort to the top as the "fastest".
+SESSION-BESTS footer is plain labels below the table, immune to sort/selection. A ⊘ EXCLUDED
+strip below the table lists substantial laps the median band left out of the times/bests (a
+mis-segmented short/long lap, an out-lap, or an in-lap) — kept out of the sortable rows so a
+short excluded lap can't sort to the top as the "fastest". The strip has TWO tiers: a muted
+one-liner for the odd stray lap, and a warning voice once the excluded share crosses
+EXCLUDED_WARN_RATIO (QA L3-06 — half a session going missing read exactly like one lap going
+missing).
 """
 
 from __future__ import annotations
 
 import math
+import statistics
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QAbstractScrollArea,
+    QFrame,
     QHeaderView,
     QLabel,
+    QScrollArea,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -55,7 +62,43 @@ EXCLUDED_TOOLTIP = (
     "These laps were left out of your times, bests and coaching. Their distance is off this "
     "session's median lap — usually a mis-segmented start/finish crossing, an out-lap, or an "
     "in-lap. If a real lap was dropped, drag the start/finish line on the map.")
-EXCLUDED_MAX_SHOWN = 6  # cap the listed laps; the rest collapse to a "+N more" line
+# How many excluded laps the expanded list shows AT ONCE. It is a VIEWPORT height, not a cap: the
+# list scrolls to the rest (QA L3-09 — the old hard cap listed 6 of 24 and spent its 7th line on a
+# dead "+18 more" naming rows no surface in the app would ever show, while the expansion still cost
+# four lap rows). Bounded height + a full list, instead of a bounded list.
+EXCLUDED_MAX_SHOWN = 6
+# The share of BANDED laps (valid + excluded) above which the strip stops whispering. Below it the
+# excluded set is the odd stray lap and the muted one-liner is the right weight; above it the
+# session's timing is substantially wrong (QA L3-06 measured 24 of 49 laps excluded — 49% — reported
+# in the same 28px muted line as a single stray lap), so the strip states the ratio, compares the
+# kept vs excluded distances and wears the attention amber the rest of the app warns in.
+EXCLUDED_WARN_RATIO = 0.20
+# ...and a floor on the COUNT, because a share alone would shout on a short recording: one stray
+# out-lap of four is 25% but it is still one stray out-lap — the documented common case this strip
+# was built for. Both conditions, or the warning voice stops meaning anything.
+EXCLUDED_WARN_MIN = 3
+# The ZERO-VALID-LAP wording, shared by the Laps grid's placeholder AND the Corners page's (QA
+# L3-08: Corners showed the generic "Select a lap to see its corners." on a recording that HAS no
+# selectable lap — an instruction that cannot be followed, beside a sibling placeholder in the same
+# panel that stated the fact). One string, so the two pages can never drift.
+NO_LAPS_TEXT = ("No complete laps in this recording.\n\n"
+                "The GPS may not have locked, or the recording is too short to cross the "
+                "start/finish line.")
+# ...and the one NEXT ACTION both placeholders end on. It is deliberately NOT "drag the start/finish
+# line": that call-to-action already lives on the map (the on-canvas cue + the trust strip), and a
+# recording with no lap at all is usually the wrong recording, not a misplaced line.
+NO_LAPS_ACTION = "Open another recording with ⌘O."
+NO_LAPS_PLACEHOLDER = f"{NO_LAPS_TEXT}\n\n{NO_LAPS_ACTION}"
+
+
+def _too_brief_note(n: int) -> str:
+    """The sentence that accounts for detected laps in NEITHER the valid nor the excluded list —
+    crossings the coarse gate rejected as slivers. "" for none, so it drops out of the join."""
+    if n <= 0:
+        return ""
+    one = n == 1
+    return (f"{n} other start/finish crossing{'' if one else 's'} "
+            f"{'was' if one else 'were'} too brief to count as a lap.")
 # L3: the most laps that can be overlaid on the speed/Δ charts at once. Beyond this the speed-plot
 # legend silently overflows/truncates (laps past ~13 get no entry) and the curves blanket each other,
 # so a larger selection is TRIMMED to the fastest MAX_COMPARE_LAPS — a visible cap in the table (the
@@ -316,10 +359,7 @@ class LapTable(QWidget):
 
         # Empty state: zero valid laps would show a blank grid, so stack a placeholder and flip to
         # it in refresh().
-        self._empty = QLabel(
-            "No complete laps in this recording.\n\n"
-            "The GPS may not have locked, or the recording is too short to "
-            "cross the start/finish line.")
+        self._empty = QLabel(NO_LAPS_PLACEHOLDER)
         self._empty.setProperty("role", "EmptyState")
         self._empty.setAlignment(Qt.AlignCenter)
         self._empty.setWordWrap(True)
@@ -357,20 +397,43 @@ class LapTable(QWidget):
         box = QVBoxLayout(strip)
         box.setContentsMargins(10, 6, 10, 8)
         box.setSpacing(2)
-        # The collapsed one-liner header ("⊘ N excluded ▸"): muted, uppercase section type, with the
-        # ▸/▾ chevron glyph telling which way a click goes. Text is set live by _refresh_excluded.
+        # The collapsed one-liner header ("⊘ N excluded of M laps ▸"): muted, uppercase section
+        # type, with the ▸/▾ chevron glyph telling which way a click goes. Text (and, above
+        # EXCLUDED_WARN_RATIO, its amber warning colour) is set live by _refresh_excluded.
         self._excluded_header = QLabel("")
         self._excluded_header.setProperty("role", "BarLabel")
         self._excluded_header.setToolTip(EXCLUDED_TOOLTIP)
+        # The WARNING-tier note (hidden below the ratio threshold): the kept-vs-excluded distance
+        # comparison and the count reconciliation, ON the strip rather than only in its tooltip —
+        # at 49% excluded the one number that explains the session is not hover-only detail.
+        self._excluded_note = QLabel("")
+        self._excluded_note.setWordWrap(True)
+        self._excluded_note.setToolTip(EXCLUDED_TOOLTIP)
+        self._excluded_note.setVisible(False)
         self._excluded_body = QLabel("")
         self._excluded_body.setWordWrap(True)
+        self._excluded_body.setAlignment(Qt.AlignTop)
         self._excluded_body.setToolTip(EXCLUDED_TOOLTIP)
         # Muted + italic — the provisional/degraded treatment used everywhere else for
         # de-emphasised timing, so "not counted" reads consistently.
         self._excluded_body.setStyleSheet(
             f"color: {theme.PROVISIONAL_COLOR}; font-style: italic;")
+        # The expanded list SCROLLS (L3-09): every excluded lap is listed, but the strip's height
+        # stays bounded at EXCLUDED_MAX_SHOWN lines so expanding it costs the lap grid the same few
+        # rows whether 6 laps were excluded or 60. Frameless + no horizontal bar: it must read as
+        # part of the strip, not as a widget dropped into it.
+        self._excluded_scroll = QScrollArea()
+        self._excluded_scroll.setObjectName("LapExcludedList")
+        self._excluded_scroll.setWidget(self._excluded_body)
+        self._excluded_scroll.setWidgetResizable(True)
+        self._excluded_scroll.setFrameShape(QFrame.NoFrame)
+        self._excluded_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._excluded_scroll.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+        self._excluded_scroll.viewport().setAutoFillBackground(False)
+        self._excluded_scroll.setStyleSheet("QScrollArea { background: transparent; }")
         box.addWidget(self._excluded_header)
-        box.addWidget(self._excluded_body)
+        box.addWidget(self._excluded_note)
+        box.addWidget(self._excluded_scroll)
         self._excluded_strip = strip
         # Two orthogonal flags: the median band produced excluded laps AND the user hasn't hidden the
         # strip via the View menu. Default collapsed (the one-liner) + shown (when there are any).
@@ -394,34 +457,84 @@ class LapTable(QWidget):
         self._excluded_menu_visible = bool(on)
         self._refresh_excluded()
 
-    def _refresh_excluded(self):
+    def _unbanded_count(self, banded: int) -> int:
+        """Detected laps that are in NEITHER list: start/finish crossings too brief to clear the
+        coarse gate (`_signal._banded_out_lap_ids`: fewer than MIN_LAP_SAMPLES points or shorter
+        than MIN_LAP_TIME). QA L3-06: the panel showed 25 valid rows and "24 excluded" on a
+        recording whose lap_count() is 50, so the two visible numbers did not add up to the third
+        and the missing one was unexplained. getattr-guarded for the lighter test doubles."""
+        lap_count = getattr(self.session, "lap_count", None)
+        return max(0, lap_count() - banded) if callable(lap_count) else 0
+
+    def _excluded_headline(self, n: int, banded: int, warn: bool) -> str:
+        """The one-liner: the count RECONCILED against the banded total (so "24 excluded" is visibly
+        24 of 49, not 24 of the 25 rows above it), the share once the strip escalates, and the
+        chevron saying which way a click goes (▸ expand / ▾ collapse)."""
+        chevron = "▸" if self._excluded_collapsed else "▾"
+        share = f" ({n / banded:.0%})" if warn else ""
+        return f"{EXCLUDED_MARK} {n} excluded of {banded} laps{share} {chevron}"
+
+    def _excluded_warning(self, kept: list, rows: list, unbanded: int) -> str:
+        """The warning-tier note: the kept-vs-excluded DISTANCE comparison — the one measurement
+        that says whether the start/finish line is in the wrong place (QA L3-06 measured a kept
+        median of 203 m against an excluded median of 536 m, 2.6x, nowhere on screen and not even
+        in the tooltip) — plus the leftover brief crossings, so every detected lap is accounted for.
+        Ends on the map's own recovery action, the wording this strip's tooltip already uses."""
+        parts = []
+        if kept:
+            parts.append(f"Counted laps run ~{statistics.median([r['dist'] for r in kept]):.0f} m; "
+                         f"these run ~{statistics.median([r['dist'] for r in rows]):.0f} m.")
+        parts.append(_too_brief_note(unbanded) if unbanded else "")
+        parts.append("If a real lap was dropped, drag the start/finish line on the map.")
+        return " ".join(p for p in parts if p)
+
+    def _refresh_excluded(self, kept: list | None = None):
         """Populate / hide the excluded-laps strip from Session.excluded_lap_rows (getattr-guarded
         so the lighter test doubles, which don't expose it, simply show no strip). COLLAPSED (the
-        default) shows just the "⊘ N excluded ▸" one-liner; EXPANDED shows one line per excluded lap
-        ("Lap 47 — 0:59.091 · 921 m"), capped at EXCLUDED_MAX_SHOWN with a "+N more" tail. The whole
-        strip hides when there are none OR when the View-menu toggle hid it."""
+        default) shows just the "⊘ N excluded of M laps ▸" one-liner; EXPANDED adds one line per
+        excluded lap ("Lap 47 — 0:59.091 · 921 m") in a scroll viewport EXCLUDED_MAX_SHOWN lines
+        tall. Past the warning tier (EXCLUDED_WARN_MIN + EXCLUDED_WARN_RATIO) the header switches
+        to the warning voice and the note below it becomes visible in BOTH states. The whole strip hides when there are none OR when the
+        View-menu toggle hid it. `kept` is refresh()'s already-fetched valid-lap rows (the ratio's
+        denominator); None re-reads them."""
         rows = getattr(self.session, "excluded_lap_rows", lambda: [])()
         # Shown only when there ARE excluded laps AND the user hasn't hidden the strip via the menu.
         self._excluded_strip.setVisible(bool(rows) and self._excluded_menu_visible)
         if not rows:
             self._excluded_header.setText("")
+            self._excluded_note.setVisible(False)
             self._excluded_body.clear()
+            self._excluded_scroll.setVisible(False)
             return
-        # The one-liner header: count + a chevron pointing the way a click goes (▸ expand / ▾ collapse).
-        chevron = "▸" if self._excluded_collapsed else "▾"
-        self._excluded_header.setText(f"{EXCLUDED_MARK} {len(rows)} excluded {chevron}")
-        # The body (the full list) shows only when expanded; collapsed, the one-liner header is all.
-        self._excluded_body.setVisible(not self._excluded_collapsed)
+        kept = self.session.lap_rows() if kept is None else kept
+        banded = len(kept) + len(rows)
+        unbanded = self._unbanded_count(banded)
+        # TIER: the odd stray lap whispers; a session losing several laps AND more than
+        # EXCLUDED_WARN_RATIO of them warns. The share is ALWAYS in the words as well as the colour,
+        # so the escalation survives greyscale and colour blindness.
+        warn = len(rows) >= EXCLUDED_WARN_MIN and len(rows) / banded > EXCLUDED_WARN_RATIO
+        self._excluded_header.setText(self._excluded_headline(len(rows), banded, warn))
+        self._excluded_header.setStyleSheet(
+            f"color: {theme.C.accent};" if warn else "")
+        # The header carries the amber; the note stays PRIMARY text, following #ProvisionalBanner's
+        # convention (the container signals, the sentence reads) — three amber lines would shout
+        # over the map's actual call-to-action.
+        self._excluded_note.setText(self._excluded_warning(kept, rows, unbanded) if warn else "")
+        self._excluded_note.setVisible(warn)
+        # The full list shows only when expanded; collapsed, the header (+ any warning) is all.
+        # Every excluded lap is listed — the viewport height, not the list, is what is capped.
+        self._excluded_scroll.setVisible(not self._excluded_collapsed)
         if self._excluded_collapsed:
             self._excluded_body.clear()
             return
         # 1-based lap number (lap_label) so the excluded strip matches the table's Lap column.
-        lines = [f"Lap {lap_label(r['idx'])} — {fmt_time(r['time'])} · {r['dist']:.0f} m"
-                 for r in rows]
-        if len(lines) > EXCLUDED_MAX_SHOWN:
-            hidden = len(lines) - EXCLUDED_MAX_SHOWN
-            lines = [*lines[:EXCLUDED_MAX_SHOWN], f"+{hidden} more"]
-        self._excluded_body.setText("\n".join(lines))
+        self._excluded_body.setText("\n".join(
+            f"Lap {lap_label(r['idx'])} — {fmt_time(r['time'])} · {r['dist']:.0f} m"
+            for r in rows))
+        # Bound the strip to EXCLUDED_MAX_SHOWN lines; a shorter list keeps its natural height, so
+        # the scrollbar only appears when there is genuinely more to reach.
+        line = QFontMetrics(self._excluded_body.font()).lineSpacing()
+        self._excluded_scroll.setMaximumHeight(line * EXCLUDED_MAX_SHOWN + 4)
 
 
     def _n_split_cols(self) -> int:
@@ -490,11 +603,9 @@ class LapTable(QWidget):
         # stack, so a page can be given its real width without this container ever seeing a
         # resizeEvent — which is how the corner columns came to be fitted to Qt's stock 640px
         # default and overflowed the 447px quadrant by MORE than before the fit existed.
-        # getattr, not self.table: the filter outlives this object's Python __dict__. When Qt tears
-        # a discarded LapTable down (or Shiboken invalidates the wrapper because a new C++ object
-        # reused its address), the attributes are cleared BEFORE the C++ children are destroyed, so
-        # the viewport's own teardown events arrive here on a stripped instance and a bare
-        # self.table raises AttributeError out of a QWidget::eventFilter override.
+        # getattr, not self.table: a dropped LapTable can be FINALIZED (its Python attributes
+        # cleared) while its C++ widget is still alive and still installed as this filter, and the
+        # AttributeError that follows surfaces inside whatever override Qt was dispatching.
         table = getattr(self, "table", None)
         if table is not None and obj is table.viewport() and event.type() == QEvent.Resize:
             self._fit_columns()
@@ -605,8 +716,9 @@ class LapTable(QWidget):
             self._reveal_last_split()
         self._n_splits_shown = n_splits
         # The excluded-laps strip follows every refresh — i.e. also after a timing-line edit
-        # re-segments the laps (which shifts both the valid and the excluded sets).
-        self._refresh_excluded()
+        # re-segments the laps (which shifts both the valid and the excluded sets). The valid rows
+        # are handed over rather than re-read: they are the excluded SHARE's denominator.
+        self._refresh_excluded(rows)
 
     # ------------------------------------------------------------- highlights
     def _lap_id(self, r: int) -> int:
@@ -932,6 +1044,16 @@ def _corner_col_tips(unit: str | None) -> list[str]:
         "session's grip limit. Normalised session-wide so a slower lap reads lower.",
     ]
 CORNER_DIR_GLYPH = {1: "⟲", -1: "⟳"}  # left / right (turn sense), shown after the C-label
+# The Δ columns when the shown lap IS the Δ baseline (QA L3-05). `corner_model.lap_corner_stats`
+# passes ref=None for the baseline and `corners.lap_corner_stats`'s docstring documents the result
+# — "None for the reference lap itself -> deltas 0" — so on the app's own post-load selection (the
+# best lap) 24 of 24 Δ cells read "+0.00"/"+0.0": 2 of 8 columns, a quarter of the table, carrying
+# no measurement and nothing on the page saying why. A dash reads as "no value here" the way it does
+# on the Stats page; the caption below names the lap.
+SELF_DELTA = "—"
+# The caption that names the baseline. Shown ONLY in that state, so it costs a normal lap nothing.
+SELF_DELTA_TOOLTIP = ("The Δ columns compare each corner against the session-best lap. This IS "
+                      "that lap, so select another one to see a Δ.")
 # Corner identity column start width: "C12 ⟳" + the "Corner" header, fully readable (C3 —
 # the old Stretch mode crushed this row-identity column to a 42px sliver at default width).
 CORNER_NAME_COL_PX = 88
@@ -991,8 +1113,17 @@ class CornerTable(QWidget):
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setWordWrap(True)
         self.empty.setVisible(False)
+        # The Δ-baseline caption (L3-05) — visible only on the lap the Δ columns measure against,
+        # where every Δ is a dash. Muted, one line, above the grid it explains.
+        self.baseline_note = QLabel("")
+        self.baseline_note.setProperty("role", "BarLabel")
+        self.baseline_note.setWordWrap(True)
+        self.baseline_note.setContentsMargins(10, 4, 10, 2)
+        self.baseline_note.setToolTip(SELF_DELTA_TOOLTIP)
+        self.baseline_note.setVisible(False)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.baseline_note)
         lay.addWidget(self.table)
         lay.addWidget(self.empty, 1)
 
@@ -1031,7 +1162,7 @@ class CornerTable(QWidget):
     def eventFilter(self, obj, event):
         # See LapTable.eventFilter: this page lives in a tab stack, so the container's own
         # resizeEvent is not a reliable signal that the table finally has its real width — and the
-        # same teardown guard applies (the filter outlives this object's Python __dict__).
+        # same finalized-instance guard applies.
         table = getattr(self, "table", None)
         if table is not None and obj is table.viewport() and event.type() == QEvent.Resize:
             self._fit_columns()
@@ -1061,6 +1192,32 @@ class CornerTable(QWidget):
         self._lap_id = lap_id
         self.refresh()
 
+    def _has_selectable_laps(self) -> bool:
+        """Whether this recording has ANY lap a user could select. getattr-guarded so the lighter
+        test doubles (which expose no valid_lap_ids) keep their "nothing selected yet" wording."""
+        valid = getattr(self.session, "valid_lap_ids", None)
+        return bool(valid()) if callable(valid) else True
+
+    def _shows_the_baseline(self, stats: list) -> bool:
+        """True when the shown lap IS the Δ baseline, i.e. `corner_model.lap_corner_stats` passed
+        `ref=None` and every delta in `stats` is the documented self-zero rather than a measurement.
+
+        Both halves of that sentence are checked. The lap rule mirrors corner_model's one baseline
+        choice and nothing else — the CROSS-RECORDING reference lap when one is loaded (then no
+        local lap is ever compared with itself), else the session best. The exact-zero test is
+        `ref=None`'s own signature (`corners.lap_corner_stats`: "None for the reference lap itself
+        -> deltas 0"), so a caller that hands us a real measurement always keeps it. Both are
+        getattr-guarded for the lighter test doubles."""
+        if self._lap_id is None or not stats:
+            return False
+        has_reference = getattr(self.session, "has_reference", None)
+        if callable(has_reference) and has_reference():
+            return False
+        best_lap_id = getattr(self.session, "best_lap_id", None)
+        if not callable(best_lap_id) or self._lap_id != best_lap_id():
+            return False
+        return all(st.delta == 0.0 and st.apex_speed_delta == 0.0 for st in stats)
+
     def refresh(self):
         """Rebuild the rows from the session's corner model (e.g. after a timing-line edit
         re-segmented the laps and the corner set/stats were recomputed)."""
@@ -1068,12 +1225,23 @@ class CornerTable(QWidget):
         # still holds the previous selection (app re-selects right after; until then, empty).
         ok = self._lap_id is not None and 0 <= self._lap_id < self.session.lap_count()
         stats = self.session.corners.lap_corner_stats(self._lap_id) if ok else []
-        # Empty state: name the reason (no selected lap vs nothing detected) — a bare grid
-        # reads as broken. The table hides so the message owns the pane.
+        # Every Δ on the baseline lap is a self-zero (see SELF_DELTA) — dash the two Δ columns and
+        # caption which lap they would have compared against.
+        baseline = self._shows_the_baseline(stats)
+        self.baseline_note.setVisible(baseline)
+        if baseline:
+            self.baseline_note.setText(
+                f"Lap {lap_label(self._lap_id)} is the session best — Δ is against itself.")
+        # Empty state: name the reason — a bare grid reads as broken. THREE cases, because "nothing
+        # is selected" and "there is nothing selectable" are different recordings: on a session with
+        # no valid lap at all, "Select a lap" is an instruction that cannot be followed (L3-08), so
+        # that case borrows the Laps grid's own wording + reason. The table hides so the message
+        # owns the pane.
         self.table.setVisible(bool(stats))
         self.empty.setVisible(not stats)
         if not stats:
             self.empty.setText(
+                NO_LAPS_PLACEHOLDER if not self._has_selectable_laps() else
                 "Select a lap to see its corners." if not ok else
                 "No corners detected for this session yet — corner analysis needs a few "
                 "clean laps of track shape.")
@@ -1094,11 +1262,14 @@ class CornerTable(QWidget):
             cells: list[tuple[str, str | None]] = [
                 (f"{c.label} {CORNER_DIR_GLYPH.get(c.direction, '')}", None),
                 (f"{st.time:.2f}", None),
-                (f"{st.delta:+.2f}", theme.delta_colour(st.delta)),
+                ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
+                 (f"{st.delta:+.2f}", theme.delta_colour(st.delta))),
                 (f"{conv(st.apex_speed, u):.1f}", None),
                 # Apex-speed Δ: FASTER through the corner is better, so the shared Δ colour
                 # rule (negative = green) is applied to the NEGATED speed delta.
-                (f"{conv(st.apex_speed_delta, u):+.1f}", theme.delta_colour(-st.apex_speed_delta)),
+                ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
+                 (f"{conv(st.apex_speed_delta, u):+.1f}",
+                  theme.delta_colour(-st.apex_speed_delta))),
                 (f"{conv(st.entry_speed, u):.1f}", None),
                 (f"{conv(st.exit_speed, u):.1f}", None),
                 (grip_pct, None),

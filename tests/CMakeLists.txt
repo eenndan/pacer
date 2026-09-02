@@ -171,6 +171,16 @@ add_test(NAME test_map_fit
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_map_fit.py)
 set_tests_properties(test_map_fit PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Track-map chrome (QA MAP-05/07/09/10 + MAP-11): the provisional callout clamped inside the plot
+# at either edge, the colour ramp hidden when a channel has no gradient to label, the Elevation
+# legend stated relative to the lap (absolute GPS altitude drifts between laps), the on-canvas
+# notice the sector buttons post (and that grab_clean hides it), and Add sector re-spacing the
+# whole set while — and only while — the user has not dragged a line. Real MapView widgets,
+# offscreen; no telemetry file.
+add_test(NAME test_map_chrome
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_map_chrome.py)
+set_tests_properties(test_map_chrome PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Compare-video Δ-badge math: session.delta_between (vs an arbitrary lap, cross-checked
 # against the hardcoded-vs-best delta_at_time). Imports Session -> Qt, so run offscreen.
 add_test(NAME test_compare
@@ -390,6 +400,20 @@ add_test(NAME test_lap_table_columns
 set_tests_properties(test_lap_table_columns PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# LapTable / CornerTable EMPTY + BASELINE + EXCLUDED states (fix/qa-lap-table-empty-states, QA
+# sweep B11): the Corners page dashes the two Δ columns and names the lap when it is showing the Δ
+# BASELINE itself (the model's documented ref=None self-zeros, not measurements — and a loaded
+# cross-recording reference keeps every local Δ); a recording with no valid lap gets the Laps
+# grid's wording instead of an unfollowable "Select a lap", both placeholders ending on one next
+# action; the ⊘ excluded strip escalates to a warning voice above EXCLUDED_WARN_RATIO with the
+# ratio in the words and both median distances on screen, reconciles its count against lap_count(),
+# and expands to the COMPLETE list in a height-bounded scroll instead of 6 laps and a dead
+# "+N more". Builds real LapTable/CornerTable widgets -> Qt, so run offscreen.
+add_test(NAME test_lap_table_empty_states
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_table_empty_states.py)
+set_tests_properties(test_lap_table_empty_states PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Grid + timing-line write guards (fix/qa-grid-splitter-collapse, QA sweep B01): no splitter DRAG
 # can collapse a panel to 0 px and no persisted zero can resurrect one, while the maximize gesture
 # still collapses for real (it opts back in via _collapse_sizes — without that, non-collapsible
@@ -444,7 +468,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_load_internals
                         test_load_pipeline test_fit_start_line test_session_services
                         test_golden_synthetic
-                        test_studio_features test_rainbow_map test_map_render
+                        test_studio_features test_rainbow_map test_map_render test_map_chrome
                         test_compare test_map_ghost test_cross_reference test_delta_engine
                         test_controllers test_central_view_realqt test_load_failure
                         test_validate_wallclock test_corners
@@ -452,7 +476,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card
                         test_stats test_lap_table_columns test_help_dialog
-                        test_grid_and_timing_guards test_charts_header_budget)
+                        test_grid_and_timing_guards test_lap_table_empty_states
+                        test_charts_header_budget)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
