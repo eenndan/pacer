@@ -162,6 +162,15 @@ add_test(NAME test_map_render
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_map_render.py)
 set_tests_properties(test_map_render PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Track-map view fit + the always-on session trace (QA MAP-01/03/04): real QWheelEvent + drag on
+# the plot viewport and back via the app's Fit button / canvas double-click, the zero-lap state
+# drawing the trace its placeholder tells you to drag onto, the fit taken over trace UNION laps
+# (so the video marker stays on canvas), and the A16/#126 guard that the pyqtgraph "A" button and
+# right-click menu stay gone. Real MapView widgets, offscreen; no telemetry file.
+add_test(NAME test_map_fit
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_map_fit.py)
+set_tests_properties(test_map_fit PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Compare-video Δ-badge math: session.delta_between (vs an arbitrary lap, cross-checked
 # against the hardcoded-vs-best delta_at_time). Imports Session -> Qt, so run offscreen.
 add_test(NAME test_compare
