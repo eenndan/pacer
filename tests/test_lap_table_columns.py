@@ -355,6 +355,48 @@ def test_corner_columns_fit_the_default_quadrant():
     print("test_corner_columns_fit_the_default_quadrant OK")
 
 
+def test_the_two_delta_headers_never_elide_to_the_same_string():
+    """W6-01: this budget deliberately lets a squeezed header elide into its tooltip — sound for a
+    label nothing can be confused with, which is why "Grip (est)" is the sacrifice it intends. It
+    was NOT sound for "Δ best" and "Δ apex": Qt elides the TAIL, so the words that told them apart
+    were the first thing destroyed. At 1280×800 — below the 1440×900 the budget was tuned at —
+    both painted "Δ …": a column of SECONDS and a column of KM/H rendered as one string,
+    separable only by a hover tooltip a keyboard user has no route to.
+
+    The guard is on the labels across every width, not at one window size, because a size guard
+    only covers the sizes someone thought to test — and 1280×800 is precisely the size nobody
+    re-checked when the budget was tuned.
+
+    Scope, stated honestly. Two limits are deliberate, not oversights:
+
+      * Below ~19 px only ONE glyph fits, so "Δbest"/"Δapex" both paint "Δ…" — as would any pair
+        sharing a first character. The check therefore applies wherever either header still keeps
+        two characters, which is every width at which a header conveys anything at all.
+      * "Entry" and "Exit" collide at 18 px, both painting "E…", and that is left alone: they
+        carry the SAME quantity in the same unit (a speed), so confusing them costs a reader far
+        less than confusing seconds with km/h.
+
+    Neither is fixable by widening the budget, and neither needs to be. At 1280 the eight columns
+    sum to the viewport exactly; rendering both Δ labels in FULL there would cost 26 px the table
+    does not have, and every floor left to take it from is a CELL width, which this table never
+    clips. The fix is not "never elide" — it is "never elide two different quantities into the
+    same string", which is what this asserts.
+    """
+    from studio.lap_table import CORNER_COLUMNS, CornerTable
+    table = CornerTable(_FakeCornerSession())          # keep the ref: Qt deletes a temporary
+    fm = QFontMetrics(table.table.horizontalHeader().font())
+    a_label, b_label = CORNER_COLUMNS[2], CORNER_COLUMNS[4]
+    assert a_label != b_label, (a_label, b_label)
+    for w in range(0, max(fm.horizontalAdvance(a_label), fm.horizontalAdvance(b_label)) + 8):
+        a = fm.elidedText(a_label, Qt.ElideRight, w)
+        b = fm.elidedText(b_label, Qt.ElideRight, w)
+        if max(len(a.rstrip("…")), len(b.rstrip("…"))) < 2:
+            continue        # a single glyph is all that fits at this width, for any label
+        assert a != b, (f'at {w}px "{a_label}" and "{b_label}" both paint "{a}" — a seconds '
+                        f"column and a km/h column rendered as one string")
+    print("test_the_two_delta_headers_never_elide_to_the_same_string OK")
+
+
 def test_spacer_column_is_not_sortable():
     """Sorting is untouched by the spacer: the data columns still sort both ways on their numeric
     keys, a click on the BLANK spacer header can't order anything so it bounces the indicator back
