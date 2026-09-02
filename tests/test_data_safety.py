@@ -381,6 +381,69 @@ def test_dialog_without_privacy_callbacks_is_browse_only():
     assert dlg.table.rowCount() == 1
 
 
+def test_the_app_wires_the_way_back_from_clear_library():
+    """W7-04 follow-through. PR #168 gave `library` a backup on clear and a `restore()` — but the
+    dialog only BUILDS its Restore… when the app injects `restore_library` and `backup_info`, and
+    the app did not. A backup the app can write and never read is the half-feature that module's
+    own docstring names, so this asserts the wiring, not the module.
+
+    Driven through the real `_open_library` with the dialog constructor captured, because the two
+    injections are the entire fix and a test of `_restore_library` alone would pass with them
+    still missing."""
+    from studio import app as studio_app
+    win = _stub_window()
+    captured = {}
+
+    class _Dlg:
+        def __init__(self, index, **kw):
+            captured.update(kw)
+
+        def exec(self):
+            return 0
+
+    real = studio_app.LibraryDialog
+    studio_app.LibraryDialog = _Dlg
+    try:
+        studio_app.StudioWindow._open_library(win)
+    finally:
+        studio_app.LibraryDialog = real
+
+    assert callable(captured.get("restore_library")), \
+        "the library dialog is built with no restore_library, so it renders no Restore… at all " \
+        "and library.restore() is unreachable from the UI"
+    assert callable(captured.get("backup_info")), \
+        "no backup_info: the Restore… confirm cannot say what it is about to put back"
+    assert captured["backup_info"] is library.backup_summary
+
+
+def test_restore_is_guarded_and_always_returns_an_index():
+    """`_restore_library` mirrors `_clear_library`: an OSError must never reach the dialog, and the
+    caller must always get an index to re-render."""
+    from studio import app as studio_app
+    win = _stub_window()
+    real = library.restore
+    library.restore = lambda *a, **k: (_ for _ in ()).throw(OSError("read-only volume"))
+    try:
+        got = studio_app.StudioWindow._restore_library(win)
+    finally:
+        library.restore = real
+    assert isinstance(got, dict) and "entries" in got, got
+
+
+def test_the_privacy_note_names_the_file_holding_your_circuits():
+    """W7-05: the note enumerated local storage and omitted `tracks.json` — the one file holding
+    every circuit's coordinates. It also survives "Clear library" and is not in "Back up…", so a
+    reader who acted on the old wording would believe both had covered it."""
+    from studio.library_dialog import PRIVACY_NOTE
+    assert "tracks.json" in PRIVACY_NOTE, \
+        "the privacy note lists what pacer stores on disk and omits the saved-track database"
+    low = PRIVACY_NOTE.lower()
+    assert "leaves tracks.json untouched" in low or "clear library\" leaves" in low, \
+        "the note must say Clear library does not remove the saved tracks"
+    assert "does not copy it" in low or "not copied" in low, \
+        "the note must say Back up… does not include the saved tracks"
+
+
 # =============================================== C. forget-the-OPEN-recording sidecar seam (app)
 def _stub_window():
     """A bare StudioWindow (no __init__) for exercising the pure forget/sidecar seam methods with a
