@@ -1644,12 +1644,15 @@ def test_reentrant_load_applies_only_latest():
     QMessageBox.critical = staticmethod(lambda *a, **k: QMessageBox.Ok)
     w = StudioWindow([])  # welcome state, no in-flight load
     try:
-        applied_tokens = []
+        applied_tokens, delivered_tokens = [], []
         _orig = w._on_session_loaded
 
         def _spy(token, paths, session):
             # Record only tokens that pass the staleness guard (i.e. actually APPLIED), by replaying
             # the guard before delegating — a stale (superseded) result must not be applied.
+            # delivered_tokens records EVERY completion, stale or not: it is what tells the wait
+            # below that both workers have reported in.
+            delivered_tokens.append(token)
             if token == w._load_token:
                 applied_tokens.append(token)
             _orig(token, paths, session)
@@ -1661,7 +1664,15 @@ def test_reentrant_load_applies_only_latest():
         latest_token = w._load_token
         assert latest_token == first_token + 1, (first_token, latest_token)
 
-        assert _pump_until(lambda: w.view is not None), "no load settled"
+        # Wait for BOTH completions to be DELIVERED, not for `w.view is not None`. The view appears
+        # the moment ANY result is applied, which is the LATEST one — so waiting on it can run the
+        # assertions before the superseded worker has reported at all, leaving the "a stale result
+        # is never applied" claim below untested (and blind to a regression that applies it late).
+        # The two loads only serialise while the first worker is still running: measured on this
+        # sample, ~1 run in 6 starts both concurrently, and then the completion order is a genuine
+        # race. Waiting on the deliveries themselves is the condition this test actually needs.
+        assert _pump_until(lambda: {first_token, latest_token} <= set(delivered_tokens)), \
+            f"both loads never settled: delivered={delivered_tokens}"
         # Only the LATEST token may have been applied; the stale (first) worker's result was dropped
         # by the token guard. No crash, one coherent session.
         assert applied_tokens == [latest_token], applied_tokens

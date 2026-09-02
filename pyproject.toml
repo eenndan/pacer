@@ -39,7 +39,14 @@ test-fast = { cmd = "ctest --test-dir build/Release --output-on-failure --timeou
 # golden gate). Run after any Session/timing/geometry/delta change; expects EQUIVALENT.
 golden = { cmd = "ctest --test-dir build/Release -R test_golden_synthetic --output-on-failure", depends-on = ["build"] }
 # The CI E2E gate as a task: build the whole StudioWindow offscreen on the bundled GoPro sample.
-smoke = { cmd = "python -m studio.dev._smoke --no-video", depends-on = ["build"] }
+# PYTHONPATH for the same reason tests/CMakeLists.txt sets it on every Python test (see the
+# comment there): `pixi run build` drops the compiled module into site-packages/pacer/, which has
+# no __init__.py, so a bare `import pacer` resolves to a namespace package and the editable
+# install's finder never runs — the smoke run then dies inside Session.load with "module 'pacer'
+# has no attribute 'Laps'". Pointing at the cmake-deployed bindings package makes it win in every
+# install state; relative like the sample path the script itself opens (both resolve off the
+# workspace root the task runs from).
+smoke = { cmd = "python -m studio.dev._smoke --no-video", depends-on = ["build"], env = { PYTHONPATH = "bindings/pacer" } }
 gen-bindings = "python bindings/pacer/generate-bindings.py"
 studio = { cmd = "python -m studio", depends-on = ["build"] }
 # fmt excludes the litgen-GENERATED nanobind_pacer.cpp: the CI regen-drift gate
