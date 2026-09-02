@@ -94,6 +94,13 @@ add_test(NAME test_track_db
 # only (session/load chain has no Qt, verified), no telemetry file.
 add_test(NAME test_session_pure
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_session_pure.py)
+# Sector-boundary integrity (QA MAP-08-ESC / MAP-11): the collapse decision is SESSION-wide, so
+# sweeping a second sector line across the tolerance can never leave two laps with a different
+# number of boundaries (the state where an S column meant a different stretch of track per row and
+# session_best_splits/theoretical_best summed incomparable pieces); plus suggest_sectors(n)'s even
+# subdivision. Bare Sessions seeded via tests/_synthetic — no Qt, no telemetry file.
+add_test(NAME test_sector_integrity
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_sector_integrity.py)
 # Load-pipeline internals (test/load-pipeline-coverage): the clock-provenance decision
 # (load._used_gps9_trueclock, behind the degraded-timing banner) and the no-average-across-a-gap
 # smoothing contract (_signal._gap_segments / _smooth_segments) — pure functions that ran only
@@ -217,6 +224,16 @@ set_tests_properties(test_central_view_realqt PROPERTIES
 add_test(NAME test_validate_wallclock
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_validate_wallclock.py)
 set_tests_properties(test_validate_wallclock PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The load ERROR paths (QA 2026-09-01: L10-01/L10-02/L10-04/L10-06/MAP-06): the failure-message
+# classification table over five real malformed inputs (pure staticmethod, real Session.load
+# exceptions), a failed RELOAD leaving the working session on screen instead of an endless loading
+# card (real window + real worker QThread), drop-order/multi-drop-warning survival, and the untimed
+# load notice being RE-decided when a timing edit changes the state it describes. Real Qt + a real
+# worker thread, so run offscreen (reuses test_central_view_realqt's synthetic window fixture).
+add_test(NAME test_load_failure
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_failure.py)
+set_tests_properties(test_load_failure PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Corner model (studio.corners, F-corner): synthetic stadium-loop detection (count/
 # positions/directions vs construction), distribution-derived threshold (+ noise
@@ -366,6 +383,18 @@ add_test(NAME test_grid_and_timing_guards
 set_tests_properties(test_grid_and_timing_guards PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Help-menu dialogs (fix/qa-help-dialogs): the shortcut card's wrapping rows must get the height
+# their text needs at ANY card width (the #119 regression painted a wrapped row's second line
+# outside the row), every live binding on the window must have a card row (⌘O had none) with the
+# glyphs Qt itself paints (⇧⌘S, not ⌘⇧S — asserted against the live QAction, so ⌃⌘F-vs-F11 is
+# platform-agnostic), the About / Privacy cards must refuse to shrink below their own copy, and
+# the privacy card must name every store the app writes. Real offscreen widgets on the REAL theme
+# (font metrics decide the wrapped heights); no pacer, no telemetry file.
+add_test(NAME test_help_dialog
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_help_dialog.py)
+set_tests_properties(test_help_dialog PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
 # `pacer` in the interpreter's site-packages — on a fresh CI env there is none, and
@@ -377,17 +406,19 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_import_ergonomics
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
-                        test_sidecar test_track_db test_session_pure test_load_internals
+                        test_sidecar test_track_db test_session_pure test_sector_integrity
+                        test_load_internals
                         test_load_pipeline test_fit_start_line test_session_services
                         test_golden_synthetic
                         test_studio_features test_rainbow_map test_map_render
                         test_compare test_map_ghost test_cross_reference test_delta_engine
-                        test_controllers test_central_view_realqt
+                        test_controllers test_central_view_realqt test_load_failure
                         test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card
-                        test_stats test_lap_table_columns test_grid_and_timing_guards)
+                        test_stats test_lap_table_columns test_help_dialog
+                        test_grid_and_timing_guards)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

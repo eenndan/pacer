@@ -112,7 +112,10 @@ def test_open_dialog_falls_back_to_current_recording_folder(monkeypatch):
 def test_multi_recording_drop_loads_only_first_and_does_not_merge(monkeypatch):
     w = _bare_window()
     calls = []
-    monkeypatch.setattr(w, "_load", lambda paths: calls.append(list(paths)))
+    notices = []
+    # _load also takes the drop_notice carried THROUGH the load (QA L10-02).
+    monkeypatch.setattr(w, "_load", lambda paths, drop_notice=None: (
+        calls.append(list(paths)), notices.append(drop_notice)))
     # Keep discovery deterministic + off-disk: a recording expands to just its dropped chapters.
     monkeypatch.setattr(
         chapters, "discover_siblings",
@@ -135,13 +138,19 @@ def test_multi_recording_drop_loads_only_first_and_does_not_merge(monkeypatch):
     # A clear, non-modal message names how many recordings + what was opened.
     assert messages and "3 recordings" in messages[0], messages
     assert "one at a time" in messages[0].lower(), messages
+    # ... and the SAME warning is handed to the load, so _on_session_loaded restates it untimed
+    # instead of overwriting it mid-load (QA L10-02).
+    assert notices == [messages[0]], notices
     print("test_multi_recording_drop_loads_only_first_and_does_not_merge OK")
 
 
 def test_single_recording_drop_is_unchanged(monkeypatch):
     w = _bare_window()
     calls = []
-    monkeypatch.setattr(w, "_load", lambda paths: calls.append(list(paths)))
+    notices = []
+    # _load also takes the drop_notice carried THROUGH the load (QA L10-02).
+    monkeypatch.setattr(w, "_load", lambda paths, drop_notice=None: (
+        calls.append(list(paths)), notices.append(drop_notice)))
     monkeypatch.setattr(
         chapters, "discover_siblings",
         lambda p: ["/foot/GX010060.MP4", "/foot/GX020060.MP4"])
@@ -154,6 +163,7 @@ def test_single_recording_drop_is_unchanged(monkeypatch):
     assert len(calls) == 1, calls
     assert calls[0] == ["/foot/GX010060.MP4", "/foot/GX020060.MP4"], calls[0]
     assert not messages, messages  # single recording: no "dropped N recordings" notice
+    assert notices == [None], notices  # ... and nothing carried into the load either
     print("test_single_recording_drop_is_unchanged OK")
 
 
