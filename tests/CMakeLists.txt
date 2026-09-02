@@ -441,6 +441,20 @@ add_test(NAME test_charts_header_budget
 set_tests_properties(test_charts_header_budget PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Coaching page layout + units (fix/qa-coaching-panel-layout, batch B24): the column budget at the
+# app's own minimum (±σ yields before the prose column starves; the columns must FIT, so no
+# horizontal scrollbar; the reason header must not paint hard-clipped — its QSS padding lives INSIDE
+# the section, so a naive advance-vs-section test passes it), the row count as a viewport-driven
+# floor rather than a literal 3 (the maximized page was 3 rows in 786 px against 11 ranked), every
+# header aligned over its own column instead of centred 611 px away, the ±σ cell's missing unit, and
+# the geometric gate on the ESTIMATED brake-point hint (an optimum a whole brake zone past turn-in
+# is not a brake point). Real offscreen OpportunitiesPanel on the REAL theme — the QSS supplies the
+# font metrics every width here is measured in. No pacer, no telemetry file.
+add_test(NAME test_coaching_panel_layout
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_coaching_panel_layout.py)
+set_tests_properties(test_coaching_panel_layout PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Help-menu dialogs (fix/qa-help-dialogs): the shortcut card's wrapping rows must get the height
 # their text needs at ANY card width (the #119 regression painted a wrapped row's second line
 # outside the row), every live binding on the window must have a card row (⌘O had none) with the
@@ -477,7 +491,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_data_safety test_units test_accessible_cues test_share_card
                         test_stats test_lap_table_columns test_help_dialog
                         test_grid_and_timing_guards test_lap_table_empty_states
-                        test_charts_header_budget)
+                        test_charts_header_budget test_coaching_panel_layout)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

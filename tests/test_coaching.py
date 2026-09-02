@@ -713,8 +713,9 @@ def test_dialog_populates_and_go_calls_jump_to():
     # row 0: the biggest-loss corner (C1), with the apex sentence + the time-lost format
     assert dlg.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
     assert dlg.table.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
-    # column 2 is the lap-to-lap consistency σ folded onto the canonical row (Consistency signal)
-    assert dlg.table.item(0, 2).text() == f"±{opp.rows[0].reason.sigma:.2f}", dlg.table.item(0, 2).text()
+    # column 2 is the lap-to-lap consistency σ folded onto the canonical row (Consistency signal),
+    # carrying its unit (L5-09 — it used to render a bare "±0.05" beside "σ 0.05 s" in the same row)
+    assert dlg.table.item(0, 2).text() == f"±{opp.rows[0].reason.sigma:.2f} s", dlg.table.item(0, 2).text()
     # column 3 is the D2 entry/apex/exit breakdown widget (no text item there)
     from studio.coaching_panel import PhaseBar
     assert isinstance(dlg.table.cellWidget(0, 3), PhaseBar)
@@ -757,8 +758,10 @@ def test_dialog_shows_brake_point_hint():
     from studio.coaching_panel import OpportunitiesDialog
     opp = _populated_opps()
     top_cid = opp.rows[0].cid
-    brake_points = {top_cid: SimpleNamespace(cid=top_cid, metres_later=6.0, actual_brake_dist=78.0,
-                                             optimal_brake_dist=84.0, a_max_g=0.9)}
+    # _corners() puts this corner's turn-in at 50 m, so an optimum at 56 m is 6 m past it — inside
+    # the estimate's domain (L5-10 suppresses one that lands a whole brake zone into the corner).
+    brake_points = {top_cid: SimpleNamespace(cid=top_cid, metres_later=6.0, actual_brake_dist=50.0,
+                                             optimal_brake_dist=56.0, a_max_g=0.9)}
     dlg = OpportunitiesDialog(opp, jump_to=None, brake_points=brake_points)
     reason_text = dlg.table.item(0, 4).text()
     assert "Brake ~6 m later" in reason_text and "(est)" in reason_text, reason_text
@@ -933,9 +936,12 @@ def test_dialog_excluded_state_has_no_table():
 # ------------------------------------------- the PERSISTENT top-3 panel (the coaching front-door)
 def test_panel_renders_top3_off_a_session():
     """The always-on OpportunitiesPanel reads the session's coaching_opportunities() directly and
-    renders the TOP-3 rows (corner · time lost · reason), the SAME data the modal dialog shows. On
-    the stadium session (4 clean laps, the far corner losing time) it shows the ranked rows, leads
-    with the slow corner, and the body is on the table page (not the excluded state)."""
+    renders the ranked rows (corner · time lost · ±σ · reason), the SAME data the modal dialog
+    shows. On the stadium session (4 clean laps, the far corner losing time) it shows the ranked
+    rows, leads with the slow corner, and the body is on the table page (not the excluded state).
+
+    L5-08: PANEL_TOP_N is the FLOOR, not a ceiling — the page shows at least the shortlist and then
+    as much of the ranking as its viewport holds, so assert the band, not a literal 3."""
     _qapp()
     from studio.coaching_panel import PANEL_TOP_N, OpportunitiesPanel
     s = _stadium_session()
@@ -944,12 +950,13 @@ def test_panel_renders_top3_off_a_session():
     panel = OpportunitiesPanel(s)
     assert panel.body.currentIndex() == 0, "enough laps -> the table page, not the excluded state"
     n = min(len(opp.rows), PANEL_TOP_N)
-    assert panel.table.rowCount() == n, (panel.table.rowCount(), n)
+    assert n <= panel.table.rowCount() <= len(opp.rows), (panel.table.rowCount(), n, len(opp.rows))
     # Row 0 is the top-ranked corner (the far corner, cid 2), with the +time-lost format.
     assert panel.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
     assert panel.table.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
-    # col 2: the lap-to-lap consistency σ folded onto the canonical row (the same as the dialog).
-    assert panel.table.item(0, 2).text() == f"±{opp.rows[0].reason.sigma:.2f}", panel.table.item(0, 2).text()
+    # col 2: the lap-to-lap consistency σ folded onto the canonical row (the same as the dialog),
+    # with its unit (L5-09).
+    assert panel.table.item(0, 2).text() == f"±{opp.rows[0].reason.sigma:.2f} s", panel.table.item(0, 2).text()
     assert coaching_module_reason(panel, opp), "the reason cell must carry the coaching sentence"
     # A row click emits the corner cid (the map-ring consumer); selecting row 0 -> rows[0].cid.
     got = []

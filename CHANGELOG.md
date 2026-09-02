@@ -67,6 +67,25 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- The Coaching page now uses the room it is given. Maximized it used to be **3 rows in 808 px**
+  — 78% dead canvas — while the ranking behind it held **11** corners; it now shows as many
+  ranked corners as the page can hold (still at least the top 3 the headline sums). And every
+  column header sits over its own data instead of being centred: "How to find it" floated
+  **611 px** away from the sentences it labels.
+- At the app's own minimum window the Coaching page no longer starves the one column carrying
+  words. The three numeric columns took 198 of the 270 px available and the reason column fell
+  back to 100 px, overflowing into a **horizontal scrollbar** with the header hard-clipped to
+  "How to find". ±σ now yields first (its value is spelled out in the reason sentence anyway),
+  the reason column keeps what it frees (**100 → 128 px**), a shortened header says so with an
+  ellipsis, and all four headers — which carried none — explain themselves on hover.
+- The **±σ** column said `±0.12` while the sentence in the same row said `σ 0.12 s`. It is
+  seconds, and now says so, matching the `+0.13 s` cell beside it.
+- The ESTIMATED brake-point hint no longer recommends braking from inside the corner. The
+  optimum is constant-decel, straight-line physics, which only holds on the approach — on one
+  D24 corner it landed **59 m into a 79.6 m corner window, 19.4 m before the apex**, and the
+  cell asked to "Brake ~50 m later" next to its own measured "~0.36 s longer on the brakes". A
+  target more than one brake zone past turn-in now shows no metres, and the hints that remain
+  name their target against the corner's turn-in instead of a bare lap-odometer reading.
 - The CHARTS header no longer leads with a different Δ baseline from the chart underneath it.
   It used to say `Δideal` while the lower chart plotted Δ-to-best, with the one label that
   reconciles them hidden at every window size the app ships at (it needed a ~1633 px window;
