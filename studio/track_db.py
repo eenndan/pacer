@@ -14,7 +14,9 @@ centroid + bbox so a fresh recording auto-detects the track on load.
 The Daytona Milton Keynes line is a BUILT-IN SEED (``SEED``), so a first-ever run already
 auto-detects MK with its measured line — its timing is identical to the old hardcoded entry. The
 user DB is merged ON TOP of the seed (a user entry of the same name overrides the seed), so
-``Save as track…`` can refine a built-in too.
+``Save as track…`` can refine a built-in too. Reusing a name for a DIFFERENT place is a different
+act — it destroys that circuit's stored lines — so it is REFUSED (``TrackNameTaken``) until the
+caller confirms; see ``save_track`` / ``replaces``.
 
 Schema (version 1) — one JSON object::
 
@@ -63,6 +65,28 @@ SEED: list[dict] = [
         "sectors": [],
     },
 ]
+
+
+class TrackNameTaken(ValueError):
+    """Raised by ``save_track`` when the entry would OVERWRITE a known track of the same NAME
+    anchored somewhere ELSE — one circuit's stored start/sector lines destroyed by another's,
+    with nothing on screen to say so. Carries the stored entry (``existing``) and the distance
+    between the two anchors (``distance_m``) so the caller can NAME what it is about to replace
+    and ask first (see ``replaces``); pass ``replace=True`` once the user has confirmed.
+
+    A ValueError subclass on purpose: every caller of the track DB already guards it against
+    ValueError (a rejected entry), so an unaware one refuses the write and reports instead of
+    silently destroying the other track."""
+
+    def __init__(self, existing: dict, distance_m: float):
+        self.existing = existing
+        self.distance_m = float(distance_m)
+        # Reads as a status line too: the message reaches the user verbatim through the app's
+        # existing `except (OSError, ValueError)` guard, so it names the conflict and one action a
+        # caller that has NOT yet grown a confirm can actually offer.
+        super().__init__(
+            f"a different circuit is already saved as {existing['name']!r} "
+            f"({distance_m / 1000:.1f} km away) — save this one under another name")
 
 
 def _app_support_dir() -> str:
@@ -269,11 +293,46 @@ def detect(lat: float, lon: float, path: str | None = None) -> dict | None:
     return best
 
 
-def save_track(entry: dict, path: str | None = None) -> dict:
+def _clash(known: list[dict], norm: dict) -> tuple[dict, float] | None:
+    """The known track `norm` would DESTROY, paired with the metres between the two anchors: an
+    entry of the same NAME anchored further than DETECT_RADIUS_M away. Inside that radius the two
+    are the SAME circuit by the app's own detection rule, so re-saving a track to refine its lines
+    (the documented Save-as-track flow, built-ins included) is not a clash — only reusing a name
+    for a different place is. Names are unique in the merged view, so the first match is the only
+    one."""
+    for e in known:
+        if e.get("name") == norm["name"]:
+            d = equirect_metres(norm["centroid"][0], norm["centroid"][1],
+                                e["centroid"][0], e["centroid"][1])
+            return (e, d) if d > DETECT_RADIUS_M else None
+    return None
+
+
+def replaces(entry: dict, path: str | None = None) -> dict | None:
+    """The stored track `entry` would overwrite — a DIFFERENT circuit saved under the same name —
+    or None when the save is safe. The question a caller asks BEFORE ``save_track`` so its confirm
+    can name the circuit whose lines are about to go (``track_db.replaces(e)`` → the entry dict).
+    Searched over the merged SEED+user view, because that view is name-keyed: a user entry
+    shadowing a built-in of the same name takes its detection with it."""
+    clash = _clash(all_tracks(path), _norm_entry(entry))
+    return None if clash is None else clash[0]
+
+
+def save_track(entry: dict, path: str | None = None, *, replace: bool = False) -> dict:
     """Load the current DB, upsert `entry`, write it back atomically, return the new DB. The one
     call the app's Save-as-track makes. Any OSError from the write propagates to the caller, which
-    guards it (a DB write must never disrupt the session — mirror library.upsert_and_save)."""
+    guards it (a DB write must never disrupt the session — mirror library.upsert_and_save).
+
+    REFUSES, with ``TrackNameTaken``, to overwrite a different circuit stored under the same name
+    (see ``_clash``): that write is silent data loss — the other track's start line, its sector
+    lines and its GPS anchor, with no undo and no second copy. ``replace=True`` is the confirmed
+    path; refining the lines of the track already saved at this location never needs it."""
     db = load(path)
-    upsert(db, entry)
+    norm = _norm_entry(entry)
+    if not replace:
+        clash = _clash(all_tracks(path), norm)
+        if clash is not None:
+            raise TrackNameTaken(*clash)
+    upsert(db, norm)
     save(db, path)
     return db

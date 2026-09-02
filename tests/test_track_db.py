@@ -13,7 +13,9 @@ Covered:
   * pure DB (no pacer): schema round-trip + float-repr bit-exactness; the name-keyed
     upsert-replaces-not-duplicates rule; corrupt/invalid DB → safe empty (self-heal) with one
     bad entry dropped (the rest kept); the built-in Daytona MK seed always present + merged
-    under the user DB; make_entry validation;
+    under the user DB; make_entry validation; the name-collision refusal (QA L12-09 — reusing a
+    name for a circuit 79 km away destroyed the first one's timing lines silently) alongside the
+    same-place refine that must stay silent;
   * detection + precedence (pacer, synthetic circle laps): a saved track detects by centroid and
     applies its lat/lon lines; precedence sidecar > DB > auto-fit; and the Daytona MK no-regression
     (seed line is byte-identical to the old hardcoded entry, so its segmentation is unchanged).
@@ -206,6 +208,86 @@ def test_load_drops_only_malformed_entries_keeps_rest():
         # A re-save persists only the survivors (the loss of nothing valid).
         track_db.save(track_db.load(p), p)
         assert {e["name"] for e in track_db.load(p)["tracks"]} == {"A", "B"}
+
+
+# --------------------------------------------------- name collisions (QA sweep L12-09)
+# The two REAL anchors the sweep measured: Save as track… under one name from a session at
+# SD_30_08_26, then again from a session at Daytona MK — 79 km apart, entry count 1 → 1, the
+# first circuit's start line gone, no dialog, and a success message byte-identical to a create.
+_SD_CENTROID = (51.37604946538461, -0.36101118296703305)
+_MK_TRACE_CENTROID = (52.039685942307685, -0.7833087395604396)
+
+
+def test_save_track_refuses_to_overwrite_a_different_circuit():
+    """A name reused for somewhere ELSE is refused, not silently applied: the stored circuit keeps
+    its start line and its anchor, and the caller gets a ValueError it already guards (so even a
+    caller with no confirm reports instead of destroying). replace=True is the confirmed path."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        first = _entry("My Circuit", centroid=_SD_CENTROID,
+                       start=[[51.376, -0.361], [51.3761, -0.3608]])
+        track_db.save_track(first, p)
+        second = _entry("My Circuit", centroid=_MK_TRACE_CENTROID,
+                        start=[[52.04031, -0.78487], [52.04020, -0.78460]])
+        raised = None
+        try:
+            track_db.save_track(second, p)
+        except ValueError as exc:      # the app's existing guard — catching ValueError is enough
+            raised = exc
+        assert raised is not None, "a 79 km name collision must not be written silently"
+        assert isinstance(raised, track_db.TrackNameTaken)
+        assert raised.existing["name"] == "My Circuit"          # names what is at risk…
+        assert raised.existing["start"] == first["start"]       # …and hands over its lines
+        assert raised.distance_m > track_db.DETECT_RADIUS_M
+        assert "My Circuit" in str(raised) and "km away" in str(raised)
+        # DECLINED ⇒ the stored track is exactly as it was.
+        db = track_db.load(p)
+        assert len(db["tracks"]) == 1
+        assert db["tracks"][0]["start"] == first["start"]
+        assert db["tracks"][0]["centroid"] == list(_SD_CENTROID)
+        # CONFIRMED ⇒ the replacement goes through, in place (the no-duplicate rule is unchanged).
+        track_db.save_track(second, p, replace=True)
+        db = track_db.load(p)
+        assert len(db["tracks"]) == 1
+        assert db["tracks"][0]["start"] == second["start"]
+
+
+def test_replaces_reports_the_track_a_save_would_destroy():
+    """The question a caller asks BEFORE saving, so its confirm can name the circuit: the stored
+    entry for a far collision, None for a fresh name and None for the same place."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        track_db.save_track(_entry("My Circuit", centroid=_SD_CENTROID), p)
+        at_risk = track_db.replaces(_entry("My Circuit", centroid=_MK_TRACE_CENTROID), p)
+        assert at_risk is not None and at_risk["centroid"] == list(_SD_CENTROID)
+        assert track_db.replaces(_entry("Another Circuit", centroid=_MK_TRACE_CENTROID), p) is None
+        assert track_db.replaces(_entry("My Circuit", centroid=_SD_CENTROID), p) is None
+        # A user entry SHADOWS a built-in of the same name in the merged view, taking its detection
+        # with it — so the seed is guarded by the same rule even with an empty user DB.
+        empty = os.path.join(d, "empty.json")
+        shadow = _entry("Daytona Milton Keynes", centroid=_SD_CENTROID)
+        assert track_db.replaces(shadow, empty) is not None
+
+
+def test_save_track_still_refines_the_track_at_this_location():
+    """Refining a line you already saved — the documented Save-as-track flow, built-ins included —
+    is NOT a collision: same name, same place (inside DETECT_RADIUS_M) still replaces in place with
+    no confirmation, so the fix costs the common case nothing."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tracks.json")
+        nudged = [[51.3762, -0.3612], [51.3763, -0.3609]]
+        track_db.save_track(_entry("My Circuit", centroid=_SD_CENTROID), p)
+        # ~11 m away (a re-run of the same session keeps a slightly different trace centroid).
+        moved = (_SD_CENTROID[0] + 0.0001, _SD_CENTROID[1])
+        track_db.save_track(_entry("My Circuit", centroid=moved, start=nudged), p)
+        db = track_db.load(p)
+        assert len(db["tracks"]) == 1 and db["tracks"][0]["start"] == nudged
+        # And the built-in MK seed is refinable at MK, exactly as documented.
+        refined = [[52.0405, -0.7849], [52.0404, -0.7846]]
+        track_db.save_track(_entry("Daytona Milton Keynes", centroid=_MK_TRACE_CENTROID,
+                                   start=refined), p)
+        mk = next(e for e in track_db.all_tracks(p) if e["name"] == "Daytona Milton Keynes")
+        assert mk["start"] == refined
 
 
 def test_detect_finds_saved_track_by_centroid():
