@@ -1166,7 +1166,22 @@ class LapTable(QWidget):
 # lap (session.lap_corner_stats). A separate widget stacked with LapTable; shares only the module
 # display constants. Headers are abbreviated so all 8 columns fit the narrow panel — dropped units
 # move to per-column header tooltips (_corner_col_tips).
-CORNER_COLUMNS = ["Corner", "Time", "Δ best", "Apex", "Δ apex", "Entry", "Exit",
+# The two Δ headers are written CLOSED ("Δbest", not "Δ best"), matching the app's own "Δideal".
+# Not cosmetic: this budget lets a squeezed header elide into its tooltip, which is sound for a
+# label nothing can be confused with — but these two shared a "Δ " prefix, and Qt elides the TAIL,
+# so the words that told them apart were the first thing destroyed. Measured at 1280×800 (below
+# the 1440×900 the budget was tuned for) both painted "Δ …": a column of seconds and a column of
+# km/h rendered as the same string, separable only by a hover tooltip a keyboard user cannot
+# reach. Closed, they elide to "Δb…" and "Δa…" — still abbreviated at 1280, but no longer the SAME
+# abbreviation, which is the whole defect. (Whole is not on offer there: at 1280 the eight columns
+# sum to the viewport exactly, and rendering both labels in full would cost 26 px this table does
+# not have. At 1440 they render in full, as they always did.)
+#
+# Flooring the two columns at their header width was the obvious alternative and does not work:
+# all eight are already at their floors at 1280 (they sum to the viewport exactly), so the width
+# has to come from a floor, and every remaining floor is a CELL width. This table's contract is
+# that headers elide and values never do.
+CORNER_COLUMNS = ["Corner", "Time", "Δbest", "Apex", "Δapex", "Entry", "Exit",
                   theme.estimated_label("Grip")]
 
 
@@ -1323,7 +1338,9 @@ class CornerTable(QWidget):
         is the row identity, so it opens at CORNER_NAME_COL_PX; unlike the lap number it carries no
         moving marker, so it may be squeezed back to its own cell width ("C12 ⟳") when the panel
         is short — 24 of the 54px the default quadrant is missing come from there, the rest from
-        the "Grip (est)" header, whose full wording is already in its tooltip."""
+        the "Grip (est)" header, whose full wording is already in its tooltip. That trade needs
+        every header to stay unambiguous once elided, which is why the two Δ columns are named
+        without a space — see CORNER_COLUMNS."""
         hdr = self.table.horizontalHeader()
         n = self.table.columnCount()
         cells = [self.table.sizeHintForColumn(c) if self.table.rowCount() else 0 for c in range(n)]
