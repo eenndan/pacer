@@ -33,6 +33,26 @@ DELTA_FLAT_EPS_S = 0.005
 # Sentinel legend the widget maps to a "best lap — no delta" hint (lo text) + a blank hi text.
 DELTA_BEST_LAP_HINT = "this is your best lap — no delta"
 
+# Elevation legend: the low end is labelled RELATIVELY ("lowest"), the high end as the RISE above
+# it ("+5 m"), never as two absolute altitudes. GPS altitude carries a slowly-drifting bias of
+# several metres, so the same physical corner reads 79.9 m on one lap and 83.0 m on another
+# (measured across 21 laps of one recording) — a 3.1 m disagreement quoted to 1 m, against a lap
+# profile only 4.5 m tall. What the colours actually encode is the WITHIN-LAP shape (the channel is
+# min/max normalised per lap), and that is exactly what these two labels now claim. Elevation
+# analytics stay out of scope; this is what the existing control says about itself (MAP-09).
+ELEVATION_LO_LABEL = "lowest"
+
+
+def _flat_hint(channel: str, value: str) -> str:
+    """The single-label legend for a channel with no gradient to paint (MAP-10).
+
+    Returned as the `lo` text with an EMPTY `hi` text — the same hint shape the Δ channel uses — so
+    the widget hides the colour ramp instead of painting a full red→green strip under two labels
+    that read the same. The measured case: a re-segmentation left a 2-sample segment whose speed
+    was 43.24 km/h at both ends, and `bucketize`'s degenerate (hi<=lo) branch dropped every segment
+    in the middle bucket while the legend still promised a gradient from `43` to `43 km/h`."""
+    return f"{channel} is {value} for this whole lap — no gradient"
+
 
 def _fmt_delta(x: float) -> str:
     """Format a signed Δ in seconds, normalizing a tiny negative to +0.00 (never "-0.00 s") (P2).
@@ -115,18 +135,26 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
 
     Returns `(seg_buckets, lo_text, hi_text)` where seg_buckets has len(xs)-1 entries (bucket per
     segment, -1 = skip), or None when the channel can't be computed (degenerate lap, missing g for
-    grip, missing best lap / zero odometer for Δ). The Δ and grip channels are NEGATED so AHEAD /
+    grip, missing best lap / zero odometer for Δ). A `(None, hint_text, "")` triple is the
+    NO-GRADIENT case — the Δ best-lap hint, or a measured channel whose two ends label the same
+    (`_flat_hint`) — and the widget then shows that one label with no colour ramp.
+    The Δ and grip channels are NEGATED so AHEAD /
     UNUSED grip land in the HIGH (green) buckets; grip uses a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale.
     """
     if len(xs) < 2:
         return None
     if mode == "speed":
-        vals = speed_kmh
+        vals = np.asarray(speed_kmh, float)
+        if not np.isfinite(vals).any():
+            return None
         # Bucketing is scale-invariant (min/max normalized), so the COLOURS ride the raw km/h; only
         # the legend end-labels convert to the display unit (identity for km/h).
-        lo_txt = f"{units.convert_speed(float(np.min(vals)), speed_unit):.0f}"
-        hi_txt = f"{units.convert_speed(float(np.max(vals)), speed_unit):.0f} {units.speed_label(speed_unit)}"
-        return _seg_buckets(times, vals), lo_txt, hi_txt
+        lo_txt = f"{units.convert_speed(float(np.nanmin(vals)), speed_unit):.0f}"
+        hi_num = f"{units.convert_speed(float(np.nanmax(vals)), speed_unit):.0f}"
+        unit = units.speed_label(speed_unit)
+        if lo_txt == hi_num:  # both ends round to the same number: no gradient to label (MAP-10)
+            return None, _flat_hint("speed", f"{hi_num} {unit}"), ""
+        return _seg_buckets(times, vals), lo_txt, f"{hi_num} {unit}"
     if mode == "grip":
         # D5: per-sample grip utilization (|g| / session envelope), ESTIMATED + lateral-dominant.
         # NEGATED + a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale so on-the-limit (high util) lands in
@@ -144,10 +172,18 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
     if mode == "elevation":
         # Altitude along the lap (metres, boxcar-smoothed at load). Informational — no good/bad
         # direction — so it rides this lap's own min→max range: low = low (red) bucket, high = green.
+        # The legend states that range RELATIVELY (lowest → +N m), never as two absolute GPS
+        # altitudes — see ELEVATION_LO_LABEL for the measured reason.
         if elevation is None or len(elevation) < len(xs):
             return None
         vals = np.asarray(elevation[:len(xs)], float)
-        return _seg_buckets(times, vals), f"{float(np.min(vals)):.0f} m", f"{float(np.max(vals)):.0f} m"
+        if not np.isfinite(vals).any():
+            return None
+        rise = float(np.nanmax(vals)) - float(np.nanmin(vals))
+        hi_txt = f"+{rise:.0f} m"
+        if hi_txt == "+0 m":  # a rise under half a metre is GPS noise, not relief (MAP-10)
+            return None, _flat_hint("elevation", "flat"), ""
+        return _seg_buckets(times, vals), ELEVATION_LO_LABEL, hi_txt
     # Δ-vs-best, resampled from the 400-grid delta() onto this lap's point distances
     if delta_grid is None or float(cum[-1]) <= 0:
         return None

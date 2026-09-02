@@ -171,6 +171,16 @@ add_test(NAME test_map_fit
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_map_fit.py)
 set_tests_properties(test_map_fit PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Track-map chrome (QA MAP-05/07/09/10 + MAP-11): the provisional callout clamped inside the plot
+# at either edge, the colour ramp hidden when a channel has no gradient to label, the Elevation
+# legend stated relative to the lap (absolute GPS altitude drifts between laps), the on-canvas
+# notice the sector buttons post (and that grab_clean hides it), and Add sector re-spacing the
+# whole set while — and only while — the user has not dragged a line. Real MapView widgets,
+# offscreen; no telemetry file.
+add_test(NAME test_map_chrome
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_map_chrome.py)
+set_tests_properties(test_map_chrome PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Compare-video Δ-badge math: session.delta_between (vs an arbitrary lap, cross-checked
 # against the hardcoded-vs-best delta_at_time). Imports Session -> Qt, so run offscreen.
 add_test(NAME test_compare
@@ -431,7 +441,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_load_internals
                         test_load_pipeline test_fit_start_line test_session_services
                         test_golden_synthetic
-                        test_studio_features test_rainbow_map test_map_render
+                        test_studio_features test_rainbow_map test_map_render test_map_chrome
                         test_compare test_map_ghost test_cross_reference test_delta_engine
                         test_controllers test_central_view_realqt test_load_failure
                         test_validate_wallclock test_corners
