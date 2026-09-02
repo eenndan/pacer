@@ -82,11 +82,23 @@ NO_LAPS_TEXT = ("No complete laps in this recording — so there are no lap stat
 NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
                   "are unavailable.")
 TILE_VALUE_PT = 15        # tile value type size (between BODY 13 and HERO 22)
-TILES_PER_ROW = 4         # tile-grid MAX columns (wide/maximized panels)
-TILE_MIN_PX = 148         # reflow threshold: columns = viewport width // this, clamped 2..4
-#                           (C6 — the hard-coded 4 pushed the 4th tile column, incl. the
-#                           coaching digest, off-pane at the default quadrant width)
-GG_HEIGHT = 220           # px; the friction-circle plot's fixed height
+TILES_PER_ROW = 4         # tile-grid max columns in a normal (quadrant-width) pane
+TILE_MIN_PX = 148         # reflow threshold: columns = viewport width // this, clamped
+#                           2..the cap (C6 — the hard-coded 4 pushed the 4th tile column,
+#                           incl. the coaching digest, off-pane at the default quadrant width)
+# ⌘⇧S maximizes this page into the whole window, where the 4-column cap left the tile rows
+# ending ~1000 px short of the right edge. Above WIDE_PANE_PX the reflow's ceiling rises, so a
+# dashboard-width pane packs the same tiles into fewer, wider rows. The 2..4 quadrant behaviour
+# is untouched — this only lifts a ceiling that a quadrant never reaches.
+TILES_PER_ROW_WIDE = 6
+WIDE_PANE_PX = 1200       # viewport width from which the page is a dashboard, not a quadrant
+GG_HEIGHT = 220           # px; the friction-circle plot's height in a normal pane
+GG_HEIGHT_WIDE = 300      # …and in a dashboard-width one (it is the page's only chart)
+# The plot's width is set EXPLICITLY (2:1 around the aspect-locked circle, leaving the axis
+# labels their gutter) rather than left to pyqtgraph's sizeHint, which is devicePixelRatio-
+# dependent: the identical 1440x900 logical window laid the plot out 440 px wide at DPR 1 and
+# 300 px at DPR 2. A fixed logical width renders the same at both.
+GG_ASPECT = 2.0
 SPARK_HEIGHT = 96         # px; the PACE trend sparkline (absorbed from the retired
 #                           ConsistencyPanel — its content lives here now)
 SPARK_AXIS_FONT = 10      # tabular tick font for the sparkline's min/max + first/last labels
@@ -136,6 +148,12 @@ GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — l
               "longitudinal g up (accelerating) / down (braking). A driver using the tyre "
               "fills the rim of the circle; rings every 0.5 g. Longitudinal is the validated "
               "GPS-derived signal (the IMU forward axis is vibration-inflated).")
+# The plot ships two kinds of ring and no way to tell them apart from the picture: the solid ones
+# are a fixed 0.5 g rule, the dashed one is a MEASURED result. Both axes now carry a name and a
+# unit too (they read "-2.0 / +0.0 / +2.0" and nothing else before).
+GG_AXIS_X = "lateral g  (− right · + left)"
+GG_AXIS_Y = "longitudinal g  (− braking · + accelerating)"
+GG_KEY_RINGS = "solid rings: 0.5 g steps"
 LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
                      "speed; peak g from the g-meter (lateral IMU, longitudinal GPS-derived); "
                      "Brake/Coast are the summed detected events — the same events the map "
@@ -203,6 +221,7 @@ class StatsView(QWidget):
         # the pane crosses a column threshold. Built at max columns, reflowed on first resize.
         self._tile_grids: list = []
         self._tile_cols = TILES_PER_ROW
+        self._wide = False          # dashboard-width pane? (drives the column cap + g-g size)
         self._scroll = None
 
         body = QWidget()
@@ -342,7 +361,9 @@ class StatsView(QWidget):
         col.addWidget(self.no_gmeter_note)
 
         # --- the g-g friction circle
-        self._gg_section = self._section("FRICTION CIRCLE")
+        # Named unit in the header, the convention its peers already follow ("CORNERS · speeds
+        # in km/h") — the axes carry the detail, this carries the scan.
+        self._gg_section = self._section("FRICTION CIRCLE · g")
         col.addWidget(self._gg_section)
         self.gg = pg.PlotWidget()
         self.gg.setToolTip(GG_TOOLTIP)
@@ -354,19 +375,32 @@ class StatsView(QWidget):
             ax.setTextPen(C.text_dim)
             ax.setTickFont(theme.mono_font(10))
             ax.setStyle(maxTickLevel=0, tickLength=3)
+        # Both axes are named and united. Without this the friction circle was the one chart on
+        # the page whose numbers ("-2.0 / +0.0 / +2.0") stated neither what they measured nor in
+        # what — while CORNERS and PER LAP name their units in their own headers.
+        label_style = {"color": C.text_dim, "font-size": f"{theme.CAPTION}pt"}
+        plot.setLabel("bottom", GG_AXIS_X, **label_style)
+        plot.setLabel("left", GG_AXIS_Y, **label_style)
         plot.setMouseEnabled(x=False, y=False)
         plot.setMenuEnabled(False)
         plot.hideButtons()
         self.gg.setBackground(None)
-        self.gg.setFixedHeight(GG_HEIGHT)
-        # Compact + left-aligned (like the tiles/tables): a maximized panel widens the pane,
-        # not the plot — the circle stays a circle with no vacant flanks.
-        self.gg.setMaximumWidth(GG_HEIGHT * 2)
+        # Compact + left-aligned (like the tiles/tables): a maximized panel widens the pane and
+        # (from WIDE_PANE_PX) the plot with it, but the circle stays a circle — the size is set
+        # EXPLICITLY in both axes so it cannot vary with the device pixel ratio (see GG_ASPECT).
+        self._set_gg_size(GG_HEIGHT)
         # Reference geometry (rings + axes) is drawn per-refresh, sized to the cloud.
         self._gg_rings: list = []
         self._gg_dots = pg.ScatterPlotItem(size=3, pen=None, pxMode=True)
         plot.addItem(self._gg_dots)
         col.addWidget(self.gg, 0, Qt.AlignLeft)
+        # The chart's key: which ring is the 0.5 g rule and which is the measured p98 envelope.
+        # Filled per refresh (the envelope's value goes in it), hidden with the section.
+        self.gg_key = QLabel("")
+        self.gg_key.setWordWrap(True)
+        self.gg_key.setStyleSheet(f"color: {C.text_dim};")
+        self.gg_key.setFont(theme.ui_font(theme.CAPTION))
+        col.addWidget(self.gg_key)
 
         # --- DRIVING reductions (hidden without a g signal)
         self._driving_section = self._section("DRIVING")
@@ -510,20 +544,48 @@ class StatsView(QWidget):
     def _place_tiles(g: QGridLayout, tiles: list, cols: int):
         for i, t in enumerate(tiles):
             g.addWidget(t, i // cols, i % cols)
-        for c in range(TILES_PER_ROW + 1):
+        for c in range(TILES_PER_ROW_WIDE + 1):
             g.setColumnStretch(c, 0)
         g.setColumnStretch(cols, 1)  # left-pack the tiles; slack stays right
+
+    def _set_gg_size(self, height: int):
+        """Pin the friction circle in BOTH axes (see GG_ASPECT / U8-01). Fixed, not maximum:
+        a maximum still lets pyqtgraph's DPR-dependent sizeHint pick the actual width."""
+        self.gg.setFixedHeight(height)
+        self.gg.setFixedWidth(int(height * GG_ASPECT))
+
+    def _pane_width(self) -> int:
+        """The width the tiles actually get, derived from THIS widget rather than read off the
+        scroll viewport. Inside a resizeEvent the viewport still carries its previous width (the
+        child layout has not been applied yet), so measuring it there reflows the page to the
+        size it used to be — visible when a window is sized before it is first shown. The scroll
+        area fills this widget with no margins, so its viewport is our width less the scrollbar."""
+        if self._scroll is None:
+            return self.width()
+        bar = self._scroll.verticalScrollBar()
+        return self.width() - (bar.width() if bar is not None and bar.isVisible() else 0)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._reflow_tiles()
 
+    def showEvent(self, event):
+        """Reflow once the page is on screen too — the scrollbar's visibility (and so the usable
+        width) is only settled then. Idempotent: the reflow early-returns when nothing changed."""
+        super().showEvent(event)
+        self._reflow_tiles()
+
     def _reflow_tiles(self):
-        """C6: fit the tile grids to the actual pane — columns = width // TILE_MIN_PX,
-        clamped 2..TILES_PER_ROW. Re-places widgets only when the count changes (cheap; a
-        resize otherwise costs nothing)."""
-        width = self._scroll.viewport().width() if self._scroll is not None else self.width()
-        cols = max(2, min(TILES_PER_ROW, width // TILE_MIN_PX))
+        """C6: fit the page to the actual pane — tile columns = width // TILE_MIN_PX, clamped
+        2..the cap, where the cap itself rises from TILES_PER_ROW to TILES_PER_ROW_WIDE once the
+        pane is dashboard-width (WIDE_PANE_PX); the friction circle grows with it. Re-places
+        widgets only when something actually changes (cheap; a resize otherwise costs nothing)."""
+        width = self._pane_width()
+        wide = width >= WIDE_PANE_PX
+        cols = max(2, min(TILES_PER_ROW_WIDE if wide else TILES_PER_ROW, width // TILE_MIN_PX))
+        if wide != self._wide:
+            self._wide = wide
+            self._set_gg_size(GG_HEIGHT_WIDE if wide else GG_HEIGHT)
         if cols == self._tile_cols:
             return
         self._tile_cols = cols
@@ -620,7 +682,7 @@ class StatsView(QWidget):
         if tot is not None and tot.duration_s > 0:
             self.t_duration.set(_fmt_hms(tot.duration_s))
             self.t_moving.set(_fmt_hms(tot.moving_s))
-            self.t_distance.set(f"{tot.distance_m / 1000.0:.1f} km")
+            self._set_distance(tot)
             clock = (f"{tot.start_clock}–{tot.end_clock}"
                      if tot.start_clock and tot.end_clock else None)
             self.t_clock.set(clock)
@@ -632,15 +694,21 @@ class StatsView(QWidget):
         pace = st.pace() if st is not None else None
         if pace is not None:
             self.t_best.set(fmt_time(pace.best))
-            self.t_median.set(fmt_time(pace.median), f"median · {pace.n} clean laps")
+            # Singular at n=1: "median · 1 clean laps" was the caption on a session where the
+            # median IS the only lap.
+            self.t_median.set(fmt_time(pace.median),
+                              f"median · {pace.n} clean lap{'' if pace.n == 1 else 's'}")
             self.t_sigma.set(f"{pace.sigma:.2f} s" if pace.sigma is not None else None)
-            self.t_spread.set(f"+{pace.spread:.2f} s")
+            # spread and the within-1% count carry σ's minimum-sample gate in the DATA layer
+            # (stats.MIN_DIST_LAPS), so all three dash together instead of two of them printing
+            # "+0.00 s" and "1 / 1" off the same single lap.
+            self.t_spread.set(f"+{pace.spread:.2f} s" if pace.spread is not None else None)
             rp = st.race_pace()
             self.t_race_pace.set(fmt_time(rp) if rp is not None else None)
             cov = st.pace_cov()
             self.t_cov.set(f"{cov:.1f} %" if cov is not None else None)
             count, n = st.laps_within_pct(1.0)
-            self.t_within.set(f"{count} / {n}" if n else None)
+            self.t_within.set(f"{count} / {n}" if count is not None else None)
             self._set_trend(st.pace_trend())
         else:
             for t in (self.t_best, self.t_median, self.t_sigma, self.t_spread,
@@ -678,6 +746,32 @@ class StatsView(QWidget):
         self._refresh_straights(session, unit, u_label)
         self._refresh_trust(session)
         self._refresh_lap_table(session, rows, unit, u_label)
+
+    def _set_distance(self, tot):
+        """The SESSION distance tile. The path length is speed-gated in the data layer (a GPS fix
+        that teleports is not distance driven), so this also has to be able to say "the trace was
+        too broken to measure": below stats.MIN_KEPT_FRAC the service returns None and the tile
+        dashes rather than printing a number nobody can trust. When a smaller share was rejected
+        the number stands and the tooltip says so — silently dropping metres would be its own
+        kind of dishonesty."""
+        kept = getattr(tot, "distance_kept_frac", 1.0)
+        if tot.distance_m is None:
+            self.t_distance.set(None)
+            self.t_distance.setToolTip(
+                f"Not shown: only {kept * 100:.0f}% of this trace's GPS steps are physically "
+                "possible at the speed the same trace reports — the rest are dropped fixes, so a "
+                "path length would be a fiction. The recorded time and the lap statistics are "
+                "unaffected.")
+            return
+        self.t_distance.set(f"{tot.distance_m / 1000.0:.1f} km")
+        # A handful of rejected steps is not worth a caveat that would round to "0%" — the note
+        # appears from a whole percent up (a real 26-minute recording rejects 0.02%).
+        self.t_distance.setToolTip(
+            "Path length of the recorded trace (the sum of its GPS steps)."
+            if kept >= 0.99 else
+            f"Path length of the recorded trace. {(1 - kept) * 100:.0f}% of the raw steps were "
+            "rejected as impossible at the speed the same trace reports (dropped GPS fixes) and "
+            "are not counted.")
 
     def _refresh_spark(self, session):
         """The PACE trend sparkline: lap time per clean lap (x = the 1-BASED lap number, the
@@ -794,6 +888,7 @@ class StatsView(QWidget):
         has = cloud is not None and len(cloud[0]) > 0
         self._gg_section.setVisible(has)
         self.gg.setVisible(has)
+        self.gg_key.setVisible(has)
         if not has:
             self._gg_dots.setData([], [])
             return
@@ -824,7 +919,14 @@ class StatsView(QWidget):
             env_pen = pg.mkPen(C.accent, width=1, style=Qt.DashLine)
             ring = plot.plot(env * np.cos(angles), env * np.sin(angles), pen=env_pen)
             self._gg_rings.append(ring)
-        ticks = [(v, f"{v:+.1f}") for v in (-r_max, 0.0, r_max)]
+        # The key: the dashed ring is a MEASURED result, the solid ones a fixed rule — and the
+        # picture alone cannot say which is which.
+        self.gg_key.setText(
+            f"dashed ring: your grip envelope, {env:.2f} g (p98 of combined g) · {GG_KEY_RINGS}"
+            if env else GG_KEY_RINGS)
+        # +0.0 for the origin reads as a signed measurement of nothing; the ends keep their sign
+        # because on this plot the sign IS the direction (see the axis labels).
+        ticks = [(v, f"{v:+.1f}" if v else "0") for v in (-r_max, 0.0, r_max)]
         plot.getAxis("left").setTicks([ticks])
         plot.getAxis("bottom").setTicks([ticks])
         pad = 0.1 * r_max
@@ -1156,9 +1258,20 @@ class StatsView(QWidget):
         cross = session.gmeter_cross() if hasattr(session, "gmeter_cross") else None
         if cross is not None:
             verdict = "agree" if cross.ok else "DISAGREE"
-            lines.append(f"IMU↔GPS cross-check: {verdict} · lateral r={cross.lat_corr:+.2f} · "
-                         f"longitudinal r={cross.long_corr:+.2f} · {cross.n} samples")
+            # The GAIN is the line's load-bearing half. r is scale-invariant by construction, so
+            # the correlation cannot move when the g channel is mis-scaled: halving it left this
+            # card BYTE-IDENTICAL while every g the app displays halved. The gain is the number
+            # that moves, so it is stated, not buried in the tooltip.
+            gain = getattr(cross, "lat_gain", None)
+            gain_bit = f" · lateral gain ×{gain:.2f}" if gain is not None else ""
+            lines.append(f"IMU↔GPS cross-check: {verdict} · lateral r={cross.lat_corr:+.2f}"
+                         f"{gain_bit} · longitudinal r={cross.long_corr:+.2f} · "
+                         f"{cross.n} samples")
             tips.append(cross.summary())
+            tips.append("Lateral gain is the IMU's lateral magnitude over the GPS-derived one: "
+                        "×1 means the g you read is scaled right. The correlation beside it "
+                        "cannot tell you that — Pearson r is unchanged by a scale error, so a "
+                        "channel reading half would still correlate perfectly.")
         self.trust_label.setText("\n".join(lines) if lines else DASH)
         # Set unconditionally (both ways): a stale cross-check summary must not survive a
         # re-render onto a session that has none.
