@@ -218,6 +218,16 @@ add_test(NAME test_validate_wallclock
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_validate_wallclock.py)
 set_tests_properties(test_validate_wallclock PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The load ERROR paths (QA 2026-09-01: L10-01/L10-02/L10-04/L10-06/MAP-06): the failure-message
+# classification table over five real malformed inputs (pure staticmethod, real Session.load
+# exceptions), a failed RELOAD leaving the working session on screen instead of an endless loading
+# card (real window + real worker QThread), drop-order/multi-drop-warning survival, and the untimed
+# load notice being RE-decided when a timing edit changes the state it describes. Real Qt + a real
+# worker thread, so run offscreen (reuses test_central_view_realqt's synthetic window fixture).
+add_test(NAME test_load_failure
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_failure.py)
+set_tests_properties(test_load_failure PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Corner model (studio.corners, F-corner): synthetic stadium-loop detection (count/
 # positions/directions vs construction), distribution-derived threshold (+ noise
 # stability), the corner/straight partition identity, and the CornerTable + map
@@ -368,7 +378,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_golden_synthetic
                         test_studio_features test_rainbow_map test_map_render
                         test_compare test_map_ghost test_cross_reference test_delta_engine
-                        test_controllers test_central_view_realqt
+                        test_controllers test_central_view_realqt test_load_failure
                         test_validate_wallclock test_corners
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video

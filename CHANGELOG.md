@@ -78,6 +78,20 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   collisions, and self-contradicting coaching copy.
 - Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker
   drain (CI deadlocks); the drift-gated per-corner loss alignment.
+- **A failed reload no longer strands the window on an endless "Loading telemetry…" card** —
+  the loaded session's UI is handed back before the error dialog claims it is unchanged.
+  Relatedly, a reload no longer blanks a working session at all unless the load runs past
+  400 ms, and the dialog's reassurance is now stated only where it is true.
+- **Load errors name the actual problem and a next step** — a folder, a missing path, a
+  0-byte file, an unreadable file, a truncated *real* GoPro chapter and a non-GoPro file
+  each get their own message (a truncated GoPro chapter used to read "this doesn't look
+  like a GoPro recording").
+- **The multi-recording drop warning survives the load it starts** and stays discoverable
+  for the session, instead of being overwritten mid-load; a multi-recording drop now opens
+  the recording that was dropped first rather than the alphabetically first.
+- **The "start/finish line was auto-fitted — drag it into place" status line retracts when
+  you place the line**, re-decided from the same seam that rebuilds the derived views (it
+  used to survive byte-identical across the very drag that answered it).
 
 ## [0.1.0] — 2026-06-22
 
