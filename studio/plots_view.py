@@ -275,10 +275,17 @@ class PlotsView(QWidget):
         # Sector positions are mode-dependent; ask app to re-push them for the new mode (F2).
         self.modeChanged.emit(self._axis_mode())
 
+    def _apply_ideal_icon(self):
+        """The ideal-lap button's star, in the palette's BEST-SECTOR hue while the overlay is on —
+        the same accessor _ideal_line_pen() draws the line itself with, so the button and the line
+        it toggles can never disagree (the frozen `C.best` here did, in the colour-blind palette)."""
+        color = theme.best_sector_colour() if self._show_ideal else C.text
+        self.ideal_btn.setIcon(icon("ph.star-four", color=color))
+
     def _on_ideal_toggled(self, on: bool):
         """D1: toggle the synthetic ideal-lap baseline overlay on the Δ plot."""
         self._show_ideal = on
-        self.ideal_btn.setIcon(icon("ph.star-four", color=C.best if on else C.text))
+        self._apply_ideal_icon()
         self.refresh()
 
     def _on_brake_throttle_toggled(self, on: bool):
@@ -560,9 +567,12 @@ class PlotsView(QWidget):
 
     def refresh_palette(self):
         """Re-render the charts after a colour-blind-palette flip so the SEMANTIC-hue surfaces follow
-        it: the brake/throttle band (behind/ahead fills) and the synthetic ideal-lap line (best-sector
-        hue) both read the palette accessors at draw time, so a plain refresh() re-pens them. The
-        identity lap-curve palette (CHART_SERIES) is palette-independent, so this is just a redraw."""
+        it: the BEST-LAP curve, the brake/throttle band (behind/ahead fills) and the synthetic
+        ideal-lap line (best-sector hue) all read the palette accessors at draw time, so a plain
+        refresh() re-pens them. The identity lap-curve palette (CHART_SERIES) is palette-independent,
+        so those curves are just redrawn. The ideal-button star is an ICON, not a drawn item, so it
+        needs its own re-tint."""
+        self._apply_ideal_icon()
         self.refresh()
 
     def refresh(self):
@@ -623,10 +633,11 @@ class PlotsView(QWidget):
         if self._delta_ideal_mode != was_ideal:
             self.deltaBaselineChanged.emit(self._delta_ideal_mode)
         for k, lid in enumerate(draw_ids):
-            # Best lap green (matches lap table); others cycle CHART_SERIES. Always-on best drawn
-            # thinner so a selected lap reads primary.
+            # Best lap in the palette's best-lap hue (matches the lap table in BOTH palettes —
+            # resolved HERE, at draw time, so a colour-blind flip + refresh() repens it); others
+            # cycle CHART_SERIES. Always-on best drawn thinner so a selected lap reads primary.
             is_best = lid == best
-            color = theme.SERIES_BEST if is_best else PALETTE[k % len(PALETTE)]
+            color = theme.best_lap_colour() if is_best else PALETTE[k % len(PALETTE)]
             width = 1 if (is_best and best_always_on) else 2
             pen = pg.mkPen(color, width=width)
             # Legend label folds in the lap time (see _curve_label).

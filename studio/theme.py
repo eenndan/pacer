@@ -30,8 +30,12 @@ class C:
     border_strong = "#3A414D"   # interactive/hover border, focus base
 
     text = "#DDE1E8"            # PRIMARY off-white (never pure white)
-    text_dim = "#9AA1AD"        # secondary
-    text_muted = "#6B7280"      # disabled / tertiary
+    text_dim = "#9AA1AD"        # secondary — the dimmest tier still allowed to carry ENABLED text
+    # DISABLED / INACTIVE chrome ONLY (disabled buttons + menu items), plus non-text furniture
+    # (scrollbar hover, drop glyph). 3.17:1 on `surface` — below WCAG AA, which is legitimate only
+    # because WCAG 1.4.3 exempts inactive components. Any ENABLED text reads `text_dim` or better;
+    # see the QSS roles below and tests/test_contrast.py, which enforces exactly that split.
+    text_muted = "#6B7280"
 
     # --- accent (amber) ---
     accent = "#F5A623"
@@ -55,8 +59,15 @@ class C:
 # original red/green/purple (no change for existing users); the "colour-blind-safe" palette swaps
 # in a blue/orange deuteranopia-safe axis (+ a distinct teal best-sector). Views read these through
 # the accessor functions below (ahead_colour / behind_colour / best_lap_colour / best_sector_colour
-# / delta_colour / rainbow_colors), NEVER C.ahead / C.behind / C.best directly, so flipping the
-# palette recolours every surface at once.
+# / ramp_mid_colour / delta_colour / rainbow_colors), NEVER C.ahead / C.behind / C.best directly,
+# so flipping the palette recolours every surface at once.
+#
+# THIS IS A CALL-TIME CONTRACT, and a MODULE CONSTANT silently breaks it: a name bound once at
+# import (`SERIES_BEST = C.ahead`) captures the palette that was active at import and can never
+# move again, so the surface it feeds freezes on the flip while every accessor-fed surface beside
+# it changes. That is exactly what happened to the charts' best-lap curve, and
+# tests/test_contrast.py::test_no_module_constant_freezes_a_palette_hue now fails the build if any
+# module in studio/ re-introduces one.
 PALETTE_STANDARD = "standard"
 PALETTE_COLORBLIND = "colorblind"
 
@@ -64,9 +75,19 @@ PALETTE_COLORBLIND = "colorblind"
 # stay distinct under red-green colour blindness AND in greyscale, unlike red/green). Best lap reads
 # as "success" so it shares the ahead blue; the best-sector cue needs to differ from the best-lap
 # cue, so it takes a distinct teal (also CB-safe against both blue and orange).
+#
+# "mid" is the map ramp's MIDDLE anchor (see rainbow_colors) and is PER-PALETTE for a measured
+# reason. The default ramp red -> amber -> green already separates cleanly, so it keeps the amber
+# accent. Reusing that amber in the colour-blind palette killed the ramp's whole lower half: amber
+# #F5A623 sits right next to the CB "behind" orange #F0902B, so buckets 0..7 spanned deuteranopic
+# CIE76 dE 7.5 with per-bucket steps of 0.90-1.16 — below the ~2.3 JND, i.e. a flat orange bar over
+# half the speed range, and 5.4x WORSE than the same half of the DEFAULT ramp (40.3). The CB
+# palette therefore diverges through a light warm neutral instead, which is the textbook CB-safe
+# orange -> light -> blue diverging scheme: lower half 58.3, upper 69.0, minimum step 7.01 (3x JND).
 _PALETTES = {
-    PALETTE_STANDARD:  {"ahead": C.ahead, "behind": C.behind, "best": C.best},
-    PALETTE_COLORBLIND: {"ahead": "#4C9BFF", "behind": "#F0902B", "best": "#38C7C7"},
+    PALETTE_STANDARD:  {"ahead": C.ahead, "behind": C.behind, "best": C.best, "mid": C.accent},
+    PALETTE_COLORBLIND: {"ahead": "#4C9BFF", "behind": "#F0902B", "best": "#38C7C7",
+                         "mid": "#EDE7DC"},
 }
 
 # The active palette name. Set once at startup from the persisted pref (see set_palette / the app);
@@ -77,9 +98,10 @@ _active_palette = PALETTE_STANDARD
 
 def set_palette(name: str) -> None:
     """Select the active semantic palette (PALETTE_STANDARD / PALETTE_COLORBLIND). Unknown names
-    fall back to STANDARD. Changes what ahead_colour / behind_colour / best_*_colour / delta_colour
-    / rainbow_colors return, so the caller re-renders the delta readout, lap table and rainbow map
-    afterwards. The single toggle for the colour-blind-safe option."""
+    fall back to STANDARD. Changes what ahead_colour / behind_colour / best_*_colour /
+    ramp_mid_colour / delta_colour / rainbow_colors return, so the caller re-renders the delta
+    readout, lap table, charts and rainbow map afterwards. The single toggle for the colour-blind-
+    safe option."""
     global _active_palette
     _active_palette = name if name in _PALETTES else PALETTE_STANDARD
 
@@ -112,9 +134,17 @@ def best_sector_colour() -> str:
     return _PALETTES[_active_palette]["best"]
 
 
-# Categorical lap-curve palette (amber accent first); best lap uses SERIES_BEST green to match
-# the lap table. These are IDENTITY colours (which lap is which), not the ahead/behind SEMANTIC
-# hues, so they are palette-independent — the map already carries no red/green meaning here.
+def ramp_mid_colour() -> str:
+    """The map ramp's MIDDLE anchor for the active palette (amber by default, a light warm neutral
+    in the colour-blind palette — see _PALETTES for the measured reason). Only rainbow_colors reads
+    it; it exists as an accessor, not a constant, so the ramp can never freeze mid-flip."""
+    return _PALETTES[_active_palette]["mid"]
+
+
+# Categorical lap-curve palette (amber accent first). These are IDENTITY colours (which lap is
+# which), not the ahead/behind SEMANTIC hues, so they are palette-independent — the map already
+# carries no red/green meaning here. The best lap is NOT in this list: it is drawn in
+# best_lap_colour() at draw time so it always matches the lap table, in either palette.
 CHART_SERIES = [
     C.accent,    # amber  — primary / first lap (also the app accent)
     "#5BC8E0",   # cyan
@@ -123,8 +153,6 @@ CHART_SERIES = [
     "#E89B6B",   # coral / soft orange
     "#9FD66B",   # lime-leaning green (distinct from the best-lap C.ahead green)
 ]
-
-SERIES_BEST = C.ahead
 
 
 # Track-map current lap coloured by a channel (speed / Δ-vs-best), quantized into MAP_RAINBOW_N
@@ -149,11 +177,12 @@ def qcolor(token: str, alpha: int | None = None) -> QColor:
 
 
 def rainbow_colors(n: int = MAP_RAINBOW_N) -> list[str]:
-    """`n` hex colours low→high along the behind → accent → ahead ramp (index 0 = slow/losing,
-    n-1 = fast/gaining). The behind/ahead endpoints follow the ACTIVE palette, so the map ramp
-    matches the Δ readout in both the default (red→amber→green) and colour-blind (orange→amber→blue)
-    palettes."""
-    anchors = [_hex_rgb(behind_colour()), _hex_rgb(C.accent), _hex_rgb(ahead_colour())]
+    """`n` hex colours low→high along the behind → mid → ahead ramp (index 0 = slow/losing,
+    n-1 = fast/gaining). ALL THREE anchors follow the ACTIVE palette, so the map ramp matches the Δ
+    readout in both the default (red→amber→green) and colour-blind (orange→neutral→blue) palettes —
+    and the colour-blind ramp keeps a usable lower half, which a shared amber mid anchor destroyed
+    (see _PALETTES["mid"])."""
+    anchors = [_hex_rgb(behind_colour()), _hex_rgb(ramp_mid_colour()), _hex_rgb(ahead_colour())]
     out = []
     for i in range(n):
         t = i / (n - 1) * (len(anchors) - 1)
@@ -253,8 +282,16 @@ def brake_glyph_size(peak_decel: float) -> float:
 
 
 def format_delta_value(d: float | None) -> str:
-    """Δ number alone, no glyph/units: em dash for None, else signed 2dp (e.g. -0.31)."""
-    return "—" if d is None else f"{d:+.2f}"
+    """Δ number alone, no glyph/units: em dash for None, else signed 2dp (e.g. -0.31).
+
+    A Δ inside the DELTA_EVEN_EPS_S dead band is snapped to +0.0 FIRST, so float noise can never
+    print the meaningless `-0.00`: `f"{-1.8e-15:+.2f}"` is `-0.00`, which reads as "you are behind"
+    on a lap where you are dead level, and the export burns it into the delivered MP4 where the
+    recipient cannot correct it. The same dead band already drives delta_colour() and delta_arrow(),
+    so all three now agree on what counts as 'even'."""
+    if d is None:
+        return "—"
+    return f"{0.0 if abs(d) <= DELTA_EVEN_EPS_S else d:+.2f}"
 
 
 def format_delta_run(d: float | None, *, units: bool = True, arrow: bool = True) -> str:
@@ -481,7 +518,9 @@ def _palette() -> QPalette:
     p.setColor(QPalette.ColorRole.HighlightedText, QColor(C.text))
     p.setColor(QPalette.ColorRole.ToolTipBase, QColor(C.surface_hover))
     p.setColor(QPalette.ColorRole.ToolTipText, text)
-    p.setColor(QPalette.ColorRole.PlaceholderText, muted)
+    # Placeholder text is ENABLED prose in an enabled field, so it takes text_dim (5.90:1), not
+    # text_muted (3.17:1, WCAG-exempt only because it is reserved for DISABLED chrome below).
+    p.setColor(QPalette.ColorRole.PlaceholderText, QColor(C.text_dim))
     p.setColor(QPalette.ColorRole.Link, QColor(C.accent))
 
     # Disabled states read muted everywhere text/foreground is drawn.
@@ -957,10 +996,12 @@ QLabel#PaneBadge {{
     font-weight: 600;
     padding: 3px 8px;
 }}
-/* in-panel empty state: shown when a recording has zero complete laps. Surface bg covers the panel; muted text. */
+/* in-panel empty state: shown when a recording has zero complete laps. Surface bg covers the panel.
+   text_dim, NOT text_muted: this is the panel's ONLY content, so it is enabled prose and has to
+   clear WCAG AA (5.90:1 here; text_muted was 3.17:1). text_muted is for disabled chrome only. */
 QLabel[role="EmptyState"] {{
     background-color: {C.surface};
-    color: {C.text_muted};
+    color: {C.text_dim};
     font-size: {BODY}px;
     padding: 24px;
 }}
@@ -981,13 +1022,21 @@ QLabel[role="WelcomeTitle"] {{
 }}
 QLabel[role="WelcomeSubtitle"] {{
     background: transparent;
-    color: {C.text_muted};
+    color: {C.text_dim};
     font-size: {BODY}px;
 }}
+/* the failed-load message. It used to be the marketing subtitle's EXACT colour one pixel smaller,
+   i.e. the faintest, smallest text on a screen where (on the "Open demo" path) it is the only
+   response the click produces. It now outranks the invitation instead of hiding under it: the
+   attention amber the rest of the app warns in, at BODY size, semibold, paired with the ⚠ glyph
+   WelcomeView prefixes — so the ranking survives greyscale and colour blindness, not just hue.
+   Amber is deliberately NOT a palette-swapped semantic hue: this text is styled once at startup by
+   the QSS and would freeze if it were (the SERIES_BEST failure mode). 9.35:1 on canvas. */
 QLabel[role="WelcomeError"] {{
     background: transparent;
-    color: {C.text_muted};
-    font-size: {CAPTION}px;
+    color: {C.accent};
+    font-size: {BODY}px;
+    font-weight: 600;
 }}
 /* load busy state: a muted "Loading telemetry…" title over an INDETERMINATE bar (QProgressBar
    range 0,0) — a multi-second GoPro ingest reads as "working", not frozen. The bar self-animates,

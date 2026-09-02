@@ -74,7 +74,10 @@ class WelcomeView(QWidget):
         zone.addLayout(buttons)
 
         if error:
-            err = QLabel(error)
+            # The ⚠ the rest of the app marks low-confidence/attention with, so the failure reads as
+            # a failure WITHOUT hue (it pairs with the amber [role=WelcomeError] styling, which used
+            # to be the subtitle's exact grey — the message hid inside the invitation copy).
+            err = QLabel(f"⚠  {error}")
             err.setProperty("role", "WelcomeError")
             err.setAlignment(Qt.AlignCenter)
             err.setWordWrap(True)

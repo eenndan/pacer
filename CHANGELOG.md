@@ -106,6 +106,23 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   collisions, and self-contradicting coaching copy.
 - Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker
   drain (CI deadlocks); the drift-gated per-corner loss alignment.
+- The colour-blind-safe option now actually reaches the charts and the map ramp. The
+  best-lap curve was pinned to the default green by a module constant, so it disagreed
+  with the lap table's recoloured cue; it resolves the palette at draw time now (as do
+  the brake-point glyphs and the ideal-lap star). And the map's speed ramp no longer goes
+  flat over its lower half in that palette — it shared the amber mid anchor with the
+  colour-blind "behind" orange, which made half the ramp indistinguishable (adjacent
+  buckets stepped 0.90–1.16 in deuteranopia-simulated CIE76 ΔE, worse than leaving the
+  option off); the palette has its own mid anchor now, with a minimum step of 7.01.
+- Text contrast: four roles that borrowed the disabled-chrome grey (the empty-state body,
+  the welcome subtitle and error, and placeholder text) were below WCAG AA at 3.17–3.68:1
+  and now clear it at 5.90–9.35:1.
+- A failed load no longer whispers: the message was the exact colour of the marketing
+  subtitle one pixel smaller — on the "Open demo" path, the only response to the click.
+  It now reads in the warning amber at body size with the ⚠ glyph.
+- `Δ -0.00` is gone. Float noise inside the even dead band printed a negative zero, which
+  reads as "behind" on a level lap — and it was burned into 14.3 % of the frames of an
+  exported overlay video, where the recipient cannot correct it.
 - **Lap and Corners tables now fit their panel.** Content-tight columns left a maximized
   Laps panel 79% empty (382 px of data, 1050 px parked in a blank spacer) and, at the
   default quadrant, pushed the Corners table's "Grip (est)" column and the sector columns
