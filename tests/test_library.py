@@ -41,19 +41,30 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
-from studio import library  # noqa: E402
+from studio import library, prefs  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
+
+# The dialog now READS its remembered size from studio.prefs on construction and WRITES it back on
+# close, so redirect that seam too, module-wide and before any dialog exists — same rule as the
+# library index above: the suite never reads or writes the user's real app-support dir. (The
+# TemporaryDirectory object is held at module scope so its finalizer removes the dir at exit.)
+_PREFS_TMP = tempfile.TemporaryDirectory(prefix="pacer-test-prefs-")
+prefs._app_support_dir = lambda: _PREFS_TMP.name
+
 from studio.library_dialog import (  # noqa: E402
     _ALL_TRACKS,
     _COL_BEST,
     _COL_DATE,
     _COL_TRACK,
+    _DEFAULT_SIZE,
+    _PB_PLOT_MAX_H,
     _UNKNOWN_TRACK,
     MISSING_ROLE,
     NUM_ROLE,
     TRACK_ROLE,
     LibraryDialog,
     _entry_junk,
+    _fit_to_screen,
 )
 
 
@@ -366,6 +377,108 @@ def test_healthy_save_does_not_create_a_backup():
         library.upsert_and_save(_entry("GX010060"), p)  # first write (no prior file)
         library.upsert_and_save(_entry("GX010061"), p)  # overwrite a healthy file
         assert not os.path.exists(p + ".bak")
+
+
+def test_clear_backs_up_the_index_before_wiping_it():
+    """QA W7-04: "Clear library" is the ONE destructive act a user can reach from the UI, and it was
+    the one write path with no copy — save()'s backup hook fires only for an unparseable/newer file,
+    which a deliberate wipe of a healthy index is not. clear() must copy the index to library.json.bak
+    FIRST, so a mis-click is recoverable."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        library.upsert_and_save(_entry("GX010060", track="MK", best=68.4), p)
+        library.upsert_and_save(_entry("GX010061", track="MK", best=69.1), p)
+        before = library.load(p)["entries"]
+        assert len(before) == 2
+
+        library.clear(p)
+
+        assert library.load(p)["entries"] == []                  # the wipe still happens
+        bak = library.backup_path(p)
+        assert os.path.exists(bak), "the wipe kept no copy of the index"
+        assert library.load(bak)["entries"] == before            # …and the copy is the whole history
+
+
+def test_clear_with_no_index_yet_is_a_clean_no_op():
+    """Clearing a library that was never written must not crash and must not manufacture an empty
+    .bak (a backup of nothing would make the Restore control offer to restore nothing)."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        library.clear(p)
+        assert library.load(p)["entries"] == []
+        assert not os.path.exists(library.backup_path(p))
+        assert library.backup_summary(p) is None
+
+
+def test_restore_brings_back_a_cleared_library():
+    """The other half of "Back up…": restore() puts the .bak back, so the whole analyzed history
+    survives a mis-clicked Clear library. Also proves the everyday upsert AFTER a clear does not
+    clobber the backup — the way back stays open once the user carries on working."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        for stem in ("GX010060", "GX010061", "GX010062"):
+            library.upsert_and_save(_entry(stem, track="MK"), p)
+        original = library.load(p)["entries"]
+        library.clear(p)
+        library.upsert_and_save(_entry("GX010070", track="MK"), p)   # a healthy save must not churn
+        assert library.load(library.backup_path(p))["entries"] == original
+
+        restored = library.restore(p)
+
+        assert [e["fingerprint"] for e in restored["entries"]] == \
+               [e["fingerprint"] for e in original]
+        assert library.load(p)["entries"] == original            # …and it is on disk, not just returned
+
+
+def test_restore_swaps_so_it_can_itself_be_taken_back():
+    """A restore is destructive in the other direction, so it SWAPS: the index it replaces becomes
+    the new backup. Restoring twice therefore returns to where you started — the control can't strand
+    a user who clicked it by mistake."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        library.upsert_and_save(_entry("GX010060", track="MK"), p)
+        library.clear(p)
+        library.upsert_and_save(_entry("GX010099", track="MK"), p)   # a NEW, different library
+        current = library.load(p)["entries"]
+
+        library.restore(p)                                       # -> the old one-entry library
+        assert [e["fingerprint"] for e in library.load(p)["entries"]] == ["GX0060"]
+        assert library.load(library.backup_path(p))["entries"] == current   # the replaced one is kept
+
+        library.restore(p)                                       # …and swapping back works
+        assert [e["fingerprint"] for e in library.load(p)["entries"]] == ["GX0099"]
+
+
+def test_restore_refuses_when_there_is_nothing_to_restore():
+    """restore() must never replace a live library with nothing — that would BE the data loss it
+    exists to undo. A missing backup, and an empty one, both leave the current index untouched."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        library.upsert_and_save(_entry("GX010060", track="MK"), p)
+        kept = library.load(p)["entries"]
+
+        assert library.restore(p)["entries"] == kept             # no .bak at all
+        library.save(library.empty_index(), library.backup_path(p))
+        assert library.restore(p)["entries"] == kept             # an EMPTY .bak
+        assert library.load(p)["entries"] == kept
+
+
+def test_backup_summary_reports_what_the_backup_holds():
+    """The read half of the backup slot, for a confirm that can name both sides of a restore: the
+    entry COUNT and a raw mtime (no formatting — this module stays display-agnostic), or None when
+    there is nothing restorable."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        assert library.backup_summary(p) is None                 # nothing yet
+        library.upsert_and_save(_entry("GX010060", track="MK"), p)
+        library.upsert_and_save(_entry("GX010061", track="MK"), p)
+        assert library.backup_summary(p) is None                 # a healthy save writes no backup
+        library.clear(p)
+        info = library.backup_summary(p)
+        assert info is not None
+        assert info["entries"] == 2
+        assert info["path"] == library.backup_path(p) == p + ".bak"
+        assert isinstance(info["mtime"], float) and info["mtime"] > 0
 
 
 def test_migrate_hook_preserves_entries_and_backfills_trust_flags():
@@ -1301,6 +1414,204 @@ def test_recent_entries_include_an_unknown_track_recording(monkeypatch):
         got = studio_app.StudioWindow._recent_entries(win)
         assert [e["fingerprint"] for e in got] == ["GX0065", "GX0062"]   # newest first
         assert studio_app.StudioWindow._recent_label(win, got[0]).startswith("unknown track")
+
+
+# ------------------------------------------------ v2 dialog: size / density (QA W7-06) + restore
+
+def _rows_visible(dlg) -> float:
+    """How many recordings the table can actually SHOW at its current size — the measure the
+    density finding is about (a 201-row library is worth nothing behind a 4-row viewport)."""
+    return dlg.table.viewport().height() / dlg.table.rowHeight(0)
+
+
+def _settle():
+    """Let the layout apply. Offscreen Qt still needs an event pass before geometry is real."""
+    for _ in range(4):
+        _APP.processEvents()
+
+
+def _many_entries(n=30):
+    """An index of `n` dated, openable-looking recordings — enough rows that the table has more to
+    show than it can fit at any sane dialog size."""
+    idx = library.empty_index()
+    for i in range(n):
+        library.upsert(idx, _entry(f"GX01{4000 + i:04d}", track="MK",
+                                   date=f"2024-{1 + i % 12:02d}-{1 + i % 28:02d}",
+                                   best=68.0 + i * 0.1, paths=[]))
+    return idx
+
+
+def test_fit_to_screen_clamps_a_dialog_size_to_the_display():
+    """The size clamp is pure so it can be tested without a display. A big screen leaves the wanted
+    size alone; a small one (an old 1280x800 panel) gets the dialog cut down to fit rather than
+    opening taller than the screen; and a bogus/zero screen never collapses it below the floor."""
+    assert _fit_to_screen(880, 860, 1512, 944) == (880, 860)       # 14" MBP — unclamped
+    assert _fit_to_screen(880, 860, 1470, 931) == (880, 860)       # 13" Air — the tightest fit
+    assert _fit_to_screen(880, 860, 1280, 775) == (880, 715)       # small panel — height cut
+    assert _fit_to_screen(1600, 1200, 800, 800) == (740, 740)      # both axes cut
+    assert _fit_to_screen(880, 860, 0, 0) == (880, 860)            # no screen reported — left alone
+    assert _fit_to_screen(880, 860, 100, 100) == (480, 420)        # never below the floor
+
+
+def test_dialog_opens_tall_enough_to_browse_and_holds_the_pb_chart_to_its_band():
+    """QA W7-06: at its own default size the library showed 4.6 of 201 recordings — the table got a
+    139 px viewport while the PB chart sat on its 150 px floor, and every pixel the dialog gained
+    went to the chart as much as to the list. The dialog now opens at a size meant for browsing
+    (clamped to the screen), and the chart is held to a band so the list takes the rest."""
+    from PySide6.QtGui import QGuiApplication
+    assert _DEFAULT_SIZE[1] > 600, "the default is no taller than the one that showed 4.6 rows"
+    dlg = LibraryDialog(_many_entries(), _OpenSpy())
+    avail = QGuiApplication.primaryScreen().availableGeometry()
+    assert (dlg.width(), dlg.height()) == _fit_to_screen(
+        *_DEFAULT_SIZE, avail.width(), avail.height())
+    # Measured at FIXED sizes so nothing depends on the test machine's screen. The chart is the
+    # thing that has to stop growing: at 880x860 it is 260 px on main (13.9 rows of table here
+    # vs 12.3 there), and it kept taking a share of every pixel the dialog gained.
+    dlg.show()
+    _settle()
+    dlg.resize(880, 860)
+    _settle()
+    roomy, tall_rows = dlg.pb_plot.height(), _rows_visible(dlg)
+    table_at_860 = dlg.table.viewport().height()
+    assert roomy <= _PB_PLOT_MAX_H, (roomy, tall_rows)
+    # Every further pixel the dialog gains belongs to the LIST: growing the dialog by 120 px must
+    # grow the table by ~120 px, not the 72 px (60%) it grew by on main.
+    dlg.resize(880, 980)
+    _settle()
+    gained = dlg.table.viewport().height() - table_at_860
+    assert gained >= 114, (gained, _rows_visible(dlg))
+    # …and the chart still yields FIRST when the dialog is small, back down toward its 150 px floor.
+    dlg.resize(880, 600)
+    _settle()
+    assert dlg.pb_plot.height() < roomy, (dlg.pb_plot.height(), roomy)
+    assert dlg.pb_plot.height() <= 160, dlg.pb_plot.height()
+    dlg.hide()
+    dlg.deleteLater()
+
+
+def test_dialog_remembers_a_size_the_user_changed_but_never_pins_its_own_default():
+    """QA W7-06 (second half): resizing the library and re-opening it used to hand back 720x600.
+    The size is persisted through studio.prefs now — but ONLY when the user actually changed it, so
+    a dialog that stores its own default on first close can't freeze that default for everyone."""
+    from PySide6.QtGui import QGuiApplication
+    avail = QGuiApplication.primaryScreen().availableGeometry()
+    path = prefs.prefs_path()
+    if os.path.exists(path):
+        os.remove(path)
+    try:
+        opened = LibraryDialog(_many_entries(), _OpenSpy())
+        opened.show()
+        _settle()
+        opened.done(0)                                   # closed without touching the size
+        assert prefs.library_size() is None, prefs.library_size()
+
+        resized = LibraryDialog(_many_entries(), _OpenSpy())
+        resized.show()
+        _settle()
+        resized.resize(700, 640)
+        _settle()
+        resized.done(0)                                  # Close/Escape and Open both route here
+        assert prefs.library_size() == (700, 640), prefs.library_size()
+
+        again = LibraryDialog(_many_entries(), _OpenSpy())
+        assert (again.width(), again.height()) == _fit_to_screen(700, 640, avail.width(),
+                                                                 avail.height())
+        for dlg in (opened, resized, again):
+            dlg.deleteLater()
+    finally:
+        if os.path.exists(path):
+            os.remove(path)                              # leave no size for the next test to inherit
+
+
+def test_dialog_clear_confirm_names_the_copy_it_keeps_and_the_way_back():
+    """QA W7-04: the confirm named what SURVIVES a wipe (videos, sidecars) and never said whether
+    the index itself could come back — it could not. It must now name the copy AND the route back,
+    which differs by what is wired: Restore… when the app injects it, else the .bak file that
+    "Reveal in Finder" opens the folder for."""
+    from PySide6.QtWidgets import QMessageBox
+    idx = _many_entries(3)
+    seen = []
+    orig = QMessageBox.question
+    QMessageBox.question = staticmethod(lambda *a, **k: (seen.append(a[2]), QMessageBox.No)[1])
+    try:
+        bare = LibraryDialog(idx, _OpenSpy(), clear_library=library.empty_index)
+        bare._on_clear_library()
+        assert "library.json.bak" in seen[-1], seen[-1]
+        assert "Reveal in Finder" in seen[-1], seen[-1]
+
+        with_restore = LibraryDialog(idx, _OpenSpy(), clear_library=library.empty_index,
+                                     restore_library=lambda: idx,
+                                     backup_info=lambda: {"entries": 3, "mtime": None})
+        with_restore._on_clear_library()
+        assert "library.json.bak" in seen[-1], seen[-1]
+        assert "Restore" in seen[-1], seen[-1]
+    finally:
+        QMessageBox.question = orig
+    bare.deleteLater()
+    with_restore.deleteLater()
+
+
+def test_dialog_restore_confirm_names_both_sides_and_routes_through_the_callback():
+    """The dialog had a "Back up…" and no way to read one back. Restore… is dependency-injected like
+    every other file op: it confirms naming BOTH sides of the swap (a restore replaces a live index,
+    so the count it is about to replace has to be on screen), fires the callback, and re-renders from
+    the index it returns."""
+    from PySide6.QtWidgets import QMessageBox
+    idx = _many_entries(2)
+    restored_to = library.empty_index()
+    for stem in ("GX010080", "GX010081", "GX010082"):
+        library.upsert(restored_to, _entry(stem, track="MK", paths=[]))
+    calls, seen = [], []
+    orig = QMessageBox.question
+    QMessageBox.question = staticmethod(lambda *a, **k: (seen.append(a[2]), QMessageBox.Yes)[1])
+    try:
+        dlg = LibraryDialog(idx, _OpenSpy(), clear_library=library.empty_index,
+                            restore_library=lambda: (calls.append(True), restored_to)[1],
+                            backup_info=lambda: {"entries": 3, "mtime": 1_700_000_000.0})
+        assert dlg.restore_btn.isEnabled()
+        assert dlg.table.rowCount() == 2
+        dlg._on_restore_library()
+    finally:
+        QMessageBox.question = orig
+    assert calls == [True]
+    assert "2 recordings" in seen[-1] and "3 recordings" in seen[-1], seen[-1]
+    assert dlg.table.rowCount() == 3                     # re-rendered from the returned index
+    dlg.deleteLater()
+
+
+def test_dialog_restore_button_is_shown_disabled_before_there_is_a_backup():
+    """The way back is visible BEFORE it is needed: with no backup yet the button is present but
+    disabled and says why, rather than appearing out of nowhere once history is already gone. With
+    no callbacks wired at all it isn't built (the browse-only DI contract)."""
+    idx = _many_entries(2)
+    empty = LibraryDialog(idx, _OpenSpy(), restore_library=lambda: idx, backup_info=lambda: None)
+    assert empty.restore_btn.isEnabled() is False
+    assert "No library backup yet" in empty.restore_btn.toolTip()
+    # A query that raises must degrade to "no restore offered", never break the dialog.
+    def _boom():
+        raise OSError("app-support unreadable")
+    broken = LibraryDialog(idx, _OpenSpy(), restore_library=lambda: idx, backup_info=_boom)
+    assert broken.restore_btn.isEnabled() is False
+    assert getattr(LibraryDialog(idx, _OpenSpy()), "restore_btn", None) is None
+    empty.deleteLater()
+    broken.deleteLater()
+
+
+def test_prefs_library_size_roundtrips_and_rejects_garbage():
+    """The persisted Library size is shape-guarded on read (two positive real ints; bool is an int
+    subclass, so it is rejected explicitly) and its writer is fully guarded — remembering a window
+    size must never disrupt the UI."""
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "prefs.json")
+        assert prefs.library_size(p) is None                       # unset
+        prefs.set_library_size(900, 780, p)
+        assert prefs.library_size(p) == (900, 780)
+        for bad in ([900], [900, 780, 1], ["900", "780"], [True, 780], [900, 0], [-1, 780], 900):
+            prefs.set(prefs.LIBRARY_SIZE, bad, p)
+            assert prefs.library_size(p) is None, bad
+        prefs.set_library_size(900, 780, p)
+        prefs.set_library_size("wide", 780, p)                     # non-numeric → ignored, not fatal
+        assert prefs.library_size(p) == (900, 780)
 
 
 # ------------------------------------------------------------------ runner

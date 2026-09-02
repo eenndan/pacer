@@ -23,6 +23,11 @@ Layout::
     │                              [Open]   [Close]   │
     └───────────────────────────────────────────────┘
 
+SIZE: the TABLE is the reason this dialog exists, so it takes the pixels — the PB chart is held to a
+150–200 px band (it yields first when space is tight and stops growing once it has enough), and the
+dialog opens tall enough to browse a real library, clamped to the screen and replaced by the user's
+own size once they resize it (persisted through ``studio.prefs``).
+
 Date/Best/Theoretical sort numerically via ``_NumItem``; Track sorts as text. The Open button +
 a double-click re-open the selected row's recording (disabled for a missing/junk row). Every time
 this dialog prints a lap time — the Best/Theoretical cells, the summary line, the chart's left axis
@@ -43,7 +48,7 @@ from collections.abc import Callable
 
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -59,7 +64,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from . import APP_NAME, theme
+from . import APP_NAME, prefs, theme
 from . import library as _library
 from ._signal import fmt_time
 from .theme import C
@@ -95,7 +100,8 @@ PRIVACY_NOTE = (
     "It stores your start/finish + sector lines in a small \"<name>.pacer.json\" file next to "
     "each video, and this library index (file paths, track names and GPS dates) under "
     "~/Library/Application Support/pacer. Right-click a recording to forget it, or use "
-    "\"Clear library\" to wipe the whole index."
+    "\"Clear library\" to wipe the whole index — a copy of the index is kept beside it as "
+    "library.json.bak, so a wipe can be undone."
 )
 
 # A PlotDataItem pen/brush for the PB line + its markers (amber accent, the app's primary).
@@ -107,9 +113,55 @@ _PB_BRUSH = pg.mkBrush(C.accent)
 _TREND_WORD = {"improving": "improving", "stalled": "off your PB"}
 
 
+# The size the dialog opens at when the user has never resized it. The old 720x600 left the table a
+# 139 px viewport — 4.6 rows of a 201-recording library, 2.3% of it — with the PB chart on its 150 px
+# floor and a 4-line privacy paragraph, a filter row and a button row taking the rest: at 600 px
+# everything is on a minimum and the layout's stretch factors never get to apply at all. 880x860
+# gives the table 349 px (11.6 rows, 2.5x) with the chart at the top of its band, and it is the
+# tallest round number that still opens UNCLAMPED on the smallest Mac this app targets (a 13" Air
+# has ~931 px of available height; _SCREEN_MARGIN leaves 871). Anything smaller than that — an old
+# 1280x800 panel, a half-height external display — is handled by _fit_to_screen rather than by
+# opening a dialog taller than the screen.
+_DEFAULT_SIZE = (880, 860)
+# The PB chart's ceiling (its floor is setMinimumHeight(150) at the widget). It reads a handful of
+# best-vs-date points and one empty-state sentence, so it has no use for more; without a ceiling it
+# grew with every pixel the dialog gained, at the list's expense.
+_PB_PLOT_MAX_H = 200
+# Left over after clamping to the screen: room for the menu bar, the Dock and the window frame.
+_SCREEN_MARGIN = 60
+# Floors the clamp will not go below, so a screen that reports something tiny/bogus can never
+# collapse the dialog (Qt then honours the layout's own minimum anyway).
+_MIN_SIZE = (480, 420)
+
+
+def _fit_to_screen(width: int, height: int, avail_w: int, avail_h: int) -> tuple[int, int]:
+    """Clamp a desired dialog size to what a screen `avail_w` x `avail_h` can actually show. Pure
+    (the caller supplies the screen's available geometry) so it is testable without a display, and
+    applied to BOTH the default and a restored size — a size remembered on an external monitor must
+    not open off-screen on the laptop panel. A non-positive available dimension (no screen) leaves
+    that axis alone."""
+    if avail_w > 0:
+        width = min(width, max(_MIN_SIZE[0], avail_w - _SCREEN_MARGIN))
+    if avail_h > 0:
+        height = min(height, max(_MIN_SIZE[1], avail_h - _SCREEN_MARGIN))
+    return int(width), int(height)
+
+
 def _plural(n: int, noun: str) -> str:
     """"1 session" / "3 sessions" — the summary line's one pluralization helper."""
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _backup_when(mtime: float | None) -> str:
+    """" taken 2026-09-03 00:12" for a ``library.backup_summary`` mtime, or "" when it has none —
+    the clause that dates the backup in the Restore confirm. Formatting lives here, not in the
+    pacer-free/display-agnostic library module, which hands back a raw POSIX timestamp."""
+    if not mtime:
+        return ""
+    try:
+        return " taken " + datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, OSError, OverflowError):
+        return ""
 
 
 class _NumItem(QTableWidgetItem):
@@ -199,17 +251,23 @@ class LibraryDialog(QDialog):
     """The File ▸ Library… dialog. `index` is a loaded ``studio.library`` index dict;
     `open_recording` is called with an entry's `paths` list to re-open it (the app passes its
     guarded `_load`). The dialog closes itself before re-opening so the reload happens against
-    the main window, not behind a modal."""
+    the main window, not behind a modal.
+
+    Every control that touches the FILESYSTEM is dependency-injected and optional — forget / clear /
+    reveal / back up / restore, plus the `backup_info` query behind Restore… — so the dialog itself
+    stays pacer-free and file-op-free (and therefore hermetic in tests), and any control whose
+    callback is absent simply isn't built."""
 
     def __init__(self, index: dict, open_recording: Callable[[list[str]], None],
                  parent=None,
                  forget_recording: Callable[[dict], dict] | None = None,
                  clear_library: Callable[[], dict] | None = None,
                  reveal_library: Callable[[], None] | None = None,
-                 backup_library: Callable[[], None] | None = None):
+                 backup_library: Callable[[], None] | None = None,
+                 restore_library: Callable[[], dict] | None = None,
+                 backup_info: Callable[[], dict | None] | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — session library")
-        self.resize(720, 600)
         self._index = index
         self._open_recording = open_recording
         # Privacy controls (optional — the dialog degrades to browse-only when not injected, e.g. in
@@ -222,6 +280,15 @@ class LibraryDialog(QDialog):
         # pacer-free / file-op-free); neither mutates the index, so no re-render is needed.
         self._reveal_library = reveal_library
         self._backup_library = backup_library
+        # RESTORE — the other half of "Back up…": `restore_library` puts the automatic
+        # ``library.json.bak`` back (the app owns the file op and returns the fresh index, like
+        # clear does), and `backup_info` reports what that backup holds (a ``library.backup_summary``
+        # dict, or None when there is nothing restorable) so the confirm can name BOTH sides of the
+        # swap. Data + action, the same split as `index` + `open_recording`; the dialog stays
+        # file-op-free, which is also what keeps it hermetic in tests.
+        self._restore_library = restore_library
+        self._backup_info = backup_info
+        self._backup = self._read_backup_info()
         self._entries = list(index.get("entries", []))
 
         root = QVBoxLayout(self)
@@ -303,6 +370,14 @@ class LibraryDialog(QDialog):
             "left": _LapTimeAxis(orientation="left")})
         self.pb_plot.setBackground(C.surface)
         self.pb_plot.setMinimumHeight(150)
+        # …and a CEILING, so the chart lives in a fixed 150–200 px band. The floor alone decided the
+        # whole layout: at 600 px tall everything was on its minimum (the stretch factors never got
+        # to apply, and the table's share was 139 px = 4.6 rows), while every pixel the dialog gained
+        # grew the chart too (234 px at 860, 370 px at 1200) to draw the same handful of dots. With
+        # the ceiling in place the chart still yields FIRST when space is tight (stretch 2 vs the
+        # table's 3) and stops growing once it has enough, so the list — the reason this dialog
+        # exists — takes everything else: 11.6 rows at the new default, ~23 at 1200 px.
+        self.pb_plot.setMaximumHeight(_PB_PLOT_MAX_H)
         self.pb_plot.setLabel("left", "best lap")
         self.pb_plot.getAxis("left").enableAutoSIPrefix(False)
         self.pb_plot.showGrid(x=True, y=True, alpha=0.12)
@@ -346,10 +421,19 @@ class LibraryDialog(QDialog):
             self.clear_btn = QPushButton("Clear library")
             self.clear_btn.setToolTip(
                 "Forget every recording in this list (wipes the app-support index only; your video "
-                "files and their .pacer.json sidecars are left untouched)")
+                "files and their .pacer.json sidecars are left untouched). A copy of the index is "
+                "kept as library.json.bak first")
             self.clear_btn.clicked.connect(self._on_clear_library)
             self.clear_btn.setEnabled(bool(self._entries))
             buttons.addWidget(self.clear_btn)
+        # The other half of "Back up…": put the automatic library.json.bak back. Sits beside the wipe
+        # it undoes. Disabled (not hidden) when there's no backup yet, so the way back is visible
+        # BEFORE it is needed rather than appearing only once history is gone.
+        if self._restore_library is not None:
+            self.restore_btn = QPushButton("Restore…")
+            self.restore_btn.clicked.connect(self._on_restore_library)
+            buttons.addWidget(self.restore_btn)
+            self._sync_restore_btn()
         # Data portability: reveal the index folder / back up library.json. Non-destructive, so no
         # confirm and always enabled when wired (there's always a folder to reveal, and back-up
         # informs the user when there's nothing to copy yet). Injected callbacks only.
@@ -378,6 +462,37 @@ class LibraryDialog(QDialog):
         # (initially empty) filter so the summary line + row visibility are in sync from the start.
         self._select_first_usable_row()
         self._apply_filter()
+        # Size last, with the widget tree complete so the layout's own minimum is settled.
+        self._apply_geometry()
+
+    # ------------------------------------------------------------------ size
+    def _apply_geometry(self):
+        """Open at the user's remembered size when they have one, else at the default — both clamped
+        to the screen this dialog is opening on. Records the size it opened at so ``done`` only
+        persists a size the user actually CHANGED: a dialog that stores its own default on first
+        close would freeze that default forever, and every future user of a never-resized library
+        would be pinned to whatever this build shipped. Guarded end-to-end — a prefs failure must
+        never stop the library opening."""
+        try:
+            remembered = prefs.library_size()
+        except Exception as exc:  # noqa: BLE001 — an unreadable pref just means "use the default"
+            print(f"studio: library size not restored ({exc!r}).", flush=True)
+            remembered = None
+        width, height = remembered or _DEFAULT_SIZE
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            width, height = _fit_to_screen(width, height, avail.width(), avail.height())
+        self.resize(width, height)
+        self._opened_size = (self.width(), self.height())
+
+    def done(self, result: int):
+        """Remember a size the user changed on the way out — both Open (accept) and Close/Escape
+        (reject) route through here — so a library enlarged to browse 200 recordings does not shrink
+        back to the default on the next open. ``prefs.set_library_size`` is itself fully guarded."""
+        if (self.width(), self.height()) != getattr(self, "_opened_size", None):
+            prefs.set_library_size(self.width(), self.height())
+        super().done(result)
 
     def _select_first_usable_row(self):
         """Select the first row (in the current sort order) whose DATE cell is NOT flagged disabled
@@ -705,20 +820,82 @@ class LibraryDialog(QDialog):
         self._index = self._forget_recording(entry)
         self._rerender()
 
+    def _read_backup_info(self) -> dict | None:
+        """What the automatic backup holds (a ``library.backup_summary`` dict) via the injected
+        query, or None when it isn't wired / there's nothing restorable. Guarded: a failing query
+        just means "no restore offered", never a broken dialog."""
+        if self._backup_info is None:
+            return None
+        try:
+            info = self._backup_info()
+        except Exception as exc:  # noqa: BLE001 — a backup query must never break the library
+            print(f"studio: library backup not readable ({exc!r}).", flush=True)
+            return None
+        return info if isinstance(info, dict) and info.get("entries") else None
+
+    def _sync_restore_btn(self):
+        """Enable Restore… only when there IS something to restore, and say which state it's in —
+        the tooltip carries the backup's size + date so the button explains itself before it is
+        clicked (and explains its own greyed-out state when there is no backup yet)."""
+        btn = getattr(self, "restore_btn", None)
+        if btn is None:
+            return
+        info = self._backup
+        btn.setEnabled(info is not None)
+        if info is None:
+            btn.setToolTip(
+                "No library backup yet — one is kept automatically as library.json.bak whenever "
+                "the library is cleared")
+        else:
+            btn.setToolTip(
+                f"Put back the automatic backup{_backup_when(info.get('mtime'))} "
+                f"({_plural(int(info['entries']), 'recording')}). The library you have now is kept "
+                "as the backup, so you can swap back")
+
     def _on_clear_library(self):
         """Confirm, then wipe the whole index via the injected callback (media + sidecars left
-        untouched) and re-render to the empty state."""
+        untouched) and re-render to the empty state. The confirm names what SURVIVES (video files,
+        sidecars) and — since this is the one destructive control in the app — where the copy of the
+        index itself goes, plus the way back: Restore… when it's wired, otherwise the .bak file the
+        Reveal in Finder button two along opens the folder for."""
         if self._clear_library is None or not self._entries:
             return
+        recovery = ("You can put it back with “Restore…”."
+                    if self._restore_library is not None else
+                    "“Reveal in Finder” opens the folder that holds it.")
         ok = QMessageBox.question(
             self, "Clear library",
             f"Forget all {_plural(len(self._entries), 'recording')} from the library?\n\n"
             "This wipes the library index only — your video files and their .pacer.json "
-            "sidecars are left untouched.",
+            "sidecars are left untouched.\n\n"
+            f"A copy of the index is kept as library.json.bak first. {recovery}",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ok != QMessageBox.Yes:
             return
         self._index = self._clear_library()
+        self._backup = self._read_backup_info()   # the wipe just created one
+        self._rerender()
+
+    def _on_restore_library(self):
+        """Confirm, then put the automatic backup back via the injected callback and re-render. The
+        confirm names BOTH sides — what is about to be replaced and what replaces it — because a
+        restore is destructive in the other direction; it also says the current library becomes the
+        backup, which is what makes this reversible."""
+        if self._restore_library is None or not self._backup:
+            return
+        info = self._backup
+        ok = QMessageBox.question(
+            self, "Restore library",
+            f"Replace this library ({_plural(len(self._entries), 'recording')}) with the backup"
+            f"{_backup_when(info.get('mtime'))} "
+            f"({_plural(int(info['entries']), 'recording')})?\n\n"
+            "The library you have now is kept as the backup, so you can swap back. Your video "
+            "files and their .pacer.json sidecars are not touched either way.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if ok != QMessageBox.Yes:
+            return
+        self._index = self._restore_library()
+        self._backup = self._read_backup_info()   # the swap replaced it with what we just left
         self._rerender()
 
     def _rerender(self):
@@ -746,6 +923,7 @@ class LibraryDialog(QDialog):
         self.track_filter.blockSignals(False)
         if getattr(self, "clear_btn", None) is not None:
             self.clear_btn.setEnabled(bool(self._entries))
+        self._sync_restore_btn()
         self._select_first_usable_row()
         self._apply_filter()
 
