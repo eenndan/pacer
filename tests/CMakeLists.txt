@@ -459,6 +459,21 @@ add_test(NAME test_lap_table_empty_states
 set_tests_properties(test_lap_table_empty_states PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Lap-panel AFFORDANCES (fix/qa-lap-table-affordances, QA sweep B12): sorting is reachable from the
+# KEYBOARD — the header is a tab stop that rings the section Space would sort by, claims Space back
+# from the window's play/pause shortcut while focused, and never walks onto the blank spacer, with
+# the mouse route intact through the replaced header; the ★ carries its one convention as a tooltip
+# on every cell and header that can wear it, without overwriting the dropout/provisional note
+# underneath; the Corners rows declare the click that rings a corner on the map (pointing hand +
+# a ROW-wide hover fill); and the Corners units are named on screen by a caption that costs the
+# already-exhausted column budget nothing — the rejected in-cell "%" is measured here too. Real
+# LapTable/CornerTable widgets under the REAL theme (the ring and the fill are pixels) -> Qt, so
+# run offscreen.
+add_test(NAME test_lap_table_affordances
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_table_affordances.py)
+set_tests_properties(test_lap_table_affordances PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Grid + timing-line write guards (fix/qa-grid-splitter-collapse, QA sweep B01): no splitter DRAG
 # can collapse a panel to 0 px and no persisted zero can resurrect one, while the maximize gesture
 # still collapses for real (it opts back in via _collapse_sizes — without that, non-collapsible
@@ -544,7 +559,10 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_lap_table_columns test_help_dialog test_grid_and_timing_guards
                         test_lap_table_empty_states test_charts_header_budget
                         test_coaching_panel_layout test_focus_cues test_pb_toast test_app_chrome
-                        test_charts_panel)
+                        test_charts_panel test_lap_table_affordances)
+                        test_lap_table_empty_states test_lap_table_affordances
+                        test_charts_header_budget test_coaching_panel_layout test_focus_cues
+                        test_app_chrome test_charts_panel)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

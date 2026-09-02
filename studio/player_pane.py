@@ -311,6 +311,11 @@ class PlayerPane(QWidget):
                 self.player.setPosition(int(local * 1000))
         else:
             # switch source; defer the seek (+ a resume if playing) to LoadedMedia.
+            # Flag the seam BEFORE _set_source, exactly as the EndOfMedia auto-advance does: this is
+            # the same reopen, so it owes the same honesty. Without it the shell's chapterChanged
+            # handler renames the banner to a chapter that has NOT loaded yet, with no busy
+            # affordance; the hint suppresses that rename and _apply_pending clears it.
+            self.seamLoading.emit(True)
             self._pending = (index, local, self.is_playing())
             self._set_source(index)
 
@@ -404,8 +409,13 @@ class PlayerPane(QWidget):
         vw, vh = self.video.width(), self.video.height()
         w = int(min(max(vw * _OVERLAY_FRAC, _OVERLAY_MIN_W), _OVERLAY_MAX_W))
         h = int(w * _OVERLAY_ASPECT)
-        if (max(w, self.gmeter.minimumWidth()) + 2 * _OVERLAY_PAD > vw
-                or max(h, self.gmeter.minimumHeight()) + 2 * _OVERLAY_PAD > vh):
+        # Ask for the size the overlay will ACTUALLY take: its own minimumSize floors whatever we
+        # set (_OVERLAY_ASPECT puts the smallest dial at 120x134 against a 120x140 minimum), so an
+        # unclamped target can never equal gmeter.geometry() and _position_gmeter's "only move on
+        # change" guard re-issues setGeometry on every tick for a size Qt then clamps straight back.
+        w = max(w, self.gmeter.minimumWidth())
+        h = max(h, self.gmeter.minimumHeight())
+        if w + 2 * _OVERLAY_PAD > vw or h + 2 * _OVERLAY_PAD > vh:
             return None
         corner = self.video.mapToGlobal(QPoint(vw - w - _OVERLAY_PAD, _OVERLAY_PAD))
         return QRect(corner.x(), corner.y(), w, h)

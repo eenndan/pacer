@@ -49,6 +49,7 @@ from _synthetic import bare_session, odometer, seed_cols  # noqa: E402
 
 from studio import data_quality, gapfill, theme  # noqa: E402
 from studio.lap_table import (  # noqa: E402
+    BEST_SPLIT_TIP,
     NUM_ROLE,
     LapTable,
     _NumItem,
@@ -412,10 +413,12 @@ def test_lap_table_verified_restores_bests_and_unmutes():
 
     # Purple best-sector cells reappear (the per-column minima [33.8, 34.4]).
     assert _any_purple_or_green(table), "verified timing must restore the best highlights"
-    # Time + sector cells un-muted: not italic, no provisional tooltip.
+    # Time + sector cells un-muted: not italic, no trust tooltip. A session-best split cell DOES
+    # carry the ★ legend (QA IA-07 — the mark is meaningless without it), which is the one string
+    # allowed here; nothing may claim the timing is provisional or estimated.
     for it in _time_col_items(table) + _sector_col_items(table):
         assert not it.font().italic(), "verified timing cell must not be italic"
-        assert it.toolTip() == "", it.toolTip()
+        assert it.toolTip() in ("", BEST_SPLIT_TIP), it.toolTip()
     print("test_lap_table_verified_restores_bests_and_unmutes OK")
 
 

@@ -79,6 +79,25 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   "Share your PB →" button beside them cleared it at 130×30. Both now stand 24 px, and the
   auto-dismiss **holds while the pointer is on the card**, so a celebration cannot disappear
   from under the click it is asking for.
+- A video seek across a chapter boundary no longer renames the chapter banner to a chapter that
+  has not loaded. Seeking backwards from chapter 2 relabelled the banner "chapter 1 of 3"
+  immediately, with no busy affordance, while the reopen was still in flight — the identical
+  reopen reached by playing off the end of a chapter had always shown "loading next chapter…".
+  Both routes now show the hint, and both clear it when the destination genuinely presents.
+- Compare mode no longer offers to compare a lap with itself. Both lap pickers listed every
+  valid lap, so picking the left pane's lap on the right gave two identical pickers, two
+  `Δ +0.00 s` badges and a chart overlaying one lap on itself, with nothing anywhere saying so.
+  Each picker now drops the lap the other pane holds — in both directions, and again after
+  every repoint — and a pair set to one lap twice reads "same lap" rather than a dead-even Δ.
+- The compare Δ badges carry the ▲/▼ direction glyph again. They hand-rolled their own format
+  and so were the one Δ surface in the app without the non-colour ahead/behind cue: the hero
+  readout showed `Δ +1.46 s ▼` beside a badge reading `Δ +1.22 s`. They now route through the
+  same formatter as every other Δ.
+- The g-meter overlay's "only re-pin on change" guard now actually holds. Its target size was
+  computed from an aspect ratio that disagreed with the dial's own minimum height (120×134
+  against a 120×140 floor), so the guard was false on every tick and re-issued a `setGeometry`
+  Qt clamped straight back — 600 of 600 ticks measured. No rendering change: the overlay
+  received no move or resize events from those calls either way.
 - The **Ideal lap** toggle no longer lights up and does nothing. With the session best selected
   alone — the state the app opens in — the lower chart is already Δ-to-*ideal*, so the overlay had
   nothing to add and the click changed **0 of 441,077 pixels** while the button latched amber. It
@@ -244,6 +263,24 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   used to show 25 rows and "24 excluded" on a 50-lap recording.
 - Expanding that strip lists **every** excluded lap in a height-bounded scroll, instead of
   6 of 24 plus a dead "+18 more" naming laps no surface in the app would show.
+- **Lap columns can be sorted from the keyboard.** Sorting was mouse-only: the header could
+  not take focus, so no Tab press ever reached it and Space/Return left the indicator where
+  it was — with no menu action and no shortcut offering a way in. One Tab out of the grid now
+  lands on the header, ←/→ (and Home/End) walk the sortable columns, and Space/Return sorts by
+  the focused one, which wears the app's focus ring so you can see what you are about to sort
+  by. While it has the keyboard it also takes Space back from the video's play/pause.
+- **The ★ says what it means.** The mark for "session best in this context" was drawn with an
+  empty tooltip on every cell that carried it, in both tables, and explained in exactly one
+  column header. Every ★ cell and every column that can wear one now carries the legend — on
+  top of, not instead of, the GPS-dropout or provisional note the cell already had.
+- **The Corners rows admit they are clickable.** Clicking one rings that corner on the map and,
+  from a maximized lap panel, restores the grid on the way so the map has pixels to paint on —
+  and the panel shrinking 5.2× was the first feedback the click produced. The rows now take the
+  pointing-hand cursor and fill on hover, and the Corner column's tooltip names the click.
+- **The Corners table names its units.** Seven columns of unit-bearing numbers carried no unit
+  anywhere on screen (they were in the header tooltips, which is hover-only) while the Laps
+  header says "Entry (km/h)" and the Stats page captions the same data. A caption above the grid
+  now states times, speeds and grip, and follows the km/h ↔ mph setting.
 - False "GPS quality low" on clean recordings (the dropped-fix denominator counted the
   trimmed stationary lead-in); clock-aware degraded-timing copy.
 - `speed_long_g` run-seam NaN that silently dropped brake/coast events; the brake-onset
