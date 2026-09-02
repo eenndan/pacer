@@ -238,6 +238,31 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   documented removal route.
 - **About / Your data & privacy** can no longer be shrunk below their own copy — both cards
   refuse the shrink and scroll if the text ever outgrows the display.
+- **The map's "drag to set start/finish — lap timing provisional" callout stays on the
+  canvas.** Centred on the start line, it painted its outer half off the panel whenever that
+  line sat near an edge — 39.8 px off a 1272 px map, where the only readable words were "o
+  set start/finish". The caption now slides its anchor to stay inside the plot, and a line
+  with room on both sides is still centred.
+- **The map no longer paints a full red→green gradient under two identical labels.** A
+  re-segmentation that left a 2-sample segment (43.24 km/h at both ends) produced a complete
+  colour ramp legended "43" → "43 km/h". A channel whose two ends round to the same number
+  now shows one sentence instead — "speed is 43 km/h for this whole lap — no gradient" —
+  the same treatment the Δ channel already gives the best lap.
+- **The Elevation channel's legend is stated relative to the lap.** It quoted two absolute
+  GPS altitudes to the metre, and GPS altitude drifts: across 21 laps of one recording the
+  low end ranged 79.9–83.0 m, a 3.2 m disagreement about the same track against a lap
+  profile only 4.5 m tall. The colours were always the *within-lap* shape (min/max normalised
+  per lap), so the legend now says exactly that — "lowest" → "+5 m" — and the channel
+  dropdown, which never mentioned Elevation at all, explains the caveat.
+- **"Reset sectors" says what it did.** Clearing three hand-placed sector lines took one
+  click, 59 ms and produced no dialog, no status line and nothing on the map. It stays
+  immediate (it is fully ⌘Z-reversible) but now posts a notice over the map naming the count
+  and the way back; clearing zero lines says so instead of silently re-segmenting.
+- **"Add sector" divides the lap evenly and reports the new split.** Each click bisected only
+  what was left, so three clicks gave sectors of 49.9 / 16.8 / 8.6 / 24.7 % of the lap — the
+  third carving an 8.6 % sliver. The set is re-spaced as a whole (24.5 / 25.4 / 25.4 / 24.7 %)
+  for as long as the lines are still the app's own suggestions; once you drag one, a click
+  appends and leaves your placements alone.
 - The developer gates hold their own weight again. `pixi run smoke` works in a clean
   checkout: it now sets the same `PYTHONPATH` every Python test already gets, because the
   build drops the compiled module into a `pacer/` directory with no `__init__.py`, so a bare
