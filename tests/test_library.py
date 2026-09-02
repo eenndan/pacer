@@ -17,7 +17,12 @@ Covered:
   * the dialog (offscreen Qt, synthetic index dicts — the dialog is pacer-free): lists every
     entry sorted; selecting a row enables Open and routes through the injected open callback (a
     spy); a missing-file row is greyed + disabled + not openable; double-click opens; and the PB
-    mini-chart plots best-vs-date for the selected row's track.
+    mini-chart plots best-vs-date for the selected row's track;
+  * the dialog's honesty/consistency surfaces: the chart's axis renders lap times (not decimal
+    seconds) through the same fmt_time the table uses; a filter matching nothing says so, counts
+    what is on screen and drops the de-selected row's axis range; the Unknown-track filter bucket
+    reaches null-track rows; a Track cell's tooltip carries its own elided label + the filename;
+    and the header/clear-confirm plurals come from the module's own _plural.
 
 Run: python tests/test_library.py   (no pacer, no telemetry file)
 """
@@ -43,6 +48,7 @@ from studio.library_dialog import (  # noqa: E402
     _COL_BEST,
     _COL_DATE,
     _COL_TRACK,
+    _UNKNOWN_TRACK,
     MISSING_ROLE,
     NUM_ROLE,
     TRACK_ROLE,
@@ -950,6 +956,161 @@ def test_dialog_row_tooltip_and_forget_confirm_name_the_recording_file():
             QMessageBox.question = orig
         assert seen and name in seen[0] and "unknown track" in seen[0]
         dlg.deleteLater()
+
+
+def test_dialog_pb_axis_renders_lap_times_not_decimal_seconds():
+    """QA L11-05: the PB chart's left axis printed decimal seconds ("69", "70.5", label "best lap
+    (s)") while the Best lap column and the summary in the SAME frame read "1:09.905". It must use
+    the app's one time formatter, and then the label must not still claim "(s)"."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("A", track="MK", date="2024-05-01", best=70.5, paths=[]))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    ax = dlg.pb_plot.getAxis("left")
+    assert ax.tickStrings([68.5, 69.0, 70.5], 1.0, 0.5) == ["1:08.500", "1:09.000", "1:10.500"]
+    assert ax.labelText == "best lap" and "(s)" not in ax.labelText
+    # …and that IS the formatter the table cell beside it uses.
+    assert ax.tickStrings([70.5], 1.0, 0.5)[0] == fmt_time(70.5)
+    dlg.deleteLater()
+
+
+def test_dialog_empty_filter_says_so_and_counts_what_is_on_screen():
+    """QA L11-06: a filter matching nothing left the dialog wholly blank — no "no matches" message
+    and a header still asserting "2 analyzed recordings" over 0 visible rows. Both must describe
+    what is on screen, and clearing the filter must restore both."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("A", track="Sonoma", date="2024-05-01", best=70.0, paths=[]))
+    library.upsert(idx, _entry("B", track="Buttonwillow", date="2024-06-15", best=68.0, paths=[]))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    assert dlg._title.text() == "2 analyzed recordings"
+    assert dlg._no_matches.isHidden()
+    dlg.search.setText("zzzz-no-such-recording")
+    assert _visible_rows(dlg) == set()
+    assert dlg._title.text() == "0 of 2 analyzed recordings"
+    assert not dlg._no_matches.isHidden()
+    assert "No recordings match" in dlg._no_matches.text()
+    assert "zzzz-no-such-recording" in dlg._no_matches.text()   # it names the term that matched none
+    # Cleared → both back to the whole library.
+    dlg.search.setText("")
+    assert dlg._title.text() == "2 analyzed recordings"
+    assert dlg._no_matches.isHidden()
+    dlg.deleteLater()
+
+
+def test_dialog_empty_library_gets_no_no_matches_message():
+    """The "no matches" sentence belongs to a FILTERED empty table only — an empty library is a
+    different state (nothing indexed yet) and must not be told its search matched nothing."""
+    dlg = LibraryDialog(library.empty_index(), _OpenSpy())
+    assert dlg._no_matches.isHidden()
+    assert dlg._title.text() == "0 analyzed recordings"
+    dlg.search.setText("anything")
+    assert dlg._no_matches.isHidden()
+    dlg.deleteLater()
+
+
+def test_dialog_empty_filter_drops_the_de_selected_rows_axis():
+    """QA L11-06: de-selecting the charted row cleared the curve but LEFT its axis range — an empty
+    grid still ticking 67.771–69.771 s, i.e. numbers about a recording no longer on screen."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        library.upsert(idx, _entry("A", track="MK", date="2024-05-01", best=70.0,
+                                   laps=8, paths=[real.name]))
+        library.upsert(idx, _entry("B", track="MK", date="2024-06-01", best=68.0,
+                                   laps=8, paths=[real.name]))
+        dlg = LibraryDialog(idx, _OpenSpy())
+        vb = dlg.pb_plot.getPlotItem().getViewBox()
+        charted = vb.viewRect()
+        assert charted.y() > 60.0, charted        # framed on the two ~68-70 s bests
+        assert dlg.pb_plot.getAxis("left").style["showValues"]
+        # Filter everything away: the selection clears, so nothing is plotted any more.
+        dlg.search.setText("zzzz-no-such-recording")
+        assert _visible_rows(dlg) == set()
+        empty = vb.viewRect()
+        assert (empty.y(), empty.height()) == (0.0, 1.0), empty   # the stale range is gone
+        assert not dlg.pb_plot.getAxis("left").style["showValues"]
+        # Re-selecting a row re-frames it — the reset is not a one-way door.
+        dlg.search.setText("")
+        assert dlg.pb_plot.getPlotItem().getViewBox().viewRect().y() > 60.0
+        assert dlg.pb_plot.getAxis("left").style["showValues"]
+        dlg.deleteLater()
+
+
+def test_dialog_unknown_track_bucket_reaches_the_rows_the_combo_could_not():
+    """QA L11-06: the track combo listed only NAMED tracks, so an unknown-track recording — the
+    common case, since the registry ships with about one circuit — could not be filtered to at all
+    (2 of the 3 rows on the QA index). An "Unknown track" bucket collects them, and the search box
+    matches the label they actually show."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        library.upsert(idx, _entry("GX010062", track="MK", date="2024-05-01", best=68.0,
+                                   laps=8, paths=[real.name]))
+        library.upsert(idx, _entry("GX010065", track=None, date="2024-06-01", best=13.0,
+                                   laps=25, verified=False, paths=[real.name]))
+        library.upsert(idx, _entry("GX010059", track=None, date="2024-07-01", best=23.0,
+                                   laps=4, verified=False, paths=[real.name]))
+        dlg = LibraryDialog(idx, _OpenSpy())
+        items = [dlg.track_filter.itemText(i) for i in range(dlg.track_filter.count())]
+        assert items == [_ALL_TRACKS, "MK", _UNKNOWN_TRACK], items
+        dlg.track_filter.setCurrentText(_UNKNOWN_TRACK)
+        assert _visible_rows(dlg) == {"2024-06-01", "2024-07-01"}
+        dlg.track_filter.setCurrentText("MK")
+        assert _visible_rows(dlg) == {"2024-05-01"}
+        # The search box reaches them too, by the label the cell shows.
+        dlg.track_filter.setCurrentText(_ALL_TRACKS)
+        dlg.search.setText("unknown")
+        assert _visible_rows(dlg) == {"2024-06-01", "2024-07-01"}
+        dlg.deleteLater()
+
+
+def test_dialog_track_cell_tooltip_leads_with_its_own_full_label():
+    """QA L11-07: Track is the one STRETCH column, so at the dialog's own 489 px minimum width it
+    elides ("unknown track  · provi…" — 172 px of text in a 141 px content box) with a tooltip that
+    named only the FILE. The tooltip must lead with the cell's own full label, and still carry the
+    recording's filename + path (QA L11-04)."""
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        idx = library.empty_index()
+        library.upsert(idx, _entry("GX010065", track=None, date="2026-08-30", best=13.073,
+                                   laps=25, verified=False, paths=[real.name]))
+        library.upsert(idx, _entry("GX010062", track="Daytona Milton Keynes", date="2026-05-24",
+                                   best=68.771, laps=21, paths=[real.name]))
+        dlg = LibraryDialog(idx, _OpenSpy())
+        dlg.resize(dlg.minimumSizeHint())        # the narrowest width Qt will let the dialog reach
+        name = os.path.basename(real.name)
+        for r in range(dlg.table.rowCount()):
+            it = dlg.table.item(r, _COL_TRACK)
+            tip = it.toolTip()
+            assert tip.startswith(it.text()), (it.text(), tip)   # the elided tail is recoverable
+            assert name in tip and real.name in tip, tip         # …and it still names the file
+        # The other columns keep the plain file identity (they size to their contents, so they
+        # never elide — repeating their own text would be noise).
+        assert dlg.table.item(0, _COL_DATE).toolTip().startswith(name)
+        dlg.deleteLater()
+
+
+def test_dialog_header_and_clear_confirm_use_the_module_pluralizer():
+    """QA L11-09: the header and the Clear-library confirm used the "(s)" placeholder plural two
+    lines above the same module's own correct _plural helper."""
+    from PySide6.QtWidgets import QMessageBox
+    one = library.empty_index()
+    library.upsert(one, _entry("A", track="MK", date="2024-05-01", best=70.0, paths=[]))
+    dlg1 = LibraryDialog(one, _OpenSpy())
+    assert dlg1._title.text() == "1 analyzed recording"       # singular, not "1 recording(s)"
+    dlg1.deleteLater()
+
+    idx = library.empty_index()
+    for i, stem in enumerate(("A", "B", "C")):
+        library.upsert(idx, _entry(stem, track="MK", date=f"2024-05-0{i + 1}", best=70.0, paths=[]))
+    seen = []
+    orig = QMessageBox.question
+    QMessageBox.question = staticmethod(lambda *a, **k: (seen.append(a[2]), QMessageBox.No)[1])
+    try:
+        dlg = LibraryDialog(idx, _OpenSpy(), clear_library=library.empty_index)
+        assert dlg._title.text() == "3 analyzed recordings"
+        dlg._on_clear_library()
+    finally:
+        QMessageBox.question = orig
+    assert seen and "Forget all 3 recordings from the library?" in seen[0], seen
+    assert "(s)" not in seen[0]
+    dlg.deleteLater()
 
 
 def test_dialog_progress_summary_line_for_selected_track():

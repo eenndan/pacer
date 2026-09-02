@@ -102,6 +102,21 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   data coordinates on a pixel-space item, ~1.8e9 px off-screen) and stays centred on resize.
 - The library's progress line no longer counts your FIRST session on a track as a personal
   best ("1 session · 1 PB"); PBs now count only sessions that beat the running best.
+- The PB chart's axis reads lap times, not decimal seconds — it printed "69" / "70.5" under
+  "best lap (s)" while the Best lap column 40 px above it read "1:09.905". Both now come from
+  the app's one time formatter.
+- A library search that matches nothing no longer blanks the dialog. It says which term matched
+  none and how to get back, the header counts what is on screen ("0 of 3 analyzed recordings"
+  rather than still claiming 3), and the chart drops the de-selected recording's axis range
+  instead of leaving its numbers labelling an empty grid.
+- The track filter can reach unknown-track recordings. It listed only named circuits, so on a
+  typical library — where the registry knows about one track — most rows could not be filtered
+  to at all; there is now an "Unknown track" bucket, and the search box matches the label those
+  rows actually show.
+- A Track cell that is too narrow for its label now hovers to the whole thing (it elides by 31 px
+  at the dialog's own minimum width, and its tooltip previously named only the file).
+- The library header and the Clear-library confirm say "3 analyzed recordings" / "Forget all 3
+  recordings" instead of the "(s)" placeholder plural, matching the summary line below them.
 - Share-card overflow, leaked chrome in map grabs, plot-overlay and corner-label
   collisions, and self-contradicting coaching copy.
 - Demo-download UI freeze (socket timeout); single-flight loads + a GIL-friendly worker
