@@ -78,6 +78,19 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   count — and a mismatch is refused with both lengths named ("counted laps here run ~203 m; the
   reference lap runs ~740 m"), the local best lap left untouched, and the fix pointed at: drag the
   start/finish line onto the right place and load the reference again.
+- **Saving a track can no longer wipe every circuit you had already saved.** If `tracks.json`
+  couldn't be read — a crash mid-write, a hand-edit through Reveal in Finder, or a file written by
+  a newer build of Pacer — Pacer fell back to an empty database, and the very next ordinary
+  **File ▸ Save as track…** rewrote the file from that empty view: three saved circuits went to
+  one, with no copy kept, no warning, and a status bar that reported success. Every start/finish
+  line, sector line and location anchor in that file was gone, and the recordings that used to
+  auto-detect their track went back to "lap timing provisional". Now a save that is about to
+  overwrite a database Pacer could not read in full copies the original to `tracks.json.bak`
+  first, so nothing is ever lost silently — the same protection the session library has had since
+  its own schema bump. A database written by a **newer** version of Pacer is no longer treated as
+  corrupt either: its circuits are read as far as this build understands them and survive the
+  downgrade, and dropping a single malformed circuit to repair the file now keeps the original
+  alongside it.
 - **Opening a second recording over one already loaded no longer bricks the window.** On any
   recording big enough for the "Loading telemetry…" card to appear (about half a second), that card
   replaced the live view — which destroys it — and the swap back to the newly loaded session then

@@ -7,6 +7,18 @@ atomic write, file-level corruption -> safe empty + one bad entry dropped (the r
 PACER-FREE BY CONTRACT — pure path resolution, schema validation, lat/lon math and JSON I/O;
 the lat/lon <-> local-metre conversion lives in session.py / tracks.py.
 
+A circuit here is DURABLE HISTORY — a start/finish line the user placed by hand, that every
+future recording at that location inherits — so a read fallback must never become a WRITE that
+destroys it. Two guarantees, both borrowed from ``studio.library`` (which grew them first) after
+one ordinary ``Save as track…`` over a half-written file emptied a three-circuit DB:
+
+  * a ``version`` that is not this build's is read BEST-EFFORT (every entry that still validates
+    is kept), NOT treated as corruption — a file from a newer build survives a downgrade;
+  * before ``save`` overwrites a file this build could not round-trip in full — unreadable, a
+    different schema version, or holding an entry that failed validation — the original bytes are
+    copied to ``tracks.json.bak`` (``_backup_unsafe``), so nothing is ever silently lost. Ask
+    ``backup_pending()`` BEFORE the write to also TELL the user it happened.
+
 A track entry is location-anchored: its timing lines are stored in lat/lon so they map onto ANY
 recording of that circuit (via the recording's own CoordinateSystem), and it carries a detection
 centroid + bbox so a fresh recording auto-detects the track on load.
@@ -39,6 +51,7 @@ import json
 import logging
 import math
 import os
+import shutil
 
 _log = logging.getLogger(__name__)
 
@@ -104,8 +117,10 @@ def db_path() -> str:
 
 
 def empty_db() -> dict:
-    """A fresh, valid, empty DB — the safe default every corruption path returns to (the seed is
-    layered on top by ``detect``, NOT stored here, so a user's file only ever holds user tracks)."""
+    """A fresh, valid, empty DB — the safe default a FILE-level corruption falls back to (the seed
+    is layered on top by ``detect``, NOT stored here, so a user's file only ever holds user
+    tracks). A read fallback only: ``save`` backs the unreadable file up before this empty view
+    could ever overwrite it."""
     return {"version": VERSION, "tracks": []}
 
 
@@ -197,39 +212,153 @@ def _norm_entry(e: dict) -> dict:
     }
 
 
-def load(path: str | None = None) -> dict:
-    """Load + validate the track DB, returning the normalized dict. File-level corruption
-    (absent / unreadable / not JSON / not a dict / wrong version / non-list ``tracks``) ->
-    ``empty_db()``; a single malformed entry is dropped (count logged), the rest kept. `path`
-    defaults to ``db_path()``."""
-    if path is None:
-        path = db_path()
+def _is_loadable_dict(path: str) -> tuple[bool, dict | None]:
+    """(readable_json_object, parsed) for `path`: True/parsed when the file exists and parses to a
+    JSON object, else (False, None). The seam ``load`` and ``_lossy_to_overwrite`` share, so
+    "genuine file-level corruption" is decided in exactly ONE place — the two must never disagree
+    about whether a file was readable, or a save would skip the backup for a file it then wipes.
+    Mirrors ``library._is_loadable_dict``."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
+        return False, None
+    if not isinstance(data, dict):
+        return False, None
+    return True, data
+
+
+def _schema_version(data: dict) -> int | None:
+    """The file's ``version`` when it is a real schema number (a plain int), else None. A missing
+    or non-int version is untrustworthy SHAPE, not a version, so the caller treats it as
+    corruption; bool is an int subclass and is rejected explicitly."""
+    v = data.get("version")
+    if isinstance(v, bool) or not isinstance(v, int):
+        return None
+    return v
+
+
+def load(path: str | None = None) -> dict:
+    """Load + validate the track DB, returning the normalized dict. NEVER discards a circuit it
+    can still read:
+
+      * a ``version`` that is not this build's is read BEST-EFFORT (every entry that still
+        validates is kept, unknown fields ignored) rather than treated as corruption — a DB
+        written by a newer build survives a downgrade instead of coming back empty. ``save``
+        copies the file to ``<path>.bak`` before re-stamping it to this build's VERSION, and a
+        real schema bump adds its forward transform here (a version bump must MIGRATE, never
+        wipe — the rule ``library`` already states);
+      * a single malformed entry is dropped (count logged), the rest kept.
+
+    Only genuine FILE-level corruption (absent / unreadable / not JSON / not a dict / missing or
+    non-int ``version`` / non-list ``tracks``) -> ``empty_db()`` — and even then the original
+    bytes are copied to ``<path>.bak`` before any write replaces them, so an empty read can no
+    longer become permanent loss. `path` defaults to ``db_path()``."""
+    if path is None:
+        path = db_path()
+    ok, data = _is_loadable_dict(path)
+    if not ok:
         return empty_db()
-    if not isinstance(data, dict) or data.get("version") != VERSION:
+    version = _schema_version(data)
+    if version is None:
         return empty_db()
+    if version != VERSION:
+        _log.warning("track_db: %s is schema version %d, not this build's %d — reading it "
+                     "best-effort; save() backs it up before re-stamping it",
+                     path, version, VERSION)
     raw = data.get("tracks")
     if not isinstance(raw, list):
         return empty_db()
     tracks = [e for e in raw if _valid_entry(e)]
     dropped = len(raw) - len(tracks)
     if dropped:
-        # A later save rewrites only the survivors, healing the file.
-        _log.warning("track_db: dropped %d malformed track%s of %d from %s",
-                     dropped, "" if dropped == 1 else "s", len(raw), path)
+        # A later save rewrites only the survivors, healing the file — with the original kept as
+        # a .bak first (_backup_unsafe), so the dropped row is recoverable rather than gone.
+        _log.warning("track_db: dropped %d malformed track%s of %d from %s (the original is "
+                     "copied to %s.bak before the next save rewrites it)",
+                     dropped, "" if dropped == 1 else "s", len(raw), path,
+                     os.path.basename(path))
     return {"version": VERSION, "tracks": [_norm_entry(e) for e in tracks]}
+
+
+def _lossy_to_overwrite(path: str) -> bool:
+    """True when rewriting `path` from ``load(path)``'s view would LOSE something the file holds —
+    the one condition that earns a ``.bak``. False for a healthy file that round-trips, so the
+    ordinary save never churns a backup.
+
+    Lossy in exactly the shapes that destroyed circuits in the field:
+      * the file does not parse to a JSON object, its ``version`` is missing / not an int, or
+        ``tracks`` is not a list — ``load`` returns ``empty_db()``, so the save writes an EMPTY DB
+        over every circuit the file held;
+      * ``version`` is not this build's — ``load`` reads it best-effort and the save re-stamps it,
+        dropping any field this build does not know;
+      * one or more entries fail validation — ``load`` keeps the rest and the save persists only
+        the survivors. Healing the file is defensible; doing it without keeping the original
+        is not."""
+    ok, data = _is_loadable_dict(path)
+    if not ok:
+        return True
+    if _schema_version(data) != VERSION:
+        return True
+    raw = data.get("tracks")
+    if not isinstance(raw, list):
+        return True
+    return not all(_valid_entry(e) for e in raw)
+
+
+def backup_pending(path: str | None = None) -> str | None:
+    """The ``<path>.bak`` the next ``save`` would leave behind, or None when the stored DB
+    round-trips cleanly. The pre-save question a UI asks — the same idiom as ``replaces`` — so it
+    can TELL the user that some of their saved circuits could not be read and name where the
+    rescued copy went. `path` defaults to ``db_path()``.
+
+    A ``.bak`` nobody is told about is only half a rescue: it makes the loss RECOVERABLE, not
+    VISIBLE. This is the hook that closes that half; ``save`` writes the copy either way, so a
+    caller that never asks still cannot destroy anything irrecoverably."""
+    if path is None:
+        path = db_path()
+    return path + ".bak" if os.path.exists(path) and _lossy_to_overwrite(path) else None
+
+
+def _backup_unsafe(path: str) -> str | None:
+    """Before ``save`` OVERWRITES an on-disk DB this build could not round-trip in full, copy it to
+    a ``<path>.bak`` sidecar so the user's original circuits are never silently lost; returns the
+    backup path written, else None. Mirrors ``library._backup_unsafe``, which the session index has
+    had since PR #55 — the track DB shipped without it, and one ordinary Save-as-track over a
+    half-written file destroyed three circuits' start/finish lines with no copy and no warning.
+
+    Best-effort, and it MUST NOT block the write: a failed copy only logs (a save that keeps the
+    app usable beats refusing to save because the backup slot is unwritable). ``shutil.copy2``
+    preserves mtime; the ``.bak`` is overwritten each time, so it mirrors the last replaced-yet-
+    unreadable file rather than accumulating — and a healthy file never touches it, so the copy
+    of a bad file survives every later save."""
+    if not os.path.exists(path) or not _lossy_to_overwrite(path):
+        return None
+    dest = path + ".bak"
+    try:
+        shutil.copy2(path, dest)
+    except OSError as exc:
+        _log.warning("track_db: could not back up %s before overwrite (%r)", path, exc)
+        return None
+    _log.warning("track_db: %s could not be read in full — copied it to %s before overwriting",
+                 os.path.basename(path), os.path.basename(dest))
+    return dest
 
 
 def save(db: dict, path: str | None = None) -> None:
     """Write the DB atomically (temp file + ``os.replace``) so a crash mid-write can't leave a
     truncated DB. Creates the app-support dir if missing. `path` defaults to ``db_path()``.
-    Raises OSError on an unwritable destination."""
+    Raises OSError on an unwritable destination.
+
+    DATA-SAFETY: before overwriting an existing file this build could not round-trip (unreadable,
+    a different schema version, or holding an entry that failed validation), the original is first
+    copied to a ``tracks.json.bak`` sidecar (``_backup_unsafe``) — so no ordinary Save-as-track
+    can destroy circuits it never managed to read. Call ``backup_pending()`` BEFORE this to also
+    tell the user it happened."""
     if path is None:
         path = db_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    _backup_unsafe(path)
     out = {"version": VERSION, "tracks": [_norm_entry(e) for e in db.get("tracks", [])]}
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -326,7 +455,12 @@ def save_track(entry: dict, path: str | None = None, *, replace: bool = False) -
     REFUSES, with ``TrackNameTaken``, to overwrite a different circuit stored under the same name
     (see ``_clash``): that write is silent data loss — the other track's start line, its sector
     lines and its GPS anchor, with no undo and no second copy. ``replace=True`` is the confirmed
-    path; refining the lines of the track already saved at this location never needs it."""
+    path; refining the lines of the track already saved at this location never needs it.
+
+    Where the name clash is REFUSED (the caller can name what is at risk), a DB the build could
+    not read is instead written THROUGH — refusing there would leave the user unable to save any
+    track at all until they hand-repaired a file the app never shows them. ``save`` keeps their
+    original bytes as ``tracks.json.bak`` instead; ``backup_pending()`` says so beforehand."""
     db = load(path)
     norm = _norm_entry(entry)
     if not replace:
