@@ -179,6 +179,82 @@ class _SlowSession:
         raise RuntimeError(f"Failed to open file: {paths[0] if paths else ''}")
 
 
+def _sip_alive(obj) -> bool:
+    """True while `obj`'s C++ object still exists (PySide6 raises RuntimeError on a deleted one)."""
+    try:
+        obj.objectName()
+    except RuntimeError:
+        return False
+    return True
+
+
+def test_the_loading_card_disposes_the_view_it_replaces():
+    """W2R-01: an ordinary second File ▸ Open over a working session left the window PERMANENTLY on
+    "Loading telemetry…" — the freshly-loaded session unreachable behind a card carrying nothing
+    but a Cancel, and no way back short of quitting.
+
+    The ORDERING is the bug. `setCentralWidget(card)` takes ownership of the widget it replaces, so
+    by the time `_build_ui` ran its documented first act — "dispose the outgoing view" — that view
+    was already destroyed. `PlayerPane.dispose()` touched `self._seam_watchdog`, a QTimer child of
+    the destroyed pane, and the RuntimeError propagated out of `_on_session_loaded`, past
+    `_build_ui`'s own `setCentralWidget(new view)` and past `_update_reference_status()`.
+
+    So the contract is: the card disposes the view it is about to replace, WHILE it is still alive,
+    and clears `self.view`. Only a load slower than LOAD_PLACEHOLDER_MS raises that card, which is
+    why nothing caught it: the failure path (L10-01, #136) and the Cancel path (L10-06) were both
+    covered — the SUCCESS path through the same card was not.
+    """
+    win, view = _window()
+    win.resize(1440, 900)
+    win.show()
+    _APP.processEvents()
+    assert win.centralWidget() is view
+
+    disposed = {"n": 0}
+    real_dispose = view.dispose
+    view.dispose = lambda: (disposed.__setitem__("n", disposed["n"] + 1), real_dispose())
+
+    win._show_loading_placeholder(["/tmp/GX010099.MP4"], on_cancel=lambda: None)
+
+    assert disposed["n"] == 1, \
+        "the loading card replaced the live view without disposing it first — its decoder and " \
+        "g-meter overlay outlive it, and _build_ui's own dispose then runs on a dead object"
+    assert win.view is None, \
+        "self.view still points at the view the card just took ownership of; _build_ui will " \
+        "dispose a deleted C++ object and strand the window on the card"
+    assert win.centralWidget() is not view
+    win.close()
+    _APP.processEvents()
+    print("test_the_loading_card_disposes_the_view_it_replaces OK")
+
+
+def test_build_ui_survives_a_view_qt_already_deleted():
+    """Belt and braces for the same crash. Even if something replaces the central widget without
+    going through _dispose_view, the teardown must not raise: a dispose that can raise is a
+    dispose that strands the window, which is precisely how a reload used to brick it.
+
+    Driven at the level that actually failed — PlayerPane.dispose() with its _seam_watchdog
+    destroyed — because the fix there is subtle: the guarded steps have to be LAMBDAS, since
+    resolving `self._seam_watchdog.stop` on a deleted object raises at attribute access, outside
+    any try that holds bound methods.
+    """
+    win, view = _window()
+    pane = view.video.pane
+    # shiboken6.delete, not deleteLater: the deferred delete needs a real event-loop pass, and a
+    # test that silently left the object ALIVE would assert nothing at all.
+    import shiboken6
+    shiboken6.delete(pane._seam_watchdog)
+    assert not _sip_alive(pane._seam_watchdog), \
+        "the watchdog is still alive — this test would pass on the unguarded teardown"
+
+    pane.dispose()          # must not raise
+    win._dispose_view()     # nor must the window-level teardown
+    assert win.view is None
+    win.close()
+    _APP.processEvents()
+    print("test_build_ui_survives_a_view_qt_already_deleted OK")
+
+
 def test_loading_card_offers_a_cancel_that_hands_the_session_back():
     """The loading card must carry a Cancel, and it must return the user to the session they had —
     with the in-flight load's result dropped, not applied late over the top of it."""
@@ -351,6 +427,8 @@ def test_dropping_a_folder_of_chapters_opens_it():
 def _run_all():
     test_open_demo_keeps_the_event_loop_alive_and_says_it_is_working()
     test_open_demo_ignores_a_result_the_user_already_overtook()
+    test_the_loading_card_disposes_the_view_it_replaces()
+    test_build_ui_survives_a_view_qt_already_deleted()
     test_loading_card_offers_a_cancel_that_hands_the_session_back()
     test_cancel_before_any_session_returns_to_the_welcome_state()
     test_zero_lap_sentence_is_the_same_on_the_bar_as_in_the_panel()
