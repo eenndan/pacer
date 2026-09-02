@@ -1001,6 +1001,22 @@ class LapTable(QWidget):
         self.table.blockSignals(False)
         self._apply_current_lap()
 
+    def refresh_timing_trust(self):
+        """Re-render everything this table keys on the session's TRUST/QUALITY flags — the muted
+        italic start-line cells, the ★ best-lap mark, the green best lap and the purple session-best
+        splits — without re-reading the laps.
+
+        The rows themselves cannot have moved: the trust flags say how authoritative the existing
+        times are, not what they are. So this is _apply_highlights (which rewrites every cell's
+        foreground/font/tooltip AND, via _apply_current_lap, every Lap cell's text), not refresh().
+
+        Exists because the flags CAN flip with no re-segmentation behind it: File ▸ Save as track…
+        promotes the current lines into a named track, which makes the session Verified while the
+        table's rows stay identical. That path left the lap in provisional italics with the ★
+        withheld, contradicting the map's already-cleared trust strip (QA W7-03). Driven by
+        CentralView.refresh_timing_trust."""
+        self._apply_highlights()
+
     def _lap_cell_text(self, lap_id, on: bool) -> str:
         """The Lap-cell text for `lap_id`: a '▶ ' prefix when it's the current (playing) lap, a '★ '
         mark when it's the overall best lap (the NON-COLOUR redundancy for the green best-lap row —
