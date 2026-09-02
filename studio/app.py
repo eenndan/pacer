@@ -3,6 +3,7 @@ load; the panel layout lives in CentralView."""
 
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import sys
@@ -870,15 +871,18 @@ class StudioWindow(QMainWindow):
         self._export_menu = menu.addMenu("Export")
         self._export_laps_action = self._export_menu.addAction("Lap times (CSV)…")
         self._export_laps_action.setToolTip(
-            "One row per lap: time, distance, entry speed, sector splits, per-corner metrics")
+            "One row per lap: time, distance, entry speed, sector splits, per-corner metrics. "
+            "Always written in SI units (km/h, m, s) whatever the display setting")
         self._export_laps_action.triggered.connect(self._export_laps_csv)
         self._export_channels_action = self._export_menu.addAction("Lap channels (CSV)…")
         self._export_channels_action.setToolTip(
-            "Per-sample channels of the selected lap: time, position, distance, speed, g")
+            "Per-sample channels of the selected lap: time, position, distance, speed, g. "
+            "Always written in SI units (km/h, m, s) whatever the display setting")
         self._export_channels_action.triggered.connect(self._export_channels_csv)
         self._export_report_action = self._export_menu.addAction("Session report (HTML)…")
         self._export_report_action.setToolTip(
-            "A one-page self-contained report: session stats, lap table, map + chart snapshots")
+            "A one-page self-contained report: session stats, lap table, map + chart snapshots — "
+            "in the speed unit you're reading on screen")
         self._export_report_action.triggered.connect(self._export_report)
         # The shareable lap card (image): the one-tap social output. Two actions — save the PNG,
         # or copy it to the clipboard to paste straight into a chat. Greyed (in _sync_export_menu)
@@ -1451,14 +1455,24 @@ class StudioWindow(QMainWindow):
         """Data portability: open the app-support FOLDER that holds ``library.json`` in Finder, so
         the durable index is findable/copyable. Reveals the DIRECTORY (created lazily on the first
         save; ``os.makedirs`` here so a never-saved library still opens to an existing folder rather
-        than a Finder error). Guarded — a failed open just logs."""
+        than a Finder error).
+
+        Reports BOTH outcomes on the status bar, like its peer "Back up…" one row over: the button
+        is a request to a handler that can decline (``openUrl`` returns False), and nothing else on
+        screen changes when it does — a click that produced silence was indistinguishable from a
+        click that worked."""
         directory = os.path.dirname(library.library_path())
         try:
             os.makedirs(directory, exist_ok=True)
         except OSError as exc:
             print(f"studio: could not open the library folder ({exc!r}).", flush=True)
+            self.statusBar().showMessage(f"could not open {directory}: {exc}", STATUS_MS)
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(directory))
+        if QDesktopServices.openUrl(QUrl.fromLocalFile(directory)):
+            self.statusBar().showMessage(f"revealed {directory} in Finder", STATUS_MS)
+        else:
+            print(f"studio: the system declined to open {directory!r}.", flush=True)
+            self.statusBar().showMessage(f"could not open {directory} in Finder", STATUS_MS)
 
     def _backup_library(self) -> None:
         """Data portability: copy ``library.json`` to a user-chosen path (``QFileDialog`` →
@@ -1683,22 +1697,76 @@ class StudioWindow(QMainWindow):
 
     # ----------------------------------------------------------- data export (F11)
     # File ▸ Export Qt side (the writers are Qt-free in export_data.py).
+
+    # WHY a gated export action is off. A disabled row that describes its feature tells you nothing
+    # about how to reach it, and all of the gated ones did exactly that; Qt keeps showing a disabled
+    # action's tooltip, so this is the only surface a greyed row has. Each string names the
+    # CONDITION and the way out of it.
+    _NO_LAPS_REASON = ("No complete laps in this recording — drag the start/finish line on the map "
+                       "to set where a lap begins, then export.")
+    _PROVISIONAL_REASON = ("This recording's timing is provisional: the start line was auto-fitted, "
+                           "not confirmed by you. Save it as a track (File ▸ Save as track…) to "
+                           "confirm it.")
+    _NO_TRACK_REASON = ("Needs a complete lap and a GPS position — there are no usable timing lines "
+                        "to promote into a reusable track.")
+
+    @staticmethod
+    def _gate_action(action, ok: bool, reason: str) -> None:
+        """Enable/disable `action` and swap its tooltip between the FEATURE description (enabled)
+        and `reason` (disabled). The feature text is stashed on the action the first time through,
+        so the single setToolTip at construction stays the one place a feature is described and the
+        two can't drift apart."""
+        if action.property("featureTip") is None:
+            action.setProperty("featureTip", action.toolTip())
+        action.setEnabled(ok)
+        action.setToolTip(action.property("featureTip") if ok else reason)
+
     def _sync_export_menu(self):
-        """Grey the Export submenu + the video-export action out until a session is loaded.
-        Connected to the File menu's aboutToShow (synced as the menu opens), so neither _load nor
-        the failed-load path needs to reach into the menu."""
+        """Gate every export action on what IT needs. Connected to the File menu's aboutToShow
+        (synced as the menu opens), so neither _load nor the failed-load path needs to reach into
+        the menu.
+
+        THREE predicates, deliberately — one per honest question:
+          * a session at all — the submenu itself (nothing to export before a load);
+          * at least one VALID lap — the four data exports. A recording the start line never
+            segments has no rows to write: "Lap times (CSV)" wrote a header-only file and reported
+            success in a window whose panels read "No complete laps found in this recording.";
+          * VERIFIED timing — the shareable lap card. An auto-fitted start line makes the lap time
+            arbitrary, so it is not a brag; card_data owns that verdict (blocked) and both card
+            actions mirror it.
+
+        The video export sits between the last two: it needs a lap, and on provisional timing it
+        WARNS instead of refusing (see _export_overlay_video) — a provisional clip is still useful
+        to the driver reviewing their own footage, an unverified brag card never is."""
         has = hasattr(self, "session")
         self._export_menu.setEnabled(has)
-        self._export_video_action.setEnabled(has)
-        # The shareable lap card is enabled only when there's a VERIFIED lap to brag about (an
-        # unverified/provisional start line makes the lap time meaningless — never a bragging
-        # card). card_data owns the verdict (blocked); we mirror it onto both card actions.
-        card_ok = has and not self._share_card_blocked()
-        self._share_card_action.setEnabled(card_ok)
-        self._copy_card_action.setEnabled(card_ok)
+        has_laps = has and self._has_valid_laps()
+        for action in (self._export_laps_action, self._export_channels_action,
+                       self._export_report_action, self._export_video_action):
+            self._gate_action(action, has_laps, self._NO_LAPS_REASON)
+        # The lap card also needs the timing to be TRUSTED. With a lap in hand the only thing
+        # card_data can still be blocked on is the provisional start line, so the reason is exact.
+        card_ok = has_laps and not self._share_card_blocked()
+        self._gate_action(self._share_card_action, card_ok,
+                          self._NO_LAPS_REASON if not has_laps else self._PROVISIONAL_REASON)
+        self._gate_action(self._copy_card_action, card_ok,
+                          self._NO_LAPS_REASON if not has_laps else self._PROVISIONAL_REASON)
         # Save-as-track needs USABLE timing lines (≥1 valid lap means the start line actually
-        # segments this trace — the lines are worth promoting to a reusable track).
-        self._save_track_action.setEnabled(self._can_save_track())
+        # segments this trace — the lines are worth promoting to a reusable track). NOT gated on
+        # trust: promoting the lines is precisely how a provisional recording becomes verified, and
+        # the map's own amber banner sends the user here to do it.
+        self._gate_action(self._save_track_action, self._can_save_track(), self._NO_TRACK_REASON)
+
+    def _has_valid_laps(self) -> bool:
+        """True iff the loaded session has at least one COMPLETE lap — the predicate behind every
+        data export, since none of them has a row to write without one. Guarded: any failure reads
+        as 'no laps' so a menu sync can never raise."""
+        if not hasattr(self, "session"):
+            return False
+        try:
+            return bool(self.session.valid_lap_ids())
+        except Exception:  # noqa: BLE001 — the guard must never raise out of a menu sync
+            return False
 
     def _share_card_blocked(self) -> bool:
         """True when a shareable lap card must NOT be offered (no valid/verified lap). Reads the
@@ -1714,10 +1782,10 @@ class StudioWindow(QMainWindow):
         """True iff the current session has usable timing lines to promote into a track: a session
         is loaded, it has valid laps (the start line really segments this trace), and the trace
         carries a location to anchor detection on. Guarded — any failure means 'not saveable'."""
-        if not hasattr(self, "session"):
+        if not self._has_valid_laps():
             return False
         try:
-            return bool(self.session.valid_lap_ids()) and self.session.point_count() > 0
+            return self.session.point_count() > 0
         except Exception:  # noqa: BLE001 — the guard must never raise out of a menu sync
             return False
 
@@ -1730,8 +1798,16 @@ class StudioWindow(QMainWindow):
             self.statusBar().showMessage("no usable timing lines to save as a track", STATUS_MS)
             return
         suggested = self.session.track_name or chapters.recording_label(self._paths) or ""
-        name, ok = QInputDialog.getText(
-            self, "Save as track", "Track name:", text=suggested)
+        # Name the trust state IN the prompt when the lines are still auto-fitted. Saving them is
+        # the documented remedy (the map's amber banner says so), so this must not block — but the
+        # save promotes them into the REUSABLE database, where every future recording here inherits
+        # them, and that is worth one sentence before it happens.
+        prompt = "Track name:"
+        if not self.session.timing_verified:
+            prompt = ("Track name:\n\nThis recording's start/finish line was auto-fitted, not "
+                      "confirmed by you. Saving it makes it the trusted line for every future "
+                      "recording at this location — check it on the map first if you're unsure.")
+        name, ok = QInputDialog.getText(self, "Save as track", prompt, text=suggested)
         name = name.strip()
         if not ok or not name:
             return
@@ -1739,7 +1815,17 @@ class StudioWindow(QMainWindow):
             centroid, bbox = self.session.track_location()
             start, sectors = self.session.timing_lines_latlon()
             entry = track_db.make_entry(name, centroid, start, sectors, bbox=bbox)
-            track_db.save_track(entry)
+            # A stored track of the same name anchored at a DIFFERENT circuit would be destroyed by
+            # this write — its start line, its sector lines and its anchor, with no undo (PR #153).
+            # track_db refuses that silently-destructive save; ask first and name what is at risk,
+            # matching the library's "Forget this recording" confirm convention. `replaces` is the
+            # pre-save question, `replace=True` the confirmed path.
+            at_risk = track_db.replaces(entry)
+            if at_risk is not None and not self._confirm_replace_track(name, at_risk, centroid):
+                self.statusBar().showMessage(
+                    f"kept the track already saved as '{name}'", STATUS_MS)
+                return
+            track_db.save_track(entry, replace=at_risk is not None)
         except (OSError, ValueError) as exc:
             print(f"studio: could not save track {name!r}: {exc}", flush=True)
             self.statusBar().showMessage(f"could not save track: {exc}", STATUS_MS)
@@ -1750,8 +1836,35 @@ class StudioWindow(QMainWindow):
         self.session.track_name = name
         if getattr(self, "view", None) is not None:
             self.view.refresh_timing_trust()
-        self.statusBar().showMessage(f"saved track '{name}' — future recordings here auto-detect it", STATUS_MS)
-        print(f"studio: saved track {name!r} to the track database", flush=True)
+        # A replace and a create used to read identically; the message now says which happened, so
+        # the one that destroyed another circuit's lines is visible after the fact too.
+        verb = "replaced" if at_risk is not None else "saved"
+        self.statusBar().showMessage(
+            f"{verb} track '{name}' — future recordings here auto-detect it", STATUS_MS)
+        print(f"studio: {verb} track {name!r} in the track database", flush=True)
+
+    def _confirm_replace_track(self, name: str, at_risk: dict, centroid) -> bool:
+        """Ask before a Save-as-track OVERWRITES a different circuit stored under the same name
+        (PR #153's `replaces` → this confirm). Leads with HOW FAR AWAY the stored one is, because
+        that is the one thing that separates "I'm refining the lines of the track I'm standing at"
+        (never asked — track_db doesn't count the same place as a clash) from "I'm about to destroy
+        a circuit 79 km away". Same Yes/No + default-No shape as the library's "Forget this
+        recording" confirm; the distance is best-effort (a malformed stored centroid just drops the
+        number, never the question)."""
+        where = ""
+        try:
+            lat, lon = at_risk["centroid"]
+            metres = track_db.equirect_metres(lat, lon, centroid[0], centroid[1])
+            where = f", about {metres / 1000:.0f} km from here"
+        except (KeyError, TypeError, ValueError):  # a stored entry we can't measure against
+            pass
+        return QMessageBox.question(
+            self, "Replace track",
+            f"A different circuit is already saved as “{name}”{where}.\n\n"
+            "Saving replaces its start line, its sector lines and its location. There is no undo, "
+            "and recordings from that circuit will stop auto-detecting their timing lines.\n\n"
+            "Replace it?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
 
     def _export_default(self, suffix: str) -> str:
         """Default save path: next to the recording, named `<stem><suffix>` (e.g.
@@ -1775,8 +1888,21 @@ class StudioWindow(QMainWindow):
         lap = getattr(view, "_corner_lap", None) if view is not None else None
         return lap if lap is not None else self.session.best_lap_id()
 
-    def _export_laps_csv(self):
+    def _no_laps_to_export(self) -> bool:
+        """True (with the reason on the status bar) when there is nothing to export: no session, or
+        a recording the start line never segmented. The click-time twin of _sync_export_menu's
+        has_laps gate — the menu greys these actions out, this is the backstop for a shortcut or a
+        stale menu state, and it replaces the old silent success on a header-only file."""
         if not hasattr(self, "session"):  # defensive: action fired with nothing loaded
+            return True
+        if not self._has_valid_laps():
+            self.statusBar().showMessage(
+                "no complete laps in this recording — nothing to export", STATUS_MS)
+            return True
+        return False
+
+    def _export_laps_csv(self):
+        if self._no_laps_to_export():
             return
         path = self._export_save_path("Export lap times", "_laps.csv", "CSV files (*.csv)")
         if not path:
@@ -1799,7 +1925,7 @@ class StudioWindow(QMainWindow):
             self.statusBar().showMessage(f"exported {os.path.basename(path)}", STATUS_MS)
 
     def _export_report(self):
-        if not hasattr(self, "session"):
+        if self._no_laps_to_export():
             return
         path = self._export_save_path("Export session report", "_report.html",
                                       "HTML files (*.html)")
@@ -1807,13 +1933,18 @@ class StudioWindow(QMainWindow):
             return
         # Snapshot the map + charts as they are on screen right now (QWidget.grab) — the
         # report writer itself stays Qt-free and just embeds the bytes. The panels are reached
-        # through the live central view.
-        images = [("Track map", self._grab_png(self.view.map)),
+        # through the live central view. The map goes through the REPORT-flavoured grab so the
+        # document doesn't carry the app's editing chrome (see _grab_report_map_png).
+        images = [("Track map", self._grab_report_map_png(self.view.map)),
                   ("Speed · Δ to best", self._grab_png(self.view.plots))]
+        # The report is a HUMAN document whose embedded chart axis and map colour bar already read
+        # in the display unit, so its lap table must too — a km/h table under an mph chart put two
+        # different numbers for the same lap on one page. (The CSVs stay canonical SI: they are
+        # machine-readable files, and export_data's writers pass no unit.)
         if self._run_export(lambda: export_data.write_report_html(
                 path, self.session,
                 source_label=chapters.recording_label(self._paths) or "session",
-                images=images), path):
+                images=images, unit=self._speed_unit), path):
             self.statusBar().showMessage(f"exported {os.path.basename(path)}", STATUS_MS)
 
     def _run_export(self, write, path: str) -> bool:
@@ -1872,6 +2003,46 @@ class StudioWindow(QMainWindow):
         with grab_clean():
             return self._grab_png(map_view)
 
+    def _grab_report_map_png(self, map_view) -> bytes:
+        """Grab the MapView to PNG for the HTML REPORT: the app's pure-INTERACTION chrome hidden,
+        the explanatory "Map key" KEPT. The report used to embed the raw live grab, so the exported
+        document carried the coral video-position marker and the orange start-line drag handles —
+        editing affordances that mean nothing in a document, sitting on top of the corner labels.
+
+        Built on the share card's ``grab_clean`` context (ONE definition of "interaction chrome", so
+        a future timing-line type is covered here too), then the key is put back for the duration of
+        the grab: it is the only explanation the report has for the brake / corner-apex glyphs its
+        own map paints, and unlike a self-contained brag image a document has nowhere else to carry
+        it. Its "Drag = start / sector line" row goes with the chrome — it describes a gesture a
+        still image can't offer, pointing at handles this grab just hid. Falls back to the plain
+        grab for a bare widget (tests) with no such context; every legend touch is best-effort,
+        because chrome must never fail an export."""
+        grab_clean = getattr(map_view, "grab_clean", None)
+        if grab_clean is None:
+            return self._grab_png(map_view)
+        with grab_clean():
+            key = getattr(map_view, "_map_key", None)
+            rows = getattr(key, "_ROWS", None)
+            shadowed = False
+            try:
+                if rows is not None:
+                    # Instance-level shadow of the legend's class-level row list; `_relayout` sizes
+                    # the plate to the new row count and the map re-pins it to its corner.
+                    key._ROWS = tuple(r for r in rows if r[0] != "start")
+                    shadowed = True
+                    key._relayout()
+                    map_view._reposition_key()
+                    key.show()
+            except Exception as exc:  # noqa: BLE001 — a legend tweak never fails an export
+                print(f"studio: report map key not adjusted ({exc!r}).", flush=True)
+            try:
+                return self._grab_png(map_view)
+            finally:
+                if shadowed:
+                    del key._ROWS  # back to the class attribute
+                    key._relayout()
+                    map_view._reposition_key()
+
     def _export_share_card(self):
         """File ▸ Export ▸ "Lap card (image)…": render the card and save it as a PNG."""
         image = self._build_share_card()
@@ -1924,10 +2095,69 @@ class StudioWindow(QMainWindow):
     _EXPORT_QUALITY_OPTIONS = [
         ("High — larger file", "high"), ("Standard — smaller file", "standard"),
     ]
+    # The picker's two choices persist across relaunches like every other UI choice (the unit, the
+    # palette, the lap-panel tab). Kept as call-site keys on prefs' generic get/set: the pair means
+    # nothing outside this dialog, and prefs.py is a store, not a registry of every screen's state.
+    _PREF_EXPORT_RES = "export_res_idx"
+    _PREF_EXPORT_QUALITY = "export_quality_idx"
+
+    # SIZE ESTIMATE. The dialog sells a file-size trade-off ("larger file" / "smaller file"), so it
+    # has to put a number on it — the two presets really are ~3x apart. The estimate is derived per
+    # encoder, never a stored megabyte figure, because the encoder choice is a property of the
+    # MACHINE (a box where no VideoToolbox session opens falls back to libx264 and lands several
+    # times larger for the same preset):
+    #   * VideoToolbox is bitrate-targeted, so export_video.vt_target_bitrate IS the answer;
+    #   * libx264 is CRF-targeted and has no bitrate to read, so these are bits per pixel per frame
+    #     measured on real GoPro footage with the overlays burned in (CRF 20 -> 0.68 at 1080p,
+    #     CRF 23 -> 0.51 at 720p). A CRF stream's real size follows how much the picture MOVES, so
+    #     this is an order of magnitude, and the dialog says "about".
+    _X264_BPP = {20: 0.68, 23: 0.51}
+    _X264_BPP_FALLBACK = 0.60         # an unknown CRF sits between the two measured points
+    _EXPORT_ASPECT = 16 / 9           # assumed for the width; GoPro's landscape modes are 16:9
+
+    def _export_pref_index(self, key: str, default: int, count: int) -> int:
+        """One persisted combo index, clamped into `[0, count)` — the guarded-accessor shape the
+        rest of prefs uses, so a stale value from an older build (a resolution that no longer
+        exists) opens the dialog on the default instead of raising."""
+        try:
+            value = prefs.get(key, default)
+        except Exception:  # noqa: BLE001 — an unreadable pref never blocks an export
+            return default
+        return value if isinstance(value, int) and 0 <= value < count else default
+
+    def _remember_export_prefs(self, res_idx: int, quality_idx: int) -> None:
+        """Persist the picker's two choices. Fully guarded, like set_last_dir: remembering a
+        preference must never disrupt an export the user has already confirmed."""
+        try:
+            prefs.set(self._PREF_EXPORT_RES, int(res_idx))
+            prefs.set(self._PREF_EXPORT_QUALITY, int(quality_idx))
+        except OSError as exc:
+            print(f"studio: export preset not remembered ({exc!r}).", flush=True)
+
+    def _export_size_hint(self, dur: float, out_height: int, quality: str) -> str:
+        """The second line of the picker's hint: about how big this export lands, how many frames
+        it has to render, and WHICH encoder will do it. Derived (see _X264_BPP) — never a stored
+        megabyte figure, because the encoder is a property of the machine. "" when there is nothing
+        honest to say: an unknown lap duration, or "Source", whose pixel count we can't know without
+        an ffprobe this dialog deliberately does not run."""
+        fps = export_video.OverlayConfig.fps_cap or 30.0
+        if not (dur > 0) or out_height >= 99999:
+            return ""
+        frames = int(math.ceil(dur * fps))
+        out_w = int(round(out_height * self._EXPORT_ASPECT))
+        bpp, crf = export_video.quality_params(quality)
+        encoder = export_video.resolve_encoder("auto")
+        if encoder == export_video.VT_H264:
+            bits_per_s = export_video.vt_target_bitrate(out_w, out_height, fps, bpp)
+        else:  # libx264 is CRF-driven: no target bitrate exists, so use the measured bpp
+            bits_per_s = out_w * out_height * fps * self._X264_BPP.get(crf, self._X264_BPP_FALLBACK)
+        megabytes = bits_per_s * dur / 8 / 1e6
+        return (f"About {megabytes:.0f} MB — {frames} frames to render at {fps:g} fps "
+                f"with {encoder}. Real size follows how much the footage moves.")
 
     def _ask_export_options(self, lap: int):
         """Modal resolution + quality picker returning an export_video.OverlayConfig, or None on
-        cancel. The last choice is remembered on the window."""
+        cancel. Both choices persist across relaunches (prefs), like the unit and the palette."""
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Export overlay video — lap {lap_label(lap)}")
         dlg.setMinimumWidth(400)
@@ -1965,16 +2195,20 @@ class StudioWindow(QMainWindow):
         res_combo = QComboBox(dlg)
         for label, _h in self._EXPORT_RES_OPTIONS:
             res_combo.addItem(label)
-        res_combo.setCurrentIndex(getattr(self, "_export_res_idx", 1))   # default 1080p
+        res_combo.setCurrentIndex(                                        # default 1080p
+            self._export_pref_index(self._PREF_EXPORT_RES, 1, len(self._EXPORT_RES_OPTIONS)))
         q_combo = QComboBox(dlg)
         for label, _q in self._EXPORT_QUALITY_OPTIONS:
             q_combo.addItem(label)
-        q_combo.setCurrentIndex(getattr(self, "_export_quality_idx", 0))  # default High
+        q_combo.setCurrentIndex(                                          # default High
+            self._export_pref_index(self._PREF_EXPORT_QUALITY, 0, len(self._EXPORT_QUALITY_OPTIONS)))
         form.addRow("Resolution", res_combo)
         form.addRow("Quality", q_combo)
         col.addLayout(form)
 
-        # States the target height + never-upscale rule (no ffprobe here); matches output_size().
+        # States the target height + never-upscale rule (no ffprobe here; matches output_size()),
+        # THEN what the two combos actually cost. "Larger file"/"smaller file" named no size at all,
+        # on a choice that spans ~3x — and the default is the expensive end of it.
         hint = QLabel("")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {theme.C.text_muted};")
@@ -1982,11 +2216,18 @@ class StudioWindow(QMainWindow):
 
         def _update_hint():
             h = self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1]
+            quality = self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1]
             if h >= 99999:
-                hint.setText("Output: source resolution (never upscaled).")
+                lines = ["Output: source resolution (never upscaled) — size follows your footage."]
             else:
-                hint.setText(f"Output: up to {h}p tall, source aspect — never upscaled past source.")
+                lines = [f"Output: up to {h}p tall, source aspect — never upscaled past source."]
+            size = self._export_size_hint(dur, h, quality)
+            if size:
+                lines.append(size)
+            hint.setText("  ".join(lines))
+        # BOTH combos, not just Resolution: the quality choice is the one the copy sells hardest.
         res_combo.currentIndexChanged.connect(_update_hint)
+        q_combo.currentIndexChanged.connect(_update_hint)
         _update_hint()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dlg)
@@ -1997,7 +2238,7 @@ class StudioWindow(QMainWindow):
         if dlg.exec() != QDialog.Accepted:
             return None
         ri, qi = res_combo.currentIndex(), q_combo.currentIndex()
-        self._export_res_idx, self._export_quality_idx = ri, qi   # remember for next time
+        self._remember_export_prefs(ri, qi)   # survives this window, and the relaunch
         out_height = self._EXPORT_RES_OPTIONS[ri][1]
         quality = self._EXPORT_QUALITY_OPTIONS[qi][1]
         # Burn the current display unit + semantic palette into the overlay so the export matches the
@@ -2007,8 +2248,28 @@ class StudioWindow(QMainWindow):
                                           speed_unit=self._speed_unit,
                                           palette=theme.active_palette())
 
+    def _confirm_provisional_video(self) -> bool:
+        """Ask before burning a PROVISIONAL lap time into an MP4. The overlay export is the app's
+        other shareable output, and it used to be the only one exempt from the timing-trust
+        verdict: on a session where card_data() blocks both lap-card actions, this rendered a clip
+        with the lap time painted across it and nothing anywhere in the frame saying the number is
+        estimated.
+
+        It WARNS rather than refusing, because unlike a brag card a provisional clip is still
+        useful — reviewing your own footage doesn't need a verified start line. What it must not be
+        is silent. Default is Cancel, and the way out (save the track) is named."""
+        return QMessageBox.warning(
+            self, "Export overlay video",
+            "This recording's timing is provisional: the start/finish line was auto-fitted, not "
+            "confirmed by you, so the lap time is an estimate.\n\n"
+            "That estimate gets burned into the video, with nothing in the frame to say so — which "
+            "is why the shareable lap card is switched off for this session. Save it as a track "
+            "(File ▸ Save as track…) to confirm the line first.\n\n"
+            "Export anyway?",
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) == QMessageBox.Yes
+
     def _export_overlay_video(self):
-        if not hasattr(self, "session"):
+        if self._no_laps_to_export():
             return
         if not export_video.ffmpeg_available():
             QMessageBox.warning(self, "Export overlay video",
@@ -2024,6 +2285,12 @@ class StudioWindow(QMainWindow):
         win = export_video.lap_window_for_export(self.session, lap) if lap is not None else None
         if win is None:
             self.statusBar().showMessage("no usable lap to export video for", STATUS_MS)
+            return
+        # The MP4 obeys the SAME trust verdict as the lap card (card_data().blocked) — one decision,
+        # every shareable output, no surface exempt. Asked here, after the mechanical guards, so a
+        # machine with no ffmpeg gets the reason it can't export rather than a trust warning first.
+        if self._share_card_blocked() and not self._confirm_provisional_video():
+            self.statusBar().showMessage("video export cancelled", STATUS_MS)
             return
         # Pick resolution + quality FIRST (so a cancel here writes nothing), then the save path.
         config = self._ask_export_options(lap)

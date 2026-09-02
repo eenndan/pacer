@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _synthetic import bare_session, odometer, reset_corner_caches, seed_cols  # noqa: E402
 
-from studio import export_data, gmeter  # noqa: E402
+from studio import export_data, gmeter, units  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
 from studio.corners import Corner  # noqa: E402
 
@@ -357,6 +357,67 @@ def test_report_html_wellformed_with_images():
         assert png == PNG_1PX
 
 
+def test_report_table_follows_the_display_unit(): # noqa: E301
+    """QA L12-01: the report embeds the app's chart + map images, which already read in the display
+    unit ("speed (mph)", "17 … 54 mph"), so its lap table must too — a km/h table 100 px under an
+    mph chart put two different numbers for the same lap on one page. Passing a unit renames AND
+    converts every speed column; nothing else on the page moves."""
+    s = make_session()
+    si_headers, si_rows = export_data.laps_table(s)
+    mph_headers, mph_rows = export_data.laps_table(s, "mph")
+
+    assert [h for h in si_headers if h.endswith("_kmh")] == \
+        ["entry_kmh", "C1_apex_kmh", "C2_apex_kmh"], si_headers
+    assert not [h for h in mph_headers if h.endswith("_kmh")], mph_headers
+    assert [h for h in mph_headers if h.endswith("_mph")] == \
+        ["entry_mph", "C1_apex_mph", "C2_apex_mph"], mph_headers
+    # Only the speed columns move, and they move by exactly the one conversion constant. The
+    # tolerance carries BOTH cells' 3-decimal rounding (0.0005 + 0.0005 x the factor).
+    speed_cols = [i for i, h in enumerate(mph_headers) if h.endswith("_mph")]
+    converted = 0
+    for (_i, si), (_j, mph) in zip(si_rows, mph_rows, strict=True):
+        for col in range(len(si)):
+            if col in speed_cols and si[col]:
+                assert abs(float(mph[col]) - float(si[col]) * units.KMH_TO_MPH) < 2e-3, col
+                converted += 1
+            else:
+                assert mph[col] == si[col], col
+    assert converted == len(speed_cols) * len(si_rows), converted
+    # An explicit "kmh" is the SI table again (the app passes its live unit, usually this one).
+    assert export_data.laps_table(s, "kmh") == (si_headers, si_rows)
+    # And the report writer threads it through — the km/h names are gone from the whole page.
+    with tempfile.TemporaryDirectory() as tmp:
+        pages = {}
+        for unit in (None, "mph"):
+            path = os.path.join(tmp, f"report-{unit}.html")
+            export_data.write_report_html(path, s, source_label="GX010099", unit=unit)
+            with open(path, encoding="utf-8") as f:
+                pages[unit] = f.read()
+            ET.fromstring(pages[unit])  # still well-formed
+    assert "entry_kmh" in pages[None] and "entry_mph" not in pages[None]
+    assert "entry_mph" in pages["mph"] and "_kmh" not in pages["mph"]
+    print("ok L12-01: the report table follows the display unit, the SI default is unchanged")
+
+
+def test_write_laps_csv_stays_si_whatever_the_report_does():
+    """The CSVs are the MACHINE-readable contract (`speed_mps` beside `speed_kmh`, every column
+    unit-suffixed) and must NOT follow the screen. Pinned as a byte comparison, because the unit
+    thread runs through the function the CSV writer calls."""
+    s = make_session()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "laps.csv")
+        export_data.write_laps_csv(path, s)
+        with open(path, "rb") as f:
+            written = f.read()
+    # Rebuilt from the no-unit table the writer is contracted to use: identical, byte for byte.
+    headers, rows = export_data.laps_table(s)
+    assert written.split(b"\r\n")[0].decode() == ",".join(headers)
+    assert b"entry_kmh" in written and b"entry_mph" not in written
+    assert b"_apex_kmh" in written and b"_apex_mph" not in written
+    assert len(written.split(b"\r\n")[1].decode().split(",")) == len(headers)
+    print(f"ok L12-03/L12-01: laps.csv stays SI ({len(written)} B, {len(headers)} columns)")
+
+
 def test_report_html_no_images_no_corners():
     s = make_session(with_sectors=False, with_corners=False, with_g=False)
     with tempfile.TemporaryDirectory() as tmp:
@@ -378,5 +439,7 @@ if __name__ == "__main__":
     test_channels_csv_g_long_is_clean_gps_not_raw_imu()
     test_session_date_uses_local_calendar_day_not_utc()
     test_report_html_wellformed_with_images()
+    test_report_table_follows_the_display_unit()
+    test_write_laps_csv_stays_si_whatever_the_report_does()
     test_report_html_no_images_no_corners()
     print("test_export_data: OK")

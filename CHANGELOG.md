@@ -67,12 +67,44 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- The **overlay-video export** now obeys the same timing-trust verdict as the lap card. On a
+  recording whose start line the app auto-fitted, `Lap card (image)…` and `Copy lap card` were
+  correctly greyed out — and `Export overlay video…` beside them rendered a 40 MB clip with an
+  unverified lap time burned across every frame and nothing anywhere saying it was an estimate.
+  It now warns and asks before rendering (a provisional clip is still useful for reviewing your
+  own footage; a silent one is not), naming the way out. `Save as track…` says the same thing in
+  its prompt before promoting auto-fitted lines into the reusable track database.
+- A recording with **no complete laps can no longer "export"**. `Lap times (CSV)` stayed enabled
+  on a session whose own panels read "No complete laps found in this recording", wrote a 76-byte
+  header-only file and reported success. All four data exports now switch off with the rest of
+  the session, and every gated export action's tooltip states the **reason** it is off and how to
+  fix it instead of describing a feature you cannot reach.
+- The **HTML report** no longer mixes units on one page. Its embedded chart axis read
+  `speed (mph)` and its map colour bar `17 … 54 mph` while the lap table 100 px below was headed
+  `entry_kmh` — 13 of 29 columns — with `73.589` for the lap the app and the chart both called
+  `45.7`. The report follows the unit you are reading on screen. The CSV exports are unchanged:
+  they stay canonical SI (`entry_kmh`, `speed_mps` beside `speed_kmh`, every column
+  unit-suffixed), which their tooltips now say.
+- The report's **map snapshot no longer bakes in the app's editing chrome** — the video-position
+  marker and the start-line drag handles were embedded in the exported document. The explanatory
+  "Brake point" / "Corner apex" key stays: unlike a share image, a document has nowhere else to
+  explain its own glyphs.
+- The **video-export options dialog** puts a number on the trade-off it sells. "High — larger
+  file" and "Standard — smaller file" quantified nothing, on a choice that spans ~3× (one 23 s
+  lap: 40 MB vs 122 MB); the hint now estimates the size, states the exact frame count and names
+  the encoder that will run, and refreshes on **both** menus rather than only Resolution.
+- The export dialog's resolution and quality now really are **remembered** — they were window
+  state that reset to 1080p/High on every relaunch while every other UI choice persisted.
+- **Reveal library in Finder** says whether it worked. It discarded the system handler's result
+  and reported nothing either way, while "Back up library…" one row over reported both outcomes.
 - **Save as track…** no longer silently overwrites a different circuit that happens to share a
   name. Saving one recording's lines as "My Circuit" and then another recording's, from a track
   **79 km away**, replaced the stored entry in place — start line, sector lines and GPS anchor
   gone, with no confirmation, no undo and a success message byte-identical to a fresh save. A name
   reused for somewhere else is now refused and reported by name and distance; refining the lines
-  of the track you are actually at (a built-in included) still saves in one step.
+  of the track you are actually at (a built-in included) still saves in one step. The save now
+  **asks** rather than refusing outright — the confirm names how far away the circuit it would
+  replace is — and the status line afterwards says "replaced", not "saved".
 - The **new personal best** card no longer asks you to hit a 20×19 px target against a running
   clock. Its dismiss ✕ (20×19) and "See your progress →" (133×19) both sat under the 24×24
   hit-target floor — on the one card in the app that deletes itself after 6 s — while the
