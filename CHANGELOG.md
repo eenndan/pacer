@@ -88,6 +88,63 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   the largest legend the app can actually produce instead of one row above it.
 - The charts empty state says what to do next — *drag the start/finish line on the map* — and the
   three chart controls no longer stay live and latching over a page that cannot draw anything.
+- **A GPS fix that teleports no longer inflates the session distance.** The SESSION "distance"
+  total summed every chord between consecutive fixes with no sanity check, so one dropped fix —
+  177.8 m across 56 ms, an implied **11,500 km/h** — put **2.3 km** on a 9.6-second clip whose own
+  speed channel caps the distance at **72 m** (a 31× overstatement). Each chord is now weighed
+  against what that same speed channel allows over the same interval, and when too little of the
+  trace survives to mean anything the tile shows a dash with the reason rather than a number. On
+  real recordings this changes nothing: measured across four sessions on two tracks it kept
+  **100.00 / 100.00 / 100.00 / 99.98 %** of the chord length.
+- **The g-meter's trust gate can now see a mis-scaled channel.** It judged the accelerometer by
+  its *correlation* with the GPS-derived g — and Pearson r is scale-invariant by construction, so
+  halving the g channel left the correlation, the verdict and the whole DATA TRUST card
+  **byte-identical** while the dial, the peak-g tiles and the friction-circle envelope all halved.
+  The verdict now also weighs **magnitude** (the lateral RMS gain, which must sit near ×1), the
+  DATA TRUST card states that gain beside the correlation, and a channel that fails falls back to
+  the GPS-derived g as it always did for a bad correlation. Measured gains on four real
+  recordings: **1.077–1.114**, comfortably inside the band. Where there is too little cornering to
+  weigh a magnitude against, the gain is reported but not gated on.
+- **The single-lap honesty rule is applied by every tile that describes a distribution.** With one
+  clean lap, σ, consistency, trend and race pace correctly dashed while "median − best" printed a
+  measured-looking **+0.00 s**, "within 1% of best" printed **1 / 1**, and the median tile read
+  "1 clean **laps**". Spread and the within-1% count now carry σ's own minimum-sample gate in the
+  data layer, so the tiles can no longer drift apart, and the caption is singular.
+- **The friction circle says what it plots.** Both axes were unnamed and unitless — the only
+  labels were the ticks `-2.0 / +0.0 / +2.0` — and nothing distinguished the dashed p98 grip-
+  envelope ring from the fixed 0.5 g reference rings. The axes are now named and directed
+  ("lateral g − right · + left", "longitudinal g − braking · + accelerating"), a one-line key names
+  both kinds of ring and carries the envelope's own value, the section header names the unit like
+  its peers, and the origin tick is unsigned.
+- **The friction circle is the same size on every screen.** Its width came from pyqtgraph's
+  `sizeHint`, which moves with the device pixel ratio, so the identical 1440×900 window laid it
+  out **440×220 at DPR 1 and 300×220 at DPR 2**. It is now pinned in both axes.
+- **The ⌘⇧S dashboard uses more of the window it takes over.** The tile grid was capped at 4
+  columns at every width; above a dashboard-width pane the cap now rises to 6 and the friction
+  circle grows with it, so the same content occupies fewer, wider rows (data content reaches
+  **611 → 742 px** of a 1700 px pane; page height 1063 → 1026 px). The 2–4 column reflow in a
+  normal quadrant is unchanged. A related ordering bug is fixed too: the reflow measured the
+  scroll viewport from inside its own resize handler, where it still holds the *previous* width,
+  so a page sized before it was first shown kept the narrow layout until resized by hand.
+- **Esc now restores a maximized panel.** The Shortcuts card and all four ⛶ tooltips promised
+  "Esc / click again to restore", but the key was ignored: its handler was gated on the window
+  being full screen, which maximizing a panel never makes it. Measured across 3 window sizes ×
+  4 panels, Escape moved **0 of 1,296,000 pixels**; it now backs out of whichever "one thing
+  fills the frame" state is on — video focus, a maximized panel, then window full screen.
+- The welcome screen no longer offers menu items that do nothing. **17 of 25** actions stayed
+  enabled with no recording open, and three were completely inert (⌘⇧S Session statistics,
+  Coaching ▸ Opportunities…, View ▸ Show excluded laps left the window unchanged, said nothing
+  and opened nothing). The Coaching and View menus now grey their session-only items out — and
+  do it from the first frame, so ⌘⇧S is inert rather than silently ignored.
+- A coaching **Jump** now says where it landed. It opened the Corners tab on a 12-row grid with
+  nothing marking the corner you clicked; the matching row is now the current cell, scrolled
+  into view (at 1100×620 it was off-screen entirely), and named on the status bar together with
+  the lap the table is showing. Jumping also stopped overwriting your saved lap-panel tab — quit
+  after a jump and the panel reopens on the page you chose, not on Corners.
+- The crash dialog calls the app **Pacer Studio**, the name every other surface uses. It was the
+  one place rendering a lower-case "pacer", on the surface that only appears when something has
+  already gone wrong (macOS shows no window title on that dialog, so the body is the only naming
+  it has).
 - The Coaching page now uses the room it is given. Maximized it used to be **3 rows in 808 px**
   — 78% dead canvas — while the ranking behind it held **11** corners; it now shows as many
   ranked corners as the page can hold (still at least the top 3 the headline sums). And every

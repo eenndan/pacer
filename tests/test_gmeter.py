@@ -279,6 +279,134 @@ def _add_cori_yaw_drift(cori, drift_deg, dur):
     return out
 
 
+def _build_lapping_slalom(dur=320.0, v0=22.0, yaw_amp_rad=0.6, period_s=12.0, lap_s=40.0):
+    """A kart lapping a circuit at CONSTANT speed, slaloming as it goes, with a fixed camera mount.
+
+    `_build_weave` swings the kart's VELOCITY, which makes its speed and heading change together
+    and leaves the GPS-derived lateral g about HALF the true one — fine for a correlation test
+    (r is scale-blind anyway), useless for a MAGNITUDE one. Here the speed is constant and the
+    HEADING carries both terms, so lateral g is exactly v · dψ/dt by construction and the GPS
+    reconstruction recovers it to within its own smoothing. The lap term is what conditions the
+    Procrustes fit: without it every acceleration vector lies on one line and the mount rotation
+    is undetermined (the `_YAW_MIN_COND` case). The result is a fixture whose lateral gain is ~1,
+    against which an injected scale fault is measurable. Same world frame, specific-force
+    convention and ACCL/GRAV/CORI element orders as the other builders.
+    """
+    up_w = np.array([0.0, 0.0, 1.0])
+    w = 2.0 * np.pi / period_s
+    lap_w = 2.0 * np.pi / lap_s
+
+    def heading(t):
+        return lap_w * t + yaw_amp_rad * np.sin(w * t)
+
+    def yaw_rate(t):
+        return lap_w + yaw_amp_rad * w * np.cos(w * t)
+
+    ta = np.linspace(0.0, dur, int(dur * 200))
+    psi = heading(ta)
+    a_lat = v0 * yaw_rate(ta)                                 # m/s^2, + = to the left
+    left_t = np.column_stack([-np.sin(psi), np.cos(psi), np.zeros_like(psi)])
+    meas_w = left_t * a_lat[:, None] + up_w * G               # + the +g up reaction
+
+    q_yaw = _quat_from_axis_angle(up_w, np.radians(50.0))
+    q_pitch = _quat_from_axis_angle([0, 1, 0], np.radians(10.0))
+    q_cam_to_world = _quat_mul(q_yaw, q_pitch)
+    q_world_to_cam = np.array([q_cam_to_world[0], -q_cam_to_world[1],
+                               -q_cam_to_world[2], -q_cam_to_world[3]])
+    meas_cam = np.array([_rot_by_quat(q_world_to_cam, m) for m in meas_w])
+    grav_dir_cam = _rot_by_quat(q_world_to_cam, up_w)
+
+    # ACCL element order here is camera (Y, X, Z) — i.e. GRAV's (X,Y,Z) read through gmeter's own
+    # _PERM. The older builders declare (Z,X,Y), which leaves a little gravity un-removed and
+    # inflates the recovered magnitude ~1.8x; harmless for the SHAPE (correlation) assertions
+    # those tests make, fatal for a magnitude one. Measured: with this order the recovered
+    # horizontal magnitude is 0.6086 g against a true 0.6089 g.
+    accl = np.column_stack([ta] + [meas_cam[:, _PERM_I] for _PERM_I in gmeter._PERM])
+    tg = np.linspace(0.0, dur, int(dur * 60))
+    grav = np.column_stack([tg] + [np.full(len(tg), c) for c in grav_dir_cam])    # (x,y,z)
+    cori = np.column_stack([tg] + [np.full(len(tg), q_world_to_cam[k]) for k in range(4)])
+
+    gt = np.arange(0.0, dur, 0.1)                             # 10 Hz, like a real GPS track
+    psi_g = heading(gt)
+    dtg = float(gt[1] - gt[0])
+
+    def integrate(f):                                          # trapezoid, no scipy
+        return np.concatenate([[0.0], np.cumsum((f[:-1] + f[1:]) * 0.5) * v0 * dtg])
+
+    return (accl, grav, cori, gt, integrate(np.cos(psi_g)), integrate(np.sin(psi_g)),
+            np.full_like(gt, v0))
+
+
+def _scale_accl_linear(accl, grav, k):
+    """Return a copy of `accl` whose LINEAR (gravity-removed) acceleration is scaled by `k`.
+
+    The mis-scaled-channel fault in miniature — a calibration/units error, or the cos(residual
+    yaw) shrink the CORI drift produced. Gravity is left exactly as it was (a mis-scaled channel
+    still reads 1 g at rest), so the only thing that changes is the MAGNITUDE of the motion the
+    IMU reports. Built by re-expressing the existing fixture, like _add_cori_yaw_drift, so
+    exactly one variable moves.
+    """
+    out = np.asarray(accl, float).copy()
+    ta = out[:, 0]
+    gperm = np.column_stack(
+        [np.interp(ta, grav[:, 0], grav[:, 1 + gmeter._PERM[i]]) for i in range(3)])
+    gperm = gperm / np.maximum(np.linalg.norm(gperm, axis=1, keepdims=True), 1e-12)
+    lin = out[:, 1:4] - G * gperm
+    out[:, 1:4] = G * gperm + k * lin
+    return out
+
+
+def test_a_mis_scaled_accelerometer_fails_the_trust_gate():
+    """L9-01. Pearson r is scale-INVARIANT by construction, so the correlation-only verdict could
+    not see a mis-scaled g channel AT ALL: halving the accelerometer left lat_corr bit-identical
+    and `ok` True while every g the app displays halved. The verdict now weighs MAGNITUDE too.
+
+    This is the gate that could not have detected the CORI yaw-drift defect (#130), whose whole
+    signature was a lateral magnitude shrinking by cos(residual yaw)."""
+    accl, grav, cori, gt, gx, gy, gs = _build_lapping_slalom()
+    good = gmeter.compute(accl, grav, cori, gt, gx, gy, gs)
+    assert good.cross is not None and good.cross.ok
+    assert good.source == "accl"
+    assert 0.8 <= good.cross.lat_gain <= 1.25, good.cross.lat_gain   # measured 1.02
+
+    halved = gmeter.compute(_scale_accl_linear(accl, grav, 0.5), grav, cori, gt, gx, gy, gs)
+    assert halved.cross is not None
+    # The correlation is blind to it — that is the entire finding, so assert it explicitly.
+    assert abs(halved.cross.lat_corr - good.cross.lat_corr) < 1e-9, (
+        halved.cross.lat_corr, good.cross.lat_corr)
+    assert halved.cross.lat_corr >= gmeter._LAT_CORR_MIN     # it would still pass the old gate
+    # …but the magnitude is not. The gain halves, the verdict fails, and the app stops sourcing
+    # the dial from a channel that reads half.
+    assert abs(halved.cross.lat_gain - good.cross.lat_gain * 0.5) < 0.01, halved.cross.lat_gain
+    assert not halved.cross.ok
+    assert halved.source == "gps"
+    assert "DISAGREE" in halved.cross.summary()
+    assert f"gain x{halved.cross.lat_gain:.2f}" in halved.cross.summary()
+    # Symmetric: an over-scaled channel is caught the same way.
+    doubled = gmeter.compute(_scale_accl_linear(accl, grav, 2.0), grav, cori, gt, gx, gy, gs)
+    assert doubled.cross is not None and not doubled.cross.ok
+    # …and a fault too small to matter is NOT condemned: the band is a tolerance, not equality.
+    nudged = gmeter.compute(_scale_accl_linear(accl, grav, 1.1), grav, cori, gt, gx, gy, gs)
+    assert nudged.cross is not None and nudged.cross.ok and nudged.source == "accl"
+    print("ok mis-scaled accelerometer: r unchanged, gain caught it, verdict flipped")
+
+
+def test_gain_is_not_weighed_without_real_cornering():
+    """The gain is a ratio of two RMS values, so on a span with no real cornering it is a ratio of
+    two noise floors and means nothing. Below _GAIN_MIN_LAT_RMS it is reported and NOT gated on —
+    otherwise a slow transit chapter would condemn a perfectly good mount."""
+    # A clean, well-correlated channel whose GPS lateral RMS is far below the floor.
+    tiny = gmeter._GAIN_MIN_LAT_RMS / 10.0
+    assert gmeter._verdict(0.95, lat_rms_accl=tiny * 5.0, lat_rms_gps=tiny) is True
+    # …the same absurd gain IS refused once there is enough cornering to weigh it against.
+    assert gmeter._verdict(0.95, lat_rms_accl=3.0, lat_rms_gps=0.6) is False
+    # …and a weak correlation still fails on its own, gain or no gain (the original rule).
+    assert gmeter._verdict(0.1, lat_rms_accl=0.66, lat_rms_gps=0.6) is False
+    assert gmeter._verdict(float("nan"), lat_rms_accl=0.66, lat_rms_gps=0.6) is False
+    assert gmeter._verdict(0.95, lat_rms_accl=0.66, lat_rms_gps=0.6) is True   # the good case
+    print("ok gain gate: weighed only where there is cornering to weigh it against")
+
+
 def _lapping_reference(dur=400.0, hz=10.0, lat_amp=1.0, collinear=False):
     """A GPS-derived reference whose acceleration DIRECTION sweeps the full circle, as a lap does.
 

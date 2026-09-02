@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _synthetic import bare_session, seed_cols  # noqa: E402
 
 from studio.stats import (  # noqa: E402
+    MIN_KEPT_FRAC,
     MOVING_MS,
     SessionStats,
     best_consecutive_mean,
@@ -53,6 +54,7 @@ from studio.stats import (  # noqa: E402
     in_windows_mask,
     moving_time_s,
     pace_stats,
+    path_distance,
     path_distance_m,
     peak_g,
     phase_matrix,
@@ -89,6 +91,33 @@ def test_path_distance_is_the_chord_sum():
     print("test_path_distance_is_the_chord_sum OK")
 
 
+def test_path_distance_gates_a_teleport_fix():
+    """L4-02. A GPS fix that jumps further than the trace's OWN speed channel allows over the same
+    interval is a dropped fix, not distance driven — un-gated it dominated the session total (a
+    real 9.6 s clip rendered 2.3 km against a 72 m speed ceiling, 31x). The gate must reject it
+    and NOT touch the honest chords beside it."""
+    # 10 Hz at a steady 20 m/s: nine 2.0 m chords, plus one injected 200 m teleport.
+    n = 11
+    times = [i * 0.1 for i in range(n)]
+    speed = [20.0] * n
+    xs = [i * 2.0 for i in range(n)]
+    ys = [0.0] * n
+    clean = path_distance(xs, ys, times, speed)
+    assert abs(clean.metres - 20.0) < 1e-9 and clean.rejected_n == 0
+    assert clean.kept_frac == 1.0                       # an honest trace loses nothing
+
+    xs[5] += 200.0                                      # one teleport out and back
+    glitched = path_distance(xs, ys, times, speed)
+    assert abs(path_distance_m(xs, ys) - 416.0) < 1e-9  # un-gated: the glitch IS the number
+    assert glitched.rejected_n == 2                     # the jump out and the jump back
+    assert abs(glitched.metres - 16.0) < 1e-9           # the eight real chords survive intact
+    # …and the total can never exceed what the speed channel allows over the recorded span.
+    ceiling = max(speed) * (times[-1] - times[0])
+    assert glitched.metres <= ceiling < path_distance_m(xs, ys)
+    assert glitched.kept_frac < MIN_KEPT_FRAC           # -> the view renders a dash
+    print("test_path_distance_gates_a_teleport_fix OK")
+
+
 def test_clock_hhmm_local_rendering_and_gps5_sentinel():
     assert clock_hhmm(0) is None      # GPS5 / empty stream sentinel — same rule as session_date
     assert clock_hhmm(-5) is None
@@ -104,8 +133,11 @@ def test_pace_stats_exact_and_nan_filtered():
     assert abs(p.sigma - float(np.std([68.0, 69.0, 70.0], ddof=1))) < 1e-12
     assert pace_stats([]) is None
     assert pace_stats([math.nan]) is None
+    # L4-06: at one lap the median IS the best, so `spread` carries σ's minimum-sample gate.
+    # It used to report 0.0, which the tile printed as a measured "+0.00 s" beside σ's dash.
     single = pace_stats([70.0])
-    assert single is not None and single.sigma is None and single.spread == 0.0
+    assert single is not None and single.sigma is None and single.spread is None
+    assert single.n == 1 and single.best == 70.0 and single.median == 70.0
     print("test_pace_stats_exact_and_nan_filtered OK")
 
 
@@ -248,7 +280,10 @@ def test_best_consecutive_mean_windows_and_nan_poisoning():
 def test_within_pct_of_best_counts_the_best_itself():
     assert within_pct_of_best([68.0, 68.5, 68.68, 70.0], 1.0) == 3  # cutoff 68.68 inclusive
     assert within_pct_of_best([], 1.0) == 0
-    assert within_pct_of_best([70.0], 1.0) == 1
+    # L4-06: one lap is trivially within 1% of itself — "1 / 1" measures nothing, so the
+    # reducer reports None below MIN_DIST_LAPS and the tile dashes like σ's does.
+    assert within_pct_of_best([70.0], 1.0) is None
+    assert within_pct_of_best([70.0, 71.0], 1.0) == 1               # two laps: a real count
     print("test_within_pct_of_best_counts_the_best_itself OK")
 
 
@@ -301,21 +336,42 @@ def _service(*, gm=None, trace_t=(), trace_v_kmh=(), xs=(), ys=(), wall=(0, 0),
 
 
 def test_totals_duration_moving_distance_and_clocks():
-    fast = (MOVING_MS + 2.0) * 3.6  # km/h, comfortably moving
+    fast = (MOVING_MS + 2.0) * 3.6  # km/h == 6 m/s, comfortably moving
     st = _service(
         trace_t=[0.0, 0.1, 0.2, 10.2],           # last step is a 10 s gap -> duration keeps it,
         trace_v_kmh=[fast, 0.0, 0.0, fast],      # moving time skips it (and the two slow leads)
-        xs=[0.0, 3.0, 3.0, 3.0], ys=[0.0, 0.0, 4.0, 4.0],
+        # Positions consistent with those speeds: 0.6 m while moving at 6 m/s, then stationary,
+        # then the 10 s gap closed by a 0.5 m chord (the trace does drift while parked).
+        xs=[0.0, 0.6, 0.6, 1.1], ys=[0.0, 0.0, 0.0, 0.0],
         wall=(1_750_000_000_000, 1_750_000_600_000),
     )
     tot = st.totals()
     assert abs(tot.duration_s - 10.2) < 1e-9          # recorded span includes the gap
     assert abs(tot.moving_s - 0.1) < 1e-9             # only the first (moving) 0.1 s interval
-    assert abs(tot.distance_m - 7.0) < 1e-9           # 3 + 4 + 0 chords
+    assert abs(tot.distance_m - 1.1) < 1e-9           # 0.6 + 0 + 0.5 chords, all plausible
+    assert tot.distance_kept_frac == 1.0              # …so the speed gate rejected nothing
     assert tot.start_clock == clock_hhmm(1_750_000_000_000)
     assert tot.end_clock == clock_hhmm(1_750_000_600_000)
     assert st.totals() is tot                          # cached (the trace never changes)
     print("test_totals_duration_moving_distance_and_clocks OK")
+
+
+def test_totals_distance_is_none_when_the_trace_is_mostly_glitch():
+    """L4-02, end to end through the service: a trace whose chords are overwhelmingly impossible
+    at its own speed reports distance_m=None (the view dashes) rather than a number 30x the
+    physical ceiling — while the duration and moving time, which are real, still stand."""
+    n = 11
+    xs = [i * 2.0 for i in range(n)]
+    xs[5] += 400.0                                    # the teleport dwarfs the honest chords
+    st = _service(trace_t=[i * 0.1 for i in range(n)],
+                  trace_v_kmh=[72.0] * n,             # 20 m/s
+                  xs=xs, ys=[0.0] * n)
+    tot = st.totals()
+    assert tot.distance_m is None
+    assert tot.distance_kept_frac < MIN_KEPT_FRAC
+    assert abs(tot.duration_s - 1.0) < 1e-9           # the honest totals are untouched
+    assert tot.moving_s > 0.0
+    print("test_totals_distance_is_none_when_the_trace_is_mostly_glitch OK")
 
 
 def test_totals_degenerate_empty_trace():
@@ -511,6 +567,7 @@ def _fake_stats_service(*, has_g=True, laps=True):
         # reduction is None/empty — exactly what SessionStats returns with no valid lap window.
         return SimpleNamespace(
             totals=lambda: SessionTotals(duration_s=61.0, moving_s=12.0, distance_m=180.0,
+                                         distance_kept_frac=1.0,
                                          start_clock="19:16", end_clock="19:17"),
             pace=lambda: None, lap_stats=list, session_vmax=lambda: None,
             gg_cloud=lambda max_points=4000: None, pace_trend=lambda: None,
@@ -530,6 +587,7 @@ def _fake_stats_service(*, has_g=True, laps=True):
     gg = ((np.array([0.5, -0.8]), np.array([-0.4, 0.2])) if has_g else None)
     return SimpleNamespace(
         totals=lambda: SessionTotals(duration_s=4406.8, moving_s=4261.2, distance_m=65560.0,
+                                     distance_kept_frac=1.0,
                                      start_clock="19:16", end_clock="20:30"),
         pace=lambda: PaceStats(n=2, best=68.2, median=69.1, sigma=1.27, spread=0.9),
         lap_stats=lambda: rows,
@@ -873,6 +931,181 @@ def test_stats_view_tiles_reflow_with_pane_width():
     assert g.itemAtPosition(r, c) is not None and g.itemAtPosition(r, c).widget() is v.t_digest
     v.hide()
     print("test_stats_view_tiles_reflow_with_pane_width OK")
+
+
+def test_stats_view_wide_pane_raises_the_tile_ceiling():
+    """L4-05: ⌘⇧S maximizes this page into the whole window, where a hard 4-column cap left every
+    tile row ending ~1000 px short of the right edge. Above WIDE_PANE_PX the reflow ceiling rises
+    and the friction circle grows with it — the quadrant behaviour (2..4) is untouched."""
+    _app()
+    from studio.stats_panel import (
+        GG_HEIGHT,
+        GG_HEIGHT_WIDE,
+        TILES_PER_ROW,
+        TILES_PER_ROW_WIDE,
+        WIDE_PANE_PX,
+        StatsView,
+    )
+    v = StatsView(_fake_view_session())
+    v.show()
+    v.resize(1000, 900)                       # a normal pane: the old cap still applies
+    _pump()
+    assert v._tile_cols == TILES_PER_ROW
+    assert v.gg.height() == GG_HEIGHT
+    narrow_rows, narrow_right = _pace_layout(v)
+
+    v.resize(WIDE_PANE_PX + 400, 900)         # a dashboard-width pane
+    _pump()
+    assert v._tile_cols == TILES_PER_ROW_WIDE, v._tile_cols
+    assert v.gg.height() == GG_HEIGHT_WIDE
+    # Measured on the real laid-out geometry, not on the column count: the same ten PACE tiles
+    # occupy strictly fewer rows and reach further right, which is the whole point — the page
+    # used to be a tall column down the left edge of a 1700 px pane.
+    wide_rows, wide_right = _pace_layout(v)
+    assert wide_rows < narrow_rows, (wide_rows, narrow_rows)
+    assert wide_right > narrow_right, (wide_right, narrow_right)
+
+    v.resize(1000, 900)                        # …and it is reversible
+    _pump()
+    assert v._tile_cols == TILES_PER_ROW and v.gg.height() == GG_HEIGHT
+    assert _pace_layout(v)[0] == narrow_rows
+    v.hide()
+    print("test_stats_view_wide_pane_raises_the_tile_ceiling OK")
+
+
+def _pace_layout(v):
+    """(rows, right edge) of the PACE tile grid, from the widgets' actual laid-out geometry."""
+    _g, tiles = v._tile_grids[1]
+    vis = [t for t in tiles if t.isVisible()]
+    return len({t.y() for t in vis}), max(t.x() + t.width() for t in vis)
+
+
+def test_friction_circle_names_its_axes_and_keys_its_rings():
+    """L4-09: the friction circle used to ship no unit and no axis name — both labelText's were
+    '' and its ticks read '-2.0 / +0.0 / +2.0' — while CORNERS and PER LAP name theirs. It also
+    draws two kinds of ring (a fixed 0.5 g rule, a MEASURED p98 envelope) with nothing saying
+    which is which."""
+    _app()
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session())
+    plot = v.gg.getPlotItem()
+    x_label = plot.getAxis("bottom").labelText
+    y_label = plot.getAxis("left").labelText
+    assert x_label and y_label, (x_label, y_label)
+    assert "lateral" in x_label and "g" in x_label
+    assert "longitudinal" in y_label
+    assert "braking" in y_label and "accelerating" in y_label   # the sign IS the direction
+    assert "g" in v._gg_section.text()                          # the peers' header convention
+    # The key names the dashed ring AND carries the envelope's own value (1.55 g in the fake).
+    key = v.gg_key.text()
+    assert "dashed" in key and "1.55 g" in key, key
+    assert "0.5 g" in key                                       # …and the solid rule beside it
+    assert not v.gg_key.isHidden()
+    # The origin tick is unsigned: "+0.0" reads as a signed measurement of nothing.
+    ticks = [lab for _pos, lab in plot.getAxis("bottom")._tickLevels[0]]
+    assert "+0.0" not in ticks and "0" in ticks, ticks
+    print("test_friction_circle_names_its_axes_and_keys_its_rings OK")
+
+
+def test_friction_circle_size_is_device_pixel_ratio_independent():
+    """U8-01: pyqtgraph's sizeHint moves with the devicePixelRatio, so the plot laid out 440x220
+    at DPR 1 and 300x220 at DPR 2 in the IDENTICAL logical window. Both axes are now pinned, so
+    the laid-out size is a property of the layout, not of the screen."""
+    _app()
+    from studio.stats_panel import GG_ASPECT, GG_HEIGHT, StatsView
+    v = StatsView(_fake_view_session())
+    v.show()
+    v.resize(1000, 900)
+    _pump()
+    expected = (int(GG_HEIGHT * GG_ASPECT), GG_HEIGHT)
+    assert (v.gg.width(), v.gg.height()) == expected, (v.gg.width(), v.gg.height())
+    # Pinned in both directions — a MAXIMUM width (what it used to carry) still lets the
+    # DPR-dependent sizeHint choose the actual number below the cap.
+    assert v.gg.minimumWidth() == v.gg.maximumWidth() == expected[0]
+    assert v.gg.minimumHeight() == v.gg.maximumHeight() == expected[1]
+    v.hide()
+    print("test_friction_circle_size_is_device_pixel_ratio_independent OK")
+
+
+def test_single_lap_dashes_every_distribution_tile():
+    """L4-06: with one clean lap the honesty gate was applied by 4 tiles and skipped by 3 — σ,
+    CoV, trend and race pace dashed while 'median − best' printed '+0.00 s', 'within 1% of best'
+    printed '1 / 1' and the median caption read '1 clean laps'. All of them describe a
+    DISTRIBUTION, so they now dash together (gated in stats.py, not here)."""
+    _app()
+    from studio.stats import PaceStats
+    from studio.stats_panel import DASH, StatsView
+    session = _fake_view_session()
+    one = pace_stats([70.0])
+    assert isinstance(one, PaceStats)
+    session.stats.pace = lambda: one
+    session.stats.pace_cov = lambda: None
+    session.stats.pace_trend = lambda: None
+    session.stats.race_pace = lambda: None
+    session.stats.laps_within_pct = lambda pct=1.0: (within_pct_of_best([70.0], pct), 1)
+    v = StatsView(session)
+    assert v.t_sigma.value.text() == DASH
+    assert v.t_spread.value.text() == DASH, v.t_spread.value.text()
+    assert v.t_within.value.text() == DASH, v.t_within.value.text()
+    assert v.t_median.caption.text() == "median · 1 clean lap"   # singular, and it is one lap
+    print("test_single_lap_dashes_every_distribution_tile OK")
+
+
+def test_stats_view_distance_dashes_when_the_trace_is_mostly_glitch():
+    """L4-02 at the tile: an implausible trace shows a dash with the reason in its tooltip, never
+    the 2.3 km a 9.6 s clip used to render. A clean trace still prints its number."""
+    _app()
+    from studio.stats import SessionTotals
+    from studio.stats_panel import DASH, StatsView
+    session = _fake_view_session()
+    session.stats.totals = lambda: SessionTotals(
+        duration_s=9.6, moving_s=8.0, distance_m=None, distance_kept_frac=0.0035,
+        start_clock=None, end_clock=None)
+    v = StatsView(session)
+    assert v.t_distance.value.text() == DASH
+    tip = v.t_distance.toolTip()
+    assert "0%" in tip and "possible" in tip, tip
+    # A partially-gated but still plausible trace keeps its number and says what was dropped.
+    session.stats.totals = lambda: SessionTotals(
+        duration_s=1549.0, moving_s=1400.0, distance_m=18445.0, distance_kept_frac=0.94,
+        start_clock=None, end_clock=None)
+    v2 = StatsView(session)
+    assert v2.t_distance.value.text() == "18.4 km"
+    assert "6% of the raw steps were rejected" in v2.t_distance.toolTip()
+    # …but a trace that lost 0.02% (a real 26-minute recording) gets no arithmetic-noise caveat.
+    session.stats.totals = lambda: SessionTotals(
+        duration_s=1549.0, moving_s=1400.0, distance_m=18445.0, distance_kept_frac=0.9998,
+        start_clock=None, end_clock=None)
+    v3 = StatsView(session)
+    assert "rejected" not in v3.t_distance.toolTip()
+    print("test_stats_view_distance_dashes_when_the_trace_is_mostly_glitch OK")
+
+
+def test_trust_card_states_the_lateral_gain():
+    """L9-01 at the card: Pearson r is scale-invariant, so halving the g channel left this card
+    BYTE-IDENTICAL while every displayed g halved. The card must therefore state the one number
+    that does move — the lateral MAGNITUDE ratio — and change when it changes."""
+    _app()
+    from studio.gmeter import CrossCheck
+    from studio.stats_panel import StatsView
+    good = CrossCheck(n=1000, lat_corr=0.96, long_corr=0.8, lat_rms_accl=0.747,
+                      lat_rms_gps=0.670, long_rms_accl=0.25, long_rms_gps=0.21,
+                      align_yaw_deg=47.0, align_reflect=False, ok=True)
+    halved = CrossCheck(**{**vars(good), "lat_rms_accl": 0.747 / 2, "ok": False})
+    assert halved.lat_corr == good.lat_corr            # r cannot see the scale error at all
+
+    session = _fake_view_session()
+    session.gmeter_cross = lambda: good
+    v_good = StatsView(session)
+    text_good = v_good.trust_label.text()
+    session.gmeter_cross = lambda: halved
+    v_bad = StatsView(session)
+    text_bad = v_bad.trust_label.text()
+    assert "gain ×1.11" in text_good, text_good
+    assert "gain ×0.56" in text_bad, text_bad
+    assert "agree" in text_good and "DISAGREE" in text_bad
+    assert text_good != text_bad                       # the card is no longer scale-blind
+    print("test_trust_card_states_the_lateral_gain OK")
 
 
 def _pump(n=40):

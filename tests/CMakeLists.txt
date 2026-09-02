@@ -397,6 +397,19 @@ add_test(NAME test_charts_panel
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_charts_panel.py)
 set_tests_properties(test_charts_panel PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Window chrome / menus (fix/qa-app-chrome): Escape must restore a MAXIMIZED PANEL — the state four
+# surfaces promise it restores and whose Escape branch was gated on isFullScreen() — at three window
+# sizes × four panels, asserted on the splitter sizes, while still leaving video focus and window
+# fullscreen; the welcome screen must not offer the four actions whose handlers early-return with no
+# session (their menus had ZERO aboutToShow receivers) and must re-enable them at _build_ui, not on
+# the next pull-down; a coaching Jump must mark + scroll to the corner row it landed on and must not
+# persist its navigation as the user's tab preference; and the crash dialog must name APP_NAME
+# (macOS gives it no window title). Real StudioWindow over the stadium synthetic; run offscreen.
+add_test(NAME test_app_chrome
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_app_chrome.py)
+set_tests_properties(test_app_chrome PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Shareable lap card (image) (feat/shareable-lap-card): the PURE card_data field extraction off
 # Session accessors (best lap / Δ-to-ideal / top opportunity / track / date / unit), the km/h↔mph
 # unit flip in the reason sentence, and the HONESTY verdict (provisional/no-lap ⇒ blocked;
@@ -506,25 +519,21 @@ set_tests_properties(test_help_dialog PROPERTIES
 # package (the tests sys.path.insert the repo root to reach `studio`), failing with
 # AttributeError. PYTHONPATH makes the deployed package win deterministically in every
 # install state; APPEND keeps the per-test QT_QPA_PLATFORM settings above intact.
-foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_gapfill
-                        test_import_ergonomics
-                        test_reference
-                        test_gps_source_bindings test_laps_bindings test_ingest_equivalence
-                        test_sidecar test_track_db test_session_pure test_sector_integrity
-                        test_load_internals
-                        test_load_pipeline test_fit_start_line test_session_services
-                        test_golden_synthetic
-                        test_studio_features test_rainbow_map test_map_render test_map_chrome
-                        test_compare test_map_ghost test_cross_reference test_delta_engine
-                        test_controllers test_central_view_realqt test_load_failure
-                        test_load_affordances
-                        test_validate_wallclock test_corners
-                        test_consistency test_gmeter test_gmeter_overlay test_export_data
-                        test_driving test_coaching test_library test_export_video
-                        test_data_safety test_units test_accessible_cues test_share_card
-                        test_stats test_lap_table_columns test_help_dialog
-                        test_grid_and_timing_guards test_lap_table_empty_states
-                        test_charts_header_budget test_coaching_panel_layout test_focus_cues)
+foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_gapfill 
+                        test_import_ergonomics test_reference test_gps_source_bindings 
+                        test_laps_bindings test_ingest_equivalence test_sidecar test_track_db 
+                        test_session_pure test_sector_integrity test_load_internals 
+                        test_load_pipeline test_fit_start_line test_session_services 
+                        test_golden_synthetic test_studio_features test_rainbow_map test_map_render 
+                        test_map_chrome test_compare test_map_ghost test_cross_reference 
+                        test_delta_engine test_controllers test_central_view_realqt 
+                        test_load_failure test_load_affordances test_validate_wallclock 
+                        test_corners test_consistency test_gmeter test_gmeter_overlay 
+                        test_export_data test_driving test_coaching test_library test_export_video 
+                        test_data_safety test_units test_accessible_cues test_share_card test_stats 
+                        test_lap_table_columns test_help_dialog test_grid_and_timing_guards 
+                        test_lap_table_empty_states test_charts_header_budget 
+                        test_coaching_panel_layout test_focus_cues test_app_chrome test_charts_panel)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
