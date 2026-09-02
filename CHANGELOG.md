@@ -67,6 +67,14 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Opening a second recording over one already loaded no longer bricks the window.** On any
+  recording big enough for the "Loading telemetry…" card to appear (about half a second), that card
+  replaced the live view — which destroys it — and the swap back to the newly loaded session then
+  crashed on the remains. The window stayed on the card **forever**, with the recording it had just
+  finished loading unreachable behind it and nothing but a Cancel button, plus a stale reference
+  chip still naming the previous recording's reference. The only way out was to quit. The card now
+  releases the view it replaces while that view is still alive, and every teardown step is guarded
+  so a half-destroyed pane can never strand the window again.
 - **Timing-line edits now show a wait cursor while they work.** Dragging the start/finish line,
   Add sector, Reset sectors and ⌘Z all re-segment the whole session synchronously — measured
   456–518 ms on a 66-lap three-chapter recording — and the window simply froze, with no cursor

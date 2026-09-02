@@ -502,17 +502,26 @@ class PlayerPane(QWidget):
     def dispose(self):
         """Release decoder + audio + overlay (player/audio are NOT Qt children of the pane, so they
         must be deleteLater-d explicitly or the FFmpeg decoder lingers until GC). Idempotent."""
-        self._seam_watchdog.stop()  # no stray seam timer firing into a deleted player
-        try:
-            self.player.stop()
-            self.player.setVideoOutput(None)
-            self.player.setAudioOutput(None)
-        except RuntimeError:
-            pass  # already torn down
-        self.gmeter.close()
-        self.gmeter.deleteLater()
-        self.player.deleteLater()
-        self.audio.deleteLater()
+        # Every step is inside the guard, including the watchdog stop and the overlay close. They
+        # were outside it, and _seam_watchdog is a QTimer CHILD of this pane: when the pane's C++
+        # object had already been deleted, its very first statement raised out of dispose(), out of
+        # _build_ui, and left the window stranded on the loading card. A teardown that can raise is
+        # a teardown that strands the caller — belt and braces behind app._dispose_view's own guard.
+        # Every step is a lambda, not a bound method: resolving `self._seam_watchdog.stop` on a
+        # deleted C++ object raises at ATTRIBUTE ACCESS, which a tuple of bound methods would do
+        # outside the guard — reintroducing the very crash this is here to contain.
+        for step in (lambda: self._seam_watchdog.stop(),
+                     lambda: self.player.stop(),
+                     lambda: self.player.setVideoOutput(None),
+                     lambda: self.player.setAudioOutput(None),
+                     lambda: self.gmeter.close(),
+                     lambda: self.gmeter.deleteLater(),
+                     lambda: self.player.deleteLater(),
+                     lambda: self.audio.deleteLater()):
+            try:
+                step()
+            except RuntimeError:
+                pass  # already torn down
 
     # ------------------------------------------------------------- player events
     def _on_position(self, ms: int):
