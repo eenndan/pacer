@@ -20,7 +20,9 @@ The camera->kart transform:
 GPS cross-check (the acid test of the transform): from the GPS trajectory,
 longitudinal_g = (d|v|/dt)/9.81 and lateral_g = (|v|*yaw_rate)/9.81; compared over the moving
 session via correlation + RMS (lateral correlates strongly; longitudinal magnitude matches but
-its per-sample correlation is weaker, as expected for the noisy forward-g channel).
+its per-sample correlation is weaker, as expected for the noisy forward-g channel). The verdict
+weighs BOTH shape (correlation) and scale (the lateral RMS gain) — a scale error is invisible to
+a correlation, so the gain is what catches a channel that tracks the corners but reads half.
 
 All of this runs once at load; GMeter.at_time is a cheap searchsorted lookup for the 30 Hz tick.
 """
@@ -76,6 +78,43 @@ _YAW_MIN_WINDOWS = 3       # below this, keep the single whole-chapter fit (noth
 # lateral r=+0.69 down to -0.05.)
 _YAW_MIN_COND = 0.08
 
+# --- the TRUST VERDICT: shape AND scale ---------------------------------------------------------
+# Lateral is the discriminating channel (a clear correlation means a real mount; a weak one means
+# head/vibration-dominated garbage), so the correlation floor stands.
+_LAT_CORR_MIN = 0.4
+# But Pearson r is scale-INVARIANT by construction, so the correlation alone cannot see a
+# MIS-SCALED g channel at all: halve the accelerometer and r comes out bit-identical while every
+# number the driver reads halves. That is the shape of the CORI yaw-drift defect too — it shrank
+# lateral g by cos(residual yaw) with the correlation barely moving. So the verdict also checks
+# MAGNITUDE: the ratio of the two lateral RMS values, which must sit near 1.
+# Measured on four real recordings (two tracks, two cameras): 1.077 / 1.101 / 1.108 / 1.114 — a
+# tight cluster a little above 1, because the 200 Hz IMU keeps the kerb/bump content the 10 Hz GPS
+# derivative smooths away. The band leaves that cluster ~0.28 of margin below and ~0.14 above,
+# while a x0.5 fault lands at 0.56 and a x2 at 2.2.
+_GAIN_MIN = 0.8
+_GAIN_MAX = 1.25
+# ...but a ratio of two noise floors measures nothing. Below this much GPS lateral RMS the span
+# holds no real cornering (the same threshold the yaw windows use), so the gain is REPORTED and not
+# gated on — otherwise a slow transit chapter would condemn a perfectly good mount.
+_GAIN_MIN_LAT_RMS = _YAW_MIN_LAT_RMS
+
+
+def _lat_gain(lat_rms_accl: float, lat_rms_gps: float) -> float:
+    """ACCL lateral RMS over GPS lateral RMS — 1.0 = the two agree in MAGNITUDE, not merely in
+    shape. See the _GAIN_* constants for why the correlation cannot do this job."""
+    return float(lat_rms_accl) / max(float(lat_rms_gps), 1e-9)
+
+
+def _verdict(lat_corr: float, lat_rms_accl: float, lat_rms_gps: float) -> bool:
+    """Is the ACCL-derived g trustworthy? It must TRACK the GPS-derived lateral (correlation) AND
+    MATCH ITS SCALE (gain). One shared function so the per-chapter fit, the post-correction
+    re-check and the whole-recording merge can never apply different rules."""
+    if not np.isfinite(lat_corr) or lat_corr < _LAT_CORR_MIN:
+        return False
+    if lat_rms_gps < _GAIN_MIN_LAT_RMS:
+        return True   # nothing to weigh the magnitude against (see _GAIN_MIN_LAT_RMS)
+    return bool(_GAIN_MIN <= _lat_gain(lat_rms_accl, lat_rms_gps) <= _GAIN_MAX)
+
 
 def _norm_rows(a):
     return a / np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-12)
@@ -114,13 +153,27 @@ class CrossCheck:
     long_rms_gps: float
     align_yaw_deg: float    # fitted CORI-world -> ENU yaw (per-recording mount calibration)
     align_reflect: bool     # whether the fit needed a handedness flip
-    ok: bool                # heuristic: is the ACCL g trustworthy (vs head-dominated garbage)?
+    ok: bool                # verdict: is the ACCL g trustworthy in SHAPE and SCALE (see _verdict)?
+
+    @property
+    def lat_gain(self) -> float:
+        """The lateral MAGNITUDE agreement (ACCL rms / GPS rms). ~1 means the g the app displays is
+        scaled right; the correlation beside it cannot tell you that (Pearson r is scale-blind)."""
+        return _lat_gain(self.lat_rms_accl, self.lat_rms_gps)
+
+    @property
+    def gain_measurable(self) -> bool:
+        """False when there was too little real cornering to weigh a magnitude against — the gain
+        is then reported for information and is NOT part of the verdict."""
+        return self.lat_rms_gps >= _GAIN_MIN_LAT_RMS
 
     def summary(self) -> str:
         verdict = "AGREE" if self.ok else "DISAGREE (ACCL may be mount/vibration-dominated)"
+        gain = (f"gain x{self.lat_gain:.2f}" if self.gain_measurable
+                else f"gain x{self.lat_gain:.2f}, not weighed — too little cornering")
         return (f"g cross-check [{verdict}] over {self.n} moving samples: "
                 f"lateral r={self.lat_corr:+.2f} (rms {self.lat_rms_accl:.2f} vs "
-                f"{self.lat_rms_gps:.2f} g), longitudinal r={self.long_corr:+.2f} "
+                f"{self.lat_rms_gps:.2f} g, {gain}), longitudinal r={self.long_corr:+.2f} "
                 f"(rms {self.long_rms_accl:.2f} vs {self.long_rms_gps:.2f} g); "
                 f"mount yaw {self.align_yaw_deg:+.0f} deg"
                 f"{', reflected' if self.align_reflect else ''}.")
@@ -407,16 +460,15 @@ def _fit_segment(ta, h1, h2, gps_t, long_gps, lat_gps, fwd, left, moving):
     _, s, R, ca, cl, along, lat = best
     reflect = (s == -1)
     yaw = float(np.degrees(np.arctan2(R[1, 0], R[0, 0])))
-    # Trust heuristic: lateral is the discriminating channel (clear correlation = a real mount,
-    # weak = head/vibration-dominated).
-    ok = bool(cl >= 0.4 and np.isfinite(cl))
+    lat_rms_accl = float(np.sqrt(np.mean(lat**2)))
+    lat_rms_gps = float(np.sqrt(np.mean(lat_gps[m]**2)))
     cross = CrossCheck(
         n=int(np.sum(m)), lat_corr=float(cl), long_corr=float(ca),
-        lat_rms_accl=float(np.sqrt(np.mean(lat**2))),
-        lat_rms_gps=float(np.sqrt(np.mean(lat_gps[m]**2))),
+        lat_rms_accl=lat_rms_accl, lat_rms_gps=lat_rms_gps,
         long_rms_accl=float(np.sqrt(np.mean(along**2))),
         long_rms_gps=float(np.sqrt(np.mean(long_gps[m]**2))),
-        align_yaw_deg=yaw, align_reflect=reflect, ok=ok)
+        align_yaw_deg=yaw, align_reflect=reflect,
+        ok=_verdict(cl, lat_rms_accl, lat_rms_gps))
     return R, reflect, cross
 
 
@@ -503,19 +555,21 @@ def _cross_check(along, lat, long_gps, lat_gps, moving, yaw_deg, reflect):
         return None
     cl = _corr(lat[m], lat_gps[m])
     ca = _corr(along[m], long_gps[m])
+    lat_rms_accl = float(np.sqrt(np.mean(lat[m]**2)))
+    lat_rms_gps = float(np.sqrt(np.mean(lat_gps[m]**2)))
     return CrossCheck(
         n=int(np.sum(m)), lat_corr=float(cl), long_corr=float(ca),
-        lat_rms_accl=float(np.sqrt(np.mean(lat[m]**2))),
-        lat_rms_gps=float(np.sqrt(np.mean(lat_gps[m]**2))),
+        lat_rms_accl=lat_rms_accl, lat_rms_gps=lat_rms_gps,
         long_rms_accl=float(np.sqrt(np.mean(along[m]**2))),
         long_rms_gps=float(np.sqrt(np.mean(long_gps[m]**2))),
         align_yaw_deg=float(yaw_deg), align_reflect=bool(reflect),
-        ok=bool(cl >= 0.4 and np.isfinite(cl)))
+        ok=_verdict(cl, lat_rms_accl, lat_rms_gps))
 
 
 def _merge_crosses(crosses):
     """Combine per-chapter cross-checks (sample-count-weighted correlations + RMS). `ok` keys off
-    the whole recording's weighted lateral correlation so one weak chapter can't condemn it."""
+    the WHOLE recording's weighted lateral correlation AND weighted lateral gain, so one weak
+    chapter can't condemn it — and no chapter can hide a mis-scaled channel behind a good r."""
     crosses = [c for c in crosses if c is not None and c.n > 0]
     if not crosses:
         return None
@@ -524,13 +578,14 @@ def _merge_crosses(crosses):
     wa = sum(c.long_corr * c.n for c in crosses) / n
     def wrms(attr):
         return float(np.sqrt(sum(getattr(c, attr)**2 * c.n for c in crosses) / n))
+    lat_rms_accl, lat_rms_gps = wrms("lat_rms_accl"), wrms("lat_rms_gps")
     # report the first chapter's alignment as representative (per-chapter yaw differs)
     return CrossCheck(
         n=n, lat_corr=float(wl), long_corr=float(wa),
-        lat_rms_accl=wrms("lat_rms_accl"), lat_rms_gps=wrms("lat_rms_gps"),
+        lat_rms_accl=lat_rms_accl, lat_rms_gps=lat_rms_gps,
         long_rms_accl=wrms("long_rms_accl"), long_rms_gps=wrms("long_rms_gps"),
         align_yaw_deg=crosses[0].align_yaw_deg, align_reflect=crosses[0].align_reflect,
-        ok=bool(wl >= 0.4))
+        ok=_verdict(wl, lat_rms_accl, lat_rms_gps))
 
 
 def _corr(a, b):
