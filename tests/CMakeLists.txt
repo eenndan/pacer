@@ -369,6 +369,18 @@ add_test(NAME test_lap_table_columns
 set_tests_properties(test_lap_table_columns PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Help-menu dialogs (fix/qa-help-dialogs): the shortcut card's wrapping rows must get the height
+# their text needs at ANY card width (the #119 regression painted a wrapped row's second line
+# outside the row), every live binding on the window must have a card row (⌘O had none) with the
+# glyphs Qt itself paints (⇧⌘S, not ⌘⇧S — asserted against the live QAction, so ⌃⌘F-vs-F11 is
+# platform-agnostic), the About / Privacy cards must refuse to shrink below their own copy, and
+# the privacy card must name every store the app writes. Real offscreen widgets on the REAL theme
+# (font metrics decide the wrapped heights); no pacer, no telemetry file.
+add_test(NAME test_help_dialog
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_help_dialog.py)
+set_tests_properties(test_help_dialog PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
 # `pacer` in the interpreter's site-packages — on a fresh CI env there is none, and
@@ -391,7 +403,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_consistency test_gmeter test_gmeter_overlay test_export_data
                         test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card
-                        test_stats test_lap_table_columns)
+                        test_stats test_lap_table_columns test_help_dialog)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

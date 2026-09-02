@@ -146,6 +146,16 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   the entry/apex/exit bar painted those thirds at 1.19:1 against the row, so the only cue
   reconciling them with the row's cross-lap "time lost" was a tooltip. Faster thirds take
   the ahead colour, segments are sized by |Δt|, and the window's net is on the row face.
+- **Help ▸ Keyboard shortcuts** no longer slices a wrapped row in half (the LAYOUT row's
+  second line painted outside its row and over the row below); ⌘O has a row at last, and
+  every accelerator's glyphs now come from its own `QKeySequence`, so the card reads what
+  the menu bar paints (⇧⌘S, not ⌘⇧S) instead of hand-typed text that could drift.
+- **Help ▸ Your data & privacy** now discloses all four stores, not two: the preferences
+  file (`prefs.json`, which holds the last folder you opened) and the saved-track database
+  (`tracks.json`, which holds GPS coordinates) were undisclosed and unreachable by either
+  documented removal route.
+- **About / Your data & privacy** can no longer be shrunk below their own copy — both cards
+  refuse the shrink and scroll if the text ever outgrows the display.
 
 ## [0.1.0] — 2026-06-22
 
