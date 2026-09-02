@@ -94,6 +94,13 @@ add_test(NAME test_track_db
 # only (session/load chain has no Qt, verified), no telemetry file.
 add_test(NAME test_session_pure
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_session_pure.py)
+# Sector-boundary integrity (QA MAP-08-ESC / MAP-11): the collapse decision is SESSION-wide, so
+# sweeping a second sector line across the tolerance can never leave two laps with a different
+# number of boundaries (the state where an S column meant a different stretch of track per row and
+# session_best_splits/theoretical_best summed incomparable pieces); plus suggest_sectors(n)'s even
+# subdivision. Bare Sessions seeded via tests/_synthetic — no Qt, no telemetry file.
+add_test(NAME test_sector_integrity
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_sector_integrity.py)
 # Load-pipeline internals (test/load-pipeline-coverage): the clock-provenance decision
 # (load._used_gps9_trueclock, behind the degraded-timing banner) and the no-average-across-a-gap
 # smoothing contract (_signal._gap_segments / _smooth_segments) — pure functions that ran only
@@ -373,7 +380,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_import_ergonomics
                         test_reference
                         test_gps_source_bindings test_laps_bindings test_ingest_equivalence
-                        test_sidecar test_track_db test_session_pure test_load_internals
+                        test_sidecar test_track_db test_session_pure test_sector_integrity
+                        test_load_internals
                         test_load_pipeline test_fit_start_line test_session_services
                         test_golden_synthetic
                         test_studio_features test_rainbow_map test_map_render

@@ -99,6 +99,13 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   corner losing 0.109 s.
 - Every ranked corner in the Opportunities list now carries a measured reason; rows below
   the top three used to print "find time here" because they were never analysed.
+- Sector splits that meant a different stretch of track on different rows. A sector line
+  dropped within the collapse tolerance of another used to be fused **per lap**, so in a
+  ~2 m band some laps kept the pair and some fused it — one lap's S2 was a 17 s sector
+  beside another's 0.2 s sliver, the purple session best could land on a sliver, and the
+  theoretical best was summed from pieces that never tiled a lap. The decision is now made
+  once for the whole session, so every lap reports the same boundaries and every S column
+  is the same stretch of track on every row.
 
 ## [0.1.0] — 2026-06-22
 
