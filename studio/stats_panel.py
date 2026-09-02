@@ -40,6 +40,10 @@ from PySide6.QtWidgets import (
 
 from . import theme, units
 from ._signal import fmt_time
+
+# The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the digest tile
+# and the coaching headline can never state different totals for the same three corners — L5-02.
+from .coaching_panel import PANEL_TOP_N, _shown_rows
 from .consistency import pb_mask
 from .lap_table import (
     BEST_LAP_MARK,
@@ -81,7 +85,7 @@ TILE_VALUE_PT = 15        # tile value type size (between BODY 13 and HERO 22)
 TILES_PER_ROW = 4         # tile-grid MAX columns (wide/maximized panels)
 TILE_MIN_PX = 148         # reflow threshold: columns = viewport width // this, clamped 2..4
 #                           (C6 — the hard-coded 4 pushed the 4th tile column, incl. the
-#                           "fix your top 3" digest, off-pane at the default quadrant width)
+#                           coaching digest, off-pane at the default quadrant width)
 GG_HEIGHT = 220           # px; the friction-circle plot's fixed height
 SPARK_HEIGHT = 96         # px; the PACE trend sparkline (absorbed from the retired
 #                           ConsistencyPanel — its content lives here now)
@@ -256,7 +260,12 @@ class StatsView(QWidget):
             "the single glory lap.")
         self.t_rolling = _Tile("best rolling")
         self.t_rolling.setToolTip(ROLLING_TOOLTIP)
-        self.t_digest = _Tile("fix your top 3 →")
+        # IA-04: the caption names the BASE. This tile is the median lap rebased, so it routinely
+        # reads slower than the "best lap" tile two cells away — uncaptioned that looks like a
+        # target you have already beaten. L4-08: no "→" — the tile is not clickable (the Coaching
+        # tab is a tab away, and a painted arrow that does nothing is a broken affordance); the
+        # tooltip points there in words instead.
+        self.t_digest = _Tile(f"median lap · top {PANEL_TOP_N} fixed")
         self.t_sigma = _Tile("σ lap")
         self.t_spread = _Tile("median − best")
         self.t_cov = _Tile("consistency · σ/median")
@@ -718,25 +727,34 @@ class StatsView(QWidget):
         self.t_trend.set(text, f"trend · {verdict}")
 
     def _set_digest(self, session, pace):
-        """The coaching digest tile: the projected lap if the top-3 corner losses were fixed,
+        """The coaching digest tile: the projected lap if the top-N corner losses were fixed,
         anchored to the MEDIAN lap (the honesty rule — the best lap already banks some of
         those corners, so best − losses would overclaim). Dash without enough clean laps /
-        no coaching data."""
+        no coaching data.
+
+        L5-02 — the saving is the Coaching panel's ARITHMETIC, not a parallel one: its rows
+        (`_shown_rows`, sub-resolution losses dropped), its count (`PANEL_TOP_N`) and its
+        rounding (the 2-dp cells the user can add up by eye, summed and re-rounded). Summing the
+        raw floats instead made the two surfaces disagree by a rounding penny for the same three
+        corners — 0.31 s here against 0.32 s on the Coaching page — and made this tile disagree
+        with its OWN tooltip, which printed 0.31 while subtracting 0.3134."""
         opp_fn = getattr(session, "coaching_opportunities", None)
         opp = opp_fn() if opp_fn is not None else None
-        rows = getattr(opp, "rows", None) if getattr(opp, "enough", False) else None
+        has_rows = getattr(opp, "enough", False) and getattr(opp, "rows", None)
+        rows = _shown_rows(opp)[:PANEL_TOP_N] if has_rows else []
         if pace is None or not rows:
             self.t_digest.set(None)
             self.t_digest.setToolTip("")
             return
-        saved = sum(r.time_lost for r in rows[:3])
+        saved = round(sum(round(r.time_lost, 2) for r in rows), 2)
         projected = pace.median - saved
-        self.t_digest.set(fmt_time(projected))
+        self.t_digest.set(fmt_time(projected), f"median lap · top {len(rows)} fixed")
         self.t_digest.setToolTip(
             f"Projected from your MEDIAN lap ({fmt_time(pace.median)}) minus the top-"
-            f"{min(len(rows), 3)} corner losses ({saved:.2f} s, measured vs your best "
-            "lap's corners — see the coaching panel). Anchored to the typical lap, not "
-            "best-minus-losses: your best lap already banks some of those corners.")
+            f"{len(rows)} corner losses ({saved:.2f} s, measured vs your best lap's "
+            "corners). Anchored to the typical lap, not best-minus-losses: your best lap "
+            "already banks some of those corners — so this target can read SLOWER than your "
+            "best lap and still be the honest one. The Coaching tab lists the corners.")
 
     def refresh_palette(self):
         """Re-render after a colour-blind-palette flip: the best-lap ★ row tint + the purple
