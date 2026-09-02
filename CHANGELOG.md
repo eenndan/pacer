@@ -67,6 +67,25 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Esc now restores a maximized panel.** The Shortcuts card and all four ⛶ tooltips promised
+  "Esc / click again to restore", but the key was ignored: its handler was gated on the window
+  being full screen, which maximizing a panel never makes it. Measured across 3 window sizes ×
+  4 panels, Escape moved **0 of 1,296,000 pixels**; it now backs out of whichever "one thing
+  fills the frame" state is on — video focus, a maximized panel, then window full screen.
+- The welcome screen no longer offers menu items that do nothing. **17 of 25** actions stayed
+  enabled with no recording open, and three were completely inert (⌘⇧S Session statistics,
+  Coaching ▸ Opportunities…, View ▸ Show excluded laps left the window unchanged, said nothing
+  and opened nothing). The Coaching and View menus now grey their session-only items out — and
+  do it from the first frame, so ⌘⇧S is inert rather than silently ignored.
+- A coaching **Jump** now says where it landed. It opened the Corners tab on a 12-row grid with
+  nothing marking the corner you clicked; the matching row is now the current cell, scrolled
+  into view (at 1100×620 it was off-screen entirely), and named on the status bar together with
+  the lap the table is showing. Jumping also stopped overwriting your saved lap-panel tab — quit
+  after a jump and the panel reopens on the page you chose, not on Corners.
+- The crash dialog calls the app **Pacer Studio**, the name every other surface uses. It was the
+  one place rendering a lower-case "pacer", on the surface that only appears when something has
+  already gone wrong (macOS shows no window title on that dialog, so the body is the only naming
+  it has).
 - The Coaching page now uses the room it is given. Maximized it used to be **3 rows in 808 px**
   — 78% dead canvas — while the ranking behind it held **11** corners; it now shows as many
   ranked corners as the page can hold (still at least the top 3 the headline sums). And every
