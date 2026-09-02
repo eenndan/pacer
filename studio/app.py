@@ -12,6 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import QBuffer, QEvent, QIODevice, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QActionGroup, QDesktopServices, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QComboBox,
     QDialog,
@@ -84,10 +85,14 @@ def _show_error_report(exc_type, exc, tb):
     detail = "".join(traceback.format_exception(exc_type, exc, tb))
     box = QMessageBox(
         QMessageBox.Critical, f"{APP_NAME} — something went wrong",
-        "Something went wrong and pacer hit an unexpected error.\n\n"
+        f"Something went wrong and {APP_NAME} hit an unexpected error.\n\n"
         "The app is still running — you can keep working, but if this keeps happening, "
         "please report it so it can be fixed.\n\n"
         f"{summary}")
+    # The BODY has to carry the product name. macOS drops a QMessageBox's window title — the
+    # constructor's title argument above leaves windowTitle() == '' here, and setting it explicitly
+    # does not change that — so on the one surface that shows up when the app is already
+    # misbehaving, the headline is the ONLY naming, and it used to say "pacer" (QA L1-11).
     # The traceback is diagnostics for a bug report — behind the collapsible Details, not the headline.
     box.setDetailedText(detail)
     box.addButton(QMessageBox.Close)
@@ -826,6 +831,10 @@ class StudioWindow(QMainWindow):
             self._tick_timer.start()
 
         self._sync_full_recording_action()
+        # The session-only menu items (and their shortcuts) come alive with the view, not on the
+        # next menu pull-down.
+        self._sync_coaching_menu()
+        self._sync_view_menu()
         # The permanent status-bar chip naming the active cross-recording reference, created once
         # and hidden until a reference is loaded.
         if getattr(self, "_ref_chip", None) is None:
@@ -942,6 +951,7 @@ class StudioWindow(QMainWindow):
         # Opportunities). Named "Coaching" to match the product positioning and the docs/docstrings
         # (studio/README.md, coaching_panel.py) — its items are all coaching/analysis surfaces.
         coaching_menu = self.menuBar().addMenu("&Coaching")
+        coaching_menu.aboutToShow.connect(self._sync_coaching_menu)
         self._ref_action = coaching_menu.addAction("Load reference recording…")
         self._ref_action.setToolTip(
             "Race a friend's GoPro: pick another recording of this track (yours or a friend's) to "
@@ -978,6 +988,7 @@ class StudioWindow(QMainWindow):
         # its body. Both default SHOWN (the calm default keeps the re-open header visible) — coaching
         # ships collapsed, excluded ships as its own one-liner.
         view_menu = self.menuBar().addMenu("&View")
+        view_menu.aboutToShow.connect(self._sync_view_menu)
         # Whole-window full screen (the native macOS ⌘⌃F): a checkable toggle whose text flips
         # Enter/Exit. The macOS green traffic-light already gives native fullscreen for a QMainWindow;
         # this is the menu item + keyboard shortcut on top of it, kept in sync via changeEvent. Esc
@@ -1039,6 +1050,17 @@ class StudioWindow(QMainWindow):
         self._colorblind_action.toggled.connect(self._on_colorblind_toggled)
 
         # Help menu: the shortcut reference (also F1 / ?) and an About card (help_dialog.py).
+        #
+        # ELLIPSIS CONVENTION (recorded because a QA pass inferred the wrong one and filed against
+        # it — QA L1-10): a trailing "…" means the command needs MORE INFORMATION before it can
+        # complete (Apple's rule), NOT "it opens a dialog". So "Open…", "Save as track…" and
+        # "Back up library…" carry one — each raises a picker — while "Keyboard shortcuts",
+        # "Your data && privacy" and "About {APP_NAME}" correctly do not: they open a card that
+        # asks the user for nothing. "Enter/Exit Full Screen" and "About …" keep macOS's own
+        # Title-case wording for the two items every Mac app shares; the sentence case elsewhere
+        # is the house style. The one real outlier is Coaching ▸ "Opportunities…", an informational
+        # ranking that needs no input — left alone here only because coaching_panel.py's in-app
+        # pointer copy names it with the ellipsis; fixing the pair is a one-line follow-up.
         help_menu = self.menuBar().addMenu("&Help")
         self._shortcuts_action = help_menu.addAction("Keyboard shortcuts")
         self._shortcuts_action.setShortcut(QKeySequence(Qt.Key_F1))
@@ -1057,6 +1079,37 @@ class StudioWindow(QMainWindow):
         self._report_action.setToolTip(
             "Open a new issue on GitHub (include your GoPro model/firmware and what you were doing)")
         self._report_action.triggered.connect(self._report_problem)
+
+        # Seed the session-dependent enablement once, so the welcome screen opens with the
+        # session-only items already greyed (and their shortcuts inert) rather than waiting for
+        # the user to pull the menu down. _build_ui re-runs both after every load.
+        self._sync_coaching_menu()
+        self._sync_view_menu()
+
+    def _sync_coaching_menu(self):
+        """Grey Coaching's session-only items out until a session is loaded (the Coaching menu's
+        aboutToShow, mirroring _sync_export_menu / _sync_edit_menu). Both handlers early-return
+        with no session, so before this the welcome screen offered a reference picker and an
+        Opportunities item that did literally nothing (QA L1-06). Clear reference / Compare vs
+        reference stay owned by _apply_reference_change — a reference cannot exist without a
+        session, so they are already off here."""
+        has = hasattr(self, "session")
+        for name in ("_ref_action", "_opportunities_action"):
+            action = getattr(self, name, None)
+            if action is not None:
+                action.setEnabled(has)
+
+    def _sync_view_menu(self):
+        """Grey View's session-only items out until a view exists (the View menu's aboutToShow).
+        Full screen, Units and the colour-blind palette all work on the welcome screen and stay
+        enabled; ⌘⇧S Session statistics and the excluded-laps toggle both need a CentralView, and
+        a disabled QAction's shortcut is inert too — which is what makes ⌘⇧S stop being a silent
+        no-op before the first load (QA L1-06)."""
+        has_view = getattr(self, "view", None) is not None
+        for name in ("_stats_action", "_excluded_action"):
+            action = getattr(self, name, None)
+            if action is not None:
+                action.setEnabled(has_view)
 
     def _show_shortcuts(self):
         """Help ▸ Keyboard shortcuts (also F1 / ?): the read-only shortcut reference."""
@@ -1189,17 +1242,38 @@ class StudioWindow(QMainWindow):
                 view.set_video_focus(False)
         super().changeEvent(event)
 
+    def _escape_out(self) -> bool:
+        """Back out of ONE "something fills the frame" state, innermost first; True if Esc was used.
+
+        Three states can be entered independently and Esc has to leave whichever is on:
+
+        * VIDEO FOCUS (⤢ / double-click the video) owns BOTH a maximized video panel and a
+          fullscreen window, so it must be tested first — either of the branches below would
+          otherwise undo half of it and leave the pair adrift.
+        * A MAXIMIZED PANEL (⛶ / double-click a header) collapses the grid and never touches the
+          window state. Gating the whole Esc branch on isFullScreen() is why this state was inert
+          while four surfaces — the Shortcuts card and all four ⛶ tooltips — promised Esc restores
+          it (QA L1-02). The window is the only viable owner: CentralView is Qt.NoFocus, so a
+          keyPressEvent there would never receive the key.
+        * WINDOW FULLSCREEN (⌘⌃F / the green button) is the outermost, so it goes last."""
+        view = getattr(self, "view", None)
+        if view is not None and getattr(view, "is_video_focused", lambda: False)():
+            view.set_video_focus(False)     # also leaves fullscreen
+            return True
+        if view is not None and getattr(view, "_maximized_panel", None) is not None:
+            view._restore_splitter_sizes()  # the inverse of the ⛶ collapse; the view owns the snapshot
+            return True
+        if self.isFullScreen():
+            self.showNormal()
+            return True
+        return False
+
     def keyPressEvent(self, event):
-        """←/→ step the video ±1 s (Shift ±5 s). Esc exits fullscreen / video focus. Handled here,
-        not as a QShortcut, so the lap table keeps arrow nav; keyPressEvent only fires when the focus
-        widget didn't use the key."""
-        if event.key() == Qt.Key_Escape and self.isFullScreen():
-            # Exit video focus if it's on (which also leaves fullscreen), else just leave fullscreen.
-            view = getattr(self, "view", None)
-            if view is not None and view.is_video_focused():
-                view.set_video_focus(False)
-            else:
-                self.showNormal()
+        """←/→ step the video ±1 s (Shift ±5 s). Esc backs out of every "one thing fills the frame"
+        state — video focus, a maximized panel, window fullscreen. Handled here, not as a QShortcut,
+        so the lap table keeps arrow nav; keyPressEvent only fires when the focus widget didn't use
+        the key."""
+        if event.key() == Qt.Key_Escape and self._escape_out():
             event.accept()
             return
         if event.key() in (Qt.Key_Left, Qt.Key_Right):
@@ -1497,17 +1571,58 @@ class StudioWindow(QMainWindow):
         # we own the seek below, to the corner entry rather than the lap start.
         view.table.select([best])
         view._on_laps_selected([best])
-        view.select_lap_tab(1)  # the Corners tab shows the per-corner rows for the jump target
+        # The Corners tab shows the per-corner rows for the jump target. This is NAVIGATION, not a
+        # preference: without the guard the jump silently overwrote (and persisted) whichever tab
+        # the user had chosen, so quitting from a jump reopened the app on Corners (QA L5-07).
+        self._jumping = True
+        try:
+            view.select_lap_tab(1)
+        finally:
+            self._jumping = False
         view.map.highlight_corner(cid)
+        self._reveal_jump_corner(cid)
         target = self.session.corners.corner_entry_media_time(best, cid)
         if target is not None:
             view.video.seek(target)
             # Seed auto-follow to the seek's lap so the post-seek tick isn't a lap-change edge.
             view._playback.followed_lap = self.session.lap_at_time(target)
 
+    def _reveal_jump_corner(self, cid: int):
+        """Point at the row the jump landed on: scroll corner `cid` to the middle of the Corners
+        grid, make it the current cell, and say on the status bar which corner and which lap the
+        table is now showing.
+
+        The Corners grid is deliberately NoSelection (track order is the meaning), so before this
+        a Jump arrived on a 12-row table with nothing indicating WHICH row you had clicked — and,
+        because the jump selects the session best, on a Δ column that is all dashes against itself.
+        Naming the destination is what makes those dashes read as an answer instead of a refutation
+        (QA L5-07). Fully guarded: a navigation nicety must never break the jump."""
+        view = getattr(self, "view", None)
+        table = getattr(getattr(view, "corner_table", None), "table", None)
+        if table is None:
+            return
+        try:
+            row = view.corner_table._cids.index(cid)
+            item = table.item(row, 0)
+            if item is None:
+                return
+            table.setCurrentCell(row, 0)
+            table.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+            label = item.text().split()[0]      # "C9 ⟳" -> "C9" (drop the direction glyph)
+            self.statusBar().showMessage(
+                f"jumped to {label} — Corners is showing lap "
+                f"{lap_label(self.session.best_lap_id())}, this session's best", STATUS_MS)
+        except (ValueError, AttributeError, IndexError):
+            return  # the corner set moved under us (a re-segment); the map ring already landed
+
     def _on_lap_tab_changed(self, index: int):
         """The lap panel's tab changed (a tab click, a digit shortcut, or ⌘⇧S): remember +
-        persist (guarded) so the panel reopens on the same page after a reload/relaunch."""
+        persist (guarded) so the panel reopens on the same page after a reload/relaunch.
+
+        A jump-to NAVIGATES the panel for the user (Coaching ▸ Opportunities ▸ Go); that is not the
+        user choosing a page, so it must not overwrite the persisted preference (QA L5-07)."""
+        if getattr(self, "_jumping", False):
+            return
         self._lap_panel_tab = int(index)
         try:
             prefs.set_lap_panel_tab(self._lap_panel_tab)
