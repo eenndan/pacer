@@ -251,6 +251,24 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   used to show 25 rows and "24 excluded" on a 50-lap recording.
 - Expanding that strip lists **every** excluded lap in a height-bounded scroll, instead of
   6 of 24 plus a dead "+18 more" naming laps no surface in the app would show.
+- **Lap columns can be sorted from the keyboard.** Sorting was mouse-only: the header could
+  not take focus, so no Tab press ever reached it and Space/Return left the indicator where
+  it was — with no menu action and no shortcut offering a way in. One Tab out of the grid now
+  lands on the header, ←/→ (and Home/End) walk the sortable columns, and Space/Return sorts by
+  the focused one, which wears the app's focus ring so you can see what you are about to sort
+  by. While it has the keyboard it also takes Space back from the video's play/pause.
+- **The ★ says what it means.** The mark for "session best in this context" was drawn with an
+  empty tooltip on every cell that carried it, in both tables, and explained in exactly one
+  column header. Every ★ cell and every column that can wear one now carries the legend — on
+  top of, not instead of, the GPS-dropout or provisional note the cell already had.
+- **The Corners rows admit they are clickable.** Clicking one rings that corner on the map and,
+  from a maximized lap panel, restores the grid on the way so the map has pixels to paint on —
+  and the panel shrinking 5.2× was the first feedback the click produced. The rows now take the
+  pointing-hand cursor and fill on hover, and the Corner column's tooltip names the click.
+- **The Corners table names its units.** Seven columns of unit-bearing numbers carried no unit
+  anywhere on screen (they were in the header tooltips, which is hover-only) while the Laps
+  header says "Entry (km/h)" and the Stats page captions the same data. A caption above the grid
+  now states times, speeds and grip, and follows the km/h ↔ mph setting.
 - False "GPS quality low" on clean recordings (the dropped-fix denominator counted the
   trimmed stationary lead-in); clock-aware degraded-timing copy.
 - `speed_long_g` run-seam NaN that silently dropped brake/coast events; the brake-onset
