@@ -550,16 +550,17 @@ class StudioWindow(QMainWindow):
         # Restore the user's saved start/sector lines (written only on a user edit) before the UI
         # is built, so every panel is constructed against the restored segmentation. Applied first
         # so the segmentation is final before any notice below is decided.
+        # Session.restore_saved_timing_lines is the SHARED seam (sidecar.load + the lat/lon apply):
+        # a cross-recording reference restores through the very same call, so a recording pulled in
+        # as a reference is segmented exactly as opening it would segment it (QA W9-01).
         self._sidecar_path = sidecar.sidecar_path(paths[0]) if paths else None
         self._timing_restore_failed = False
-        data = sidecar.load(self._sidecar_path) if self._sidecar_path else None
-        if data is not None:
-            if session.apply_timing_lines_latlon(data["start"], data["sectors"],
-                                                 confirmed=data["confirmed"]):
-                print(f"studio: restored saved timing lines from "
-                      f"{os.path.basename(self._sidecar_path)}", flush=True)
-            else:
-                self._timing_restore_failed = True
+        restored = session.restore_saved_timing_lines(self._sidecar_path)
+        if restored is True:
+            print(f"studio: restored saved timing lines from "
+                  f"{os.path.basename(self._sidecar_path)}", flush=True)
+        elif restored is False:  # the revert guard rejected them; the fitted lines still stand
+            self._timing_restore_failed = True
 
         # Re-opening the SAME recording carries its timing-line undo history across the new Session.
         # Without this, File ▸ Open on the recording you had just mis-dragged greyed out the one

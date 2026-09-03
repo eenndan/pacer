@@ -35,6 +35,7 @@ from . import (
     gmeter,
     library,
     render_cache,
+    sidecar,
     timeline,
     track_match,
     tracks,
@@ -324,7 +325,10 @@ class Session:
         only the reference lap's `(dist, speed, elapsed)` curve is needed for the charts/table.
         For the map the reference racing line is fit into THIS session's local frame (see
         cross_reference.build). Loading goes through the normal headless `Session.load`
-        pipeline (no video pane needed for the data path)."""
+        pipeline (no video pane needed for the data path); `set_reference_session` then restores
+        the reference's OWN saved timing lines before any guard reads a lap off it, so a
+        recording is banded on the segmentation its owner confirmed rather than on the loader's
+        auto-fitted guess."""
         try:
             ref = Session.load(paths)
         except Exception as exc:  # noqa: BLE001 — a bad reference must never break the session
@@ -335,6 +339,16 @@ class Session:
         """Adopt an already-loaded `Session` as the reference (the guard + extraction half of
         `load_reference`, split out so tests can pass a synthetic reference Session without a
         telemetry file). Returns None on success or the refusal reason."""
+        # SEGMENT IT AS ITS OWNER DID, before any guard reads a lap off it. `Session.load` returns
+        # telemetry with the loader's AUTO-FITTED start line; the line the user confirmed for that
+        # recording lives in its sidecar and was, until QA W9-01, applied only by the primary
+        # open's `_on_session_loaded`. So a reference arrived here cut at a line its owner had
+        # already replaced — on the owner's own pair, 198.7 m fragments of a 740.3 m lap — and the
+        # lap-length band below refused it for a mis-placement that was fixed on disk. Restoring
+        # HERE rather than at the two call sites is what makes that structural: every route into a
+        # reference goes through this function, including any future one. No-op (returns None)
+        # for a Session with no on-disk provenance, which is every synthetic double.
+        ref.restore_saved_timing_lines()
         # IDENTITY guard, first: the picker offers every .MP4 on disk including the one already
         # open, and `chapters.discover_siblings` expands a picked chapter to the SAME chain this
         # session was loaded from — so "load reference" lands on your own recording with one
@@ -343,7 +357,14 @@ class Session:
         # reference's chrome: 12 corner rows of "+0.00", a dead-flat Δ curve, and a cross-compare
         # with the same lap of the same file in both panes, all badged as measurements. There is
         # no comparison to be had, so the honest answer is to refuse before adopting it.
-        if self._shares_footage_with(ref):
+        #
+        # TWO predicates, ORed, because they miss different things: `_shares_footage_with` asks
+        # where the files are and is blind to a COPY (a duplicated folder, an external-drive
+        # backup, a re-download — QA W9-04 admitted a byte-identical copy and painted every Δ as
+        # "+0.00"); `_shares_recording_identity_with` asks what the footage IS and is blind to the
+        # same recording reached over a different chapter subset. Neither is a superset of the
+        # other, so the gate asks both.
+        if self._shares_footage_with(ref) or self._shares_recording_identity_with(ref):
             return ("that is the recording you already have open — a lap can't be a reference for "
                     "itself. Pick a different recording of the same track; keeping the local "
                     "best lap.")
@@ -415,6 +436,78 @@ class Session:
         mine = self._source_paths()
         return bool(mine and (mine & other._source_paths()))
 
+    def _recording_identity(self) -> tuple[int, int, int] | None:
+        """What this session's FOOTAGE is, independent of where its file sits and of how the laps
+        were cut: ``(first kept GPS fix epoch-ms, last kept GPS fix epoch-ms, kept point count)``.
+
+        Segmentation-independent by construction — it reads the point stream, not the laps — which
+        matters because the reference path now restores saved timing lines before the guards run.
+        A copy of a recording fingerprints identically to its original; two genuinely different
+        recordings would have to share a GPS wall clock to the MILLISECOND at both ends AND keep
+        the identical number of fixes through the quality gate.
+
+        None (never assumed to collide) when the answer cannot be READ rather than merely differs:
+          * a stream with no per-fix wall clock — a GPS5 camera reports 0 for every fix, so two
+            unrelated recordings would both fingerprint (0, 0, n) and collide on point count alone;
+          * an empty session, or a `laps` double with no point API (every synthetic test fixture).
+        """
+        laps = getattr(self, "laps", None)
+        if laps is None or not hasattr(laps, "point_count") or not hasattr(laps, "get_point"):
+            return None
+        n = int(laps.point_count())
+        if n <= 0:
+            return None
+        first_ms = int(laps.get_point(0).point.timestamp_ms)
+        last_ms = int(laps.get_point(n - 1).point.timestamp_ms)
+        if first_ms <= 0 or last_ms <= 0:  # GPS5 / sentinel samples: no wall clock to compare
+            return None
+        return (first_ms, last_ms, n)
+
+    def _shares_recording_identity_with(self, other: Session) -> bool:
+        """True iff `other` is the SAME FOOTAGE as this session by its own content — the predicate
+        that catches what `_shares_footage_with` structurally cannot: a byte copy under another
+        name (QA W9-04).
+
+        Both sides must also have on-disk PROVENANCE (`_source_paths`), for the same reason that
+        one already declines to guess: a Session with no recording behind it is a fixture, not a
+        duplicate of anything, and its clock fingerprint describes whatever file the fixture was
+        derived from rather than a recording the user picked. Only the synthetic doubles and the
+        dev equivalence gate's deliberately anonymised stand-in reach that state; every reference
+        the app can actually load carries its chapter paths."""
+        mine = self._recording_identity()
+        if mine is None or mine != other._recording_identity():
+            return False
+        return bool(self._source_paths() and other._source_paths())
+
+    def _reference_lap_duplicates_a_local_lap(self) -> bool:
+        """True iff the ADOPTED reference lap's curve is bit-identical to one of this session's
+        own laps — same sample count, same odometer, same elapsed clock, exactly.
+
+        This asks nothing about files: it looks only at the numbers already adopted, so it still
+        answers when BOTH provenance predicates miss (see `reference_is_own_recording`). Exact
+        equality is the point — the state it names is "the baseline IS this lap", and two
+        independently sampled recordings cannot agree on hundreds of float64 odometer samples.
+        That puts a false positive out of reach; a false negative (the same footage segmented at a
+        different start line, or re-encoded) is what the provenance predicates are for."""
+        ref = self._ref
+        if ref is None:
+            return False
+        ref_dist, ref_elapsed = np.asarray(ref.dist), np.asarray(ref.elapsed)
+        if len(ref_dist) < 2:
+            return False
+        for lap_id in self.valid_lap_ids():
+            try:
+                dist, _speed_kmh, elapsed = self._lap_arrays(lap_id)
+            except Exception:  # noqa: BLE001 — a lap we can't read is a lap we can't match
+                continue
+            # Length first: it prunes every non-candidate before any element comparison, which is
+            # what keeps this cheap enough for the compare controller's per-tick badge.
+            if len(dist) != len(ref_dist):
+                continue
+            if np.array_equal(dist, ref_dist) and np.array_equal(elapsed, ref_elapsed):
+                return True
+        return False
+
     def reference_is_own_recording(self) -> bool:
         """True iff the ACTIVE reference was taken from this session's own footage.
 
@@ -422,11 +515,29 @@ class Session:
         it exists because the surfaces downstream of the baseline (the Corners Δ dashes, the
         compare same-lap badge) each carried their own hard-coded assumption that "a reference
         implies a different recording", and an assumption is not a guard. They ask this instead,
-        so a future path that reaches the state prints dashes rather than fake measurements."""
-        ref_session = getattr(self, "_reference_session", None)
-        if self._ref is None or ref_session is None:
+        so a future path that reaches the state prints dashes rather than fake measurements.
+
+        INDEPENDENCE IS THE WHOLE POINT, and the first version of this did not have it: it was a
+        one-line call to `_shares_footage_with`, the refusal's own and only predicate, so a case
+        that predicate missed was missed by BOTH layers at once — a byte-identical copy was
+        admitted as a reference AND reported as a different recording, and every Δ cell rendered
+        "+0.00" as a measurement (QA W9-04). So this asks questions that fail for DIFFERENT
+        reasons and answers True if any of them says yes:
+          1. the adopted lap's own numbers duplicate a local lap — no file question at all, and
+             the only route that survives both provenance predicates being wrong;
+          2. the chapter files overlap (the refusal's first predicate);
+          3. the recording identity matches (the refusal's second).
+        Route 1 is asked FIRST and deliberately reaches further than the refusal can: it holds
+        even for a reference this session has no provenance for at all."""
+        if self._ref is None:
             return False
-        return self._shares_footage_with(ref_session)
+        if self._reference_lap_duplicates_a_local_lap():
+            return True
+        ref_session = getattr(self, "_reference_session", None)
+        if ref_session is None:
+            return False
+        return (self._shares_footage_with(ref_session)
+                or self._shares_recording_identity_with(ref_session))
 
     def _track_admits_reference(self, ref: Session) -> tuple[bool, bool, str | None]:
         """Decide whether `ref` may overlay this session, and HOW it was matched. Returns
@@ -507,10 +618,16 @@ class Session:
             return None  # nothing to band against: admit, exactly as before
         if LAP_DIST_BAND_LO * median_m <= ref_total_m <= LAP_DIST_BAND_HI * median_m:
             return None
+        # The advice names the RIGHT recording to fix. The reference arrives here already carrying
+        # whatever start line its owner saved for it (`restore_saved_timing_lines`, called by
+        # set_reference_session), so the only way to reach this message is a reference that has
+        # never had one placed — and "drag it on the map" used to read as though it meant THIS
+        # session's map, which is not where the mis-placed line is (QA W9-01).
         return (f"reference lap isn't comparable with this session's laps: counted laps here run "
                 f"~{median_m:.0f} m; the reference lap runs ~{ref_total_m:.0f} m "
-                f"({ref_total_m / median_m:.2g}x). Keeping the local best lap — if a start/finish "
-                f"line is in the wrong place, drag it on the map and load the reference again.")
+                f"({ref_total_m / median_m:.2g}x). Keeping the local best lap — open THAT "
+                f"recording, drag its start/finish line onto the track, then load it as a "
+                f"reference again.")
 
     def clear_reference(self) -> None:
         """Drop the cross-recording reference — every "vs best" output reverts to the local
@@ -995,6 +1112,52 @@ class Session:
             return True
         self.set_timing_lines(prev_start, prev_sectors, user_confirm=False)
         return False
+
+    def own_sidecar_path(self) -> str | None:
+        """The sidecar path for the recording THIS session was loaded from, or None when the
+        session has no on-disk provenance (the synthetic doubles the tests build, and the dev
+        gate's anonymised stand-in). Resolved from the FIRST chapter, which is exactly the naming
+        rule `sidecar.sidecar_path` applies, so a chaptered session and a single-chapter open of
+        any one of its chapters resolve to the same file.
+
+        Ordered, unlike `_source_paths()` (a set): the sidecar belongs to the first chapter, so
+        the two can't share one accessor. Best-effort — a path that can't be resolved (an
+        unreadable folder, a name `discover_siblings` refuses) has no saved lines, and a session
+        that can't name its own recording must never GUESS at one."""
+        chapter_map = getattr(self, "chapters", None)
+        chapter_paths = getattr(chapter_map, "chapters", None) if chapter_map is not None else None
+        first = chapter_paths[0].path if chapter_paths else getattr(self, "video_path", None)
+        if not first:
+            return None
+        try:
+            return sidecar.sidecar_path(first)
+        except Exception:  # noqa: BLE001 — an unresolvable path simply has no saved lines
+            return None
+
+    def restore_saved_timing_lines(self, path: str | None = None) -> bool | None:
+        """Apply the start/sector lines the user SAVED for this recording — the one restore seam.
+
+        Returns None when there is nothing to restore (no provenance, no sidecar, or an invalid
+        one), True when the saved lines were applied, False when `apply_timing_lines_latlon`'s
+        revert guard rejected them (the segmentation is left exactly as the loader fitted it).
+
+        WHY THIS IS A SEAM AND NOT AN INLINE BLOCK IN app.py: the two calls it wraps used to live
+        only in `StudioWindow._on_session_loaded`, so a recording opened in a window was segmented
+        by the line the user confirmed while the SAME recording pulled in as a cross-recording
+        reference was segmented by the loader's auto-fitted guess — 0.27x the lap length on the
+        owner's own pair, which `_lap_length_refusal` then (correctly) refused, advising the user
+        to drag a line they had already dragged (QA W9-01). One seam, both callers: the primary
+        open passes the path it already resolved; `set_reference_session` calls it with no
+        argument, so a reference restores its own."""
+        if path is None:
+            path = self.own_sidecar_path()
+        if path is None:
+            return None
+        data = sidecar.load(path)
+        if data is None:
+            return None
+        return self.apply_timing_lines_latlon(data["start"], data["sectors"],
+                                              confirmed=data["confirmed"])
 
     # ------------------------------------------ the loader's placement (revert + track trust)
     # How far (m, at EITHER endpoint) a start line may sit from a reference line and still count as
