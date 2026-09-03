@@ -180,6 +180,16 @@ class Session:
         # on an unknown track whose start line was auto-fitted. set_timing_lines() flips it True
         # (an explicit edit IS the confirmation); the sidecar persists it across reloads.
         self._timing_user_confirmed = False
+        # The start/sector lines the LOADER placed for this recording, in the load-invariant
+        # (lat, lon) form — captured by Session.load BEFORE app.py's sidecar restore, so they
+        # survive as the standing way back from a bad edit (see revert_timing_to_fitted). None on
+        # a Session built directly (the test path) — every reverting surface is gated on that.
+        self._fitted_lines: tuple[list, list] | None = None
+        # The lines `track_name` VOUCHES for: the detected track's own lines at load, or the lines
+        # promoted into the database by File ▸ Save as track… (adopt_track). timing_verified reads
+        # it so a track name can only certify the line it was actually attached to; None means we
+        # don't know the named track's geometry and the name is trusted on its own (legacy path).
+        self._track_lines: tuple[list, list] | None = None
         # Data-quality signal (the timing-ACCURACY axis, orthogonal to the timing-TRUST surface
         # above): which per-sample time clock the load built (GPS9 true clock vs the ~0.1%-fast
         # media-clock fallback on an older GPS5 camera) + the gate's dropped-fix fraction. Set by
@@ -248,6 +258,10 @@ class Session:
         session = cls(laps, cs, video_path, chapter_map)
         session.track_name = track_name
         session._timing_quality = timing_quality
+        # Record the loader's own placement NOW, before app.py restores any sidecar over it: it is
+        # both the standing way back from a bad edit (revert_timing_to_fitted) and — on a detected
+        # track — the geometry `track_name` vouches for (timing_verified).
+        session._record_fitted_lines()
         if imu is not None:
             session._build_gmeter(*imu)
         return session
@@ -831,11 +845,35 @@ class Session:
             views de-emphasize the timing, drop the purple "validated best" cue, and show a
             persistent "drag to set start/finish" banner until this flips True.
 
+        A track name certifies THE LINE IT WAS ATTACHED TO, not the recording forever. It used to
+        certify the recording: `track_name is not None` alone returned True, so any path that put a
+        DIFFERENT, unconfirmed line back under a named track kept every "verified" surface lit on a
+        line the app itself had called provisional. Measured (QA W3-02): drag the start line 5 m,
+        File ▸ Save as track…, one Edit ▸ Undo — the line lands 0.000000 m from the auto-fit and
+        5.000 m from the line stored in tracks.json, `timing_user_confirmed` is False, the sidecar
+        says "confirmed": false, and yet the DATA TRUST card dropped "Start/finish line: auto-fitted,
+        not confirmed" and the map dropped its amber "Lap timing is unverified" bar. It survived a
+        reload, because the reload re-detects the track and re-applies the same unconfirmed sidecar
+        line — so no undo-side fix could reach it. The line in use must match ``_track_lines``.
+
+        Compared on the START line only: sector lines split a lap, they don't bound one, so adding
+        or clearing them can't invalidate the lap TIMING the trust surfaces are about. Compared
+        within ``_LINE_MATCH_TOL_M``, and against the line the loader actually fitted (which may be
+        `load._fit_start_line`'s WIDENED version of the registered one) — not the raw DB entry, or
+        every normal known-track load would demote itself to Provisional.
+
+        ``_track_lines`` is None whenever we don't know the named track's geometry (a Session built
+        directly with a track_name assigned — the test/fake path): the name is then trusted on its
+        own exactly as before.
+
         Trust lives here (on Session); the views just render it. getattr-guarded for the
         bare-Session (no-__init__) test path, where the slots are absent — see ``_ref``."""
-        if getattr(self, "track_name", None) is not None:
+        if bool(getattr(self, "_timing_user_confirmed", False)):
             return True
-        return bool(getattr(self, "_timing_user_confirmed", False))
+        if getattr(self, "track_name", None) is None:
+            return False
+        ref = getattr(self, "_track_lines", None)
+        return True if ref is None else self._start_line_matches(ref[0])
 
     def confirm_timing(self) -> None:
         """Mark the start/finish line as user-confirmed (Provisional → Verified). Called when the
@@ -958,6 +996,97 @@ class Session:
         self.set_timing_lines(prev_start, prev_sectors, user_confirm=False)
         return False
 
+    # ------------------------------------------ the loader's placement (revert + track trust)
+    # How far (m, at EITHER endpoint) a start line may sit from a reference line and still count as
+    # THE SAME line. Sized well above the ~µm wobble of a local->lat/lon->local round trip and well
+    # below a deliberate nudge (the smallest drag in the QA evidence moved 5 m); at 100 km/h a 1 m
+    # start-line error is ~36 ms of lap time, which is the scale at which "same line" stops being
+    # true anyway.
+    _LINE_MATCH_TOL_M = 1.0
+
+    def _record_fitted_lines(self) -> None:
+        """Capture the lines currently in place as the LOADER'S placement (and, on a detected
+        track, as the geometry that track vouches for). Called once by ``Session.load``, before any
+        sidecar is restored over them. Best-effort: a degenerate load (empty coordinate system, no
+        trace) just leaves both None, which disables every surface gated on them."""
+        try:
+            lines = self.timing_lines_latlon()
+        except Exception:  # noqa: BLE001 — a session that can't express its own lines has none
+            return
+        self._fitted_lines = lines
+        self._track_lines = lines if self.track_name is not None else None
+
+    def adopt_track(self, name: str) -> None:
+        """Attach this session to the named track AND record that the CURRENT lines are the ones
+        that track vouches for — File ▸ Save as track… promotes exactly these lines into the
+        database, so they are what the name now certifies (see ``timing_verified``). The single
+        writer of ``track_name`` outside the loader: a bare assignment would leave the name
+        certifying whatever geometry happened to be recorded before it."""
+        self.track_name = name
+        self._track_lines = self.timing_lines_latlon()
+
+    def _start_line_matches(self, ref_start) -> bool:
+        """Whether the start line in use IS the line given as a (lat, lon) endpoint pair — both
+        endpoints within ``_LINE_MATCH_TOL_M``. The reference is converted into the session's own
+        local metres (the comparison a user would make on the map), so the two sides can't disagree
+        through the lat/lon round trip. A geometry failure answers True: it means we could not
+        compare, and inventing a demotion from a broken conversion is worse than the name-only
+        trust this replaces."""
+        try:
+            seg = self.start_line
+            ends = []
+            for lat, lon in ref_start:
+                v = self.cs.local(pacer.GPSSample(lat=float(lat), lon=float(lon), altitude=0))
+                ends.append((float(v[0]), float(v[1])))
+            (ax, ay), (bx, by) = ends
+        except Exception:  # noqa: BLE001 — see the docstring: uncomparable is not disproven
+            return True
+        tol = self._LINE_MATCH_TOL_M
+        return (math.hypot(seg.x1 - ax, seg.y1 - ay) <= tol
+                and math.hypot(seg.x2 - bx, seg.y2 - by) <= tol)
+
+    def timing_matches_fitted(self) -> bool:
+        """True when the start/finish line in use is still the one the loader placed (so a revert
+        would change nothing). True as well when there is no recorded placement to compare with."""
+        fitted = getattr(self, "_fitted_lines", None)
+        return True if fitted is None else self._start_line_matches(fitted[0])
+
+    def can_revert_timing(self) -> bool:
+        """True iff reverting the start/finish line to the loader's placement would actually move
+        it — the enablement of Edit ▸ Revert start/finish line (never offer a no-op)."""
+        return getattr(self, "_fitted_lines", None) is not None and not self.timing_matches_fitted()
+
+    def revert_timing_to_fitted(self) -> bool:
+        """Put the start/finish line back where the loader placed it — the auto-fitted heuristic
+        line on an unknown track, the detected track's own line on a known one.
+
+        This is the STANDING way back from a bad edit, and the reason it exists is that the undo
+        stack is per-Session: re-opening the recording built a new Session, `can_undo_timing()` went
+        False, and a sweep of all 45 actions and 27 buttons in the window found nothing else that
+        offered the auto-fitted line back (QA W3-01) — while the mis-dragged line had already been
+        written to the sidecar and moved the session best by 4.2%. The loader recomputes this
+        placement on every load, so unlike the history it cannot expire.
+
+        Restores the start line ONLY: hand-placed sector lines are left exactly where they are (the
+        map's own "Reset sectors" owns those, and its tooltip already promises the start/finish line
+        is not affected). Applied with ``confirmed=False`` — an auto-fitted line the user has not
+        re-confirmed is Provisional again, caveats and all, which is the state the loader itself
+        would have produced.
+
+        Pushed onto the undo history first, so ⌘Z takes the reverted line back. Returns False when
+        there is nothing to revert to, when the line is already there, or when the replay is refused
+        by ``apply_timing_lines_latlon``'s revert guard — in which case the phantom history entry is
+        popped, because the revert the user asked for never happened."""
+        if not self.can_revert_timing():
+            return False
+        start = self._fitted_lines[0]              # the loader's start line…
+        sectors = self.timing_lines_latlon()[1]    # …under the user's own sector lines
+        self.push_timing_history()
+        if not self.apply_timing_lines_latlon(start, sectors, confirmed=False):
+            self._timing_history().pop()
+            return False
+        return True
+
     # ------------------------------------------ timing-line undo (edit history)
     # A bounded per-session stack of PRIOR timing-line states, captured just BEFORE each user
     # edit (the map drag re-segments AND overwrites the sidecar with no confirm; dragging the
@@ -990,6 +1119,24 @@ class Session:
     def can_undo_timing(self) -> bool:
         """True iff there's a prior timing-line state to undo (the Edit ▸ Undo enablement)."""
         return bool(self._timing_history())
+
+    def adopt_timing_history(self, other: Session) -> None:
+        """Take over another Session's undo history — the app calls this when a load re-opens the
+        SAME recording, so ⌘Z still reaches the line that was on screen before the edit.
+
+        The stack used to die with the Session: File ▸ Open on the recording you had just mis-dragged
+        built a new Session, and the one control that could undo the mistake greyed out while the
+        mis-dragged line was already in the sidecar (QA W3-01). Snapshots are stored in the
+        load-invariant (lat, lon) form precisely so they outlive the load that made them; each one
+        still replays through ``apply_timing_lines_latlon``'s revert guard, so a snapshot that no
+        longer crosses this trace is refused rather than applied. Copied (never aliased), and only
+        onto a session that has no history of its own, so this can't smuggle one recording's edits
+        onto another's stack."""
+        if self._timing_history():
+            return
+        hist = getattr(other, "_timing_undo", None)
+        if hist:
+            self._timing_undo = list(hist)
 
     def undo_timing_lines(self) -> bool:
         """Restore the most recent snapshot pushed by ``push_timing_history`` — PEEK it and replay

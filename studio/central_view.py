@@ -17,7 +17,9 @@ timing-line save) into the constructor. The ~30 Hz tick TIMER stays on the windo
 from __future__ import annotations
 
 import contextlib
+import math
 import os
+from typing import NamedTuple
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QFontMetrics, QGuiApplication
@@ -88,6 +90,58 @@ _HERO_TEMPLATES = (
     "Δ -10.00 s ▼     188 km/h",      # leading with Δ-to-best, plus its direction arrow
 )
 _HERO_PAD_PX = 20   # the QSS's `#DiffBox { padding: 2px 8px }` (16) + a rounding px per side
+
+
+class UndoOutcome(NamedTuple):
+    """What an Edit ▸ Undo actually restored: whether the START/FINISH line moved, and how the
+    sector-line COUNT changed (+2 = two lines came back, -1 = an added line went away).
+
+    Exists because the window used to print "reverted the last start/finish-line edit" for every
+    undo, including the ones that only put sector lines back and left the start line exactly where
+    it was (QA W3-03). A NamedTuple, so an outcome is always truthy and the None no-op stays falsy."""
+
+    start_moved: bool
+    sector_delta: int
+
+
+# How far (m) either endpoint of the start line must move for an undo to count as having moved it.
+# Restores round-trip through lat/lon, which wobbles the local metres by ~µm; anything a user did is
+# orders of magnitude larger.
+_START_MOVED_M = 0.05
+
+
+def _start_moved(before, after) -> bool:
+    """Whether a start line given as two (lat, lon) endpoint pairs actually moved between the two
+    states — flat-earth metres, which is exact enough over the tens of metres in question."""
+    try:
+        for (a_lat, a_lon), (b_lat, b_lon) in zip(before, after, strict=True):
+            dy = (b_lat - a_lat) * 111320.0
+            dx = (b_lon - a_lon) * 111320.0 * math.cos(math.radians(a_lat))
+            if math.hypot(dx, dy) > _START_MOVED_M:
+                return True
+    except (TypeError, ValueError):  # a malformed/absent pair: don't claim a move we can't see
+        return False
+    return False
+
+
+def undo_summary(outcome: UndoOutcome) -> str:
+    """The ONE sentence naming what an undo restored, lower-case and status-bar shaped.
+
+    Single-sourced here because two surfaces say it in the same frame — the window's status bar and
+    the map's on-canvas plate — and this finding is precisely about one gesture being named four
+    different ways (QA W3-03). Sector counts are named outright: "put back 2 sector lines" is the
+    only phrasing that tells a user with both kinds of edit on the stack which one just came back."""
+    n = abs(outcome.sector_delta)
+    lines = f"{n} sector line{'s' if n != 1 else ''}"
+    if outcome.start_moved and outcome.sector_delta:
+        return "reverted the last timing-line edit"
+    if outcome.start_moved:
+        return "reverted the last start/finish-line edit"
+    if outcome.sector_delta > 0:
+        return f"put back {lines}"
+    if outcome.sector_delta < 0:
+        return f"removed {lines}"
+    return "reverted the last timing-line edit"  # a restore that changed nothing visible
 
 
 def _hero_min_width() -> int:
@@ -1658,16 +1712,22 @@ class CentralView(QWidget):
             return
         print(f"studio: timing lines saved to {os.path.basename(path)}", flush=True)
 
-    def undo_timing_lines(self) -> bool:
+    def undo_timing_lines(self) -> UndoOutcome | None:
         """Undo the last timing-line edit (Edit ▸ Undo / Cmd+Z). Restores the prior lines through
         Session.undo_timing_lines (which replays them through the same re-segment/apply path, so
         the segmentation + PB/session-best baseline recompute identically), then re-draws the map
         handles, rebuilds the derived views, and re-persists the restored lines to the sidecar.
-        No-op (returns False) when there's no prior edit to undo. Compare mode is torn down first
-        (a re-segment shifts lap ids, invalidating any pinned pair) — mirrors _on_lines."""
+        No-op (returns None) when there's no prior edit to undo. Compare mode is torn down first
+        (a re-segment shifts lap ids, invalidating any pinned pair) — mirrors _on_lines.
+
+        Returns an ``UndoOutcome`` naming WHAT came back, measured across the restore, so the
+        window can confirm the gesture it actually performed instead of the one string it used to
+        print for every undo (QA W3-03). Truthy on success, falsy (None) on the no-op, so the
+        `if view.undo_timing_lines():` callers read as before."""
+        before_start, before_sectors = self.session.timing_lines_latlon()
         with _busy():  # ~440 ms on a 66-lap session, same re-segment path as _on_lines
             if not self.session.undo_timing_lines():
-                return False
+                return None
             if self._comparing():
                 self.video.set_compare_enabled(False)
             # The session lines are already restored; pull the map's draggable handles onto them
@@ -1676,5 +1736,37 @@ class CentralView(QWidget):
             self.rebuild_derived_views(reselect=True)
             self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
             self._save_sidecar()  # persist the restored lines so a reload sees the undone state
+        after_start, after_sectors = self.session.timing_lines_latlon()
+        outcome = UndoOutcome(start_moved=_start_moved(before_start, after_start),
+                              sector_delta=len(after_sectors) - len(before_sectors))
+        # The map's own plate is where the user was TOLD to press ⌘Z ("2 sector lines cleared —
+        # Edit ▸ Undo timing-line edit (⌘Z) puts them back."), and it outlives the undo by ~5.95 s
+        # of its 6 s (QA W3-04). Swap it for what just happened, so the canvas cannot keep
+        # instructing a key that has already been pressed — and so the plate and the status bar
+        # (same sentence, composed by the window from the same outcome) agree in one frame.
+        mp = getattr(self, "map", None)
+        if mp is not None:
+            mp.retract_notice(undo_summary(outcome).capitalize() + ".")
+        self.timingEdited.emit()
+        return outcome
+
+    def revert_timing_to_fitted(self) -> bool:
+        """Edit ▸ Revert start/finish line: put the start line back on the loader's own placement
+        (Session.revert_timing_to_fitted) and take it through the SAME road as an undo — the map's
+        handles, every derived view, the sidecar. False when there was nothing to revert.
+
+        The trust surfaces are refreshed explicitly on top of the rebuild: the revert un-confirms
+        the timing, and on a session that is Verified through a TRACK NAME the rebuild's banner-only
+        refresh would leave the map's canvas cue and the Laps table disagreeing with it."""
+        with _busy():
+            if not self.session.revert_timing_to_fitted():
+                return False
+            if self._comparing():
+                self.video.set_compare_enabled(False)
+            self.map.reload_timing_lines()
+            self.rebuild_derived_views(reselect=True)
+            self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
+            self._save_sidecar()
+        self.refresh_timing_trust()
         self.timingEdited.emit()
         return True

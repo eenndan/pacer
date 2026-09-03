@@ -92,6 +92,12 @@ class FakeSession:
         self._laps = list(laps)
         self._centroid = centroid
 
+    def adopt_track(self, name):
+        """Session.adopt_track — the seam File ▸ Save as track… uses instead of assigning
+        track_name, so the name records the lines it certifies. This fake's timing_verified is a
+        plain flag, so there is nothing else to model."""
+        self.track_name = name
+
     def valid_lap_ids(self):
         return list(self._laps)
 

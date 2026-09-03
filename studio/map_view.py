@@ -1069,6 +1069,20 @@ class MapView(QWidget):
         notice.raise_()
         self._notice_timer.start()
 
+    def retract_notice(self, replacement: str) -> None:
+        """Replace the plate's text with `replacement` — but ONLY while a plate is actually up.
+
+        For the gestures that START on the map and COMPLETE elsewhere. "Reset sectors" posts "2
+        sector lines cleared — Edit ▸ Undo timing-line edit (⌘Z) puts them back." on a fire-and-
+        forget 6 s timer; the ⌘Z it asks for lands in 45 ms, and the plate then spent the remaining
+        ~5.95 s instructing the user to press a key they had already pressed, directly above the
+        restored lines (QA W3-04). Silent when no plate is showing, so an undo that nobody was
+        told to make adds no new chatter to the canvas."""
+        notice = getattr(self, "_notice", None)
+        if notice is None or notice.isHidden():
+            return
+        self._post_notice(replacement)
+
     def _reposition_notice(self):
         """Pin the notice plate to the plot's top-left, wrapping within the panel's width."""
         notice = getattr(self, "_notice", None)

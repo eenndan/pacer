@@ -10,7 +10,14 @@ A. UNDO the start/finish-line edit — dragging the line re-segments AND overwri
      * an undo restores the previous lines + segmentation (edit twice, undo, lines/laps match
        the first state);
      * undo is a no-op with no history;
-     * a restore of a previously-confirmed state stays confirmed (timing_verified consistency).
+     * a restore of a previously-confirmed state stays confirmed (timing_verified consistency);
+     * the stack outlives the Session it was built on — a re-open of the same recording adopts it
+       (QA W3-01: a reload used to grey Undo out with the mis-drag already saved to the sidecar);
+     * the loader's own placement is a STANDING way back that no reload can expire, offered only
+       when it would move the line, undoable, and leaving hand-placed sector lines alone;
+     * a track NAME certifies only the geometry it was attached to (QA W3-02: Save-as-track then
+       Undo left every "verified" surface lit on the auto-fitted line it had just called
+       provisional, 5 m from the line actually stored in tracks.json).
    Built on a REAL pacer.Laps (the test_sidecar circle construction) — no Qt, no media file.
 
 B. Library privacy — forget one recording (drop its index entry + delete its .pacer.json
@@ -172,6 +179,139 @@ def test_undo_keeps_confirmed_state():
     assert s.timing_verified is True
     assert s.undo_timing_lines() is True
     assert s.timing_verified is True  # the restored confirmed state is preserved
+
+
+def _loaded_session() -> Session:
+    """A session whose LOADER placement has been recorded, as Session.load does before app.py
+    restores any sidecar over it. _make_session() builds a Session directly (no load pipeline), so
+    the one line the loader would have run is called explicitly here."""
+    s = _make_session()
+    # A real load segments inside load.py — it never goes through Session.set_timing_lines, so a
+    # freshly-loaded unknown-track session is UNCONFIRMED. _make_session builds its circle through
+    # the confirming path, so clear the flag to model the state the app actually opens in.
+    s._timing_user_confirmed = False
+    s._record_fitted_lines()
+    return s
+
+
+def test_revert_puts_the_start_line_back_on_the_loaders_placement():
+    """W3-01. The undo stack dies with the Session, so re-opening a recording used to lock a
+    mis-dragged start line in for good: no action or button in the window offered the auto-fitted
+    line back, while the bad line was already in the sidecar. The loader recomputes its placement on
+    EVERY load, so reverting to it cannot expire — and it demotes the timing back to Provisional,
+    because an auto-fitted line the user has not re-confirmed is exactly what the loader produces."""
+    s = _loaded_session()
+    fitted = _line_tuple(s.start_line)
+    s.push_timing_history()
+    s.set_timing_lines(_start_line_at(s.cs, _THETA_ALT), [])  # the "mis-drag"
+    assert _line_tuple(s.start_line) != fitted
+    assert s.timing_verified is True          # a drag IS a confirmation
+
+    assert s.revert_timing_to_fitted() is True
+    for a, b in zip(_line_tuple(s.start_line), fitted, strict=True):
+        assert abs(a - b) < 1e-3, (s.start_line, fitted)
+    assert s.timing_user_confirmed is False
+    assert s.timing_verified is False, "an auto-fitted line nobody confirmed is Provisional"
+
+
+def test_revert_leaves_hand_placed_sector_lines_alone():
+    """It is the START/FINISH line's way back, not a reset: the map's own 'Reset sectors' owns the
+    sector lines and promises in its tooltip that the start/finish line is not affected — this is
+    the exact complement, so neither gesture can destroy the other's work."""
+    s = _loaded_session()
+    theta_sector = 2.0 * math.pi * ((_PER_LAP // 2) + 0.5) / _PER_LAP
+    a = s.cs.local(_circle_gps(theta_sector, _RADIUS_M - 40.0))
+    b = s.cs.local(_circle_gps(theta_sector, _RADIUS_M + 40.0))
+    sector = Seg(a[0], a[1], b[0], b[1])
+    s.set_timing_lines(_start_line_at(s.cs, _THETA_ALT), [sector])
+    assert s.sector_count() == 1
+
+    assert s.revert_timing_to_fitted() is True
+    assert s.sector_count() == 1, "the revert cleared a hand-placed sector line"
+
+
+def test_revert_is_never_offered_when_it_would_do_nothing():
+    """The enablement predicate behind the Edit item: False on a pristine session (the line IS the
+    loader's), False again once a revert has landed, and False on a Session with no recorded
+    placement at all (the direct-construction path) — never a lit control that does nothing."""
+    assert _make_session().can_revert_timing() is False, "no recorded placement -> nothing to revert"
+    s = _loaded_session()
+    assert s.can_revert_timing() is False
+    s.set_timing_lines(_start_line_at(s.cs, _THETA_ALT), [])
+    assert s.can_revert_timing() is True
+    assert s.revert_timing_to_fitted() is True
+    assert s.can_revert_timing() is False
+    assert s.revert_timing_to_fitted() is False, "a second revert must be a no-op"
+
+
+def test_revert_is_itself_undoable():
+    """The revert snapshots the line it replaced, so one Cmd+Z brings the user's own placement back
+    — the revert is a way OUT of a bad edit, not a second way to lose a good one."""
+    s = _loaded_session()
+    s.set_timing_lines(_start_line_at(s.cs, _THETA_ALT), [])
+    placed = _line_tuple(s.start_line)
+    assert s.revert_timing_to_fitted() is True
+    assert s.can_undo_timing() is True
+    assert s.undo_timing_lines() is True
+    for a, b in zip(_line_tuple(s.start_line), placed, strict=True):
+        assert abs(a - b) < 1e-3, (s.start_line, placed)
+
+
+def test_undo_history_is_handed_to_a_reloaded_session():
+    """W3-01, the other half: re-opening the SAME recording carries the stack across, so Cmd+Z still
+    reaches the line that was on screen before the edit. Copied, not aliased, and refused onto a
+    session that already has history of its own (one recording's edits can never land on another's
+    stack)."""
+    old = _loaded_session()
+    old.push_timing_history()
+    old.set_timing_lines(_start_line_at(old.cs, _THETA_ALT), [])
+    pre_edit = old._timing_history()[-1]
+
+    fresh = _loaded_session()
+    assert fresh.can_undo_timing() is False       # a new Session starts with nothing to undo
+    fresh.adopt_timing_history(old)
+    assert fresh.can_undo_timing() is True
+    assert fresh._timing_history() == [pre_edit]
+    assert fresh._timing_history() is not old._timing_history(), "the stack was aliased, not copied"
+
+    busy = _loaded_session()
+    busy.push_timing_history()
+    own = list(busy._timing_history())
+    busy.adopt_timing_history(old)
+    assert busy._timing_history() == own, "adopting clobbered a session's own history"
+
+
+def test_a_track_name_only_verifies_the_line_it_was_attached_to():
+    """W3-02. `Save as track…` + one Undo left the app claiming VERIFIED timing on a line it had
+    called provisional two gestures earlier and 5 m from the one stored in tracks.json — because
+    `timing_verified` was satisfied by a track NAME alone. It now certifies the geometry the name
+    was attached to. Note the name is kept: the recording still belongs to its track (its PB
+    progression, its reference admission) — only the trust claim tracks the line in use."""
+    s = _loaded_session()
+    s.push_timing_history()
+    s.set_timing_lines(_start_line_at(s.cs, _THETA_ALT), [])   # the user places a line
+    s.adopt_track("kart-circuit")                              # File ▸ Save as track…
+    assert s.timing_verified is True
+
+    assert s.undo_timing_lines() is True     # …and takes that very placement back
+    assert s.track_name == "kart-circuit"
+    assert s.timing_user_confirmed is False
+    assert s.timing_verified is False, "a named track certified a line that is not the track's"
+
+    # Put the track's own line back under it and the name certifies again.
+    s.set_timing_lines(_start_line_at(s.cs, _THETA_ALT), [], user_confirm=False)
+    assert s.timing_verified is True
+
+
+def test_a_track_name_with_no_recorded_geometry_is_still_trusted():
+    """The unchanged path: a Session that carries a track name but no record of the track's lines
+    (built directly rather than loaded — the fake/test path every trust surface is exercised
+    through) trusts the name on its own, exactly as before. Uncomparable is not disproven."""
+    s = _make_session()
+    s._timing_user_confirmed = False   # so the verdict can only come from the name
+    s.track_name = "Daytona MK"
+    assert s._track_lines is None
+    assert s.timing_verified is True
 
 
 def test_undo_history_is_bounded():

@@ -67,6 +67,17 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **A mis-dragged start/finish line always has a way back, and a saved track no longer
+  vouches for a line that isn't its own.** Re-opening a recording used to lock a bad drag
+  in for good — the undo stack died with the session, and nothing else in the app offered
+  the auto-fitted line back (a 12 m nudge moved the session best 4.2%, silently). The
+  history now carries across a re-open of the same recording, and Edit gained "Revert
+  start/finish line", enabled only when it would move the line and itself undoable.
+  Separately, `File ▸ Save as track…` followed by one Undo left every "verified" surface
+  lit on the auto-fitted line the app had just called provisional: a track name now
+  certifies only the geometry it was attached to. Undo also says which kind of line it
+  restored, instead of naming the start/finish line after a sector-only edit, and the
+  map's "⌘Z puts them back" plate retracts the moment ⌘Z is pressed.
 - **The Library dialog now fits the privacy note it ships with, and never re-opens too small
   to show the library.** Naming `tracks.json` in that note made it 194 characters longer, but
   a word-wrapped label reports a *one-line* height to the layout — so the dialog's minimum

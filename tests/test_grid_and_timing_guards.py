@@ -50,7 +50,8 @@ _APP = QApplication.instance() or QApplication([])
 # the rest of the real-Qt view tests build on.
 from test_central_view_realqt import _real_central_view  # noqa: E402
 
-from studio.central_view import CentralView  # noqa: E402
+from studio.central_view import CentralView, UndoOutcome, undo_summary  # noqa: E402
+from studio.map_view import MapView  # noqa: E402
 
 
 def _settle(n=6):
@@ -354,7 +355,107 @@ def test_a_persisted_mph_preference_reaches_the_corner_tooltips():
     print("test_a_persisted_mph_preference_reaches_the_corner_tooltips OK")
 
 
+# ------------------------------------- W3-03/W3-04: an undo that says what it actually restored
+def test_the_undo_confirmation_names_what_came_back():
+    """W3-03: ONE literal string confirmed every undo — 'reverted the last start/finish-line edit'
+    — including the undos that only put SECTOR lines back and never touched the start line. The
+    sentence is now composed from what the restore measurably changed."""
+    assert undo_summary(UndoOutcome(start_moved=True, sector_delta=0)) == \
+        "reverted the last start/finish-line edit"
+    assert undo_summary(UndoOutcome(start_moved=False, sector_delta=2)) == "put back 2 sector lines"
+    assert undo_summary(UndoOutcome(start_moved=False, sector_delta=1)) == "put back 1 sector line"
+    assert undo_summary(UndoOutcome(start_moved=False, sector_delta=-1)) == "removed 1 sector line"
+    # Both kinds in one restore, and the degenerate "nothing visibly moved": the generic sentence,
+    # which is the only one of the four that is true of every undo.
+    assert undo_summary(UndoOutcome(start_moved=True, sector_delta=2)) == \
+        "reverted the last timing-line edit"
+    assert undo_summary(UndoOutcome(start_moved=False, sector_delta=0)) == \
+        "reverted the last timing-line edit"
+    print("test_the_undo_confirmation_names_what_came_back OK")
+
+
+def _notice_plate(showing: bool):
+    """The duck-typed slice of MapView that retract_notice touches: a plate that knows whether it is
+    hidden, and the fire-and-forget poster it delegates to."""
+    posted = []
+    plate = SimpleNamespace(isHidden=lambda: not showing)
+    mp = SimpleNamespace(_notice=plate, _post_notice=posted.append)
+    return mp, posted
+
+
+def test_a_stale_map_notice_is_retracted_but_a_quiet_canvas_stays_quiet():
+    """W3-04: 'Reset sectors' posts '2 sector lines cleared — Edit ▸ Undo timing-line edit (⌘Z)
+    puts them back.' on a 6 s timer; the ⌘Z it asks for lands in 45 ms, and the plate then spent
+    ~5.95 s instructing a key the user had already pressed. Retracting REPLACES a live plate — and
+    stays silent when there is none, so an undo nobody was told to make adds no new chatter."""
+    mp, posted = _notice_plate(showing=True)
+    MapView.retract_notice(mp, "Put back 2 sector lines.")
+    assert posted == ["Put back 2 sector lines."], posted
+
+    mp, posted = _notice_plate(showing=False)
+    MapView.retract_notice(mp, "Put back 2 sector lines.")
+    assert posted == [], posted
+
+    MapView.retract_notice(SimpleNamespace(), "x")  # a view with no plate at all: a no-op
+    print("test_a_stale_map_notice_is_retracted_but_a_quiet_canvas_stays_quiet OK")
+
+
+def _undo_view(before, after, restored=True):
+    """The duck-typed slice of CentralView that undo_timing_lines touches, with the session's
+    timing lines stepping from `before` to `after` across the restore."""
+    calls = SimpleNamespace(lines=[before, after], notices=[], emitted=0)
+
+    def lines():
+        """The pre-restore read, then the post-restore one (the last state repeats)."""
+        return calls.lines.pop(0) if len(calls.lines) > 1 else calls.lines[0]
+
+    session = SimpleNamespace(undo_timing_lines=lambda: restored,
+                              valid_lap_ids=lambda: [0, 1],
+                              timing_lines_latlon=lines)
+    view = SimpleNamespace(
+        session=session, calls=calls, _comparing=lambda: False,
+        video=SimpleNamespace(set_compare_enabled=lambda _on: None),
+        map=SimpleNamespace(reload_timing_lines=lambda: None,
+                            retract_notice=calls.notices.append),
+        rebuild_derived_views=lambda reselect=False: None,
+        _save_sidecar=lambda: None,
+        timingEdited=SimpleNamespace(emit=lambda: setattr(calls, "emitted", calls.emitted + 1)),
+    )
+    return view
+
+
+_L_A = [[52.0, -0.78], [52.001, -0.781]]
+_L_B = [[52.002, -0.78], [52.003, -0.781]]   # ~220 m away: unmistakably moved
+
+
+def test_undo_reports_a_sector_restore_as_a_sector_restore():
+    """End-to-end over the seam: sectors 0 -> 2 with the start line untouched must produce an
+    outcome that names the sector lines, and must put THAT sentence on the map's plate."""
+    view = _undo_view((_L_A, []), (_L_A, [_L_B, _L_B]))
+    outcome = CentralView.undo_timing_lines(view)
+    assert outcome == (False, 2), outcome
+    assert undo_summary(outcome) == "put back 2 sector lines"
+    assert view.calls.notices == ["Put back 2 sector lines."], view.calls.notices
+    assert view.calls.emitted == 1
+
+    # A real start-line undo still reads exactly as it always did.
+    view = _undo_view((_L_A, []), (_L_B, []))
+    outcome = CentralView.undo_timing_lines(view)
+    assert outcome == (True, 0), outcome
+    assert undo_summary(outcome) == "reverted the last start/finish-line edit"
+
+    # Nothing to undo: falsy, so `if view.undo_timing_lines():` reads as before, and the canvas is
+    # left alone rather than told about a restore that never happened.
+    view = _undo_view((_L_A, []), (_L_A, []), restored=False)
+    assert CentralView.undo_timing_lines(view) is None
+    assert view.calls.notices == [] and view.calls.emitted == 0
+    print("test_undo_reports_a_sector_restore_as_a_sector_restore OK")
+
+
 def _run_all():
+    test_the_undo_confirmation_names_what_came_back()
+    test_a_stale_map_notice_is_retracted_but_a_quiet_canvas_stays_quiet()
+    test_undo_reports_a_sector_restore_as_a_sector_restore()
     test_a_persisted_mph_preference_reaches_the_corner_tooltips()
     test_no_drag_can_delete_a_panel()
     test_maximize_still_fills_the_window_and_leaves_the_grid_uncollapsible()
