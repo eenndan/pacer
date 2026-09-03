@@ -172,6 +172,95 @@ def test_no_module_constant_freezes_a_palette_hue():
     print("test_no_module_constant_freezes_a_palette_hue OK")
 
 
+def _hue_reads(path):
+    """EVERY `C.<swappable>` read in one source file — module level in any expression AND inside
+    function bodies — as (lineno, attr, enclosing function) triples.
+
+    The wider half of the guard above. That one walks `tree.body` for bare NAME = C.hue ASSIGNMENTS
+    only, which leaves two shapes of the same defect invisible: a hue read inside a FUNCTION (the
+    hero Δ readout was pinned to the standard red in both palettes for exactly this reason), and a
+    hue wrapped in a CONSTRUCTOR at module level (`_MARKER_RGB = QColor(C.behind)` — an assignment,
+    but its value is a Call, not an Attribute).
+
+    Each read is labelled with the thing that OWNS it — the enclosing function, or the module-level
+    name it is being bound to — so an exemption names a decision rather than a line number."""
+    out = []
+
+    def visit(node, owner):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            owner = node.name
+        elif isinstance(node, ast.Assign) and owner is None:
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            owner = names[0] if names else owner
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id == "C" and node.attr in _SWAPPABLE):
+            out.append((node.lineno, node.attr, owner))
+        for ch in ast.iter_child_nodes(node):
+            visit(ch, owner)
+
+    visit(ast.parse(open(path, encoding="utf-8").read(), path), None)
+    return out
+
+
+def test_no_bare_palette_hue_is_read_anywhere_in_studio():
+    """The WIDE guard. Every meaning-bearing colour must be an accessor CALL resolved at draw time,
+    wherever it is read — not only at module level, which is all the sibling guard above can see.
+
+    Each exemption below is a decision with a measured reason, not a silencer."""
+    EXEMPT = {
+        # The source of truth the accessors read, and the identity palette (which LAP, not who is
+        # faster — deliberately palette-independent; see test_chart_series_stays_palette_independent).
+        ("theme.py", "_PALETTES"), ("theme.py", "CHART_SERIES"),
+        # The QPalette role for framework-drawn chrome (native dialogs, widget bits the QSS misses).
+        # BrightText is not a Δ surface: the hue is used as "a bright colour", carries no
+        # ahead/behind meaning, and no ENABLED app text reads it. Left alone deliberately —
+        # repointing it at behind_colour() would recolour OS chrome for no accessibility gain.
+        ("theme.py", "_palette"),
+        # map_view.MARKER_COLOR / its _MARKER_RGB brush companion — the video-position marker. The
+        # U10-01 audit flagged the first as a frozen constant, but MEASUREMENT says pointing it at
+        # behind_colour() would be strictly WORSE: it would then equal rainbow bucket 0 exactly in
+        # BOTH palettes (dE 0.0). Frozen, its measured minimum separation across all 16 colour-blind
+        # buckets is 16.40 (JND 2.3). The marker needs its OWN token, which is a map_view design
+        # change, not a palette-accessor one. Both names are one decision, so both are exempt.
+        ("map_view.py", "MARKER_COLOR"), ("map_view.py", "_MARKER_RGB"),
+    }
+    offenders = []
+    for fn in sorted(os.listdir(_STUDIO)):
+        if not fn.endswith(".py"):
+            continue
+        for lineno, attr, owner in _hue_reads(os.path.join(_STUDIO, fn)):
+            if (fn, owner) not in EXEMPT:
+                offenders.append(f"{fn}:{lineno} C.{attr} (in {owner})")
+    assert not offenders, (
+        "raw palette-swappable hues read instead of the accessor (ahead_colour / behind_colour / "
+        f"best_lap_colour / best_sector_colour), so they cannot follow the palette: {offenders}")
+    print("test_no_bare_palette_hue_is_read_anywhere_in_studio OK")
+
+
+def test_hero_ideal_readout_follows_the_palette():
+    """U10 / W4-01. `format_ideal_readout` feeds the #DiffBox — the largest text in the window — and
+    it read the raw `C.behind`, so the app's biggest number kept the standard palette's red in BOTH
+    palettes (a render of the readout was byte-identical between them, max per-channel |Δ| = 0 over
+    391x35 px) while the Corners table 130 px below painted the same meaning in the palette's
+    orange. The sibling formatter format_delta_speed already routed through delta_colour()."""
+    try:
+        theme.set_palette(theme.PALETTE_STANDARD)
+        std = theme.format_ideal_readout(0.94, 37.0, 2, "mph")[1]
+        assert std == theme.behind_colour() == C.behind, std
+        theme.set_palette(theme.PALETTE_COLORBLIND)
+        cb = theme.format_ideal_readout(0.94, 37.0, 2, "mph")[1]
+        assert cb == theme.behind_colour(), cb
+        assert cb != std, "the hero readout must MOVE with the palette, like every other Δ surface"
+        # ...and it is the SAME hue the other Δ surfaces use, not a third one
+        assert cb == theme.delta_colour(0.94)
+        # the neutral/no-lap cases are unchanged in both palettes: there is no "ahead of ideal"
+        for d in (None, 0.0):
+            assert theme.format_ideal_readout(d, 37.0, 2, "mph")[1] is None
+    finally:
+        theme.set_palette(theme.PALETTE_STANDARD)
+    print("test_hero_ideal_readout_follows_the_palette OK")
+
+
 def test_best_lap_curve_colour_follows_the_palette_in_both_directions():
     """The chart's best-lap pen and the lap table's best-lap foreground resolve through the SAME
     accessor, so they agree in either palette — and the chart's green is genuinely gone in the
@@ -444,6 +533,8 @@ def test_exported_overlay_readout_never_burns_negative_zero():
 
 def _run_all():
     test_no_module_constant_freezes_a_palette_hue()
+    test_no_bare_palette_hue_is_read_anywhere_in_studio()
+    test_hero_ideal_readout_follows_the_palette()
     test_best_lap_curve_colour_follows_the_palette_in_both_directions()
     test_ideal_star_icon_and_ideal_line_share_one_accessor()
     test_colourblind_map_ramp_steps_clear_the_jnd_under_deuteranopia()

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
@@ -64,30 +64,46 @@ def _apply_series_dash(pen, k: int) -> None:
     dash = SERIES_DASH[k % len(SERIES_DASH)]
     if dash:
         pen.setDashPattern(dash)
+# Every pen below is a FUNCTION, not a module constant, for the same reason the palette hues are
+# accessors: a pyqtgraph pen width is in DEVICE pixels (theme.line_width), so a pen built once at
+# import freezes the device-pixel ratio that happened to be current at startup and draws at half
+# weight the moment the window is on a Retina panel. Built at call time, they follow both.
 # Scrub cursor: thin neutral dashed (quiet); brighter accent + thicker on hover so it reads as
-# grabbable. Pens built once.
-CURSOR_PEN = pg.mkPen(C.text_dim, width=1, style=Qt.DashLine)
-CURSOR_HOVER_PEN = pg.mkPen(C.accent, width=2, style=Qt.DashLine)
+# grabbable.
+def cursor_pen():
+    return pg.mkPen(C.text_dim, width=theme.line_width(1), style=Qt.DashLine)
+
+
+def cursor_hover_pen():
+    return pg.mkPen(C.accent, width=theme.line_width(2), style=Qt.DashLine)
 # Hover dot rides the delta curve: accent fill with a dark canvas outline so it pops on any curve.
 HOVER_DOT_BRUSH = pg.mkBrush(C.accent)
-HOVER_DOT_PEN = pg.mkPen(C.canvas, width=1)
+
+
+def hover_dot_pen():
+    return pg.mkPen(C.canvas, width=theme.line_width(1))
 # Legend plate: near-opaque surface fill (alpha 230) + hairline border so it reads as a card on
 # the chart.
 _sr, _sg, _sb = theme._hex_rgb(C.surface)
 LEGEND_BRUSH = pg.mkBrush(_sr, _sg, _sb, 230)
-LEGEND_PEN = pg.mkPen(C.border, width=1)
+
+
+def legend_pen():
+    return pg.mkPen(C.border, width=theme.line_width(1))
 # F2: sector boundary guide lines — neutral grey dashed (so they never clash with the amber
 # current-lap curve), behind everything (zValue -5).
-SECTOR_LINE_PEN = pg.mkPen(C.text_muted, width=1, style=Qt.DashLine)
+def sector_line_pen():
+    return pg.mkPen(C.text_muted, width=theme.line_width(1), style=Qt.DashLine)
 SECTOR_LABEL_COLOR = C.text_dim
 # The delta plot's y=0 reference line — a faint hairline, same weight as the gridlines.
-ZERO_LINE_PEN = pg.mkPen(C.border, width=1)
+def zero_line_pen():
+    return pg.mkPen(C.border, width=theme.line_width(1))
 # D1: the SYNTHETIC ideal-lap baseline (lower-envelope theoretical best). Best-SECTOR colour to
 # echo the lap table's theoretical-best cells, dashed so it never reads as a real driven lap. Built
 # at DRAW time (not frozen at import) so it follows the active palette's best-sector hue (purple →
 # teal in the colour-blind palette), matching the lap-table cells.
 def _ideal_line_pen():
-    return pg.mkPen(theme.best_sector_colour(), width=1, style=Qt.DashLine)
+    return pg.mkPen(theme.best_sector_colour(), width=theme.line_width(1), style=Qt.DashLine)
 # F5: brake glyphs (sized by peak decel) ride the speed curve; coast spans shade a neutral band.
 COAST_FILL_ALPHA = 38                  # 0-255: a subtle shaded band, under the curves
 COAST_PEN = pg.mkPen(None)
@@ -103,8 +119,9 @@ BT_GAP_FRAC = 0.04                     # a small clear gap between the lowest sp
 # Brake fills toward the "behind" hue, throttle toward the "ahead" hue. Resolved at DRAW time via
 # the palette accessors (not frozen at import) so the band follows the active palette — red/green by
 # default, orange/blue in the colour-blind palette (matching the Δ readout + rainbow map).
-BT_PEN = pg.mkPen(None)
-BT_BASELINE_PEN = pg.mkPen(C.border, width=1, style=Qt.DotLine)  # the band's zero (lift/cruise) line
+BT_PEN = pg.mkPen(None)  # a NO-pen: carries no width, so nothing to scale
+def bt_baseline_pen():                 # the band's zero (lift/cruise) line
+    return pg.mkPen(C.border, width=theme.line_width(1), style=Qt.DotLine)
 # L6-06: the speed legend is a near-opaque plate INSIDE the plot, so wherever it sits it hides trace.
 # It used to sit top-left, which is the worst corner on every fixture measured (the start of a lap is
 # flat out, so the trace is high and to the left): at a full 6-lap selection it covered 413 of 2800
@@ -203,6 +220,9 @@ class PlotsView(QWidget):
 
     def __init__(self, session: Session):
         super().__init__()
+        # Before ANY pen is built: pyqtgraph pen widths are in device pixels, so point theme at
+        # this widget's device-pixel ratio first (see theme.line_width and `event` below).
+        theme.set_pen_scale(self.devicePixelRatioF())
         self.session = session
         # Speed-axis display unit (km/h default); the app pushes the persisted choice via
         # set_speed_unit. Speed VALUES stay km/h — the y-axis label is the only conversion here
@@ -306,22 +326,22 @@ class PlotsView(QWidget):
         self.p_delta.showGrid(x=True, y=True, alpha=0.10)
         # Permanently x-linked: same x basis in both modes, so cursors/pan/zoom track.
         self.p_delta.setXLink(self.p_speed)
-        self.p_delta.addLine(y=0, pen=ZERO_LINE_PEN)
+        self.p_delta.addLine(y=0, pen=zero_line_pen())
 
         # Axis styling, set once: dim tokens, tabular mono font, fewer ticks.
         for plot, sides in ((self.p_speed, ("left",)), (self.p_delta, ("left", "bottom"))):
             for side in sides:
                 ax = plot.getAxis(side)
-                ax.setPen(C.border)            # dim axis line + ticks
                 ax.setTextPen(C.text_dim)      # tick labels + axis title
                 ax.setTickFont(theme.mono_font(11))  # tabular figures so digits column-align
                 ax.setStyle(maxTickLevel=1, hideOverlappingLabels=True)  # fewer, cleaner ticks
+        self._apply_axis_pens()
         # Legend: dimmed text on a surface plate (both the speed legend and the Δ ideal-lap one).
         for lg in (leg, self._delta_legend):
             if lg is not None:
                 lg.setLabelTextColor(C.text_dim)
                 lg.setBrush(LEGEND_BRUSH)
-                lg.setPen(LEGEND_PEN)
+                lg.setPen(legend_pen())
                 # L6-06: pyqtgraph implements mouseDragEvent on LegendItem, so the plate has always
                 # been movable — but the cursor never changed and nothing said so, which makes the
                 # one escape from a plate over your trace completely unhinted.
@@ -337,10 +357,10 @@ class PlotsView(QWidget):
             plot.setMenuEnabled(False)
 
         # Draggable scrub cursors; hoverPen makes the thin dashed line easy to grab.
-        self.cur_speed = pg.InfiniteLine(angle=90, movable=True, pen=CURSOR_PEN,
-                                         hoverPen=CURSOR_HOVER_PEN)
-        self.cur_delta = pg.InfiniteLine(angle=90, movable=True, pen=CURSOR_PEN,
-                                         hoverPen=CURSOR_HOVER_PEN)
+        self.cur_speed = pg.InfiniteLine(angle=90, movable=True, pen=cursor_pen(),
+                                         hoverPen=cursor_hover_pen())
+        self.cur_delta = pg.InfiniteLine(angle=90, movable=True, pen=cursor_pen(),
+                                         hoverPen=cursor_hover_pen())
         for ln in (self.cur_speed, self.cur_delta):
             ln.setVisible(False)
             ln.setCursor(Qt.SizeHorCursor)  # resize cursor on hover signals "drag me"
@@ -354,7 +374,7 @@ class PlotsView(QWidget):
         self.cur_delta.sigPositionChangeFinished.connect(self._on_drag_finished)
 
         # Hover dot: rides the delta curve under the mouse, showing the delta value (see _on_delta_hover).
-        self.hover_dot = pg.ScatterPlotItem(size=9, brush=HOVER_DOT_BRUSH, pen=HOVER_DOT_PEN)
+        self.hover_dot = pg.ScatterPlotItem(size=9, brush=HOVER_DOT_BRUSH, pen=hover_dot_pen())
         self.hover_dot.setZValue(20)
         self.hover_dot.setVisible(False)
         self.hover_label = pg.TextItem(color=C.accent, anchor=(0, 1))
@@ -510,7 +530,7 @@ class PlotsView(QWidget):
                 # Label on the speed plot only (delta panel is too small).
                 text = label if plot is self.p_speed else None
                 ln = pg.InfiniteLine(
-                    pos=float(x), angle=90, pen=SECTOR_LINE_PEN, label=text,
+                    pos=float(x), angle=90, pen=sector_line_pen(), label=text,
                     labelOpts={"color": SECTOR_LABEL_COLOR, "position": 0.96, "movable": False},
                 )
                 ln.setZValue(-5)  # behind the curves + cursor; a subtle backdrop
@@ -582,7 +602,15 @@ class PlotsView(QWidget):
                 spots.append({"pos": (float(x), y), "size": theme.brake_glyph_size(decel)})
             if not spots:
                 continue
-            dots = pg.ScatterPlotItem(symbol="t", pen=None, brush=pg.mkBrush(colour), pxMode=True)
+            # U10: the glyph carries the lap's identity in SHAPE as well as hue (theme.SERIES_SYMBOL)
+            # — #156 gave the curves and the legend a per-slot dash, but a filled marker has no
+            # stroke to dash, so on this layer hue was the only cue and two of the six identity
+            # colours are one colour for a deuteranope. The canvas-coloured outline is the other
+            # half of it: with pen=None, glyphs from different laps fuse edge-to-edge in a braking
+            # zone into a single blob, and shape can only be read if the edges are.
+            dots = pg.ScatterPlotItem(
+                symbol=theme.series_symbol(colour), brush=pg.mkBrush(colour), pxMode=True,
+                pen=pg.mkPen(C.canvas, width=theme.line_width(1)))
             dots.addPoints(spots)
             dots.setZValue(8)  # above curves + coast band, below the cursor
             self.p_speed.addItem(dots)
@@ -668,7 +696,7 @@ class PlotsView(QWidget):
             self.p_speed.addItem(curve)
             self._brake_throttle_items.append(curve)
         # The band's zero/cruise reference line.
-        zero = pg.InfiniteLine(pos=mid, angle=0, pen=BT_BASELINE_PEN)
+        zero = pg.InfiniteLine(pos=mid, angle=0, pen=bt_baseline_pen())
         zero.setZValue(-3)
         self.p_speed.addItem(zero)
         self._brake_throttle_items.append(zero)
@@ -729,6 +757,36 @@ class PlotsView(QWidget):
         re-tint."""
         self._apply_ideal_icon()
         self.refresh()
+
+    def _apply_axis_pens(self):
+        """Pen the axis lines, ticks and GRIDLINES at the current device-pixel ratio.
+
+        An explicit width, not the bare colour token: handed a colour, pyqtgraph builds its own
+        width-1 COSMETIC pen — i.e. one DEVICE pixel — and that same pen draws the grid (AxisItem
+        falls back from tickPen() to pen() and only re-alphas it per level). That is why the grid
+        measured 0.5 logical px on a Retina panel while the axis numerals beside it scaled."""
+        for plot, sides in ((self.p_speed, ("left",)), (self.p_delta, ("left", "bottom"))):
+            for side in sides:
+                plot.getAxis(side).setPen(pg.mkPen(C.border, width=theme.line_width(1)))
+
+    def event(self, ev):
+        """Re-pen when the window moves to a screen with a different device-pixel ratio.
+
+        A pyqtgraph pen width is in DEVICE pixels (theme.line_width), so the correct width depends
+        on the screen the window is currently on — drag the window from the Retina panel to an
+        external monitor and every chart line would otherwise stay at the old screen's weight
+        (double on the way out, half on the way back). Qt delivers DevicePixelRatioChange on that
+        move; point theme at the new ratio and redraw. The cursor pens are re-applied explicitly
+        because refresh() does not rebuild the InfiniteLines, only the curves."""
+        if ev.type() == QEvent.Type.DevicePixelRatioChange:
+            if theme.set_pen_scale(self.devicePixelRatioF()):
+                self._apply_axis_pens()
+                for ln in (self.cur_speed, self.cur_delta):
+                    ln.setPen(cursor_pen())
+                    ln.setHoverPen(cursor_hover_pen())
+                self.hover_dot.setPen(hover_dot_pen())
+                self.refresh()
+        return super().event(ev)
 
     def refresh(self):
         for plot, curve in self._curves:
@@ -807,7 +865,7 @@ class PlotsView(QWidget):
             is_best = lid == best
             color = theme.best_lap_colour() if is_best else PALETTE[k % len(PALETTE)]
             width = 1 if (is_best and best_always_on) else 2
-            pen = pg.mkPen(color, width=width)
+            pen = pg.mkPen(color, width=theme.line_width(width))
             # L6-03: identity slots also carry their slot's dash pattern, so the legend still maps
             # to a curve for a deuteranope (two of the six hues are under the JND for one). The best
             # lap stays solid: it is the baseline, and its hue is the one that follows the palette.

@@ -104,7 +104,7 @@ class _TimingLine:
         self.on_changed = on_changed
         # snap(x,y)->(x,y)|None: opt-in snap hook; None (toggle off) = free placement. See _snap_to_trace.
         self.snap = snap
-        pen = pg.mkPen(color, width=2)
+        pen = pg.mkPen(color, width=theme.line_width(2))
         self.line = pg.PlotDataItem([seg.x1, seg.x2], [seg.y1, seg.y2], pen=pen)
         self.h1 = pg.TargetItem((seg.x1, seg.y1), size=11, movable=True, pen=pen)
         self.h2 = pg.TargetItem((seg.x2, seg.y2), size=11, movable=True, pen=pen)
@@ -161,7 +161,7 @@ def _inferred_pen(color, base_width):
     qc = pg.mkColor(color)
     qc = qc.darker(int(100 / INFERRED_DARKEN))  # toward black
     qc.setAlpha(INFERRED_ALPHA)
-    pen = pg.mkPen(qc, width=max(base_width - 1, 1))
+    pen = pg.mkPen(qc, width=theme.line_width(max(base_width - 1, 1)))
     pen.setStyle(Qt.DashLine)
     pen.setDashPattern(INFERRED_DASH)
     return pen
@@ -196,7 +196,8 @@ class _RainbowOverlay:
         if self._items is None:
             self._items = []
             for color in rainbow_colors(MAP_RAINBOW_N):
-                it = pg.PlotCurveItem(pen=pg.mkPen(color, width=RAINBOW_WIDTH), connect="finite")
+                it = pg.PlotCurveItem(pen=pg.mkPen(color, width=theme.line_width(RAINBOW_WIDTH)),
+                                      connect="finite")
                 it.setZValue(5)  # above lap overlays, below the marker (z=10)
                 self.plot.addItem(it)
                 self._items.append(it)
@@ -222,7 +223,7 @@ class _RainbowOverlay:
         if self._items is None:
             return
         for it, color in zip(self._items, rainbow_colors(MAP_RAINBOW_N), strict=True):
-            it.setPen(pg.mkPen(color, width=RAINBOW_WIDTH))
+            it.setPen(pg.mkPen(color, width=theme.line_width(RAINBOW_WIDTH)))
 
 
 class _GradientStrip(QWidget):
@@ -392,6 +393,7 @@ class _LapOverlay:
         self.base_width = base_width
         self.lap_id = None
         self._items: list = []
+        self._inferred: list[bool] = []   # per item: dashed gap-fill? (parallel to _items; see repen)
         # Hidden in place (not rebuilt) while the rainbow paints the lap, so toggling it off restores
         # the same items/pens.
         self.visible = True
@@ -400,6 +402,18 @@ class _LapOverlay:
         for it in self._items:
             self.plot.removeItem(it)
         self._items = []
+        self._inferred = []
+
+    def repen(self):
+        """Re-apply the pens to the already-drawn items, at the CURRENT device-pixel ratio.
+
+        The geometry never moves — only the widths change — so this is a re-pen, not a rebuild.
+        Which of the two pens (measured solid / inferred dashed) an item carries is remembered
+        alongside it rather than read back off the item."""
+        solid = pg.mkPen(self.color, width=theme.line_width(self.base_width))
+        dashed = _inferred_pen(self.color, self.base_width)
+        for it, inferred in zip(self._items, self._inferred, strict=True):
+            it.setPen(dashed if inferred else solid)
 
     def set_visible(self, on: bool):
         """Show/hide the existing items in place — no rebuild. Items created later inherit the
@@ -416,7 +430,7 @@ class _LapOverlay:
         self.lap_id = lap_id
         if lap_id is None:
             return
-        solid = pg.mkPen(self.color, width=self.base_width)
+        solid = pg.mkPen(self.color, width=theme.line_width(self.base_width))
         dashed = _inferred_pen(self.color, self.base_width)
         for seg in session.lap_trace_segments(lap_id):
             pen = solid if seg.measured else dashed
@@ -424,6 +438,7 @@ class _LapOverlay:
             if not self.visible:
                 item.setVisible(False)
             self._items.append(item)
+            self._inferred.append(not seg.measured)
 
     def set_polyline(self, xs, ys, key):
         """(Re)draw one solid polyline (the F7 cross-recording reference ring). `key` gates redraws
@@ -435,10 +450,11 @@ class _LapOverlay:
         if xs is None or len(xs) < 2:
             return
         item = self.plot.plot(np.asarray(xs), np.asarray(ys),
-                              pen=pg.mkPen(self.color, width=self.base_width))
+                              pen=pg.mkPen(self.color, width=theme.line_width(self.base_width)))
         if not self.visible:
             item.setVisible(False)
         self._items.append(item)
+        self._inferred.append(False)
 
     def refresh(self, session: Session):
         """Force a redraw of the current lap (e.g. after re-segmentation invalidated caches)."""
@@ -513,11 +529,15 @@ class _TraceOverlay:
         self.plot = plot
         self._items: list = []
         self._bounds = None  # memo: the items are built once and never move
-        pen = pg.mkPen(TRACE_COLOR, width=TRACE_WIDTH)
         for xs, ys in _trace_runs(session):
-            item = plot.plot(xs, ys, pen=pen)
+            item = plot.plot(xs, ys, pen=pg.mkPen(TRACE_COLOR, width=theme.line_width(TRACE_WIDTH)))
             item.setZValue(-5)  # below the lap overlays/rainbow (see the marker's z-order note)
             self._items.append(item)
+
+    def repen(self):
+        """Re-pen at the current device-pixel ratio (the points never move — see repen above)."""
+        for it in self._items:
+            it.setPen(pg.mkPen(TRACE_COLOR, width=theme.line_width(TRACE_WIDTH)))
 
     def bounds(self):
         """NaN-safe (x_lo, x_hi, y_lo, y_hi) over the drawn trace, or None if nothing is drawn.
@@ -753,7 +773,8 @@ class _CornerMarkers:
                 ring = pg.ScatterPlotItem(
                     pos=[(float(x), float(y))], size=CORNER_HIGHLIGHT_SIZE,
                     brush=pg.mkBrush(None),
-                    pen=pg.mkPen(C.accent, width=CORNER_HIGHLIGHT_PEN_W), pxMode=True)
+                    pen=pg.mkPen(C.accent, width=theme.line_width(CORNER_HIGHLIGHT_PEN_W)),
+                    pxMode=True)
                 ring.setZValue(7)  # above corner dots/labels, below the marker
                 self.plot.addItem(ring)
                 self._highlight_item = ring
@@ -781,8 +802,12 @@ class _BrakeMarkers:
             if not markers:
                 continue
             spots = [{"pos": (x, y), "size": theme.brake_glyph_size(d)} for x, y, d in markers]
+            # Same identity contract as the speed chart's glyphs: shape by CHART_SERIES slot (so
+            # compare's two laps stay apart with no colour vision) plus a canvas outline, which
+            # here also keeps the glyph off the rainbow ribbon it sits on.
             dots = pg.ScatterPlotItem(
-                symbol="t", pen=None, brush=pg.mkBrush(colour), pxMode=True)
+                symbol=theme.series_symbol(colour), brush=pg.mkBrush(colour), pxMode=True,
+                pen=pg.mkPen(C.canvas, width=theme.line_width(1)))
             dots.addPoints(spots)
             dots.setZValue(7)  # above corner dots, below the marker
             self.plot.addItem(dots)
@@ -795,6 +820,9 @@ class MapView(QWidget):
 
     def __init__(self, session: Session):
         super().__init__()
+        # Before ANY pen is built: pyqtgraph pen widths are in device pixels, so point theme at
+        # this widget's device-pixel ratio first (see theme.line_width and `event` below).
+        theme.set_pen_scale(self.devicePixelRatioF())
         self.session = session
         # Speed display unit (km/h default); app pushes the persisted choice via set_speed_unit.
         # Only the "speed" rainbow legend end-labels use it — the bucket COLOURS are km/h-invariant.
@@ -845,7 +873,7 @@ class MapView(QWidget):
 
         self.marker = pg.TargetItem(
             (session.tx[0] if len(session.tx) else 0, session.ty[0] if len(session.ty) else 0),
-            size=15, movable=True, pen=pg.mkPen(MARKER_COLOR, width=2),
+            size=15, movable=True, pen=pg.mkPen(MARKER_COLOR, width=theme.line_width(2)),
             brush=pg.mkBrush(_MARKER_RGB.red(), _MARKER_RGB.green(), _MARKER_RGB.blue(), 110),
         )
         self.plot.addItem(self.marker)
@@ -978,6 +1006,24 @@ class MapView(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.widget, 1)
         lay.addWidget(self._legend)
+
+    def event(self, ev):
+        """Re-pen when the window moves to a screen with a different device-pixel ratio.
+
+        The pens here are in DEVICE pixels (see theme.line_width), so the correct width depends on
+        the screen the window is on right now: drag the window from the Retina panel to an external
+        monitor and the rainbow ribbon and lap traces would otherwise keep the old screen's weight
+        (double on the way out, half on the way back). The layers that are rebuilt on every lap
+        change (brake/corner glyphs, timing-line handles) heal themselves on the next redraw; the
+        ones that are built once and memoized are re-penned in place here."""
+        if ev.type() == QEvent.Type.DevicePixelRatioChange:
+            if theme.set_pen_scale(self.devicePixelRatioF()):
+                self._trace_overlay.repen()
+                self._best_overlay.repen()
+                self._current_overlay.repen()
+                self.marker.setPen(pg.mkPen(MARKER_COLOR, width=theme.line_width(2)))
+                self.refresh_palette()      # re-pens the rainbow buckets + legend strip
+        return super().event(ev)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1235,7 +1281,7 @@ class MapView(QWidget):
         mx, my = (seg.x1 + seg.x2) / 2.0, (seg.y1 + seg.y2) / 2.0
         if self._provisional_line is None:
             # Dashed accent line over the start segment (z above the handles, below the marker).
-            pen = pg.mkPen(C.accent, width=2)
+            pen = pg.mkPen(C.accent, width=theme.line_width(2))
             pen.setStyle(Qt.DashLine)
             pen.setDashPattern([4, 4])
             self._provisional_line = pg.PlotDataItem([seg.x1, seg.x2], [seg.y1, seg.y2], pen=pen)
@@ -1403,7 +1449,7 @@ class MapView(QWidget):
         if self._ghost is None:
             # Hollow ring (no fill), not movable — the marker stays the only drag-to-seek surface.
             self._ghost = pg.TargetItem((0.0, 0.0), size=11, movable=False,
-                                        pen=pg.mkPen(GHOST_COLOR, width=2),
+                                        pen=pg.mkPen(GHOST_COLOR, width=theme.line_width(2)),
                                         brush=pg.mkBrush(None))
             self._ghost.setZValue(9)  # below the marker (10)
             self.plot.addItem(self._ghost)

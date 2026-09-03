@@ -24,6 +24,7 @@ band), and every number asserted here is read back off the widgets the app actua
 
 Run: QT_QPA_PLATFORM=offscreen python tests/test_charts_panel.py
 """
+import ast
 import itertools
 import os
 import sys
@@ -36,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QEvent, Qt  # noqa: E402
 from PySide6.QtGui import QFontMetrics  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -228,6 +229,144 @@ def test_chart_series_stays_palette_independent():
     finally:
         theme.set_palette(theme.PALETTE_STANDARD)
     print("test_chart_series_stays_palette_independent OK")
+
+
+def _brake_items(v, n_laps=4):
+    """Push one brake series per identity lap (the state central_view builds) and return the drawn
+    ScatterPlotItems."""
+    data = [([(300.0 + 40 * k, 0.30)], theme.CHART_SERIES[k], k) for k in range(n_laps)]
+    v.set_brake_markers(data)
+    for _ in range(4):
+        _APP.processEvents()
+    return v.plots._brake_items if hasattr(v, "plots") else v._brake_items
+
+
+def test_brake_glyphs_carry_a_shape_channel_that_survives_deuteranopia():
+    """W4-02. The dash channel above reaches the CURVES and the legend, but a filled brake marker
+    has no stroke to dash — so on the glyph layer hue was still the only identity cue, and hue is
+    exactly what a deuteranope does not have: CHART_SERIES slot 2 vs slot 3 is CIE76 dE 1.27 under
+    the repo's Machado-1.0 matrix (26.27 to normal vision), and any 4-lap selection reaches it.
+
+    Shipped, `{it.opts['symbol'] for it in _brake_items}` was exactly `{'t'}`: one triangle in six
+    hues. The contract now is the same one the curves have — no two glyph series the panel can draw
+    at once may be separated by a sub-JND hue ALONE."""
+    v = _view(n=7, best=6, select=range(6))
+    items = _brake_items(v, n_laps=6)
+    assert len(items) == 6, items
+    symbols = [it.opts["symbol"] for it in items]
+    colours = [it.opts["brush"].color().name() for it in items]
+    # the shape channel is real: as many distinct symbols as there are distinct colours
+    assert len(set(symbols)) == len(set(colours)) == 6, (symbols, colours)
+    collisions = []
+    for (sa, ca), (sb, cb) in itertools.combinations(zip(symbols, colours, strict=True), 2):
+        if sa == sb and _dE(_deut(_hx(ca)), _deut(_hx(cb))) < JND:
+            collisions.append(f"{sa} {ca} vs {sb} {cb}")
+    assert not collisions, f"brake glyphs separated only by a sub-JND hue: {collisions}"
+    # ...and the glyphs are OUTLINED, so two overlapping laps' markers cannot fuse into one blob
+    # (with pen=None they did, which is what makes the shape unreadable exactly where it matters).
+    for it in items:
+        pen = it.opts["pen"]
+        assert pen is not None and pen.style() != Qt.NoPen, "brake glyphs need a separating outline"
+    # the cue is per SLOT, so it is stable across selections rather than per draw order
+    assert len(theme.SERIES_SYMBOL) == len(theme.CHART_SERIES), "one glyph shape per identity slot"
+    assert theme.SERIES_SYMBOL[0] == "t", "slot 0 keeps the shipped triangle (1-lap default)"
+    assert theme.series_symbol(theme.CHART_SERIES[2]) != theme.series_symbol(theme.CHART_SERIES[3]), (
+        "the dE 1.27 pair is the one that HAS to be carried by shape")
+    v.deleteLater()
+    print("test_brake_glyphs_carry_a_shape_channel_that_survives_deuteranopia OK")
+
+
+def _at_dpr(v, dpr):
+    """Pretend the window moved to a screen at `dpr` and deliver Qt's own notification.
+
+    The widget's device-pixel ratio is what the handler reads, so overriding it and firing the real
+    QEvent exercises the shipped path rather than a test-only hook."""
+    v.devicePixelRatioF = lambda: dpr
+    v.event(QEvent(QEvent.Type.DevicePixelRatioChange))
+    for _ in range(4):
+        _APP.processEvents()
+
+
+def test_chart_line_weights_are_logical_pixels_not_device_pixels():
+    """W5-01. pyqtgraph's mkPen sets `setCosmetic(True)`, so a pen width is in DEVICE pixels and Qt
+    never multiplies it by the device-pixel ratio. Shipped, every chart line therefore kept the same
+    DEVICE width at any DPR — measured on a fixed 1512x982 LOGICAL screen, the Δ-plot gridlines drew
+    1.0 logical px at DPR 1 and 0.5 at DPR 2, and the always-on best-lap trace (width=1, deliberately
+    the thinnest line in the app) became a 0.5-logical-px hairline in the window, in the exported
+    HTML report and on the shared lap card.
+
+    Every width now goes through theme.line_width, so a design weight of N logical px is N device px
+    at DPR 1 and 2N at DPR 2 — the same rendered weight, which is what the Qt widgets beside the
+    chart already do.
+
+    The DPR is a property of the SCREEN THE WINDOW IS ON, so this is asserted BOTH ways: dragging
+    the window to a denser screen must thicken the pens, and dragging it back must thin them again.
+    A pen built once at import could only ever be right on one of the two."""
+    try:
+        assert theme.line_width(2) == 2.0, "unscaled: a logical width is a device width at DPR 1"
+        v = _view(n=7, best=6, select=range(6))
+        # constructed on this (DPR 1) screen: the shipped weights, unchanged
+        widths = {n: w for n, _c, w, _s, _d in _speed_pens(v)}
+        assert {w for n, w in widths.items() if "best" not in n} == {2}, widths
+        assert {w for n, w in widths.items() if "best" in n} == {1}, widths
+        assert v.p_delta.getAxis("left").pen().widthF() == 1.0
+        sizes_at_1 = {sp["size"] for it in _brake_items(v) for sp in it.data}
+
+        _at_dpr(v, 2.0)                                   # dragged onto the Retina panel
+        assert theme.pen_scale() == 2.0
+        widths = {n: w for n, _c, w, _s, _d in _speed_pens(v)}
+        assert {w for n, w in widths.items() if "best" not in n} == {4}, widths
+        assert {w for n, w in widths.items() if "best" in n} == {2}, widths
+        # the GRIDLINES too — they are drawn with the axis pen (AxisItem falls back from tickPen()
+        # to pen()), which is the line the 1.0 -> 0.5 logical px defect was measured on.
+        for plot, side in ((v.p_speed, "left"), (v.p_delta, "left"), (v.p_delta, "bottom")):
+            assert plot.getAxis(side).pen().widthF() == 2.0, side
+        # the scrub cursor is NOT rebuilt by refresh(), so the handler must re-pen it explicitly
+        assert v.cur_speed.pen.widthF() == 2.0
+        # ...and the glyph SIZE must NOT be scaled: a pxMode=True scatter size is already
+        # device-independent (measured: size 18 draws a 19x19 LOGICAL box at both DPRs), so
+        # scaling it as well would draw double-size brake markers on a Retina panel.
+        assert {sp["size"] for it in _brake_items(v) for sp in it.data} == sizes_at_1
+
+        _at_dpr(v, 1.0)                                   # ...and back to the external monitor
+        widths = {n: w for n, _c, w, _s, _d in _speed_pens(v)}
+        assert {w for n, w in widths.items() if "best" not in n} == {2}, widths
+        assert v.p_delta.getAxis("left").pen().widthF() == 1.0
+        assert v.cur_speed.pen.widthF() == 1.0
+        v.deleteLater()
+    finally:
+        theme.set_pen_scale(1.0)
+    print("test_chart_line_weights_are_logical_pixels_not_device_pixels OK")
+
+
+def test_no_chart_or_map_pen_hardcodes_a_device_pixel_width():
+    """The guard that keeps W5-01 fixed. A bare `width=<number>` on a pyqtgraph pen is a DEVICE-pixel
+    width and is the whole defect, so in the two files that draw the charts and the map every width
+    must be a `theme.line_width(...)` call. AST-based: a grep would trip over the comments that
+    explain this."""
+    offenders = []
+    for fn in ("plots_view.py", "map_view.py"):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "studio", fn)
+        tree = ast.parse(open(path, encoding="utf-8").read(), fn)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            if not (isinstance(f, ast.Attribute) and f.attr in ("mkPen", "setPen")):
+                continue
+            for kw in node.keywords:
+                if kw.arg != "width":
+                    continue
+                v = kw.value
+                ok = (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute)
+                      and v.func.attr == "line_width")
+                if not ok:
+                    offenders.append(f"{fn}:{node.lineno} width={ast.unparse(v)}")
+    assert not offenders, (
+        "pyqtgraph pen widths are in DEVICE pixels — route them through theme.line_width so they "
+        f"keep their weight on a Retina panel: {offenders}")
+    print("test_no_chart_or_map_pen_hardcodes_a_device_pixel_width OK")
 
 
 # ============================================================================ L6-04
@@ -444,6 +583,9 @@ def _run_all():
     test_ideal_toggle_is_live_only_where_it_can_draw()
     test_identity_curves_carry_a_cue_that_survives_deuteranopia()
     test_chart_series_stays_palette_independent()
+    test_brake_glyphs_carry_a_shape_channel_that_survives_deuteranopia()
+    test_chart_line_weights_are_logical_pixels_not_device_pixels()
+    test_no_chart_or_map_pen_hardcodes_a_device_pixel_width()
     test_speed_axis_never_ticks_inside_the_estimated_pedal_band()
     test_pedal_band_names_itself_on_the_chart()
     test_legend_sits_clear_of_the_lap_start_and_says_it_can_be_moved()

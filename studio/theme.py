@@ -154,6 +154,55 @@ CHART_SERIES = [
     "#9FD66B",   # lime-leaning green (distinct from the best-lap C.ahead green)
 ]
 
+# A THIRD identity channel, for the layers that are filled GLYPHS rather than stroked lines. #156
+# gave the curves and the legend a per-slot dash pattern (plots_view.SERIES_DASH), but a brake
+# marker has no stroke to dash: it was one filled triangle in six hues, so on that layer hue was
+# still the only cue. Two CHART_SERIES pairs do not survive deuteranopia — measured CIE76 under the
+# Machado-2009 severity-1.0 matrix tests/test_contrast.py uses (JND 2.3):
+#     slot 2 #B794F6 vs slot 3 #7FA8F5 = 1.27   (26.27 to normal vision) — BELOW the JND
+#     slot 4 #E89B6B vs slot 5 #9FD66B = 7.90   (60.97 to normal vision) — weak
+# Every other pair is >= 20.01, so colour already separates them and the shape budget is spent
+# where colour is weakest: slots 2/3 get the most distinct pair in the set (square vs diamond,
+# mask distance 1-IoU = 0.56 at the 9 px worst case) and slots 4/5 the next (0.41).
+#
+# All six are FILLED shapes with the same bounding box, because glyph SIZE is already spent
+# encoding peak decel (brake_glyph_size, 9-18 px): pyqtgraph scales every symbol into the same
+# box, so extent — which is what the eye reads as "bigger" — is identical across shapes (measured
+# 10x10 at size 9 and 19x19 at size 18 for all of them) and the decel ramp still reads. Slot 0
+# stays "t", so the one-lap default and the map's single-lap trace draw exactly what they drew.
+SERIES_SYMBOL = [
+    "t",    # slot 0  triangle-down (the shipped glyph)
+    "o",    # slot 1  circle
+    "s",    # slot 2  square   ┐ the deuteranopic dE 1.27 pair: this is the one that
+    "d",    # slot 3  diamond  ┘ has to be carried by shape alone
+    "t1",   # slot 4  triangle-up ┐ the dE 7.90 pair
+    "p",    # slot 5  pentagon    ┘
+]
+
+
+def series_slot(colour) -> int:
+    """The CHART_SERIES identity slot a lap glyph colour belongs to (0 when it is not an identity
+    colour — the always-on BEST lap, which is drawn in best_lap_colour()).
+
+    Derived from the colour rather than plumbed alongside it on purpose: the glyph's shape and its
+    hue then come from the same value and can never disagree, and the shape automatically matches
+    the dash pattern of the curve it rides (both key off the same slot). The best lap falling back
+    to slot 0's triangle is safe by measurement — its hue is >= 17.0 deuteranopic dE from every
+    identity colour in BOTH palettes, so colour separates it from a slot-0 lap on its own."""
+    try:
+        want = QColor(colour).name().upper()
+    except Exception:
+        return 0
+    for i, c in enumerate(CHART_SERIES):
+        if QColor(c).name().upper() == want:
+            return i
+    return 0
+
+
+def series_symbol(colour) -> str:
+    """The pyqtgraph glyph symbol for a lap colour (see SERIES_SYMBOL / series_slot)."""
+    return SERIES_SYMBOL[series_slot(colour) % len(SERIES_SYMBOL)]
+
 
 # Track-map current lap coloured by a channel (speed / Δ-vs-best), quantized into MAP_RAINBOW_N
 # buckets through the behind → accent → ahead ramp so it matches the Δ readout. The ramp endpoints
@@ -276,9 +325,63 @@ BRAKE_DECEL_HI = 0.45        # g: cap of the size ramp
 
 
 def brake_glyph_size(peak_decel: float) -> float:
-    """Brake-event peak decel (g) -> marker glyph size (px), clamped to the ramp ends."""
+    """Brake-event peak decel (g) -> marker glyph size (px), clamped to the ramp ends.
+
+    Returned in LOGICAL px and used as is: a pxMode=True ScatterPlotItem's `size` is already
+    device-independent (measured: size=18 draws a 19x19 logical box at DPR 1 and 2 alike), unlike
+    the pen widths next to it — see line_width."""
     frac = (float(peak_decel) - BRAKE_DECEL_LO) / max(BRAKE_DECEL_HI - BRAKE_DECEL_LO, 1e-6)
     return BRAKE_MARKER_MIN_PX + min(max(frac, 0.0), 1.0) * (BRAKE_MARKER_MAX_PX - BRAKE_MARKER_MIN_PX)
+
+
+# ================================================================= HiDPI chart/map line weights
+# pyqtgraph's mkPen sets `pen.setCosmetic(True)` unconditionally (0.14.0), and a COSMETIC pen's
+# width is in DEVICE pixels — Qt does NOT multiply it by the painter's devicePixelRatio. So a
+# `width=1` gridline is one DEVICE pixel at every DPR: full weight on a normal display and HALF
+# weight on a Retina panel, while the plain Qt widgets beside it scale correctly. Measured on the
+# shipped charts at a fixed 1512x982 LOGICAL screen: the delta plot's gridlines are 1.0 logical px
+# at DPR 1 and 0.5 at DPR 2, and the always-on best-lap trace (deliberately the thinnest line in
+# the app, width=1) degrades to a 0.5-logical-px hairline — in the window AND in the grabs the
+# HTML report and the share card embed.
+#
+# So every chart/map pen width is a LOGICAL px design value that must be multiplied by the DPR
+# before it reaches mkPen. `setCosmetic(False)` is NOT the fix: a non-cosmetic pen's width is in
+# SCENE units, so it would then scale with the ViewBox zoom — a plot zoomed 4x would draw
+# 4x-fat traces, which is a different behaviour, not a corrected one.
+#
+# THIS IS A CALL-TIME CONTRACT, exactly like the palette accessors above, and for the same reason:
+# the DPR is a property of the SCREEN THE WINDOW IS ON, and it changes when the user drags the
+# window from the Retina panel to an external monitor. A pen built once at import freezes the
+# ratio that happened to be current at startup. Views therefore build their pens at draw time and
+# re-resolve on QEvent.DevicePixelRatioChange (see plots_view/map_view `event`), and
+# tests/test_charts_panel.py fails the build if a `width=` literal reaches mkPen directly.
+_pen_scale = 1.0
+
+
+def pen_scale() -> float:
+    """The device-pixel ratio chart/map pen widths are currently scaled by."""
+    return _pen_scale
+
+
+def set_pen_scale(dpr: float) -> bool:
+    """Point the chart/map line weights at a new device-pixel ratio. Returns True when it actually
+    moved, so a caller can skip an expensive re-draw on the (common) no-op."""
+    global _pen_scale
+    new = float(dpr) if dpr and float(dpr) > 0 else 1.0
+    if abs(new - _pen_scale) < 1e-6:
+        return False
+    _pen_scale = new
+    return True
+
+
+def line_width(logical_px: float) -> float:
+    """A design line weight in LOGICAL px -> the DEVICE-px width a cosmetic pyqtgraph pen needs.
+
+    Every `pg.mkPen(..., width=...)` in the charts and the map goes through this. Dash patterns do
+    NOT need it: Qt specifies a dash pattern in units of the PEN WIDTH, so scaling the width scales
+    the pattern with it (measured: the [5,3] pattern draws 5/3 device px at width 1 and 12/4 at
+    width 2 — multiplying the pattern too would double-scale it)."""
+    return float(logical_px) * _pen_scale
 
 
 def format_delta_value(d: float | None) -> str:
@@ -348,7 +451,12 @@ def format_ideal_readout(d_ideal: float | None, speed_kmh: float | None,
     v = format_delta_value(d_ideal)
     delta_run = f"Δideal {v}" + (" s" if d_ideal is not None else "")
     text = f"{delta_run}     {format_speed_run(speed_kmh, lap, unit)}"
-    colour = C.behind if (d_ideal is not None and d_ideal > DELTA_EVEN_EPS_S) else None
+    # behind_colour(), NOT the raw C.behind token: this is the app's LARGEST text and it carries
+    # the ahead/behind meaning, so it must follow the colour-blind palette like every other Δ
+    # surface. Read as a constant it stayed the standard red in BOTH palettes (max per-channel
+    # |Δ| = 0 over the whole readout) while the Corners table 130 px below painted the same
+    # meaning in the palette's orange.
+    colour = behind_colour() if (d_ideal is not None and d_ideal > DELTA_EVEN_EPS_S) else None
     return text, colour
 
 

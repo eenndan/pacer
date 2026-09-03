@@ -34,6 +34,7 @@ import pyqtgraph as pg
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtCore import QEvent, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
@@ -42,6 +43,8 @@ from _synthetic import bare_session  # noqa: E402
 
 from studio import theme  # noqa: E402
 from studio.map_view import (  # noqa: E402
+    RAINBOW_WIDTH,
+    TRACE_WIDTH,
     MapView,
     bucket_polylines,
     bucketize,
@@ -249,6 +252,67 @@ def test_toggle_off_restores_exact_items_and_pens():
     assert all(it.xData is None or it.xData.size == 0 for it in mv._rainbow._items)
     assert not mv._legend.isVisibleTo(mv), "legend hides when off"
     print("test_toggle_off_restores_exact_items_and_pens OK")
+
+
+def test_map_line_weights_follow_the_device_pixel_ratio():
+    """W5-01 on the map. pyqtgraph pens are COSMETIC — their width is in DEVICE pixels — so at DPR 2
+    the rainbow ribbon (RAINBOW_WIDTH=3) drew 1.5 LOGICAL px and its parallel strands stopped
+    merging into one band, and the whole-recording trace (width 1.0) halved to a 0.5 px hairline.
+    Every width now goes through theme.line_width, and MapView re-resolves it on Qt's
+    DevicePixelRatioChange so dragging the window between screens re-pens rather than freezing on
+    whichever screen the window opened."""
+    try:
+        s = _stub_session()
+        mv = MapView(s)
+        mv.set_rainbow_mode("speed")
+        mv.set_current_lap(1)
+        assert {it.opts["pen"].widthF() for it in mv._rainbow._items} == {float(RAINBOW_WIDTH)}
+        assert {it.opts["pen"].widthF() for it in mv._trace_overlay._items} == {float(TRACE_WIDTH)}
+
+        mv.devicePixelRatioF = lambda: 2.0                # dragged onto the Retina panel
+        mv.event(QEvent(QEvent.Type.DevicePixelRatioChange))
+        for _ in range(4):
+            _APP.processEvents()
+        assert theme.pen_scale() == 2.0
+        assert {it.opts["pen"].widthF() for it in mv._rainbow._items} == {2.0 * RAINBOW_WIDTH}
+        assert {it.opts["pen"].widthF() for it in mv._trace_overlay._items} == {2.0 * TRACE_WIDTH}
+        # the lap overlays are memoized (they are not rebuilt per tick), so they need re-penning
+        # in place — the case a plain "redraw on change" would silently miss
+        assert {it.opts["pen"].widthF() for it in mv._current_overlay._items} == {2.0 * 3}
+        assert mv.marker.pen.widthF() == 4.0      # a 2 logical-px marker outline
+
+        mv.devicePixelRatioF = lambda: 1.0                # ...and back again
+        mv.event(QEvent(QEvent.Type.DevicePixelRatioChange))
+        for _ in range(4):
+            _APP.processEvents()
+        assert {it.opts["pen"].widthF() for it in mv._rainbow._items} == {float(RAINBOW_WIDTH)}
+        assert {it.opts["pen"].widthF() for it in mv._current_overlay._items} == {3.0}
+    finally:
+        theme.set_pen_scale(1.0)
+    print("test_map_line_weights_follow_the_device_pixel_ratio OK")
+
+
+def test_map_brake_glyphs_carry_a_shape_channel():
+    """The map's brake markers ride the same CHART_SERIES identity colours as the speed chart's, so
+    they get the same non-colour channel: shape by slot, plus a canvas outline that also keeps the
+    glyph off the rainbow ribbon it sits on. Shipped, compare mode drew both laps' glyphs as the
+    same filled triangle."""
+    s = _stub_session()
+    mv = MapView(s)
+    mv.set_current_lap(1)
+    markers = [(0.0, 0.0, 0.30), (10.0, 5.0, 0.40)]
+    mv.set_brake_markers([(markers, theme.CHART_SERIES[k]) for k in (2, 3)])
+    items = mv._brake_markers._items
+    assert len(items) == 2, items
+    # slots 2 and 3 are the deuteranopic dE 1.27 pair — on the map too, shape is what tells them
+    # apart, since their hues do not
+    assert items[0].opts["symbol"] != items[1].opts["symbol"], "compare's two laps share a shape"
+    for it in items:
+        assert it.opts["pen"] is not None and it.opts["pen"].style() != Qt.NoPen
+    # a single-lap map (slot 0) still draws exactly the triangle it always drew
+    mv.set_brake_markers([(markers, theme.CHART_SERIES[0])])
+    assert mv._brake_markers._items[0].opts["symbol"] == "t"
+    print("test_map_brake_glyphs_carry_a_shape_channel OK")
 
 
 def test_tick_path_does_zero_rainbow_rebuilds():
