@@ -71,7 +71,9 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = [
         (QKeySequence("Ctrl+Shift+S"), "Session statistics, full-window (again / ⛶ to restore)"),
     ]),
     ("Editing", [
-        (QKeySequence.StandardKey.Undo, "Undo the last start/finish-line edit"),
+        # "timing-line", matching the menu item it documents: ⌘Z takes back SECTOR-line edits too,
+        # and this card used to be one of the two surfaces (with the status bar) that said otherwise.
+        (QKeySequence.StandardKey.Undo, "Undo the last timing-line edit"),
     ]),
     ("Layout", [
         ("Double-click header  ·  ⛶", "Maximize a panel to fill the window (Esc / again to restore)"),

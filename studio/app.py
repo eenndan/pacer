@@ -47,7 +47,7 @@ from . import (
     units,
 )
 from ._signal import lap_label
-from .central_view import CentralView
+from .central_view import CentralView, undo_summary
 from .coaching_panel import OpportunitiesDialog
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
@@ -146,6 +146,12 @@ class StudioWindow(QMainWindow):
     # Emitted after every load settles (on the UI thread, after _on_session_loaded /
     # _on_load_failed have run) — a clean way for tests/smoke to wait for the now-async load.
     loadFinished = Signal()
+
+    # Edit ▸ Revert, in its two truthful spellings (chosen per session in _sync_edit_menu): the
+    # loader auto-fits a start line on an unknown track, but places the DETECTED TRACK's own
+    # registered line when it knows the circuit, and "auto-fitted" would misname that one.
+    _REVERT_FITTED_LABEL = "Revert start/finish line to auto-fitted"
+    _REVERT_TRACK_LABEL = "Revert start/finish line to the track's line"
 
     def __init__(self, paths: list[str], full: bool = False, demo_unavailable: bool = False):
         super().__init__()
@@ -529,6 +535,10 @@ class StudioWindow(QMainWindow):
             return  # superseded by a newer load; drop this result
         self._loading_token = None
         self._cancel_placeholder_timer()  # the result beat the card: never blank the window now
+        # The OUTGOING session + the recording it belonged to, captured before they are replaced —
+        # a re-open of the SAME recording hands its undo history forward (below).
+        prev_session = getattr(self, "session", None)
+        prev_sidecar = getattr(self, "_sidecar_path", None)
         self.session = session
         # Commit _paths only after a successful load, so a failed reload leaves both self.session
         # and _paths pointing at the still-good recording (every _paths consumer stays in sync).
@@ -550,6 +560,16 @@ class StudioWindow(QMainWindow):
                       f"{os.path.basename(self._sidecar_path)}", flush=True)
             else:
                 self._timing_restore_failed = True
+
+        # Re-opening the SAME recording carries its timing-line undo history across the new Session.
+        # Without this, File ▸ Open on the recording you had just mis-dragged greyed out the one
+        # control that could take the mistake back — while the mis-drag was already in the sidecar
+        # and had moved the session best by 4.2% (QA W3-01). Identity is the resolved sidecar path,
+        # the same "is this the same recording" test the forget path uses. After the restore, so the
+        # carried snapshots sit under the state actually on screen.
+        if (prev_session is not None and self._sidecar_path is not None
+                and prev_sidecar == self._sidecar_path):
+            session.adopt_timing_history(prev_session)
 
         label = chapters.recording_label(paths)
         self.setWindowTitle(f"{APP_NAME} — {label}" if label else APP_NAME)
@@ -990,6 +1010,18 @@ class StudioWindow(QMainWindow):
             "previous lap timing + session-best baseline)")
         self._undo_action.triggered.connect(self._undo_timing)
         self._undo_action.setEnabled(False)  # no session / no edit yet
+        # …and the STANDING way back, for when Undo can no longer reach it. Undo is per-session
+        # history; the loader's own placement is recomputed on every load, so this item works on a
+        # recording opened months after the bad drag was saved into its sidecar (QA W3-01, where a
+        # 12 m mis-drag moved the session best 4.2% and no control in the app could put it back).
+        # Its label is set per session in _sync_edit_menu — on a detected track the line it restores
+        # is the TRACK's, not an auto-fit.
+        self._revert_action = edit_menu.addAction(self._REVERT_FITTED_LABEL)
+        self._revert_action.setToolTip(
+            "Put the start/finish line back where it was placed when this recording was opened, "
+            "and go back to treating the lap times as provisional. Sector lines are not affected")
+        self._revert_action.triggered.connect(self._revert_timing_to_fitted)
+        self._revert_action.setEnabled(False)  # no session yet
         edit_menu.aboutToShow.connect(self._sync_edit_menu)
 
         # Coaching menu: the comparison / coaching surface (reference load/clear/compare +
@@ -1177,25 +1209,54 @@ class StudioWindow(QMainWindow):
 
     # ----------------------------------------------------- timing-line undo (Edit ▸ Undo)
     def _sync_edit_menu(self):
-        """Enable Edit ▸ Undo only when the current session has a prior timing-line edit to revert.
+        """Enable each Edit item only when it would do something on the current session: Undo when
+        there's a prior timing-line edit in THIS session's history, Revert when the start/finish
+        line is somewhere other than where the loader put it.
         Connected to the Edit menu's aboutToShow AND refreshed live via the view's timingEdited
         signal (so the shortcut's enabled state tracks each drag), so neither _load nor _on_lines
         needs to reach into the menu. getattr-guarded — _build_ui can run before _build_menu in a
         partial test harness (test_central_view_realqt builds the UI without the menu bar)."""
-        action = getattr(self, "_undo_action", None)
-        if action is None:
-            return
         session = getattr(self, "session", None)
-        action.setEnabled(bool(session is not None and session.can_undo_timing()))
+        action = getattr(self, "_undo_action", None)
+        if action is not None:
+            action.setEnabled(bool(session is not None and session.can_undo_timing()))
+        revert = getattr(self, "_revert_action", None)
+        if revert is not None:
+            # Named for the line it would actually restore: "auto-fitted" is a lie on a detected
+            # track, where the loader placed the TRACK's registered line.
+            revert.setText(self._REVERT_TRACK_LABEL
+                           if getattr(session, "track_name", None) is not None
+                           else self._REVERT_FITTED_LABEL)
+            revert.setEnabled(bool(session is not None and session.can_revert_timing()))
 
     def _undo_timing(self):
         """Edit ▸ Undo (Cmd+Z): revert the last timing-line edit via the current view. No-op when
-        nothing is loaded or there's no prior edit (the action is disabled there too)."""
+        nothing is loaded or there's no prior edit (the action is disabled there too).
+
+        The confirmation NAMES WHAT CAME BACK (central_view.undo_summary over the view's measured
+        outcome). It used to be one fixed string — "reverted the last start/finish-line edit" —
+        printed even for the undos that only restored sector lines and never touched the start line
+        (QA W3-03); the map's plate says the same sentence in the same frame."""
         view = getattr(self, "view", None)
         if view is None:
             return
-        if view.undo_timing_lines():
-            self.statusBar().showMessage("reverted the last start/finish-line edit", STATUS_MS)
+        outcome = view.undo_timing_lines()
+        if outcome is not None:
+            self.statusBar().showMessage(undo_summary(outcome), STATUS_MS)
+
+    def _revert_timing_to_fitted(self):
+        """Edit ▸ Revert start/finish line: put the start line back where the loader placed it.
+
+        The way back that does NOT expire with the session (see Session.revert_timing_to_fitted).
+        Goes through the view so the restored line takes the same road as an undo — map handles,
+        derived views, sidecar — and the trust surfaces pick up the demotion back to Provisional."""
+        view = getattr(self, "view", None)
+        if view is None or not view.revert_timing_to_fitted():
+            return
+        self._apply_session_notice()  # the line is auto-fitted again; the untimed notice says so
+        self.statusBar().showMessage(
+            "put the start/finish line back where it was when this recording was opened "
+            "(⌘Z undoes this)", STATUS_MS)
 
     # ----------------------------------------------------- keyboard shortcuts
     def _build_shortcuts(self):
@@ -1943,7 +2004,10 @@ class StudioWindow(QMainWindow):
         # and it makes the timing VERIFIED (a named track is a trusted start line). Nothing was
         # re-segmented, so nothing rebuilt itself: this gesture owns propagating the flip to every
         # surface that reads it, or the app contradicts itself in one frame (QA W7-02/W7-03).
-        self.session.track_name = name
+        # adopt_track, not a bare `track_name =`: the name has to record WHICH LINES it just
+        # promoted, or it goes on certifying the recording after those lines are replaced by an
+        # unconfirmed one (QA W3-02) — see Session.timing_verified.
+        self.session.adopt_track(name)
         # 1. the views: trust strip, the map's on-canvas provisional cue, the Laps table's muting +
         #    ★ best mark, the Stats page's banner and muted tiles.
         if getattr(self, "view", None) is not None:

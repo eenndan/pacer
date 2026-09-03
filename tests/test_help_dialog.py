@@ -158,7 +158,7 @@ def test_card_glyphs_match_the_live_bindings():
     rows = {desc: help_dialog._key_text(key)
             for _group, group_rows in SHORTCUT_GROUPS for key, desc in group_rows}
     for handle, desc in (("_open_action", "Open a recording"),
-                         ("_undo_action", "Undo the last start/finish-line edit"),
+                         ("_undo_action", "Undo the last timing-line edit"),
                          ("_stats_action", "Session statistics, full-window (again / ⛶ to restore)"),
                          ("_fullscreen_action", "Enter / exit full screen")):
         live = getattr(win, handle).shortcut().toString(QKeySequence.NativeText)

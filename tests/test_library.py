@@ -1416,6 +1416,12 @@ class _TrustSession:
     def timing_lines_latlon(self):
         return (((-37.95, 145.10), (-37.95, 145.11)), [])
 
+    def adopt_track(self, name):
+        """The seam File ▸ Save as track… actually goes through (Session.adopt_track): attaching
+        the name also records WHICH LINES it certifies, so the name can't outlive them."""
+        self.track_name = name
+        self.track_lines = self.timing_lines_latlon()
+
     def library_entry(self, paths):
         return _entry("GX030059", track=self.track_name, laps=2, best=23.231,
                       verified=self.timing_verified, paths=list(paths))
