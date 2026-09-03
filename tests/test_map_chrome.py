@@ -15,6 +15,9 @@ Four things the map said (or failed to say) about itself, all offscreen on stub 
     line and nothing on the map to say it happened (it IS ⌘Z-reversible, which nothing said).
   * MAP-11 — "Add sector" appended at 1/2, then 2/3, then 3/4 of what was LEFT, giving sub-sectors
     of 49.9 / 16.8 / 8.6 / 24.7 % of the lap.
+  * W2R-06 — a cross-recording reference whose racing line was refused (too far off, or the wrong
+    SIZE) left no ring and said nothing, so "the reference loaded" and "the reference's line is
+    untrustworthy" looked identical: the faint line silently reverted to the local best lap.
 
 Run: python tests/test_map_chrome.py
 """
@@ -244,6 +247,56 @@ def test_reset_with_no_sectors_says_so_instead_of_re_segmenting():
     assert emitted == [], "clearing zero sector lines re-segmented the session"
     assert "No sector lines to clear" in mv._notice.text(), mv._notice.text()
     print("test_reset_with_no_sectors_says_so_instead_of_re_segmenting OK")
+
+
+def test_a_reference_whose_line_cannot_be_drawn_is_explained_not_silent():
+    """QA-W2R-06's other half. When the cross-recording reference's spatial fit is refused (too
+    far off, or — the new half — the wrong SIZE), `reference_overlay_xy()` is None and the map
+    silently falls back to the local best-lap ghost: two different states that looked identical.
+    The map now says which one it is, once, on the canvas the line is missing from."""
+    s = _session()
+    s.reference_overlay_xy = lambda: None
+    s.reference_label = lambda: "recording 0059 · 3 chapters"
+    mv = _sized_map(s)
+    mv._refresh_best()
+    _APP.processEvents()
+    notice = mv._notice
+    assert notice.isVisibleTo(mv.widget), \
+        "a reference whose racing line cannot be drawn vanished without a word"
+    text = notice.text()
+    assert "recording 0059 · 3 chapters" in text, text
+    assert "not drawn" in text and "size" in text, text
+    assert "your own best lap" in text, f"the notice must say what the faint line IS: {text!r}"
+    assert "lap table" in text or "charts" in text, \
+        f"the notice must say the Δ side still works: {text!r}"
+    # …and the plate is big enough to SHOW it. adjustSize() sizes a word-wrapped QLabel to its
+    # one-line hint, which sliced this four-line notice through the middle (measured: 70 px of
+    # plate for 5 wrapped lines) — the message was there and unreadable.
+    need = notice.heightForWidth(notice.width())
+    assert notice.height() >= need, \
+        f"the notice plate is {notice.height()} px for {need} px of wrapped text — it clips"
+    assert mv.widget.rect().contains(notice.geometry()), \
+        f"the notice is outside the map: {notice.geometry()} in {mv.widget.rect()}"
+    # Idempotent: the 30 Hz tick re-runs this path and must not re-post (the plate would never
+    # time out). Hide it by hand and check nothing puts it back while the state is unchanged.
+    notice.hide()
+    for _ in range(3):
+        mv.set_current_lap(0)
+        mv.refresh_overlays()
+    _APP.processEvents()
+    assert not notice.isVisibleTo(mv.widget), "the notice re-posts on every tick"
+
+    # A reference that DOES draw says nothing at all — no notice on the happy path.
+    s2 = _session()
+    ring = np.column_stack([np.cos(np.linspace(0, 2 * math.pi, 80)) * 200.0,
+                            np.sin(np.linspace(0, 2 * math.pi, 80)) * 40.0])
+    s2.reference_overlay_xy = lambda: ring
+    s2.reference_label = lambda: "recording 0059 · 3 chapters"
+    mv2 = _sized_map(s2)
+    mv2._refresh_best()
+    _APP.processEvents()
+    assert not mv2._notice.isVisibleTo(mv2.widget), "a drawn reference must not post a notice"
+    print("test_a_reference_whose_line_cannot_be_drawn_is_explained_not_silent OK")
 
 
 def test_the_action_notice_never_reaches_the_share_card():
