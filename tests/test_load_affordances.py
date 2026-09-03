@@ -22,6 +22,7 @@ What each pins, and why it could regress:
 Real Qt + a real worker QThread, so run offscreen:
     QT_QPA_PLATFORM=offscreen python tests/test_load_affordances.py
 """
+import gc
 import os
 import sys
 import tempfile
@@ -34,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QMimeData, QTimer, QUrl  # noqa: E402
+from PySide6.QtCore import QEvent, QMimeData, Qt, QTimer, QUrl  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QMessageBox,
@@ -424,6 +425,93 @@ def test_dropping_a_folder_of_chapters_opens_it():
     print("test_dropping_a_folder_of_chapters_opens_it OK")
 
 
+# ==================================================== W8-02 · what a load LEAVES BEHIND
+def _live_load_workers():
+    """Every SessionLoadWorker still alive in the process, after two full gc passes."""
+    gc.collect()
+    gc.collect()
+    return sum(1 for o in gc.get_objects()
+               if isinstance(o, workers_mod.SessionLoadWorker))
+
+
+def _window_timers(win):
+    """QTimers parented DIRECTLY to the window — where the loading-card timer lives. Direct-only
+    on purpose: the view rebuilt by each load owns timers of its own, and counting those would
+    measure the rebuild instead of the leak."""
+    return len(win.findChildren(QTimer, options=Qt.FindDirectChildrenOnly))
+
+
+def test_a_reload_releases_its_loading_card_timer_and_its_load_worker():
+    """QA W8-02: every recording opened left a QTimer and a finished SessionLoadWorker (a QThread)
+    riding on the window, permanently — measured +1 of each per load across 30 in-window reloads
+    with no plateau. The timer was parented to the window and only ever stop()ed or dropped from
+    the attribute; the worker was held by its own `finished.connect(lambda w=worker: ...)`, a cycle
+    inside Qt's C++ connection table that Python's gc can neither see nor break.
+
+    Driven through the app's own reload entry point (_load, what File ▸ Open Recent calls) with a
+    path that cannot load, so the whole worker lifecycle — start, fail, finished — runs for real
+    without a recording on disk. What is asserted is the DELTA over five reloads: exactly the
+    counts the leak grew."""
+    win, _view = _window()
+    win.resize(1440, 900)
+    win.show()
+    _APP.processEvents()
+    DIALOGS.clear()
+
+    def _settle():
+        # deleteLater() is honoured by the event loop, not by processEvents() alone.
+        _APP.sendPostedEvents(None, QEvent.DeferredDelete)
+        _APP.processEvents()
+
+    # One reload first, so the baseline is a STEADY state (the first load through a fresh window
+    # installs one-off children that would otherwise read as growth).
+    win._load(["/tmp/pacer-no-such-recording-GX019001.MP4"])
+    assert _pump(30.0, lambda: win._load_worker is None), "the first probe load never finished"
+    _settle()
+    base_workers, base_timers = _live_load_workers(), _window_timers(win)
+
+    for i in range(5):
+        win._load([f"/tmp/pacer-no-such-recording-GX01900{i + 2}.MP4"])
+        assert _pump(30.0, lambda: win._load_worker is None), f"reload {i} never finished"
+        _settle()
+
+    workers, timers = _live_load_workers(), _window_timers(win)
+    assert workers == base_workers, (
+        f"5 reloads left {workers - base_workers} finished SessionLoadWorker QThread(s) alive "
+        f"({base_workers} -> {workers}); each one is a QThread the window can never release")
+    assert timers == base_timers, (
+        f"5 reloads left {timers - base_timers} loading-card QTimer(s) parented to the window "
+        f"({base_timers} -> {timers})")
+    win.close()
+    _APP.processEvents()
+    print("test_a_reload_releases_its_loading_card_timer_and_its_load_worker OK")
+
+
+def test_the_fired_placeholder_timer_is_released_not_just_dropped():
+    """The OTHER release site, and the one a normal reload actually takes: the card's timer FIRES
+    (a real load runs ~1.25 s against LOAD_PLACEHOLDER_MS = 400), and _on_placeholder_due used to
+    set self._placeholder_timer = None without deleting the QTimer it had just let go of.
+
+    Driven with a STALE token so the slot takes its "this load is no longer current" branch and
+    releases the timer without installing a card — the release must not depend on which branch
+    ran."""
+    win, _view = _window()
+    timer = QTimer(win)
+    timer.setSingleShot(True)
+    win._placeholder_timer = timer
+
+    win._on_placeholder_due(win._load_token + 99, [])   # stale token: no card, just the release
+    assert win._placeholder_timer is None
+    _APP.sendPostedEvents(None, QEvent.DeferredDelete)
+    _APP.processEvents()
+    assert not _sip_alive(timer), (
+        "the fired loading-card timer is still a live QTimer child of the window — one more per "
+        "recording opened, for the life of the window")
+    win.close()
+    _APP.processEvents()
+    print("test_the_fired_placeholder_timer_is_released_not_just_dropped OK")
+
+
 def _run_all():
     test_open_demo_keeps_the_event_loop_alive_and_says_it_is_working()
     test_open_demo_ignores_a_result_the_user_already_overtook()
@@ -433,6 +521,8 @@ def _run_all():
     test_cancel_before_any_session_returns_to_the_welcome_state()
     test_zero_lap_sentence_is_the_same_on_the_bar_as_in_the_panel()
     test_dropping_a_folder_of_chapters_opens_it()
+    test_a_reload_releases_its_loading_card_timer_and_its_load_worker()
+    test_the_fired_placeholder_timer_is_released_not_just_dropped()
     print("all load-affordance tests OK")
 
 

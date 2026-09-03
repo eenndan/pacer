@@ -67,6 +67,26 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Changing units or turning on colour-blind cues no longer kills the app after ordinary
+  lap-panel use.** The Statistics page re-places its tiles into their grid whenever the column
+  count changes — which its own scrollbar appearing makes happen the first time the page is
+  shown — and handed each tile straight back to `QGridLayout.addWidget` while the grid still
+  held it. Qt reacts to that by deleting the tile's existing layout item from *inside* the
+  `addWidget` call, and one such pass over the page's ~30 tiles left the process in a state
+  where the next burst of Qt-object destruction segfaulted: a View ▸ Units or View ▸
+  Colour-blind-safe cues toggle, after nothing but tab switching, took the window down with no
+  dialog and no chance to save. Each tile is now taken out of the grid before it goes back in.
+  Measured on the reporting sequence: 7 crashes in 10 runs before, 0 in 12 after.
+- **Turning colour-blind-safe cues on now recolours the brake-point glyphs too.** The glyphs on
+  the speed chart and on the map trace are drawn from a cached colour, so they alone did not
+  follow the flip: the best lap's curve turned colour-blind blue while its own markers stayed
+  the standard palette's green — a hue that palette exists to remove — until you happened to
+  click a lap. The palette refresh now re-pushes them.
+- **Opening a recording no longer leaves a timer and a worker thread behind.** Every load left
+  its loading-card `QTimer` and its finished loader `QThread` attached to the window for the
+  rest of the session — one more of each per recording opened, with no plateau. Both are
+  released now, the thread only ever from its own `finished` signal, so a cancelled or
+  superseded load (neither of which stops the read) can never free one that is still running.
 - **Chart and map lines are their designed weight on a Retina display, and the two
   colour-blind cues that stopped short now reach the surfaces they missed.** pyqtgraph
   builds every pen `cosmetic`, so its width is in DEVICE pixels and Qt never scales it:
