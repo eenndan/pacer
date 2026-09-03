@@ -67,6 +67,22 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Chart and map lines are their designed weight on a Retina display, and the two
+  colour-blind cues that stopped short now reach the surfaces they missed.** pyqtgraph
+  builds every pen `cosmetic`, so its width is in DEVICE pixels and Qt never scales it:
+  measured on a fixed 1512x982 logical screen, the Δ-plot gridlines drew 1.0 logical px at
+  DPR 1 but 0.5 at DPR 2, the always-on best-lap trace and its legend swatch degraded to
+  near-invisible hairlines, and the map's rainbow ribbon halved from 3 to 1.5 logical px so
+  its parallel strands stopped merging — in the window, in the exported HTML report and on
+  the shared lap card. Every chart/map pen width now goes through `theme.line_width` and is
+  re-resolved when the window moves to a screen with a different ratio. Separately, the
+  hero Δideal readout — the largest text in the window — read the raw `C.behind` token, so
+  it kept the standard palette's red in BOTH palettes (a render of it was byte-identical
+  between them) while the Corners table below painted the same meaning in the colour-blind
+  orange; and the brake-point glyphs were one filled triangle in six hues, two of which are
+  a single colour for a deuteranope (CIE76 dE 1.27), so they now carry a per-slot SHAPE plus
+  an outline that stops adjacent laps' markers fusing into one blob.
+
 - **A reference recording is read the way its owner saved it, and a copy of the open
   recording can no longer be its own reference.** Loading another recording as a
   cross-recording reference went through `Session.load` alone, which returns telemetry cut at
