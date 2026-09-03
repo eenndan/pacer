@@ -170,14 +170,32 @@ CHART_SERIES = [
 # box, so extent — which is what the eye reads as "bigger" — is identical across shapes (measured
 # 10x10 at size 9 and 19x19 at size 18 for all of them) and the decel ramp still reads. Slot 0
 # stays "t", so the one-lap default and the map's single-lap trace draw exactly what they drew.
+#
+# A SLOT'S SHAPE IS NOT FREE: the brake glyphs share a canvas with marker classes that are not
+# laps, and those own shapes of their own (RESERVED_SYMBOLS). The first cut of this list handed
+# slot 1 the circle — which is the map's corner-apex dot, in the SAME hue, because
+# map_view.CORNER_LEFT_COLOR *is* CHART_SERIES[1]. Hue had never separated those two classes;
+# shape was the only thing that did, and giving the lap glyphs a shape channel spent it. Slot 1
+# is a star instead: mask distance 1-IoU 0.645 from the circle at the 9 px worst case — more
+# separation than the 0.60 the shape-only slot 2/3 pair gets — and >= 0.45 from every other slot,
+# above this list's own 0.41 floor. Measured with the same rasterized-mask method as the pairs
+# above, on the very QPainterPaths pyqtgraph draws.
 SERIES_SYMBOL = [
-    "t",    # slot 0  triangle-down (the shipped glyph)
-    "o",    # slot 1  circle
-    "s",    # slot 2  square   ┐ the deuteranopic dE 1.27 pair: this is the one that
-    "d",    # slot 3  diamond  ┘ has to be carried by shape alone
-    "t1",   # slot 4  triangle-up ┐ the dE 7.90 pair
-    "p",    # slot 5  pentagon    ┘
+    "t",     # slot 0  triangle-down (the shipped glyph)
+    "star",  # slot 1  5-point star (NOT the circle — see RESERVED_SYMBOLS)
+    "s",     # slot 2  square   ┐ the deuteranopic dE 1.27 pair: this is the one that
+    "d",     # slot 3  diamond  ┘ has to be carried by shape alone
+    "t1",    # slot 4  triangle-up ┐ the dE 7.90 pair
+    "p",     # slot 5  pentagon    ┘
 ]
+
+# Shapes that belong to a NON-lap marker class and are therefore not available to SERIES_SYMBOL.
+# A lap glyph that takes one of these is separated from that class by hue alone — and on the map
+# the hues are the same value, so it is separated by nothing at all. Both entries are the round
+# silhouette: the corner-apex dots and the apex highlight ring are plain ScatterPlotItems (default
+# symbol "o"), and the video-position marker is a pg.TargetItem, whose "crosshair" path fills to
+# the same circle. tests/test_charts_panel.py fails the build on any overlap.
+RESERVED_SYMBOLS = ("o", "crosshair")
 
 
 def series_slot(colour) -> int:
@@ -353,8 +371,16 @@ def brake_glyph_size(peak_decel: float) -> float:
 # the DPR is a property of the SCREEN THE WINDOW IS ON, and it changes when the user drags the
 # window from the Retina panel to an external monitor. A pen built once at import freezes the
 # ratio that happened to be current at startup. Views therefore build their pens at draw time and
-# re-resolve on QEvent.DevicePixelRatioChange (see plots_view/map_view `event`), and
-# tests/test_charts_panel.py fails the build if a `width=` literal reaches mkPen directly.
+# re-resolve on QEvent.DevicePixelRatioChange (see plots_view/map_view/stats_panel `event` and
+# library_dialog `showEvent`), and tests/test_charts_panel.py fails the build if a `width=` literal
+# reaches mkPen directly — in EVERY studio module that imports pyqtgraph, found by walking the
+# package rather than by a list of file names. The list of names was the bug: it held
+# plots_view.py and map_view.py, so the Stats page and the Library's PB chart kept drawing one
+# device pixel while the guard reported green.
+#
+# A BARE COLOUR IS A WIDTH TOO. `axis.setPen(C.border)` looks like it sets no width, but pyqtgraph
+# builds a width-1 COSMETIC pen from it — the same half-weight hairline, and the one that draws the
+# GRIDLINES (AxisItem falls back from tickPen() to pen()). The guard rejects those as well.
 _pen_scale = 1.0
 
 

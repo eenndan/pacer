@@ -339,16 +339,55 @@ def test_chart_line_weights_are_logical_pixels_not_device_pixels():
     print("test_chart_line_weights_are_logical_pixels_not_device_pixels OK")
 
 
-def test_no_chart_or_map_pen_hardcodes_a_device_pixel_width():
-    """The guard that keeps W5-01 fixed. A bare `width=<number>` on a pyqtgraph pen is a DEVICE-pixel
-    width and is the whole defect, so in the two files that draw the charts and the map every width
-    must be a `theme.line_width(...)` call. AST-based: a grep would trip over the comments that
-    explain this."""
+def _pyqtgraph_modules():
+    """Every module under studio/ that imports pyqtgraph — FOUND, not listed.
+
+    The list of names was the bug. This guard shipped walking `("plots_view.py", "map_view.py")`,
+    so the moment the Stats page and the Library dialog grew pyqtgraph charts of their own they
+    were outside it: they kept drawing one DEVICE pixel at any DPR and the guard reported green
+    (QA W11-03). Discovering the modules means the next one is covered on the day it is written.
+
+    studio/dev/ is excluded on purpose: those are research scripts that open their own throwaway
+    pyqtgraph windows, do not import theme and are not a surface the app renders."""
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "studio")
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__", "dev")]
+        for fn in sorted(filenames):
+            if not fn.endswith(".py"):
+                continue
+            path = os.path.join(dirpath, fn)
+            tree = ast.parse(open(path, encoding="utf-8").read(), fn)
+            for node in ast.walk(tree):
+                imported = (
+                    isinstance(node, ast.Import)
+                    and any(a.name.split(".")[0] == "pyqtgraph" for a in node.names)
+                ) or (
+                    isinstance(node, ast.ImportFrom)
+                    and (node.module or "").split(".")[0] == "pyqtgraph"
+                )
+                if imported:
+                    found.append((os.path.relpath(path, os.path.dirname(root)), tree))
+                    break
+    return found
+
+
+def test_no_pyqtgraph_pen_in_studio_hardcodes_a_device_pixel_width():
+    """The guard that keeps W5-01 fixed, over EVERY studio module that draws with pyqtgraph.
+
+    Two shapes are rejected, because both produce a one-DEVICE-pixel cosmetic pen:
+
+      * `width=<number>` on mkPen/setPen — the literal defect;
+      * `axis.setPen(C.border)` — a bare colour, which looks like it sets no width at all. pyqtgraph
+        builds the pen itself at width 1, and that pen draws the GRIDLINES (AxisItem falls back from
+        tickPen() to pen()). It is where the 0.5-logical-px grid on a Retina panel came from, and
+        the file-scoped guard could not see it even in the files it did walk.
+
+    AST-based: a grep would trip over the comments that explain all this."""
+    modules = _pyqtgraph_modules()
+    assert len(modules) >= 4, f"the walk found only {[m for m, _t in modules]}"
     offenders = []
-    for fn in ("plots_view.py", "map_view.py"):
-        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "studio", fn)
-        tree = ast.parse(open(path, encoding="utf-8").read(), fn)
+    for name, tree in modules:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -362,11 +401,20 @@ def test_no_chart_or_map_pen_hardcodes_a_device_pixel_width():
                 ok = (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute)
                       and v.func.attr == "line_width")
                 if not ok:
-                    offenders.append(f"{fn}:{node.lineno} width={ast.unparse(v)}")
+                    offenders.append(f"{name}:{node.lineno} width={ast.unparse(v)}")
+            if f.attr == "setPen" and len(node.args) == 1 and not node.keywords:
+                arg = node.args[0]
+                bare = (isinstance(arg, ast.Constant) and isinstance(arg.value, str)) or (
+                    isinstance(arg, ast.Attribute) and isinstance(arg.value, ast.Name)
+                    and arg.value.id == "C")
+                if bare:
+                    offenders.append(f"{name}:{node.lineno} setPen({ast.unparse(arg)}) "
+                                     "— a bare colour is an implicit width-1 DEVICE-pixel pen")
     assert not offenders, (
         "pyqtgraph pen widths are in DEVICE pixels — route them through theme.line_width so they "
         f"keep their weight on a Retina panel: {offenders}")
-    print("test_no_chart_or_map_pen_hardcodes_a_device_pixel_width OK")
+    print(f"test_no_pyqtgraph_pen_in_studio_hardcodes_a_device_pixel_width OK "
+          f"({len(modules)} modules: {[m for m, _t in modules]})")
 
 
 # ============================================================================ L6-04
@@ -585,7 +633,7 @@ def _run_all():
     test_chart_series_stays_palette_independent()
     test_brake_glyphs_carry_a_shape_channel_that_survives_deuteranopia()
     test_chart_line_weights_are_logical_pixels_not_device_pixels()
-    test_no_chart_or_map_pen_hardcodes_a_device_pixel_width()
+    test_no_pyqtgraph_pen_in_studio_hardcodes_a_device_pixel_width()
     test_speed_axis_never_ticks_inside_the_estimated_pedal_band()
     test_pedal_band_names_itself_on_the_chart()
     test_legend_sits_clear_of_the_lap_start_and_says_it_can_be_moved()

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -183,6 +183,50 @@ def _fmt_hms(seconds: float) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
+# --------------------------------------------------------------- pyqtgraph pen accessors
+# CALL-TIME, never module constants: a pyqtgraph pen width is in DEVICE pixels (theme.line_width),
+# so a pen built once at import freezes whatever device-pixel ratio happened to be current then and
+# draws half weight on a Retina panel. Same contract, and the same accessor shape, as plots_view.
+def _axis_pen():
+    """The pen for an axis line — and therefore for the GRIDLINES, since pyqtgraph's AxisItem falls
+    back from tickPen() to pen(). Handed a bare colour it would build this pen itself at width 1,
+    i.e. one DEVICE pixel; that is the half-weight grid W5-01 measured."""
+    return pg.mkPen(C.border, width=theme.line_width(1))
+
+
+def _spark_curve_pen():
+    return pg.mkPen(C.text_dim, width=theme.line_width(1))
+
+
+def _spark_baseline_pen(colour):
+    return pg.mkPen(colour, width=theme.line_width(1), style=Qt.DashLine)
+
+
+def _glyph_outline_pen():
+    """The canvas-coloured outline that keeps overlapping scatter dots readable as separate dots."""
+    return pg.mkPen(C.canvas, width=theme.line_width(1))
+
+
+def _gg_ring_pen():
+    return pg.mkPen(C.border, width=theme.line_width(1))
+
+
+def _gg_envelope_pen():
+    return pg.mkPen(C.accent, width=theme.line_width(1), style=Qt.DashLine)
+
+
+def _repen(item, logical_px: float = 1.0):
+    """Re-issue `item`'s pen at the CURRENT device-pixel ratio, keeping its colour and dash style.
+
+    For the items whose colour is decided per refresh (the spark baseline takes the palette's
+    best-lap hue, the g-g rings are rebuilt around the measured cloud): a DPR change must not wait
+    for the next refresh, and re-deriving the colour here would duplicate that logic."""
+    pen = item.opts.get("pen") if hasattr(item, "opts") else getattr(item, "pen", None)
+    if pen is None:
+        return
+    item.setPen(pg.mkPen(pen.color(), width=theme.line_width(logical_px), style=pen.style()))
+
+
 class _Tile(QWidget):
     """One stat tile: a mono value over a dim caption. set() rewrites both in place."""
 
@@ -215,6 +259,10 @@ class StatsView(QWidget):
 
     def __init__(self, session: Session):
         super().__init__()
+        # Before ANY pen is built: pyqtgraph pen widths are in device pixels, so point theme at
+        # this widget's device-pixel ratio first (see theme.line_width and `event` below). The
+        # same first line PlotsView and MapView carry — this page has its own charts.
+        theme.set_pen_scale(self.devicePixelRatioF())
         self.session = session
         self._speed_unit = getattr(self, "_speed_unit", units.DEFAULT_UNIT)
         # C6 responsive tiles: every _grid registers here; _reflow_tiles re-places them when
@@ -306,7 +354,7 @@ class StatsView(QWidget):
         spark_plot = self.spark.getPlotItem()
         for side in ("left", "bottom"):
             ax = spark_plot.getAxis(side)
-            ax.setPen(C.border)
+            ax.setPen(_axis_pen())
             ax.setTextPen(C.text_dim)
             ax.setTickFont(theme.mono_font(SPARK_AXIS_FONT))
             ax.setStyle(maxTickLevel=0, tickLength=3)
@@ -319,13 +367,12 @@ class StatsView(QWidget):
         self.spark.setFixedHeight(SPARK_HEIGHT)
         self._spark_baseline = pg.InfiniteLine(angle=0, movable=False)
         spark_plot.addItem(self._spark_baseline)
-        self._spark_curve = self.spark.plot([], [], pen=pg.mkPen(C.text_dim, width=1))
+        self._spark_curve = self.spark.plot([], [], pen=_spark_curve_pen())
         self._spark_curve.setDownsampling(auto=True)
         self._spark_curve.setClipToView(True)
         self._spark_dots = pg.ScatterPlotItem(size=4, pen=None,
                                               brush=pg.mkBrush(C.text_muted), pxMode=True)
-        self._spark_pb_dots = pg.ScatterPlotItem(size=7, pen=pg.mkPen(C.canvas, width=1),
-                                                 pxMode=True)
+        self._spark_pb_dots = pg.ScatterPlotItem(size=7, pen=_glyph_outline_pen(), pxMode=True)
         spark_plot.addItem(self._spark_dots)
         spark_plot.addItem(self._spark_pb_dots)
         col.addWidget(self.spark)
@@ -371,7 +418,7 @@ class StatsView(QWidget):
         plot.setAspectLocked(True)  # a circle must render round, whatever the pane shape
         for side in ("left", "bottom"):
             ax = plot.getAxis(side)
-            ax.setPen(C.border)
+            ax.setPen(_axis_pen())
             ax.setTextPen(C.text_dim)
             ax.setTickFont(theme.mono_font(10))
             ax.setStyle(maxTickLevel=0, tickLength=3)
@@ -599,6 +646,35 @@ class StatsView(QWidget):
         super().showEvent(event)
         self._reflow_tiles()
 
+    def event(self, ev):
+        """Re-pen when the window moves to a screen with a different device-pixel ratio.
+
+        A pyqtgraph pen width is in DEVICE pixels (theme.line_width), so the right width depends on
+        the screen the window is on right now. Without this the sparkline and the friction circle
+        kept the ratio that was current when the page was built, while the charts one tab away
+        followed the move — two surfaces in one window disagreeing about the same design weight."""
+        if ev.type() == QEvent.Type.DevicePixelRatioChange:
+            if theme.set_pen_scale(self.devicePixelRatioF()):
+                self._apply_pen_scale()
+        return super().event(ev)
+
+    def _apply_pen_scale(self):
+        """Re-issue every pyqtgraph pen on this page at the current device-pixel ratio.
+
+        In place rather than through refresh(): the page must re-pen on a screen change whether or
+        not a session is loaded, and the rings/baseline carry per-refresh colours that _repen keeps.
+        The scatter BRUSHES and the pxMode glyph SIZES are device-independent already and are
+        deliberately left alone (scaling a size would draw double-size dots on a Retina panel)."""
+        if not hasattr(self, "_gg_rings"):
+            return                      # a DPR event landed mid-construction; __init__ will pen
+        for plot in (self.spark.getPlotItem(), self.gg.getPlotItem()):
+            for side in ("left", "bottom"):
+                plot.getAxis(side).setPen(_axis_pen())
+        self._spark_curve.setPen(_spark_curve_pen())
+        self._spark_pb_dots.setPen(_glyph_outline_pen())
+        for item in (self._spark_baseline, *self._gg_rings):
+            _repen(item)
+
     def _reflow_tiles(self):
         """C6: fit the page to the actual pane — tile columns = width // TILE_MIN_PX, clamped
         2..the cap, where the cap itself rises from TILES_PER_ROW to TILES_PER_ROW_WIDE once the
@@ -824,7 +900,7 @@ class StatsView(QWidget):
         self._spark_pb_dots.setData([n for n, on in zip(laps, pb, strict=True) if on],
                                     [t for t, on in zip(times, pb, strict=True) if on])
         lo, hi = min(times), max(times)
-        self._spark_baseline.setPen(pg.mkPen(best_colour, width=1, style=Qt.DashLine))
+        self._spark_baseline.setPen(_spark_baseline_pen(best_colour))
         self._spark_baseline.setValue(lo)
         plot = self.spark.getPlotItem()
         pad = max((hi - lo) * SPARK_Y_PAD_FRAC, 1e-3)
@@ -933,7 +1009,7 @@ class StatsView(QWidget):
                       ) * GG_RING_STEP
         r_max = max(r_max, GG_RING_STEP)
         angles = np.linspace(0.0, 2.0 * np.pi, 90)
-        ring_pen = pg.mkPen(C.border, width=1)
+        ring_pen = _gg_ring_pen()
         r = GG_RING_STEP
         while r <= r_max + 1e-9:
             ring = plot.plot(r * np.cos(angles), r * np.sin(angles), pen=ring_pen)
@@ -947,7 +1023,7 @@ class StatsView(QWidget):
         # "ceiling you actually reached", vs the neutral 0.5 g reference rings.
         env = st.gg_envelope() if st is not None else None
         if env:
-            env_pen = pg.mkPen(C.accent, width=1, style=Qt.DashLine)
+            env_pen = _gg_envelope_pen()
             ring = plot.plot(env * np.cos(angles), env * np.sin(angles), pen=env_pen)
             self._gg_rings.append(ring)
         # The key: the dashed ring is a MEASURED result, the solid ones a fixed rule — and the

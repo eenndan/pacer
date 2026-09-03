@@ -725,6 +725,59 @@ def test_dialog_pb_chart_hides_pyqtgraph_chrome():
         dlg.deleteLater()
 
 
+def _pb_pens(dlg):
+    """The PB chart's cosmetic pyqtgraph pens as {name: (width, colour)} — a cosmetic pen's width
+    IS device px, so these numbers are what the chart actually draws on the screen it is on."""
+    pens = {
+        "left axis": dlg.pb_plot.getAxis("left").pen(),
+        "bottom axis": dlg.pb_plot.getAxis("bottom").pen(),
+        "PB line": dlg._pb_curve.opts["pen"],
+        "marker outline": dlg._pb_curve.opts["symbolPen"],
+    }
+    return {k: (p.widthF(), p.color().name()) for k, p in pens.items()}
+
+
+def test_pb_chart_line_weights_are_logical_pixels_not_device_pixels():
+    """QA W11-03. The PB progression chart built its pens as MODULE CONSTANTS (`_PB_PEN =
+    pg.mkPen(C.accent, width=2)`) and penned its axes from a bare colour. A pyqtgraph pen is
+    cosmetic, so its width is in DEVICE pixels: those are 2 and 1 device px at every ratio, i.e.
+    half weight on a Retina panel — while the charts and the map, converted by #175, scale. The
+    guard that was supposed to catch this walked a hard-coded list of two other file names.
+
+    A module constant cannot be right on both screens whatever it is set to, which is why the pens
+    are accessors and the dialog re-issues them when it is shown and when its ratio changes."""
+    from PySide6.QtCore import QEvent
+
+    from studio import theme
+    try:
+        dlg = _wired_dialog(_many_entries())
+        dlg.show()
+        _settle()
+        at_1 = _pb_pens(dlg)
+        assert {w for w, _c in at_1.values()} == {1.0, 2.0}, at_1
+        assert at_1["PB line"][0] == 2.0, at_1
+
+        dlg.devicePixelRatioF = lambda: 2.0          # dragged onto the Retina panel
+        dlg.event(QEvent(QEvent.Type.DevicePixelRatioChange))
+        _settle()
+        at_2 = _pb_pens(dlg)
+        assert {k: w for k, (w, _c) in at_2.items()} == {
+            k: w * 2 for k, (w, _c) in at_1.items()}, (
+            f"on a DPR-2 screen (theme.pen_scale()={theme.pen_scale()}) the PB chart still draws "
+            f"{at_2} device px, i.e. half its design weight: was {at_1}")
+        assert theme.pen_scale() == 2.0
+        assert ({c for _w, c in at_2.values()} == {c for _w, c in at_1.values()}), (at_1, at_2)
+
+        dlg.devicePixelRatioF = lambda: 1.0          # …and back to the external monitor
+        dlg.event(QEvent(QEvent.Type.DevicePixelRatioChange))
+        _settle()
+        assert _pb_pens(dlg) == at_1, (at_1, _pb_pens(dlg))
+        dlg.hide()
+        dlg.deleteLater()
+    finally:
+        theme.set_pen_scale(1.0)
+
+
 def test_dialog_sort_by_best_orders_numerically():
     """Sorting the Best column ascending puts the fastest lap first (68.0 < 70.0) — numeric, not
     lexical."""
@@ -1821,6 +1874,68 @@ def test_dialog_never_reopens_too_small_to_show_the_list():
             assert again.height() > tiny[1], (
                 f"re-opened at the stored {again.height()} px, the same height the drag left it "
                 f"at — the floor was not applied")
+        for dlg in (shrunk, again):
+            dlg.hide()
+            dlg.deleteLater()
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def test_the_browsable_height_floor_still_gets_the_width_it_assumes():
+    """QA W11-02, corrected. The finding was that #172's floor is on the wrong axis: it bounds only
+    the HEIGHT, "on the stated argument that the width minimum is 581 px — it is 234 px", so one
+    corner drag leaves a 234-px-wide dialog showing 0.63 of one row for ever.
+
+    234 px is the minimum of a dialog built with only `open_recording` — two buttons. The app never
+    builds that one: ``StudioWindow._open_library`` wires all six file-op callbacks, and that button
+    row's minimum is 581 px. Measured on the shipping wiring, the finding's own gesture gives
+    581x522 stored -> 581x680 re-opened -> 6.23 rows, i.e. the floor doing exactly what #172 said.
+    (The unwired dialog reaches 234x662 -> 234x680 -> 1.23 rows, which is the number the finding
+    reports.) So there is no width floor here: at every size the app can actually reach, the height
+    floor is enough.
+
+    What was missing is this test. The 680 px was derived AT a width no code guarantees — it is a
+    side effect of how many buttons the row has — so the premise could rot silently, exactly the way
+    the guard in test_charts_panel.py rotted. It is asserted now, at both halves: the width the
+    button row grants, and the rows the floor buys after the worst drag a user can perform.
+
+    The gesture is `minimumSizeHint()` re-read until it converges, not `resize(1, 1)`: the privacy
+    note is a WrapLabel that re-asserts its wrapped height AFTER each resize, so the layout minimum
+    grows under the drag and a single resize stops short of where a real drag ends up."""
+    from PySide6.QtGui import QGuiApplication
+
+    from studio.library_dialog import _BROWSABLE_H_MEASURED_AT_W
+    path = prefs.prefs_path()
+    if os.path.exists(path):
+        os.remove(path)
+    try:
+        shrunk = _wired_dialog(_many_entries())
+        shrunk.show()
+        _settle()
+        for _ in range(4):                           # the WrapLabel feedback loop; settles in 2
+            hint = shrunk.minimumSizeHint()
+            shrunk.resize(hint.width(), hint.height())
+            _settle()
+        tiny = (shrunk.width(), shrunk.height())
+        assert tiny[0] >= _BROWSABLE_H_MEASURED_AT_W, (
+            f"the layout's minimum width is now {tiny[0]} px, under the "
+            f"{_BROWSABLE_H_MEASURED_AT_W} px _MIN_BROWSABLE_H was measured at — the button row no "
+            f"longer grants the width the HEIGHT floor needs to buy 5 rows, so the floor is a "
+            f"number derived at a width the dialog can no longer be relied on to have")
+        shrunk.done(0)
+        assert prefs.library_size() == tiny, (prefs.library_size(), tiny)
+
+        again = _wired_dialog(_many_entries())
+        again.show()
+        _settle()
+        avail = QGuiApplication.primaryScreen().availableGeometry()
+        room = _fit_to_screen(again.width(), 10_000, avail.width(), avail.height())[1]
+        if room >= 700:                              # a screen too small to grant it is its call
+            assert _rows_visible(again) >= 5, (
+                f"re-opened at {again.width()}x{again.height()} showing "
+                f"{_rows_visible(again):.2f} rows — the drag a user can actually perform still "
+                f"leaves the library unable to show a library")
         for dlg in (shrunk, again):
             dlg.hide()
             dlg.deleteLater()
