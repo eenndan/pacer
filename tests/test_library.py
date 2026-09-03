@@ -42,8 +42,16 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
-from studio import library, prefs  # noqa: E402
+from studio import library, prefs, theme  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
+
+# The dialog's SIZE tests measure a wrapped paragraph's height and a table's row height, and both
+# are functions of the FONT — so measure against the app's real theme rather than Qt's default
+# stack, or every number below describes a dialog that never ships. (At the dialog's own minimum
+# the untuned stack shows 2.3 table rows where the shipped one shows 0.97.) Same reason
+# tests/test_help_dialog.py registers the fonts before it measures a wrapped paragraph.
+theme.register_fonts()
+theme.apply_theme(_APP)
 
 # The dialog now READS its remembered size from studio.prefs on construction and WRITES it back on
 # close, so redirect that seam too, module-wide and before any dialog exists — same rule as the
@@ -58,10 +66,13 @@ from studio.library_dialog import (  # noqa: E402
     _COL_DATE,
     _COL_TRACK,
     _DEFAULT_SIZE,
+    _MIN_BROWSABLE_H,
     _PB_PLOT_MAX_H,
+    _SCREEN_MARGIN,
     _UNKNOWN_TRACK,
     MISSING_ROLE,
     NUM_ROLE,
+    PRIVACY_NOTE,
     TRACK_ROLE,
     LibraryDialog,
     _entry_junk,
@@ -1681,13 +1692,135 @@ def test_dialog_remembers_a_size_the_user_changed_but_never_pins_its_own_default
         assert prefs.library_size() == (700, 640), prefs.library_size()
 
         again = LibraryDialog(_many_entries(), _OpenSpy())
-        assert (again.width(), again.height()) == _fit_to_screen(700, 640, avail.width(),
-                                                                 avail.height())
+        # 640 is below the browsable floor, so what OPENS is floored — while what was STORED stays
+        # 640 (asserted above). That split is the contract: the pref records the size the user
+        # asked for, and each open applies the constraints of the moment (the floor, then the
+        # screen), so neither one silently rewrites the other.
+        assert (again.width(), again.height()) == _fit_to_screen(
+            700, max(640, _MIN_BROWSABLE_H), avail.width(), avail.height())
         for dlg in (opened, resized, again):
             dlg.deleteLater()
     finally:
         if os.path.exists(path):
             os.remove(path)                              # leave no size for the next test to inherit
+
+
+def _wired_dialog(index):
+    """The dialog exactly as ``StudioWindow._open_library`` builds it — all six file-op callbacks
+    injected. Not decoration: the button row those callbacks build is what sets the dialog's
+    minimum WIDTH (581 px wired, 184 px bare), and the width is what decides how tall the privacy
+    paragraph wraps. A size measured on an unwired dialog is a measurement of a dialog that never
+    ships."""
+    return LibraryDialog(index, _OpenSpy(),
+                         forget_recording=lambda e: index, clear_library=lambda: index,
+                         reveal_library=lambda: None, backup_library=lambda: None,
+                         restore_library=lambda: index, backup_info=lambda: None)
+
+
+def _privacy_note(dlg):
+    """The dialog's privacy paragraph label."""
+    from PySide6.QtWidgets import QLabel
+    for label in dlg.findChildren(QLabel):
+        if label.text() == PRIVACY_NOTE:
+            return label
+    raise AssertionError("the privacy note is not in the dialog")
+
+
+def test_dialog_privacy_note_fits_inside_the_dialog_at_its_own_minimum():
+    """QA W9-02: the privacy note is a WRAPPED label, and a layout builds its minimum from each
+    item's minimumSizeHint — one LINE for a wrapping label. So lengthening the note to name
+    tracks.json did not raise the dialog's minimum at all: at the smallest size a drag can reach,
+    the note needed 128 px in the 83 px it was given and painted 45 px past its box, straight
+    through the button row, and the two sentences about tracks.json never rendered.
+
+    Measured at the dialog's OWN minimum (resize(1, 1); Qt clamps), because that is both the worst
+    case and — since the size is remembered — a state the app can open in."""
+    from PySide6.QtWidgets import QPushButton
+    dlg = _wired_dialog(_many_entries())
+    dlg.show()
+    _settle()
+    dlg.resize(1, 1)                     # Qt clamps at the layout's own minimum
+    _settle()
+    note = _privacy_note(dlg)
+    needs = note.heightForWidth(note.width())
+    assert note.height() >= needs > 0, (
+        f"the privacy note has {note.height()} px and needs {needs} px at {note.width()} px wide "
+        f"(dialog {dlg.width()}x{dlg.height()}) — {needs - note.height()} px of it, including the "
+        f"tracks.json sentences, paints outside its box")
+    buttons_top = min(b.y() for b in dlg.findChildren(QPushButton))
+    assert note.y() + needs <= buttons_top, (
+        f"the note runs {note.y() + needs - buttons_top} px into the button row "
+        f"(note y={note.y()} + {needs} px vs buttons at y={buttons_top})")
+    dlg.hide()
+    dlg.deleteLater()
+
+
+def test_dialog_minimum_stays_within_the_smallest_supported_screen():
+    """The guard on the fix above. Making the note's wrapped height part of the layout's minimum is
+    correct, but it hands PRIVACY_NOTE a lever on a number nobody looks at: every sentence added to
+    that paragraph raises the height below which the library cannot be opened at all. Pin it to the
+    smallest Mac this app targets — a 13" Air reports ~869 px of available height, and
+    _SCREEN_MARGIN leaves 809 of it — so a note that grew past what that screen can show fails here
+    instead of shipping. Measured at the narrowest width, where the note wraps tallest."""
+    dlg = _wired_dialog(_many_entries())
+    dlg.show()
+    _settle()
+    dlg.resize(1, 1)
+    _settle()
+    need = dlg.minimumSizeHint().height()
+    room = 869 - _SCREEN_MARGIN
+    assert need <= room, (
+        f"the library's minimum height is now {need} px, more than the {room} px a 13\" Air can "
+        f"give it — PRIVACY_NOTE has outgrown the smallest screen this app targets")
+    dlg.hide()
+    dlg.deleteLater()
+
+
+def test_dialog_never_reopens_too_small_to_show_the_list():
+    """QA W9-03: the remembered size had no floor. One drag to the corner stored the layout's own
+    minimum, where the table shows 0.97 of ONE row of the library — and every future open came
+    back that way, with nothing in the dialog to undo it.
+
+    The floor is applied to what OPENS, not to what is STORED: the pref still records the size the
+    user asked for (asserted below), so the app is never caught silently forgetting a resize, and
+    the open is where the size is made usable again — the same contract _fit_to_screen already has
+    for a size remembered on a bigger display."""
+    from PySide6.QtGui import QGuiApplication
+    path = prefs.prefs_path()
+    if os.path.exists(path):
+        os.remove(path)
+    try:
+        shrunk = _wired_dialog(_many_entries())
+        shrunk.show()
+        _settle()
+        shrunk.resize(1, 1)                          # the user drags the corner all the way in
+        _settle()
+        tiny = (shrunk.width(), shrunk.height())
+        assert _rows_visible(shrunk) < 1.5, _rows_visible(shrunk)
+        shrunk.done(0)
+        assert prefs.library_size() == tiny, (prefs.library_size(), tiny)
+
+        again = _wired_dialog(_many_entries())
+        again.show()
+        _settle()
+        # A display too small to grant the floor is the screen's call, not this dialog's (the
+        # clamp is _fit_to_screen's job and has its own test), so only assert where there is room.
+        avail = QGuiApplication.primaryScreen().availableGeometry()
+        room = _fit_to_screen(again.width(), 10_000, avail.width(), avail.height())[1]
+        if room >= 700:
+            assert _rows_visible(again) >= 5, (
+                f"re-opened at {again.width()}x{again.height()} showing "
+                f"{_rows_visible(again):.2f} rows of the library — a size remembered from one "
+                f"stray drag still cannot show the list it exists to show")
+            assert again.height() > tiny[1], (
+                f"re-opened at the stored {again.height()} px, the same height the drag left it "
+                f"at — the floor was not applied")
+        for dlg in (shrunk, again):
+            dlg.hide()
+            dlg.deleteLater()
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
 
 
 def test_dialog_clear_confirm_names_the_copy_it_keeps_and_the_way_back():

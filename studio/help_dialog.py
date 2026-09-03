@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from . import APP_NAME, __version__
 from .theme import C
+from .widgets import WrapLabel
 
 # ---------------------------------------------------------------- shortcut catalogue
 # (key, what it does). Grouped by the same mental model the app uses: File (getting footage in),
@@ -131,32 +132,6 @@ def _key_text(key: Keys) -> str:
     return QKeySequence(key).toString(QKeySequence.NativeText)
 
 
-class _WrapLabel(QLabel):
-    """A word-wrapping QLabel that claims the height its wrapped text actually needs.
-
-    QLabel implements heightForWidth but ships a size policy that does not advertise it, so a
-    layout hands a wrapping label the SINGLE-LINE sizeHint height and every further line paints
-    outside the row — sliced through the letterforms and over whatever sits below. Re-asserting
-    the height on each resize makes the fix width-independent: a longer string, a bigger system
-    font or a translation grows the row instead of clipping it. (Widening the card only changes
-    WHICH strings wrap; at 560 px the longest description clears its box by 5 px, which is not a
-    margin to rely on.) Converges — heightForWidth depends only on the width, which the extra
-    height does not change."""
-
-    def __init__(self, text: str, parent=None):
-        super().__init__(text, parent)
-        self.setWordWrap(True)
-        policy = self.sizePolicy()
-        policy.setHeightForWidth(True)
-        self.setSizePolicy(policy)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        need = self.heightForWidth(self.width())
-        if need > 0 and need != self.minimumHeight():
-            self.setMinimumHeight(need)
-
-
 def _copy_column(spacing: int) -> tuple[QScrollArea, QVBoxLayout]:
     """The copy column of a read-only Help card: a frameless, vertically-scrolling QScrollArea
     around a plain widget column. Returns (scroll area, the layout to add paragraphs to).
@@ -185,12 +160,12 @@ def _fit_to_copy(dialog: QDialog, scroll: QScrollArea, column: QVBoxLayout) -> N
     Run from showEvent, not __init__: the wrapped height of a paragraph is only real once the
     global QSS font is polished onto the labels and they have been laid out at the card's actual
     width, so a construction-time heightForWidth under-reads it (measured 588 px against a real
-    940 px on the privacy card). ``totalMinimumSize`` then reads the heights _WrapLabel has
+    940 px on the privacy card). ``totalMinimumSize`` then reads the heights WrapLabel has
     already asserted. Idempotent, so re-showing the card is a no-op. Capped at the screen: a card
     whose copy outgrows a small display scrolls rather than opening taller than the desk."""
     body = scroll.widget()
     # Lay the copy out at the width it will really get (minus the scrollbar, so the estimate errs
-    # tall) — that is what makes _WrapLabel assert each paragraph's wrapped height, which
+    # tall) — that is what makes WrapLabel assert each paragraph's wrapped height, which
     # totalMinimumSize then sums. widgetResizable re-sizes the body straight after.
     body.resize(max(1, dialog.minimumWidth() - scroll.verticalScrollBar().sizeHint().width()),
                 body.height())
@@ -241,7 +216,7 @@ class ShortcutsDialog(QDialog):
     def _group_body(self, rows: list[tuple[Keys, str]]) -> QWidget:
         """A two-column grid (key | description) for one group. The key column is mono + dimmed
         (BarLabel role) and right-aligned so the glyphs line up into a tidy gutter; the
-        description is the primary text colour and wraps (a _WrapLabel, so a wrapped row is TALLER
+        description is the primary text colour and wraps (a WrapLabel, so a wrapped row is TALLER
         rather than sliced in half)."""
         body = QWidget()
         grid = QGridLayout(body)
@@ -257,7 +232,7 @@ class ShortcutsDialog(QDialog):
             # BarLabel role gives the dimmed small-header colour/size, we only add the family.
             key_label.setStyleSheet('font-family: "SF Mono","JetBrains Mono","Menlo","monospace";')
             grid.addWidget(key_label, r, 0)
-            grid.addWidget(_WrapLabel(desc), r, 1)
+            grid.addWidget(WrapLabel(desc), r, 1)
         return body
 
 
@@ -288,7 +263,7 @@ class AboutDialog(QDialog):
         tagline.setStyleSheet(f"color: {C.accent}; font-weight: 600;")
         column.addWidget(tagline)
 
-        blurb = _WrapLabel(APP_BLURB)
+        blurb = WrapLabel(APP_BLURB)
         blurb.setStyleSheet(f"color: {C.text_dim};")
         column.addWidget(blurb)
 
@@ -329,7 +304,7 @@ class PrivacyDialog(QDialog):
         column.addWidget(heading)
 
         for para in PRIVACY_PARAGRAPHS:
-            label = _WrapLabel(para)
+            label = WrapLabel(para)
             label.setStyleSheet(f"color: {C.text_dim};")
             label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             column.addWidget(label)
