@@ -542,6 +542,30 @@ class StatsView(QWidget):
 
     @staticmethod
     def _place_tiles(g: QGridLayout, tiles: list, cols: int):
+        """(Re-)place `tiles` into `g` at `cols` columns, left-packed.
+
+        removeWidget() FIRST — always, even though the first call has nothing to remove (it is a
+        documented no-op for a widget the layout does not hold).
+
+        WHY, and it is not tidiness: this runs AGAIN whenever the reflow changes the column count,
+        and QGridLayout.addWidget is not an idempotent "move" for a widget the same layout already
+        holds. Qt reacts to it inside QLayout::addChildWidget by DELETING that widget's existing
+        layout item — removeWidgetRecursively -> `delete lay->takeAt(i)` — i.e. it mutates, through
+        the layout's own virtuals, the very layout addWidget is midway through inserting into. One
+        such pass over the page's ~30 tiles was enough to leave the process in a state where the
+        next burst of Qt-object destruction died: a View ▸ Units or View ▸ Colour-blind-safe cues
+        toggle, after nothing more than ordinary tab use, SIGSEGV'd inside Shiboken::Object::destroy
+        in whichever table refill or pyqtgraph re-plot happened to run first (QA W8-01 — the fatal
+        frame moved between five tables in three modules, which is why it never looked like one
+        table's bug).
+
+        Taking each tile out first makes the add a plain insert and addChildWidget finds nothing to
+        unpick. MEASURED on the reporter's sequence, Laps<->Stats churn then 30 toggles: 8/8 clean
+        runs with the removeWidget, 5 deaths in 11 without it. The deeper PySide6 6.11 defect that
+        turns the re-entrant item delete into a crash is NOT root-caused; what is proven is that
+        this call is what arms it (disabling _place_tiles alone: 8/8 clean)."""
+        for t in tiles:
+            g.removeWidget(t)
         for i, t in enumerate(tiles):
             g.addWidget(t, i // cols, i % cols)
         for c in range(TILES_PER_ROW_WIDE + 1):

@@ -373,7 +373,7 @@ class StudioWindow(QMainWindow):
     def _on_demo_placeholder_due(self):
         """LOAD_PLACEHOLDER_MS elapsed with the demo fetch still running: say so on the card the
         load itself would use, so the wait reads as one continuous operation."""
-        self._placeholder_timer = None
+        self._cancel_placeholder_timer()  # the fired single-shot is spent: release it, don't just drop it
         if self._demo_worker is not None and self._demo_worker.isRunning():
             self._show_loading_placeholder([], title="Fetching the demo clip…")
 
@@ -393,10 +393,12 @@ class StudioWindow(QMainWindow):
         self._load([path])
 
     def _on_demo_worker_finished(self, worker):
-        """The demo fetch's QThread finished: drop it from the in-flight set (see _open_demo)."""
+        """The demo fetch's QThread finished: drop it from the in-flight set (see _open_demo) and
+        release it (see _release_worker)."""
         self._load_workers.discard(worker)
         if self._demo_worker is worker:
             self._demo_worker = None
+        self._release_worker(worker)
 
     # ------------------------------------------------------------------ loading
     def _load(self, paths: list[str], drop_notice: str | None = None):
@@ -456,17 +458,45 @@ class StudioWindow(QMainWindow):
         """LOAD_PLACEHOLDER_MS elapsed: install the loading card only if THIS load is still the
         current one and still waiting for its worker (a result that already landed cleared
         _loading_token, and a superseding _load bumped it)."""
-        self._placeholder_timer = None
+        self._cancel_placeholder_timer()  # the fired single-shot is spent: release it, don't just drop it
         if token == self._load_token and self._loading_token == token:
             self._show_loading_placeholder(paths, on_cancel=lambda: self._cancel_load(token))
 
     def _cancel_placeholder_timer(self):
-        """Stop the pending loading-card timer, if any (a load settled, was superseded, or the
-        window is closing)."""
+        """Release the pending loading-card timer, if any (a load settled, was superseded, its card
+        has just been installed, or the window is closing).
+
+        deleteLater(), not merely stop(): the timer is parented to the WINDOW, so one that is only
+        stopped and dropped from the attribute stays a child of the window for as long as the window
+        lives — one more dead QTimer per recording opened, for the whole session (QA W8-02 measured
+        +1 per load across 30 in-window reloads, with no plateau). Deferred rather than immediate
+        because the commonest caller is the timer's OWN timeout slot; Qt then destroys it once
+        control is back in the event loop, after the signal has finished emitting."""
         timer = getattr(self, "_placeholder_timer", None)  # guarded: closeEvent runs in partial harnesses
         self._placeholder_timer = None
         if timer is not None:
             timer.stop()
+            timer.deleteLater()
+
+    def _release_worker(self, worker):
+        """Drop the last reference to a FINISHED load / demo-fetch worker so its QThread is
+        destroyed with the load that used it.
+
+        WHOSE LIFETIME — this belongs to the worker's own `finished` signal and NOWHERE else. The
+        two paths that abandon a load, the loading card's Cancel (_cancel_load) and a superseding
+        _load, deliberately do not stop the thread: Session.load is one uninterruptible synchronous
+        call inside run(), so the worker always runs to completion and only its RESULT is discarded,
+        by the token guard. Releasing it from either of those would free a QThread that is still
+        running — turning a benign leak into a crash. `finished` is emitted after run() has
+        returned, so the only worker this can ever see is a stopped one.
+
+        deleteLater(), not del: we are inside the emission of the very signal that called us, so the
+        destruction is deferred to the next event-loop turn. Destroying the QThread is also what
+        BREAKS the leak's cycle — `finished.connect(lambda w=worker: ...)` holds the worker inside a
+        connection owned by the worker itself, a cycle that lives in Qt's C++ connection table where
+        Python's gc can neither see nor break it (QA W8-02: +1 live SessionLoadWorker per recording
+        opened, monotonic over 30 loads)."""
+        worker.deleteLater()
 
     def _start_load_worker(self, token: int, paths: list[str]):
         """Spawn the single in-flight load worker for `token` (see _load's single-flight rule)."""
@@ -480,11 +510,13 @@ class StudioWindow(QMainWindow):
         worker.start()
 
     def _on_worker_finished(self, worker):
-        """A load worker's QThread finished: drop it from the in-flight set, then (single-flight)
-        start the most recent QUEUED load if one is pending and still current."""
+        """A load worker's QThread finished: drop it from the in-flight set and release it (see
+        _release_worker), then (single-flight) start the most recent QUEUED load if one is pending
+        and still current."""
         self._load_workers.discard(worker)
         if self._load_worker is worker:
             self._load_worker = None
+        self._release_worker(worker)
         pending = self._pending_load
         if pending is not None:
             self._pending_load = None
@@ -2609,10 +2641,12 @@ class StudioWindow(QMainWindow):
         worker.start()
 
     def _on_reference_worker_finished(self, worker):
-        """A reference load worker's QThread finished: drop it from the shared in-flight set."""
+        """A reference load worker's QThread finished: drop it from the shared in-flight set and
+        release it (see _release_worker)."""
         self._load_workers.discard(worker)
         if self._ref_load_worker is worker:
             self._ref_load_worker = None
+        self._release_worker(worker)
 
     def _on_reference_loaded(self, token: int, paths: list[str], ref):
         """Reference load succeeded (UI thread, queued signal): adopt the loaded Session as the

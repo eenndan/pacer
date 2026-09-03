@@ -933,6 +933,65 @@ def test_stats_view_tiles_reflow_with_pane_width():
     print("test_stats_view_tiles_reflow_with_pane_width OK")
 
 
+def test_tile_reflow_takes_each_tile_out_of_the_grid_before_re_adding_it():
+    """QA W8-01 — the MECHANISM behind a crash, pinned deterministically because the crash itself
+    is a SIGSEGV that no in-process assertion can catch.
+
+    The reflow re-places the same tiles into the same QGridLayout at a new column count, and
+    QGridLayout.addWidget is NOT an idempotent move for a widget the layout already holds: Qt's
+    QLayout::addChildWidget reacts by deleting that widget's existing layout item from INSIDE the
+    addWidget call (removeWidgetRecursively -> `delete lay->takeAt(i)`), re-entrantly mutating the
+    layout it is midway through inserting into. One such pass over the page's ~30 tiles — which is
+    all it takes, since the page's own scrollbar appearing on first show flips the column count
+    once — left the process in a state where the next burst of Qt-object destruction segfaulted
+    inside Shiboken::Object::destroy: a View ▸ Units or View ▸ Colour-blind-safe cues toggle killed
+    the app after nothing but ordinary lap-panel tab use.
+
+    So the contract is on the CALL ORDER: on a re-place, every tile is removed from the grid before
+    it is added back. Measured on the reporter's sequence: 8/8 clean runs with the removeWidget,
+    5 deaths in 11 without it."""
+    _app()
+    from PySide6.QtWidgets import QGridLayout, QLabel
+
+    from studio.stats_panel import StatsView
+
+    class _RecordingGrid(QGridLayout):
+        """A QGridLayout that records the ORDER of the layout calls made against it."""
+
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def addWidget(self, w, *a, **k):
+            self.calls.append(("add", w))
+            super().addWidget(w, *a, **k)
+
+        def removeWidget(self, w):
+            self.calls.append(("remove", w))
+            super().removeWidget(w)
+
+    g = _RecordingGrid()
+    tiles = [QLabel(f"t{i}") for i in range(6)]
+    StatsView._place_tiles(g, tiles, 3)          # first placement: nothing to remove yet
+    g.calls.clear()
+
+    StatsView._place_tiles(g, tiles, 2)          # THE REFLOW: same tiles, new column count
+    for w in tiles:
+        seq = [kind for kind, obj in g.calls if obj is w]
+        assert seq, f"{w.text()} was not re-placed at all"
+        assert seq[0] == "remove", (
+            f"{w.text()} was handed straight back to addWidget while the grid still held it — "
+            "Qt then deletes its layout item from inside addWidget, which is what arms the "
+            f"toggle crash (calls for this tile: {seq})")
+    # …and it is still laid out where the new column count says it belongs.
+    for i, w in enumerate(tiles):
+        row, col = i // 2, i % 2
+        item = g.itemAtPosition(row, col)
+        assert item is not None and item.widget() is w, (
+            f"{w.text()} should sit at ({row}, {col}) after a 2-column reflow")
+    print("test_tile_reflow_takes_each_tile_out_of_the_grid_before_re_adding_it OK")
+
+
 def test_stats_view_wide_pane_raises_the_tile_ceiling():
     """L4-05: ⌘⇧S maximizes this page into the whole window, where a hard 4-column cap left every
     tile row ending ~1000 px short of the right edge. Above WIDE_PANE_PX the reflow ceiling rises

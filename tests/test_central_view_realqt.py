@@ -477,6 +477,66 @@ def test_trust_flip_without_a_rebuild_refreshes_the_table_and_the_map_cue():
     print("test_trust_flip_without_a_rebuild_refreshes_the_table_and_the_map_cue OK")
 
 
+def _brake_glyph_brushes(view):
+    """Every brake-point glyph brush currently DRAWN, upper-cased hex — the speed chart's series
+    and the identical glyphs on the map trace, read off the live ScatterPlotItems (not inferred)."""
+    out = []
+    for it in view.plots._brake_items:
+        out.append(it.opts["brush"].color().name().upper())
+    for it in view.map._brake_markers._items:
+        out.append(it.opts["brush"].color().name().upper())
+    return out
+
+
+def test_palette_flip_without_a_selection_recolours_the_brake_glyphs():
+    """QA W4-03: refresh_palette must be a COMPLETE seam, the way refresh_timing_trust is.
+
+    The brake-point glyphs on the speed chart and on the map are drawn from a CACHED
+    (positions, colour, lap_id) tuple that plots_view/map_view were last PUSHED, so — unlike the
+    curves they sit on — they cannot follow a palette flip on their own. refresh_palette re-penned
+    the curves, the tables, the map ramp, stats and the hero box but never re-pushed the channels,
+    so after View ▸ Colour-blind-safe cues the best lap's curve turned colour-blind blue while its
+    own markers stayed the standard palette's green — on both surfaces, in one frame.
+
+    Driven the way _on_colorblind_toggled does it (theme.set_palette, then view.refresh_palette())
+    with NO lap-table selection in between: a selection re-pushes the channels and repairs the
+    colour by accident, which is precisely why every test that drives the table missed this."""
+    from PySide6.QtGui import QColor
+
+    from studio import theme as _theme
+    view, s, _t0, _t1 = _real_central_view()
+    # The stadium synthetic brakes nowhere the detector calls a brake point, so give the channel ONE
+    # onset per lap. Only the glyph's EXISTENCE is stubbed — its colour still comes from the app's
+    # own _driving_lap_colour, which is the thing under test.
+    s.driving.lap_brake_map_markers = lambda lid: [(0.0, 0.0, 0.8)]
+    try:
+        _theme.set_palette(_theme.PALETTE_STANDARD)
+        view.rebuild_derived_views(reselect=True)
+        assert view._corner_lap == s.best_lap_id(), (
+            "this test reads the BEST lap's glyph hue, so the primary lap must be the best lap")
+        std_best = QColor(_theme.best_lap_colour()).name().upper()
+        before = _brake_glyph_brushes(view)
+        assert before, "the synthetic session must draw at least one brake glyph to measure"
+        assert std_best in before, (
+            f"the best lap's glyphs should carry the standard best-lap hue {std_best}: {before}")
+
+        # THE GESTURE — the palette flip's whole fan-out, and nothing else.
+        _theme.set_palette(_theme.PALETTE_COLORBLIND)
+        view.refresh_palette()
+
+        cb_best = QColor(_theme.best_lap_colour()).name().upper()
+        assert cb_best != std_best, "the two palettes must disagree for this test to mean anything"
+        after = _brake_glyph_brushes(view)
+        assert std_best not in after, (
+            f"the glyph layer is still painting the OLD palette's {std_best} after the flip "
+            f"(theme.best_lap_colour() is now {cb_best}): {after}")
+        assert cb_best in after, (
+            f"the best lap's glyphs must carry the active palette's {cb_best}: {after}")
+    finally:
+        _theme.set_palette(_theme.PALETTE_STANDARD)
+    print("test_palette_flip_without_a_selection_recolours_the_brake_glyphs OK")
+
+
 def test_quality_banner_is_informational_and_independent():
     """The INFORMATIONAL tier — timing ACCURACY (Session.timing_quality) — tracks a degraded clock
     end-to-end AND wears the calmer (non-CTA) style, independent of the start-line trust:
@@ -941,6 +1001,7 @@ def _run_all():
     test_compare_tick_keeps_panes_consistent_no_reentry()
     test_provisional_banner_shows_and_clears_with_trust_state()
     test_trust_flip_without_a_rebuild_refreshes_the_table_and_the_map_cue()
+    test_palette_flip_without_a_selection_recolours_the_brake_glyphs()
     test_quality_banner_is_informational_and_independent()
     test_provisional_and_degraded_share_one_trust_strip()
     test_hero_readout_leads_with_labelled_delta_to_ideal()

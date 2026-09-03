@@ -1018,7 +1018,20 @@ class CentralView(QWidget):
           * the Stats page — best-lap ★ tint, purple sector bests, the trend sparkline's PB hue;
           * the charts — the brake/throttle band (behind/ahead fills) + the synthetic ideal-lap line
             (best-sector hue) read the palette at draw time, so a refresh re-pens them;
+          * the F5 DRIVING CHANNELS — the brake-point glyphs on the chart AND on the map trace are
+            drawn from a CACHED (positions, colour, lap_id) tuple that plots_view/map_view were last
+            pushed, so — unlike the curves beside them — they cannot follow the flip on their own.
+            They have to be re-pushed through _refresh_driving_channels(), whose _driving_lap_colour
+            resolves the hue per call;
           * the hero Δ readout — re-style from the last moment.
+
+        COMPLETE SEAM, not a call list to extend at each call site (the pattern refresh_timing_trust
+        already follows): flip the palette, call this, and the whole frame agrees. The glyph layer
+        was the hole — after View ▸ Colour-blind-safe cues the best lap's curve turned colour-blind
+        blue while its own brake markers stayed the standard palette's green, 2,735 px of a hue that
+        palette does not contain, on the chart and the map at once. It repaired itself the moment the
+        user happened to touch the lap table (a selection re-pushes the channels), which is exactly
+        why no test that drives the table ever caught it (QA W4-03).
 
         Cheap: a handful of in-place repaints / redraws, no session recompute."""
         self.table.refresh()
@@ -1027,6 +1040,9 @@ class CentralView(QWidget):
         self.opportunities.refresh()
         self.stats_view.refresh_palette()
         self.plots.refresh_palette()
+        # AFTER plots.refresh_palette(): that re-pens the curves and redraws the glyph items from
+        # their cached colour, so the re-push has to land on top of it, not before it.
+        self._refresh_driving_channels()
         # Force a Δ-box restyle even if the number is unchanged: the palette flip changes the colour
         # for the SAME delta, so clear the cached colour first.
         self._diff_colour = None
