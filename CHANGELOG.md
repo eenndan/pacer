@@ -67,6 +67,20 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **The map no longer draws a reference racing line at the wrong size.** The cross-recording
+  reference ring was accepted on its fit RESIDUAL alone, but that fit is a *similarity* fit —
+  it is free to resize the loop — so a mis-sized reference was simply shrunk onto your track
+  until the residual looked good: a real 190.6 x 124.8 m reference lap was drawn at
+  54.2 x 72.1 m (scale 0.40) for an RMS of 4.33 m, a third of the 12 m tolerance. Both
+  recordings are already measured in metres, so the fit is now gated on SCALE as well —
+  the same +-10 % band the session already demands of a reference lap's length, applied
+  symmetrically so the verdict cannot flip when you swap which recording is the reference
+  (measured: every one of 163 real laps across two circuits fits at 0.964-1.035). And a
+  reference whose line cannot be drawn is no longer silent: the map says so, says the faint
+  line you can see is still your own best lap, and says the delta charts and lap table do
+  still use the reference. The map's notice plate also grew to fit multi-line text instead
+  of slicing through it.
+
 - **The two ways back from a destroyed library or track database are now reachable, and the app
   says when it uses one.** Rewriting a `tracks.json` pacer could not fully read now warns and
   names the copy it kept, instead of reporting a successful save while the circuit list quietly

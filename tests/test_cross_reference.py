@@ -15,7 +15,8 @@ the asserts are the contract the feature must hold:
   * DORMANT identity: with no reference, delta() is byte-identical to the pre-feature output (the
     "no change when off" invariant), checked here on a bare Session against a hand-computed baseline;
   * the cross_reference.build map-overlay fit gate (a good fit overlays, a gross mis-fit is dropped
-    but the data side still works).
+    but the data side still works), including its SCALE half (QA-W2R-06): the fit may resize the
+    reference loop, so a wrongly-SIZED reference passes the RMS check and must be refused anyway.
 
 Run:  python tests/test_cross_reference.py
 """
@@ -505,15 +506,17 @@ def test_overlay_fits_good_loop_and_drops_gross_misfit():
     dist, speed, elapsed = (np.linspace(0, 1000, 50), np.full(50, 50.0), np.linspace(0, 60, 50))
     # Realistic track scale (~100 m) so the metre tolerance is meaningful.
     primary_loop = loop_xy(scale=100.0)
-    # A reference loop that is a SIMILARITY-transform of the primary (rotated/scaled/translated):
-    # the closed-loop fit must recover it and the overlay lands close (low RMS).
+    # A reference loop in ANOTHER recording's frame — rotated and translated away, but the same
+    # TRUE SIZE (both frames are metres, so a same-circuit lap is the same size): the closed-loop
+    # fit must recover the rotation/offset and the overlay lands close (low RMS, scale ~1).
     th = 0.7
     R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
-    ref_loop = (loop_xy(scale=100.0) * 1.4) @ R.T + np.array([300.0, -120.0])
+    ref_loop = loop_xy(scale=100.0) @ R.T + np.array([300.0, -120.0])
     ref = xr.build(dist=dist, speed_kmh=speed, elapsed=elapsed, loop_xy=ref_loop,
                    primary_loop_xy=primary_loop, source_label="r", lap_id=0)
-    assert ref.overlay_xy is not None, "a similarity-transformed loop must overlay"
+    assert ref.overlay_xy is not None, "a rotated/translated true-size loop must overlay"
     assert ref.map_fit_rms is not None and ref.map_fit_rms < xr.MAP_FIT_RMS_TOL_M
+    assert ref.map_fit_scale is not None and abs(ref.map_fit_scale - 1.0) < 0.01, ref.map_fit_scale
     # The fitted overlay sits in the PRIMARY frame (near the primary loop, not the ref's).
     assert abs(ref.overlay_xy[:, 0].max()) < primary_loop[:, 0].max() * 3
 
@@ -541,6 +544,80 @@ def test_overlay_fits_good_loop_and_drops_gross_misfit():
     assert bad.total_time == elapsed[-1] and len(bad.arrays()[0]) == 50
     print(f"test_overlay_fit_gate OK: good rms={ref.map_fit_rms:.2f}m, "
           f"misfit rms={bad.map_fit_rms:.1f}m dropped")
+
+
+def test_overlay_gate_refuses_a_mis_sized_reference():
+    """QA-W2R-06: the overlay gate must weigh the fitted SCALE, not only the residual.
+
+    `fit_loop_to_loop` solves a SIMILARITY transform, so uniform scale is a free parameter of the
+    very fit the RMS scores: hand it a reference loop of the wrong SIZE and it shrinks (or grows)
+    the loop onto the primary until the residual is tiny, and an RMS-only gate sees nothing wrong.
+    Measured in the app on real recordings, a 190.6 x 124.8 m reference lap was drawn at
+    54.2 x 72.1 m — scale 0.403 — for an rms of 4.33 m, a third of MAP_FIT_RMS_TOL_M.
+
+    Both directions are checked (the same pair fits at s one way and 1/s the other, and the
+    verdict must not depend on which recording the user loaded as the reference), and the band is
+    checked from BELOW too: the widest genuine same-circuit lap-to-lap fit measured over 163 real
+    laps was x1.038, which must still overlay."""
+    from studio import reference as refmod
+    dist, speed, elapsed = (np.linspace(0, 1000, 50), np.full(50, 50.0), np.linspace(0, 60, 50))
+    primary_loop = loop_xy(scale=100.0)
+    th = 0.7
+    R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+
+    def build_at(size, label):
+        """A reference loop of the SAME shape at `size` x the primary's, in its own frame."""
+        ref_loop = (loop_xy(scale=100.0) * size) @ R.T + np.array([300.0, -120.0])
+        got = xr.build(dist=dist, speed_kmh=speed, elapsed=elapsed, loop_xy=ref_loop,
+                       primary_loop_xy=primary_loop, source_label=label, lap_id=0)
+        # Re-derive the scale from the fit itself, so this test states its own evidence rather
+        # than trusting the field it is here to add.
+        _fitted, info = refmod.fit_loop_to_loop(ref_loop, primary_loop)
+        return got, float(info["scale"]), float(info["rms"])
+
+    # 1. The filed case: the reference lap is 2.49x too big, so the fit draws it at 0.40x its true
+    #    size. The RMS gate is delighted — the shrunk ring lies right on the primary loop.
+    big, scale, rms = build_at(2.49, "too big")
+    assert rms < xr.MAP_FIT_RMS_TOL_M, (rms, "this case is only interesting if the RMS passes")
+    assert big.map_fit_rms is not None and big.map_fit_rms <= xr.MAP_FIT_RMS_TOL_M
+    assert big.overlay_xy is None, (
+        f"a reference loop 2.49x too big was accepted and drawn at {scale:.3f}x its true size "
+        f"(fit rms {rms:.2f} m, well inside the {xr.MAP_FIT_RMS_TOL_M} m gate) — the map would "
+        f"show a false racing line whose metres are not the map's metres")
+    assert big.map_fit_scale is not None and abs(big.map_fit_scale - scale) < 1e-9
+    # The DATA side is untouched by a refused overlay (charts/table align by distance).
+    assert big.total_time == elapsed[-1] and len(big.arrays()[0]) == 50
+
+    # 2. The mirror: a reference 2.49x too SMALL is grown onto the primary. Same verdict — the
+    #    gate must not depend on which recording the user picked as the reference.
+    small, scale_s, rms_s = build_at(1 / 2.49, "too small")
+    assert rms_s < xr.MAP_FIT_RMS_TOL_M, rms_s
+    assert small.overlay_xy is None, (
+        f"a reference loop 2.49x too small was accepted and grown {scale_s:.2f}x onto the "
+        f"primary (fit rms {rms_s:.2f} m)")
+
+    # 3. NOT over-tightened. The worst genuine same-circuit lap-to-lap fit measured over 163 real
+    #    laps (3 recordings, 2 circuits) was x1.0376 — it must still overlay, in both directions.
+    for size in (1.0376, 1 / 1.0376):
+        ok, sc, rm = build_at(size, "genuine")
+        assert ok.overlay_xy is not None, (
+            f"a genuine same-circuit reference at {size:.4f}x (fit scale {sc:.4f}, rms {rm:.2f} m) "
+            f"was refused — the band is tighter than real GPS")
+        assert ok.map_fit_scale is not None
+
+    # 4. The band itself, stated once on the predicate the gate uses.
+    tol = xr.MAP_FIT_SCALE_TOL
+    assert xr.fit_is_drawable(1.0, 1.0) and xr.fit_is_drawable(1.0, 1 / 1.05)
+    assert xr.fit_is_drawable(1.0, tol) and xr.fit_is_drawable(1.0, 1 / tol), "the edges are IN"
+    assert not xr.fit_is_drawable(1.0, tol * 1.01), "outside the band, however good the RMS"
+    assert not xr.fit_is_drawable(1.0, 1 / (tol * 1.01))
+    assert not xr.fit_is_drawable(xr.MAP_FIT_RMS_TOL_M + 0.1, 1.0), "the RMS half still bites"
+    assert not xr.fit_is_drawable(1.0, 0.0) and not xr.fit_is_drawable(1.0, float("nan"))
+    assert not xr.fit_is_drawable(float("nan"), 1.0) and not xr.fit_is_drawable(None, None)
+    print(f"test_overlay_gate_refuses_a_mis_sized_reference OK: 2.49x too big -> scale "
+          f"{scale:.4f} rms {rms:.2f} m REFUSED (RMS alone would have drawn it); 2.49x too small "
+          f"-> scale {scale_s:.4f} REFUSED; x1.0376 (the worst real lap) still drawn; band "
+          f"[{1/tol:.4f}, {tol:.4f}]")
 
 
 if __name__ == "__main__":
