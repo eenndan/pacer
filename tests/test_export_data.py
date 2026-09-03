@@ -355,6 +355,38 @@ def test_report_html_wellformed_with_images():
         png = base64.b64decode(src.split(",", 1)[1])
         assert png.startswith(b"\x89PNG\r\n\x1a\n") and len(png) > 0
         assert png == PNG_1PX
+        # No stated width when the caller gives none — the browser sizes it from the PNG, which
+        # is right for a caller with no display to divide out (and what a 2-tuple has always
+        # meant).
+        assert img.get("width") is None, img.attrib
+
+
+def test_report_figures_are_laid_out_at_the_stated_width():
+    """W5-02: `QWidget.grab()` renders at the screen's device pixel ratio, so the report embedded
+    a 2x PNG from a Retina Mac and — with no width on the tag — the browser laid the figure out at
+    its DEVICE width. Measured on one recording exported twice from the same 1512x982 LOGICAL
+    screen: figures 917 px wide from DPR 1 and 1120 px from DPR 2 (+22 %, the clamp being the
+    stylesheet's own 70em column), the document 168 px longer, which moves a print/PDF page break.
+    A third element states the LOGICAL width, so the page describes the session and not the
+    machine. On main a 3-tuple raised ValueError from the writer's unpack."""
+    s = make_session()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "report.html")
+        export_data.write_report_html(
+            path, s, source_label="GX010060",
+            images=[("Track map", PNG_1PX, 917), ("Speed", PNG_1PX, None)])
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    root = ET.fromstring(text)  # still well-formed with the extra attribute
+    imgs = root.findall(".//img")
+    assert len(imgs) == 2
+    assert imgs[0].get("width") == "917", imgs[0].attrib
+    assert imgs[0].get("src", "").startswith("data:image/png;base64,")
+    assert imgs[1].get("width") is None, imgs[1].attrib  # None ⇒ no attribute, as before
+    # height:auto is what keeps the aspect ratio when a stated width (or the 70em clamp) shrinks
+    # a figure below its natural pixel size.
+    assert "height: auto" in text
+    print("ok W5-02: the report states each figure's layout width")
 
 
 def test_report_table_follows_the_display_unit(): # noqa: E301
@@ -439,6 +471,7 @@ if __name__ == "__main__":
     test_channels_csv_g_long_is_clean_gps_not_raw_imu()
     test_session_date_uses_local_calendar_day_not_utc()
     test_report_html_wellformed_with_images()
+    test_report_figures_are_laid_out_at_the_stated_width()
     test_report_table_follows_the_display_unit()
     test_write_laps_csv_stays_si_whatever_the_report_does()
     test_report_html_no_images_no_corners()

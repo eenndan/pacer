@@ -187,18 +187,28 @@ th, td { border: 1px solid #ccc; padding: 3px 10px; text-align: right;
 th { background: #f2f2f2; }
 tr.best td { color: #0a7d33; font-weight: 600; }
 table.meta th, table.meta td { text-align: left; }
-img { max-width: 100%; border: 1px solid #ccc; margin: 0.5em 0; }
+/* height:auto keeps the aspect ratio when the max-width clamp (or a stated width, see
+   write_report_html) shrinks a figure below its natural pixel size. */
+img { max-width: 100%; height: auto; border: 1px solid #ccc; margin: 0.5em 0; }
 """
 
 
 def write_report_html(path: str, session, source_label: str = "",
-                      images: list[tuple[str, bytes]] = (), unit: str | None = None) -> None:
+                      images: list[tuple[str, bytes] | tuple[str, bytes, int | None]] = (),
+                      unit: str | None = None) -> None:
     """One SELF-CONTAINED page: the session header (recording, track, date, lap count,
     best lap), the laps table (same rows/columns as `write_laps_csv`, via `laps_table`),
     and the passed PNG snapshots embedded as base64 data URIs. `images` is an iterable of
-    `(title, png_bytes)` — app.py grabs the map/plots widgets (QWidget.grab → QImage →
-    PNG bytes), so this module stays Qt-free. Deliberately dead-simple, WELL-FORMED
-    (XML-parseable) markup with a little inline CSS and NO JavaScript.
+    `(title, png_bytes)` or `(title, png_bytes, layout_width_px)` — app.py grabs the map/plots
+    widgets (QWidget.grab → QImage → PNG bytes), so this module stays Qt-free. Deliberately
+    dead-simple, WELL-FORMED (XML-parseable) markup with a little inline CSS and NO JavaScript.
+
+    `layout_width_px` is the width the DOCUMENT lays that image out at, in CSS pixels, and it is
+    what makes the page reproducible: a HiDPI grab arrives at 2x the pixels, and with no width
+    the browser sizes the figure from the PNG, so the same session exported from a Retina Mac
+    laid its figures out 22 % larger than from a non-Retina one (see app.py's
+    _report_image_width, which computes it by dividing the grab's device pixel ratio out). None
+    or absent emits no attribute — right for any caller that has no display to divide out.
 
     `unit` is the reader's DISPLAY speed unit, passed straight to `laps_table`. The app passes its
     live choice because the embedded images already follow it: the grabbed chart axis reads
@@ -235,10 +245,13 @@ def write_report_html(path: str, session, source_label: str = "",
         cls = ' class="best"' if lap_id == best else ""
         out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
     out.append("</table>")
-    for title, png in images:
+    for item in images:
+        title, png = item[0], item[1]
+        width = item[2] if len(item) > 2 else None
         b64 = base64.b64encode(png).decode("ascii")
+        attr = f' width="{int(width)}"' if width else ""
         out.append(f"<h2>{esc(title)}</h2>")
-        out.append(f'<img alt="{esc(title)}" src="data:image/png;base64,{b64}"/>')
+        out.append(f'<img alt="{esc(title)}"{attr} src="data:image/png;base64,{b64}"/>')
     out.append("</body></html>")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out))

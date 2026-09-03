@@ -10,13 +10,22 @@ PACER-FREE by design (AGENTS.md: only ingest/load/session/tracks may import pace
 input arrives as a plain numpy array or a Session-bound callable over Session's own cached
 per-lap arrays, so this module never touches the bound core.
 
+The reference centerline is ONE circuit's shape, so it is offered as a donor only when
+`studio/reference.py` accepts the fit as that circuit; on any other track `donors_for`
+returns the cross-lap donors alone (see `reference_centerline_xy`).
+
 Cache lifetime — the perf invariant (see Session.set_timing_lines): the draw segments are
 computed once per lap on FIRST DRAW, never per frame, and become stale on re-segmentation
 (lap ids, windows and donor traces all change when a timing line moves), so Session calls
 `invalidate()` from set_timing_lines. The reference centerline is intentionally NOT
 dropped there — same behaviour as before the extraction: it's only the last-resort fill
 donor (the cross-lap borrow dominates), and the georeferenced track shape is good enough
-for a dimmed dashed fill regardless of which lap it was fit against.
+for a dimmed dashed fill regardless of which lap it was fit against. That still holds now
+that the fit is gated, because the verdict is a property of the CIRCUIT, not of the lap:
+measured over every valid lap of four recordings, the accept/reject answer is the same for
+all 65 laps of the two Daytona MK recordings and for all 26 laps of the two other tracks
+(numbers in reference.py). Re-fitting on every timing-line drag would cost ~0.3 s to
+re-derive an answer that does not move.
 """
 
 from __future__ import annotations
@@ -88,7 +97,9 @@ class LapRenderCache:
     def donors_for(self, lap_id: int) -> list[dict]:
         """Ordered fill-source list for reconstructing `lap_id`'s gaps: every OTHER valid lap
         first (cross-lap borrow, the primary source), then the georeferenced reference
-        centerline LAST (fallback). Each donor is {"xy", "name", "is_reference"}."""
+        centerline LAST (fallback) — and only when the fit accepted this session's track as the
+        circuit that centerline belongs to, so on another track the list is cross-lap donors
+        only. Each donor is {"xy", "name", "is_reference"}."""
         donors = []
         for other in self._valid_lap_ids():
             if other == lap_id:
@@ -103,13 +114,15 @@ class LapRenderCache:
         return donors
 
     def reference_centerline_xy(self):
-        """The georeferenced track centerline in LOCAL metres (an (M,2) array), or None.
+        """The georeferenced track centerline in LOCAL metres (an (M,2) array), or None when
+        there is no centerline OR the session is not on the circuit the centerline traces.
 
-        Built once and cached. Only the known-track fallback uses it; with ~18 laps the
-        cross-lap borrow covers virtually every gap, so this is rarely needed. See
-        studio/reference.py for the trace+georeference of the Daytona MK centerline:
-        the stored loop is fit against ONE clean lap's closed loop (cyclic arc-length
-        correspondence), not the unordered all-laps point cloud."""
+        Built once and cached (None is cached too — an empty array). Only the known-track
+        fallback uses it; with ~18 laps the cross-lap borrow covers virtually every gap, so
+        this is rarely needed. See studio/reference.py for the trace+georeference of the
+        Daytona MK centerline: the stored loop is fit against ONE clean lap's closed loop
+        (cyclic arc-length correspondence), not the unordered all-laps point cloud, and
+        `centerline_local` returns it empty unless that fit passes `fit_is_this_circuit`."""
         if self._reference_xy is not None:
             return self._reference_xy if len(self._reference_xy) else None
         from . import reference  # local import: optional, only on the fallback path

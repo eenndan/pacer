@@ -57,7 +57,8 @@ for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db
     _mod._app_support_dir = (lambda d=_dir: d)
 sidecar.sidecar_path = lambda _p, _d=_SEAMS: os.path.join(_d, "test.pacer.json")
 
-from PySide6.QtGui import QDesktopServices  # noqa: E402
+from PySide6.QtCore import QBuffer, QIODevice  # noqa: E402
+from PySide6.QtGui import QDesktopServices, QImage  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QComboBox,
@@ -374,6 +375,68 @@ def test_the_report_map_grab_survives_a_map_without_the_contract():
     print("test_the_report_map_grab_survives_a_map_without_the_contract OK")
 
 
+# ============================================================ W5-02 — a document, not a screen
+def _png_bytes(w, h):
+    """A real PNG of a known pixel size (what a grab hands the width helper)."""
+    image = QImage(w, h, QImage.Format_RGB32)
+    image.fill(0x202020)
+    buf = QBuffer()
+    buf.open(QIODevice.WriteOnly)
+    image.save(buf, "PNG")
+    return bytes(buf.data())
+
+
+def test_the_report_figure_width_divides_out_the_screens_pixel_ratio():
+    """`QWidget.grab()` renders at the screen's device pixel ratio, so the same panel comes back
+    917 px wide on a non-Retina Mac and 1834 px on a Retina one; embedded with no width, the
+    browser laid the figure out at that DEVICE width and the exported document described the
+    machine (+22 % figures, 168 px longer page). The helper states the LOGICAL width instead —
+    always <= the PNG's own, so a browser only ever downsamples. On main it did not exist."""
+    win = _window(FakeSession())
+    png = _png_bytes(1834, 558)
+    win.devicePixelRatioF = lambda: 1.0
+    assert win._report_image_width(png) == 1834
+    win.devicePixelRatioF = lambda: 2.0
+    assert win._report_image_width(png) == 917
+    win.devicePixelRatioF = lambda: 0.0          # never divide by a nonsense ratio
+    assert win._report_image_width(png) == 1834
+    win.devicePixelRatioF = lambda: 1.0
+    assert win._report_image_width(b"not a png at all") is None  # ⇒ no attribute, as before
+    win.hide()
+    print("test_the_report_figure_width_divides_out_the_screens_pixel_ratio OK")
+
+
+def test_the_report_export_states_a_layout_width_for_every_figure():
+    """End to end: _export_report hands the writer (title, png, width) per figure, and at DPR 1
+    that width is the panel's own logical width — so the same export from a Retina machine lays
+    out identically. On main the images were bare (title, png) pairs."""
+    win = _window(FakeSession())
+    map_w, plots_w = QWidget(), QWidget()
+    map_w.resize(240, 100)
+    plots_w.resize(240, 180)
+    win.view = SimpleNamespace(map=map_w, plots=plots_w)
+    seen = {}
+    orig_report, orig_dialog = export_data.write_report_html, QFileDialog.getSaveFileName
+    with tempfile.TemporaryDirectory() as td:
+        QFileDialog.getSaveFileName = staticmethod(
+            lambda *a, **k: (os.path.join(td, "r.html"), ""))
+        export_data.write_report_html = lambda *a, **k: seen.update(k)
+        try:
+            win._export_report()
+        finally:
+            export_data.write_report_html = orig_report
+            QFileDialog.getSaveFileName = orig_dialog
+    images = seen["images"]
+    assert [t for t, *_ in images] == ["Track map", "Speed · Δ to best"], images
+    for (title, png, width), widget in zip(images, (map_w, plots_w), strict=True):
+        assert png[:8] == b"\x89PNG\r\n\x1a\n", title
+        natural = QImage.fromData(png, "PNG").width()
+        assert width == round(natural / win.devicePixelRatioF()) == widget.width(), \
+            (title, width, natural, widget.width())
+    win.hide()
+    print("test_the_report_export_states_a_layout_width_for_every_figure OK")
+
+
 # ============================================================ L12-07 — put a number on it
 def test_the_options_hint_quantifies_the_size_and_the_work():
     """The dialog sold "larger file"/"smaller file" and stated no size. The hint now names a size,
@@ -579,6 +642,8 @@ def _run_all():
     test_the_report_is_written_in_the_display_unit_and_the_csv_is_not()
     test_the_report_map_keeps_its_key_and_loses_the_interaction_chrome()
     test_the_report_map_grab_survives_a_map_without_the_contract()
+    test_the_report_figure_width_divides_out_the_screens_pixel_ratio()
+    test_the_report_export_states_a_layout_width_for_every_figure()
     test_the_options_hint_quantifies_the_size_and_the_work()
     test_the_hint_refreshes_on_the_quality_combo_too()
     test_the_export_preset_survives_a_new_window()
