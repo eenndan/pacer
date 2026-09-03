@@ -67,6 +67,20 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **A brake point on the map can no longer be mistaken for a corner apex, and the map key
+  draws the glyphs that are actually on the map.** Giving each lap's brake glyphs their own
+  SHAPE handed identity slot 1 the circle — which is the corner-apex dot, in the identical
+  hue, so in compare mode two different marker classes drew the same mark. Slot 1 is a star
+  now (mask distance 0.645 from the circle), the circle is reserved to the apex dots, and the
+  key's "Brake point" row paints the real per-lap glyphs instead of one fixed triangle in the
+  video marker's colour.
+- **The Stats page's charts and the Library's PB progression keep their line weight on a
+  Retina display.** A pyqtgraph pen width is in DEVICE pixels, so the sparkline, the friction
+  circle's rings and grip envelope, and the PB line and its axes all drew half their design
+  weight on the screens they are usually read on, while the speed/Δ charts beside them had
+  already been fixed. The guard that was meant to prevent this walked a hard-coded list of two
+  file names; it now finds every module that draws with pyqtgraph, and rejects a bare colour
+  handed to `setPen` (an implicit one-device-pixel gridline pen) as well as a literal width.
 - **Every stat tile paints its value larger than its caption again**, and the Stats page's
   notes, the coaching phase-bar numbers and the Library dialog's summary/privacy text are back
   at the sizes they were written for. The theme's base stylesheet rule carried a `font-size`

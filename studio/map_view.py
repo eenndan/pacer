@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QTransform
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -32,6 +32,10 @@ from .map_render import (
 )
 from .session import Seg
 from .theme import CHART_SERIES, MAP_RAINBOW_N, C, icon, rainbow_colors
+
+# The very QPainterPaths pyqtgraph fills for a ScatterPlotItem symbol, in a unit box centred on the
+# origin. The map key paints its brake row from these, so the plate cannot drift from the canvas.
+_SYMBOLS = pg.graphicsItems.ScatterPlotItem.Symbols
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -305,6 +309,9 @@ class _MapLegend(QWidget):
         super().__init__()
         self._collapsed = False
         self._on_resize = on_resize  # MapView re-pins the key when collapse changes its height
+        # The brake glyphs CURRENTLY on the plot, as [(pyqtgraph symbol, colour)] — pushed by
+        # MapView.set_brake_markers. Empty until a lap is drawn; see _paint_glyph.
+        self.brake_glyphs: list[tuple[str, str]] = []
         self._font = theme.ui_font(theme.CAPTION)
         self._title_font = theme.ui_font(theme.PANEL_HEADER, theme.W_SEMIBOLD)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
@@ -317,6 +324,19 @@ class _MapLegend(QWidget):
         self._w = 196
         self._h = _LEGEND_PAD * 2 + _LEGEND_ROW_H + rows * _LEGEND_ROW_H
         self.setFixedSize(self._w, self._h)
+
+    def set_brake_glyphs(self, glyphs):
+        """Tell the key which brake glyphs the map is drawing right now, [(symbol, colour)].
+
+        The key used to paint one hard-coded ▼ in the VIDEO-MARKER's coral for "Brake point" — a
+        picture of no lap on the canvas. Since the glyphs carry lap identity in shape as well as
+        hue (theme.SERIES_SYMBOL), a fixed drawing cannot describe them: in compare mode there are
+        two, in two different shapes, in neither of those colours. So the key is fed the real
+        thing and mirrors it."""
+        glyphs = [(str(s), str(c)) for s, c in glyphs]
+        if glyphs != self.brake_glyphs:
+            self.brake_glyphs = glyphs
+            self.update()
 
     def mousePressEvent(self, _event):
         # Click anywhere on the key toggles collapse — the whole plate is the affordance.
@@ -366,12 +386,21 @@ class _MapLegend(QWidget):
             fill.setAlpha(110)
             p.setBrush(QBrush(fill))
             p.drawEllipse(QPointF(cx, cy), 5, 5)
-        elif kind == "brake":  # down-triangle (▼) — brake-point glyph
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(QColor(MARKER_COLOR)))
-            tri = QPolygonF([QPointF(cx - 5, cy - 4), QPointF(cx + 5, cy - 4),
-                             QPointF(cx, cy + 5)])
-            p.drawPolygon(tri)
+        elif kind == "brake":  # the brake glyphs on the plot RIGHT NOW, in their own shapes/hues
+            glyphs = self.brake_glyphs or [(theme.series_symbol(theme.CHART_SERIES[0]),
+                                            theme.CHART_SERIES[0])]
+            # Side by side when compare draws two laps; the cell is _LEGEND_GLYPH_W wide, so the
+            # glyph shrinks rather than the plate growing or the two overlapping.
+            n = min(len(glyphs), 2)
+            box = min(_LEGEND_GLYPH_W / n - 2.0, _LEGEND_ROW_H - 6.0)
+            for i, (sym, colour) in enumerate(glyphs[:n]):
+                gx = cx + (i - (n - 1) / 2.0) * (box + 2.0)
+                path = QTransform().translate(gx, cy).scale(box, box).map(
+                    _SYMBOLS.get(sym, _SYMBOLS["o"]))
+                # Same outline the markers carry (_BrakeMarkers), so two adjacent glyphs read as two.
+                p.setPen(QPen(QColor(C.canvas), 1))
+                p.setBrush(QBrush(QColor(colour)))
+                p.drawPath(path)
         elif kind == "corner":  # cyan apex dot (the left/right hues collapse to one in the key)
             qc = QColor(CORNER_LEFT_COLOR)
             qc.setAlpha(CORNER_DOT_ALPHA)
@@ -1697,3 +1726,7 @@ class MapView(QWidget):
         """Show brake glyphs from `lap_markers` = [(markers, colour)], markers = [(x, y,
         peak_decel)] in local metres. Current lap normally; both laps in compare. [] clears."""
         self._brake_markers.set_markers(lap_markers)
+        # The key describes what is on the canvas, so it is told at the same moment (and from the
+        # same argument) rather than drawing a fixed glyph of its own — see _MapLegend.
+        self._map_key.set_brake_glyphs([(theme.series_symbol(colour), colour)
+                                        for markers, colour in lap_markers if markers])

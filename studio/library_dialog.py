@@ -50,7 +50,7 @@ import os
 from collections.abc import Callable
 
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QBrush, QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
@@ -111,8 +111,27 @@ PRIVACY_NOTE = (
 )
 
 # A PlotDataItem pen/brush for the PB line + its markers (amber accent, the app's primary).
-_PB_PEN = pg.mkPen(C.accent, width=2)
+# The pens are ACCESSORS, not constants: a pyqtgraph pen width is in DEVICE pixels
+# (theme.line_width), so a module-level `mkPen(..., width=2)` freezes whatever device-pixel ratio
+# was current at import — which on a Retina panel draws the PB line at half the weight the charts
+# and the map draw theirs. The brush has no width and stays a constant.
 _PB_BRUSH = pg.mkBrush(C.accent)
+
+
+def _pb_pen():
+    """The PB progression line — the same 2 logical px the chart traces use."""
+    return pg.mkPen(C.accent, width=theme.line_width(2))
+
+
+def _pb_symbol_pen():
+    """The marker outline: surface-coloured, so overlapping session dots stay countable."""
+    return pg.mkPen(C.surface, width=theme.line_width(1))
+
+
+def _pb_axis_pen():
+    """The axis line — and the grid, since pyqtgraph's AxisItem falls back from tickPen() to pen().
+    A bare colour here would let pyqtgraph build its own one-DEVICE-pixel pen (W5-01)."""
+    return pg.mkPen(C.border, width=theme.line_width(1))
 
 # The progress-summary trend word per library.track_summary["trend"]. "single"/"none" add nothing
 # (there's no trend to read from one/zero sessions) so they map to no word.
@@ -145,6 +164,16 @@ _PB_PLOT_MAX_H = 200
 # was called broken. The screen still overrules it (_fit_to_screen runs after), and it is applied to
 # the size being OPENED, never to the size being stored — see _apply_geometry.
 _MIN_BROWSABLE_H = 680
+# The width _MIN_BROWSABLE_H was measured at — and therefore the premise the height floor RESTS on:
+# height alone cannot buy rows at a width where the privacy note (a WrapLabel, so its wrapped height
+# is part of the layout minimum) and the PB plot's 150 px floor eat everything the floor adds.
+# 581 px is not a constraint this dialog applies; it is the layout minimum the BUTTON ROW happens to
+# impose once the app wires all six file-op callbacks (see ``_wired_dialog`` in tests/test_library.py
+# — an unwired two-button dialog's minimum is 234 px, and at 234x680 the table shows 1.23 rows, which
+# is what QA W11-02 measured). So the number is named here and the test asserts the button row still
+# grants it, rather than the comment asserting it and nothing checking. Shrink the button row below
+# this and the guard fails instead of the library quietly re-opening 1 row tall.
+_BROWSABLE_H_MEASURED_AT_W = 581
 # Left over after clamping to the screen: room for the menu bar, the Dock and the window frame.
 _SCREEN_MARGIN = 60
 # Floors the clamp will not go below, so a screen that reports something tiny/bogus can never
@@ -405,13 +434,13 @@ class LibraryDialog(QDialog):
         self.pb_plot.setMenuEnabled(False)
         for side in ("left", "bottom"):
             ax = self.pb_plot.getAxis(side)
-            ax.setPen(C.border)
+            ax.setPen(_pb_axis_pen())
             ax.setTextPen(C.text_dim)
             ax.setTickFont(theme.mono_font(11))
         # ONE reusable curve item (line + markers); its data is swapped per selected track.
         self._pb_curve = pg.PlotDataItem(
-            pen=_PB_PEN, symbol="o", symbolSize=7,
-            symbolBrush=_PB_BRUSH, symbolPen=pg.mkPen(C.surface, width=1))
+            pen=_pb_pen(), symbol="o", symbolSize=7,
+            symbolBrush=_PB_BRUSH, symbolPen=_pb_symbol_pen())
         self.pb_plot.addItem(self._pb_curve)
         # Centred in-chart empty-state label, shown when <2 points to plot (see _show_pb). It is a
         # CHILD of the ViewBox, so it is positioned in the box's PIXEL space (_centre_pb_empty) and
@@ -503,8 +532,10 @@ class LibraryDialog(QDialog):
         monitor is cut down on the laptop panel and comes back in full when the monitor does).
         Refusing to STORE a too-small size would instead discard the user's request, and discard it
         silently: they would resize, close, re-open, and find the app had quietly forgotten. Only
-        the height is floored — the width's minimum is already set by the button row below, and at
-        that width all four columns are on screen."""
+        the height is floored — the width's minimum is already set by the button row below, at the
+        _BROWSABLE_H_MEASURED_AT_W the height floor was measured at, and at that width all four
+        columns are on screen. That is a DEPENDENCY, not an observation: see the constant, and
+        tests/test_library.py::test_the_browsable_height_floor_still_gets_the_width_it_assumes."""
         try:
             remembered = prefs.library_size()
         except Exception as exc:  # noqa: BLE001 — an unreadable pref just means "use the default"
@@ -518,6 +549,35 @@ class LibraryDialog(QDialog):
             width, height = _fit_to_screen(width, height, avail.width(), avail.height())
         self.resize(width, height)
         self._opened_size = (self.width(), self.height())
+
+    # ------------------------------------------------------------------ HiDPI
+    def showEvent(self, event):
+        """Re-pen the PB chart once the dialog HAS a window — that is when its device-pixel ratio
+        is real, and a cosmetic pyqtgraph pen's width is in device pixels (theme.line_width).
+
+        Deliberately not in ``__init__``: ``theme.set_pen_scale`` is a process-wide setting the main
+        window owns, and an unshown dialog reports the PRIMARY screen's ratio, not its parent's — so
+        constructing the library on a second monitor would re-point the charts' pen scale at the
+        wrong screen. Built at the app's current scale (which is already correct), then corrected
+        here, and again on ``DevicePixelRatioChange`` if the user drags the dialog to another
+        display."""
+        super().showEvent(event)
+        self._apply_pen_scale()
+
+    def event(self, ev):
+        """Follow the window to a screen with a different device-pixel ratio (see ``showEvent``)."""
+        if ev.type() == QEvent.Type.DevicePixelRatioChange:
+            self._apply_pen_scale()
+        return super().event(ev)
+
+    def _apply_pen_scale(self):
+        """Point theme at this dialog's device-pixel ratio and re-issue the PB chart's pens."""
+        if not theme.set_pen_scale(self.devicePixelRatioF()):
+            return                                  # already at this ratio — nothing to redraw
+        for side in ("left", "bottom"):
+            self.pb_plot.getAxis(side).setPen(_pb_axis_pen())
+        self._pb_curve.setPen(_pb_pen())
+        self._pb_curve.setSymbolPen(_pb_symbol_pen())
 
     def done(self, result: int):
         """Remember a size the user changed on the way out — both Open (accept) and Close/Escape

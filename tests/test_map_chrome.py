@@ -27,18 +27,21 @@ import sys
 from types import SimpleNamespace
 
 import numpy as np
+import pyqtgraph as pg
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtGui import QColor  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
 from _synthetic import bare_session  # noqa: E402
 
+from studio import theme  # noqa: E402
 from studio.map_render import ELEVATION_LO_LABEL, rainbow_channel  # noqa: E402
-from studio.map_view import MapView, _segs_equal  # noqa: E402
+from studio.map_view import CORNER_LEFT_COLOR, MapView, _segs_equal  # noqa: E402
 
 
 def _session(n=240, y_amp=40.0, start_x=-200.0, speed=None):
@@ -353,6 +356,83 @@ def test_adding_a_sector_never_moves_a_line_the_user_placed():
         "adding a sector moved lines the user had already placed"
     assert "left where you put them" in mv._notice.text(), mv._notice.text()
     print("test_adding_a_sector_never_moves_a_line_the_user_placed OK")
+
+
+# ------------------------------------------------- W11-01: one glyph, one meaning, one key
+def _scatters(mv):
+    """Every populated ScatterPlotItem on the map plot as (symbol, brush hex, z)."""
+    out = []
+    for it in mv.plot.items:
+        if isinstance(it, pg.ScatterPlotItem) and len(it.data):
+            brush = it.opts.get("brush")
+            colour = QColor(brush.color()).name().lower() if hasattr(brush, "color") else "?"
+            out.append((it.opts.get("symbol"), colour, it.zValue()))
+    return out
+
+
+def _compare_map():
+    """A map in the state two clicks reach: corner apexes drawn, and brake glyphs for TWO laps —
+    the best lap (slot 0's hue) and a compare lap on identity slot 1, whose hue IS the corner-apex
+    dots' hue (map_view.CORNER_LEFT_COLOR is theme.CHART_SERIES[1], and always has been)."""
+    mv = _sized_map(_session())
+    mv.set_corners([("C1", -150.0, 10.0, 1), ("C2", 150.0, -10.0, -1),
+                    ("C3", 0.0, 38.0, 1)])
+    brakes = [([(-100.0, 20.0, 0.4), (60.0, -20.0, 0.2)], theme.CHART_SERIES[0]),
+              ([(-40.0, 30.0, 0.5), (120.0, 5.0, 0.3)], theme.CHART_SERIES[1])]
+    mv.set_brake_markers(brakes)
+    _APP.processEvents()
+    return mv
+
+
+def test_no_two_map_marker_classes_share_a_symbol_and_a_hue():
+    """QA W11-01. #175 gave each identity slot its own glyph SHAPE so compare's laps stay apart with
+    no colour vision — and handed slot 1 the circle. The map's corner-apex dot is a circle too, in
+    map_view.CORNER_LEFT_COLOR, which *is* CHART_SERIES[1]: the same hex. Hue had never separated
+    those two classes; shape was the only thing that did, and #175 spent it. Measured on the shipped
+    plot, `('o', '#5bc8e0')` was drawn by two different marker classes at once — 8 corner apexes at
+    z=5 and 11 of lap B's brake points at z=7.
+
+    The contract is per PLOT, not per layer: two marks a user can see in one frame must differ in
+    shape or in hue. Asserted on the live items, so it holds however the colours are plumbed."""
+    mv = _compare_map()
+    seen = [(sym, colour) for sym, colour, _z in _scatters(mv)]
+    dupes = sorted({p for p in seen if seen.count(p) > 1})
+    assert not dupes, (
+        f"two marker classes on one map draw the identical glyph: {dupes} — of {_scatters(mv)}")
+    # …and the reservation that keeps it that way is stated, not just currently true.
+    assert not set(theme.SERIES_SYMBOL) & set(theme.RESERVED_SYMBOLS), (
+        f"a lap glyph took a shape another marker class owns: "
+        f"{set(theme.SERIES_SYMBOL) & set(theme.RESERVED_SYMBOLS)}")
+    assert theme.series_symbol(CORNER_LEFT_COLOR) not in ("o",), (
+        "the corner-apex hue is an identity hue, so its slot's glyph must not be the apex dot")
+    mv.hide()
+    mv.deleteLater()
+    print("test_no_two_map_marker_classes_share_a_symbol_and_a_hue OK")
+
+
+def test_the_map_key_draws_the_brake_glyphs_that_are_on_the_map():
+    """QA W11-01, second half. The key promised a ▼ in `MARKER_COLOR` for "Brake point" — the VIDEO
+    MARKER's coral, a colour no brake glyph is ever drawn in — and one fixed shape, while compare
+    draws two glyphs in two shapes in two other hues. So the row described no lap on the canvas, and
+    its "Corner apex" cyan dot was a picture of lap B's brake points instead.
+
+    The key now takes its brake glyphs from the same argument the markers are built from."""
+    mv = _compare_map()
+    key = mv._map_key
+    assert key.brake_glyphs == [(theme.series_symbol(theme.CHART_SERIES[0]), theme.CHART_SERIES[0]),
+                                (theme.series_symbol(theme.CHART_SERIES[1]), theme.CHART_SERIES[1])], (
+        f"the key's brake row says {key.brake_glyphs}, the map draws {_scatters(mv)}")
+    on_map = {(sym, colour) for sym, colour, z in _scatters(mv) if z == 7.0}
+    assert {(s, QColor(c).name().lower()) for s, c in key.brake_glyphs} == on_map, (
+        f"key {key.brake_glyphs} vs map {on_map}")
+    # A single-lap map draws one glyph, and clearing the layer must not leave a stale pair behind.
+    mv.set_brake_markers([([(0.0, 0.0, 0.3)], theme.CHART_SERIES[0])])
+    assert len(key.brake_glyphs) == 1, key.brake_glyphs
+    mv.set_brake_markers([])
+    assert key.brake_glyphs == [], key.brake_glyphs
+    mv.hide()
+    mv.deleteLater()
+    print("test_the_map_key_draws_the_brake_glyphs_that_are_on_the_map OK")
 
 
 def _run_all():

@@ -1147,6 +1147,84 @@ def test_friction_circle_size_is_device_pixel_ratio_independent():
     print("test_friction_circle_size_is_device_pixel_ratio_independent OK")
 
 
+def _stats_at_dpr(v, dpr):
+    """Pretend the window moved to a screen at `dpr` and deliver Qt's OWN notification — the same
+    path a user dragging the window between displays takes."""
+    from PySide6.QtCore import QEvent
+    v.devicePixelRatioF = lambda: dpr
+    v.event(QEvent(QEvent.Type.DevicePixelRatioChange))
+    _pump()
+
+
+def _stats_pens(v):
+    """Every cosmetic pyqtgraph pen on the page, as {name: (width, style, colour)}. A cosmetic
+    pen's width IS device px, which is the quantity under test; the style and colour ride along so
+    a re-pen that silently turned a dashed ring solid, or recoloured it, fails here too."""
+    spark, gg = v.spark.getPlotItem(), v.gg.getPlotItem()
+    pens = {
+        "spark left axis": spark.getAxis("left").pen(),
+        "spark bottom axis": spark.getAxis("bottom").pen(),
+        "spark curve": v._spark_curve.opts["pen"],
+        "spark baseline": v._spark_baseline.pen,
+        "spark PB dot outline": v._spark_pb_dots.opts["pen"],
+        "gg left axis": gg.getAxis("left").pen(),
+        "gg bottom axis": gg.getAxis("bottom").pen(),
+    }
+    for i, ring in enumerate(v._gg_rings):
+        pens[f"gg ring/axis/envelope {i}"] = ring.opts["pen"] if hasattr(ring, "opts") else ring.pen
+    return {k: (p.widthF(), p.style(), p.color().name()) for k, p in pens.items()}
+
+
+def test_stats_page_line_weights_are_logical_pixels_not_device_pixels():
+    """QA W11-03. #175 made every chart/map pen a LOGICAL weight (theme.line_width) — and its AST
+    guard walked a two-name list, `("plots_view.py", "map_view.py")`. The Stats page has its own
+    pyqtgraph charts, so it was outside the fix AND outside the guard: measured live on one
+    1440x900 window, the charts' axis pen went 1 -> 2 device px across a DPR 1 -> 2 move while
+    every pen on this page — spark axes, spark curve, baseline, PB-dot outline, the friction
+    circle's axes, its 0.5 g rings and its measured grip envelope — stayed at 1, i.e. HALF a
+    logical pixel on the Retina panel the owner uses. The guard reported green throughout.
+
+    Asserted in BOTH directions: the ratio is a property of the screen the window is on, so
+    dragging back to an external monitor has to thin the pens again."""
+    _app()
+    from studio import theme
+    from studio.stats_panel import StatsView
+    try:
+        v = StatsView(_fake_view_session())
+        v.show()
+        _pump()
+        assert v._gg_rings, "the fixture must draw the friction circle for this to mean anything"
+        at_1 = _stats_pens(v)
+        assert {w for w, _s, _c in at_1.values()} == {1.0}, at_1
+        # the friction circle draws a dashed MEASURED envelope beside its solid 0.5 g rules — the
+        # style/colour half of the snapshot is only worth asserting if both kinds are present
+        assert len({s for _w, s, _c in at_1.values()}) > 1, at_1
+
+        _stats_at_dpr(v, 2.0)                        # dragged onto the Retina panel
+        at_2 = _stats_pens(v)
+        assert at_2.keys() == at_1.keys()
+        assert {w for w, _s, _c in at_2.values()} == {2.0}, (
+            f"on a DPR-2 screen (theme.pen_scale()={theme.pen_scale()}) the Stats page still "
+            f"draws {at_2} device px — half the logical weight the charts beside it draw")
+        assert theme.pen_scale() == 2.0
+        # Dash patterns ride the width (Qt specifies them in pen-width units), so re-penning must
+        # keep every style and colour exactly — a solid grip envelope would be a different chart.
+        assert ({(s, c) for _w, s, c in at_2.values()}
+                == {(s, c) for _w, s, c in at_1.values()}), (at_1, at_2)
+        # …and the pxMode glyph SIZE is already device-independent: scaling it too would draw
+        # double-size PB dots on a Retina panel.
+        assert v._spark_pb_dots.opts["size"] == 7
+
+        _stats_at_dpr(v, 1.0)                        # …and back to the external monitor
+        back = _stats_pens(v)
+        assert back == at_1, (at_1, back)
+        v.hide()
+        v.deleteLater()
+    finally:
+        theme.set_pen_scale(1.0)
+    print("test_stats_page_line_weights_are_logical_pixels_not_device_pixels OK")
+
+
 def test_single_lap_dashes_every_distribution_tile():
     """L4-06: with one clean lap the honesty gate was applied by 4 tiles and skipped by 3 — σ,
     CoV, trend and race pace dashed while 'median − best' printed '+0.00 s', 'within 1% of best'
