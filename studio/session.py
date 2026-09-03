@@ -321,6 +321,18 @@ class Session:
         """Adopt an already-loaded `Session` as the reference (the guard + extraction half of
         `load_reference`, split out so tests can pass a synthetic reference Session without a
         telemetry file). Returns None on success or the refusal reason."""
+        # IDENTITY guard, first: the picker offers every .MP4 on disk including the one already
+        # open, and `chapters.discover_siblings` expands a picked chapter to the SAME chain this
+        # session was loaded from — so "load reference" lands on your own recording with one
+        # wrong click. Every other guard PASSES in that state (same track name, identical lap
+        # length), and the result is a baseline that is this session's own best lap wearing a
+        # reference's chrome: 12 corner rows of "+0.00", a dead-flat Δ curve, and a cross-compare
+        # with the same lap of the same file in both panes, all badged as measurements. There is
+        # no comparison to be had, so the honest answer is to refuse before adopting it.
+        if self._shares_footage_with(ref):
+            return ("that is the recording you already have open — a lap can't be a reference for "
+                    "itself. Pick a different recording of the same track; keeping the local "
+                    "best lap.")
         # Track guard: prove the two recordings are the SAME circuit before overlaying them (a
         # wrong match overlays two DIFFERENT tracks — worse than refusing). See _track_admits_
         # reference for the two-path decision (confirmed name-match vs geometry fallback).
@@ -362,6 +374,45 @@ class Session:
         # invalidate_stats() drops only those (detection windows unchanged), recomputed lazily.
         self.corners.invalidate_stats()
         return None
+
+    def _source_paths(self) -> set[str]:
+        """The chapter files on disk this session was loaded from, as resolved real paths.
+
+        `Session` keeps no `paths` list, but it keeps the two things load() derived from one: the
+        `ChapterMap` (every chapter's path) and `video_path` (the first). Resolved with
+        `os.path.realpath` so the same file reached through a symlink, a relative path or a
+        different `/private` prefix compares equal — the whole point is file IDENTITY, not string
+        equality. Empty for a Session with neither (the synthetic doubles the tests build), which
+        is exactly right: an unknown provenance must never be *assumed* to collide."""
+        chapter_map = getattr(self, "chapters", None)
+        paths = [c.path for c in chapter_map.chapters] if chapter_map is not None else []
+        if not paths:
+            video_path = getattr(self, "video_path", None)
+            paths = [video_path] if video_path else []
+        return {os.path.realpath(p) for p in paths if p}
+
+    def _shares_footage_with(self, other: Session) -> bool:
+        """True iff `other` was loaded from any of the SAME chapter files as this session.
+
+        OVERLAP, not set equality: opening chapter 1 alone and referencing the full three-chapter
+        chain (or the reverse) is still this recording compared with itself over the part they
+        share — the lap in common is the same lap. Two sessions with no known paths never
+        overlap (see _source_paths)."""
+        mine = self._source_paths()
+        return bool(mine and (mine & other._source_paths()))
+
+    def reference_is_own_recording(self) -> bool:
+        """True iff the ACTIVE reference was taken from this session's own footage.
+
+        `set_reference_session` refuses that state, so on the shipped paths this is always False —
+        it exists because the surfaces downstream of the baseline (the Corners Δ dashes, the
+        compare same-lap badge) each carried their own hard-coded assumption that "a reference
+        implies a different recording", and an assumption is not a guard. They ask this instead,
+        so a future path that reaches the state prints dashes rather than fake measurements."""
+        ref_session = getattr(self, "_reference_session", None)
+        if self._ref is None or ref_session is None:
+            return False
+        return self._shares_footage_with(ref_session)
 
     def _track_admits_reference(self, ref: Session) -> tuple[bool, bool, str | None]:
         """Decide whether `ref` may overlay this session, and HOW it was matched. Returns

@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, sidecar, theme, units
+from . import chapters, plots_view, sidecar, theme, units
 from .coaching_panel import OpportunitiesPanel
 from .compare_controller import CompareController
 from .lap_table import CornerTable, LapTable
@@ -53,10 +53,24 @@ from .video_view import VideoView
 # lengths. The bar names the baseline the LOWER CHART actually draws, which is NOT the hero
 # readout's own reference — so when the bar is cramped it drops the decorative "SPEED · " half and
 # keeps the naming (see _fit_plots_header for the full yield order).
+# QA-W2R-03: there are THREE baselines, not two — with a cross-recording reference loaded this bar
+# used to paint "Δ TO BEST" over a curve measured against another recording's lap. "REF" rather
+# than the recording's name: the bar is over-subscribed by construction (see _fit_plots_header) and
+# every px this label takes comes off a control's text, so the two REF strings are deliberately the
+# NARROWEST of the three pairs and the recording is named in full by the label's tooltip, by the
+# chart legend under it and by the permanent status chip.
 _PLOTS_LABEL_BEST = "SPEED · Δ TO BEST"
 _PLOTS_LABEL_IDEAL = "SPEED · Δ TO IDEAL"
+_PLOTS_LABEL_REF = "SPEED · Δ TO REF"
 _PLOTS_CHIP_BEST = "Δ BEST"
 _PLOTS_CHIP_IDEAL = "Δ IDEAL"
+_PLOTS_CHIP_REF = "Δ REF"
+# kind (plots_view.DELTA_BASELINE_*) -> (full label, short chip) for the fit pass.
+_PLOTS_BASELINE_LABELS = {
+    plots_view.DELTA_BASELINE_BEST: (_PLOTS_LABEL_BEST, _PLOTS_CHIP_BEST),
+    plots_view.DELTA_BASELINE_IDEAL: (_PLOTS_LABEL_IDEAL, _PLOTS_CHIP_IDEAL),
+    plots_view.DELTA_BASELINE_REFERENCE: (_PLOTS_LABEL_REF, _PLOTS_CHIP_REF),
+}
 _MAXIMIZE_GLYPH = "ph.corners-out"   # expand this panel to fill the window
 _RESTORE_GLYPH = "ph.corners-in"     # shown while maximized — click/Esc to restore the grid
 # The header maximize button is sized like the video transport's icon buttons so the whole app's
@@ -554,10 +568,11 @@ class CentralView(QWidget):
         # No layout minimum of its own: the fit pass hands it exactly the width of whichever of its
         # two lengths it chose, so the bar's derived minimum never pins the main splitter.
         plots_label.setMinimumWidth(0)
-        # Which baseline the LOWER CHART is drawing (plots_view.deltaBaselineChanged). Not the same
-        # thing as the hero readout's reference, which is the ideal_readout_btn's business — the bar
-        # showing one while the chart draws the other is exactly what made it ambiguous.
-        self._plots_baseline_ideal = False
+        # Which baseline the LOWER CHART is drawing (plots_view.deltaBaselineChanged), as a KIND.
+        # Not the same thing as the hero readout's reference, which is the ideal_readout_btn's
+        # business — the bar showing one while the chart draws the other is exactly what made it
+        # ambiguous.
+        self._plots_baseline_kind = plots_view.DELTA_BASELINE_BEST
         self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.ideal_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.plots.brake_throttle_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
@@ -1147,8 +1162,8 @@ class CentralView(QWidget):
                       + _HDR_ICON_BTN.width()),
             "text": sum(text_px.values()) + combo_px,
             "icons": sum(icons_px.values()) + combo_px,
-            "labels": {t: _with_text(label, t) for t in
-                       (_PLOTS_LABEL_BEST, _PLOTS_LABEL_IDEAL, _PLOTS_CHIP_BEST, _PLOTS_CHIP_IDEAL)},
+            "labels": {t: _with_text(label, t)
+                       for pair in _PLOTS_BASELINE_LABELS.values() for t in pair},
         }
         self._plots_budget = budget
         return budget
@@ -1195,26 +1210,37 @@ class CentralView(QWidget):
             floor = self._plots_header_need(budget, "", icons=True)
             if column is not None and column.minimumWidth() != floor:
                 column.setMinimumWidth(floor)
-            ideal = self._plots_baseline_ideal
-            full = _PLOTS_LABEL_IDEAL if ideal else _PLOTS_LABEL_BEST
-            chip = _PLOTS_CHIP_IDEAL if ideal else _PLOTS_CHIP_BEST
+            full, chip = _PLOTS_BASELINE_LABELS[self._plots_baseline_kind]
             tiers = ((full, False), (full, True), (chip, True), ("", True))
             for text, icons in tiers:
                 if header.width() >= self._plots_header_need(budget, text, icons):
                     break                       # else: fall through to the last (floor) tier
             label.setText(text)
             label.setVisible(bool(text))
+            # Every tier abbreviates ("Δ TO REF", "Δ BEST", or nothing at all), so the hover carries
+            # the sentence — including WHICH recording, which no tier of this label has room for.
+            label.setToolTip(self._delta_baseline_tip())
             for btn, name in self._plots_toggles:
                 btn.setText("" if icons else name)
         finally:
             self._fitting = False
 
-    def _set_delta_baseline_label(self, ideal: bool):
-        """Keep the charts bar honest about which baseline the lower chart is drawing (plots_view
-        swaps to Δ-to-ideal when the best lap is selected alone). The fit pass owns the text —
-        the ideal wording is longer, so the bar may have to re-spend its budget."""
+    def _delta_baseline_tip(self) -> str:
+        """The charts label's hover: the lower chart's baseline spelled out. Shares its wording
+        with the Δ axis's own tooltip (plots_view._delta_axis_tip) so the two can't drift.
+        getattr-guarded: the fit pass can run from a resize on a partially-built view."""
+        plots = getattr(self, "plots", None)
+        return plots._delta_axis_tip() if plots is not None else ""
+
+    def _set_delta_baseline_label(self, kind: str):
+        """Keep the charts bar honest about which baseline the lower chart is drawing: the local
+        best, the synthetic ideal (plots_view swaps to it when the best lap is selected alone), or
+        the cross-recording REFERENCE. `kind` is a plots_view.DELTA_BASELINE_* value; an unknown one
+        falls back to "best" rather than raising inside a signal handler. The fit pass owns the text
+        — the wordings differ in length, so the bar may have to re-spend its budget."""
         if getattr(self, "_plots_label", None) is not None:
-            self._plots_baseline_ideal = bool(ideal)
+            self._plots_baseline_kind = (
+                kind if kind in _PLOTS_BASELINE_LABELS else plots_view.DELTA_BASELINE_BEST)
             self._fit_plots_header()
 
     def _update_table_header(self):

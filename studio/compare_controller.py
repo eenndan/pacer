@@ -80,10 +80,27 @@ class CompareController:
         self.scrub = scrub
 
     def clear_prefer_cross(self) -> None:
-        """D5: drop the sticky cross-recording preference (the app calls this when the reference
-        recording is cleared) so a later compare toggle enters SAME-recording compare, not a cross
-        compare against a reference that no longer exists."""
+        """D5: drop the sticky cross-recording preference (see on_reference_cleared) so a later
+        compare toggle enters SAME-recording compare, not a cross compare against a reference that
+        no longer exists."""
         self._prefer_cross = False
+
+    def on_reference_cleared(self) -> None:
+        """The app dropped the cross-recording reference: leave any compare that was ABOUT it, then
+        drop the sticky preference for the next one.
+
+        QA-W2R-05: clearing used to do only the second half. `_cross` and `_session_b` therefore
+        outlived the reference they pointed at — the video quadrant kept a "REFERENCE" pane naming
+        the cleared recording and playing its footage behind a dead "Δ —" badge, while every menu
+        item and the status chip said there was no reference, and the reference Session's arrays
+        stayed alive on `_session_b` against clear_reference's own "frees its decode/arrays"
+        docstring. A cross compare exists only for the reference, so clearing the reference ends
+        it; a same-recording compare is untouched, because the reference was never what it was
+        about. Ordered exit-then-forget so `exit()` restores the table-driven selection once,
+        before the app's own reference-change refresh runs."""
+        if self._cross:
+            self.exit()
+        self.clear_prefer_cross()
 
     # --- read-only state the tick loop, scrub controller + auto-follow observe ---
     @property
@@ -149,16 +166,16 @@ class CompareController:
         if self.video.is_gmeter_visible():
             self.video.set_pane_g(1, self._session_b.g_at_time(t_b))
         # Each pane's Δ vs the OTHER lap, at that pane's own track position.
-        if self._cross:
-            # Cross badge routing: pane A vs the reference, pane B (the reference) vs the primary.
-            self._set_pane_badge(0, self.session.delta_at_lap(a, t_a))
-            self._set_pane_badge(1, self.session.reference_delta_vs_lap(a, t_b))
-        elif a == b:
+        if self._is_same_lap_pair(a, b):
             # Degenerate pair: the pickers cross-exclude, so this is only reachable if the pair is
             # set programmatically. Say what it is — two "Δ +0.00 s" badges read as a dead-even
             # comparison of two laps, not as one lap measured against itself.
             self._set_pane_badge(0, None, same_lap=True)
             self._set_pane_badge(1, None, same_lap=True)
+        elif self._cross:
+            # Cross badge routing: pane A vs the reference, pane B (the reference) vs the primary.
+            self._set_pane_badge(0, self.session.delta_at_lap(a, t_a))
+            self._set_pane_badge(1, self.session.reference_delta_vs_lap(a, t_b))
         else:
             self._set_pane_badge(0, self.session.delta_between(a, b, t_a))
             self._set_pane_badge(1, self.session.delta_between(b, a, t_b))
@@ -172,6 +189,24 @@ class CompareController:
                     self.map.set_ghost_pos(float(xy[i, 0]), float(xy[i, 1]))
             else:
                 self.map.set_ghost_index(self.session.index_at_time(t_b))
+
+    def _is_same_lap_pair(self, a: int, b: int) -> bool:
+        """True when both panes are showing the SAME lap of the SAME recording.
+
+        Equal ids are not enough in cross mode: there the two ids index DIFFERENT recordings, so
+        lap 41 of one and lap 41 of the other is a perfectly ordinary comparison and badging it
+        "same lap" would be a new lie in place of the old one. It IS the same lap when the
+        reference was taken from this session's own footage — which set_reference_session refuses,
+        but which the badge must not depend on it refusing (QA-W2R-04: the check sat AFTER the
+        cross branch, so the badge was simply unreachable while comparing against a reference,
+        and a recording referenced against itself pinned the same lap of the same file in both
+        panes with both badged 'Δ +0.00 s' as though measured)."""
+        if a != b:
+            return False
+        if not self._cross:
+            return True
+        own = getattr(self.session, "reference_is_own_recording", None)
+        return bool(callable(own) and own())
 
     # The badge for the degenerate "both panes on the same lap" pair (see tick()).
     SAME_LAP_BADGE = "same lap"

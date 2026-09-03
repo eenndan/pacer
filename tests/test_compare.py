@@ -502,9 +502,16 @@ class _RecordingVideo:
         self.specs = {}
         self.badges = {}
         self.gmeter_laps = {}
+        self.exited = False
 
     def set_compare(self, spec_a, spec_b):
         self.specs[0], self.specs[1] = spec_a, spec_b
+
+    def exit_compare(self):
+        self.exited = True
+
+    def set_pane_g(self, side, g):
+        pass
 
     def reseed_pane(self, side, spec):
         self.specs[side] = spec
@@ -637,6 +644,84 @@ def test_l8_06_pane_badges_use_the_shared_delta_formatter():
     c._set_pane_badge(0, None)
     assert c.video.badges[0] == ("Δ —", None), c.video.badges[0]
     print("test_l8_06_pane_badges_use_the_shared_delta_formatter OK")
+
+
+# ------------------------------------ QA-W2R-04 / QA-W2R-05: compare vs a cross-recording reference
+def _cross_compare(*, own_recording: bool):
+    """The three-lap controller forced into CROSS mode (pane B resolves against a reference
+    Session), with the session reporting whether that reference came from THIS recording. Δ sources
+    are stubbed to fixed values so a badge can only be the branch that produced it."""
+    c, video, plots, ids = _three_lap_compare()
+    c.enter()
+    c._cross = True
+    c._session_b = c.session
+    c.session.reference_is_own_recording = lambda: own_recording
+    c.session.delta_at_lap = lambda lid, t: 0.4
+    c.session.reference_delta_vs_lap = lambda lid, t: -0.4
+    c.session.g_at_time = lambda t: None
+    return c, video, plots, ids
+
+
+def test_a_reference_of_the_same_recording_badges_the_same_lap_pair():
+    """QA-W2R-04. `tick()` tested `if self._cross:` BEFORE `elif a == b:`, so the same-lap badge was
+    unreachable in cross mode — a recording loaded as its own reference pinned the same lap of the
+    same file in both panes and badged both 'Δ +0.00 s' as though measured. Equal ids plus a
+    reference that IS this recording is one lap against itself, and must say so."""
+    from studio.compare_controller import CompareController
+
+    c, video, _plots, _ids = _cross_compare(own_recording=True)
+    c._compare_b = c._compare_a
+    c._compare_last_t = None
+    c.tick()
+    assert video.badges[0][0] == CompareController.SAME_LAP_BADGE, video.badges
+    assert video.badges[1][0] == CompareController.SAME_LAP_BADGE, video.badges
+    assert video.badges[0][1] is None and video.badges[1][1] is None
+    print("test_a_reference_of_the_same_recording_badges_the_same_lap_pair OK")
+
+
+def test_equal_lap_ids_across_two_recordings_are_not_the_same_lap():
+    """The other half, and the reason the reporter's "just reorder the branches" would have been a
+    new lie: in a NORMAL cross compare the two ids index DIFFERENT recordings, so lap 4 of mine
+    against lap 4 of yours is an ordinary comparison. It must keep its measured cross badges."""
+    c, video, _plots, _ids = _cross_compare(own_recording=False)
+    c._compare_b = c._compare_a
+    c._compare_last_t = None
+    c.tick()
+    assert video.badges[0] == (theme.format_delta_run(0.4), theme.delta_colour(0.4)), video.badges
+    assert video.badges[1] == (theme.format_delta_run(-0.4), theme.delta_colour(-0.4)), video.badges
+    print("test_equal_lap_ids_across_two_recordings_are_not_the_same_lap OK")
+
+
+def test_clearing_the_reference_leaves_the_cross_compare():
+    """QA-W2R-05. Clearing the reference dropped only the STICKY cross preference, so `_cross` and
+    `_session_b` outlived the reference they pointed at: the video quadrant kept a 'REFERENCE' pane
+    naming the cleared recording behind a dead 'Δ —' badge while every menu item said there was no
+    reference, and the reference Session's arrays stayed alive on `_session_b`."""
+    c, video, _plots, _ids = _cross_compare(own_recording=False)
+    other = object()
+    c._session_b = other                       # stand-in for the retained reference Session
+    assert c.active and c.cross and c.session_b is other
+
+    c.on_reference_cleared()
+    assert not c.cross, "the compare that was ABOUT the reference must not outlive it"
+    assert not c.active, "…and it is the whole compare that ends, not just the cross flag"
+    assert c.session_b is c.session, "pane B must stop resolving against the dropped reference"
+    assert video.exited, "the panes must actually come down"
+    assert not c._prefer_cross, "and the next compare toggle must not re-enter cross"
+    print("test_clearing_the_reference_leaves_the_cross_compare OK")
+
+
+def test_clearing_the_reference_leaves_a_same_recording_compare_alone():
+    """The reference was never what a SAME-recording compare was about, so clearing it must not
+    tear that compare down — only the sticky preference goes."""
+    c, video, _plots, _ids = _three_lap_compare()
+    c.enter()
+    c._prefer_cross = True
+    a, b = c.lap_a, c.lap_b
+    c.on_reference_cleared()
+    assert c.active and not c.cross and (c.lap_a, c.lap_b) == (a, b)
+    assert not video.exited and not c._prefer_cross
+    print("test_clearing_the_reference_leaves_a_same_recording_compare_alone OK")
 
 
 def test_compare_captions_and_picker_labels_are_one_based():

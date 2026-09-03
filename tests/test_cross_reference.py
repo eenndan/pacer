@@ -11,6 +11,9 @@ the asserts are the contract the feature must hold:
     without disturbing the local best;
   * the LAP-LENGTH band refuses a same-track recording segmented into laps of a different length
     (QA-W2R-02) while still admitting a genuinely comparable one;
+  * the IDENTITY guard refuses the recording already open as its own reference (QA-W2R-04) — every
+    other guard passes there — while admitting a different recording, and `reference_is_own_-
+    recording` reports that state for the surfaces downstream of the baseline;
   * clear_reference reverts to the local best;
   * DORMANT identity: with no reference, delta() is byte-identical to the pre-feature output (the
     "no change when off" invariant), checked here on a bare Session against a hand-computed baseline;
@@ -22,6 +25,7 @@ Run:  python tests/test_cross_reference.py
 """
 import os
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -338,6 +342,100 @@ def test_lap_length_band_is_skipped_when_no_per_lap_distances_exist():
     assert primary.set_reference_session(ref) is None, "unbandable data must not be refused"
     assert primary.has_reference()
     print("test_lap_length_band_skipped_without_distances OK")
+
+
+# ------------------------------------------------- QA-W2R-04: a recording as its OWN reference
+def give_paths(session, *paths):
+    """Give a bare Session the on-disk provenance `Session._source_paths` reads: a ChapterMap-shaped
+    stub (one Chapter per path) plus the first path as `video_path`, the way `Session.load` leaves
+    them. Paths need not exist — the guard compares realpaths, not file contents."""
+    session.chapters = SimpleNamespace(
+        chapters=[SimpleNamespace(path=p) for p in paths])
+    session.video_path = paths[0] if paths else None
+    return session
+
+
+def _comparable_pair(track="Track A"):
+    """A primary + a reference that pass every OTHER guard (same track name, same lap length, a
+    fittable loop) — so any refusal below can only be the identity guard."""
+    primary = make_session({4: odometer(120, 0.45, 0.0, 950.0)}, best=4, valid=[4], track=track)
+    ref = make_session({4: odometer(120, 0.45, 0.0, 950.0)}, best=4, valid=[4], track=track)
+    _stub_loops(primary, ref)
+    return primary, ref
+
+
+def test_a_recording_is_refused_as_its_own_reference():
+    """QA-W2R-04. The picker lists every .MP4 on disk including the one already open, and
+    `chapters.discover_siblings` expands a picked chapter to the SAME chain the session was loaded
+    from — so one wrong click makes a session its own Δ baseline. Every other guard PASSES there
+    (identical track, identical lap length), and the result is a lap compared with itself dressed
+    as a measurement. It must be refused, and the refusal must SAY which mistake it was."""
+    primary, ref = _comparable_pair()
+    give_paths(primary, "/recordings/GX010062.MP4", "/recordings/GX020062.MP4")
+    give_paths(ref, "/recordings/GX010062.MP4", "/recordings/GX020062.MP4")
+    reason = primary.set_reference_session(ref, source_label="recording 0062 · 2 chapters")
+    assert reason is not None, "a recording must not be its own reference"
+    assert "already have open" in reason, reason
+    assert not primary.has_reference(), "the refusal must leave the local best lap in place"
+    assert primary.reference_session() is None
+    print(f"test_a_recording_is_refused_as_its_own_reference OK: refused with {reason!r}")
+
+
+def test_a_partial_chapter_overlap_is_the_same_recording():
+    """Opening chapter 1 alone and referencing the whole three-chapter chain (or the reverse) is
+    still this recording against itself over the part they share — the guard is an OVERLAP test,
+    not set equality. Symmetric, and blind to how the path was spelled: a relative path, a symlink
+    directory and an absolute one all name the same file."""
+    for mine, theirs in ((["/rec/GX010062.MP4"],
+                          ["/rec/GX010062.MP4", "/rec/GX020062.MP4", "/rec/GX030062.MP4"]),
+                         (["/rec/GX010062.MP4", "/rec/GX020062.MP4"],
+                          ["/rec/GX020062.MP4"]),
+                         (["/rec/GX010062.MP4"], ["/rec/./sub/../GX010062.MP4"])):
+        primary, ref = _comparable_pair()
+        give_paths(primary, *mine)
+        give_paths(ref, *theirs)
+        reason = primary.set_reference_session(ref)
+        assert reason is not None and "already have open" in reason, (mine, theirs, reason)
+        assert not primary.has_reference()
+    print("test_a_partial_chapter_overlap_is_the_same_recording OK")
+
+
+def test_a_different_recording_of_the_same_track_is_still_admitted():
+    """The guard must cost the feature nothing: a DIFFERENT recording of the same circuit — the
+    whole point of a cross-recording reference — is admitted exactly as before, and so is a pair
+    with no known provenance at all (the synthetic doubles), which must never be ASSUMED to
+    collide."""
+    primary, ref = _comparable_pair()
+    give_paths(primary, "/recordings/GX010062.MP4")
+    give_paths(ref, "/recordings/GX010059.MP4")
+    assert primary.set_reference_session(ref, source_label="recording 0059") is None
+    assert primary.has_reference() and primary.reference_lap_id() == 4
+
+    bare_primary, bare_ref = _comparable_pair()
+    assert not bare_primary._source_paths() and not bare_ref._source_paths()
+    assert bare_primary.set_reference_session(bare_ref) is None, "unknown provenance must admit"
+    assert bare_primary.has_reference()
+    print("test_a_different_recording_of_the_same_track_is_still_admitted OK")
+
+
+def test_reference_is_own_recording_reports_the_state_the_ui_asks_about():
+    """The predicate the Corners dashes and the compare same-lap badge consult instead of ASSUMING
+    a reference is a different recording (QA-W2R-04's downstream half). False for a normal
+    reference, False when nothing is loaded, True when the retained reference Session shares this
+    session's footage."""
+    primary, ref = _comparable_pair()
+    give_paths(primary, "/recordings/GX010062.MP4")
+    give_paths(ref, "/recordings/GX010059.MP4")
+    assert not primary.reference_is_own_recording(), "dormant: no reference at all"
+    assert primary.set_reference_session(ref) is None
+    assert not primary.reference_is_own_recording(), "a different recording is not our own"
+    # Re-point the retained reference Session's provenance at ours: the predicate is live, so the
+    # UI can never be told "different recording" about footage that is in fact this one.
+    give_paths(ref, "/recordings/GX010062.MP4")
+    assert primary.reference_is_own_recording()
+    primary.clear_reference()
+    assert not primary.reference_is_own_recording(), "cleared: nothing to be our own"
+    print("test_reference_is_own_recording_reports_the_state_the_ui_asks_about OK")
 
 
 def test_no_valid_laps_reference_refused():

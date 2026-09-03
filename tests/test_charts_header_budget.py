@@ -58,7 +58,13 @@ _APP = QApplication.instance() or QApplication([])
 # the rest of the real-Qt view tests build on.
 from test_central_view_realqt import _real_central_view  # noqa: E402
 
-from studio import theme  # noqa: E402
+from studio import plots_view, theme  # noqa: E402
+from studio.central_view import (  # noqa: E402
+    _PLOTS_CHIP_BEST,
+    _PLOTS_CHIP_REF,
+    _PLOTS_LABEL_BEST,
+    _PLOTS_LABEL_REF,
+)
 
 
 def _settle(n=6):
@@ -159,6 +165,43 @@ def test_charts_bar_keeps_naming_the_baseline_when_the_toggles_must_yield():
         assert [b.text() for b, _n in view._plots_toggles] == ["", ""], "the toggles must yield"
         print(f"test_charts_bar_keeps_naming_the_baseline_when_the_toggles_must_yield OK "
               f"({label.text()!r})")
+
+
+def test_the_bar_names_a_cross_recording_reference_at_both_shipped_sizes():
+    """QA-W2R-03 + the width judgement it forces. The bar's label had exactly two states, so with a
+    reference loaded it painted "SPEED · Δ TO BEST" over a chart measured against ANOTHER
+    recording's lap. Adding the third state is the fix; choosing its WORDING is the risk, because
+    this bar is over-subscribed by construction and #122/#125 both lost the naming to a caption
+    that grew (L6-01 above).
+
+    So the wording is pinned by width, not by taste: the REF pair must be no wider than the BEST
+    pair it joins, which makes it impossible for this caption to cost the bar anything the shipped
+    one does not already cost. Measured, the alternative "SPEED · Δ TO REFERENCE" needs 1033 px
+    against an 815 px bar at 1280x800 and drops the fit pass all the way to its no-label floor
+    tier — the naming would VANISH at the smaller of the app's two shipped sizes, which is exactly
+    the regression this file exists to catch."""
+    for size, want in (((1440, 900), "SPEED · Δ TO REF"), ((1280, 800), "Δ REF")):
+        with _Themed(size) as view:
+            label = view._plots_label
+            budget = view._plots_budget or view._measure_plots_budget()
+            view._set_delta_baseline_label(plots_view.DELTA_BASELINE_REFERENCE)
+            assert label.isVisible(), f"baseline naming hidden at {size} with a reference loaded"
+            assert label.text() == want, (size, label.text())
+            assert "BEST" not in label.text(), label.text()
+            # Neither REF string may be wider than the BEST string at the same tier.
+            for ref_text, best_text in ((_PLOTS_LABEL_REF, _PLOTS_LABEL_BEST),
+                                        (_PLOTS_CHIP_REF, _PLOTS_CHIP_BEST)):
+                assert budget["labels"][ref_text] <= budget["labels"][best_text], (
+                    f"{ref_text!r} ({budget['labels'][ref_text]}px) is wider than "
+                    f"{best_text!r} ({budget['labels'][best_text]}px) — the bar cannot afford it")
+            # The abbreviation has the recording behind it (the bar has room for no tier that does).
+            assert label.toolTip(), "an abbreviated caption must carry its meaning on hover"
+            # ...and the naming still outranks the control text, the order L6-01 established.
+            assert [b.text() for b, _n in view._plots_toggles] == ["", ""]
+            # Back to the local best: the caption follows the baseline in BOTH directions.
+            view._set_delta_baseline_label(plots_view.DELTA_BASELINE_BEST)
+            assert "BEST" in label.text(), label.text()
+    print("test_the_bar_names_a_cross_recording_reference_at_both_shipped_sizes OK")
 
 
 def test_no_charts_control_is_ever_centre_clipped():
@@ -277,6 +320,7 @@ def test_hero_readout_explains_its_structural_zero_on_the_best_lap():
 def _run_all():
     test_charts_bar_names_the_chart_baseline_at_the_shipped_default()
     test_charts_bar_keeps_naming_the_baseline_when_the_toggles_must_yield()
+    test_the_bar_names_a_cross_recording_reference_at_both_shipped_sizes()
     test_no_charts_control_is_ever_centre_clipped()
     test_charts_header_children_never_overlap_at_the_column_minimum()
     test_charts_header_budget_matches_the_layouts_own_chrome()

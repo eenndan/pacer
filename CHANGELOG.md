@@ -67,6 +67,21 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Every surface that names the Δ baseline now names the one actually in use, and a
+  recording can no longer be its own reference.** With a cross-recording reference loaded,
+  the charts header, the Δ chart's y-axis and the Corners Δ column all still read "best"
+  while the numbers under them were measured against another recording's lap — the chart
+  legend, three inches away, named it correctly, so one panel gave two different baselines
+  the same word. The baseline is now plumbed as a *kind* (best · ideal · reference), so each
+  caption follows it (`Δ TO REF` / `Δ to ref (s)` / `Δref`), with the recording spelled out on
+  hover. Separately, the reference picker happily accepted the recording already open:
+  every other guard passes there, and the result was twelve corner rows of `+0.00` and a
+  cross-compare pinning the same lap of the same file in both panes, all presented as
+  measurements. That is refused now ("that is the recording you already have open"), and the
+  two surfaces that had assumed a reference is always a *different* recording — the Corners
+  self-Δ dashes and the compare same-lap badge — ask instead of assuming. Clearing the
+  reference also ends the cross-recording compare it was the entire point of, instead of
+  leaving a "REFERENCE" pane naming a recording the rest of the app says is gone.
 - **The map no longer draws a reference racing line at the wrong size.** The cross-recording
   reference ring was accepted on its fit RESIDUAL alone, but that fit is a *similarity* fit —
   it is free to resize the loop — so a mis-sized reference was simply shrunk onto your track
