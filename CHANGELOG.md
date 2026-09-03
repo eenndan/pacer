@@ -67,6 +67,26 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **The bundled track centerline is no longer armed as a gap-fill donor on circuits it has
+  nothing to do with.** `studio/mk_centerline.json` traces one circuit (Daytona Milton Keynes),
+  but the closed-loop fit that places it computed a residual, printed it, and handed the ring
+  back regardless — so `LapRenderCache.donors_for` offered it on every session, and on a
+  recording whose only valid lap has a dropout it was the *only* fill source. Measured on real
+  recordings: on Sandown it fitted at 39 % of the size it takes on its own track (RMS 9.4 m,
+  72 % coverage) and on an unnamed kart track at 30 % (RMS 6.0 m, 85 %). The fit is now an
+  admission test — the ring is returned only when its shape actually matches (coverage ≥ 98 %
+  and RMS ≤ 3 m, thresholds bracketing 65 real Daytona MK laps against 26 laps of two other
+  circuits) — and a refusal simply removes the donor, leaving `gapfill`'s own dashed spline
+  bridge. The Daytona MK behaviour is unchanged.
+- **An exported HTML report is the same document from any Mac.** The report's figures are
+  `QWidget.grab()` snapshots, which render at the screen's device pixel ratio, and they were
+  embedded with no stated width — so the browser laid each figure out at its *device* width and
+  the exported document silently described the machine that wrote it. Measured on one recording
+  exported twice from the same 1512 × 982 logical screen: figures 917 px wide from a non-Retina
+  screen and 1120 px from a Retina one (+22 %), the page 168 px longer, moving the page break in
+  a print or PDF. Each figure now states its logical width, so the layout is identical
+  everywhere while the extra Retina pixels stay in the file and keep the figure crisp when
+  zoomed or printed.
 - **Changing units or turning on colour-blind cues no longer kills the app after ordinary
   lap-panel use.** The Statistics page re-places its tiles into their grid whenever the column
   count changes — which its own scrollbar appearing makes happen the first time the page is

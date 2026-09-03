@@ -11,7 +11,14 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QBuffer, QEvent, QIODevice, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QActionGroup, QDesktopServices, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import (
+    QActionGroup,
+    QDesktopServices,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -2180,8 +2187,13 @@ class StudioWindow(QMainWindow):
         # report writer itself stays Qt-free and just embeds the bytes. The panels are reached
         # through the live central view. The map goes through the REPORT-flavoured grab so the
         # document doesn't carry the app's editing chrome (see _grab_report_map_png).
-        images = [("Track map", self._grab_report_map_png(self.view.map)),
-                  ("Speed · Δ to best", self._grab_png(self.view.plots))]
+        # Each snapshot carries the width the DOCUMENT must lay it out at — see
+        # _report_image_width for why the exported page would otherwise depend on this Mac's
+        # screen rather than on the session.
+        map_png = self._grab_report_map_png(self.view.map)
+        plots_png = self._grab_png(self.view.plots)
+        images = [("Track map", map_png, self._report_image_width(map_png)),
+                  ("Speed · Δ to best", plots_png, self._report_image_width(plots_png))]
         # The report is a HUMAN document whose embedded chart axis and map colour bar already read
         # in the display unit, so its lap table must too — a km/h table under an mph chart put two
         # different numbers for the same lap on one page. (The CSVs stay canonical SI: they are
@@ -2213,6 +2225,30 @@ class StudioWindow(QMainWindow):
         buf.open(QIODevice.WriteOnly)
         image.save(buf, "PNG")
         return bytes(buf.data())
+
+    def _report_image_width(self, png: bytes) -> int | None:
+        """The width, in CSS pixels, the HTML report must lay `png` out at — its LOGICAL size,
+        i.e. the device pixels the grab produced divided by this window's device pixel ratio.
+        None when the PNG can't be read (the caller then emits no width, as before).
+
+        WHY the export needs this at all. `QWidget.grab()` renders at the screen's device pixel
+        ratio, so the same panel on the same 1512 x 982 logical screen comes back 917 px wide on
+        a non-Retina Mac and 1834 px wide on a Retina one. The report embeds those bytes with no
+        width, so the browser lays each figure out at its DEVICE width and the exported document
+        silently describes the machine it was exported from: measured on one recording, the same
+        two figures laid out 917 px wide from DPR 1 and 1120 px wide from DPR 2 (+22 %, the clamp
+        being the stylesheet's own 70em column), making the page 168 px longer and moving the
+        print/PDF page break. Stating the logical width pins the LAYOUT while leaving the extra
+        pixels to do what they are for — the figure stays crisp when zoomed or printed, and the
+        browser only ever downsamples, never upsamples, because this width is by construction
+        <= the PNG's own. (The sibling exports that render into a fixed-size QImage — the g-meter
+        dial, the lap card, the overlay MP4 frame — are already byte-identical across DPRs; the
+        live-widget grab was the only path that leaked the screen into a file.)"""
+        image = QImage.fromData(png, "PNG")
+        if image.isNull() or image.width() <= 0:
+            return None
+        dpr = float(self.devicePixelRatioF() or 1.0)
+        return max(1, round(image.width() / dpr)) if dpr > 0 else image.width()
 
     # ------------------------------------------------ shareable lap card (image)
     # File ▸ Export ▸ "Lap card (image)…" / "Copy lap card" + the PB-toast one-tap share. The
