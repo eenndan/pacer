@@ -117,13 +117,36 @@ LEGEND_OFFSET = (-8, 8)
 # table's own MAX_COMPARE_LAPS (6) plus the always-on best lap, i.e. the largest legend the app can
 # legitimately produce; the previous 8 sat one row ABOVE that ceiling, so the guard could never fire.
 LEGEND_MAX_ROWS = 7
-# P7: the lower chart's two possible baselines. Δ-to-best is the normal one; when the BEST lap is
-# the only thing drawn its Δ against itself is identically zero — a flat, empty chart — so that one
-# case re-references the curve to the SYNTHETIC ideal-lap envelope (the same Δideal the hero
-# readout leads with). The y-axis label always names the active baseline, so the two can't be
-# confused; the legend entry (see _delta_curve_label) repeats it on the curve itself.
+# P7 / F7: the lower chart's THREE possible baselines. Δ-to-best is the normal one; when the BEST
+# lap is the only thing drawn its Δ against itself is identically zero — a flat, empty chart — so
+# that one case re-references the curve to the SYNTHETIC ideal-lap envelope (the same Δideal the
+# hero readout leads with); and with a cross-recording reference loaded the baseline is that other
+# recording's lap (see refresh()). The y-axis label always names the active baseline, so the three
+# can't be confused; the legend entry (see _delta_curve_label / _curve_label) repeats it on the
+# curve itself, naming the recording.
+#
+# QA-W2R-03: the reference case used to paint DELTA_LABEL_BEST — the same panel named two different
+# baselines with the same word, three inches apart. The wording is deliberately SHORT: this is a
+# left-axis label, so pyqtgraph rotates it and its length is consumed VERTICALLY, where the only
+# thing above it is the speed plot's own "speed (km/h)". Spelling the recording out here
+# ("Δ to ref recording 0059 · 3 chapters") measures 218 px against a 90 px Δ-plot label slot and
+# collides with it; "Δ to ref (s)" is NARROWER than the Δ-to-best label it replaces, so it cannot
+# make that worse, and the recording is named in full by the legend on the same chart, by the
+# status chip, and by the charts-header tooltip.
 DELTA_LABEL_BEST = "Δ to best (s)"
 DELTA_LABEL_IDEAL = "Δ to ideal (s)"
+DELTA_LABEL_REF = "Δ to ref (s)"
+# The Δ baseline the lower chart is drawing, as a KIND — the value deltaBaselineChanged carries and
+# the key of the labels above. A bool could only ever say best-or-ideal, which is why the reference
+# case had no caption of its own.
+DELTA_BASELINE_BEST = "best"
+DELTA_BASELINE_IDEAL = "ideal"
+DELTA_BASELINE_REFERENCE = "reference"
+DELTA_AXIS_LABELS = {
+    DELTA_BASELINE_BEST: DELTA_LABEL_BEST,
+    DELTA_BASELINE_IDEAL: DELTA_LABEL_IDEAL,
+    DELTA_BASELINE_REFERENCE: DELTA_LABEL_REF,
+}
 # L6-04: the strip's own caption, drawn INSIDE the reserved band. The left axis is titled
 # "speed (km/h)" and it is the only thing that used to say anything about this region — but the band
 # is a pedal ESTIMATE derived from the speed derivative, not a speed.
@@ -171,10 +194,12 @@ class PlotsView(QWidget):
     scrubEnded = Signal()
     # Fired when the shared x-axis mode flips; app re-pushes sector positions for the new mode (F2).
     modeChanged = Signal(str)  # the new mode: 'time' | 'distance'
-    # True when the lower chart switched to Δ-to-IDEAL (the best lap alone would be a flat zero
-    # line — P7). The panel HEADER must follow it, or the bar claims "Δ TO BEST" over an axis
-    # that reads "Δ to ideal (s)".
-    deltaBaselineChanged = Signal(bool)
+    # Which baseline the lower chart is now drawing: one of the DELTA_BASELINE_* kinds. The panel
+    # HEADER must follow it, or the bar claims "Δ TO BEST" over an axis that reads "Δ to ideal (s)"
+    # (P7) or over a curve measured against another recording entirely (F7 / QA-W2R-03). It carries
+    # the KIND rather than an `ideal: bool` for exactly that reason: a two-state flag has nowhere
+    # to put the third baseline, so the reference case silently reported itself as "best".
+    deltaBaselineChanged = Signal(str)
 
     def __init__(self, session: Session):
         super().__init__()
@@ -271,6 +296,9 @@ class PlotsView(QWidget):
         # P7: True while the Δ chart is referenced to the ideal lap instead of the best lap
         # (decided per refresh() — never on the ~30 Hz tick). Drives the y-label + legend wording.
         self._delta_ideal_mode = False
+        # ...and the same decision as a KIND, covering the cross-recording reference the bool
+        # cannot express (see DELTA_BASELINE_*). Refresh-time only; emitted on change.
+        self._delta_baseline_kind = DELTA_BASELINE_BEST
         self.p_delta.setLabel("left", DELTA_LABEL_BEST)
         self.p_delta.setLabel("bottom", "distance (m)")
         # Sub-second deltas otherwise auto-scale to a "(x0.001)" SI prefix; keep plain seconds.
@@ -754,12 +782,21 @@ class PlotsView(QWidget):
         # best lap is alone and its Δ to itself would be a flat zero line). Refresh-time only — the
         # ~30 Hz tick only moves cursors — and presentation-only: both series come from the
         # session's existing accessors, so no computed value changes.
-        was_ideal = self._delta_ideal_mode
+        was_kind = self._delta_baseline_kind
         delta, self._delta_ideal_mode = self._delta_series(draw_ids, baseline, delta, x_mode)
-        self.p_delta.setLabel(
-            "left", DELTA_LABEL_IDEAL if self._delta_ideal_mode else DELTA_LABEL_BEST)
-        if self._delta_ideal_mode != was_ideal:
-            self.deltaBaselineChanged.emit(self._delta_ideal_mode)
+        # The three baselines are mutually exclusive and decided in this order: the ideal swap only
+        # happens when the baseline is a LOCAL lap (see _delta_series, which refuses it outright for
+        # REFERENCE_ID), so a reference is never mislabelled as the ideal.
+        self._delta_baseline_kind = (
+            DELTA_BASELINE_IDEAL if self._delta_ideal_mode else
+            DELTA_BASELINE_REFERENCE if baseline == REFERENCE_ID else
+            DELTA_BASELINE_BEST)
+        self.p_delta.setLabel("left", DELTA_AXIS_LABELS[self._delta_baseline_kind])
+        # The axis label is short by necessity (see DELTA_LABEL_REF); the recording it abbreviates
+        # is on the axis's own hover.
+        self.p_delta.getAxis("left").setToolTip(self._delta_axis_tip())
+        if self._delta_baseline_kind != was_kind:
+            self.deltaBaselineChanged.emit(self._delta_baseline_kind)
         # L6-02: the ideal toggle is inert exactly while that baseline is active — decided here, with
         # the mode, so the button can never disagree with the chart under it.
         self._sync_chart_controls(plotted=True)
@@ -863,6 +900,17 @@ class PlotsView(QWidget):
         if not ideal:
             return delta, False
         return ideal, True
+
+    def _delta_axis_tip(self) -> str:
+        """The Δ axis's hover: the baseline SPELLED OUT, including the reference recording the
+        short axis label can only abbreviate as "ref"."""
+        if self._delta_baseline_kind == DELTA_BASELINE_IDEAL:
+            return ("Δ against the SYNTHETIC ideal lap — your own best sections stitched together, "
+                    "shown because the best lap alone would be a flat zero line against itself.")
+        if self._delta_baseline_kind == DELTA_BASELINE_REFERENCE:
+            tag = self.session.reference_label() or "the reference recording"
+            return f"Δ against the reference recording's best lap ({tag}), not this session's best."
+        return "Δ against this session's best lap (seconds; − is ahead)."
 
     def _delta_curve_label(self, lid: int) -> str:
         """P7 legend text for the ideal-referenced Δ curve: the normal lap label plus the baseline

@@ -37,6 +37,7 @@ os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtGui import QFontMetrics  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
@@ -55,24 +56,41 @@ class _StubSession:
     `laps` is {lap_id: (xs, speed_kmh, delta_s)}. Everything else (corner math, timing, media) is
     outside this widget's reach, so it is not faked."""
 
-    def __init__(self, laps, best=None, ideal=True):
+    def __init__(self, laps, best=None, ideal=True, reference=None):
         self._laps = {int(k): tuple(np.asarray(a, float) for a in v) for k, v in laps.items()}
         self._best = best
         self._ideal = ideal
+        # F7: the cross-recording reference's source label, or None. When set, `delta()` reports
+        # REFERENCE_ID as its baseline id, which is what makes the lower chart's baseline that
+        # other recording's lap (plots_view.refresh).
+        self._reference = reference
 
     def has_reference(self):
-        return False
+        return self._reference is not None
+
+    def reference_label(self):
+        return self._reference
+
+    def reference_lap_time(self):
+        return 68.2
 
     def best_lap_id(self):
         return self._best
 
     def delta(self, ids, x_mode="distance"):
-        sel = [i for i in ids if i in self._laps]
+        # With a reference loaded the baseline id IS the REFERENCE_ID sentinel, and its curve comes
+        # back alongside the local laps' (mirrors Session.delta's reference branch).
+        pool = dict(self._laps)
+        if self._reference is not None:
+            first = next(iter(self._laps.values()))
+            pool[plots_view.REFERENCE_ID] = (first[0], first[1] - 2.0, first[2] + 0.3)
+        sel = [i for i in ids if i in pool]
         if not sel:
             return None
-        speed = {i: (self._laps[i][0], self._laps[i][1]) for i in sel}
-        delta = {i: (self._laps[i][0], self._laps[i][2]) for i in sel}
-        return self._best, speed, delta
+        speed = {i: (pool[i][0], pool[i][1]) for i in sel}
+        delta = {i: (pool[i][0], pool[i][2]) for i in sel}
+        base = plots_view.REFERENCE_ID if self._reference is not None else self._best
+        return base, speed, delta
 
     def delta_to_ideal(self, ids, x_mode="distance"):
         if not self._ideal:
@@ -105,9 +123,9 @@ def _laps(n, points=400):
     return out
 
 
-def _view(n=6, best=0, ideal=True, size=(900, 520), select=None):
+def _view(n=6, best=0, ideal=True, size=(900, 520), select=None, reference=None):
     """A real, laid-out PlotsView over n stub laps, refreshed and settled."""
-    v = plots_view.PlotsView(_StubSession(_laps(n), best=best, ideal=ideal))
+    v = plots_view.PlotsView(_StubSession(_laps(n), best=best, ideal=ideal, reference=reference))
     v.resize(*size)
     v.show()
     v.set_laps(range(n) if select is None else select)
@@ -366,7 +384,63 @@ def test_empty_state_offers_a_next_action_and_disables_the_inert_controls():
     print("test_empty_state_offers_a_next_action_and_disables_the_inert_controls OK")
 
 
+# ============================================================================ QA-W2R-03
+def test_the_delta_axis_names_the_reference_it_is_measured_against():
+    """QA-W2R-03. With a cross-recording reference loaded, plots_view.refresh() DOES swap the
+    baseline to REFERENCE_ID — and then painted "Δ to best (s)" over it, three inches under a
+    legend reading "ref recording 0059 · 3 chapters". The same panel named two different baselines
+    with the same word, and "best" was the wrong one.
+
+    The wording is short by necessity: this is a LEFT axis, so pyqtgraph rotates the label and its
+    length is spent VERTICALLY, in a Δ plot ~124 px tall at 1280x800. Spelling the recording out
+    here measures 211 px and collides with the speed plot's own label above it, so the axis
+    abbreviates and the recording lives on the axis's hover (and on the legend, which already
+    names it)."""
+    v = _view(n=2, best=0, reference="recording 0059 · 3 chapters", select=[0])
+    axis = v.p_delta.getAxis("left")
+    assert v._delta_baseline_kind == plots_view.DELTA_BASELINE_REFERENCE, v._delta_baseline_kind
+    assert axis.labelText == plots_view.DELTA_LABEL_REF, axis.labelText
+    assert "best" not in axis.labelText, axis.labelText
+    # The abbreviation has the recording behind it, reachable without reading the legend.
+    assert "recording 0059 · 3 chapters" in axis.toolTip(), axis.toolTip()
+    # It is NARROWER than the label it replaces, so it cannot make the rotated-label collision the
+    # reporter measured any worse (measured 73 px -> 63 px).
+    fm = QFontMetrics(v.font())
+    assert (fm.horizontalAdvance(plots_view.DELTA_LABEL_REF)
+            <= fm.horizontalAdvance(plots_view.DELTA_LABEL_BEST)), (
+        plots_view.DELTA_LABEL_REF, plots_view.DELTA_LABEL_BEST)
+    print(f"test_the_delta_axis_names_the_reference_it_is_measured_against OK "
+          f"({axis.labelText!r})")
+
+
+def test_the_baseline_signal_carries_the_kind_not_a_two_state_flag():
+    """The cause behind every mis-named caption: the baseline was plumbed to the header as
+    `deltaBaselineChanged(bool)` — best or ideal — so the reference had nowhere to be reported and
+    arrived as "not ideal", i.e. "best". It must carry the KIND, and all three must round-trip."""
+    seen = []
+    v = _view(n=2, best=0, select=[0, 1])
+    v.deltaBaselineChanged.connect(seen.append)
+    assert v._delta_baseline_kind == plots_view.DELTA_BASELINE_BEST
+    v.set_laps([0])                       # best alone -> the P7 ideal swap
+    assert seen[-1] == plots_view.DELTA_BASELINE_IDEAL, seen
+    v.set_laps([0, 1])
+    assert seen[-1] == plots_view.DELTA_BASELINE_BEST, seen
+
+    ref = _view(n=2, best=0, reference="recording 0059 · 3 chapters", select=[0, 1])
+    got = []
+    ref.deltaBaselineChanged.connect(got.append)
+    ref.session._reference = None         # clear the reference under a live view
+    ref.refresh()
+    assert got == [plots_view.DELTA_BASELINE_BEST], got
+    ref.session._reference = "recording 0059 · 3 chapters"
+    ref.refresh()
+    assert got[-1] == plots_view.DELTA_BASELINE_REFERENCE, got
+    print(f"test_the_baseline_signal_carries_the_kind_not_a_two_state_flag OK ({seen} / {got})")
+
+
 def _run_all():
+    test_the_delta_axis_names_the_reference_it_is_measured_against()
+    test_the_baseline_signal_carries_the_kind_not_a_two_state_flag()
     test_ideal_toggle_is_live_only_where_it_can_draw()
     test_identity_curves_carry_a_cue_that_survives_deuteranopia()
     test_chart_series_stays_palette_independent()

@@ -310,7 +310,7 @@ class _FakeCornerSession:
     """The read surface CornerTable.refresh() touches — 12 corners on one lap, the shape that put
     501px of columns in a 447px quadrant."""
 
-    def __init__(self, n=12):
+    def __init__(self, n=12, reference=None):
         cl = [SimpleNamespace(label=f"C{i + 1}", direction=1 if i % 2 else -1, cid=i)
               for i in range(n)]
         st = [SimpleNamespace(time=2.75 + i * 0.1, delta=-0.12, apex_speed=44.9 + i,
@@ -320,9 +320,16 @@ class _FakeCornerSession:
                                        lap_corner_stats=lambda lap: st if lap == 0 else [],
                                        corner_session_bests=lambda: [s.time for s in st])
         self.driving = SimpleNamespace(lap_corner_grip=lambda lap: [0.77] * n)
+        self._reference = reference   # the cross-recording reference's label, or None
 
     def lap_count(self):
         return 1
+
+    def has_reference(self):
+        return self._reference is not None
+
+    def reference_label(self):
+        return self._reference
 
 
 def test_corner_columns_fit_the_default_quadrant():
@@ -382,19 +389,56 @@ def test_the_two_delta_headers_never_elide_to_the_same_string():
     clips. The fix is not "never elide" — it is "never elide two different quantities into the
     same string", which is what this asserts.
     """
-    from studio.lap_table import CORNER_COLUMNS, CornerTable
+    from studio.lap_table import CORNER_COLUMNS, CORNER_DELTA_REF_HEADER, CornerTable
     table = CornerTable(_FakeCornerSession())          # keep the ref: Qt deletes a temporary
     fm = QFontMetrics(table.table.horizontalHeader().font())
-    a_label, b_label = CORNER_COLUMNS[2], CORNER_COLUMNS[4]
-    assert a_label != b_label, (a_label, b_label)
-    for w in range(0, max(fm.horizontalAdvance(a_label), fm.horizontalAdvance(b_label)) + 8):
-        a = fm.elidedText(a_label, Qt.ElideRight, w)
-        b = fm.elidedText(b_label, Qt.ElideRight, w)
-        if max(len(a.rstrip("…")), len(b.rstrip("…"))) < 2:
-            continue        # a single glyph is all that fits at this width, for any label
-        assert a != b, (f'at {w}px "{a_label}" and "{b_label}" both paint "{a}" — a seconds '
-                        f"column and a km/h column rendered as one string")
+    # BOTH spellings of column 2: "Δbest" normally, "Δref" while a cross-recording reference is the
+    # Δ baseline (QA-W2R-03). The rename must not re-open what this guard closed.
+    for a_label in (CORNER_COLUMNS[2], CORNER_DELTA_REF_HEADER):
+        b_label = CORNER_COLUMNS[4]
+        assert a_label != b_label, (a_label, b_label)
+        for w in range(0, max(fm.horizontalAdvance(a_label), fm.horizontalAdvance(b_label)) + 8):
+            a = fm.elidedText(a_label, Qt.ElideRight, w)
+            b = fm.elidedText(b_label, Qt.ElideRight, w)
+            if max(len(a.rstrip("…")), len(b.rstrip("…"))) < 2:
+                continue    # a single glyph is all that fits at this width, for any label
+            assert a != b, (f'at {w}px "{a_label}" and "{b_label}" both paint "{a}" — a seconds '
+                            f"column and a km/h column rendered as one string")
+    # ...and the renamed header never costs the seven columns beside it width they do not have.
+    assert (fm.horizontalAdvance(CORNER_DELTA_REF_HEADER)
+            <= fm.horizontalAdvance(CORNER_COLUMNS[2])), (
+        f"{CORNER_DELTA_REF_HEADER!r} is wider than the {CORNER_COLUMNS[2]!r} it replaces "
+        f"({fm.horizontalAdvance(CORNER_DELTA_REF_HEADER)}px vs "
+        f"{fm.horizontalAdvance(CORNER_COLUMNS[2])}px) in a table that fits exactly at 1280")
     print("test_the_two_delta_headers_never_elide_to_the_same_string OK")
+
+
+def test_the_corner_delta_column_names_the_baseline_it_measures():
+    """QA-W2R-03. With a cross-recording reference loaded, EVERY Δ in this column is measured
+    against another recording's lap — "Δbest" is then simply false, and it was the only baseline
+    word on the Corners tab. The header must follow the live baseline in both directions, and
+    because the header is an abbreviation either way, the recording it abbreviates has to be
+    somewhere a reader can reach: the column's own tooltip."""
+    from studio.lap_table import (
+        CORNER_COLUMNS,
+        CORNER_DELTA_COL,
+        CORNER_DELTA_REF_HEADER,
+        CornerTable,
+    )
+
+    sess = _FakeCornerSession(reference="recording 0059 · 3 chapters")
+    table = CornerTable(sess)
+    table.set_lap(0)
+    hdr = table.table.horizontalHeaderItem
+    assert hdr(CORNER_DELTA_COL).text() == CORNER_DELTA_REF_HEADER, hdr(CORNER_DELTA_COL).text()
+    for col in (CORNER_DELTA_COL, 4):          # the Δ time column and the Δ apex-speed column
+        assert "recording 0059 · 3 chapters" in hdr(col).toolTip(), (col, hdr(col).toolTip())
+    # Clearing the reference puts the local wording back — the same table, no rebuild.
+    sess._reference = None
+    table.refresh()
+    assert hdr(CORNER_DELTA_COL).text() == CORNER_COLUMNS[CORNER_DELTA_COL]
+    assert "the best lap" in hdr(CORNER_DELTA_COL).toolTip(), hdr(CORNER_DELTA_COL).toolTip()
+    print("test_the_corner_delta_column_names_the_baseline_it_measures OK")
 
 
 def test_spacer_column_is_not_sortable():

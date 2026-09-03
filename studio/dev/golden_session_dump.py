@@ -11,8 +11,10 @@ fingerprinted too:
   * "reseg"  — after set_timing_lines(current lines) (a no-op-geometry re-segmentation, which
                still clears + recomputes every per-lap cache — proves invalidate() clears
                exactly what the old hand-clearing did);
-  * "ref"    — after set_reference_session(self) (a SELF reference: same track, valid best lap,
-               so it is adopted) — exercises the reference path everywhere a delta is drawn;
+  * "ref"    — after set_reference_session(a second load of the SAME file, re-labelled as another
+               recording) — exercises the reference path everywhere a delta is drawn. Same file, so
+               every number is identical to the self-reference this replaced; a literal self
+               reference is now refused by Session (QA-W2R-04);
   * "ref_cleared" — after clear_reference() (must revert byte-for-byte to "base");
   * "detected" — a RELOAD after seeding the (hermetic, empty) track DB from this session's own
                geometry, so the loader takes the detected-track path (stored lines adopted,
@@ -340,9 +342,19 @@ def main():
     s.set_timing_lines(s.start_line, s.sector_lines)
     result["reseg"] = fingerprint(s)
 
-    # SELF reference: same track + a valid best lap, so it is adopted. Exercises every delta path
-    # with a reference loaded.
-    reason = s.set_reference_session(s, source_label="self-ref")
+    # REFERENCE phase: exercises every delta path with a cross-recording reference loaded.
+    #
+    # The reference is a SECOND load of the same file, re-labelled as a distinct recording. It used
+    # to be `set_reference_session(s)` — the session itself — which `Session` now refuses outright
+    # ("a lap can't be a reference for itself"; QA-W2R-04), so that shortcut no longer reaches the
+    # code this phase exists to fingerprint. A second load is the deterministic stand-in for the
+    # real state — another recording of the same track, driven identically — and it is deliberately
+    # THE SAME FILE so every number this phase dumps is unchanged: same pipeline, same arrays, same
+    # best lap, hence a byte-identical fingerprint to the self-reference it replaces.
+    ref = Session.load([REAL])
+    ref.video_path = None          # a distinct recording's provenance, not this one's
+    ref.chapters = None
+    reason = s.set_reference_session(ref, source_label="self-ref")
     result["ref_set_reason"] = reason
     result["ref"] = fingerprint(s)
 

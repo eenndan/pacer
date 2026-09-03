@@ -1199,19 +1199,41 @@ class LapTable(QWidget):
 # that headers elide and values never do.
 CORNER_COLUMNS = ["Corner", "Time", "Δbest", "Apex", "Δapex", "Entry", "Exit",
                   theme.estimated_label("Grip")]
+# Column 2's header when a cross-recording REFERENCE is the Δ baseline (QA-W2R-03). The whole
+# column is then measured against another recording's lap and "Δbest" is simply false — the legend
+# on the chart beside it already spells the recording out, and this table's own header tooltip
+# names it (see _corner_col_tips). Written CLOSED for the reason above, and it elides to "Δr…"
+# against "Δapex"'s "Δa…", so it keeps the property the elide guard exists to protect; it is also
+# 8 px NARROWER than "Δbest", so it cannot squeeze the seven columns beside it.
+CORNER_DELTA_COL = 2
+CORNER_DELTA_REF_HEADER = "Δref"
 
 
-def _corner_col_tips(unit: str | None) -> list[str]:
+def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str]:
     """Full meaning + units per header, shown on hover (1:1 with CORNER_COLUMNS). The four speed
-    tips name the current display unit ("km/h" / "mph"); the rest are unit-independent."""
+    tips name the current display unit ("km/h" / "mph"); the rest are unit-independent.
+
+    `ref_label` is the cross-recording reference's source label when one is the Δ baseline: the two
+    Δ tips then name THAT recording, which is the only place in this table with room to spell it
+    out (the headers abbreviate to "Δref"/"Δapex")."""
     u = units.speed_label(unit)
+    # The two Δ tips, per baseline. Written out rather than interpolated so the no-reference
+    # wording stays exactly what it has always been, and the reference wording reads as English.
+    if ref_label:
+        delta_tip = (f"Δ vs the same corner on the reference recording's lap — {ref_label} "
+                     f"(seconds; − is faster)")
+        apex_tip = (f"Δ apex speed vs the reference recording's lap — {ref_label} "
+                    f"({u}; + is faster)")
+    else:
+        delta_tip = "Δ vs the best lap's same corner (seconds; − is faster)"
+        apex_tip = f"Δ apex speed vs the best lap ({u}; + is faster)"
     return [
         "Detected corner in track order (⟲ left / ⟳ right). Click a row to ring that corner "
         "on the map.",
         f"Time spent in the corner (seconds). {BEST_CORNER_TIP}",
-        "Δ vs the best lap's same corner (seconds; − is faster)",
+        delta_tip,
         f"Apex (minimum) speed through the corner ({u})",
-        f"Δ apex speed vs the best lap ({u}; + is faster)",
+        apex_tip,
         f"Corner entry speed ({u})",
         f"Corner exit speed ({u})",
         # ESTIMATED, not measured: the friction circle mixes the noisier longitudinal axis, so this is
@@ -1250,6 +1272,13 @@ SELF_DELTA = "—"
 # The caption that names the baseline. Shown ONLY in that state, so it costs a normal lap nothing.
 SELF_DELTA_TOOLTIP = ("The Δ columns compare each corner against the session-best lap. This IS "
                       "that lap, so select another one to see a Δ.")
+# ...and the same state reached through the REFERENCE path (QA-W2R-04): a reference loaded from the
+# recording already open makes the baseline THIS lap, so every Δ is again a self-zero rather than a
+# measurement. set_reference_session refuses that today; this wording exists because the dashes must
+# not depend on the refusal being there.
+SELF_REFERENCE_TOOLTIP = ("The Δ columns compare each corner against the reference recording's lap "
+                          "— but that reference is this same recording, so this lap is being "
+                          "compared with itself. Load a different recording as the reference.")
 # Corner identity column start width: "C12 ⟳" + the "Corner" header, fully readable (C3 —
 # the old Stretch mode crushed this row-identity column to a 42px sliver at default width).
 CORNER_NAME_COL_PX = 88
@@ -1407,11 +1436,25 @@ class CornerTable(QWidget):
                     item.setData(Qt.BackgroundRole, fill if r == row else None)
         self._hover_row = row
 
+    def _reference_label(self) -> str | None:
+        """The active cross-recording reference's source label, or None when the Δ baseline is this
+        session's own best lap. getattr-guarded for the lighter test doubles."""
+        has_reference = getattr(self.session, "has_reference", None)
+        if not (callable(has_reference) and has_reference()):
+            return None
+        label = getattr(self.session, "reference_label", None)
+        return (label() if callable(label) else None) or "reference recording"
+
     def _apply_corner_tips(self):
-        """(Re)apply the unit-dependent chrome: the per-column header tooltips AND the unit caption
-        above the grid, which name the same units. Called from set_speed_unit and, for the
-        constructor seam that writes `_speed_unit` directly, from central_view."""
-        for c, tip in enumerate(_corner_col_tips(self._speed_unit)):
+        """(Re)apply the baseline- and unit-dependent chrome: the Δ column's HEADER, the per-column
+        header tooltips AND the unit caption above the grid. Called from set_speed_unit, from
+        refresh() (the reference can change under a live table), and, for the constructor seam that
+        writes `_speed_unit` directly, from central_view. setText on the existing header item, never
+        setHorizontalHeaderLabels — the latter replaces the items and drops the tooltips below."""
+        ref_label = self._reference_label()
+        self.table.horizontalHeaderItem(CORNER_DELTA_COL).setText(
+            CORNER_DELTA_REF_HEADER if ref_label else CORNER_COLUMNS[CORNER_DELTA_COL])
+        for c, tip in enumerate(_corner_col_tips(self._speed_unit, ref_label)):
             if tip:
                 self.table.horizontalHeaderItem(c).setToolTip(tip)
         self.unit_note.setText(_corner_unit_caption(self._speed_unit))
@@ -1441,24 +1484,41 @@ class CornerTable(QWidget):
         return bool(valid()) if callable(valid) else True
 
     def _shows_the_baseline(self, stats: list) -> bool:
-        """True when the shown lap IS the Δ baseline, i.e. `corner_model.lap_corner_stats` passed
-        `ref=None` and every delta in `stats` is the documented self-zero rather than a measurement.
+        """True when the shown lap IS the Δ baseline, so every delta in `stats` is a self-zero
+        rather than a measurement.
 
-        Both halves of that sentence are checked. The lap rule mirrors corner_model's one baseline
-        choice and nothing else — the CROSS-RECORDING reference lap when one is loaded (then no
-        local lap is ever compared with itself), else the session best. The exact-zero test is
-        `ref=None`'s own signature (`corners.lap_corner_stats`: "None for the reference lap itself
-        -> deltas 0"), so a caller that hands us a real measurement always keeps it. Both are
-        getattr-guarded for the lighter test doubles."""
+        Both halves of that sentence are checked. The lap rule mirrors corner_model's baseline
+        choice and nothing else: the CROSS-RECORDING reference lap when one is loaded, else the
+        session best. The exact-zero test is `ref=None`'s own signature
+        (`corners.lap_corner_stats`: "None for the reference lap itself -> deltas 0"), so a caller
+        that hands us a real measurement always keeps it. Both are getattr-guarded for the lighter
+        test doubles.
+
+        QA-W2R-04: this used to return False the moment `has_reference()` was true, on the stated
+        assumption that a reference is always a DIFFERENT recording — "then no local lap is ever
+        compared with itself". That is an assumption, not a guard, and a reference loaded from this
+        session's own footage falsified it: the dashes and the caption switched off and twelve rows
+        of "+0.00" rendered as real numbers. So ask the session whether its reference is its own
+        recording (Session.reference_is_own_recording) instead of assuming it is not."""
         if self._lap_id is None or not stats:
+            return False
+        if not all(st.delta == 0.0 and st.apex_speed_delta == 0.0 for st in stats):
             return False
         has_reference = getattr(self.session, "has_reference", None)
         if callable(has_reference) and has_reference():
-            return False
+            return self._reference_lap_is_this_lap()
         best_lap_id = getattr(self.session, "best_lap_id", None)
-        if not callable(best_lap_id) or self._lap_id != best_lap_id():
+        return callable(best_lap_id) and self._lap_id == best_lap_id()
+
+    def _reference_lap_is_this_lap(self) -> bool:
+        """True when the active cross-recording reference is a lap of THIS recording and it is the
+        lap on screen — i.e. the reference baseline is this very lap. False (the shipped state) for
+        a reference from another recording, so nothing here is dashed."""
+        own = getattr(self.session, "reference_is_own_recording", None)
+        if not (callable(own) and own()):
             return False
-        return all(st.delta == 0.0 and st.apex_speed_delta == 0.0 for st in stats)
+        ref_lap_id = getattr(self.session, "reference_lap_id", None)
+        return callable(ref_lap_id) and ref_lap_id() == self._lap_id
 
     def refresh(self):
         """Rebuild the rows from the session's corner model (e.g. after a timing-line edit
@@ -1467,13 +1527,23 @@ class CornerTable(QWidget):
         # still holds the previous selection (app re-selects right after; until then, empty).
         ok = self._lap_id is not None and 0 <= self._lap_id < self.session.lap_count()
         stats = self.session.corners.lap_corner_stats(self._lap_id) if ok else []
+        # Name the Δ baseline on the column header itself: "Δbest" is false while a cross-recording
+        # reference is the baseline (QA-W2R-03). Re-applied every refresh because a reference can be
+        # loaded or cleared under a live table, and it re-tooltips with it so the header's
+        # abbreviation always has the recording behind it.
+        self._apply_corner_tips()
         # Every Δ on the baseline lap is a self-zero (see SELF_DELTA) — dash the two Δ columns and
         # caption which lap they would have compared against.
         baseline = self._shows_the_baseline(stats)
         self.baseline_note.setVisible(baseline)
         if baseline:
+            self_ref = self._reference_lap_is_this_lap()
             self.baseline_note.setText(
+                f"Lap {lap_label(self._lap_id)} is the reference lap — Δ is against itself."
+                if self_ref else
                 f"Lap {lap_label(self._lap_id)} is the session best — Δ is against itself.")
+            self.baseline_note.setToolTip(
+                SELF_REFERENCE_TOOLTIP if self_ref else SELF_DELTA_TOOLTIP)
         # Empty state: name the reason — a bare grid reads as broken. THREE cases, because "nothing
         # is selected" and "there is nothing selectable" are different recordings: on a session with
         # no valid lap at all, "Select a lap" is an instruction that cannot be followed (L3-08), so

@@ -115,8 +115,13 @@ class _FakeCornerSession:
     stats it hands back for that lap carry the model's ref=None self-zeros — the exact pairing the
     real corner model produces."""
 
-    def __init__(self, n=4, best=0, valid=(0, 1), reference=False):
-        self.best, self._valid, self._reference = best, list(valid), reference
+    def __init__(self, n=4, best=0, valid=(0, 1), reference=False, reference_of_self=False):
+        # reference_of_self: the reference was loaded from THIS recording, so its lap IS the local
+        # best and every Δ against it is a self-zero again (QA-W2R-04). set_reference_session
+        # refuses that state; the table must not depend on the refusal existing.
+        self.best, self._valid = best, list(valid)
+        self._reference = reference or reference_of_self
+        self._reference_of_self = reference_of_self
         cl = [SimpleNamespace(label=f"C{i + 1}", direction=1 if i % 2 else -1, cid=i)
               for i in range(n)]
         self.corners = SimpleNamespace(
@@ -130,8 +135,9 @@ class _FakeCornerSession:
         if lap_id is None or lap_id not in self._valid:
             return []
         # The baseline lap's own stats are all-zero deltas unless a cross-recording reference is
-        # loaded, in which case even it is measured against that (corner_model.lap_corner_stats).
-        if lap_id == self.best and not self._reference:
+        # loaded, in which case even it is measured against that (corner_model.lap_corner_stats)
+        # — UNLESS that reference is this same recording's own lap, when the zeros are back.
+        if lap_id == self.best and (self._reference_of_self or not self._reference):
             return [_stat() for _ in range(self._n)]
         return [_stat(delta=0.11 + i * 0.01, apex_delta=-0.9) for i in range(self._n)]
 
@@ -146,6 +152,15 @@ class _FakeCornerSession:
 
     def has_reference(self):
         return self._reference
+
+    def reference_label(self):
+        return "recording 0059 · 3 chapters" if self._reference else None
+
+    def reference_is_own_recording(self):
+        return self._reference_of_self
+
+    def reference_lap_id(self):
+        return self.best if self._reference_of_self else 99
 
 
 def test_corner_deltas_dash_on_the_lap_they_would_compare_with_itself():
@@ -181,6 +196,31 @@ def test_a_cross_recording_reference_keeps_every_local_delta():
     assert not ct.baseline_note.isVisible()
     assert ct.table.item(0, _DELTA_BEST_COL).text() == "+0.11"
     print("test_a_cross_recording_reference_keeps_every_local_delta OK")
+
+
+def test_a_reference_of_this_same_recording_still_dashes_the_self_deltas():
+    """QA-W2R-04. `_shows_the_baseline` returned False the moment `has_reference()` was true, on
+    the stated assumption that a reference is always a DIFFERENT recording — "then no local lap is
+    ever compared with itself". A recording loaded as its OWN reference falsified that: the
+    dashes and the caption switched off and twelve rows of exact zeros rendered as "+0.00"/"+0.0",
+    which is the very defect the dashes exist to prevent, reached through another door.
+
+    The state is refused at load now, but the table must not depend on that: it asks the session
+    whether the reference is its own recording rather than assuming it is not."""
+    sess = _FakeCornerSession(reference_of_self=True)
+    ct = _shown(LT.CornerTable(sess))
+    ct.set_lap(0)                                     # == best == the reference lap
+    tb = ct.table
+    for c in (_DELTA_BEST_COL, _DELTA_APEX_COL):
+        got = [tb.item(r, c).text() for r in range(tb.rowCount())]
+        assert got == [LT.SELF_DELTA] * tb.rowCount(), (c, got)
+    # ...and the caption names the REFERENCE as the baseline, not "the session best" — the reason
+    # the Δ is against itself is different, so the sentence is.
+    assert ct.baseline_note.isVisible()
+    assert "reference lap" in ct.baseline_note.text(), ct.baseline_note.text()
+    assert "Lap 1" in ct.baseline_note.text(), ct.baseline_note.text()
+    assert ct.baseline_note.toolTip() == LT.SELF_REFERENCE_TOOLTIP
+    print("test_a_reference_of_this_same_recording_still_dashes_the_self_deltas OK")
 
 
 def test_zero_valid_laps_never_asks_for_a_lap():

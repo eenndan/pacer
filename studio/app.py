@@ -2584,12 +2584,14 @@ class StudioWindow(QMainWindow):
         session's own best lap."""
         if not hasattr(self, "session") or not self.session.has_reference():
             return
-        self.session.clear_reference()
-        # Drop the sticky "prefer cross-recording compare" preference so a later compare toggle
-        # enters same-recording compare (there's no reference left).
+        # Leave a cross-recording compare FIRST: it exists only for the reference, and it holds the
+        # reference Session on pane B (QA-W2R-05). Done before clear_reference() so the controller's
+        # exit path still sees the reference it is unwinding, and before _apply_reference_change()
+        # so the single rebuild below lands on the restored single-pane state.
         view = getattr(self, "view", None)
         if view is not None:
-            view.compare.clear_prefer_cross()
+            view.compare.on_reference_cleared()
+        self.session.clear_reference()
         self._apply_reference_change()
 
     def _enter_cross_compare(self):
