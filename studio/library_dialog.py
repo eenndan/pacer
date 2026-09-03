@@ -26,7 +26,10 @@ Layout::
 SIZE: the TABLE is the reason this dialog exists, so it takes the pixels — the PB chart is held to a
 150–200 px band (it yields first when space is tight and stops growing once it has enough), and the
 dialog opens tall enough to browse a real library, clamped to the screen and replaced by the user's
-own size once they resize it (persisted through ``studio.prefs``).
+own size once they resize it (persisted through ``studio.prefs``). A remembered size is stored as
+given but FLOORED on the way back in (``_MIN_BROWSABLE_H``), so one drag to the layout minimum can't
+leave every future open showing 0.97 of one row; the privacy paragraph is a ``WrapLabel`` so the
+layout's own minimum accounts for the height its text really wraps to.
 
 Date/Best/Theoretical sort numerically via ``_NumItem``; Track sorts as text. The Open button +
 a double-click re-open the selected row's recording (disabled for a missing/junk row). Every time
@@ -68,6 +71,7 @@ from . import APP_NAME, prefs, theme
 from . import library as _library
 from ._signal import fmt_time
 from .theme import C
+from .widgets import WrapLabel
 
 # Column layout — index → header. Date/Best/Theoretical sort numerically (a key in NUM_ROLE);
 # Track sorts as text.
@@ -129,6 +133,18 @@ _DEFAULT_SIZE = (880, 860)
 # best-vs-date points and one empty-state sentence, so it has no use for more; without a ceiling it
 # grew with every pixel the dialog gained, at the list's expense.
 _PB_PLOT_MAX_H = 200
+# The FLOOR under the height the dialog OPENS at. A remembered size is stored verbatim, and Qt lets
+# the user drag the dialog all the way to the layout's own minimum — where the table's viewport is
+# 29 px, 0.97 of ONE row of a 201-recording library, and (since the size is remembered) every future
+# open comes back that way. 680 px is the measured height at which the table shows 5 rows at the
+# dialog's NARROWEST width, 581 px, where the privacy note wraps tallest and so leaves the list
+# least; a wider dialog gets more (6.2 rows at 880). It is deliberately far below the 860 px default
+# — a user is allowed to want a small window — and exists only to rule out the sizes at which a list
+# dialog stops showing a list. 5 rows is the bound this dialog already argued for when it rejected a
+# 4.6-row default as too little: the library should never OPEN showing less list than the size that
+# was called broken. The screen still overrules it (_fit_to_screen runs after), and it is applied to
+# the size being OPENED, never to the size being stored — see _apply_geometry.
+_MIN_BROWSABLE_H = 680
 # Left over after clamping to the screen: room for the menu bar, the Dock and the window frame.
 _SCREEN_MARGIN = 60
 # Floors the clamp will not go below, so a screen that reports something tiny/bogus can never
@@ -409,8 +425,13 @@ class LibraryDialog(QDialog):
         root.addWidget(self.pb_plot, 2)
 
         # ----- privacy disclosure (calm, factual: it's all local/offline)
-        privacy = QLabel(PRIVACY_NOTE)
-        privacy.setWordWrap(True)
+        # A WrapLabel, not a wrapped QLabel: this paragraph is the tallest thing in the dialog that
+        # a layout cannot measure on its own (see studio/widgets.py). As a plain QLabel it was
+        # given ONE line's worth of room in the layout's minimum, so at the dialog's own minimum
+        # the note painted 45 px past its box — through the button row, taking the two sentences
+        # about tracks.json with it. The wrapper makes the dialog's minimum height include the
+        # note's REAL wrapped height at whatever width it is being shown at.
+        privacy = WrapLabel(PRIVACY_NOTE)
         privacy.setFont(theme.mono_font(11))
         privacy.setStyleSheet(f"color: {C.text_dim};")
         root.addWidget(privacy)
@@ -469,18 +490,28 @@ class LibraryDialog(QDialog):
 
     # ------------------------------------------------------------------ size
     def _apply_geometry(self):
-        """Open at the user's remembered size when they have one, else at the default — both clamped
-        to the screen this dialog is opening on. Records the size it opened at so ``done`` only
-        persists a size the user actually CHANGED: a dialog that stores its own default on first
-        close would freeze that default forever, and every future user of a never-resized library
-        would be pinned to whatever this build shipped. Guarded end-to-end — a prefs failure must
-        never stop the library opening."""
+        """Open at the user's remembered size when they have one, else at the default — floored so
+        the list is still a list, then clamped to the screen this dialog is opening on. Records the
+        size it opened at so ``done`` only persists a size the user actually CHANGED: a dialog that
+        stores its own default on first close would freeze that default forever, and every future
+        user of a never-resized library would be pinned to whatever this build shipped. Guarded
+        end-to-end — a prefs failure must never stop the library opening.
+
+        The floor is applied to the size being OPENED, not to the size being STORED. prefs keeps
+        what the user asked for and each open applies the constraints of the moment — exactly the
+        contract ``_fit_to_screen`` already has in the other direction (a size remembered on a big
+        monitor is cut down on the laptop panel and comes back in full when the monitor does).
+        Refusing to STORE a too-small size would instead discard the user's request, and discard it
+        silently: they would resize, close, re-open, and find the app had quietly forgotten. Only
+        the height is floored — the width's minimum is already set by the button row below, and at
+        that width all four columns are on screen."""
         try:
             remembered = prefs.library_size()
         except Exception as exc:  # noqa: BLE001 — an unreadable pref just means "use the default"
             print(f"studio: library size not restored ({exc!r}).", flush=True)
             remembered = None
         width, height = remembered or _DEFAULT_SIZE
+        height = max(height, _MIN_BROWSABLE_H)
         screen = self.screen() or QGuiApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
@@ -491,7 +522,10 @@ class LibraryDialog(QDialog):
     def done(self, result: int):
         """Remember a size the user changed on the way out — both Open (accept) and Close/Escape
         (reject) route through here — so a library enlarged to browse 200 recordings does not shrink
-        back to the default on the next open. ``prefs.set_library_size`` is itself fully guarded."""
+        back to the default on the next open. Stored VERBATIM, including a size below the browsable
+        floor: what the user asked for is theirs to keep, and ``_apply_geometry`` is where the floor
+        (and the screen clamp) are applied to what actually opens. ``prefs.set_library_size`` is
+        itself fully guarded."""
         if (self.width(), self.height()) != getattr(self, "_opened_size", None):
             prefs.set_library_size(self.width(), self.height())
         super().done(result)

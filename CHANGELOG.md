@@ -78,6 +78,19 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   certifies only the geometry it was attached to. Undo also says which kind of line it
   restored, instead of naming the start/finish line after a sector-only edit, and the
   map's "⌘Z puts them back" plate retracts the moment ⌘Z is pressed.
+- **The Library dialog now fits the privacy note it ships with, and never re-opens too small
+  to show the library.** Naming `tracks.json` in that note made it 194 characters longer, but
+  a word-wrapped label reports a *one-line* height to the layout — so the dialog's minimum
+  size never grew, and at the smallest size a drag can reach the note needed 128 px in the
+  83 px it was given: 45 px of it painted through the button row, taking both new sentences
+  about `tracks.json` with it. The paragraph is now a `WrapLabel` (the wrapper the Help cards
+  already use, promoted to `studio/widgets.py`), so the dialog's own minimum includes the
+  height its text really wraps to. Separately, the size the dialog remembers had no floor: one
+  drag to the corner stored a size showing 0.97 of one row of a 201-recording library, and
+  every future open came back that way with nothing to undo it. What is *stored* is still
+  exactly what the user left — the floor is applied to what *opens*, so the app is never
+  caught silently forgetting a resize — and the library now opens showing at least five
+  recordings, or as many as the screen allows.
 
 - **Every surface that names the Δ baseline now names the one actually in use, and a
   recording can no longer be its own reference.** With a cross-recording reference loaded,
