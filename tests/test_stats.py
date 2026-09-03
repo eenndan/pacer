@@ -39,7 +39,15 @@ import numpy as np
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from _qtapp import themed_app  # noqa: E402
 from _synthetic import bare_session, seed_cols  # noqa: E402
+
+# The page's typography and its mute cue are BOTH font-resolution behaviour, so the whole Qt half
+# of this file runs in the app's real regime. Unthemed, `tile.value.font()` echoed back whatever
+# the constructor asked for and every assertion below about a size or an italic was a statement
+# about Qt's default stack — the tiles asked for 15/12, painted 13/13 in the app, and this file
+# saw 15/12 and passed. See tests/_qtapp.py.
+_APP = themed_app()
 
 from studio.stats import (  # noqa: E402
     MIN_KEPT_FRAC,
@@ -556,8 +564,12 @@ def test_bare_session_stats_property_wires_the_service():
 
 # --------------------------------------------------------------- the StatsView page (Qt)
 def _app():
-    from PySide6.QtWidgets import QApplication
-    return QApplication.instance() or QApplication([])
+    return _APP
+
+
+def _settle(n=6):
+    for _ in range(n):
+        _APP.processEvents()
 
 
 def _fake_stats_service(*, has_g=True, laps=True):
@@ -709,6 +721,40 @@ def test_stats_view_hides_signal_absent_sections():
     print("test_stats_view_hides_signal_absent_sections OK")
 
 
+def test_stats_tiles_paint_a_value_over_a_smaller_caption():
+    """W10-01: the page's whole type hierarchy, measured as PAINTED — the tile value at
+    TILE_VALUE_PT semibold over a CAPTION-sized caption, and the three page-level captions
+    (DATA TRUST, the no-g note, the g-g key) at CAPTION too.
+
+    Shipped, every one of the 29 tiles painted 13 px over 13 px: the theme's base QSS rule carried
+    `font-size`, which outranks a setFont, so "1:08.771" and "best lap" had the same cap height and
+    only colour separated them. This file could not see it — it had no theme, so `setFont` survived
+    and it measured a page the app never rendered. Hence fontInfo(), not font(), and hence
+    tests/_qtapp.py at the top of the file."""
+    _app()
+    from studio import theme
+    from studio.stats_panel import TILE_VALUE_PT, StatsView, _Tile
+
+    v = StatsView(_fake_view_session())
+    v.resize(900, 900)
+    v.show()
+    _settle()
+    tiles = v.findChildren(_Tile)
+    assert len(tiles) >= 20, len(tiles)                    # the whole page, not one group
+    painted = {(t.value.fontInfo().pixelSize(), t.caption.fontInfo().pixelSize()) for t in tiles}
+    assert painted == {(TILE_VALUE_PT, theme.CAPTION)}, painted
+    assert TILE_VALUE_PT > theme.CAPTION, "the value must outrank its own caption"
+    # The emphasis half of the hierarchy: a semibold value over a regular caption.
+    assert all(int(t.value.fontInfo().weight()) >= int(theme.W_SEMIBOLD) for t in tiles)
+    assert all(int(t.caption.fontInfo().weight()) < int(theme.W_SEMIBOLD) for t in tiles)
+    # The page's three prose captions share the caption size (they are notes, not body copy).
+    for lab in (v.trust_label, v.no_gmeter_note, v.gg_key):
+        assert lab.fontInfo().pixelSize() == theme.CAPTION, lab.fontInfo().pixelSize()
+    v.hide()
+    print(f"test_stats_tiles_paint_a_value_over_a_smaller_caption OK ({len(tiles)} tiles, "
+          f"{painted.pop()} px)")
+
+
 def test_stats_view_target_tiles_mute_on_provisional_and_degraded_timing():
     """The theoretical / rolling tiles are stitched TARGETS, not laps anyone drove, so they share
     the lap timing's authority — the behaviour they carried in the Laps footer they moved from.
@@ -716,11 +762,18 @@ def test_stats_view_target_tiles_mute_on_provisional_and_degraded_timing():
     PROVISIONAL timing (an arbitrary start line) or a DEGRADED clock (media-clock fallback /
     low-GPS estimate) renders them muted + italic with the explaining note prepended to the
     tooltip; Verified AND high-quality renders them as normal tiles. The measured PACE tiles
-    beside them stay unmuted — those ARE laps you drove."""
+    beside them stay unmuted — those ARE laps you drove.
+
+    W10-02 — every italic assertion here reads fontInfo(), the font Qt PAINTS, not font(), the one
+    the widget was asked for, and every one is made on a view fresh out of the constructor with no
+    extra refresh(). Under the theme those two distinctions were the whole test: this guard used to
+    pass only because the file was unthemed, and the app only painted the cue because CentralView
+    refreshes a second time after a load."""
     _app()
+    from studio import theme
     from studio.data_quality import MEDIA_CLOCK_FALLBACK, TimingQuality
     from studio.lap_table import PROVISIONAL_TOOLTIP, estimated_timing_tooltip
-    from studio.stats_panel import StatsView
+    from studio.stats_panel import TILE_VALUE_PT, StatsView
     from studio.theme import PROVISIONAL_COLOR, C
 
     targets = lambda v: (v.t_theoretical, v.t_rolling)  # noqa: E731 — a local alias, not a def
@@ -728,34 +781,42 @@ def test_stats_view_target_tiles_mute_on_provisional_and_degraded_timing():
     # Verified + clean clock: normal tiles.
     v = StatsView(_fake_view_session())
     for t in targets(v):
-        assert not t.value.font().italic()
+        assert not t.value.fontInfo().italic()
         assert C.text in t.value.styleSheet(), t.value.styleSheet()
-    assert not v.t_best.value.font().italic(), "a measured lap time must never mute"
+    assert not v.t_best.value.fontInfo().italic(), "a measured lap time must never mute"
 
-    # Provisional start line: muted + italic, tooltip led by the provisional note.
+    # Provisional start line: muted + italic, tooltip led by the provisional note. Asserted on the
+    # tile as the CONSTRUCTOR leaves it — a second refresh() must not be what makes the cue appear.
     sess = _fake_view_session()
     sess.timing_verified = False
     v = StatsView(sess)
     for t in targets(v):
-        assert t.value.font().italic(), "provisional target tile must be italic"
+        assert t.value.fontInfo().italic(), "provisional target tile must PAINT italic"
         assert PROVISIONAL_COLOR in t.value.styleSheet(), t.value.styleSheet()
         assert t.toolTip().startswith(PROVISIONAL_TOOLTIP), t.toolTip()
-    assert not v.t_best.value.font().italic(), "the measured best lap stays unmuted"
+    assert not v.t_best.value.fontInfo().italic(), "the measured best lap stays unmuted"
 
     # Verified but DEGRADED clock: the orthogonal axis — muted with the estimated note instead.
     sess = _fake_view_session()
     sess.timing_quality = TimingQuality(clock=MEDIA_CLOCK_FALLBACK)
     v = StatsView(sess)
     for t in targets(v):
-        assert t.value.font().italic(), "degraded target tile must be italic"
+        assert t.value.fontInfo().italic(), "degraded target tile must PAINT italic"
         assert t.toolTip().startswith(estimated_timing_tooltip(sess.timing_quality)), t.toolTip()
 
     # And it RESTORES: flipping back to verified + clean and refreshing un-mutes in place.
     sess.timing_quality = TimingQuality()
     v.refresh()
     for t in targets(v):
-        assert not t.value.font().italic(), "restored target tile must not stay italic"
+        assert not t.value.fontInfo().italic(), "restored target tile must not stay italic"
         assert C.text in t.value.styleSheet(), t.value.styleSheet()
+    # ...and muting never costs the tile its type: the cue is the slant and the colour, not a
+    # size change (the value stays TILE_VALUE_PT over a CAPTION caption in both states).
+    sess.timing_verified = False
+    v.refresh()
+    for t in targets(v):
+        assert t.value.fontInfo().pixelSize() == TILE_VALUE_PT, t.value.fontInfo().pixelSize()
+        assert t.caption.fontInfo().pixelSize() == theme.CAPTION
     print("test_stats_view_target_tiles_mute_on_provisional_and_degraded_timing OK")
 
 

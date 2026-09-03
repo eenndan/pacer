@@ -458,6 +458,18 @@ def test_the_options_hint_quantifies_the_size_and_the_work():
     print("test_the_options_hint_quantifies_the_size_and_the_work OK")
 
 
+def _clear_export_preset():
+    """Drop the persisted export preset so a guard can start from the app's own defaults.
+
+    The preset is a REAL preference (redirected to this file's temp tree at the top), shared by
+    every test in the process and by every run on a machine where the user has ever chosen one.
+    A test that assumes an unstored state has to say so — and clear it."""
+    data = prefs.load()
+    for key in (StudioWindow._PREF_EXPORT_RES, StudioWindow._PREF_EXPORT_QUALITY):
+        data.pop(key, None)
+    prefs.save(data)
+
+
 def _run_options_dialog(win, on_dialog):
     """Open the real _ask_export_options with QDialog.exec replaced by `on_dialog`."""
     orig = QDialog.exec
@@ -470,17 +482,32 @@ def _run_options_dialog(win, on_dialog):
 
 def test_the_hint_refreshes_on_the_quality_combo_too():
     """Only Resolution was wired to _update_hint, so changing the quality — the choice the copy
-    sells hardest — left the estimate stale."""
+    sells hardest — left the estimate stale.
+
+    W10-06 — this used to open the dialog and go straight to `setCurrentIndex(1)`, assuming it
+    started at High. The preset is a real persisted preference (studio.prefs), so once ANY earlier
+    test (or any user who has ever picked "Standard") has stored index 1, that call is a no-op and
+    the guard asserts a change nothing requested: green in the file's hand-written order, red in
+    any other, and blind to the regression it exists for on a machine where the preference is
+    already Standard. It now clears the two preset keys and drives each combo off a KNOWN index,
+    so the verdict does not depend on what ran before it."""
+    _clear_export_preset()
     win = _window(FakeSession())
     texts = []
 
     def on_dialog(dlg):
         hint = [w for w in dlg.findChildren(QLabel) if "Output:" in w.text()][0]
         combos = dlg.findChildren(QComboBox)
+        # The starting state is asserted, not assumed — the default preset is the top of each list.
+        assert (combos[0].currentIndex(), combos[1].currentIndex()) == (1, 0), (
+            "with no stored preset the dialog must open at 1080p/High, got "
+            f"{(combos[0].currentIndex(), combos[1].currentIndex())}")
         texts.append(hint.text())
-        combos[1].setCurrentIndex(1)          # Quality: High -> Standard
+        combos[1].setCurrentIndex(1)          # Quality: High -> Standard (a real transition)
+        assert combos[1].currentIndex() == 1
         texts.append(hint.text())
-        combos[0].setCurrentIndex(0)          # Resolution: 1080p -> 720p
+        combos[0].setCurrentIndex(0)          # Resolution: 1080p -> 720p (a real transition)
+        assert combos[0].currentIndex() == 0
         texts.append(hint.text())
         return QDialog.Rejected
 

@@ -662,11 +662,18 @@ class StatsView(QWidget):
         provisional = not getattr(session, "timing_verified", True)
         quality = getattr(session, "timing_quality", None)
         muted = provisional or bool(quality is not None and quality.degraded)
-        font = tile.value.font()
-        font.setItalic(muted)
-        tile.value.setFont(font)
+        # COLOUR FIRST, THEN FONT — not cosmetic ordering. setStyleSheet on a NEW string repolishes
+        # the label, and the repolish re-resolves its font, dropping the italic bit a setFont set a
+        # moment earlier. The other way round the first refresh of a fresh view painted the muted
+        # target tile upright, and only a SECOND refresh() made it italic: the app happened to get
+        # that second call from CentralView after a load, so the cue shipped — but nothing on the
+        # single-refresh paths (a tab switch, a unit flip, a bare StatsView) did. Setting the
+        # stylesheet first means the repolish is already spent when the font lands.
         tile.value.setStyleSheet(
             f"color: {theme.PROVISIONAL_COLOR if muted else C.text};")
+        font = theme.mono_font(TILE_VALUE_PT, theme.W_SEMIBOLD)
+        font.setItalic(muted)
+        tile.value.setFont(font)
         if not muted:
             tile.setToolTip(tip)
             return

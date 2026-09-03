@@ -26,6 +26,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from _qtapp import themed_app  # noqa: E402
+
 from studio import coaching as K  # noqa: E402
 from studio.corners import Corner  # noqa: E402
 
@@ -678,9 +680,19 @@ def test_session_gate_under_min_laps():
 
 
 # ----------------------------------------------------------------------- UI (offscreen)
+# The dialog half of this file makes 12 geometry assertions (column widths, row heights), all of
+# them functions of the FONT — so it runs in the app's real regime, not Qt's default stack. See
+# tests/_qtapp.py; W10-03.
+_APP = themed_app()
+
+
 def _qapp():
-    from PySide6.QtWidgets import QApplication
-    return QApplication.instance() or QApplication([])
+    return _APP
+
+
+def _settle(n=6):
+    for _ in range(n):
+        _APP.processEvents()
 
 
 def _populated_opps():
@@ -777,7 +789,14 @@ def test_dialog_reason_cell_is_not_truncated():
     lacks (the fixed ~150-px Entry·Apex·Exit PhaseBar + the per-row Jump button) which squeeze the
     stretch reason column. Mirror the panel's #66 test: word-wrap on + the vertical header sizes
     rows to their content, and the dialog default width leaves the reason column real room (a
-    genuinely long, 2-line reason grows the row past the old fixed 40-px section)."""
+    genuinely long, 2-line reason grows the row past the old fixed 40-px section).
+
+    W10-03 — this used to measure a dialog that was never shown and never pumped, so the stretch
+    section had not been laid out: it read 216 px where the shipped dialog gives 431, and tested
+    that artefact against a hand-picked 200 px floor. A real 2x regression in the shipped column
+    would have left the artefact above the floor and this test green. It now show()s the dialog and
+    asserts the reason column's SHARE of the viewport, which is the property the design actually
+    claims (a stretch column that outweighs the fixed ones) and which no font change can move."""
     _qapp()
     from PySide6.QtWidgets import QHeaderView
 
@@ -788,11 +807,24 @@ def test_dialog_reason_cell_is_not_truncated():
     assert (dlg.table.verticalHeader().sectionResizeMode(0)
             == QHeaderView.ResizeToContents), "rows must auto-fit their wrapped content, not clip"
     # At the dialog's default size the stretch reason column must have real room — not a sliver
-    # squeezed by the phase bar + Jump button. A sane floor well above the ~40-px truncating width.
+    # squeezed by the phase bar + Jump button.
     dlg.resize(920, 380)
+    dlg.show()                           # LOAD-BEARING: the stretch section is laid out on show
+    _settle()
     dlg.table.resizeColumnsToContents()  # settle the content columns; reason keeps the slack
-    assert dlg.table.columnWidth(_COL_REASON) > 200, (
-        f"the reason column must have real width, got {dlg.table.columnWidth(_COL_REASON)}px")
+    _settle()
+    reason_px = dlg.table.columnWidth(_COL_REASON)
+    viewport_px = dlg.table.viewport().width()
+    others_px = sum(dlg.table.columnWidth(c) for c in range(dlg.table.columnCount())
+                    if c != _COL_REASON)
+    assert reason_px > 200, f"the reason column must have real width, got {reason_px}px"
+    # The share, not a pixel count: the prose column must be the widest in the table and hold
+    # something near half the viewport. Both survive a font change; a 200-px floor did not.
+    assert reason_px == max(dlg.table.columnWidth(c) for c in range(dlg.table.columnCount())), (
+        f"the prose column must be the widest one, got {reason_px}px against "
+        f"{[dlg.table.columnWidth(c) for c in range(dlg.table.columnCount())]}")
+    assert reason_px >= 0.4 * viewport_px, (
+        f"the reason column holds only {reason_px}px of a {viewport_px}px viewport")
     # A genuinely long, two-line reason MUST grow the row past the old fixed 40-px section (which
     # clipped the 2nd line). Set the text directly so the assertion is deterministic.
     long_reason = ("Carry more apex speed here — your typical lap is ~5 km/h slower than your "
@@ -801,8 +833,10 @@ def test_dialog_reason_cell_is_not_truncated():
     dlg.table.resizeRowsToContents()
     assert dlg.table.rowHeight(0) > 40, (
         f"a wrapped 2-line reason must grow the row, not clip: {dlg.table.rowHeight(0)}px")
-    print(f"ok dialog: reason cell not truncated (reason col w={dlg.table.columnWidth(_COL_REASON)}px, "
-          f"row0 h={dlg.table.rowHeight(0)}px, wrap+auto-height)")
+    dlg.hide()
+    print(f"ok dialog: reason cell not truncated (reason col w={reason_px}px of a {viewport_px}px "
+          f"viewport vs {others_px}px of fixed columns, row0 h={dlg.table.rowHeight(0)}px, "
+          "wrap+auto-height)")
 
 
 def test_m4_phasebar_tooltip_does_not_claim_time_lost_and_guards_sign_flip():

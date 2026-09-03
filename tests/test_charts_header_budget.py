@@ -43,8 +43,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from _qtapp import themed_app  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
-    QApplication,
     QComboBox,
     QStyle,
     QStyleOptionButton,
@@ -52,13 +52,19 @@ from PySide6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-_APP = QApplication.instance() or QApplication([])
+# THEMED BEFORE THE FIRST WIDGET, which is the order studio/app.py uses and the order this file's
+# numbers depend on: central_view freezes the x-axis combo's minimumWidth from its construction
+# -time sizeHint, so a view built unthemed and measured themed reports a control whose box was
+# sized in a different font ("x: distance" needing 64 px in a 55 px box). _Themed used to apply the
+# theme after building the view AND restore the prior font on exit, which made every measurement a
+# function of how many _Themed blocks had run before it.
+_APP = themed_app()
 
 # The real production CentralView over the deterministic stadium-loop synthetic — the same fixture
 # the rest of the real-Qt view tests build on.
 from test_central_view_realqt import _real_central_view  # noqa: E402
 
-from studio import plots_view, theme  # noqa: E402
+from studio import plots_view  # noqa: E402
 from studio.central_view import (  # noqa: E402
     _PLOTS_CHIP_BEST,
     _PLOTS_CHIP_REF,
@@ -73,14 +79,14 @@ def _settle(n=6):
 
 
 class _Themed:
-    """A shown, REAL-themed CentralView at `size`. The theme is mandatory, not decoration: every
-    number the header budget is made of comes from the QSS's painted fonts (the hero is styled in
-    the mono stack at HERO/600), so measuring an unthemed view measures a different app."""
+    """A shown CentralView at `size`, built under the module-scope theme. The theme is mandatory,
+    not decoration: every number the header budget is made of comes from the painted fonts (the
+    hero is styled in the mono stack at HERO/600), so measuring an unthemed view measures a
+    different app — and so does measuring a view that was BUILT unthemed and themed afterwards,
+    which is what this class used to do."""
 
     def __init__(self, size=(1440, 900)):
         self.view, self.session = _real_central_view()[:2]
-        self._prior = (_APP.styleSheet(), _APP.font(), _APP.palette())
-        theme.apply_theme(_APP)
         self.view.resize(*size)
         self.view.show()
         _settle(8)
@@ -89,10 +95,7 @@ class _Themed:
         return self.view
 
     def __exit__(self, *exc):
-        _APP.setStyleSheet(self._prior[0])
-        _APP.setFont(self._prior[1])
-        _APP.setPalette(self._prior[2])
-        self.view.hide()
+        self.view.hide()          # the theme stays: it is the module's regime, not this block's
         return False
 
 

@@ -399,10 +399,16 @@ def test_the_corners_table_names_its_units_on_screen():
 def test_naming_the_units_costs_the_columns_nothing():
     """The no-regression guard for L3-03, and the reason the grip % is in the caption instead of
     the cells. The caption is a LABEL: it cannot widen a column. Writing the unit into the cells
-    can and does — "77 %" raises that column's floor from 39 to 55 px, and on this fixture that is
-    the 8 px that turns a table which fits the default quadrant into one with a horizontal
-    scrollbar. So: the columns still fit at 457 px, and the same table with the suffix in its cells
-    does not. (The first half is green on `main` too — deliberately: it is what must not change.)"""
+    can and does — "77 %" raises that column's floor from 38 to 55 px (+45 %), the widest single
+    column cost in the table. So: the columns fit the default quadrant, and the same table with
+    the suffix in its cells demonstrably wants more room for the same data.
+
+    W10-04 — this used to end `and sum(suffixed) > vp`, i.e. "the suffixed table would overflow
+    the quadrant". It would not. That claim was measured in a font the app does not ship: the file
+    themed without registering the bundled Inter, so Qt substituted a family and the columns came
+    out 453 px in a 453 px viewport (0 px of slack, and the suffix put them 8 px over). In the
+    shipped font the same table is 414 px in 453 (39 px of slack) and the suffixed one 431 — still
+    fitting. The COST is real and is what this guard now pins; the overflow was an artefact."""
     ct = _corner_table(width=457)                   # the default lap-panel quadrant
     _settle()
     vp = ct.table.viewport().width()
@@ -416,9 +422,14 @@ def test_naming_the_units_costs_the_columns_nothing():
         it = ct.table.item(r, _GRIP_COL)
         it.setText(it.text() + " %")
     _, suffixed, _ = ct._column_budget()
-    assert suffixed[_GRIP_COL] > floors[_GRIP_COL] and sum(suffixed) > vp, (floors, suffixed, vp)
+    assert suffixed[_GRIP_COL] >= floors[_GRIP_COL] * 1.3, (floors, suffixed)
+    assert sum(suffixed) > sum(floors), (floors, suffixed)
+    # ...and every other column is untouched: the cost is the grip column's alone.
+    assert [w for c, w in enumerate(suffixed) if c != _GRIP_COL] == \
+           [w for c, w in enumerate(floors) if c != _GRIP_COL], (floors, suffixed)
     print(f"test_naming_the_units_costs_the_columns_nothing OK ({total} px in {vp} px; "
-          f"in-cell % would want {sum(suffixed)} px)")
+          f"in-cell % would want {sum(suffixed)} px, grip column "
+          f"{floors[_GRIP_COL]} -> {suffixed[_GRIP_COL]} px)")
 
 
 def _run_all():
