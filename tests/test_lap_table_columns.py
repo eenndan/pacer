@@ -37,11 +37,17 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _qtapp import themed_app  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QFontMetrics  # noqa: E402
-from PySide6.QtWidgets import QApplication, QHeaderView  # noqa: E402
+from PySide6.QtWidgets import QHeaderView  # noqa: E402
 
-_APP = QApplication.instance() or QApplication([])
+# 18 geometry assertions, every one a function of the FONT — including the Δbest/Δapex/Δref elide
+# guard #163 and #171 rest on, which compares glyph advances 1-3 px apart. Unthemed this file
+# measured Qt's default stack: column 3 came out 88 px where the shipped table gives 58 (-34 %),
+# columns 4/5 62 px where the app gives 77/78. See tests/_qtapp.py; W10-05.
+_APP = themed_app()
 
 from studio import data_quality, units  # noqa: E402
 from studio.lap_table import (  # noqa: E402

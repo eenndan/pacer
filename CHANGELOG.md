@@ -67,6 +67,15 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Every stat tile paints its value larger than its caption again**, and the Stats page's
+  notes, the coaching phase-bar numbers and the Library dialog's summary/privacy text are back
+  at the sizes they were written for. The theme's base stylesheet rule carried a `font-size`
+  that matched *every* widget, and a stylesheet font outranks a programmatic `setFont` — so all
+  29 tiles painted a 13 px value over a 13 px caption where 15 over 12 was intended, and only
+  colour separated "1:08.771" from "best lap". The app-wide default font now comes from
+  `app.setFont()`, which a widget's own font wins against. Same cause: the Stats page's muted
+  "provisional timing" target tiles only rendered italic after a *second* refresh, so the cue
+  was missing on every single-refresh path.
 - **The bundled track centerline is no longer armed as a gap-fill donor on circuits it has
   nothing to do with.** `studio/mk_centerline.json` traces one circuit (Daytona Milton Keynes),
   but the closed-loop fit that places it computed a residual, printed it, and handed the ring

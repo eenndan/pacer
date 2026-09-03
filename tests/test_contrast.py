@@ -27,6 +27,7 @@ Run: python tests/test_contrast.py
 """
 import ast
 import os
+import re
 import sys
 
 import numpy as np
@@ -531,7 +532,84 @@ def test_exported_overlay_readout_never_burns_negative_zero():
     print("test_exported_overlay_readout_never_burns_negative_zero OK")
 
 
+_BLANKET_SELECTORS = ("QWidget", "*", "QLabel", "QFrame")
+
+
+def test_the_theme_never_takes_a_widgets_own_font_away():
+    """W10-01. A stylesheet font is resolved OVER a widget's own font on every polish, so a font
+    declaration on a selector that matches everything silently discards the size and family of
+    every setFont() in the app — a call that reports success, echoes the font back from font(),
+    and paints something else. The theme's base rule used to carry `font-family` + `font-size`,
+    and the Stats page's 29 tiles asked for 15/600 over 12 and painted 13 over 13: value and
+    caption the same size, the hierarchy gone. It is invisible from inside the app, so it is
+    pinned from both ends here — the shape of the rule, and the behaviour it produces.
+
+    The app-wide default belongs in apply_theme's app.setFont(), which LOSES to setFont. A widget
+    that genuinely wants a fixed size still takes a rule of its own, keyed on objectName or a role
+    property (#DiffBox, [role="EmptyState"] …) — those match one surface, not every widget."""
+    from PySide6.QtWidgets import QLabel, QWidget
+
+    # 1. the shape: no blanket selector may declare a font. Comments go first — a QSS comment can
+    # carry braces and selector-looking text, and this rule is about what Qt PARSES.
+    qss = re.sub(r"/\*.*?\*/", "", theme._build_qss(), flags=re.S)
+    blocks = re.findall(r"(?:^|\})\s*([^{}@]*?)\{([^{}]*)\}", qss, flags=re.S)
+    assert len(blocks) > 30, f"the QSS block parse found only {len(blocks)} rules"
+    for selector, body in blocks:
+        sel = " ".join(selector.split()).strip()
+        # A selector is "blanket" when a bare class name matches with no #id / [prop] / ::sub-
+        # control narrowing it. Those are the ones that reach every widget in the window.
+        parts = [p.strip() for p in sel.split(",") if p.strip()]
+        blanket = [p for p in parts if p in _BLANKET_SELECTORS]
+        if blanket and "font" in body:
+            raise AssertionError(
+                f"blanket selector {blanket} declares a font — it will outrank every setFont "
+                f"in the app:\n{sel} {{{body}}}")
+
+    # 2. the behaviour: a widget's own font survives the theme, at the size it asked for.
+    theme.apply_theme(_APP)
+    host = QWidget()
+    lab = QLabel("1:08.771", host)
+    lab.setFont(theme.mono_font(theme.HERO, theme.W_SEMIBOLD))
+    small = QLabel("best lap", host)
+    small.setFont(theme.ui_font(theme.CAPTION))
+    plain = QLabel("body text", host)                    # no setFont: takes the app default
+    host.show()
+    for _ in range(4):
+        _APP.processEvents()
+    assert lab.fontInfo().pixelSize() == theme.HERO, lab.fontInfo().pixelSize()
+    assert small.fontInfo().pixelSize() == theme.CAPTION, small.fontInfo().pixelSize()
+    assert plain.fontInfo().pixelSize() == theme.BODY, plain.fontInfo().pixelSize()
+    assert lab.fontInfo().pixelSize() > plain.fontInfo().pixelSize() > small.fontInfo().pixelSize()
+    host.hide()
+    print("test_the_theme_never_takes_a_widgets_own_font_away OK "
+          f"({lab.fontInfo().pixelSize()} / {plain.fontInfo().pixelSize()} / "
+          f"{small.fontInfo().pixelSize()} px)")
+
+
+def test_apply_theme_registers_the_fonts_its_qss_names():
+    """W10-04. theme.UI_FAMILIES leads with "Inter", which only exists as a family once the bundled
+    TTFs are in the font DB — and six test files called apply_theme() WITHOUT register_fonts(), so
+    Qt substituted a family and they measured a layout up to 13 % off the shipped advances (the
+    charts column's asserted minimum: 752 px in-test against 759 shipped). The pair is now one
+    call, so the two can no longer drift."""
+    theme._fonts_registered = False
+    theme._inter_available = False
+    theme.apply_theme(_APP)
+    assert theme._fonts_registered, "apply_theme must register the fonts its QSS names"
+    assert theme._inter_available, "the bundled Inter TTFs must be in the font DB after apply_theme"
+    assert theme.ui_font(theme.BODY).families()[0] == "Inter"
+    # ...and the family list the QFont builders use IS the one the QSS names (one source, two uses).
+    assert theme.UI_STACK == ",".join(f'"{f}"' for f in theme.UI_FAMILIES)
+    assert theme.MONO_STACK == ",".join(f'"{f}"' for f in theme.MONO_FAMILIES)
+    # mono_font is Inter+tnum on Qt >= 6.7 and the mono stack below it — either way its family
+    # list is one of the two module tuples, never a third hand-kept copy.
+    assert tuple(theme.mono_font(11).families()) in (theme.UI_FAMILIES, theme.MONO_FAMILIES)
+    print("test_apply_theme_registers_the_fonts_its_qss_names OK")
+
+
 def _run_all():
+    test_the_theme_never_takes_a_widgets_own_font_away()
+    test_apply_theme_registers_the_fonts_its_qss_names()
     test_no_module_constant_freezes_a_palette_hue()
     test_no_bare_palette_hue_is_read_anywhere_in_studio()
     test_hero_ideal_readout_follows_the_palette()

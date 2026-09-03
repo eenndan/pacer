@@ -477,14 +477,22 @@ CAPTION = 12
 W_REGULAR = QFont.Weight.Normal     # 400
 W_SEMIBOLD = QFont.Weight.DemiBold  # 600
 
-# --- font stacks (used in QSS font-family declarations) ---
-UI_STACK = '"Inter","-apple-system","SF Pro Text","Helvetica Neue","sans-serif"'
-MONO_STACK = '"SF Mono","JetBrains Mono","Menlo","monospace"'
+# --- font stacks ---
+# ONE list per face, in fallback order, used BOTH by the QFont builders below (setFamilies) and by
+# the QSS font-family declarations (*_STACK). They were two hand-kept copies; nothing painted the
+# UI stack from QSS any more (see the base rule in _build_qss), so a drift between them would have
+# been invisible.
+UI_FAMILIES = ("Inter", "-apple-system", "SF Pro Text", "Helvetica Neue", "sans-serif")
+MONO_FAMILIES = ("SF Mono", "JetBrains Mono", "Menlo", "monospace")
+UI_STACK = ",".join(f'"{f}"' for f in UI_FAMILIES)
+MONO_STACK = ",".join(f'"{f}"' for f in MONO_FAMILIES)
 
 _FONTS_DIR = os.path.join(os.path.dirname(__file__), "assets", "fonts")
 # rsms/inter OFL static TTFs bundled under assets/fonts/.
 _INTER_FILES = ("Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf")
 
+# Set by register_fonts() so a second call (apply_theme's) is a cheap no-op.
+_fonts_registered = False
 # Set by register_fonts(): True once Inter is registered with the Qt font DB.
 _inter_available = False
 # Set by register_fonts(): does the installed Qt support per-feature tags (tnum)? Qt ≥ 6.7.
@@ -503,8 +511,16 @@ def _qt_supports_feature() -> bool:
 
 def register_fonts() -> None:
     """Register the bundled Inter TTFs (assets/fonts/); skip to the system font fallback if absent.
-    Also records Qt tnum support. Call once before apply_theme."""
-    global _inter_available, _supports_feature
+    Also records Qt tnum support.
+
+    Idempotent, and called by apply_theme() — the two belong together (the QSS and ui_font() both
+    name "Inter", which only exists once the TTFs are in the font DB), and six test files proved
+    they can drift apart: they called apply_theme alone, so Qt substituted a family for the one the
+    theme names and they measured a layout 7 px narrower than the shipped one."""
+    global _fonts_registered, _inter_available, _supports_feature
+    if _fonts_registered:
+        return
+    _fonts_registered = True
     _supports_feature = _qt_supports_feature()
 
     have_files = all(os.path.exists(os.path.join(_FONTS_DIR, f)) for f in _INTER_FILES)
@@ -535,7 +551,7 @@ def ui_font(size: int = BODY, weight: QFont.Weight = W_REGULAR) -> QFont:
     f = QFont(family, size)
     f.setWeight(weight)
     # Fallback families for when `family` itself is missing (Qt walks substitutes).
-    f.setFamilies(["Inter", "-apple-system", "SF Pro Text", "Helvetica Neue", "sans-serif"])
+    f.setFamilies(list(UI_FAMILIES))
     f.setPixelSize(size)
     return f
 
@@ -551,7 +567,7 @@ def mono_font(size: int = TABLE, weight: QFont.Weight = W_REGULAR) -> QFont:
         return f
     f = QFont("SF Mono", size)
     f.setWeight(weight)
-    f.setFamilies(["SF Mono", "JetBrains Mono", "Menlo", "monospace"])
+    f.setFamilies(list(MONO_FAMILIES))
     f.setPixelSize(size)
     return f
 
@@ -683,12 +699,27 @@ QComboBox::down-arrow:on {{  /* open: nudge so it reads as pressed, no flip */
     else:
         caret_arrow_rule = "/* QComboBox::down-arrow: native arrow (asset unavailable) */"
     return f"""
-/* ---------------------------------------------------------------- base */
+/* ---------------------------------------------------------------- base
+   COLOURS ONLY — the default FONT is set once, in apply_theme, with app.setFont(ui_font(BODY)).
+
+   NEVER put `font-family` / `font-size` back on this blanket QWidget rule. A stylesheet font is
+   resolved OVER the widget's own font on every polish (QStyleSheetStyle::updateStyleSheetFont
+   does `rule.font.resolve(w->font())`), so a rule that matches every widget silently discards the
+   size and family of EVERY programmatic setFont in the app — a call that looks like it works,
+   reads like it works, and paints 13px. That is exactly what it did: the Stats page's 29 tiles
+   asked for mono_font(15, semibold) over ui_font(12) and painted (13, 13) — value and caption the
+   same size, hierarchy gone — while three caption labels asked for 12 and got 13, the coaching
+   PhaseBar numbers asked for 12 and got 13, and the Library dialog's summary/privacy notes asked
+   for 11 and got 13. Nothing could see it: setFont() reported success and font() echoed back the
+   font that was thrown away. #DiffBox below is the scar tissue from the first time this bit —
+   the hero Δ readout had to re-declare its own setFont in QSS to survive.
+
+   app.setFont gives the identical default (Inter/UI_STACK at BODY px) and LOSES to setFont, which
+   is the whole point; a widget that wants a different size may still take a rule of its own (the
+   role/objectName rules further down), it just no longer has to. */
 QWidget {{
     background-color: {C.canvas};
     color: {C.text};
-    font-family: {UI_STACK};
-    font-size: {BODY}px;
 }}
 QMainWindow, QWidget#centralwidget {{
     background-color: {C.canvas};
@@ -1247,6 +1278,12 @@ def apply_theme(app) -> None:
     pyqtgraph background/foreground (the latter MUST run before any plot widget is created so the
     charts adopt the dark surface). Does not otherwise style pyqtgraph internals — that's Phase 2.
     """
+    # The pair, never one alone: ui_font() and the QSS both name "Inter", which is only a real
+    # family once the bundled TTFs are in the font DB. Idempotent, so an app (or a test) that
+    # already registered them pays nothing.
+    register_fonts()
+    # The app-wide DEFAULT font — deliberately here and not in the QSS, so that any widget's own
+    # setFont still wins. See the base rule in _build_qss for what a blanket QSS font costs.
     app.setFont(ui_font(BODY, W_REGULAR))
     app.setPalette(_palette())
     app.setStyleSheet(_build_qss())
