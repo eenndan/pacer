@@ -67,6 +67,25 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **A reference recording is read the way its owner saved it, and a copy of the open
+  recording can no longer be its own reference.** Loading another recording as a
+  cross-recording reference went through `Session.load` alone, which returns telemetry cut at
+  the loader's auto-fitted start line — the line the owner had dragged and confirmed lives in
+  that recording's sidecar and was applied only when the recording was opened in a window. So
+  the same recording measured 740 m laps when opened and 199 m fragments as a reference, and
+  the lap-length band refused it (0.27x) with advice to drag a start line that was already
+  saved on disk. The restore is now one shared seam
+  (`Session.restore_saved_timing_lines`) that both the primary open and the reference
+  adoption call, so a reference is segmented exactly as opening it would segment it.
+  Separately, "is this reference my own footage?" was decided purely by comparing file paths,
+  so a byte-identical copy under another name (a duplicated folder, an external-drive backup,
+  a re-download) was accepted as a reference against itself and every corner Δ printed
+  "+0.00" as though it were a measurement. Identity now also asks an intrinsic question —
+  the GPS wall clock at both ends of the recording plus its kept point count — and the
+  downstream `reference_is_own_recording()` fallback no longer shares a predicate with the
+  refusal: it can tell from the adopted lap's own numbers alone, so the Δ dashes hold even if
+  both provenance checks are wrong.
+
 - **A mis-dragged start/finish line always has a way back, and a saved track no longer
   vouches for a line that isn't its own.** Re-opening a recording used to lock a bad drag
   in for good — the undo stack died with the session, and nothing else in the app offered

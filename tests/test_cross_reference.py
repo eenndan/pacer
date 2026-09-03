@@ -23,8 +23,10 @@ the asserts are the contract the feature must hold:
 
 Run:  python tests/test_cross_reference.py
 """
+import json
 import os
 import sys
+import tempfile
 from types import SimpleNamespace
 
 import numpy as np
@@ -34,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from studio import cross_reference as xr  # noqa: E402
 from studio._signal import LAP_DIST_BAND_HI, LAP_DIST_BAND_LO  # noqa: E402
 from studio.session import REFERENCE_ID, Session  # noqa: E402
-from tests._synthetic import bare_session, odometer, seed_cols  # noqa: E402
+from tests._synthetic import bare_session, odometer, seed_cols, seed_lap  # noqa: E402
 
 
 # ---------------------------------------------------------------- synthetic Session helpers
@@ -356,10 +358,17 @@ def give_paths(session, *paths):
 
 
 def _comparable_pair(track="Track A"):
-    """A primary + a reference that pass every OTHER guard (same track name, same lap length, a
-    fittable loop) — so any refusal below can only be the identity guard."""
+    """A primary + a reference that pass every OTHER guard (same track name, a comparable lap
+    length, a fittable loop) — so any refusal below can only be the identity guard.
+
+    The reference lap is DELIBERATELY not a copy of the primary's (950.0 m / 0.45 s steps vs
+    948.0 m / 0.4471 s): these two stand in for two DIFFERENT recordings, and two different
+    recordings do not sample the same odometer. Handing both sides identical arrays would make
+    `_reference_lap_duplicates_a_local_lap` — the file-blind route in
+    `reference_is_own_recording` — fire on a fixture that is supposed to be a legitimate
+    cross-recording pair, and the tests below would then be asserting against a fiction."""
     primary = make_session({4: odometer(120, 0.45, 0.0, 950.0)}, best=4, valid=[4], track=track)
-    ref = make_session({4: odometer(120, 0.45, 0.0, 950.0)}, best=4, valid=[4], track=track)
+    ref = make_session({4: odometer(120, 0.4471, 0.0, 948.0)}, best=4, valid=[4], track=track)
     _stub_loops(primary, ref)
     return primary, ref
 
@@ -436,6 +445,210 @@ def test_reference_is_own_recording_reports_the_state_the_ui_asks_about():
     primary.clear_reference()
     assert not primary.reference_is_own_recording(), "cleared: nothing to be our own"
     print("test_reference_is_own_recording_reports_the_state_the_ui_asks_about OK")
+
+
+# ---------------------------------- QA W9-01: a reference carries the line its owner confirmed
+# `Session.load` hands back telemetry cut at the loader's AUTO-FITTED start line; the line the
+# user dragged and confirmed lives in the recording's sidecar. That restore used to happen only
+# in the primary open's `_on_session_loaded`, so the SAME recording measured 740.3 m laps in a
+# window and 198.7 m fragments as a reference — and the lap-length band above then refused it,
+# advising the owner to drag a line that was already saved on disk. `set_reference_session` now
+# restores first, through the same `Session.restore_saved_timing_lines` seam the primary open uses.
+def _write_sidecar(folder, stem, start, sectors=(), confirmed=True):
+    """Write a real version-1 sidecar for `<folder>/<stem>.MP4` and return the recording path.
+    The .MP4 is touched too, so `chapters.discover_siblings` resolves the same first chapter
+    `sidecar.sidecar_path` names."""
+    recording = os.path.join(folder, f"{stem}.MP4")
+    open(recording, "wb").close()
+    with open(os.path.join(folder, f"{stem}.pacer.json"), "w", encoding="utf-8") as fh:
+        json.dump({"version": 1, "track": "Sandown Park", "start": start,
+                   "sectors": list(sectors), "confirmed": confirmed}, fh)
+    return recording
+
+
+def _restore_stub(session, lap_id, times, dists, total_m, log):
+    """Stand in for the real `apply_timing_lines_latlon` on a bare Session (no pacer `Laps`, no
+    CoordinateSystem): record the restored lines, then re-seed the session's caches as a genuine
+    re-segmentation onto the saved start line would leave them."""
+    def apply(start, sectors, confirmed=True):
+        log.append((start, sectors, confirmed))
+        session._dist_cache.clear()
+        session._cols_cache.clear()
+        seed_lap(session, lap_id, times, dists)
+        seed_cols(session, lap_id, times, dists)
+        set_lap_distances(session, {lap_id: total_m})
+        session._valid_cache = [lap_id]
+        session._best_cache = lap_id
+        return True
+    return apply
+
+
+def test_a_reference_is_segmented_by_the_start_line_its_owner_saved():
+    """QA W9-01, with the owner's own measured figures. The primary counts 740 m laps; the
+    reference recording's AUTO-FITTED line cuts it into 198.7 m fragments (0.27x), which the
+    lap-length band refuses — but its owner has already confirmed a start line for it, and with
+    that line restored the same recording measures 737.9 m and is admitted."""
+    lap_m = {1: 731.9, 2: 740.5, 3: 754.2}
+    primary = make_session({i: odometer(200, 0.24, 0.0, m) for i, m in lap_m.items()},
+                           best=2, valid=sorted(lap_m), track="Sandown Park")
+    set_lap_distances(primary, lap_m)
+
+    with tempfile.TemporaryDirectory() as folder:
+        start = [[51.376040, -0.361060], [51.376120, -0.360980]]
+        recording = _write_sidecar(folder, "GX010065", start, sectors=[], confirmed=True)
+
+        # The reference as `Session.load` hands it over: the loader's fitted line, 198.7 m laps.
+        ref = make_session({7: odometer(60, 0.22, 0.0, 198.7)}, best=7, valid=[7],
+                           track="Sandown Park")
+        set_lap_distances(ref, {7: 198.7})
+        give_paths(ref, recording)
+        _stub_loops(primary, ref)
+        restored: list = []
+        saved_times, saved_dists = odometer(200, 0.2346, 0.0, 737.9)
+        ref.apply_timing_lines_latlon = _restore_stub(ref, 7, saved_times, saved_dists,
+                                                      737.9, restored)
+        sidecar_file = os.path.join(folder, "GX010065.pacer.json")
+
+        reason = primary.set_reference_session(ref, source_label="recording 0065")
+
+    assert reason is None, (
+        "a reference carrying its owner's confirmed start line must be ADMITTED; on main it is "
+        f"read at the loader's fitted line and refused: {reason!r}")
+    assert restored, "the reference must be restored BEFORE the guards read a lap off it"
+    assert restored[0][0] == start and restored[0][2] is True, restored
+    assert ref.own_sidecar_path() == sidecar_file
+    assert primary.has_reference() and primary.reference_lap_id() == 7
+    assert abs(primary.active_baseline_total_distance() - 737.9) < 1e-6
+    print("test_a_reference_is_segmented_by_the_start_line_its_owner_saved OK: "
+          "198.7 m refused -> 737.9 m admitted")
+
+
+def test_restore_saved_timing_lines_is_the_shared_seam():
+    """The seam `StudioWindow._on_session_loaded` and `set_reference_session` now share. Its
+    three answers are what the primary open branches on: None = nothing saved (keep the fitted
+    lines silently), True = restored, False = the revert guard rejected them."""
+    with tempfile.TemporaryDirectory() as folder:
+        s = make_session({1: odometer(60, 0.3, 0.0, 500.0)}, best=1, valid=[1], track="T")
+        assert s.own_sidecar_path() is None, "no provenance -> no sidecar to guess at"
+        assert s.restore_saved_timing_lines() is None
+
+        start = [[51.3, -0.36], [51.31, -0.359]]
+        recording = _write_sidecar(folder, "GX010065", start, confirmed=False)
+        give_paths(s, recording)
+        log: list = []
+        s.apply_timing_lines_latlon = lambda st, se, confirmed=True: (
+            log.append((st, se, confirmed)) or True)
+        assert s.restore_saved_timing_lines() is True
+        assert log == [(start, [], False)], log
+
+        # An explicit path wins over the session's own (what the primary open passes), and a
+        # rejected restore reports False rather than swallowing it.
+        s.apply_timing_lines_latlon = lambda st, se, confirmed=True: False
+        assert s.restore_saved_timing_lines(os.path.join(folder, "GX010065.pacer.json")) is False
+        # A missing / invalid sidecar is "nothing saved", never an error.
+        assert s.restore_saved_timing_lines(os.path.join(folder, "nope.pacer.json")) is None
+    print("test_restore_saved_timing_lines_is_the_shared_seam OK")
+
+
+# --------------------------- QA W9-04: identity is the FOOTAGE, not the path — and two layers
+# `_shares_footage_with` compares realpath sets, so a byte-identical COPY under another name is a
+# different recording to it. The owner's Desktop already carries duplicated folders. Two things
+# had to change: the refusal gained a second, intrinsic predicate, and `reference_is_own_-
+# recording` — added so the Corners dashes would NOT depend on the refusal holding — stopped
+# being a one-line call to the refusal's only predicate.
+def set_point_stream(session, *, first_ms, last_ms, n):
+    """Give a bare Session the point-stream surface `_recording_identity` reads (`point_count` +
+    `get_point(i).point.timestamp_ms`), preserving the stubs already installed on `laps`."""
+    keep = {name: staticmethod(getattr(session.laps, name))
+            for name in ("laps_count", "min_max", "get_lap_distance")
+            if hasattr(session.laps, name)}
+    keep["point_count"] = staticmethod(lambda n=n: n)
+    keep["get_point"] = staticmethod(
+        lambda i, f=first_ms, last=last_ms, n=n: SimpleNamespace(
+            point=SimpleNamespace(timestamp_ms=(f if i == 0 else last))))
+    session.laps = type("L", (), keep)()
+
+
+def test_a_byte_identical_copy_is_refused_as_its_own_reference():
+    """The state the path guard cannot see: the same footage at a second path (a duplicated
+    folder, an external-drive backup, a re-download). Every path differs, so `_shares_footage_-
+    with` says "different recording" and every other guard passes — the reference lap IS this
+    session's best lap. The recording-identity predicate refuses it."""
+    primary, ref = _comparable_pair()
+    give_paths(primary, "/recordings/Daytona_24h/GX010065.MP4")
+    give_paths(ref, "/recordings/Daytona_24h copy/GX010065.MP4")
+    assert not primary._shares_footage_with(ref), "the paths genuinely differ — that is the trap"
+    set_point_stream(primary, first_ms=1756540800123, last_ms=1756542600456, n=32_401)
+    set_point_stream(ref, first_ms=1756540800123, last_ms=1756542600456, n=32_401)
+
+    reason = primary.set_reference_session(ref, source_label="recording 0065")
+    assert reason is not None, "a copy of the open recording must not be its own reference"
+    assert "already have open" in reason, reason
+    assert not primary.has_reference() and primary.reference_session() is None
+    print(f"test_a_byte_identical_copy_is_refused OK: refused with {reason!r}")
+
+
+def test_recording_identity_declines_to_guess_rather_than_refuse_a_legitimate_reference():
+    """The false-POSITIVE direction is the expensive one — refusing a real reference is the bug
+    the lap-length band already cost a PR. So the intrinsic predicate answers only when it can
+    READ an identity: a stream with no per-fix wall clock (a GPS5 camera reports 0 for every fix,
+    where two unrelated recordings would otherwise collide on point count alone) and a session
+    with no on-disk provenance are both left to the other guards."""
+    # Two DIFFERENT recordings at the same track, one minute apart: admitted, as before.
+    primary, ref = _comparable_pair()
+    give_paths(primary, "/recordings/GX010065.MP4")
+    give_paths(ref, "/recordings/GX010066.MP4")
+    set_point_stream(primary, first_ms=1756540800123, last_ms=1756542600456, n=32_401)
+    set_point_stream(ref, first_ms=1756542660000, last_ms=1756544460000, n=32_401)
+    assert primary._recording_identity() != ref._recording_identity()
+    assert primary.set_reference_session(ref) is None, "a different recording must still load"
+
+    # GPS5 (no wall clock): identical fingerprints on paper, unreadable in fact -> not a collision.
+    p5, r5 = _comparable_pair()
+    give_paths(p5, "/recordings/GX010065.MP4")
+    give_paths(r5, "/recordings/GX010066.MP4")
+    set_point_stream(p5, first_ms=0, last_ms=0, n=32_401)
+    set_point_stream(r5, first_ms=0, last_ms=0, n=32_401)
+    assert p5._recording_identity() is None and not p5._shares_recording_identity_with(r5)
+    assert p5.set_reference_session(r5) is None, "an unreadable identity must never refuse"
+
+    # No provenance at all (the synthetic doubles, and the dev gate's anonymised stand-in).
+    pn, rn = _comparable_pair()
+    set_point_stream(pn, first_ms=1756540800123, last_ms=1756542600456, n=32_401)
+    set_point_stream(rn, first_ms=1756540800123, last_ms=1756542600456, n=32_401)
+    assert pn._recording_identity() == rn._recording_identity()
+    assert not pn._shares_recording_identity_with(rn), "a fixture is not a duplicate of anything"
+    assert pn.set_reference_session(rn) is None
+    print("test_recording_identity_declines_to_guess OK")
+
+
+def test_reference_is_own_recording_holds_when_both_provenance_predicates_miss():
+    """The independence QA W9-04 says was missing. `reference_is_own_recording` used to BE
+    `_shares_footage_with`, so the refusal and the fallback failed on exactly the same inputs and
+    the Corners Δ cells printed "+0.00" as measurements. Here both provenance predicates are made
+    to answer "different recording" — different paths, different wall clocks — and the fallback
+    must still report the state, off the adopted lap's own numbers."""
+    same_lap = odometer(120, 0.45, 0.0, 950.0)
+    primary = make_session({4: same_lap}, best=4, valid=[4], track="Track A")
+    ref = make_session({4: same_lap}, best=4, valid=[4], track="Track A")
+    _stub_loops(primary, ref)
+    give_paths(primary, "/recordings/GX010065.MP4")
+    give_paths(ref, "/elsewhere/GX010099.MP4")
+    set_point_stream(primary, first_ms=1756540800123, last_ms=1756542600456, n=32_401)
+    set_point_stream(ref, first_ms=1756540800124, last_ms=1756542600455, n=32_400)
+
+    assert primary.set_reference_session(ref, source_label="0099") is None
+    assert primary.reference_is_own_recording(), (
+        "the baseline is bit-identical to lap 4 — the fallback must say so WITHOUT asking about "
+        "files; on main it asks the refusal's own predicate and answers False")
+    # ...and it got there on its own: both provenance routes are blind to this pair.
+    assert not primary._shares_footage_with(ref), "provenance route 2 is deliberately blind here"
+    assert not primary._shares_recording_identity_with(ref), "route 3 is deliberately blind too"
+    # ...and it is still False for a reference whose lap is merely SIMILAR, not the same numbers.
+    other_p, other_r = _comparable_pair()          # 950.0 m vs 948.0 m
+    assert other_p.set_reference_session(other_r) is None
+    assert not other_p.reference_is_own_recording(), "a genuinely different lap is not our own"
+    print("test_reference_is_own_recording_holds_when_both_provenance_predicates_miss OK")
 
 
 def test_no_valid_laps_reference_refused():
