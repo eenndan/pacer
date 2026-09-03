@@ -14,7 +14,9 @@ WHY this is a thin value object and NOT a second live Session wired into the vie
     LOCAL frame. The two recordings have independent coordinate systems (each centred on its
     own cleaned-trace bbox), so the reference loop is aligned onto the primary best lap's loop
     by the SAME closed-loop cyclic-arc-length similarity fit the centerline gap-fill uses
-    (`studio.reference.fit_loop_to_loop`) — reused, not reinvented.
+    (`studio.reference.fit_loop_to_loop`) — reused, not reinvented. That fit is free to RESIZE
+    the loop, so what it returns is gated on SCALE as well as residual before anything is drawn
+    (`fit_is_drawable`): the map's metres have to mean the same thing as the reference's.
 
 This module is PACER-FREE (numpy only): `Session.load_reference` does the one pacer-backed
 step (loading the second Session via the normal pipeline) and hands the already-extracted
@@ -29,6 +31,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import reference
+from ._signal import LAP_DIST_BAND_HI
 
 # A reference loop must overlay the primary track closely to be trustworthy as a racing-line
 # overlay. The closed-loop fit reports an RMS distance (metres) of the reference points to the
@@ -37,6 +40,40 @@ from . import reference
 # are unaffected). Generous vs the ~8 m kart-track width + lap-to-lap line spread, tight vs a
 # gross mis-fit. Same scale as reference.COVERAGE_TOL_M, which gates the centerline fit.
 MAP_FIT_RMS_TOL_M = 12.0
+# ...and the RMS ALONE cannot say the overlay is honest, because `fit_loop_to_loop` solves a
+# SIMILARITY transform: uniform SCALE is a free parameter of the very fit the RMS scores, so a
+# grossly mis-sized reference is simply resized until it sits on the primary loop and then
+# reports a small residual. Measured in the app on real recordings: a 190.6 x 124.8 m reference
+# lap drawn at 54.2 x 72.1 m (scale 0.403, 1/2.5 of true size) reports rms 4.33 m — a third of
+# the tolerance above. Metres are the map's contract, so a reference line drawn at 40 % of its real
+# size is a FALSE racing line that looks like data. Gate the magnitude too (the same remedy the
+# g-meter's shape-only trust gate needed).
+#
+# The band: both loops are already in METRES (each recording's own local frame is a metre grid),
+# so two laps of the same circuit must fit at scale 1 — the fit has nothing legitimate to
+# resize. This is `_signal.LAP_DIST_BAND_HI`, the SAME +-10 % the session already demands of a
+# reference lap's arc LENGTH (`Session._lap_length_refusal`), applied to the fitted 2-D SIZE;
+# sharing the number keeps the two halves of one claim ("a comparable lap is the same lap, at
+# the same size") from drifting apart. Applied as [1/tol, tol] rather than [lo, hi] so the
+# verdict cannot flip when the user swaps which recording is the reference.
+# Measured over 163 real laps / 3 recordings / 2 circuits, every genuine same-circuit lap fits
+# its own session's best-lap loop at scale 0.9638-1.0345 (worst = x1.038, on the smallest 53 x
+# 67 m loop), so this band leaves ~2.6x headroom over the worst real lap while the filed
+# failure (0.403) sits 9.5x outside it in log terms.
+MAP_FIT_SCALE_TOL = LAP_DIST_BAND_HI
+
+
+def fit_is_drawable(rms: float | None, scale: float | None) -> bool:
+    """True iff a closed-loop fit may be drawn as the reference racing line: near enough (RMS,
+    metres) AND the right SIZE (uniform scale, 1.0 == true size). Both halves are load-bearing —
+    the RMS is blind to scale because the fit is free to choose it (see the constants above).
+    A non-finite or non-positive scale/RMS is never drawable."""
+    if rms is None or scale is None:
+        return False
+    if not (np.isfinite(rms) and np.isfinite(scale)) or scale <= 0:
+        return False
+    return bool(rms <= MAP_FIT_RMS_TOL_M
+                and (1.0 / MAP_FIT_SCALE_TOL) <= scale <= MAP_FIT_SCALE_TOL)
 
 
 @dataclass
@@ -62,13 +99,18 @@ class ReferenceLap:
     source_label: str
     lap_id: int
     overlay_xy: np.ndarray | None
-    map_fit_rms: float | None  # RMS (m) of the overlay fit, or None when no overlay
+    map_fit_rms: float | None  # RMS (m) of the overlay fit, or None when no fit was attempted
     # True when the reference was admitted by GEOMETRY (unknown track name — matched on GPS
     # location/size) rather than a confirmed same-named track. The overlay is valid, but neither
     # recording's start line is known-good, so the aligned Δ phase may be off until the user sets
     # both start lines. The UI surfaces a short "matched by location — unverified" caveat on it.
     # Defaults False so the confirmed same-named-track path is byte-identical (no caveat).
     is_geometric: bool = False
+    # The uniform SCALE the similarity fit applied to the reference loop (1.0 == drawn at its
+    # true size), or None when no fit was attempted. Recorded beside map_fit_rms because the RMS
+    # alone cannot tell a good overlay from a resized one — the pair IS the verdict, and a
+    # refusal can only be explained with the number that caused it. See fit_is_drawable.
+    map_fit_scale: float | None = None
 
     def arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """`(dist, speed_kmh, elapsed)` — the `_lap_arrays`-shaped triple `Session.delta`
@@ -101,8 +143,10 @@ def build(
     is the reference lap's closed (xs, ys) loop in the REFERENCE recording's local metres;
     `primary_loop_xy` is the PRIMARY best lap's closed loop in the primary's local metres. The
     overlay is the reference loop fit onto the primary loop (so it draws in the primary frame);
-    if the fit RMS exceeds MAP_FIT_RMS_TOL_M (or either loop is degenerate) the overlay is None
-    and only the map racing-line is skipped — the distance-aligned charts/table are unaffected.
+    unless that fit is both NEAR ENOUGH and the RIGHT SIZE (`fit_is_drawable` — RMS and scale;
+    a similarity fit resizes freely, so the RMS alone cannot see a mis-sized loop) — or either
+    loop is degenerate — the overlay is None and only the map racing-line is skipped; the
+    distance-aligned charts/table are unaffected.
 
     `is_geometric` marks a reference admitted by GPS-geometry match (unknown track name) rather
     than a confirmed same-named track — carried onto the `ReferenceLap` so the UI can flag it
@@ -115,17 +159,20 @@ def build(
 
     overlay_xy = None
     fit_rms = None
+    fit_scale = None
     if (primary_loop_xy is not None and len(primary_loop_xy) >= 10
             and loop_xy is not None and len(loop_xy) >= 10):
         # Reuse the centerline's closed-loop cyclic-arc-length similarity fit: align the
         # reference loop ONTO the primary best-lap loop, so it draws in the primary's frame.
         fitted, info = reference.fit_loop_to_loop(loop_xy, primary_loop_xy)
         fit_rms = float(info["rms"])
-        if fit_rms <= MAP_FIT_RMS_TOL_M:
+        fit_scale = float(info["scale"])
+        if fit_is_drawable(fit_rms, fit_scale):
             overlay_xy = fitted
 
     return ReferenceLap(
         dist=dist, speed_kmh=speed_kmh, elapsed=elapsed, total_time=total_time,
         source_label=source_label, lap_id=lap_id,
         overlay_xy=overlay_xy, map_fit_rms=fit_rms, is_geometric=is_geometric,
+        map_fit_scale=fit_scale,
     )

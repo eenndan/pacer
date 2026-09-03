@@ -870,6 +870,9 @@ class MapView(QWidget):
         self._provisional_label: pg.TextItem | None = None
         self._start: _TimingLine | None = None
         self._sectors: list[_TimingLine] = []
+        # The (reference label, ring-missing) state the "no reference line" notice was last posted
+        # for — declared before _rebuild/_refresh_best, which consult it. See _note_missing_reference.
+        self._ref_note_key: tuple | None = None
         self._rebuild(session.start_line, session.sector_lines)
         self._refresh_best()
 
@@ -1073,8 +1076,14 @@ class MapView(QWidget):
             return
         m = 8  # px inset from the panel edges (same as _reposition_key)
         host = self.widget
-        notice.setFixedWidth(max(min(host.width() - 2 * m, NOTICE_MAX_W_PX), 120))
-        notice.adjustSize()
+        w = max(min(host.width() - 2 * m, NOTICE_MAX_W_PX), 120)
+        notice.setFixedWidth(w)
+        # A word-wrapped QLabel's sizeHint is its ONE-LINE hint, so adjustSize() alone sizes the
+        # plate for one line and paints the rest outside it — measured on the reference notice
+        # below: 5 wrapped lines in a 70 px plate, top and bottom lines sliced through. Ask the
+        # label what the text needs at the width just pinned; sizeHint stays the floor so the
+        # existing one-line notices keep their exact geometry.
+        notice.setFixedHeight(max(notice.heightForWidth(w), notice.sizeHint().height()))
         notice.move(m, m)
 
     def _reposition_key(self):
@@ -1500,10 +1509,42 @@ class MapView(QWidget):
         return "painted"
 
     # --------------------------------------------------------------- lap overlays
+    def _note_missing_reference(self, ref_xy):
+        """Say WHY the map is not drawing a loaded reference's racing line, once per state change.
+
+        A reference whose spatial fit is refused (too far off the primary loop, or the wrong SIZE
+        — see cross_reference.fit_is_drawable) leaves `reference_overlay_xy()` None, and the map
+        quietly falls back to the local best-lap ghost. That fallback is correct — a mis-fitted
+        ring is worse than none, because it looks like data — but on its own it is indistinguishable
+        from "the reference loaded fine", so the user is left to wonder which faint line they are
+        looking at. The map owns the surface the line is missing from, so it explains it here, on
+        the canvas where the change happened (the same reasoning as the sector notices).
+
+        Keyed on (label, missing) so the 30 Hz `set_current_lap` tick and every re-segmentation
+        re-run it for free; nothing is latched before the notice widget exists (early in __init__),
+        so a reference already active at construction is still explained on the first real refresh."""
+        if getattr(self, "_notice", None) is None:
+            return
+        # reference_label() is None exactly when no reference is active — the same identity the
+        # drawn-ring branch below keys on. getattr-guarded like the view's other session reads, so
+        # a minimal test double without the F7 seam behaves as "no reference" rather than raising.
+        label = getattr(self.session, "reference_label", lambda: None)()
+        key = (label, ref_xy is None)
+        if key == self._ref_note_key:
+            return
+        self._ref_note_key = key
+        if label is None or ref_xy is not None:
+            return
+        self._post_notice(
+            f"Reference “{label}” loaded — but its racing line is not drawn: it doesn't match "
+            "this lap's shape and size closely enough to place honestly. The faint line is your "
+            "own best lap; the Δ charts and lap table still compare against the reference.")
+
     def _refresh_best(self):
         """Draw the faint reference (local best lap, or the F7 cross-recording reference ring when
         one is loaded); redraws only when the drawn identity changes."""
         ref_xy = self.session.reference_overlay_xy()
+        self._note_missing_reference(ref_xy)
         if ref_xy is not None:
             # Key the reference distinctly from any lap id so switching always rebuilds.
             key = ("ref", self.session.reference_label())
