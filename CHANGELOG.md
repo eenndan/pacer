@@ -96,6 +96,21 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Changed
 
+- **DATA TRUST is a list of facts, not a paragraph.** The card was a single word-wrapping label
+  holding up to seven `·`-separated sentences joined by newlines — the densest block on a page
+  otherwise made entirely of values-with-names, and the only thing on it you had to read rather
+  than scan. Each fact is now its own row: a dim term on the left ("Timing", "g-meter", "IMU↔GPS
+  cross-check") and its value on the right, wrapping inside the pane so nothing can be cut again.
+  The trust-BREAKING facts — an unconfirmed start line, an unknown track, laps left out of every
+  statistic, in-lap GPS dropouts — lead the card and are marked ⚠, so it can no longer read the
+  same on a session where three of them are wrong and one where none are. Every sentence is the
+  one that shipped; nothing moved into a tooltip, and in particular the IMU↔GPS lateral GAIN is
+  still stated on the surface.
+- **The Stats page's spacing is on the design scale.** The tile grid's 18 px columns and 1 px
+  value-to-caption gap, and the page's 6 px block gap, were the last off-scale dimensions on this
+  surface; they are now `SPACE_L`, `SPACE_XXS` and `SPACE_XS`, and the stat tile itself has moved
+  into `studio/widgets.py` as `Tile` so the Library and Coaching pages can use the same object.
+
 - **Visible control changes from the control-vocabulary pass.** Icon buttons are one 28x28 size
   with a 16 px glyph, so the four ⛶ panel buttons grew 2 px wider and the five video-transport
   buttons lost 4 px of width and 2 px of glyph — the transport row now agrees with the "Compare"
@@ -138,6 +153,36 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   agents posture).
 
 ### Fixed
+
+- **The Stats page no longer clips DATA TRUST mid-word, and no longer scrolls sideways in its own
+  quadrant.** Two widgets pinned themselves WIDER than the pane they live in — the widest report
+  table to the exact width of its nine columns (730 px) and the friction circle to 2:1 around a
+  fixed 220 px height (440 px) — and the larger of those became the scroll body's minimum. So in
+  the 503 px quadrant the app opens at, the whole page was laid out 742 px wide and then had to be
+  scrolled to: every section heading, every tile row and the entire DATA TRUST card was wrapping at
+  a width the reader could not see, and the card's longest line ran 61 px past the right edge and
+  stopped mid-number ("…longitudinal r=+0.82 · 3468"). At 1280x800 it was 119 px. Both widgets now
+  size themselves from the pane — a report table takes `min(pane, its own columns)` and grows its
+  OWN horizontal scrollbar when the pane is narrower, so no column is ever hidden without a bar
+  saying so, and the friction circle shrinks with the pane instead of forcing the page wider than
+  itself. Measured after: body width equals the viewport, no page-level horizontal scrollbar, and
+  0 px of the trust card off-screen at 1440x900 and 1280x800, in the quadrant and maximized, in
+  both palettes.
+- **The charts panel's axis names are no longer sliced.** `speed (km/h)` and `Δ to ideal (s)` lost
+  their left 2 px and `distance (m)` its bottom 5.8 px — at every window size, from 1440x900 down
+  to the app's own 845x414 minimum, because the cause was arithmetic rather than a squeeze:
+  pyqtgraph reserves `0.8 ×` an axis title's bounding height and then places the title 5 px further
+  OUT than it reserved, and Pacer's 2 px focus-ring border on every chart leaves the last rows of
+  the scene outside the viewport. The panel now MEASURES what its titles need and reserves it,
+  rounded up to the spacing scale, so the budget follows the font instead of a constant chosen
+  against one machine's. Measured after: 0 px of overflow on every title at both window sizes and
+  at the window minimum.
+- **The friction circle can state which way is braking again.** Its rotated y-axis title
+  ("longitudinal g (− braking · + accelerating)") is a 304 px box and the axis is 173 px tall in
+  the quadrant, so pyqtgraph centred it and cut 88 px off BOTH ends — including the word
+  "accelerating". Both axis titles are now stacked over two or three short lines, which costs
+  thickness the axis has to spare and saves length it does not, and both get the same measured
+  gutter as the charts panel (the x title was losing 7.4 px through its descenders).
 
 - **The status bar no longer spends window height on a chip nobody can see.** `QStatusBar` sizes
   itself from its children's size hints and counts a permanent widget that is merely HIDDEN, so the

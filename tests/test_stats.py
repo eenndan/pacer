@@ -698,8 +698,8 @@ def test_stats_view_renders_every_group():
     assert not v.t_theoretical.value.font().italic()
     assert "not a lap you drove" in v.t_theoretical.toolTip()
     assert "not a lap you drove" in v.t_rolling.toolTip()
-    assert "agree" in v.trust_label.text()                   # the cross-check's first UI surface
-    assert "GPS9 true clock" in v.trust_label.text()
+    assert "agree" in v.trust_card.text()                   # the cross-check's first UI surface
+    assert "GPS9 true clock" in v.trust_card.text()
     print("test_stats_view_renders_every_group OK")
 
 
@@ -723,7 +723,7 @@ def test_stats_view_hides_signal_absent_sections():
 
 def test_stats_tiles_paint_a_value_over_a_smaller_caption():
     """W10-01: the page's whole type hierarchy, measured as PAINTED — the tile value at
-    TILE_VALUE_PT semibold over a CAPTION-sized caption, and the three page-level captions
+    theme.EMPHASIS semibold over a CAPTION-sized caption, and the page-level captions
     (DATA TRUST, the no-g note, the g-g key) at CAPTION too.
 
     Shipped, every one of the 29 tiles painted 13 px over 13 px: the theme's base QSS rule carried
@@ -732,24 +732,35 @@ def test_stats_tiles_paint_a_value_over_a_smaller_caption():
     and it measured a page the app never rendered. Hence fontInfo(), not font(), and hence
     tests/_qtapp.py at the top of the file."""
     _app()
-    from studio import theme
-    from studio.stats_panel import TILE_VALUE_PT, StatsView, _Tile
+    from studio import stats_panel, theme
+    from studio.stats_panel import StatsView
+    from studio.widgets import Tile
+
+    # The alias is GONE, not merely equal: the tile and its type step are app vocabulary now
+    # (widgets.Tile / theme.EMPHASIS), and a page-local name for either is what this phase removed.
+    assert not hasattr(stats_panel, "TILE_VALUE_PT"), "the local alias for theme.EMPHASIS is gone"
+    assert not hasattr(stats_panel, "_Tile"), "the page-private tile is gone; widgets.Tile is it"
 
     v = StatsView(_fake_view_session())
     v.resize(900, 900)
     v.show()
     _settle()
-    tiles = v.findChildren(_Tile)
+    tiles = v.findChildren(Tile)
     assert len(tiles) >= 20, len(tiles)                    # the whole page, not one group
     painted = {(t.value.fontInfo().pixelSize(), t.caption.fontInfo().pixelSize()) for t in tiles}
-    assert painted == {(TILE_VALUE_PT, theme.CAPTION)}, painted
-    assert TILE_VALUE_PT > theme.CAPTION, "the value must outrank its own caption"
+    assert painted == {(theme.EMPHASIS, theme.CAPTION)}, painted
+    assert theme.EMPHASIS > theme.CAPTION, "the value must outrank its own caption"
     # The emphasis half of the hierarchy: a semibold value over a regular caption.
     assert all(int(t.value.fontInfo().weight()) >= int(theme.W_SEMIBOLD) for t in tiles)
     assert all(int(t.caption.fontInfo().weight()) < int(theme.W_SEMIBOLD) for t in tiles)
     # The page's three prose captions share the caption size (they are notes, not body copy).
-    for lab in (v.trust_label, v.no_gmeter_note, v.gg_key):
+    for lab in (v.no_gmeter_note, v.gg_key):
         assert lab.fontInfo().pixelSize() == theme.CAPTION, lab.fontInfo().pixelSize()
+    # ...and so does every half of every DATA TRUST row (the card is a definition list now, so
+    # there are two labels per fact rather than one paragraph).
+    for term, value in v.trust_card._widgets:
+        for lab in (term, value):
+            assert lab.fontInfo().pixelSize() == theme.CAPTION, lab.fontInfo().pixelSize()
     v.hide()
     print(f"test_stats_tiles_paint_a_value_over_a_smaller_caption OK ({len(tiles)} tiles, "
           f"{painted.pop()} px)")
@@ -773,7 +784,7 @@ def test_stats_view_target_tiles_mute_on_provisional_and_degraded_timing():
     from studio import theme
     from studio.data_quality import MEDIA_CLOCK_FALLBACK, TimingQuality
     from studio.lap_table import PROVISIONAL_TOOLTIP, estimated_timing_tooltip
-    from studio.stats_panel import TILE_VALUE_PT, StatsView
+    from studio.stats_panel import StatsView
     from studio.theme import PROVISIONAL_COLOR, C
 
     targets = lambda v: (v.t_theoretical, v.t_rolling)  # noqa: E731 — a local alias, not a def
@@ -811,11 +822,11 @@ def test_stats_view_target_tiles_mute_on_provisional_and_degraded_timing():
         assert not t.value.fontInfo().italic(), "restored target tile must not stay italic"
         assert C.text in t.value.styleSheet(), t.value.styleSheet()
     # ...and muting never costs the tile its type: the cue is the slant and the colour, not a
-    # size change (the value stays TILE_VALUE_PT over a CAPTION caption in both states).
+    # size change (the value stays theme.EMPHASIS over a CAPTION caption in both states).
     sess.timing_verified = False
     v.refresh()
     for t in targets(v):
-        assert t.value.fontInfo().pixelSize() == TILE_VALUE_PT, t.value.fontInfo().pixelSize()
+        assert t.value.fontInfo().pixelSize() == theme.EMPHASIS, t.value.fontInfo().pixelSize()
         assert t.caption.fontInfo().pixelSize() == theme.CAPTION
     print("test_stats_view_target_tiles_mute_on_provisional_and_degraded_timing OK")
 
@@ -1295,10 +1306,10 @@ def test_trust_card_states_the_lateral_gain():
     session = _fake_view_session()
     session.gmeter_cross = lambda: good
     v_good = StatsView(session)
-    text_good = v_good.trust_label.text()
+    text_good = v_good.trust_card.text()
     session.gmeter_cross = lambda: halved
     v_bad = StatsView(session)
-    text_bad = v_bad.trust_label.text()
+    text_bad = v_bad.trust_card.text()
     assert "gain ×1.11" in text_good, text_good
     assert "gain ×0.56" in text_bad, text_bad
     assert "agree" in text_good and "DISAGREE" in text_bad
@@ -1382,17 +1393,30 @@ def test_stats_view_trust_card_names_the_sessions_own_problems():
     sess.timing_verified = False
     sess.track_name = None
     v = StatsView(sess)   # bound, not inlined: a dropped StatsView deletes its own QLabels
-    text = v.trust_label.text().lower()
+    text = v.trust_card.text().lower()
     assert "auto-fitted, not confirmed" in text
     assert "track: unknown" in text
     # Both counts stated, and the denominator is the laps FOUND (lap_count) — not valid+excluded,
     # which would be arithmetic invented to make the two numbers meet.
-    assert "statistics use 2 of the 5 laps found" in text and "3 ⊘ excluded" in text
+    assert "statistics use: 2 of the 5 laps found" in text and "3 ⊘ excluded" in text
+    # ...and each of those is its OWN row, marked as a caveat — that is what the card being a fact
+    # list rather than a paragraph buys, and it is what makes the alarms scannable. The caveats
+    # lead: no provenance row may sort above one.
+    caveats = [t for t, _v, c in v.trust_card.rows() if c]
+    assert {"Start/finish line", "Track", "Statistics use"} <= set(caveats), caveats
+    marks = [c for _t, _v, c in v.trust_card.rows()]
+    assert marks == sorted(marks, reverse=True), f"caveats must lead the card: {marks}"
 
     clean = StatsView(_fake_view_session(excluded=()))  # verified, named track, nothing dropped
-    text = clean.trust_label.text().lower()
+    text = clean.trust_card.text().lower()
     for phrase in ("auto-fitted", "track: unknown", "excluded"):
         assert phrase not in text, f"clean session must not claim {phrase!r}"
+    # (the fixture does carry a ⚠ dropout lap, so "no caveats at all" is not the claim — the claim
+    # is that the three the session does not have are absent, and that the caveats still lead)
+    clean_marks = [c for _t, _v, c in clean.trust_card.rows()]
+    assert clean_marks == sorted(clean_marks, reverse=True), clean_marks
+    assert {"Start/finish line", "Track", "Statistics use"}.isdisjoint(
+        {t for t, _v, c in clean.trust_card.rows() if c}), clean.trust_card.rows()
     print("test_stats_view_trust_card_names_the_sessions_own_problems OK")
 
 
@@ -1408,9 +1432,9 @@ def test_stats_view_trust_card_names_the_moving_fix_population():
     sess = _fake_view_session()
     sess.timing_quality = TimingQuality(dropped_fraction=0.0)   # the raw gate DID drop fixes
     v = StatsView(sess)
-    line = next(ln for ln in v.trust_label.text().split("\n") if ln.startswith("Timing:"))
+    line = next(ln for ln in v.trust_card.text().split("\n") if ln.startswith("Timing:"))
     assert line == "Timing: GPS9 true clock · 0% of moving fixes rejected", line
-    assert "WHILE MOVING" in v.trust_label.toolTip()
+    assert "WHILE MOVING" in v.trust_card.toolTip()
     # The measured value is the shipped one — the fix was the sentence, not the maths.
     assert sess.timing_quality.dropped_pct() == 0
     print("test_stats_view_trust_card_names_the_moving_fix_population OK")
@@ -1423,13 +1447,13 @@ def test_stats_view_states_the_missing_accelerometer():
     from studio.stats_panel import NO_GMETER_NOTE, StatsView
 
     v = StatsView(_fake_view_session(has_g=False))
-    assert NO_GMETER_NOTE in v.trust_label.text()
+    assert NO_GMETER_NOTE in v.trust_card.text()
     assert v.no_gmeter_note.isVisibleTo(v)                  # said again beside the dashes
     assert v.t_peak_lat.value.text() == "—"                 # the dash it explains
     v = StatsView(_fake_view_session(has_g=True))
-    assert NO_GMETER_NOTE not in v.trust_label.text()
+    assert NO_GMETER_NOTE not in v.trust_card.text()
     assert not v.no_gmeter_note.isVisibleTo(v)
-    assert "IMU lateral" in v.trust_label.text()
+    assert "IMU lateral" in v.trust_card.text()
     print("test_stats_view_states_the_missing_accelerometer OK")
 
 
@@ -1447,7 +1471,7 @@ def test_stats_view_zero_lap_page_explains_itself():
     # No provisional banner and no "every lap time BELOW" line when there is nothing below —
     # the empty-state block already names placing the start line as the next action.
     assert not v.provisional_banner.isVisibleTo(v)
-    assert "below" not in v.trust_label.text().lower()
+    assert "below" not in v.trust_card.text().lower()
     note = v.no_laps_note.text().lower()
     assert "no complete laps" in note and "start/finish line" in note   # reason + next action
     assert not v._pace_section.isVisibleTo(v) and not v._speed_section.isVisibleTo(v)
@@ -1457,7 +1481,7 @@ def test_stats_view_zero_lap_page_explains_itself():
               if getattr(v, n).isVisibleTo(v) and getattr(v, n).value.text() == "—"]
     assert dashed == [], f"dash-only tiles still visible: {dashed}"
     assert v.t_duration.isVisibleTo(v) and v.t_duration.value.text() == "1:01"  # real recording
-    assert v.trust_label.text() != "—"                       # the diagnostic stays on the page
+    assert v.trust_card.text() != "—"                       # the diagnostic stays on the page
     # Reversible: a re-segmentation that finds laps restores every group.
     v.session = _fake_view_session()
     v.refresh()
@@ -1481,7 +1505,7 @@ def test_stats_view_trust_card_is_above_the_fold():
     v.resize(1728, 1025)
     v.show()
     app.processEvents()
-    lab = v.trust_label
+    lab = v.trust_card
     y = lab.mapTo(v._scroll.widget(), lab.rect().topLeft()).y()
     viewport = v._scroll.viewport().height()
     assert 0 < y < viewport, f"trust card at y={y} is outside the first {viewport}px viewport"
@@ -1613,3 +1637,131 @@ if __name__ == "__main__":
     for t in tests:
         t()
     print(f"\nALL {len(tests)} STATS TESTS PASSED")
+
+
+# ------------------------------------------------------------- Phase 4: the page fits its pane
+#: The two widths this page's own quadrant has at the app's shipped window sizes, measured on the
+#: real CentralView (1440x900 -> 503 px of viewport, 1280x800 -> 445). The page is a QUADRANT
+#: first and a ⌘⇧S dashboard second, and every legibility claim below is made at these two.
+QUADRANT_WIDTHS = (503, 445)
+
+
+def _laid_out(width, height=760, **kw):
+    """A real, shown, settled StatsView at a given pane size."""
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session(**kw))
+    v.resize(width, height)
+    v.show()
+    _settle(8)
+    return v
+
+
+def test_the_stats_page_never_scrolls_sideways_in_its_own_quadrant():
+    """The page laid itself out WIDER than the pane it lives in, and then scrolled to it.
+
+    Each report table pinned itself to the exact width of its own columns and the friction circle
+    to 2:1 around a 220 px height — 730 px and 440 px against a 503 px quadrant. The larger of
+    those became the scroll body's minimum, so every section heading, every tile row and the whole
+    DATA TRUST card was wrapped at a width the reader could not see and then had to be dragged
+    into view. Measured on the shipped default: body 742 px inside a 503 px viewport.
+
+    The contract is the body's width, not the scrollbar's visibility, because that is the thing
+    that decides where every other widget on the page wraps."""
+    for width in QUADRANT_WIDTHS:
+        v = _laid_out(width)
+        viewport = v._scroll.viewport()
+        body = v._scroll.widget()
+        assert body.width() <= viewport.width(), (
+            f"the Stats page lays out {body.width()}px of content in a {viewport.width()}px "
+            f"pane, so everything on it wraps to a width the reader cannot see")
+        assert not v._scroll.horizontalScrollBar().isVisible(), (
+            f"horizontal scrollbar on the Stats page at a {width}px quadrant")
+        # ...and the honesty rule the page-level scroll used to buy is KEPT, moved to the widget
+        # that actually overflows: a report table narrower than its columns grows its OWN bar
+        # rather than clipping a column in silence.
+        for table in (v.lap_table, v.corners_table):
+            if not table.isVisible():
+                continue
+            assert table.width() <= viewport.width(), (table.width(), viewport.width())
+            content = sum(table.columnWidth(c) for c in range(table.columnCount()))
+            if content > table.viewport().width():
+                assert table.horizontalScrollBar().isVisible(), (
+                    f"{table.objectName() or table} hides {content - table.viewport().width()}px "
+                    f"of columns with no scrollbar to say so")
+        v.hide()
+    print(f"test_the_stats_page_never_scrolls_sideways_in_its_own_quadrant OK ({QUADRANT_WIDTHS})")
+
+
+def test_the_data_trust_card_fits_the_pane_it_is_given():
+    """DATA TRUST was clipped mid-word, and the fix is structural rather than a smaller font.
+
+    Shipped, the card was one word-wrapping QLabel holding up to seven `·`-separated sentences.
+    It wrapped at the scroll BODY's width — which the over-wide report tables had pushed to 742 px
+    inside a 503 px quadrant — so its longest line ran 61 px past the right edge of the viewport
+    and simply stopped ("…longitudinal r=+0.82 · 3468"). At 1280x800 it was 119 px.
+
+    Measured the way the defect was: the width the text PAINTS at, against the width the pane can
+    show. Asserted at both quadrant widths AND at dashboard width, because the card has to survive
+    a ~500 px column and the maximized ⌘⇧S page with the same treatment."""
+    from PySide6.QtCore import QRect, Qt
+    worst = []
+    for width in (*QUADRANT_WIDTHS, 1420):
+        # The worst case: every caveat present as well as every provenance fact.
+        v = _laid_out(width, excluded=(5, 6, 7))
+        v.session.timing_verified = False
+        v.session.track_name = None
+        v.refresh()
+        _settle(8)
+        card = getattr(v, "trust_card", None) or v.trust_label
+        viewport = v._scroll.viewport()
+        # Every text-bearing half of the card, painted at the width the layout gave it.
+        labels = ([w for pair in card._widgets for w in pair if w.isVisible()]
+                  if hasattr(card, "_widgets") else [card])
+        assert labels
+        for label in labels:
+            painted = label.fontMetrics().boundingRect(
+                QRect(0, 0, max(label.width(), 1), 10000), Qt.TextWordWrap, label.text())
+            right = label.mapTo(v._scroll.widget(), label.rect().topLeft()).x() + painted.width()
+            worst.append(right - viewport.width())
+            assert right <= viewport.width(), (
+                f"at a {width}px pane the DATA TRUST line {label.text()[:40]!r} paints to "
+                f"{right}px in a {viewport.width()}px viewport — {right - viewport.width()}px of "
+                f"it is off-screen")
+        v.hide()
+    print(f"test_the_data_trust_card_fits_the_pane_it_is_given OK "
+          f"(worst margin {-max(worst)}px to spare)")
+
+
+def test_the_friction_circles_axis_titles_fit_inside_the_chart():
+    """The one chart on this page painted 88 px of its y-axis title outside itself.
+
+    pyqtgraph rotates a left-axis title, so its LENGTH is spent vertically: "longitudinal g
+    (− braking · + accelerating)" is a 304 px box, and the axis is 173 px tall in the quadrant.
+    Both ends were cut, including the word "accelerating" — the half of the label that says which
+    way is braking. The x title lost 7.4 px through its descenders to a separate defect: pyqtgraph
+    reserves 0.8 of a title's bounding height and then nudges the title 5 px further out (see
+    widgets.budget_plot_gutters).
+
+    Measured in SCENE coordinates against what the viewport can show, because that is the
+    rectangle that decides which pixels exist."""
+    for width in (*QUADRANT_WIDTHS, 1420):
+        v = _laid_out(width)
+        plot = v.gg.getPlotItem()
+        viewport = v.gg.viewport()
+        seen = 0
+        for side in ("left", "bottom"):
+            axis = plot.getAxis(side)
+            label = axis.label
+            assert axis.labelText, f"the {side} axis lost its title"
+            r = label.mapRectToScene(label.boundingRect())
+            seen += 1
+            over = {"left": -r.left(), "top": -r.top(),
+                    "right": r.right() - viewport.width(),
+                    "bottom": r.bottom() - viewport.height()}
+            bad = {k: round(px, 1) for k, px in over.items() if px > 0.5}
+            assert not bad, (
+                f"at a {width}px pane the friction circle's {side} title "
+                f"{axis.labelText!r} paints outside the chart: {bad}")
+        assert seen == 2
+        v.hide()
+    print("test_the_friction_circles_axis_titles_fit_inside_the_chart OK")
