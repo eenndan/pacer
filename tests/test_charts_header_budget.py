@@ -1,24 +1,22 @@
-"""Regression tests for the CHARTS/MAP header width budget (QA-sweep batch B02).
+"""Regression tests for the CHARTS/MAP panel chrome (QA-sweep batch B02, restated after the
+header/toolbar split).
 
-Six findings, one bar. The charts header carries a 391 px hero readout, its reference chip, two
-chart toggles, the x-axis combo and the ⛶ button inside a quadrant that is 917 px at the app's own
-1440x900 default — over-subscribed by construction — and every finding here is a way that
-over-subscription surfaced:
+WHAT THIS FILE USED TO GUARD. Six findings, one bar. The charts header carried a 391 px hero
+readout, its reference chip, two chart toggles, the x-axis combo and the ⛶ button inside a quadrant
+that is 917 px at the app's own 1440x900 default — over-subscribed by construction — and every
+finding was a way that over-subscription surfaced:
 
   * L6-01 (REGRESSION of #125) — the bar led with "Δideal" while the chart under it plotted
     Δ-to-BEST, and the label naming the chart's baseline was hidden at every width the app ships
     at. #122 made that label the bar's first casualty while it genuinely was decorative; #125 then
     handed it the baseline naming without moving it up the yield order, so #122's gate won 100 % of
-    the time (needed 1040 px against a 917 px bar; the label reappeared only from a ~1633 px
-    window, and the commit records verification at 1511x940). Nothing on screen was FALSE — the
-    y-axis and the legend both name the baseline — but the header led with a different one.
+    the time (needed 1040 px against a 917 px bar).
   * L2-02 (REGRESSION of #125) — with the label hidden the controls still did not fit at 1280x800:
     "Brake/Throttle" (88 px of text) painted into a 60 px content box, "Ideal lap" (52) into 24 and
     "x: distance" (67) into 40, all centre-clipped with no ellipsis, and the combo had no tooltip.
-    The file's own comment promised these "elide to their icon (meaning intact in the tooltip)";
-    nothing implemented it. NOTE the trap: qa.strings-style PAD estimates put those shortfalls at
-    2/2/7 px — the real QStyle content rects put them at 24/24/27, so these tests measure
-    SE_PushButtonContents / SC_ComboBoxEditField, never an estimate.
+    NOTE the trap: qa.strings-style PAD estimates put those shortfalls at 2/2/7 px — the real
+    QStyle content rects put them at 24/24/27, so these tests measure SE_PushButtonContents /
+    SC_ComboBoxEditField, never an estimate.
   * L2-03 — the right column's 360 px minimum was below the bar's own minimum, so at that minimum
     QHBoxLayout resolved the shortfall by letting children OVERLAP: the hero ran 39 px past the
     header's right edge and the amber chip painted 307 px inside the hero's rect.
@@ -26,11 +24,26 @@ over-subscription surfaced:
     and neither sector button carried a tooltip (the destructive one included).
   * L2-08 — the ⛶ buttons were 26x22, under the 24x24 hit-target floor, and they are the only
     always-visible affordance that restores a maximized panel.
-  * IA-03 — the largest text in the window (the hero, 16.05 px cap, 1.70x the lap-table cell font)
-    is Δ-to-ideal on the lap the app opens on, which is the BEST lap: the ideal is stitched from
-    the driver's own best sections, so it is structurally ~0 there (max |Δ| measured across a whole
-    real best lap: 0.08 s). The type scale lives in theme.py's QSS, so the size is not this file's
-    to change — what IS fixable here is the honesty: say why the number cannot move.
+  * IA-03 — the largest text in the window (the hero) is Δ-to-ideal on the lap the app opens on,
+    which is the BEST lap, where the ideal is structurally ~0. What is fixable is the honesty: say
+    why the number cannot move.
+
+WHAT CHANGED, AND WHY THE CONTRACTS SURVIVED THE REWRITE. The fix for all of that was a four-tier
+width-budget ladder (`_measure_plots_budget` / `_fit_plots_header` + a resize `eventFilter`) that
+chose, at every resize, how much of the panel's IDENTITY to trade away for control text. The
+header/toolbar split deletes the ladder: identity + the live hero readout stay in a `PanelHeader` of
+declared height, every control moves to a `PanelToolbar` below, and the two stop sharing one width
+budget. So the tests below assert the SAME properties — nothing centre-clipped, nothing overlapping,
+the baseline always named, every ⛶ over the hit floor — against a structure where they hold by
+construction rather than by arithmetic.
+
+ONE CONTRACT IS DELIBERATELY GONE, and it is the one that was about the ladder itself:
+`test_charts_bar_keeps_naming_the_baseline_when_the_toggles_must_yield` pinned a YIELD ORDER —
+"identity outranks control text when the bar cannot hold both". There is no shortfall to spend any
+more (measured below: the label, the hero and every control paint in full at 1440x900, at 1280x800
+and at the column minimum), so an assertion about which item gives way first would be asserting the
+behaviour of code that no longer exists. Its real content — the naming survives a cramped panel —
+is now the stronger claim in `test_charts_header_names_the_baseline_at_every_width_it_can_reach`.
 
 Run: QT_QPA_PLATFORM=offscreen python tests/test_charts_header_budget.py
 """
@@ -53,24 +66,21 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 # THEMED BEFORE THE FIRST WIDGET, which is the order studio/app.py uses and the order this file's
-# numbers depend on: central_view freezes the x-axis combo's minimumWidth from its construction
-# -time sizeHint, so a view built unthemed and measured themed reports a control whose box was
-# sized in a different font ("x: distance" needing 64 px in a 55 px box). _Themed used to apply the
-# theme after building the view AND restore the prior font on exit, which made every measurement a
-# function of how many _Themed blocks had run before it.
+# numbers depend on: every dimension here comes from the painted fonts (the hero is styled in the
+# mono stack at HERO/600), so a view built unthemed and measured themed reports a different app.
 _APP = themed_app()
 
 # The real production CentralView over the deterministic stadium-loop synthetic — the same fixture
 # the rest of the real-Qt view tests build on.
 from test_central_view_realqt import _real_central_view  # noqa: E402
 
-from studio import plots_view  # noqa: E402
+from studio import plots_view, theme  # noqa: E402
 from studio.central_view import (  # noqa: E402
-    _PLOTS_CHIP_BEST,
-    _PLOTS_CHIP_REF,
     _PLOTS_LABEL_BEST,
+    _PLOTS_LABEL_IDEAL,
     _PLOTS_LABEL_REF,
 )
+from studio.widgets import PanelHeader, PanelToolbar  # noqa: E402
 
 
 def _settle(n=6):
@@ -80,10 +90,9 @@ def _settle(n=6):
 
 class _Themed:
     """A shown CentralView at `size`, built under the module-scope theme. The theme is mandatory,
-    not decoration: every number the header budget is made of comes from the painted fonts (the
-    hero is styled in the mono stack at HERO/600), so measuring an unthemed view measures a
-    different app — and so does measuring a view that was BUILT unthemed and themed afterwards,
-    which is what this class used to do."""
+    not decoration: every number the panel chrome is made of comes from the painted fonts, so
+    measuring an unthemed view measures a different app — and so does measuring a view that was
+    BUILT unthemed and themed afterwards, which is what this class used to do."""
 
     def __init__(self, size=(1440, 900)):
         self.view, self.session = _real_central_view()[:2]
@@ -132,162 +141,197 @@ def _assert_readable(controls):
 
 
 def _set_right_column(view, px):
-    """Give the charts column exactly `px` (the header spans it), settled."""
+    """Give the charts column exactly `px` (the panel spans it), settled."""
     total = sum(view._main_splitter.sizes())
     view._main_splitter.setSizes([total - px, px])
     _settle(6)
 
 
 def _charts_controls(view):
-    return (view.plots.brake_throttle_btn, view.plots.ideal_btn, view.plots.x_mode_combo)
+    return (view.ideal_readout_btn, view.plots.brake_throttle_btn, view.plots.ideal_btn,
+            view.plots.x_mode_combo)
 
 
-def test_charts_bar_names_the_chart_baseline_at_the_shipped_default():
-    """L6-01. At the app's own 1440x900 the bar must name the baseline the LOWER CHART draws, and
-    name the same one the y-axis does. Before this fix the label was hidden at 1440 / 1500 / 1600
-    and only returned from a ~1633 px window."""
-    with _Themed((1440, 900)) as view:
-        label, header = view._plots_label, view._plots_header_widget
-        assert header.width() >= 900, header.width()   # the shipped quadrant, not a wide window
-        assert label.isVisible(), f"baseline naming hidden in a {header.width()}px bar"
-        axis = view.plots.p_delta.getAxis("left").labelText
-        wanted = "IDEAL" if "ideal" in axis.lower() else "BEST"
-        assert wanted in label.text(), (label.text(), axis)
-        print(f"test_charts_bar_names_the_chart_baseline_at_the_shipped_default OK "
-              f"({label.text()!r} over {axis!r} in a {header.width()}px bar)")
+def _map_controls(view):
+    return (view.map.rainbow_combo, view.map.snap_btn,
+            view.map.add_sector_btn, view.map.reset_sectors_btn)
 
 
-def test_charts_bar_keeps_naming_the_baseline_when_the_toggles_must_yield():
-    """L6-01, the other half: the naming outranks control TEXT. At 1280x800 the bar cannot hold
-    both, so the toggles drop to their icon and the short chip stays — the inverse of the order
-    #122 established and #125 inherited."""
-    with _Themed((1280, 800)) as view:
-        label = view._plots_label
-        assert label.isVisible(), "the short baseline chip must survive a 1280x800 bar"
-        assert "Δ" in label.text(), label.text()
-        assert [b.text() for b, _n in view._plots_toggles] == ["", ""], "the toggles must yield"
-        print(f"test_charts_bar_keeps_naming_the_baseline_when_the_toggles_must_yield OK "
-              f"({label.text()!r})")
+def _column_floor(view):
+    """The narrowest the charts column can be dragged. Derived from the live splitter rather than
+    from a constant, because the whole point of the rewrite is that nobody computes this number by
+    hand any more — Qt derives it from what the panels actually need."""
+    return view._right_splitter.minimumSizeHint().width()
 
 
-def test_the_bar_names_a_cross_recording_reference_at_both_shipped_sizes():
-    """QA-W2R-03 + the width judgement it forces. The bar's label had exactly two states, so with a
-    reference loaded it painted "SPEED · Δ TO BEST" over a chart measured against ANOTHER
-    recording's lap. Adding the third state is the fix; choosing its WORDING is the risk, because
-    this bar is over-subscribed by construction and #122/#125 both lost the naming to a caption
-    that grew (L6-01 above).
+def _chrome_children(bar):
+    """The visible child widgets of a header/toolbar, left to right."""
+    return sorted([k for k in bar.children() if isinstance(k, QWidget) and k.isVisible()],
+                  key=lambda k: k.geometry().x())
 
-    So the wording is pinned by width, not by taste: the REF pair must be no wider than the BEST
-    pair it joins, which makes it impossible for this caption to cost the bar anything the shipped
-    one does not already cost. Measured, the alternative "SPEED · Δ TO REFERENCE" needs 1033 px
-    against an 815 px bar at 1280x800 and drops the fit pass all the way to its no-label floor
-    tier — the naming would VANISH at the smaller of the app's two shipped sizes, which is exactly
-    the regression this file exists to catch."""
-    for size, want in (((1440, 900), "SPEED · Δ TO REF"), ((1280, 800), "Δ REF")):
+
+# ============================================================ identity
+def test_charts_header_names_the_baseline_at_every_width_it_can_reach():
+    """L6-01, strengthened. The header must name the baseline the LOWER CHART draws, and name the
+    same one the y-axis does. Before the fix the label was hidden at 1440 / 1500 / 1600 and only
+    returned from a ~1633 px window; after the first fix it survived, but as a four-character chip
+    at the app's smaller shipped size.
+
+    Now it is checked at BOTH shipped sizes AND at the narrowest the column can be dragged, and the
+    text must be the FULL wording at all three — there is no abbreviated tier left to fall back to,
+    because the label no longer competes with anything for width."""
+    for size in ((1440, 900), (1280, 800)):
         with _Themed(size) as view:
             label = view._plots_label
-            budget = view._plots_budget or view._measure_plots_budget()
+            axis = view.plots.p_delta.getAxis("left").labelText
+            wanted = "IDEAL" if "ideal" in axis.lower() else "BEST"
+            for px in (view._plots_panel.width(), _column_floor(view)):
+                _set_right_column(view, px)
+                assert label.isVisible(), f"baseline naming hidden in a {px}px panel"
+                assert wanted in label.text(), (label.text(), axis)
+                assert label.text() in (_PLOTS_LABEL_BEST, _PLOTS_LABEL_IDEAL, _PLOTS_LABEL_REF), (
+                    f"the label was abbreviated to {label.text()!r} at {px}px — the degradation "
+                    "ladder is supposed to be gone")
+                assert label.width() >= label.sizeHint().width(), (
+                    f"{label.text()!r} is squeezed below its own width at {px}px")
+    print("test_charts_header_names_the_baseline_at_every_width_it_can_reach OK")
+
+
+def test_the_header_names_a_cross_recording_reference_at_both_shipped_sizes():
+    """QA-W2R-03 + the width judgement it still forces. The label had exactly two states, so with a
+    reference loaded it painted "SPEED · Δ TO BEST" over a chart measured against ANOTHER
+    recording's lap. Adding the third state is the fix; choosing its WORDING is still a risk, but
+    for a DIFFERENT reason than before.
+
+    It used to be that a wider wording lost the naming to a control label. Now the label is part of
+    the charts column's FLOOR — the panel's minimum width is its identity + the hero's 391 px floor
+    + ⛶ — so a wider wording costs the user drag range instead. The constraint is the same shape and
+    is pinned the same way: the REF wording must be no wider than the BEST wording it joins, which
+    makes it impossible for this caption to cost the layout anything the shipped one does not
+    already cost."""
+    for size in ((1440, 900), (1280, 800)):
+        with _Themed(size) as view:
+            label = view._plots_label
+            floor_before = _column_floor(view)
             view._set_delta_baseline_label(plots_view.DELTA_BASELINE_REFERENCE)
-            assert label.isVisible(), f"baseline naming hidden at {size} with a reference loaded"
-            assert label.text() == want, (size, label.text())
+            _settle(4)
+            assert label.text() == _PLOTS_LABEL_REF, (size, label.text())
             assert "BEST" not in label.text(), label.text()
-            # Neither REF string may be wider than the BEST string at the same tier.
-            for ref_text, best_text in ((_PLOTS_LABEL_REF, _PLOTS_LABEL_BEST),
-                                        (_PLOTS_CHIP_REF, _PLOTS_CHIP_BEST)):
-                assert budget["labels"][ref_text] <= budget["labels"][best_text], (
-                    f"{ref_text!r} ({budget['labels'][ref_text]}px) is wider than "
-                    f"{best_text!r} ({budget['labels'][best_text]}px) — the bar cannot afford it")
-            # The abbreviation has the recording behind it (the bar has room for no tier that does).
+            assert label.isVisible() and label.width() >= label.sizeHint().width()
+            assert _column_floor(view) <= floor_before, (
+                f"{_PLOTS_LABEL_REF!r} raised the charts column's floor from {floor_before} to "
+                f"{_column_floor(view)} — the wording may not cost the user drag range")
+            # The abbreviation has the recording behind it (no header-sized wording has room).
             assert label.toolTip(), "an abbreviated caption must carry its meaning on hover"
-            # ...and the naming still outranks the control text, the order L6-01 established.
-            assert [b.text() for b, _n in view._plots_toggles] == ["", ""]
             # Back to the local best: the caption follows the baseline in BOTH directions.
             view._set_delta_baseline_label(plots_view.DELTA_BASELINE_BEST)
-            assert "BEST" in label.text(), label.text()
-    print("test_the_bar_names_a_cross_recording_reference_at_both_shipped_sizes OK")
+            assert label.text() == _PLOTS_LABEL_BEST, label.text()
+    print("test_the_header_names_a_cross_recording_reference_at_both_shipped_sizes OK")
 
 
-def test_no_charts_control_is_ever_centre_clipped():
-    """L2-02. Measured from the real QStyle content rects at both the app's small default and the
-    column minimum. On main: 88px of 'Brake/Throttle' in 60, 52 of 'Ideal lap' in 24, 67 of
-    'x: distance' in 40 — and the combo, the one whose meaning is unrecoverable, had no tooltip."""
-    with _Themed((1280, 800)) as view:
-        assert view.plots.x_mode_combo.toolTip(), "the x-axis combo must say what it switches"
-        _assert_readable(_charts_controls(view))
-        _set_right_column(view, view._right_splitter.minimumWidth())
-        _assert_readable(_charts_controls(view))
-        print("test_no_charts_control_is_ever_centre_clipped OK")
+# ============================================================ the controls
+def test_no_charts_or_map_control_is_ever_centre_clipped():
+    """L2-02 + L2-04. Measured from the real QStyle content rects at both shipped sizes AND at the
+    column minimum. On the pre-fix build: 88px of 'Brake/Throttle' in 60, 52 of 'Ideal lap' in 24,
+    67 of 'x: distance' in 40, 'Add sector' as 'ld sect' and 'Reset sectors' as 'et sec' — and the
+    combo, the one whose meaning is unrecoverable, had no tooltip.
 
-
-def test_charts_header_children_never_overlap_at_the_column_minimum():
-    """L2-03. Drag the main handle fully right: the column must clamp at the bar's own tightest
-    need, not at a 360 px floor the bar cannot honour. On main the hero ran 39 px past the header
-    and the amber chip sat 307 px inside the hero's rect, painting through the live number."""
-    with _Themed((1280, 800)) as view:
-        header = view._plots_header_widget
-        _set_right_column(view, 360)                    # ask for far less than the bar can hold
-        kids = sorted([k for k in header.children() if isinstance(k, QWidget) and k.isVisible()],
-                      key=lambda k: k.geometry().x())
-        prev = None
-        for k in kids:
-            g = k.geometry()
-            assert g.right() < header.width(), (_bar_text(k), g, header.width())
-            if prev is not None:
-                assert g.x() > prev.geometry().right(), (_bar_text(k), g, prev.geometry())
-            prev = k
-        # The specific collision the naive "raise the floors" fix produces, pinned by name.
-        assert view.ideal_readout_btn.geometry().x() > view.diff_box.geometry().right(), (
-            "the 'vs ideal' chip must never paint inside the hero readout")
-        # The column's floor IS the bar's tightest tier (no label, icon-only toggles). It sits
-        # below the header's live minimumSizeHint, which includes whichever label the current tier
-        # is showing — a drag past it drops that tier rather than being refused.
-        assert header.width() == view._right_splitter.minimumWidth(), header.width()
-        assert view._right_splitter.minimumWidth() == view._plots_header_need(
-            view._plots_budget, "", icons=True), view._right_splitter.minimumWidth()
-        print(f"test_charts_header_children_never_overlap_at_the_column_minimum OK "
-              f"(clamped at {header.width()}px)")
-
-
-def test_charts_header_budget_matches_the_layouts_own_chrome():
-    """The arithmetic itself. QBoxLayout charges spacing only BETWEEN non-empty items and both
-    addStretch spacers report empty, so the fixed chrome is margins + spacing x (visible - 1).
-    The old pass summed the ⛶ button's 45 px sizeHint against its 26 px setFixedSize and charged
-    the label's spacing twice: it demanded 1040 px where the layout needs 1013. Pinned as a
-    boundary — one pixel under the computed need must drop a tier, one pixel over must not."""
-    with _Themed((1633, 900)) as view:
-        header, row = view._plots_header_widget, view._plots_header_widget.layout()
-        brake, ideal, combo = _charts_controls(view)
-        margins = row.contentsMargins()
-        # Derived from the widgets and the layout themselves, NOT from the app's own constant, so
-        # this fails on a build whose arithmetic disagrees rather than agreeing with it by
-        # construction. Seven non-empty items => six gaps; the ⛶ button contributes its FIXED
-        # width, not the larger sizeHint the old pass charged for it.
-        need = (margins.left() + margins.right() + row.spacing() * 6
-                + view._plots_label.sizeHint().width() + view.diff_box.minimumWidth()
-                + view.ideal_readout_btn.sizeHint().width() + brake.sizeHint().width()
-                + ideal.sizeHint().width() + combo.sizeHint().width()
-                + view._plots_max_btn.width())
-        _set_right_column(view, need)
-        assert header.width() == need, (header.width(), need)
-        assert view._plots_label.isVisible(), f"the label must fit in exactly {need}px"
-        assert (brake.text(), ideal.text()) == ("Brake/Throttle", "Ideal lap"), "…with full text"
-        _set_right_column(view, need - 1)
-        assert (brake.text(), ideal.text()) == ("", ""), "one px under must drop a tier"
-        assert view._plots_label.isVisible(), "…and the naming still outranks the control text"
-        print(f"test_charts_header_budget_matches_the_layouts_own_chrome OK (need {need}px)")
+    A PanelToolbar pins every child to its sizeHint width (QSizePolicy.Fixed), so the shortfall that
+    used to be resolved by clipping glyphs is now resolved by the splitter refusing the drag. That
+    is what makes this checkable at the floor rather than only at the sizes the app opens at."""
+    for size in ((1440, 900), (1280, 800)):
+        with _Themed(size) as view:
+            assert view.plots.x_mode_combo.toolTip(), "the x-axis combo must say what it switches"
+            for px in (view._plots_panel.width(), _column_floor(view)):
+                _set_right_column(view, px)
+                _assert_readable(_charts_controls(view))
+                _assert_readable(_map_controls(view))
+    print("test_no_charts_or_map_control_is_ever_centre_clipped OK")
 
 
 def test_map_sector_buttons_carry_their_labels_on_hover():
-    """L2-04. 'Add sector' and 'Reset sectors' painted as 'ld sect' / 'et sec' at the column
-    minimum with empty tooltips — so the DESTRUCTIVE one was an unhoverable non-word."""
+    """L2-04's other half — the DESTRUCTIVE button must never be an unhoverable non-word, whatever
+    the layout does to it."""
     with _Themed((1280, 800)) as view:
         for btn, name in ((view.map.add_sector_btn, "Add sector"),
                           (view.map.reset_sectors_btn, "Reset sectors")):
             assert btn.toolTip(), f"{name} has no tooltip"
             assert name.lower() in btn.toolTip().lower(), btn.toolTip()
-        _set_right_column(view, view._right_splitter.minimumWidth())
-        _assert_readable((view.map.snap_btn, view.map.add_sector_btn, view.map.reset_sectors_btn))
-        print("test_map_sector_buttons_carry_their_labels_on_hover OK")
+    print("test_map_sector_buttons_carry_their_labels_on_hover OK")
+
+
+# ============================================================ the layout
+def test_no_panel_chrome_children_ever_overlap_at_the_column_minimum():
+    """L2-03, extended to the toolbars. Drag the main handle fully right: the column must clamp at
+    what the panels HONESTLY need, not at a floor they cannot honour. On the pre-fix build the hero
+    ran 39 px past the header and the amber chip sat 307 px inside the hero's rect, painting through
+    the live number.
+
+    Checked for every header AND every toolbar in the view, because the split created two new rows
+    that can be over-subscribed and it would be an odd kind of progress to fix the old one by
+    shipping two more."""
+    with _Themed((1280, 800)) as view:
+        _set_right_column(view, 100)                    # ask for far less than the panels can hold
+        bars = view.findChildren(PanelHeader) + view.findChildren(PanelToolbar)
+        assert len(bars) >= 6, f"expected 4 headers + 2 toolbars, found {len(bars)}"
+        for bar in bars:
+            if not bar.isVisible():
+                continue
+            prev = None
+            for k in _chrome_children(bar):
+                g = k.geometry()
+                assert g.right() < bar.width(), (type(bar).__name__, _bar_text(k), g, bar.width())
+                assert g.top() >= 0 and g.bottom() < bar.height(), (
+                    f"{_bar_text(k)!r} paints outside its {bar.height()}px row: {g}")
+                if prev is not None:
+                    assert g.x() > prev.geometry().right(), (_bar_text(k), g, prev.geometry())
+                prev = k
+        # The specific collision the naive "raise the floors" fix produces, pinned by name. The
+        # 'vs ideal' chip is no longer even in the same ROW as the hero, which is the structural
+        # version of this assertion — but the hero must still clear whatever IS beside it.
+        hero = view.diff_box
+        assert view.ideal_readout_btn.parentWidget() is view._plots_toolbar, (
+            "'vs ideal' is a control and belongs in the toolbar, not beside the live number")
+        assert hero.geometry().right() < view._plots_max_btn.geometry().x(), (
+            "the hero readout must never paint into the ⛶ button")
+        print("test_no_panel_chrome_children_ever_overlap_at_the_column_minimum OK "
+              f"(clamped at {view._plots_panel.width()}px)")
+
+
+def test_the_charts_column_floor_is_the_headers_own_honest_need():
+    """The arithmetic, restated. This test used to reconstruct a hand-computed width BUDGET and
+    check the app's own constant against it — necessary while a fit pass was choosing tiers from
+    that budget, and a place two different off-by-a-spacing bugs had already lived (the old pass
+    demanded 1040 px where the layout needed 1013).
+
+    Nobody computes it any more. `_layout_panels` sets NO explicit minimum on the charts column, so
+    the floor is whatever Qt derives from the panels themselves, and this test proves that number is
+    the charts header's real need — margins + two gaps + identity + the hero's floor + ⛶ — and that
+    a drag one pixel past it is REFUSED rather than absorbed by the children.
+
+    It is also the measurement that says the split cost the user nothing horizontally: the ladder
+    computed floors of 675 px (1440x900) and 759 px (1280x800); this is 555."""
+    with _Themed((1280, 800)) as view:
+        header, row = view._plots_header, view._plots_header.layout()
+        margins = row.contentsMargins()
+        # Three non-empty items (identity · hero · ⛶) => two gaps. Derived from the widgets and the
+        # layout themselves, NOT from an app constant, so this fails on a build whose arithmetic
+        # disagrees rather than agreeing with it by construction.
+        need = (margins.left() + margins.right() + row.spacing() * 2
+                + view._plots_label.sizeHint().width() + view.diff_box.minimumWidth()
+                + view._plots_max_btn.width())
+        floor = _column_floor(view)
+        assert floor == need, (
+            f"the charts column's floor is {floor}px but its header needs {need}px")
+        assert floor < 675, f"the header/toolbar split must not raise the column floor ({floor})"
+        # Ask for one pixel less than the floor: the splitter clamps, it does not squeeze.
+        _set_right_column(view, need - 1)
+        assert view._plots_panel.width() == need, (view._plots_panel.width(), need)
+        assert header.width() == need, (header.width(), need)
+        assert view._plots_label.isVisible(), f"the label must fit in exactly {need}px"
+        assert (view.plots.brake_throttle_btn.text(), view.plots.ideal_btn.text()) == (
+            "Brake/Throttle", "Ideal lap"), "…and no control gives up its text to get there"
+        print(f"test_the_charts_column_floor_is_the_headers_own_honest_need OK ({need}px)")
 
 
 def test_every_maximize_button_clears_the_hit_target_floor():
@@ -296,10 +340,11 @@ def test_every_maximize_button_clears_the_hit_target_floor():
     with _Themed((1440, 900)) as view:
         for name in ("video", "table", "map", "plots"):
             btn = getattr(view, f"_{name}_max_btn")
-            assert btn.width() >= 24 and btn.height() >= 24, (name, btn.size())
+            assert btn.width() >= theme.HIT_MIN and btn.height() >= theme.HIT_MIN, (name, btn.size())
         print("test_every_maximize_button_clears_the_hit_target_floor OK")
 
 
+# ============================================================ the hero readout
 def test_hero_readout_explains_its_structural_zero_on_the_best_lap():
     """IA-03. The window's largest text is Δ-to-ideal, and on the best lap it cannot move: the
     ideal is stitched from that lap's own sections. Say so on hover — without dropping the
@@ -321,16 +366,15 @@ def test_hero_readout_explains_its_structural_zero_on_the_best_lap():
 
 
 def _run_all():
-    test_charts_bar_names_the_chart_baseline_at_the_shipped_default()
-    test_charts_bar_keeps_naming_the_baseline_when_the_toggles_must_yield()
-    test_the_bar_names_a_cross_recording_reference_at_both_shipped_sizes()
-    test_no_charts_control_is_ever_centre_clipped()
-    test_charts_header_children_never_overlap_at_the_column_minimum()
-    test_charts_header_budget_matches_the_layouts_own_chrome()
+    test_charts_header_names_the_baseline_at_every_width_it_can_reach()
+    test_the_header_names_a_cross_recording_reference_at_both_shipped_sizes()
+    test_no_charts_or_map_control_is_ever_centre_clipped()
     test_map_sector_buttons_carry_their_labels_on_hover()
+    test_no_panel_chrome_children_ever_overlap_at_the_column_minimum()
+    test_the_charts_column_floor_is_the_headers_own_honest_need()
     test_every_maximize_button_clears_the_hit_target_floor()
     test_hero_readout_explains_its_structural_zero_on_the_best_lap()
-    print("ALL CHARTS-HEADER BUDGET TESTS OK")
+    print("ALL CHARTS/MAP PANEL-CHROME TESTS OK")
 
 
 if __name__ == "__main__":

@@ -389,9 +389,12 @@ set_tests_properties(test_contrast PROPERTIES
 # an AST walk over studio/ for literal setContentsMargins/setSpacing/setFixedHeight/setFixedSize
 # arguments, labelled by the class+method that owns each, with the not-yet-migrated view surfaces
 # in a prose-justified EXEMPT list whose size is the progress metric; and the tokens' own
-# consistency, including a LIVE check that a real button, combo and tab bar all paint at CTRL_H.
-# Qt (offscreen) for that live check; no telemetry file and no `pacer` import, so it stays OUT of
-# the PYTHONPATH foreach block at the bottom of this file.
+# consistency, including a LIVE check that a real button, combo and tab bar all paint at CTRL_H;
+# and (feat/panel-header-toolbar) THE measurement the system exists to move — the four panel
+# headers, on the real CentralView, at one declared PANEL_HDR_H instead of the shipped 32/38/43/43.
+# Qt (offscreen), and that last check builds the production view over the synthetic session, so it
+# IS in the PYTHONPATH foreach block at the bottom of this file (it was not while checks 1-3 were
+# all it had).
 add_test(NAME test_design_system
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_design_system.py)
 set_tests_properties(test_design_system PROPERTIES
@@ -594,7 +597,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_lap_table_empty_states test_charts_header_budget
                         test_coaching_panel_layout test_focus_cues test_pb_toast test_app_chrome
                         test_charts_panel test_lap_table_affordances test_export_gates
-                        test_golden_hermetic)
+                        test_golden_hermetic test_design_system)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

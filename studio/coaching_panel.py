@@ -34,6 +34,7 @@ from . import APP_NAME, coaching, theme, units
 from ._signal import lap_label
 from .lap_table import CORNER_DIR_GLYPH
 from .theme import C
+from .widgets import PanelHeader
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -678,13 +679,12 @@ class OpportunitiesPanel(QWidget):
             "lap you select; the Corners tab is the per-lap view. The total is your top "
             f"{PANEL_TOP_N} corners; the table below lists as much of the full ranking as fits. "
             "Open Coaching ▸ Opportunities… for the full ranking + jump-to.")
-        header = QWidget()
-        header.setProperty("role", "PanelHeader")
-        row = QHBoxLayout(header)
-        row.setContentsMargins(8, 4, 8, 4)
-        row.setSpacing(8)
-        row.addWidget(self.summary_label)
-        row.addStretch(1)
+        # The same PanelHeader the four quadrants use. This strip was a byte-identical copy of
+        # CentralView._header_bar — same (8, 4, 8, 4) margins, same spacing — which is how the
+        # Coaching page came to sit under a header of a DIFFERENT height from the tab bar directly
+        # above it. There is one header now and it declares its height, so this page's strip and the
+        # panel header it lives under can no longer drift apart.
+        header = PanelHeader(self.summary_label)
         self._header = header
 
         # --- body: a stack of {top-3 table, friendly "need more laps" label}, swapped in refresh().
