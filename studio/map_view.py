@@ -32,6 +32,7 @@ from .map_render import (
 )
 from .session import Seg
 from .theme import CHART_SERIES, MAP_RAINBOW_N, C, icon, rainbow_colors
+from .widgets import ToggleButton
 
 # The very QPainterPaths pyqtgraph fills for a ScatterPlotItem symbol, in a unit box centred on the
 # origin. The map key paints its brake row from these, so the plate cannot drift from the canvas.
@@ -940,15 +941,11 @@ class MapView(QWidget):
         self.reset_sectors_btn.clicked.connect(self._reset_sectors)
         # Opt-in snap-to-track toggle (default off = free placement). When on, a released handle
         # snaps to the nearest trace point. See _snap_to_trace.
-        self.snap_btn = QPushButton("Snap to track")
-        self.snap_btn.setIcon(icon("ph.magnet"))
-        self.snap_btn.setCheckable(True)
-        self.snap_btn.setToolTip(
-            "Snap to track: when on, a released timing-line handle jumps to the nearest point "
-            "on the track trace. Off (default) = handles stay exactly where you drop them.")
-        # Tint the icon accent while checked.
-        self.snap_btn.toggled.connect(
-            lambda on: self.snap_btn.setIcon(icon("ph.magnet", color=C.accent if on else C.text)))
+        self.snap_btn = ToggleButton(
+            "Snap to track", glyph="ph.magnet",
+            tooltip="Snap to track: when on, a released timing-line handle jumps to the nearest "
+                    "point on the track trace. Off (default) = handles stay exactly where you "
+                    "drop them.")
 
         # F3 rainbow channel control: a LABELLED dropdown (Off · Speed · Δ · Grip), so every channel
         # — Grip especially, formerly an undiscoverable 4th blind-cycle step — is visible and one
@@ -1021,10 +1018,9 @@ class MapView(QWidget):
         # of the Fit button (top-right), the map key (bottom-left) and the centred empty state.
         self._notice = QLabel("", self.widget)
         self._notice.setWordWrap(True)
-        self._notice.setStyleSheet(
-            f"background-color: {C.surface_active}; color: {C.text_dim}; "
-            f"border: 1px solid {C.border}; border-radius: 6px; padding: 6px 10px; "
-            f"font-size: {theme.CAPTION}px;")
+        # The card was the app's only whole-widget stylesheet built in a view file (its own 6 px
+        # radius and 6px/10px padding, neither on any scale); it is the theme's QLabel#MapNotice now.
+        self._notice.setObjectName("MapNotice")
         self._notice.hide()
         self._notice_timer = QTimer(self)
         self._notice_timer.setSingleShot(True)

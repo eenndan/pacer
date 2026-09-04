@@ -71,14 +71,18 @@ from . import APP_NAME, prefs, theme
 from . import library as _library
 from ._signal import fmt_time
 from .theme import C
-from .widgets import WrapLabel
+from .widgets import NUM_ROLE, WrapLabel
+from .widgets import NumItem as _NumItem
 
 # Column layout — index → header. Date/Best/Theoretical sort numerically (a key in NUM_ROLE);
 # Track sorts as text.
 _COL_DATE, _COL_TRACK, _COL_BEST, _COL_THEO = range(4)
 _HEADERS = ["Date", "Track", "Best lap", "Theoretical"]
 
-NUM_ROLE = Qt.UserRole          # numeric sort key on a cell (date epoch / seconds)
+# NUM_ROLE is studio.widgets' (it owns the shared numeric-sort cell `_NumItem` reads); the two
+# files each declared their own `Qt.UserRole` literal for the same job. `_NumItem` keeps its local
+# name — this dialog never sets the sort DIRECTION flag, so it wants the base class's "blanks last
+# ascending, first descending", which is exactly what its old None-as-+inf trick produced.
 PATHS_ROLE = Qt.UserRole + 1    # the entry's file path list (on the Date cell)
 TRACK_ROLE = Qt.UserRole + 2    # the entry's track name, raw (on the Date cell)
 MISSING_ROLE = Qt.UserRole + 3  # True if the recording's file(s) are missing (on the Date cell)
@@ -209,17 +213,6 @@ def _backup_when(mtime: float | None) -> str:
         return " taken " + datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
     except (ValueError, OSError, OverflowError):
         return ""
-
-
-class _NumItem(QTableWidgetItem):
-    """Table cell sorting on its NUM_ROLE numeric key; None compares as +inf so it sorts last."""
-
-    def __lt__(self, other: QTableWidgetItem) -> bool:  # noqa: D401 (Qt sort hook)
-        a = self.data(NUM_ROLE)
-        b = other.data(NUM_ROLE)
-        a = float("inf") if a is None else a
-        b = float("inf") if b is None else b
-        return a < b
 
 
 class _LapTimeAxis(pg.AxisItem):
@@ -403,7 +396,7 @@ class LibraryDialog(QDialog):
         self._summary = QLabel("")
         self._summary.setWordWrap(True)
         self._summary.setFont(theme.mono_font(11))
-        self._summary.setStyleSheet(f"color: {C.text_dim};")
+        self._summary.setProperty("role", "Note")
         root.addWidget(self._summary)
 
         # ----- per-track PB-progression mini-chart (best lap vs recording date)
@@ -462,7 +455,7 @@ class LibraryDialog(QDialog):
         # note's REAL wrapped height at whatever width it is being shown at.
         privacy = WrapLabel(PRIVACY_NOTE)
         privacy.setFont(theme.mono_font(11))
-        privacy.setStyleSheet(f"color: {C.text_dim};")
+        privacy.setProperty("role", "Note")
         root.addWidget(privacy)
 
         # ----- buttons

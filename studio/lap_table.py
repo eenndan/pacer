@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from . import theme, units
 from ._signal import fmt_time, lap_label
+from .widgets import NUM_ROLE, NumItem, set_tone
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -259,7 +260,9 @@ def _columns(unit: str | None) -> list[str]:
 # Columns 1.. (everything but the Lap column) hold numerics: right-align + tabular font so the
 # digits column-align. The Lap column stays left/default.
 NUMERIC_COL_START = 1
-NUM_ROLE = Qt.UserRole  # the numeric sort key stored on every cell
+# NUM_ROLE is imported from studio.widgets (which owns the shared numeric-sort cell) rather than
+# re-declared: the role a cell STORES its key under and the role the comparison READS have to be
+# the same value, and they were two independent `Qt.UserRole` literals in two files.
 LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the Lap cell
 
 # The two stitched targets that used to sit in a SESSION-BESTS footer below this table
@@ -269,31 +272,17 @@ LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the La
 # hidden, and repeated numbers the Stats page was already the home for.
 
 
-def _is_blank(v) -> bool:
-    """A cell key is "blank" when it's absent or NaN (a partial lap with fewer splits)."""
-    return v is None or (isinstance(v, float) and math.isnan(v))
+class _NumItem(NumItem):
+    """The lap grid's numeric-sort cell: `widgets.NumItem`, subclassed for one reason.
 
+    `_descending` is a CLASS attribute that LapTable writes before every sort, and the Library
+    dialog's table sorts the same kind of cell. Sharing one class would have let the lap table's
+    last sort direction decide where the Library put its blanks; a subclass gives each table its
+    own copy of the flag and no other difference. The comparison itself — blanks last in BOTH
+    directions — lives once, in widgets.NumItem, where it used to live twice.
 
-class _NumItem(QTableWidgetItem):
-    """A table cell that sorts by a numeric key (Qt.UserRole), not its text. Blank/NaN keys sort
-    LAST in BOTH directions: LapTable sets `_descending` before each sort so blanks survive Qt's
-    descending reversal."""
-
-    _descending = False  # active sort direction, set by LapTable before each sort
-
-    def __lt__(self, other: QTableWidgetItem) -> bool:  # noqa: D401 (Qt sort hook)
-        a = self.data(NUM_ROLE)
-        b = other.data(NUM_ROLE)
-        a_blank = _is_blank(a)
-        b_blank = _is_blank(b)
-        if a_blank or b_blank:
-            if a_blank and b_blank:
-                return False  # two blanks: equal, stable order
-            # Flip the blank ordering by direction so blanks land LAST after Qt's descending reversal.
-            if a_blank:        # self is the blank
-                return self._descending
-            return not self._descending  # other is the blank, self is real
-        return float(a) < float(b)
+    The module-level `_is_blank` moved with it (`widgets.is_blank`); tests/test_studio_features.py
+    reads both this name and its `_descending` flag."""
 
 
 # The keys that sort the focused column, i.e. the two a focused control is expected to activate on.
@@ -531,9 +520,7 @@ class LapTable(QWidget):
         View ▸ Show excluded laps menu toggle (set_excluded_visible) and the auto-hide when there
         are no excluded laps — so a menu-hidden strip stays hidden regardless of collapse state."""
         strip = _ExcludedStrip(self._toggle_excluded_collapsed)
-        strip.setObjectName("LapExcludedStrip")
-        strip.setStyleSheet(
-            f"QWidget#LapExcludedStrip {{ border-top: 1px solid {theme.C.border}; }}")
+        strip.setObjectName("LapExcludedStrip")   # the top hairline is the theme's rule now
         box = QVBoxLayout(strip)
         box.setContentsMargins(10, 6, 10, 8)
         box.setSpacing(2)
@@ -541,6 +528,7 @@ class LapTable(QWidget):
         # type, with the ▸/▾ chevron glyph telling which way a click goes. Text (and, above
         # EXCLUDED_WARN_RATIO, its amber warning colour) is set live by _refresh_excluded.
         self._excluded_header = QLabel("")
+        self._excluded_header.setObjectName("LapExcludedHeader")
         self._excluded_header.setProperty("role", "BarLabel")
         self._excluded_header.setToolTip(EXCLUDED_TOOLTIP)
         # The WARNING-tier note (hidden below the ratio threshold): the kept-vs-excluded distance
@@ -555,9 +543,9 @@ class LapTable(QWidget):
         self._excluded_body.setAlignment(Qt.AlignTop)
         self._excluded_body.setToolTip(EXCLUDED_TOOLTIP)
         # Muted + italic — the provisional/degraded treatment used everywhere else for
-        # de-emphasised timing, so "not counted" reads consistently.
-        self._excluded_body.setStyleSheet(
-            f"color: {theme.PROVISIONAL_COLOR}; font-style: italic;")
+        # de-emphasised timing, so "not counted" reads consistently. It is the theme's
+        # QLabel#LapExcludedBody rule, which reads PROVISIONAL_COLOR instead of re-spelling it.
+        self._excluded_body.setObjectName("LapExcludedBody")
         # The expanded list SCROLLS (L3-09): every excluded lap is listed, but the strip's height
         # stays bounded at EXCLUDED_MAX_SHOWN lines so expanding it costs the lap grid the same few
         # rows whether 6 laps were excluded or 60. Frameless + no horizontal bar: it must read as
@@ -570,7 +558,6 @@ class LapTable(QWidget):
         self._excluded_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._excluded_scroll.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
         self._excluded_scroll.viewport().setAutoFillBackground(False)
-        self._excluded_scroll.setStyleSheet("QScrollArea { background: transparent; }")
         box.addWidget(self._excluded_header)
         box.addWidget(self._excluded_note)
         box.addWidget(self._excluded_scroll)
@@ -654,8 +641,9 @@ class LapTable(QWidget):
         # so the escalation survives greyscale and colour blindness.
         warn = len(rows) >= EXCLUDED_WARN_MIN and len(rows) / banded > EXCLUDED_WARN_RATIO
         self._excluded_header.setText(self._excluded_headline(len(rows), banded, warn))
-        self._excluded_header.setStyleSheet(
-            f"color: {theme.C.accent};" if warn else "")
+        # A STATE, so a dynamic property + a re-polish rather than a stylesheet swapped in and out:
+        # see the theme's QLabel#LapExcludedHeader[tone="warn"] rule.
+        set_tone(self._excluded_header, "warn" if warn else None)
         # The header carries the amber; the note stays PRIMARY text, following #ProvisionalBanner's
         # convention (the container signals, the sentence reads) — three amber lines would shout
         # over the map's actual call-to-action.

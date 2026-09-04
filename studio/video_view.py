@@ -33,14 +33,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QSlider,
     QSplitter,
@@ -52,10 +51,13 @@ from PySide6.QtWidgets import (
 
 from . import chapters, theme
 from .player_pane import PlayerPane
+from .widgets import ToggleButton, icon_button
 
-# Phosphor (qtawesome `ph` prefix) glyphs for the transport bar, themed via theme.icon.
-_ICON_PX = 18                       # glyph render size inside the buttons
-_ICON_BTN = QSize(32, 30)           # compact square-ish icon button
+# The transport bar's own icon-button size constants (_ICON_PX 18 / _ICON_BTN 32x30) are gone: the
+# app has ONE icon button now (widgets.icon_button, theme.ICON_BTN, theme.ICON_PX), and these were
+# one of the two families it replaced. The transport row loses 4x2 px of button and gains agreement
+# with the "Compare" label beside it, which the 30 px height had been silently overriding to 30
+# while every other control in the app stood at CTRL_H.
 
 # 0 = primary (left, drives telemetry); 1 = secondary (right, video-only). Used by the lap-picker
 # repoint signal so app knows which side to repoint.
@@ -74,10 +76,11 @@ _PICKER_MAX_W = 260
 _STRIP_SPACING = 6
 
 # The scrub bar is the video panel's primary hit target and the lap ruler's canvas: it gets its own
-# full-width row under the video, a >=24px handle and a >=26px widget (the 24px hit floor), which
-# also buys the ruler the travel it needs to stay readable on a 65-lap session.
-_SLIDER_H = 26
-_SLIDER_HANDLE = 24
+# full-width row under the video, a HIT_MIN handle and a widget one sub-step taller (the 24px hit
+# floor), which also buys the ruler the travel it needs to stay readable on a 65-lap session. The
+# HANDLE's geometry moved to the theme (QSlider#ScrubBar) with the rest of the slider chrome; it was
+# the app's one dimensional stylesheet built inside a view.
+_SLIDER_H = theme.HIT_MIN + theme.SPACE_XXS
 # Seek tooltip; the ruler appends what the ticks mean (see _LapRulerSlider._refresh_tooltip).
 _SEEK_TIP = "Seek — click or drag · ←/→ step 1 s · Shift+←/→ 5 s"
 
@@ -445,10 +448,12 @@ class _PaneCell(QWidget):
             self._fit_strip()
         if colour != self._badge_colour:
             self._badge_colour = colour
-            if colour is None:
-                self.badge.setStyleSheet("")
-            else:
-                self.badge.setStyleSheet(f"QLabel#PaneBadge {{ color: {colour}; }}")
+            # ONE call, both branches: an empty sheet clears any previous tint back to the themed
+            # #PaneBadge colour. (A per-tick colour MERGE over a role is one of the handful of
+            # setStyleSheet calls the control-vocabulary phase deliberately kept — see
+            # tests/test_inline_styles.py, which lists them by owner.)
+            self.badge.setStyleSheet(
+                f"QLabel#PaneBadge {{ color: {colour}; }}" if colour else "")
 
     def _on_pick(self, index: int):
         if 0 <= index < len(self._lap_ids):
@@ -509,29 +514,22 @@ class VideoView(QWidget):
         self._lap_boundaries_s: list[float] = []
 
         # Phosphor-icon transport buttons; icons set once per state change, never on the playback tick.
-        self.play_btn = QPushButton()
-        self.play_btn.setIcon(theme.icon("ph.play-fill"))
-        self.play_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
-        self.play_btn.setFixedSize(_ICON_BTN)
-        self.play_btn.setToolTip("Play / pause (Space)")
+        # Play and mute are plain icon buttons (a press, not a state you can see in the button);
+        # the other three are ToggleButtons, which own the "recolour the glyph on toggled" wiring
+        # that used to be re-written at each of these call sites.
+        self.play_btn = icon_button("ph.play-fill", tooltip="Play / pause (Space)")
         self.play_btn.clicked.connect(self.toggle)
 
-        # mute/unmute toggle. speaker-x while muted (default), speaker-high while audible.
-        self.mute_btn = QPushButton()
-        self.mute_btn.setIcon(theme.icon("ph.speaker-simple-x"))
-        self.mute_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
-        self.mute_btn.setFixedSize(_ICON_BTN)
-        self.mute_btn.setToolTip("Audio muted — click to unmute (M)")
+        # mute/unmute toggle. speaker-x while muted (default), speaker-high while audible. NOT a
+        # ToggleButton: it is not checkable — muted is the default state, so a checked-when-muted
+        # button would open latched amber, and the glyph swap already says which state it is in.
+        self.mute_btn = icon_button("ph.speaker-simple-x",
+                                    tooltip="Audio muted — click to unmute (M)")
         self.mute_btn.clicked.connect(self.toggle_mute)
 
         # g-meter show/hide toggle. Checkable: QSS :checked tints the button; the glyph also goes accent.
-        self.gmeter_btn = QPushButton()
-        self.gmeter_btn.setIcon(theme.icon("ph.gauge"))
-        self.gmeter_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
-        self.gmeter_btn.setFixedSize(_ICON_BTN)
-        self.gmeter_btn.setCheckable(True)
-        self.gmeter_btn.setToolTip("Show/hide the g-meter overlay (G)")
-        self.gmeter_btn.toggled.connect(self._on_gmeter_toggled)
+        self.gmeter_btn = ToggleButton(glyph="ph.gauge", icon_only=True,
+                                       tooltip="Show/hide the g-meter overlay (G)")
         self.gmeter_btn.toggled.connect(self.set_gmeter_visible)
 
         # Icon-only compare toggle (same transport vocab as g-meter). Off by default, enabled only
@@ -543,14 +541,11 @@ class VideoView(QWidget):
         # It carries a TEXT LABEL, not just a glyph: compare is one of the app's three headline
         # capabilities and "compare" appeared in no visible string anywhere in the window — only in
         # this button's tooltip, which a user has to already suspect the feature exists to find.
-        self.compare_btn = QPushButton("Compare")
-        self.compare_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
-        self.compare_btn.setFixedHeight(_ICON_BTN.height())
-        self.compare_btn.setCheckable(True)
+        self.compare_btn = ToggleButton("Compare", glyph="ph.columns")
         self.compare_btn.setEnabled(False)
-        self.compare_btn.toggled.connect(self._set_compare_btn_appearance)  # glyph follows checked
+        self.compare_btn.toggled.connect(self._sync_compare_tooltip)        # wording follows checked
         self.compare_btn.toggled.connect(self.compareToggled)               # emit the user intent
-        self._set_compare_btn_appearance(False)
+        self._sync_compare_tooltip(False)
 
         # "Fullscreen video" toggle (⤢): make the video fill the whole screen, like a normal player.
         # A pure INPUT (mirrors compare_btn): a click just emits videoFocusRequested; CentralView owns
@@ -558,12 +553,12 @@ class VideoView(QWidget):
         # It is DISABLED while the compare stage is mounted, because CentralView refuses the gesture
         # there: a checkable button whose click is silently refused latches into a checked state it
         # did not earn (indistinguishable from a genuinely-on toggle).
-        self.fullscreen_btn = QPushButton()
-        self.fullscreen_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
-        self.fullscreen_btn.setFixedSize(_ICON_BTN)
-        self.fullscreen_btn.setCheckable(True)
+        # `glyph_on` rather than a re-tint: `ph.arrows-in` (contract) reads as "exit fullscreen"
+        # while on and `ph.arrows-out` (expand) as "enter", so the state survives without colour.
+        self.fullscreen_btn = ToggleButton(glyph="ph.arrows-out", glyph_on="ph.arrows-in",
+                                           icon_only=True)
         self.fullscreen_btn.clicked.connect(self.videoFocusRequested)  # a genuine click = the intent
-        self._set_fullscreen_btn_appearance(False)
+        self._sync_fullscreen_tooltip()
         # F is the ⤢ button's key (it had none anywhere in the app — only a click or a double-click
         # on the video). Routed through the BUTTON, like app.py's G/C, so a disabled button (compare
         # mode) makes the key a no-op instead of a silently-refused state change.
@@ -577,13 +572,13 @@ class VideoView(QWidget):
         self.slider.setRange(0, 0)
         self.slider.setSingleStep(1000)   # wheel/←→ step 1s
         self.slider.setPageStep(5000)     # page step 5s
-        # The panel's primary hit target: a 24px handle in a 26px widget clears the 24px floor, and
-        # the widget-level rule only overrides the handle's box (the themed groove/colours cascade).
+        # The panel's primary hit target: a HIT_MIN handle in a widget one sub-step taller clears the
+        # pointer floor. The handle's own geometry is the theme's QSlider#ScrubBar rule now (the
+        # themed groove/colours already cascaded); it was the last dimensional stylesheet the app
+        # built inside a view, and the one number in it that could not be a token — half of 24 — is
+        # theme.pill_radius(HIT_MIN).
+        self.slider.setObjectName("ScrubBar")
         self.slider.setMinimumHeight(_SLIDER_H)
-        self.slider.setStyleSheet(
-            f"QSlider::handle:horizontal {{ width: {_SLIDER_HANDLE}px;"
-            f" height: {_SLIDER_HANDLE}px; margin: -{(_SLIDER_HANDLE - 8) // 2}px 0;"
-            f" border-radius: {_SLIDER_HANDLE // 2}px; }}")
         self.slider.sliderMoved.connect(self._on_slider_moved)
         # groove clicks are actionTriggered not sliderMoved — route them through the same clamped seek.
         self.slider.actionTriggered.connect(self._on_slider_action)
@@ -747,10 +742,11 @@ class VideoView(QWidget):
         if not enabled and self.compare_btn.isChecked():
             self.compare_btn.setChecked(False)  # -> compareToggled(False) -> controller exits
 
-    def _set_compare_btn_appearance(self, on: bool):
-        """Drive the compare toggle's OFF/ON appearance (glyph accent + tooltip) to track its checked
-        state. Wired to the button's `toggled` and re-applied by _set_compare_visual; never per tick."""
-        self.compare_btn.setIcon(theme.icon("ph.columns", color=theme.C.accent if on else None))
+    def _sync_compare_tooltip(self, on: bool):
+        """Drive the compare toggle's OFF/ON WORDING to track its checked state. The glyph's accent
+        is the ToggleButton's own job now; only the sentence is left here, because it names the
+        gesture rather than the state. Wired to `toggled` and re-applied by _set_compare_visual;
+        never per tick."""
         self.compare_btn.setToolTip(
             "Comparing two laps' videos side-by-side — click to exit (C)" if on else
             "Compare two laps' videos side-by-side (C) — needs ≥2 valid laps")
@@ -766,17 +762,18 @@ class VideoView(QWidget):
             self.compare_btn.blockSignals(True)
             self.compare_btn.setChecked(on)
             self.compare_btn.blockSignals(False)
-        self._set_compare_btn_appearance(on)
+            # blockSignals suppressed the ToggleButton's own `toggled`-driven repaint, so the glyph
+            # is re-applied explicitly here — the reflection path is the one place a checked state
+            # changes without the button hearing about it.
+            self.compare_btn.refresh_glyph()
+        self._sync_compare_tooltip(on)
 
     # ------------------------------------------------------------- fullscreen-video toggle
-    def _set_fullscreen_btn_appearance(self, on: bool):
-        """Drive the ⤢ button's OFF/ON glyph + tooltip to track video-focus state. `ph.arrows-in`
-        (contract) reads as "exit fullscreen" while on; `ph.arrows-out` (expand) as "enter". While
-        the gesture is unavailable (compare mode) the tooltip says WHY, in the same shape as the
-        compare button's own "— needs ≥2 valid laps"."""
-        self.fullscreen_btn.setIcon(theme.icon(
-            "ph.arrows-in" if on else "ph.arrows-out",
-            color=theme.C.accent if on else None))
+    def _sync_fullscreen_tooltip(self):
+        """Drive the ⤢ button's tooltip to track video-focus state (the glyph swap + accent is the
+        ToggleButton's). While the gesture is unavailable (compare mode) the tooltip says WHY, in
+        the same shape as the compare button's own "— needs ≥2 valid laps"."""
+        on = self.fullscreen_btn.isChecked()
         if not self.fullscreen_btn.isEnabled():
             tip = "Make the video fill the screen (F) — not while comparing two laps"
         elif on:
@@ -798,7 +795,8 @@ class VideoView(QWidget):
             self.fullscreen_btn.blockSignals(True)
             self.fullscreen_btn.setChecked(False)
             self.fullscreen_btn.blockSignals(False)
-        self._set_fullscreen_btn_appearance(self.fullscreen_btn.isChecked())
+            self.fullscreen_btn.refresh_glyph()   # blockSignals suppressed the button's own repaint
+        self._sync_fullscreen_tooltip()
 
     def _on_focus_shortcut(self):
         """F → the ⤢ button's own click (so the disabled state gates the key too)."""
@@ -818,7 +816,8 @@ class VideoView(QWidget):
             self.fullscreen_btn.blockSignals(True)
             self.fullscreen_btn.setChecked(on)
             self.fullscreen_btn.blockSignals(False)
-        self._set_fullscreen_btn_appearance(on)
+            self.fullscreen_btn.refresh_glyph()   # blockSignals suppressed the button's own repaint
+        self._sync_fullscreen_tooltip()
 
     def set_compare(self, pane_a: PaneSpec, pane_b: PaneSpec):
         """Enter or re-seed compare mode: swap the single pane for a 2-pane QSplitter. pane_a is the
@@ -1007,12 +1006,8 @@ class VideoView(QWidget):
                                  else "Audio on — click to mute (M)")
 
     # ------------------------------------------------------------- g-meter overlay (drives pane)
-    def _on_gmeter_toggled(self, on: bool):
-        """Recolour the g-meter glyph to the accent when the overlay is active (the QSS already
-        tints the button background on :checked)."""
-        self.gmeter_btn.setIcon(theme.icon("ph.gauge", color=theme.C.accent if on
-                                           else theme.C.text))
-
+    # `_on_gmeter_toggled` (recolour the glyph to the accent while the overlay is on) is gone: that
+    # is what a ToggleButton IS, and it was one of the seven copies of it.
     def set_gmeter_visible(self, on: bool):
         """Show/hide the friction-circle g-meter overlay (the toggle button). Applies PER-PANE:
         both panes' overlays toggle together (each defaults off); the secondary's stays muted.

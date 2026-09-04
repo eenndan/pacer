@@ -70,6 +70,14 @@ SIZES = (theme.HIT_MIN, theme.CTRL_H, theme.TOOLBAR_H, theme.PANEL_HDR_H,
 _SPACE_OK = set(SPACE) | {0}                    # zero is always a legal gap
 _FOCUS_OK = {theme.focus_pad(v) for v in SPACE}  # the ring compensation, derived not chosen
 _BOX_OK = _SPACE_OK | set(SIZES)                # what a reconstructed outer box may come to
+# A CIRCLE is half its own box — a derivation, not a fourth radius step, in exactly the sense
+# focus_pad is not a fourth padding step. The stylesheet already contained the relation without
+# being able to say so (the scrub knob is SPACE_L across at RADIUS_M, a circle only because
+# RADIUS_M happens to be half of SPACE_L); the video scrub bar needed the same shape at HIT_MIN,
+# could not spell 12 as a token, and therefore shipped as a hand-written stylesheet string inside
+# video_view.py — off the scale AND out of this guard's reach. Admitting the derivation is what
+# brought it back in.
+_RADIUS_OK = set(RADII) | {theme.pill_radius(s) for s in (*SIZES, *SPACE)}
 
 
 # ============================================================================ QSS parsing
@@ -172,8 +180,10 @@ def test_every_stylesheet_dimension_is_on_the_scale():
                     offenders.append(f"{sel} {{ {prop}: {val} }} — {bad} off the SPACE scale")
             elif prop in _RADIUS_PROPS:
                 checked += 1
-                if px[0] not in RADII:
-                    offenders.append(f"{sel} {{ {prop}: {val} }} — not a RADIUS_* step")
+                if px[0] not in _RADIUS_OK:
+                    offenders.append(
+                        f"{sel} {{ {prop}: {val} }} — not a RADIUS_* step, and not "
+                        f"theme.pill_radius() of a declared size")
             elif prop in _MIN_PROPS:
                 checked += 1
                 outer = px[0] + _chrome(decls, _MIN_PROPS[prop])

@@ -239,7 +239,7 @@ class _Tile(QWidget):
         self.value.setFont(theme.mono_font(TILE_VALUE_PT, theme.W_SEMIBOLD))
         self.caption = QLabel(caption)
         self.caption.setFont(theme.ui_font(theme.CAPTION))
-        self.caption.setStyleSheet(f"color: {C.text_dim};")
+        self.caption.setProperty("role", "Note")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(1)
@@ -314,7 +314,7 @@ class StatsView(QWidget):
         col.addWidget(self._section("DATA TRUST"))
         self.trust_label = QLabel("")
         self.trust_label.setWordWrap(True)
-        self.trust_label.setStyleSheet(f"color: {C.text_dim};")
+        self.trust_label.setProperty("role", "Note")
         self.trust_label.setFont(theme.ui_font(theme.CAPTION))
         col.addWidget(self.trust_label)
 
@@ -405,7 +405,7 @@ class StatsView(QWidget):
         # sections hide themselves entirely, so these are the g surfaces left visible).
         self.no_gmeter_note = QLabel(NO_GMETER_NOTE)
         self.no_gmeter_note.setWordWrap(True)
-        self.no_gmeter_note.setStyleSheet(f"color: {C.text_dim};")
+        self.no_gmeter_note.setProperty("role", "Note")
         self.no_gmeter_note.setFont(theme.ui_font(theme.CAPTION))
         self.no_gmeter_note.setVisible(False)
         col.addWidget(self.no_gmeter_note)
@@ -448,7 +448,7 @@ class StatsView(QWidget):
         # Filled per refresh (the envelope's value goes in it), hidden with the section.
         self.gg_key = QLabel("")
         self.gg_key.setWordWrap(True)
-        self.gg_key.setStyleSheet(f"color: {C.text_dim};")
+        self.gg_key.setProperty("role", "Note")
         self.gg_key.setFont(theme.ui_font(theme.CAPTION))
         col.addWidget(self.gg_key)
 

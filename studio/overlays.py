@@ -53,7 +53,7 @@ class WelcomeView(QWidget):
 
         # Intentional short brand lockup on the welcome screen — NOT the full APP_NAME wordmark.
         title = QLabel("Pacer")
-        title.setProperty("role", "WelcomeTitle")
+        title.setProperty("role", "Title")   # shared with the About / privacy cards
         title.setAlignment(Qt.AlignCenter)
         subtitle = QLabel("Drop a GoPro recording here — or open one — to get your laps.")
         subtitle.setProperty("role", "WelcomeSubtitle")

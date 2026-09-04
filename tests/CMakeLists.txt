@@ -399,6 +399,20 @@ add_test(NAME test_design_system
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_design_system.py)
 set_tests_properties(test_design_system PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The CONTROL half of the same guard (feat/control-vocabulary), i.e. what the app is BUILT from
+# rather than what it measures: an AST walk over studio/ for setStyleSheet calls, labelled by the
+# class+method that owns each, so that the only survivors are the per-datum colour merges a
+# stylesheet cannot express (34 sites -> 7, each named in prose) and no new bare `color:` can creep
+# back; every objectName and role property really having a rule in theme._build_qss (four had names
+# and no rule at all); a LIVE check on the real CentralView that all eight icon buttons are one
+# theme.ICON_BTN with one theme.ICON_PX glyph (two families shipped, neither painting its declared
+# size); and setCheckable(True) belonging to widgets.ToggleButton alone (it was re-implemented at
+# seven call sites, six of which disagreed). Qt (offscreen); the icon-button check builds the
+# production view over the synthetic session, so it is in the PYTHONPATH foreach block below.
+add_test(NAME test_inline_styles
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_inline_styles.py)
+set_tests_properties(test_inline_styles PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Keyboard focus cues (fix/qa-theme-focus-cues): every one of the 15 tab stops must change PIXELS
 # when it takes focus — four of them (the lap table, any CHECKED toggle, and the two pyqtgraph
 # canvases) used to change none — the lap table's ring must paint on all FOUR edges rather than the
@@ -597,7 +611,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_lap_table_empty_states test_charts_header_budget
                         test_coaching_panel_layout test_focus_cues test_pb_toast test_app_chrome
                         test_charts_panel test_lap_table_affordances test_export_gates
-                        test_golden_hermetic test_design_system)
+                        test_golden_hermetic test_design_system test_inline_styles)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

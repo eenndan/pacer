@@ -92,11 +92,21 @@ RADIUS_S, RADIUS_M, RADIUS_L = 4, 8, 16   # controls · cards & chips · large s
 BORDER_PX = 1                # the app's hairline: every control border, every panel rule
 CTRL_H = 28                  # every button and combo in a header or a toolbar
 ICON_BTN = QSize(28, 28)     # square icon button — replaces the 26x24 / 32x30 split (Phase 3)
+ICON_PX = SPACE_L            # the GLYPH inside an icon button (see widgets.icon_button)
 PANEL_HDR_H = 36             # a panel's identity row, declared not emergent (Phase 2)
 TOOLBAR_H = 32               # a panel's control row, where it has one (Phase 2)
 HIT_MIN = 24                 # pointer-target floor — nothing clickable may be smaller
 SPLITTER_HANDLE_PX = 8       # divider hit area (see the splitter section of the stylesheet)
 FOCUS_RING_PX = 2            # keyboard focus ring width (see the focus-ring section)
+
+# ICON_PX is a SEPARATE decision from ICON_BTN, and both halves shipped hand-picked: the four ⛶
+# panel buttons drew a 15 px glyph in a 26x24 box, the five video-transport buttons an 18 px glyph
+# in a 32x30 one. Neither ratio was chosen — they are 0.60 and 0.58 of the button — so one glyph
+# step that lands between them changes what either family reads like by about a pixel while making
+# "how big is the picture inside a button" a thing the app decides ONCE. SPACE_L in the ICON_BTN
+# box leaves ctrl_content_h(28, SPACE_XXS) = 22 px of content, i.e. SPACE_XXS of air on every side
+# of the glyph after the button's own padding and border — more room than the shipped transport
+# button had (1 px), which is why the smaller box does not read as tighter.
 
 
 def ctrl_content_h(total: int = CTRL_H, pad_v: int = SPACE_XS,
@@ -120,6 +130,21 @@ def ctrl_content_h(total: int = CTRL_H, pad_v: int = SPACE_XS,
     stylesheet — value + that rule's own padding + that rule's own border — and requires the result
     to be a declared size token, so a later nudge to EITHER half fails the build."""
     return total - 2 * pad_v - border_v
+
+
+def pill_radius(size: int) -> int:
+    """The `border-radius` that makes a `size`-px control a CIRCLE / a full pill.
+
+    Half the box, by definition — a derivation, not a fourth radius step, in the same sense
+    that focus_pad (below) is not a fourth padding step. The stylesheet already contained this relation without saying so: the scrub
+    knob is SPACE_L across at RADIUS_M, which is a circle only because RADIUS_M happens to be half
+    of SPACE_L. The video transport's own scrub handle needed the same shape at HIT_MIN and could
+    not spell it, so it shipped as a hand-written `border-radius: 12px` in a stylesheet string
+    inside video_view.py — off the scale, and out of reach of the guard.
+
+    tests/test_design_system.py accepts a radius that is pill_radius() of a declared size token,
+    which is why a circle no longer has to be an exemption."""
+    return size // 2
 
 
 def focus_pad(v: int) -> int:
@@ -968,11 +993,12 @@ QScrollBar::add-page, QScrollBar::sub-page {{
        setFixedSize(32, 30)    ->  unaffected (30 already clears 28)
 
    So a widget that needs to be SHORTER than a control has to say so in the stylesheet, where this
-   rule can lose to it, and not in Python, where it cannot. The PB toast's two flat buttons are
-   exactly that case and take their HIT_MIN in a rule of their own further down. The four ⛶ panel
-   buttons (`central_view._maximize_button`, setFixedSize(26, 24)) are the other case and are NOT
-   fixed here: they are hand-sized below both CTRL_H and ICON_BTN, the theme now stands them at
-   26x28, and giving them one square icon-button size is the control-vocabulary phase's job. */
+   rule can lose to it, and not in Python, where it cannot. The PB toast's three action buttons are
+   exactly that case and take their HIT_MIN in rules of their own further down. The four ⛶ panel
+   buttons were the other case — hand-sized to setFixedSize(26, 24), i.e. below both CTRL_H and
+   ICON_BTN, so this rule stood them at 26x28 and nothing in Python could see it. They are icon
+   buttons now and take the [role="IconButton"] rule below, which declares BOTH axes here where
+   this one can lose to them. */
 QPushButton {{
     background-color: {C.surface};
     color: {C.text};
@@ -1012,6 +1038,83 @@ QPushButton[variant="primary"]:hover {{
 QPushButton[variant="primary"]:pressed {{
     background-color: {C.accent_press};
     border-color: {C.accent_press};
+}}
+
+/* ---------------------------------------------------------------- icon button
+   A SQUARE control whose whole label is one glyph — the four ⛶ panel-maximize buttons and the
+   video transport's play / mute / g-meter / ⤢. Two families shipped (26x24 with a 15 px glyph,
+   32x30 with an 18 px glyph), each assembled by a hand-rolled setIconSize + setFixedSize + a
+   setFlat that this stylesheet made a no-op anyway; see widgets.icon_button, which is now the only
+   way to build one.
+
+   IT NEEDS ITS OWN PADDING, and that is the part a size token alone cannot fix. The base
+   QPushButton rule charges SPACE_M either side for a TEXT label, which on a 28 px-wide button
+   leaves a 2 px content box for a 16 px glyph — Qt centres the icon in that box rather than
+   clipping it, so the button paints correctly while the style believes it has almost no room, and
+   any later change that consults the content rect gets a nonsense answer. SPACE_XXS all round
+   leaves ctrl_content_h(28, SPACE_XXS) = 22 px, which is the honest number.
+
+   min-width AND min-height, because ICON_BTN is square and the base rule declares neither: the
+   width is what the Python side used to have to pin, in the one place a stylesheet could silently
+   overrule it. */
+QPushButton[role="IconButton"] {{
+    padding: {SPACE_XXS}px;
+    border: {BORDER_PX}px solid {C.border};
+    min-width: {ctrl_content_h(ICON_BTN.width(), SPACE_XXS)}px;
+    min-height: {ctrl_content_h(ICON_BTN.height(), SPACE_XXS)}px;
+}}
+
+/* ---------------------------------------------------------------- chip
+   A CHIP is a small pill that QUALIFIES the thing next to it: the lap panel's data-quality badge
+   ("ESTIMATED" beside the tabs), the status bar's cross-recording reference, and the charts
+   toolbar's "vs ideal", which names which baseline the hero readout is measuring against.
+
+   ONE LOOK, TWO WIDGET CLASSES, ON PURPOSE. A chip is a STYLE, not a widget: what it is made of
+   has to follow what it DOES. The quality badge and the reference chip are not interactive — as
+   QPushButtons they would each add a tab stop that does nothing, announce themselves to assistive
+   tech as buttons, and need a focus ring for an action they do not have — so they are QLabels.
+   "vs ideal" is a genuine two-state control with a keyboard path and a hit target, so it stays a
+   checkable QPushButton. Giving both the same padding, radius, type and tint is what makes them
+   one vocabulary; giving them the same CLASS would have broken one of them either way.
+
+   Shipped, neither was really a chip: "vs ideal" was a plain QPushButton borrowing the generic
+   `:checked` amber, and the reference chip padded itself with LITERAL SPACES inside its own text
+   string. RADIUS_M rather than the RADIUS_S every other control wears is the cue that reads as
+   "this is a state, not an action". */
+QLabel[role="Chip"], QPushButton[role="Chip"] {{
+    background-color: {C.surface};
+    color: {C.text_dim};
+    border: {BORDER_PX}px solid {C.border};
+    border-radius: {RADIUS_M}px;
+    padding: {SPACE_XXS}px {SPACE_S}px;
+    font-size: {TABLE_HEADER}px;
+    font-weight: 700;
+}}
+/* ON: the amber trust tint the rest of the app warns/affirms in. Both classes reach it, one by a
+   static tone (a badge that is only ever shown while the thing it warns about is true) and one by
+   its checked state. */
+QLabel[role="Chip"][tone="warn"], QPushButton[role="Chip"]:checked {{
+    background-color: {C.accent_tint};
+    color: {C.accent};
+    border: {BORDER_PX}px solid {C.accent};
+}}
+/* An INTERACTIVE chip is still a CONTROL, so it stands at CTRL_H like everything else in a toolbar
+   — the pill is its look, not its box. Declared here and not left to the base QPushButton rule,
+   whose min-height is derived against the base rule's OWN padding: recomputed against the chip's
+   tighter SPACE_XXS inset it came out at 24, so the one chip in a toolbar sat 4 px shorter than the
+   three buttons beside it. A QLabel chip is not a control and keeps its natural ~20 px pill. */
+QPushButton[role="Chip"] {{
+    padding: {SPACE_XXS}px {SPACE_S}px;
+    border: {BORDER_PX}px solid {C.border};
+    min-height: {ctrl_content_h(CTRL_H, SPACE_XXS)}px;
+}}
+QPushButton[role="Chip"]:hover {{
+    background-color: {C.surface_hover};
+    border-color: {C.border_strong};
+}}
+QPushButton[role="Chip"]:checked:hover {{
+    background-color: {C.accent_tint};
+    border-color: {C.accent_hover};
 }}
 
 /* ---------------------------------------------------------------- combo box */
@@ -1072,6 +1175,18 @@ QPushButton:focus, QPushButton:checked:focus {{
     /* the base padding minus the extra border px — identical outer box; see focus_pad */
     padding: {focus_pad(SPACE_XS)}px {focus_pad(SPACE_M)}px;
 }}
+/* The two control-vocabulary roles pay for the ring out of THEIR OWN padding, not the base rule's:
+   a bare `QPushButton:focus` would hand an icon button SPACE_M of horizontal padding on focus and
+   shove its glyph off centre inside a box that (being setFixedSize) cannot grow to absorb it. Same
+   trade as above, computed against each role's own resting step. */
+QPushButton[role="IconButton"]:focus, QPushButton[role="IconButton"]:checked:focus {{
+    border: {FOCUS_RING_PX}px solid {C.accent_hover};
+    padding: {focus_pad(SPACE_XXS)}px;
+}}
+QPushButton[role="Chip"]:focus, QPushButton[role="Chip"]:checked:focus {{
+    border: {FOCUS_RING_PX}px solid {C.accent_hover};
+    padding: {focus_pad(SPACE_XXS)}px {focus_pad(SPACE_S)}px;
+}}
 /* an amber ring on the amber primary fill is invisible, so that one variant rings in its own
    ink colour instead (the same dark the label already uses). */
 QPushButton[variant="primary"]:focus {{
@@ -1130,6 +1245,18 @@ QSlider::handle:horizontal {{
 }}
 QSlider::handle:horizontal:hover {{
     background: {C.accent};
+}}
+/* THE VIDEO SCRUB BAR is the app's primary seek target and takes a HIT_MIN knob rather than the
+   SPACE_L one above — it is the control you drag while looking at the video, not at the control.
+   The three numbers are the same three relations the generic rule states (a circle, centred on the
+   groove), re-derived at the bigger size; shipped they were a `24 / -8 / 12` stylesheet string
+   built inside video_view.py, where the 12 could not be a token because half of 24 is not a radius
+   step (see pill_radius). */
+QSlider#ScrubBar::handle:horizontal {{
+    width: {HIT_MIN}px;
+    height: {HIT_MIN}px;
+    margin: -{(HIT_MIN - SPACE_S) // 2}px 0;
+    border-radius: {pill_radius(HIT_MIN)}px;
 }}
 
 /* ---------------------------------------------------------------- header view */
@@ -1245,6 +1372,62 @@ QLabel[role="BarLabel"] {{
     background: transparent;
     color: {C.text_dim};
     font-size: {PANEL_HEADER}px;
+    font-weight: 600;
+}}
+/* A KEY CAP — one keyboard shortcut in the Shortcuts reference's left gutter. BarLabel's dimmed
+   small-header type in the MONO face, so the glyphs of ⌘⇧S and ⌥→ line up into a column instead of
+   drifting on a proportional face.
+
+   It is a role rather than the one-line `font-family` patch it shipped as, for the reason the
+   UI_STACK / MONO_STACK block above already documents in prose: that patch was a hand-typed COPY of
+   MONO_STACK, and this file has been bitten once by exactly that duplication. It is also not a
+   one-off — #Readout, #PaneCaption and #PaneBadge are all "dimmed small type in the mono face" and
+   all have names; this was the fourth instance of a pattern the theme had already role-ified three
+   times, and the only one that spelled its font out in a view file. */
+QLabel[role="KeyCap"] {{
+    background: transparent;
+    color: {C.text_dim};
+    font-family: {MONO_STACK};
+    font-size: {PANEL_HEADER}px;
+    font-weight: 600;
+}}
+/* ---- the two prose roles ---------------------------------------------------------------
+   NOTE is the app's SECONDARY TEXT: a caption, a summary line, a privacy paragraph, a dialog's
+   explanatory sentence — anything that reads at the primary size but ranks below the thing it is
+   about. It was the single most-copied line in the app: fourteen labels across six files each set
+   `color: <text_dim>` in a stylesheet string of their own, which is also how one of them (the
+   export dialog's hint) drifted onto the DISABLED-chrome token and stayed there.
+
+   HINT ranks below NOTE and does it with SIZE rather than with a dimmer colour, because the tier
+   below text_dim is text_muted and text_muted is 3.17:1 — reserved for inactive controls by the
+   contract at the top of this file. A caption step keeps the hierarchy and clears WCAG AA.
+
+   Neither declares a font FAMILY or WEIGHT: several of these labels set their own mono/size font in
+   Python and the rule must not take it away (see the base-rule warning at the top). */
+QLabel[role="Note"] {{
+    background: transparent;
+    color: {C.text_dim};
+}}
+QLabel[role="Hint"] {{
+    background: transparent;
+    color: {C.text_dim};
+    font-size: {CAPTION}px;
+}}
+/* A TITLE is the largest line on a surface that has no live number: the welcome wordmark, the
+   About card's app name, the privacy card's heading. Those three shipped as HERO/700 via a role,
+   22px/700 inline and 18px/700 inline — one treatment, three spellings, and the 18 was a fifth type
+   step that no scale declared. HERO is the step; one rule serves all three. */
+QLabel[role="Title"] {{
+    background: transparent;
+    color: {C.text};
+    font-size: {HERO}px;
+    font-weight: 700;
+}}
+/* the product's one-line promise on the About card — the only place a whole line is accent-coloured
+   prose, and the reason it is a role is that it was the last inline `color:` left in that file. */
+QLabel[role="Tagline"] {{
+    background: transparent;
+    color: {C.accent};
     font-weight: 600;
 }}
 /* hero Δ/speed readout — emphasized centre element of the charts' consolidated header bar
@@ -1387,13 +1570,8 @@ QFrame#WelcomeDropZone {{
     border: {SPACE_XXS}px dashed {C.border_strong};
     border-radius: {RADIUS_L}px;
 }}
-/* first-run welcome empty state (no recording loaded): a large wordmark + a muted invitation. */
-QLabel[role="WelcomeTitle"] {{
-    background: transparent;
-    color: {C.text};
-    font-size: {HERO}px;
-    font-weight: 700;
-}}
+/* first-run welcome empty state (no recording loaded): a large wordmark (role="Title", shared with
+   the About/privacy cards) + a muted invitation. */
 QLabel[role="WelcomeSubtitle"] {{
     background: transparent;
     color: {C.text_dim};
@@ -1430,18 +1608,70 @@ QProgressBar#LoadingBar::chunk {{
     background-color: {C.accent};
     border-radius: {RADIUS_S}px;
 }}
-/* ESTIMATED data-quality badge (central_view QualityBadge): a small padded/rounded/tinted chip
-   next to the LAPS label when the timing quality is degraded — so it reads as a chip, not plain
-   text. Amber-tinted like the other trust affordances (the provisional banner / accent), sized
-   small. Only shown (setVisible) when Session.timing_quality is degraded. */
-QLabel#QualityBadge {{
-    background-color: {C.accent_tint};
+/* the load card's escape hatch. It had an objectName and NO rule at all, so it painted as an
+   ordinary panel button in the middle of an otherwise typographic card; quiet chrome, because
+   cancelling a load you asked for is a recovery, not the card's purpose. */
+QPushButton#LoadingCancel {{
+    background: transparent;
+    color: {C.text_dim};
+    border: {BORDER_PX}px solid {C.border};
+    padding: {SPACE_XS}px {SPACE_L}px;
+    min-height: {ctrl_content_h()}px;
+}}
+QPushButton#LoadingCancel:hover {{
+    color: {C.text};
+    border-color: {C.border_strong};
+    background-color: {C.surface};
+}}
+
+/* ---------------------------------------------------------------- excluded-lap strip
+   The muted "⊘ N excluded ▸" strip below the lap table (lap_table._build_excluded_strip). All
+   three names carried an objectName and were styled from Python anyway — a border in one string,
+   a transparent scroll-area background in a second, the provisional muted+italic treatment in a
+   third — which is how the strip ended up being the one surface that re-spelled PROVISIONAL_COLOR
+   instead of reading the token. */
+QWidget#LapExcludedStrip {{
+    border-top: {BORDER_PX}px solid {C.border};
+}}
+QScrollArea#LapExcludedList {{
+    background: transparent;
+    border: none;
+}}
+QLabel#LapExcludedBody {{
+    background: transparent;
+    color: {PROVISIONAL_COLOR};
+    font-style: italic;
+}}
+/* the one-liner header escalates to amber ONLY above EXCLUDED_WARN_RATIO — a state, so it is a
+   dynamic `tone` property rather than a stylesheet swapped in and out at runtime. It sits after
+   [role="BarLabel"] (which it also wears) so it wins on tone, and inherits the size/weight. */
+QLabel#LapExcludedHeader[tone="warn"] {{
     color: {C.accent};
-    font-size: {TABLE_HEADER}px;
-    font-weight: 700;
-    padding: {SPACE_XXS}px {SPACE_S}px;
-    border: {BORDER_PX}px solid {C.accent};
+}}
+
+/* the map's transient action confirmation ("Sector added", "Sectors reset") — a small plate over
+   the canvas's top-left. It shipped as the app's ONLY whole-card stylesheet built in a view file,
+   with its own 6 px radius and 6px/10px padding; the card is unchanged in kind, only in the fact
+   that its numbers are now the same ones every other card uses. */
+QLabel#MapNotice {{
+    background-color: {C.surface_active};
+    color: {C.text_dim};
+    border: {BORDER_PX}px solid {C.border};
     border-radius: {RADIUS_M}px;
+    padding: {SPACE_XS}px {SPACE_M}px;
+    font-size: {CAPTION}px;
+}}
+
+/* the PB toast's PRIMARY action, the third button in an action row whose other two are HIT_MIN
+   flat links. It had an objectName and no rule, so it took the base QPushButton's CTRL_H and stood
+   4 px taller than the two buttons beside it in a 3-button row. Same floor, same caption type; the
+   amber fill is still the [variant="primary"] rule's, which is what makes it read as primary. */
+QPushButton#PBToastShare {{
+    font-size: {CAPTION}px;
+    font-weight: 600;
+    padding: {SPACE_XS}px {SPACE_S}px;
+    border: {BORDER_PX}px solid {C.accent};
+    min-height: {ctrl_content_h(HIT_MIN, SPACE_XS)}px;
 }}
 """
 

@@ -36,7 +36,6 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME, __version__
-from .theme import C
 from .widgets import WrapLabel
 
 # ---------------------------------------------------------------- shortcut catalogue
@@ -228,11 +227,13 @@ class ShortcutsDialog(QDialog):
         grid.setColumnStretch(1, 1)
         for r, (key, desc) in enumerate(rows):
             key_label = QLabel(_key_text(key))
-            key_label.setProperty("role", "BarLabel")
+            # A KEY CAP: BarLabel's dimmed small-header type in the MONO face, so the glyphs line
+            # up into a gutter. It shipped as BarLabel + a one-line `font-family` patch that spelled
+            # the whole mono stack out by hand — a literal copy of theme.MONO_STACK, in a file that
+            # cannot see it drift. It is theme's [role="KeyCap"] now; see that rule for why this is
+            # a missing role rather than a legitimate one-off.
+            key_label.setProperty("role", "KeyCap")
             key_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
-            # The reference's key glyphs read better in the mono face (they line up); the QSS
-            # BarLabel role gives the dimmed small-header colour/size, we only add the family.
-            key_label.setStyleSheet('font-family: "SF Mono","JetBrains Mono","Menlo","monospace";')
             grid.addWidget(key_label, r, 0)
             grid.addWidget(WrapLabel(desc), r, 1)
         return body
@@ -254,19 +255,19 @@ class AboutDialog(QDialog):
         root.addWidget(scroll)
 
         name = QLabel(APP_NAME)
-        name.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {C.text};")
+        name.setProperty("role", "Title")
         column.addWidget(name)
 
         version = QLabel(f"v{__version__}")
-        version.setStyleSheet(f"color: {C.text_dim};")
+        version.setProperty("role", "Note")
         column.addWidget(version)
 
         tagline = QLabel(APP_TAGLINE)
-        tagline.setStyleSheet(f"color: {C.accent}; font-weight: 600;")
+        tagline.setProperty("role", "Tagline")
         column.addWidget(tagline)
 
         blurb = WrapLabel(APP_BLURB)
-        blurb.setStyleSheet(f"color: {C.text_dim};")
+        blurb.setProperty("role", "Note")
         column.addWidget(blurb)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
@@ -302,12 +303,15 @@ class PrivacyDialog(QDialog):
         root.addWidget(scroll)
 
         heading = QLabel(PRIVACY_TITLE)
-        heading.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {C.text};")
+        # The same [role="Title"] the About card's name and the welcome wordmark wear. It was
+        # 18px/700 inline, i.e. a FIFTH type step that no scale declared, one pixel of hierarchy
+        # away from a heading nobody else in the app has; HERO is the step this rank has.
+        heading.setProperty("role", "Title")
         column.addWidget(heading)
 
         for para in PRIVACY_PARAGRAPHS:
             label = WrapLabel(para)
-            label.setStyleSheet(f"color: {C.text_dim};")
+            label.setProperty("role", "Note")
             label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             column.addWidget(label)
 
