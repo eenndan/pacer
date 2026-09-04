@@ -81,7 +81,10 @@ NO_LAPS_TEXT = ("No complete laps in this recording — so there are no lap stat
 # tiles, so the dashes and the trust card explain themselves in the same words.
 NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
                   "are unavailable.")
-TILE_VALUE_PT = 15        # tile value type size (between BODY 13 and HERO 22)
+# This page discovered on its own that a value needs a type step between BODY and HERO; that step
+# is now theme.EMPHASIS, part of the shared scale. The local name stays as an ALIAS for one phase
+# so the ~30 call sites and tests/test_stats.py move in the phase that owns this file, not here.
+TILE_VALUE_PT = theme.EMPHASIS   # alias for theme.EMPHASIS — do not give it a value of its own
 TILES_PER_ROW = 4         # tile-grid max columns in a normal (quadrant-width) pane
 TILE_MIN_PX = 148         # reflow threshold: columns = viewport width // this, clamped
 #                           2..the cap (C6 — the hard-coded 4 pushed the 4th tile column,

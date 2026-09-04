@@ -383,7 +383,10 @@ def test_default_map_ramp_is_byte_identical_and_the_mid_anchor_is_an_accessor():
 
 # =========================================================================== 3. WCAG AA on text
 TINT = _over(C.accent, 0.16, C.surface)
-BODY, CAPTION, SMALL = 13, 12, 10
+# Declared locally, NOT read from theme, so this table is independent of the code under test —
+# the same reason tests/test_pb_toast.py spells its own 24 px hit floor. They are the px sizes the
+# QSS renders, and they set the WCAG threshold each style is judged at (large text starts at 18).
+BODY, CAPTION, SMALL = 13, 11, 10
 
 # (label, fg, bg, px) — every distinct TEXT style the theme renders. Sizes are the QSS/px values.
 TEXT_STYLES = [
@@ -552,8 +555,12 @@ def test_the_theme_never_takes_a_widgets_own_font_away():
     # 1. the shape: no blanket selector may declare a font. Comments go first — a QSS comment can
     # carry braces and selector-looking text, and this rule is about what Qt PARSES.
     qss = re.sub(r"/\*.*?\*/", "", theme._build_qss(), flags=re.S)
-    blocks = re.findall(r"(?:^|\})\s*([^{}@]*?)\{([^{}]*)\}", qss, flags=re.S)
-    assert len(blocks) > 30, f"the QSS block parse found only {len(blocks)} rules"
+    # The old pattern anchored on `(?:^|\})` and CONSUMED the previous rule's closing brace, so
+    # findall could not start the next match there and returned every OTHER rule — 44 of the 87
+    # that are in the stylesheet. Proved with "A{a}B{b}C{c}" -> [(A,a), (C,c)]. This one anchors on
+    # nothing: a selector is whatever sits between the last `}` and the next `{`.
+    blocks = re.findall(r"([^{}]*)\{([^{}]*)\}", qss, flags=re.S)
+    assert len(blocks) > 60, f"the QSS block parse found only {len(blocks)} rules"
     for selector, body in blocks:
         sel = " ".join(selector.split()).strip()
         # A selector is "blanket" when a bare class name matches with no #id / [prop] / ::sub-

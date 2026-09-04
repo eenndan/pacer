@@ -382,6 +382,20 @@ add_test(NAME test_contrast
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_contrast.py)
 set_tests_properties(test_contrast PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The DIMENSIONAL half of the same guard (feat/design-tokens): every padding / margin /
+# border-radius / min-height in theme._build_qss() is a SPACE_*/RADIUS_* step or a stated
+# derivation of one (focus_pad for the ring compensation that produced `5px 11px`,
+# ctrl_content_h for a min-height, which is checked by reconstructing the outer box it paints);
+# an AST walk over studio/ for literal setContentsMargins/setSpacing/setFixedHeight/setFixedSize
+# arguments, labelled by the class+method that owns each, with the not-yet-migrated view surfaces
+# in a prose-justified EXEMPT list whose size is the progress metric; and the tokens' own
+# consistency, including a LIVE check that a real button, combo and tab bar all paint at CTRL_H.
+# Qt (offscreen) for that live check; no telemetry file and no `pacer` import, so it stays OUT of
+# the PYTHONPATH foreach block at the bottom of this file.
+add_test(NAME test_design_system
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_design_system.py)
+set_tests_properties(test_design_system PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Keyboard focus cues (fix/qa-theme-focus-cues): every one of the 15 tab stops must change PIXELS
 # when it takes focus — four of them (the lap table, any CHECKED toggle, and the two pyqtgraph
 # canvases) used to change none — the lap table's ring must paint on all FOUR edges rather than the
