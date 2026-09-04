@@ -278,12 +278,9 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
         # re-typed, when the panel gets its PanelHeader/PanelToolbar.
         ("lap_table.py", "CornerTable.__init__"),
         ("lap_table.py", "LapTable._build_excluded_strip"),
-        # ---- Phase 4 (the two weak surfaces) ------------------------------------------------
-        # The Stats page's tile grid and its 1 px value-over-caption gap. The 1 px is the single
-        # tightest gap in the app and it is deliberate — the tile is ONE thing — but it is below
-        # even SPACE_XXS, so it is a decision to re-take with the tile, not to bless from here.
-        # `_Tile` is also the widget Phase 4 promotes into widgets.py, so it moves anyway.
-        ("stats_panel.py", "_Tile.__init__"), ("stats_panel.py", "StatsView.__init__"),
+        # (Phase 4 deleted its two — `stats_panel._Tile.__init__` and `StatsView.__init__`. The
+        # tile is `widgets.Tile` now and its value-to-caption gap is SPACE_XXS, the sub-step that
+        # exists for exactly that job; the page's 6 px block gap is SPACE_XS.)
         # The coaching PhaseBar: a 6/4 inset, a 2 px bar-to-numbers gap (SPACE_XXS doing exactly
         # its job) and a 1 px gap BETWEEN the three bar segments — which is not spacing at all but
         # a hairline separator, i.e. BORDER_PX wearing a layout's clothes. Re-taken with the bar.
@@ -317,8 +314,8 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
         "theme.SPACE_* (or add an EXEMPT entry saying whose decision it is):\n  "
         + "\n  ".join(offenders))
     # The backlog may only shrink. A phase that migrates a surface deletes its entry; a phase that
-    # adds one has to say so out loud, here, in prose.
-    assert len(EXEMPT) <= 11, f"the exemption list GREW to {len(EXEMPT)}"
+    # adds one has to say so out loud, here, in prose. 11 after Phase 1-3, 9 after Phase 4.
+    assert len(EXEMPT) <= 9, f"the exemption list GREW to {len(EXEMPT)}"
     print(f"test_no_studio_module_hand_picks_a_layout_dimension OK "
           f"({onscale}/{total} literal calls on the scale, {len(EXEMPT)} exempted surfaces)")
 
@@ -365,8 +362,13 @@ def test_the_type_scale_has_four_steps_and_four_roles():
     # the small-caps chrome shares CAPTION's step; they are roles, not sizes of their own
     assert theme.PANEL_HEADER == theme.TABLE_HEADER == theme.CAPTION == 11
     assert theme.TABLE == theme.BODY
-    # the promotion, still an alias so the call sites move in one deliberate change
-    assert stats_panel.TILE_VALUE_PT == theme.EMPHASIS
+    # The promotion is FINISHED: the page-local alias is gone, and so is the page-local tile that
+    # needed it. A second name for a scale step is how a scale acquires a fifth step.
+    assert not hasattr(stats_panel, "TILE_VALUE_PT"), "the alias outlived the phase that owned it"
+    from studio.widgets import Tile
+    tile = Tile("best lap")      # bound, not inlined: a dropped Tile deletes its own QLabels
+    assert tile.value.font().pixelSize() == theme.EMPHASIS
+    assert tile.caption.font().pixelSize() == theme.CAPTION
     # no step may sit within 1px of another — that is the defect this scale was cut to fix
     assert all(b - a >= 2 for a, b in zip(steps, steps[1:], strict=False)), steps
     print(f"test_the_type_scale_has_four_steps_and_four_roles OK ({steps})")
@@ -464,6 +466,71 @@ def test_all_four_panel_headers_are_one_height():
           f"(4 headers @ {theme.PANEL_HDR_H}, 2 toolbars @ {theme.TOOLBAR_H})")
 
 
+# ============================================================================ 5. the charts
+def test_no_chart_axis_title_is_painted_outside_its_chart():
+    """Check 5 — the charts panel's own version of "declared, not emergent", measured on pixels.
+
+    The panel shipped with `speed (km/h)` and `Δ to ideal (s)` sliced down their left edge and
+    `distance (m)` cut through its descenders. Not under pressure: 2 px and 5.8 px at 1440x900, the
+    SAME 2 px and 5.8 px at 1280x800, and again at the window's own 845x414 minimum — because the
+    cause is arithmetic, not a squeeze. pyqtgraph reserves `0.8 *` a title's bounding height and
+    then places the title `nudge = 5` px further OUT than it reserved, and this app's 2 px
+    focus-ring border on every QGraphicsView leaves the scene's last rows outside the viewport
+    (studio/widgets.py::budget_plot_gutters carries the full account).
+
+    So: measured in SCENE coordinates against what the viewport can SHOW, on the real CentralView
+    under the shipped theme — the border is a themed rule, so an unthemed app cannot see half of
+    this defect — at both shipped window sizes AND at the app's own minimum, which is where a
+    reserve chosen by eye at 1440x900 would be expected to fail first.
+
+    The gutter it reserves is MEASURED, so this also pins that the measurement stayed on the
+    spatial scale: a derived number that quietly stops being a step is a fifth kind of spacing."""
+    from test_central_view_realqt import _real_central_view
+
+    view = _real_central_view()[0]
+    view.show()
+    for _ in range(8):
+        _APP.processEvents()
+    SHIPPED = [(1440, 900), (1280, 800)]
+    hint = view.minimumSizeHint()
+    sizes = [*SHIPPED, (max(hint.width(), 1), max(hint.height(), 1))]
+    checked = 0
+    for size in sizes:
+        view.resize(*size)
+        for _ in range(8):
+            _APP.processEvents()
+        plots = view.plots
+        viewport = plots.glw.viewport()
+        for plot, side in ((plots.p_speed, "left"), (plots.p_delta, "left"),
+                           (plots.p_delta, "bottom")):
+            axis = plot.getAxis(side)
+            assert axis.isVisible() and axis.labelText and axis.label.isVisible(), (size, side)
+            checked += 1
+            r = axis.label.mapRectToScene(axis.label.boundingRect())
+            over = {"left": -r.left(), "right": r.right() - viewport.width(),
+                    "bottom": r.bottom() - viewport.height()}
+            # The TOP edge is deliberately not in that dict, and only at the window's own minimum
+            # does the distinction matter. A left-axis title is ROTATED, so its length is spent
+            # along the axis and pyqtgraph centres it: once the axis is shorter than the title
+            # (the 845x368 minimum leaves the speed plot ~67 px against a 93 px `speed (km/h)`)
+            # it overflows both ends at once. That is a title-vs-axis LENGTH problem, not a
+            # gutter, and no margin can fix it — it is out of this phase's scope and it is a size
+            # the app cannot be driven at. The gutters are asserted at every size, including there.
+            if tuple(size) in SHIPPED:
+                over["top"] = -r.top()
+            bad = {k: round(px, 1) for k, px in over.items() if px > 0.5}
+            assert not bad, (
+                f"at {size} the {side} axis title {axis.labelText!r} is painted outside the "
+                f"chart by {bad} — the reader loses the name of the axis, not a decoration")
+        margins = plots.glw.ci.layout.getContentsMargins()
+        assert all(round(m) in _SPACE_OK for m in margins), (
+            f"the measured axis gutter left the spatial scale at {size}: {margins}")
+    view.hide()
+    assert checked == 3 * len(sizes), checked
+    print(f"test_no_chart_axis_title_is_painted_outside_its_chart OK "
+          f"({checked} titles over {len(sizes)} sizes incl. the {sizes[-1]} minimum)")
+
+
 def _run_all():
     test_every_stylesheet_dimension_is_on_the_scale()
     test_the_focus_ring_is_paid_for_out_of_the_padding_not_the_box()
@@ -473,6 +540,7 @@ def _run_all():
     test_the_pointer_target_floor_has_one_home()
     test_a_button_a_combo_and_a_tab_really_paint_at_ctrl_h()
     test_all_four_panel_headers_are_one_height()
+    test_no_chart_axis_title_is_painted_outside_its_chart()
     print("\nAll design-system (spatial + type scale) tests passed.")
 
 

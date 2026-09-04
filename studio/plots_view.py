@@ -28,7 +28,7 @@ from . import theme, units
 from ._signal import fmt_time, lap_label
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
 from .theme import C
-from .widgets import ToggleButton
+from .widgets import ToggleButton, budget_plot_gutters
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -185,6 +185,9 @@ EMPTY_TEXT = ("No lap data to plot.\n\n"
               "one finished lap.\n\n"
               "If this is the right track, drag the start/finish line on the map to set where a "
               "lap begins.")
+# The chart block's inset from the panel — the FLOOR on all four edges. Left and bottom are then
+# widened to whatever the rotated axis titles measure (see PlotsView._budget_axis_gutters).
+PLOT_INSET = theme.SPACE_XXS
 class _SpeedAxis(pg.AxisItem):
     """The speed plot's left axis, with the ESTIMATED pedal strip's slice of the range de-ticked.
 
@@ -293,9 +296,11 @@ class PlotsView(QWidget):
         self.brake_throttle_btn.toggled.connect(self._on_brake_throttle_toggled)
 
         self.glw = pg.GraphicsLayoutWidget()
-        # Tight margins so the charts fill the panel.
-        self.glw.ci.layout.setContentsMargins(2, 2, 2, 2)
-        self.glw.ci.layout.setSpacing(4)
+        # Tight margins so the charts fill the panel. The LEFT and BOTTOM are a floor, not the
+        # final value: _budget_axis_gutters measures what the axis titles actually need and
+        # widens those two edges (see there).
+        self.glw.ci.layout.setContentsMargins(PLOT_INSET, PLOT_INSET, PLOT_INSET, PLOT_INSET)
+        self.glw.ci.layout.setSpacing(theme.SPACE_XS)
         # L6-04: the speed plot's own left axis, so the reserved pedal strip can be de-ticked.
         self._speed_axis = _SpeedAxis(orientation="left")
         self.p_speed = self.glw.addPlot(row=0, col=0, axisItems={"left": self._speed_axis})
@@ -757,6 +762,28 @@ class PlotsView(QWidget):
         self._apply_ideal_icon()
         self.refresh()
 
+    # ------------------------------------------------------- axis gutters (the clipped titles)
+    def _budget_axis_gutters(self) -> tuple[int, int]:
+        """Reserve what `speed (km/h)`, `Δ to ideal (s)` and `distance (m)` actually measure.
+
+        All the reasoning — pyqtgraph's 0.8-of-the-bounding-box reserve, its 5 px outward nudge, the
+        scene-vs-viewport slice the focus-ring border costs, and why the number is measured rather
+        than fixed — is in widgets.budget_plot_gutters, which the Stats page's friction circle
+        shares. Both surfaces were clipped by the same arithmetic, so both read it from one place."""
+        return budget_plot_gutters(self.glw, self.glw.ci.layout,
+                                   (self.p_speed, self.p_delta), inset=PLOT_INSET)
+
+    def resizeEvent(self, event):
+        """Re-budget the axis gutters once the charts have a real size.
+
+        The overhang itself is size-independent, but the FIRST measurement is not trustworthy: at
+        construction the scene has not been laid out, so the axes report a nominal height and the
+        titles have not been placed against it yet. Re-asking after every resize is what makes the
+        first painted frame correct as well as the second, and it costs nothing — the write is
+        guarded on the value actually changing."""
+        super().resizeEvent(event)
+        self._budget_axis_gutters()
+
     def _apply_axis_pens(self):
         """Pen the axis lines, ticks and GRIDLINES at the current device-pixel ratio.
 
@@ -937,6 +964,9 @@ class PlotsView(QWidget):
         self._draw_sectors()
         self._draw_driving()
         self._draw_brake_throttle()
+        # The Δ axis's TITLE changes with the baseline (best / ideal / ref) and the speed axis's
+        # with the unit, so the gutter is re-budgeted here as well as on resize.
+        self._budget_axis_gutters()
 
     def _delta_series(self, draw_ids, baseline, delta, x_mode: str):
         """P7: the Δ series the lower chart draws + whether it is the IDEAL-referenced one.

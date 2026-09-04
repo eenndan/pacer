@@ -57,11 +57,13 @@ from .lap_table import (
     estimated_timing_tooltip,
 )
 from .theme import C
+from .widgets import DASH, Tile, WrapLabel, budget_plot_gutters
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
 
-DASH = "—"                # the "no signal" cell/tile — an em-dash, never a fake 0
+# DASH ("—", the "no signal" cell/tile — never a fake 0) and the stat TILE are imported from
+# studio.widgets: both were this page's private inventions and both are now app vocabulary.
 # The page's OWN unverified-timing banner. View ▸ Session statistics maximizes the lap panel, which
 # hides the MAP — and with it the app's one prominent "Lap timing is unverified" strip — exactly on
 # the surface that then paints a full page of bold statistics. So the CTA is repeated here, above
@@ -81,10 +83,8 @@ NO_LAPS_TEXT = ("No complete laps in this recording — so there are no lap stat
 # tiles, so the dashes and the trust card explain themselves in the same words.
 NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
                   "are unavailable.")
-# This page discovered on its own that a value needs a type step between BODY and HERO; that step
-# is now theme.EMPHASIS, part of the shared scale. The local name stays as an ALIAS for one phase
-# so the ~30 call sites and tests/test_stats.py move in the phase that owns this file, not here.
-TILE_VALUE_PT = theme.EMPHASIS   # alias for theme.EMPHASIS — do not give it a value of its own
+# (The local TILE_VALUE_PT alias is gone: the step it named is theme.EMPHASIS, the tile that used
+# it is widgets.Tile, and the two call sites left in this file read the token directly.)
 TILES_PER_ROW = 4         # tile-grid max columns in a normal (quadrant-width) pane
 TILE_MIN_PX = 148         # reflow threshold: columns = viewport width // this, clamped
 #                           2..the cap (C6 — the hard-coded 4 pushed the 4th tile column,
@@ -102,6 +102,14 @@ GG_HEIGHT_WIDE = 300      # …and in a dashboard-width one (it is the page's on
 # dependent: the identical 1440x900 logical window laid the plot out 440 px wide at DPR 1 and
 # 300 px at DPR 2. A fixed logical width renders the same at both.
 GG_ASPECT = 2.0
+# …and the heights above are a CEILING, not the answer: 220 px at 2:1 is 440 px of pinned width,
+# which is wider than this page's own pane at 1280x800 (445 px less the gutters) and 196 px wider
+# than it at the app's 845x414 minimum. Pinned in both axes and wider than its pane, the friction
+# circle was the last thing on the page still forcing a horizontal scroll once the report tables
+# stopped. So _set_gg_size takes min(ceiling, what the pane can give), which keeps the plot square
+# with its own axes, keeps both dimensions EXPLICIT (the DPR contract above), and lets the one
+# chart on the page be the thing that yields — the section is never hidden, only sized.
+GG_MIN_HEIGHT = 120       # below this the cloud stops being readable; the page h-scrolls instead
 SPARK_HEIGHT = 96         # px; the PACE trend sparkline (absorbed from the retired
 #                           ConsistencyPanel — its content lives here now)
 SPARK_AXIS_FONT = 10      # tabular tick font for the sparkline's min/max + first/last labels
@@ -154,8 +162,15 @@ GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — l
 # The plot ships two kinds of ring and no way to tell them apart from the picture: the solid ones
 # are a fixed 0.5 g rule, the dashed one is a MEASURED result. Both axes now carry a name and a
 # unit too (they read "-2.0 / +0.0 / +2.0" and nothing else before).
-GG_AXIS_X = "lateral g  (− right · + left)"
-GG_AXIS_Y = "longitudinal g  (− braking · + accelerating)"
+# STACKED, and that is a measurement rather than a style choice. pyqtgraph rotates a left-axis
+# title, so its LENGTH is consumed vertically: set on one line, "longitudinal g  (− braking · +
+# accelerating)" is a 304 px box inside an axis 173 px tall in the quadrant (253 maximized), and
+# 88 px of it — both ends, including the word "accelerating" — was painted outside the plot at
+# every size the page has ever shipped. A <br> costs thickness, which this axis has to spare, and
+# buys length, which it does not: the longest line is now ~95 px against 173. The x title is
+# stacked to match, so the two axes read as one pair rather than one wrapped and one not.
+GG_AXIS_X = "lateral g<br>− right · + left"
+GG_AXIS_Y = "longitudinal g<br>− braking<br>+ accelerating"
 GG_KEY_RINGS = "solid rings: 0.5 g steps"
 LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
                      "speed; peak g from the g-meter (lateral IMU, longitudinal GPS-derived); "
@@ -230,26 +245,184 @@ def _repen(item, logical_px: float = 1.0):
     item.setPen(pg.mkPen(pen.color(), width=theme.line_width(logical_px), style=pen.style()))
 
 
-class _Tile(QWidget):
-    """One stat tile: a mono value over a dim caption. set() rewrites both in place."""
+class _TrustCard(QWidget):
+    """DATA TRUST as a list of FACTS — one labelled row each — instead of a paragraph.
 
-    def __init__(self, caption: str):
-        super().__init__()
-        self.value = QLabel(DASH)
-        self.value.setFont(theme.mono_font(TILE_VALUE_PT, theme.W_SEMIBOLD))
-        self.caption = QLabel(caption)
-        self.caption.setFont(theme.ui_font(theme.CAPTION))
-        self.caption.setProperty("role", "Note")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(1)
-        lay.addWidget(self.value)
-        lay.addWidget(self.caption)
+    WHAT IT REPLACES, and why the shape had to change. The card shipped as a single word-wrapping
+    QLabel holding up to seven `·`-separated sentences joined by newlines. Three things were wrong
+    with that, and only one of them was the clipping:
 
-    def set(self, value: str | None, caption: str | None = None):
-        self.value.setText(value if value else DASH)
-        if caption is not None:
-            self.caption.setText(caption)
+      * it CLIPPED. The label wrapped at the scroll BODY's width — which the content-sized report
+        tables had pushed to 742 px inside a 503 px quadrant — so the longest line ran 61 px past
+        the right edge of the viewport and stopped mid-number ("…longitudinal r=+0.82 · 3468").
+        Measured at 1280x800 it was 119 px. Nothing about the label was wrong; it was being asked
+        to lay out at a width nobody could see.
+      * it read as PROSE in a page made of tiles. Every other group on this page is a value with a
+        name under it; the densest, most technical block on the surface was the one thing with no
+        structure at all, and the `·` separators made a fact list look like a sentence.
+      * it could not be SCANNED. "Is the timing verified? what is the g source?" are lookups, and a
+        lookup wants a column of terms, not three lines of running text.
+
+    So each fact is a ROW: a dim CAPTION term on the left, its value on the right. That is the
+    tile's own type pair — the dim name and the value it names — turned through ninety degrees,
+    which is what makes it survive a ~500 px quadrant where a tile grid of seven captions would not.
+    The value WRAPS (WrapLabel, so the layout is actually told the height it needs), so no fact can
+    ever be cut again however long it gets.
+
+    THE CAVEATS LEAD. The trust-BREAKING facts — an unconfirmed start line, an unknown track, laps
+    left out of every statistic, in-lap GPS dropouts — appear only when they apply, and appear
+    FIRST, marked `⚠`, so the card cannot read the same on a session where three of them are wrong
+    and one where none are. That ordering was already the shipped behaviour; a row of its own and a
+    marked term is what makes it visible at a glance rather than on a careful read.
+
+    WHY THE CAVEATS ARE NOT PAINTED AMBER. The app's amber call-to-action treatment
+    (`#ProvisionalBanner`) is already on this page, as its own strip, ~100 px above this card and
+    stating the first of these caveats in the same words. A second amber block for the same fact is
+    noise rather than emphasis, and the other three caveats have no single action to offer. So the
+    alarm here is carried by MARKING and by ORDER; the amber is spent once, where the action is.
+
+    `text()` is the whole card as one string, and it is not a test affordance: a composite widget
+    announces as nothing to assistive tech, so it is also the card's accessible description.
+    Deliberately `f"{term}: {value}"` per row — the same sentences the paragraph printed, so this
+    change is provably presentational."""
+
+    #: What marks a caveat row's term. The glyph the Laps tab already uses for a flagged lap.
+    CAVEAT_MARK = "⚠ "
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows: list[tuple[str, str, bool]] = []
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(theme.SPACE_M)
+        self._grid.setVerticalSpacing(theme.SPACE_XS)
+        # The TERM column takes exactly what its longest term needs; the VALUE column takes
+        # everything else and wraps inside it. A stretch on the value column (and none on the term)
+        # is what stops a long value from widening the card past its pane — the defect that put the
+        # old paragraph 61 px off-screen.
+        self._grid.setColumnStretch(0, 0)
+        self._grid.setColumnStretch(1, 1)
+        self._widgets: list[tuple[QLabel, WrapLabel]] = []
+
+    def rows(self) -> list[tuple[str, str, bool]]:
+        """The facts currently shown, as (term, value, is_caveat)."""
+        return list(self._rows)
+
+    def text(self) -> str:
+        """The card as text: one "term: value" line per fact (also its accessible description)."""
+        return "\n".join(f"{term}: {value}" for term, value, _caveat in self._rows)
+
+    def set_rows(self, rows) -> None:
+        """Re-render the card from (term, value, is_caveat) triples.
+
+        Widgets are REUSED and only the surplus is hidden, rather than deleted and rebuilt: this
+        runs on every refresh() — a unit flip, a palette flip, a re-segmentation — and tearing down
+        QLabels inside a live QGridLayout on every one of those is the same re-entrancy the tile
+        reflow had to be taught to avoid (see _place_tiles)."""
+        self._rows = [(str(t), str(v), bool(c)) for t, v, c in rows]
+        while len(self._widgets) < len(self._rows):
+            term = QLabel()
+            term.setFont(theme.ui_font(theme.CAPTION))
+            term.setProperty("role", "Note")
+            # Top-aligned: a one-word term must sit level with the FIRST line of a value that
+            # wraps to three, not float in the middle of it.
+            term.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            value = WrapLabel()
+            value.setProperty("role", "Note")
+            value.setFont(theme.ui_font(theme.CAPTION))
+            r = len(self._widgets)
+            self._grid.addWidget(term, r, 0)
+            self._grid.addWidget(value, r, 1)
+            self._widgets.append((term, value))
+        for i, (term_w, value_w) in enumerate(self._widgets):
+            if i >= len(self._rows):
+                term_w.setVisible(False)
+                value_w.setVisible(False)
+                continue
+            term, value, caveat = self._rows[i]
+            term_w.setText(f"{self.CAVEAT_MARK}{term}" if caveat else term)
+            value_w.setText(value)
+            term_w.setVisible(True)
+            value_w.setVisible(True)
+        self.setAccessibleDescription(self.text())
+
+
+class _ReportTable(QTableWidget):
+    """A content-sized statistics table that SCROLLS ITSELF when the pane is too narrow for it.
+
+    THE PAGE'S HORIZONTAL SCROLLBAR WAS THIS WIDGET. Each report table pinned itself to the exact
+    width of its own columns (`_fit_table`), and the widest of them — PER LAP, nine columns — asks
+    for 730 px. In the 503 px quadrant that is the app's default the table's fixed width became the
+    scroll body's minimum, so the WHOLE page was laid out 742 px wide and then scrolled sideways
+    inside a 503 px viewport: every section heading, every tile row and the DATA TRUST card were
+    being wrapped at a width 239 px larger than anything the reader could see. The one widget that
+    genuinely did not fit made the eight that did fit stop fitting.
+
+    The honesty rule that put the scrollbar there in the first place still holds — a statistics
+    table must never silently clip its rightmost column — so the scrolling is not removed, it is
+    MOVED to the widget that actually overflows. The table takes `min(pane, its content)`: at
+    dashboard width it is exactly as wide as its columns and reads left-packed as before; in a
+    quadrant it takes the pane and grows its own horizontal scrollbar. The page never scrolls
+    sideways again, and no column is ever hidden without a bar saying so.
+
+    The HEIGHT has to follow, which is why this is a class and not two more lines in `_fit_table`:
+    the outer column owns vertical scrolling, so each table is pinned to its content height — and
+    the moment an in-table scrollbar appears it would eat the last row out of that pinned height.
+    `_apply_height` re-pays for the bar when it is showing and takes the pixels back when it is
+    not, on every resize."""
+
+    def __init__(self, columns: list[str], row_height: int):
+        super().__init__(0, len(columns))
+        self._row_height = row_height
+        self._content_w = 0
+        self.setHorizontalHeaderLabels(columns)
+        self.verticalHeader().setVisible(False)
+        self.verticalHeader().setDefaultSectionSize(row_height)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setSelectionMode(QAbstractItemView.NoSelection)
+        self.setAlternatingRowColors(True)
+        self.setFocusPolicy(Qt.NoFocus)
+        # Vertical scrolling belongs to the outer page (each table is pinned to its content
+        # height); horizontal scrolling belongs HERE, and only when the pane is too narrow.
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        # Preferred (not Fixed) horizontally: the table may shrink to the pane. Its MAXIMUM is its
+        # content width, so a wide pane never stretches it — the left-packed reading is unchanged.
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        # ...and its layout MINIMUM must not be its content: a QTableWidget's minimumSizeHint is
+        # generous enough to re-create the very overflow this class exists to remove.
+        self.setMinimumWidth(0)
+
+    def fit(self) -> None:
+        """Re-measure after a refill: columns to their content, width capped there, height pinned."""
+        self.resizeColumnsToContents()
+        self._content_w = (sum(self.columnWidth(c) for c in range(self.columnCount()))
+                           + 2 * self.frameWidth() + 2)
+        self.setMaximumWidth(self._content_w)
+        self._apply_height()
+
+    def minimumSizeHint(self):
+        """Zero-width, full-height. Qt's own hint for a scroll area is wide enough to reserve room
+        for content that this table is explicitly willing to scroll instead."""
+        hint = super().minimumSizeHint()
+        hint.setWidth(0)
+        return hint
+
+    def _needs_bar(self) -> bool:
+        return self.viewport().width() < self._content_w - 2 * self.frameWidth() - 2
+
+    def _apply_height(self) -> None:
+        h = (self.horizontalHeader().height() + self._row_height * self.rowCount()
+             + 2 * self.frameWidth())
+        if self._needs_bar():
+            h += self.horizontalScrollBar().sizeHint().height()
+        if h != self.height() or self.minimumHeight() != h:
+            self.setFixedHeight(h)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_height()
 
 
 class StatsView(QWidget):
@@ -277,8 +450,13 @@ class StatsView(QWidget):
 
         body = QWidget()
         col = QVBoxLayout(body)
-        col.setContentsMargins(12, 8, 12, 12)
-        col.setSpacing(6)
+        # On the scale, and on it deliberately: SPACE_M of gutter, SPACE_S under the panel chrome,
+        # and SPACE_XS between blocks — the 6 px that used to sit here was the page's only
+        # off-scale gap, and it is the rhythm every section heading and tile row is measured from.
+        # The GROUP separation is paid for by the tile grids' own bottom margin (see _grid), so a
+        # tighter step here tightens the rows without letting the sections run together.
+        col.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_M)
+        col.setSpacing(theme.SPACE_XS)
 
         # --- the page's own trust banner + empty state, above everything they qualify.
         self.provisional_banner = QLabel(PROVISIONAL_BANNER)
@@ -297,12 +475,12 @@ class StatsView(QWidget):
 
         # --- SESSION totals
         col.addWidget(self._section("SESSION"))
-        self.t_laps = _Tile("laps")
+        self.t_laps = Tile("laps")
         self.t_laps.setToolTip("Valid laps · ⊘ band-excluded · ⚠ laps with a GPS dropout")
-        self.t_duration = _Tile("recorded")
-        self.t_moving = _Tile("moving")
-        self.t_distance = _Tile("distance")
-        self.t_clock = _Tile("on track")
+        self.t_duration = Tile("recorded")
+        self.t_moving = Tile("moving")
+        self.t_distance = Tile("distance")
+        self.t_clock = Tile("on track")
         col.addLayout(self._grid(self.t_laps, self.t_duration, self.t_moving,
                                  self.t_distance, self.t_clock))
 
@@ -312,38 +490,35 @@ class StatsView(QWidget):
         # 1728x1117 maximized dashboard — so the caveats that say how much every number below is
         # worth were only reachable by scrolling past all of them.
         col.addWidget(self._section("DATA TRUST"))
-        self.trust_label = QLabel("")
-        self.trust_label.setWordWrap(True)
-        self.trust_label.setProperty("role", "Note")
-        self.trust_label.setFont(theme.ui_font(theme.CAPTION))
-        col.addWidget(self.trust_label)
+        self.trust_card = _TrustCard()
+        col.addWidget(self.trust_card)
 
         # --- PACE distribution
         self._pace_section = self._section("PACE")
         self._pace_section.setToolTip(PACE_TOOLTIP)
         col.addWidget(self._pace_section)
-        self.t_best = _Tile("best lap")
-        self.t_median = _Tile("median lap")
-        self.t_race_pace = _Tile("race pace · best 3-lap run")
+        self.t_best = Tile("best lap")
+        self.t_median = Tile("median lap")
+        self.t_race_pace = Tile("race pace · best 3-lap run")
         self.t_race_pace.setToolTip(
             "The best average of 3 CONSECUTIVE clean laps — your sustained pace, next to "
             "the single glory lap.")
-        self.t_rolling = _Tile("best rolling")
+        self.t_rolling = Tile("best rolling")
         self.t_rolling.setToolTip(ROLLING_TOOLTIP)
         # IA-04: the caption names the BASE. This tile is the median lap rebased, so it routinely
         # reads slower than the "best lap" tile two cells away — uncaptioned that looks like a
         # target you have already beaten. L4-08: no "→" — the tile is not clickable (the Coaching
         # tab is a tab away, and a painted arrow that does nothing is a broken affordance); the
         # tooltip points there in words instead.
-        self.t_digest = _Tile(f"median lap · top {PANEL_TOP_N} fixed")
-        self.t_sigma = _Tile("σ lap")
-        self.t_spread = _Tile("median − best")
-        self.t_cov = _Tile("consistency · σ/median")
+        self.t_digest = Tile(f"median lap · top {PANEL_TOP_N} fixed")
+        self.t_sigma = Tile("σ lap")
+        self.t_spread = Tile("median − best")
+        self.t_cov = Tile("consistency · σ/median")
         self.t_cov.setToolTip(
             "Coefficient of variation: sample σ of the clean lap times over the median, as "
             "a percent. Scale-free, so it is comparable across tracks — lower is steadier.")
-        self.t_within = _Tile("within 1% of best")
-        self.t_trend = _Tile("trend")
+        self.t_within = Tile("within 1% of best")
+        self.t_trend = Tile("trend")
         self.t_trend.setToolTip(
             "Robust lap-time trend over the session (Theil–Sen median slope — one traffic "
             "lap can't fake it). Negative = getting faster. Shown from 6 clean laps up.")
@@ -383,17 +558,17 @@ class StatsView(QWidget):
         # --- SPEED & G peaks
         self._speed_section = self._section("SPEED · G")
         col.addWidget(self._speed_section)
-        self.t_vmax = _Tile("top speed")
+        self.t_vmax = Tile("top speed")
         self.t_vmax.setToolTip("Max 3D GPS speed across the valid laps (10 Hz).")
-        self.t_vmin = _Tile("slowest point")
+        self.t_vmin = Tile("slowest point")
         self.t_vmin.setToolTip(
             "The slowest on-lap speed across the valid laps — typically the tightest "
             "corner (a traffic or off-line lap can dip lower).")
-        self.t_peak_lat = _Tile("peak lateral g")
+        self.t_peak_lat = Tile("peak lateral g")
         self.t_peak_lat.setToolTip(
             "Peak |lateral g| over the valid laps — IMU lateral, the GPS-cross-checked axis "
             "(see DATA TRUST).")
-        self.t_peak_brake = _Tile("peak braking g")
+        self.t_peak_brake = Tile("peak braking g")
         self.t_peak_brake.setToolTip(
             "Peak deceleration — from the smoothed GPS speed derivative (the validated "
             "longitudinal; the raw IMU forward axis is vibration-inflated). 10 Hz GPS "
@@ -455,11 +630,11 @@ class StatsView(QWidget):
         # --- DRIVING reductions (hidden without a g signal)
         self._driving_section = self._section("DRIVING")
         col.addWidget(self._driving_section)
-        self.t_brake = _Tile("braking / lap · median")
-        self.t_brake_n = _Tile("brake events / lap")
-        self.t_coast = _Tile("coasting / lap · median")
-        self.t_longest_coast = _Tile("longest coast")
-        self.t_grip_ceiling = _Tile("grip envelope · p98")
+        self.t_brake = Tile("braking / lap · median")
+        self.t_brake_n = Tile("brake events / lap")
+        self.t_coast = Tile("coasting / lap · median")
+        self.t_longest_coast = Tile("longest coast")
+        self.t_grip_ceiling = Tile("grip envelope · p98")
         self.t_grip_ceiling.setToolTip(
             "The session's demonstrated combined-g ceiling: the 98th percentile of "
             "hypot(lateral, longitudinal) over the valid laps — the dashed ring on the "
@@ -476,7 +651,7 @@ class StatsView(QWidget):
         # are literally its inputs — and it inherits the section's 0-sector hide for free: with no
         # sector lines it degenerates to the best lap time (a duplicate of the ★ starred best that
         # can even read slower than the rolling best), so it carries no information there.
-        self.t_theoretical = _Tile("theoretical best")
+        self.t_theoretical = Tile("theoretical best")
         self.t_theoretical.setToolTip(THEORETICAL_TOOLTIP)
         self._sector_target_grid = self._grid(self.t_theoretical)
         col.addLayout(self._sector_target_grid)
@@ -494,9 +669,9 @@ class StatsView(QWidget):
                      "coaching reasons use), medianed per corner, positive parts summed. "
                      "Seconds = what a typical lap gives away in that phase across the whole "
                      "track; hover a corner's loss cell for its own triple.")
-        self.t_phase_entry = _Tile("lost on entry")
-        self.t_phase_apex = _Tile("lost at apex")
-        self.t_phase_exit = _Tile("lost on exit")
+        self.t_phase_entry = Tile("lost on entry")
+        self.t_phase_apex = Tile("lost at apex")
+        self.t_phase_exit = Tile("lost on exit")
         for t in (self.t_phase_entry, self.t_phase_apex, self.t_phase_exit):
             t.setToolTip(phase_tip)
         col.addLayout(self._grid(self.t_phase_entry, self.t_phase_apex, self.t_phase_exit))
@@ -533,7 +708,7 @@ class StatsView(QWidget):
         # --- the straight-line report (hidden without corners / a best lap)
         self._straights_section = self._section("STRAIGHTS")
         col.addWidget(self._straights_section)
-        self.t_fix_first = _Tile("fix first")
+        self.t_fix_first = Tile("fix first")
         self.t_fix_first.setToolTip(
             "The corner whose exit deficit costs the most down the following straight "
             "(exit-speed deficit × the straight's median−best time spread) — measured, "
@@ -561,8 +736,21 @@ class StatsView(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        # AsNeeded (not AlwaysOff): the report tables are content-sized, so in a narrow pane
-        # the page h-scrolls instead of silently clipping their rightmost columns.
+        # STILL AsNeeded, and it no longer fires at either shipped window size.
+        #
+        # The policy was never the bug. The bug was that two widgets pinned themselves WIDER than
+        # the pane and made the whole page pay: the widest report table fixed itself at 730 px
+        # (PER LAP, nine columns) and the friction circle at 440 (220 px at 2:1). In the 503 px
+        # quadrant the app opens at, the larger of those became the scroll body's minimum, so every
+        # heading, every tile row and the DATA TRUST card were laid out 239 px wider than the
+        # viewport and then had to be scrolled to. Two widgets that did not fit stopped eight that
+        # did.
+        #
+        # Both now size themselves from the pane (_ReportTable, which grows its OWN horizontal bar
+        # instead; _set_gg_size, which shrinks the circle), so the body's minimum is the viewport
+        # and this bar has nothing to show. AsNeeded is kept rather than turned off because the
+        # rule behind it still holds — a statistics page must h-scroll rather than silently clip —
+        # and it remains the honest fallback below the friction circle's readable floor.
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setWidget(body)
         self._scroll = scroll
@@ -579,11 +767,15 @@ class StatsView(QWidget):
         lab.setProperty("role", "BarLabel")
         return lab
 
-    def _grid(self, *tiles: _Tile) -> QGridLayout:
+    def _grid(self, *tiles: Tile) -> QGridLayout:
         g = QGridLayout()
-        g.setContentsMargins(0, 0, 0, 4)
-        g.setHorizontalSpacing(18)
-        g.setVerticalSpacing(8)
+        # The tile grid, on the scale. It was `0,0,0,4` / 18 / 8 — one step, one nudge and one
+        # step. The bottom margin is now the GROUP separator (SPACE_S under a block of tiles, on
+        # top of the column's own SPACE_XS), the columns are SPACE_L apart — the widest gap that
+        # still reads as one row at the 148 px tile floor — and the rows keep SPACE_S.
+        g.setContentsMargins(0, 0, 0, theme.SPACE_S)
+        g.setHorizontalSpacing(theme.SPACE_L)
+        g.setVerticalSpacing(theme.SPACE_S)
         self._place_tiles(g, list(tiles), self._tile_cols)
         # Registered for the responsive reflow (C6): a narrow quadrant re-places every grid
         # at fewer columns instead of pushing the 4th column off-pane.
@@ -622,11 +814,42 @@ class StatsView(QWidget):
             g.setColumnStretch(c, 0)
         g.setColumnStretch(cols, 1)  # left-pack the tiles; slack stays right
 
+    def _budget_gg_gutters(self):
+        """Give the friction circle's axis TITLES the room they measure.
+
+        The same pyqtgraph arithmetic that clipped the charts panel's `distance (m)` clipped this
+        chart's `lateral g` by 7.4 px through its descenders, at every size — see
+        widgets.budget_plot_gutters for the mechanism and for why the number is measured. This is a
+        bare PlotWidget rather than a GraphicsLayoutWidget, so the margins that position the plot
+        are the PlotItem's OWN internal layout's rather than a central layout's; the measurement is
+        identical either way because it is taken against what the viewport can show."""
+        plot = self.gg.getPlotItem()
+        budget_plot_gutters(self.gg, plot.layout, (plot,), inset=theme.SPACE_XXS)
+
     def _set_gg_size(self, height: int):
-        """Pin the friction circle in BOTH axes (see GG_ASPECT / U8-01). Fixed, not maximum:
-        a maximum still lets pyqtgraph's DPR-dependent sizeHint pick the actual width."""
+        """Pin the friction circle in BOTH axes (see GG_ASPECT / U8-01), at the largest size the
+        pane can actually give it. Fixed, not maximum: a maximum still lets pyqtgraph's
+        DPR-dependent sizeHint pick the actual width below the cap.
+
+        `height` is the CEILING for this pane class (GG_HEIGHT / GG_HEIGHT_WIDE); the pane decides
+        whether it gets it. 220 px at 2:1 is 440 px wide, against a 445 px pane at 1280x800 less
+        24 px of gutters — so left pinned it was the page's last horizontal overflow, and being
+        wider than the pane it was ALSO the one thing on the page a horizontal scroll could not
+        help you read (a circle you have to scroll is not a circle). Sizing it from the pane is
+        the section yielding gracefully rather than being hidden."""
+        room = self._pane_width() - 2 * theme.SPACE_M      # the body column's own gutters
+        height = max(GG_MIN_HEIGHT, min(int(height), int(room / GG_ASPECT)))
+        width = int(height * GG_ASPECT)
         self.gg.setFixedHeight(height)
-        self.gg.setFixedWidth(int(height * GG_ASPECT))
+        self.gg.setFixedWidth(width)
+        # APPLY THE SIZE NOW, then force the plot's own graphics layout to catch up, THEN measure.
+        # setFixedWidth/Height only ask the parent layout for a size; the widget itself changes
+        # later, and pyqtgraph sizes its SCENE from the widget. Measuring in between reads a plot
+        # laid out for the new height inside a viewport still reporting the old one, and the gutter
+        # comes out of that mixture — 24 px of reserve where 2 was right, on the maximize.
+        self.gg.resize(width, height)
+        self.gg.getPlotItem().layout.activate()
+        self._budget_gg_gutters()
 
     def _pane_width(self) -> int:
         """The width the tiles actually get, derived from THIS widget rather than read off the
@@ -686,40 +909,27 @@ class StatsView(QWidget):
         width = self._pane_width()
         wide = width >= WIDE_PANE_PX
         cols = max(2, min(TILES_PER_ROW_WIDE if wide else TILES_PER_ROW, width // TILE_MIN_PX))
-        if wide != self._wide:
-            self._wide = wide
-            self._set_gg_size(GG_HEIGHT_WIDE if wide else GG_HEIGHT)
+        self._wide = wide
+        # UNCONDITIONALLY, not only when the pane crosses WIDE_PANE_PX: the friction circle's size
+        # is now a function of the pane's actual width (see _set_gg_size), so a resize INSIDE a
+        # class still changes it. Cheap — setFixedHeight/Width on an unchanged value is a no-op.
+        self._set_gg_size(GG_HEIGHT_WIDE if wide else GG_HEIGHT)
         if cols == self._tile_cols:
             return
         self._tile_cols = cols
         for g, tiles in self._tile_grids:
             self._place_tiles(g, tiles, cols)
 
-    def _make_table(self, columns: list[str]) -> QTableWidget:
-        t = QTableWidget(0, len(columns))
-        t.setHorizontalHeaderLabels(columns)
-        t.verticalHeader().setVisible(False)
-        t.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
-        t.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        t.setSelectionMode(QAbstractItemView.NoSelection)
-        t.setAlternatingRowColors(True)
-        t.setFocusPolicy(Qt.NoFocus)
-        # The OUTER scroll column owns scrolling; each table is sized to its content (no
-        # stretched last column — it clips in the quadrant and balloons maximized).
-        t.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        t.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        t.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        return t
+    @staticmethod
+    def _make_table(columns: list[str]) -> QTableWidget:
+        """One report table (see _ReportTable): content-sized, scrolling itself when it must."""
+        return _ReportTable(columns, ROW_HEIGHT)
 
     @staticmethod
     def _fit_table(t: QTableWidget):
-        """Pin the table's size to its content so the outer scroll column does the scrolling
-        and the table reads left-packed (like the tiles) when the panel is maximized."""
-        t.resizeColumnsToContents()
-        header_h = t.horizontalHeader().height()
-        t.setFixedHeight(header_h + ROW_HEIGHT * t.rowCount() + 2 * t.frameWidth())
-        width = sum(t.columnWidth(c) for c in range(t.columnCount()))
-        t.setFixedWidth(width + 2 * t.frameWidth() + 2)
+        """Re-measure a table after a refill — columns to content, width capped there, height
+        pinned so the OUTER column keeps owning the vertical scroll."""
+        t.fit()
 
     def _num_item(self, text: str) -> QTableWidgetItem:
         item = QTableWidgetItem(text)
@@ -727,7 +937,7 @@ class StatsView(QWidget):
         item.setFont(theme.mono_font(theme.TABLE))
         return item
 
-    def _set_target_tile(self, tile: _Tile, value, tip: str):
+    def _set_target_tile(self, tile: Tile, value, tip: str):
         """Render a stitched TARGET tile (theoretical best / best rolling).
 
         These are not laps anyone drove — they are composed from the session's best splits and
@@ -750,7 +960,7 @@ class StatsView(QWidget):
         # stylesheet first means the repolish is already spent when the font lands.
         tile.value.setStyleSheet(
             f"color: {theme.PROVISIONAL_COLOR if muted else C.text};")
-        font = theme.mono_font(TILE_VALUE_PT, theme.W_SEMIBOLD)
+        font = theme.mono_font(theme.EMPHASIS, theme.W_SEMIBOLD)
         font.setItalic(muted)
         tile.value.setFont(font)
         if not muted:
@@ -1306,25 +1516,35 @@ class StatsView(QWidget):
         _NumItem._descending = order == Qt.DescendingOrder
 
     def _refresh_trust(self, session):
-        """The DATA TRUST card: what the numbers on this page are worth.
+        """The DATA TRUST card: what the numbers on this page are worth, one labelled FACT per row.
 
         The TRUST-BREAKING facts LEAD — an unconfirmed start line, an unknown track, laps left
-        out of every statistic. Without them the card printed provenance only, and read
-        identically on a session where all three were wrong and one where all three were fine.
-        The provenance lines (clock, g source, dropouts, cross-check) follow."""
-        lines: list[str] = []
+        out of every statistic, in-lap GPS dropouts. Without them the card printed provenance only,
+        and read identically on a session where all three were wrong and one where all three were
+        fine. The provenance facts (clock, g source, cross-check) follow.
+
+        EVERY SENTENCE HERE IS THE SHIPPED ONE. Each row is a (term, value) split of a line the
+        card already printed — at the line's own colon where it had one, and at its verb where it
+        did not ("Statistics use | 21 of the 22 laps found …") — so `_TrustCard.text()` re-joins
+        into what the paragraph said. This change is the card's SHAPE, never its claims. Nothing
+        was moved into a tooltip, and in particular the lateral GAIN stays on the surface — r is
+        scale-invariant, so halving the g channel left the old card byte-identical while every g
+        the app shows halved, and the gain is the number that moves."""
+        rows: list[tuple[str, str, bool]] = []
         tips: list[str] = []
         valid = session.valid_lap_ids() if hasattr(session, "valid_lap_ids") else []
         # Gated on having laps, like the banner: with none, "every lap time below" refers to
         # nothing, and the empty-state block already makes placing the line the next action.
         if valid and not getattr(session, "timing_verified", True):
-            lines.append("Start/finish line: auto-fitted, not confirmed — every lap time and "
-                         "split below is measured from an arbitrary point. Drag it on the map.")
+            rows.append(("Start/finish line",
+                         "auto-fitted, not confirmed — every lap time and split below is "
+                         "measured from an arbitrary point. Drag it on the map.", True))
         # "" (not None) as the getattr default: a test double that models no track at all must
         # not be reported as a recording whose track lookup FAILED.
         if getattr(session, "track_name", "") is None:
-            lines.append("Track: unknown — not in the track database, so the start/finish line "
-                         "could not be placed for you.")
+            rows.append(("Track",
+                         "unknown — not in the track database, so the start/finish line "
+                         "could not be placed for you.", True))
         excluded = getattr(session, "excluded_lap_ids", list)() or []
         if excluded:
             # Denominator = the laps the segmenter FOUND, not valid+excluded: a recording can
@@ -1332,9 +1552,18 @@ class StatsView(QWidget):
             # arithmetic invented to make the two numbers meet. State both true counts instead.
             count = getattr(session, "lap_count", None)
             total = count() if callable(count) else len(valid) + len(excluded)
-            lines.append(f"Statistics use {len(valid)} of the {total} laps found — "
+            rows.append(("Statistics use",
+                         f"{len(valid)} of the {total} laps found — "
                          f"{len(excluded)} ⊘ excluded, their distance off the session median "
-                         "(see the Laps tab).")
+                         "(see the Laps tab).", True))
+        # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for the
+        # statistics on this page (those laps feed no best/σ/pace number). It moved UP here, with
+        # the other three caveats: it is one, and it was the only one printed among the provenance.
+        dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+        if dropouts:
+            rows.append(("GPS dropout",
+                         f"inside {len(dropouts)} of {len(valid)} laps — "
+                         "flagged ⚠ and left out of bests, σ and pace", True))
         quality = getattr(session, "timing_quality", None)  # a Session @property
         if quality is not None:
             clock = ("video clock (estimated)" if quality.media_clock
@@ -1344,7 +1573,8 @@ class StatsView(QWidget):
             # GPS-acquisition lead-in the pipeline trims, which flagged clean footage as
             # degraded purely on how many chapters were opened). Naming the population is the
             # fix; the number itself is the shipped one.
-            lines.append(f"Timing: {clock} · {quality.dropped_pct()}% of moving fixes rejected")
+            rows.append(("Timing",
+                         f"{clock} · {quality.dropped_pct()}% of moving fixes rejected", False))
             tips.append("The rejected-fix share is measured over the fixes taken WHILE MOVING. "
                         "The stationary lead-in before you drive off is trimmed by the loader "
                         "and left out of the verdict, so opening one chapter or all of them "
@@ -1353,39 +1583,33 @@ class StatsView(QWidget):
             src = {"accl": "IMU", "gps": "GPS"}
             lat_src = src.get(session.gmeter_source(), session.gmeter_source())
             long_src = src.get(session.gmeter_long_source(), session.gmeter_long_source())
-            lines.append(f"g-meter: {lat_src} lateral · {long_src}-derived longitudinal")
+            rows.append(("g-meter",
+                         f"{lat_src} lateral · {long_src}-derived longitudinal", False))
         else:
             # The card used to go SILENT about the g channel exactly when it is missing — while
             # the peak-g tiles, the per-lap g columns and the corner Grip % all render em-dashes
-            # with no stated reason anywhere on the window.
-            lines.append(NO_GMETER_NOTE)
-        # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for
-        # the statistics on this page (those laps feed no best/σ/pace number).
-        dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
-        if dropouts:
-            lines.append(f"GPS dropout inside {len(dropouts)} of {len(valid)} laps — "
-                         "flagged ⚠ and left out of bests, σ and pace")
+            # with no stated reason anywhere on the window. Split on NO_GMETER_NOTE's own "term:
+            # value" colon so the constant stays the single source of that sentence.
+            term, _, value = NO_GMETER_NOTE.partition(": ")
+            rows.append((term, value, True))
         cross = session.gmeter_cross() if hasattr(session, "gmeter_cross") else None
         if cross is not None:
             verdict = "agree" if cross.ok else "DISAGREE"
-            # The GAIN is the line's load-bearing half. r is scale-invariant by construction, so
-            # the correlation cannot move when the g channel is mis-scaled: halving it left this
-            # card BYTE-IDENTICAL while every g the app displays halved. The gain is the number
-            # that moves, so it is stated, not buried in the tooltip.
             gain = getattr(cross, "lat_gain", None)
             gain_bit = f" · lateral gain ×{gain:.2f}" if gain is not None else ""
-            lines.append(f"IMU↔GPS cross-check: {verdict} · lateral r={cross.lat_corr:+.2f}"
-                         f"{gain_bit} · longitudinal r={cross.long_corr:+.2f} · "
-                         f"{cross.n} samples")
+            rows.append(("IMU↔GPS cross-check",
+                         f"{verdict} · lateral r={cross.lat_corr:+.2f}{gain_bit} · "
+                         f"longitudinal r={cross.long_corr:+.2f} · {cross.n} samples",
+                         not cross.ok))
             tips.append(cross.summary())
             tips.append("Lateral gain is the IMU's lateral magnitude over the GPS-derived one: "
                         "×1 means the g you read is scaled right. The correlation beside it "
                         "cannot tell you that — Pearson r is unchanged by a scale error, so a "
                         "channel reading half would still correlate perfectly.")
-        self.trust_label.setText("\n".join(lines) if lines else DASH)
+        self.trust_card.set_rows(rows or [(DASH, DASH, False)])
         # Set unconditionally (both ways): a stale cross-check summary must not survive a
         # re-render onto a session that has none.
-        self.trust_label.setToolTip("\n\n".join(tips))
+        self.trust_card.setToolTip("\n\n".join(tips))
 
     def _refresh_lap_table(self, session, rows, unit, u_label):
         has = bool(rows)

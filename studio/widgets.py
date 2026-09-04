@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QTableWidgetItem,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -20,6 +21,27 @@ from . import theme
 
 #: The numeric sort key a `NumItem` cell compares on (see below). One role for both tables.
 NUM_ROLE = Qt.UserRole
+
+#: The "no signal" value — an em-dash, never a fake 0. The app-wide convention the Stats page
+#: established and every `Tile` now inherits by default.
+DASH = "—"
+
+
+def space_at_least(px: float) -> int:
+    """The smallest spacing step that is at least `px` — a MEASURED gap, snapped to the scale.
+
+    The scale exists so nobody picks 5 or 9 by nudging. But some gaps are not chosen at all: they
+    are the size a third-party item needs in order not to paint outside its own box, and that size
+    is a font metric, discovered at runtime (see PlotsView._budget_axis_gutters). Rounding such a
+    measurement UP to a declared step is what keeps the two ideas compatible — the number comes
+    from the widget, the value that lands in the layout is still one of the app's eight.
+
+    The same shape as theme.focus_pad: a derivation of the scale, not a fourth kind of number."""
+    for step in (theme.SPACE_XXS, theme.SPACE_XS, theme.SPACE_S, theme.SPACE_M,
+                 theme.SPACE_L, theme.SPACE_XL, theme.SPACE_2XL, theme.SPACE_3XL):
+        if step >= px:
+            return step
+    return theme.SPACE_3XL
 
 
 class WrapLabel(QLabel):
@@ -229,6 +251,114 @@ class NumItem(QTableWidgetItem):
                 return self._descending
             return not self._descending  # other is the blank, self is real
         return float(a) < float(b)
+
+
+def budget_plot_gutters(view, layout, plots, *, inset: int) -> tuple[int, int]:
+    """Give a pyqtgraph plot's AXIS TITLES the room they measure. Returns the (left, bottom) applied.
+
+    THE DEFECT THIS EXISTS FOR, in pyqtgraph's own numbers. `AxisItem._updateWidth` reserves room
+    for a title with ``w += self.label.boundingRect().height() * 0.8`` — the ``* 0.8`` carries the
+    comment "bounding rect is usually an overestimate" — and `AxisItem.resizeEvent` then places that
+    title a further ``nudge = 5`` px OUTSIDE the axis (``p.setX(-nudge)`` on a left axis;
+    ``size().height() - br.height() + nudge`` on a bottom one). Reserving four fifths of a box and
+    then pushing the box further out than you reserved overhangs by construction. Measured on the
+    shipped app: `speed (km/h)` and `Δ to ideal (s)` lost their left 2 px and `distance (m)` its
+    bottom 5.8 px at EVERY window size, from 1440x900 down to the app's own 845x414 minimum,
+    because the overhang is a font metric and not a layout pressure.
+
+    A SECOND, UNRELATED DEFICIT rides on the bottom edge. pyqtgraph's GraphicsView sizes its SCENE
+    from the widget (``autoPixelRange`` reads ``self.size()``) but only the VIEWPORT is visible, and
+    this app puts a 2 px border on every QGraphicsView so a keyboard focus ring can be painted
+    without re-laying the plot out (see the QGraphicsView rule in theme.py — the reservation is
+    deliberate, and paid in the resting state). Scene origin and viewport origin coincide, so the
+    whole difference lands at the bottom: a 917x456 scene inside a 913x452 viewport draws its last
+    four rows where nothing can show them. Both deficits are absorbed here because the measurement
+    below is taken against what the viewport can SHOW, which is the only rectangle that matters.
+
+    WHY MEASURED AND NOT A FIXED RESERVE. The overhang is `nudge` plus a fifth of the title's own
+    bounding height: it does not move when the text does (`speed (km/h)` -> `speed (mph)`,
+    `Δ to best` -> `Δ to ref`), but it moves with the FACE those strings are set in — and the app
+    ships a font STACK, so the metrics depend on which of Inter / the system UI font a machine
+    resolves. A constant chosen against Inter 11 on one box silently starts clipping on the next.
+
+    THE MEASUREMENT IS MARGIN-INVARIANT, which is what makes one pass enough. It asks for
+    ``current_margin + (how far past the visible edge the title paints)``: each pixel of margin
+    moves the title exactly one pixel back inside, so that sum is the same number whatever the
+    current margin is — and it can come out SMALLER than the current margin, so a title that later
+    needs less gets its pixels back instead of keeping a stale reserve.
+
+    `space_at_least` then rounds it up to a declared step, so the value that reaches the layout is
+    still one of the app's eight (the same bargain theme.focus_pad strikes: derive the number, keep
+    the scale). Snapping a margin-invariant quantity is itself stable, so this cannot oscillate.
+
+    `view` is the pg.GraphicsView (GraphicsLayoutWidget / PlotWidget); `layout` is the
+    QGraphicsGridLayout whose margins position those plots — ``glw.ci.layout`` for a layout widget,
+    ``plotItem.layout`` for a bare PlotWidget; `plots` are the PlotItems to inspect. Idempotent: it
+    only writes when the margins would change, so it is safe to call from refresh() and resize()."""
+    viewport = view.viewport()
+    margins = layout.getContentsMargins()
+    if viewport is None:
+        return int(margins[0]), int(margins[3])
+    left_need = bottom_need = None
+    for plot in plots:
+        for side in ("left", "bottom"):
+            axis = plot.getAxis(side)
+            label = getattr(axis, "label", None)
+            # An axis with no TITLE still has a label item — an empty 8 px box that would measure
+            # as an overhang and buy a gutter for nothing (the Stats sparkline is exactly this).
+            if (axis is None or not axis.isVisible() or label is None
+                    or not label.isVisible() or not getattr(axis, "labelText", "")):
+                continue
+            r = label.mapRectToScene(label.boundingRect())
+            if side == "left":
+                need = margins[0] + (0.0 - r.left())
+                left_need = need if left_need is None else max(left_need, need)
+            else:
+                need = margins[3] + (r.bottom() - viewport.height())
+                bottom_need = need if bottom_need is None else max(bottom_need, need)
+    left = space_at_least(max(float(inset), left_need)) if left_need is not None \
+        else int(margins[0])
+    bottom = space_at_least(max(float(inset), bottom_need)) if bottom_need is not None \
+        else int(margins[3])
+    if (round(margins[0]), round(margins[3])) != (left, bottom):
+        layout.setContentsMargins(left, margins[1], margins[2], bottom)
+    return left, bottom
+
+
+class Tile(QWidget):
+    """One STAT TILE: a value in the mono face over a dim caption naming it. `set()` rewrites both.
+
+    Promoted out of `stats_panel._Tile`, where the app's whole "a number and what it is" pattern had
+    been living privately. It is the Stats page's unit of composition — ~30 of them — and it is the
+    shape the Library and Coaching pages want too, so it belongs with the rest of the vocabulary
+    rather than inside the one page that got there first.
+
+    THE TYPE PAIR IS THE POINT, and it is why the value carries `theme.EMPHASIS`: a tile is legible
+    only if the value outranks its own caption, and before the type scale had a step between BODY
+    and HERO both painted at 13 px (the base QSS `font-size` outranks a `setFont`), so nothing but
+    colour separated "1:08.771" from "best lap". EMPHASIS was discovered here and named in theme;
+    this is where the discovery is now spent.
+
+    The value-to-caption gap is SPACE_XXS — the sub-step, which exists for exactly this: a gap
+    WITHIN one element, where anything larger would read as two stacked things instead of one."""
+
+    def __init__(self, caption: str, parent=None):
+        super().__init__(parent)
+        self.value = QLabel(DASH)
+        self.value.setFont(theme.mono_font(theme.EMPHASIS, theme.W_SEMIBOLD))
+        self.caption = QLabel(caption)
+        self.caption.setFont(theme.ui_font(theme.CAPTION))
+        self.caption.setProperty("role", "Note")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(theme.SPACE_XXS)
+        lay.addWidget(self.value)
+        lay.addWidget(self.caption)
+
+    def set(self, value: str | None, caption: str | None = None):
+        self.value.setText(value if value else DASH)
+        if caption is not None:
+            self.caption.setText(caption)
 
 
 class PanelHeader(QWidget):
