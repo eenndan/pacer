@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 
 from PySide6 import __version__ as PYSIDE_VERSION
+from PySide6.QtCore import QSize
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPalette
 
 from . import units
@@ -49,6 +50,92 @@ class C:
     ahead = "#5DD6A0"           # ahead / success / best lap green
     behind = "#E8746B"          # behind / danger red
     best = "#B794F6"            # best-sector purple
+
+
+# ====================================================================== spatial tokens
+# The DIMENSIONAL half of the design system, and the newer half. The colour tokens above were
+# always a locked set with a test behind them; every spacing, radius and control height in the app
+# was a literal chosen at its own call site. Measured before this block existed, the stylesheet
+# alone carried 21 distinct px values, 6 border radii and 12 different padding pairs — among them
+# `5px 11px` and `4px 9px`, which nobody chooses. You arrive at those by nudging, and a UI built
+# out of nudges reads as assembled rather than designed however good its colours are.
+#
+# The rule is the same one `class C` has: pick a token, or make the case here for a new step.
+# tests/test_design_system.py fails the build on an off-scale value in this file's stylesheet.
+#
+# THE SCALE IS 4 px BASED WITH ONE 2 px SUB-STEP, and the sub-step is a role, not an escape hatch.
+# Four pixels is the least air two SEPARATE things can have and still read as separate at this type
+# size, so SPACE_XS is the floor for a gap BETWEEN elements. SPACE_XXS is for the gap WITHIN one
+# element — a value and its own caption, a bar and its own segments, a chip's text and its own
+# tint — where 4 px already reads as a break and 2 px reads as "these are one thing". Every step
+# is a whole multiple of SPACE_XXS.
+SPACE_XXS, SPACE_XS, SPACE_S, SPACE_M = 2, 4, 8, 12
+SPACE_L, SPACE_XL, SPACE_2XL, SPACE_3XL = 16, 24, 32, 48
+#  XXS  2  intra-component: value↔its caption, an accent rule's weight, a chip's vertical padding
+#  XS   4  the tightest gap between two separate things; a control's VERTICAL padding
+#  S    8  the default gap inside a row or bar; a control's tight horizontal padding
+#  M   12  a control's HORIZONTAL padding; the default gutter inside a panel
+#  L   16  separation between GROUPS inside one surface
+#  XL  24  a page's own breathing room (empty states, dialog bodies)
+#  2XL 32  } the two large-surface insets — the welcome drop zone is the only thing wide enough
+#  3XL 48  } to need them, and it needs both (48 across, 32 down)
+
+# Corner radii, by what the thing IS rather than by how big it looks: a control, a card, a large
+# surface. Three steps replace six, and the mapping is mechanical — if you are styling something
+# the pointer can press, it is RADIUS_S.
+RADIUS_S, RADIUS_M, RADIUS_L = 4, 8, 16   # controls · cards & chips · large surfaces
+
+# --- sizes ---
+# Heights that are DECLARED rather than emergent. Before this, the app had two icon-button size
+# families (26x24 and 32x30) and four panel headers whose heights were whatever their tallest
+# child happened to be.
+BORDER_PX = 1                # the app's hairline: every control border, every panel rule
+CTRL_H = 28                  # every button and combo in a header or a toolbar
+ICON_BTN = QSize(28, 28)     # square icon button — replaces the 26x24 / 32x30 split (Phase 3)
+PANEL_HDR_H = 36             # a panel's identity row, declared not emergent (Phase 2)
+TOOLBAR_H = 32               # a panel's control row, where it has one (Phase 2)
+HIT_MIN = 24                 # pointer-target floor — nothing clickable may be smaller
+SPLITTER_HANDLE_PX = 8       # divider hit area (see the splitter section of the stylesheet)
+FOCUS_RING_PX = 2            # keyboard focus ring width (see the focus-ring section)
+
+
+def ctrl_content_h(total: int = CTRL_H, pad_v: int = SPACE_XS,
+                   border_v: int = 2 * BORDER_PX) -> int:
+    """A control's QSS `min-height` so that its OUTER height is `total`.
+
+    `border_v` is the rule's TOTAL vertical border, so it reads straight off the rule it belongs
+    to: a boxed control (`border: 1px`) charges 2 * BORDER_PX — the default, since most do — a menu
+    row charges 0, and a tab, whose only border is its SPACE_XXS underline, charges SPACE_XXS.
+
+    Qt's stylesheet box model reads `min-height` as the CONTENT rectangle and then adds the rule's
+    own padding and borders on top, so a rule that wants a 28 px control cannot just say 28.
+
+    This helper is the whole reason CTRL_H can BE 28. A QPushButton in this theme has a 16 px
+    content height (Inter at BODY), so padding alone lands it on 24 (SPACE_XS) or 32 (SPACE_S) and
+    nothing between — 28 is simply not reachable by choosing a spacing step, which is why the
+    shipped button carried an off-scale 6 px padding and stood 30 px tall. Declare the height, then
+    derive the stylesheet number from it, and every button, combo and tab shares one measurement.
+
+    tests/test_design_system.py reconstructs the outer height of every min-height rule in the
+    stylesheet — value + that rule's own padding + that rule's own border — and requires the result
+    to be a declared size token, so a later nudge to EITHER half fails the build."""
+    return total - 2 * pad_v - border_v
+
+
+def focus_pad(v: int) -> int:
+    """A padding step minus the pixel the focus ring's extra border takes.
+
+    The ring is FOCUS_RING_PX where the resting border is BORDER_PX, so a `:focus` rule that kept
+    its base padding would grow its control by 2 px in each axis every time the keyboard landed on
+    it. Handing that pixel back out of the padding keeps the OUTER box identical, which is the
+    contract tests/test_focus_cues.py pins ("nothing may change size or position between the two
+    states").
+
+    The shipped `5px 11px` and `4px 9px` — the two paddings in the whole stylesheet that look most
+    obviously nudged — were exactly this compensation, computed by hand off two different bases.
+    They are not off-scale values; they are a scale value minus a known constant, and saying so in
+    code is what lets the guard verify the relationship instead of exempting the numbers."""
+    return v - (FOCUS_RING_PX - BORDER_PX)
 
 
 # ====================================================================== accessible palette
@@ -492,12 +579,19 @@ LAP_SEEK_NUDGE_S = 0.010
 
 
 # --- type scale (px) ---
-HERO = 22
-PANEL_HEADER = 11
-BODY = 13
-TABLE = 13
-TABLE_HEADER = 11
-CAPTION = 12
+# FOUR steps, FOUR roles: 11 / 13 / 15 / 22. It used to be 11/12/13/22, with three of the four
+# sizes inside two pixels of each other and the 12 doing no job the 11 or the 13 was not already
+# doing — so what actually separated a value from the label about it was colour, not size, and the
+# hierarchy vanished for anyone reading in greyscale. CAPTION moved 12 -> 11 (it joins the small-
+# caps chrome it always sat beside) and EMPHASIS 15 was promoted out of stats_panel, which had
+# discovered on its own that a tile value needs a step between BODY and HERO.
+HERO = 22          # the one live number read at a glance while driving (the Δideal readout)
+EMPHASIS = 15      # a VALUE that must outrank its own label (the Stats tiles)
+BODY = 13          # prose, table cells, button labels — the app default (apply_theme's setFont)
+TABLE = 13         # table cell text — BODY's role inside a grid
+CAPTION = 11       # a label ABOUT a value, and running notes (banners, readouts, tile captions)
+PANEL_HEADER = 11  # small-caps panel identity — CAPTION's step, its own role (Phase 2 may move it)
+TABLE_HEADER = 11  # column headers and badges — likewise
 
 # --- weights ---
 W_REGULAR = QFont.Weight.Normal     # 400
@@ -681,13 +775,10 @@ def _palette() -> QPalette:
 
 
 # ====================================================================== QSS
-# Splitter handle geometry. NEVER express the grip with margin/padding — see the splitter section of
-# the stylesheet for what that costs; _splitter_grip draws it with a gradient, which is size-free.
-SPLITTER_HANDLE_PX = 8
-
-# Width of the keyboard focus ring (see the "focus ring" section of the stylesheet). One number, so
-# the reserved and the coloured state can never drift apart and start resizing controls on focus.
-FOCUS_RING_PX = 2
+# Every dimension below comes from the spatial-token block at the top of this file (SPACE_*,
+# RADIUS_*, CTRL_H, ctrl_content_h, focus_pad). SPLITTER_HANDLE_PX and FOCUS_RING_PX used to be
+# declared right here, beside the two sections that read them; they moved up so that all of the
+# app's dimensional tokens live in one place, the way all of its colours do.
 
 
 def _splitter_grip(orientation: str, colour: str) -> str:
@@ -716,11 +807,11 @@ def _build_qss() -> str:
         caret_url = caret.replace(os.sep, "/")  # QSS url() wants forward slashes on every OS
         caret_arrow_rule = f"""QComboBox::down-arrow {{
     image: url({caret_url});
-    width: 12px; height: 12px;
-    margin-right: 6px;
+    width: {SPACE_M}px; height: {SPACE_M}px;
+    margin-right: {SPACE_XS}px;
 }}
 QComboBox::down-arrow:on {{  /* open: nudge so it reads as pressed, no flip */
-    top: 1px;
+    top: {BORDER_PX}px;
 }}"""
     else:
         caret_arrow_rule = "/* QComboBox::down-arrow: native arrow (asset unavailable) */"
@@ -755,11 +846,11 @@ QMainWindow, QWidget#centralwidget {{
 QMenuBar {{
     background-color: {C.surface};
     color: {C.text};
-    border-bottom: 1px solid {C.border};
+    border-bottom: {BORDER_PX}px solid {C.border};
 }}
 QMenuBar::item {{
     background: transparent;
-    padding: 4px 10px;
+    padding: {SPACE_XS}px {SPACE_M}px;
 }}
 QMenuBar::item:selected {{
     background-color: {C.accent_tint};
@@ -768,12 +859,15 @@ QMenuBar::item:selected {{
 QMenu {{
     background-color: {C.surface};
     color: {C.text};
-    border: 1px solid {C.border};
-    padding: 4px;
+    border: {BORDER_PX}px solid {C.border};
+    padding: {SPACE_XS}px;
 }}
+/* a menu row is a control: same CTRL_H as every button and combo, declared the same way (see
+   ctrl_content_h — the row has no border of its own, so all of its chrome is the padding). */
 QMenu::item {{
-    padding: 6px 16px;
-    border-radius: 4px;
+    padding: {SPACE_XS}px {SPACE_L}px;
+    min-height: {ctrl_content_h(CTRL_H, SPACE_XS, border_v=0)}px;
+    border-radius: {RADIUS_S}px;
 }}
 QMenu::item:selected {{
     background-color: {C.accent_tint};
@@ -783,9 +877,9 @@ QMenu::item:disabled {{
     color: {C.text_muted};
 }}
 QMenu::separator {{
-    height: 1px;
+    height: {BORDER_PX}px;
     background: {C.border};
-    margin: 4px 8px;
+    margin: {SPACE_XS}px {SPACE_S}px;
 }}
 
 /* ---------------------------------------------------------------- splitter
@@ -823,27 +917,30 @@ QSplitter::handle:vertical:hover {{
 }}
 
 /* ---------------------------------------------------------------- scrollbars */
+/* The track is SPACE_M wide with a SPACE_XXS inset, so the grip itself is SPACE_S — the same
+   weight as the splitter grip and the scrub groove, which is what makes them read as one family.
+   RADIUS_S on an 8 px grip is exactly a pill (the old 5 px radius on a 6 px grip was one too). */
 QScrollBar:vertical {{
     background: transparent;
-    width: 10px;
+    width: {SPACE_M}px;
     margin: 0;
 }}
 QScrollBar:horizontal {{
     background: transparent;
-    height: 10px;
+    height: {SPACE_M}px;
     margin: 0;
 }}
 QScrollBar::handle:vertical {{
     background: {C.border_strong};
-    min-height: 28px;
-    border-radius: 5px;
-    margin: 2px;
+    min-height: {CTRL_H}px;
+    border-radius: {RADIUS_S}px;
+    margin: {SPACE_XXS}px;
 }}
 QScrollBar::handle:horizontal {{
     background: {C.border_strong};
-    min-width: 28px;
-    border-radius: 5px;
-    margin: 2px;
+    min-width: {CTRL_H}px;
+    border-radius: {RADIUS_S}px;
+    margin: {SPACE_XXS}px;
 }}
 QScrollBar::handle:hover {{
     background: {C.text_muted};
@@ -855,13 +952,34 @@ QScrollBar::add-page, QScrollBar::sub-page {{
     background: transparent;
 }}
 
-/* ---------------------------------------------------------------- buttons */
+/* ---------------------------------------------------------------- buttons
+   Height is DECLARED (CTRL_H), not inferred from whatever padding looked right: see
+   ctrl_content_h for why a `min-height` is the only way to reach 28 px with a scale-step padding,
+   and why every button, combo, tab and menu row in the app can therefore be the same height.
+
+   A `min-height` ON A BLANKET SELECTOR IS THE SIZE VERSION OF THE FONT TRAP AT THE TOP OF THIS
+   FILE, and it is worth knowing before you add another one. QStyleSheetStyle::setGeometry pushes
+   the rule's height straight into the widget with `w->setMinimumHeight(...)` and marks it with a
+   `_q_stylesheet_minh` property — it does not merge with the widget's own minimum, it REPLACES
+   it, and it does not consult the widget's MAXIMUM at all. Measured under this rule:
+
+       setMinimumSize(24, 24)  ->  minimumHeight 28   (the widget's own 24 is gone)
+       setFixedSize(26, 24)    ->  minimumHeight 28 with maximumHeight 24 — and it paints 26x28
+       setFixedSize(32, 30)    ->  unaffected (30 already clears 28)
+
+   So a widget that needs to be SHORTER than a control has to say so in the stylesheet, where this
+   rule can lose to it, and not in Python, where it cannot. The PB toast's two flat buttons are
+   exactly that case and take their HIT_MIN in a rule of their own further down. The four ⛶ panel
+   buttons (`central_view._maximize_button`, setFixedSize(26, 24)) are the other case and are NOT
+   fixed here: they are hand-sized below both CTRL_H and ICON_BTN, the theme now stands them at
+   26x28, and giving them one square icon-button size is the control-vocabulary phase's job. */
 QPushButton {{
     background-color: {C.surface};
     color: {C.text};
-    border: 1px solid {C.border};
-    border-radius: 6px;
-    padding: 6px 12px;
+    border: {BORDER_PX}px solid {C.border};
+    border-radius: {RADIUS_S}px;
+    padding: {SPACE_XS}px {SPACE_M}px;
+    min-height: {ctrl_content_h()}px;
 }}
 QPushButton:hover {{
     background-color: {C.surface_hover};
@@ -878,14 +996,14 @@ QPushButton:disabled {{
 /* checked toggle: amber tint + accent border (glyph also recoloured in code) */
 QPushButton:checked {{
     background-color: {C.accent_tint};
-    border: 1px solid {C.accent};
+    border: {BORDER_PX}px solid {C.accent};
     color: {C.accent};
 }}
 /* PRIMARY variant via dynamic property: setProperty("variant","primary") */
 QPushButton[variant="primary"] {{
     background-color: {C.accent};
     color: {C.on_accent};
-    border: 1px solid {C.accent};
+    border: {BORDER_PX}px solid {C.accent};
 }}
 QPushButton[variant="primary"]:hover {{
     background-color: {C.accent_hover};
@@ -900,22 +1018,30 @@ QPushButton[variant="primary"]:pressed {{
 QComboBox {{
     background-color: {C.surface};
     color: {C.text};
-    border: 1px solid {C.border};
-    border-radius: 6px;
-    padding: 5px 10px;
+    border: {BORDER_PX}px solid {C.border};
+    border-radius: {RADIUS_S}px;
+    padding: {SPACE_XS}px {SPACE_M}px;
+    min-height: {ctrl_content_h()}px;
 }}
 QComboBox:hover {{
     border-color: {C.border_strong};
 }}
+/* SPACE_L for the chevron well (SPACE_M of caret + SPACE_XS of air), which with the SPACE_M text
+   padding either side costs a combo EXACTLY the 40 px of chrome the shipped 20/10/10 did — so the
+   scale migration buys a combo no width at all. That is not a coincidence, it is a budget: this
+   theme's combos live in the charts and map header bars, which are already over-subscribed, and
+   the first cut of this rule (a SPACE_XL well) spent 8 px there and dropped the charts bar past
+   the tier that still NAMES its baseline at 1280x800. tests/test_charts_header_budget.py caught
+   it; do not widen this without re-running that file. */
 QComboBox::drop-down {{
     border: none;
-    width: 20px;
+    width: {SPACE_L}px;
 }}
 {caret_arrow_rule}
 QComboBox QAbstractItemView {{
     background-color: {C.surface};
     color: {C.text};
-    border: 1px solid {C.border};
+    border: {BORDER_PX}px solid {C.border};
     selection-background-color: {C.accent_tint};
     selection-color: {C.text};
     outline: none;
@@ -943,13 +1069,14 @@ QComboBox QAbstractItemView {{
    checked included, and nothing may change size or position between the two states. */
 QPushButton:focus, QPushButton:checked:focus {{
     border: {FOCUS_RING_PX}px solid {C.accent_hover};
-    padding: 5px 11px;   /* base 6px 12px, minus the extra border px — identical outer box */
+    /* the base padding minus the extra border px — identical outer box; see focus_pad */
+    padding: {focus_pad(SPACE_XS)}px {focus_pad(SPACE_M)}px;
 }}
 /* an amber ring on the amber primary fill is invisible, so that one variant rings in its own
    ink colour instead (the same dark the label already uses). */
 QPushButton[variant="primary"]:focus {{
     border: {FOCUS_RING_PX}px solid {C.on_accent};
-    padding: 5px 11px;
+    padding: {focus_pad(SPACE_XS)}px {focus_pad(SPACE_M)}px;
 }}
 /* flat text buttons (the PB toast) have no border to ring — they take the hover treatment. */
 QPushButton#PBToastLink:focus, QPushButton#PBToastClose:focus {{
@@ -958,7 +1085,7 @@ QPushButton#PBToastLink:focus, QPushButton#PBToastClose:focus {{
 }}
 QComboBox:focus {{
     border: {FOCUS_RING_PX}px solid {C.accent_hover};
-    padding: 4px 9px;    /* base 5px 10px — same trade */
+    padding: {focus_pad(SPACE_XS)}px {focus_pad(SPACE_M)}px;   /* same trade */
 }}
 QTableView:focus, QTableWidget:focus {{
     border: {FOCUS_RING_PX}px solid {C.accent_hover};
@@ -976,26 +1103,30 @@ QGraphicsView:focus {{
     border: {FOCUS_RING_PX}px solid {C.accent_hover};
 }}
 
-/* scrub bar = primary seek target: 8px groove + 18px handle for grabbability and lap-ruler tick room. */
+/* scrub bar = primary seek target: a SPACE_S groove (the app's one bar weight, shared with the
+   splitter grip, the scrollbar grip and the load bar) under a SPACE_L knob, for grabbability and
+   lap-ruler tick room. The knob's numbers are all derived from those two: RADIUS_M is exactly half
+   of SPACE_L so it is a circle, and the negative margin is half the difference so the circle sits
+   centred on the groove. Shipped it was 18/9/-5 — the same three relations, off the scale. */
 QSlider::groove:horizontal {{
-    height: 8px;
+    height: {SPACE_S}px;
     background: {C.border};
-    border-radius: 4px;
+    border-radius: {RADIUS_S}px;
 }}
 QSlider::sub-page:horizontal {{
     background: {C.accent};
-    border-radius: 4px;
+    border-radius: {RADIUS_S}px;
 }}
 QSlider::add-page:horizontal {{
     background: {C.border};
-    border-radius: 4px;
+    border-radius: {RADIUS_S}px;
 }}
 QSlider::handle:horizontal {{
     background: {C.text};
-    width: 18px;
-    height: 18px;
-    margin: -5px 0;
-    border-radius: 9px;
+    width: {SPACE_L}px;
+    height: {SPACE_L}px;
+    margin: -{(SPACE_L - SPACE_S) // 2}px 0;
+    border-radius: {RADIUS_M}px;
 }}
 QSlider::handle:horizontal:hover {{
     background: {C.accent};
@@ -1007,9 +1138,12 @@ QHeaderView::section {{
     color: {C.text_dim};
     font-size: {TABLE_HEADER}px;
     font-weight: 600;
-    padding: 6px 8px;
+    /* the HORIZONTAL step is load-bearing and unchanged: every column's fitted width is measured
+       through it (tests/test_lap_table_columns.py). Only the vertical padding moved onto the
+       scale, which brings the header row down beside the rows it labels. */
+    padding: {SPACE_XS}px {SPACE_S}px;
     border: none;
-    border-bottom: 1px solid {C.border};
+    border-bottom: {BORDER_PX}px solid {C.border};
 }}
 QHeaderView::section:hover {{
     color: {C.text};
@@ -1031,11 +1165,11 @@ QTableView, QTableWidget {{
        than merely suppressed: a hairline in the accent, drawn INSIDE the cell (negative offset)
        so it can't overlap the row above. It only paints while the view has focus, which is what
        makes it a current-CELL cue on top of the whole-table ring. */
-    outline: 1px solid {C.accent};
-    outline-offset: -1px;
+    outline: {BORDER_PX}px solid {C.accent};
+    outline-offset: -{BORDER_PX}px;
 }}
 QTableView::item, QTableWidget::item {{
-    padding: 4px 8px;
+    padding: {SPACE_XS}px {SPACE_S}px;
 }}
 QTableView::item:selected, QTableWidget::item:selected {{
     background-color: {C.sel_bg};
@@ -1043,16 +1177,16 @@ QTableView::item:selected, QTableWidget::item:selected {{
 }}
 QTableCornerButton::section {{
     background-color: {C.surface};
-    border: 1px solid {C.border};
+    border: {BORDER_PX}px solid {C.border};
 }}
 
 /* ---------------------------------------------------------------- tooltip */
 QToolTip {{
     background-color: {C.surface_hover};
     color: {C.text};
-    border: 1px solid {C.border};
-    border-radius: 4px;
-    padding: 4px 8px;
+    border: {BORDER_PX}px solid {C.border};
+    border-radius: {RADIUS_S}px;
+    padding: {SPACE_XS}px {SPACE_S}px;
 }}
 
 /* ---------------------------------------------------------------- labels & roles */
@@ -1066,14 +1200,14 @@ QLabel.PanelHeader, QLabel[role="PanelHeader"] {{
     color: {C.text_dim};
     font-size: {PANEL_HEADER}px;
     font-weight: 600;
-    padding: 6px 12px;
-    border-bottom: 1px solid {C.border};
+    padding: {SPACE_XS}px {SPACE_M}px;
+    border-bottom: {BORDER_PX}px solid {C.border};
 }}
 /* a header-strip container holding widgets (map header / charts' consolidated bar): same
    surface bg + bottom hairline as a text PanelHeader, but it lays out child widgets itself. */
 QWidget[role="PanelHeader"] {{
     background-color: {C.surface};
-    border-bottom: 1px solid {C.border};
+    border-bottom: {BORDER_PX}px solid {C.border};
 }}
 /* the lap panel's tab bar (Laps · Corners · Stats · Coaching) — lives INSIDE a PanelHeader
    bar, so no base/bg of its own; tabs use the header type scale with the selected tab lifted
@@ -1082,22 +1216,28 @@ QWidget[role="PanelHeader"] {{
 QTabBar {{
     background: transparent;
 }}
+/* A tab takes SPACE_S horizontally, not the SPACE_M a button takes, because the two paddings do
+   different jobs: a button's separates its label from its own BORDER, while a borderless tab's is
+   really the GAP to the next tab, and SPACE_S is the gap step. It also stands at CTRL_H like every
+   other control in a header bar — the underline is the tab's only border, so it is all the chrome
+   ctrl_content_h has to allow for. */
 QTabBar::tab {{
     background: transparent;
     color: {C.text_dim};
     font-size: {PANEL_HEADER}px;
     font-weight: 600;
-    padding: 6px 10px;
+    padding: {SPACE_XS}px {SPACE_S}px;
+    min-height: {ctrl_content_h(CTRL_H, SPACE_XS, border_v=SPACE_XXS)}px;
     border: none;
-    border-bottom: 2px solid transparent;
-    margin-right: 2px;
+    border-bottom: {SPACE_XXS}px solid transparent;
+    margin-right: {SPACE_XXS}px;
 }}
 QTabBar::tab:hover {{
     color: {C.text};
 }}
 QTabBar::tab:selected {{
     color: {C.text};
-    border-bottom: 2px solid {C.accent};
+    border-bottom: {SPACE_XXS}px solid {C.accent};
 }}
 /* section label that sits INSIDE a widget header bar — the dimmed small header type, but no
    bg/border of its own (the parent bar already provides them). */
@@ -1117,7 +1257,7 @@ QLabel#DiffBox {{
     font-family: {MONO_STACK};
     font-size: {HERO}px;
     font-weight: 600;
-    padding: 2px 8px;
+    padding: {SPACE_XXS}px {SPACE_S}px;
 }}
 /* trust strip over the map — one strip, two tiers. The ACTIONABLE line (place the start/finish
    line, #ProvisionalBanner) wears the amber call-to-action treatment: amber left-rule + tint so it
@@ -1128,31 +1268,34 @@ QLabel#DiffBox {{
    lines read as one strip. */
 QWidget#TrustStrip {{
     background: transparent;
-    border-bottom: 1px solid {C.border};
+    border-bottom: {BORDER_PX}px solid {C.border};
 }}
+/* SPACE_XXS is the app's ACCENT-RULE weight — it is what the selected tab underlines itself with
+   — so the two trust lines and the chapter banner below now share it. Shipped, the same cue was
+   drawn at three different weights (3 px, 3 px, 2 px) for no reason anyone could state. */
 QLabel#ProvisionalBanner {{
     background-color: {C.accent_tint};
     color: {C.text};
     font-size: {CAPTION}px;
     font-weight: 600;
-    padding: 5px 12px;
-    border-left: 3px solid {C.accent};
+    padding: {SPACE_XS}px {SPACE_M}px;
+    border-left: {SPACE_XXS}px solid {C.accent};
 }}
 QLabel#InfoBanner {{
     background-color: {C.surface};
     color: {C.text_dim};
     font-size: {CAPTION}px;
     font-weight: 500;
-    padding: 5px 12px;
-    border-left: 3px solid {C.border_strong};
+    padding: {SPACE_XS}px {SPACE_M}px;
+    border-left: {SPACE_XXS}px solid {C.border_strong};
 }}
 /* "new personal best!" celebration toast — a transient, tasteful card overlaid on the window when a
    freshly-analysed session beats the track's prior PB (verified timing only). Amber accent so it
    reads as a positive moment, not an error; auto-dismisses. The link inside opens the PB progression. */
 QWidget#PBToast {{
     background-color: {C.surface_active};
-    border: 1px solid {C.accent};
-    border-radius: 8px;
+    border: {BORDER_PX}px solid {C.accent};
+    border-radius: {RADIUS_M}px;
 }}
 QLabel#PBToastTitle {{
     background: transparent;
@@ -1166,14 +1309,19 @@ QLabel#PBToastBody {{
     font-size: {CAPTION}px;
 }}
 /* the "see your progress" link + the dismiss ×: flat text buttons that don't look like the chunky
-   panel QPushButtons. */
+   panel QPushButtons — so they take HIT_MIN rather than CTRL_H, and they must take it HERE.
+   A stylesheet min-height REPLACES the widget's own minimum (see the note on QPushButton above):
+   these two call setMinimumSize(MIN_HIT_PX, MIN_HIT_PX) in overlays.py and were silently getting
+   22 px from the base rule's CTRL_H derivation instead — under the pointer floor, on the one card
+   in the app you have to hit before it deletes itself. tests/test_pb_toast.py caught it. */
 QPushButton#PBToastLink, QPushButton#PBToastClose {{
     background: transparent;
     border: none;
     color: {C.accent};
     font-size: {CAPTION}px;
     font-weight: 600;
-    padding: 2px 6px;
+    padding: {SPACE_XXS}px {SPACE_S}px;
+    min-height: {ctrl_content_h(HIT_MIN, SPACE_XXS, border_v=0)}px;
 }}
 QPushButton#PBToastLink:hover {{
     color: {C.accent_hover};
@@ -1191,9 +1339,9 @@ QLabel#ChapterBanner {{
     color: {C.text_dim};
     font-size: {CAPTION}px;
     font-weight: 500;
-    padding: 4px 12px;
-    border-left: 2px solid {C.accent};
-    border-bottom: 1px solid {C.border};
+    padding: {SPACE_XS}px {SPACE_M}px;
+    border-left: {SPACE_XXS}px solid {C.accent};
+    border-bottom: {BORDER_PX}px solid {C.border};
 }}
 /* video time/speed/lap readout (caption, dimmed, tabular) */
 QLabel#Readout {{
@@ -1201,7 +1349,7 @@ QLabel#Readout {{
     color: {C.text_dim};
     font-family: {MONO_STACK};
     font-size: {CAPTION}px;
-    padding: 4px 8px;
+    padding: {SPACE_XS}px {SPACE_S}px;
 }}
 /* per-pane caption strip in compare mode: "lap N  m:ss.mmm" (tabular, dimmed, surface bg). */
 QLabel#PaneCaption {{
@@ -1210,7 +1358,7 @@ QLabel#PaneCaption {{
     font-family: {MONO_STACK};
     font-size: {CAPTION}px;
     font-weight: 600;
-    padding: 3px 8px;
+    padding: {SPACE_XS}px {SPACE_S}px;
 }}
 /* per-pane "Δ vs other" badge in compare mode: tabular, transparent so it sits inline in the
    caption strip; only its Δ-value COLOUR is driven per-tick (a merged `color:` rule). */
@@ -1220,7 +1368,7 @@ QLabel#PaneBadge {{
     font-family: {MONO_STACK};
     font-size: {CAPTION}px;
     font-weight: 600;
-    padding: 3px 8px;
+    padding: {SPACE_XS}px {SPACE_S}px;
 }}
 /* in-panel empty state: shown when a recording has zero complete laps. Surface bg covers the panel.
    text_dim, NOT text_muted: this is the panel's ONLY content, so it is enabled prose and has to
@@ -1229,15 +1377,15 @@ QLabel[role="EmptyState"] {{
     background-color: {C.surface};
     color: {C.text_dim};
     font-size: {BODY}px;
-    padding: 24px;
+    padding: {SPACE_XL}px;
 }}
 /* first-run welcome DROP ZONE: a dashed-border rounded rect framing the wordmark/invitation/
    buttons, so the drag-and-drop affordance is VISIBLE (a user reads "drop a file here"). Restrained
    — a dashed hairline over the canvas, not a heavy box; the buttons inside keep their own styling. */
 QFrame#WelcomeDropZone {{
     background: transparent;
-    border: 2px dashed {C.border_strong};
-    border-radius: 16px;
+    border: {SPACE_XXS}px dashed {C.border_strong};
+    border-radius: {RADIUS_L}px;
 }}
 /* first-run welcome empty state (no recording loaded): a large wordmark + a muted invitation. */
 QLabel[role="WelcomeTitle"] {{
@@ -1275,12 +1423,12 @@ QLabel[role="LoadingTitle"] {{
 QProgressBar#LoadingBar {{
     background-color: {C.surface};
     border: none;
-    border-radius: 3px;
-    max-height: 6px;
+    border-radius: {RADIUS_S}px;
+    max-height: {SPACE_S}px;   /* the app's one bar weight: groove, splitter grip, scrollbar grip */
 }}
 QProgressBar#LoadingBar::chunk {{
     background-color: {C.accent};
-    border-radius: 3px;
+    border-radius: {RADIUS_S}px;
 }}
 /* ESTIMATED data-quality badge (central_view QualityBadge): a small padded/rounded/tinted chip
    next to the LAPS label when the timing quality is degraded — so it reads as a chip, not plain
@@ -1291,9 +1439,9 @@ QLabel#QualityBadge {{
     color: {C.accent};
     font-size: {TABLE_HEADER}px;
     font-weight: 700;
-    padding: 2px 7px;
-    border: 1px solid {C.accent};
-    border-radius: 8px;
+    padding: {SPACE_XXS}px {SPACE_S}px;
+    border: {BORDER_PX}px solid {C.accent};
+    border-radius: {RADIUS_M}px;
 }}
 """
 

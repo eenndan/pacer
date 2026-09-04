@@ -41,8 +41,9 @@ class WelcomeView(QWidget):
         self.drop_zone.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         zone = QVBoxLayout(self.drop_zone)
         zone.setAlignment(Qt.AlignCenter)
-        zone.setContentsMargins(56, 44, 56, 44)
-        zone.setSpacing(14)
+        zone.setContentsMargins(theme.SPACE_3XL, theme.SPACE_2XL,
+                                theme.SPACE_3XL, theme.SPACE_2XL)
+        zone.setSpacing(theme.SPACE_L)
 
         # A small muted drop glyph above the wordmark, reinforcing "drop a file here" without hue.
         self.drop_icon = QLabel()
@@ -107,7 +108,12 @@ class PBToast(QWidget):
     # the primary share button already stands 30px on its variant's padding, and an explicit
     # minimum would REPLACE its layout minimum (qSmartMinSize takes an explicit minimumSize
     # verbatim), letting the row squeeze it down to 24 instead of leaving it alone.
-    MIN_HIT_PX = 24
+    #
+    # The number itself is theme.HIT_MIN — the app-wide pointer-target floor, which lives with the
+    # rest of the dimensional tokens now instead of being owned by whichever widget needed it
+    # first. The NAME stays, because it is the widget's own statement of the rule and
+    # tests/test_pb_toast.py reads it.
+    MIN_HIT_PX = theme.HIT_MIN
 
     def __init__(self, title: str, body: str, on_progress, on_share=None, parent=None):
         super().__init__(parent)
@@ -115,8 +121,8 @@ class PBToast(QWidget):
         self._on_progress = on_progress
         self._on_share = on_share
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(2)
+        lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
+        lay.setSpacing(theme.SPACE_XXS)
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
@@ -172,7 +178,7 @@ class PBToast(QWidget):
         self.adjustSize()
         pw = parent.width()
         x = max(0, (pw - self.width()) // 2)
-        self.move(x, 16)
+        self.move(x, theme.SPACE_L)
         self.raise_()
         self.show()
         self._timer.start(self.AUTO_DISMISS_MS)

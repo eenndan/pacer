@@ -10,6 +10,27 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Added
 
+- **A spatial design system in `studio/theme.py`** (developer-facing plumbing) — the dimensional
+  half of the token set the colours already had: a 4 px spacing scale with one 2 px sub-step
+  (`SPACE_XXS`…`SPACE_3XL`), three radii by role (`RADIUS_S/M/L` — controls, cards, large
+  surfaces), declared sizes (`CTRL_H`, `ICON_BTN`, `PANEL_HDR_H`, `TOOLBAR_H`, `HIT_MIN`,
+  `BORDER_PX`, plus the pre-existing `SPLITTER_HANDLE_PX` / `FOCUS_RING_PX` folded in), and two
+  helpers that DERIVE the awkward numbers instead of nudging them — `ctrl_content_h` (a QSS
+  `min-height` is a content box, so a control that must paint at `CTRL_H` computes what to declare)
+  and `focus_pad` (the padding a `:focus` rule gives back so the thicker ring cannot move the outer
+  box). The theme's own stylesheet is migrated onto the scale: 21 distinct px values → 16, 7 border
+  radii → 3, 17 padding pairs → 7, and the two hand-computed `5px 11px` / `4px 9px` focus paddings
+  are now generated. The type scale gains a fourth defined step (`EMPHASIS` 15, promoted from
+  `stats_panel.TILE_VALUE_PT`) and `CAPTION` moves 12 → 11, so the four sizes are 11 / 13 / 15 / 22
+  instead of three sitting within two pixels of each other.
+- **`tests/test_design_system.py`** — the dimensional guard beside the colour one: every
+  padding / margin / border-radius / min-height in the theme's stylesheet must be a token or a
+  stated derivation of tokens (a `min-height` is checked by reconstructing the outer box it
+  actually paints); an AST walk over `studio/` for hand-picked `setContentsMargins` / `setSpacing`
+  / `setFixedHeight` / `setFixedSize` values, labelled by the class and method that owns each, with
+  the not-yet-migrated view surfaces in a prose-justified exemption list; and a live check that a
+  real button, combo box and tab bar all paint at `CTRL_H`.
+
 - **Session Statistics page** — a third page on the lap panel's **Laps | Corners | Stats**
   toggle (⌘⇧S or View ▸ Session statistics opens it as a full-window dashboard): session
   totals (time on track, moving time, distance, wall-clock window), the pace distribution
