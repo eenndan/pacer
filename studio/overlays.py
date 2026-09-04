@@ -1,10 +1,17 @@
 """Presentational overlay widgets shown over StudioWindow: the first-run empty state (WelcomeView)
 and the personal-best celebration/share toast (PBToast). Self-contained — they take DI callbacks +
-formatted text and route Qt signals; no reach into StudioWindow internals."""
+formatted text and route Qt signals; no reach into StudioWindow internals.
+
+The one thing an overlay cannot decide for itself is WHERE it belongs, because that depends on
+what the window is currently showing. So there is a small optional protocol instead of a reach:
+a parent may expose ``view.overlay_anchor()`` returning the widget a transient card should sit
+inside (see ``PBToast.anchor_region`` and ``CentralView.overlay_anchor``). Absent, the card falls
+back to the window itself — which is what keeps these widgets constructible over a bare QWidget in
+the tests, exactly as before."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -88,8 +95,9 @@ class WelcomeView(QWidget):
 
 
 class PBToast(QWidget):
-    """A transient "new personal best!" celebration card overlaid on the window (top-centre) when a
-    freshly-analysed session beats its track's prior PB on verified timing. Tasteful, not modal: an
+    """A transient "new personal best!" celebration card overlaid on the window — at the bottom of
+    the LAP panel's body, see `show_for` / `anchor_region` — when a freshly-analysed session beats
+    its track's prior PB on verified timing. Tasteful, not modal: an
     amber-accented card that auto-dismisses after a few seconds, holding that clock while the
     pointer is on it so it never vanishes mid-click. At the peak-pride moment it turns
     into a SHARE loop: the PRIMARY "Share your PB →" button saves the shareable lap card (image),
@@ -118,6 +126,15 @@ class PBToast(QWidget):
     def __init__(self, title: str, body: str, on_progress, on_share=None, parent=None):
         super().__init__(parent)
         self.setObjectName("PBToast")
+        # THE CARD HAS TO BE TOLD TO PAINT ITSELF. theme.py has drawn this toast a background, an
+        # accent border and a RADIUS_M corner since the moment shipped — and a bare QWidget honours
+        # none of it: Qt only runs the stylesheet's box painting for a QWidget subclass when
+        # WA_StyledBackground is set (QPushButton, QLabel and friends draw their own, which is why
+        # every other #Name rule in this app just works). So the "card" was transparent, and it read
+        # as one only because it happened to be sitting over the map's empty top-left corner, which
+        # is flat surface colour. Moved onto the lap grid it became text over alternating stripes
+        # and lap times, which is what made this visible at all.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self._on_progress = on_progress
         self._on_share = on_share
         lay = QVBoxLayout(self)
@@ -173,12 +190,67 @@ class PBToast(QWidget):
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.dismiss)
 
+    def anchor_region(self, parent: QWidget) -> QRect:
+        """The rectangle of `parent` this card may sit in, in `parent`'s own coordinates.
+
+        WHY THIS EXISTS. The card used to be placed top-centre of the WINDOW, at a fixed 16 px from
+        its top edge — a position chosen when the window was a picture rather than a set of panels.
+        Measured on the shipped app at 1440x900 it landed at (579, 16, 281x96), which put it 36 px
+        deep into the MAP panel's PanelHeader (colliding with the word "MAP"), across the whole 32 px
+        of the map's PanelToolbar, and 20 px into the track canvas below that; with the lap panel
+        maximized it sat on THAT panel's header instead. Now that every panel declares a header
+        height, an overlay landing on one is not a near-miss, it is the one rule the chrome has.
+
+        So the position is asked for rather than assumed: a parent that knows what it is showing
+        exposes ``view.overlay_anchor()`` -> QWidget (CentralView does; see its docstring for which
+        panel body it hands back and why). Anything else — a bare QWidget host in a test, the
+        window before its view exists — gets the parent's own rect, which is the previous behaviour
+        minus the fixed top offset.
+
+        Deliberately duck-typed, and deliberately read off `parent.view` rather than imported: this
+        module is Qt-only and knows nothing about sessions, panels or telemetry, and importing the
+        view that owns the panels would end that.
+
+        THE ANSWER IS THEN CHECKED, not trusted, against the only thing this class does know: its
+        own size. A panel can be laid out, correctly sized and still not be on screen — Qt collapses
+        a splitter SECTION rather than the widget in it — so the region is clipped to what `parent`
+        can actually show, and a clipped region too small to hold this card hands the whole window
+        back instead. That keeps the failure mode "a toast somewhere slightly worse" rather than "a
+        toast at (0, 0)"."""
+        view = getattr(parent, "view", None)
+        anchor = getattr(view, "overlay_anchor", None)
+        widget = anchor() if callable(anchor) else None
+        if widget is None or widget.isHidden() or not parent.isAncestorOf(widget):
+            return parent.rect()
+        shown = QRect(widget.mapTo(parent, QPoint(0, 0)),
+                      widget.size()).intersected(parent.rect())
+        if (shown.width() < self.width()
+                or shown.height() < self.height() + 2 * theme.SPACE_M):
+            return parent.rect()
+        return shown
+
     def show_for(self, parent: QWidget):
-        """Position the toast top-centre over `parent`, show it on top, and start the auto-dismiss."""
+        """Place the toast at the BOTTOM of its anchor region, centred, and start the auto-dismiss.
+
+        BOTTOM, not top, and that is the whole placement decision. The anchor region is a panel's
+        BODY (`anchor_region`), so its top edge is immediately under that panel's header — and the
+        lap grid puts its own column headers there, so a card inset from the top would land on a
+        header again, one level down. Its bottom edge has nothing structural on it: the rows a card
+        covers there are the ones furthest from the ★ best lap this card is about, and they scroll.
+        It also puts the card in the window's bottom-left, which is where a transient notification
+        conventionally lives, instead of centred on the splitter between two columns.
+
+        Clamped rather than trusted: a region shorter or narrower than the card (a panel dragged
+        small) pins the card to the region's top-left and lets it overhang, because a celebration
+        that is off-screen is worse than one that overlaps. Nothing here can push it outside
+        `parent`."""
         self.adjustSize()
-        pw = parent.width()
-        x = max(0, (pw - self.width()) // 2)
-        self.move(x, theme.SPACE_L)
+        region = self.anchor_region(parent)
+        x = region.left() + max(0, (region.width() - self.width()) // 2)
+        y = max(region.top() + theme.SPACE_M,
+                region.bottom() + 1 - theme.SPACE_M - self.height())
+        self.move(max(0, min(x, max(0, parent.width() - self.width()))),
+                  max(0, min(y, max(0, parent.height() - self.height()))))
         self.raise_()
         self.show()
         self._timer.start(self.AUTO_DISMISS_MS)

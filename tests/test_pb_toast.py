@@ -1,4 +1,4 @@
-"""PB-toast hit targets + dismiss clock (fix/qa-toast-and-trackdb, QA sweep L10-07).
+"""PB-toast hit targets + dismiss clock + WHERE THE CARD LANDS (QA sweep L10-07 · plan §C).
 
 The "new personal best!" card (studio.overlays.PBToast) deletes itself after AUTO_DISMISS_MS, so
 it is the one surface in the app where a small control and a running clock compound: two of its
@@ -16,6 +16,19 @@ Pinned here:
     are unchanged, and the flat buttons still take their focus cue (colour + underline, which the
     theme paints without touching geometry).
 
+AND WHERE IT LANDS, which is the Phase-5 half. The card was placed top-centre of the WINDOW at a
+fixed 16 px from its top edge — a rule from when the window was one picture rather than four
+panels. Measured on the shipped app at 1440x900 that put it 36 px into the MAP panel's header
+(over the word "MAP"), across all 32 px of the map's toolbar, and 20 px into the track; with the
+lap panel maximized it sat on THAT header, cutting the "Dist (m)" column label in half. Every panel
+now DECLARES its header height (theme.PANEL_HDR_H), so an overlay on one is not a near miss.
+
+Pinned here: the card never intersects a PanelHeader or a PanelToolbar, at both shipped window
+sizes, in the default grid AND with each of the four panels maximized; it sits inside the lap
+panel's body when that panel is on screen; and it PAINTS ITS OWN CARD — the theme has drawn
+#PBToast a background, an accent border and a radius since the moment shipped, and a bare QWidget
+ignores all three without WA_StyledBackground.
+
 Real widgets on the REAL theme (the QSS decides every pixel measured here), so run offscreen.
 No pacer, no telemetry file.
 
@@ -26,18 +39,23 @@ import sys
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# The anchoring tests build the REAL CentralView; PACER_NO_MEDIA must be set before studio imports
+# (PlayerPane reads it once, at construction).
+os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect  # noqa: E402
+from _qtapp import themed_app  # noqa: E402
+
+_APP = themed_app()  # the toast's sizes come from the QSS padding — measure the SHIPPED font+theme
+
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt  # noqa: E402
 from PySide6.QtGui import QEnterEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from studio import theme  # noqa: E402
 from studio.overlays import PBToast  # noqa: E402
-
-_APP = QApplication.instance() or QApplication([])
-theme.apply_theme(_APP)  # the toast's sizes come from the QSS padding — measure the real one
 
 # The QA sweep's pointer-target floor, spelled out here rather than read off PBToast so the
 # measurement is independent of the code under test (on main these assertions fail with the
@@ -136,9 +154,136 @@ def test_toast_wording_and_routing_survive_the_floor():
     print("test_toast_wording_and_routing_survive_the_floor OK")
 
 
+# ======================================================================== where the card lands
+def _hex(px):
+    return f"#{px & 0xFFFFFF:06X}"
+
+
+def test_the_card_paints_the_card_the_theme_draws_it():
+    """A #PBToast rule with nobody to paint it. theme.py gives this widget `background-color:
+    surface_active`, a `BORDER_PX solid accent` border and a RADIUS_M corner — and Qt runs a
+    stylesheet's BOX painting for a plain QWidget subclass only when WA_StyledBackground is set
+    (QLabel/QPushButton draw their own box, which is why every other #Name rule in this app just
+    works). So the card was transparent: it read as a card only while it sat over the map's empty
+    top-left corner, which happens to be flat surface colour. Over the lap grid it was celebration
+    text interleaved with lap times.
+
+    Measured on the widget's own render, not on the attribute alone — the attribute is the
+    mechanism, the pixels are the claim."""
+    host, toast = _shown_toast(on_share=lambda: None)
+    assert toast.testAttribute(Qt.WA_StyledBackground), (
+        "without WA_StyledBackground the #PBToast background/border/radius are never painted")
+    img = toast.grab().toImage()
+    mid = img.pixel(toast.width() // 2, toast.height() // 2)
+    # The border is BORDER_PX at a RADIUS_M corner, so sample it mid-edge where the corner arc is
+    # not in the way. Row 0 of a styled QWidget IS the border.
+    edge = img.pixel(toast.width() // 2, 0)
+    host.close()
+    assert _hex(mid) == theme.C.surface_active.upper(), (
+        f"the card's interior is {_hex(mid)}, not the themed {theme.C.surface_active}")
+    assert _hex(edge) == theme.C.accent.upper(), (
+        f"the card's border is {_hex(edge)}, not the themed accent {theme.C.accent}")
+    print(f"test_the_card_paints_the_card_the_theme_draws_it OK "
+          f"(fill {_hex(mid)}, border {_hex(edge)})")
+
+
+def _window_with_toast(size, maximize=None):
+    """A REAL StudioWindow + CentralView at `size` with the PB toast up, optionally with one panel
+    maximized. Returns (win, view, toast)."""
+    from test_central_view_realqt import _studiowindow_with_view
+
+    win, view = _studiowindow_with_view()
+    win.resize(*size)
+    win.show()
+    for _ in range(10):
+        _APP.processEvents()
+    if maximize is not None:
+        view._toggle_panel_maximized(getattr(view, maximize))
+        for _ in range(8):
+            _APP.processEvents()
+    toast = PBToast(_TITLE, _BODY, on_progress=lambda: None, on_share=lambda: None, parent=win)
+    toast.show_for(win)
+    for _ in range(6):
+        _APP.processEvents()
+    return win, view, toast
+
+
+def _chrome_rects(win, view):
+    """Every declared panel-chrome row (PanelHeader / PanelToolbar) that is ON SCREEN, in the
+    window's coordinates. A maximized panel collapses its siblings' splitter SECTION rather than
+    their widgets, so an off-screen header is not a header anyone can collide with."""
+    from studio.widgets import PanelHeader, PanelToolbar
+
+    out = []
+    for w in [*view.findChildren(PanelHeader), *view.findChildren(PanelToolbar)]:
+        if w.isHidden() or w.width() <= 0 or w.height() <= 0:
+            continue
+        r = QRect(w.mapTo(win, QPoint(0, 0)), w.size()).intersected(win.rect())
+        if not r.isEmpty():
+            out.append((type(w).__name__, r))
+    return out
+
+
+def test_the_toast_never_lands_on_panel_chrome():
+    """§C, the whole point of it: nothing overlays a declared header.
+
+    On main this fails with a 281x36 intersection with the MAP PanelHeader (and 281x32 with the map
+    PanelToolbar) at both window sizes, and with the TABLE PanelHeader once the lap panel is
+    maximized. Checked in five states per size, because the defect had two of them."""
+    for size in ((1440, 900), (1280, 800)):
+        for state in (None, "_map_panel", "_table_panel", "_video_panel", "_plots_panel"):
+            win, view, toast = _window_with_toast(size, maximize=state)
+            card = QRect(toast.mapTo(win, QPoint(0, 0)), toast.size())
+            hits = [(kind, r, card.intersected(r)) for kind, r in _chrome_rects(win, view)
+                    if not card.intersected(r).isEmpty()]
+            assert card.width() > 0 and card.height() > 0, card
+            assert win.rect().contains(card), (
+                f"{size} {state}: the card at {card} is not inside the {win.rect()} window")
+            win.hide()
+            assert not hits, (
+                f"{size} maximize={state}: the PB toast at {card} overlays panel chrome — "
+                + "; ".join(f"{k} {r} by {i.width()}x{i.height()}" for k, r, i in hits))
+    print("test_the_toast_never_lands_on_panel_chrome OK (2 sizes x 5 layout states)")
+
+
+def test_the_toast_sits_in_the_lap_panels_body():
+    """WHERE it goes, not just where it does not. The PB moment is a LAP fact with two lap actions
+    on it, so it belongs over the grid that holds the ★ session-best row — not over the map, whose
+    every pixel is the racing line, the corner markers and the draggable start/finish handles.
+
+    And it must survive that panel being collapsed: maximizing another quadrant drives the lap
+    panel's splitter section to 0 while leaving its WIDGETS sized (measured: 280x453 at (-1, -430)),
+    so a naive `is it big enough` check would put the card off the top of the window."""
+    win, view, toast = _window_with_toast((1440, 900))
+    body = QRect(view.table_stack.mapTo(win, QPoint(0, 0)), view.table_stack.size())
+    card = QRect(toast.mapTo(win, QPoint(0, 0)), toast.size())
+    win.hide()
+    assert body.contains(card), f"the card at {card} is not inside the lap panel body {body}"
+    # ...at the BOTTOM of it: the top of that body is where the grid's own column headers are.
+    assert card.bottom() > body.center().y(), (card, body)
+
+    # A COLLAPSED lap panel must not still be chosen. Maximizing the map drives the lap panel's
+    # splitter section to 0 while its widgets keep their size (measured on main: 280x453 sitting at
+    # (-1, -430)), so the on-screen check is the one that matters, not the widget's own geometry.
+    win2, view2, toast2 = _window_with_toast((1440, 900), maximize="_map_panel")
+    stack = QRect(view2.table_stack.mapTo(win2, QPoint(0, 0)), view2.table_stack.size())
+    card2 = QRect(toast2.mapTo(win2, QPoint(0, 0)), toast2.size())
+    win2.hide()
+    assert not win2.rect().intersects(stack) or stack.height() < card2.height(), (
+        "this fixture is only meaningful while the lap panel really is off screen", stack)
+    assert win2.rect().contains(card2), (
+        f"with the map maximized the card landed at {card2}, outside the "
+        f"{win2.rect()} window — the collapsed lap panel was still used as the anchor")
+    print("test_the_toast_sits_in_the_lap_panels_body OK "
+          f"(card {card} in body {body}; collapsed-panel fallback keeps it at {card2})")
+
+
 if __name__ == "__main__":
     test_every_toast_control_clears_the_hit_floor()
     test_toast_controls_are_inside_the_card_they_grew()
     test_auto_dismiss_holds_while_the_pointer_is_on_the_card()
     test_toast_wording_and_routing_survive_the_floor()
-    print("\nAll PB-toast hit-target tests passed.")
+    test_the_card_paints_the_card_the_theme_draws_it()
+    test_the_toast_never_lands_on_panel_chrome()
+    test_the_toast_sits_in_the_lap_panels_body()
+    print("\nAll PB-toast hit-target + anchoring tests passed.")

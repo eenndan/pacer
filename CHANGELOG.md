@@ -154,6 +154,31 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **The "new personal best" card no longer lands on the MAP panel's header — and it is a card
+  now.** It was placed top-centre of the WINDOW, 16 px from its top edge: a rule from when the
+  window was one picture rather than four panels. Measured on the shipped app at 1440x900 it sat at
+  (579, 16, 281x96) — 36 px deep into the map's header (across the word "MAP"), over all 32 px of
+  the map's toolbar and 20 px into the track itself; with the lap panel maximized it sat on THAT
+  header instead, cutting the "Dist (m)" column label in half. It now sits in the LAP panel's body,
+  bottom-centre: the panel whose ★ session-best row is the lap the card is announcing, and whose
+  rows scroll, rather than the one canvas where every pixel is the racing line, the corner markers
+  and the draggable start/finish handles. A collapsed lap panel (any other quadrant maximized)
+  hands the card to whichever panel IS on screen, so a six-second celebration can never be placed
+  off it. And it finally paints the card the theme has always drawn it: `#PBToast` has had a
+  background, an amber border and a rounded corner since the moment shipped, and a bare `QWidget`
+  honours none of that without `WA_StyledBackground` — so the "card" was transparent, which read as
+  a card only while it happened to be over the map's empty top-left corner.
+- **The lap and corner tables' numeric headers now sit over their own numbers.** `Time`,
+  `Dist (m)` and `Entry (km/h)` — and all seven numeric corner columns — were CENTRED over
+  right-aligned digits. Measured from the pixels at 1440x900, each header's ink ended 39 / 40 /
+  42 px short of its column while the digits it names ended 13 / 12 / 12 px short: a label floating
+  26-30 px to the left of its own data, and further on every extra pixel of column width (a
+  maximized lap panel gives each data column 240 px). The app already enforced the opposite for the
+  Coaching table. Column widths are unchanged to the pixel at both shipped window sizes. The lap
+  grid's sort indicator moves out of the way rather than over the label: under a stylesheet, Qt
+  stops subtracting the arrow's width from a header's text rect, so a right-aligned "Time" would
+  have painted straight through the ▲.
+
 - **The Stats page no longer clips DATA TRUST mid-word, and no longer scrolls sideways in its own
   quadrant.** Two widgets pinned themselves WIDER than the pane they live in — the widest report
   table to the exact width of its nine columns (730 px) and the friction circle to 2:1 around a
