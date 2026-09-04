@@ -33,12 +33,14 @@ So: three checks, in the same idiom as the colour guard next door.
      a real QPushButton, QComboBox and QTabBar built under the shipped theme really do stand at
      CTRL_H. A declared height that the box model quietly refuses is worse than no token at all.
 
-NOT asserted here yet: that the four PANEL HEADERS share a height. They do not — 32 / 38 / 43 / 43
-on the shipped app, because nothing declares one and the height is emergent from whichever control
-happens to be tallest. PANEL_HDR_H exists for the phase that fixes that; the assertion belongs
-with it.
+  4. THE FOUR PANEL HEADERS ARE ONE HEIGHT. This was the check the token PR deliberately left out,
+     because it was not yet true: the app shipped 32 / 38 / 43 / 43, and the tokens alone narrowed
+     that to 36 / 36 / 36 / 38 as a SIDE EFFECT of controls landing on one height — not because
+     anything declared a header height. The header/toolbar split declares it, so the assertion
+     lands with it, measured on the REAL CentralView rather than on a widget built for the test.
 
-Offscreen Qt, no telemetry file, no pacer.  Run: python tests/test_design_system.py
+Offscreen Qt.  Checks 1-3 need no telemetry and no pacer; check 4 builds the production view over
+the deterministic synthetic session.  Run: python tests/test_design_system.py
 """
 import ast
 import os
@@ -400,6 +402,58 @@ def test_a_button_a_combo_and_a_tab_really_paint_at_ctrl_h():
     print(f"test_a_button_a_combo_and_a_tab_really_paint_at_ctrl_h OK ({got})")
 
 
+# ============================================================================ 4. the panels
+def test_all_four_panel_headers_are_one_height():
+    """Check 4 — THE measurement this design system was cut to move, on the REAL CentralView.
+
+    Shipped, the four panels stood at 32 / 38 / 43 / 43. All four already went through ONE shared
+    header builder, which is what made the defect so hard to see in the diff: the builder set
+    margins and never a HEIGHT, so each bar came out as tall as whichever control it happened to
+    hold — a QTabBar, a QPushButton, the 30 px hero #DiffBox. The spatial tokens alone narrowed the
+    spread to 36 / 36 / 36 / 38 by landing every CONTROL on CTRL_H, but that is a coincidence of
+    contents, not a declaration: adding one taller widget to any header would have moved it again.
+
+    So: every PanelHeader in the view stands at exactly PANEL_HDR_H and every PanelToolbar at
+    exactly TOOLBAR_H, at both shipped window sizes, and the count is pinned too — four headers
+    (one per quadrant) and exactly two toolbars, because a panel with no controls does not get an
+    empty control row.
+
+    Measured on the production view over the deterministic synthetic session, not on widgets built
+    for the test: a header is only the right height when it holds the app's real contents."""
+    from test_central_view_realqt import _real_central_view
+
+    from studio.widgets import PanelHeader, PanelToolbar
+
+    for size in ((1440, 900), (1280, 800)):
+        view = _real_central_view()[0]
+        view.resize(*size)
+        view.show()
+        for _ in range(8):
+            _APP.processEvents()
+        panels = {"VIDEO": view._video_panel, "TABLE": view._table_panel,
+                  "MAP": view._map_panel, "CHARTS": view._plots_panel}
+        heights = {}
+        for name, panel in panels.items():
+            # The header is layout item 0 of every panel, by construction (CentralView._headered).
+            header = panel.layout().itemAt(0).widget()
+            assert isinstance(header, PanelHeader), (name, type(header).__name__)
+            heights[name] = header.height()
+        view.hide()
+        assert set(heights.values()) == {theme.PANEL_HDR_H}, (
+            f"the four panel headers must be ONE declared height "
+            f"(PANEL_HDR_H={theme.PANEL_HDR_H}) at {size}: {heights}")
+        toolbars = [t for t in view.findChildren(PanelToolbar)]
+        assert len(toolbars) == 2, (
+            f"only MAP and CHARTS have controls, so only they get a toolbar: {len(toolbars)}")
+        for t in toolbars:
+            assert t.height() == theme.TOOLBAR_H, (t.height(), theme.TOOLBAR_H)
+            for c in t.controls:
+                assert c.height() == theme.CTRL_H, (
+                    f"every control in a toolbar shares one height: {c!r} is {c.height()}")
+    print(f"test_all_four_panel_headers_are_one_height OK "
+          f"(4 headers @ {theme.PANEL_HDR_H}, 2 toolbars @ {theme.TOOLBAR_H})")
+
+
 def _run_all():
     test_every_stylesheet_dimension_is_on_the_scale()
     test_the_focus_ring_is_paid_for_out_of_the_padding_not_the_box()
@@ -408,6 +462,7 @@ def _run_all():
     test_the_type_scale_has_four_steps_and_four_roles()
     test_the_pointer_target_floor_has_one_home()
     test_a_button_a_combo_and_a_tab_really_paint_at_ctrl_h()
+    test_all_four_panel_headers_are_one_height()
     print("\nAll design-system (spatial + type scale) tests passed.")
 
 

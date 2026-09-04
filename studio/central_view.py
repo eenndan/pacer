@@ -24,7 +24,6 @@ from typing import NamedTuple
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
-    QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
@@ -46,32 +45,35 @@ from .scrub_controller import ScrubController
 from .session import fmt_time
 from .stats_panel import StatsView
 from .video_view import VideoView
+from .widgets import PanelHeader, PanelToolbar
 
 # The maximize-button glyphs. DELIBERATELY DISTINCT from the video transport's fullscreen ⤢ button
 # (ph.arrows-out / ph.arrows-in — "fill the SCREEN"): the corners glyphs read as "fill this WINDOW
 # quadrant", a different action, so the two never collide on the video header. Maximize glyph while
 # the panel is in the grid, restore glyph while it's maximized.
-# The charts panel's section label, per Δ baseline (see plots_view.deltaBaselineChanged), in two
-# lengths. The bar names the baseline the LOWER CHART actually draws, which is NOT the hero
-# readout's own reference — so when the bar is cramped it drops the decorative "SPEED · " half and
-# keeps the naming (see _fit_plots_header for the full yield order).
+# The charts panel's identity, per Δ baseline (see plots_view.deltaBaselineChanged). The label
+# names the baseline the LOWER CHART actually draws, which is NOT the hero readout's own reference
+# — so it is the item that keeps the panel unambiguous, not decoration.
+#
+# It used to exist in TWO lengths, because identity and the panel's controls shared one width
+# budget and a degradation ladder chose between them at every resize. The controls now live in a
+# PanelToolbar of their own, so there is exactly one wording per baseline and it is always painted
+# in full: the charts panel's minimum width is set by this label plus the hero readout, and the
+# splitter cannot be dragged below it.
+#
 # QA-W2R-03: there are THREE baselines, not two — with a cross-recording reference loaded this bar
 # used to paint "Δ TO BEST" over a curve measured against another recording's lap. "REF" rather
-# than the recording's name: the bar is over-subscribed by construction (see _fit_plots_header) and
-# every px this label takes comes off a control's text, so the two REF strings are deliberately the
-# NARROWEST of the three pairs and the recording is named in full by the label's tooltip, by the
-# chart legend under it and by the permanent status chip.
+# than the recording's name because THIS LABEL IS NOW PART OF THE COLUMN'S FLOOR: every px it takes
+# is a px the user can no longer drag the charts column below. The recording is named in full by
+# the label's tooltip, by the chart legend under it and by the permanent status chip.
 _PLOTS_LABEL_BEST = "SPEED · Δ TO BEST"
 _PLOTS_LABEL_IDEAL = "SPEED · Δ TO IDEAL"
 _PLOTS_LABEL_REF = "SPEED · Δ TO REF"
-_PLOTS_CHIP_BEST = "Δ BEST"
-_PLOTS_CHIP_IDEAL = "Δ IDEAL"
-_PLOTS_CHIP_REF = "Δ REF"
-# kind (plots_view.DELTA_BASELINE_*) -> (full label, short chip) for the fit pass.
+# kind (plots_view.DELTA_BASELINE_*) -> the bar's wording for it.
 _PLOTS_BASELINE_LABELS = {
-    plots_view.DELTA_BASELINE_BEST: (_PLOTS_LABEL_BEST, _PLOTS_CHIP_BEST),
-    plots_view.DELTA_BASELINE_IDEAL: (_PLOTS_LABEL_IDEAL, _PLOTS_CHIP_IDEAL),
-    plots_view.DELTA_BASELINE_REFERENCE: (_PLOTS_LABEL_REF, _PLOTS_CHIP_REF),
+    plots_view.DELTA_BASELINE_BEST: _PLOTS_LABEL_BEST,
+    plots_view.DELTA_BASELINE_IDEAL: _PLOTS_LABEL_IDEAL,
+    plots_view.DELTA_BASELINE_REFERENCE: _PLOTS_LABEL_REF,
 }
 _MAXIMIZE_GLYPH = "ph.corners-out"   # expand this panel to fill the window
 _RESTORE_GLYPH = "ph.corners-in"     # shown while maximized — click/Esc to restore the grid
@@ -296,40 +298,11 @@ class CentralView(QWidget):
             video.stop_all()
 
     # --------------------------------------------------------- panel container helpers
-    @staticmethod
-    def _panel(title: str, *contents) -> QWidget:
-        """Wrap content under a .PanelHeader label. Each entry is a widget or a (widget, stretch) tuple."""
-        panel = QWidget()
-        lay = QVBoxLayout(panel)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-        header = QLabel(title)
-        header.setProperty("role", "PanelHeader")
-        lay.addWidget(header)
-        for c in contents:
-            if isinstance(c, tuple):
-                lay.addWidget(c[0], c[1])
-            else:
-                lay.addWidget(c)
-        return panel
-
-    @staticmethod
-    def _header_bar(*segments) -> QWidget:
-        """.PanelHeader-styled strip holding widgets (map/charts headers). Segments: a widget, an int
-        (addStretch), or a (widget, stretch)."""
-        bar = QWidget()
-        bar.setProperty("role", "PanelHeader")
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(8, 4, 8, 4)
-        row.setSpacing(8)
-        for seg in segments:
-            if isinstance(seg, int):
-                row.addStretch(seg)
-            elif isinstance(seg, tuple):
-                row.addWidget(seg[0], seg[1])
-            else:
-                row.addWidget(seg)
-        return bar
+    # `_header_bar` and a text-only `_panel` used to live here. Both are gone: studio.widgets.
+    # PanelHeader is the ONE header, it declares its own height, and it takes the identity as a
+    # string OR a widget — which is exactly the difference the two helpers used to encode. (The
+    # text-only variant was already dead: none of the four quadrants had used it since the map and
+    # charts headers grew controls.)
 
     def _maximize_button(self) -> QPushButton:
         """A small right-aligned header button that maximizes/restores its panel — the VISIBLE
@@ -370,14 +343,20 @@ class CentralView(QWidget):
                 "Maximize panel (or double-click the header) — Esc / click again to restore")
 
     @staticmethod
-    def _headered(header: QWidget, *contents) -> QWidget:
-        """Stack a header widget above contents (like _panel but with a widget header). Each entry is
-        a widget or a (widget, stretch) tuple."""
+    def _headered(header: PanelHeader, *contents, toolbar: PanelToolbar | None = None) -> QWidget:
+        """Assemble one panel: PanelHeader, then its PanelToolbar if it has one, then the contents.
+
+        The header is always layout item 0 — _install_header_dblclick resolves a panel's header
+        that way, and the double-click-to-maximize gesture belongs to the identity row, not to a
+        row of buttons where every click would land on a control anyway. Each content entry is a
+        widget or a (widget, stretch) tuple."""
         panel = QWidget()
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(header)
+        if toolbar is not None:
+            lay.addWidget(toolbar)
         for c in contents:
             if isinstance(c, tuple):
                 lay.addWidget(c[0], c[1])
@@ -439,7 +418,6 @@ class CentralView(QWidget):
         self.ideal_readout_btn = QPushButton("vs ideal")
         self.ideal_readout_btn.setCheckable(True)
         self.ideal_readout_btn.setChecked(True)
-        self.ideal_readout_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.ideal_readout_btn.setToolTip(
             "Hero readout reference: ON = Δ to your THEORETICAL IDEAL — the best you've driven at "
             "each point on track, stitched together into a synthetic curve (not a single drivable "
@@ -458,14 +436,12 @@ class CentralView(QWidget):
         self.video.seamLoading.connect(self._on_seam_loading)
         self.chapter_label.setVisible(self.video.is_multi)
 
-        # VIDEO panel: a header BAR (title + right-aligned maximize button) so the panel-maximize
-        # affordance sits on the header like the other three; the ⤢ *fullscreen-video* button stays
-        # on the transport bar below (a DIFFERENT action — fill the SCREEN, not this window quadrant).
-        video_label = QLabel("VIDEO")
-        video_label.setProperty("role", "BarLabel")
+        # VIDEO panel: identity + ⛶, no toolbar — the transport controls belong ON the player, and
+        # the ⤢ *fullscreen-video* button stays with them (a DIFFERENT action from ⛶: fill the
+        # SCREEN, not this window quadrant).
         self._video_max_btn = self._maximize_button()
-        video_header = self._header_bar(video_label, 1, self._video_max_btn)
-        video_panel = self._headered(video_header, self.chapter_label, (self.video, 1))
+        self._video_header = PanelHeader("VIDEO", trailing=self._video_max_btn)
+        video_panel = self._headered(self._video_header, self.chapter_label, (self.video, 1))
 
         # LAP panel: ONE native tab bar (Laps · Corners · Stats · Coaching) over a QStackedWidget
         # — the page switcher IS the tab bar, and every page gets the panel's FULL height. This
@@ -534,23 +510,27 @@ class CentralView(QWidget):
         rows_h = self.table.table.verticalHeader().defaultSectionSize()
         self.table_stack.setMinimumHeight(rows_h * 5 + 56)  # ~5-row floor so a drag can't zero it
         self._table_max_btn = self._maximize_button()
-        table_header = self._header_bar(self.tab_bar, self.quality_badge, 1,
-                                        self._table_max_btn)
-        table_panel = self._headered(table_header, (self.table_stack, 1))
+        # The TABS are this panel's identity — they name the page you are on — and the quality badge
+        # is a STATUS chip about the data under them, not a control, so it rides in the header's
+        # status slot beside the tabs rather than in a toolbar. Putting it in a toolbar would have
+        # given this panel a 32 px control row to hold one non-interactive chip that is hidden on
+        # every clean GPS9 recording; keeping it beside the tabs also keeps the warning adjacent to
+        # the lap times it qualifies. This panel gets no toolbar at all.
+        self._table_header = PanelHeader(self.tab_bar, status=(self.quality_badge,),
+                                         trailing=self._table_max_btn)
+        table_panel = self._headered(self._table_header, (self.table_stack, 1))
 
-        # MAP header: title (left) + the line-channel dropdown / snap / sector controls (right);
-        # handlers live in MapView. The rainbow channel is a LABELLED combo (Off · Speed · Δ · Grip)
-        # so Grip is discoverable, not a blind 4th cycle step.
-        for b in (self.map.snap_btn, self.map.add_sector_btn, self.map.reset_sectors_btn):
-            b.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        self.map.rainbow_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        # MAP: identity + ⛶ in the header, every control in a toolbar of its own. Handlers live in
+        # MapView; the rainbow channel is a LABELLED combo (Off · Speed · Δ · Grip) so Grip is
+        # discoverable, not a blind 4th cycle step.
+        #
         # A QPushButton centre-clips its label rather than eliding it, so a squeezed map header
-        # painted "ld sect" / "et sec" — non-words — with nothing to hover for the real meaning.
-        # The charts column's honest minimum (see _measure_plots_budget) now keeps this bar wide
-        # enough to paint all three in full; these tooltips are the belt to that braces, and the
-        # DESTRUCTIVE one (Reset sectors wipes the user's lines) must never be a mystery word.
-        # Set here rather than in map_view because this file already owns how these controls are
-        # mounted and sized into the header.
+        # painted "ld sect" / "et sec" — non-words — with nothing to hover for the real meaning. The
+        # PanelToolbar pins each control at its sizeHint width (QSizePolicy.Fixed), so that squeeze
+        # is now refused by the layout rather than absorbed by the glyphs; these tooltips are the
+        # belt to that braces, and the DESTRUCTIVE one (Reset sectors wipes the user's lines) must
+        # never be a mystery word. Set here rather than in map_view because this file owns how these
+        # controls are mounted into the panel.
         for b, tip in ((self.map.add_sector_btn,
                         "Add sector: drop another sector line on the map. Sector splits then "
                         "appear per lap in the Laps table (session-best splits in purple)."),
@@ -559,12 +539,10 @@ class CentralView(QWidget):
                         "recording. The start/finish line is not affected.")):
             b.setToolTip(tip)
         # (snap_btn and rainbow_combo already carry MapView's own tooltips — left alone.)
-        map_label = QLabel("MAP")
-        map_label.setProperty("role", "BarLabel")
         self._map_max_btn = self._maximize_button()
-        map_header = self._header_bar(map_label, 1, self.map.rainbow_combo, self.map.snap_btn,
-                                      self.map.add_sector_btn, self.map.reset_sectors_btn,
-                                      self._map_max_btn)
+        self._map_header = PanelHeader("MAP", trailing=self._map_max_btn)
+        self._map_toolbar = PanelToolbar(self.map.rainbow_combo, self.map.snap_btn,
+                                         self.map.add_sector_btn, self.map.reset_sectors_btn)
         # Trust strip over the map: ONE compact strip, two tiers of concern, so it never eats a
         # third of the ≤320px map (the common first-run case: unknown track + older GoPro would
         # stack two word-wrapped banners). The ACTIONABLE line leads (provisional_banner — "place
@@ -610,55 +588,55 @@ class CentralView(QWidget):
         strip_lay.setSpacing(0)
         strip_lay.addWidget(self.provisional_banner)
         strip_lay.addWidget(self.quality_banner)
-        map_panel = self._headered(map_header, (self._trust_strip, 0), (self.map, 1))
+        map_panel = self._headered(self._map_header, (self._trust_strip, 0), (self.map, 1),
+                                   toolbar=self._map_toolbar)
 
-        # CHARTS consolidated bar: section label (left) · the Δ/speed readout (centre) · the x-mode toggle (right).
-        # The Δ half of this label tracks the chart's actual baseline (plots_view flips to
-        # Δ-to-ideal when the best lap is selected alone) — a static "Δ TO BEST" would contradict
-        # the axis. Text owned entirely by _fit_plots_header, driven by deltaBaselineChanged.
+        # CHARTS: identity + the hero Δ/speed readout + ⛶ in the header; every control below it.
+        #
+        # This panel is the reason the app has a header/toolbar split at all. Its bar used to carry
+        # the identity label, the 391 px hero readout, the hero's reference toggle, two chart
+        # toggles, the x-axis combo and ⛶ in ONE row, inside a quadrant that is 917 px at the app's
+        # own 1440x900 default — over-subscribed by construction. Surviving that took a four-tier
+        # degradation ladder (_measure_plots_budget / _fit_plots_header and a resize eventFilter)
+        # that traded the panel's identity away for control text: full label -> icon-only toggles ->
+        # short chip -> NO LABEL AT ALL. The ladder is deleted; the controls have a row of their own
+        # and identity never competes with them again.
+        #
+        # The label tracks the chart's actual baseline (plots_view flips to Δ-to-ideal when the best
+        # lap is selected alone) — a static "Δ TO BEST" would contradict the axis — via
+        # _set_delta_baseline_label on deltaBaselineChanged.
         self._plots_label = QLabel(_PLOTS_LABEL_BEST)
-        plots_label = self._plots_label
-        plots_label.setProperty("role", "BarLabel")
-        # No layout minimum of its own: the fit pass hands it exactly the width of whichever of its
-        # two lengths it chose, so the bar's derived minimum never pins the main splitter.
-        plots_label.setMinimumWidth(0)
+        self._plots_label.setProperty("role", "BarLabel")
+        # Every wording abbreviates ("Δ TO REF" most of all), so the hover carries the sentence —
+        # including WHICH recording, which no header-sized wording has room for. Seeded here so the
+        # label is hoverable before the first deltaBaselineChanged arrives.
+        self._plots_label.setToolTip(self._delta_baseline_tip())
         # Which baseline the LOWER CHART is drawing (plots_view.deltaBaselineChanged), as a KIND.
         # Not the same thing as the hero readout's reference, which is the ideal_readout_btn's
         # business — the bar showing one while the chart draws the other is exactly what made it
         # ambiguous.
         self._plots_baseline_kind = plots_view.DELTA_BASELINE_BEST
-        self.plots.x_mode_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        self.plots.ideal_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        self.plots.brake_throttle_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        # The two chart toggles yield their TEXT (falling back to their icon, with the full label in
-        # the tooltip + the accessible name) rather than being squeezed under it: a QPushButton
-        # centre-clips, so the old 34 px floors painted "Brake/Thrott" and "Ideal la" with no
-        # ellipsis and no way back to the meaning. Captured before the fit pass ever strips them —
-        # re-reading text() later would latch "" as the label. Real floors are set from the
-        # measured icon-only widths in _measure_plots_budget.
-        self._plots_toggles = tuple(
-            (btn, btn.text()) for btn in (self.plots.brake_throttle_btn, self.plots.ideal_btn))
-        for btn, name in self._plots_toggles:
-            btn.setAccessibleName(name)          # what the icon-only form no longer says out loud
+        # The two chart toggles keep the accessible name the icon-only tier used to depend on: the
+        # tooltips still quote it, tests still assert it, and it costs nothing to state out loud
+        # what a toggle is. They no longer ever lose their text.
+        for btn in (self.plots.brake_throttle_btn, self.plots.ideal_btn):
+            btn.setAccessibleName(btn.text())
         # The x-axis combo was the one control in the bar with NO tooltip, so "x: dista" was the
-        # only cue for what it does. It is also the one control the fit pass never shrinks (its
-        # whole meaning is the word), so it is pinned at its natural width below. Set here, not in
-        # plots_view, because this file mounts and sizes the control.
+        # only cue for what it does. Set here, not in plots_view, because this file mounts the
+        # control into the panel.
         self.plots.x_mode_combo.setToolTip(
             "Chart x-axis: DISTANCE around the lap (the same corner lines up across laps) or TIME "
             "into the lap (matches the video clock).")
         self._plots_max_btn = self._maximize_button()
-        plots_header = self._header_bar(plots_label, 1, (self.diff_box, 0),
-                                        self.ideal_readout_btn, 1,
-                                        self.plots.brake_throttle_btn, self.plots.ideal_btn,
-                                        self.plots.x_mode_combo, self._plots_max_btn)
-        # Watch the bar's width so the fit pass can re-spend its budget (and re-measure it when the
-        # theme changes every font under it). None = not measured yet; see _measure_plots_budget.
-        self._plots_budget: dict | None = None
-        self._fitting = False
-        self._plots_header_widget = plots_header
-        plots_header.installEventFilter(self)
-        plots_panel = self._headered(plots_header, (self.plots, 1))
+        self._plots_header = PanelHeader(self._plots_label, status=(self.diff_box,),
+                                         trailing=self._plots_max_btn)
+        # ideal_readout_btn leads the toolbar: it is the control that decides which reference the
+        # hero readout above it leads with, so it sits directly under the number it governs.
+        self._plots_toolbar = PanelToolbar(self.ideal_readout_btn,
+                                           self.plots.brake_throttle_btn, self.plots.ideal_btn,
+                                           self.plots.x_mode_combo)
+        plots_panel = self._headered(self._plots_header, (self.plots, 1),
+                                     toolbar=self._plots_toolbar)
 
         # Stash the four panel containers for _layout_panels.
         self._video_panel = video_panel
@@ -700,21 +678,25 @@ class CentralView(QWidget):
         right.setStretchFactor(1, 62)
         right.setSizes([320, 520])
 
-        # Explicit column minimums: without them each column inherits its WIDEST header bar's
-        # minimumSizeHint (the charts' hero Δ readout + buttons ≈ 980 px), which silently
-        # pinned the main splitter — the lap panel could never be dragged wider than ~390 px
-        # and a persisted layout could not restore.
+        # The LEFT column takes an explicit minimum; the RIGHT column deliberately does not.
         #
-        # "Squeezed headers degrade gracefully" was the assumption, and it was false: 360 px is
-        # below the hero readout's own 391 px floor, so at that minimum QHBoxLayout resolved the
-        # shortfall by letting the children OVERLAP — the amber "vs ideal" chip painted straight
-        # through the Δ number, and the controls past it painted "ake," / "Ide" / "x: (". The right
-        # column's real floor is now the charts bar's own tightest-tier need, measured from the
-        # painted fonts in _measure_plots_budget and applied by _fit_plots_header (it can only be
-        # measured once the QSS has been polished onto these widgets, which is after this runs).
-        # This 360 is the pre-measurement seed.
+        # "Squeezed headers degrade gracefully" was the assumption, and it was false. The right
+        # column used to be pinned at 360 px — below the hero readout's own 391 px floor — so at
+        # that minimum QHBoxLayout resolved the shortfall by letting the children OVERLAP: the amber
+        # "vs ideal" chip painted straight through the Δ number and the controls past it painted
+        # "ake," / "Ide" / "x: (". The fix at the time was a measured budget that computed the bar's
+        # tightest survivable tier and pushed it back in here as a minimumWidth.
+        #
+        # An explicit setMinimumWidth is the wrong instrument for that, and this is why: qSmartMinSize
+        # takes a widget's EXPLICIT minimum over its minimumSizeHint, so a number set here does not
+        # merge with what the children actually need — it REPLACES it, and any shortfall comes out of
+        # the children's glyphs. The honest minimum is the one Qt derives from the panels themselves,
+        # and now that the controls sit in their own toolbar it is a number worth accepting: the
+        # charts header needs its identity label + the hero's 391 px floor + ⛶ (~569 px measured),
+        # which is LESS than the 675-759 px the ladder used to compute, so the user can drag the lap
+        # panel WIDER than before, not narrower. So: no explicit minimum on the right column at all.
+        # (The left column's 280 is unchanged and unrelated — nothing in it is over-subscribed.)
         left.setMinimumWidth(280)
-        right.setMinimumWidth(360)
 
         main = QSplitter(Qt.Horizontal)
         main.addWidget(left)
@@ -722,12 +704,12 @@ class CentralView(QWidget):
         main.setStretchFactor(0, 40)
         main.setStretchFactor(1, 60)
         # 515/917 sums to 1432 = the real usable width at the 1440 default window (1440 minus the
-        # 8px splitter handle). The charts column's MEASURED minimum is 675 — it was 917 before the
-        # header learned to hide its decorative label and shrink its controls — so 917 is a comfort
-        # target with headroom, not a floor, and the lap panel takes the rest: enough width for
-        # every Laps column with no horizontal scrollbar. The old [576, 864] was aspirational — the
-        # right column's hidden minimum overrode it to ~[394, 1046] on every launch. The explicit
-        # column minimums above let the USER trade either way; only the default has to be clip-free.
+        # 8px splitter handle). The charts column's honest minimum is ~569 — it was 917 before the
+        # header learned to shed its controls into a toolbar — so 917 is a comfort target with
+        # headroom, not a floor, and the lap panel takes the rest: enough width for every Laps
+        # column with no horizontal scrollbar. The old [576, 864] was aspirational — the right
+        # column's hidden minimum overrode it to ~[394, 1046] on every launch. The column minimums
+        # let the USER trade either way; only the default has to be clip-free.
         main.setSizes([515, 917])
         # Those column minimums are only a floor if Qt is told to honour them. With Qt's default
         # childrenCollapsible, a drag that overshoots a minimum COLLAPSES the section to 0 instead
@@ -735,7 +717,8 @@ class CentralView(QWidget):
         # right column (MAP + CHARTS), the 400 ms debounce below persisted [1432, 0] to prefs.json,
         # and every relaunch reopened with those panels gone — recoverable only via the 8 px handle
         # now pinned against the window's own resize hot zone. Non-collapsible turns that same drag
-        # into a polite clamp at [1072, 360]. (Maximize still needs a real 0 — see _collapse_sizes.)
+        # into a polite clamp at the columns' minimums. (Maximize still needs a real 0 — see
+        # _collapse_sizes.)
         for splitter in (main, left, right):
             splitter.setChildrenCollapsible(False)
         # The user's persisted grid layout (a drag used to be lost on every reload, which read
@@ -852,19 +835,12 @@ class CentralView(QWidget):
         header.installEventFilter(self)
 
     def eventFilter(self, obj, event):
-        """Catch a double-click on any registered panel header and toggle that panel's maximize,
-        and a resize (or a re-style) of the charts header so it can re-spend its width budget.
-        Everything else passes through untouched (return the base implementation)."""
-        if obj is getattr(self, "_plots_header_widget", None):
-            if event.type() == QEvent.Resize:
-                self._fit_plots_header()
-                return False      # observe only — the header still lays itself out normally
-            if event.type() in (QEvent.StyleChange, QEvent.ApplicationFontChange):
-                # Every number in the budget is font-derived and the QSS supplies the painted
-                # fonts, so a theme applied AFTER this view was built invalidates the measurement.
-                self._plots_budget = None
-                self._fit_plots_header()
-                return False
+        """Catch a double-click on any registered panel header and toggle that panel's maximize.
+        Everything else passes through untouched (return the base implementation).
+
+        This filter used to have a second job: watching the charts header's Resize / StyleChange so
+        the width-budget fit pass could re-run. Both the pass and its trigger are gone — the charts
+        controls live in a PanelToolbar, so the header's contents no longer depend on its width."""
         if (event.type() == QEvent.MouseButtonDblClick
                 and obj in getattr(self, "_header_routes", {})):
             panel, _column, _main = self._header_routes[obj]
@@ -1183,135 +1159,30 @@ class CentralView(QWidget):
         if getattr(self, "map", None) is not None and not self._comparing():
             self._refresh_driving_channels()
 
-    def _measure_plots_budget(self) -> dict:
-        """Measure the charts bar's width budget ONCE per style, from every item's FULL-text
-        metrics. _fit_plots_header spends it (and derives the charts column's floor from it).
-
-        Measured rather than assumed, and cached rather than re-derived, for three reasons:
-          * the QSS supplies the painted fonts (the hero is styled in the mono stack at HERO/600),
-            so every number here only exists after the widgets are polished;
-          * the fit pass REWRITES the text it is measuring — deriving the tier from live sizeHints
-            would feed the stripped text straight back into the layout (shorter text → smaller hint
-            → narrower box → shorter text), a shrink loop;
-          * the arithmetic the old fit pass did by hand was wrong in both directions. Qt gives a
-            QBoxLayout spacing only BETWEEN non-empty items, and both `addStretch` spacers report
-            empty, so the fixed chrome is margins + spacing×(visible items − 1) — 56 px for the six
-            controls, 64 px with the label — while the old constant summed the ⛶ button's 45 px
-            sizeHint against its setFixedSize of 26 and double-counted the label's spacing. It
-            asked for 1040 px where the layout needs 1013 (measured: the label reappeared at a
-            1041 px bar).
-        Invalidated on a style/font change; see eventFilter."""
-        row = self._plots_header_widget.layout()
-        label = self._plots_label
-        for w in (label, self.diff_box, self.ideal_readout_btn, self.plots.x_mode_combo,
-                  self._plots_max_btn, *(b for b, _n in self._plots_toggles)):
-            w.ensurePolished()
-
-        def _with_text(widget, text):
-            """sizeHint width the widget WOULD have at `text`, current text restored."""
-            was = widget.text()
-            widget.setText(text)
-            px = widget.sizeHint().width()
-            widget.setText(was)
-            return px
-
-        combo_px = self.plots.x_mode_combo.sizeHint().width()
-        icons_px = {btn: _with_text(btn, "") for btn, _name in self._plots_toggles}
-        text_px = {btn: _with_text(btn, name) for btn, name in self._plots_toggles}
-        # Real floors, so the header's own minimumSizeHint stops lying: a toggle may shrink to its
-        # icon and no further, and the combo never shrinks at all (its whole meaning is the word).
-        for btn, floor in icons_px.items():
-            btn.setMinimumWidth(floor)
-        self.plots.x_mode_combo.setMinimumWidth(combo_px)
-        margins = row.contentsMargins()
-        budget = {
-            "chrome": margins.left() + margins.right(),
-            "spacing": row.spacing(),
-            # Never yields: the live number's floor + its reference toggle + the ⛶ button (fixed).
-            "fixed": (self.diff_box.minimumWidth() + self.ideal_readout_btn.sizeHint().width()
-                      + _HDR_ICON_BTN.width()),
-            "text": sum(text_px.values()) + combo_px,
-            "icons": sum(icons_px.values()) + combo_px,
-            "labels": {t: _with_text(label, t)
-                       for pair in _PLOTS_BASELINE_LABELS.values() for t in pair},
-        }
-        self._plots_budget = budget
-        return budget
-
-    @staticmethod
-    def _plots_header_need(budget: dict, label_text: str, icons: bool) -> int:
-        """Width the charts bar needs for one configuration: six controls, plus the label when it
-        carries text, plus margins and the spacing Qt puts between the non-empty items."""
-        items = 6 + (1 if label_text else 0)
-        return (budget["chrome"] + budget["spacing"] * (items - 1) + budget["fixed"]
-                + budget["icons" if icons else "text"]
-                + (budget["labels"][label_text] if label_text else 0))
-
-    def _fit_plots_header(self):
-        """Spend the charts bar's width on MEANING first, then on control text.
-
-        The bar carries two different Δ references — the hero readout's (its own toggle's business)
-        and the one the LOWER CHART is actually drawing — so the label naming the chart's baseline
-        is the item that keeps the panel unambiguous, not decoration. #122 made it the bar's first
-        casualty; #125 then handed it that meaning without moving it up the yield order, so at every
-        width the app ships at it lost to two button labels whose meaning is already in their
-        tooltips. The order below inverts that, and the toggles finally fall back to their icon —
-        the behaviour this file has claimed since #122 and never implemented — instead of being
-        centre-clipped mid-word:
-
-            SPEED · Δ TO BEST + full control text  →  + icon-only toggles  →  Δ BEST + icons  →
-            icons alone (the column floor, so this last tier is only reachable by a drag)
-
-        Pure function of the bar's width and the cached budget, so no tier can chase its own
-        output; re-entrancy guarded because setting the text re-activates the layout."""
-        header = getattr(self, "_plots_header_widget", None)
-        label = getattr(self, "_plots_label", None)
-        if header is None or label is None or self._fitting:
-            return
-        self._fitting = True
-        try:
-            budget = self._plots_budget or self._measure_plots_budget()
-            # The charts COLUMN may never be dragged narrower than the bar's tightest tier: that is
-            # what stops the header's children overlapping each other (and the hero readout
-            # painting through them) at the column minimum. Applied here rather than at
-            # measurement time because the bar's first resize can precede _layout_panels, and
-            # re-checked every pass because a no-op setMinimumWidth is cheaper than being wrong.
-            column = getattr(self, "_right_splitter", None)
-            floor = self._plots_header_need(budget, "", icons=True)
-            if column is not None and column.minimumWidth() != floor:
-                column.setMinimumWidth(floor)
-            full, chip = _PLOTS_BASELINE_LABELS[self._plots_baseline_kind]
-            tiers = ((full, False), (full, True), (chip, True), ("", True))
-            for text, icons in tiers:
-                if header.width() >= self._plots_header_need(budget, text, icons):
-                    break                       # else: fall through to the last (floor) tier
-            label.setText(text)
-            label.setVisible(bool(text))
-            # Every tier abbreviates ("Δ TO REF", "Δ BEST", or nothing at all), so the hover carries
-            # the sentence — including WHICH recording, which no tier of this label has room for.
-            label.setToolTip(self._delta_baseline_tip())
-            for btn, name in self._plots_toggles:
-                btn.setText("" if icons else name)
-        finally:
-            self._fitting = False
-
     def _delta_baseline_tip(self) -> str:
-        """The charts label's hover: the lower chart's baseline spelled out. Shares its wording
-        with the Δ axis's own tooltip (plots_view._delta_axis_tip) so the two can't drift.
-        getattr-guarded: the fit pass can run from a resize on a partially-built view."""
+        """The charts label's hover: the lower chart's baseline spelled out, naming the reference
+        RECORDING that no wording short enough for the header has room for. Shares its wording with
+        the Δ axis's own tooltip (plots_view._delta_axis_tip) so the two can't drift.
+        getattr-guarded: a re-label can arrive on a partially-built view."""
         plots = getattr(self, "plots", None)
         return plots._delta_axis_tip() if plots is not None else ""
 
     def _set_delta_baseline_label(self, kind: str):
-        """Keep the charts bar honest about which baseline the lower chart is drawing: the local
+        """Keep the charts header honest about which baseline the lower chart is drawing: the local
         best, the synthetic ideal (plots_view swaps to it when the best lap is selected alone), or
         the cross-recording REFERENCE. `kind` is a plots_view.DELTA_BASELINE_* value; an unknown one
-        falls back to "best" rather than raising inside a signal handler. The fit pass owns the text
-        — the wordings differ in length, so the bar may have to re-spend its budget."""
-        if getattr(self, "_plots_label", None) is not None:
-            self._plots_baseline_kind = (
-                kind if kind in _PLOTS_BASELINE_LABELS else plots_view.DELTA_BASELINE_BEST)
-            self._fit_plots_header()
+        falls back to "best" rather than raising inside a signal handler.
+
+        One wording per baseline, painted in full — there is no tier to choose any more. What used
+        to make this a fit pass was three baselines' worth of text competing with six controls for
+        one row's width; the controls have their own row now."""
+        label = getattr(self, "_plots_label", None)
+        if label is None:
+            return
+        self._plots_baseline_kind = (
+            kind if kind in _PLOTS_BASELINE_LABELS else plots_view.DELTA_BASELINE_BEST)
+        label.setText(_PLOTS_BASELINE_LABELS[self._plots_baseline_kind])
+        label.setToolTip(self._delta_baseline_tip())
 
     def _update_table_header(self):
         """The Corners tab always names WHICH lap its per-corner rows describe — directly on

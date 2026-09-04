@@ -635,13 +635,19 @@ def test_hero_readout_leads_with_labelled_delta_to_ideal():
     print(f"test_hero_readout_leads_with_labelled_delta_to_ideal OK ({text!r} / {best_text!r})")
 
 
-def test_hero_readout_keeps_every_character_when_the_charts_header_is_squeezed():
-    """The hero #DiffBox is a QLabel — QLabels never elide, they HARD-CLIP — and the charts header's
-    natural minimum is far wider than the column minimum the splitter allows, so Qt squeezes every
-    item proportionally. Centred, that ate BOTH ends of the live number (".deal +0.00 s" / "74 km,").
-    The number must survive intact at any column width: it carries an explicit floor sized to the
-    widest readout it can render, it is LEFT-aligned so any residual squeeze costs the tail rather
-    than the leading Δ, and the secondary controls yield first.
+def test_hero_readout_keeps_every_character_at_every_column_width():
+    """The hero #DiffBox is a QLabel — QLabels never elide, they HARD-CLIP — so the live number must
+    survive intact at ANY charts-column width. Centred, an over-subscribed bar used to eat BOTH ends
+    of it (".deal +0.00 s" / "74 km,"), which is why the box carries an explicit floor sized to the
+    widest readout it can render and is LEFT-aligned so any residual squeeze costs the tail rather
+    than the leading Δ.
+
+    The three splitter positions below are pinned, and the third one (460 px) is the point: it is
+    BELOW what the charts panel needs. It used to be reachable, and the header survived it by
+    stripping its identity label and both control labels — the degradation ladder. There is no
+    ladder now; the hero's 391 px floor is part of the column's own minimum, so a drag to 460 px is
+    REFUSED. The assertion is the same either way — the number is never clipped — but what makes it
+    true is the layout declining the drag rather than the header dismantling itself.
 
     Measured against the PAINTED font (the QSS styles #DiffBox in the mono stack, not in the font
     the widget was constructed with), so the theme is applied for the duration and restored after."""
@@ -662,24 +668,29 @@ def test_hero_readout_keeps_every_character_when_the_charts_header_is_squeezed()
         box = view.diff_box
         fm = QFontMetrics(box.font())
         pad = 16  # the QSS's `#DiffBox { padding: 2px 8px }`
+        floor = view._right_splitter.minimumSizeHint().width()
         # The user's own layout (a WIDE left column) first, then well past it.
         for right_w in (931, 700, 460):
             view._main_splitter.setSizes([1511 - right_w, right_w])
-            _APP.processEvents()
+            for _ in range(4):
+                _APP.processEvents()
             room = box.width() - pad
             assert room >= fm.horizontalAdvance(box.text()), (
                 right_w, box.width(), box.text(), fm.horizontalAdvance(box.text()))
-        # The controls beside it are the ones that gave way — and they now do it by dropping to
-        # their icon (full label in the tooltip + accessible name) rather than being centre-clipped
-        # under a 34 px floor, so what proves the yield is the empty text, not a squeezed box.
-        assert view.plots.ideal_btn.text() == "", view.plots.ideal_btn.text()
-        assert view.plots.ideal_btn.width() == view.plots.ideal_btn.sizeHint().width()
+            assert view._plots_panel.width() >= floor, (
+                f"asked for {right_w}px, got {view._plots_panel.width()} — below the {floor}px "
+                "floor the charts header honestly needs")
+        # …and no control paid for it. The two chart toggles used to be emptied to their icon at
+        # exactly this layout; they now sit in the panel's own toolbar and keep their labels.
+        assert view.plots.ideal_btn.text() == "Ideal lap", view.plots.ideal_btn.text()
+        assert view.plots.brake_throttle_btn.text() == "Brake/Throttle"
+        assert view.plots.ideal_btn.width() >= view.plots.ideal_btn.sizeHint().width()
     finally:
         _APP.setStyleSheet(prior[0])
         _APP.setFont(prior[1])
         _APP.setPalette(prior[2])
         view.hide()
-    print("test_hero_readout_keeps_every_character_when_the_charts_header_is_squeezed OK")
+    print("test_hero_readout_keeps_every_character_at_every_column_width OK")
 
 
 def test_delta_to_ideal_tooltips_are_honest_not_best_sector():
@@ -1005,7 +1016,7 @@ def _run_all():
     test_quality_banner_is_informational_and_independent()
     test_provisional_and_degraded_share_one_trust_strip()
     test_hero_readout_leads_with_labelled_delta_to_ideal()
-    test_hero_readout_keeps_every_character_when_the_charts_header_is_squeezed()
+    test_hero_readout_keeps_every_character_at_every_column_width()
     test_delta_to_ideal_tooltips_are_honest_not_best_sector()
     test_grip_map_reachable_via_labelled_combo()
     test_opportunities_panel_is_the_coaching_tab_page()
@@ -1017,7 +1028,7 @@ def _run_all():
     test_tab_bar_switches_pages_and_names_the_corners_lap()
     test_one_chapter_phrasing_on_the_banner_and_the_transport()
     test_corner_row_click_rings_the_map()
-    test_charts_header_yields_control_text_before_the_baseline_naming()
+    test_the_charts_header_never_has_to_choose_between_identity_and_controls()
     test_show_stats_maximized_is_a_true_toggle()
     test_stats_corner_row_click_restores_grid_then_rings_map()
     test_splitter_handles_stay_thin_under_the_theme()
@@ -1098,43 +1109,45 @@ def test_one_chapter_phrasing_on_the_banner_and_the_transport():
     print("test_one_chapter_phrasing_on_the_banner_and_the_transport OK")
 
 
-def test_charts_header_yields_control_text_before_the_baseline_naming():
-    """The charts header is genuinely cramped at a narrow right column, and it now spends the
-    shortfall in the RIGHT order.
+def test_the_charts_header_never_has_to_choose_between_identity_and_controls():
+    """The charts header has no shortfall to spend any more, at any width the app can reach.
 
-    This test used to pin the opposite contract ("the decorative label must yield when cramped"),
-    which is how the L6-01 regression shipped: #122 made the section label the bar's first casualty
-    while it really was decorative, then #125 made that same label the only surface naming the
-    baseline the LOWER CHART draws — a different reference from the hero readout's own. The label
-    stopped being decorative; nothing moved it up the yield order, so at every width the app ships
-    at the naming lost to two button labels whose meaning is already in their tooltips.
+    THREE VERSIONS OF THIS TEST NOW EXIST, and the sequence is the argument for the header/toolbar
+    split. It first pinned "the decorative label must yield when cramped" — which is how the L6-01
+    regression shipped, because #125 turned that same label into the only surface naming the
+    baseline the LOWER CHART draws and nothing moved it up the yield order. It was then inverted:
+    the toggles give up their TEXT first, falling back to their icon. Both versions were pinning a
+    YIELD ORDER, i.e. asserting which meaning the app throws away when its header runs out of room.
 
-    Now the toggles give up their TEXT first (falling back to their icon, tooltip + accessible name
-    intact) and nothing is ever centre-clipped under a floor."""
+    There is no order to pin now. Identity + the live readout are in a PanelHeader, the controls are
+    in a PanelToolbar under it, and neither can take width from the other — so this asserts the
+    thing the earlier versions could not: at the reporter's cramped layout AND at a roomy one, EVERY
+    item paints in full, and each of the two rows stands at its declared height regardless."""
     view, _s, _t0, _t1 = _real_central_view()
     view.resize(1511, 940)
     view.show()
     _APP.processEvents()
 
-    view._main_splitter.setSizes([580, 931])       # the reporter's layout — header is cramped
-    for _ in range(4):
-        _APP.processEvents()
-    assert view._plots_label.isVisibleTo(view), "the baseline naming must survive a cramped bar"
-    assert "Δ" in view._plots_label.text(), view._plots_label.text()
-    for w in (view.plots.brake_throttle_btn, view.plots.ideal_btn, view.plots.x_mode_combo):
-        assert w.width() >= w.sizeHint().width(), (w.text() if hasattr(w, "text") else w, w.width())
-    # The toggles are what gave way, and hovering still names them.
-    for btn in (view.plots.brake_throttle_btn, view.plots.ideal_btn):
-        assert btn.text() == "", btn.accessibleName()
-        assert btn.accessibleName() in btn.toolTip(), btn.toolTip()
-
-    view._main_splitter.setSizes([300, 1211])      # plenty of room again
-    for _ in range(4):
-        _APP.processEvents()
-    assert view._plots_label.isVisibleTo(view), "…and it is still there when there is room"
-    assert view.plots.brake_throttle_btn.text() == "Brake/Throttle"
+    for sizes in ([580, 931], [300, 1211]):        # the reporter's cramped layout, then a roomy one
+        view._main_splitter.setSizes(sizes)
+        for _ in range(4):
+            _APP.processEvents()
+        label = view._plots_label
+        assert label.isVisibleTo(view), "the baseline naming must survive a cramped panel"
+        assert "SPEED" in label.text() and "Δ" in label.text(), label.text()
+        assert label.width() >= label.sizeHint().width(), (label.text(), label.width())
+        for w in (view.ideal_readout_btn, view.plots.brake_throttle_btn, view.plots.ideal_btn,
+                  view.plots.x_mode_combo):
+            assert w.width() >= w.sizeHint().width(), (w.objectName(), w.width())
+        assert view.plots.brake_throttle_btn.text() == "Brake/Throttle"
+        assert view.plots.ideal_btn.text() == "Ideal lap"
+        # Hovering still names the toggles — the icon-only tier is gone, the accessible name is not.
+        for btn in (view.plots.brake_throttle_btn, view.plots.ideal_btn):
+            assert btn.accessibleName() in btn.toolTip(), btn.toolTip()
+        assert view._plots_header.height() == theme.PANEL_HDR_H, view._plots_header.height()
+        assert view._plots_toolbar.height() == theme.TOOLBAR_H, view._plots_toolbar.height()
     view.hide()
-    print("test_charts_header_yields_control_text_before_the_baseline_naming OK")
+    print("test_the_charts_header_never_has_to_choose_between_identity_and_controls OK")
 
 
 def test_corner_row_click_rings_the_map():

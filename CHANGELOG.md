@@ -71,6 +71,19 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Changed
 
+- **Every panel now wears the same header, and its controls have a row of their own.** The four
+  panels used to stand at four different heights — nothing declared one, so each header came out as
+  tall as whichever control it happened to hold. They are now one declared height, with the panel's
+  name (or its tabs) on the left, its live readout beside it and the ⛶ maximize button on the right,
+  in all four. The map's line/snap/sector controls and the charts' toggles moved to a toolbar
+  underneath. The visible payoff is on the **charts panel**: its header used to be so crowded that
+  it hid things to survive — at the app's default window the two chart toggles showed as bare icons,
+  and on a narrower window the panel lost its own title entirely, leaving a Δ number over an unnamed
+  chart. Nothing hides any more. **Brake/Throttle** and **Ideal lap** keep their labels at every
+  window size, the chart's Δ baseline is always named, and you can drag the lap table **≈200 px
+  wider** than before. The map and charts panels each give up ~32 px of height for their toolbar.
+  The Coaching page's summary strip matches the header above it, which costs it one listed corner at
+  small window sizes (the full ranking is still under **Coaching ▸ Opportunities…**).
 - **The lap panel is a real tabbed panel** — one native tab bar (**Laps · Corners · Stats ·
   Coaching**, digits 1–4), every page at the panel's full height. The under-table coaching +
   consistency strips (and their height caps, collapse chevrons and View-menu hide toggles)
