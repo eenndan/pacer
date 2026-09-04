@@ -400,6 +400,19 @@ class PanelHeader(QWidget):
         # The existing themed role: surface background + the bottom hairline every panel header has
         # worn since the app had panels.
         self.setProperty("role", "PanelHeader")
+        # ...AND THE BAR HAS TO BE TOLD TO PAINT IT. QStyleSheetStyle::polish sets
+        # WA_StyledBackground for you only when `w->metaObject() == &QWidget::staticMetaObject` —
+        # a BARE QWidget. A QWidget SUBCLASS honours neither the background nor the border, and
+        # says nothing: the role is set, the rule matches, `palette()` even reports the rule's
+        # colour, and the bar composites the canvas behind it. That is what happened here. These
+        # bars were bare `QWidget()`s built by `central_view._header_bar` and DID paint; promoting
+        # them to this class silently flattened all four panel headers and both toolbars to canvas
+        # — no surface, no hairline, no visible extent for the "double-click the header" target.
+        # Anything QLabel/QPushButton-derived draws its own box and never needs this line, which is
+        # why every other #Name rule in the app just works (the dialogs' QLabel PanelHeaders among
+        # them). tests/test_inline_styles.py's check 5 now holds every QWidget subclass the QSS
+        # gives a box to this rule.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         # DECLARED. setFixedHeight also pins the vertical size policy, so a QVBoxLayout can neither
         # stretch this row nor squeeze it.
         self.setFixedHeight(theme.PANEL_HDR_H)
@@ -467,6 +480,9 @@ class PanelToolbar(QWidget):
         # block of panel chrome with a rule between identity and actions. A `PanelToolbar` role of
         # its own belongs with the rest of the control vocabulary, in the phase that owns theme.py.
         self.setProperty("role", "PanelHeader")
+        # A QWidget subclass paints the QSS box only when told to — see the long note in
+        # PanelHeader.__init__ for the mechanism and what it cost.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedHeight(theme.TOOLBAR_H)
         row = QHBoxLayout(self)
         row.setContentsMargins(theme.SPACE_S, theme.SPACE_XXS, theme.SPACE_S, theme.SPACE_XXS)

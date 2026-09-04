@@ -400,64 +400,271 @@ TINT = _over(C.accent, 0.16, C.surface)
 # QSS renders, and they set the WCAG threshold each style is judged at (large text starts at 18).
 BODY, CAPTION, SMALL = 13, 11, 10
 
-# (label, fg, bg, px) — every distinct TEXT style the theme renders. Sizes are the QSS/px values.
-TEXT_STYLES = [
-    ("QWidget base body text", C.text, C.canvas, BODY),
-    ("table cell text", C.text, C.surface, BODY),
-    ("table cell (alt row)", C.text, C.surface_alt, BODY),
-    ("selected table row", C.text, C.sel_bg, BODY),
-    ("QHeaderView::section", C.text_dim, C.surface, 11),
-    ("QTabBar::tab unselected", C.text_dim, C.surface, 11),
-    ("QTabBar::tab selected", C.text, C.surface, 11),
-    ("PanelHeader label", C.text_dim, C.surface, 11),
-    ("BarLabel", C.text_dim, C.surface, 11),
-    ("#Readout", C.text_dim, C.surface, CAPTION),
-    ("#PaneCaption", C.text_dim, C.surface, CAPTION),
-    ("#InfoBanner", C.text_dim, C.surface, CAPTION),
-    ("#ChapterBanner", C.text_dim, C.surface, CAPTION),
-    ("PROVISIONAL_COLOR", theme.PROVISIONAL_COLOR, C.surface, BODY),
-    ("PROVISIONAL_COLOR on selection", theme.PROVISIONAL_COLOR, C.sel_bg, BODY),
+# --------------------------------------------------------------- DERIVED: what the QSS renders
+# This inventory used to be hand-typed — 33 rows claiming to be "every distinct TEXT style the
+# theme renders" — and it had gone stale: seven rendered (fg,bg) pairs were missing, including
+# C.text_dim on C.surface_active at 4.80:1 (#MapNotice, #PBToastClose — the thinnest margin in the
+# app), and one listed row asserted a pairing Qt cannot produce (PROVISIONAL_COLOR on the selection
+# band: QCommonStyle paints a selected item in HighlightedText and ignores its ForegroundRole).
+# It went stale for a structural reason: a MISSING row is silent. Nothing about hand-listing 20 of
+# 23 pairs looks different from hand-listing all 23.
+#
+# So the INVENTORY is derived from theme._build_qss() and the JUDGEMENT is not. The thresholds
+# (4.5:1, the 18px large-text break), the px sizes above and the WCAG/Lab maths at the top of this
+# file all stay declared here, independent of the app — that is the "so the assertion cannot drift
+# with the app" principle this file is built on, and it is untouched. What is derived is only the
+# LIST OF THINGS TO JUDGE, which is the one part that cannot be right by being remembered.
+#
+# Two things the stylesheet genuinely does not know, both stated below rather than guessed:
+#   * CONTAINMENT (`HOSTS`) — a `transparent` or `rgba()` background composites over whatever
+#     widget is behind, which is a layout fact. An unlisted one FAILS rather than defaulting, so
+#     this map cannot go quietly stale the way the old table did.
+#   * the colours PYTHON paints (`PAINTED_STYLES`) — item foregrounds, pyqtgraph ticks, the
+#     palette-swapped hues. No parser can see those.
+
+# The surface each transparent/tinted element actually sits on. A tuple means "any of these", and
+# every one is asserted — where the answer is genuinely 'it depends', more candidates make the
+# test STRICTER, never laxer.
+HOSTS = {
+    # A bare QLabel goes anywhere: on the window canvas (overlays, dialogs) or on a panel surface.
+    "QLabel": (C.canvas, C.surface),
+    # The lap panel's tab bar lives INSIDE a PanelHeader bar, which is C.surface.
+    "QTabBar": (C.surface,),
+    # Panel chrome: the header/toolbar bars are C.surface, so everything they carry sits on it.
+    'QLabel[role="BarLabel"]': (C.surface,),
+    "QLabel#DiffBox": (C.surface,),
+    "QLabel#PaneBadge": (C.surface,),
+    # The trust strip over the map: #TrustStrip is itself transparent, so its two banner lines
+    # composite onto the map panel's surface.
+    "QLabel#ProvisionalBanner": (C.surface,),
+    # The excluded-lap strip sits under the lap grid, on the panel surface.
+    "QLabel#LapExcludedBody": (C.surface,),
+    'QLabel#LapExcludedHeader[tone="warn"]': (C.surface,),
+    # The PB toast is a card with its own C.surface_active fill; everything inside it is on that.
+    "QLabel#PBToastTitle": (C.surface_active,),
+    "QLabel#PBToastBody": (C.surface_active,),
+    "QPushButton#PBToastLink": (C.surface_active,),
+    "QPushButton#PBToastClose": (C.surface_active,),
+    # The welcome / loading overlays fill the window, so their type is on the canvas.
+    'QLabel[role="WelcomeSubtitle"]': (C.canvas,),
+    'QLabel[role="WelcomeError"]': (C.canvas,),
+    'QLabel[role="LoadingTitle"]': (C.canvas,),
+    "QPushButton#LoadingCancel": (C.canvas,),
+    # The Shortcuts / About cards: dialog prose and key caps, on the dialog's canvas; the same
+    # roles are also used on panel surfaces (the library dialog's summary/privacy notes), so both.
+    'QLabel[role="KeyCap"]': (C.canvas, C.surface),
+    'QLabel[role="Note"]': (C.canvas, C.surface),
+    'QLabel[role="Hint"]': (C.canvas, C.surface),
+    'QLabel[role="Title"]': (C.canvas, C.surface),
+    'QLabel[role="Tagline"]': (C.canvas, C.surface),
+    # An interactive chip's amber ON tint: chips ride in panel headers and toolbars (C.surface)
+    # and, for the reference chip, the status bar (C.canvas). The ON tint REPLACES the chip's own
+    # fill, so it composites onto the bar behind it, not onto the resting pill.
+    'QLabel[role="Chip"][tone="warn"]': (C.canvas, C.surface),
+    'QPushButton[role="Chip"]': (C.canvas, C.surface),
+    # A checked ToggleButton's amber tint, likewise: buttons sit in panel toolbars (C.surface) and
+    # on the welcome overlay (C.canvas).
+    "QPushButton": (C.canvas, C.surface),
+}
+
+_INERT_BG = {"transparent", "none", "inherit"}
+_RGBA = re.compile(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)")
+
+
+class _Unhosted(Exception):
+    pass
+
+
+def _qss_rules():
+    """Every (selector-part, declarations) pair in the shipped stylesheet.
+
+    Comments stripped first, and anchored on nothing — see the note in
+    test_the_theme_never_takes_a_widgets_own_font_away for the parse that consumed every other
+    rule and hid half this stylesheet from every guard in the repo."""
+    qss = re.sub(r"/\*.*?\*/", "", theme._build_qss(), flags=re.S)
+    blocks = re.findall(r"([^{}]*)\{([^{}]*)\}", qss, flags=re.S)
+    assert len(blocks) > 60, f"the QSS block parse found only {len(blocks)} rules"
+    out = []
+    for selector, body in blocks:
+        d = {}
+        for line in body.split(";"):
+            k, _, v = line.partition(":")
+            if _:
+                d[k.strip().lower()] = " ".join(v.split())
+        for part in " ".join(selector.split()).split(","):
+            part = part.strip()
+            if part:
+                out.append((part, d))
+    return out
+
+
+def _derived_text_styles():
+    """(selector, fg, bg, px) for every colour the stylesheet declares, over every background it
+    can be painted on. Raises `_Unhosted` naming any selector whose background cannot be resolved,
+    so the HOSTS map above cannot silently fall behind the sheet."""
+    rules = _qss_rules()
+    own_bg = {p: (d.get("background-color") or d.get("background"))
+              for p, d in rules if ("background-color" in d or "background" in d)}
+    own_px = {p: int(d["font-size"][:-2]) for p, d in rules
+              if d.get("font-size", "").endswith("px")}
+
+    def ancestor(part, table):
+        """The longest STRICT PREFIX of this selector that the table knows. QSS inherits only down
+        a prefix chain — `QMenu::item:disabled` from `QMenu`, never from a same-class sibling. A
+        naive base-class cascade makes the disabled menu item inherit the SELECTED item's amber
+        tint and invents AA failures that do not exist."""
+        best = None
+        for k in table:
+            if part != k and part.startswith(k) and (best is None or len(k) > len(best)):
+                best = k
+        return best
+
+    def hosts(part):
+        key = part.split(":")[0]           # drop pseudo-states and pseudo-elements
+        if key not in HOSTS:
+            raise _Unhosted(part)
+        return HOSTS[key]
+
+    def backgrounds(part, origin=None):
+        """Where `part`'s text lands, as one or more opaque colours.
+
+        `origin` is the selector we started from, and it is what a HOST lookup uses. That matters:
+        `QLabel { background: transparent }` cascades to every QLabel rule that declares no
+        background of its own, and resolving the host under `QLabel` instead of under the rule we
+        came from would let one entry — "a label is on the canvas or a panel surface" — silently
+        vouch for every label in the app, including the ones on `C.surface_active` whose 4.80:1 is
+        the whole reason this derivation exists. Inheritance walks up; containment does not."""
+        origin = origin or part
+        v = own_bg.get(part)
+        if v is None:
+            anc = ancestor(part, own_bg)
+            return backgrounds(anc, origin) if anc else hosts(origin)
+        v = v.strip()
+        if v.startswith("#"):
+            return (v,)
+        head = v.split()[0].lower() if v.split() else ""
+        if head in _INERT_BG or not head:
+            return hosts(origin)
+        m = _RGBA.match(v)
+        if m:
+            r, g, b, a = m.group(1), m.group(2), m.group(3), m.group(4)
+            hexed = f"#{int(r):02X}{int(g):02X}{int(b):02X}"
+            # A semi-transparent fill composites over what is BEHIND it, and that differs by kind:
+            # a SUB-CONTROL (`QMenu::item:selected`) is drawn on top of its own widget's
+            # background, which the sheet knows; a tint on the WIDGET ITSELF
+            # (`QPushButton:checked`, `[tone="warn"]`) replaces that widget's background and lands
+            # on its parent, which it does not. Backwards, this is how a naive cascade invents AA
+            # failures that nothing on screen has.
+            under = backgrounds(part.split("::")[0]) if "::" in part else hosts(origin)
+            return tuple(_over(hexed, float(a or 1.0), h) for h in under)
+        raise _Unhosted(f"{part} (background {v!r} is not a hex, an rgba() or transparent)")
+
+    out, unhosted = [], []
+    for part, d in rules:
+        fg = d.get("color", "").strip()
+        if not fg.startswith("#"):
+            continue
+        px = own_px.get(part) or own_px.get(ancestor(part, own_px) or "", BODY)
+        try:
+            for bg in backgrounds(part):
+                out.append((part, fg, bg, px))
+        except _Unhosted as exc:
+            unhosted.append(str(exc))
+    assert not unhosted, (
+        "these selectors paint text on a background this test cannot resolve — add the surface "
+        "they sit on to HOSTS (a layout fact the stylesheet does not carry):\n  "
+        + "\n  ".join(sorted(set(unhosted))))
+    return out
+
+
+# ------------------------------------------------- HAND-KEPT: the colours PYTHON paints
+# Not derivable: these are QBrush/QColor foregrounds set on items and pyqtgraph, and the
+# palette-swapped hues, none of which appear in the stylesheet at all.
+PAINTED_STYLES = [
     ("pyqtgraph axis ticks", C.text_dim, C.surface, 11),
     ("Stats sparkline ticks (SMALLEST TYPE)", C.text_dim, C.surface, SMALL),
-    ("role=EmptyState", C.text_dim, C.surface, BODY),
-    ("role=WelcomeSubtitle", C.text_dim, C.canvas, BODY),
-    ("role=WelcomeError", C.accent, C.canvas, BODY),
-    ("role=LoadingTitle", C.text_dim, C.canvas, BODY),
     ("QPalette PlaceholderText", C.text_dim, C.surface, BODY),
-    ("#ProvisionalBanner", C.text, TINT, CAPTION),
-    ("#QualityBadge", C.accent, TINT, 11),
-    ("#PBToastTitle", C.accent, C.surface_active, BODY),
-    ("#PBToastBody", C.text, C.surface_active, CAPTION),
-    ("primary button label", C.on_accent, C.accent, BODY),
+    ("PROVISIONAL_COLOR (lap grid, unselected)", theme.PROVISIONAL_COLOR, C.surface, BODY),
     ("#DiffBox behind", C.behind, C.surface, 22),
     ("#DiffBox ahead", C.ahead, C.surface, 22),
     ("best-lap cell (colour-blind)", "#4C9BFF", C.surface, BODY),
     ("best-sector cell (standard)", C.best, C.surface, BODY),
     ("best-sector cell (colour-blind)", "#38C7C7", C.surface, BODY),
     ("Δ behind (colour-blind)", "#F0902B", C.surface, BODY),
+    # Item text on the SELECTION band: Qt paints a selected item in QPalette::HighlightedText and
+    # ignores the item's own ForegroundRole, so C.text is the only ink that lands here. (The old
+    # table listed PROVISIONAL_COLOR on this background; measured on the real grid, a provisional
+    # lap paints #9AA1AD unselected and C.text selected — the demotion is Qt's to drop.)
+    ("selected item text", C.text, C.sel_bg, BODY),
+    ("table cell (alt row)", C.text, C.surface_alt, BODY),
 ]
 
-# WCAG 1.4.3 exempts text in INACTIVE user-interface components. These are the only styles allowed
-# to use C.text_muted, and they must all genuinely be disabled states. Grown-by-accident is the
-# failure mode this list exists to stop.
-DISABLED_EXEMPT = [
-    ("QPushButton:disabled", C.text_muted, C.surface, BODY),
-    ("QMenu::item:disabled", C.text_muted, C.surface, BODY),
-]
+# WCAG 1.4.3 exempts text in INACTIVE user-interface components. C.text_muted is the ONLY token
+# allowed below AA, and only on genuinely disabled states — matched against the derived selectors
+# by substring, so a new sub-AA style cannot join by being forgotten.
+DISABLED_EXEMPT = (":disabled",)
 
 
 def test_every_enabled_text_style_clears_wcag_aa():
     """U1-01: six styles shared one token, C.text_muted at 3.17:1 / 3.68:1. The token stayed (it is
     right for disabled chrome); the four ENABLED roles that were borrowing it moved to C.text_dim,
-    and the failure message moved to the accent it should have had all along."""
-    fails = []
-    for name, fg, bg, px in TEXT_STYLES:
+    and the failure message moved to the accent it should have had all along.
+
+    The inventory is now derived from the sheet (see the note above `HOSTS`), so a style cannot
+    escape this by never being typed into a list."""
+    fails, exempt = [], []
+    styles = [(p, fg, bg, px) for p, fg, bg, px in _derived_text_styles()] + PAINTED_STYLES
+    for name, fg, bg, px in styles:
+        if any(k in name for k in DISABLED_EXEMPT):
+            exempt.append((name, fg, bg))
+            continue
         need = 3.0 if px >= 18 else 4.5     # WCAG "large text" starts at 18.66px bold / 24px
         r = contrast(fg, bg)
         if r < need:
             fails.append(f"{name}: {fg} on {bg} = {r:.2f}:1 (needs {need})")
     assert not fails, "styles below WCAG AA: " + "; ".join(fails)
-    print(f"test_every_enabled_text_style_clears_wcag_aa OK ({len(TEXT_STYLES)} styles)")
+    pairs = {(fg.upper(), bg.upper()) for _n, fg, bg, _p in styles}
+    worst = min(styles, key=lambda s: contrast(s[1], s[2]) if not any(
+        k in s[0] for k in DISABLED_EXEMPT) else 99)
+    print(f"test_every_enabled_text_style_clears_wcag_aa OK ({len(styles)} styles, {len(pairs)} "
+          f"distinct fg/bg pairs, {len(exempt)} disabled-exempt; thinnest = {worst[0]} at "
+          f"{contrast(worst[1], worst[2]):.2f}:1)")
+
+
+def test_the_derived_inventory_covers_the_whole_stylesheet():
+    """The derivation's own honesty check: every rule that declares a text colour must produce at
+    least one judged (fg,bg) pair, and the pairs must OUTNUMBER what the hand table used to list.
+
+    The old table claimed to be complete at 20 distinct pairs while the sheet rendered more, and
+    nothing could tell — a hand list has no way to know what it is missing. This pins the direction
+    of travel: the derived set may grow, but it may not quietly shrink back to a subset."""
+    derived = _derived_text_styles()
+    coloured = {p for p, d in _qss_rules() if d.get("color", "").strip().startswith("#")}
+    covered = {p for p, _fg, _bg, _px in derived}
+    assert coloured == covered, f"rules with a colour but no judged pair: {sorted(coloured - covered)}"
+    pairs = {(fg.upper(), bg.upper()) for _p, fg, bg, _x in derived + PAINTED_STYLES}
+    assert len(pairs) >= 19, (
+        f"only {len(pairs)} distinct pairs judged — the parse or the resolver has regressed; the "
+        f"hand table this replaced already listed 19")
+    # The two specific corrections, pinned so neither can come back. The first is the pair the old
+    # table missed and the thinnest margin in the app; the second is the row it listed that Qt
+    # cannot produce (a selected item is painted in HighlightedText, its ForegroundRole ignored).
+    assert (C.text_dim.upper(), C.surface_active.upper()) in pairs, (
+        "C.text_dim on C.surface_active is not being judged — that is #MapNotice and "
+        "#PBToastClose, at 4.80:1 the app's narrowest margin, and it was invisible to the hand "
+        "table for exactly as long as it was un-typed")
+    assert (theme.PROVISIONAL_COLOR.upper(), C.sel_bg.upper()) not in pairs, (
+        "PROVISIONAL_COLOR on the selection band is back — measured on the real lap grid, a "
+        "provisional row paints #9AA1AD unselected and C.text selected; this pairing is never "
+        "rendered")
+    # …and every HOSTS entry is load-bearing: an unused one is the stale-ledger shape again, which
+    # is the failure this whole change is about (see tests/test_inline_styles.py:_no_dead_exemptions).
+    used = {p.split(":")[0] for p in coloured}
+    dead = sorted(k for k in HOSTS if k not in used)
+    assert not dead, f"HOSTS entries that host nothing — delete them: {dead}"
+    print(f"test_the_derived_inventory_covers_the_whole_stylesheet OK "
+          f"({len(coloured)} coloured rules -> {len(derived)} judged styles, "
+          f"{len(pairs)} distinct pairs, {len(HOSTS)} stated hosts)")
 
 
 def test_text_muted_is_confined_to_wcag_exempt_disabled_chrome():
@@ -466,8 +673,18 @@ def test_text_muted_is_confined_to_wcag_exempt_disabled_chrome():
     test_every_enabled_text_style_clears_wcag_aa fails — this one documents WHY the exemption is
     legitimate and keeps the exempt list short."""
     assert contrast(C.text_muted, C.surface) < 4.5     # the honest admission
-    for name, fg, _bg, _px in DISABLED_EXEMPT:
-        assert fg == C.text_muted and ":disabled" in name
+    # Both directions, over the DERIVED inventory rather than a remembered list: every style that
+    # uses the sub-AA token must be a disabled state, and every style the exemption lets past must
+    # be using that token — so the exemption can neither grow to cover an enabled role nor be left
+    # excusing something that has moved off it.
+    styles = _derived_text_styles() + PAINTED_STYLES
+    muted = {n for n, fg, _bg, _px in styles if fg.upper() == C.text_muted.upper()}
+    excused = {n for n, _fg, _bg, _px in styles if any(k in n for k in DISABLED_EXEMPT)}
+    assert muted, "nothing uses C.text_muted any more — drop the exemption with the token"
+    assert muted <= excused, f"C.text_muted on an ENABLED style: {sorted(muted - excused)}"
+    assert excused <= muted, (
+        f"a :disabled style not on the sub-AA token — it should simply be held to AA: "
+        f"{sorted(excused - muted)}")
     # every ENABLED style clears AA at its own size
     assert contrast(C.text_dim, C.surface) >= 4.5
     assert contrast(C.text_dim, C.canvas) >= 4.5
@@ -638,6 +855,7 @@ def _run_all():
     test_the_accessible_ramp_is_never_worse_than_the_default_one()
     test_default_map_ramp_is_byte_identical_and_the_mid_anchor_is_an_accessor()
     test_every_enabled_text_style_clears_wcag_aa()
+    test_the_derived_inventory_covers_the_whole_stylesheet()
     test_text_muted_is_confined_to_wcag_exempt_disabled_chrome()
     test_welcome_error_outranks_the_welcome_subtitle()
     test_format_delta_value_never_prints_negative_zero()
