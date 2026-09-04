@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME, __version__
+from . import APP_NAME, __version__, theme
 from .widgets import WrapLabel
 
 # ---------------------------------------------------------------- shortcut catalogue
@@ -140,10 +140,24 @@ def _copy_column(spacing: int) -> tuple[QScrollArea, QVBoxLayout]:
     Both cards used to put their paragraphs straight into the dialog, which set only a minimum
     WIDTH — so every height Qt permitted below the copy's height guillotined the last paragraphs
     with no scrollbar and no cue. The scroll area guarantees the text stays reachable; _fit_to_copy
-    below is what keeps it off screen in the first place."""
+    below is what keeps it off screen in the first place.
+
+    THE INSET IS SPACE_XL, AND PROSE DOES NOT GET A SCALE OF ITS OWN. This was `20, 18, 20, 16` —
+    four numbers for one box — under a guard exemption arguing that a reading column has "its own
+    typographic measure … off the scale and off it consistently". It was not consistent: the same
+    claim covered the Shortcuts card's 12/10/12/12 and the export dialog's 16/14/16/14, three
+    different insets for the same job, which is the definition of a nudge rather than a measure. And
+    the scale already declares the step this wants — SPACE_XL is documented as "a page's own
+    breathing room (empty states, dialog bodies)" — so a PROSE_* token at 20 would have bought a
+    ninth spacing value to preserve numbers nobody chose.
+
+    What a prose column legitimately owns is `spacing`, and it stays a PARAMETER because its two
+    callers mean different things by it: the About card's four lines are one identity block
+    (SPACE_S, the gap inside a bar), the Privacy card's are paragraphs (SPACE_M, the panel gutter).
+    That is the one place these cards diverge, and now it is stated instead of being 8 and 10."""
     body = QWidget()
     column = QVBoxLayout(body)
-    column.setContentsMargins(20, 18, 20, 16)
+    column.setContentsMargins(theme.SPACE_XL, theme.SPACE_XL, theme.SPACE_XL, theme.SPACE_XL)
     column.setSpacing(spacing)
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
@@ -210,7 +224,7 @@ class ShortcutsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         box = QWidget()
         box_layout = QVBoxLayout(box)
-        box_layout.setContentsMargins(12, 10, 12, 12)
+        box_layout.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_M)
         box_layout.addWidget(buttons)
         root.addWidget(box)
 
@@ -218,12 +232,18 @@ class ShortcutsDialog(QDialog):
         """A two-column grid (key | description) for one group. The key column is mono + dimmed
         (BarLabel role) and right-aligned so the glyphs line up into a tidy gutter; the
         description is the primary text colour and wraps (a WrapLabel, so a wrapped row is TALLER
-        rather than sliced in half)."""
+        rather than sliced in half).
+
+        THIS CARD IS A REFERENCE TABLE, NOT PROSE, so it takes control spacing rather than the copy
+        cards' SPACE_XL reading inset: a key cap beside its description is a ROW, and the group
+        headers above them are the app's own PanelHeader strips. The row gap was 6 and is SPACE_S —
+        a description here can wrap to two lines, so the gap BETWEEN rows has to beat the gap
+        WITHIN one or two rows read as one."""
         body = QWidget()
         grid = QGridLayout(body)
-        grid.setContentsMargins(12, 8, 12, 12)
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(6)
+        grid.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_M)
+        grid.setHorizontalSpacing(theme.SPACE_L)
+        grid.setVerticalSpacing(theme.SPACE_S)
         grid.setColumnStretch(1, 1)
         for r, (key, desc) in enumerate(rows):
             key_label = QLabel(_key_text(key))
@@ -251,7 +271,9 @@ class AboutDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        scroll, column = _copy_column(spacing=8)
+        # SPACE_S: the four lines below (wordmark, version, tagline, blurb) are ONE identity block,
+        # not four paragraphs — the gap inside a bar, not the gap between paragraphs.
+        scroll, column = _copy_column(spacing=theme.SPACE_S)
         root.addWidget(scroll)
 
         name = QLabel(APP_NAME)
@@ -275,7 +297,9 @@ class AboutDialog(QDialog):
         buttons.accepted.connect(self.accept)
         box = QWidget()
         box_layout = QVBoxLayout(box)
-        box_layout.setContentsMargins(20, 0, 20, 16)
+        # The card's own inset, so Close lines up with the left edge of the copy above it; no top
+        # margin because the copy column's SPACE_XL bottom already provides the gap.
+        box_layout.setContentsMargins(theme.SPACE_XL, 0, theme.SPACE_XL, theme.SPACE_XL)
         box_layout.addWidget(buttons)
         root.addWidget(box)
         self._scroll, self._column = scroll, column
@@ -299,7 +323,9 @@ class PrivacyDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        scroll, column = _copy_column(spacing=10)
+        # SPACE_M: these ARE paragraphs — a framing line, a list of four bullets and a removal
+        # route — so they take the panel gutter rather than the About card's tighter block gap.
+        scroll, column = _copy_column(spacing=theme.SPACE_M)
         root.addWidget(scroll)
 
         heading = QLabel(PRIVACY_TITLE)
@@ -320,7 +346,9 @@ class PrivacyDialog(QDialog):
         buttons.accepted.connect(self.accept)
         box = QWidget()
         box_layout = QVBoxLayout(box)
-        box_layout.setContentsMargins(20, 0, 20, 16)
+        # The card's own inset, so Close lines up with the left edge of the copy above it; no top
+        # margin because the copy column's SPACE_XL bottom already provides the gap.
+        box_layout.setContentsMargins(theme.SPACE_XL, 0, theme.SPACE_XL, theme.SPACE_XL)
         box_layout.addWidget(buttons)
         root.addWidget(box)
         self._scroll, self._column = scroll, column

@@ -62,6 +62,11 @@ theme.apply_theme(_APP)
 
 # The panel geometry the app's OWN minimum window produces, measured on the real StudioWindow with
 # the QA harness on fixture F.B: window 1047x434 -> Coaching page 280x196 -> table viewport 270 px.
+# KEPT AT 280 THOUGH THE APP NO LONGER GOES THAT NARROW. Deleting the left column's hand-written
+# 280 px minimum (it REPLACED the lap panel's honest 292 and squeezed the tab bar into scroll
+# arrows — see tests/test_design_system.py check 4b) moved this floor to 292, so 280 is now 12 px
+# STRICTER than anything a user can produce. That is the safe direction for a layout test, and
+# widening it to match would be loosening a pin for no gain.
 MIN_PANEL = (280, 196)
 
 # The D24 C10 geometry the finding rests on (best lap 19, single chapter). All metres are the best

@@ -1388,6 +1388,22 @@ QTabBar::tab:selected {{
     color: {C.text};
     border-bottom: {SPACE_XXS}px solid {C.accent};
 }}
+/* THE SCROLL ARROWS, when four tabs do not fit. They should never be reachable — the lap panel's
+   own minimum width is now derived from this bar rather than replaced by a smaller number (see
+   CentralView._layout_panels) — but "never" here is a property of four English tab names in
+   whichever face of this app's font STACK a machine resolves, which is exactly the kind of
+   constant budget_plot_gutters exists because you cannot pick. So the fallback is declared rather
+   than left to the style.
+
+   `width` on ::scroller is the width of BOTH buttons: QStyleSheetStyle returns half of it for
+   PM_TabBarScrollButtonWidth. Unstyled it came back 16 while the buttons PAINTED 21 and Qt placed
+   them 10 px apart — two 21x28 arrows overlapping by 11x28, each under the 24 px pointer floor,
+   in the one control that reaches a tab the reader can no longer see. Two HIT_MIN targets plus the
+   single pixel Qt's own PM_TabBar_ScrollButtonOverlap makes them share, so each arrow owns HIT_MIN
+   of itself. */
+QTabBar::scroller {{
+    width: {2 * (HIT_MIN + BORDER_PX)}px;
+}}
 /* section label that sits INSIDE a widget header bar — the dimmed small header type, but no
    bg/border of its own (the parent bar already provides them). */
 QLabel[role="BarLabel"] {{

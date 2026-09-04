@@ -723,13 +723,19 @@ class StudioWindow(QMainWindow):
         given, adds the Cancel button: the card used to carry ZERO controls, so the app's longest
         routine wait was the one thing in it a user could not back out of — while its own video
         export has offered both a determinate bar and a Cancel all along (QA L10-06). The bar stays
-        indeterminate: Session.load reports no progress, and a bar that invents one would be a lie."""
+        indeterminate: Session.load reports no progress, and a bar that invents one would be a lie.
+
+        IT IS A CONTROL SURFACE WITH ONE LINE OF PROSE, not a prose surface — the distinction that
+        decides its spacing. Nobody READS this card; they glance at it and possibly click Cancel,
+        which is a real control with a focus ring and CTRL_H like any other. So it does not take the
+        Help cards' SPACE_XL reading inset. Its 18 px lead separates three GROUPS (what is
+        happening · that it is still happening · how to stop it), which is what SPACE_L is for."""
         label = chapters.recording_label(paths)
         headline = title or "Loading telemetry…"
         container = QWidget()
         v = QVBoxLayout(container)
         v.setAlignment(Qt.AlignCenter)
-        v.setSpacing(18)
+        v.setSpacing(theme.SPACE_L)
         title_label = QLabel(f"{headline}\n\n{label}" if label else headline)
         title_label.setProperty("role", "LoadingTitle")
         title_label.setAlignment(Qt.AlignCenter)
@@ -2458,8 +2464,13 @@ class StudioWindow(QMainWindow):
 
         body = QWidget(dlg)
         col = QVBoxLayout(body)
-        col.setContentsMargins(16, 14, 16, 14)
-        col.setSpacing(10)
+        # A CONTROL surface, not a prose one: two combos, a form and a button row, with two note
+        # lines about them. So it takes the panel gutter (SPACE_M) rather than the Help cards'
+        # SPACE_XL reading inset — this dialog is operated, not read. It shipped 16/14/16/14 with a
+        # 10 px block gap, under the same exemption that called the Help cards "off the scale and
+        # off it CONSISTENTLY"; they were three different insets for the same job.
+        col.setContentsMargins(theme.SPACE_M, theme.SPACE_M, theme.SPACE_M, theme.SPACE_M)
+        col.setSpacing(theme.SPACE_M)
         root.addWidget(body)
 
         desc = QLabel("Burns the overlays into your footage: g-meter, Δ / speed, map inset and the "
@@ -2476,8 +2487,8 @@ class StudioWindow(QMainWindow):
 
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(8)
+        form.setHorizontalSpacing(theme.SPACE_M)
+        form.setVerticalSpacing(theme.SPACE_S)
         res_combo = QComboBox(dlg)
         for label, _h in self._EXPORT_RES_OPTIONS:
             res_combo.addItem(label)

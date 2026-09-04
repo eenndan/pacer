@@ -230,7 +230,16 @@ def test_the_focus_ring_is_paid_for_out_of_the_padding_not_the_box():
 
 
 # ============================================================================ 2. the source
-_CALLS = ("setContentsMargins", "setSpacing", "setFixedHeight", "setFixedSize")
+# setHorizontalSpacing / setVerticalSpacing are here for the reason the sweep of this wave gave for
+# rewriting its own equality pins: a guard that checks `setSpacing` and not its QGridLayout /
+# QFormLayout siblings is excusing itself. They set exactly the same quantity — the gap between two
+# things in a layout — and leaving them out is how the Shortcuts card kept a 6 px row gap through a
+# phase whose entire subject was gaps. EXTENT calls (setMinimumWidth / setFixedWidth) are
+# deliberately NOT here: a dialog's measure, a busy bar's length and a card's floor are sizes of
+# things, not spaces between them, and the SPACE scale has nothing to say about 560 or 220. The
+# defect an extent can carry is a different assertion, and it has its own check below (4b).
+_CALLS = ("setContentsMargins", "setSpacing", "setFixedHeight", "setFixedSize",
+          "setHorizontalSpacing", "setVerticalSpacing")
 
 
 def _dimension_literals(path):
@@ -271,38 +280,25 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
     because moving a margin is a visual change and it belongs in the PR whose pixel proof covers
     that surface. So this lands with a real exemption list, each entry naming the constructor that
     owns the decision, and every later phase should delete some of it. The count is printed on
-    every run so the direction is visible without reading the diff."""
-    EXEMPT = {
-        # ---- Phase 2 (header/toolbar) + Phase 3 (control vocabulary) ------------------------
-        # (Phase 5 deleted `lap_table.CornerTable.__init__`. Its two caption strips were inset by a
-        # hand-written 10 px to start on the same pixel as the grid's first column of text — which
-        # turned out not to be a nudge at all but FOCUS_RING_PX + SPACE_S, the table's reserved
-        # ring plus the QSS cell padding. It is written as that sum now, so the number follows both
-        # halves instead of restating one value they happen to add up to.)
-        # The excluded-lap strip is the same inset with a 6 px lead above it that IS a chosen gap,
-        # off the scale, on a surface this phase has no measurement for. It moves with whichever
-        # phase looks at that strip.
-        ("lap_table.py", "LapTable._build_excluded_strip"),
-        # (Phase 4 deleted its two — `stats_panel._Tile.__init__` and `StatsView.__init__`. The
-        # tile is `widgets.Tile` now and its value-to-caption gap is SPACE_XXS, the sub-step that
-        # exists for exactly that job; the page's 6 px block gap is SPACE_XS.)
-        # The coaching PhaseBar: a 6/4 inset, a 2 px bar-to-numbers gap (SPACE_XXS doing exactly
-        # its job) and a 1 px gap BETWEEN the three bar segments — which is not spacing at all but
-        # a hairline separator, i.e. BORDER_PX wearing a layout's clothes. Re-taken with the bar.
-        ("coaching_panel.py", "PhaseBar.__init__"),
-        # ---- not owned by any planned phase -------------------------------------------------
-        # The three Help/About/Privacy dialogs and the export-options dialog are prose surfaces
-        # with their own typographic measure (a 20 px text column inset, an 18 px paragraph lead)
-        # rather than instances of the app's control layout. They are off the scale and they are
-        # off it consistently; snapping them blind would reflow four dialogs for no stated gain,
-        # so they wait for a phase that actually looks at them.
-        ("help_dialog.py", "ShortcutsDialog.__init__"), ("help_dialog.py", "AboutDialog.__init__"),
-        ("help_dialog.py", "PrivacyDialog.__init__"), ("help_dialog.py", "_copy_column"),
-        ("app.py", "StudioWindow._ask_export_options"),
-        # The loading placeholder's 18 px lead between title and busy bar — the one surface a user
-        # sees for a few seconds and never interacts with; it moves with the dialogs above.
-        ("app.py", "StudioWindow._show_loading_placeholder"),
-    }
+    every run so the direction is visible without reading the diff.
+
+    THE BACKLOG IS EMPTY, and what emptied it was reading the last exemption's own prose. Six of
+    the final eight were excused as "prose surfaces with their own typographic measure — a 20 px
+    text column inset, an 18 px paragraph lead — off the scale and off it CONSISTENTLY". The
+    consistency was the load-bearing half of that argument and it was false: the copy column was
+    20/18/20/16, the Shortcuts card 12/10/12/12 and the export dialog 16/14/16/14 with a 10 px block
+    gap — three different insets for one job, which is what a nudge looks like from the inside. The
+    18 was not a paragraph lead either; it was a top inset, while the actual paragraph gap was a
+    parameter passed as 8 from one card and 10 from the other.
+
+    Nothing bought a PROSE_* scale in the end. The step a reading column wants is already declared —
+    SPACE_XL is documented as "a page's own breathing room (empty states, dialog bodies)" — so a
+    second system would have been a ninth spacing value bought to keep numbers nobody chose. What
+    IS stated per surface is which kind of surface it is: the two copy cards take the reading inset,
+    the Shortcuts reference and the export dialog take control spacing because they are a table and
+    a form, and the loading card takes SPACE_L between its three groups because it is glanced at and
+    clicked, not read."""
+    EXEMPT: set[tuple[str, str]] = set()
     offenders = []
     total = onscale = 0
     for fn in sorted(os.listdir(_STUDIO)):
@@ -319,8 +315,12 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
         "theme.SPACE_* (or add an EXEMPT entry saying whose decision it is):\n  "
         + "\n  ".join(offenders))
     # The backlog may only shrink. A phase that migrates a surface deletes its entry; a phase that
-    # adds one has to say so out loud, here, in prose. 11 after Phase 1-3, 9 after Phase 4, 8 after 5.
-    assert len(EXEMPT) <= 8, f"the exemption list GREW to {len(EXEMPT)}"
+    # adds one has to say so out loud, here, in prose. 11 after Phase 1-3, 9 after Phase 4, 8 after
+    # 5, and ZERO after Phase 6 — so the ceiling is now the floor, and the next off-scale literal
+    # cannot be waved through with an exemption at all. It has to be argued in this file's prose
+    # against an empty set, or written as a derivation of the scale the way theme.focus_pad,
+    # theme.pill_radius, widgets.space_at_least and lap_table.GRID_TEXT_INSET already are.
+    assert not EXEMPT, f"the exemption list GREW to {len(EXEMPT)}: {sorted(EXEMPT)}"
     print(f"test_no_studio_module_hand_picks_a_layout_dimension OK "
           f"({onscale}/{total} literal calls on the scale, {len(EXEMPT)} exempted surfaces)")
 
@@ -477,6 +477,108 @@ def test_all_four_panel_headers_are_one_height():
                     f"every control in a toolbar shares one height: {c!r} is {c.height()}")
     print(f"test_all_four_panel_headers_are_one_height OK "
           f"(4 headers @ {theme.PANEL_HDR_H}, 2 toolbars @ {theme.TOOLBAR_H})")
+
+
+def _arrows(bar):
+    """The tab bar's two scroll buttons as (visible, [rects]), whatever Qt calls them."""
+    from PySide6.QtWidgets import QToolButton
+    btns = sorted(bar.findChildren(QToolButton), key=lambda b: b.x())
+    return [b for b in btns if b.isVisible()], [b.geometry() for b in btns]
+
+
+def test_the_lap_panels_identity_is_never_squeezed_and_its_fallback_clears_the_hit_floor():
+    """Check 4b — AN EXTENT, which is the other way a hand-picked dimension does damage.
+
+    Check 2 above governs the space BETWEEN things and deliberately says nothing about the size OF
+    one: 560 px of dialog measure or 220 px of busy bar are not on any spacing scale and should not
+    be. The harm an extent can do is different, and this is it, in the one place the app had it.
+
+    THE DEFECT. `CentralView._layout_panels` pinned the left column at `setMinimumWidth(280)`
+    directly under a comment explaining, for the RIGHT column, exactly why that is the wrong
+    instrument — "qSmartMinSize takes a widget's EXPLICIT minimum over its minimumSizeHint, so a
+    number set here does not merge with what the children actually need, it REPLACES it, and any
+    shortfall comes out of the children's glyphs" — and then asserting the left column was
+    "unrelated: nothing in it is over-subscribed". It was over-subscribed by 12 px. The lap panel's
+    honest minimum is 292 (SPACE_S + the tab bar's own 240 + SPACE_S + the 28 px ⛶ + SPACE_S), so at
+    the floor the header handed a 240 px identity 228 px, Qt raised the QTabBar's two scroll arrows
+    and put part of "Coaching" behind them. Measured on the shipped tree: two 21x28 arrows
+    OVERLAPPING BY 11x28, both under the 24 px pointer floor, and the only route to a tab the
+    reader could no longer see. Present identically before the design wave — this is older than any
+    of it.
+
+    So, two assertions, and they are deliberately different in kind:
+
+      * THE MECHANISM. At every size the app can be driven to — including its own minimumSizeHint,
+        and under a splitter drag that asks for a 1 px lap panel — the tab bar gets at least its
+        sizeHint, every tab rect is inside it, and NO arrow is visible. Four tabs at ElideNone in a
+        narrow panel is a real constraint; a panel narrower than its own contents was not one.
+      * THE FALLBACK. Forced narrow anyway (a fifth tab, a translation, a font stack that resolves
+        wider — the same reason widgets.budget_plot_gutters measures instead of choosing), each
+        arrow clears HIT_MIN and the two overlap by no more than Qt's own declared
+        PM_TabBar_ScrollButtonOverlap, which is the single pixel two adjacent buttons share. That is
+        what theme's QTabBar::scroller rule buys: the metric came back 16 unstyled while the buttons
+        painted 21."""
+    from PySide6.QtWidgets import QStyle
+    from test_central_view_realqt import _real_central_view
+
+    view = _real_central_view()[0]
+    view.show()
+    for _ in range(8):
+        _APP.processEvents()
+    bar = view.tab_bar
+    hint = view.minimumSizeHint()
+    checked = 0
+    for size in ((1440, 900), (1280, 800), (max(hint.width(), 1), max(hint.height(), 1))):
+        view.resize(*size)
+        for _ in range(8):
+            _APP.processEvents()
+        # ...and then ASK for the panel to be narrower than anything a drag could reach. A
+        # QSplitter clamps at its section's minimum, so this measures the floor itself rather than
+        # a size a test happened to pick.
+        total = sum(view._main_splitter.sizes())
+        for ask in (total // 3, 1):
+            view._main_splitter.setSizes([ask, total - ask])
+            for _ in range(6):
+                _APP.processEvents()
+            checked += 1
+            vis, _rects = _arrows(bar)
+            assert not vis, (
+                f"at {size} with the lap column asked down to {ask} px the tab bar is "
+                f"{bar.width()} px for a {bar.sizeHint().width()} px identity, so Qt raised "
+                f"{len(vis)} scroll arrow(s) — the panel is narrower than its own contents")
+            assert bar.width() >= bar.sizeHint().width(), (
+                size, ask, bar.width(), bar.sizeHint().width())
+            for i in range(bar.count()):
+                r = bar.tabRect(i)
+                assert r.left() >= 0 and r.right() <= bar.width(), (
+                    f"at {size}/{ask} tab {i} ({bar.tabText(i)!r}) paints {r} outside a "
+                    f"{bar.width()} px bar")
+        view._main_splitter.setSizes([total // 2, total - total // 2])
+        for _ in range(4):
+            _APP.processEvents()
+
+    # THE FALLBACK, forced. Resize the bar itself: its parent's layout is what normally refuses
+    # this, which is the point — the question here is only what the arrows look like once Qt has
+    # decided to draw them.
+    bar.resize(bar.sizeHint().width() // 2, bar.height())
+    for _ in range(6):
+        _APP.processEvents()
+    vis, rects = _arrows(bar)
+    assert len(vis) == 2, f"a half-width tab bar must show both arrows, got {len(vis)}"
+    seam = bar.style().pixelMetric(QStyle.PM_TabBar_ScrollButtonOverlap, None, bar)
+    for r in rects:
+        assert r.width() >= theme.HIT_MIN and r.height() >= theme.HIT_MIN, (
+            f"a tab-bar scroll arrow is {r.width()}x{r.height()}, under the "
+            f"HIT_MIN={theme.HIT_MIN} pointer floor")
+    hit = rects[0].intersected(rects[1])
+    assert hit.width() <= seam, (
+        f"the two scroll arrows overlap by {hit.width()}x{hit.height()} px, more than the "
+        f"{seam} px Qt's own PM_TabBar_ScrollButtonOverlap makes two adjacent buttons share — "
+        f"so one of them is partly un-clickable")
+    view.hide()
+    print(f"test_the_lap_panels_identity_is_never_squeezed_and_its_fallback_clears_the_hit_floor "
+          f"OK ({checked} squeezes, arrows {rects[0].width()}x{rects[0].height()} sharing "
+          f"{hit.width()} px)")
 
 
 # ============================================================================ 5. the charts
@@ -771,6 +873,7 @@ def _run_all():
     test_the_pointer_target_floor_has_one_home()
     test_a_button_a_combo_and_a_tab_really_paint_at_ctrl_h()
     test_all_four_panel_headers_are_one_height()
+    test_the_lap_panels_identity_is_never_squeezed_and_its_fallback_clears_the_hit_floor()
     test_no_chart_axis_title_is_painted_outside_its_chart()
     test_no_table_header_elides_away_its_own_name()
     test_no_table_header_floats_off_its_data()
