@@ -151,9 +151,20 @@ def test_no_module_styles_itself_from_a_string():
     # migration's whole point. It was seven until the status-bar reference chip's merge went: it
     # set `color: PROVISIONAL_COLOR`, which IS the colour QLabel[role="Chip"] already paints, so
     # the caveat it claimed to draw changed nothing. That is now a `tone="warn"` role flip.
-    assert total == 6, (
-        f"{total} inline setStyleSheet calls (was 34, is 6 by design): the list above is the "
-        f"complete set, so a change to this number is a decision, not a detail")
+    # ONE-DIRECTIONAL, like tests/test_design_system.py:323's "the backlog may only shrink" — and
+    # it took a rewrite to get there. Written `== 6` this line turns the build RED when someone
+    # REMOVES an inline stylesheet: the exact migration this file's own prose schedules, for the
+    # exact call it names ("the one exemption here that is a deferral rather than a decision"), and
+    # the failure text then tells the person who just did the right thing that their number is
+    # wrong because the old one "is by design". It had already happened once in the other
+    # direction — the count was 7 until the status-bar chip's merge went, and the pin had to be
+    # edited to let the improvement land. A ceiling says everything the equality said about "one
+    # more little stylesheet has to come here and argue for itself", and nothing it said about
+    # deletions.
+    assert total <= 6, (
+        f"{total} inline setStyleSheet calls (was 34, is at most 6 by design): every one is named "
+        f"in EXEMPT above as a PER-DATUM colour, so a NEW one has to come here and argue for "
+        f"itself. The count may only fall — if you removed one, lower this ceiling.")
     print(f"test_no_module_styles_itself_from_a_string OK ({total} calls in "
           f"{len(EXEMPT)} owners, all per-datum)")
 
@@ -189,7 +200,17 @@ def test_no_bare_colour_declaration_creeps_back_in():
                     f"child; use a theme role, or a `QLabel#Name {{ … }}` selector")
     assert not offenders, "\n  ".join(offenders)
     _no_dead_exemptions(LEAF, found, "bare-colour LEAF")
-    assert hits >= 5, f"only {hits} colour merges found — the exemption list needs re-reading"
+    # ...and the same one-directional rewrite as the ceiling above, for the same reason and found
+    # the same way: this was `hits >= 5`, a FLOOR under a count the migration exists to lower. Run
+    # the improvement the file schedules and it fires second, one line after the equality pin lets
+    # go — "only 4 colour merges found" reported as a failure of the person who removed one. What a
+    # floor can honestly protect here is the SCAN, not the number: that the AST walk still sees
+    # colour merges at all, so `offenders` is not empty for the wrong reason. `_no_dead_exemptions`
+    # above already proves each named merge is still there, from the other side.
+    assert hits, "no colour merges found at all — the AST scan has gone blind, so this passed empty"
+    assert hits <= 5, (
+        f"{hits} colour merges (was 14, is at most 5 by design) — a new one has to be a qualified "
+        f"selector or a leaf label, and it has to be argued for in LEAF above. May only fall.")
     print(f"test_no_bare_colour_declaration_creeps_back_in OK ({hits} colour merges, "
           f"{len(LEAF)} of them leaf labels)")
 

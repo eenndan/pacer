@@ -154,6 +154,30 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **"Share your PB →" shows the keyboard where it is again.** The personal-best card's primary
+  action — the one that saves the shareable lap card — painted **zero** changed pixels when the
+  keyboard landed on it, while the ✕ and the progression link beside it changed 36 and 656. Its new
+  `objectName` rule declared a `border`, and in Qt's stylesheet cascade an ID selector outranks the
+  shared `[variant="primary"]:focus` ring, so the ring was never drawn: a keyboard user could not
+  tell they were on the button the card exists for, on a card that deletes itself after six
+  seconds. The ring is back (512 changed pixels, with the control's box unmoved). The same trap had
+  taken the **load card's Cancel button** — its only control — down to 0 changed pixels of 186x28;
+  that one is fixed here too, and a new guard now fails the build for any future `#Name` rule that
+  borders a focusable control without declaring its own `:focus`.
+- **The personal-best card lands on the lap grid, not across the Δ chart.** It was supposed to
+  appear at the bottom of the lap panel's body. On the app's own load path it never did: the window
+  builds the new view and celebrates in the same breath, before Qt has shown that view, so the card
+  fell back to "somewhere in the window" and landed at (571, 792) — 449 px from the lap panel,
+  covering 298x86 px of the Δ-to-ideal chart, on first load and on every reload. The card now
+  re-asks where it belongs once the layout has settled, and follows its panel if the window is
+  resized while it is up.
+- **The Corners table's `Δbest` header no longer elides to a bare `Δ…`.** At 1280x800 the column
+  carrying lap-time deltas painted a delta sign and an ellipsis — no letter — next to a km/h column
+  reading `Δa…`. Both Δ columns now ask for the width their header needs to keep naming them, taken
+  from the slack the other columns are holding above their own values, so nothing a column *shows*
+  is squeezed to pay for it. The same rule keeps the lap grid's sector columns from painting `…`
+  where an `S2` should be.
+
 - **The panel headers and toolbars are visible again.** All four quadrant headers (VIDEO, the lap
   tab bar, MAP, SPEED · Δ TO IDEAL), both panel toolbars and the excluded-lap strip were painting
   the flat window canvas instead of the surface-coloured bar and 1 px separator the theme has
