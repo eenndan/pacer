@@ -19,7 +19,7 @@ import math
 import statistics
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, Qt, Signal
+from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QScrollArea,
     QStackedWidget,
+    QStyle,
+    QStyleOptionHeader,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -260,6 +262,38 @@ def _columns(unit: str | None) -> list[str]:
 # Columns 1.. (everything but the Lap column) hold numerics: right-align + tabular font so the
 # digits column-align. The Lap column stays left/default.
 NUMERIC_COL_START = 1
+
+
+def align_headers_over_their_columns(table: QTableWidget, numeric_from: int = NUMERIC_COL_START):
+    """Give every header the alignment of the COLUMN it labels — numbers right, identity left.
+
+    Qt's ``QHeaderView.defaultAlignment`` is ``AlignCenter``, and a centred header over
+    right-aligned digits does not label them. Measured FROM THE PIXELS of the shipped lap panel at
+    1440x900: the ink of "Time" / "Dist (m)" / "Entry (km/h)" ended 39 / 40 / 42 px short of its
+    section while the digits under it ended 13 / 12 / 12 px short — 26, 28 and 30 px of drift. And
+    the drift is half the slack, so it GROWS with the column: at a maximized lap panel every data
+    column takes MAX_DATA_COL_PX and each label floats ~100 px from its own numbers.
+
+    The app already knew this and only half-applied it: the coaching table
+    aligns each header to its own column and tests/test_coaching_panel_layout.py pins it with
+    "a centred header floats off its data", so these two tables were disagreeing with a rule the
+    app had already written down.
+
+    Only the SIDE is taken from the column; the vertical centring is the header's own. Deliberately
+    derived from the same ``numeric_from`` boundary the CELLS use rather than from a per-column
+    table: the two tables here already right-align every cell from column 1 on, so a new column
+    cannot arrive with its header and its values disagreeing.
+
+    (tests/test_design_system.py::test_no_table_header_floats_off_its_data is where the rule lives
+    for the app as a whole — it measures the lap, corner, coaching and library tables on the real
+    view, which is the only place a FOURTH table's drift could be caught. A shared helper here
+    would not have caught it: each of those tables builds its headers differently.)"""
+    for c in range(table.columnCount()):
+        item = table.horizontalHeaderItem(c)
+        if item is None:
+            continue
+        side = Qt.AlignRight if c >= numeric_from else Qt.AlignLeft
+        item.setTextAlignment(side | Qt.AlignVCenter)
 # NUM_ROLE is imported from studio.widgets (which owns the shared numeric-sort cell) rather than
 # re-declared: the role a cell STORES its key under and the role the comparison READS have to be
 # the same value, and they were two independent `Qt.UserRole` literals in two files.
@@ -307,6 +341,11 @@ class _KeyboardSortHeader(QHeaderView):
     `sortable(i)` is injected by the owner: the blank trailing SPACER column holds no cells, so
     walking onto it would park the ring on a header that cannot order anything (the same case
     `LapTable._on_sorted` bounces a mouse click out of)."""
+
+    #: Which half of the split repaint is in flight (see paintSection), or None. Read by
+    #: initStyleOptionForIndex, which is the only hook Qt offers for "draw this section without
+    #: its sort arrow / without its label".
+    _paint_pass = None
 
     def __init__(self, sortable):
         super().__init__(Qt.Horizontal)
@@ -387,8 +426,83 @@ class _KeyboardSortHeader(QHeaderView):
             return
         event.accept()
 
+    def _section_option(self, rect, logicalIndex) -> QStyleOptionHeader:
+        """A style option describing ONE section of this header, carrying the live sort indicator.
+        (Qt maps AscendingOrder to SortDown — the arrow points at where the smallest value went.)"""
+        opt = QStyleOptionHeader()
+        self.initStyleOption(opt)
+        opt.rect = rect
+        opt.section = logicalIndex
+        opt.orientation = Qt.Horizontal
+        opt.state |= QStyle.State_Horizontal
+        opt.sortIndicator = (QStyleOptionHeader.SortIndicator.SortDown
+                             if self.sortIndicatorOrder() == Qt.AscendingOrder
+                             else QStyleOptionHeader.SortIndicator.SortUp)
+        return opt
+
+    def _crowded_sort_arrow(self, rect, logicalIndex):
+        """The sort indicator's rect when it would be painted ON TOP of this section's label —
+        else None, which is every section this header had before the labels moved.
+
+        THE DEFECT, in the two style paths that make it. Qt's own header keeps the arrow and the
+        label apart in QCommonStyle::subElementRect(SE_HeaderLabel), which subtracts the arrow's
+        width from the label's rect whenever a section carries the indicator. That subtraction is
+        NOT REACHED under a stylesheet: QStyleSheetStyle answers SE_HeaderLabel with the section's
+        CONTENTS rect the moment the section rule has a box, and this app's QHeaderView::section
+        rule has padding and a bottom border. Centred labels never noticed — they are nowhere near
+        either edge. A RIGHT-aligned label ends exactly where the arrow starts: measured on the
+        shipped theme, "Time" in a 100 px section painted 161..191 with the arrow at 182..195, so
+        the glyph landed across the last third of the word.
+
+        Only the sorted section can collide, and only when its label is right-aligned; everything
+        else takes the untouched path below."""
+        if not self.isSortIndicatorShown() or logicalIndex != self.sortIndicatorSection():
+            return None
+        model = self.model()
+        align = (model.headerData(logicalIndex, Qt.Horizontal, Qt.TextAlignmentRole)
+                 if model is not None else None)
+        if align is None or not int(align) & int(Qt.AlignRight):
+            return None
+        arrow = self.style().subElementRect(
+            QStyle.SE_HeaderArrow, self._section_option(rect, logicalIndex), self)
+        return arrow if arrow.isValid() else None
+
+    def initStyleOptionForIndex(self, option, logicalIndex):
+        """Qt's hook for "what does this section look like", used here to draw it in two passes."""
+        super().initStyleOptionForIndex(option, logicalIndex)
+        if self._paint_pass is not None:
+            # The arrow is ours to place in this repaint; the style must not also draw it.
+            option.sortIndicator = QStyleOptionHeader.SortIndicator.None_
+            if self._paint_pass == "chrome":
+                option.text = ""
+
     def paintSection(self, painter, rect, logicalIndex):
-        super().paintSection(painter, rect, logicalIndex)
+        arrow = self._crowded_sort_arrow(rect, logicalIndex)
+        if arrow is None:
+            super().paintSection(painter, rect, logicalIndex)
+        else:
+            # TWO PASSES OVER ONE SECTION, so that nothing here re-types a colour, a font or a
+            # border that theme.py owns. Pass 1 draws the section with NO label: full-width
+            # background and the bottom hairline, exactly as the stylesheet paints them. Pass 2
+            # draws the same section into a rect that stops short of the arrow, which is what moves
+            # the right-aligned label — and it re-paints identical background pixels on the way, so
+            # the overdraw is invisible by construction rather than by luck. Then the arrow itself,
+            # through the style's own PE_IndicatorHeaderArrow at the rect the style chose for it:
+            # the indicator does not move, the label does.
+            label = QRect(rect)
+            label.setRight(arrow.left() - 1 - theme.SPACE_XXS)
+            try:
+                self._paint_pass = "chrome"
+                super().paintSection(painter, rect, logicalIndex)
+                self._paint_pass = "label"
+                # An invalid (negative-width) rect is a no-op in Qt: a section too narrow to hold
+                # both loses the label, never the indicator that says how the grid is ordered.
+                super().paintSection(painter, label, logicalIndex)
+            finally:
+                self._paint_pass = None
+            opt = self._section_option(rect, logicalIndex)
+            opt.rect = arrow
+            self.style().drawPrimitive(QStyle.PE_IndicatorHeaderArrow, opt, painter, self)
         # The app's one focus language (theme's FOCUS_RING_PX accent_hover ring), drawn on the
         # SECTION rather than the whole header: which column Space would sort by is the thing a
         # keyboard user needs to see. Inset so the ring sits inside the section it marks.
@@ -451,6 +565,7 @@ class LapTable(QWidget):
         # tab between cells for; the arrow keys still walk the rows.
         self.table.setTabKeyNavigation(False)
         self.table.setHorizontalHeaderLabels(_columns(self._speed_unit))
+        align_headers_over_their_columns(self.table)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -776,6 +891,9 @@ class LapTable(QWidget):
         self.table.blockSignals(True)
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
+        # setHorizontalHeaderLabels REPLACES the header items, so the alignment (like the tooltips
+        # below) has to be re-applied on every refresh, not only at construction.
+        align_headers_over_their_columns(self.table)
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             lap_id = row["idx"]
@@ -1270,6 +1388,14 @@ SELF_REFERENCE_TOOLTIP = ("The Δ columns compare each corner against the refere
 # Corner identity column start width: "C12 ⟳" + the "Corner" header, fully readable (C3 —
 # the old Stretch mode crushed this row-identity column to a 42px sliver at default width).
 CORNER_NAME_COL_PX = 88
+# How far a caption printed ABOVE a grid has to be inset to start on the same pixel as the grid's
+# own first column of text. It is not a chosen gap: the table reserves FOCUS_RING_PX of border so a
+# keyboard ring can be painted without re-laying the grid out, and the QSS then pads every cell and
+# every header section by SPACE_S — so the text a caption has to line up with begins at exactly
+# their sum. Shipped as a hand-written 10, which is that sum, and read as a nudge because nothing
+# said so. Written as the derivation (theme.focus_pad's bargain: derive the number, keep the scale),
+# it also survives a change to either half.
+GRID_TEXT_INSET = theme.FOCUS_RING_PX + theme.SPACE_S
 
 
 class CornerTable(QWidget):
@@ -1294,6 +1420,10 @@ class CornerTable(QWidget):
         self._hover_row = -1         # the row under the pointer (L3-07), -1 for none
         self.table = QTableWidget(0, len(CORNER_COLUMNS))
         self.table.setHorizontalHeaderLabels(CORNER_COLUMNS)
+        # Once: this table never re-labels its headers (see _apply_corner_tips, which rewrites the
+        # Δ column's TEXT on the existing item precisely to keep the tooltips), so the alignment
+        # set here survives every refresh.
+        align_headers_over_their_columns(self.table)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -1341,7 +1471,8 @@ class CornerTable(QWidget):
         self.baseline_note = QLabel("")
         self.baseline_note.setProperty("role", "BarLabel")
         self.baseline_note.setWordWrap(True)
-        self.baseline_note.setContentsMargins(10, 4, 10, 2)
+        self.baseline_note.setContentsMargins(GRID_TEXT_INSET, theme.SPACE_XS,
+                                              GRID_TEXT_INSET, theme.SPACE_XXS)
         self.baseline_note.setToolTip(SELF_DELTA_TOOLTIP)
         self.baseline_note.setVisible(False)
         # The UNIT caption (L3-10) — see _corner_unit_caption. Directly above the grid it names,
@@ -1350,7 +1481,8 @@ class CornerTable(QWidget):
         # without a unit-changed signal) sets it as surely as the View ▸ Units action does.
         self.unit_note = QLabel("")
         self.unit_note.setProperty("role", "BarLabel")
-        self.unit_note.setContentsMargins(10, 2, 10, 2)
+        self.unit_note.setContentsMargins(GRID_TEXT_INSET, theme.SPACE_XXS,
+                                          GRID_TEXT_INSET, theme.SPACE_XXS)
         self.unit_note.setVisible(False)
         self._apply_corner_tips()
         lay = QVBoxLayout(self)

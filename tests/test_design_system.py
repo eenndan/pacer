@@ -55,6 +55,8 @@ from _qtapp import themed_app  # noqa: E402
 
 _APP = themed_app()            # module scope, BEFORE any widget: measure the SHIPPING font stack
 
+from PySide6.QtCore import Qt  # noqa: E402
+
 from studio import theme  # noqa: E402
 
 _STUDIO = os.path.join(_REPO, "studio")
@@ -272,11 +274,14 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
     every run so the direction is visible without reading the diff."""
     EXEMPT = {
         # ---- Phase 2 (header/toolbar) + Phase 3 (control vocabulary) ------------------------
-        # The corner table's two header strips and the excluded-lap strip are hand-inset to sit
-        # flush with the lap table's own column padding — a 10 px gutter chosen against a
-        # QHeaderView padding that this PR just moved onto the scale. They are re-measured, not
-        # re-typed, when the panel gets its PanelHeader/PanelToolbar.
-        ("lap_table.py", "CornerTable.__init__"),
+        # (Phase 5 deleted `lap_table.CornerTable.__init__`. Its two caption strips were inset by a
+        # hand-written 10 px to start on the same pixel as the grid's first column of text — which
+        # turned out not to be a nudge at all but FOCUS_RING_PX + SPACE_S, the table's reserved
+        # ring plus the QSS cell padding. It is written as that sum now, so the number follows both
+        # halves instead of restating one value they happen to add up to.)
+        # The excluded-lap strip is the same inset with a 6 px lead above it that IS a chosen gap,
+        # off the scale, on a surface this phase has no measurement for. It moves with whichever
+        # phase looks at that strip.
         ("lap_table.py", "LapTable._build_excluded_strip"),
         # (Phase 4 deleted its two — `stats_panel._Tile.__init__` and `StatsView.__init__`. The
         # tile is `widgets.Tile` now and its value-to-caption gap is SPACE_XXS, the sub-step that
@@ -314,8 +319,8 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
         "theme.SPACE_* (or add an EXEMPT entry saying whose decision it is):\n  "
         + "\n  ".join(offenders))
     # The backlog may only shrink. A phase that migrates a surface deletes its entry; a phase that
-    # adds one has to say so out loud, here, in prose. 11 after Phase 1-3, 9 after Phase 4.
-    assert len(EXEMPT) <= 9, f"the exemption list GREW to {len(EXEMPT)}"
+    # adds one has to say so out loud, here, in prose. 11 after Phase 1-3, 9 after Phase 4, 8 after 5.
+    assert len(EXEMPT) <= 8, f"the exemption list GREW to {len(EXEMPT)}"
     print(f"test_no_studio_module_hand_picks_a_layout_dimension OK "
           f"({onscale}/{total} literal calls on the scale, {len(EXEMPT)} exempted surfaces)")
 
@@ -531,6 +536,112 @@ def test_no_chart_axis_title_is_painted_outside_its_chart():
           f"({checked} titles over {len(sizes)} sizes incl. the {sizes[-1]} minimum)")
 
 
+# ============================================================================ 6. the tables
+def _h_side(align, default):
+    """The HORIZONTAL half of a Qt alignment, as a name. 0 means "unset", and what that means
+    differs by surface — a header falls back to its view's defaultAlignment, a cell to left — so
+    the caller passes the fallback rather than this guessing."""
+    a = int(align)
+    for name, flag in (("right", Qt.AlignRight), ("centre", Qt.AlignHCenter),
+                       ("left", Qt.AlignLeft)):
+        if a & int(flag):
+            return name
+    return default
+
+
+def test_no_table_header_floats_off_its_data():
+    """Check 6. A HEADER IS A LABEL FOR THE COLUMN UNDER IT, and Qt's default centres every one.
+
+    This rule was already written down, in exactly one place: the coaching table aligns each header
+    to its own column and tests/test_coaching_panel_layout.py:223 pins it with "a centred header
+    floats off its data". The lap and corner tables did not, so the app disagreed with itself.
+    Measured from the pixels of the shipped lap panel at 1440x900, the header's ink ended 39 / 40 /
+    42 px short of its section while the digits it names ended 13 / 12 / 12 px short — the label
+    floating 26-30 px to the left of its own numbers, and further on every extra pixel of column
+    width (a maximized lap panel gives each data column MAX_DATA_COL_PX).
+
+    THIS IS WHERE THE RULE LIVES, and that is the point of putting it here rather than in a fourth
+    private helper. The four tables build their headers four different ways — a per-column dict
+    keyed by header TEXT (coaching), a numeric-column boundary (laps, corners), nothing at all
+    (library) — and no shared function could have caught the ones that never called it. What they
+    can share is a MEASUREMENT, over the real widgets, that enumerates every table the app ships.
+
+    Anything with cells and a header is in: a fifth table has to come here and either pass or say
+    why not."""
+    from PySide6.QtWidgets import QHeaderView
+    from test_central_view_realqt import _real_central_view
+    from test_coaching_panel_layout import _panel as _coaching_panel
+    from test_coaching_panel_layout import _rows as _coaching_rows
+
+    from studio.library_dialog import LibraryDialog
+
+    # (table, why it is exempt) — prose, in the house idiom, and the list may only shrink.
+    EXEMPT = {
+        # The Library dialog's NUMBERS are not right-aligned either: "Best lap" and "Theoretical"
+        # are lap times rendered as left-aligned text (studio/library_dialog.py::_fill_rows sets no
+        # alignment at all), so its headers do not float off their data — they sit centred over
+        # columns that are themselves unaligned. Making that table read like the other three is a
+        # CELL change first and a header change second, in a surface this phase does not touch. It
+        # is listed here, rather than left out, so the decision is visible and the next phase to
+        # open that file inherits the check.
+        "LIBRARY",
+    }
+    view = _real_central_view()[0]
+    view.resize(1440, 900)
+    view.show()
+    # Visit every page: the Corners and Coaching tables fill on the tab switch, and a table with no
+    # rows has no cell to compare a header against — i.e. it would pass by not being looked at.
+    for page in range(view.tab_bar.count()):
+        view.tab_bar.setCurrentIndex(page)
+        for _ in range(6):
+            _APP.processEvents()
+    view.tab_bar.setCurrentIndex(0)
+    for _ in range(8):
+        _APP.processEvents()
+    # The Coaching page needs a ranked model to have rows at all, and the two-lap synthetic session
+    # has none — so it comes from the fixture in the test that already owns this contract for it
+    # (test_coaching_panel_layout::test_every_header_sits_over_its_own_column), which is the point:
+    # the rule is asserted once, over every table, in one place.
+    coach = _coaching_panel(_coaching_rows(6), (1200, 800))
+    dlg = LibraryDialog({"entries": [
+        {"track": "Daytona MK", "date": "2026-08-12", "best": 68.42, "theoretical": 67.9,
+         "paths": ["/tmp/a.MP4"], "verified": True}]}, open_recording=lambda _p: None)
+    tables = {"LAPS": view.table.table, "CORNERS": view.corner_table.table,
+              "COACHING": coach.table, "LIBRARY": dlg.table}
+    offenders, checked = [], {}
+    for name, table in tables.items():
+        checked[name] = 0
+        default = _h_side(table.horizontalHeader().defaultAlignment(), "left")
+        for c in range(table.columnCount()):
+            item = table.horizontalHeaderItem(c)
+            cell = next((table.item(r, c) for r in range(table.rowCount())
+                         if table.item(r, c) is not None), None)
+            # A column with no header text or no cells labels nothing (the lap grid's blank
+            # trailing spacer is exactly this) — there is no alignment to agree with.
+            if item is None or not item.text() or cell is None:
+                continue
+            checked[name] += 1
+            want = _h_side(cell.textAlignment(), "left")
+            got = _h_side(item.textAlignment(), default)
+            if (got != want or got == "centre") and name not in EXEMPT:
+                offenders.append(
+                    f"{name} col {c} {item.text()!r}: header is {got}, its cells are {want}"
+                    + ("  (a centred header floats off its data)" if got == "centre" else ""))
+    view.hide()
+    coach.hide()
+    dlg.deleteLater()
+    assert not offenders, (
+        "table headers that do not sit over the column they name:\n  " + "\n  ".join(offenders))
+    assert min(checked.values()) >= 3 and sum(checked.values()) >= 20, (
+        f"every table must contribute labelled columns with cells under them: {checked}")
+    # ...and the rule is only worth having if the app's headers CAN be centred: prove the default
+    # this fights is still Qt's, so a future Qt that changed it does not silently pass this test.
+    probe = QHeaderView(Qt.Horizontal)
+    assert _h_side(probe.defaultAlignment(), "left") == "centre", probe.defaultAlignment()
+    print(f"test_no_table_header_floats_off_its_data OK ({sum(checked.values())} labelled "
+          f"columns over {len(tables)} tables {checked}, {len(EXEMPT)} exempt)")
+
+
 def _run_all():
     test_every_stylesheet_dimension_is_on_the_scale()
     test_the_focus_ring_is_paid_for_out_of_the_padding_not_the_box()
@@ -541,6 +652,7 @@ def _run_all():
     test_a_button_a_combo_and_a_tab_really_paint_at_ctrl_h()
     test_all_four_panel_headers_are_one_height()
     test_no_chart_axis_title_is_painted_outside_its_chart()
+    test_no_table_header_floats_off_its_data()
     print("\nAll design-system (spatial + type scale) tests passed.")
 
 

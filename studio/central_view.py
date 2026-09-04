@@ -21,7 +21,7 @@ import math
 import os
 from typing import NamedTuple
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
     QLabel,
@@ -888,6 +888,57 @@ class CentralView(QWidget):
         self._collapse_sizes(column, [full_h, 0] if panel in top_panels else [0, full_h])
         self._maximized_panel = panel
         self._sync_maximize_buttons()  # this panel's button now shows the restore glyph
+
+    # ----------------------------------------------------- transient overlays
+    #: A panel body must be at least this wide/tall before an overlay is put inside it — a
+    #: collapsed section reports 0, and a section a user has dragged nearly shut is not somewhere
+    #: to hide a card that deletes itself. One CTRL_H is the smallest thing this app draws.
+    _OVERLAY_MIN = theme.CTRL_H
+
+    def overlay_anchor(self) -> QWidget:
+        """The widget a transient, session-level card (the PB toast) should sit INSIDE.
+
+        WHICH PANEL, AND WHY IT IS NOT THE MAP. The PB moment is a LAP fact — "1:02.418, 0.317 s
+        faster than your previous best" — with two lap actions on it (save the lap card, open this
+        track's PB progression). It was landing on the map only because "top-centre of the window"
+        happened to point there. The map is also the worst possible host: it is the one panel whose
+        every pixel is the DATUM (the racing line, the corner markers, the draggable start/finish
+        handles and the map key), it cannot scroll, and its body starts under a header AND a
+        toolbar. So the anchor is `table_stack` — the lap panel's body, the surface whose Laps page
+        holds the ★ session-best row this card is announcing, whose rows scroll, and which is the
+        one quadrant with a page for each thing the toast could send you to.
+
+        (The status bar was the other candidate and it cannot hold this card: it is one line, and
+        the toast is a title, a wrapped sentence and TWO actions of which the primary one — "Share
+        your PB →" — is the whole retention loop the moment exists for. A one-line status message
+        would delete the feature, not move it.)
+
+        FALLBACK, because a panel can be COLLAPSED. Maximizing any other quadrant drives the lap
+        panel's splitter section to 0 (see _collapse_sizes), and an overlay inside a zero-height
+        widget is an overlay nobody sees. So a maximized panel lends its own body instead, and if
+        even that is unavailable the view itself is returned — the card then sits at the bottom of
+        the grid, which is still below every header. Returns a widget, never a rect, so the caller
+        can map it into whatever coordinate space it is placing in."""
+        def usable(w) -> bool:
+            # isHidden(), not isVisible(): the second is False for every widget in a window that
+            # has not been shown yet, which would send the very first toast to the fallback.
+            if w is None or w.isHidden():
+                return False
+            # ...and its OWN size is not enough either. A maximized panel collapses its siblings'
+            # SPLITTER SECTION, not their widgets: measured with the map maximized, the lap panel
+            # still reported 280x453 while sitting at (-1, -430) — laid out, sized, and entirely
+            # off the top of the window. So the question is how much of it the window can SHOW.
+            shown = QRect(w.mapTo(self, QPoint(0, 0)), w.size()).intersected(self.rect())
+            return (shown.width() >= self._OVERLAY_MIN
+                    and shown.height() >= self._OVERLAY_MIN)
+
+        body = getattr(self, "table_stack", None)
+        if usable(body):
+            return body
+        maxed = getattr(self, "_maximized_panel", None)
+        content = {self._video_panel: self.video, self._table_panel: body,
+                   self._map_panel: self.map, self._plots_panel: self.plots}.get(maxed)
+        return content if usable(content) else self
 
     @staticmethod
     def _collapse_sizes(splitter: QSplitter, sizes: list[int]):
