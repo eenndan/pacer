@@ -199,6 +199,78 @@ LAP_COL_PX = 92
 MAX_DATA_COL_PX = 240
 
 
+# How many of its OWN glyphs a header must keep once it elides. Two, because that is the number at
+# which "Δbest" and "Δapex" stop being the same string — the pair this whole budget was re-tuned
+# around (#163) — and it is the same threshold tests/test_lap_table_columns.py's elide guard has
+# always used to decide when its own check applies.
+HEADER_STEM_CHARS = 2
+ELLIPSIS = "…"
+
+
+def header_stem_px(fm: QFontMetrics, text: str, chars: int = HEADER_STEM_CHARS) -> int:
+    """The narrowest label width at which `text` still elides to `chars` of its own glyphs.
+
+    Qt's ElideRight keeps the longest prefix that fits ALONGSIDE the ellipsis, so the width at
+    which the k-th character survives is exactly the advance of `text[:k] + "…"` — no search, and
+    exact against the same metrics Qt will elide with. Never more than the full string's advance
+    (for a short label the ellipsis can cost more than the letters it replaces)."""
+    full = fm.horizontalAdvance(text)
+    if len(text) <= chars:
+        return full
+    return min(full, fm.horizontalAdvance(text[:chars] + ELLIPSIS))
+
+
+def _header_pad_px(hdr) -> int:
+    """The chrome a header section spends on everything that is not its text, from the STYLE.
+
+    Read as `section - SE_HeaderLabel` off a nominal section rather than from the QSS literal:
+    the padding is a stylesheet value, the sort indicator is a style metric, and the column budget
+    has to reason about the box the text actually gets. Measured at 16 px on the shipped theme."""
+    probe = 200
+    opt = QStyleOptionHeader()
+    hdr.initStyleOption(opt)
+    opt.section = 0
+    opt.rect = QRect(0, 0, probe, max(hdr.height(), 1))
+    label = hdr.style().subElementRect(QStyle.SE_HeaderLabel, opt, hdr)
+    return max(0, probe - label.width())
+
+
+def header_floors(table, floors: list[int], natural: list[int], avail: int) -> list[int]:
+    """`floors` raised so that every header still NAMES its column — while the table has the room.
+
+    WHAT THIS CLOSES. This budget deliberately lets a squeezed header elide into its tooltip, and
+    #163 made that safe for the one pair it is not safe for by naming them "Δbest"/"Δapex" — two
+    labels whose elisions, "Δb…" and "Δa…", still differ. What was never true is that the table
+    HAD those pixels: at 1280x800 the eight corner columns sit above their cell floors with 118 px
+    of collective slack, and `_shrink_to` hands that slack out in PROPORTION. So the "b" in "Δb…"
+    was never allocated to anything — it was change from a division. The design wave spent 2 px of
+    table viewport (443 -> 441) on chrome, the division came out 1 px differently, and the column
+    carrying lap-time deltas started painting a bare "Δ…": a header with no information in it
+    beyond "this is a delta", next to a km/h column still reading "Δa…".
+
+    So the stem is ASKED FOR instead of hoped for. Each column's floor is raised to the width its
+    own header needs to keep HEADER_STEM_CHARS of itself (a font metric — see header_stem_px —
+    plus the style's header chrome), capped at what the column naturally wants. The pixels come
+    from the other columns' slack ABOVE THEIR OWN CELL FLOORS, which `_shrink_to` already refuses
+    to cross, so no VALUE is squeezed to buy a header: this table's contract is unchanged.
+
+    AND IT YIELDS RATHER THAN OVERFLOWS. A panel genuinely too narrow to honour every stem would
+    otherwise push the sum past the viewport and summon the horizontal scrollbar that QA L3-03
+    was about. So the raised floors are used only when they all fit; below that the table falls
+    back to the cell floors and headers elide exactly as they did. The guarantee is "while there
+    is room", stated, rather than "always", broken."""
+    hdr = table.horizontalHeader()
+    fm = QFontMetrics(hdr.font())
+    pad = _header_pad_px(hdr)
+    raised = []
+    for c, floor in enumerate(floors):
+        item = table.horizontalHeaderItem(c)
+        text = item.text() if item is not None else ""
+        stem = (header_stem_px(fm, text) + pad) if text else 0
+        raised.append(min(max(floor, stem), natural[c]))
+    return raised if sum(raised) <= avail else list(floors)
+
+
 def _shrink_to(widths: list[int], floors: list[int], excess: int):
     """Take `excess` px off `widths` in place, proportionally to each column's slack above its
     floor, never below the floor. Stops early when every column is at its floor (the panel is
@@ -838,7 +910,9 @@ class LapTable(QWidget):
         if avail <= 0 or real <= 0:
             return
         natural, floors, caps = self._column_budget()
-        fitted = fit_columns(natural, floors, caps, avail)
+        # ...with every column at least wide enough for its header to keep naming it, while the
+        # panel can afford that (header_floors). The spacer is not in these lists and has no label.
+        fitted = fit_columns(natural, header_floors(self.table, floors, natural, avail), caps, avail)
         for c, w in enumerate(fitted):
             hdr.resizeSection(c, w)
         # The spacer takes EXACTLY the slack the capped data columns left (P5: keep them adjacent
@@ -1528,6 +1602,9 @@ class CornerTable(QWidget):
         if avail <= 0 or not self.table.columnCount():
             return
         natural, floors, caps = self._column_budget()
+        # ...with every header's stem asked for rather than left to the rounding of the squeeze —
+        # this is the table the two Δ columns live in. See header_floors.
+        floors = header_floors(self.table, floors, natural, avail)
         for c, w in enumerate(fit_columns(natural, floors, caps, avail)):
             hdr.resizeSection(c, w)
 

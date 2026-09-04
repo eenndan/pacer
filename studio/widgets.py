@@ -325,6 +325,72 @@ def budget_plot_gutters(view, layout, plots, *, inset: int) -> tuple[int, int]:
     return left, bottom
 
 
+def budget_plot_min_height(view, layout, plots) -> int:
+    """The smallest widget height at which stacked plots can each NAME their y axis. Applies it.
+
+    THE DEFECT THIS EXISTS FOR. A pyqtgraph left-axis title is ROTATED and centred on its axis,
+    with no length check anywhere — `AxisItem.resizeEvent` sets the label's position from the axis
+    height and lets it overhang both ends when the string is longer than the axis. Two stacked
+    plots therefore do not merely clip; they overprint EACH OTHER. Measured on the shipped charts
+    quadrant at the app's own 845x414 minimum: `speed (km/h)` is 93.5 px of rotated text on a
+    35.9 px axis, `Δ to ideal (s)` is 88.9 px on the same, and the two titles shared 24 x 49.5 px
+    of one gutter — an unreadable mash of two alphabets — while the top 26.5 px of `speed (km/h)`
+    was outside the viewport entirely. `budget_plot_gutters` cannot see any of this: it measures
+    the axis-PERPENDICULAR direction, and this is a length along the axis.
+
+    WHY A MINIMUM AND NOT A DEGRADATION. The honest reading of the measurement is that 414 px is
+    not a height two stacked labelled charts fit in — at the point they stop colliding the window
+    is ~530 px tall — so the choice is between a window minimum that admits that and a charts
+    panel that drops or shortens its titles under pressure. This is the second: hiding a title on
+    a condition evaluated mid-layout was built in an earlier phase and reverted, because the
+    condition fired transiently at a SHIPPED size and took the friction circle's y-title with it
+    (see .claude/design-system-2026-09-04.md §8). A minimum has no condition to misfire: it is
+    declared once, Qt enforces it, and every size the app can then be driven at is a size where
+    both charts are named in full.
+
+    THE NUMBER IS MEASURED, for the same reason the gutters are: the overhang is a font metric of
+    whichever face of this app's font STACK a machine resolves, not a layout pressure, so a
+    constant chosen against Inter 11 on one box is wrong on the next. Each plot is asked for two
+    quantities that are both independent of the current height — its title's length along the axis
+    (`mapRectToScene(...).height()` of the rotated label) and its non-axis CHROME (everything in
+    the plot that is not the left axis: the bottom axis and its labels). Verified height-invariant
+    across a 414 -> 800 px sweep: the two titles stayed 93.5 / 88.9 px and the chrome 1.5 / 40.7 px
+    at every step. One pass is therefore enough, and re-running it can only produce the same
+    answer — it cannot ratchet.
+
+    The condition it enforces is the strict one, `every axis is at least as long as its own title`,
+    which is ~8 px stricter than "the two titles do not touch" and does not depend on the row
+    stretch, on which plot owns the shared x axis, or on how many plots there are.
+
+    Returns the minimum height applied to `view` (0 if nothing could be measured). Idempotent: it
+    only writes when the value would change, so it is safe to call from resize()."""
+    margins = layout.getContentsMargins()
+    need = float(margins[1]) + float(margins[3])
+    rows = 0
+    for plot in plots:
+        axis = plot.getAxis("left")
+        label = getattr(axis, "label", None)
+        if (axis is None or not axis.isVisible() or label is None
+                or not label.isVisible() or not getattr(axis, "labelText", "")):
+            continue
+        title = label.mapRectToScene(label.boundingRect()).height()
+        chrome = max(0.0, plot.boundingRect().height() - axis.boundingRect().height())
+        need += title + chrome
+        rows += 1
+    if rows == 0:
+        return int(view.minimumHeight())
+    need += layout.verticalSpacing() * (rows - 1)
+    # The scene is sized from the WIDGET and only the VIEWPORT is visible — this app puts a
+    # FOCUS_RING_PX border on every QGraphicsView so a focus ring costs no re-layout — so the
+    # widget has to be that much taller than the height the scene needs. Same accounting as the
+    # bottom gutter in budget_plot_gutters, from the other side.
+    border = max(0, view.height() - view.viewport().height()) if view.viewport() is not None else 0
+    applied = int(need) + border
+    if view.minimumHeight() != applied:
+        view.setMinimumHeight(applied)
+    return applied
+
+
 class Tile(QWidget):
     """One STAT TILE: a value in the mono face over a dim caption naming it. `set()` rewrites both.
 

@@ -55,7 +55,7 @@ from _qtapp import themed_app  # noqa: E402
 
 _APP = themed_app()            # module scope, BEFORE any widget: measure the SHIPPING font stack
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QRect, Qt  # noqa: E402
 
 from studio import theme  # noqa: E402
 
@@ -459,9 +459,17 @@ def test_all_four_panel_headers_are_one_height():
         assert set(heights.values()) == {theme.PANEL_HDR_H}, (
             f"the four panel headers must be ONE declared height "
             f"(PANEL_HDR_H={theme.PANEL_HDR_H}) at {size}: {heights}")
-        toolbars = [t for t in view.findChildren(PanelToolbar)]
-        assert len(toolbars) == 2, (
-            f"only MAP and CHARTS have controls, so only they get a toolbar: {len(toolbars)}")
+        # WHICH panels have a toolbar, not HOW MANY. This was `len(toolbars) == 2` — a count, in
+        # a file whose other backlog numbers are one-directional ratchets, and it fails the same
+        # way whether a fifth panel grows a control row (a design change worth arguing) or MAP
+        # loses one (a regression). Neither is a direction, so this is not a ratchet to loosen: it
+        # is a fact to state precisely. Asked as an identity it names the offender either way.
+        owners = {name for name, panel in panels.items() if panel.findChildren(PanelToolbar)}
+        assert owners == {"MAP", "CHARTS"}, (
+            f"only MAP and CHARTS have controls, so only they get a toolbar: {sorted(owners)}")
+        toolbars = view.findChildren(PanelToolbar)
+        assert len(toolbars) == len(owners), (
+            f"a panel grew a SECOND toolbar: {len(toolbars)} rows across {sorted(owners)}")
         for t in toolbars:
             assert t.height() == theme.TOOLBAR_H, (t.height(), theme.TOOLBAR_H)
             for c in t.controls:
@@ -496,9 +504,19 @@ def test_no_chart_axis_title_is_painted_outside_its_chart():
     view.show()
     for _ in range(8):
         _APP.processEvents()
-    SHIPPED = [(1440, 900), (1280, 800)]
     hint = view.minimumSizeHint()
-    sizes = [*SHIPPED, (max(hint.width(), 1), max(hint.height(), 1))]
+    # EVERY EDGE AT EVERY SIZE, INCLUDING THE MINIMUM. There used to be an exemption here: the TOP
+    # edge was asserted only at the two shipped sizes, on the stated grounds that the minimum "is a
+    # size the app cannot be driven at". That was false — `minimumSizeHint()` is exactly what Qt
+    # honours a resize to, this test asks the view for it and then resizes to it — and the thing
+    # the exemption waved through was not a near-miss: at 845x414 the two ROTATED left-axis titles
+    # were centred on axes shorter than themselves and painted ON TOP OF EACH OTHER, sharing
+    # 24 x 49.5 px of one gutter, with 26.5 px of `speed (km/h)` above the viewport entirely.
+    # studio/widgets.py::budget_plot_min_height fixes that by declaring the height two stacked
+    # labelled charts need, which is why the minimum is now ~528 px tall rather than 414 — so the
+    # honest form of this check is simply to assert everything everywhere and let the minimum be
+    # whatever the charts can actually be named in.
+    sizes = [(1440, 900), (1280, 800), (max(hint.width(), 1), max(hint.height(), 1))]
     checked = 0
     for size in sizes:
         view.resize(*size)
@@ -513,20 +531,23 @@ def test_no_chart_axis_title_is_painted_outside_its_chart():
             checked += 1
             r = axis.label.mapRectToScene(axis.label.boundingRect())
             over = {"left": -r.left(), "right": r.right() - viewport.width(),
-                    "bottom": r.bottom() - viewport.height()}
-            # The TOP edge is deliberately not in that dict, and only at the window's own minimum
-            # does the distinction matter. A left-axis title is ROTATED, so its length is spent
-            # along the axis and pyqtgraph centres it: once the axis is shorter than the title
-            # (the 845x368 minimum leaves the speed plot ~67 px against a 93 px `speed (km/h)`)
-            # it overflows both ends at once. That is a title-vs-axis LENGTH problem, not a
-            # gutter, and no margin can fix it — it is out of this phase's scope and it is a size
-            # the app cannot be driven at. The gutters are asserted at every size, including there.
-            if tuple(size) in SHIPPED:
-                over["top"] = -r.top()
+                    "bottom": r.bottom() - viewport.height(), "top": -r.top()}
             bad = {k: round(px, 1) for k, px in over.items() if px > 0.5}
             assert not bad, (
                 f"at {size} the {side} axis title {axis.labelText!r} is painted outside the "
                 f"chart by {bad} — the reader loses the name of the axis, not a decoration")
+        # ...and no title may be painted on ANOTHER title. Staying inside the viewport is not the
+        # same contract: two rotated labels can both be fully inside it and still overprint, which
+        # is exactly what the minimum used to do — `Δ to ideal (` with `peed` struck through it.
+        boxes = [(p, p.getAxis("left").label.mapRectToScene(
+            p.getAxis("left").label.boundingRect())) for p in (plots.p_speed, plots.p_delta)]
+        for i, (pa, ra) in enumerate(boxes):
+            for pb, rb in boxes[i + 1:]:
+                hit = ra.intersected(rb)
+                assert hit.isEmpty(), (
+                    f"at {size} {pa.getAxis('left').labelText!r} and "
+                    f"{pb.getAxis('left').labelText!r} are painted over each other in "
+                    f"{round(hit.width(), 1)} x {round(hit.height(), 1)} px of one gutter")
         margins = plots.glw.ci.layout.getContentsMargins()
         assert all(round(m) in _SPACE_OK for m in margins), (
             f"the measured axis gutter left the spatial scale at {size}: {margins}")
@@ -547,6 +568,105 @@ def _h_side(align, default):
         if a & int(flag):
             return name
     return default
+
+
+def _painted_headers(table):
+    """Each header as the user SEES it: elided against the style's own SE_HeaderLabel rect.
+
+    The rect, not the section width and not an estimate of the QSS padding. A header that reads
+    "Δ…" does so because the label box is 28 px inside a 44 px section, and the 16 px difference is
+    a stylesheet padding plus a style metric — the two things a hand-written estimate gets wrong.
+    Returns [(column, full text, painted text)] for the columns that carry a label."""
+    from PySide6.QtGui import QFontMetrics
+    from PySide6.QtWidgets import QStyle, QStyleOptionHeader
+
+    hdr = table.horizontalHeader()
+    fm = QFontMetrics(hdr.font())
+    out = []
+    for c in range(table.columnCount()):
+        item = table.horizontalHeaderItem(c)
+        text = item.text() if item is not None else ""
+        if not text:
+            continue
+        opt = QStyleOptionHeader()
+        hdr.initStyleOption(opt)
+        opt.section = c
+        opt.rect = QRect(0, 0, hdr.sectionSize(c), max(hdr.height(), 1))
+        label = hdr.style().subElementRect(QStyle.SE_HeaderLabel, opt, hdr)
+        out.append((c, text, fm.elidedText(text, Qt.ElideRight, label.width())))
+    return out
+
+
+def test_no_table_header_elides_away_its_own_name():
+    """Check 6b. A header may abbreviate. It may not stop NAMING the column.
+
+    THE DEFECT, and why the guard that already existed could not see it. #163 fixed "Δ best" and
+    "Δ apex" both painting "Δ …" at 1280x800 by closing them up, so their elisions read "Δb…" and
+    "Δa…" — different stems. Its guard sweeps LABEL WIDTHS against the font: given a width, do the
+    two strings elide differently? That is a property of the two strings, and it stayed true. What
+    it cannot see is the width the table actually HANDS the header, which is the output of a
+    proportional squeeze across eight columns — and once the design wave moved 2 px of table
+    viewport into chrome, the division came out 1 px differently and the seconds column started
+    painting a bare "Δ…" beside a km/h column reading "Δa…". Both "distinct" and both, for the
+    reader, a delta of nothing in particular.
+
+    So this measures the RENDERED SECTION on the real view, at three sizes, and asks the thing the
+    reader asks: is there a letter left? HEADER_STEM_CHARS of the label's own glyphs, which is the
+    same two-character threshold #163's guard uses to decide when its own check applies — and, as a
+    consequence rather than an assumption, no two headers in one table painting the same string.
+
+    The one exemption is stated in the code below and is the documented fallback: a table squeezed
+    so far that its columns no longer FIT their viewport is out of pixels altogether (every column
+    is at its own cell floor, and this table never clips a value to widen a header), so there the
+    headers elide as far as they must. Everywhere the table still fits, the stem is guaranteed."""
+    from test_central_view_realqt import _real_central_view
+
+    # Two, spelled out here rather than imported from the widget it governs: this is the reader's
+    # threshold, not an implementation's, and it is the same two characters #163's own guard uses
+    # to decide when its check applies. A test that reads its expectation off the code under test
+    # agrees with that code by construction.
+    HEADER_STEM_CHARS = 2
+
+    view = _real_central_view()[0]
+    view.show()
+    offenders, checked, skipped = [], 0, []
+    # The third size is not decoration: 1100x700 is where the corner table's squeeze bites hardest
+    # while its columns still fit, and it is where main paints "Δ…" for BOTH Δ columns.
+    for size in ((1440, 900), (1280, 800), (1100, 700)):
+        view.resize(*size)
+        for page in range(view.tab_bar.count()):
+            view.tab_bar.setCurrentIndex(page)
+            for _ in range(6):
+                _APP.processEvents()
+        for name, table in (("LAPS", view.table.table),
+                            ("CORNERS", view.corner_table.table)):
+            widths = sum(table.horizontalHeader().sectionSize(c)
+                         for c in range(table.columnCount()))
+            if widths > table.viewport().width():
+                skipped.append(f"{name}@{size}")
+                continue
+            painted = _painted_headers(table)
+            for c, text, shown in painted:
+                checked += 1
+                stem = shown.rstrip("…")
+                if len(stem) < min(HEADER_STEM_CHARS, len(text)):
+                    offenders.append(
+                        f"{name}@{size} col {c}: {text!r} paints {shown!r} — "
+                        f"{len(stem)} of its own glyphs, so the column is unnamed")
+            seen = {}
+            for c, text, shown in painted:
+                twin = seen.get(shown)
+                if twin is not None:
+                    offenders.append(
+                        f"{name}@{size} col {twin[0]} ({twin[1]!r}) and col {c} ({text!r}) "
+                        f"both paint {shown!r} — two columns, one label")
+                seen[shown] = (c, text)
+    view.hide()
+    assert not offenders, (
+        "table headers that elided away the column they name:\n  " + "\n  ".join(offenders))
+    assert checked >= 40, f"only {checked} headers measured — the sweep stopped seeing tables"
+    print(f"test_no_table_header_elides_away_its_own_name OK ({checked} rendered headers"
+          + (f"; {len(skipped)} out of room: {skipped}" if skipped else "") + ")")
 
 
 def test_no_table_header_floats_off_its_data():
@@ -652,6 +772,7 @@ def _run_all():
     test_a_button_a_combo_and_a_tab_really_paint_at_ctrl_h()
     test_all_four_panel_headers_are_one_height()
     test_no_chart_axis_title_is_painted_outside_its_chart()
+    test_no_table_header_elides_away_its_own_name()
     test_no_table_header_floats_off_its_data()
     print("\nAll design-system (spatial + type scale) tests passed.")
 

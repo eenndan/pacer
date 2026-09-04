@@ -278,6 +278,84 @@ def test_the_toast_sits_in_the_lap_panels_body():
           f"(card {card} in body {body}; collapsed-panel fallback keeps it at {card2})")
 
 
+def _spin(seconds: float):
+    """Turn the event loop for real wall-clock time — processEvents alone returns in microseconds,
+    and the placement this file now checks is deliberately deferred by a timer."""
+    import time
+
+    end = time.time() + seconds
+    while time.time() < end:
+        _APP.processEvents()
+        time.sleep(0.005)
+
+
+def test_the_toast_lands_in_the_lap_panel_on_the_apps_own_load_path():
+    """The anchoring above was RIGHT and never reached a real user, and this is the difference.
+
+    Every other test in this file raises the card over a window that is already shown and laid
+    out. `StudioWindow._load` does not: it runs `_build_ui()` — which constructs a NEW CentralView
+    and setCentralWidget()s it — and then calls `_show_pb_moment()` in the SAME synchronous block.
+    At that instant the new view has not been shown, so `overlay_anchor()` hands back a widget that
+    is still `isHidden()`, `anchor_region` takes its fallback to the whole window, and the card
+    lands bottom-CENTRE over the Δ chart. Measured on the shipped app: (571, 792) against a lap
+    panel at (0, 425, 515x453) — 449 px away, overlapping the CHARTS panel by 298x86 — on the first
+    load and on a second load into an already-visible window, at DPR 1 and DPR 2 alike. The
+    exceptional branch was the only branch a production toast ever took.
+
+    So this test reproduces the ORDERING, not the outcome: build the view and celebrate in one
+    block, exactly as the load does, then let the event loop turn exactly as it does the instant
+    `_load` returns. `_show_pb_moment` is the app's own method, swallowing nothing silently — the
+    card must be visible, and it must be in the lap panel's body."""
+    from test_central_view_realqt import _studiowindow_with_view
+
+    win, _first = _studiowindow_with_view()
+    win.resize(1440, 900)
+    win.show()
+    for _ in range(10):
+        _APP.processEvents()
+    # ---- the app's own end-of-load block, in the app's own order
+    win._build_ui()
+    win._show_pb_moment({"kind": "beat", "track": "Stadium", "best": 62.418,
+                         "prior": 62.735, "improvement": 0.317})
+    toast = win._pb_toast
+    assert toast is not None and toast.isVisible(), (
+        "_show_pb_moment swallowed something — see the studio: line it prints")
+    _spin(0.4)
+    view = win.view
+    body = QRect(view.table_stack.mapTo(win, QPoint(0, 0)), view.table_stack.size())
+    charts = QRect(view._plots_panel.mapTo(win, QPoint(0, 0)), view._plots_panel.size())
+    card = QRect(toast.mapTo(win, QPoint(0, 0)), toast.size())
+    hit = card.intersected(charts)
+    win.hide()
+    assert body.contains(card), (
+        f"raised the way the app raises it, the card landed at {card} instead of inside the lap "
+        f"panel body {body} — {abs(card.center().x() - body.center().x())} px off centre, "
+        f"overlapping the charts by {hit.width()}x{hit.height()}")
+    assert hit.isEmpty(), f"the card covers {hit.width()}x{hit.height()} of the Δ chart"
+    print(f"test_the_toast_lands_in_the_lap_panel_on_the_apps_own_load_path OK "
+          f"(card {card} in body {body})")
+
+
+def test_the_toast_follows_its_anchor_when_the_window_resizes():
+    """The other half of "placed once is not enough": the card outlives a drag.
+
+    Its clock is 6 s, which is long enough for a window resize, a splitter drag or a maximize, and
+    a card placed once stays where the OLD layout put it — at 1000x700 the 1440-wide placement is
+    simply outside the window. Same idempotent `_place`, driven off the parent's resize."""
+    win, _view, toast = _window_with_toast((1440, 900))
+    before = QRect(toast.mapTo(win, QPoint(0, 0)), toast.size())
+    win.resize(1000, 700)
+    for _ in range(10):
+        _APP.processEvents()
+    body = QRect(win.view.table_stack.mapTo(win, QPoint(0, 0)), win.view.table_stack.size())
+    after = QRect(toast.mapTo(win, QPoint(0, 0)), toast.size())
+    win.hide()
+    assert after != before, "the card did not move with the window"
+    assert body.contains(after), (
+        f"after the resize the card sits at {after}, not inside the lap panel body {body}")
+    print(f"test_the_toast_follows_its_anchor_when_the_window_resizes OK ({before} -> {after})")
+
+
 if __name__ == "__main__":
     test_every_toast_control_clears_the_hit_floor()
     test_toast_controls_are_inside_the_card_they_grew()
@@ -286,4 +364,6 @@ if __name__ == "__main__":
     test_the_card_paints_the_card_the_theme_draws_it()
     test_the_toast_never_lands_on_panel_chrome()
     test_the_toast_sits_in_the_lap_panels_body()
+    test_the_toast_lands_in_the_lap_panel_on_the_apps_own_load_path()
+    test_the_toast_follows_its_anchor_when_the_window_resizes()
     print("\nAll PB-toast hit-target + anchoring tests passed.")

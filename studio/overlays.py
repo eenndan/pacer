@@ -11,7 +11,7 @@ the tests, exactly as before."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -110,6 +110,10 @@ class PBToast(QWidget):
     let the suite assert the wording + that each button routes to its injected callback."""
 
     AUTO_DISMISS_MS = 6000  # generous but transient — long enough to read, short enough to not nag
+    # How long after show_for() the card re-asks where it belongs. Deliberately the SAME 120 ms
+    # CentralView.showEvent uses to restore the grid splitters, because that restore is the last
+    # thing that moves the panel this card anchors to — see show_for.
+    SETTLE_MS = 120
     # Pointer-target floor for the card's flat controls. They are sized by their QSS text padding
     # alone, which left the ✕ at 20x19 and the progression link 19px tall — under the 24px minimum,
     # on the one card in the app you must hit before it deletes itself. Applied ONLY to those two:
@@ -137,6 +141,10 @@ class PBToast(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._on_progress = on_progress
         self._on_share = on_share
+        # The widget show_for() was given, i.e. the one this card is placed inside and follows.
+        # None until then, and None again after dismiss(), which is what makes _place a no-op for
+        # a card that is on its way out.
+        self._host: QWidget | None = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
         lay.setSpacing(theme.SPACE_XXS)
@@ -230,7 +238,44 @@ class PBToast(QWidget):
         return shown
 
     def show_for(self, parent: QWidget):
-        """Place the toast at the BOTTOM of its anchor region, centred, and start the auto-dismiss.
+        """Show the toast over `parent` and keep it on its anchor for as long as it lives.
+
+        PLACING IT ONCE IS NOT ENOUGH, and that is what this method learned the hard way. The
+        caller is `StudioWindow._load`, which runs `_build_ui()` — constructing a NEW CentralView
+        and `setCentralWidget`-ing it — and then celebrates in the SAME synchronous block, before
+        Qt has shown that widget or laid it out. So at this instant `view.overlay_anchor()` hands
+        back a panel body that is still `isHidden()`, `anchor_region` takes its documented fallback
+        to the whole window, and the card lands bottom-CENTRE over the Δ chart: measured at
+        (571, 792), 449 px from where it belongs, on the first load AND on a second load into an
+        already-visible window. The fallback that `anchor_region` calls exceptional was the only
+        branch a production toast ever took. (The card was also 298 px wide there instead of 270,
+        because its wrapped body label had not been measured yet either.)
+
+        So the position is (re-)DECIDED, not remembered: `_place` is idempotent — it re-measures
+        the card and moves it only if the answer changed — and it is called now, again on the next
+        turn of the event loop, again after the deferred layout passes, and on any resize of the
+        parent while the card is up. The two deferred calls are deliberately the same shape and the
+        same 120 ms as `CentralView.showEvent`'s splitter restore, for the same reason and against
+        the same event: that restore MOVES the lap panel, so a card placed before it would be
+        stale. Placing immediately as well means a host that never spins an event loop (a test, a
+        window torn down inside the same block) still gets the old behaviour rather than a card at
+        (0, 0)."""
+        self._host = parent
+        parent.installEventFilter(self)
+        self._place()
+        self.raise_()
+        self.show()
+        self._timer.start(self.AUTO_DISMISS_MS)
+        # Owned by this widget (never QTimer.singleShot's static form), so a card dismissed inside
+        # the settle window takes its pending re-places to the grave with it.
+        for delay in (0, self.SETTLE_MS):
+            t = QTimer(self)
+            t.setSingleShot(True)
+            t.timeout.connect(self._place)
+            t.start(delay)
+
+    def _place(self):
+        """Put the card at the BOTTOM of its anchor region, centred. Safe to call at any time.
 
         BOTTOM, not top, and that is the whole placement decision. The anchor region is a panel's
         BODY (`anchor_region`), so its top edge is immediately under that panel's header — and the
@@ -244,6 +289,9 @@ class PBToast(QWidget):
         small) pins the card to the region's top-left and lets it overhang, because a celebration
         that is off-screen is worse than one that overlaps. Nothing here can push it outside
         `parent`."""
+        parent = self._host
+        if parent is None:
+            return
         self.adjustSize()
         region = self.anchor_region(parent)
         x = region.left() + max(0, (region.width() - self.width()) // 2)
@@ -251,9 +299,12 @@ class PBToast(QWidget):
                 region.bottom() + 1 - theme.SPACE_M - self.height())
         self.move(max(0, min(x, max(0, parent.width() - self.width()))),
                   max(0, min(y, max(0, parent.height() - self.height()))))
-        self.raise_()
-        self.show()
-        self._timer.start(self.AUTO_DISMISS_MS)
+
+    def eventFilter(self, obj, event):
+        """Follow the anchor when the window resizes under the card (its 6 s outlives a drag)."""
+        if obj is self._host and event.type() == QEvent.Resize and self.isVisible():
+            self._place()
+        return super().eventFilter(obj, event)
 
     def enterEvent(self, ev):
         """Hold the auto-dismiss while the pointer is on the card: someone who has moved onto it is
@@ -284,5 +335,6 @@ class PBToast(QWidget):
 
     def dismiss(self):
         self._timer.stop()
+        self._host = None   # any re-place still in flight becomes a no-op
         self.hide()
         self.deleteLater()

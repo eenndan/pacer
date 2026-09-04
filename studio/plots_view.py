@@ -28,7 +28,7 @@ from . import theme, units
 from ._signal import fmt_time, lap_label
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
 from .theme import C
-from .widgets import ToggleButton, budget_plot_gutters
+from .widgets import ToggleButton, budget_plot_gutters, budget_plot_min_height
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -773,6 +773,21 @@ class PlotsView(QWidget):
         return budget_plot_gutters(self.glw, self.glw.ci.layout,
                                    (self.p_speed, self.p_delta), inset=PLOT_INSET)
 
+    def _budget_min_height(self) -> int:
+        """Declare the height at which BOTH y-axis titles still fit their own axis.
+
+        The gutter budget above buys the titles room ACROSS the axis; this buys them room ALONG
+        it. Without it the two rotated titles overprinted each other in one 24x49.5 px column at
+        the app's own window minimum, and half of `speed (km/h)` was outside the viewport — a
+        title-vs-axis LENGTH problem no margin can fix. The reasoning, the measurement and why it
+        is a minimum rather than a degradation ladder are in widgets.budget_plot_min_height.
+
+        The cost is stated: it takes the app's minimum window height from 414 px to ~530. That is
+        the honest reading of the measurement — 414 px is not a height two stacked labelled charts
+        fit in — and it is a size no display is."""
+        return budget_plot_min_height(self.glw, self.glw.ci.layout,
+                                      (self.p_speed, self.p_delta))
+
     def resizeEvent(self, event):
         """Re-budget the axis gutters once the charts have a real size.
 
@@ -783,6 +798,7 @@ class PlotsView(QWidget):
         guarded on the value actually changing."""
         super().resizeEvent(event)
         self._budget_axis_gutters()
+        self._budget_min_height()
 
     def _apply_axis_pens(self):
         """Pen the axis lines, ticks and GRIDLINES at the current device-pixel ratio.

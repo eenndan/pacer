@@ -1198,6 +1198,28 @@ QPushButton#PBToastLink:focus, QPushButton#PBToastClose:focus {{
     color: {C.accent_hover};
     text-decoration: underline;
 }}
+/* ...and the toast's PRIMARY action needs its ring spelled out AT ITS OWN ID, which is the whole
+   point of this rule and the reason the guard below it exists.
+
+   An ID selector is (1,0,0) in Qt's stylesheet cascade; `QPushButton[variant="primary"]:focus`
+   above is (0,2,1). Specificity beats everything else, so the moment `QPushButton#PBToastShare`
+   (added later, to make this button the same height as the two flat links beside it) declared a
+   `border`, it out-ranked the primary ring and the ring stopped being painted — measured at ZERO
+   changed pixels on focus, against 656 and 36 for its two siblings in the same row. A keyboard
+   user could see they had landed on the ✕ and on the progression link but not on the button the
+   card exists for, on a card that deletes itself after six seconds.
+
+   The rule itself is the ordinary one: {FOCUS_RING_PX}px in {C.on_accent} (an amber ring on the
+   amber primary fill is invisible), paid for out of the button's OWN resting padding — SPACE_S
+   here, not the base rule's SPACE_M — so the outer box is identical in both states.
+
+   tests/test_focus_cues.py::test_every_id_rule_that_borders_a_control_also_rings_it is the
+   general form: any `#Name` rule that sets a border on a focusable control must carry its own
+   `:focus`, because the shared ring can never reach it. */
+QPushButton#PBToastShare:focus {{
+    border: {FOCUS_RING_PX}px solid {C.on_accent};
+    padding: {focus_pad(SPACE_XS)}px {focus_pad(SPACE_S)}px;
+}}
 QComboBox:focus {{
     border: {FOCUS_RING_PX}px solid {C.accent_hover};
     padding: {focus_pad(SPACE_XS)}px {focus_pad(SPACE_M)}px;   /* same trade */
@@ -1623,6 +1645,15 @@ QPushButton#LoadingCancel:hover {{
     border-color: {C.border_strong};
     background-color: {C.surface};
 }}
+/* ...and its ring, for the same reason #PBToastShare needs one: the `border` above is an ID-level
+   declaration, so it beats the shared `QPushButton:focus` ring on specificity and the ring is
+   never painted (measured: 0 changed pixels of 186x28 on focus). This card has exactly ONE
+   control, so a keyboard user had nothing on screen to see at all. Padding traded against the
+   thicker ring off this rule's OWN steps, so the box does not move. */
+QPushButton#LoadingCancel:focus {{
+    border: {FOCUS_RING_PX}px solid {C.accent_hover};
+    padding: {focus_pad(SPACE_XS)}px {focus_pad(SPACE_L)}px;
+}}
 
 /* ---------------------------------------------------------------- excluded-lap strip
    The muted "⊘ N excluded ▸" strip below the lap table (lap_table._build_excluded_strip). All
@@ -1665,7 +1696,9 @@ QLabel#MapNotice {{
 /* the PB toast's PRIMARY action, the third button in an action row whose other two are HIT_MIN
    flat links. It had an objectName and no rule, so it took the base QPushButton's CTRL_H and stood
    4 px taller than the two buttons beside it in a 3-button row. Same floor, same caption type; the
-   amber fill is still the [variant="primary"] rule's, which is what makes it read as primary. */
+   amber fill is still the [variant="primary"] rule's, which is what makes it read as primary.
+   THE `border` HERE IS WHY #PBToastShare:focus EXISTS — an ID selector out-specifies the shared
+   [variant="primary"]:focus ring, so this rule silently deleted it. See the focus-ring section. */
 QPushButton#PBToastShare {{
     font-size: {CAPTION}px;
     font-weight: 600;
