@@ -197,6 +197,14 @@ LAP_COL_PX = 92
 # 300px with its values pinned to the far right. 240px is wide enough to fill a maximized quadrant
 # and narrow enough to keep every header over its own number.
 MAX_DATA_COL_PX = 240
+# How far a caption printed ABOVE or BELOW a grid has to be inset to start on the same pixel as the
+# grid's own first column of text. It is not a chosen gap: the table reserves FOCUS_RING_PX of
+# border so a keyboard ring can be painted without re-laying the grid out, and the QSS then pads
+# every cell and every header section by SPACE_S — so the text a caption has to line up with begins
+# at exactly their sum. Shipped as a hand-written 10 in both places that need it, which is that sum,
+# and read as a nudge because nothing said so. Written as the derivation (theme.focus_pad's bargain:
+# derive the number, keep the scale), it also survives a change to either half.
+GRID_TEXT_INSET = theme.FOCUS_RING_PX + theme.SPACE_S
 
 
 # How many of its OWN glyphs a header must keep once it elides. Two, because that is the number at
@@ -714,8 +722,19 @@ class LapTable(QWidget):
         strip = _ExcludedStrip(self._toggle_excluded_collapsed)
         strip.setObjectName("LapExcludedStrip")   # the top hairline is the theme's rule now
         box = QVBoxLayout(strip)
-        box.setContentsMargins(10, 6, 10, 8)
-        box.setSpacing(2)
+        # GRID_TEXT_INSET horizontally, so "⊘ N excluded" starts on the same pixel as the lap
+        # numbers directly above it — the same derivation the corner captions take, and the reason
+        # the shipped 10 was never really a nudge.
+        #
+        # SPACE_XS vertically, top and bottom. It shipped 6/8, a chosen gap with nothing choosing
+        # it, and the obvious tidy — one symmetric SPACE_S inset — was measured before it was
+        # believed: it grows the strip 28 -> 30 px and the lap grid loses a visible row (14 -> 13 at
+        # a 465 px panel). Every pixel this strip takes is a lap row, and it is a collapsed one-line
+        # footnote about laps that are NOT in the table, so the tightest step between two separate
+        # things is the right one: the strip goes 28 -> 22 px and the grid 437 -> 443, which keeps
+        # its 14 rows with 6 px to spare.
+        box.setContentsMargins(GRID_TEXT_INSET, theme.SPACE_XS, GRID_TEXT_INSET, theme.SPACE_XS)
+        box.setSpacing(theme.SPACE_XXS)
         # The collapsed one-liner header ("⊘ N excluded of M laps ▸"): muted, uppercase section
         # type, with the ▸/▾ chevron glyph telling which way a click goes. Text (and, above
         # EXCLUDED_WARN_RATIO, its amber warning colour) is set live by _refresh_excluded.
@@ -1467,14 +1486,6 @@ SELF_REFERENCE_TOOLTIP = ("The Δ columns compare each corner against the refere
 # Corner identity column start width: "C12 ⟳" + the "Corner" header, fully readable (C3 —
 # the old Stretch mode crushed this row-identity column to a 42px sliver at default width).
 CORNER_NAME_COL_PX = 88
-# How far a caption printed ABOVE a grid has to be inset to start on the same pixel as the grid's
-# own first column of text. It is not a chosen gap: the table reserves FOCUS_RING_PX of border so a
-# keyboard ring can be painted without re-laying the grid out, and the QSS then pads every cell and
-# every header section by SPACE_S — so the text a caption has to line up with begins at exactly
-# their sum. Shipped as a hand-written 10, which is that sum, and read as a nudge because nothing
-# said so. Written as the derivation (theme.focus_pad's bargain: derive the number, keep the scale),
-# it also survives a change to either half.
-GRID_TEXT_INSET = theme.FOCUS_RING_PX + theme.SPACE_S
 
 
 class CornerTable(QWidget):

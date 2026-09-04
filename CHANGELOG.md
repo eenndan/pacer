@@ -96,6 +96,20 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Changed
 
+- **Every surface in the app is on the spacing scale** (mostly internal). The dimensional guard
+  shipped with a migration backlog of eight exempt surfaces; it is now empty, and the exemption set
+  is pinned at zero so the next off-scale literal has to be argued for rather than excused. The last
+  eight were the Help/About/Privacy cards, the export-options dialog, the loading card, the
+  excluded-lap strip and the coaching phase bar, all excused together as "prose surfaces with their
+  own typographic measure … off the scale and off it *consistently*". They were not consistent —
+  20/18/20/16, 12/10/12/12 and 16/14/16/14 for the same job — so instead of a second scale each
+  surface now states which kind it is: the two copy cards take the reading inset `SPACE_XL`, the
+  Shortcuts reference and the export dialog take control spacing because they are a table and a
+  form, and the loading card takes `SPACE_L` between its three groups because it is glanced at and
+  clicked, not read. Visibly, the copy cards gain a little air (the About card is 22 px taller, the
+  privacy card 52) and the excluded-lap strip loses 6 px, giving those pixels back to the lap grid.
+  The guard also now watches `setHorizontalSpacing` / `setVerticalSpacing`, which it had never
+  looked at — that is how the Shortcuts card kept a 6 px row gap through a phase about gaps.
 - **DATA TRUST is a list of facts, not a paragraph.** The card was a single word-wrapping label
   holding up to seven `·`-separated sentences joined by newlines — the densest block on a page
   otherwise made entirely of values-with-names, and the only thing on it you had to read rather
@@ -154,6 +168,17 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **The lap panel always shows all four of its tabs.** Dragged narrow, the panel used to hide part
+  of `Coaching` behind a pair of scroll arrows — two 21x28 px buttons **overlapping each other by
+  11x28**, both under the app's own 24 px pointer floor, and the only way to reach a tab you could
+  no longer see. The cause was not the arrows: the left column carried a hand-written 280 px
+  minimum width, and Qt takes an explicit minimum *instead of* what a widget's contents need rather
+  than merging the two — so at that floor the header handed a 240 px row of tabs 228 px and Qt
+  raised the arrows to cover the shortfall. The column's floor is now the one Qt derives from the
+  panels themselves (292 px), which costs the window 12 px of minimum width and means the arrows
+  are never needed at any size the app can be driven to. They are still there as the fallback for a
+  future fifth tab or a wider font, and they are now 25x28 each, sharing only the single pixel Qt
+  makes two adjacent buttons share.
 - **"Share your PB →" shows the keyboard where it is again.** The personal-best card's primary
   action — the one that saves the shareable lap card — painted **zero** changed pixels when the
   keyboard landed on it, while the ✕ and the progression link beside it changed 36 and 656. Its new

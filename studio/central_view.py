@@ -456,8 +456,18 @@ class CentralView(QWidget):
         # deducts a SECOND time when it derives SE_TabBarTabText from the tab rect, so the text rect
         # comes out a few px NARROWER than the label's own advance and ElideRight then elides all
         # four names unconditionally, at ANY width ("La…", "Corners ·…", "St…", "Coac…"). Scroll
-        # buttons also drop minimumSizeHint to ~half the sizeHint, so pin a Minimum h-policy: a
-        # layout may grow the bar but never squeeze it below the width its four names need.
+        # buttons also drop minimumSizeHint to ~half the sizeHint (133 against 240), so pin a
+        # Minimum h-policy: a layout may grow the bar but never squeeze it below the width its four
+        # names need.
+        #
+        # THE ARROWS ARE THE FALLBACK, NOT THE ANSWER. That h-policy makes the header's own minimum
+        # 292 px, and the honest way for four tabs to fit is for the panel to be at least that wide
+        # — which it now always is, because the left column no longer overrides its derived floor
+        # with a smaller literal (see _layout_panels). Kept switched on because "240 px fits" is a
+        # font-stack metric, not a fact: a fifth tab, a translation or a differently-resolved face
+        # moves it, and a clipped tab name with no way to reach it is worse than a scroll arrow. The
+        # arrows themselves are sized by theme's QTabBar::scroller rule (they shipped 21 px wide and
+        # overlapping by 11).
         self.tab_bar.setUsesScrollButtons(True)
         self.tab_bar.setElideMode(Qt.ElideNone)
         self.tab_bar.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
@@ -679,7 +689,8 @@ class CentralView(QWidget):
         right.setStretchFactor(1, 62)
         right.setSizes([320, 520])
 
-        # The LEFT column takes an explicit minimum; the RIGHT column deliberately does not.
+        # NEITHER COLUMN TAKES AN EXPLICIT MINIMUM. Both floors are the ones Qt derives from the
+        # panels themselves.
         #
         # "Squeezed headers degrade gracefully" was the assumption, and it was false. The right
         # column used to be pinned at 360 px — below the hero readout's own 391 px floor — so at
@@ -695,9 +706,19 @@ class CentralView(QWidget):
         # and now that the controls sit in their own toolbar it is a number worth accepting: the
         # charts header needs its identity label + the hero's 391 px floor + ⛶ (~569 px measured),
         # which is LESS than the 675-759 px the ladder used to compute, so the user can drag the lap
-        # panel WIDER than before, not narrower. So: no explicit minimum on the right column at all.
-        # (The left column's 280 is unchanged and unrelated — nothing in it is over-subscribed.)
-        left.setMinimumWidth(280)
+        # panel WIDER than before, not narrower.
+        #
+        # THE LEFT COLUMN CARRIED THE SAME DEFECT, under a comment asserting it did not ("the left
+        # column's 280 is unchanged and unrelated — nothing in it is over-subscribed"). It was
+        # over-subscribed by 12 px: the lap panel's honest minimum is 292 (SPACE_S + the tab bar's
+        # own 240 + SPACE_S + the 28 px ⛶ + SPACE_S), and 280 REPLACED it. The shortfall came out of
+        # the glyphs exactly as the paragraph above predicts — the tab bar was handed 228 px for a
+        # 240 px identity, so Qt raised its two scroll arrows and hid part of "Coaching" behind
+        # them. Four tabs at ElideNone in a 280 px panel is not a constraint the app had; it is a
+        # constraint the number invented. The derived floor is 292 and costs the window 12 px of
+        # minimum width, which is the price of the lap panel always being able to say what page you
+        # are on. (theme.py's QTabBar::scroller rule fixes the arrows themselves, for the sizes a
+        # different font stack or a fifth tab could still reach.)
 
         main = QSplitter(Qt.Horizontal)
         main.addWidget(left)

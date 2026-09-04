@@ -173,6 +173,10 @@ class PhaseBar(QWidget):
     tooltip reconciled the two measures. Faster thirds now take the palette's ahead colour, are
     sized by |Δt| like the losing ones, and the window's net is stated on the row face."""
 
+    #: The proportional bar's INK, not a gap — the same category as the scrollbar track's width or
+    #: the slider groove's, which is why the spatial guard's stylesheet half deliberately leaves
+    #: sub-control artwork sizes alone. It is the thickness of a drawn mark under two lines of
+    #: CAPTION type; a spacing step would be choosing it for the wrong reason.
     _BAR_H = 6  # px; the proportional bar's height (the numbers sit below it)
 
     def __init__(self, phases: coaching.PhaseLoss, parent=None):
@@ -181,8 +185,13 @@ class PhaseBar(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(6, 4, 6, 4)
-        lay.setSpacing(2)
+        # ONE inset for a widget this small — SPACE_XS, the tightest gap between two separate
+        # things. It shipped 6/4: two numbers for one box, and the 6 gave the bar 4 px less width to
+        # divide between three proportional segments than the cell actually had.
+        lay.setContentsMargins(theme.SPACE_XS, theme.SPACE_XS, theme.SPACE_XS, theme.SPACE_XS)
+        # SPACE_XXS: the bar and the numbers under it are ONE element, which is the whole job the
+        # sub-step exists for.
+        lay.setSpacing(theme.SPACE_XXS)
 
         vals = phases.as_tuple()                      # (entry, apex, exit) seconds
         dominant = phases.dominant
@@ -195,7 +204,12 @@ class PhaseBar(QWidget):
         # proportional bar
         bar = QHBoxLayout()
         bar.setContentsMargins(0, 0, 0, 0)
-        bar.setSpacing(1)
+        # NOT A SPACING. The 1 px between the three segments is a HAIRLINE — the thing that keeps
+        # entry / apex / exit legible as three marks when two of them happen to take the same
+        # colour — so it is the app's border weight wearing a layout's clothes, and it follows
+        # BORDER_PX rather than the gap scale. SPACE_XXS here would be a 2 px gutter that reads as
+        # three separate bars; a 0 would merge them.
+        bar.setSpacing(theme.BORDER_PX)
         for pid, v, m in zip(ids, vals, mags, strict=True):
             seg = QWidget()
             seg.setFixedHeight(self._BAR_H)
@@ -208,7 +222,7 @@ class PhaseBar(QWidget):
         # the three numbers under the bar (the dominant loss accented, the faster thirds ahead-hued)
         nums = QHBoxLayout()
         nums.setContentsMargins(0, 0, 0, 0)
-        nums.setSpacing(4)
+        nums.setSpacing(theme.SPACE_XS)
         num_font = theme.mono_font(theme.CAPTION)
         for pid, v in zip(ids, vals, strict=True):
             lbl = QLabel(f"{v:+.2f}")
