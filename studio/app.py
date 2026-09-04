@@ -60,7 +60,7 @@ from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
 from .overlays import PBToast, WelcomeView
 from .session import DEFAULT_SAMPLE, fmt_time
-from .widgets import chip
+from .widgets import chip, set_tone
 from .workers import DemoResolveWorker, SessionLoadWorker, VideoExportWorker
 
 # Help ▸ Report a problem… opens this GitHub new-issue page (the only support channel; no crash
@@ -2781,15 +2781,23 @@ class StudioWindow(QMainWindow):
             label = self.session.reference_label()
             # A geometry-matched reference (unknown track name, matched by GPS location) is a valid
             # overlay but UNVERIFIED: both start lines may be provisional, so the aligned Δ phase can
-            # be off. Flag it with the shared PROVISIONAL trust-tier colour (no hardcoded colour) and
-            # a short caveat tooltip; a confirmed same-named match is unchanged (no caveat, no tint).
+            # be off. Say so in the TEXT, and tint the chip with the app's trust-caveat amber; a
+            # confirmed same-named match is unchanged (no caveat, no tint).
             geometric = self.session.reference_match_is_geometric()
             ref_chip.setText(f"▶ reference: {label} · matched by location — unverified" if geometric
                              else f"▶ reference: {label}")
-            # ONE call, both branches: an empty sheet clears any prior caveat tint (the chip is
-            # reused across loads) back to the themed chip colour. A per-datum colour MERGE over a
-            # role, kept deliberately — see tests/test_inline_styles.py.
-            ref_chip.setStyleSheet(f"color: {theme.PROVISIONAL_COLOR};" if geometric else "")
+            # THE TINT HAS TO BE A DIFFERENT COLOUR. This branch used to merge
+            # `color: PROVISIONAL_COLOR` over the chip — and PROVISIONAL_COLOR *is* C.text_dim,
+            # which is the resting colour QLabel[role="Chip"] already paints, so the "caveat tint"
+            # changed 0 of 12,338 pixels. PROVISIONAL_COLOR reads as a demotion in the lap grid,
+            # where the text around it is C.text; on a chip it is a no-op. `tone="warn"` is the
+            # amber trust tint the quality badge and the excluded-lap escalation already wear
+            # (accent on accent_tint, 5.51:1 at 11 px, and accent does not move under the
+            # colour-blind palette), and it changes every pixel. The colour is REDUNDANT with the
+            # "— unverified" text above, which is the app's rule for colour cues, and set_tone
+            # re-polishes so the flip actually reaches the screen. One call, both branches: an
+            # empty tone clears a prior caveat, since the chip is reused across loads.
+            set_tone(ref_chip, "warn" if geometric else None)
             ref_chip.setToolTip(
                 "This reference was matched to your session by GPS location, not a confirmed "
                 "track name. The overlay is valid, but set BOTH recordings' start/finish lines "

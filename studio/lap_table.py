@@ -522,6 +522,11 @@ class _ExcludedStrip(QWidget):
 
     def __init__(self, on_click):
         super().__init__()
+        # The strip's only chrome is the top hairline QWidget#LapExcludedStrip declares, and a
+        # QWidget SUBCLASS does not paint the QSS box unless told to (see the note in
+        # widgets.PanelHeader.__init__): the rule was matching and the separator was simply absent,
+        # so the strip ran into the lap grid above it with nothing between them.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self._on_click = on_click
         self.setCursor(Qt.PointingHandCursor)
 

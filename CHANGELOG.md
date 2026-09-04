@@ -154,6 +154,22 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **The panel headers and toolbars are visible again.** All four quadrant headers (VIDEO, the lap
+  tab bar, MAP, SPEED · Δ TO IDEAL), both panel toolbars and the excluded-lap strip were painting
+  the flat window canvas instead of the surface-coloured bar and 1 px separator the theme has
+  declared for them since the app had panels — so the four quadrants ran into each other with no
+  chrome between them, and the "double-click the header to maximize" target had no visible extent.
+  Qt hands a stylesheet's background and border to a plain `QWidget` automatically but *not* to a
+  `QWidget` subclass, which needs `WA_StyledBackground`; these bars used to be plain `QWidget`s and
+  became subclasses when the panel chrome was consolidated. Measured from the window composite at
+  1440x900: fill `#15181E` → `#21252E` and hairline `#15181E` → `#2D323C` on all six bars, 22,127
+  changed pixels in the top 120 rows alone (19,201 at 1280x800).
+- **The status-bar reference chip now shows its "unverified" caveat.** When a cross-recording
+  reference is matched by GPS location rather than a confirmed track name, the chip is meant to be
+  tinted as well as labelled — but the tint it applied was the exact colour the chip already
+  painted, so the two states rendered identically (0 of 12,338 pixels differed). It wears the
+  app's amber trust tint now, redundantly with the "— unverified" text it already carried.
+
 - **The "new personal best" card no longer lands on the MAP panel's header — and it is a card
   now.** It was placed top-centre of the WINDOW, 16 px from its top edge: a rule from when the
   window was one picture rather than four panels. Measured on the shipped app at 1440x900 it sat at

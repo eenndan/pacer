@@ -15,8 +15,13 @@ surface. That is not a stylesheet, it is a habit, and it has already cost the ap
   * four widgets carried an `objectName` — the app's own signal that "this thing has a theme rule"
     — with NO rule anywhere, so the name promised styling the theme never provided.
 
-So: four checks. Each has an EXEMPT set of `(file, owner)` tuples with prose saying whose decision
-it is, in the house idiom (tests/test_contrast.py:_hue_reads, tests/test_design_system.py).
+So: five checks. Each has an EXEMPT set of `(file, owner)` tuples with prose saying whose decision
+it is, in the house idiom (tests/test_contrast.py:_hue_reads, tests/test_design_system.py) — and
+every entry in every one of those sets must MATCH SOMETHING, checked in both directions the way
+tests/test_layering.py checks its allow-list. A name-keyed exemption that matches nothing is
+silently a no-op, so a stale one costs nothing at run time and can never fail: three of them had
+drifted onto functions that no longer exist (`coaching_panel._row_face`, twice, and
+`app.StudioWindow._build_view_menu`) and the file went on passing.
 
   1. NO MODULE STYLES ITSELF FROM A STRING, except the handful of PER-DATUM colour merges a
      stylesheet genuinely cannot express — a Δ that changes hue every tick, a bar segment whose
@@ -27,8 +32,14 @@ it is, in the house idiom (tests/test_contrast.py:_hue_reads, tests/test_design_
   4. THE TOGGLES GO THROUGH ONE FACTORY. `setCheckable(True)` on a button belongs to
      widgets.ToggleButton; seven call sites re-implemented it, and six of the seven disagreed with
      each other about height, off-tint or binding time.
+  5. EVERY WIDGET THE THEME GIVES A BOX TO CAN ACTUALLY PAINT IT — check 2's other half. A rule
+     matching a widget is not the same as a widget drawing it: a QWidget SUBCLASS ignores the
+     stylesheet's background and border unless it sets `WA_StyledBackground`, and all four panel
+     headers, both panel toolbars and the excluded-lap strip shipped flat on the canvas because of
+     it. This is the FIFTH styling mechanism in this app that reached a widget's rule but not its
+     pixels, so it is a rule now rather than a fix.
 
-Offscreen Qt.  Checks 1-2 and 4 are static; check 3 builds the production view over the
+Offscreen Qt.  Checks 1-2, 4 and 5 are static; check 3 builds the production view over the
 deterministic synthetic session.  Run: python tests/test_inline_styles.py
 """
 import ast
@@ -80,9 +91,24 @@ def _modules():
     return [fn for fn in sorted(os.listdir(_STUDIO)) if fn.endswith(".py")]
 
 
+def _no_dead_exemptions(exempt, found, what):
+    """Every exemption must excuse something that still exists.
+
+    The failure mode this closes: these sets are keyed by `(file, owner)` NAME, and a key that
+    matches nothing is a no-op — it costs nothing at run time, so a decision that moved (a helper
+    folded into a constructor, a menu builder renamed) leaves an entry that can never fail and can
+    never be noticed. Checked in the same both-directions shape as tests/test_layering.py's ALLOWED
+    list: `offenders` catches an unexcused call, this catches an excuse with nothing under it."""
+    dead = sorted(exempt - set(found))
+    assert not dead, (
+        f"dead {what} exemption(s) — these name no {what} call in the tree, so they excuse nothing "
+        f"and can never fail. Delete them (or fix the name if the decision moved):\n  "
+        + "\n  ".join(f"{f}::{o}" for f, o in dead))
+
+
 # ============================================================================ 1. the strings
 def test_no_module_styles_itself_from_a_string():
-    """Check 1, and the metric this phase is measured by: 34 inline `setStyleSheet` sites -> 7.
+    """Check 1, and the metric this phase is measured by: 34 inline `setStyleSheet` sites -> 6.
 
     Every survivor is a PER-DATUM colour, i.e. a value that changes with the data and therefore
     cannot live in a stylesheet built once at startup. Anything that is the same on every recording
@@ -93,43 +119,40 @@ def test_no_module_styles_itself_from_a_string():
         # both are guarded so a stable readout costs no re-parse.
         ("central_view.py", "CentralView._update_diff_box"),
         ("video_view.py", "_PaneCell.set_badge"),
-        # ---- the status bar's reference chip: a caveat TINT (PROVISIONAL_COLOR) applied when the
-        # reference was matched by GPS location rather than by a confirmed track name. Per-session
-        # rather than per-tick, but the same shape: a merge over the chip role, cleared by an empty
-        # sheet when the caveat does not apply.
-        ("app.py", "StudioWindow._update_reference_status"),
-        # ---- the coaching PhaseBar: the three segment FILLS and the three numbers under them are
-        # the datum (entry/mid/exit Δt, coloured by which third is losing), computed per row.
+        # ---- the coaching PhaseBar: the three segment FILLS and the two numbers under them are
+        # the datum (entry/mid/exit Δt, coloured by which third is losing, plus the "net" line
+        # whose ahead case reads the palette ACCESSOR ahead_colour() — a value the stylesheet is
+        # built too early to know), all computed per row in the one constructor.
         ("coaching_panel.py", "PhaseBar.__init__"),
-        # ---- the same row's "net" line: ahead_colour() is a palette ACCESSOR and the stylesheet is
-        # built once at startup, so a QSS rule here would freeze this label in the standard green
-        # while every other ahead/behind surface followed the colour-blind flip. The muted default
-        # IS a role; only the ahead case merges.
-        ("coaching_panel.py", "_row_face"),
         # ---- NOT THIS PHASE'S. stats_panel is Phase 4's surface, and this call carries a
         # load-bearing ORDERING (the sheet must be set before setFont or the repolish drops the
         # italic bit) that a mechanical migration would be very likely to break. Left exactly as it
         # is, deliberately; it is the one exemption here that is a deferral rather than a decision.
         ("stats_panel.py", "StatsView._set_target_tile"),
     }
-    offenders = []
+    offenders, found = [], []
     total = 0
     for fn in _modules():
         if fn == "theme.py":
             continue                      # the stylesheet's own home
         for lineno, _node, owner in _calls(os.path.join(_STUDIO, fn), "setStyleSheet"):
             total += 1
+            found.append((fn, owner))
             if (fn, owner) not in EXEMPT:
                 offenders.append(f"{fn}:{lineno} setStyleSheet (in {owner})")
     assert not offenders, (
         "widgets styled from a string instead of from a theme role — put the treatment in "
         "theme.py's stylesheet and set a `role`/objectName here (or add an EXEMPT entry saying "
         "why this colour cannot be known until the data is):\n  " + "\n  ".join(offenders))
-    # SEVEN calls across SIX owners: PhaseBar.__init__ makes two (the segment fills and the numbers
-    # under them are two loops over the same datum). The number is pinned so that "one more little
-    # stylesheet" has to come here and argue for itself — the count is the migration's whole point.
-    assert total == 7, (
-        f"{total} inline setStyleSheet calls (was 34, is 7 by design): the list above is the "
+    _no_dead_exemptions(EXEMPT, found, "setStyleSheet")
+    # SIX calls across FOUR owners: coaching_panel.PhaseBar.__init__ makes THREE of them (two loops
+    # over the segment datum plus the "net" line, all in the one constructor). The number is pinned
+    # so that "one more little stylesheet" has to come here and argue for itself — the count is the
+    # migration's whole point. It was seven until the status-bar reference chip's merge went: it
+    # set `color: PROVISIONAL_COLOR`, which IS the colour QLabel[role="Chip"] already paints, so
+    # the caveat it claimed to draw changed nothing. That is now a `tone="warn"` role flip.
+    assert total == 6, (
+        f"{total} inline setStyleSheet calls (was 34, is 6 by design): the list above is the "
         f"complete set, so a change to this number is a decision, not a detail")
     print(f"test_no_module_styles_itself_from_a_string OK ({total} calls in "
           f"{len(EXEMPT)} owners, all per-datum)")
@@ -144,12 +167,10 @@ def test_no_bare_colour_declaration_creeps_back_in():
     cascades to the widget's CHILDREN, which is a second, quieter bug: it is why a container that
     "just tints its own label" can repaint an entire subtree."""
     # The exempt merges, and what each is allowed to say. A qualified selector is checked by name;
-    # the four unqualified ones are all leaf QLabels with no children to cascade onto.
-    LEAF = {("app.py", "StudioWindow._update_reference_status"),
-            ("coaching_panel.py", "PhaseBar.__init__"),
-            ("coaching_panel.py", "_row_face"),
+    # the two unqualified ones are both leaf QLabels with no children to cascade onto.
+    LEAF = {("coaching_panel.py", "PhaseBar.__init__"),
             ("stats_panel.py", "StatsView._set_target_tile")}
-    offenders = []
+    offenders, found = [], []
     hits = 0
     for fn in _modules():
         if fn == "theme.py":
@@ -160,12 +181,14 @@ def test_no_bare_colour_declaration_creeps_back_in():
             if "color" not in src:
                 continue
             hits += 1
+            found.append((fn, owner))
             qualified = re.search(r"Q[A-Za-z]+#\w+\s*\{", src) or re.search(r"\{\{", src)
             if not qualified and (fn, owner) not in LEAF:
                 offenders.append(
                     f"{fn}:{lineno} sets a bare `color:` (in {owner}) — it will cascade to every "
                     f"child; use a theme role, or a `QLabel#Name {{ … }}` selector")
     assert not offenders, "\n  ".join(offenders)
+    _no_dead_exemptions(LEAF, found, "bare-colour LEAF")
     assert hits >= 5, f"only {hits} colour merges found — the exemption list needs re-reading"
     print(f"test_no_bare_colour_declaration_creeps_back_in OK ({hits} colour merges, "
           f"{len(LEAF)} of them leaf labels)")
@@ -326,6 +349,65 @@ def test_an_absent_reference_chip_costs_the_window_no_height():
           f"(a hidden permanent chip would cost {cost}px, so it is not mounted)")
 
 
+def test_the_reference_chips_unverified_caveat_is_actually_visible():
+    """A trust caveat you cannot see is not a caveat.
+
+    The geometry-matched branch of `_update_reference_status` claimed to "flag it with the shared
+    PROVISIONAL trust-tier colour" — and PROVISIONAL_COLOR is C.text_dim, which is the colour
+    `QLabel[role="Chip"]` already paints. The two branches rendered IDENTICALLY: 0 pixels of
+    12,338 differed. The code said tint, the comment said tint, the guard's exemption prose said
+    tint, and the screen said nothing; only the chip's TEXT ever changed.
+
+    Driven through the real `StudioWindow._update_reference_status` with the session's three
+    reference accessors stubbed, and read out of the WINDOW composite — not the chip's own grab(),
+    which renders the widget's palette rather than what the window shows."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QImage
+    from test_central_view_realqt import _studiowindow_with_view
+
+    win, view = _studiowindow_with_view(build_menu=True)
+    del win._update_reference_status            # drop the no-op stub; use the production method
+    s = win.session
+    s.has_reference = lambda: True
+    s.reference_session = lambda: None
+    s.reference_label = lambda: "Daytona Milton Keynes"
+    win.resize(1440, 900)
+    win.show()
+
+    def render(geometric):
+        s.reference_match_is_geometric = lambda: geometric
+        win._update_reference_status()
+        for _ in range(8):
+            _APP.processEvents()
+        chip_w = win._ref_chip
+        img = win.grab().toImage().convertToFormat(QImage.Format_RGB32)
+        p = chip_w.mapTo(win, QPoint(0, 0))
+        return [[img.pixel(p.x() + x, p.y() + y) for x in range(chip_w.width())]
+                for y in range(chip_w.height())], chip_w.text()
+
+    confirmed, confirmed_text = render(False)
+    caveat, caveat_text = render(True)
+    win.hide()
+    view.dispose()
+
+    total = sum(len(r) for r in confirmed)
+    differ = sum(a != b for ra, rb in zip(confirmed, caveat) for a, b in zip(ra, rb))
+    assert total > 1000, f"the chip rendered {total} px — it is not on screen, so this proves nothing"
+    assert "unverified" in caveat_text and "unverified" not in confirmed_text, \
+        (confirmed_text, caveat_text)
+    # A tenth of the pill is a low bar that the amber fill+border+ink clears by a mile and the
+    # shipped no-op missed completely (it changed exactly zero).
+    assert differ > total // 10, (
+        f"the unverified reference chip is visually IDENTICAL to a confirmed one "
+        f"({differ}/{total} px differ). The text says 'unverified' and nothing else does — if that "
+        f"is the intent, say so here and drop the colour call rather than leaving a tint that "
+        f"tints nothing")
+    # …and the cue is REDUNDANT with the text, not a substitute for it: the app's rule for colour.
+    assert win._ref_chip.property("tone") == "warn"
+    print(f"test_the_reference_chips_unverified_caveat_is_actually_visible OK "
+          f"({differ}/{total} px differ; was 0)")
+
+
 # ============================================================================ 4. the toggles
 def test_only_the_toggle_factory_makes_a_checkable_button():
     """Check 4. The "setCheckable(True) + recolour the glyph in a `toggled` handler" pattern
@@ -337,19 +419,21 @@ def test_only_the_toggle_factory_makes_a_checkable_button():
     QAction.setCheckable is a different thing (a menu item, not a control) and stays where it is."""
     EXEMPT = {
         # the three View-menu checkmarks: QActions, not buttons — no glyph, no size, no state tint.
+        # All three are built in _build_menu; the View menu is a section of it, not a method.
         ("app.py", "StudioWindow._build_menu"),
-        ("app.py", "StudioWindow._build_view_menu"),
     }
-    offenders = []
+    offenders, found = [], []
     for fn in _modules():
         if fn == "widgets.py":
             continue                      # the factory's own home
         for lineno, _node, owner in _calls(os.path.join(_STUDIO, fn), "setCheckable"):
+            found.append((fn, owner))
             if (fn, owner) not in EXEMPT:
                 offenders.append(f"{fn}:{lineno} setCheckable (in {owner})")
     assert not offenders, (
         "a checkable control built by hand instead of with widgets.ToggleButton:\n  "
         + "\n  ".join(offenders))
+    _no_dead_exemptions(EXEMPT, found, "setCheckable")
     # ...and the factory really is the one the views use.
     from studio.widgets import ToggleButton
     for mod, attr in (("map_view", "ToggleButton"), ("plots_view", "ToggleButton"),
@@ -360,14 +444,218 @@ def test_only_the_toggle_factory_makes_a_checkable_button():
           "(4 view modules, one factory)")
 
 
+# ================================================= 5. a rule that matches is not a rule that paints
+# The Qt condition, spelled out because everything below turns on it. QStyleSheetStyle::polish sets
+# WA_StyledBackground for you when — and only when — `w->metaObject() == &QWidget::staticMetaObject`,
+# i.e. the widget is a BARE QWidget. Give that widget a Python subclass and the stylesheet's
+# background, border and radius stop being painted, with no warning anywhere: the rule still
+# matches, `palette()` still reports the rule's colour (which is why a child `widget.grab()` shows
+# the "right" colour for a bar that composites the canvas on screen), and only the window composite
+# tells the truth. Every class that draws its own box — QLabel, QPushButton, QFrame, QComboBox,
+# QAbstractScrollArea and friends — is immune, which is exactly why this stays invisible until it
+# lands on the one widget family that isn't.
+_SELF_PAINTING = {
+    # Qt classes whose own paintEvent/QStyle primitive draws the stylesheet box. Not exhaustive
+    # for all of Qt — exhaustive for the base classes studio/ actually subclasses.
+    "QLabel", "QPushButton", "QToolButton", "QAbstractButton", "QCheckBox", "QRadioButton",
+    "QComboBox", "QLineEdit", "QTextEdit", "QPlainTextEdit", "QFrame", "QGroupBox",
+    "QScrollArea", "QAbstractScrollArea", "QTableWidget", "QTableView", "QTreeWidget",
+    "QListWidget", "QTabBar", "QTabWidget", "QMenu", "QMenuBar", "QStatusBar", "QToolBar",
+    "QProgressBar", "QSlider", "QSpinBox", "QDialog", "QMainWindow", "QSplitter", "QHeaderView",
+    "QStackedWidget", "QGraphicsView", "QVideoWidget", "PlotWidget", "GraphicsLayoutWidget",
+}
+# A declared `background`/`border` that paints NOTHING needs nobody to draw it.
+_INERT = {"none", "transparent", "", "inherit", "0", "0px"}
+
+
+def _box_selectors(qss):
+    """Every selector part in the stylesheet that declares a VISIBLE background or border, split
+    into the two keys studio/ can carry: `#objectName` and `[property="value"]`.
+
+    Each key remembers whether any rule claiming it would match a plain QWidget — `QLabel[role=
+    "PanelHeader"]` dresses the dialogs' label headers and says nothing about a QWidget wearing the
+    same role, so a QWidget-rooted widget is only on the hook for a rule qualified `QWidget`, `*`,
+    or nothing at all."""
+    qss = re.sub(r"/\*.*?\*/", "", qss, flags=re.S)
+    blocks = re.findall(r"([^{}]*)\{([^{}]*)\}", qss, flags=re.S)
+    assert len(blocks) > 60, f"the QSS block parse found only {len(blocks)} rules"
+    names, props = {}, {}
+    for selector, body in blocks:
+        paints = False
+        for line in body.split(";"):
+            prop, _, val = line.partition(":")
+            prop, val = prop.strip().lower(), " ".join(val.split()).lower()
+            if prop.split("-")[0] in ("background", "border") and val not in _INERT \
+                    and not re.fullmatch(r"0(px)?( none)?( \S+)?", val):
+                paints = True
+        if not paints:
+            continue
+        for part in " ".join(selector.split()).split(","):
+            part = part.strip()
+            if not part or "::" in part:   # a SUB-CONTROL box (::item, ::handle) is the style's
+                continue                   # to draw, not the widget's
+            qualifier = re.match(r"[A-Za-z*]\w*", part)
+            plain = qualifier is None or qualifier.group(0) in ("QWidget", "*")
+            for n in re.findall(r"#(\w+)", part):
+                names[n] = names.get(n, False) or plain
+            for p, v in re.findall(r'\[(\w+)="([^"]+)"\]', part):
+                props[(p, v)] = props.get((p, v), False) or plain
+    return names, props
+
+
+def _widget_classes():
+    """Every class in studio/, with its declared bases and whether its body ever sets
+    WA_StyledBackground (in any method — the attribute is sticky, not per-call)."""
+    out = {}
+    for fn in _modules():
+        path = os.path.join(_STUDIO, fn)
+        src = open(path, encoding="utf-8").read()
+        for node in ast.walk(ast.parse(src, path)):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            bases = [b.id if isinstance(b, ast.Name) else
+                     b.attr if isinstance(b, ast.Attribute) else "?" for b in node.bases]
+            body = ast.unparse(node)
+            out[node.name] = (fn, bases, "WA_StyledBackground" in body)
+    return out
+
+
+def _dressed_widgets():
+    """Every `setObjectName("X")` / `setProperty("role"/"tone"/…, "Y")` in studio/, resolved to the
+    CLASS of the widget it was called on: `("PanelHeader", "self")` for a class dressing itself,
+    `("QWidget", "instance")` for a local built by a constructor call. Assignment-tracked, because
+    the excluded-lap strip is named by its parent (`strip = _ExcludedStrip(...)`, then
+    `strip.setObjectName(...)`) rather than by itself."""
+    def visit(fn, node, cls, types, out):
+        if isinstance(node, ast.ClassDef):
+            cls, types = node.name, {}
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            types = dict(types)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            f = node.value.func
+            made = f.id if isinstance(f, ast.Name) else (
+                f.attr if isinstance(f, ast.Attribute) else None)
+            if made and made.lstrip("_")[:1].isupper():          # a CLASS, not a factory function
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        types[t.id] = made
+                    elif (isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+                            and t.value.id == "self"):
+                        types[f"self.{t.attr}"] = made
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("setObjectName", "setProperty")):
+            recv, args = node.func.value, node.args
+            if isinstance(recv, ast.Name):
+                key = recv.id
+            elif (isinstance(recv, ast.Attribute) and isinstance(recv.value, ast.Name)
+                    and recv.value.id == "self"):
+                key = f"self.{recv.attr}"
+            else:
+                key = None
+            target = (cls, "self") if key == "self" else (types.get(key), "instance")
+            lit = [a.value for a in args if isinstance(a, ast.Constant)
+                   and isinstance(a.value, str)]
+            if node.func.attr == "setObjectName" and lit:
+                out.append((fn, node.lineno, ("name", lit[0]), target))
+            elif node.func.attr == "setProperty" and len(lit) == len(args) == 2:
+                out.append((fn, node.lineno, ("prop", (lit[0], lit[1])), target))
+        for ch in ast.iter_child_nodes(node):
+            visit(fn, ch, cls, types, out)
+
+    out = []
+    for fn in _modules():
+        path = os.path.join(_STUDIO, fn)
+        visit(fn, ast.parse(open(path, encoding="utf-8").read(), path), None, {}, out)
+    return out
+
+
+def test_every_widget_the_theme_gives_a_box_to_can_paint_it():
+    """Check 5. Cross the stylesheet's BOX rules with the widgets that carry their names.
+
+    This is the fifth time a styling mechanism has reached a widget's rule and not its pixels —
+    after the blanket `font-family`, the blanket `font-size`, the blanket `min-height` and the PB
+    toast's own card — so it stops being a fix and becomes an invariant. The rule: if the theme
+    declares a background or a border for a name/role, every studio widget carrying that name/role
+    must be a class that paints its own box, a BARE `QWidget()` (which Qt styles for you), or a
+    QWidget subclass that sets `WA_StyledBackground`.
+
+    Deliberately BROAD — keyed on the stylesheet's own box declarations rather than on a list of
+    the names we already know about, because a narrow guard is defeated by the next role somebody
+    adds, which is precisely how this defect arrived. It is not noisy in practice: Qt's condition
+    is exact, so of the 34 dressed widgets in studio/ only the handful rooted at a plain QWidget
+    are ever in scope."""
+    EXEMPT_TARGETS = set()      # (file, class): none — every dressed widget resolves and complies
+    classes = _widget_classes()
+    boxed_names, boxed_props = _box_selectors(theme._build_qss())
+
+    def root(name, seen=()):
+        """Walk declared bases to the Qt class this one is rooted at."""
+        if name is None or name in seen:
+            return None
+        if name in _SELF_PAINTING or name == "QWidget":
+            return name
+        entry = classes.get(name)
+        if entry is None:
+            return None
+        for b in entry[1]:
+            r = root(b, seen + (name,))
+            if r:
+                return r
+        return None
+
+    def paints_box(name, seen=()):
+        """WA_StyledBackground set on this class or any studio ancestor."""
+        entry = classes.get(name)
+        if entry is None or name in seen:
+            return False
+        return entry[2] or any(paints_box(b, seen + (name,)) for b in entry[1])
+
+    offenders, unresolved, checked = [], [], []
+    for fn, lineno, (kind, value), (target, how) in _dressed_widgets():
+        table = boxed_names if kind == "name" else boxed_props
+        if value not in table:
+            continue                       # the theme gives this name no box; check 2 owns the rest
+        label = f"#{value}" if kind == "name" else f'[{value[0]}="{value[1]}"]'
+        if target is None:
+            unresolved.append(f"{fn}:{lineno} {label} — cannot resolve the widget's class")
+            continue
+        r = root(target)
+        if r is None:
+            unresolved.append(f"{fn}:{lineno} {label} on {target} — cannot resolve its Qt base")
+            continue
+        if r != "QWidget" or not table[value]:
+            continue                       # self-painting, or no QWidget-matching rule claims it
+        if how == "instance" and target == "QWidget":
+            continue                       # a BARE QWidget: Qt sets the attribute itself
+        checked.append((fn, target, label))
+        if not paints_box(target) and (fn, target) not in EXEMPT_TARGETS:
+            offenders.append(
+                f"{fn}:{lineno} {target} wears {label}, which the theme gives a background/border "
+                f"— but {target} is a QWidget SUBCLASS and never calls "
+                f"setAttribute(Qt.WA_StyledBackground, True), so Qt paints none of it")
+    assert not unresolved, (
+        "check 5 could not type these dressed widgets, so it cannot vouch for them — teach the "
+        "walker, or split the construction out:\n  " + "\n  ".join(unresolved))
+    assert not offenders, (
+        "widgets the theme dresses and Qt will not paint:\n  " + "\n  ".join(offenders))
+    _no_dead_exemptions(EXEMPT_TARGETS, [(f, t) for f, t, _l in checked], "WA_StyledBackground")
+    assert checked, "check 5 matched nothing — the QSS parse or the AST walk has gone vacuous"
+    print(f"test_every_widget_the_theme_gives_a_box_to_can_paint_it OK "
+          f"({len(boxed_names)} boxed names + {len(boxed_props)} boxed roles; "
+          f"{len(checked)} QWidget subclasses on the hook, all painting)")
+
+
 def _run_all():
     test_no_module_styles_itself_from_a_string()
     test_no_bare_colour_declaration_creeps_back_in()
     test_every_object_name_and_role_has_a_theme_rule()
     test_every_icon_button_is_one_size_on_the_real_view()
     test_an_absent_reference_chip_costs_the_window_no_height()
+    test_the_reference_chips_unverified_caveat_is_actually_visible()
     test_only_the_toggle_factory_makes_a_checkable_button()
-    print("\nAll control-vocabulary (inline-style / icon-button / toggle) tests passed.")
+    test_every_widget_the_theme_gives_a_box_to_can_paint_it()
+    print("\nAll control-vocabulary (inline-style / icon-button / toggle / styled-box) tests "
+          "passed.")
 
 
 if __name__ == "__main__":
