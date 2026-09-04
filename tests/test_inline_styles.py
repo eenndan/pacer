@@ -390,8 +390,15 @@ def test_the_reference_chips_unverified_caveat_is_actually_visible():
     win.hide()
     view.dispose()
 
-    total = sum(len(r) for r in confirmed)
-    differ = sum(a != b for ra, rb in zip(confirmed, caveat) for a, b in zip(ra, rb))
+    # The two grabs are NOT the same size: the caveat branch appends "— unverified", so the chip
+    # is wider in that state. Compare the box they share, explicitly. A bare zip() would do this
+    # silently by truncating to the shorter row, which is how the measurement reads as if the two
+    # states were the same shape — and confining it to the common box is what keeps this a test of
+    # the TINT rather than of the extra text, which the text assertion below covers separately.
+    rows = min(len(confirmed), len(caveat))
+    cols = min(len(confirmed[0]), len(caveat[0])) if rows else 0
+    total = rows * cols
+    differ = sum(confirmed[y][x] != caveat[y][x] for y in range(rows) for x in range(cols))
     assert total > 1000, f"the chip rendered {total} px — it is not on screen, so this proves nothing"
     assert "unverified" in caveat_text and "unverified" not in confirmed_text, \
         (confirmed_text, caveat_text)
