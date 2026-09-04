@@ -240,7 +240,14 @@ class PhaseBar(QWidget):
         face = QLabel(f"net {net:+.2f} s" if abs(net) > 1e-6 else "net ~0 s")
         face.setFont(theme.mono_font(theme.CAPTION))
         face.setAlignment(Qt.AlignCenter)
-        face.setStyleSheet(f"color:{theme.ahead_colour() if net < -1e-6 else C.text_dim};")
+        face.setProperty("role", "Note")     # the muted default; the ahead case tints over it
+        # A PER-DATUM semantic colour, so it stays a runtime merge over the role rather than a QSS
+        # rule: ahead_colour() is a palette ACCESSOR and the stylesheet is built once at startup, so
+        # a rule here would freeze this label in the standard green while every other ahead/behind
+        # surface followed the colour-blind flip. One of the merges tests/test_inline_styles.py
+        # lists by owner.
+        if net < -1e-6:
+            face.setStyleSheet(f"color:{theme.ahead_colour()};")
         lay.addWidget(face)
 
         self.setToolTip(
@@ -521,7 +528,7 @@ class OpportunitiesDialog(QDialog):
         label = QLabel(msg)
         label.setWordWrap(True)
         label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet(f"color: {C.text_dim};")
+        label.setProperty("role", "Note")
         return label
 
     def _build_table(self, rows: list[coaching.Opportunity]) -> QWidget:
@@ -724,7 +731,7 @@ class OpportunitiesPanel(QWidget):
         self.empty_label = QLabel("")
         self.empty_label.setWordWrap(True)
         self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet(f"color: {C.text_dim};")
+        self.empty_label.setProperty("role", "Note")
 
         self.body = QStackedWidget()
         self.body.addWidget(self.table)        # index 0 — the top-3 rows

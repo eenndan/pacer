@@ -266,11 +266,16 @@ def test_excluded_strip_escalates_when_the_ratio_crosses_the_threshold():
     assert calm._excluded_header.text() == f"{LT.EXCLUDED_MARK} 1 excluded of 22 laps ▸"
     assert "%" not in calm._excluded_header.text()
     assert not calm._excluded_note.isVisible()
-    assert theme.C.accent not in calm._excluded_header.styleSheet()
+    # The escalation is a dynamic `tone` property read by the theme's
+    # QLabel#LapExcludedHeader[tone="warn"] rule, not a stylesheet built at the call site — so the
+    # assertion is on the STATE, and on the rule existing to paint it.
+    assert calm._excluded_header.property("tone") in (None, "")
 
     loud = _shown(LT.LapTable(_FakeLapSession(valid=25, excluded=24, detected=50)))
     assert loud._excluded_header.text() == f"{LT.EXCLUDED_MARK} 24 excluded of 49 laps (49%) ▸"
-    assert theme.C.accent in loud._excluded_header.styleSheet()
+    assert loud._excluded_header.property("tone") == "warn"
+    warn_rule = theme._build_qss().split('QLabel#LapExcludedHeader[tone="warn"]')[1].split("}")[0]
+    assert theme.C.accent in warn_rule, warn_rule
     assert loud._excluded_note.isVisible()
     note = loud._excluded_note.text()
     assert "203 m" in note and "536 m" in note, note          # BOTH medians, on screen

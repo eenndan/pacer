@@ -10,6 +10,31 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Added
 
+- **A control vocabulary in `studio/widgets.py` + `studio/theme.py`** (mostly developer-facing) —
+  one way to build each of the three things the app clicks on, replacing nine hand-rolled copies.
+  `icon_button()` is the single square glyph button (it replaces two undeclared size families,
+  26x24 with a 15 px glyph and 32x30 with an 18 px glyph, *neither of which painted what it said*:
+  a stylesheet `min-height` on a blanket selector REPLACES a widget's own minimum, so the four ⛶
+  panel buttons stood at 26x28 and the five video-transport buttons at 32x28). `ToggleButton`
+  is the single checkable control — the "setCheckable + recolour the glyph in a `toggled` handler"
+  pattern appeared seven times in four files, and six of the seven disagreed with the others about
+  the height an iconed toggle ends up at, whether the OFF glyph is tinted or left at the icon
+  helper's default, or whether the ON colour is a token or a palette ACCESSOR resolved at paint
+  time. `chip()` + the new `[role="Chip"]` rule are the single pill. New theme roles retire the
+  fourteen labels that each spelled `color: <text_dim>` out for themselves: `Note`, `Hint`,
+  `Title`, `Tagline` and `KeyCap`, plus rules for the four `objectName`s that had a name and no
+  rule at all (`LoadingCancel`, `LapExcludedStrip`, `LapExcludedList`, `PBToastShare`) and for the
+  map's action notice and the video scrub bar, which were being styled from strings inside their
+  view files.
+- **`tests/test_inline_styles.py`** — the control half of the guard, beside the colour
+  (`test_contrast.py`) and dimensional (`test_design_system.py`) ones: inline `setStyleSheet` sites
+  outside `theme.py` are down from 34 to 7 and every survivor is named in prose as a PER-DATUM
+  colour a stylesheet cannot express; no new bare `color:` may creep back (and an exempt merge must
+  write a qualified selector, or be a leaf label, because an unqualified `color:` cascades to a
+  widget's children); every `objectName` and `role` really has a rule; all eight icon buttons are
+  one `theme.ICON_BTN` with one `theme.ICON_PX` glyph, measured on the real view at both shipped
+  window sizes; and `setCheckable(True)` on a button belongs to `ToggleButton` alone.
+
 - **A spatial design system in `studio/theme.py`** (developer-facing plumbing) — the dimensional
   half of the token set the colours already had: a 4 px spacing scale with one 2 px sub-step
   (`SPACE_XXS`…`SPACE_3XL`), three radii by role (`RADIUS_S/M/L` — controls, cards, large
@@ -71,6 +96,19 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Changed
 
+- **Visible control changes from the control-vocabulary pass.** Icon buttons are one 28x28 size
+  with a 16 px glyph, so the four ⛶ panel buttons grew 2 px wider and the five video-transport
+  buttons lost 4 px of width and 2 px of glyph — the transport row now agrees with the "Compare"
+  button beside it, which the old fixed height had been standing 30 px tall against every other
+  control's 28. The charts toolbar's "vs ideal" is a real amber CHIP rather than a plain button
+  borrowing the generic checked state, so it reads as the reference the hero number is measured
+  against rather than as a third overlay switch. The About card's name and the privacy card's
+  heading share one `Title` style at the type scale's 22 px (the privacy heading was an 18 px step
+  no scale declared). The PB toast's "Share your PB →" now stands at the same 24 px hit floor as
+  the two buttons beside it instead of 4 px taller. The export dialog's size/quality hint ranks
+  below the description by SIZE rather than by `C.text_muted`, the 3.17:1 token the colour contract
+  reserves for disabled chrome.
+
 - **Every panel now wears the same header, and its controls have a row of their own.** The four
   panels used to stand at four different heights — nothing declared one, so each header came out as
   tall as whichever control it happened to hold. They are now one declared height, with the panel's
@@ -100,6 +138,13 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   agents posture).
 
 ### Fixed
+
+- **The status bar no longer spends window height on a chip nobody can see.** `QStatusBar` sizes
+  itself from its children's size hints and counts a permanent widget that is merely HIDDEN, so the
+  cross-recording reference chip — invisible on any session without a reference, which is nearly
+  all of them — was costing the four panels 3 px between them (391/452/321/522 against
+  393/453/322/524, measured on the real window). It is now added to and removed from the bar rather
+  than shown and hidden.
 
 - **A brake point on the map can no longer be mistaken for a corner apex, and the map key
   draws the glyphs that are actually on the map.** Giving each lap's brake glyphs their own

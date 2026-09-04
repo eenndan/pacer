@@ -21,7 +21,7 @@ import math
 import os
 from typing import NamedTuple
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
     QLabel,
@@ -45,7 +45,7 @@ from .scrub_controller import ScrubController
 from .session import fmt_time
 from .stats_panel import StatsView
 from .video_view import VideoView
-from .widgets import PanelHeader, PanelToolbar
+from .widgets import PanelHeader, PanelToolbar, ToggleButton, chip, icon_button
 
 # The maximize-button glyphs. DELIBERATELY DISTINCT from the video transport's fullscreen ⤢ button
 # (ph.arrows-out / ph.arrows-in — "fill the SCREEN"): the corners glyphs read as "fill this WINDOW
@@ -77,13 +77,10 @@ _PLOTS_BASELINE_LABELS = {
 }
 _MAXIMIZE_GLYPH = "ph.corners-out"   # expand this panel to fill the window
 _RESTORE_GLYPH = "ph.corners-in"     # shown while maximized — click/Esc to restore the grid
-# The header maximize button is sized like the video transport's icon buttons so the whole app's
-# header controls read as one family (video_view._ICON_PX / _ICON_BTN).
-_HDR_ICON_PX = 15
-# 24 px tall, not 22: these are the ONLY always-visible affordance that restores a maximized panel,
-# and 26x22 sat under the 24x24 hit-target floor. The header bar's 4 px vertical margins already
-# had the room, so the headers do not grow.
-_HDR_ICON_BTN = QSize(26, 24)
+# The two constants that used to live here (_HDR_ICON_PX 15, _HDR_ICON_BTN 26x24) are gone: an
+# icon button's size is theme.ICON_BTN and its glyph theme.ICON_PX, applied by widgets.icon_button.
+# The old pair never described what shipped anyway — a stylesheet min-height stood these buttons at
+# 26x28, which is neither the value written here nor any size the app declared.
 
 # The widest readouts the hero #DiffBox can ever render (theme.format_ideal_readout /
 # format_delta_speed at their longest realistic values), used to derive its layout floor below.
@@ -304,20 +301,17 @@ class CentralView(QWidget):
     # text-only variant was already dead: none of the four quadrants had used it since the map and
     # charts headers grew controls.)
 
-    def _maximize_button(self) -> QPushButton:
+    @staticmethod
+    def _maximize_button() -> QPushButton:
         """A small right-aligned header button that maximizes/restores its panel — the VISIBLE
-        affordance for the same action as double-clicking the header. Styled like the video
-        transport's icon buttons so every header control reads as one family. Wired to its panel
-        later by _wire_maximize_button (the panel container doesn't exist yet when the header is
-        built); its glyph/tooltip track the maximized state via _sync_maximize_buttons."""
-        btn = QPushButton()
-        btn.setIconSize(QSize(_HDR_ICON_PX, _HDR_ICON_PX))
-        btn.setFixedSize(_HDR_ICON_BTN)
-        btn.setFlat(True)
-        btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        btn.setIcon(theme.icon(_MAXIMIZE_GLYPH))
-        btn.setToolTip("Maximize panel (or double-click the header) — Esc / click again to restore")
-        return btn
+        affordance for the same action as double-clicking the header. One `widgets.icon_button`,
+        the same object the video transport is built from, so every icon button in the app is one
+        size. Wired to its panel later by _wire_maximize_button (the panel container doesn't exist
+        yet when the header is built); its glyph/tooltip track the maximized state via
+        _sync_maximize_buttons."""
+        return icon_button(
+            _MAXIMIZE_GLYPH,
+            tooltip="Maximize panel (or double-click the header) — Esc / click again to restore")
 
     def _wire_maximize_button(self, btn: QPushButton, panel: QWidget) -> None:
         """Connect a header maximize button to its panel's toggle + register it so its glyph/tooltip
@@ -413,11 +407,15 @@ class CentralView(QWidget):
         # Last (speed, lap) the readout rendered — so toggling the reference re-renders without a tick.
         self._last_diff_speed: float | None = None
         self._last_diff_lap: int | None = None
-        # Checked (default) → Δ-to-ideal leads; unchecked → Δ-to-best leads. A small labelled toggle
-        # so the reference of the hero number is always explicit and one click to swap.
-        self.ideal_readout_btn = QPushButton("vs ideal")
-        self.ideal_readout_btn.setCheckable(True)
-        self.ideal_readout_btn.setChecked(True)
+        # Checked (default) → Δ-to-ideal leads; unchecked → Δ-to-best leads. A CHIP, not a plain
+        # button: it does not act on the charts, it NAMES what the hero number beside it is measured
+        # against — the same job the lap panel's quality badge does for the lap times — so it wears
+        # the chip pill rather than the button rectangle its two neighbours (Brake/Throttle, Ideal
+        # lap, which really do turn overlays on) wear. It stays a checkable QPushButton because it
+        # is genuinely interactive; only its LOOK is shared with the static chips. See the
+        # [role="Chip"] rule in theme.py.
+        self.ideal_readout_btn = ToggleButton("vs ideal", checked=True)
+        self.ideal_readout_btn.setProperty("role", "Chip")
         self.ideal_readout_btn.setToolTip(
             "Hero readout reference: ON = Δ to your THEORETICAL IDEAL — the best you've driven at "
             "each point on track, stitched together into a synthetic curve (not a single drivable "
@@ -491,8 +489,11 @@ class CentralView(QWidget):
         # timing_quality copy (clock-aware: "ESTIMATED" only on the media-clock fallback, "GPS LOW"
         # on a true-clock recording whose only concern is rejected fixes — the old static
         # "ESTIMATED" overclaimed on true-clock footage, M3). Hidden on a clean GPS9 recording.
-        self.quality_badge = QLabel("ESTIMATED")
-        self.quality_badge.setObjectName("QualityBadge")
+        # A STATIC chip: it reports, it is never clicked. Same pill as the interactive "vs ideal"
+        # chip in the charts toolbar, built as a QLabel so it adds no tab stop and announces itself
+        # to assistive tech as text rather than as a button that does nothing (see widgets.chip).
+        # It shed its #QualityBadge objectName with the one-off rule that name existed to carry.
+        self.quality_badge = chip("ESTIMATED", tone="warn")
         self.quality_badge.setVisible(False)
         # The coaching page: the top opportunities (corner · time lost · reason), full height —
         # no strip, no collapse, no height cap. A corner-row click ring-highlights its apex on

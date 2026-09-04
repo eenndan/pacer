@@ -524,15 +524,24 @@ def test_estimated_short_label_is_one_canonical_form():
 
 
 def test_estimated_quality_badge_is_a_real_chip():
-    """The central-view ESTIMATED QualityBadge (objectName #QualityBadge) has a real QSS chip rule
-    (padding + rounded + tinted), not plain text — the whole stylesheet carries a #QualityBadge block
-    with border-radius + padding so the badge renders as the chip the code claims."""
+    """The central-view ESTIMATED quality badge renders as a real CHIP (padding + rounded + tinted),
+    not plain text.
+
+    It used to carry a one-off #QualityBadge objectName and a rule that existed only for it. The
+    app has ONE chip vocabulary now — a [role="Chip"] pill worn by this badge, by the status bar's
+    reference chip and by the charts toolbar's "vs ideal" — so the assertion moved onto that role
+    and onto the amber `tone` this badge takes, and it is made against the LIVE widget rather than
+    against a name only this test knew about."""
+    from studio.widgets import chip
     qss = theme._build_qss()
-    assert "QLabel#QualityBadge" in qss, "no QSS rule for the ESTIMATED quality badge"
-    # Pull the rule body and check it's a padded/rounded/tinted chip.
-    block = qss.split("QLabel#QualityBadge", 1)[1].split("}", 1)[0]
+    assert 'QLabel[role="Chip"]' in qss, "no QSS chip rule"
+    block = qss.split('QLabel[role="Chip"], QPushButton[role="Chip"]', 1)[1].split("}", 1)[0]
     assert "border-radius" in block and "padding" in block, block
-    assert theme.C.accent_tint in block or theme.C.accent in block, block
+    warn = qss.split('QLabel[role="Chip"][tone="warn"]', 1)[1].split("}", 1)[0]
+    assert theme.C.accent_tint in warn or theme.C.accent in warn, warn
+    # the live badge really wears them (built by the same factory central_view uses)
+    badge = chip("ESTIMATED", tone="warn")
+    assert badge.property("role") == "Chip" and badge.property("tone") == "warn"
     print("test_estimated_quality_badge_is_a_real_chip OK")
 
 

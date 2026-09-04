@@ -19,7 +19,6 @@ from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
-    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -28,7 +27,8 @@ from PySide6.QtWidgets import (
 from . import theme, units
 from ._signal import fmt_time, lap_label
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
-from .theme import C, icon
+from .theme import C
+from .widgets import ToggleButton
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -269,27 +269,27 @@ class PlotsView(QWidget):
         # on the Δ plot. Default off so the standard Δ-to-best view stays uncluttered. Exposed;
         # central_view mounts it in the charts header next to the x-mode toggle.
         self._show_ideal = False
-        self.ideal_btn = QPushButton("Ideal lap")
-        self.ideal_btn.setIcon(icon("ph.star-four"))
-        self.ideal_btn.setCheckable(True)
-        self.ideal_btn.setToolTip(
-            "Ideal lap: overlay the SYNTHETIC theoretical ideal Δ — the best you've driven at each "
-            "point on track, stitched together (dashed purple, dips below the y=0 best-lap line). "
-            "Not a single drivable lap; it shows where your achievable lap is faster than your best.")
+        # `on_colour` is the ACCESSOR, not a colour: the star has to be the palette's best-sector hue
+        # — the same accessor _ideal_line_pen() draws the line with — resolved at paint time, or it
+        # freezes out of the colour-blind flip (tests/test_contrast.py pins exactly this pairing).
+        self.ideal_btn = ToggleButton(
+            "Ideal lap", glyph="ph.star-four", on_colour=theme.best_sector_colour,
+            tooltip="Ideal lap: overlay the SYNTHETIC theoretical ideal Δ — the best you've driven "
+                    "at each point on track, stitched together (dashed purple, dips below the y=0 "
+                    "best-lap line). Not a single drivable lap; it shows where your achievable lap "
+                    "is faster than your best.")
         self.ideal_btn.toggled.connect(self._on_ideal_toggled)
 
         # D3 opt-in: a SYNTHETIC brake/throttle band under the speed curve. Default off so the
         # speed chart stays clean; mounted by central_view in the charts header next to the
         # ideal-lap toggle. ESTIMATED (we have no pedal sensors — it's the speed-derived g).
         self._show_brake_throttle = False
-        self.brake_throttle_btn = QPushButton("Brake/Throttle")
-        self.brake_throttle_btn.setIcon(icon("ph.gauge"))
-        self.brake_throttle_btn.setCheckable(True)
-        self.brake_throttle_btn.setToolTip(
-            "Brake/Throttle band (ESTIMATED): a pedal-style trace under the speed curve, inferred "
-            "from the GPS speed-derivative — pacer has no pedal sensors. Red fills below the line "
-            "while braking, green above while on power. Derived from the same signal as the brake "
-            "points; not measured.")
+        self.brake_throttle_btn = ToggleButton(
+            "Brake/Throttle", glyph="ph.gauge",
+            tooltip="Brake/Throttle band (ESTIMATED): a pedal-style trace under the speed curve, "
+                    "inferred from the GPS speed-derivative — pacer has no pedal sensors. Red "
+                    "fills below the line while braking, green above while on power. Derived from "
+                    "the same signal as the brake points; not measured.")
         self.brake_throttle_btn.toggled.connect(self._on_brake_throttle_toggled)
 
         self.glw = pg.GraphicsLayoutWidget()
@@ -407,16 +407,16 @@ class PlotsView(QWidget):
         self.modeChanged.emit(self._axis_mode())
 
     def _apply_ideal_icon(self):
-        """The ideal-lap button's star, in the palette's BEST-SECTOR hue while the overlay is on —
-        the same accessor _ideal_line_pen() draws the line itself with, so the button and the line
-        it toggles can never disagree (the frozen `C.best` here did, in the colour-blind palette)."""
-        color = theme.best_sector_colour() if self._show_ideal else C.text
-        self.ideal_btn.setIcon(icon("ph.star-four", color=color))
+        """Re-apply the ideal-lap button's star for the CURRENT palette.
+
+        The tint itself is the ToggleButton's (it holds the best_sector_colour ACCESSOR, so it
+        resolves the hue every time it paints the glyph). This stays as the palette-flip hook: the
+        window flips the palette and re-renders, and the button has no `toggled` to hear."""
+        self.ideal_btn.refresh_glyph()
 
     def _on_ideal_toggled(self, on: bool):
         """D1: toggle the synthetic ideal-lap baseline overlay on the Δ plot."""
         self._show_ideal = on
-        self._apply_ideal_icon()
         self.refresh()
 
     def _on_brake_throttle_toggled(self, on: bool):
@@ -425,7 +425,6 @@ class PlotsView(QWidget):
         band — the y-range has to be re-fitted (widened when on, tightened back when off), which only
         happens in refresh()'s autorange step."""
         self._show_brake_throttle = on
-        self.brake_throttle_btn.setIcon(icon("ph.gauge", color=C.accent if on else C.text))
         self.refresh()
 
     # ------------------------------------------------------- chart-control enablement

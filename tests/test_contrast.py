@@ -295,9 +295,21 @@ def test_ideal_star_icon_and_ideal_line_share_one_accessor():
     Both now resolve through the accessor, and a palette flip re-tints the icon."""
     src = open(os.path.join(_STUDIO, "plots_view.py"), encoding="utf-8").read()
     assert "color=C.best" not in src
-    assert "theme.best_sector_colour() if self._show_ideal" in src
+    # The button is a widgets.ToggleButton now and the accessor is HANDED to it uncalled — which is
+    # the same contract one level up: `on_colour=theme.best_sector_colour` (no parentheses) is a
+    # reference the button resolves every time it repaints its glyph, whereas
+    # `on_colour=theme.best_sector_colour()` would freeze the hue at construction exactly the way
+    # the old frozen `C.best` did. The missing parentheses are the whole assertion.
+    assert "on_colour=theme.best_sector_colour," in src, (
+        "the ideal-lap star must be handed the ACCESSOR, not a resolved colour")
+    assert "on_colour=theme.best_sector_colour()" not in src
     # refresh_palette must re-tint the icon: it is an icon, not a drawn item, so refresh() misses it
     assert "self._apply_ideal_icon()" in src.split("def refresh_palette")[1].split("def ")[0]
+    # ...and that hook has to reach the button, which is the only thing holding the accessor.
+    from studio import plots_view as _pv
+    body = src.split("def _apply_ideal_icon")[1].split("\n    def ")[0]
+    assert "refresh_glyph()" in body, body
+    assert hasattr(_pv.ToggleButton, "refresh_glyph")
     print("test_ideal_star_icon_and_ideal_line_share_one_accessor OK")
 
 

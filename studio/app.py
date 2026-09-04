@@ -60,6 +60,7 @@ from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
 from .overlays import PBToast, WelcomeView
 from .session import DEFAULT_SAMPLE, fmt_time
+from .widgets import chip
 from .workers import DemoResolveWorker, SessionLoadWorker, VideoExportWorker
 
 # Help ▸ Report a problem… opens this GitHub new-issue page (the only support channel; no crash
@@ -938,11 +939,15 @@ class StudioWindow(QMainWindow):
         self._sync_coaching_menu()
         self._sync_view_menu()
         # The permanent status-bar chip naming the active cross-recording reference, created once
-        # and hidden until a reference is loaded.
+        # and MOUNTED only while a reference is loaded (see _update_reference_status).
         if getattr(self, "_ref_chip", None) is None:
-            self._ref_chip = QLabel("")
-            self._ref_chip.setProperty("role", "BarLabel")
-            self.statusBar().addPermanentWidget(self._ref_chip)
+            # A real chip (widgets.chip): the same pill the lap panel's quality badge and the charts
+            # toolbar's "vs ideal" wear. As a BarLabel it had no box at all, and padded itself by
+            # putting LITERAL SPACES either side of its own text — which is why the padding was
+            # invisible to every layout that measured it.
+            self._ref_chip = chip()
+            self._ref_chip.setVisible(False)
+            self._ref_chip_mounted = False
         self._update_reference_status()
 
     def _tick(self):
@@ -2460,13 +2465,13 @@ class StudioWindow(QMainWindow):
         desc = QLabel("Burns the overlays into your footage: g-meter, Δ / speed, map inset and the "
                       "lap strip.")
         desc.setWordWrap(True)
-        desc.setStyleSheet(f"color: {theme.C.text_dim};")
+        desc.setProperty("role", "Note")
         col.addWidget(desc)
 
         # lap_time is a cheap pacer-free accessor (no ffprobe).
         dur = self.session.lap_time(lap) if hasattr(self, "session") else float("nan")
         lap_line = QLabel(f"Lap {lap_label(lap)}  ·  {fmt_time(dur)}")
-        lap_line.setStyleSheet(f"color: {theme.C.text_dim};")
+        lap_line.setProperty("role", "Note")
         col.addWidget(lap_line)
 
         form = QFormLayout()
@@ -2492,7 +2497,10 @@ class StudioWindow(QMainWindow):
         # on a choice that spans ~3x — and the default is the expensive end of it.
         hint = QLabel("")
         hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {theme.C.text_muted};")
+        # [role="Hint"] ranks BELOW the description above it by SIZE, not by a dimmer colour: this
+        # label read C.text_muted, which is 3.17:1 and reserved by contract for disabled chrome —
+        # enabled prose in an enabled dialog had quietly borrowed the disabled token.
+        hint.setProperty("role", "Hint")
         col.addWidget(hint)
 
         def _update_hint():
@@ -2766,8 +2774,8 @@ class StudioWindow(QMainWindow):
         if hasattr(self, "_cross_compare_action"):
             can_cross = active and self.session.reference_session() is not None
             self._cross_compare_action.setEnabled(can_cross)
-        chip = getattr(self, "_ref_chip", None)
-        if chip is None:
+        ref_chip = getattr(self, "_ref_chip", None)
+        if ref_chip is None:
             return
         if active:
             label = self.session.reference_label()
@@ -2775,20 +2783,39 @@ class StudioWindow(QMainWindow):
             # overlay but UNVERIFIED: both start lines may be provisional, so the aligned Δ phase can
             # be off. Flag it with the shared PROVISIONAL trust-tier colour (no hardcoded colour) and
             # a short caveat tooltip; a confirmed same-named match is unchanged (no caveat, no tint).
-            if self.session.reference_match_is_geometric():
-                chip.setText(f"  ▶ reference: {label} · matched by location — unverified  ")
-                chip.setStyleSheet(f"color: {theme.PROVISIONAL_COLOR};")
-                chip.setToolTip(
-                    "This reference was matched to your session by GPS location, not a confirmed "
-                    "track name. The overlay is valid, but set BOTH recordings' start/finish lines "
-                    "for exact Δ alignment.")
-            else:
-                chip.setText(f"  ▶ reference: {label}  ")
-                chip.setStyleSheet("")   # clear any prior caveat tint (chip is reused across loads)
-                chip.setToolTip("")
-            chip.setVisible(True)
+            geometric = self.session.reference_match_is_geometric()
+            ref_chip.setText(f"▶ reference: {label} · matched by location — unverified" if geometric
+                             else f"▶ reference: {label}")
+            # ONE call, both branches: an empty sheet clears any prior caveat tint (the chip is
+            # reused across loads) back to the themed chip colour. A per-datum colour MERGE over a
+            # role, kept deliberately — see tests/test_inline_styles.py.
+            ref_chip.setStyleSheet(f"color: {theme.PROVISIONAL_COLOR};" if geometric else "")
+            ref_chip.setToolTip(
+                "This reference was matched to your session by GPS location, not a confirmed "
+                "track name. The overlay is valid, but set BOTH recordings' start/finish lines "
+                "for exact Δ alignment." if geometric else "")
+            self._mount_reference_chip(True)
         else:
-            chip.setVisible(False)
+            self._mount_reference_chip(False)
+
+    def _mount_reference_chip(self, on: bool) -> None:
+        """Add / remove the reference chip from the status bar, rather than only show/hide it.
+
+        QStatusBar sizes itself from its children's SIZE HINTS, and it counts a permanent widget
+        that is merely hidden: mounting the chip once at build time and hiding it cost the window
+        3 px of content height on every session with no cross-recording reference — which is nearly
+        all of them — because a 20 px chip's hint stood the bar at 25 where the 14 px label it
+        replaced stood it at 22. Measured on the real window: the four panels came back 391/452/
+        321/522 against 393/453/322/524. `removeWidget` hides the widget AND takes it out of the
+        bar's layout, so an absent chip costs nothing and a present one is honestly paid for."""
+        if bool(on) == getattr(self, "_ref_chip_mounted", False):
+            return
+        if on:
+            self.statusBar().addPermanentWidget(self._ref_chip)
+            self._ref_chip.setVisible(True)
+        else:
+            self.statusBar().removeWidget(self._ref_chip)   # removes AND hides
+        self._ref_chip_mounted = bool(on)
 
 
 
