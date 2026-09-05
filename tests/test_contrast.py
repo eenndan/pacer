@@ -848,15 +848,54 @@ def test_apply_theme_registers_the_fonts_its_qss_names():
     # ...and the family list the QFont builders use IS the one the QSS names (one source, two uses).
     assert theme.UI_STACK == ",".join(f'"{f}"' for f in theme.UI_FAMILIES)
     assert theme.MONO_STACK == ",".join(f'"{f}"' for f in theme.MONO_FAMILIES)
-    # mono_font is Inter+tnum on Qt >= 6.7 and the mono stack below it — either way its family
-    # list is one of the two module tuples, never a third hand-kept copy.
+    # mono_font is Inter+tnum where Qt can apply the feature and the mono stack below it — either
+    # way its family list is one of the two module tuples, never a third hand-kept copy.
+    # NOTE this assertion is about the FAMILY only. It passed for the whole life of the bug that
+    # `test_mono_font_actually_delivers_tabular_figures` now covers: the family was right and the
+    # digits were still proportional.
     assert tuple(theme.mono_font(11).families()) in (theme.UI_FAMILIES, theme.MONO_FAMILIES)
     print("test_apply_theme_registers_the_fonts_its_qss_names OK")
+
+
+def test_mono_font_actually_delivers_tabular_figures():
+    """`mono_font` must produce digits that all advance the SAME width — measured, not declared.
+
+    The bug this pins: `_qt_supports_feature` checked the PySide version and
+    `hasattr(QFont, "setFeature")` — an API PRESENCE check — and `mono_font` then called
+    `setFeature("tnum", 1)` inside a bare `except: pass`. On PySide6 6.11.1 that call raises
+    `ValueError` (only `QFont.Tag("tnum")` binds), so the feature never applied, `featureTags()`
+    stayed empty, and `register_fonts()` printed "tabular figures via tnum feature" while every lap
+    time, split, sector and delta in the app rendered PROPORTIONAL.
+
+    Measured on Inter 13 px before the fix: NINE distinct digit advances, `1` at 5.281 px against
+    `4` at 8.391 px, so two same-length lap times differed by 12 px in a right-aligned column
+    (`1:08.201` 50.06 px vs `1:11.111` 38.03 px). That is the whole reason this face exists.
+
+    The assertion is on the RENDERED metric rather than on `featureTags()`, so it also holds on a
+    build that reaches tabular figures through the mono stack instead — the contract is the
+    alignment, not the mechanism."""
+    from PySide6.QtGui import QFontMetricsF
+
+    theme.register_fonts()  # _APP is already live at module scope; this is the font DB half
+    for size in (theme.CAPTION, theme.TABLE, theme.HERO):
+        fm = QFontMetricsF(theme.mono_font(size))
+        widths = {d: round(fm.horizontalAdvance(d), 3) for d in "0123456789"}
+        assert len(set(widths.values())) == 1, (
+            f"mono_font({size}) digits are proportional, not tabular: "
+            f"{len(set(widths.values()))} distinct advances {sorted(set(widths.values()))} "
+            f"(per digit {widths}) — a right-aligned numeric column cannot line up")
+
+    # The consequence, stated as the thing a user would see: equal-length times measure equal.
+    fm = QFontMetricsF(theme.mono_font(theme.TABLE))
+    a, b = fm.horizontalAdvance("1:08.201"), fm.horizontalAdvance("1:11.111")
+    assert a == b, f"equal-length lap times measure {a} vs {b} px"
+    print("test_mono_font_actually_delivers_tabular_figures OK")
 
 
 def _run_all():
     test_the_theme_never_takes_a_widgets_own_font_away()
     test_apply_theme_registers_the_fonts_its_qss_names()
+    test_mono_font_actually_delivers_tabular_figures()
     test_no_module_constant_freezes_a_palette_hue()
     test_no_bare_palette_hue_is_read_anywhere_in_studio()
     test_hero_ideal_readout_follows_the_palette()

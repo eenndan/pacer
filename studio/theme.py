@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 
-from PySide6 import __version__ as PYSIDE_VERSION
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPalette
 
@@ -703,13 +702,52 @@ _supports_feature = False
 
 
 # ====================================================================== fonts
+def _tnum_tags():
+    """The forms the 'tnum' tag can take across PySide6 builds, most specific first.
+
+    6.7 documents `setFeature(tag: QFont.Tag | str, value: int)`, but the two arms are not equally
+    reliable — see `_qt_supports_feature`. Try the typed one first and keep the string as the
+    fallback so an older build that only accepts a str still works."""
+    tag_cls = getattr(QFont, "Tag", None)
+    if tag_cls is not None:
+        try:
+            yield tag_cls("tnum")
+        except (TypeError, ValueError):
+            pass
+    yield "tnum"
+
+
+def _apply_tnum(f: QFont) -> bool:
+    """Set tabular figures on `f`, returning whether the font ACTUALLY carries the feature after.
+
+    The round trip is the point: a `setFeature` that raises, or that silently records nothing, must
+    not be reported as success."""
+    for tag in _tnum_tags():
+        try:
+            f.setFeature(tag, 1)
+        except (TypeError, ValueError):
+            continue
+        if f.featureTags():
+            return True
+    return False
+
+
 def _qt_supports_feature() -> bool:
-    """QFont.setFeature (OpenType feature tags such as 'tnum') landed in Qt/PySide6 6.7."""
-    try:
-        major, minor = (int(p) for p in PYSIDE_VERSION.split(".")[:2])
-    except ValueError:
+    """Can this Qt actually APPLY an OpenType feature tag (tnum) to a QFont?
+
+    This used to check the PySide version and `hasattr(QFont, "setFeature")` and stop — an API
+    PRESENCE check, not a capability check. On PySide6 6.11.1 the attribute exists and the signature
+    is documented as `setFeature(tag: QFont.Tag | str, value: int)`, but passing the plain string
+    raises `ValueError: called with wrong argument values`; only `QFont.Tag("tnum")` binds. The one
+    call site swallowed that in a bare `except: pass`, so every "tabular" surface in the app — every
+    lap time, split, sector and delta — shipped PROPORTIONAL figures while `register_fonts()`
+    printed "tabular figures via tnum feature". The banner asserted the opposite of the truth.
+
+    So probe the round trip rather than the version: set the feature on a scratch font and believe
+    `featureTags()`."""
+    if not hasattr(QFont, "setFeature"):
         return False
-    return (major, minor) >= (6, 7) and hasattr(QFont, "setFeature")
+    return _apply_tnum(QFont())
 
 
 def register_fonts() -> None:
@@ -759,20 +797,27 @@ def ui_font(size: int = BODY, weight: QFont.Weight = W_REGULAR) -> QFont:
     return f
 
 
-def mono_font(size: int = TABLE, weight: QFont.Weight = W_REGULAR) -> QFont:
-    """Tabular-figures face for column-aligning digits: Inter+tnum on Qt≥6.7, else the mono stack."""
-    if _supports_feature:
-        f = ui_font(size, weight)
-        try:
-            f.setFeature("tnum", 1)  # tabular figures (Qt ≥ 6.7 accepts a str tag)
-        except Exception:
-            pass
-        return f
+def _mono_stack_font(size: int, weight: QFont.Weight) -> QFont:
+    """The fallback: a real monospaced face, whose digits are tabular by construction."""
     f = QFont("SF Mono", size)
     f.setWeight(weight)
     f.setFamilies(list(MONO_FAMILIES))
     f.setPixelSize(size)
     return f
+
+
+def mono_font(size: int = TABLE, weight: QFont.Weight = W_REGULAR) -> QFont:
+    """Tabular-figures face for column-aligning digits: Inter+tnum where Qt can apply the feature,
+    else the mono stack.
+
+    Falls through to the mono stack if the feature does not take on THIS font, rather than returning
+    a proportional face that claims to be tabular — the previous silent-`pass` version is what let
+    the app ship un-aligned digits behind a log line saying otherwise."""
+    if _supports_feature:
+        f = ui_font(size, weight)
+        if _apply_tnum(f):
+            return f
+    return _mono_stack_font(size, weight)
 
 
 # ====================================================================== icons
