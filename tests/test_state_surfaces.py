@@ -428,7 +428,16 @@ def test_the_tile_value_claims_the_height_its_own_ink_needs():
     IS the line height, so it was the one surface slicing the apex and base arcs off.
 
     Read from the window composite: the number of INK ROWS must equal the ink the string has, not
-    merely 'ink reaches the edge'."""
+    merely 'ink reaches the edge'.
+
+    THE HEIGHT IS CLAIMED ON THE TYPE STEP, NOT ON THE STRING, and the two assertions at the foot
+    of this test are where that shows. As shipped, #194 measured `tightBoundingRect(text)` — the
+    height of THIS tile's own value — so a tile printing a ⊘ stood 2 px taller than its row-mates
+    and dropped its caption 2 px below theirs in a shared grid row (the wave's own regression
+    sweep, SW4-02). The clip fix is unchanged and still proved from the pixels below; what moved
+    is that the claim is now made over `widgets.VALUE_INK`, every mark a tile can print, so the
+    marked and the plain tile are ONE height. The cost is paid by every tile or by none —
+    tests/test_measure_floors.py holds the row."""
     marked = Tile("laps")
     marked.set(f"25 · 24 {LT.EXCLUDED_MARK} · 3 {LT.DROPOUT_MARK}")
     plain = Tile("best lap")
@@ -460,11 +469,16 @@ def test_the_tile_value_claims_the_height_its_own_ink_needs():
         assert len(ink) >= wanted, (
             f"{name}: only {len(ink)} ink rows composited in a {lb.height()} px box for {wanted} "
             f"px of ink")
-    # The fix costs nothing where it is not needed: a tile of digits keeps the plain line box.
-    assert plain.value.height() == plain.value.fontMetrics().height()
-    assert marked.value.height() > plain.value.height()
+    # ...and the claim is a property of the TYPE STEP, so the two tiles are one height. A tile
+    # whose height depended on its own string is a tile that can move its neighbours' captions.
+    assert marked.value.height() == plain.value.height(), (
+        f"the ⊘ tile's value box is {marked.value.height()} px and a digits-only tile's is "
+        f"{plain.value.height()} — a shared grid row is as tall as its tallest member, so the "
+        f"shorter tile's caption sits {marked.value.height() - plain.value.height()} px low")
+    assert plain.value.height() >= plain.value.fontMetrics().height()
     print(f"test_the_tile_value_claims_the_height_its_own_ink_needs OK "
-          f"(marked {marked.value.height()} px, digits {plain.value.height()} px)")
+          f"(marked {marked.value.height()} px == digits {plain.value.height()} px, over a "
+          f"{plain.value.fontMetrics().height()} px line box)")
 
 
 def test_the_lap_grids_trailing_spacer_never_paints_under_the_pointer_floor():
