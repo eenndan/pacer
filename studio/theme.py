@@ -1638,6 +1638,19 @@ QFrame#WelcomeDropZone {{
     border: {SPACE_XXS}px dashed {C.border_strong};
     border-radius: {RADIUS_L}px;
 }}
+/* ...and the state it never had. Measured across seven payloads at two cursor positions, a drag
+   over the window changed ZERO pixels of the composite (QA D4-03): the zone advertised a target
+   and then gave no feedback that the target had been hit. The border takes the attention accent
+   and the box fills to the surface colour — no new hue, and the dashes stay, because the invitation
+   is still "drop it here". The whole shorthand is restated rather than a lone `border-color`, so
+   the dashed style and width cannot be inherited from a rule someone later edits. Set from
+   StudioWindow._set_dragover, which pairs it with style().unpolish/polish — a dynamic property
+   alone does not repaint under QSS. */
+QFrame#WelcomeDropZone[dragover="true"] {{
+    background-color: {C.surface};
+    border: {SPACE_XXS}px dashed {C.accent};
+    border-radius: {RADIUS_L}px;
+}}
 /* first-run welcome empty state (no recording loaded): a large wordmark (role="Title", shared with
    the About/privacy cards) + a muted invitation. */
 QLabel[role="WelcomeSubtitle"] {{

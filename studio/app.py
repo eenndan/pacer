@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QInputDialog,
     QLabel,
     QMainWindow,
@@ -58,7 +59,7 @@ from .central_view import CentralView, undo_summary
 from .coaching_panel import OpportunitiesDialog
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
-from .overlays import PBToast, WelcomeView
+from .overlays import BUSY_DEMO_LABEL, PBToast, WelcomeView
 from .session import DEFAULT_SAMPLE, fmt_time
 from .widgets import chip, set_tone
 from .workers import DemoResolveWorker, SessionLoadWorker, VideoExportWorker
@@ -77,6 +78,23 @@ STATUS_MS = 6000
 # card up forever (QA L10-01/L10-06). The FIRST load has nothing to keep on screen, so it shows
 # the card immediately (see _arm_loading_placeholder).
 LOAD_PLACEHOLDER_MS = 400
+# The two "a file on disk exists and this build could not use it" notices, module-level because the
+# tests assert them against the branch that raises them rather than against a re-typed literal.
+#
+# A sidecar is the user's OWN hand-placed start/finish line. `sidecar.load` used to answer None for
+# absent, unreadable, not-JSON, wrong-version and structurally-invalid alike, and `_on_session_loaded`
+# read that one None as "nothing to restore" — so a corrupt sidecar still sitting on disk was
+# discarded in total silence (no modal, no status change, no console line) and the app then told the
+# user "unknown track — start/finish line was auto-fitted; drag it into place", i.e. asked them to
+# redo the work it had just thrown away (QA D2-04). Absent stays silent, because absent is normal.
+SIDECAR_UNREADABLE_NOTICE = ("saved timing lines couldn't be read — the .pacer.json next to this "
+                             "recording is damaged; place the start/finish line again to rewrite it")
+# The track database is every circuit the user has saved. When the FILE is corrupt, track_db.load
+# returns an empty DB — correct, and it keeps a save from wiping the original (it is copied to
+# .bak first) — but nothing said so at load, so every recording opened as "unknown track" with no
+# way to tell that from a genuinely new circuit (QA D2-16).
+TRACKS_UNREADABLE_NOTICE = ("your saved tracks couldn't be read — tracks.json is damaged, so no "
+                            "circuit will be auto-detected")
 
 
 def _show_error_report(exc_type, exc, tb):
@@ -185,10 +203,18 @@ class StudioWindow(QMainWindow):
         self._demo_worker = None
         # The ONE untimed status-bar line describing the loaded session (see _session_notice): the
         # multi-drop warning carried through the load that started it, whether a sidecar restore was
-        # rejected, and the last notice actually put on the bar (so a stale one can be retracted).
+        # rejected, whether the saved lines could not even be READ, whether the track database is
+        # unreadable, and the last notice actually put on the bar (so a stale one can be retracted).
         self._drop_notice = None
         self._timing_restore_failed = False
+        self._timing_restore_unreadable = False
+        self._tracks_unreadable = False
         self._notice = None
+        # The loading card currently installed (see _show_loading_placeholder) and its two labels,
+        # so a long UI-thread stage can NAME itself on the card that is already on screen instead of
+        # freezing under a headline that stopped being true (see _announce_stage).
+        self._loading_card = None
+        self._loading_headline = None
         # Reference (cross-recording compare) load bookkeeping — the reference Session.load is the SAME
         # ~1.4–4 s synchronous compute as the primary open, so it too runs on a SessionLoadWorker (a
         # freeze here was the worst kind: it hit the moat "race a friend's GoPro" path). Its own token
@@ -214,6 +240,12 @@ class StudioWindow(QMainWindow):
         theme.set_palette(theme.PALETTE_COLORBLIND if self._colorblind else theme.PALETTE_STANDARD)
         self._build_menu()
         self._build_shortcuts()
+        # MATERIALISE THE STATUS BAR NOW, not on the first message. QMainWindow.statusBar() CREATES
+        # the bar, so on a cold launch findChildren(QStatusBar) was empty and the very first
+        # showMessage() grew a 22 px bar under the welcome state — moving its centred drop zone
+        # 11 px up and repainting 16,604 px, at the moment the app is telling the user something
+        # (QA D4-10). The welcome state also had no persistent place for a message at all.
+        self.statusBar()
         # --full on the CLI auto-discovers the first file's sibling chapters; explicit multiple
         # paths are used as-is.
         if full and len(paths) == 1:
@@ -271,9 +303,48 @@ class StudioWindow(QMainWindow):
         return out
 
     def dragEnterEvent(self, event):
-        """Accept a drag only if it carries at least one .mp4 (so the cursor shows it's droppable)."""
+        """Accept a drag only if it carries at least one .mp4 (so the cursor shows it's droppable),
+        and LIGHT THE DROP ZONE UP while it is over the window."""
         if self._dropped_mp4s(event.mimeData()):
             event.acceptProposedAction()
+            self._set_dragover(True)
+
+    def dragLeaveEvent(self, event):
+        """The drag left the window (or was cancelled): put the drop zone back. Without this the
+        highlight would be permanent, which is worse than none at all."""
+        self._set_dragover(False)
+        super().dragLeaveEvent(event)
+
+    def _set_dragover(self, on: bool):
+        """Reflect "a droppable file is over this window" on the welcome state's dashed zone.
+
+        MEASURED, THIS WAS DECORATION. `overlays.WelcomeView` states the intent — "the centred
+        content sits inside a dashed-border DROP ZONE ... so the drag-and-drop affordance is
+        VISIBLE" — and across seven payloads at two cursor positions a drag over the window changed
+        **0 pixels** of the 1440x900 composite (QA D4-03): the zone was visible only BEFORE the
+        drag, and it was not the target either.
+
+        Whatever the cursor position, because the WHOLE WINDOW is the drop target (dropEvent is the
+        window's) — a file accepted 400 px outside the dashed rect is still going to load, so
+        highlighting only on hover over the rect would advertise a target that isn't the real one.
+
+        `setProperty` ALONE DOES NOT REPAINT under QSS: Qt resolves a widget's rules once and
+        caches them, so a dynamic property in a selector needs an explicit unpolish/polish to force
+        re-evaluation. This is the seventh place in this campaign where a stylesheet could silently
+        miss a widget, so the pair is not optional — and the rule is proven from the WINDOW
+        composite, never from `drop_zone.grab()` (a child grab reads the colour back out of the
+        palette and reports success when nothing composited).
+
+        Guarded on the welcome state being what's on screen: a drag over a LOADED session has no
+        zone to light, and that is not an error."""
+        zone = getattr(self.centralWidget(), "drop_zone", None)
+        if zone is None:
+            return
+        # "true" / property removed — never the string "false", so the stylesheet has exactly one
+        # drag state to dress and tests/test_inline_styles.py can check that it exists.
+        zone.setProperty("dragover", "true" if on else None)
+        zone.style().unpolish(zone)
+        zone.style().polish(zone)
 
     def dropEvent(self, event):
         """Load the dropped GoPro file(s) through the guarded _load path.
@@ -283,6 +354,7 @@ class StudioWindow(QMainWindow):
         loads it exactly as before; dropping SEVERAL unrelated recordings must NOT fold them onto one
         clock (which fabricates bogus laps), so we open only the FIRST and say so — the user opens the
         rest one at a time (a batch-import queue is a noted follow-up, not this)."""
+        self._set_dragover(False)   # the drag is over either way; never leave the zone lit
         paths = self._dropped_mp4s(event.mimeData())
         if not paths:
             return
@@ -292,10 +364,11 @@ class StudioWindow(QMainWindow):
     def _open_recordings(self, paths: list[str]):
         """Group `paths` into recordings and load the first, never merging unrelated recordings.
 
-        Expands the chosen recording's full on-disk chapter set via discover_siblings (so a single
-        opened chapter still chains its siblings, matching --full / File ▸ Open), then loads that ONE
-        recording. On a multi-recording drop it surfaces a clear, non-modal status message naming what
-        was opened. Shared by dropEvent (and any future multi-selection open path).
+        Expands the chosen recording's full on-disk chapter set via discover_siblings (so a dropped
+        chapter chains its siblings, matching --full — but NOT File ▸ Open, which deliberately opens
+        exactly the file you picked; see _open_file), then loads that ONE recording. On a
+        multi-recording drop it surfaces a clear, non-modal status message naming what was opened.
+        Shared by dropEvent (and any future multi-selection open path).
 
         That warning is CARRIED THROUGH the load (drop_notice) rather than left to expire on its own:
         it used to be a 6 s transient that _on_session_loaded overwrote after 2.5-3.6 s, so the one
@@ -310,6 +383,9 @@ class StudioWindow(QMainWindow):
         # (dropped chapters ∪ discovered siblings), ordered by chapter index and de-duped, so neither
         # an explicitly-dropped chapter nor an on-disk sibling is ever lost — and dropping the two
         # chapters of one recording loads exactly those two (the common case stays unchanged).
+        # This is the WHOLE difference between the two front doors, and _session_notice is what
+        # names it on the other one (QA D4-02): dropping GX010062 loads 66 laps across 3 chapters,
+        # picking the same file in File ▸ Open… loads 22.
         to_load = chapters.order_chapters(first + chapters.discover_siblings(first[0]))
         drop_notice = None
         if len(groups) > 1:
@@ -322,11 +398,17 @@ class StudioWindow(QMainWindow):
             # untimed (see _session_notice), so the fact stays on screen for the whole session.
             self.statusBar().showMessage(drop_notice, STATUS_MS)
 
-    def _show_welcome(self, error: str | None = None):
-        """Install the no-recording welcome empty state (also the first-load-failure fallback)."""
+    def _show_welcome(self, error: str | None = None, error_path: str | None = None):
+        """Install the no-recording welcome empty state (also the first-load-failure fallback).
+
+        `error_path` is the OFFENDING FILE, passed separately rather than glued onto `error`: the
+        view shows its basename and puts the absolute path on the tooltip, because a raw
+        `/Users/…/track day 2026-08-30/holiday.mp4` inside a word-wrapping label is what drove the
+        drop zone from 403x239 to 727x303 and collapsed the tagline (QA D2-09)."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle(APP_NAME)
-        self.setCentralWidget(WelcomeView(self._open_file, self._open_demo, error, parent=self))
+        self.setCentralWidget(WelcomeView(self._open_file, self._open_demo, error,
+                                          error_path=error_path, parent=self))
         if getattr(self, "_full_action", None) is not None:
             self._full_action.setEnabled(False)
 
@@ -345,9 +427,15 @@ class StudioWindow(QMainWindow):
         broken. Instead keep the welcome screen and say so honestly, so they can retry or open their
         own footage."""
         if self._demo_worker is not None and self._demo_worker.isRunning():
-            return  # already fetching; the button is disabled, but never start a second fetch
+            # Already fetching — never start a second one. SAY so rather than swallowing the click:
+            # the fetch is cancellable now (_cancel_demo), and after a cancel the welcome button is
+            # live again while the abandoned download is still running, so a silent no-op here
+            # would read as a dead button (QA D2-13).
+            self.statusBar().showMessage("Still fetching the demo clip…", STATUS_MS)
+            return
+        token = self._load_token
         self._set_demo_busy(True)
-        self._arm_demo_placeholder()
+        self._arm_demo_placeholder(token)
         worker = DemoResolveWorker(self._load_token)
         self._demo_worker = worker
         self._load_workers.add(worker)  # hold it so the QThread isn't GC'd mid-fetch; drained on close
@@ -364,9 +452,11 @@ class StudioWindow(QMainWindow):
         if btn is None:
             return
         btn.setEnabled(not busy)
-        btn.setText("Fetching the demo clip…" if busy else "Open demo")
+        # The busy label is WelcomeView's constant, because that is where the button is sized to
+        # fit it — the row used to re-centre on the click and slide the primary CTA 39 px (D4-06).
+        btn.setText(BUSY_DEMO_LABEL if busy else "Open demo")
 
-    def _arm_demo_placeholder(self):
+    def _arm_demo_placeholder(self, token: int):
         """Install the loading card only if the demo fetch is still running LOAD_PLACEHOLDER_MS
         later — the same grace period a reload gets. A cached/env demo resolves in microseconds and
         goes straight into a real load, so the card would only ever be a flash there; a cold first
@@ -374,16 +464,35 @@ class StudioWindow(QMainWindow):
         self._cancel_placeholder_timer()
         timer = QTimer(self)
         timer.setSingleShot(True)
-        timer.timeout.connect(self._on_demo_placeholder_due)
+        timer.timeout.connect(lambda: self._on_demo_placeholder_due(token))
         self._placeholder_timer = timer
         timer.start(LOAD_PLACEHOLDER_MS)
 
-    def _on_demo_placeholder_due(self):
+    def _on_demo_placeholder_due(self, token: int):
         """LOAD_PLACEHOLDER_MS elapsed with the demo fetch still running: say so on the card the
         load itself would use, so the wait reads as one continuous operation."""
         self._cancel_placeholder_timer()  # the fired single-shot is spent: release it, don't just drop it
         if self._demo_worker is not None and self._demo_worker.isRunning():
-            self._show_loading_placeholder([], title="Fetching the demo clip…")
+            # WITH ITS CANCEL. This is the same card, in the same place, for the same kind of wait
+            # as a file load — and it shipped without the one control that card has, so the ONLY
+            # multi-second wait in the app you could not back out of was the one that reaches the
+            # network on a first run (QA D2-13).
+            self._show_loading_placeholder([], title=BUSY_DEMO_LABEL,
+                                           on_cancel=lambda: self._cancel_demo(token))
+
+    def _cancel_demo(self, token: int):
+        """Cancel on the demo card: stop WAITING for the fetch and hand the welcome screen back.
+
+        The download is not interrupted — DemoResolveWorker runs one uninterruptible call, exactly
+        like Session.load — so the worker runs to completion and its result is DROPPED by the same
+        token guard _on_demo_resolved already applies to a superseded fetch. Ignores a stale click
+        (the fetch already settled or was superseded)."""
+        if token != self._load_token:
+            return
+        self._load_token += 1        # the in-flight resolve is now stale and will be dropped
+        self._cancel_placeholder_timer()
+        self._show_welcome()
+        self.statusBar().showMessage("Demo download cancelled.", STATUS_MS)
 
     def _on_demo_resolved(self, token: int, path):
         """The demo resolved (on the UI thread, via a queued signal): load it, or re-show the
@@ -595,12 +704,28 @@ class StudioWindow(QMainWindow):
         # as a reference is segmented exactly as opening it would segment it (QA W9-01).
         self._sidecar_path = sidecar.sidecar_path(paths[0]) if paths else None
         self._timing_restore_failed = False
+        self._timing_restore_unreadable = False
         restored = session.restore_saved_timing_lines(self._sidecar_path)
         if restored is True:
             print(f"studio: restored saved timing lines from "
                   f"{os.path.basename(self._sidecar_path)}", flush=True)
         elif restored is False:  # the revert guard rejected them; the fitted lines still stand
             self._timing_restore_failed = True
+        elif restored == sidecar.UNREADABLE:
+            # The sidecar EXISTS and could not be used. Absent (restored is None) stays silent —
+            # that is the ordinary case and a notice for it would be noise — but this one is the
+            # user's own placed line being dropped, so it goes into the same untimed notice channel
+            # the revert guard already uses, and onto the console beside the success line.
+            self._timing_restore_unreadable = True
+            print(f"studio: could not read the saved timing lines in "
+                  f"{os.path.basename(self._sidecar_path)} — keeping the fitted start line",
+                  flush=True)
+        # Whether the user's saved CIRCUITS are readable is a per-load fact too (the DB is read
+        # during Session.load's track detection), cached here so _session_notice can be re-decided
+        # on every timing edit without re-reading the file each time.
+        self._tracks_unreadable = track_db.unreadable()
+        if self._tracks_unreadable:
+            print(f"studio: {TRACKS_UNREADABLE_NOTICE}", flush=True)
 
         # Re-opening the SAME recording carries its timing-line undo history across the new Session.
         # Without this, File ▸ Open on the recording you had just mis-dragged greyed out the one
@@ -614,7 +739,25 @@ class StudioWindow(QMainWindow):
 
         label = chapters.recording_label(paths)
         self.setWindowTitle(f"{APP_NAME} — {label}" if label else APP_NAME)
-        self._build_ui()
+        # NAME THE SECOND STAGE BEFORE IT BLOCKS. Session.load is off-thread as documented, but
+        # everything below this line is not: building the CentralView costs 647-674 ms warm and
+        # ~1.5 s cold, during which the UI thread is outside the event loop — the indeterminate bar
+        # stops animating and Cancel, the card's only control, cannot be clicked (QA D4-01:
+        # measured 1508.4 ms of a 3807.5 ms load, a 1528.6 ms gap between the bar's last paint and
+        # the next paint of anything, 70.2% of the load blocked in total).
+        #
+        # This does NOT make the wait shorter. Qt widgets are main-thread-only, so moving
+        # CentralView construction off the UI thread is not available at any price. What it fixes is
+        # the wait being a LIE: the card said "Loading telemetry…" and froze under a headline that
+        # had already stopped being true. Now it says which stage it is in, and the BusyCursor says
+        # the freeze is the app working rather than the app hung.
+        self._announce_stage("Building the session view…")
+        QApplication.setOverrideCursor(Qt.BusyCursor)
+        try:
+            self._build_ui()
+        finally:
+            # After the swap, not before: setCentralWidget is the last thing in the blocked run.
+            QApplication.restoreOverrideCursor()
         # One-line, non-fatal: the statusbar mirrors the console "studio:" notice style.
         notice = self._apply_session_notice()
         if notice:
@@ -626,6 +769,50 @@ class StudioWindow(QMainWindow):
         if moment is not None:
             self._show_pb_moment(moment)
         self.loadFinished.emit()
+
+    def _announce_stage(self, headline: str) -> bool:
+        """Rename the loading card's headline to the stage that is ABOUT to run, and force one
+        synchronous paint so the new text is on screen before that stage blocks the UI thread.
+
+        Returns whether there was a card to rename — False when the card was never installed (a
+        reload fast enough to beat LOAD_PLACEHOLDER_MS keeps the live session on screen, and
+        repainting a working window to say "building" would be a worse lie than saying nothing).
+
+        The force-paint is the SAME trick `_show_loading_placeholder` ends with: without it the
+        setText only queues a repaint that the very block it is announcing would then swallow, so
+        the card would change its headline AFTER the stage it names had finished. Identity-checked
+        against the current central widget, so a stale wrapper for a card `setCentralWidget` has
+        already deleted can never be touched."""
+        card = getattr(self, "_loading_card", None)
+        headline_label = getattr(self, "_loading_headline", None)
+        if card is None or headline_label is None or self.centralWidget() is not card:
+            return False
+        headline_label.setText(headline)
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        return True
+
+    def _chapter_subset(self) -> tuple[int, int] | None:
+        """(chapters open, chapters on disk) when the loaded session is a STRICT SUBSET of its
+        recording's chapters — else None (the whole recording, or a recording whose chapter set
+        can't be resolved).
+
+        THE ONE SOURCE for "you are looking at part of a recording", read by both the notice that
+        SAYS so and the File ▸ Load full recording item that FIXES it, so the two cannot disagree
+        about whether there is anything to chain. Best-effort by construction: an unreadable folder
+        answers None, i.e. "no partiality to report", which is the safe direction — never invent a
+        missing chapter."""
+        paths = getattr(self, "_paths", None)
+        if not paths:
+            return None
+        try:
+            sibs = chapters.discover_siblings(paths[0])
+        except Exception:  # noqa: BLE001 — an unresolvable chapter set is simply not a subset
+            return None
+        if len(sibs) > len(paths) and set(paths) <= set(sibs):
+            return len(paths), len(sibs)
+        return None
 
     def _session_notice(self) -> str | None:
         """The ONE untimed status-bar line for the CURRENTLY loaded session, derived from live state
@@ -643,6 +830,20 @@ class StudioWindow(QMainWindow):
             trust strip and provisional cue read, so the bar retracts the "drag it into place" line
             in the same beat the map does. It used to be decided ONCE at load from `track_name`, so
             it survived byte-identical across the very drag that answered it (QA MAP-06);
+          * a SAVED-LINES failure — a sidecar that is on disk and could not be used. Distinct from
+            the revert-guard rejection below it and from the (correctly silent) absent case: the
+            user's hand-placed start/finish line is being discarded, and the app then goes on to
+            ask them to "drag it into place", i.e. to redo the work it just threw away (QA D2-04);
+          * a PARTIAL RECORDING — the session is a strict subset of its chapters on disk. The two
+            front doors disagree by 44 laps on the owner's own footage (dropping GX010062 loads 66
+            across three chapters; picking the same file in File ▸ Open… loads 22) and NOTHING on
+            screen said which you got: the title bar's "· 3 chapters" suffix only appears in the
+            affirmative case, and this line never mentioned chapters at all (QA D4-02). Stated
+            alongside rather than instead of the clauses above, because it is the reason a chapter
+            can have no laps or an unfamiliar best;
+          * an UNREADABLE TRACK DATABASE — tracks.json exists and this build cannot read a circuit
+            out of it, so no track auto-detects and every recording opens as "unknown track" with
+            no way to tell that from a genuinely new circuit (QA D2-16);
           * the multi-drop warning carried in from _open_recordings (QA L10-02), appended so the
             recordings that were NOT opened stay named for the life of the session.
         getattr-guarded for the partial test harnesses that build a window via __new__."""
@@ -661,8 +862,19 @@ class StudioWindow(QMainWindow):
                 # into place. To register the track: studio/dev/print_track_entry.py.
                 notice = ("unknown track — start/finish line was auto-fitted; "
                           "drag it into place to fix lap timing")
+        # Its OWN clause, not a branch of the chain above: a detected track keeps timing_verified
+        # True, so a discarded sidecar would otherwise be stated nowhere at all on exactly the
+        # recording whose saved lines the user cared enough to place by hand.
+        sidecar_notice = (SIDECAR_UNREADABLE_NOTICE
+                          if getattr(self, "_timing_restore_unreadable", False) else None)
+        subset = self._chapter_subset()
+        chapter_notice = (f"{subset[0]} of {subset[1]} chapters — File ▸ Load full recording to "
+                          "analyse the whole recording") if subset else None
+        tracks_notice = (TRACKS_UNREADABLE_NOTICE
+                         if getattr(self, "_tracks_unreadable", False) else None)
         drop_notice = getattr(self, "_drop_notice", None)
-        return " · ".join(p for p in (notice, drop_notice) if p) or None
+        return " · ".join(p for p in (notice, sidecar_notice, chapter_notice, tracks_notice,
+                                      drop_notice) if p) or None
 
     def _apply_session_notice(self) -> str | None:
         """Put the current _session_notice on the status bar and return it.
@@ -729,18 +941,42 @@ class StudioWindow(QMainWindow):
         decides its spacing. Nobody READS this card; they glance at it and possibly click Cancel,
         which is a real control with a focus ring and CTRL_H like any other. So it does not take the
         Help cards' SPACE_XL reading inset. Its 18 px lead separates three GROUPS (what is
-        happening · that it is still happening · how to stop it), which is what SPACE_L is for."""
+        happening · that it is still happening · how to stop it), which is what SPACE_L is for.
+
+        IT IS ALSO THE SECOND FRAME OF THE WELCOME SCREEN, and it used to share no structure with
+        the first. Measured two milliseconds apart at 1440x900: the dashed 403x239 container went to
+        nothing, the headline dropped from 22 px `role="Title"` in `C.text` to a 13 px muted
+        `role="LoadingTitle"`, and the one button on screen moved 62.9 px (QA D4-05). So the card is
+        built on the SAME column as WelcomeView's drop zone — same content margins, same SPACE_L
+        rhythm, same headline role — and the headline is its own label now, with the recording it is
+        reading as a separate muted line underneath rather than fused into one string by "\\n\\n".
+        There is deliberately no dashed border here: dashes mean "drop a file here", which stopped
+        being true the moment a file was dropped. (This is the shape D2 §8.1's proposed
+        `widgets.EmptyState` takes — icon?/title/body/busy/action on one rhythm — so it can adopt
+        that object when it lands, without a competing one being invented here first.)"""
         label = chapters.recording_label(paths)
         headline = title or "Loading telemetry…"
         container = QWidget()
-        v = QVBoxLayout(container)
+        outer = QVBoxLayout(container)
+        outer.setAlignment(Qt.AlignCenter)
+        card = QFrame()
+        v = QVBoxLayout(card)
         v.setAlignment(Qt.AlignCenter)
+        v.setContentsMargins(theme.SPACE_3XL, theme.SPACE_2XL,
+                             theme.SPACE_3XL, theme.SPACE_2XL)
         v.setSpacing(theme.SPACE_L)
-        title_label = QLabel(f"{headline}\n\n{label}" if label else headline)
-        title_label.setProperty("role", "LoadingTitle")
+        outer.addWidget(card, 0, Qt.AlignCenter)
+        title_label = QLabel(headline)
+        title_label.setProperty("role", "Title")
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setWordWrap(True)
         v.addWidget(title_label, 0, Qt.AlignCenter)
+        if label:
+            subject = QLabel(label)
+            subject.setProperty("role", "LoadingTitle")
+            subject.setAlignment(Qt.AlignCenter)
+            subject.setWordWrap(True)
+            v.addWidget(subject, 0, Qt.AlignCenter)
         bar = QProgressBar()
         bar.setObjectName("LoadingBar")
         bar.setRange(0, 0)          # indeterminate: self-animates, no timer to leak, dies with the widget
@@ -752,6 +988,10 @@ class StudioWindow(QMainWindow):
             cancel.setObjectName("LoadingCancel")
             cancel.clicked.connect(on_cancel)
             v.addWidget(cancel, 0, Qt.AlignCenter)
+        # Held so a long UI-thread stage can rename the headline on the card ALREADY ON SCREEN
+        # (see _announce_stage) instead of leaving it asserting a stage that finished.
+        self._loading_card = container
+        self._loading_headline = title_label
         # setCentralWidget DELETES the widget it replaces, so the live view's C++ object dies on
         # the next line. Dispose it HERE, while it is still alive, and forget the Python wrapper.
         #
@@ -832,18 +1072,26 @@ class StudioWindow(QMainWindow):
         # The reassurance is only stated where it is TRUE (and now verifiable on screen behind the
         # dialog); a first-load failure has no previous session, so the line is dropped there.
         tail = "\n\nYour loaded session is unchanged." if reload_failed else ""
+        # THE BODY HAS TO CARRY THE PRODUCT NAME, for exactly the reason _show_error_report states
+        # 700 lines up and this dialog did not honour: macOS DROPS a QMessageBox's window title, so
+        # the constructor's title argument leaves windowTitle() == '' — measured empty in all five
+        # failure cases — and the product was named nowhere on the one surface a first-time user is
+        # most likely to meet first (QA D2-10). The five case messages below are untouched; this is
+        # a naming line in front of them, in the same shape the crash dialog already uses.
         box = QMessageBox(QMessageBox.Critical, f"{APP_NAME} — could not load recording",
+                          f"{APP_NAME} couldn't open this recording.\n\n"
                           f"{message}\n\n{offending}{tail}", parent=self)
         # Raw exception text lives in the collapsible details, not the headline.
         box.setDetailedText(detail)
         box.exec()
         # First-load failure: no central widget yet — show the welcome empty state (with the plain
-        # message) so the window stays open and the user can drop/open another recording.
+        # message) so the window stays open and the user can drop/open another recording. The path
+        # goes separately: shown as its basename, with the absolute path on the tooltip (QA D2-09).
         if not reload_failed:
             # Seed _paths for the failed-first-load case (nothing else has set it, yet readers like
             # "Load full recording" stay reachable). A failed reload keeps the good _paths instead.
             self._paths = list(paths)
-            self._show_welcome(error=f"{message}\n\n{offending}")
+            self._show_welcome(error=message, error_path=offending)
 
     @staticmethod
     def _load_failure_message(paths: list[str], exc: Exception) -> str:
@@ -1444,6 +1692,24 @@ class StudioWindow(QMainWindow):
     def _open_file(self):
         """File ▸ Open…: pick a GoPro MP4 and reload through the guarded _load path.
 
+        IT OPENS THE FILE YOU PICKED, and only that file — it does NOT chain the recording's sibling
+        chapters the way a DROP does (dropEvent -> _open_recordings -> discover_siblings). On the
+        owner's GX010062 that is 22 laps here against 66 there, from the same file, in 1.33 s
+        against 3.81 s (QA D4-02). The difference was previously invisible: the window title's
+        "· 3 chapters" suffix only appears in the affirmative case and the status bar said nothing,
+        so a user could analyse a third of their session and never know. `_session_notice` states it
+        now — "1 of 3 chapters — File ▸ Load full recording to analyse the whole recording" — and
+        names the control that fixes it.
+
+        WHY NOT JUST CHAIN, measured, because that was the obvious alternative: chaining here would
+        leave NO path in the GUI that produces a single-chapter session (drop chains, Open would
+        chain, and Open Recent / Library replay whatever paths a previous load stored), which makes
+        `File ▸ Load full recording` — an opt-in this app deliberately built, and whose enablement
+        rule is `len(_paths) == 1` — permanently disabled and therefore dead. It would also change
+        every number this front door produces (22 laps -> 66, a different session best, a different
+        library row) for a user who asked for one file, and cost every Open +2.5 s. Picking a FILE
+        and dropping a RECORDING are different gestures; the fix is to say which one you made.
+
         Starts the dialog in the persisted last-opened folder (a track-day user's footage lives in one
         place), falling back to the current recording's folder and then nowhere. On a successful open
         the picked file's folder is remembered for next time."""
@@ -1463,22 +1729,21 @@ class StudioWindow(QMainWindow):
         return os.path.dirname(self._paths[0]) if getattr(self, "_paths", None) else ""
 
     def _sync_full_recording_action(self):
-        """Enable "Load full recording" only when the current session is a SINGLE opened chapter
-        that actually has sibling chapters on disk to chain (so the opt-in does something)."""
-        can = False
-        if len(self._paths) == 1:
-            sibs = chapters.discover_siblings(self._paths[0])
-            can = len(sibs) > 1
-        self._full_action.setEnabled(can)
+        """Enable "Load full recording" only when the loaded session is a strict SUBSET of its
+        recording's chapters, i.e. when the opt-in would actually do something.
+
+        Reads `_chapter_subset`, the same predicate `_session_notice` uses to SAY the session is
+        partial — so the sentence that names this control and the control itself can never disagree
+        about whether there is anything left to chain."""
+        self._full_action.setEnabled(self._chapter_subset() is not None)
 
     def _load_full_recording(self):
         """Opt-in: chain the opened chapter's siblings into one full recording and reload."""
-        if len(self._paths) != 1:
+        if self._chapter_subset() is None:
             return
         sibs = chapters.discover_siblings(self._paths[0])
-        if len(sibs) > 1:
-            print(f"studio: loading full recording — {len(sibs)} chapters.", flush=True)
-            self._load(sibs)
+        print(f"studio: loading full recording — {len(sibs)} chapters.", flush=True)
+        self._load(sibs)
 
     # ----------------------------------------------------------- session library (F8)
     def _update_library(self, paths: list[str]) -> dict | None:
@@ -1923,6 +2188,8 @@ class StudioWindow(QMainWindow):
                            "confirm it.")
     _NO_TRACK_REASON = ("Needs a complete lap and a GPS position — there are no usable timing lines "
                         "to promote into a reusable track.")
+    _NO_LIBRARY_REASON = ("No recordings analysed yet — open a GoPro recording and it is remembered "
+                          "here, with its track, date and best lap.")
 
     @staticmethod
     def _gate_action(action, ok: bool, reason: str) -> None:
@@ -1970,6 +2237,23 @@ class StudioWindow(QMainWindow):
         # trust: promoting the lines is precisely how a provisional recording becomes verified, and
         # the map's own amber banner sends the user here to do it.
         self._gate_action(self._save_track_action, self._can_save_track(), self._NO_TRACK_REASON)
+        # Library… needs a library. On a genuinely fresh index this item was enabled and opened a
+        # 900x520 dialog whose table body was entirely blank, over a PB pane reading "Select a
+        # recording to see its track's PB progression" — instructing an action that cannot be
+        # performed (QA D4-07 / D2-03). Its neighbour "Back up library…" already answers honestly,
+        # which is what made the pair read as an oversight rather than a decision. The dialog also
+        # has a real empty state now (library_dialog), so this gate is belt-and-braces rather than
+        # the only defence.
+        self._gate_action(self._library_action, self._has_library(), self._NO_LIBRARY_REASON)
+
+    @staticmethod
+    def _has_library() -> bool:
+        """True iff the local session-library index holds at least one recording. Guarded — a menu
+        sync must never raise, and an unreadable index reads as 'nothing to browse'."""
+        try:
+            return bool(library.load().get("entries"))
+        except Exception:  # noqa: BLE001 — the guard must never raise out of a menu sync
+            return False
 
     def _has_valid_laps(self) -> bool:
         """True iff the loaded session has at least one COMPLETE lap — the predicate behind every

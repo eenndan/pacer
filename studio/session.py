@@ -1134,12 +1134,20 @@ class Session:
         except Exception:  # noqa: BLE001 — an unresolvable path simply has no saved lines
             return None
 
-    def restore_saved_timing_lines(self, path: str | None = None) -> bool | None:
+    def restore_saved_timing_lines(self, path: str | None = None) -> bool | str | None:
         """Apply the start/sector lines the user SAVED for this recording — the one restore seam.
 
-        Returns None when there is nothing to restore (no provenance, no sidecar, or an invalid
-        one), True when the saved lines were applied, False when `apply_timing_lines_latlon`'s
-        revert guard rejected them (the segmentation is left exactly as the loader fitted it).
+        FOUR answers, because there are four states and three of them used to be one:
+          * ``None`` — nothing to restore: no provenance, or no sidecar on disk. Correctly silent;
+          * ``True`` — the saved lines were applied;
+          * ``False`` — `apply_timing_lines_latlon`'s revert guard rejected them (the segmentation
+            is left exactly as the loader fitted it);
+          * ``sidecar.UNREADABLE`` — a sidecar IS there and could not be used (damaged, wrong
+            version, structurally invalid). This one was folded into `None`, so a corrupt sidecar
+            discarded the user's hand-placed start/finish line and every surface went on to behave
+            as if they had never placed one (QA D2-04). The caller surfaces it; the session's own
+            behaviour is unchanged — the loader's fitted lines still stand, which is the only safe
+            thing to do with lines that cannot be read.
 
         WHY THIS IS A SEAM AND NOT AN INLINE BLOCK IN app.py: the two calls it wraps used to live
         only in `StudioWindow._on_session_loaded`, so a recording opened in a window was segmented
@@ -1153,7 +1161,12 @@ class Session:
             path = self.own_sidecar_path()
         if path is None:
             return None
-        data = sidecar.load(path)
+        try:
+            data = sidecar.load(path)
+        except sidecar.SidecarUnreadable as exc:
+            # Reported, never fatal: a damaged sidecar must not stop a recording from opening.
+            print(f"studio: {exc}", flush=True)
+            return sidecar.UNREADABLE
         if data is None:
             return None
         return self.apply_timing_lines_latlon(data["start"], data["sectors"],

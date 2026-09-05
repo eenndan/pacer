@@ -281,6 +281,33 @@ def load(path: str | None = None) -> dict:
     return {"version": VERSION, "tracks": [_norm_entry(e) for e in tracks]}
 
 
+def unreadable(path: str | None = None) -> bool:
+    """True when a track DB FILE EXISTS and this build cannot read a single circuit out of it — the
+    three file-level shapes ``load`` answers with ``empty_db()``: it does not parse to a JSON
+    object, its ``version`` is missing / not an int, or ``tracks`` is not a list.
+
+    DELIBERATELY NARROWER than ``_lossy_to_overwrite``: a DB with one malformed entry among five
+    good ones is not unreadable, it is repaired-on-read, and telling the user "your saved tracks
+    couldn't be read" there would be false. Absent is False for the same reason absent is silent for
+    a sidecar — a user with no saved circuits has nothing wrong.
+
+    Exists because the silence was total: a corrupt tracks.json made every recording open as
+    "unknown track — start/finish line was auto-fitted", indistinguishable from a genuinely new
+    circuit, with nothing on screen naming the file (QA D2-16). Reading it is the caller's job (see
+    StudioWindow._session_notice), so this stays a pure question with no Qt in it. `path` defaults
+    to ``db_path()``."""
+    if path is None:
+        path = db_path()
+    if not os.path.exists(path):
+        return False
+    ok, data = _is_loadable_dict(path)
+    if not ok:
+        return True
+    if _schema_version(data) is None:
+        return True
+    return not isinstance(data.get("tracks"), list)
+
+
 def _lossy_to_overwrite(path: str) -> bool:
     """True when rewriting `path` from ``load(path)``'s view would LOSE something the file holds —
     the one condition that earns a ``.bak``. False for a healthy file that round-trips, so the
