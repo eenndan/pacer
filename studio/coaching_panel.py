@@ -34,7 +34,7 @@ from . import APP_NAME, coaching, theme, units
 from ._signal import lap_label
 from .lap_table import set_corner_direction
 from .theme import C
-from .widgets import PanelHeader
+from .widgets import EmptyState, PanelHeader
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -132,6 +132,29 @@ def _clean_laps_phrase(n: int) -> str:
     """"median of N clean laps" — the sample the opportunities are a median OVER, so the headline
     carries its own denominator (singular for the degenerate one-lap case)."""
     return f"median of {n} clean lap{'' if n == 1 else 's'}"
+
+
+def empty_state_copy(opps: coaching.Opportunities) -> tuple[str, str]:
+    """(title, body) for the two no-table cases — too few clean laps, or nothing losing time.
+
+    ONE PAIR OF CONSTANTS FOR TWO SURFACES, and this function is what makes that true rather than
+    intended. `OpportunitiesPanel._show_excluded` carried a docstring claiming it matched "the modal
+    dialog's wording so the two surfaces read the same"; measured on the same session (QA D2-08),
+    the panel said "Drive at least 3 clean (valid, GPS-dropout-free) laps to surface coaching
+    opportunities — this session has 0." and the modal said "Need at least 3 … This session has 2.
+    Drive a few more laps and reload." Same fact, different sentence, and the PANEL — the surface a
+    user actually lands on — was the one missing the NEXT ACTION. Two call sites re-authoring a
+    string is how a docstring becomes a wish; there is one author now.
+
+    The split is the app's empty-state copy contract: title = WHAT HAPPENED, body = WHY then WHAT
+    NEXT (see widgets.EmptyState)."""
+    if not opps.enough:
+        return ("Not enough clean laps yet.",
+                f"Coaching needs {coaching.MIN_LAPS} clean (valid, GPS-dropout-free) laps; this "
+                f"session has {opps.n_laps}. Drive a few more laps and reload.")
+    return ("No corner is losing time.",
+            "Your typical lap matches your best lap all the way round — your best-lap pace is "
+            "consistent. Nice driving.")
 
 
 def _shown_rows(opps: coaching.Opportunity) -> list[coaching.Opportunity]:
@@ -531,20 +554,11 @@ class OpportunitiesDialog(QDialog):
 
     # ------------------------------------------------------------------ states
     def _empty_state(self, opps: coaching.Opportunities) -> QWidget:
-        """Friendly message for the two no-table cases: too few clean laps, or no corner losing
-        time."""
-        if not opps.enough:
-            msg = (f"Need at least {coaching.MIN_LAPS} clean (valid, GPS-dropout-free) laps to "
-                   f"find coaching opportunities.\nThis session has {opps.n_laps}. "
-                   "Drive a few more laps and reload.")
-        else:
-            msg = ("No corner is losing time versus your best lap on your typical lap — your "
-                   "best-lap pace is consistent across the lap. Nice driving.")
-        label = QLabel(msg)
-        label.setWordWrap(True)
-        label.setAlignment(Qt.AlignCenter)
-        label.setProperty("role", "Note")
-        return label
+        """The two no-table cases, from the SAME pair of constants the panel uses.
+
+        `owns_pane=False`: this is a dialog, so the state sits on the window's own canvas rather
+        than painting a card inside a card."""
+        return EmptyState(*empty_state_copy(opps), owns_pane=False)
 
     def _build_table(self, rows: list[coaching.Opportunity]) -> QWidget:
         table = QTableWidget(len(rows), len(_HEADERS))
@@ -747,14 +761,15 @@ class OpportunitiesPanel(QWidget):
         # the event that means "the columns now have this much room".
         self.table.viewport().installEventFilter(self)
 
-        self.empty_label = QLabel("")
-        self.empty_label.setWordWrap(True)
-        self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setProperty("role", "Note")
+        # The app's ONE empty-state object, owning the pane — which is the whole of QA D2-07. This
+        # page's state was a bare `role="Note"` label on the window CANVAS while its three sibling
+        # tabs, in the SAME rectangle ([0, 461, 515, 417] measured), showed a `C.surface` card: the
+        # panel changed colour when you switched tab, and nothing in either file said so.
+        self.empty_state = EmptyState("")
 
         self.body = QStackedWidget()
         self.body.addWidget(self.table)        # index 0 — the top-3 rows
-        self.body.addWidget(self.empty_label)  # index 1 — the friendly excluded state
+        self.body.addWidget(self.empty_state)  # index 1 — the friendly excluded state
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -934,20 +949,17 @@ class OpportunitiesPanel(QWidget):
         return self.table.viewport().height()
 
     def _show_excluded(self, opps: coaching.Opportunities):
-        """Show the friendly "need more laps" / "no corner losing time" state (NOT an empty box),
-        matching the modal dialog's wording so the two surfaces read the same."""
+        """Show the friendly "need more laps" / "no corner losing time" state (NOT an empty box).
+
+        The wording is `empty_state_copy`'s, so the panel and the Opportunities modal read the same
+        — which is what the docstring here USED to claim while the two strings differed and only
+        the modal's carried a next action (QA D2-08)."""
         self._cids = []
         self._all_rows = []
         self._tuned_key = None
-        if not opps.enough:
-            msg = (f"Drive at least {coaching.MIN_LAPS} clean (valid, GPS-dropout-free) laps to "
-                   f"surface coaching opportunities — this session has {opps.n_laps}.")
-        else:
-            msg = ("No corner is losing time vs your best lap on your typical lap — your best-lap "
-                   "pace is consistent. Nice driving.")
         self._headline = ""
         self._refresh_summary_label()
-        self.empty_label.setText(msg)
+        self.empty_state.set_state(*empty_state_copy(opps))
         self.body.setCurrentIndex(1)
 
     def resizeEvent(self, event):

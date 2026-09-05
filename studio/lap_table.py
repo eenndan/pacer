@@ -38,9 +38,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme, units
+from . import data_quality, theme, units
 from ._signal import fmt_time, lap_label
-from .widgets import NUM_ROLE, NumItem, set_tone
+from .widgets import NUM_ROLE, EmptyState, NumItem, set_tone
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -124,14 +124,14 @@ EXCLUDED_WARN_MIN = 3
 # L3-08: Corners showed the generic "Select a lap to see its corners." on a recording that HAS no
 # selectable lap — an instruction that cannot be followed, beside a sibling placeholder in the same
 # panel that stated the fact). One string, so the two pages can never drift.
-NO_LAPS_TEXT = ("No complete laps in this recording.\n\n"
-                "The GPS may not have locked, or the recording is too short to cross the "
-                "start/finish line.")
-# ...and the one NEXT ACTION both placeholders end on. It is deliberately NOT "drag the start/finish
-# line": that call-to-action already lives on the map (the on-canvas cue + the trust strip), and a
-# recording with no lap at all is usually the wrong recording, not a misplaced line.
-NO_LAPS_ACTION = "Open another recording with ⌘O."
-NO_LAPS_PLACEHOLDER = f"{NO_LAPS_TEXT}\n\n{NO_LAPS_ACTION}"
+#
+# IT IS NOW THE APP'S string rather than this file's. `NO_LAPS_ACTION` used to live here and said
+# "Open another recording with ⌘O." on the argument that "that call-to-action already lives on the
+# map". It did — and both were on screen at once on every zero-lap recording, 523 px apart, telling
+# the user to do two different things (QA D2-01). data_quality.no_laps_body() states both, in one
+# order, everywhere; the ⌘O sentence is its second half now (NO_LAPS_ALT_ACTION).
+NO_LAPS_HEADLINE = data_quality.NO_LAPS_HEADLINE
+NO_LAPS_TEXT = f"{NO_LAPS_HEADLINE}\n\n{data_quality.no_laps_body()}"
 
 
 def _with_star(star_tip: str, tip: str) -> str:
@@ -201,10 +201,11 @@ def _lap_col_tips(unit: str | None) -> list[str]:
 # stripe + row selection across the full table width). It is ALWAYS the last column, so it moves
 # as the dynamic S-split columns come and go — see _n_real_cols / _apply_column_sizing.
 SPACER_HEADER = ""
-# How far the spacer may COLLAPSE when the panel has no slack to give it. Qt's default minimum
-# section size (~17px here) is enough to push a table that would otherwise just fit into a
-# horizontal scrollbar — the spacer must never be the thing that summons one. It only floors
-# hand-dragged sections (the data columns size themselves), so a few pixels is safe.
+# The header's minimum section size. Qt's default (~17px here) is enough to push a table that would
+# otherwise just fit into a horizontal scrollbar; it only floors hand-dragged sections (the data
+# columns size themselves), so a few pixels is safe. It is NOT the spacer's collapsed width any
+# more: a spacer with less than theme.HIT_MIN of slack to hold is HIDDEN, not collapsed, because a
+# 4x29 clickable header section is a pointer target four pixels wide (QA D4-12, see _fit_columns).
 MIN_SECTION_PX = 4
 # The Lap column is Interactive with a fixed start width (the CornerTable precedent below), NOT
 # ResizeToContents: its text carries the ▶ current-lap marker, which appears/disappears every lap
@@ -875,11 +876,10 @@ class LapTable(QWidget):
         self.table.viewport().installEventFilter(self)   # re-fit on every real width change
 
         # Empty state: zero valid laps would show a blank grid, so stack a placeholder and flip to
-        # it in refresh().
-        self._empty = QLabel(NO_LAPS_PLACEHOLDER)
-        self._empty.setProperty("role", "EmptyState")
-        self._empty.setAlignment(Qt.AlignCenter)
-        self._empty.setWordWrap(True)
+        # it in refresh(). The app's ONE empty-state object (widgets.EmptyState) — headline in its
+        # own slot, body at the app's one measure, card surface — where this was a single wrapped
+        # QLabel fusing both into one string with "\n\n" and setting 72 characters per line.
+        self._empty = EmptyState(NO_LAPS_HEADLINE, data_quality.no_laps_body())
         self._stack = QStackedWidget()
         self._stack.addWidget(self.table)   # index 0: the populated table
         self._stack.addWidget(self._empty)  # index 1: the empty-state placeholder
@@ -1133,6 +1133,10 @@ class LapTable(QWidget):
         hdr = self.table.horizontalHeader()
         for c in range(self._n_real_cols() + 1):
             hdr.setSectionResizeMode(c, QHeaderView.Interactive)
+            # ...and UNHIDE, because _fit_columns hides the spacer when it would fall below the
+            # pointer floor and the spacer's INDEX moves as S-columns come and go. Without this, a
+            # new sector line turns yesterday's hidden spacer into today's hidden DATA column.
+            self.table.setColumnHidden(c, False)
         self._fit_columns()
 
     def _column_budget(self) -> tuple[list[int], list[int], list[int]]:
@@ -1158,22 +1162,35 @@ class LapTable(QWidget):
         spacer (L2-06) and a narrow panel keeps its S-split columns on screen (L3-04)."""
         hdr = self.table.horizontalHeader()
         real = self._n_real_cols()
-        # MIN_SECTION_PX is reserved for the spacer: it must never be the section that summons a
-        # horizontal scrollbar, so the data columns are fitted to the width that is left after it.
         width = self.table.viewport().width()
-        avail = width - MIN_SECTION_PX
-        if avail <= 0 or real <= 0:
+        if width <= 0 or real <= 0:
             return
         natural, floors, caps = self._column_budget()
         # ...with every column at least wide enough for its header to keep naming it, while the
         # panel can afford that (header_floors). The spacer is not in these lists and has no label.
-        fitted = fit_columns(natural, header_floors(self.table, floors, natural, avail), caps, avail)
+        fitted = fit_columns(natural, header_floors(self.table, floors, natural, width), caps, width)
         for c, w in enumerate(fitted):
             hdr.resizeSection(c, w)
         # The spacer takes EXACTLY the slack the capped data columns left (P5: keep them adjacent
-        # and left-packed instead of flinging the last one across a dead band), and collapses to
-        # MIN_SECTION_PX when there is none.
-        hdr.resizeSection(real, max(MIN_SECTION_PX, width - sum(fitted)))
+        # and left-packed instead of flinging the last one across a dead band) — AND IT IS HIDDEN
+        # RATHER THAN COLLAPSED when that slack is under the app's pointer floor (QA D4-12).
+        #
+        # It used to floor at MIN_SECTION_PX, which is what a SQUEEZED panel always produces: the
+        # data columns were fitted to `width - MIN_SECTION_PX` and the fit fills its budget exactly,
+        # so at every size where the columns do not all reach their caps — the shipped default among
+        # them — the panel's right edge carried a 4x29 px enabled, clickable header section. That is
+        # 4 px of pointer target against a declared floor of theme.HIT_MIN = 24, and it was the only
+        # interactive surface under the floor anywhere in the app's first look. A section this small
+        # is not a control that is merely hard to hit; it is one nobody meant to ship.
+        #
+        # Fitting to the FULL width instead of reserving those 4 px is what makes hiding it free:
+        # the squeezed case now lands exactly on the viewport, so there is nothing left over to
+        # show and nothing left behind. The spacer never summoned the scrollbar before and cannot
+        # now — a hidden section has no width at all.
+        slack = width - sum(fitted)
+        self.table.setColumnHidden(real, slack < theme.HIT_MIN)
+        if slack >= theme.HIT_MIN:
+            hdr.resizeSection(real, slack)
 
     def eventFilter(self, obj, event):
         # The table's VIEWPORT, not this widget: the Corners/Laps pages are laid out inside a tab
@@ -1831,11 +1848,10 @@ class CornerTable(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         self._num_font = theme.mono_font(theme.TABLE)
         # Empty state (was a bare header grid — the one surface without one): says WHY there
-        # are no rows (no lap selected vs no corners detected) instead of a silent void.
-        self.empty = QLabel("")
-        self.empty.setProperty("role", "EmptyState")
-        self.empty.setAlignment(Qt.AlignCenter)
-        self.empty.setWordWrap(True)
+        # are no rows (no lap selected vs no corners detected) instead of a silent void. Same
+        # object as the Laps grid's, so the two pages of one panel cannot present the same fact
+        # two ways; refresh() sets both slots at once through set_state.
+        self.empty = EmptyState("")
         self.empty.setVisible(False)
         # The Δ-baseline caption (L3-05) — visible only on the lap the Δ columns measure against,
         # where every Δ is a dash. Muted, one line, above the grid it explains.
@@ -2050,11 +2066,17 @@ class CornerTable(QWidget):
         self._hover_row = -1
         self.empty.setVisible(not stats)
         if not stats:
-            self.empty.setText(
-                NO_LAPS_PLACEHOLDER if not self._has_selectable_laps() else
-                "Select a lap to see its corners." if not ok else
-                "No corners detected for this session yet — corner analysis needs a few "
-                "clean laps of track shape.")
+            # WHAT HAPPENED in the title, WHY + WHAT NEXT in the body — the same split the Laps
+            # grid, the charts panel, the map and the Library dialog now make, so the three cases
+            # differ in their words and in nothing else.
+            self.empty.set_state(*(
+                (NO_LAPS_HEADLINE, data_quality.no_laps_body())
+                if not self._has_selectable_laps() else
+                ("No lap selected.",
+                 "Pick a lap in the Laps tab to see its corner times, apex speeds and grip.")
+                if not ok else
+                ("No corners detected yet.",
+                 "Corner analysis needs a few clean laps of track shape for this session.")))
         corner_list = self.session.corners.corner_list() if stats else []
         bests = self.session.corners.corner_session_bests() if stats else []
         # Per-corner grip utilisation (%); [] when there's no g signal → the column shows a dash.

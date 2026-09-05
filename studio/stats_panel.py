@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme, units
+from . import data_quality, theme, units
 from ._signal import fmt_time
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the digest tile
@@ -78,13 +78,18 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
 PROVISIONAL_BANNER = ("Lap timing is unverified — every lap time, split and “best” on this page is "
                       "measured from an auto-fitted start/finish line. Drag it on the map to where "
                       "a lap begins.")
-# The 0-lap page: the status bar's own copy plus the next action, ON the page. Without it the
+# The 0-lap page: the app's shared copy plus the one clause only this page can add. Without it the
 # PACE/SPEED groups render as a wall of em-dashes whose only explanation is a status-bar line
 # outside the maximized panel.
-NO_LAPS_TEXT = ("No complete laps in this recording — so there are no lap statistics to show.\n\n"
-                "The GPS may not have locked, or the recording is too short to cross the "
-                "start/finish line. If the track looks right on the map, drag the start/finish "
-                "line to where a lap begins.")
+#
+# EVERY WORD BUT THE MIDDLE CLAUSE IS data_quality's. This page's private copy had drifted furthest
+# of the four (QA D2-02): it said "If the track looks right on the map, drag the start/finish line
+# to where a lap begins" where the map itself said "If this is the right track, drag the
+# start/finish line on the map to set where a lap begins" — the same instruction, re-typed, and it
+# omitted the second way out entirely.
+NO_LAPS_STATS_CLAUSE = "There are no lap statistics to show."
+NO_LAPS_TEXT = (f"{data_quality.NO_LAPS_HEADLINE} {NO_LAPS_STATS_CLAUSE} "
+                f"{data_quality.no_laps_body()}")
 # The absent-accelerometer sentence — used BOTH in the DATA TRUST card and under the SPEED · G
 # tiles, so the dashes and the trust card explain themselves in the same words.
 NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
@@ -116,8 +121,23 @@ GG_ASPECT = 2.0
 # with its own axes, keeps both dimensions EXPLICIT (the DPR contract above), and lets the one
 # chart on the page be the thing that yields — the section is never hidden, only sized.
 GG_MIN_HEIGHT = 120       # below this the cloud stops being readable; the page h-scrolls instead
-SPARK_HEIGHT = 96         # px; the PACE trend sparkline (absorbed from the retired
-#                           ConsistencyPanel — its content lives here now)
+# The PACE trend sparkline's height (absorbed from the retired ConsistencyPanel — its content lives
+# here now). A DERIVATION, not a picked 96, and the derivation is the same move theme.py makes for
+# ICON_PX (= SPACE_L) and GRID_ROW_H (= CTRL_H): an emergent number becomes a declared one by being
+# spelled as the step it already was, with the sentence it never had.
+#
+# WHY TWO STEPS OF SPACE_3XL. SPACE_3XL is what the scale spends when a surface is large enough to
+# need room of its own, and this strip is two of them: measured on the shipped widget, the 96 is a
+# 71.5 px DATA BAND plus a 23 px bottom axis plus the 4 px of border every QGraphicsView in this app
+# reserves so a focus ring costs no re-layout (see the QGraphicsView rule in theme.py). The band is
+# the part that has to be big enough — the y axis prints the fastest and slowest lap at its two ends
+# and the curve has to show a slope between them — and one step under a bottom axis would leave it
+# 24 px, two label rows, which is a line rather than a trend.
+#
+# It was the last genuine off-scale literal in `studio/` (tests/test_design_system.py listed it by
+# name as the stats lane's, the one entry of seven that was not an extent excuse). The rendered
+# height is unchanged: this is the same 96 px, said in the app's own units.
+SPARK_HEIGHT = 2 * theme.SPACE_3XL
 SPARK_AXIS_FONT = 10      # tabular tick font for the sparkline's min/max + first/last labels
 SPARK_Y_PAD_FRAC = 0.12   # vertical headroom so extreme dots/labels aren't clipped
 SPARK_TOOLTIP = ("Lap-time trend over the clean laps (GPS-dropout ⚠ laps excluded). "
@@ -515,8 +535,17 @@ class StatsView(QWidget):
         self.provisional_banner.setToolTip(PROVISIONAL_TOOLTIP)
         self.provisional_banner.setVisible(False)
         col.addWidget(self.provisional_banner)
+        # NOT AN EMPTY STATE — a BANNER, and that distinction is the whole of QA D2-06. It wore
+        # `role="EmptyState"`, the same role five centred, card-backed placeholders wore, while
+        # this one rendered LEFT-aligned; the reason it did is that the page BELOW it keeps
+        # rendering (SESSION totals and the DATA TRUST card are real with or without a lap), so it
+        # qualifies content rather than replacing it. One role producing two presentations is not a
+        # role. It takes the amber call-to-action treatment its own sibling two lines up already
+        # owns — the two are mutually exclusive by construction (see refresh: the provisional
+        # banner needs `valid`, this needs `not valid`), so they are one banner slot with two
+        # messages, never a stack of two amber strips.
         self.no_laps_note = QLabel(NO_LAPS_TEXT)
-        self.no_laps_note.setProperty("role", "EmptyState")  # the lap grid's empty-state styling
+        self.no_laps_note.setObjectName("ProvisionalBanner")
         self.no_laps_note.setWordWrap(True)
         self.no_laps_note.setVisible(False)
         col.addWidget(self.no_laps_note)
