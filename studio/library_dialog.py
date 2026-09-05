@@ -369,6 +369,14 @@ class LibraryDialog(QDialog):
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        # theme.GRID_ROW_H, not Qt's default 30. This grid's ROW is the click target (SelectRows +
+        # SingleSelection, and a double-click OPENS the recording), so its height is the app's
+        # control height by the same argument the Laps and Corners grids take it. The 30 it stood
+        # at was not a decision anyone made — it is QHeaderView's stock default, and it was the
+        # last of the app's three grid heights still written by nobody (#193 named this exact
+        # one-line change in its own guard's prose and deliberately did not assert it, so `main`
+        # did not depend on this lane landing; the assertion goes in with the fix).
+        self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(_COL_TRACK, QHeaderView.Stretch)
         for col in (_COL_DATE, _COL_BEST, _COL_THEO):

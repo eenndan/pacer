@@ -121,8 +121,23 @@ GG_ASPECT = 2.0
 # with its own axes, keeps both dimensions EXPLICIT (the DPR contract above), and lets the one
 # chart on the page be the thing that yields — the section is never hidden, only sized.
 GG_MIN_HEIGHT = 120       # below this the cloud stops being readable; the page h-scrolls instead
-SPARK_HEIGHT = 96         # px; the PACE trend sparkline (absorbed from the retired
-#                           ConsistencyPanel — its content lives here now)
+# The PACE trend sparkline's height (absorbed from the retired ConsistencyPanel — its content lives
+# here now). A DERIVATION, not a picked 96, and the derivation is the same move theme.py makes for
+# ICON_PX (= SPACE_L) and GRID_ROW_H (= CTRL_H): an emergent number becomes a declared one by being
+# spelled as the step it already was, with the sentence it never had.
+#
+# WHY TWO STEPS OF SPACE_3XL. SPACE_3XL is what the scale spends when a surface is large enough to
+# need room of its own, and this strip is two of them: measured on the shipped widget, the 96 is a
+# 71.5 px DATA BAND plus a 23 px bottom axis plus the 4 px of border every QGraphicsView in this app
+# reserves so a focus ring costs no re-layout (see the QGraphicsView rule in theme.py). The band is
+# the part that has to be big enough — the y axis prints the fastest and slowest lap at its two ends
+# and the curve has to show a slope between them — and one step under a bottom axis would leave it
+# 24 px, two label rows, which is a line rather than a trend.
+#
+# It was the last genuine off-scale literal in `studio/` (tests/test_design_system.py listed it by
+# name as the stats lane's, the one entry of seven that was not an extent excuse). The rendered
+# height is unchanged: this is the same 96 px, said in the app's own units.
+SPARK_HEIGHT = 2 * theme.SPACE_3XL
 SPARK_AXIS_FONT = 10      # tabular tick font for the sparkline's min/max + first/last labels
 SPARK_Y_PAD_FRAC = 0.12   # vertical headroom so extreme dots/labels aren't clipped
 SPARK_TOOLTIP = ("Lap-time trend over the clean laps (GPS-dropout ⚠ laps excluded). "

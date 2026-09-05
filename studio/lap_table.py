@@ -201,10 +201,11 @@ def _lap_col_tips(unit: str | None) -> list[str]:
 # stripe + row selection across the full table width). It is ALWAYS the last column, so it moves
 # as the dynamic S-split columns come and go — see _n_real_cols / _apply_column_sizing.
 SPACER_HEADER = ""
-# How far the spacer may COLLAPSE when the panel has no slack to give it. Qt's default minimum
-# section size (~17px here) is enough to push a table that would otherwise just fit into a
-# horizontal scrollbar — the spacer must never be the thing that summons one. It only floors
-# hand-dragged sections (the data columns size themselves), so a few pixels is safe.
+# The header's minimum section size. Qt's default (~17px here) is enough to push a table that would
+# otherwise just fit into a horizontal scrollbar; it only floors hand-dragged sections (the data
+# columns size themselves), so a few pixels is safe. It is NOT the spacer's collapsed width any
+# more: a spacer with less than theme.HIT_MIN of slack to hold is HIDDEN, not collapsed, because a
+# 4x29 clickable header section is a pointer target four pixels wide (QA D4-12, see _fit_columns).
 MIN_SECTION_PX = 4
 # The Lap column is Interactive with a fixed start width (the CornerTable precedent below), NOT
 # ResizeToContents: its text carries the ▶ current-lap marker, which appears/disappears every lap
@@ -1132,6 +1133,10 @@ class LapTable(QWidget):
         hdr = self.table.horizontalHeader()
         for c in range(self._n_real_cols() + 1):
             hdr.setSectionResizeMode(c, QHeaderView.Interactive)
+            # ...and UNHIDE, because _fit_columns hides the spacer when it would fall below the
+            # pointer floor and the spacer's INDEX moves as S-columns come and go. Without this, a
+            # new sector line turns yesterday's hidden spacer into today's hidden DATA column.
+            self.table.setColumnHidden(c, False)
         self._fit_columns()
 
     def _column_budget(self) -> tuple[list[int], list[int], list[int]]:
@@ -1157,22 +1162,35 @@ class LapTable(QWidget):
         spacer (L2-06) and a narrow panel keeps its S-split columns on screen (L3-04)."""
         hdr = self.table.horizontalHeader()
         real = self._n_real_cols()
-        # MIN_SECTION_PX is reserved for the spacer: it must never be the section that summons a
-        # horizontal scrollbar, so the data columns are fitted to the width that is left after it.
         width = self.table.viewport().width()
-        avail = width - MIN_SECTION_PX
-        if avail <= 0 or real <= 0:
+        if width <= 0 or real <= 0:
             return
         natural, floors, caps = self._column_budget()
         # ...with every column at least wide enough for its header to keep naming it, while the
         # panel can afford that (header_floors). The spacer is not in these lists and has no label.
-        fitted = fit_columns(natural, header_floors(self.table, floors, natural, avail), caps, avail)
+        fitted = fit_columns(natural, header_floors(self.table, floors, natural, width), caps, width)
         for c, w in enumerate(fitted):
             hdr.resizeSection(c, w)
         # The spacer takes EXACTLY the slack the capped data columns left (P5: keep them adjacent
-        # and left-packed instead of flinging the last one across a dead band), and collapses to
-        # MIN_SECTION_PX when there is none.
-        hdr.resizeSection(real, max(MIN_SECTION_PX, width - sum(fitted)))
+        # and left-packed instead of flinging the last one across a dead band) — AND IT IS HIDDEN
+        # RATHER THAN COLLAPSED when that slack is under the app's pointer floor (QA D4-12).
+        #
+        # It used to floor at MIN_SECTION_PX, which is what a SQUEEZED panel always produces: the
+        # data columns were fitted to `width - MIN_SECTION_PX` and the fit fills its budget exactly,
+        # so at every size where the columns do not all reach their caps — the shipped default among
+        # them — the panel's right edge carried a 4x29 px enabled, clickable header section. That is
+        # 4 px of pointer target against a declared floor of theme.HIT_MIN = 24, and it was the only
+        # interactive surface under the floor anywhere in the app's first look. A section this small
+        # is not a control that is merely hard to hit; it is one nobody meant to ship.
+        #
+        # Fitting to the FULL width instead of reserving those 4 px is what makes hiding it free:
+        # the squeezed case now lands exactly on the viewport, so there is nothing left over to
+        # show and nothing left behind. The spacer never summoned the scrollbar before and cannot
+        # now — a hidden section has no width at all.
+        slack = width - sum(fitted)
+        self.table.setColumnHidden(real, slack < theme.HIT_MIN)
+        if slack >= theme.HIT_MIN:
+            hdr.resizeSection(real, slack)
 
     def eventFilter(self, obj, event):
         # The table's VIEWPORT, not this widget: the Corners/Laps pages are laid out inside a tab
