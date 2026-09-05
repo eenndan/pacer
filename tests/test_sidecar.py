@@ -122,15 +122,29 @@ def test_confirmed_roundtrip_and_legacy_default():
         bad = f'{{"version": 1, "start": {json.dumps(_START)}, "confirmed": "yes"}}'
         with open(p, "w") as f:
             f.write(bad)
-        assert sidecar.load(p) is None
+        try:
+            sidecar.load(p)
+        except sidecar.SidecarUnreadable:
+            pass
+        else:
+            raise AssertionError("a non-bool `confirmed` must be refused, not accepted")
 
 
 def test_load_missing_file_is_none():
+    """ABSENT is the one shape that answers None — and it has to stay that way, because None is
+    what the caller treats as "nothing saved, say nothing" (QA D2-04's negative control)."""
     assert sidecar.load("/nonexistent/dir/GX010060.pacer.json") is None
 
 
 def test_load_rejects_corrupt_and_invalid():
-    """Every malformed shape → None (one contract: caller keeps the auto-fitted lines)."""
+    """QA D2-04: every malformed shape RAISES `SidecarUnreadable`, naming the file and a reason.
+
+    It used to return the same None as "there is no sidecar", and `Session.restore_saved_timing_lines`
+    passed that one None to `StudioWindow`, which read it as "nothing to restore". Measured on the
+    owner's D24 with a truncated sidecar still on disk: no modal, no status change,
+    `_timing_restore_failed == False`, no console line — the user's hand-placed start/finish line
+    was discarded in silence and the app then asked them to place it again. Absent and unusable are
+    two different facts and this is where they part."""
     start_json = json.dumps(_START)
     bad_bodies = [
         "{ not json",                                              # not JSON at all
@@ -153,7 +167,22 @@ def test_load_rejects_corrupt_and_invalid():
         for body in bad_bodies:
             with open(p, "w") as f:
                 f.write(body)
-            assert sidecar.load(p) is None, body
+            try:
+                sidecar.load(p)
+            except sidecar.SidecarUnreadable as exc:
+                assert exc.path == p, exc
+                assert exc.reason, f"a refusal must say WHY: {body}"
+            else:
+                raise AssertionError(f"accepted a malformed sidecar: {body}")
+        # A DIRECTORY at the sidecar path is unusable too, and it is not "absent".
+        folder = os.path.join(d, "folder.pacer.json")
+        os.makedirs(folder)
+        try:
+            sidecar.load(folder)
+        except sidecar.SidecarUnreadable:
+            pass
+        else:
+            raise AssertionError("a directory at the sidecar path must not read as absent")
 
 
 # ------------------------------------------- Session export/apply (pacer, synthetic laps)

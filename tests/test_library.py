@@ -1160,28 +1160,43 @@ def test_dialog_empty_filter_says_so_and_counts_what_is_on_screen():
     library.upsert(idx, _entry("B", track="Buttonwillow", date="2024-06-15", best=68.0, paths=[]))
     dlg = LibraryDialog(idx, _OpenSpy())
     assert dlg._title.text() == "2 analyzed recordings"
-    assert dlg._no_matches.isHidden()
+    assert dlg._empty_note.isHidden()
     dlg.search.setText("zzzz-no-such-recording")
     assert _visible_rows(dlg) == set()
     assert dlg._title.text() == "0 of 2 analyzed recordings"
-    assert not dlg._no_matches.isHidden()
-    assert "No recordings match" in dlg._no_matches.text()
-    assert "zzzz-no-such-recording" in dlg._no_matches.text()   # it names the term that matched none
+    assert not dlg._empty_note.isHidden()
+    assert "No recordings match" in dlg._empty_note.text()
+    assert "zzzz-no-such-recording" in dlg._empty_note.text()   # it names the term that matched none
+    # …and the empty grid goes with the rows: the sentence stands where they would be (QA D2-03).
+    assert dlg.table.isHidden()
     # Cleared → both back to the whole library.
     dlg.search.setText("")
     assert dlg._title.text() == "2 analyzed recordings"
-    assert dlg._no_matches.isHidden()
+    assert dlg._empty_note.isHidden()
+    assert not dlg.table.isHidden()
     dlg.deleteLater()
 
 
-def test_dialog_empty_library_gets_no_no_matches_message():
-    """The "no matches" sentence belongs to a FILTERED empty table only — an empty library is a
-    different state (nothing indexed yet) and must not be told its search matched nothing."""
+def test_dialog_empty_library_says_what_the_library_is_for():
+    """QA D2-03 / D4-07: a genuinely fresh index used to open a 900x520 dialog with a blank
+    four-column table body and no empty-state copy of any kind.
+
+    It gets one now — and it is NOT the "no matches" sentence, which belongs to a FILTERED empty
+    table: an empty library is a different state (nothing indexed yet) and must never be told its
+    search matched nothing, however hard the user searches."""
     dlg = LibraryDialog(library.empty_index(), _OpenSpy())
-    assert dlg._no_matches.isHidden()
     assert dlg._title.text() == "0 analyzed recordings"
+    assert not dlg._empty_note.isHidden()
+    assert "No recordings analysed yet." in dlg._empty_note.text()
+    assert "No recordings match" not in dlg._empty_note.text()
+    # It names the gesture that fills the list, and the blank grid is gone.
+    assert ".MP4" in dlg._empty_note.text()
+    assert dlg.table.isHidden()
     dlg.search.setText("anything")
-    assert dlg._no_matches.isHidden()
+    assert "No recordings match" not in dlg._empty_note.text()
+    # …and the PB pane stops asking for a selection that cannot be made (QA D2-15).
+    assert "Select a recording" not in dlg._pb_empty.toPlainText()
+    assert "Analyse two sessions" in dlg._pb_empty.toPlainText()
     dlg.deleteLater()
 
 
