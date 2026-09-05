@@ -230,7 +230,7 @@ def test_zero_valid_laps_never_asks_for_a_lap():
     ct.refresh()
     assert not ct.table.isVisible() and ct.empty.isVisible()
     assert "Select a lap" not in ct.empty.text(), ct.empty.text()
-    assert ct.empty.text() == LT.NO_LAPS_PLACEHOLDER
+    assert ct.empty.text() == LT.NO_LAPS_TEXT
 
     ct = _keep(LT.CornerTable(_FakeCornerSession()))            # laps exist, none selected
     ct.refresh()
@@ -242,18 +242,25 @@ def test_zero_valid_laps_never_asks_for_a_lap():
     print("test_zero_valid_laps_never_asks_for_a_lap OK")
 
 
-def test_both_zero_lap_placeholders_end_on_a_next_action():
-    """Both pages of the panel share one wording AND one thing to do about it — the recording is
-    the problem, so the action is to open another (the map already owns "drag the start/finish
-    line", and repeating it here would be its third appearance in the same window)."""
+def test_both_zero_lap_placeholders_state_both_next_actions():
+    """Both pages of the panel share one wording AND the SAME pair of things to do about it.
+
+    This test used to assert the opposite — that the panel ends on "Open another recording with
+    ⌘O" and deliberately does NOT repeat the map's "drag the start/finish line", on the argument
+    that a third appearance in one window would be noise. Measured on a zero-lap recording (QA
+    D2-01), what that produced was not silence but CONTRADICTION: the map and the charts panel were
+    both on screen, 523 px to the right, telling the user to drag the line while this panel told
+    them to open a different file. There are two ways out and the user cannot tell which applies,
+    so every surface now states both, in one order, from data_quality.no_laps_body()."""
     corners = _keep(LT.CornerTable(_FakeCornerSession(valid=())))
     corners.refresh()
     laps = _keep(LT.LapTable(_FakeLapSession(valid=0)))
     for text in (corners.empty.text(), laps._empty.text()):
         assert LT.NO_LAPS_TEXT in text, text
-        assert text.endswith(LT.NO_LAPS_ACTION), text
+        assert data_quality.no_laps_body() in text, text
+        assert text.endswith(data_quality.NO_LAPS_ALT_ACTION), text
         assert "⌘O" in text, text
-    print("test_both_zero_lap_placeholders_end_on_a_next_action OK")
+    print("test_both_zero_lap_placeholders_state_both_next_actions OK")
 
 
 def test_excluded_strip_escalates_when_the_ratio_crosses_the_threshold():

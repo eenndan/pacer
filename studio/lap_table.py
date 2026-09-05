@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme, units
+from . import data_quality, theme, units
 from ._signal import fmt_time, lap_label
 from .widgets import NUM_ROLE, NumItem, set_tone
 
@@ -124,14 +124,14 @@ EXCLUDED_WARN_MIN = 3
 # L3-08: Corners showed the generic "Select a lap to see its corners." on a recording that HAS no
 # selectable lap — an instruction that cannot be followed, beside a sibling placeholder in the same
 # panel that stated the fact). One string, so the two pages can never drift.
-NO_LAPS_TEXT = ("No complete laps in this recording.\n\n"
-                "The GPS may not have locked, or the recording is too short to cross the "
-                "start/finish line.")
-# ...and the one NEXT ACTION both placeholders end on. It is deliberately NOT "drag the start/finish
-# line": that call-to-action already lives on the map (the on-canvas cue + the trust strip), and a
-# recording with no lap at all is usually the wrong recording, not a misplaced line.
-NO_LAPS_ACTION = "Open another recording with ⌘O."
-NO_LAPS_PLACEHOLDER = f"{NO_LAPS_TEXT}\n\n{NO_LAPS_ACTION}"
+#
+# IT IS NOW THE APP'S string rather than this file's. `NO_LAPS_ACTION` used to live here and said
+# "Open another recording with ⌘O." on the argument that "that call-to-action already lives on the
+# map". It did — and both were on screen at once on every zero-lap recording, 523 px apart, telling
+# the user to do two different things (QA D2-01). data_quality.no_laps_body() states both, in one
+# order, everywhere; the ⌘O sentence is its second half now (NO_LAPS_ALT_ACTION).
+NO_LAPS_HEADLINE = data_quality.NO_LAPS_HEADLINE
+NO_LAPS_TEXT = f"{NO_LAPS_HEADLINE}\n\n{data_quality.no_laps_body()}"
 
 
 def _with_star(star_tip: str, tip: str) -> str:
@@ -876,7 +876,7 @@ class LapTable(QWidget):
 
         # Empty state: zero valid laps would show a blank grid, so stack a placeholder and flip to
         # it in refresh().
-        self._empty = QLabel(NO_LAPS_PLACEHOLDER)
+        self._empty = QLabel(NO_LAPS_TEXT)
         self._empty.setProperty("role", "EmptyState")
         self._empty.setAlignment(Qt.AlignCenter)
         self._empty.setWordWrap(True)
@@ -2051,7 +2051,7 @@ class CornerTable(QWidget):
         self.empty.setVisible(not stats)
         if not stats:
             self.empty.setText(
-                NO_LAPS_PLACEHOLDER if not self._has_selectable_laps() else
+                NO_LAPS_TEXT if not self._has_selectable_laps() else
                 "Select a lap to see its corners." if not ok else
                 "No corners detected for this session yet — corner analysis needs a few "
                 "clean laps of track shape.")

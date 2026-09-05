@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme, units
+from . import data_quality, theme, units
 from ._signal import fmt_time, lap_label
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
 from .theme import C
@@ -178,13 +178,13 @@ IDEAL_IS_BASELINE_TIP = (
     "Unavailable here: with only the best lap drawn, the lower chart is ALREADY Δ to the ideal — the "
     "y = 0 line IS the synthetic ideal envelope, so there is nothing left to overlay. Select a "
     "second lap and this overlays the ideal on the Δ-to-best chart.")
-# L6-07: the empty state names the cause AND the way out, in the same words map_view's zero-lap
-# placeholder uses (the only one of the four zero-lap surfaces that offered a next action).
-EMPTY_TEXT = ("No lap data to plot.\n\n"
-              "This recording has no complete laps — the speed and Δ-to-best charts need at least "
-              "one finished lap.\n\n"
-              "If this is the right track, drag the start/finish line on the map to set where a "
-              "lap begins.")
+# L6-07: the empty state names the cause AND the way out. It used to say so in this file's OWN
+# words ("No lap data to plot." + a charts-specific reason), which made it the third of four
+# phrasings of one fact in one frame (QA D2-01/D2-02). The panel it sits in is captioned
+# "SPEED · Δ TO IDEAL", so naming the panel again in its own empty state bought nothing that the
+# divergence did not cost: headline and body are the app's, from data_quality.
+EMPTY_HEADLINE = data_quality.NO_LAPS_HEADLINE
+EMPTY_TEXT = f"{EMPTY_HEADLINE}\n\n{data_quality.no_laps_body()}"
 # The chart block's inset from the panel — the FLOOR on all four edges. Left and bottom are then
 # widened to whatever the rotated axis titles measure (see PlotsView._budget_axis_gutters).
 PLOT_INSET = theme.SPACE_XXS

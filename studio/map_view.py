@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import gapfill, prefs, theme, units
+from . import data_quality, gapfill, prefs, theme, units
 from .map_render import (
     bucket_polylines,
     bucketize,  # noqa: F401  (re-exported for tests importing from map_view)
@@ -1098,9 +1098,11 @@ class MapView(QWidget):
         # quadrant), so a load with no complete laps reads as an explained state — with the recovery
         # action — rather than a black void. Parented to the PlotWidget, re-centred by
         # _reposition_empty_state, shown/hidden by _refresh_empty_state (called at build + reseg).
+        # The wording is data_quality's, not this file's: "No complete laps FOUND in this
+        # recording." was the fourth phrasing of one fact in one frame, and the half of the next
+        # action it stated was the half that contradicted the lap panel's (QA D2-01).
         self._empty_state = QLabel(
-            "No complete laps found in this recording.\n\nIf this is the right track, drag the "
-            "start/finish line on the map to set where a lap begins.", self.widget)
+            f"{data_quality.NO_LAPS_HEADLINE}\n\n{data_quality.no_laps_body()}", self.widget)
         self._empty_state.setProperty("role", "EmptyState")
         self._empty_state.setAlignment(Qt.AlignCenter)
         self._empty_state.setWordWrap(True)

@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import theme, units
+from . import data_quality, theme, units
 from ._signal import fmt_time
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the digest tile
@@ -78,13 +78,18 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
 PROVISIONAL_BANNER = ("Lap timing is unverified — every lap time, split and “best” on this page is "
                       "measured from an auto-fitted start/finish line. Drag it on the map to where "
                       "a lap begins.")
-# The 0-lap page: the status bar's own copy plus the next action, ON the page. Without it the
+# The 0-lap page: the app's shared copy plus the one clause only this page can add. Without it the
 # PACE/SPEED groups render as a wall of em-dashes whose only explanation is a status-bar line
 # outside the maximized panel.
-NO_LAPS_TEXT = ("No complete laps in this recording — so there are no lap statistics to show.\n\n"
-                "The GPS may not have locked, or the recording is too short to cross the "
-                "start/finish line. If the track looks right on the map, drag the start/finish "
-                "line to where a lap begins.")
+#
+# EVERY WORD BUT THE MIDDLE CLAUSE IS data_quality's. This page's private copy had drifted furthest
+# of the four (QA D2-02): it said "If the track looks right on the map, drag the start/finish line
+# to where a lap begins" where the map itself said "If this is the right track, drag the
+# start/finish line on the map to set where a lap begins" — the same instruction, re-typed, and it
+# omitted the second way out entirely.
+NO_LAPS_STATS_CLAUSE = "There are no lap statistics to show."
+NO_LAPS_TEXT = (f"{data_quality.NO_LAPS_HEADLINE} {NO_LAPS_STATS_CLAUSE} "
+                f"{data_quality.no_laps_body()}")
 # The absent-accelerometer sentence — used BOTH in the DATA TRUST card and under the SPEED · G
 # tiles, so the dashes and the trust card explain themselves in the same words.
 NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
