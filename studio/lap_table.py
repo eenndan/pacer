@@ -215,17 +215,54 @@ HEADER_STEM_CHARS = 2
 ELLIPSIS = "…"
 
 
-def header_stem_px(fm: QFontMetrics, text: str, chars: int = HEADER_STEM_CHARS) -> int:
-    """The narrowest label width at which `text` still elides to `chars` of its own glyphs.
+def header_keeps_stem(fm: QFontMetrics, text: str, px: int,
+                      chars: int = HEADER_STEM_CHARS) -> bool:
+    """Does `text`, elided into a `px`-wide label box, still show `chars` of its OWN glyphs?
 
-    Qt's ElideRight keeps the longest prefix that fits ALONGSIDE the ellipsis, so the width at
-    which the k-th character survives is exactly the advance of `text[:k] + "…"` — no search, and
-    exact against the same metrics Qt will elide with. Never more than the full string's advance
-    (for a short label the ellipsis can cost more than the letters it replaces)."""
+    The question `header_stem_px` answers, asked of Qt directly instead of predicted — the two are
+    a pair, and the second is what makes the first's claim checkable rather than asserted."""
+    shown = fm.elidedText(text, Qt.ElideRight, px)
+    kept = shown[:-1] if shown.endswith(ELLIPSIS) else shown
+    return len(kept) >= min(chars, len(text))
+
+
+def header_stem_px(fm: QFontMetrics, text: str, chars: int = HEADER_STEM_CHARS) -> int:
+    """The narrowest label width at which `text` still shows `chars` of its own glyphs.
+
+    THIS WAS ONE PIXEL SHORT, and the pixel was not a rounding slip — it was a strict inequality
+    read as a loose one. The docstring here used to claim the answer "is exactly the advance of
+    `text[:k] + '…'` — no search, and exact against the same metrics Qt will elide with". Qt's
+    ElideRight (QTextEngine::elidedText) walks the string accumulating glyph advances and stops at
+    the first prefix whose width is NOT LESS THAN `width - ellipsisWidth`, then returns the prefix
+    BEFORE it. So `advance(text[:k] + "…")` is the widest box at which the k-th glyph is LOST, not
+    the narrowest at which it survives: the survivor needs one more pixel. `header_floors` asked
+    for that width, the column was granted exactly it, and "Δbest" painted a bare "Δ…" beside a
+    km/h column reading "Δa…" — A52's symptom, one pixel wide, over a 30 px band of window width
+    (QA W14-02).
+
+    Both terms are also ROUNDED integers of a fixed-point (1/64 px) metric, so "advance + 1" is
+    guaranteed sufficient but can be a pixel generous. So the arithmetic is the STARTING POINT and
+    `header_keeps_stem` — Qt's own elide, the one the header will run — is the answer: step up
+    while the stem is not there yet, down while the pixel below still holds it. Monotone in `px`,
+    so the walk terminates at the true minimum and normally does not step at all. Never more than
+    a hair over the full string's advance (for a short label the ellipsis can cost more than the
+    letters it replaces, and a rounded-down advance can still elide)."""
+    if not text:
+        return 0
     full = fm.horizontalAdvance(text)
     if len(text) <= chars:
-        return full
-    return min(full, fm.horizontalAdvance(text[:chars] + ELLIPSIS))
+        px = full
+    else:
+        px = min(full, fm.horizontalAdvance(text[:chars] + ELLIPSIS) + 1)
+    # `full + 2` clears the rounding in either direction, so the ceiling always shows the whole
+    # string and the upward walk cannot run away.
+    lo, hi = 1, max(1, full + 2)
+    px = max(lo, min(px, hi))
+    while px < hi and not header_keeps_stem(fm, text, px, chars):
+        px += 1
+    while px > lo and header_keeps_stem(fm, text, px - 1, chars):
+        px -= 1
+    return px
 
 
 def _header_pad_px(hdr) -> int:
@@ -263,20 +300,85 @@ def header_floors(table, floors: list[int], natural: list[int], avail: int) -> l
     to cross, so no VALUE is squeezed to buy a header: this table's contract is unchanged.
 
     AND IT YIELDS RATHER THAN OVERFLOWS. A panel genuinely too narrow to honour every stem would
-    otherwise push the sum past the viewport and summon the horizontal scrollbar that QA L3-03
-    was about. So the raised floors are used only when they all fit; below that the table falls
-    back to the cell floors and headers elide exactly as they did. The guarantee is "while there
-    is room", stated, rather than "always", broken."""
+    otherwise push the sum past the viewport and summon the horizontal scrollbar that QA L3-03 was
+    about. So the guarantee is "while there is room", stated, rather than "always", broken — and
+    what "room" means is the three cases below.
+
+    THE YIELD USED TO BE ALL-OR-NOTHING, AND THAT IS THE HALF THIS BUDGET GOT WRONG. One column
+    the viewport could not afford dropped the stems of all EIGHT, which is how 973-1191 px of
+    window — 174 px of it at and below the app's own minimum — painted a seconds column and a
+    km/h column as the same bare "…". Measured on the shipped corner table (GX010062, dark theme,
+    1 dpr): only three of the eight columns cost anything at all (Δbest +9, Δapex +8, "Grip (est)"
+    +2 over their cell floors — the other five already stand above their own stems), the raised set
+    wants 19 px more than the cell floors, and the viewport hands out between -2 and +105 px of
+    slack across the band. So the yield is now GRADED, in three stated cases:
+
+      1. Every stem fits — grant them all. Unchanged.
+      2. The CELL floors alone already exceed the viewport. The horizontal scrollbar this budget
+         yields to avoid is up ALREADY, for reasons that have nothing to do with headers (at 973 px
+         the corner table's cell floors want 394 px of a 392 px viewport), so withholding the stems
+         buys nothing whatsoever — it only costs every column its name. Grant them all; the scroll
+         range grows by those 19 px and the scrollbar that was going to be there is there.
+      3. There is slack, just not enough. Spend it, AMBIGUITY FIRST: a header whose label shares a
+         prefix with another column's is the one whose elision can be mistaken for its neighbour's
+         ("Δbest"/"Δapex" — the pair this whole budget was re-tuned around), so it is served before
+         a header that is unmistakable however far it elides; among equals, the cheapest first, so
+         the slack names as many columns as it can buy.
+
+    WHAT CASE 3 STILL CANNOT DO, stated rather than papered over. Sweeping the corner table over
+    every window width the app permits, 973 to 1440: the two Δ headers now paint the same string
+    over 1147-1168 px and nowhere else — 22 px of window, down from 227 — because there the
+    viewport's slack is 0-7 px and the cheaper of the two Δ stems costs 8. Closing that band would
+    mean summoning the horizontal scrollbar ~50 px of window earlier than today to buy two glyphs,
+    which is L3-03's defect traded for A52's, and the scrollbar is the more expensive of the two.
+    Above it, 1169-1193 keeps the two apart ("…"/"Δa…") while Δbest is still short of its own stem,
+    and from 1200 px up EVERY header in the table keeps its two glyphs. Below it — the 174 px from
+    the app's own minimum to 1146 — case 2 now names all eight, where the old all-or-nothing yield
+    named none. The scrollbar band is unchanged by all of this: measured before and after, the
+    corner table's horizontal scrollbar appears over exactly 973-1146 either way."""
     hdr = table.horizontalHeader()
     fm = QFontMetrics(hdr.font())
     pad = _header_pad_px(hdr)
-    raised = []
+    labels, raised = [], []
     for c, floor in enumerate(floors):
         item = table.horizontalHeaderItem(c)
         text = item.text() if item is not None else ""
+        labels.append(text)
         stem = (header_stem_px(fm, text) + pad) if text else 0
         raised.append(min(max(floor, stem), natural[c]))
-    return raised if sum(raised) <= avail else list(floors)
+    if sum(raised) <= avail or sum(floors) > avail:
+        return raised                                   # cases 1 and 2
+    budget = avail - sum(floors)                        # case 3
+    out = list(floors)
+    for c in sorted(range(len(floors)),
+                    key=lambda c: (-_shared_prefix_chars(labels, c), raised[c] - floors[c])):
+        cost = raised[c] - floors[c]
+        if 0 < cost <= budget:
+            out[c] = raised[c]
+            budget -= cost
+    return out
+
+
+def _shared_prefix_chars(labels: list[str], c: int) -> int:
+    """How many leading characters column `c`'s label shares with the LONGEST-matching other label
+    in the same table — the priority key for a partial yield.
+
+    Two headers can only be confused for each other once BOTH have eroded past what tells them
+    apart, and the longer the prefix they share the sooner that happens: "Δbest"/"Δapex" become one
+    string at one glyph, "Corner"/"Time" never do at any width. So this ranks the columns by how
+    much they need the pixels, and it is a property of the LABELS — no widths, no layout, nothing
+    circular."""
+    best = 0
+    for i, other in enumerate(labels):
+        if i == c or not other or not labels[c]:
+            continue
+        n = 0
+        for a, b in zip(labels[c], other, strict=False):   # a shared PREFIX: stop at the shorter
+            if a != b:
+                break
+            n += 1
+        best = max(best, n)
+    return best
 
 
 def _shrink_to(widths: list[int], floors: list[int], excess: int):

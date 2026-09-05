@@ -133,8 +133,8 @@ def _key_text(key: Keys) -> str:
     return QKeySequence(key).toString(QKeySequence.NativeText)
 
 
-def _copy_column(spacing: int) -> tuple[QScrollArea, QVBoxLayout]:
-    """The copy column of a read-only Help card: a frameless, vertically-scrolling QScrollArea
+def _copy_column(spacing: int, inset: int = theme.SPACE_XL) -> tuple[QScrollArea, QVBoxLayout]:
+    """The scrolling column of a read-only Help card: a frameless, vertically-scrolling QScrollArea
     around a plain widget column. Returns (scroll area, the layout to add paragraphs to).
 
     Both cards used to put their paragraphs straight into the dialog, which set only a minimum
@@ -154,10 +154,21 @@ def _copy_column(spacing: int) -> tuple[QScrollArea, QVBoxLayout]:
     What a prose column legitimately owns is `spacing`, and it stays a PARAMETER because its two
     callers mean different things by it: the About card's four lines are one identity block
     (SPACE_S, the gap inside a bar), the Privacy card's are paragraphs (SPACE_M, the panel gutter).
-    That is the one place these cards diverge, and now it is stated instead of being 8 and 10."""
+    That is the one place these cards diverge, and now it is stated instead of being 8 and 10.
+
+    `inset` IS THE SAME KIND OF PARAMETER, and it exists because the third Help card was the one
+    card of the three with neither this scroll area nor the screen cap below it — it opened 733 px
+    tall with a hard 717 px floor, off the bottom of the two smallest 13-inch scaled modes (695 and
+    615 px of available height), with the Close button as the part that went missing (QA W14-03).
+    The MECHANISM it was missing is generic; the reading inset is not. Shortcuts is a reference
+    TABLE whose group strips run flush to the card's edges and whose rows carry their own control
+    insets (see ShortcutsDialog._group_body, and the prose in tests/test_design_system.py that
+    settled which surface takes which spacing), so it takes this column at inset 0 rather than
+    growing a fourth margin. Sharing the scroll and the cap while keeping the typography apart is
+    the whole point of the parameter — the alternative was a second copy of the mechanism."""
     body = QWidget()
     column = QVBoxLayout(body)
-    column.setContentsMargins(theme.SPACE_XL, theme.SPACE_XL, theme.SPACE_XL, theme.SPACE_XL)
+    column.setContentsMargins(inset, inset, inset, inset)
     column.setSpacing(spacing)
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
@@ -200,7 +211,18 @@ class ShortcutsDialog(QDialog):
     headers, BarLabel-styled key column); content is data-driven from SHORTCUT_GROUPS so the list
     can't drift from the layout, and each accelerator's glyphs come from its own QKeySequence so it
     can't drift from the menu bar either. Self-contained — takes no app state, so it's trivially
-    constructible in headless tests."""
+    constructible in headless tests.
+
+    IT SCROLLS AND IT FITS THE SCREEN, like its two siblings. This is the longest card in the app —
+    seven groups, thirty-odd rows — and it was the only one of the three built straight into its
+    own root layout: no scroll area, so nothing could be reached once a height was refused, and no
+    screen cap, so Qt refused every height below 717 px. On the two smallest 13-inch scaled modes
+    (1152x720 and 1024x640, i.e. 695 and 615 px of available height) that put the Close button and
+    the HELP group off the bottom of the display, with no scrollbar and no way to shrink the card
+    (QA W14-03; #187 grew the band by 18 px, it did not open it). The groups now live in the same
+    `_copy_column` the copy cards use — at inset 0, because this card's strips are flush and its
+    rows own their spacing — under the same `_fit_to_copy` cap, so the card opens at the height its
+    rows need or at 85% of the display, whichever is smaller, and scrolls for the rest."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -210,15 +232,22 @@ class ShortcutsDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+        # inset 0 / spacing 0: the group strips are flush to the card's edges and each group body
+        # carries its own control margins, so the column adds nothing of its own — the scroll and
+        # the screen cap are all this card wants from _copy_column.
+        scroll, column = _copy_column(spacing=0, inset=0)
+        root.addWidget(scroll)
 
         for title, rows in SHORTCUT_GROUPS:
             # Flush PanelHeader strip per group — same surface bg + hairline as every panel header.
             header = QLabel(title.upper())
             header.setProperty("role", "PanelHeader")
-            root.addWidget(header)
-            root.addWidget(self._group_body(rows))
+            column.addWidget(header)
+            column.addWidget(self._group_body(rows))
 
-        # Standard close button row (Esc / Enter both dismiss via the button box's default).
+        # Standard close button row (Esc / Enter both dismiss via the button box's default). It
+        # stays OUTSIDE the scroll area, like the copy cards' — the way out of a card must not be
+        # the thing you have to scroll to find.
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
@@ -227,6 +256,11 @@ class ShortcutsDialog(QDialog):
         box_layout.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_M)
         box_layout.addWidget(buttons)
         root.addWidget(box)
+        self._scroll, self._column = scroll, column
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        _fit_to_copy(self, self._scroll, self._column)
 
     def _group_body(self, rows: list[tuple[Keys, str]]) -> QWidget:
         """A two-column grid (key | description) for one group. The key column is mono + dimmed

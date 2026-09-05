@@ -225,17 +225,39 @@ class PBToast(QWidget):
         can actually show, and a clipped region too small to hold this card hands the whole window
         back instead. That keeps the failure mode "a toast somewhere slightly worse" rather than "a
         toast at (0, 0)"."""
+        return self._anchor_state(parent)[0]
+
+    def _anchor_state(self, parent: QWidget) -> tuple[QRect, bool]:
+        """`anchor_region`, plus whether that rectangle is the FINAL answer.
+
+        The two are one measurement and they used to be one return value, which is what let the
+        card be shown before it was placed. The flag distinguishes the fallback's two very
+        different meanings:
+
+          * SETTLED — the anchor widget answered, and the region is its own; or the host has no
+            `overlay_anchor` at all (a bare QWidget in a test), in which case the whole-window
+            fallback is not a miss, it is the documented answer for that host and it will not
+            improve by waiting.
+          * PROVISIONAL — the host DOES know where this card belongs, and the widget it named is
+            not on screen yet (`isHidden()`, not yet a descendant, or clipped smaller than the
+            card). During `_load` that is simply "the layout has not run", and the region will
+            change under the card the moment it does.
+
+        A genuinely collapsed panel reads PROVISIONAL too, and that is harmless: the caller waits
+        one deferred pass and then shows the card at the fallback anyway."""
         view = getattr(parent, "view", None)
         anchor = getattr(view, "overlay_anchor", None)
-        widget = anchor() if callable(anchor) else None
+        if not callable(anchor):
+            return parent.rect(), True
+        widget = anchor()
         if widget is None or widget.isHidden() or not parent.isAncestorOf(widget):
-            return parent.rect()
+            return parent.rect(), False
         shown = QRect(widget.mapTo(parent, QPoint(0, 0)),
                       widget.size()).intersected(parent.rect())
         if (shown.width() < self.width()
                 or shown.height() < self.height() + 2 * theme.SPACE_M):
-            return parent.rect()
-        return shown
+            return parent.rect(), False
+        return shown, True
 
     def show_for(self, parent: QWidget):
         """Show the toast over `parent` and keep it on its anchor for as long as it lives.
@@ -257,24 +279,66 @@ class PBToast(QWidget):
         parent while the card is up. The two deferred calls are deliberately the same shape and the
         same 120 ms as `CentralView.showEvent`'s splitter restore, for the same reason and against
         the same event: that restore MOVES the lap panel, so a card placed before it would be
-        stale. Placing immediately as well means a host that never spins an event loop (a test, a
-        window torn down inside the same block) still gets the old behaviour rather than a card at
-        (0, 0)."""
+        stale.
+
+        AND RE-PLACING IT IS NOT ENOUGH EITHER, WHICH IS WHY THE **SHOW** IS WHAT DEFERS NOW. All
+        of the above still SHOWED the card first and corrected it afterwards, so on the real load
+        path the user got the defect anyway: measured at 1440x900, the card was shown at (568, 792)
+        and PAINTED there six times over 120 ms — a readable eighth of a second over the Δ chart —
+        before the settle pass teleported it 462 px left onto the lap panel (QA W14-01). Three
+        placement passes had been added to that sequence and none of them could help, because both
+        the immediate one and the 0 ms one run before the layout does.
+
+        The other repair — make the anchor real at that instant — is the one that cannot be had.
+        Forcing the new view's layout early would still not settle it: `CentralView.showEvent`
+        RESTORES the persisted grid splitter sizes on a 120 ms timer, and that restore is the last
+        thing that moves the panel this card sits in. There is no earlier moment at which the
+        answer is true, so the card waits for it instead of guessing and jumping.
+
+        So: place immediately, and show only once the placement is SETTLED (`_anchor_state`) —
+        which for a host with no `overlay_anchor` (a bare QWidget in a test, a window torn down
+        inside the same block) is still immediately, unchanged. A host that names an anchor it has
+        not laid out yet gets the card from the first deferred pass whose answer is real, and from
+        the 120 ms one unconditionally, so a permanently-collapsed panel still celebrates. The
+        auto-dismiss clock starts when the card becomes visible, so the wait is not taken out of
+        the 6 s anyone gets to read it."""
         self._host = parent
         parent.installEventFilter(self)
+        # Owned by this widget (never QTimer.singleShot's static form), so a card dismissed inside
+        # the settle window takes its pending re-places to the grave with it.
+        for delay, slot in ((0, self._place_then_reveal_if_settled),
+                            (self.SETTLE_MS, self._place_then_reveal)):
+            t = QTimer(self)
+            t.setSingleShot(True)
+            t.timeout.connect(slot)
+            t.start(delay)
+        if self._place():
+            self._reveal()
+
+    def _place_then_reveal_if_settled(self):
+        """The 0 ms pass: one turn of the event loop is enough for a host that was already laid
+        out, and not enough for one mid-`_load`. Show only if the answer is real by now."""
+        if self._place():
+            self._reveal()
+
+    def _place_then_reveal(self):
+        """The 120 ms pass — the same beat as CentralView's splitter restore, and the last one
+        there is. Whatever the answer is now is the answer, so the card is shown either way: a
+        celebration that never appears is worse than one at the documented fallback."""
         self._place()
+        self._reveal()
+
+    def _reveal(self):
+        """Raise and show the card, once, and start its clock from that moment. A no-op for a card
+        already up or already dismissed (`dismiss` clears `_host`), so the deferred passes can
+        never resurrect one."""
+        if self._host is None or self.isVisible():
+            return
         self.raise_()
         self.show()
         self._timer.start(self.AUTO_DISMISS_MS)
-        # Owned by this widget (never QTimer.singleShot's static form), so a card dismissed inside
-        # the settle window takes its pending re-places to the grave with it.
-        for delay in (0, self.SETTLE_MS):
-            t = QTimer(self)
-            t.setSingleShot(True)
-            t.timeout.connect(self._place)
-            t.start(delay)
 
-    def _place(self):
+    def _place(self) -> bool:
         """Put the card at the BOTTOM of its anchor region, centred. Safe to call at any time.
 
         BOTTOM, not top, and that is the whole placement decision. The anchor region is a panel's
@@ -288,17 +352,22 @@ class PBToast(QWidget):
         Clamped rather than trusted: a region shorter or narrower than the card (a panel dragged
         small) pins the card to the region's top-left and lets it overhang, because a celebration
         that is off-screen is worse than one that overlaps. Nothing here can push it outside
-        `parent`."""
+        `parent`.
+
+        Returns whether the region it used was SETTLED — see `_anchor_state`. `show_for` reads
+        that to decide whether the card may be shown yet; a dismissed card (no host) reports
+        False, which is also what makes every re-place in flight a no-op."""
         parent = self._host
         if parent is None:
-            return
+            return False
         self.adjustSize()
-        region = self.anchor_region(parent)
+        region, settled = self._anchor_state(parent)
         x = region.left() + max(0, (region.width() - self.width()) // 2)
         y = max(region.top() + theme.SPACE_M,
                 region.bottom() + 1 - theme.SPACE_M - self.height())
         self.move(max(0, min(x, max(0, parent.width() - self.width()))),
                   max(0, min(y, max(0, parent.height() - self.height()))))
+        return settled
 
     def eventFilter(self, obj, event):
         """Follow the anchor when the window resizes under the card (its 6 s outlives a drag)."""

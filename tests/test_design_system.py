@@ -712,16 +712,30 @@ def test_no_table_header_elides_away_its_own_name():
     painting a bare "Δ…" beside a km/h column reading "Δa…". Both "distinct" and both, for the
     reader, a delta of nothing in particular.
 
-    So this measures the RENDERED SECTION on the real view, at three sizes, and asks the thing the
+    So this measures the RENDERED SECTION on the real view, at four sizes, and asks the thing the
     reader asks: is there a letter left? HEADER_STEM_CHARS of the label's own glyphs, which is the
     same two-character threshold #163's guard uses to decide when its own check applies — and, as a
     consequence rather than an assumption, no two headers in one table painting the same string.
 
-    The one exemption is stated in the code below and is the documented fallback: a table squeezed
-    so far that its columns no longer FIT their viewport is out of pixels altogether (every column
-    is at its own cell floor, and this table never clips a value to widen a header), so there the
-    headers elide as far as they must. Everywhere the table still fits, the stem is guaranteed."""
+    WHICH SIZES ARE EXEMPT MOVED, because the budget's yield did (QA W14-02, lap_table.header_floors
+    cases 1-3). This used to skip any table whose columns no longer FIT their viewport, on the
+    grounds that it was "out of pixels altogether". That was the exemption swallowing the defect:
+    the corner table overflows its viewport at every window width from the app's own 973 px minimum
+    up to 1146 px — 174 px of the range, the part a small display actually sits in — and the
+    all-or-nothing yield painted BOTH Δ headers as a bare "…" through all of it, unchecked, with a
+    horizontal scrollbar already up so the yield was buying nothing. The budget grants every stem
+    there now, so the overflow case is CHECKED rather than excused.
+
+    What is exempt instead is the narrow band in between, where the columns fit but the stems do
+    not all fit with them, and header_floors spends the slack on the ambiguous headers first. That
+    is a real "there are no pixels" case rather than a category, and it is detected here the same
+    way the budget decides it: per column, against what that header ASKED FOR. A section at least
+    as wide as the ask must show the stem — that is the promise, and the one pixel by which it was
+    false is what this sweep now catches."""
+    from PySide6.QtGui import QFontMetrics
     from test_central_view_realqt import _real_central_view
+
+    from studio.lap_table import _header_pad_px, header_stem_px
 
     # Two, spelled out here rather than imported from the widget it governs: this is the reader's
     # threshold, not an implementation's, and it is the same two characters #163's own guard uses
@@ -732,9 +746,10 @@ def test_no_table_header_elides_away_its_own_name():
     view = _real_central_view()[0]
     view.show()
     offenders, checked, skipped = [], 0, []
-    # The third size is not decoration: 1100x700 is where the corner table's squeeze bites hardest
-    # while its columns still fit, and it is where main paints "Δ…" for BOTH Δ columns.
-    for size in ((1440, 900), (1280, 800), (1100, 700)):
+    # The last two sizes are not decoration: 1100x700 is where the corner table's squeeze bites
+    # hardest, and 1200x800 is where the columns were granted EXACTLY the stem width they asked for
+    # and the seconds column still painted a bare "Δ…" — the one-pixel defect, at a size a user has.
+    for size in ((1440, 900), (1280, 800), (1200, 800), (1100, 700)):
         view.resize(*size)
         for page in range(view.tab_bar.count()):
             view.tab_bar.setCurrentIndex(page)
@@ -742,12 +757,20 @@ def test_no_table_header_elides_away_its_own_name():
                 _APP.processEvents()
         for name, table in (("LAPS", view.table.table),
                             ("CORNERS", view.corner_table.table)):
-            widths = sum(table.horizontalHeader().sectionSize(c)
-                         for c in range(table.columnCount()))
-            if widths > table.viewport().width():
-                skipped.append(f"{name}@{size}")
-                continue
+            hdr = table.horizontalHeader()
+            fm = QFontMetrics(hdr.font())
+            pad = _header_pad_px(hdr)
             painted = _painted_headers(table)
+            granted = {c: hdr.sectionSize(c) for c, _t, _s in painted}
+            asked = {c: header_stem_px(fm, text) + pad for c, text, _s in painted}
+            short = [c for c, text, shown in painted
+                     if len(shown.rstrip("…")) < min(HEADER_STEM_CHARS, len(text))]
+            # The stated exemption: a column that was NOT given the width its header asked for is
+            # in the partial band, and the budget already says so out loud.
+            if short and all(granted[c] < asked[c] for c in short):
+                skipped.append(f"{name}@{size}(short by "
+                               + ",".join(f"{asked[c] - granted[c]}px" for c in short) + ")")
+                continue
             for c, text, shown in painted:
                 checked += 1
                 stem = shown.rstrip("…")
