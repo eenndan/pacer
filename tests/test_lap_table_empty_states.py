@@ -263,7 +263,10 @@ def test_excluded_strip_escalates_when_the_ratio_crosses_the_threshold():
     screen instead of only in a tooltip."""
     calm = _shown(LT.LapTable(_FakeLapSession(valid=21, excluded=1)))
     assert calm._excluded_strip.isVisible()
-    assert calm._excluded_header.text() == f"{LT.EXCLUDED_MARK} 1 excluded of 22 laps ▸"
+    # The ⊘ mark and the disclosure caret are theme.icon() pixmaps beside this label now
+    # (tests/test_glyph_vocabulary.py owns those); the label carries the WORDS, and the words are
+    # what has to reconcile.
+    assert calm._excluded_header.text() == "1 excluded of 22 laps"
     assert "%" not in calm._excluded_header.text()
     assert not calm._excluded_note.isVisible()
     # The escalation is a dynamic `tone` property read by the theme's
@@ -272,7 +275,7 @@ def test_excluded_strip_escalates_when_the_ratio_crosses_the_threshold():
     assert calm._excluded_header.property("tone") in (None, "")
 
     loud = _shown(LT.LapTable(_FakeLapSession(valid=25, excluded=24, detected=50)))
-    assert loud._excluded_header.text() == f"{LT.EXCLUDED_MARK} 24 excluded of 49 laps (49%) ▸"
+    assert loud._excluded_header.text() == "24 excluded of 49 laps (49%)"
     assert loud._excluded_header.property("tone") == "warn"
     warn_rule = theme._build_qss().split('QLabel#LapExcludedHeader[tone="warn"]')[1].split("}")[0]
     assert theme.C.accent in warn_rule, warn_rule

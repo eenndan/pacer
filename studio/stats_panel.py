@@ -6,7 +6,9 @@ the existing Session accessors — SESSION totals, the DATA TRUST card (what the
 are worth: the start-line/track/exclusion caveats, the timing clock, the g provenance and the
 IMU↔GPS cross-check), PACE distribution, SPEED & G peaks, the g-g friction circle, DRIVING
 (brake/coast reductions), per-SECTOR best/median/σ, and a per-lap statistics table. Compact in
-the quadrant; the panel-maximize button (⤢) turns it into a full-window dashboard.
+the quadrant; the panel-maximize button in the header turns it into a full-window dashboard.
+(It paints ph.corners-out — "fill this window quadrant". The transport's ph.arrows-out button is
+a different action, "fill the SCREEN with the video", and this line used to name that one.)
 
 HONESTY RULES. The maximized dashboard hides the map, so the page carries its OWN unverified-
 timing banner rather than leaning on the map's. Unverified timing mutes the PER LAP Time column
@@ -23,7 +25,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -47,14 +49,16 @@ from .coaching_panel import PANEL_TOP_N, _shown_rows
 from .consistency import pb_mask
 from .lap_table import (
     BEST_LAP_MARK,
-    CORNER_DIR_GLYPH,
+    DROPOUT_MARK,
     DROPOUT_SUFFIX,
     DROPOUT_TOOLTIP,
+    EXCLUDED_MARK,
     NUM_ROLE,
     PROVISIONAL_COLOR,
     PROVISIONAL_TOOLTIP,
     _NumItem,
     estimated_timing_tooltip,
+    set_corner_direction,
 )
 from .theme import C
 from .widgets import DASH, Tile, WrapLabel, budget_plot_gutters
@@ -476,7 +480,8 @@ class StatsView(QWidget):
         # --- SESSION totals
         col.addWidget(self._section("SESSION"))
         self.t_laps = Tile("laps")
-        self.t_laps.setToolTip("Valid laps · ⊘ band-excluded · ⚠ laps with a GPS dropout")
+        self.t_laps.setToolTip(f"Valid laps · {EXCLUDED_MARK} band-excluded · "
+                               f"{DROPOUT_MARK} laps with a GPS dropout")
         self.t_duration = Tile("recorded")
         self.t_moving = Tile("moving")
         self.t_distance = Tile("distance")
@@ -677,6 +682,10 @@ class StatsView(QWidget):
         col.addLayout(self._grid(self.t_phase_entry, self.t_phase_apex, self.t_phase_exit))
         self.corners_table = self._make_table(CORNER_COLUMNS)
         self.corners_table.setToolTip(CORNERS_TOOLTIP)
+        # The corner-direction arrow in column 0 paints at the app's ICON_PX rather than at the
+        # style's PM_SmallIconSize (see lap_table.CornerTable for the same statement). It fits the
+        # 22 px ROW_HEIGHT with 3 px either side.
+        self.corners_table.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
         # Unlike the other stats tables this one is interactive: row-select → map ring,
         # header-click → sort (numeric via _NumItem, the lap-table idiom).
         self.corners_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -992,11 +1001,17 @@ class StatsView(QWidget):
             bool(valid) and not getattr(session, "has_gmeter", False))
         excluded = getattr(session, "excluded_lap_ids", list)() or []
         dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+        # SPACE BETWEEN THE COUNT AND ITS MARK, and it is not a nudge (D1-04). This tile shipped
+        # "24⊘": measured on the live composite the ⊘ and the 4 merged into ONE 40x19 ink run with
+        # no gap, and at EMPHASIS=15 the ⊘ fills the whole 19 px box against 13 px digits — 1.46x
+        # the height of the number it is qualifying. The tile's own legend (setToolTip above) and
+        # the DATA TRUST row below both already space it; this was the one of the three that did
+        # not, so the same fact printed two ways on one page.
         lap_bits = [str(len(valid))]
         if excluded:
-            lap_bits.append(f"{len(excluded)}⊘")
+            lap_bits.append(f"{len(excluded)} {EXCLUDED_MARK}")
         if dropouts:
-            lap_bits.append(f"{len(dropouts)}⚠")
+            lap_bits.append(f"{len(dropouts)} {DROPOUT_MARK}")
         self.t_laps.set(" · ".join(lap_bits) if valid else None)
         tot = st.totals() if st is not None else None
         if tot is not None and tot.duration_s > 0:
@@ -1343,7 +1358,9 @@ class StatsView(QWidget):
         t.clearSelection()
         t.setRowCount(len(report))
         for r, cr in enumerate(report):
-            name = _NumItem(f"C{cr.cid} {CORNER_DIR_GLYPH.get(cr.direction, '')}")
+            # The direction goes in the cell's ICON slot (lap_table.set_corner_direction), so the
+            # sort key and the text stay the bare corner number.
+            name = set_corner_direction(_NumItem(f"C{cr.cid}"), cr.direction)
             name.setData(NUM_ROLE, cr.cid)   # numeric key: C10 must not sort before C2
             t.setItem(r, 0, name)
             t.setItem(r, 1, cell(cr.best_s, "{:.2f}"))
@@ -1554,8 +1571,8 @@ class StatsView(QWidget):
             total = count() if callable(count) else len(valid) + len(excluded)
             rows.append(("Statistics use",
                          f"{len(valid)} of the {total} laps found — "
-                         f"{len(excluded)} ⊘ excluded, their distance off the session median "
-                         "(see the Laps tab).", True))
+                         f"{len(excluded)} {EXCLUDED_MARK} excluded, their distance off the "
+                         "session median (see the Laps tab).", True))
         # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for the
         # statistics on this page (those laps feed no best/σ/pace number). It moved UP here, with
         # the other three caveats: it is one, and it was the only one printed among the provenance.
@@ -1563,7 +1580,7 @@ class StatsView(QWidget):
         if dropouts:
             rows.append(("GPS dropout",
                          f"inside {len(dropouts)} of {len(valid)} laps — "
-                         "flagged ⚠ and left out of bests, σ and pace", True))
+                         f"flagged {DROPOUT_MARK} and left out of bests, σ and pace", True))
         quality = getattr(session, "timing_quality", None)  # a Session @property
         if quality is not None:
             clock = ("video clock (estimated)" if quality.media_clock

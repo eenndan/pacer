@@ -4,7 +4,7 @@ Cells sort by their numeric Qt.UserRole key, not text (so "1:08.408" sorts as 68
 mouse or the keyboard — the header is a tab stop with its own ring (_KeyboardSortHeader).
 Row/cell highlights are keyed by lap id so they survive sorts: ▶ playing marker, green best
 lap, blue Qt selection, purple per-sector session-best cells, ⚠ GPS-dropout flag. The
-SESSION-BESTS footer is plain labels below the table, immune to sort/selection. A ⊘ EXCLUDED
+SESSION-BESTS footer is plain labels below the table, immune to sort/selection. An EXCLUDED
 strip below the table lists substantial laps the median band left out of the times/bests (a
 mis-segmented short/long lap, an out-lap, or an in-lap) — kept out of the sortable rows so a
 short excluded lap can't sort to the top as the "fastest". The strip has TWO tiers: a muted
@@ -19,12 +19,13 @@ import math
 import statistics
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QRect, Qt, Signal
+from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
     QFrame,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QScrollArea,
@@ -49,7 +50,12 @@ BASE_COLOR = QColor(theme.C.text)             # default row text
 # blind palette), so they're resolved per-refresh via theme.best_lap_colour()/best_sector_colour()
 # rather than frozen at import — a palette flip then recolours the cells on the next refresh().
 CURRENT_PREFIX = "▶ "  # current (playing) lap marker
-DROPOUT_SUFFIX = " ⚠"  # GPS-dropout lap (low-confidence)
+# GPS-dropout lap (low-confidence). ⚠ STAYS TEXT, deliberately: U+26A0 is IN Inter (measured —
+# 13x11 of ink at TABLE=13, 1 px off the cell's optical centre), it is the app's most-repeated
+# trust mark, and it appears mid-sentence and mid-readout where a pixmap cannot go. The mark, and
+# the suffix built from it, so the four surfaces that spell it share one definition.
+DROPOUT_MARK = "⚠"
+DROPOUT_SUFFIX = f" {DROPOUT_MARK}"
 # NON-COLOUR redundancy for the "best" cues so they read without the green/purple hue (colour
 # blindness / greyscale): a ★ marks the overall best lap's Lap cell and each session-best split
 # cell. Paired with the existing bold, the star carries the meaning independent of colour.
@@ -68,9 +74,33 @@ DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are le
 # EXCLUDED laps: substantial laps the median band left OUT of the times / bests (a mis-segmented
 # short/long lap, an out-lap, or an in-lap). They're shown in a muted strip BELOW the table rather
 # than injected as rows — a short excluded lap would otherwise sort to the top as the "fastest" row
-# and re-create the exact confusion the band filter removes. ⊘ reads as "left out" (distinct from
-# the ⚠ dropout flag, which marks a lap that IS still counted).
+# and re-create the exact confusion the band filter removes. "left out" (distinct from the ⚠
+# dropout flag, which marks a lap that IS still counted).
+#
+# TWO SPELLINGS OF ONE MEANING, and the split is deliberate:
+#   * EXCLUDED_ICON is what the STRIP paints — a Phosphor pixmap, drawn by the same theme.icon()
+#     the app's fifteen other icon controls go through.
+#   * EXCLUDED_MARK is the ⊘ codepoint, for the places the mark has to live INSIDE a sentence or a
+#     compact readout beside a ⚠ (the Stats laps tile, its legend, the DATA TRUST row). Those are
+#     text, and a pixmap cannot be part of a run of text.
+# It is exported because stats_panel spells the same mark on three surfaces — it used to hand-type
+# "⊘" on each of them, which is how one of the three ended up printing it unspaced (D1-04).
+#
+# WHY THE STRIP STOPPED USING THE CODEPOINT (D1-02/D1-03). Inter's U+2298 asks for a
+# tightBoundingRect 15.53 px tall at CAPTION=11 against an ascent+descent of 13.3, so in the
+# 14 px contents box of QLabel#LapExcludedHeader its apex and base arcs were simply cut off:
+# measured on the live composite the ink filled rows 0..13 of a 14 px box, where the same glyph in
+# a 16 px box paints rows 0..15. It was also the LARGEST ink in the label by 2x — 16x14 beside an
+# 8.0 px cap-height and a 4x4 chevron, one 32-character line carrying a 4x range of ink in two
+# faces, neither of which any line of code chose.
+EXCLUDED_ICON = "ph.prohibit"
 EXCLUDED_MARK = "⊘"
+# The strip's disclosure chevron, which says which way a click goes. It was ▸/▾ — U+25B8/U+25BE,
+# absent from Inter, so macOS resolved them per character to .AppleSystemUIFont at 4x4 px of ink:
+# half the cap-height beside them, 40% of ph.caret-down's, and the ONLY affordance on a click
+# target (D1-11). Phosphor's carets are the same pair the combo boxes already use.
+EXPAND_ICON = "ph.caret-right"     # collapsed: a click opens the list
+COLLAPSE_ICON = "ph.caret-down"    # expanded: a click closes it
 EXCLUDED_TOOLTIP = (
     "These laps were left out of your times, bests and coaching. Their distance is off this "
     "session's median lap — usually a mis-segmented start/finish crossing, an out-lap, or an "
@@ -696,8 +726,61 @@ class _KeyboardSortHeader(QHeaderView):
             painter.restore()
 
 
+class _GlyphLabel(QLabel):
+    """One themed Phosphor glyph rendered as a pixmap INSIDE a run of text.
+
+    The app already had a mechanism for icons (`theme.icon` -> a QIcon on a control) and it is the
+    one part of the glyph vocabulary that is uniform: every live icon control paints at ICON_PX
+    inside ICON_BTN, ink centred within 0.5 px of its box at DPR 1 and DPR 2. What it had NO
+    mechanism for was a glyph that sits beside words in a label — those sites reached for a literal
+    codepoint instead, and Qt then picked a face per character (see EXCLUDED_ICON's note). This is
+    that missing mechanism: the same `theme.icon()`, at the same `ICON_PX`, in a QLabel.
+
+    `set_colour` re-renders rather than re-tints, because a QPixmap carries no tint: the strip's
+    header escalates to the attention amber above EXCLUDED_WARN_RATIO and the glyph has to escalate
+    with the words it belongs to, or the amber would read as a colour applied to half a line.
+
+    HiDPI needs no special case here: `QIcon.pixmap(QSize)` already renders at the application's
+    device pixel ratio, so ICON_PX logical pixels come back as a 32x32 pixmap tagged dpr 2.0 on a
+    2x panel — measured, with exactly 2x the ink and a LOWER anti-aliased fraction than at 1x."""
+
+    def __init__(self, name: str, tooltip: str = "", accessible: str = ""):
+        super().__init__()
+        self._name = name
+        self._colour = theme.C.text_dim
+        self.setToolTip(tooltip)
+        # The mark carries meaning that used to be in the label's TEXT, so it has to stay in the
+        # accessibility tree — a pixmap has no text for a screen reader to read.
+        self.setAccessibleName(accessible or name)
+        self.setFixedSize(QSize(theme.ICON_PX, theme.ICON_PX))
+        self.setAlignment(Qt.AlignCenter)
+        self._render()
+
+    def set_glyph(self, name: str, tooltip: str = "", accessible: str = ""):
+        if tooltip:
+            self.setToolTip(tooltip)
+        if accessible:
+            self.setAccessibleName(accessible)
+        if name != self._name:
+            self._name = name
+            self._render()
+
+    def set_colour(self, colour: str):
+        if colour != self._colour:
+            self._colour = colour
+            self._render()
+
+    def glyph_name(self) -> str:
+        """The Phosphor name this label is painting (the guard test reads it)."""
+        return self._name
+
+    def _render(self):
+        self.setPixmap(theme.icon(self._name, color=self._colour)
+                       .pixmap(QSize(theme.ICON_PX, theme.ICON_PX)))
+
+
 class _ExcludedStrip(QWidget):
-    """The ⊘ excluded-laps strip container whose WHOLE surface is a click target: a left-click
+    """The excluded-laps strip container whose WHOLE surface is a click target: a left-click
     toggles it between the collapsed one-liner and the full list (via the injected ``on_click``).
     A plain, muted info strip — deliberately NOT a sortable lap row (a short excluded lap injected
     as a row would sort to the top as the 'fastest')."""
@@ -811,11 +894,12 @@ class LapTable(QWidget):
     # ------------------------------------------------------------------ build
     def _build_excluded_strip(self) -> QWidget:
         """A muted strip listing laps LEFT OUT of the times/bests by the median band (see
-        EXCLUDED_MARK). COLLAPSED by default to a single muted one-liner ("⊘ N excluded ▸"); a
-        click on the header expands it to the full per-lap list and back. Hidden entirely when there
-        are none (the clean, common case), so it adds no chrome to a normal recording. Kept OUT of
-        the sortable table on purpose — a short excluded lap injected as a row would sort to the top
-        as the 'fastest' and re-create the very confusion the band filter removes.
+        EXCLUDED_ICON). COLLAPSED by default to a single muted one-liner (the prohibit mark, "N
+        excluded of M laps", a caret); a click on the header expands it to the full per-lap list and
+        back. Hidden entirely when there are none (the clean, common case), so it adds no chrome to
+        a normal recording. Kept OUT of the sortable table on purpose — a short excluded lap
+        injected as a row would sort to the top as the 'fastest' and re-create the very confusion
+        the band filter removes.
 
         The header is a click target (a plain muted info strip, NOT a sortable lap row): clicking it
         toggles the collapse. The whole strip's VISIBILITY is a separate, orthogonal concern — the
@@ -824,9 +908,9 @@ class LapTable(QWidget):
         strip = _ExcludedStrip(self._toggle_excluded_collapsed)
         strip.setObjectName("LapExcludedStrip")   # the top hairline is the theme's rule now
         box = QVBoxLayout(strip)
-        # GRID_TEXT_INSET horizontally, so "⊘ N excluded" starts on the same pixel as the lap
-        # numbers directly above it — the same derivation the corner captions take, and the reason
-        # the shipped 10 was never really a nudge.
+        # GRID_TEXT_INSET horizontally, so the mark starts on the same pixel as the lap numbers
+        # directly above it — the same derivation the corner captions take, and the reason the
+        # shipped 10 was never really a nudge.
         #
         # SPACE_XS vertically, top and bottom. It shipped 6/8, a chosen gap with nothing choosing
         # it, and the obvious tidy — one symmetric SPACE_S inset — was measured before it was
@@ -835,15 +919,51 @@ class LapTable(QWidget):
         # footnote about laps that are NOT in the table, so the tightest step between two separate
         # things is the right one: the strip goes 28 -> 22 px and the grid 437 -> 443, which keeps
         # its 14 rows with 6 px to spare.
+        #
+        # THE HEADER ROW IS ICON_PX (16) TALL, NOT THE 14 PX THE TEXT ALONE WANTED, and this is the
+        # one place the glyph fix spends pixels out of the budget the comment above banked: the ⊘
+        # and the ▸ are ICON_PX pixmaps, so the row is the glyph's height rather than the caption's
+        # and the strip goes 72 -> 74 px in the warning state (22 -> 24 collapsed).
+        #
+        # MEASURED, not waved away. Swept in 1 px steps over window heights 700..1100 on F.D, the
+        # lap grid's viewport loses exactly 2 px at every height, and a fully-visible lap row costs
+        # 28 — so the row count drops by one at 26 of those 401 heights (6.5%, i.e. the 2-in-28
+        # band where the grid was already within 2 px of its next row) and is identical at the other
+        # 375. That is the price of a mark that is not cut off and an affordance bigger than 4x4 px,
+        # and it is stated here rather than discovered later. Buying it back by shrinking this
+        # inset to SPACE_XXS was considered and refused: it would make the strip's outer breathing
+        # room equal to the gap between its own stacked parts, which is the distinction SPACE_XS is
+        # here to draw.
         box.setContentsMargins(GRID_TEXT_INSET, theme.SPACE_XS, GRID_TEXT_INSET, theme.SPACE_XS)
         box.setSpacing(theme.SPACE_XXS)
-        # The collapsed one-liner header ("⊘ N excluded of M laps ▸"): muted, uppercase section
-        # type, with the ▸/▾ chevron glyph telling which way a click goes. Text (and, above
-        # EXCLUDED_WARN_RATIO, its amber warning colour) is set live by _refresh_excluded.
+        # The collapsed one-liner header: the ⊘ mark, "N excluded of M laps", and the disclosure
+        # caret saying which way a click goes — a ROW of three items rather than one string,
+        # because two of the three are now theme.icon() pixmaps (see EXCLUDED_ICON / EXPAND_ICON
+        # for the measurements that took them out of the text).
+        #
+        # The WORDS keep the objectName and the BarLabel role, so the theme still owns their type
+        # and the [tone="warn"] escalation; the two glyphs escalate alongside them via set_colour,
+        # since a pixmap cannot inherit a QSS colour. Text (and the tone) is set by _refresh_excluded.
+        self._excluded_mark = _GlyphLabel(EXCLUDED_ICON, EXCLUDED_TOOLTIP, "excluded laps")
         self._excluded_header = QLabel("")
         self._excluded_header.setObjectName("LapExcludedHeader")
         self._excluded_header.setProperty("role", "BarLabel")
         self._excluded_header.setToolTip(EXCLUDED_TOOLTIP)
+        self._excluded_caret = _GlyphLabel(EXPAND_ICON, EXCLUDED_TOOLTIP, "expand")
+        header_row = QWidget()
+        row = QHBoxLayout(header_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        # SPACE_XS between the mark, the words and the caret: the gap WITHIN one line, matching the
+        # single space the string used to carry (a CAPTION-sized space advances 3.1 px, and each
+        # glyph box already carries ~3 px of its own padding around the ~10 px of ink).
+        row.setSpacing(theme.SPACE_XS)
+        row.addWidget(self._excluded_mark)
+        row.addWidget(self._excluded_header)
+        row.addWidget(self._excluded_caret)
+        # The caret follows the WORDS rather than sitting at the far right of a 495 px strip: it is
+        # the one-liner's own disclosure cue, and 480 px from the sentence it discloses it would
+        # read as an unrelated control.
+        row.addStretch(1)
         # The WARNING-tier note (hidden below the ratio threshold): the kept-vs-excluded distance
         # comparison and the count reconciliation, ON the strip rather than only in its tooltip —
         # at 49% excluded the one number that explains the session is not hover-only detail.
@@ -871,13 +991,13 @@ class LapTable(QWidget):
         self._excluded_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._excluded_scroll.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
         self._excluded_scroll.viewport().setAutoFillBackground(False)
-        box.addWidget(self._excluded_header)
+        box.addWidget(header_row)
         box.addWidget(self._excluded_note)
         box.addWidget(self._excluded_scroll)
         self._excluded_strip = strip
         # Two orthogonal flags: the median band produced excluded laps AND the user hasn't hidden the
         # strip via the View menu. Default collapsed (the one-liner) + shown (when there are any).
-        self._excluded_collapsed = True     # the ⊘ N excluded ▸ one-liner (click to expand)
+        self._excluded_collapsed = True     # the "N excluded" one-liner (click to expand)
         self._excluded_menu_visible = True  # the View ▸ Show excluded laps toggle
         strip.setVisible(False)
         return strip
@@ -890,7 +1010,7 @@ class LapTable(QWidget):
         self._refresh_excluded()
 
     def set_excluded_visible(self, on: bool):
-        """View ▸ Show excluded laps: fully show/hide the ⊘ excluded strip (header included). Kept
+        """View ▸ Show excluded laps: fully show/hide the excluded strip (header included). Kept
         distinct from the header's own collapse: this is the "hide it entirely" menu toggle, so a
         hidden strip stays hidden regardless of collapse state (and the strip is still auto-hidden
         when the session has no excluded laps). Driven by the window's persisted choice."""
@@ -907,12 +1027,14 @@ class LapTable(QWidget):
         return max(0, lap_count() - banded) if callable(lap_count) else 0
 
     def _excluded_headline(self, n: int, banded: int, warn: bool) -> str:
-        """The one-liner: the count RECONCILED against the banded total (so "24 excluded" is visibly
-        24 of 49, not 24 of the 25 rows above it), the share once the strip escalates, and the
-        chevron saying which way a click goes (▸ expand / ▾ collapse)."""
-        chevron = "▸" if self._excluded_collapsed else "▾"
+        """The one-liner's WORDS: the count RECONCILED against the banded total (so "24 excluded" is
+        visibly 24 of 49, not 24 of the 25 rows above it), plus the share once the strip escalates.
+
+        The ⊘ mark and the disclosure caret used to be in this string and are now the two
+        _GlyphLabels either side of it (EXCLUDED_ICON / EXPAND_ICON) — so this returns the sentence
+        a screen reader should read, and nothing a font has to be asked to draw."""
         share = f" ({n / banded:.0%})" if warn else ""
-        return f"{EXCLUDED_MARK} {n} excluded of {banded} laps{share} {chevron}"
+        return f"{n} excluded of {banded} laps{share}"
 
     def _excluded_warning(self, kept: list, rows: list, unbanded: int) -> str:
         """The warning-tier note: the kept-vs-excluded DISTANCE comparison — the one measurement
@@ -931,7 +1053,7 @@ class LapTable(QWidget):
     def _refresh_excluded(self, kept: list | None = None):
         """Populate / hide the excluded-laps strip from Session.excluded_lap_rows (getattr-guarded
         so the lighter test doubles, which don't expose it, simply show no strip). COLLAPSED (the
-        default) shows just the "⊘ N excluded of M laps ▸" one-liner; EXPANDED adds one line per
+        default) shows just the "N excluded of M laps" one-liner; EXPANDED adds one line per
         excluded lap ("Lap 47 — 0:59.091 · 921 m") in a scroll viewport EXCLUDED_MAX_SHOWN lines
         tall. Past the warning tier (EXCLUDED_WARN_MIN + EXCLUDED_WARN_RATIO) the header switches
         to the warning voice and the note below it becomes visible in BOTH states. The whole strip hides when there are none OR when the
@@ -957,6 +1079,15 @@ class LapTable(QWidget):
         # A STATE, so a dynamic property + a re-polish rather than a stylesheet swapped in and out:
         # see the theme's QLabel#LapExcludedHeader[tone="warn"] rule.
         set_tone(self._excluded_header, "warn" if warn else None)
+        # The two glyphs are pixmaps, so the QSS tone rule above cannot reach them — they are
+        # re-rendered in the same colour the words just took, and the caret flips to say which way
+        # the next click goes.
+        tint = theme.C.accent if warn else theme.C.text_dim
+        self._excluded_mark.set_colour(tint)
+        self._excluded_caret.set_colour(tint)
+        self._excluded_caret.set_glyph(
+            EXPAND_ICON if self._excluded_collapsed else COLLAPSE_ICON,
+            accessible="expand" if self._excluded_collapsed else "collapse")
         # The header carries the amber; the note stays PRIMARY text, following #ProvisionalBanner's
         # convention (the container signals, the sentence reads) — three amber lines would shout
         # over the map's actual call-to-action.
@@ -1534,8 +1665,8 @@ def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str
         delta_tip = "Δ vs the best lap's same corner (seconds; − is faster)"
         apex_tip = f"Δ apex speed vs the best lap ({u}; + is faster)"
     return [
-        "Detected corner in track order (⟲ left / ⟳ right). Click a row to ring that corner "
-        "on the map.",
+        "Detected corner in track order, with an arrow for its direction — anticlockwise is a "
+        "left-hander, clockwise a right. Click a row to ring that corner on the map.",
         f"Time spent in the corner (seconds). {BEST_CORNER_TIP}",
         delta_tip,
         f"Apex (minimum) speed through the corner ({u})",
@@ -1567,7 +1698,43 @@ def _corner_unit_caption(unit: str | None) -> str:
     columns already wanted 501 px in a 447 px quadrant with 0 of 12 grip cells readable. One
     caption line states all three unit families and costs the columns nothing."""
     return f"Times in seconds · speeds in {units.speed_label(unit)} · grip %"
-CORNER_DIR_GLYPH = {1: "⟲", -1: "⟳"}  # left / right (turn sense), shown after the C-label
+# CORNER DIRECTION — the turn sense, in the two spellings the app needs.
+#
+# CORNER_DIR_ICON is what the three TABLES paint (Corners, Stats ▸ CORNERS, Coaching): a Phosphor
+# pixmap in the cell's icon slot, with the cell text left as the bare "C1". It replaced ⟲/⟳
+# (U+27F2/U+27F3), which Inter does not contain, so macOS resolved them to Apple Symbols at 8x7 px
+# of ink — 3 px shorter than the digits they sit beside and 1.5 px below their optical centre,
+# while the header tooltip promised the reader could tell the two apart (D1-05). They differ in 30
+# of 32 ink pixels and at 8x7 both read as the same grey smudge.
+#
+# CORNER_DIR_GLYPH is the ⟲/⟳ codepoints, kept for share_card.py — the lap-card IMAGE, which
+# composes one string with QPainter and has no cell to hang an icon in. Its own lane owns whether
+# a painted card wants a painted arrow.
+CORNER_DIR_ICON = {1: "ph.arrow-counter-clockwise", -1: "ph.arrow-clockwise"}
+CORNER_DIR_GLYPH = {1: "⟲", -1: "⟳"}  # left / right (turn sense), share_card.py only
+# What the arrow means, on the cell that wears it — the direction was previously only spelled out
+# in the column header's tooltip, i.e. nowhere the mark itself could be hovered.
+CORNER_DIR_TIP = {1: "Left-hander (anticlockwise)", -1: "Right-hander (clockwise)"}
+
+
+def set_corner_direction(item: QTableWidgetItem, direction: int) -> QTableWidgetItem:
+    """Put the corner's direction arrow in `item`'s ICON SLOT (and name it on hover). Returns the
+    item, so a cell builder can wrap its own construction.
+
+    It DECORATES rather than builds because the three tables that render this cell need three
+    different item classes — the Stats page sorts its corner column by a numeric key (`NumItem`),
+    the other two are plain read-only cells — and the one thing they must share is the mark.
+
+    Qt gives a QTableWidgetItem exactly one icon slot and paints it to the LEFT of the text, so the
+    arrow now leads the label instead of trailing it. Checked free on all three tables before this
+    relied on it: nothing else sets an icon on any of their column 0s. A direction of 0/None (a
+    corner with no measured turn sense) leaves the cell as bare text, exactly as the glyph
+    mapping's `.get(..., "")` default did."""
+    name = CORNER_DIR_ICON.get(direction)
+    if name:
+        item.setIcon(theme.icon(name))
+        item.setToolTip(CORNER_DIR_TIP[direction])
+    return item
 # The Δ columns when the shown lap IS the Δ baseline (QA L3-05). `corner_model.lap_corner_stats`
 # passes ref=None for the baseline and `corners.lap_corner_stats`'s docstring documents the result
 # — "None for the reference lap itself -> deltas 0" — so on the app's own post-load selection (the
@@ -1585,8 +1752,10 @@ SELF_DELTA_TOOLTIP = ("The Δ columns compare each corner against the session-be
 SELF_REFERENCE_TOOLTIP = ("The Δ columns compare each corner against the reference recording's lap "
                           "— but that reference is this same recording, so this lap is being "
                           "compared with itself. Load a different recording as the reference.")
-# Corner identity column start width: "C12 ⟳" + the "Corner" header, fully readable (C3 —
-# the old Stretch mode crushed this row-identity column to a 42px sliver at default width).
+# Corner identity column start width: the direction arrow + "C12" + the "Corner" header, fully
+# readable (C3 — the old Stretch mode crushed this row-identity column to a 42px sliver at default
+# width). Unchanged by the move to an icon: the arrow's ICON_PX slot is 3 px wider than the 13 px
+# the "⟳ " it replaced advanced, and the column's measured natural width stays inside the 88.
 CORNER_NAME_COL_PX = 88
 
 
@@ -1619,11 +1788,16 @@ class CornerTable(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # The corner-direction arrow (set_corner_direction) paints at the SAME ICON_PX every other
+        # glyph in the app does. Stated rather than inherited: a view's default icon size is the
+        # style's PM_SmallIconSize, i.e. a number the platform picks — which is the exact shape of
+        # problem the literal ⟲/⟳ had.
+        self.table.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
         # Column sizing (UI-scrutiny C3+B5): the old col-0 Stretch let Qt crush the row's
         # IDENTITY column to a 42px "orne" sliver at the default panel width (the "all 8 fit"
         # assumption rotted as columns grew) and balloon it to a 959px void when maximized.
-        # Now: col 0 starts at a readable CORNER_NAME_COL_PX (fits "C12 ⟳" + the header) and every
-        # column is Interactive so _fit_columns can size the set to the panel.
+        # Now: col 0 starts at a readable CORNER_NAME_COL_PX (fits the arrow + "C12" + the header)
+        # and every column is Interactive so _fit_columns can size the set to the panel.
         # QA L3-03: leaving the overflow to the h-scrollbar was not enough — at the DEFAULT 447px
         # quadrant these 8 columns wanted 501px, so "Grip (est)" started at x=422 and 0 of 12 grip
         # cells rendered a readable value, behind a scrollbar handle at 1.55:1 contrast. The fit
@@ -1693,7 +1867,7 @@ class CornerTable(QWidget):
     def _column_budget(self) -> tuple[list[int], list[int], list[int]]:
         """(natural, floors, caps) for the corner columns — see LapTable._column_budget. Column 0
         is the row identity, so it opens at CORNER_NAME_COL_PX; unlike the lap number it carries no
-        moving marker, so it may be squeezed back to its own cell width ("C12 ⟳") when the panel
+        moving marker, so it may be squeezed back to its own cell width (arrow + "C12") when the panel
         is short — 24 of the 54px the default quadrant is missing come from there, the rest from
         the "Grip (est)" header, whose full wording is already in its tooltip. That trade needs
         every header to stay unambiguous once elided, which is why the two Δ columns are named
@@ -1891,7 +2065,7 @@ class CornerTable(QWidget):
             u = self._speed_unit
             conv = units.convert_speed
             cells: list[tuple[str, str | None]] = [
-                (f"{c.label} {CORNER_DIR_GLYPH.get(c.direction, '')}", None),
+                (c.label, None),
                 (f"{st.time:.2f}", None),
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
                  (f"{st.delta:+.2f}", theme.delta_colour(st.delta))),
@@ -1913,6 +2087,10 @@ class CornerTable(QWidget):
                     text = text + BEST_SECTOR_MARK
                 item = QTableWidgetItem(text)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                # Column 0 is the corner IDENTITY: the label plus its turn sense, the latter in the
+                # cell's icon slot rather than appended to the text (see set_corner_direction).
+                if col == 0:
+                    set_corner_direction(item, c.direction)
                 if col >= NUMERIC_COL_START:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     item.setFont(self._num_font)

@@ -34,7 +34,14 @@ _APP = QApplication.instance() or QApplication([])
 
 from studio import data_quality, library, prefs, theme  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
-from studio.lap_table import BEST_LAP_MARK, BEST_SECTOR_MARK, LapTable  # noqa: E402
+from studio.lap_table import (  # noqa: E402
+    BEST_LAP_MARK,
+    BEST_SECTOR_MARK,
+    COLLAPSE_ICON,
+    EXCLUDED_ICON,
+    EXPAND_ICON,
+    LapTable,
+)
 
 
 # ===================================================================== A. non-colour Δ redundancy
@@ -204,27 +211,34 @@ def test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip():
     surfaced in the muted ⊘ EXCLUDED strip — NOT injected into the sortable rows (where it would
     sort to the top as the 'fastest'), so a dropped lap isn't invisible.
 
-    Declutter PR: the strip now ships COLLAPSED to a "⊘ N excluded ▸" one-liner (the count in the
-    header, the full list hidden), and expands to the per-lap detail on a header click. So the
-    default state shows the count in the HEADER and an empty body; expanding reveals the lap line."""
+    Declutter PR: the strip now ships COLLAPSED to a one-liner (the count in the header, the full
+    list hidden), and expands to the per-lap detail on a header click. So the default state shows
+    the count in the HEADER and an empty body; expanding reveals the lap line.
+
+    The ⊘ and the ▸ that used to be IN that header string are now theme.icon() pixmaps beside it
+    (they fell out of Inter, or were clipped by the 14 px line — see tests/test_glyph_vocabulary.py,
+    which owns the glyph half). What this test still asserts is the NON-COLOUR cue's substance: the
+    count is in the words, and the disclosure state is visible."""
     sess = _FakeLapSession()
     sess.excluded_lap_rows = lambda: [{"idx": 47, "time": 59.091, "dist": 921.0, "entry": 40.0}]
     table = LapTable(sess)
     # It is NOT one of the sortable lap rows ... (the internal lap id / row key stays 0-based)
     assert 47 not in [table._lap_id(r) for r in range(table.table.rowCount())]
     # ... the strip is visible (there's an excluded lap) and COLLAPSED by default: the header reads
-    # "⊘ 1 excluded ▸" and the detail body is empty until expanded.
+    # "1 excluded …" beside the ⊘ mark, and the detail body is empty until expanded.
     assert not table._excluded_strip.isHidden()
     assert table._excluded_collapsed, "the excluded strip must ship collapsed (the one-liner)"
     header = table._excluded_header.text()
-    assert "⊘" in header and "1 excluded" in header and "▸" in header, header
+    assert "1 excluded" in header, header
+    assert table._excluded_mark.glyph_name() == EXCLUDED_ICON, "the ⊘ cue must be on the strip"
+    assert table._excluded_caret.glyph_name() == EXPAND_ICON, "collapsed → a 'will expand' caret"
     assert table._excluded_body.text() == "", "collapsed: the full list stays hidden"
     # Expand it (a header click): the full per-lap line appears, showing the 1-based lap NUMBER
     # (id 47 → "Lap 48", matching the table's Lap column — NOT the raw id) + time + distance, and the
-    # header chevron flips to ▾.
+    # header caret flips to the "will collapse" one.
     table._toggle_excluded_collapsed()
     assert not table._excluded_collapsed
-    assert "▾" in table._excluded_header.text()
+    assert table._excluded_caret.glyph_name() == COLLAPSE_ICON
     body = table._excluded_body.text()
     assert "Lap 48" in body and "0:59.091" in body and "921" in body, body
     print("test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip OK")
