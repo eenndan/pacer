@@ -600,6 +600,25 @@ add_test(NAME test_first_run_path
 set_tests_properties(test_first_run_path PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The GLYPH guard (feat/icon-vocabulary, design wave 2 D1) — the third vocabulary, beside
+# test_design_system's dimensions and test_contrast's colour. The app had FOUR ways to draw a mark
+# and only theme.icon()'s Phosphor layer was designed: a literal Unicode character in a label falls
+# back PER CHARACTER to whatever the OS supplies, which put eight marks into .AppleSystemUIFont /
+# Apple Symbols / STIX Two Math / Menlo / .Apple Color Emoji UI at sizes from 4 px of ink to 16, in
+# one case inside a single 14 px label. An AST walk over the guarded modules' string literals —
+# each hit labelled by the class+method that owns it, so an exemption names a decision — asserts
+# that every painted character is drawn by the face the app declares, resolved LIVE through
+# _qtapp.themed_app(); the ledger of what Inter does and does not carry is measured here rather
+# than assumed; and the four surfaces the PR fixed (the excluded strip's ⊘ + caret, the three
+# corner tables' turn-sense arrow, the Shortcuts card's two Layout keycaps, and the emoji-free PB
+# moment) are pinned, with the card's glyphs read out of central_view/video_view by AST so the
+# documentation cannot drift from the buttons. Builds real widgets under the real theme -> Qt, so
+# run offscreen.
+add_test(NAME test_glyph_vocabulary
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_glyph_vocabulary.py)
+set_tests_properties(test_glyph_vocabulary PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
 # `pacer` in the interpreter's site-packages — on a fresh CI env there is none, and
