@@ -434,6 +434,20 @@ def delta_colour(d: float | None) -> str | None:
 # already-signed number so "am I ahead or behind" reads WITHOUT hue (survives greyscale / colour
 # blindness). Ahead (faster, Δ < 0) → ▲ "gaining"; behind (slower, Δ > 0) → ▼ "losing"; even → none.
 # The sign (−/+) and the arrow agree, so the cue is doubly non-colour.
+#
+# THESE TWO CODEPOINTS ARE NOT THE DEFECT, AND CHANGING THEM WOULD MAKE ONE. Measured from the
+# window composite at 1440x900: on #DiffBox the arrow's ink is 14x14 sitting 2.0 px BELOW the
+# centre of the 51x18 digits beside it — but in the app's own UI face the same codepoint is 21x18
+# at cy 0.0, the digits' exact height and centre. What moved it is the SURFACE: #DiffBox (and
+# #PaneBadge) declare `font-family: {MONO_STACK}` down in the QSS, which out-ranks the view's own
+# setFont, and Menlo — the third name in that stack and the first that exists on macOS — centres
+# every geometric shape it carries on the x-height, exactly where it puts the lowercase `s`
+# (measured: `s` is 11x14 at cy +2.0 too). Eight candidate marks across four Unicode blocks were
+# measured: every one Menlo carries is at cy +2.0, and the three that ARE centred (⬆⬇ ▴▾ ▵▿) are
+# not in Menlo at all — they arrive from .AppleJapaneseFont / .AppleSystemUIFont / .AppleKoreanFont,
+# i.e. swapping the codepoint buys a NEW borrowed face, the defect PR #189 removed.
+# The full two-step hand-off (theme.mono_font's tnum is silently a no-op, so the QSS family cannot
+# just be deleted) is written out in tests/test_glyph_vocabulary.py's module docstring.
 DELTA_AHEAD_ARROW = "▲"   # ahead / gaining (negative Δ)
 DELTA_BEHIND_ARROW = "▼"  # behind / losing (positive Δ)
 

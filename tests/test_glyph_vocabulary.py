@@ -49,6 +49,47 @@ known hits that are hand-offs to other lanes, both filed and both in files this 
 `▲`/`▼` delta arrows in `theme.py`, which are Inter but land on a `MONO_STACK` QSS surface where
 Menlo draws them 4 px shorter than the digits beside them. Widening `_GUARDED` is what closes them.
 
+UPDATE — the ✕ is closed: `overlays` is in `_GUARDED` below, the button carries
+`overlays.DISMISS_ICON` = `ph.x`, and check 3e pins it. **The Δ arrows are NOT, and widening
+`_GUARDED` would never have closed them — the paragraph above is wrong about the mechanism, which
+is why this note corrects it rather than deleting it.** Check 1 resolves every character through
+`theme.ui_font()`, and `▲`/`▼` resolve there to Inter perfectly well; check 2 asserts exactly that.
+The defect is one level down: `QLabel#DiffBox` and `QLabel#PaneBadge` declare
+`font-family: {MONO_STACK}` in the QSS, which out-ranks the `setFont` their views give them, and
+nothing in this file measures a mark in any face but the app's UI one. Measured on the real view at
+1440x900, read from the WINDOW composite:
+
+    #DiffBox 391x30, asks "SF Mono", paints **Menlo**
+      digits "0.34"   51x18  cy  0.0     <- the numerals the arrow sits beside
+      Δ               13x17  cy -0.5
+      s               11x14  cy +2.0
+      ▼ / ▲           14x14  cy +2.0     <- 4 px shorter than the digits, down on the x-height
+    the SAME codepoint in the app's UI face: 21x18, cy 0.0 — the digits' own height and centre.
+
+Changing the CODEPOINT is refuted, measured over eight candidates in four Unicode blocks: every
+mark Menlo carries sits at cy +2.0 (it centres its geometric shapes on the x-height band, not on
+the digits), and the three that DO centre — ⬆⬇ ▴▾ ▵▿ — are not in Menlo at all and arrive from
+`.AppleJapaneseFont`, `.AppleSystemUIFont` or `.AppleKoreanFont`: they buy the exact defect this
+file exists to prevent.
+
+So the fix is the surface's FACE, and it is a two-step hand-off to whoever owns theme.py's font and
+QSS blocks, in this order, because step 2 on its own is a regression:
+
+  1. `theme.mono_font()` does not do what it says. `f.setFeature("tnum", 1)` RAISES `ValueError` on
+     the shipped PySide6 6.11.1 (the signature wants a `QFont.Tag`) and the bare
+     `except Exception: pass` swallows it — `QFont.featureTags()` comes back **empty** and
+     `QTextLayout` widths for "000"/"111"/"888" are 43.5 / 27.89 / 42.23 px. The app's "tabular
+     figures" face is plain proportional Inter. With `QFont.Tag("tnum")` all three measure 42.66.
+     Fix that first.
+  2. THEN drop `font-family: {MONO_STACK}` from `QLabel#DiffBox` (and `#PaneBadge`) so the label
+     keeps the `mono_font` its view already sets. Verified counterfactually: with that line deleted
+     TODAY the label paints Inter and its digits go 000=44 / 111=28 px — a 16 px reflow on a readout
+     that re-renders ~30 times a second. **Menlo being the third choice in MONO_FAMILIES is the only
+     reason the app's largest number does not currently jitter**, which narrows D1-09 from "a defect"
+     to "true, and load-bearing". `central_view._hero_min_width()` moves 391 -> 308 px with it,
+     because it measures the MONO stack on purpose, so the charts column's honest minimum moves too
+     and that belongs in the same PR.
+
 Run: QT_QPA_PLATFORM=offscreen python tests/test_glyph_vocabulary.py
 """
 import ast
@@ -73,7 +114,7 @@ _STUDIO = os.path.join(_REPO, "studio")
 # The modules this guard covers. Not "every module": the walk is only honest where the surfaces
 # have actually been migrated, and a guard that starts green everywhere it looks is worth more than
 # one carrying a backlog of exemptions (see SCOPE in the docstring for the two open hand-offs).
-_GUARDED = ("lap_table", "stats_panel", "coaching_panel", "help_dialog", "library")
+_GUARDED = ("lap_table", "stats_panel", "coaching_panel", "help_dialog", "library", "overlays")
 
 # (module, owning scope, character, why it is allowed to fall out of the face).
 #
@@ -389,6 +430,55 @@ def test_the_personal_best_moment_carries_no_colour_emoji():
             assert not bad, f"{text!r} carries {bad}"
     assert "personal best" in library.pb_moment_text(beat, lambda s: f"{s:.2f}")[0].lower()
     print("test_the_personal_best_moment_carries_no_colour_emoji OK")
+
+
+def test_the_toast_dismiss_is_a_pixmap_and_keeps_both_of_its_state_cues():
+    """Check 3e. The PB toast's ✕ was U+2715, which Inter does not carry — Qt fetched it
+    per-character from **Menlo** and drew **6x6 px** of ink inside a 24x24 button, measured from
+    the window composite, 1.0 px below the button's own centre. `ph.x` at `ICON_PX` is 10x10 at
+    cy 0.0: 2.8x the ink, centred, in the vocabulary something actually chose.
+
+    The half of that swap which is easy to get wrong is the STATE, because
+    `QPushButton#PBToastClose` says its resting, hover and focus treatments as `color:` — and a
+    stylesheet colour cannot reach a pixmap. So both are asserted here: the hover tint really
+    changes the icon (Qt has no icon mode for "pointer is on me", so the card's own event filter
+    does it), and the focus tint lives on `QIcon::Active`, which is the mode
+    `QCommonStyle::drawControl(CE_PushButtonLabel)` picks from `State_HasFocus`."""
+    from PySide6.QtCore import QEvent, QSize
+    from PySide6.QtGui import QIcon
+
+    from studio import overlays
+
+    toast = overlays.PBToast("New personal best!", "1:02.418 — 0.317 s faster.",
+                             on_progress=lambda: None, on_share=lambda: None)
+    btn = toast.close_btn
+    assert overlays.DISMISS_ICON.startswith("ph."), overlays.DISMISS_ICON
+    assert not btn.text(), f"the dismiss control is still a character: {btn.text()!r}"
+    assert not btn.icon().isNull(), "the dismiss control renders no pixmap"
+    assert btn.iconSize() == QSize(theme.ICON_PX, theme.ICON_PX), btn.iconSize()
+    assert btn.accessibleName(), "a pixmap has no text — the meaning must survive for a reader"
+    assert btn.width() >= theme.HIT_MIN and btn.height() >= theme.HIT_MIN, btn.size()
+
+    px = QSize(theme.ICON_PX, theme.ICON_PX)
+
+    def _digest(icon, size, mode):
+        """The PIXELS, not the QIcon identity — `bytes(...)` because constBits() aliases a buffer
+        the next pixmap() call is free to reuse, which is how a previous wave compared a freed
+        image with itself and got a clean pass."""
+        img = icon.pixmap(size, mode).toImage()
+        return hash(bytes(img.constBits()))
+
+    rest = _digest(btn.icon(), px, QIcon.Normal)
+    focused = _digest(btn.icon(), px, QIcon.Active)
+    assert rest != focused, ("the dismiss ✕ paints the same pixels focused and unfocused — the "
+                             "`:focus` half of its rule reaches a `color:` and nothing else")
+    _APP.sendEvent(btn, QEvent(QEvent.Enter))
+    hovered = _digest(btn.icon(), px, QIcon.Normal)
+    assert hovered != rest, "the hover tint never reached the pixmap"
+    _APP.sendEvent(btn, QEvent(QEvent.Leave))
+    assert _digest(btn.icon(), px, QIcon.Normal) == rest, "leaving left the hover tint behind"
+    toast.deleteLater()
+    print("test_the_toast_dismiss_is_a_pixmap_and_keeps_both_of_its_state_cues OK")
 
 
 if __name__ == "__main__":
