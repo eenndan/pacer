@@ -55,6 +55,7 @@ _APP = QApplication.instance() or QApplication([])
 from test_session_services import _synthetic_session  # noqa: E402
 
 from studio import chapters, data_quality, render_cache, theme, tracks  # noqa: E402
+from studio._signal import fmt_time  # noqa: E402
 from studio.central_view import CentralView  # noqa: E402
 
 
@@ -1026,7 +1027,7 @@ def _run_all():
     test_video_focus_disabled_while_comparing()
     test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_state()
     test_tab_bar_switches_pages_and_names_the_corners_lap()
-    test_one_chapter_phrasing_on_the_banner_and_the_transport()
+    test_the_chapter_is_named_once_in_the_panel()
     test_corner_row_click_rings_the_map()
     test_the_charts_header_never_has_to_choose_between_identity_and_controls()
     test_show_stats_maximized_is_a_true_toggle()
@@ -1087,26 +1088,40 @@ def test_tab_bar_switches_pages_and_names_the_corners_lap():
     print("test_tab_bar_switches_pages_and_names_the_corners_lap OK")
 
 
-def test_one_chapter_phrasing_on_the_banner_and_the_transport():
-    """P4: the chapter banner (above the video) and the transport timecode (below it) are visible
-    at the SAME time, so they must speak ONE format. The transport used to compress it to
-    "chapter 2/3" against the banner's "chapter 2 of 3", which reads as two different facts; both
-    now render through chapters.format_chapter."""
+def test_the_chapter_is_named_once_in_the_panel():
+    """P4, ONE SURFACE LATER. This began as "the banner and the transport timecode are visible at
+    the same time, so they must speak ONE format" — a real fix (the transport had compressed it to
+    "chapter 2/3" against the banner's "chapter 2 of 3"), and an admission that the same fact was
+    printed twice in one panel, 300 px apart, in two bands.
+
+    The banner is gone. It was a full-width strip above the video carrying the recording label the
+    window TITLE already holds plus a chapter the timecode printed again; it is a `widgets.chip` in
+    the panel's identity row now, in the `status` slot, beside the word it qualifies. So the
+    assertion is no longer "the two agree" but "there is one of them" — which is the thing the
+    phrasing fix was a proxy for, and which cannot drift.
+
+    The formatter stays single-sourced (`chapters.format_chapter`), because the LAP panel and the
+    export overlay still render it and a second spelling would be the original defect elsewhere."""
     view, s, _t0, _t1 = _real_central_view()
     dur = s.chapters.total_duration / 3.0
-    # A real 3-chapter load: the session carries the map (transport readout) and so does the
-    # player pane (which is what makes video.is_multi — the banner's gate — true).
+    # A real 3-chapter load: the session carries the map and so does the player pane (which is what
+    # makes video.is_multi — the chip's gate — true).
     s.chapters = chapters.ChapterMap(["/tmp/a.MP4", "/tmp/b.MP4", "/tmp/c.MP4"], [dur] * 3)
     view.video.pane._chapters = s.chapters
 
     view._update_chapter_label(1)                       # 0-based index 1 == the 2nd chapter
-    banner = view.chapter_label.text()
+    chip_text = view.chapter_label.text()
     transport = view._transport_readout(dur * 1.5)      # a moment inside the 2nd chapter
 
-    assert "chapter 2 of 3" in banner, banner
-    assert "chapter 2 of 3" in transport, transport
+    assert chip_text == chapters.format_chapter(1, 3) == "chapter 2 of 3", chip_text
+    assert "chapter" not in transport, (
+        f"the timecode is printing the chapter a second time in the same panel: {transport!r}")
     assert "2/3" not in transport, transport
-    print("test_one_chapter_phrasing_on_the_banner_and_the_transport OK")
+    assert transport == fmt_time(dur * 1.5), transport
+    # ...and the chip is where a live fact about this panel belongs.
+    assert view.chapter_label in view._video_header.status
+    assert view.chapter_label.property("role") == "Chip", view.chapter_label.property("role")
+    print("test_the_chapter_is_named_once_in_the_panel OK")
 
 
 def test_the_charts_header_never_has_to_choose_between_identity_and_controls():

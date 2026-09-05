@@ -45,7 +45,7 @@ from .scrub_controller import ScrubController
 from .session import fmt_time
 from .stats_panel import StatsView
 from .video_view import VideoView
-from .widgets import PanelHeader, PanelToolbar, ToggleButton, chip, icon_button
+from .widgets import PanelHeader, PanelToolbar, ToggleButton, chip, icon_button, set_tone
 
 # The maximize-button glyphs. DELIBERATELY DISTINCT from the video transport's fullscreen ⤢ button
 # (ph.arrows-out / ph.arrows-in — "fill the SCREEN"): the corners glyphs read as "fill this WINDOW
@@ -423,23 +423,36 @@ class CentralView(QWidget):
             "tooltip.")
         self.ideal_readout_btn.toggled.connect(self._on_ideal_readout_toggled)
 
-        # Chapter banner above the video; shown only for multi-chapter sessions.
-        self.chapter_label = QLabel("")
-        self.chapter_label.setObjectName("ChapterBanner")
-        self.chapter_label.setAlignment(Qt.AlignCenter)
-        self._seam_loading = False  # True while a chapter is reopening at a seam (banner hint)
+        # Which chapter the video is in — a CHIP in the panel's identity row, shown only for a
+        # multi-chapter session. It was a full-width banner strip ABOVE the video: a fifth band in
+        # a panel that already stacked four, printing the recording label the window TITLE carries
+        # and the chapter the transport timecode printed again 300 px below. A chip in the `status`
+        # slot is what PanelHeader has that slot FOR — a live fact about what this panel is showing
+        # right now, sitting beside the word that names the panel.
+        self.chapter_label = chip("")
+        self._seam_loading = False  # True while a chapter is reopening at a seam (the chip's hint)
         self._update_chapter_label(self.video.current_chapter())
         self.video.chapterChanged.connect(self._update_chapter_label)
-        # Brief "loading next chapter…" hint on the banner during a seam reopen.
+        # Brief "loading next chapter…" hint on the chip during a seam reopen.
         self.video.seamLoading.connect(self._on_seam_loading)
         self.chapter_label.setVisible(self.video.is_multi)
+
+        # ...and whether the panel is holding ONE video or TWO. Entering compare replaces the video
+        # with a two-pane stage, re-ranges the scrub bar from the whole session to a single lap and
+        # empties its lap ruler, and the identity row used to go on reading exactly "VIDEO" —
+        # "compare" appeared nowhere in the window but on the transport button and its tooltip.
+        self._compare_chip = chip("COMPARING", tone="warn")
+        self._compare_chip.setVisible(False)
+        self.video.compareModeChanged.connect(self._on_compare_mode_changed)
 
         # VIDEO panel: identity + ⛶, no toolbar — the transport controls belong ON the player, and
         # the ⤢ *fullscreen-video* button stays with them (a DIFFERENT action from ⛶: fill the
         # SCREEN, not this window quadrant).
         self._video_max_btn = self._maximize_button()
-        self._video_header = PanelHeader("VIDEO", trailing=self._video_max_btn)
-        video_panel = self._headered(self._video_header, self.chapter_label, (self.video, 1))
+        self._video_header = PanelHeader("VIDEO",
+                                         status=(self.chapter_label, self._compare_chip),
+                                         trailing=self._video_max_btn)
+        video_panel = self._headered(self._video_header, (self.video, 1))
 
         # LAP panel: ONE native tab bar (Laps · Corners · Stats · Coaching) over a QStackedWidget
         # — the page switcher IS the tab bar, and every page gets the panel's FULL height. This
@@ -957,7 +970,11 @@ class CentralView(QWidget):
         if usable(body):
             return body
         maxed = getattr(self, "_maximized_panel", None)
-        content = {self._video_panel: self.video, self._table_panel: body,
+        # Each entry is a panel's BODY, not the panel: `self.map` and `self.plots` are the content
+        # widgets and exclude their panel's header and toolbar by construction. `self.video` is NOT
+        # the equivalent — it carries the transport bars under the picture — so the video panel
+        # lends its stage (see VideoView.stage), or the card lands on the transport.
+        content = {self._video_panel: self.video.stage, self._table_panel: body,
                    self._map_panel: self.map, self._plots_panel: self.plots}.get(maxed)
         return content if usable(content) else self
 
@@ -1114,30 +1131,48 @@ class CentralView(QWidget):
             return
         table.set_excluded_visible(self._excluded_visible)
 
-    # --------------------------------------------------------- chapter banner
+    # --------------------------------------------------------- chapter chip / compare chip
     def _update_chapter_label(self, chapter_index: int):
-        """Banner text: the recording label plus, for a chaptered session, the current chapter.
-        Suppressed while a seam reopen is in flight (the "loading next chapter…" hint owns the banner
-        until the next chapter has presented, at which point _on_seam_loading(False) restores this)."""
+        """Chip text: which chapter the video is in. Suppressed while a seam reopen is in flight
+        (the "loading next chapter…" hint owns the chip until the next chapter has presented, at
+        which point _on_seam_loading(False) restores this).
+
+        It no longer repeats the RECORDING label. That string is in the window title, permanently,
+        and the chip is a qualifier on the word VIDEO beside it — "which chapter", not "which
+        file". The transport timecode dropped its own copy of the chapter in the same edit, so the
+        fact is now printed once in the window instead of twice."""
         if getattr(self, "_seam_loading", False):
             return
-        label = chapters.recording_label(self._paths)
-        if self.video.is_multi:
-            self.chapter_label.setText(
-                f"{label}  —  {chapters.format_chapter(chapter_index, len(self.session.chapters))}")
-        else:
-            self.chapter_label.setText(label)
+        self.chapter_label.setText(
+            chapters.format_chapter(chapter_index, len(self.session.chapters))
+            if self.video.is_multi else "")
 
     def _on_seam_loading(self, loading: bool):
-        """Show/clear a brief "loading next chapter…" hint on the chapter banner during a seam
-        reopen. On (EndOfMedia → reopen): a clearly-styled hint so the momentary hitch reads as
+        """Show/clear a brief "loading next chapter…" hint on the chapter chip during a seam
+        reopen. On (EndOfMedia → reopen): the amber trust tone, so the momentary hitch reads as
         intentional. Off (next chapter loaded + resumed): restore the normal current-chapter text.
         chapterChanged fires during the switch, so it's gated on _seam_loading to not clobber this."""
         self._seam_loading = bool(loading)
         if loading:
             self.chapter_label.setText("loading next chapter…")
+            set_tone(self.chapter_label, "warn")
         else:
+            set_tone(self.chapter_label, None)
             self._update_chapter_label(self.video.current_chapter())
+
+    def _on_compare_mode_changed(self, on: bool):
+        """The video panel mounted (or dropped) its two-pane compare stage: show the COMPARING chip
+        in the identity row, and put the two lap pickers in the tab chain where they belong.
+
+        The pickers are the reason this is not simply `setVisible`. The compare cells are built
+        LAZILY and Qt appends a new child to the END of the top-level focus chain, so the two
+        controls 40 px under the video panel's own ⛶ were tab stops 16 and 17 of 17 — sixteen
+        presses away. setTabOrder puts each one immediately after the widget named first."""
+        self._compare_chip.setVisible(bool(on))
+        picker_a, picker_b = self.video.compare_pickers()
+        if on and picker_a is not None and picker_b is not None:
+            self.setTabOrder(self._video_max_btn, picker_a)
+            self.setTabOrder(picker_a, picker_b)
 
     # --------------------------------------------------------- selection / poster
     def _select_default(self):
@@ -1351,13 +1386,13 @@ class CentralView(QWidget):
             self.video.set_g(self.session.g_at_time(t))
 
     def _transport_readout(self, t: float) -> str:
-        """The under-video TIMECODE strip (C6): the media position, plus the current chapter when
-        the recording spans several (the one piece of video-specific context not surfaced anywhere
-        else). Deliberately does NOT echo speed / Δ / lap — those live in the hero #DiffBox, the
-        single source of the live moment."""
-        chs = self.session.chapters
-        if chs is not None and chs.is_multi:
-            return f"{fmt_time(t)}   ·   {chapters.format_chapter(chs.chapter_at(t), len(chs))}"
+        """The transport TIMECODE (C6): the media position, and only that. Deliberately does NOT
+        echo speed / Δ / lap — those live in the hero #DiffBox, the single source of the live
+        moment — and no longer echoes the CHAPTER either: that is a property of the panel, not of
+        the instant, and it is a chip in the panel's identity row now. Keeping both copies would
+        have put the same string twice in one panel AND made this label the transport bar's widest
+        child (274 px of a 408 px bar at the window's own minimum), which is the width that decides
+        whether the timecode can sit inline beside the ▶ it describes at all."""
         return fmt_time(t)
 
     def _follow_current_lap(self, lap_id: int | None, t: float):

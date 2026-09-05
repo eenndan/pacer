@@ -517,11 +517,26 @@ class PanelHeader(QWidget):
 
 
 class PanelToolbar(QWidget):
-    """A panel's CONTROL row — the things you click, right-aligned, under the header.
+    """A panel's CONTROL row — the things you click, under the header.
 
-    Only two panels have one (map: line channel · snap · add/reset sector; charts: the hero's
-    reference toggle · the two chart toggles · the x-axis mode), and a panel without controls does
-    not get an empty strip.
+    Three panels have one (map: line channel · snap · add/reset sector; charts: the hero's
+    reference toggle · the two chart toggles · the x-axis mode; video: the transport), and a panel
+    without controls does not get an empty strip.
+
+    TWO GROUPS AROUND THE STRETCH, not one right-aligned run. The map and charts toolbars are pure
+    right-aligned control runs, which is why this class began as `addStretch(1)` then everything.
+    A media transport is not that shape: ▶ and 🔇 act on the picture and belong under its left
+    edge, while the view toggles belong opposite them — and the app's only control zone that was
+    NOT on a bar was the one that could not be expressed here. `leading` is the group before the
+    stretch; `*controls` stays the group after it, so the two existing toolbars are unchanged.
+
+    A GROUP IS A TUPLE, and it is a LAYOUT rather than a wrapper widget. Passing a tuple of
+    widgets puts them in a nested row at SPACE_XS — "these are one idea" — while everything else
+    in the bar stays SPACE_S apart, which is what stops five transport buttons reading as one
+    undifferentiated run. It is not a wrapper QWidget because the theme's base rule paints every
+    BARE QWidget with the canvas colour (a wrapper would punch a canvas hole in the bar's own
+    surface) and a QWidget SUBCLASS silently paints nothing at all — see the long note in
+    PanelHeader.__init__. A layout has no box, so it has neither problem.
 
     Every child is pinned to ``theme.CTRL_H`` and to its own sizeHint width:
 
@@ -540,7 +555,7 @@ class PanelToolbar(QWidget):
         costs the layout nothing it was not already paying.
     """
 
-    def __init__(self, *controls: QWidget, parent=None):
+    def __init__(self, *controls, leading=(), parent=None):
         super().__init__(parent)
         # Reuses the header's themed role — surface + bottom hairline — so the two rows read as one
         # block of panel chrome with a rule between identity and actions. A `PanelToolbar` role of
@@ -553,9 +568,37 @@ class PanelToolbar(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(theme.SPACE_S, theme.SPACE_XXS, theme.SPACE_S, theme.SPACE_XXS)
         row.setSpacing(theme.SPACE_S)
+        #: every control before the stretch, flat (a group's members counted individually)
+        self.leading = self._mount(row, leading)
         row.addStretch(1)
-        self.controls = tuple(controls)
-        for c in self.controls:
-            c.setFixedHeight(theme.CTRL_H)
-            c.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            row.addWidget(c, 0, Qt.AlignVCenter)
+        #: every control after the stretch, flat — the original right-aligned run
+        self.controls = self._mount(row, controls)
+
+    def _mount(self, row: QHBoxLayout, items) -> tuple:
+        """Add each item to `row` and return every control that landed there, FLAT.
+
+        An item is a control, or a TUPLE of controls that are one idea (see the class docstring).
+        The flat return is what lets a guard assert "every control in a toolbar shares one height"
+        without having to know which of them were grouped."""
+        flat = []
+        for item in items:
+            if isinstance(item, (tuple, list)):
+                group = QHBoxLayout()
+                group.setContentsMargins(0, 0, 0, 0)
+                group.setSpacing(theme.SPACE_XS)
+                for c in item:
+                    self._pin(c)
+                    group.addWidget(c, 0, Qt.AlignVCenter)
+                    flat.append(c)
+                row.addLayout(group)
+            else:
+                self._pin(item)
+                row.addWidget(item, 0, Qt.AlignVCenter)
+                flat.append(item)
+        return tuple(flat)
+
+    @staticmethod
+    def _pin(c: QWidget) -> None:
+        """One control at the one control height and its own honest width (see the class prose)."""
+        c.setFixedHeight(theme.CTRL_H)
+        c.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)

@@ -319,14 +319,25 @@ class CompareController:
                           choices=ids_a, choice_labels=labels_a)
         spec_b = PaneSpec(ref_lap, wb, cap_b,
                           source=(ref_sess.chapters or ref_sess.video_path),
-                          choices=[ref_lap], choice_labels=[cap_b])
+                          choices=[ref_lap],
+                          choice_labels=[self._ref_choice_label(ref_sess, ref_lap)])
         self._enter(spec_a, spec_b)
         return True
 
     def _cross_caption_b(self, ref_sess: Session, ref_lap: int) -> str:
-        """Pane B caption for cross compare: reference label + lap id + lap time."""
+        """Pane B CAPTION for cross compare (the pane's tooltip): reference label + lap + time."""
         label = self.session.reference_label() or "reference"
         return f"{label} · lap {lap_label(ref_lap)} · {fmt_time(ref_sess.lap_time(ref_lap))}"
+
+    def _ref_choice_label(self, ref_sess: Session, ref_lap: int) -> str:
+        """Pane B's PICKER ITEM for cross compare: the lap, in the same shape every other picker
+        item takes. It used to be the caption above — recording label and all — and a recording
+        name is unbounded: `GX010099 · Tuesday evening · lap 1 · 0:37.955` measured 281 px inside a
+        238 px combo, so the item elided and what it elided away was the LAP TIME, in the one
+        control that exists to carry it. The recording is a property of the PANE, not of the lap it
+        holds: it stays in the pane's tooltip (set_caption) and in the window's permanent reference
+        status chip, which is the same call the charts header's `Δ TO REF` label already makes."""
+        return f"lap {lap_label(ref_lap)}  ({fmt_time(ref_sess.lap_time(ref_lap))})"
 
     def exit(self) -> None:
         self._cross = False

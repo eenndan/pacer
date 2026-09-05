@@ -434,6 +434,10 @@ HOSTS = {
     'QLabel[role="BarLabel"]': (C.surface,),
     "QLabel#DiffBox": (C.surface,),
     "QLabel#PaneBadge": (C.surface,),
+    # The video transport's timecode, inline in a PanelToolbar. It used to declare a C.surface fill
+    # of its OWN because it was a full-width band under the buttons; it is on the bar now, exactly
+    # as #DiffBox is on the charts header, and the bar is what it composites onto.
+    "QLabel#Readout": (C.surface,),
     # The trust strip over the map: #TrustStrip is itself transparent, so its two banner lines
     # composite onto the map panel's surface.
     "QLabel#ProvisionalBanner": (C.surface,),

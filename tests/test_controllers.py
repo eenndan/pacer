@@ -38,6 +38,7 @@ _APP = QApplication.instance() or QApplication([])
 from _synthetic import bare_session, odometer  # noqa: E402
 
 from studio import theme  # noqa: E402
+from studio._signal import fmt_time, lap_label  # noqa: E402
 from studio.compare_controller import CompareController  # noqa: E402
 from studio.playback_state import PlaybackState  # noqa: E402
 from studio.scrub_controller import ScrubController  # noqa: E402
@@ -873,7 +874,15 @@ def test_enter_cross_builds_locked_reference_panespec():
     assert spec_b.source == f"REF_CHAPTERS_{ref_lap}", spec_b.source
     assert spec_b.window == ref.lap_window(ref_lap)
     assert spec_b.choices == [ref_lap], "pane B picker is locked to the single reference lap"
-    assert spec_b.choice_labels == [spec_b.caption], "the one locked entry shows the cross caption"
+    # THE ITEM IS A LAP, NOT A LAP-PLUS-A-RECORDING. It used to be `spec_b.caption` verbatim —
+    # `GX010099 · Tuesday evening · lap 1 · 0:37.955`, 281 px of unbounded recording name inside a
+    # 238 px combo, which elided and took the LAP TIME with it (D3/V-02). A recording name is a
+    # property of the PANE: it stays in the caption, which is the pane's tooltip, and in the
+    # window's permanent reference status chip.
+    assert spec_b.choice_labels == [
+        f"lap {lap_label(ref_lap)}  ({fmt_time(ref.lap_time(ref_lap))})"], spec_b.choice_labels
+    assert spec_b.choice_labels != [spec_b.caption], (
+        "the picker item is carrying the recording name again")
     print("test_enter_cross_builds_locked_reference_panespec OK")
 
 
