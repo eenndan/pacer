@@ -1470,12 +1470,17 @@ def test_stats_view_zero_lap_page_explains_itself():
     sess = _fake_view_session(laps=False, has_g=False)
     sess.timing_verified = False
     v = StatsView(sess)
-    assert v.no_laps_note.isVisibleTo(v)
+    assert v.no_laps_note.isVisibleTo(v) and v.no_laps_prose.isVisibleTo(v)
     # No provisional banner and no "every lap time BELOW" line when there is nothing below —
     # the empty-state block already names placing the start line as the next action.
     assert not v.provisional_banner.isVisibleTo(v)
     assert "below" not in v.trust_card.text().lower()
-    note = v.no_laps_note.text().lower()
+    # THE BLOCK IS TWO LABELS, so the copy is read as the block. `#ProvisionalBanner` is an 11 px
+    # semibold amber call-to-action LINE and it was carrying all 308 characters; the statement
+    # stays in the strip and the why/what-next moved into the app's prose step at the app's prose
+    # measure (tests/test_measure_floors.py owns that geometry). Reading one label alone is how a
+    # split like this silently loses half a sentence, so both are read here.
+    note = f"{v.no_laps_note.text()} {v.no_laps_prose.text()}".lower()
     assert "no complete laps" in note and "start/finish line" in note   # reason + next action
     assert not v._pace_section.isVisibleTo(v) and not v._speed_section.isVisibleTo(v)
     tiles = ("t_best", "t_median", "t_race_pace", "t_rolling", "t_digest", "t_sigma", "t_spread",

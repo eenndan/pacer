@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QScrollArea,
     QSizePolicy,
@@ -90,6 +91,17 @@ PROVISIONAL_BANNER = ("Lap timing is unverified — every lap time, split and �
 NO_LAPS_STATS_CLAUSE = "There are no lap statistics to show."
 NO_LAPS_TEXT = (f"{data_quality.NO_LAPS_HEADLINE} {NO_LAPS_STATS_CLAUSE} "
                 f"{data_quality.no_laps_body()}")
+# ...and the two HALVES that render it, because one banner strip is the wrong home for all 308
+# characters. `#ProvisionalBanner` is an 11 px semibold amber CALL-TO-ACTION LINE (theme.py: the
+# map trust strip's actionable tier), and it was handed a paragraph: 491 px of 11 px type, the
+# app's longest prose in its shortest step, while the same sentences on the four sibling panels in
+# the same frame are 13 px inside a 440 px measure. So the STATEMENT stays in the banner — the one
+# line the role is built for, and the line that says which page this is about — and the WHY/WHAT
+# NEXT becomes prose in the app's prose step at the app's prose measure. Both halves are still
+# NO_LAPS_TEXT concatenated, which is the string tests/test_state_surfaces.py holds every zero-lap
+# surface to.
+NO_LAPS_BANNER = f"{data_quality.NO_LAPS_HEADLINE} {NO_LAPS_STATS_CLAUSE}"
+NO_LAPS_PROSE = data_quality.no_laps_body()
 # The absent-accelerometer sentence — used BOTH in the DATA TRUST card and under the SPEED · G
 # tiles, so the dashes and the trust card explain themselves in the same words.
 NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
@@ -544,11 +556,33 @@ class StatsView(QWidget):
         # owns — the two are mutually exclusive by construction (see refresh: the provisional
         # banner needs `valid`, this needs `not valid`), so they are one banner slot with two
         # messages, never a stack of two amber strips.
-        self.no_laps_note = QLabel(NO_LAPS_TEXT)
+        # A BANNER IS ONE LINE, and this one now carries one line: what happened, and what it
+        # costs on THIS page. See NO_LAPS_BANNER / NO_LAPS_PROSE for the measured reason the
+        # paragraph moved out from under an 11 px semibold call-to-action strip.
+        self.no_laps_note = QLabel(NO_LAPS_BANNER)
         self.no_laps_note.setObjectName("ProvisionalBanner")
         self.no_laps_note.setWordWrap(True)
         self.no_laps_note.setVisible(False)
         col.addWidget(self.no_laps_note)
+        # The WHY and BOTH ways out, in the app's prose step (`role="EmptyBody"` — BODY/13, the
+        # exact rule its four siblings' bodies wear) at the app's prose measure
+        # (theme.EMPTY_MEASURE_PX, "the widest a column of PROSE may be set"). No new token, and
+        # the same 62 characters per line the ported states set.
+        #
+        # THE MEASURE IS THE LABEL'S MAXIMUM AND THE ITEM IS NOT ALIGNMENT-FLAGGED, which is the
+        # whole of how it avoids widgets.EmptyState's ratchet: an un-aligned QWidgetItem takes
+        # `min(cell, maximumWidth)`, so the label is handed the pane up to the cap and its
+        # MINIMUM stays its own (the longest word). An AlignLeft flag here would hand it
+        # `sizeHint` instead — QLabel's roughly-square wrap heuristic — and a `setFixedWidth`
+        # would pin the page's minimum to the measure.
+        self.no_laps_prose = WrapLabel(NO_LAPS_PROSE)
+        self.no_laps_prose.setProperty("role", "EmptyBody")
+        self.no_laps_prose.setMaximumWidth(theme.EMPTY_MEASURE_PX)
+        self.no_laps_prose.setVisible(False)
+        self._no_laps_prose_row = QHBoxLayout()
+        self._no_laps_prose_row.addWidget(self.no_laps_prose)
+        col.addLayout(self._no_laps_prose_row)
+        self._show_no_laps_prose(False)
 
         # --- SESSION totals
         col.addWidget(self._section("SESSION"))
@@ -1273,6 +1307,25 @@ class StatsView(QWidget):
         self.refresh()
 
     # ------------------------------------------------------------------ groups
+    def _show_no_laps_prose(self, on: bool) -> None:
+        """Show/hide the zero-lap prose AND ITS OWN AIR, so neither can outlive the other.
+
+        The indent is the layout's, not the label's: a QSS rule that reaches a QLabel rewrites
+        that label's contents margins from the rule's own box (widgets.EmptyState carries the
+        measurement), and nothing can reach a layout. But a layout's margins survive its only
+        child being hidden — an empty row still asks for 2*SPACE_XS of page — so the margins go
+        with the slot, which is the same rule widgets.EmptyState._show_slot follows and the same
+        defect (a gap nobody could see and nobody had removed) it was written for.
+
+        Indented by the banner's own accent rule plus its padding so the prose starts on the same
+        pixel as the line above it and the two halves read as one block."""
+        self.no_laps_prose.setVisible(on)
+        if on:
+            self._no_laps_prose_row.setContentsMargins(
+                theme.SPACE_XXS + theme.SPACE_M, theme.SPACE_XS, theme.SPACE_M, theme.SPACE_XS)
+        else:
+            self._no_laps_prose_row.setContentsMargins(0, 0, 0, 0)
+
     def _set_no_laps_state(self, has_laps: bool):
         """With zero valid laps every PACE and SPEED · G tile can only render an em-dash, so hide
         both groups behind ONE explanatory block carrying the status bar's copy and the next
@@ -1280,6 +1333,7 @@ class StatsView(QWidget):
         does DATA TRUST — it is the diagnostic for why no lap was found. Reversible: a
         re-segmentation that finds laps restores every tile."""
         self.no_laps_note.setVisible(not has_laps)
+        self._show_no_laps_prose(not has_laps)
         for section in (self._pace_section, self._speed_section):
             section.setVisible(has_laps)
         for t in (self.t_best, self.t_median, self.t_race_pace, self.t_rolling, self.t_digest,

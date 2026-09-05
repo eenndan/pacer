@@ -677,3 +677,27 @@ add_test(NAME test_state_surfaces
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_state_surfaces.py)
 set_tests_properties(test_state_surfaces PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# A MEASURE BOUNDS CONTENT — it may not become the minimum of the thing carrying it. The design
+# wave spent two per-instance measurements on dimensions a widget SHARES: EmptyState's measure
+# pinned the pane's own minimum (a one-way ratchet — one zero-lap recording had three window
+# minimums, 929/1018/1049, decided by resize history), and Tile claimed its ink height per STRING,
+# so the one tile printing a ⊘ stood 2 px taller than its row-mates and dropped its caption below
+# theirs. Also holds the Stats zero-lap block, whose paragraph moved out of an 11 px one-line
+# banner role into the app's prose step at the app's prose measure. Swept at 1 px in BOTH
+# directions: a one-size check is what let the ratchet through.
+add_test(NAME test_measure_floors
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_measure_floors.py)
+set_tests_properties(test_measure_floors PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# The corner grid's cell floors as a DIGIT BUDGET. #196's tabular figures widened them by 12 px
+# and nothing went red; the horizontal-scrollbar band moved 58 px of window across the wave. This
+# proves from the WINDOW COMPOSITE that the floors hold no slack (a pixel below any of them elides
+# that column's widest VALUE), and pins what they want on a 2-digit circuit and on a CONSTRUCTED
+# 3-digit one — the faster circuit no fixture on this machine produces, and the case that inverted
+# when `1` went from the narrowest digit to the widest.
+add_test(NAME test_corner_grid_budget
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_grid_budget.py)
+set_tests_properties(test_corner_grid_budget PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
