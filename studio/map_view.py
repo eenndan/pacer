@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QTransform
 from PySide6.QtWidgets import (
     QComboBox,
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import gapfill, theme, units
+from . import gapfill, prefs, theme, units
 from .map_render import (
     bucket_polylines,
     bucketize,  # noqa: F401  (re-exported for tests importing from map_view)
@@ -291,12 +291,25 @@ _LEGEND_ROW_H = 18        # px per key row
 _LEGEND_GLYPH_W = 22      # px column reserved for the glyph
 _LEGEND_PAD = 8           # px inner padding of the plate
 _LEGEND_GAP = 6           # px between the glyph column and its label
+# Inset of every plate floated over the plot (the map key, the Fit button, the action notice) from
+# the canvas edges. One name, because _reposition_key's clamp and the other two have to agree — as
+# a literal it was spelled three times, each with a comment pointing at the other two.
+_CHROME_INSET = theme.SPACE_S
 
 
 class _MapLegend(QWidget):
     """A small collapsible key for the map's glyphs, anchored over the plot's bottom-left. Click
-    the header to collapse to just the title. The glyph cells are painted to match the real
-    markers; labels are plain language."""
+    the plate to collapse to just the title. The glyph cells are painted to match the real
+    markers; labels are plain language.
+
+    TWO collapse inputs, one painted state. `_collapsed` is the USER's choice, and it is the one
+    that persists (studio/prefs.py). `_fits` is whether the canvas the plate floats over is tall
+    enough for the full plate at all: the plate is a FIXED height over a canvas whose height is
+    whatever the splitter leaves, and one ordinary drag takes that canvas to 72 px. Below the
+    threshold the plate paints itself collapsed regardless of the user's choice — and restores
+    their choice when the room comes back — so the alternative (Qt clipping 42 px off the TOP of a
+    106 px plate, taking the title row and the caret that are the only sign it collapses at all)
+    cannot happen. See MapView._reposition_key."""
 
     # Each row: (kind, label). `kind` selects the painter below.
     _ROWS = (
@@ -306,25 +319,71 @@ class _MapLegend(QWidget):
         ("start", "Drag = start / sector line"),
     )
 
-    def __init__(self, on_resize=None):
+    # The plate is its own only control and a 5 px caret was the only thing saying so, so the
+    # gesture is named in the tooltip — and when there is no room to expand, the plate says THAT
+    # instead of offering a click that cannot do anything (the _set_control_enabled idiom the chart
+    # controls use for a dead toggle).
+    _TIP_EXPANDED = "Map key — what the marks on the track mean. Click it to collapse."
+    _TIP_COLLAPSED = "Map key — what the marks on the track mean. Click it to expand."
+    _TIP_NO_ROOM = ("Map key — collapsed because the map panel is too short to show it. Drag the "
+                    "splitter under the map down (or maximize the panel) to open it.")
+
+    def __init__(self, on_resize=None, on_toggle=None, collapsed: bool = False):
         super().__init__()
-        self._collapsed = False
+        self._collapsed = bool(collapsed)   # the USER's choice — the value that persists
+        self._fits = True                   # room on the canvas for the full plate (set by MapView)
         self._on_resize = on_resize  # MapView re-pins the key when collapse changes its height
+        self._on_toggle = on_toggle  # MapView persists the user's choice
         # The brake glyphs CURRENTLY on the plot, as [(pyqtgraph symbol, colour)] — pushed by
         # MapView.set_brake_markers. Empty until a lap is drawn; see _paint_glyph.
         self.brake_glyphs: list[tuple[str, str]] = []
         self._font = theme.ui_font(theme.CAPTION)
         self._title_font = theme.ui_font(theme.PANEL_HEADER, theme.W_SEMIBOLD)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-        self.setCursor(Qt.PointingHandCursor)
         self._relayout()
 
+    @classmethod
+    def expanded_height(cls) -> int:
+        """Height of the full plate — title row + one row per key row, regardless of state."""
+        return _LEGEND_PAD * 2 + _LEGEND_ROW_H * (1 + len(cls._ROWS))
+
+    @classmethod
+    def collapsed_height(cls) -> int:
+        """Height of the title-only plate, regardless of state."""
+        return _LEGEND_PAD * 2 + _LEGEND_ROW_H
+
+    def collapsed(self) -> bool:
+        """The USER's collapse choice — what gets persisted. NOT what is painted: a canvas too
+        short for the full plate paints it collapsed anyway (see set_available_height)."""
+        return self._collapsed
+
+    def painted_collapsed(self) -> bool:
+        """What is actually on screen right now — the user's choice OR a canvas with no room."""
+        return self._collapsed or not self._fits
+
+    def set_available_height(self, avail: int) -> bool:
+        """Tell the plate how much canvas height it may occupy (the canvas minus both insets), so
+        it can fall back to its title row instead of being clipped. Returns True when that changed
+        the plate's height (the caller then re-pins it)."""
+        fits = int(avail) >= self.expanded_height()
+        if fits == self._fits:
+            return False
+        self._fits = fits
+        self._relayout()
+        self.update()
+        return True
+
     def _relayout(self):
-        rows = 0 if self._collapsed else len(self._ROWS)
+        rows = 0 if self.painted_collapsed() else len(self._ROWS)
         # Fixed width sized to the widest label + glyph column.
         self._w = 196
         self._h = _LEGEND_PAD * 2 + _LEGEND_ROW_H + rows * _LEGEND_ROW_H
         self.setFixedSize(self._w, self._h)
+        # Cursor + tooltip are part of the layout state: whether the plate is a control at all
+        # depends on whether it has room to open.
+        self.setCursor(Qt.PointingHandCursor if self._fits else Qt.ArrowCursor)
+        self.setToolTip(self._TIP_NO_ROOM if not self._fits
+                        else self._TIP_COLLAPSED if self._collapsed else self._TIP_EXPANDED)
 
     def set_brake_glyphs(self, glyphs):
         """Tell the key which brake glyphs the map is drawing right now, [(symbol, colour)].
@@ -339,12 +398,20 @@ class _MapLegend(QWidget):
             self.brake_glyphs = glyphs
             self.update()
 
-    def mousePressEvent(self, _event):
+    def mousePressEvent(self, event):
         # Click anywhere on the key toggles collapse — the whole plate is the affordance.
+        # Swallowed (not ignored) while there is no room to expand: propagating it would start a
+        # pan of the plot underneath, and silently flipping the stored choice would mean the click
+        # changed nothing on screen but something on disk. The tooltip says why instead.
+        event.accept()
+        if not self._fits:
+            return
         self._collapsed = not self._collapsed
         self._relayout()
         if self._on_resize is not None:  # the plate changed height — re-pin it to the corner
             self._on_resize()
+        if self._on_toggle is not None:  # remember it across recordings and launches
+            self._on_toggle(self._collapsed)
         self.update()
 
     def paintEvent(self, _event):
@@ -358,10 +425,11 @@ class _MapLegend(QWidget):
         p.drawRoundedRect(QRectF(0.5, 0.5, self._w - 1, self._h - 1), 6, 6)
         p.setFont(self._title_font)
         p.setPen(QPen(QColor(C.text_dim)))
-        caret = "▾" if not self._collapsed else "▸"
+        collapsed = self.painted_collapsed()
+        caret = "▾" if not collapsed else "▸"
         p.drawText(QRectF(_LEGEND_PAD, _LEGEND_PAD, self._w - 2 * _LEGEND_PAD, _LEGEND_ROW_H),
                    int(Qt.AlignVCenter | Qt.AlignLeft), f"{caret}  Map key")
-        if self._collapsed:
+        if collapsed:
             p.end()
             return
         p.setFont(self._font)
@@ -935,8 +1003,18 @@ class MapView(QWidget):
         self._refresh_best()
 
         # Sector controls are exposed (not placed here) so app.py mounts them in the map header.
-        self.add_sector_btn = QPushButton("Add sector")
-        self.reset_sectors_btn = QPushButton("Reset sectors")
+        # GLYPHED, because the map toolbar was the one place in the app where a labelled control on
+        # panel chrome went bare: "Snap to track" sits beside them with ph.magnet, and every other
+        # labelled control mounted on chrome carries a Phosphor glyph too (Compare, Brake/Throttle,
+        # Ideal lap, the map's own Fit, coaching's Jump). Bare words are the DIALOG vocabulary
+        # (Open / Close / Cancel / Clear library …), which is internally consistent and stays that
+        # way. Cost measured: the map toolbar's fixed width goes 504 -> 544 px, which is also the
+        # map panel's minimum width — still under the 557 px the charts panel already sets for that
+        # column, so the window's own minimum stays 973x528.
+        self.add_sector_btn = QPushButton(icon("ph.plus"), "Add sector")
+        self.reset_sectors_btn = QPushButton(icon("ph.eraser"), "Reset sectors")
+        for btn in (self.add_sector_btn, self.reset_sectors_btn):
+            btn.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
         self.add_sector_btn.clicked.connect(self._add_sector)
         self.reset_sectors_btn.clicked.connect(self._reset_sectors)
         # Opt-in snap-to-track toggle (default off = free placement). When on, a released handle
@@ -977,8 +1055,15 @@ class MapView(QWidget):
         self._legend.setVisible(False)
 
         # C3 map key: floats over the plot's bottom-left (parented to the PlotWidget, re-pinned by
-        # _reposition_key, raised so it stays clickable).
-        self._map_key = _MapLegend(on_resize=self._reposition_key)
+        # _reposition_key, raised so it stays clickable). Its collapse is a PREFERENCE, read here
+        # and written back from the plate's own click: it used to be per-MapView state, so a user
+        # who put a 196x106 plate away got it back on the next recording and on the next launch.
+        # Read/written in the view rather than pushed down by app.py — the same call the Library
+        # dialog makes for its own remembered size, and for the same reason: nothing outside this
+        # widget has an opinion about it (studio/prefs.py).
+        self._map_key = _MapLegend(on_resize=self._reposition_key,
+                                   on_toggle=prefs.set_map_key_collapsed,
+                                   collapsed=prefs.map_key_collapsed())
         self._map_key.setParent(self.widget)
         self._map_key.raise_()
         self._map_key.show()
@@ -1124,9 +1209,8 @@ class MapView(QWidget):
         btn = getattr(self, "fit_btn", None)
         if btn is None:
             return
-        m = 8  # px inset from the panel edges (same as _reposition_key)
         btn.adjustSize()
-        btn.move(self.widget.width() - btn.width() - m, m)
+        btn.move(self.widget.width() - btn.width() - _CHROME_INSET, _CHROME_INSET)
 
     # ------------------------------------------------------------ on-canvas notice
     def _post_notice(self, text: str):
@@ -1159,9 +1243,8 @@ class MapView(QWidget):
         notice = getattr(self, "_notice", None)
         if notice is None or notice.isHidden():
             return
-        m = 8  # px inset from the panel edges (same as _reposition_key)
         host = self.widget
-        w = max(min(host.width() - 2 * m, NOTICE_MAX_W_PX), 120)
+        w = max(min(host.width() - 2 * _CHROME_INSET, NOTICE_MAX_W_PX), 120)
         notice.setFixedWidth(w)
         # A word-wrapped QLabel's sizeHint is its ONE-LINE hint, so adjustSize() alone sizes the
         # plate for one line and paints the rest outside it — measured on the reference notice
@@ -1169,15 +1252,34 @@ class MapView(QWidget):
         # label what the text needs at the width just pinned; sizeHint stays the floor so the
         # existing one-line notices keep their exact geometry.
         notice.setFixedHeight(max(notice.heightForWidth(w), notice.sizeHint().height()))
-        notice.move(m, m)
+        notice.move(_CHROME_INSET, _CHROME_INSET)
 
     def _reposition_key(self):
-        """Keep the floating map key pinned to the plot's bottom-left, just inside the edge."""
-        if getattr(self, "_map_key", None) is None:
+        """Keep the floating map key pinned to the plot's bottom-left, just inside the edge — and
+        never let a short canvas push it off the TOP.
+
+        The plate is a fixed height (106 px expanded) over a canvas whose height is whatever the
+        splitter leaves. Pinning it by `host.height() - key.height() - m` alone put y at −42 px on
+        a 72 px canvas — one ordinary drag of the map/charts splitter, and also the window's own
+        973x528 minimum — and Qt clips a child at its parent's edge, so 42 px of a 106 px plate
+        went off the TOP: the "▾ Map key" title row and the "Video position" row, i.e. exactly the
+        caret and title that are the only sign the plate collapses at all.
+
+        Two lines fix it, in this order. Tell the plate how much room it has, so it falls back to
+        its 34 px title-only form rather than being cut (and restores the user's own choice when
+        the room returns); then clamp the corner. The clamp is what makes the failure GRACEFUL
+        rather than absent: below ~50 px of canvas even the title bar cannot fit, and anchoring to
+        the top-left means the title is the LAST thing lost instead of the first. (Measured: the
+        map panel's own minimumSizeHint floors the canvas at 72 px, and the only way past that is
+        maximizing the charts panel, which takes the whole map panel to 0 px — nothing is painted
+        there at all.)"""
+        key = getattr(self, "_map_key", None)
+        if key is None:
             return
-        m = 8  # px inset from the panel edges
         host = self.widget
-        self._map_key.move(m, host.height() - self._map_key.height() - m)
+        key.set_available_height(host.height() - 2 * _CHROME_INSET)
+        key.move(_CHROME_INSET,
+                 max(_CHROME_INSET, host.height() - key.height() - _CHROME_INSET))
 
     @contextmanager
     def grab_clean(self):
