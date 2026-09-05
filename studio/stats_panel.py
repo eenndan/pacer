@@ -54,9 +54,11 @@ from .lap_table import (
     DROPOUT_TOOLTIP,
     EXCLUDED_MARK,
     NUM_ROLE,
+    NUMERIC_COL_START,
     PROVISIONAL_COLOR,
     PROVISIONAL_TOOLTIP,
     _NumItem,
+    align_headers_over_their_columns,
     estimated_timing_tooltip,
     set_corner_direction,
 )
@@ -123,17 +125,42 @@ SPARK_TOOLTIP = ("Lap-time trend over the clean laps (GPS-dropout ⚠ laps exclu
                  "session best (the floor). Y labels: fastest / slowest lap.")
 GG_DOT_ALPHA = 90         # scatter alpha (0-255): a cloud, not 4000 opaque dots
 GG_RING_STEP = 0.5        # g; concentric reference rings every half g
-ROW_HEIGHT = 22           # per-lap/sector table row height (the consistency-table convention)
+# Every report table's row height. It was a bare 22, documented here as "the consistency-table
+# convention" — a convention inherited from the ConsistencyPanel, which PR #111 DELETED, so the
+# number outlived its only argument. Three of the five tables below are genuine row click targets
+# (SelectRows + SingleSelection + ClickFocus → corner_clicked → the map's apex ring), and 35 of
+# their rows therefore shipped two pixels under the pointer-target floor theme.py declares. This is
+# that floor, spelled as the token: a report grid may be denser than a control, never denser than
+# the floor. See theme.GRID_ROW_DENSE_H for why this is not a new density scale.
+ROW_HEIGHT = theme.GRID_ROW_DENSE_H
 # Speed units live in the PER-LAP section label (one place), keeping the columns narrow
 # enough that the whole table fits the quadrant with no clipped column.
 LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s", "Coast s"]
 CORNER_COLUMNS = ["Corner", "Best", "Median", "σ (s)", "Med loss", "Apex best", "Apex med",
                   "Grip %"]
-WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss cell tinted
+WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss cell marked
+# ...and MARKED, not merely tinted. The cue used to be hue and nothing else — tinted and plain
+# cells were identical in size, weight, family, alignment and format, and carried the same tooltip
+# — while the ranking is by σ × median-loss, a PRODUCT that is not a column on screen. So the
+# column read as if it were ordered by its own numbers and was not: on D24 a tinted +0.09 (C11) sat
+# directly under a plain +0.11 (C10), and a plain +0.10 (C7) beat the tinted +0.09. A reader with
+# no colour, or with the colour and no explanation, was given a contradiction either way.
+#
+# This mark is the app's attention glyph — the same ⚠ the lap grid hangs on a dropout lap and the
+# map key on the grip channel's limit — and it is a PREFIX, deliberately: this column is
+# fixed-decimal and right-aligned, so right alignment IS decimal alignment (a property measured and
+# kept), and a trailing mark would push three of twelve numbers out of the decimal column. Prefixed,
+# it hangs to the left of an untouched right edge. The character stays TEXT rather than becoming a
+# theme.icon() pixmap because Inter draws it (tests/test_glyph_vocabulary.py measures exactly that)
+# and because a cell's icon slot paints at the cell's LEFT edge, a whole column away from the
+# right-aligned number it would be marking.
+WORST_LOSS_MARK = "⚠ "
 CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median / σ "
                    "time-in-corner, the median loss vs best, apex speeds and median grip "
-                   "utilization. The worst 3 loss cells (by σ × median-loss — erratic AND "
-                   "slow) are tinted: that's where practice pays first. Click a row to ring "
+                   f"utilization. The worst 3 loss cells are marked {WORST_LOSS_MARK.strip()} and "
+                   "tinted — ranked by σ × median-loss (erratic AND slow), which is why the marked "
+                   "cells are not simply this column's three largest numbers; hover one for its "
+                   "own score. That's where practice pays first. Click a row to ring "
                    "the corner's apex on the map; click a column header to sort.")
 BRAKE_COLUMNS = ["Corner", "n", "Onset σ m", "Span m", "Commit %", "m later"]
 STRAIGHT_COLUMNS = ["Straight", "Best", "Median", "σ (s)", "Trap best", "Trap med", "Exit Δ"]
@@ -380,6 +407,23 @@ class _ReportTable(QTableWidget):
         self._row_height = row_height
         self._content_w = 0
         self.setHorizontalHeaderLabels(columns)
+        # ...and then give every header the SIDE of the column it labels. Qt's
+        # QHeaderView.defaultAlignment is AlignCenter, these five tables never overrode it, and
+        # every cell from NUMERIC_COL_START on is AlignRight — so each label floated over the
+        # middle of a column whose digits sit at its right edge, by up to 34 px of ink-centre drift
+        # on the widest column (BRAKING "Commit %", 108 px, measured on the window composite at
+        # 1440x900). The rule is the app's, already written down for the lap / corner / coaching
+        # grids; these tables were simply never brought to it, and the guard that exists for
+        # exactly this defect (tests/test_design_system.py::test_no_table_header_floats_off_its_data)
+        # enumerated four tables and not these five.
+        #
+        # Applied HERE, in the shared table, rather than at the five call sites, because unlike the
+        # lap and corner grids all five build their headers the same way — through this one
+        # constructor — so a SIXTH report table cannot arrive without it. The boundary is the same
+        # NUMERIC_COL_START the cells use (column 0 is the row's identity: "C7" / "S2" / a lap
+        # number, left; everything after it is a number, right), which is what stops a new column
+        # arriving with its header and its values disagreeing.
+        align_headers_over_their_columns(self, NUMERIC_COL_START)
         self.verticalHeader().setVisible(False)
         self.verticalHeader().setDefaultSectionSize(row_height)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -684,7 +728,7 @@ class StatsView(QWidget):
         self.corners_table.setToolTip(CORNERS_TOOLTIP)
         # The corner-direction arrow in column 0 paints at the app's ICON_PX rather than at the
         # style's PM_SmallIconSize (see lap_table.CornerTable for the same statement). It fits the
-        # 22 px ROW_HEIGHT with 3 px either side.
+        # ROW_HEIGHT with 4 px either side.
         self.corners_table.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
         # Unlike the other stats tables this one is interactive: row-select → map ring,
         # header-click → sort (numeric via _NumItem, the lap-table idiom).
@@ -1314,7 +1358,24 @@ class StatsView(QWidget):
             best = bests[k] if k < len(bests) else None
             best_item = self._num_item(fmt_time(best) if best is not None else DASH)
             if best is not None:
-                best_item.setForeground(best_colour)  # the purple session-best hue
+                # The purple session-best hue — and DELIBERATELY WITHOUT the ★ the same meaning
+                # carries elsewhere (lap_table's best-lap cell and best-split cells, and this
+                # page's own PACE list). The ★ exists where a tint picks ONE cell out of a column
+                # of comparable ones: without a mark, "which of these 21 laps is the best" is
+                # carried by hue alone and is lost in greyscale. Here the tint covers the WHOLE
+                # column — every cell in it is a session best, because that is what the column IS —
+                # so the meaning is already in the header, no cell is being distinguished from its
+                # neighbours, and a ★ on all four rows would mark a tautology and devalue the mark
+                # on the surfaces where it does work. What WAS missing is the sentence, so the cell
+                # now says what it is on hover.
+                # (tests/test_accessible_cues.py::test_lap_table_best_cells_carry_non_colour_star_marks
+                # holds the column-wide/row-wise distinction, and asserts this column really is
+                # column-wide rather than taking the claim on trust.)
+                best_item.setForeground(best_colour)
+                best_item.setToolTip(
+                    f"Session-best S{k + 1} split — the fastest this sector was driven, in the "
+                    "same purple the Laps tab paints on the lap that set it. The theoretical "
+                    "best above is this column summed.")
             self.sector_table.setItem(k, 1, best_item)
             med = medians[k] if k < len(medians) else None
             self.sector_table.setItem(
@@ -1337,11 +1398,12 @@ class StatsView(QWidget):
             self.corners_table.setRowCount(0)
             return
         self._corners_section.setText(f"CORNERS · speeds in {u_label}")
-        # The worst corners by σ × median-loss get their loss cell tinted in the "behind"
-        # hue — erratic AND slow is where practice pays first. Capped at WORST_TINT_N and
+        # The worst corners by σ × median-loss get their loss cell MARKED and tinted in the
+        # "behind" hue — erratic AND slow is where practice pays first. Capped at WORST_TINT_N and
         # at half the field: a tint that covers every row highlights nothing.
         k = min(WORST_TINT_N, max(1, len(report) // 2))
-        worst = {r.cid for r in sorted(report, key=lambda r: -r.score)[:k] if r.score > 0}
+        ranked = sorted(report, key=lambda r: -r.score)[:k]
+        worst = {r.cid: r for r in ranked if r.score > 0}
         behind = QColor(theme.behind_colour())
         mono = theme.mono_font(theme.TABLE)
 
@@ -1367,14 +1429,28 @@ class StatsView(QWidget):
             t.setItem(r, 2, cell(cr.median_s, "{:.2f}"))
             t.setItem(r, 3, cell(cr.sigma_s, "{:.2f}"))
             loss = cell(cr.median_loss_s, "+{:.2f}")
-            if cr.cid in worst:
+            # The tooltip is built in the SAME branch as the cue, so the reason can never be
+            # missing from a cell that carries the mark. Two independent lines when both apply:
+            # WHY THIS CELL IS MARKED (the ranking score, which is not a column on screen — a
+            # reader comparing the marked +0.09 with the plain +0.11 above it has no other way to
+            # find out) and the corner's own phase triple.
+            tips = []
+            wr = worst.get(cr.cid)
+            if wr is not None:
                 loss.setForeground(behind)
+                loss.setText(WORST_LOSS_MARK + loss.text())
+                tips.append(
+                    f"One of the {len(worst)} worst corners to practise — ranked by "
+                    f"σ × median loss = {wr.sigma_s:.2f} × {wr.median_loss_s:.2f} = "
+                    f"{wr.score:.3f} s², not by this column alone.")
             tri = phase_rows.get(cr.cid)
             if tri is not None:
                 # The corner's own phase matrix, on hover — where INSIDE this corner the
                 # typical lap loses (positive = slower than best over that third).
-                loss.setToolTip(f"Median vs best — entry {tri[0]:+.2f} · "
-                                f"apex {tri[1]:+.2f} · exit {tri[2]:+.2f} s")
+                tips.append(f"Median vs best — entry {tri[0]:+.2f} · "
+                            f"apex {tri[1]:+.2f} · exit {tri[2]:+.2f} s")
+            if tips:
+                loss.setToolTip("\n".join(tips))
             t.setItem(r, 4, loss)
             t.setItem(r, 5, cell(units.convert_speed(cr.apex_best_kmh, unit)
                                  if cr.apex_best_kmh is not None else None, "{:.1f}"))

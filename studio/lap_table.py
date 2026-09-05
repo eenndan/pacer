@@ -858,7 +858,10 @@ class LapTable(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
         self.table.horizontalHeader().resizeSection(0, LAP_COL_PX)
         self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setDefaultSectionSize(28)
+        # theme.GRID_ROW_H, not a bare 28: this grid's ROW is the app's primary seek target (a
+        # click jumps the video to that lap), so its height is the control height by argument
+        # rather than by coincidence. See the token's note in theme.py.
+        self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         self._num_font = theme.mono_font(theme.TABLE)
         # Default sort = lap# ascending; remembered across refreshes, re-applied after each sort.
         self._sort_col = 0
@@ -1823,7 +1826,9 @@ class CornerTable(QWidget):
         # feedback on headers that do nothing.
         hdr.setSectionsClickable(False)
         self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setDefaultSectionSize(28)
+        # Same token as the lap grid above, and for the same reason: hovering a corner row ring-
+        # highlights it on the map and the rows track the pointer (see the viewport event filter).
+        self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         self._num_font = theme.mono_font(theme.TABLE)
         # Empty state (was a bare header grid — the one surface without one): says WHY there
         # are no rows (no lap selected vs no corners detected) instead of a silent void.

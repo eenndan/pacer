@@ -98,6 +98,36 @@ TOOLBAR_H = 32               # a panel's control row, where it has one (Phase 2)
 HIT_MIN = 24                 # pointer-target floor — nothing clickable may be smaller
 SPLITTER_HANDLE_PX = 8       # divider hit area (see the splitter section of the stylesheet)
 FOCUS_RING_PX = 2            # keyboard focus ring width (see the focus-ring section)
+GRID_ROW_H = CTRL_H          # 28 — a grid whose ROW is the primary click/seek target
+GRID_ROW_DENSE_H = HIT_MIN   # 24 — a report grid; still a legal pointer target
+
+# THE TWO GRID ROWS ARE DERIVATIONS, NOT A NEW SCALE, and the distinction matters because a
+# DENSITY_* ladder was the obvious thing to reach for here and it was measured down.
+#
+# Every repeating unit in the app was censused: the tile is one number (35, all 28 of them), the
+# panel header one (36 x4), the toolbar one (32 x2), the control one (CTRL_H everywhere), the table
+# header row one (29 x9). SIX of the app's seven repeating kinds were already exactly one value.
+# The entire spread lived in the GRID ROW — 28 (Laps, Corners), 22 (the five Stats report tables),
+# 30 (the Library dialog) — and two of those three were not decisions at all: Library's 30 is Qt's
+# own default, written by nobody, and Stats' 22 was documented at its call site as "the
+# consistency-table convention" for a panel DELETED in PR #111. A new ladder bought to preserve
+# numbers nobody chose is precisely the argument tests/test_design_system.py already makes, in its
+# own prose, against buying a PROSE_* step.
+#
+# So the two names are aliases of tokens that already exist, and what they add is the SENTENCE:
+#   * GRID_ROW_H is CTRL_H because a row you click is a control. Laps and Corners spelled it as a
+#     bare 28 in two files and passed the dimension guard only because 28 happens to be in its
+#     SIZES set — the number was right and it was a coincidence.
+#   * GRID_ROW_DENSE_H is HIT_MIN because a report grid may be denser than a control, but not
+#     denser than the floor: three of the five Stats tables ARE row click targets (SelectRows +
+#     SingleSelection + ClickFocus, wired to the map's corner ring), and 35 of their rows shipped
+#     at 22 px, two pixels under the floor this file declares two lines above. The probe every
+#     earlier hit-target sweep used enumerates buttons, combos, sliders and header sections — it
+#     has no `row` kind, so a clickable table row had never been in scope.
+# A grid whose rows are NOT a target and whose content is wrapped prose (Coaching's
+# ResizeToContents opportunities list) is a different kind of row and takes neither.
+# tests/test_design_system.py::test_every_grid_row_is_one_of_the_two_declared_heights measures both
+# halves on the real view.
 
 # ICON_PX is a SEPARATE decision from ICON_BTN, and both halves shipped hand-picked: the four ⛶
 # panel buttons drew a 15 px glyph in a 26x24 box, the five video-transport buttons an 18 px glyph
