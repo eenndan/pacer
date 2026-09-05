@@ -588,6 +588,18 @@ add_test(NAME test_export_gates
 set_tests_properties(test_export_gates PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The first-run path (design wave 2, D4-01/02/03/05/10, D2-04/09/13/16): the two front doors'
+# 44-lap disagreement and the notice that names it, the busy card naming the stage that blocks the
+# UI thread, the drag-over affordance PROVEN FROM THE WINDOW COMPOSITE (a child grab reads the QSS
+# colour out of the palette and lies), the silently-discarded sidecar, and the welcome screen's
+# failure frame matching its first-run frame. Real StudioWindow + real theme, so run offscreen; the
+# prefs / library / track-DB seams are redirected to a temp tree inside the test and the recordings
+# it resolves chapters and sidecars against are 16-byte files in another.
+add_test(NAME test_first_run_path
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_first_run_path.py)
+set_tests_properties(test_first_run_path PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The map's floating key (design wave 2, D5-03/D5-06/D1-10): one ordinary splitter drag took the
 # map canvas to 72 px and Qt clipped 42 px off the TOP of the fixed 196x106 plate — the title row
 # and the caret that are the only sign it collapses. The plate falls back to its title-only form
@@ -642,7 +654,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_lap_table_empty_states test_charts_header_budget
                         test_coaching_panel_layout test_focus_cues test_pb_toast test_app_chrome
                         test_charts_panel test_lap_table_affordances test_export_gates
-                        test_golden_hermetic test_design_system test_inline_styles test_map_key)
+                        test_golden_hermetic test_design_system test_inline_styles
+                        test_first_run_path test_map_key)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
