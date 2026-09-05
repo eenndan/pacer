@@ -492,8 +492,15 @@ def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
     best = fmt_time(moment["best"])
     if moment["kind"] == "beat":
         gap = moment["improvement"]
+        # NO EMOJI (D1-07). The 🏁 that shipped here was the app's ONLY colour glyph: U+1F3C1
+        # resolves to .Apple Color Emoji UI — a 19 px advance in a 13 px line, in full colour, on
+        # the one surface the app designs as a peak moment, inside a UI whose every other mark is a
+        # monochrome Phosphor or Inter glyph. There is no like-for-like replacement: Phosphor 1.4.2
+        # ships 4,470 names and none of them is a chequered flag (flag / flag-banner / flag-fill /
+        # flag-thin, no flag-checkered). So this is a copy decision, and the sentence already
+        # celebrates — the exclamation mark was doing the work the emoji was decorating.
         return (
-            "New personal best! 🏁",
+            "New personal best!",
             f"{track} — {best}, {gap:.2f} s faster than your previous best "
             f"({fmt_time(moment['prior'])}).",
         )

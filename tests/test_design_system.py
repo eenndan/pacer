@@ -872,18 +872,29 @@ def test_no_table_header_floats_off_its_data():
     width (a maximized lap panel gives each data column MAX_DATA_COL_PX).
 
     THIS IS WHERE THE RULE LIVES, and that is the point of putting it here rather than in a fourth
-    private helper. The four tables build their headers four different ways — a per-column dict
-    keyed by header TEXT (coaching), a numeric-column boundary (laps, corners), nothing at all
-    (library) — and no shared function could have caught the ones that never called it. What they
-    can share is a MEASUREMENT, over the real widgets, that enumerates every table the app ships.
+    private helper. The tables build their headers several different ways — a per-column dict keyed
+    by header TEXT (coaching), a numeric-column boundary (laps, corners, the five report grids),
+    nothing at all (library) — and no shared function could have caught the ones that never called
+    it. What they can share is a MEASUREMENT, over the real widgets, that enumerates every table
+    the app ships.
 
     Anything with cells and a header is in: a fifth table has to come here and either pass or say
-    why not."""
-    from PySide6.QtWidgets import QHeaderView
+    why not.
+
+    THE FIVE STATS TABLES ARE WHY THAT SENTENCE IS THERE, and for two releases they were the proof
+    it was not being honoured. This guard enumerated four tables; the app shipped nine. All five
+    stats.StatsView report grids sat on Qt's centred default over cells that are AlignRight from
+    column 1 on — 26 numeric columns across four tables on an unmodified D24 recording, up to 34 px
+    of ink-centre drift between a header and its own digits (BRAKING "Commit %", a 108 px column,
+    read off the window composite at 1440x900). The dict below is now every table with cells and a
+    header, and it is built from the REAL view + the two dialogs rather than from a list of names,
+    so a tenth table arrives here by construction."""
+    from PySide6.QtWidgets import QHeaderView, QTableView
     from test_central_view_realqt import _real_central_view
     from test_coaching_panel_layout import _panel as _coaching_panel
     from test_coaching_panel_layout import _rows as _coaching_rows
 
+    from studio import stats as stats_service
     from studio.library_dialog import LibraryDialog
 
     # (table, why it is exempt) — prose, in the house idiom, and the list may only shrink.
@@ -897,7 +908,7 @@ def test_no_table_header_floats_off_its_data():
         # open that file inherits the check.
         "LIBRARY",
     }
-    view = _real_central_view()[0]
+    view, session = _real_central_view()[:2]
     view.resize(1440, 900)
     view.show()
     # Visit every page: the Corners and Coaching tables fill on the tab switch, and a table with no
@@ -909,6 +920,18 @@ def test_no_table_header_floats_off_its_data():
     view.tab_bar.setCurrentIndex(0)
     for _ in range(8):
         _APP.processEvents()
+    # Stats ▸ BRAKING is the one report grid the two-lap synthetic session cannot fill — it needs a
+    # matched brake event per corner and there is no g signal here — so it is seeded through the
+    # page's own refresh(), for the same reason the Coaching panel below comes from its own fixture:
+    # an empty table would pass this test by not being looked at, which is exactly how five tables
+    # stayed off it in the first place.
+    session.brake_report = lambda: [
+        stats_service.BrakeConsistency(cid=cid, n=2, median_dist_m=90.0 + cid, sigma_m=1.4,
+                                       span_m=2.0, commit_pct=82.0, metres_later_med=-1.2)
+        for cid in (1, 2)]
+    view.stats_view.refresh()
+    for _ in range(4):
+        _APP.processEvents()
     # The Coaching page needs a ranked model to have rows at all, and the two-lap synthetic session
     # has none — so it comes from the fixture in the test that already owns this contract for it
     # (test_coaching_panel_layout::test_every_header_sits_over_its_own_column), which is the point:
@@ -917,8 +940,20 @@ def test_no_table_header_floats_off_its_data():
     dlg = LibraryDialog({"entries": [
         {"track": "Daytona MK", "date": "2026-08-12", "best": 68.42, "theoretical": 67.9,
          "paths": ["/tmp/a.MP4"], "verified": True}]}, open_recording=lambda _p: None)
+    stats = view.stats_view
     tables = {"LAPS": view.table.table, "CORNERS": view.corner_table.table,
-              "COACHING": coach.table, "LIBRARY": dlg.table}
+              "COACHING": coach.table, "LIBRARY": dlg.table,
+              "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
+              "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
+              "STATS/PER LAP": stats.lap_table}
+    # ...and the dict really is every table the view ships: anything with cells that is not in it
+    # would be a tenth surface nobody brought to the rule.
+    missed = [f"{type(t).__name__} under {type(t.parentWidget()).__name__}"
+              for t in view.findChildren(QTableView)
+              if t not in tables.values() and t.model() is not None and t.model().rowCount()]
+    assert not missed, (
+        "a table with rows that this guard does not enumerate — add it above and let it pass or "
+        f"say why not: {missed}")
     offenders, checked = [], {}
     for name, table in tables.items():
         checked[name] = 0
@@ -943,7 +978,7 @@ def test_no_table_header_floats_off_its_data():
     dlg.deleteLater()
     assert not offenders, (
         "table headers that do not sit over the column they name:\n  " + "\n  ".join(offenders))
-    assert min(checked.values()) >= 3 and sum(checked.values()) >= 20, (
+    assert min(checked.values()) >= 3 and sum(checked.values()) >= 50, (
         f"every table must contribute labelled columns with cells under them: {checked}")
     # ...and the rule is only worth having if the app's headers CAN be centred: prove the default
     # this fights is still Qt's, so a future Qt that changed it does not silently pass this test.
@@ -951,6 +986,112 @@ def test_no_table_header_floats_off_its_data():
     assert _h_side(probe.defaultAlignment(), "left") == "centre", probe.defaultAlignment()
     print(f"test_no_table_header_floats_off_its_data OK ({sum(checked.values())} labelled "
           f"columns over {len(tables)} tables {checked}, {len(EXEMPT)} exempt)")
+
+
+def test_every_grid_row_is_one_of_the_two_declared_heights():
+    """Check 7. THE GRID ROW WAS THE APP'S LAST UNDECIDED REPEATING UNIT.
+
+    Six of the app's seven repeating kinds were measured to be exactly one number each — the stat
+    tile (35, all 28 of them), the panel header (36 x4), the panel toolbar (32 x2), every control
+    (CTRL_H), the table header row (29 x9). The whole spread lived in the grid row: 28 on Laps and
+    Corners, 22 on the five Stats report grids, 30 in the Library dialog, and a variable 42-58 on
+    Coaching. Two of those were not decisions at all — Library's 30 is Qt's own default, written by
+    nobody, and Stats' 22 was documented at its call site as "the consistency-table convention" for
+    a panel DELETED in PR #111.
+
+    A DENSITY_* ladder is the obvious answer and is the wrong one: it would be a second scale
+    bought to preserve numbers nobody chose, which is the argument this file already makes in its
+    own prose against a PROSE_* step. theme.GRID_ROW_H / GRID_ROW_DENSE_H are therefore aliases of
+    CTRL_H and HIT_MIN, and what they add is the sentence — a row you click is a control; a report
+    row may be denser than a control but never denser than the pointer floor.
+
+    Both halves are measured on the real view, because the second one is what shipped broken:
+    three of the five Stats grids are genuine row click targets (SelectRows + SingleSelection +
+    ClickFocus, wired to corner_clicked -> the map's apex ring) and 35 of their rows stood at 22 px
+    against theme.HIT_MIN = 24. No earlier hit-target sweep could see it — the probe those sweeps
+    used enumerates QAbstractButton / QComboBox / QSlider / QHeaderView sections and has no `row`
+    kind at all, so a clickable table ROW had never been in scope.
+
+    KNOWN GAP, named rather than skipped: the Library dialog's grid still takes Qt's default 30 and
+    is not asserted here, because studio/library_dialog.py belongs to another lane of this design
+    wave. It is one dict entry away once that lands — `LIBRARY: dlg.table`, `GRID_ROW_H`."""
+    from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableView
+    from test_central_view_realqt import _real_central_view
+    from test_coaching_panel_layout import _panel as _coaching_panel
+    from test_coaching_panel_layout import _rows as _coaching_rows
+
+    from studio import stats as stats_service
+
+    view, session = _real_central_view()[:2]
+    view.resize(1440, 900)
+    view.show()
+    for page in range(view.tab_bar.count()):
+        view.tab_bar.setCurrentIndex(page)
+        for _ in range(6):
+            _APP.processEvents()
+    view.tab_bar.setCurrentIndex(0)
+    for _ in range(8):
+        _APP.processEvents()
+    # BRAKING again needs a brake event to have a row (see the header guard above).
+    session.brake_report = lambda: [
+        stats_service.BrakeConsistency(cid=cid, n=2, median_dist_m=90.0 + cid, sigma_m=1.4,
+                                       span_m=2.0, commit_pct=82.0, metres_later_med=-1.2)
+        for cid in (1, 2)]
+    view.stats_view.refresh()
+    for _ in range(4):
+        _APP.processEvents()
+    # The Coaching grid is the one that must NOT take either token, and the synthetic session gives
+    # it no rows — so it comes from its own fixture, or the exemption below would be untested prose.
+    coach = _coaching_panel(_coaching_rows(6), (1200, 800))
+
+    stats = view.stats_view
+    named = {"LAPS": view.table.table, "CORNERS": view.corner_table.table,
+             "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
+             "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
+             "STATS/PER LAP": stats.lap_table, "COACHING": coach.table}
+    by_widget = {id(t): n for n, t in named.items()}
+    # Every table in the real view PLUS the coaching fixture, named where we know it and labelled
+    # structurally where we do not — a new grid is measured whether or not anyone updated the dict.
+    tables = [(by_widget.get(id(t), f"<unnamed {type(t).__name__} under "
+                                    f"{type(t.parentWidget()).__name__}>"), t)
+              for t in (*view.findChildren(QTableView), coach.table)]
+
+    offenders, heights, prose = [], {}, {}
+    for name, table in tables:
+        rows = table.model().rowCount() if table.model() is not None else 0
+        if not rows:
+            continue                      # no row painted, nothing to measure
+        h = table.rowHeight(0)
+        # A row whose height is CONTENT is a different kind of row: Coaching's opportunities list
+        # wraps prose under ResizeToContents and is legitimately variable (42-58 px on real data).
+        # The predicate is structural, not a name, so a second prose grid inherits it.
+        if table.verticalHeader().sectionResizeMode(0) == QHeaderView.ResizeToContents:
+            prose[name] = h
+            continue
+        heights[name] = h
+        if h not in (theme.GRID_ROW_H, theme.GRID_ROW_DENSE_H):
+            offenders.append(
+                f"{name}: rows are {h} px — a fixed grid row is GRID_ROW_H "
+                f"({theme.GRID_ROW_H}, a row you click) or GRID_ROW_DENSE_H "
+                f"({theme.GRID_ROW_DENSE_H}, a report row)")
+        if table.selectionMode() != QAbstractItemView.NoSelection and h < theme.HIT_MIN:
+            offenders.append(
+                f"{name}: rows are selectable ({table.selectionMode()}) at {h} px, under the "
+                f"declared pointer floor HIT_MIN={theme.HIT_MIN}")
+    view.hide()
+    coach.hide()
+    assert not offenders, "grid rows off the two declared heights:\n  " + "\n  ".join(offenders)
+    # The guard is only worth having if it exercises BOTH tokens and the prose exemption — a run
+    # that happened to see one height would pass for the wrong reason.
+    assert theme.GRID_ROW_H in heights.values() and theme.GRID_ROW_DENSE_H in heights.values(), (
+        f"both grid-row tokens must be exercised by a real table: {heights}")
+    assert prose, "the ResizeToContents prose row must be exercised, or its exemption is untested"
+    assert len(heights) >= 7, f"too few real grids measured: {heights}"
+    # ...and the two tokens are the tokens they claim to be, not two new numbers.
+    assert (theme.GRID_ROW_H, theme.GRID_ROW_DENSE_H) == (theme.CTRL_H, theme.HIT_MIN)
+    assert theme.GRID_ROW_DENSE_H >= theme.HIT_MIN
+    print(f"test_every_grid_row_is_one_of_the_two_declared_heights OK ({len(heights)} fixed grids "
+          f"{heights}, {len(prose)} content-sized {prose})")
 
 
 def _run_all():
@@ -966,6 +1107,7 @@ def _run_all():
     test_no_chart_axis_title_is_painted_outside_its_chart()
     test_no_table_header_elides_away_its_own_name()
     test_no_table_header_floats_off_its_data()
+    test_every_grid_row_is_one_of_the_two_declared_heights()
     print("\nAll design-system (spatial + type scale) tests passed.")
 
 

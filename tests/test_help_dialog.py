@@ -54,6 +54,13 @@ from studio.help_dialog import (  # noqa: E402
 theme.register_fonts()
 theme.apply_theme(_APP)
 
+# The ⌘⇧S row's DESCRIPTION, read from the card rather than re-typed: it used to name the
+# panel-maximize button with a ⛶ that the button does not paint (D1-06) and now names it in words,
+# and a description is copy — a test that hard-codes it fails on a wording change that broke
+# nothing. What these tests are about is the KEY, so the key is what they assert.
+_STATS_DESC = next(desc for _g, rows in SHORTCUT_GROUPS for key, desc in rows
+                   if isinstance(key, QKeySequence) and key == QKeySequence("Ctrl+Shift+S"))
+
 
 def _shown(dialog):
     """Show a dialog offscreen and let its layout settle (wrapping needs a few passes)."""
@@ -159,12 +166,12 @@ def test_card_glyphs_match_the_live_bindings():
             for _group, group_rows in SHORTCUT_GROUPS for key, desc in group_rows}
     for handle, desc in (("_open_action", "Open a recording"),
                          ("_undo_action", "Undo the last timing-line edit"),
-                         ("_stats_action", "Session statistics, full-window (again / ⛶ to restore)"),
+                         ("_stats_action", _STATS_DESC),
                          ("_fullscreen_action", "Enter / exit full screen")):
         live = getattr(win, handle).shortcut().toString(QKeySequence.NativeText)
         assert rows[desc] == live, f"{handle}: card says {rows[desc]!r}, Qt paints {live!r}"
     # And the specific drift the sweep measured: Qt's order is ⇧⌘S, not ⌘⇧S.
-    stats = rows["Session statistics, full-window (again / ⛶ to restore)"]
+    stats = rows[_STATS_DESC]
     assert stats == QKeySequence("Ctrl+Shift+S").toString(QKeySequence.NativeText), stats
     win.deleteLater()   # never shown; close() would run closeEvent's session teardown
     print("test_card_glyphs_match_the_live_bindings OK")

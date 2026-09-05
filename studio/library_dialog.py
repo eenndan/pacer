@@ -381,14 +381,23 @@ class LibraryDialog(QDialog):
             self.table.customContextMenuRequested.connect(self._on_context_menu)
         root.addWidget(self.table, 3)
 
+        # THE ONE "there is nothing in this table" SURFACE, for both of the ways that happens.
+        #
         # A filter that matches nothing hides every row, and a table of hidden rows is just blank
-        # space — say so, and name the way back out.
-        self._no_matches = QLabel("")
-        self._no_matches.setProperty("role", "EmptyState")
-        self._no_matches.setWordWrap(True)
-        self._no_matches.setAlignment(Qt.AlignCenter)
-        self._no_matches.setVisible(False)
-        root.addWidget(self._no_matches)
+        # space — say so, and name the way back out. An EMPTY INDEX had no state at all: on a
+        # genuinely fresh library the dialog opened 900x520 with "0 analyzed recordings", a search
+        # box, and a four-column table whose body was an entirely blank 336 px void, over a chart
+        # pane reading "Select a recording to see its track's PB progression" — instructing an
+        # action that cannot be performed, while the neighbouring "Back up library…" answered
+        # honestly (QA D4-07 / D2-03). Both states now REPLACE the table (same stretch), because
+        # leaving an empty grid on screen beside the sentence explaining it is the void again.
+        self._empty_note = QLabel("")
+        self._empty_note.setProperty("role", "EmptyState")
+        self._empty_note.setWordWrap(True)
+        self._empty_note.setAlignment(Qt.AlignCenter)
+        self._empty_note.setVisible(False)
+        root.addWidget(self._empty_note, 3)
+        self._show_empty_note(len(self._entries), "", _ALL_TRACKS)
 
         # ----- light cross-session progress summary for the selected track (the 2nd/3rd-visit
         # hook: "N sessions · best … · M PBs · improving"). Reads library.track_summary (trustworthy
@@ -635,7 +644,7 @@ class LibraryDialog(QDialog):
         # analyzed recordings" over a table filtered down to nothing is the dialog contradicting
         # itself, and blank space is not a "no matches" message.
         self._update_title(visible)
-        self._show_no_matches(visible, query, chosen)
+        self._show_empty_note(visible, query, chosen)
         # Keep a sensible selection: if the selected row got hidden (or none is selected), land on
         # the first VISIBLE usable row so the chart/summary reflect what's on screen.
         self._reselect_visible()
@@ -648,17 +657,32 @@ class LibraryDialog(QDialog):
         self._title.setText(whole if visible is None or visible == total
                             else f"{visible} of {whole}")
 
-    def _show_no_matches(self, visible: int, query: str, chosen: str):
-        """The filtered-to-nothing empty state. Only for a FILTERED empty table — an empty library
-        is a different (and already handled) state, and gets no "no matches" sentence."""
-        filtering = bool(query) or chosen != _ALL_TRACKS
-        show = filtering and not visible and bool(self._entries)
-        if show:
-            term = self.search.text().strip() or chosen
-            self._no_matches.setText(
-                f"No recordings match “{term}”.\nClear the search or pick “{_ALL_TRACKS}” to see "
-                f"all {_plural(len(self._entries), 'recording')}.")
-        self._no_matches.setVisible(show)
+    def _show_empty_note(self, visible: int, query: str, chosen: str):
+        """The "this table has nothing in it" state, in its two DIFFERENT senses — and each gets its
+        own sentence, because the way out of them is different:
+
+          * NO LIBRARY AT ALL — nothing has been analysed yet. Says what this list is FOR and the
+            one gesture that fills it, which is the whole first-run answer this dialog was missing;
+          * FILTERED TO NOTHING — rows exist and the search/track combo is hiding them. Names the
+            term and the way back to all of them.
+
+        The table is hidden while either is up, so the sentence stands where the rows would be
+        instead of under an empty grid."""
+        if not self._entries:
+            self._empty_note.setText(
+                "No recordings analysed yet.\nDrop a GoPro .MP4 on the main window and it is "
+                "remembered here — track, date and best lap.")
+            show = True
+        else:
+            filtering = bool(query) or chosen != _ALL_TRACKS
+            show = filtering and not visible
+            if show:
+                term = self.search.text().strip() or chosen
+                self._empty_note.setText(
+                    f"No recordings match “{term}”.\nClear the search or pick “{_ALL_TRACKS}” to "
+                    f"see all {_plural(len(self._entries), 'recording')}.")
+        self._empty_note.setVisible(show)
+        self.table.setVisible(not show)
 
     def _reselect_visible(self):
         """Select the first VISIBLE, non-disabled row; clear the selection (→ empty chart/summary)
@@ -789,18 +813,24 @@ class LibraryDialog(QDialog):
 
     def _show_pb(self, track: str | None):
         """Plot best-lap-vs-date for `track`: line for >=2 dated bests, a framed single marker for
-        1, empty-state for 0. No track means one of two DIFFERENT states — nothing selected, or a
-        selected recording whose circuit the track database doesn't know (the common case for a new
-        user, and now a selectable row) — so each gets its own sentence instead of asking the user
-        to select what they already selected."""
+        1, empty-state for 0. No track means one of THREE different states — an empty library,
+        nothing selected, or a selected recording whose circuit the track database doesn't know
+        (the common case for a new user, and now a selectable row) — so each gets its own sentence
+        instead of asking the user to select what they already selected, or to select from a list
+        with nothing in it (QA D2-15: "Select a recording…" was shown over an empty library, an
+        instruction that cannot be carried out)."""
         if not track:
             self._pb_curve.setData([], [])
             self._pb_title.setText("PB progression")
             self._set_pb_axes(False)
-            self._set_pb_empty(
-                "This recording's track isn't in your database yet, so there's nothing to chart"
-                if self._selected_date_item() is not None
-                else "Select a recording to see its track's PB progression")
+            if not self._entries:
+                message = "Analyse two sessions at the same track to see your progression"
+            elif self._selected_date_item() is not None:
+                message = ("This recording's track isn't in your database yet, so there's nothing "
+                           "to chart")
+            else:
+                message = "Select a recording to see its track's PB progression"
+            self._set_pb_empty(message)
             return
         series = _library.pb_series(self._index, track)
         xs, ys = [], []

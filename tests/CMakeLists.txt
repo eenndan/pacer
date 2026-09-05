@@ -588,6 +588,49 @@ add_test(NAME test_export_gates
 set_tests_properties(test_export_gates PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The first-run path (design wave 2, D4-01/02/03/05/10, D2-04/09/13/16): the two front doors'
+# 44-lap disagreement and the notice that names it, the busy card naming the stage that blocks the
+# UI thread, the drag-over affordance PROVEN FROM THE WINDOW COMPOSITE (a child grab reads the QSS
+# colour out of the palette and lies), the silently-discarded sidecar, and the welcome screen's
+# failure frame matching its first-run frame. Real StudioWindow + real theme, so run offscreen; the
+# prefs / library / track-DB seams are redirected to a temp tree inside the test and the recordings
+# it resolves chapters and sidecars against are 16-byte files in another.
+add_test(NAME test_first_run_path
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_first_run_path.py)
+set_tests_properties(test_first_run_path PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The map's floating key (design wave 2, D5-03/D5-06/D1-10): one ordinary splitter drag took the
+# map canvas to 72 px and Qt clipped 42 px off the TOP of the fixed 196x106 plate — the title row
+# and the caret that are the only sign it collapses. The plate falls back to its title-only form
+# and its corner is clamped now; the collapse is a preference rather than per-MapView state; and a
+# labelled control in a panel toolbar carries a Phosphor glyph (chips exempt by name). The height
+# claims are SWEPT 1 px at a time, real MapView + real CentralView on the real theme, so run
+# offscreen; the prefs seam is redirected to a temp dir inside the test.
+add_test(NAME test_map_key
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_map_key.py)
+set_tests_properties(test_map_key PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The GLYPH guard (feat/icon-vocabulary, design wave 2 D1) — the third vocabulary, beside
+# test_design_system's dimensions and test_contrast's colour. The app had FOUR ways to draw a mark
+# and only theme.icon()'s Phosphor layer was designed: a literal Unicode character in a label falls
+# back PER CHARACTER to whatever the OS supplies, which put eight marks into .AppleSystemUIFont /
+# Apple Symbols / STIX Two Math / Menlo / .Apple Color Emoji UI at sizes from 4 px of ink to 16, in
+# one case inside a single 14 px label. An AST walk over the guarded modules' string literals —
+# each hit labelled by the class+method that owns it, so an exemption names a decision — asserts
+# that every painted character is drawn by the face the app declares, resolved LIVE through
+# _qtapp.themed_app(); the ledger of what Inter does and does not carry is measured here rather
+# than assumed; and the four surfaces the PR fixed (the excluded strip's ⊘ + caret, the three
+# corner tables' turn-sense arrow, the Shortcuts card's two Layout keycaps, and the emoji-free PB
+# moment) are pinned, with the card's glyphs read out of central_view/video_view by AST so the
+# documentation cannot drift from the buttons. Builds real widgets under the real theme -> Qt, so
+# run offscreen.
+add_test(NAME test_glyph_vocabulary
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_glyph_vocabulary.py)
+set_tests_properties(test_glyph_vocabulary PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The Python tests must import the cmake-deployed bindings package (bindings/pacer/pacer,
 # where the build drops the compiled module) WITHOUT relying on a pip/editable install of
 # `pacer` in the interpreter's site-packages — on a fresh CI env there is none, and
@@ -612,7 +655,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_coaching_panel_layout test_focus_cues test_pb_toast test_app_chrome
                         test_charts_panel test_lap_table_affordances test_export_gates
                         test_golden_hermetic test_design_system test_inline_styles
-                        test_video_view_compare)
+                        test_first_run_path test_map_key test_video_view_compare)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

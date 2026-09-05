@@ -11,6 +11,8 @@ the tests, exactly as before."""
 
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame,
@@ -25,17 +27,48 @@ from PySide6.QtWidgets import (
 from . import theme
 from .theme import C
 
+# What the welcome screen's "Open demo" button says while its fetch is in flight. Owned HERE
+# because this is the module that has to reserve room for it (see WelcomeView.demo_btn); read by
+# StudioWindow._set_demo_busy, which sets it — the width the button is floored at and the text that
+# fills it are the same fact, and a second copy of the string is a button that grows again.
+BUSY_DEMO_LABEL = "Fetching the demo clip…"
+
 
 class WelcomeView(QWidget):
     """First-run / no-recording empty state — the product's tagline made literal: drop a GoPro
     recording onto the window, or open one. The centred content sits inside a dashed-border DROP
     ZONE (`drop_zone`, objectName "WelcomeDropZone") so the drag-and-drop affordance is VISIBLE — a
-    user reads "you can drop a file here" instead of just being told. `on_open` runs the file
-    picker, `on_demo` resolves and loads a real demo lapping recording (and re-shows this state with
-    an honest message if the demo can't be fetched). An optional `error` line is shown when this
-    stands in for a failed first load. The buttons are exposed (`open_btn`/`demo_btn`) for tests."""
+    user reads "you can drop a file here" instead of just being told, and the zone now LIGHTS UP
+    while a droppable file is over the window (StudioWindow._set_dragover + the
+    `[dragover="true"]` rule; before that, a drag over the window changed zero pixels). `on_open`
+    runs the file picker, `on_demo` resolves and loads a real demo lapping recording (and re-shows
+    this state with an honest message if the demo can't be fetched). An optional `error` (plus the
+    offending `error_path`) is shown when this stands in for a failed first load. The buttons are
+    exposed (`open_btn`/`demo_btn`) and so is `error_label`, for tests.
 
-    def __init__(self, on_open, on_demo, error: str | None = None, parent=None):
+    THE FAILURE STATE IS THE SAME SHAPE AS THE FIRST-RUN STATE, which it was not. `_show_welcome`
+    DESTROYS and rebuilds this view to show an error, so the two are consecutive frames of one
+    screen — and measured at 1440x900 the error was appended BELOW the buttons INSIDE the card with
+    no width bound, which drove the drop zone from 403x239 to 727x303, collapsed the two-line
+    tagline onto one line and moved both buttons 48 px up, so the control the user's next click is
+    aimed at was not where it had just been (QA D2-09 / D4-06). Three things fix it, all here:
+      * the error slot is ALWAYS constructed, empty and hidden with `RetainSizeWhenHidden`, so the
+        no-error and error frames have the same geometry rather than two different ones;
+      * it sits ABOVE the card, on the canvas — reason before action, and the card cannot be
+        re-flowed by it at all;
+      * the offending PATH is shown as its basename with the absolute path on the tooltip; the raw
+        `/Users/…/track day 2026-08-30/holiday.mp4` was most of the width blow-up.
+    """
+
+    # How many BODY lines the error slot reserves. MEASURED, not chosen: at the card's own measure
+    # the longest of the app's eight failure sentences (app._load_failure_message plus the demo's)
+    # takes two lines, and the file it names takes a third. A longer one still wraps rather than
+    # clipping — the failure mode is a slightly taller banner over unchanged content, not a lost
+    # word. tests/test_first_run_path.py sweeps all eight against this number, at both sizes.
+    ERROR_LINES = 3
+
+    def __init__(self, on_open, on_demo, error: str | None = None, parent=None,
+                 error_path: str | None = None):
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setAlignment(Qt.AlignCenter)
@@ -77,20 +110,66 @@ class WelcomeView(QWidget):
         self.open_btn.clicked.connect(on_open)
         self.demo_btn = QPushButton("Open demo")
         self.demo_btn.clicked.connect(on_demo)
+        # FLOOR THE DEMO BUTTON AT ITS BUSY WIDTH. `StudioWindow._set_demo_busy` swaps the label to
+        # "Fetching the demo clip…" the moment it is clicked, which grew the button 98 -> 177 px;
+        # the row is centred, so the PRIMARY "Open recording…" slid 39 px left and the drop zone
+        # widened and moved with it — 9,151 px changed, in response to a click on the OTHER button
+        # (QA D4-06). Sizing the button for the widest thing it will ever say costs 79 px of a card
+        # that is 89.9% empty canvas, and buys a row that does not move.
+        self.demo_btn.setMinimumWidth(
+            self.demo_btn.sizeHint().width()
+            + self.demo_btn.fontMetrics().horizontalAdvance(BUSY_DEMO_LABEL)
+            - self.demo_btn.fontMetrics().horizontalAdvance(self.demo_btn.text()))
         buttons.addWidget(self.open_btn)
         buttons.addWidget(self.demo_btn)
         zone.addLayout(buttons)
 
+        # THE ERROR SLOT, ON THE CANVAS ABOVE THE CARD — always built, `RetainSizeWhenHidden`, so
+        # the first-run frame and the failure frame have IDENTICAL geometry and the card is
+        # byte-identical between them. The ⚠ is the glyph the rest of the app marks
+        # low-confidence/attention with, so the failure reads as a failure WITHOUT hue (it pairs
+        # with the amber [role=WelcomeError] styling, which used to be the subtitle's exact grey —
+        # the message hid inside the invitation copy).
+        #
+        # ABOVE, and OUTSIDE the zone, and both halves of that were measured. Above, because the
+        # error is the reason and the buttons are the action, and it used to be appended after them.
+        # Outside, because the longest of the app's load-failure sentences takes FOUR lines at the
+        # card's own 303 px measure: reserving that inside the card would have put an 80 px hole
+        # between the invitation and the buttons on every cold launch, for a failure that usually
+        # does not happen. Out here the reserved band is bare canvas, which the cold launch is
+        # 89.9% made of, so it costs nothing to look at and the card never moves.
+        #
+        # The measure is the CARD's own width — a derivation, not a number picked here — so the
+        # error column and the thing it is about line up, and three lines hold every production
+        # message (see tests/test_studio_features.py).
+        self.error_label = QLabel("")
+        self.error_label.setProperty("role", "WelcomeError")
+        self.error_label.setAlignment(Qt.AlignCenter)
+        self.error_label.setWordWrap(True)
+        # FIXED width, not maximum. A word-wrapping QLabel added with Qt.AlignCenter is granted its
+        # own sizeHint, and a wrapping label's sizeHint is a narrow heuristic, not its maximum: with
+        # setMaximumWidth(427) the label was laid out 206 px wide, needed five lines at that measure
+        # and was CLIPPED top and bottom inside the three lines reserved for it. Caught in the
+        # window composite; a maximumWidth read would have reported the intended 427 px and passed.
+        self.error_label.setFixedWidth(self.drop_zone.sizeHint().width())
+        self.error_label.setMinimumHeight(
+            self.ERROR_LINES * self.error_label.fontMetrics().height())
+        policy = self.error_label.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)   # the slot exists whether or not it has anything in it
+        self.error_label.setSizePolicy(policy)
         if error:
-            # The ⚠ the rest of the app marks low-confidence/attention with, so the failure reads as
-            # a failure WITHOUT hue (it pairs with the amber [role=WelcomeError] styling, which used
-            # to be the subtitle's exact grey — the message hid inside the invitation copy).
-            err = QLabel(f"⚠  {error}")
-            err.setProperty("role", "WelcomeError")
-            err.setAlignment(Qt.AlignCenter)
-            err.setWordWrap(True)
-            zone.addWidget(err)
-
+            text = f"⚠  {error}"
+            if error_path:
+                # The BASENAME, with the absolute path on the tooltip. The modal in front of this
+                # view already showed the full path once; repeating it inside a wrapping label is
+                # what made this line 627 px wide and the card 727 px (QA D2-09).
+                text += f"\n{os.path.basename(error_path)}"
+                self.error_label.setToolTip(error_path)
+        else:
+            self.error_label.setVisible(False)
+            text = ""
+        self.error_label.setText(text)
+        root.addWidget(self.error_label, 0, Qt.AlignCenter)
         root.addWidget(self.drop_zone, 0, Qt.AlignCenter)
 
 

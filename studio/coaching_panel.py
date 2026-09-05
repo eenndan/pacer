@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from . import APP_NAME, coaching, theme, units
 from ._signal import lap_label
-from .lap_table import CORNER_DIR_GLYPH
+from .lap_table import set_corner_direction
 from .theme import C
 from .widgets import PanelHeader
 
@@ -60,7 +60,8 @@ _HEADERS = ["Corner", "Time lost", "±σ", "Entry · Apex · Exit Δt", "How to 
 # one definition and can't drift.
 _HEADER_ALIGN = {"Time lost": Qt.AlignRight, "±σ": Qt.AlignRight}
 _HEADER_TIPS = {
-    "Corner": "The corner's number in track order, with its direction (⟲ left / ⟳ right).",
+    "Corner": "The corner's number in track order, with an arrow for its direction — "
+              "anticlockwise is a left-hander, clockwise a right.",
     "Time lost": "Median time lost through this corner versus your own best lap's same corner, "
                  "over your clean laps (seconds).",
     "±σ": "Lap-to-lap consistency: the σ (standard deviation) of your time through this corner "
@@ -407,11 +408,11 @@ def _brake_point_hint(bp, entry_dist: float | None = None) -> str | None:
 # --- shared per-row cell builders (the modal dialog AND the persistent panel render rows the SAME
 # way, so the corner / time-lost / reason cells can't drift between the two surfaces). ---
 def _corner_cell(opp: coaching.Opportunity) -> QTableWidgetItem:
-    """The 'C<n> <dir-glyph>' corner cell (read-only)."""
-    glyph = CORNER_DIR_GLYPH.get(opp.direction, "")
-    item = QTableWidgetItem(f"C{opp.cid} {glyph}")
+    """The 'C<n>' corner cell (read-only), with the turn sense in the item's icon slot — the same
+    lap_table.set_corner_direction the Corners and Stats ▸ CORNERS tables use."""
+    item = QTableWidgetItem(f"C{opp.cid}")
     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-    return item
+    return set_corner_direction(item, opp.direction)
 
 
 def _lost_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
@@ -553,6 +554,8 @@ class OpportunitiesDialog(QDialog):
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setFocusPolicy(Qt.NoFocus)
         table.setAlternatingRowColors(True)
+        # The corner-direction arrow paints at the app's ICON_PX, not the style's PM_SmallIconSize.
+        table.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
         # Word-wrap the reason cell + let each row grow to its wrapped content instead of a fixed
         # 40-px section that clips a 2nd line (the modal's extra PhaseBar + Jump columns squeeze the
         # stretch reason column, so the "How to find it" sentence wraps and MUST get the height for
@@ -717,6 +720,8 @@ class OpportunitiesPanel(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(True)
+        # The corner-direction arrow paints at the app's ICON_PX, not the style's PM_SmallIconSize.
+        self.table.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
         # Let each row grow to fit its wrapped "How to find it" cell instead of a fixed 34-px row
         # that clips a 2nd line at a narrow panel width (the ellipsis-truncation bug). As a full
         # tab page there is normally room for all rows; the table scrolls only when the panel is

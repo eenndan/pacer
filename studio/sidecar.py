@@ -37,6 +37,34 @@ from . import chapters
 VERSION = 1
 SUFFIX = ".pacer.json"
 
+# What ``load`` raises when the file IS THERE and cannot be used, so a caller can tell that from
+# "there is nothing saved for this recording". The two were one answer (None) for both, and the one
+# caller read it as "nothing to restore" — so a damaged sidecar silently discarded the user's
+# hand-placed start/finish line and the app then asked them to place it again (QA D2-04). Absent is
+# still None: it is the ordinary case, and it is correctly silent.
+#
+# An EXCEPTION rather than a second return value because that is what the distinction is: a file the
+# user has that this build cannot honour is exceptional, a file they never wrote is not. Callers
+# that only want the lines keep the old shape by catching it.
+
+
+class SidecarUnreadable(Exception):
+    """A sidecar exists at this path but is unusable — unreadable, not JSON, not this version, or
+    structurally invalid. Carries the path and a short machine-ish `reason` for the log."""
+
+    def __init__(self, path: str, reason: str):
+        super().__init__(f"{path}: {reason}")
+        self.path = path
+        self.reason = reason
+
+
+# The fourth answer ``Session.restore_saved_timing_lines`` can give, beside True (applied) / False
+# (the revert guard rejected them) / None (nothing saved). Spelled once, here, so the seam that
+# RAISES and the window that REPORTS cannot drift into two names for one state. A plain string
+# rather than a sentinel object because the other three answers are `is`-compared singletons and a
+# fourth falsy/truthy object would make `restored is False` a coin toss to read.
+UNREADABLE = "unreadable"
+
 
 def sidecar_path(recording_path: str) -> str:
     """The sidecar path for (any chapter of) a recording: the FIRST chapter's stem +
@@ -69,31 +97,43 @@ def _norm_line(line) -> list[list[float]]:
 
 def load(path: str) -> dict | None:
     """Parse + validate the sidecar at `path`. Returns the normalized dict (keys:
-    ``version``/``track``/``start``/``sectors``/``confirmed``) or None when the file is absent,
-    unreadable, not valid JSON, not version-1, or structurally invalid — the caller
-    treats every None identically (keep the session's auto-fitted lines).
+    ``version``/``track``/``start``/``sectors``/``confirmed``), or **None when there is no sidecar
+    at all** — the ordinary case, correctly silent, and the caller keeps its auto-fitted lines.
+
+    Raises ``SidecarUnreadable`` when a file IS there and cannot be used: unreadable, not JSON, not
+    a JSON object, not version-1, or structurally invalid. That distinction is the whole point of
+    this function's contract — every one of those cases used to return the same None as "absent",
+    so the user's hand-placed start/finish line was discarded without a word (QA D2-04).
 
     ``confirmed`` defaults to True when the key is absent: a legacy sidecar (pre-trust-marker)
     was only ever written by a deliberate user edit, so it counts as a confirmed start line."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict) or data.get("version") != VERSION:
-        return None
+    except FileNotFoundError:
+        return None                      # no sidecar for this recording — nothing to say
+    except IsADirectoryError as exc:
+        raise SidecarUnreadable(path, "is a directory") from exc
+    except OSError as exc:               # permissions, an unreadable volume, a half-copied file
+        raise SidecarUnreadable(path, f"unreadable ({type(exc).__name__})") from exc
+    except ValueError as exc:            # json.JSONDecodeError — truncated or not JSON at all
+        raise SidecarUnreadable(path, "not valid JSON") from exc
+    if not isinstance(data, dict):
+        raise SidecarUnreadable(path, "not a JSON object")
+    if data.get("version") != VERSION:
+        raise SidecarUnreadable(path, f"version {data.get('version')!r}, not {VERSION}")
     track = data.get("track")
     if track is not None and not isinstance(track, str):
-        return None
+        raise SidecarUnreadable(path, "track is not a name")
     start = data.get("start")
     sectors = data.get("sectors", [])
     if not _valid_line(start):
-        return None
+        raise SidecarUnreadable(path, "no usable start line")
     if not isinstance(sectors, list) or not all(_valid_line(s) for s in sectors):
-        return None
+        raise SidecarUnreadable(path, "a sector line is not two lat/lon points")
     confirmed = data.get("confirmed", True)
     if not isinstance(confirmed, bool):
-        return None
+        raise SidecarUnreadable(path, "confirmed is not a boolean")
     return {"version": VERSION, "track": track, "confirmed": confirmed,
             "start": _norm_line(start), "sectors": [_norm_line(s) for s in sectors]}
 
