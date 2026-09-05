@@ -90,6 +90,38 @@ _HERO_TEMPLATES = (
 )
 _HERO_PAD_PX = 20   # the QSS's `#DiffBox { padding: 2px 8px }` (16) + a rounding px per side
 
+# WHY THE HERO READOUT EXPLAINS ITSELF ON THE BEST LAP, AND WHY IT NO LONGER OFFERS THE ACTION IT
+# USED TO. A font-size census of every visible text-bearing widget at the FIRST PAINTED FRAME of a
+# real three-chapter drop ranks exactly ONE surface above 13 px: this readout, 22 px semibold at
+# [830, 537, 391, 30], reading `Δideal +0.00 s     73 km/h`, against 167 surfaces at 13 px and 8 at
+# 11. The app's largest number on arrival is a structural null, because the default selection is
+# the session best and the ideal is stitched from that lap's own sections. That is a real finding
+# (D4-08) and it is bigger than "the arrival frame": sampled 400 times across the whole default lap
+# on the real recording, `Δideal` prints a non-zero value on only **33.2%** of it (max 0.159 s), and
+# `Δ`-to-best prints one on **0.0%** of it — exactly 0.000 s everywhere, because on the best lap the
+# reference IS the lap.
+#
+# Which is why the old advice had to go. The note used to end "...pick another lap, or switch this
+# readout to Δ-to-best, for a number that moves", and half of that sentence is measurably false:
+# switching the reference on this lap produces a number that moves LESS — it never moves at all.
+# Picking another lap is the action that works: on laps 0/1/2 of the same recording Δideal reaches
+# 1.688 / 1.917 / 1.763 s and is non-zero on ~99% of each. So the note names only that, and the
+# OTHER reference now carries its own note instead of arriving unexplained.
+#
+# What is deliberately NOT done here: swapping the readout for the selected lap's TIME while the
+# playhead has not moved. It would put a headline on the arrival frame and take it away on the
+# first pixel of scrub — handing back a `+0.00` for two thirds of that lap — and it would make the
+# app's largest surface change what it MEANS on an incidental gesture. It is also not "one branch
+# in the same label": #DiffBox has a single QSS `font-size`, and its layout floor (_hero_min_width
+# below) is a plain-text advance over _HERO_TEMPLATES, so a second type step inside it means rich
+# text, a second template set and a re-derived floor.
+_BEST_LAP_IDEAL_NOTE = (
+    "\nThis IS your best lap, and the ideal is stitched from your own best sections, so Δideal "
+    "stays near zero here by construction. Pick another lap for a number that moves.")
+_BEST_LAP_BEST_NOTE = (
+    "\nThis IS your best lap, so it is the reference this Δ is measured against: it reads exactly "
+    "zero for the whole lap. Pick another lap for a number that moves.")
+
 
 class UndoOutcome(NamedTuple):
     """What an Edit ▸ Undo actually restored: whether the START/FINISH line moved, and how the
@@ -257,14 +289,40 @@ class CentralView(QWidget):
 
     # ------------------------------------------------------------------ lifecycle
     def showEvent(self, event):
-        """First show: restore the persisted grid-splitter sizes (deferred one event-loop turn
-        so the splitters carry their REAL post-layout sizes — a pre-show setSizes gets warped
-        by min-size clamping at the unshown widget's tiny default geometry)."""
+        """First show: restore the persisted grid-splitter sizes — SYNCHRONOUSLY here, and then
+        twice more on timers.
+
+        THE FIRST PASS IS THE ONE THE USER SEES. Both restores used to be deferred, and a
+        returning user (anyone who has ever dragged a splitter) therefore watched their studio
+        paint the BUILT-IN DEFAULT layout first, fully rendered with their real data, and then
+        jump. Measured on the real three-chapter drop with a persisted `main=[700, 732]`, sampling
+        the window composite and all three splitters on the wall clock at a 0.10 ms median
+        interval from `loadFinished`: the default `main=[515, 917]` was painted at +53 ms and held
+        for **78 ms** — the `singleShot(0)` did not run until +108 ms, because a zero-timer is
+        still queued BEHIND the first layout/paint burst of a freshly installed 66-lap view. Every
+        panel then moved at once: left column +185 px wide, video −94 px tall, map +185 px right
+        and +180 px taller (a full axis re-tick), charts +180 px down. `overlays.PBToast` already
+        knew — it defers itself 120 ms with a comment saying the restore MOVES the lap panel. The
+        toast waited; the panels did not.
+
+        The pre-show `setSizes` this used to warn about is a different moment: `_layout_panels`
+        runs before the widget has any geometry at all, and a restore there IS warped by min-size
+        clamping. By the time a ShowEvent is delivered the splitters already carry their real
+        post-layout extents (measured: 1440x854, `main=[515, 917]` at showEvent ENTRY), so the
+        synchronous pass lands undistorted and the first frame is the user's own layout.
+
+        BOTH DEFERRED PASSES STAY, and they are not belt-and-braces: they are the correctness net
+        for the case the synchronous pass cannot serve — a view shown before its top-level has
+        activated its layout (no geometry yet), and the deferred top-level layout passes that
+        re-split by stretch factor and would otherwise override whichever splitter they touch
+        last. `_apply_grid_sizes` is idempotent, so running it three times costs three clamped
+        `setSizes` on already-correct splitters and changes nothing."""
         super().showEvent(event)
         pending = getattr(self, "_pending_grid_sizes", None)
         if pending is not None:
             self._pending_grid_sizes = None
-            # Twice, idempotently: once right after this event burst, once after the deferred
+            self._apply_grid_sizes(pending)
+            # Then twice, idempotently: once right after this event burst, once after the deferred
             # top-level layout passes (which re-split by stretch factor and would otherwise
             # override the restore of whichever splitter they touch last).
             QTimer.singleShot(0, lambda: self._apply_grid_sizes(pending))
@@ -1440,23 +1498,25 @@ class CentralView(QWidget):
         self._last_diff_speed, self._last_diff_lap = sp, lap_id
         d_best = self.session.delta_at_lap(lap_id, t) if lap_id is not None else None
         d_ideal = self.session.delta_to_ideal_at(lap_id, t) if lap_id is not None else None
+        on_best = lap_id is not None and lap_id == self.session.best_lap_id()
         if self.ideal_readout_btn.isChecked():
             text, sem_colour = theme.format_ideal_readout(d_ideal, sp, lap_id, self._speed_unit)
             tip = f"Δ to your best lap here: {theme.format_delta_run(d_best)}"
             # IA-03: this readout is the largest text in the window, and on the BEST lap it is a
             # structural null — the ideal is the best-of-each-point stitched from the driver's own
-            # laps, so the lap that formed most of it can barely differ from it (measured over the
-            # whole of one real best lap: max |Δideal| = 0.08 s). The app opens with the playhead
-            # in exactly that lap. Rather than let 16 px of "+0.00" read as an achievement, say
-            # WHY it is zero — appended, never replacing the Δ-to-best number the box promises to
-            # keep one hover away.
-            if lap_id is not None and lap_id == self.session.best_lap_id():
-                tip += ("\nThis IS your best lap, and the ideal is stitched from your own best "
-                        "sections, so Δideal stays near zero here by construction — pick another "
-                        "lap, or switch this readout to Δ-to-best, for a number that moves.")
+            # laps, so the lap that formed most of it can barely differ from it. The app opens with
+            # the playhead in exactly that lap. Rather than let 22 px of "+0.00" read as an
+            # achievement, say WHY it is zero — appended, never replacing the Δ-to-best number the
+            # box promises to keep one hover away.
+            if on_best:
+                tip += _BEST_LAP_IDEAL_NOTE
         else:
             text, sem_colour = theme.format_delta_speed(d_best, sp, lap_id, self._speed_unit)
             tip = f"Δ to your IDEAL achievable lap here: Δideal {theme.format_delta_value(d_ideal)}"
+            # ...and the SAME honesty for the other reference, which had none. Δ-to-best on the
+            # best lap is not "near" zero, it is zero: this lap IS the reference. See the note.
+            if on_best:
+                tip += _BEST_LAP_BEST_NOTE
         colour = sem_colour or theme.C.text
         self.diff_box.setText(text)
         self.diff_box.setToolTip(tip)

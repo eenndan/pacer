@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -32,6 +33,14 @@ from .theme import C
 # StudioWindow._set_demo_busy, which sets it — the width the button is floored at and the text that
 # fills it are the same fact, and a second copy of the string is a button that grows again.
 BUSY_DEMO_LABEL = "Fetching the demo clip…"
+
+# The PB toast's dismiss mark, in the app's ONE glyph vocabulary (PR #189: a character in a
+# user-visible string must be drawn by the app's own UI face, or it must be a theme.icon() pixmap).
+# `✕` U+2715 is not in Inter, so Qt fetched it per-character from **Menlo** and drew **6x6 px** of
+# ink in a 24x24 button — measured from the window composite, 1.0 px below the button's centre.
+# `ph.x` at ICON_PX is **10x10, cy 0.0**: 2.8x the ink, centred, and drawn by a face something
+# chose. Named here so tests/test_glyph_vocabulary.py can bind to the button's own declaration.
+DISMISS_ICON = "ph.x"
 
 
 class WelcomeView(QWidget):
@@ -234,12 +243,19 @@ class PBToast(QWidget):
         self.title_label.setObjectName("PBToastTitle")
         top.addWidget(self.title_label)
         top.addStretch(1)
-        self.close_btn = QPushButton("✕")
+        self.close_btn = QPushButton()
         self.close_btn.setObjectName("PBToastClose")
         self.close_btn.setMinimumSize(self.MIN_HIT_PX, self.MIN_HIT_PX)
+        self.close_btn.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
+        self.close_btn.setIcon(self._dismiss_icon(hover=False))
+        # A pixmap carries no text, so the meaning has to survive somewhere a screen reader reads.
+        self.close_btn.setAccessibleName("Dismiss")
         self.close_btn.setCursor(Qt.PointingHandCursor)
         self.close_btn.setToolTip("Dismiss")
         self.close_btn.clicked.connect(self.dismiss)
+        # ...and the HOVER half of its rule, which a `color:` cannot deliver to a pixmap — see
+        # _dismiss_icon and eventFilter.
+        self.close_btn.installEventFilter(self)
         top.addWidget(self.close_btn)
         lay.addLayout(top)
 
@@ -448,10 +464,37 @@ class PBToast(QWidget):
                   max(0, min(y, max(0, parent.height() - self.height()))))
         return settled
 
+    @staticmethod
+    def _dismiss_icon(hover: bool) -> QIcon:
+        """The dismiss ✕ as a Phosphor pixmap, carrying BOTH of the state cues its stylesheet rule
+        spells for the character it replaces.
+
+        `QPushButton#PBToastClose` declares `color: text_dim`, `:hover { color: text }` and
+        `:focus { color: accent_hover }`. **A stylesheet `color:` cannot reach a pixmap** — this is
+        the same class of miss as the five other QSS mechanisms that have reached a widget's rule
+        but not its pixels in this app — so both states are painted here instead:
+
+          * NORMAL is re-set from `eventFilter` on Enter/Leave, because Qt gives a QPushButton no
+            icon mode for "the pointer is on me";
+          * ACTIVE is the FOCUS state, because `QCommonStyle::drawControl(CE_PushButtonLabel)`
+            picks `QIcon::Active` from `State_HasFocus`, not from `State_MouseOver`. Measured on
+            the real card: the character's focus cue changed 32 px of the button's 576; the pixmap's
+            changes 52. (tests/test_focus_cues.py enumerates this control — a silent focus ring on
+            the one card in the app that deletes itself after six seconds is a HIGH here.)"""
+        px = QSize(theme.ICON_PX, theme.ICON_PX)
+        ic = QIcon()
+        ic.addPixmap(theme.icon(DISMISS_ICON, color=C.text if hover else C.text_dim).pixmap(px),
+                     QIcon.Normal)
+        ic.addPixmap(theme.icon(DISMISS_ICON, color=C.accent_hover).pixmap(px), QIcon.Active)
+        return ic
+
     def eventFilter(self, obj, event):
-        """Follow the anchor when the window resizes under the card (its 6 s outlives a drag)."""
+        """Follow the anchor when the window resizes under the card (its 6 s outlives a drag), and
+        carry the dismiss button's hover tint, which its QSS rule cannot (see _dismiss_icon)."""
         if obj is self._host and event.type() == QEvent.Resize and self.isVisible():
             self._place()
+        elif obj is self.close_btn and event.type() in (QEvent.Enter, QEvent.Leave):
+            self.close_btn.setIcon(self._dismiss_icon(hover=event.type() == QEvent.Enter))
         return super().eventFilter(obj, event)
 
     def enterEvent(self, ev):
