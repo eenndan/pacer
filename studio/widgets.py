@@ -469,7 +469,20 @@ class EmptyState(QWidget):
         column.setSpacing(0)
         column.setAlignment(Qt.AlignCenter)
 
+        # EVERY GAP IS A SPACER ITEM WITH A HANDLE, and the handles are why. Both gaps sit next to a
+        # slot that a LIVE surface hides and shows — the Library dialog's two senses differ by
+        # exactly the icon, and "Forget all recordings" flips between them with the dialog open — so
+        # the air has to go with the slot or the object leaves the hole it exists to prevent
+        # (Coaching's stray 11 px gap was a 7x14 empty header label nobody could see).
+        #
+        # The obvious spelling, giving each slot its gap as its own contentsMargins, was tried and
+        # MEASURED WRONG: a QSS rule that reaches a QLabel rewrites that label's contents margins
+        # from the rule's own box, and it does not do so uniformly. On the shipped render four
+        # panels kept `[0, 8, 0, 0]` on the body while the map's floating card — same object, same
+        # rule — came back `[0, 0, 0, 0]` and stood its title directly on its body. Suspect the
+        # stylesheet first: a spacer item is layout state, and no rule can reach it.
         self.icon_label = None
+        self._icon_gap = None
         if icon:
             self.icon_label = QLabel(self)
             self.icon_label.setPixmap(theme.icon(icon, color=theme.C.text_muted)
@@ -478,15 +491,9 @@ class EmptyState(QWidget):
             # A pixmap has no text for a screen reader; the title says the same thing, so the mark
             # is decorative and named after it rather than left anonymous.
             self.icon_label.setAccessibleName(title)
-            # THE ICON'S GAP IS ITS OWN BOTTOM MARGIN, not an addSpacing item, because this is the
-            # one slot a live surface hides and shows: the Library dialog's two senses differ by
-            # exactly this mark, and "Forget all recordings" can flip between them while the dialog
-            # is open. A layout SPACING item does not disappear with the widget above it, so an
-            # addSpacing here would leave a 12 px hole every time the icon went away — which is the
-            # defect this object exists to stop (Coaching's stray 11 px gap was a 7x14 empty header
-            # label nobody could see). A hidden widget takes no space at all, margins included.
-            self.icon_label.setContentsMargins(0, 0, 0, theme.SPACE_M)
             column.addWidget(self.icon_label, 0, Qt.AlignHCenter)
+            column.addSpacing(theme.SPACE_M)
+            self._icon_gap = column.itemAt(column.count() - 1)
 
         self.title = QLabel(title, self)
         self.title.setProperty("role", "EmptyTitle")
@@ -499,19 +506,56 @@ class EmptyState(QWidget):
         self.body.setProperty("role", "EmptyBody")
         self.body.setAlignment(Qt.AlignCenter)
         self.body.setMaximumWidth(theme.EMPTY_MEASURE_PX)
-        # ...and the title→body gap the same way, on the same rule: EVERY GAP BELONGS TO THE SLOT
-        # THAT CAN VANISH — the icon's below it, the body's above it — so hiding either takes its
-        # own air with it and the two present slots are always exactly one step apart.
-        self.body.setContentsMargins(0, theme.SPACE_S, 0, 0)
+        column.addSpacing(theme.SPACE_S)
+        self._body_gap = column.itemAt(column.count() - 1)
         column.addWidget(self.body, 0, Qt.AlignHCenter)
-        self.body.setVisible(bool(body))
+        self._show_body(bool(body))
+
+    def resizeEvent(self, event):
+        """Set both text slots to the measure: everything the pane can give, up to the cap.
+
+        THE CAP ALONE DOES NOT PRODUCE A MEASURE, which is what measuring the ported states showed.
+        `setMaximumWidth` is a ceiling; the FLOOR is the label's own size hint, and a word-wrapped
+        QLabel's hint is `QLabelPrivate::sizeForWidth`'s heuristic — it wraps the text into a
+        roughly square block rather than a line. Under a centring layout (which gives an aligned
+        item `min(available, maximum, sizeHint)`) that heuristic wins, so the Coaching panel's
+        two-sentence body set 30 characters per line inside a 440 px allowance: capped at one
+        number and still not set to one measure, 30 characters being as far below the readable
+        band as 138 was above it.
+
+        Pinning the width here is what makes the cap a measure. It is width-driven and monotone —
+        the value depends only on this widget's own width — so it cannot oscillate, and in a pane
+        narrower than the cap it simply yields the pane."""
+        super().resizeEvent(event)
+        room = max(0, self.width() - 2 * theme.SPACE_XL)
+        measure = min(room, theme.EMPTY_MEASURE_PX)
+        for label in (self.title, self.body):
+            if label.width() != measure:
+                label.setFixedWidth(measure)
+
+    def _show_slot(self, widget, gap, gap_px: int, on: bool) -> None:
+        """Show/hide one optional slot AND its own gap, so neither can outlive the other."""
+        widget.setVisible(on)
+        if gap is not None:
+            gap.changeSize(0, gap_px if on else 0)
+            self.layout().invalidate()
+
+    def _show_body(self, on: bool) -> None:
+        self._show_slot(self.body, self._body_gap, theme.SPACE_S, on)
+
+    def set_icon_visible(self, on: bool) -> None:
+        """Show/hide the mark and the air under it together. The Library dialog is the one caller:
+        its empty-INDEX sense is about the app and carries the folder, its no-filter-match sense is
+        about the filter and does not."""
+        if self.icon_label is not None:
+            self._show_slot(self.icon_label, self._icon_gap, theme.SPACE_M, on)
 
     def set_state(self, title: str, body: str = "") -> None:
         """Rewrite both slots. One call, because a state is a PAIR — a title with a stale body is
         how the Corners page came to tell a user to select a lap on a recording that has none."""
         self.title.setText(title)
         self.body.setText(body)
-        self.body.setVisible(bool(body))
+        self._show_body(bool(body))
 
     def text(self) -> str:
         """Everything this state SAYS, as one string — the shape the QLabel placeholders it

@@ -702,7 +702,7 @@ class LibraryDialog(QDialog):
         # over it would say the library is empty when it is not. `Forget all…` can flip between the
         # two while the dialog is open, so this is decided here rather than at construction — the
         # icon's gap is its own margin, so it leaves nothing behind (see widgets.EmptyState).
-        self._empty_note.icon_label.setVisible(not self._entries)
+        self._empty_note.set_icon_visible(not self._entries)
         self._empty_note.setVisible(show)
         self.table.setVisible(not show)
 

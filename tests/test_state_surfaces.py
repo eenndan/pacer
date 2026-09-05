@@ -184,6 +184,13 @@ def _states():
     lt = _lap_table()
     corners_none = _corner_table(valid=())
     corners_unsel = _corner_table(valid=(0, 1))
+    plots = _plots_view()
+    panel = _coaching_panel()
+    # HOSTED, every one of them: a widget that has never been laid out has never run its own
+    # resizeEvent, so its labels still carry the size hint they were born with — that is a test
+    # measuring a composition the user never sees.
+    for w in (lt, corners_none, corners_unsel, plots, panel):
+        _host(w, (640, 420))
     empty_lib = _library([])
     filtered = _library([{"track": "Daytona MK", "date": "2026-08-12", "best": 68.42,
                           "theoretical": 67.9, "paths": ["/tmp/a.MP4"], "verified": True}])
@@ -193,10 +200,10 @@ def _states():
         ("LapTable.__init__", lt._empty, True),
         ("CornerTable.refresh (no selectable lap)", corners_none.empty, True),
         ("CornerTable.refresh (nothing selected)", corners_unsel.empty, True),
-        ("PlotsView.__init__", _plots_view()._empty, True),
+        ("PlotsView.__init__", plots._empty, True),
         ("LibraryDialog._show_empty_note (empty index)", empty_lib._empty_note, True),
         ("LibraryDialog._show_empty_note (filter)", filtered._empty_note, True),
-        ("OpportunitiesPanel.__init__", _coaching_panel().empty_state, True),
+        ("OpportunitiesPanel.__init__", panel.empty_state, True),
         ("OpportunitiesDialog._empty_state", _coaching_modal().findChild(EmptyState), False),
     ]
 
@@ -263,10 +270,17 @@ def test_one_measure_one_title_size_one_body_size():
     offenders = []
     for label, state, _card in _states():
         title, body = state.title, state.body
-        if title.maximumWidth() != theme.EMPTY_MEASURE_PX:
-            offenders.append(f"{label}: title measure {title.maximumWidth()} px")
-        if body.maximumWidth() != theme.EMPTY_MEASURE_PX:
-            offenders.append(f"{label}: body measure {body.maximumWidth()} px")
+        # THE MEASURE IS A LIVE RULE, not a ceiling: everything the pane can give, up to the cap.
+        # Asserting only `maximumWidth == cap` would pass against the state that shipped from the
+        # first port, where a word-wrapped QLabel's own size hint set 30 characters per line inside
+        # a 440 px allowance (see EmptyState.resizeEvent).
+        want = min(max(0, state.width() - 2 * theme.SPACE_XL), theme.EMPTY_MEASURE_PX)
+        if title.width() != want:
+            offenders.append(f"{label}: title is {title.width()} px in a {state.width()} px pane, "
+                             f"not the measure {want}")
+        if body.width() != want:
+            offenders.append(f"{label}: body is {body.width()} px in a {state.width()} px pane, "
+                             f"not the measure {want}")
         if title.font().pixelSize() != theme.EMPHASIS:
             offenders.append(f"{label}: title is {title.font().pixelSize()} px, not EMPHASIS")
         if body.font().pixelSize() != theme.BODY:
@@ -312,17 +326,25 @@ def test_the_declared_gaps_are_carried_by_the_slot_that_can_vanish():
         assert state.layout().contentsMargins().left() == theme.SPACE_XL
         assert state.layout().contentsMargins().top() == theme.SPACE_XL
     assert with_icon.icon_label is not None
-    assert with_icon.icon_label.contentsMargins().bottom() == theme.SPACE_M
     assert plain.icon_label is None, "an absent slot must not be CONSTRUCTED"
-    for state in (with_icon, plain):
-        assert state.body.contentsMargins().top() == theme.SPACE_S
     assert not no_body.body.isVisible() or not no_body.body.text()
+    # THE GAPS ARE SPACER ITEMS, not contents margins, and this is the assertion that says why: a
+    # QSS rule that reaches a QLabel rewrites its contents margins from the rule's own box, and it
+    # did so unevenly — four panels kept a body margin of 8 while the map's floating card, the same
+    # object under the same rule, came back 0 and stood its title on its body.
+    for state in (with_icon, plain, no_body):
+        assert state.title.contentsMargins().bottom() == 0
+        assert state.body.contentsMargins().top() == 0
+    assert with_icon.layout().itemAt(1).sizeHint().height() == theme.SPACE_M
+    assert plain.layout().itemAt(1).sizeHint().height() == theme.SPACE_S
+    assert no_body.layout().itemAt(1).sizeHint().height() == 0, (
+        "a state with no body must not stand its title over 8 px of nothing")
     # ...and the icon really goes away, gap included: hidden, it occupies no height at all.
     _host(with_icon, (520, 300))
     # sizeHint, not height(): the state is stretched by its host, so the WIDGET does not shrink —
     # what has to shrink is the room the composition asks for.
     tall = with_icon.sizeHint().height()
-    with_icon.icon_label.setVisible(False)
+    with_icon.set_icon_visible(False)
     with_icon.layout().activate()
     _settle(8)
     shrunk = with_icon.sizeHint().height()
