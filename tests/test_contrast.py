@@ -873,22 +873,39 @@ def test_mono_font_actually_delivers_tabular_figures():
 
     The assertion is on the RENDERED metric rather than on `featureTags()`, so it also holds on a
     build that reaches tabular figures through the mono stack instead — the contract is the
-    alignment, not the mechanism."""
+    alignment, not the mechanism.
+
+    THE SECOND HALF IS THE ONE THAT BROKE CI. The first version of the fix fell through to the mono
+    stack whenever the tnum round trip failed. That swaps the FACE, and every fitted width in the
+    app is derived from Inter's metrics: `MONO_FAMILIES` leads with two families that exist on
+    neither this Mac nor the CI runner, so Qt walked to a wider one and the compare strip's picker
+    painted 24 px outside its own 152 px pane at view width 311. Degrading to misaligned digits
+    costs a column its tidiness; degrading to a different typeface costs the layout its budget."""
     from PySide6.QtGui import QFontMetricsF
 
     theme.register_fonts()  # _APP is already live at module scope; this is the font DB half
-    for size in (theme.CAPTION, theme.TABLE, theme.HERO):
-        fm = QFontMetricsF(theme.mono_font(size))
-        widths = {d: round(fm.horizontalAdvance(d), 3) for d in "0123456789"}
-        assert len(set(widths.values())) == 1, (
-            f"mono_font({size}) digits are proportional, not tabular: "
-            f"{len(set(widths.values()))} distinct advances {sorted(set(widths.values()))} "
-            f"(per digit {widths}) — a right-aligned numeric column cannot line up")
 
-    # The consequence, stated as the thing a user would see: equal-length times measure equal.
-    fm = QFontMetricsF(theme.mono_font(theme.TABLE))
-    a, b = fm.horizontalAdvance("1:08.201"), fm.horizontalAdvance("1:11.111")
-    assert a == b, f"equal-length lap times measure {a} vs {b} px"
+    # 1. The face never silently swaps while the bundled one is there.
+    if theme._inter_available:
+        for size in (theme.CAPTION, theme.TABLE, theme.HERO):
+            assert theme.mono_font(size).family() == theme.ui_font(size).family(), (
+                f"mono_font({size}) is {theme.mono_font(size).family()!r} while the UI face is "
+                f"{theme.ui_font(size).family()!r} — a face swap re-budgets every fitted width")
+
+    # 2. Where Qt can apply the feature (proved by a round trip at register_fonts time), the digits
+    #    really are tabular. This is the assertion the original bug failed.
+    if theme._supports_feature:
+        for size in (theme.CAPTION, theme.TABLE, theme.HERO):
+            fm = QFontMetricsF(theme.mono_font(size))
+            widths = {d: round(fm.horizontalAdvance(d), 3) for d in "0123456789"}
+            assert len(set(widths.values())) == 1, (
+                f"mono_font({size}) digits are proportional, not tabular: "
+                f"{len(set(widths.values()))} distinct advances {sorted(set(widths.values()))} "
+                f"(per digit {widths}) — a right-aligned numeric column cannot line up")
+        # The consequence, as a user would see it: equal-length times measure equal.
+        fm = QFontMetricsF(theme.mono_font(theme.TABLE))
+        a, b = fm.horizontalAdvance("1:08.201"), fm.horizontalAdvance("1:11.111")
+        assert a == b, f"equal-length lap times measure {a} vs {b} px"
     print("test_mono_font_actually_delivers_tabular_figures OK")
 
 
