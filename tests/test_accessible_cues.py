@@ -178,7 +178,20 @@ def _sector_cells(table):
 
 def test_lap_table_best_cells_carry_non_colour_star_marks():
     """The best-lap Lap cell carries a ★ (after any ▶) and every session-best split cell a trailing
-    ★, so "this is the best" reads WITHOUT the green/purple hue. Non-best rows carry no ★."""
+    ★, so "this is the best" reads WITHOUT the green/purple hue. Non-best rows carry no ★.
+
+    WHAT THE ★ IS FOR, and therefore where it does NOT belong. A mark is owed wherever a tint picks
+    ONE cell out of a column of comparable ones: which of these 21 laps is the best, which of these
+    splits was the session's — questions whose answer is carried by hue alone and is lost in
+    greyscale. Stats ▸ SECTORS "Best" was filed as the app's one un-★-ed session-best cue, and on
+    inspection it is a different shape: the tint there covers the WHOLE column, because every cell
+    in that column IS a session best by construction. Nothing is being distinguished from its
+    neighbours, the meaning is already in the header, and four ★s marking a tautology would spend
+    the mark where it says nothing.
+
+    So the convention is stated as: colour-only is a defect when it RANKS WITHIN a column, not when
+    it LABELS a whole one. The column-wide case is measured below rather than taken on trust — if
+    a future refresh ever tints only the fastest sector, this fails and the ★ is owed."""
     table = LapTable(_FakeLapSession())
     # Best lap (id 1) Lap cell shows the ★ mark; the two non-best laps do not.
     assert BEST_LAP_MARK.strip() in _lap_cell(table, 1).text(), _lap_cell(table, 1).text()
@@ -189,6 +202,118 @@ def test_lap_table_best_cells_carry_non_colour_star_marks():
     assert len(starred) == 2, starred
     assert any(s.startswith("33.80") for s in starred) and any(s.startswith("34.40") for s in starred)
     print("test_lap_table_best_cells_carry_non_colour_star_marks OK")
+
+
+def test_stats_sector_best_column_is_tinted_whole_and_says_so_on_hover():
+    """The other half of the rule above, on the surface it exempts: Stats ▸ SECTORS "Best".
+
+    Two things have to hold for the missing ★ to be a convention note rather than a lost cue.
+    EVERY derivable cell in the column carries the tint (so the hue labels a column, not a winner),
+    and the column's own header says what it is. Both are measured on the real StatsView. And the
+    half that WAS a real gap — the cell said nothing at all on hover — is closed: each best cell now
+    names itself, so the purple is explained where it is used rather than only in the tile above."""
+    _APP  # noqa: B018
+    from PySide6.QtGui import QColor
+    from test_stats import _fake_view_session
+
+    from studio.stats_panel import SECTOR_COLUMNS, StatsView
+    from studio.widgets import DASH
+    view = StatsView(_fake_view_session())
+    t = view.sector_table
+    assert t.rowCount() >= 2, t.rowCount()
+    assert SECTOR_COLUMNS[1] == "Best", SECTOR_COLUMNS
+    purple = QColor(theme.best_sector_colour()).name().upper()
+    cells = [t.item(r, 1) for r in range(t.rowCount())]
+    real = [c for c in cells if c is not None and c.text() != DASH]
+    assert len(real) == t.rowCount(), "this fixture must give every sector a best"
+    # COLUMN-WIDE: every one of them, not a subset — which is exactly why no ★ is owed.
+    tinted = [c for c in real if c.foreground().color().name().upper() == purple]
+    assert len(tinted) == len(real), (
+        f"the Best column tints {len(tinted)} of {len(real)} cells — a tint that picks a SUBSET "
+        f"ranks within the column and owes a non-colour mark (see the test above)")
+    # ...and no neighbouring column is wearing the same hue, which would make it a row cue again.
+    for col in (2, 3):
+        for r in range(t.rowCount()):
+            it = t.item(r, col)
+            assert it is None or it.foreground().color().name().upper() != purple, (r, col)
+    # The meaning is in the header and, now, on every cell.
+    assert all(c.toolTip() for c in real), "a tinted cell with no words is a colour and nothing else"
+    assert "Session-best" in real[0].toolTip() and "S1" in real[0].toolTip(), real[0].toolTip()
+    assert BEST_SECTOR_MARK.strip() not in real[0].text(), (
+        "the column-wide case deliberately carries no ★ — see the convention above")
+    print("test_stats_sector_best_column_is_tinted_whole_and_says_so_on_hover OK")
+
+
+def test_stats_worst_loss_cells_carry_a_mark_and_the_score_that_chose_them():
+    """Stats ▸ CORNERS "Med loss": the worst-3 cue was hue and NOTHING else, over a ranking that is
+    not a column on screen.
+
+    Measured on D24: tinted and plain cells were identical in size, weight, family, alignment and
+    format, and carried the same tooltip. The ranking is σ × median-loss — erratic AND slow — so on
+    screen a tinted +0.09 sat directly under a plain +0.11, and a plain +0.10 beat the tinted +0.09.
+    A reader saw a column that appeared to be ordered by its own numbers and was not, with no way
+    to find out. Contrast was never the problem; meaning was.
+
+    The fixture reproduces exactly that contradiction, and the test asserts the three things that
+    make the cue survive it: a non-colour mark, the deciding SCORE on the cell it decided, and the
+    numbers themselves untouched (the mark is a PREFIX because right alignment in a fixed-decimal
+    column IS decimal alignment, and the sort key is the bare float)."""
+    _APP  # noqa: B018
+    from types import SimpleNamespace
+
+    from PySide6.QtGui import QColor
+    from test_stats import _fake_view_session
+
+    from studio.lap_table import DROPOUT_MARK, NUM_ROLE
+    from studio.stats import CornerReport
+    from studio.stats_panel import WORST_LOSS_MARK, WORST_TINT_N, StatsView
+
+    def corner(cid, loss, sigma):
+        return CornerReport(cid=cid, direction=1, n=6, best_s=9.0, median_s=9.0 + loss,
+                            sigma_s=sigma, median_loss_s=loss, apex_best_kmh=60.0,
+                            apex_median_kmh=58.0, grip_median=0.8, score=sigma * loss)
+
+    # C11 (+0.09, erratic) outranks C10 (+0.11, steady): the D24 contradiction, reproduced.
+    report = [corner(1, 0.05, 0.05), corner(6, 0.12, 0.20), corner(7, 0.10, 0.05),
+              corner(10, 0.11, 0.05), corner(11, 0.09, 0.20), corner(12, 0.16, 0.20)]
+    sess = _fake_view_session()
+    sess.corner_report = lambda: report
+    # A phase triple on C11 only: the two tooltip lines must COMPOSE, not overwrite each other.
+    sess.phase_report = lambda: SimpleNamespace(cids=[11], rows=[(0.03, 0.04, 0.02)], share=None)
+    view = StatsView(sess)
+    t = view.corners_table
+    assert t.rowCount() == len(report), t.rowCount()
+
+    behind = QColor(theme.behind_colour()).name().upper()
+    by_cid = {}
+    for r in range(t.rowCount()):
+        cell = t.item(r, 4)
+        by_cid[int(t.item(r, 0).data(NUM_ROLE))] = cell
+    marked = {cid for cid, c in by_cid.items() if c.text().startswith(WORST_LOSS_MARK)}
+    tinted = {cid for cid, c in by_cid.items()
+              if c.foreground().color().name().upper() == behind}
+    assert marked == tinted == {6, 11, 12}, (marked, tinted)
+    assert len(marked) == WORST_TINT_N, marked
+    # THE CONTRADICTION: a marked +0.09 and an unmarked +0.11 in the same column. Without the mark
+    # the only difference between these two cells was hue; with it, greyscale still separates them.
+    assert by_cid[11].text() == WORST_LOSS_MARK + "+0.09", by_cid[11].text()
+    assert by_cid[10].text() == "+0.11", by_cid[10].text()
+    assert by_cid[11].text().replace(WORST_LOSS_MARK, "") < by_cid[10].text()
+    # ...and the number that caused it is ON the cell it caused, not only in the table's tooltip.
+    tip = by_cid[11].toolTip()
+    assert "0.20" in tip and "0.09" in tip and "0.018" in tip, tip
+    assert "σ × median loss" in tip, tip
+    assert "entry +0.03" in tip and "exit +0.02" in tip, "the phase triple must survive"
+    assert by_cid[10].toolTip() == "", "an unmarked cell must not claim a score"
+    # The mark is the app's existing attention glyph (the lap grid's dropout mark), so the shipped
+    # font ledger in tests/test_glyph_vocabulary.py already covers it — no new codepoint arrives.
+    assert WORST_LOSS_MARK.strip() == DROPOUT_MARK == "⚠"
+    # PREFIX, not suffix: every cell in the column still ends at the same decimal place, and the
+    # numeric sort key is untouched by the mark.
+    assert {len(c.text().split("+")[-1]) for c in by_cid.values()} == {4}, (
+        [c.text() for c in by_cid.values()])
+    assert by_cid[11].data(NUM_ROLE) == 0.09
+    print("test_stats_worst_loss_cells_carry_a_mark_and_the_score_that_chose_them OK")
 
 
 def test_lap_table_best_star_survives_a_sort():
@@ -658,6 +783,8 @@ if __name__ == "__main__":
     test_palette_selector_is_single_source_and_swaps_semantic_hues()
     test_colorblind_palette_pref_roundtrip()
     test_lap_table_best_cells_carry_non_colour_star_marks()
+    test_stats_sector_best_column_is_tinted_whole_and_says_so_on_hover()
+    test_stats_worst_loss_cells_carry_a_mark_and_the_score_that_chose_them()
     test_lap_table_best_star_survives_a_sort()
     test_lap_table_shows_a_banded_out_lap_in_the_excluded_strip()
     test_lap_table_excluded_strip_hidden_on_a_clean_recording()
