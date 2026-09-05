@@ -550,11 +550,43 @@ class Tile(QWidget):
         lay.setSpacing(theme.SPACE_XXS)
         lay.addWidget(self.value)
         lay.addWidget(self.caption)
+        self._claim_ink_height()
 
     def set(self, value: str | None, caption: str | None = None):
         self.value.setText(value if value else DASH)
+        self._claim_ink_height()
         if caption is not None:
             self.caption.setText(caption)
+
+    def _claim_ink_height(self) -> int:
+        """Give the value label the height its own INK needs, not just its font's line box.
+
+        THE RESIDUAL PR #189 COULD NOT REACH, in numbers. That PR's rule is about FALLBACK — a
+        character in a user-visible string must be drawn by the app's own face — and it measured
+        that Inter genuinely carries ⊘ (U+2298), so the mark stays TEXT. What it could not fix from
+        there is that Inter's ⊘ is TALLER THAN ITS OWN LINE BOX at every step of the type scale:
+        at EMPHASIS its tight bounding rect is 21 px against a 19 px line (ascent 15 + descent 4),
+        and it overshoots by exactly one pixel at each end. Everywhere else in the app that costs
+        nothing, because every other ⊘ sits in a 24 or 28 px table row. The Stats laps tile is the
+        one surface whose box IS the line height with nothing around it, so it was the one place
+        the apex and base arcs were sliced off — measured from the window composite, ink filling
+        rows 0..18 of a 19 px box for a glyph that wants 21.
+
+        A QLabel's sizeHint takes `QFontMetrics::height()`, which is a FONT property (ascent +
+        descent) and knows nothing about the string. `tightBoundingRect` is the string's real ink.
+        Taking the larger of the two is the whole fix, and it is general: it does not name ⊘, it
+        does not care which mark a future tile prints, and it costs nothing (the max is the line
+        box) for the ~30 tiles whose value is digits.
+
+        It deliberately does NOT split the run across two mechanisms. `25 · 24 ⊘ · 3 ⚠` is one ink
+        run in one face; turning the ⊘ into an icon pixmap while the ⚠ two characters later stayed
+        text would make one line out of two vocabularies, which is the defect #189 exists to
+        prevent, not a fix for it."""
+        fm = self.value.fontMetrics()
+        need = max(fm.height(), fm.tightBoundingRect(self.value.text()).height())
+        if self.value.minimumHeight() != need:
+            self.value.setMinimumHeight(need)
+        return need
 
 
 class PanelHeader(QWidget):
