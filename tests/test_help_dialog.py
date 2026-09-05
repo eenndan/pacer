@@ -195,6 +195,96 @@ def test_copy_cards_scroll_rather_than_clip():
     print("test_copy_cards_scroll_rather_than_clip OK")
 
 
+# ----------------------------------------------- W14-03: EVERY Help card, not two of the three
+def test_every_help_card_is_capped_to_the_display():
+    """The two tests above cover the two COPY cards. The card this menu exists for was the one
+    that had neither of the things they check.
+
+    ShortcutsDialog is the longest card in the app — seven groups, thirty-odd rows — and it was
+    built straight into its own root layout: no scroll area, so nothing could be reached once a
+    height was refused, and no `_fit_to_copy`, so no cap on the display. Measured: it opened at
+    560x733 with a hard floor of 717 (a resize to 200 px came back 717), while its siblings capped
+    themselves at 85% of the screen and adapted — on a 695 px display Privacy opened 642 and
+    Shortcuts still demanded 733, with the Close button as the row that went off the bottom
+    (QA W14-03; #187 grew this band by 18 px, it did not open it).
+
+    So the rule is stated once, for all three, and it is the rule the two copy cards already
+    obeyed: a Help card has exactly one scroll column, and that column never asks the screen for
+    more than `_fit_to_copy`'s share of it. On main this fails on ShortcutsDialog with zero scroll
+    areas."""
+    room = int(_APP.primaryScreen().availableGeometry().height() * 0.85)
+    for cls in (ShortcutsDialog, AboutDialog, PrivacyDialog):
+        d = _shown(cls())
+        scrolls = d.findChildren(QScrollArea)
+        assert len(scrolls) == 1, (
+            f"{cls.__name__} has {len(scrolls)} scroll columns — a Help card that cannot scroll "
+            f"has no way to show copy the display is too short for")
+        assert scrolls[0].minimumHeight() <= room, (
+            f"{cls.__name__}'s copy column demands {scrolls[0].minimumHeight()}px of a display "
+            f"that offers {room}px after the 85% cap")
+        d.close()
+    print(f"test_every_help_card_is_capped_to_the_display OK (cap {room}px)")
+
+
+def test_the_shortcuts_card_fits_the_smallest_13_inch_display():
+    """The measurement the cap is FOR, taken on a display the card did not fit.
+
+    A screen's size is fixed when QGuiApplication is constructed, so this one is taken in a child
+    process against Qt's offscreen `configfile` screen — 1024x615, which is the smaller of the two
+    scaled modes macOS offers on a 13-inch panel (the other is 1152x720, ~695 px available). Both
+    are inside the band where the card was taller than the desk.
+
+    Three things are read: the height the card OPENS at, the floor Qt will accept, and whether the
+    Close button — the row that was going off the bottom — is on the card at all. On main the child
+    reports 733/717 against a 615 px screen; here it must fit."""
+    import json
+    import subprocess
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = os.path.join(tmp, "screen.json")
+        with open(cfg, "w", encoding="utf-8") as fh:
+            json.dump({"screens": [{"name": "small", "x": 0, "y": 0, "width": 1024, "height": 615,
+                                    "logicalDpi": 96, "logicalBaseDpi": 96, "dpr": 1}]}, fh)
+        child = """
+import json, sys
+from PySide6.QtCore import QPoint, QRect
+from PySide6.QtWidgets import QApplication, QDialogButtonBox
+app = QApplication([])
+from studio import theme
+theme.register_fonts(); theme.apply_theme(app)
+from studio.help_dialog import ShortcutsDialog
+avail = app.primaryScreen().availableGeometry().height()
+d = ShortcutsDialog()
+d.show()
+for _ in range(8):
+    app.processEvents()
+opened = d.height()
+d.resize(560, 200)
+for _ in range(8):
+    app.processEvents()
+bb = d.findChild(QDialogButtonBox)
+box = QRect(bb.mapTo(d, QPoint(0, 0)), bb.size())
+print("RESULT " + json.dumps(dict(avail=avail, opened=opened, floor=d.height(),
+                                  close_on_card=d.rect().contains(box))))
+"""
+        env = dict(os.environ, PYTHONPATH=_REPO,
+                   QT_QPA_PLATFORM="offscreen:configfile=" + cfg)
+        run = subprocess.run([sys.executable, "-c", child], env=env,
+                             capture_output=True, text=True, timeout=180)
+    line = next((ln for ln in run.stdout.splitlines() if ln.startswith("RESULT ")), None)
+    assert line, f"the child produced no measurement:\n{run.stdout}\n{run.stderr}"
+    got = json.loads(line[len("RESULT "):])
+    assert got["avail"] <= 615, f"the child did not get the small screen: {got}"
+    assert got["opened"] <= got["avail"], (
+        f"the shortcuts card opens {got['opened']}px tall on a {got['avail']}px display")
+    assert got["floor"] <= got["avail"], (
+        f"the shortcuts card refuses every height below {got['floor']}px on a "
+        f"{got['avail']}px display — there is no size at which it fits")
+    assert got["close_on_card"], "the Close button is off the bottom of the card"
+    print(f"test_the_shortcuts_card_fits_the_smallest_13_inch_display OK "
+          f"(opens {got['opened']}px / floor {got['floor']}px on a {got['avail']}px display)")
+
+
 # --------------------------------------------------- L1-04: the privacy card names every store
 def test_privacy_card_names_every_store_it_writes():
     from studio import library, prefs, track_db

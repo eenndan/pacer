@@ -419,6 +419,185 @@ def test_the_two_delta_headers_never_elide_to_the_same_string():
     print("test_the_two_delta_headers_never_elide_to_the_same_string OK")
 
 
+def _painted(table, fm, col):
+    """What column `col`'s header ACTUALLY paints at its current section width — the label box the
+    style hands the text, elided by the same metrics the header uses. Not the section width: the
+    section also pays for the QSS padding and the sort indicator (see _header_pad_px)."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QStyle, QStyleOptionHeader
+
+    hdr = table.horizontalHeader()
+    opt = QStyleOptionHeader()
+    hdr.initStyleOption(opt)
+    opt.section = col
+    opt.rect = QRect(0, 0, hdr.sectionSize(col), max(hdr.height(), 1))
+    box = hdr.style().subElementRect(QStyle.SE_HeaderLabel, opt, hdr).width()
+    item = table.horizontalHeaderItem(col)
+    return fm.elidedText(item.text() if item is not None else "", Qt.ElideRight, box)
+
+
+def _stem_of(shown):
+    """The header's OWN glyphs in what it painted — the ellipsis is not one of them."""
+    return shown[:-1] if shown.endswith("…") else shown
+
+
+def _keeps_stem(fm, text, px, chars=2):
+    """Does `text` elided into a `px` label box still show `chars` of its own glyphs?
+
+    Spelled out here rather than imported from the module under test, for the reason this file
+    already spells HEADER_STEM_CHARS out: a guard that asks the code under test what the right
+    answer is agrees with it by construction, and on main these assertions have to fail with a
+    measurement, not with an ImportError."""
+    return len(_stem_of(fm.elidedText(text, Qt.ElideRight, px))) >= min(chars, len(text))
+
+
+def test_header_stem_px_is_the_narrowest_width_that_keeps_the_stem():
+    """W14-02, the arithmetic. `header_stem_px` names a width and `header_floors` spends real
+    pixels buying it, so the number has to be TRUE against the elide it predicts — and it was one
+    pixel short of it.
+
+    Its docstring claimed the width at which the k-th glyph survives "is exactly the advance of
+    text[:k] + '…' — no search, and exact against the same metrics Qt will elide with". Qt's
+    ElideRight keeps the last prefix whose width is strictly LESS than (box - ellipsis), so that
+    advance is the widest box at which the k-th glyph is LOST. On main this test fails on the first
+    real header it checks: header_stem_px(fm, 'Δbest') returns 28 and elidedText at 28 px is 'Δ…',
+    one glyph, not two.
+
+    Checked in BOTH directions and on every header the two tables ship, because a floor that is a
+    pixel too generous is a pixel taken off a neighbouring column for nothing:
+
+      * at the returned width the stem is there, and
+      * at one pixel less it is not (unless the answer is already 1 px, i.e. the label is a single
+        glyph the box can always hold).
+
+    Then the whole neighbourhood is swept anyway — every width from 1 px to a few past the full
+    advance — asserting the elide is MONOTONE and that the returned width is exactly the threshold
+    it crosses. That is the property the search inside header_stem_px relies on, so it is checked
+    rather than assumed."""
+    from studio.lap_table import (
+        CORNER_COLUMNS,
+        CORNER_DELTA_REF_HEADER,
+        HEADER_STEM_CHARS,
+        CornerTable,
+        _columns,
+        header_stem_px,
+    )
+    table = CornerTable(_FakeCornerSession())          # keep the ref: Qt deletes a temporary
+    fm = QFontMetrics(table.table.horizontalHeader().font())
+    # Every header either table ships, in BOTH speed units — the Entry column renames itself.
+    labels = [*CORNER_COLUMNS, CORNER_DELTA_REF_HEADER,
+              *_columns("kmh"), *_columns("mph"), *(f"S{i}" for i in range(1, 5))]
+    checked = 0
+    for text in sorted({s for s in labels if s}):
+        px = header_stem_px(fm, text)
+        want = min(HEADER_STEM_CHARS, len(text))
+        shown = fm.elidedText(text, Qt.ElideRight, px)
+        assert len(_stem_of(shown)) >= want, (
+            f"header_stem_px says {text!r} keeps {want} of its own glyphs in a {px}px label box, "
+            f"but Qt elides it to {shown!r} — the width the column budget buys is short")
+        if px > 1:
+            below = fm.elidedText(text, Qt.ElideRight, px - 1)
+            assert len(_stem_of(below)) < want, (
+                f"header_stem_px({text!r}) = {px}px is not the NARROWEST such width: {px - 1}px "
+                f"already paints {below!r} — every pixel over the threshold is taken from a "
+                f"neighbouring column for nothing")
+        # ...and the threshold is a threshold: monotone, with the answer exactly at the crossing.
+        for w in range(0, fm.horizontalAdvance(text) + 6):
+            assert _keeps_stem(fm, text, w, HEADER_STEM_CHARS) == (w >= px), (
+                f"{text!r} at {w}px: elide is {fm.elidedText(text, Qt.ElideRight, w)!r} but the "
+                f"stem width is {px}px — the keeps/loses boundary is not where it is claimed")
+        checked += 1
+    assert checked >= 10, f"only {checked} labels swept — the header sets moved"
+    print(f"test_header_stem_px_is_the_narrowest_width_that_keeps_the_stem OK ({checked} labels)")
+
+
+def test_the_corner_header_stems_survive_the_whole_width_band():
+    """W14-02, the budget. A one-size check is what let a one-pixel error through, so this sweeps
+    EVERY viewport width the corner table can be given across the app's whole window range — the
+    real panel hands this table 392 px at the app's 973 px minimum and 499 px at 1440, and the
+    sweep below covers 340-560 px, a superset of both ends.
+
+    THREE THINGS ARE PINNED, and each of the first two failed on main:
+
+      1. WHEN EVERY STEM FITS, EVERY HEADER KEEPS ITS STEM. The raised floors were asked for, the
+         columns were granted exactly them, and "Δbest" still painted a bare "Δ…" beside a km/h
+         column reading "Δa…" — a seconds column with no information in its header, over a 30 px
+         band of window width that included 1200x800. That is header_stem_px's missing pixel
+         reaching the pixels.
+      2. WHEN THE COLUMNS DO NOT FIT AT ALL, EVERY HEADER STILL KEEPS ITS STEM. The yield was
+         all-or-nothing: one column the viewport could not afford dropped the stems of all eight,
+         which is how the app's own MINIMUM window size painted a seconds column and a km/h column
+         as the same bare "…" — with a horizontal scrollbar already up, so the yield was buying
+         nothing. It is graded now (header_floors case 2).
+      3. AND THE BAND WHERE TWO HEADERS ARE ONE STRING IS SMALL. Between the two regimes there is
+         genuinely not room for every stem, and header_floors says so out loud rather than
+         pretending: the pixels go to the ambiguous columns first, and what is left over is a
+         narrow band. Measured on the shipped corner table over the app's full window range it is
+         22 px of 468, where it was 227 — so this asserts a tenth of the band, which passes with
+         better than 2x of headroom and fails on main by a factor of five."""
+    from studio.lap_table import CORNER_COLUMNS, CornerTable, _header_pad_px, header_stem_px
+
+    table = CornerTable(_FakeCornerSession())
+    table.set_lap(0)
+    tb = table.table
+    hdr = tb.horizontalHeader()
+    fm = QFontMetrics(hdr.font())
+    table.resize(600, 320)
+    table.show()
+    _APP.processEvents()
+    overhead = table.width() - tb.viewport().width()
+    pad = _header_pad_px(hdr)
+    # What each header ASKS FOR — the number header_floors spends pixels on. Restated here from
+    # the two published parts rather than read back off header_floors, because header_floors now
+    # returns what it could AFFORD: asking it what it wanted would be asking the answer to grade
+    # itself, and a test that does that agrees with the code by construction.
+    asks = [header_stem_px(fm, L) + pad for L in CORNER_COLUMNS]
+
+    short, twins, ambiguous, swept = [], [], 0, 0
+    for vp_want in range(340, 561):
+        table.resize(vp_want + overhead, 320)
+        _APP.processEvents()
+        vp = tb.viewport().width()
+        natural, floors, _caps = table._column_budget()
+        sections = [hdr.sectionSize(c) for c in range(tb.columnCount())]
+        painted = [_painted(tb, fm, c) for c in range(tb.columnCount())]
+        # Case 1 (every ask is affordable) or case 2 (the columns overflow the viewport, so the
+        # scrollbar this budget yields to avoid is up whatever it does): every header is promised
+        # its own glyphs. In between, header_floors buys what the slack covers and says so.
+        wants = [min(max(floors[c], asks[c]), natural[c]) for c in range(len(floors))]
+        guaranteed = sum(wants) <= vp or sum(sections) > vp
+        for c, shown in enumerate(painted):
+            label, stem = CORNER_COLUMNS[c], _stem_of(painted[c])
+            if len(stem) >= min(2, len(label)):
+                continue
+            where = f"{vp}px viewport, col {c} {label!r} paints {shown!r} in a {sections[c]}px "
+            # THE ARITHMETIC, per column and at every width: a section at least as wide as the
+            # header asked for must show the stem it asked for. This is the one-pixel defect,
+            # and it does not need a case analysis to catch.
+            if sections[c] >= asks[c]:
+                short.append(where + f"section — it asked for {asks[c]}px and got them")
+            elif guaranteed:
+                short.append(where + "section, at a width the budget guarantees")
+        if painted[2] == painted[4]:
+            ambiguous += 1
+            if guaranteed:
+                twins.append(f"{vp}px viewport: {CORNER_COLUMNS[2]!r} and {CORNER_COLUMNS[4]!r} "
+                             f"both paint {painted[2]!r}")
+        swept += 1
+
+    assert not short, (
+        "a corner header elided away the column it names:\n  "
+        + "\n  ".join(short[:12]) + (f"\n  ...and {len(short) - 12} more" if len(short) > 12
+                                     else ""))
+    assert not twins, ("a seconds column and a km/h column painted one string:\n  "
+                       + "\n  ".join(twins[:12]))
+    assert ambiguous <= swept // 10, (
+        f"the two Δ headers are the same string at {ambiguous} of {swept} swept viewport widths "
+        f"— the graded yield is meant to hold this under {swept // 10}")
+    print(f"test_the_corner_header_stems_survive_the_whole_width_band OK "
+          f"({swept} viewport widths; {ambiguous} with the Δ pair still ambiguous)")
+
+
 def test_the_corner_delta_column_names_the_baseline_it_measures():
     """QA-W2R-03. With a cross-recording reference loaded, EVERY Δ in this column is measured
     against another recording's lap — "Δbest" is then simply false, and it was the only baseline

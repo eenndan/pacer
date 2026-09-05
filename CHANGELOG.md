@@ -168,6 +168,34 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **Both Δ columns on the Corners tab keep their names in a narrow panel.** A "Δbest" (seconds)
+  column and a "Δapex" (km/h) column could paint the same bare `…`, leaving a reader no way to tell
+  which was which. Two causes, both closed. The width the budget buys for a header was computed as
+  the advance of `Δb…`, which is the widest box at which the `b` is *lost* — Qt keeps the prefix
+  that fits strictly inside the box minus the ellipsis — so a column granted exactly what it asked
+  for still painted `Δ…`; the width is now derived and then checked against Qt's own elide. And the
+  budget's fallback was all-or-nothing: one column the panel could not afford dropped the stems of
+  all eight, which is why the app's own minimum window size showed both Δ headers as `…` while a
+  horizontal scrollbar was already up and the fallback was buying nothing. It now grants every stem
+  when the table already overflows, and otherwise spends what slack there is on the headers that
+  can be mistaken for each other first. Swept across every window width from 973 to 1440 px, the
+  two Δ headers are now distinct at all but 22 of them, where they were identical at 227 — and the
+  scrollbar appears at exactly the same widths as before.
+- **The personal-best celebration no longer jumps across the window.** On every real load the card
+  was shown at the bottom centre of the *window*, over the Δ-to-ideal chart, painted there six or
+  seven times across ~130 ms, and then moved 462 px onto the lap panel where it belongs. The card
+  was being shown before the newly-built view had been laid out, so the first placement — and the
+  one on the next turn of the event loop — both fell back to the whole window. The card now waits
+  for a placement it can trust before it appears (the anchor genuinely is not final until the grid
+  splitters restore, 120 ms in), so it is drawn once, in the right place, and its dismiss clock
+  starts when it becomes visible.
+- **Help ▸ Keyboard shortcuts fits a small display.** The longest card in the app opened 733 px
+  tall and refused any height below 717, with no scrollbar — so on the two smallest 13-inch scaled
+  modes (1152x720 and 1024x640) the Close button and the HELP group sat off the bottom of the
+  screen with no way to reach them. It was the one Help card built without the scroll column and
+  85%-of-the-display cap that About and Your data & privacy already had. It now has both: measured
+  on 615 / 695 / 775 / 900 px displays it opens at 570 / 638 / 706 / 717 px and scrolls for the
+  rest.
 - **The lap panel always shows all four of its tabs.** Dragged narrow, the panel used to hide part
   of `Coaching` behind a pair of scroll arrows — two 21x28 px buttons **overlapping each other by
   11x28**, both under the app's own 24 px pointer floor, and the only way to reach a tab you could

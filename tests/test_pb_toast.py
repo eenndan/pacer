@@ -50,7 +50,7 @@ from _qtapp import themed_app  # noqa: E402
 
 _APP = themed_app()  # the toast's sizes come from the QSS padding — measure the SHIPPED font+theme
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt  # noqa: E402
 from PySide6.QtGui import QEnterEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
@@ -289,6 +289,24 @@ def _spin(seconds: float):
         time.sleep(0.005)
 
 
+class _PaintLog(QObject):
+    """Every position the card was PAINTED at, in the order it was painted there.
+
+    The distinction this whole test rests on: a widget's final geometry says where it ENDED UP,
+    and a card that is shown in the wrong place and corrected 120 ms later ends up in the right
+    one. Only the paints say what a user saw."""
+
+    def __init__(self, widget):
+        super().__init__(widget)
+        self.seen = []
+        widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Paint:
+            self.seen.append(obj.pos().toTuple())
+        return False
+
+
 def test_the_toast_lands_in_the_lap_panel_on_the_apps_own_load_path():
     """The anchoring above was RIGHT and never reached a real user, and this is the difference.
 
@@ -304,8 +322,16 @@ def test_the_toast_lands_in_the_lap_panel_on_the_apps_own_load_path():
 
     So this test reproduces the ORDERING, not the outcome: build the view and celebrate in one
     block, exactly as the load does, then let the event loop turn exactly as it does the instant
-    `_load` returns. `_show_pb_moment` is the app's own method, swallowing nothing silently — the
-    card must be visible, and it must be in the lap panel's body."""
+    `_load` returns.
+
+    IT USED TO CHECK THE FINAL POSITION, AND THAT IS WHY IT PASSED THROUGH THE DEFECT. Re-placing
+    the card on a 120 ms timer does land it in the lap panel — eventually — so the card's geometry
+    at the end of the spin was right while the user was still shown the wrong thing: measured on
+    the real load path at 1440x900, the card was shown at (568, 792) and PAINTED there SIX times
+    over 120 ms before jumping 462 px left (QA W14-01). A test that reads `toast.geometry()` after
+    the spin cannot see an eighth of a second of celebration in the wrong place; one that reads
+    `paintEvent` can, so this counts PAINTS and requires every one of them to be in the lap panel
+    body. On main it fails with six paints over the Δ chart."""
     from test_central_view_realqt import _studiowindow_with_view
 
     win, _first = _studiowindow_with_view()
@@ -318,22 +344,37 @@ def test_the_toast_lands_in_the_lap_panel_on_the_apps_own_load_path():
     win._show_pb_moment({"kind": "beat", "track": "Stadium", "best": 62.418,
                          "prior": 62.735, "improvement": 0.317})
     toast = win._pb_toast
-    assert toast is not None and toast.isVisible(), (
+    assert toast is not None, (
         "_show_pb_moment swallowed something — see the studio: line it prints")
+    # Installed the instant the block returns, which is still before Qt has run a single paint:
+    # nothing here spins the event loop, and show() only schedules one.
+    log = _PaintLog(toast)
     _spin(0.4)
     view = win.view
     body = QRect(view.table_stack.mapTo(win, QPoint(0, 0)), view.table_stack.size())
     charts = QRect(view._plots_panel.mapTo(win, QPoint(0, 0)), view._plots_panel.size())
     card = QRect(toast.mapTo(win, QPoint(0, 0)), toast.size())
     hit = card.intersected(charts)
+    # Every position the card was ever painted at, as a rect of the size it is now.
+    painted = [QRect(QPoint(*p), toast.size()) for p in log.seen]
+    strays = [r for r in painted if not body.contains(r)]
+    visible = toast.isVisible()   # read BEFORE hiding the window, which hides the card with it
     win.hide()
+    assert visible, "the celebration never appeared at all"
+    assert painted, "the card was never painted — this test cannot see anything"
     assert body.contains(card), (
         f"raised the way the app raises it, the card landed at {card} instead of inside the lap "
         f"panel body {body} — {abs(card.center().x() - body.center().x())} px off centre, "
         f"overlapping the charts by {hit.width()}x{hit.height()}")
     assert hit.isEmpty(), f"the card covers {hit.width()}x{hit.height()} of the Δ chart"
+    assert not strays, (
+        f"the card was painted {len(strays)} of {len(painted)} times outside the lap panel body "
+        f"{body} — a user sees {strays[0]} before it jumps "
+        f"{abs(strays[0].x() - card.x())} px to {card}")
+    assert len({tuple(p) for p in log.seen}) == 1, (
+        f"the card moved while it was on screen: painted at {sorted({tuple(p) for p in log.seen})}")
     print(f"test_the_toast_lands_in_the_lap_panel_on_the_apps_own_load_path OK "
-          f"(card {card} in body {body})")
+          f"(card {card} in body {body}; {len(painted)} paints, all at {log.seen[0]})")
 
 
 def test_the_toast_follows_its_anchor_when_the_window_resizes():
