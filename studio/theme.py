@@ -808,15 +808,25 @@ def _mono_stack_font(size: int, weight: QFont.Weight) -> QFont:
 
 def mono_font(size: int = TABLE, weight: QFont.Weight = W_REGULAR) -> QFont:
     """Tabular-figures face for column-aligning digits: Inter+tnum where Qt can apply the feature,
-    else the mono stack.
+    Inter alone where it cannot, and the mono stack only when Inter is not there at all.
 
-    Falls through to the mono stack if the feature does not take on THIS font, rather than returning
-    a proportional face that claims to be tabular — the previous silent-`pass` version is what let
-    the app ship un-aligned digits behind a log line saying otherwise."""
-    if _supports_feature:
+    THE FALLBACK ORDER IS LOAD-BEARING, and getting it wrong is how the first version of this fix
+    broke CI. When the tnum round trip fails, switching to the mono stack changes the FACE, and
+    every fitted width in the app is derived from Inter's metrics. `MONO_FAMILIES` leads with
+    "SF Mono" and "JetBrains Mono", neither of which exists on macOS 26 or on the CI runner, so Qt
+    walks to whatever it can find — and the compare strip's picker, whose floor is budgeted against
+    its pane, stood 24 px outside a 152 px pane at view width 311
+    (`test_video_view_compare::test_l8_01_...`). Degrading from "aligned digits" to "misaligned
+    digits" costs a column its tidiness; degrading to a different typeface costs the layout its
+    budget. Prefer the narrower, known face and say so in the log.
+
+    The mono stack is still the right answer when Inter is genuinely absent, because then there is
+    no known face to preserve."""
+    if _inter_available:
         f = ui_font(size, weight)
-        if _apply_tnum(f):
-            return f
+        if _supports_feature:
+            _apply_tnum(f)   # best effort; `_supports_feature` already proved the round trip once
+        return f
     return _mono_stack_font(size, weight)
 
 
