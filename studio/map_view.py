@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import gapfill, prefs, theme, units
+from . import data_quality, gapfill, prefs, theme, units
 from .map_render import (
     bucket_polylines,
     bucketize,  # noqa: F401  (re-exported for tests importing from map_view)
@@ -32,7 +32,7 @@ from .map_render import (
 )
 from .session import Seg
 from .theme import CHART_SERIES, MAP_RAINBOW_N, C, icon, rainbow_colors
-from .widgets import ToggleButton
+from .widgets import EmptyState, ToggleButton
 
 # The very QPainterPaths pyqtgraph fills for a ScatterPlotItem symbol, in a unit box centred on the
 # origin. The map key paints its brake row from these, so the plate cannot drift from the canvas.
@@ -1098,12 +1098,11 @@ class MapView(QWidget):
         # quadrant), so a load with no complete laps reads as an explained state — with the recovery
         # action — rather than a black void. Parented to the PlotWidget, re-centred by
         # _reposition_empty_state, shown/hidden by _refresh_empty_state (called at build + reseg).
-        self._empty_state = QLabel(
-            "No complete laps found in this recording.\n\nIf this is the right track, drag the "
-            "start/finish line on the map to set where a lap begins.", self.widget)
-        self._empty_state.setProperty("role", "EmptyState")
-        self._empty_state.setAlignment(Qt.AlignCenter)
-        self._empty_state.setWordWrap(True)
+        # The wording is data_quality's, not this file's: "No complete laps FOUND in this
+        # recording." was the fourth phrasing of one fact in one frame, and the half of the next
+        # action it stated was the half that contradicted the lap panel's (QA D2-01).
+        self._empty_state = EmptyState(data_quality.NO_LAPS_HEADLINE,
+                                       data_quality.no_laps_body(), parent=self.widget)
         self._empty_state.hide()
         self._refresh_empty_state()
 
@@ -1373,8 +1372,13 @@ class MapView(QWidget):
         if es is None or es.isHidden():
             return
         host = self.widget
-        w = min(host.width() - 24, 420)
-        es.setFixedWidth(max(w, 120))
+        # The card is the app's one prose MEASURE plus the empty state's own SPACE_XL inset on both
+        # sides — not a hand-picked 420. Shipped, this pane set the NARROWEST of the sixteen states
+        # (372 px ≈ 57 characters) while the charts pane beside it set 869 px ≈ 134 (QA D2-12);
+        # deriving both from theme.EMPTY_MEASURE_PX is what makes them the same object on screen.
+        card = theme.EMPTY_MEASURE_PX + 2 * theme.SPACE_XL
+        w = min(host.width() - 2 * theme.SPACE_XL, card)
+        es.setFixedWidth(max(w, theme.SPACE_3XL * 2))
         es.adjustSize()
         es.move((host.width() - es.width()) // 2, (host.height() - es.height()) // 2)
 

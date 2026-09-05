@@ -659,3 +659,21 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
+
+# COMPOSITION guard (QA D2 / D4-12) — the fourth vocabulary, after dimensions (test_design_system),
+# colour (test_contrast) and marks (test_glyph_vocabulary): what a surface with NOTHING TO SHOW is
+# made of. Sixteen such states shared exactly one property, the 13 px body size. This pins the
+# contract that replaced that: one object (the ledger of adopting sites is enumerated by owning
+# FUNCTION), one measure (checked against the 45-75 character band in the LIVE face), one title and
+# one body size, the declared gaps carried by the slot that can vanish, the card/canvas rule read
+# from the WINDOW COMPOSITE (a child grab reads the rule's colour out of the palette and would pass
+# against a widget that painted nothing), and no surface stating one next action without its
+# sibling. Plus the two size-dependent residuals, swept rather than sampled: the Stats tile's ⊘
+# against its box, and the lap grid's trailing spacer against HIT_MIN at every width 360..1440.
+# Builds real widgets under the real theme -> Qt, so run offscreen; PYTHONPATH for the same reason
+# the foreach above sets it (map_view/plots_view/coaching reach studio.session, which needs the
+# cmake-deployed bindings package).
+add_test(NAME test_state_surfaces
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_state_surfaces.py)
+set_tests_properties(test_state_surfaces PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

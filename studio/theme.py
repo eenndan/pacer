@@ -100,6 +100,20 @@ SPLITTER_HANDLE_PX = 8       # divider hit area (see the splitter section of the
 FOCUS_RING_PX = 2            # keyboard focus ring width (see the focus-ring section)
 GRID_ROW_H = CTRL_H          # 28 — a grid whose ROW is the primary click/seek target
 GRID_ROW_DENSE_H = HIT_MIN   # 24 — a report grid; still a legal pointer target
+EMPTY_MEASURE_PX = 440       # the widest a column of PROSE may be set (widgets.EmptyState)
+
+# EMPTY_MEASURE_PX is an EXTENT, not a gap, which is why it sits with the sizes and not with the
+# SPACE scale — the same argument tests/test_design_system.py's `_CALLS` preamble makes for a
+# dialog's 560 px measure and the busy bar's 220 px length: those are sizes of THINGS.
+#
+# WHAT IT IS FOR. Sixteen "nothing to show" states were measured at one type size and ran from 19
+# to 138 characters per line — a 7x spread — because not one of them set a maximum width, so each
+# state's measure was really the width of whatever pane it happened to land in (QA D2-12). The
+# charts panel's zero-lap sentence set 134 characters across an 869 px pane while the map's set 57
+# across 372, in the same window, in the same frame. Typography's readable band is ~45-75
+# characters; 440 px lands mid-band at BODY in the shipped face, and
+# tests/test_state_surfaces.py asserts that from the LIVE font metrics rather than from this
+# comment, so a font change surfaces here instead of in a screenshot six months later.
 
 # THE TWO GRID ROWS ARE DERIVATIONS, NOT A NEW SCALE, and the distinction matters because a
 # DENSITY_* ladder was the obvious thing to reach for here and it was measured down.
@@ -1632,14 +1646,38 @@ QLabel#PaneBadge {{
     font-size: {CAPTION}px;
     font-weight: 600;
 }}
-/* in-panel empty state: shown when a recording has zero complete laps. Surface bg covers the panel.
-   text_dim, NOT text_muted: this is the panel's ONLY content, so it is enabled prose and has to
-   clear WCAG AA (5.90:1 here; text_muted was 3.17:1). text_muted is for disabled chrome only. */
-QLabel[role="EmptyState"] {{
+/* in-panel empty state: shown when a recording has zero complete laps, when a filter matches
+   nothing, when a page has nothing selected. ONE rule set for all of them (widgets.EmptyState),
+   where there used to be one `role="EmptyState"` producing three different presentations — the
+   Laps and Charts panes as a card, the Coaching panel as canvas (the same rectangle changing
+   colour on a tab switch, QA D2-07) and the Stats page LEFT-aligned while five siblings sharing
+   this exact role were centred (D2-06).
+
+   The CONTAINER carries the surface, so the state's whole box is the card rather than the text's
+   own padding: `card` is a dynamic property, so a state that floats on the canvas simply does not
+   set it. WA_StyledBackground has to be set in Python for either to paint at all — the container
+   is a QWidget SUBCLASS (see widgets.EmptyState / PanelHeader).
+
+   text_dim, NOT text_muted, on the body: this is the panel's ONLY content, so it is enabled prose
+   and has to clear WCAG AA (5.90:1 here; text_muted was 3.17:1). text_muted is for disabled chrome
+   — and for the state's ICON, which is decoration beside prose that already says it. */
+QWidget#EmptyState {{
+    background: transparent;
+}}
+QWidget#EmptyState[card="true"] {{
     background-color: {C.surface};
+    border-radius: {RADIUS_M}px;
+}}
+QLabel[role="EmptyTitle"] {{
+    background: transparent;
+    color: {C.text};
+    font-size: {EMPHASIS}px;
+    font-weight: 600;
+}}
+QLabel[role="EmptyBody"] {{
+    background: transparent;
     color: {C.text_dim};
     font-size: {BODY}px;
-    padding: {SPACE_XL}px;
 }}
 /* first-run welcome DROP ZONE: a dashed-border rounded rect framing the wordmark/invitation/
    buttons, so the drag-and-drop affordance is VISIBLE (a user reads "drop a file here"). Restrained

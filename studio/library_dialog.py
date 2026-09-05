@@ -71,7 +71,7 @@ from . import APP_NAME, prefs, theme
 from . import library as _library
 from ._signal import fmt_time
 from .theme import C
-from .widgets import NUM_ROLE, WrapLabel
+from .widgets import NUM_ROLE, EmptyState, WrapLabel
 from .widgets import NumItem as _NumItem
 
 # Column layout — index → header. Date/Best/Theoretical sort numerically (a key in NUM_ROLE);
@@ -95,6 +95,11 @@ FILTER_ROLE = Qt.UserRole + 5   # lower-cased "track date" haystack for the sear
 # the bucket the combo simply cannot reach them (2 of 3 on the QA index).
 _ALL_TRACKS = "All tracks"
 _UNKNOWN_TRACK = "Unknown track"
+
+# The mark over the FIRST-RUN library state — a Phosphor name for theme.icon(), never a literal
+# Unicode character (tests/test_glyph_vocabulary.py). It is the one icon in the app's empty states:
+# this is the only one of them that is about the app rather than about a recording.
+EMPTY_LIBRARY_ICON = "ph.folder-open"
 
 # What a Track cell reads when the registry doesn't know the circuit — shown in the cell, matched by
 # the search box, and the label the unknown-track filter bucket stands for.
@@ -364,6 +369,14 @@ class LibraryDialog(QDialog):
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        # theme.GRID_ROW_H, not Qt's default 30. This grid's ROW is the click target (SelectRows +
+        # SingleSelection, and a double-click OPENS the recording), so its height is the app's
+        # control height by the same argument the Laps and Corners grids take it. The 30 it stood
+        # at was not a decision anyone made — it is QHeaderView's stock default, and it was the
+        # last of the app's three grid heights still written by nobody (#193 named this exact
+        # one-line change in its own guard's prose and deliberately did not assert it, so `main`
+        # did not depend on this lane landing; the assertion goes in with the fix).
+        self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(_COL_TRACK, QHeaderView.Stretch)
         for col in (_COL_DATE, _COL_BEST, _COL_THEO):
@@ -391,10 +404,11 @@ class LibraryDialog(QDialog):
         # action that cannot be performed, while the neighbouring "Back up library…" answered
         # honestly (QA D4-07 / D2-03). Both states now REPLACE the table (same stretch), because
         # leaving an empty grid on screen beside the sentence explaining it is the void again.
-        self._empty_note = QLabel("")
-        self._empty_note.setProperty("role", "EmptyState")
-        self._empty_note.setWordWrap(True)
-        self._empty_note.setAlignment(Qt.AlignCenter)
+        # Both senses go through the app's ONE empty-state object, so this dialog's states are the
+        # same object as the four panels' — headline in its own slot at EMPHASIS, body at the app's
+        # one measure. Only the EMPTY-INDEX sense carries the icon: it is the app's first-run
+        # answer, the one state that is about the LIBRARY rather than about a filter.
+        self._empty_note = EmptyState("", icon=EMPTY_LIBRARY_ICON)
         self._empty_note.setVisible(False)
         root.addWidget(self._empty_note, 3)
         self._show_empty_note(len(self._entries), "", _ALL_TRACKS)
@@ -669,18 +683,26 @@ class LibraryDialog(QDialog):
         The table is hidden while either is up, so the sentence stands where the rows would be
         instead of under an empty grid."""
         if not self._entries:
-            self._empty_note.setText(
-                "No recordings analysed yet.\nDrop a GoPro .MP4 on the main window and it is "
-                "remembered here — track, date and best lap.")
+            self._empty_note.set_state(
+                "No recordings analysed yet.",
+                "Drop a GoPro .MP4 on the main window and it is remembered here — track, date and "
+                "best lap.")
             show = True
         else:
             filtering = bool(query) or chosen != _ALL_TRACKS
             show = filtering and not visible
             if show:
                 term = self.search.text().strip() or chosen
-                self._empty_note.setText(
-                    f"No recordings match “{term}”.\nClear the search or pick “{_ALL_TRACKS}” to "
-                    f"see all {_plural(len(self._entries), 'recording')}.")
+                self._empty_note.set_state(
+                    f"No recordings match “{term}”.",
+                    f"Clear the search or pick “{_ALL_TRACKS}” to see all "
+                    f"{_plural(len(self._entries), 'recording')}.")
+        # The mark belongs to the EMPTY-INDEX sense only: it is the app's first-run answer, about
+        # the library itself. A filter that matched nothing is about the filter, and a folder glyph
+        # over it would say the library is empty when it is not. `Forget all…` can flip between the
+        # two while the dialog is open, so this is decided here rather than at construction — the
+        # icon's gap is its own margin, so it leaves nothing behind (see widgets.EmptyState).
+        self._empty_note.set_icon_visible(not self._entries)
         self._empty_note.setVisible(show)
         self.table.setVisible(not show)
 

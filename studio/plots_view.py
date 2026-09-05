@@ -18,17 +18,16 @@ import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
-    QLabel,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from . import theme, units
+from . import data_quality, theme, units
 from ._signal import fmt_time, lap_label
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
 from .theme import C
-from .widgets import ToggleButton, budget_plot_gutters, budget_plot_min_height
+from .widgets import EmptyState, ToggleButton, budget_plot_gutters, budget_plot_min_height
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -178,13 +177,13 @@ IDEAL_IS_BASELINE_TIP = (
     "Unavailable here: with only the best lap drawn, the lower chart is ALREADY Δ to the ideal — the "
     "y = 0 line IS the synthetic ideal envelope, so there is nothing left to overlay. Select a "
     "second lap and this overlays the ideal on the Δ-to-best chart.")
-# L6-07: the empty state names the cause AND the way out, in the same words map_view's zero-lap
-# placeholder uses (the only one of the four zero-lap surfaces that offered a next action).
-EMPTY_TEXT = ("No lap data to plot.\n\n"
-              "This recording has no complete laps — the speed and Δ-to-best charts need at least "
-              "one finished lap.\n\n"
-              "If this is the right track, drag the start/finish line on the map to set where a "
-              "lap begins.")
+# L6-07: the empty state names the cause AND the way out. It used to say so in this file's OWN
+# words ("No lap data to plot." + a charts-specific reason), which made it the third of four
+# phrasings of one fact in one frame (QA D2-01/D2-02). The panel it sits in is captioned
+# "SPEED · Δ TO IDEAL", so naming the panel again in its own empty state bought nothing that the
+# divergence did not cost: headline and body are the app's, from data_quality.
+EMPTY_HEADLINE = data_quality.NO_LAPS_HEADLINE
+EMPTY_TEXT = f"{EMPTY_HEADLINE}\n\n{data_quality.no_laps_body()}"
 # The chart block's inset from the panel — the FLOOR on all four edges. Left and bottom are then
 # widened to whatever the rotated axis titles measure (see PlotsView._budget_axis_gutters).
 PLOT_INSET = theme.SPACE_XXS
@@ -392,10 +391,10 @@ class PlotsView(QWidget):
         # E1: empty-state placeholder shown (via the stack) when there are no laps to plot. L6-07:
         # it names the recovery action too, and refresh() switches the three chart controls off with
         # it — they were staying live and inert over a chart that cannot draw anything.
-        self._empty = QLabel(EMPTY_TEXT)
-        self._empty.setProperty("role", "EmptyState")
-        self._empty.setAlignment(Qt.AlignCenter)
-        self._empty.setWordWrap(True)
+        # The app's ONE empty-state object. This pane is the widest of the four, which is exactly
+        # why it needed the object: unbounded, its sentence set 134 characters per line against the
+        # map's 57 in the same frame (QA D2-12).
+        self._empty = EmptyState(EMPTY_HEADLINE, data_quality.no_laps_body())
 
         # The view is now JUST the charts; the x-mode toggle lives in app.py's consolidated bar.
         self._stack = QStackedWidget()

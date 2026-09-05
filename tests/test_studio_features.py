@@ -506,7 +506,7 @@ def test_lap_table_shows_empty_state_when_no_laps():
     table = LapTable(_FakeEmptySession())
     assert table.table.rowCount() == 0
     assert table._stack.currentIndex() == 1, "lap table must show the empty state, not the grid"
-    assert table._empty.property("role") == "EmptyState"
+    assert table._empty.objectName() == "EmptyState"   # widgets.EmptyState, the one object
     assert table._empty.text(), "empty-state placeholder must carry a message"
 
     # And with laps it flips BACK to the table (no sticky empty state).
@@ -552,7 +552,7 @@ def test_plots_view_shows_empty_state_when_no_laps():
     pv = PlotsView(_Sess(has_laps=False))
     pv.refresh()
     assert pv._stack.currentIndex() == 1, "plots must show the empty state with no laps"
-    assert pv._empty.property("role") == "EmptyState"
+    assert pv._empty.objectName() == "EmptyState"      # widgets.EmptyState, the one object
     assert pv._empty.text(), "empty-state placeholder must carry a message"
 
     # With data it shows the charts panel (index 0), not the placeholder.

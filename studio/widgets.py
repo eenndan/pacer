@@ -391,6 +391,180 @@ def budget_plot_min_height(view, layout, plots) -> int:
     return applied
 
 
+class EmptyState(QWidget):
+    """The app's ONE not-loaded / nothing-here surface: icon? · title · body, one rhythm, one measure.
+
+    WHAT WAS MEASURED. Sixteen states that answer the question "why is there nothing here?" were
+    driven in the real app (QA D2). They shared exactly ONE property — the 13 px body size. An icon
+    appeared at 1 of 16 sites and a title slot at 1; alignment was centred at 15 sites and left at
+    one, and the outlier used the SAME QSS role as five of the centred ones; the measure ran from
+    19 to 138 characters at that one type size because nothing anywhere set a maximum width; and
+    the same pane changed colour when you switched tab (`#21252E` card on Laps, `#15181E` canvas on
+    Coaching, identical rectangle). Spacing was NOT the finding: every internal gap was already on
+    the scale. The space system was finished and the composition system had never been started.
+
+    THE THREE SLOTS ARE THE OBJECT.
+
+      * `title` — WHAT HAPPENED, one sentence, at `theme.EMPHASIS` (15). Not HERO 22: that step is
+        the welcome WORDMARK (`role="Title"`, shared with the About and privacy cards), a brand
+        lockup rather than a state title. Not BODY 13 either, or there is no title. EMPHASIS is the
+        existing rung for "a value that must outrank its own label" and it is the only free step on
+        11/13/15/22 — no new type size was bought for this.
+      * `body` — WHY, then WHAT NEXT, in that order, wrapped at `theme.EMPTY_MEASURE_PX`.
+      * `icon` — optional, a `theme.icon()` NAME (never a literal Unicode mark: see
+        tests/test_glyph_vocabulary.py), rendered at ICON_PX in `C.text_muted`.
+
+    ABSENT SLOTS ARE NOT CONSTRUCTED. A zero-height ghost label is not free: the Coaching panel's
+    stray 11 px gap was an empty 7x14 header label nobody could see and nobody had removed.
+
+    NO `busy` SLOT AND NO `action` SLOT, and both omissions are decisions rather than oversights.
+    The object D2 §8.1 proposed carried both, for the LOADING CARD (`app.py`) and for a window-sized
+    state's single button. Measured after PR #191 landed, the loading card is deliberately NOT this
+    object: it is the SECOND FRAME OF THE WELCOME SCREEN and #191 built it on the welcome drop
+    zone's own column, with the wordmark's 22 px `role="Title"` headline, precisely so the first
+    click does not restyle the screen under the user. Adopting a 15 px state title there would undo
+    that. With the loading card out, no site in the app passes `busy`, and the ACTION RULE — a state
+    that owns a WINDOW may carry a button, a state that owns a PANEL gets a sentence, because a
+    467 px lap pane cannot carry a button without competing with the panel's own toolbar — leaves
+    every state this object serves as prose. The one window-sized candidate (the empty Library) can
+    only offer "open a recording" through a seam `library_dialog` does not have. A slot with no
+    caller is a slot with no proof, so the two go in with the caller that needs them.
+
+    `owns_pane` decides the SURFACE, and it is the whole of D2-07: True paints the card (the
+    `card="true"` dynamic property → `QWidget#EmptyState[card="true"]`), False leaves the canvas
+    showing. It is a property of the SITE — does this state replace a panel's content, or float on
+    the window? — so two tabs of one panel can no longer disagree about it by accident.
+
+    `Qt.WA_StyledBackground` IS SET EXPLICITLY and the line is load-bearing. QStyleSheetStyle sets
+    it for you only when `metaObject() == QWidget::staticMetaObject` — a BARE QWidget — so a QWidget
+    SUBCLASS silently stops painting its QSS background while `palette()` cheerfully reports the
+    rule's colour. That cost three widgets in PR #185; `PanelHeader.__init__` above carries the full
+    note. The card is proved from the WINDOW COMPOSITE in tests/test_state_surfaces.py, never from a
+    child `grab()`, because a child grab reads the colour out of the palette and would report
+    success against a widget that composited nothing.
+
+    THE MEASURE CAP IS ON THE LABELS, not on a wrapper widget, for the reason `PanelToolbar._mount`
+    gives for using a nested LAYOUT: the theme's base rule paints every bare `QWidget` with the
+    CANVAS colour, so a wrapper column inside the card would punch a canvas-coloured hole in it.
+    """
+
+    def __init__(self, title: str, body: str = "", *, icon: str | None = None,
+                 owns_pane: bool = True, parent=None):
+        super().__init__(parent)
+        self.setObjectName("EmptyState")
+        # See the class prose: a QWidget SUBCLASS paints its QSS box only when told to.
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        # The app's own dynamic-property idiom (app.py._set_dragover): the string, or None to
+        # remove the property entirely, so the [card="true"] selector simply stops matching.
+        self.setProperty("card", "true" if owns_pane else None)
+
+        column = QVBoxLayout(self)
+        # SPACE_XL is documented as "a page's own breathing room (empty states, dialog bodies)" —
+        # this is the surface that sentence was written about. It was already what the QSS rule
+        # this object replaces spent as `padding`, so no state's inset moves.
+        column.setContentsMargins(theme.SPACE_XL, theme.SPACE_XL, theme.SPACE_XL, theme.SPACE_XL)
+        # Every gap is stated below, one addSpacing per boundary, so the rhythm cannot drift as
+        # slots come and go — a layout `spacing` would silently apply itself to whichever pairs
+        # happened to exist.
+        column.setSpacing(0)
+        column.setAlignment(Qt.AlignCenter)
+
+        # EVERY GAP IS A SPACER ITEM WITH A HANDLE, and the handles are why. Both gaps sit next to a
+        # slot that a LIVE surface hides and shows — the Library dialog's two senses differ by
+        # exactly the icon, and "Forget all recordings" flips between them with the dialog open — so
+        # the air has to go with the slot or the object leaves the hole it exists to prevent
+        # (Coaching's stray 11 px gap was a 7x14 empty header label nobody could see).
+        #
+        # The obvious spelling, giving each slot its gap as its own contentsMargins, was tried and
+        # MEASURED WRONG: a QSS rule that reaches a QLabel rewrites that label's contents margins
+        # from the rule's own box, and it does not do so uniformly. On the shipped render four
+        # panels kept `[0, 8, 0, 0]` on the body while the map's floating card — same object, same
+        # rule — came back `[0, 0, 0, 0]` and stood its title directly on its body. Suspect the
+        # stylesheet first: a spacer item is layout state, and no rule can reach it.
+        self.icon_label = None
+        self._icon_gap = None
+        if icon:
+            self.icon_label = QLabel(self)
+            self.icon_label.setPixmap(theme.icon(icon, color=theme.C.text_muted)
+                                      .pixmap(theme.ICON_PX, theme.ICON_PX))
+            self.icon_label.setAlignment(Qt.AlignCenter)
+            # A pixmap has no text for a screen reader; the title says the same thing, so the mark
+            # is decorative and named after it rather than left anonymous.
+            self.icon_label.setAccessibleName(title)
+            column.addWidget(self.icon_label, 0, Qt.AlignHCenter)
+            column.addSpacing(theme.SPACE_M)
+            self._icon_gap = column.itemAt(column.count() - 1)
+
+        self.title = QLabel(title, self)
+        self.title.setProperty("role", "EmptyTitle")
+        self.title.setAlignment(Qt.AlignCenter)
+        self.title.setWordWrap(True)
+        self.title.setMaximumWidth(theme.EMPTY_MEASURE_PX)
+        column.addWidget(self.title, 0, Qt.AlignHCenter)
+
+        self.body = WrapLabel(body, self)
+        self.body.setProperty("role", "EmptyBody")
+        self.body.setAlignment(Qt.AlignCenter)
+        self.body.setMaximumWidth(theme.EMPTY_MEASURE_PX)
+        column.addSpacing(theme.SPACE_S)
+        self._body_gap = column.itemAt(column.count() - 1)
+        column.addWidget(self.body, 0, Qt.AlignHCenter)
+        self._show_body(bool(body))
+
+    def resizeEvent(self, event):
+        """Set both text slots to the measure: everything the pane can give, up to the cap.
+
+        THE CAP ALONE DOES NOT PRODUCE A MEASURE, which is what measuring the ported states showed.
+        `setMaximumWidth` is a ceiling; the FLOOR is the label's own size hint, and a word-wrapped
+        QLabel's hint is `QLabelPrivate::sizeForWidth`'s heuristic — it wraps the text into a
+        roughly square block rather than a line. Under a centring layout (which gives an aligned
+        item `min(available, maximum, sizeHint)`) that heuristic wins, so the Coaching panel's
+        two-sentence body set 30 characters per line inside a 440 px allowance: capped at one
+        number and still not set to one measure, 30 characters being as far below the readable
+        band as 138 was above it.
+
+        Pinning the width here is what makes the cap a measure. It is width-driven and monotone —
+        the value depends only on this widget's own width — so it cannot oscillate, and in a pane
+        narrower than the cap it simply yields the pane."""
+        super().resizeEvent(event)
+        room = max(0, self.width() - 2 * theme.SPACE_XL)
+        measure = min(room, theme.EMPTY_MEASURE_PX)
+        for label in (self.title, self.body):
+            if label.width() != measure:
+                label.setFixedWidth(measure)
+
+    def _show_slot(self, widget, gap, gap_px: int, on: bool) -> None:
+        """Show/hide one optional slot AND its own gap, so neither can outlive the other."""
+        widget.setVisible(on)
+        if gap is not None:
+            gap.changeSize(0, gap_px if on else 0)
+            self.layout().invalidate()
+
+    def _show_body(self, on: bool) -> None:
+        self._show_slot(self.body, self._body_gap, theme.SPACE_S, on)
+
+    def set_icon_visible(self, on: bool) -> None:
+        """Show/hide the mark and the air under it together. The Library dialog is the one caller:
+        its empty-INDEX sense is about the app and carries the folder, its no-filter-match sense is
+        about the filter and does not."""
+        if self.icon_label is not None:
+            self._show_slot(self.icon_label, self._icon_gap, theme.SPACE_M, on)
+
+    def set_state(self, title: str, body: str = "") -> None:
+        """Rewrite both slots. One call, because a state is a PAIR — a title with a stale body is
+        how the Corners page came to tell a user to select a lap on a recording that has none."""
+        self.title.setText(title)
+        self.body.setText(body)
+        self._show_body(bool(body))
+
+    def text(self) -> str:
+        """Everything this state SAYS, as one string — the shape the QLabel placeholders it
+        replaced had, so a guard (and the tests that predate the object) can read a state's whole
+        copy without knowing how many labels it is made of."""
+        return f"{self.title.text()}\n\n{self.body.text()}" if self.body.text() \
+            else self.title.text()
+
+
 class Tile(QWidget):
     """One STAT TILE: a value in the mono face over a dim caption naming it. `set()` rewrites both.
 
@@ -420,11 +594,43 @@ class Tile(QWidget):
         lay.setSpacing(theme.SPACE_XXS)
         lay.addWidget(self.value)
         lay.addWidget(self.caption)
+        self._claim_ink_height()
 
     def set(self, value: str | None, caption: str | None = None):
         self.value.setText(value if value else DASH)
+        self._claim_ink_height()
         if caption is not None:
             self.caption.setText(caption)
+
+    def _claim_ink_height(self) -> int:
+        """Give the value label the height its own INK needs, not just its font's line box.
+
+        THE RESIDUAL PR #189 COULD NOT REACH, in numbers. That PR's rule is about FALLBACK — a
+        character in a user-visible string must be drawn by the app's own face — and it measured
+        that Inter genuinely carries ⊘ (U+2298), so the mark stays TEXT. What it could not fix from
+        there is that Inter's ⊘ is TALLER THAN ITS OWN LINE BOX at every step of the type scale:
+        at EMPHASIS its tight bounding rect is 21 px against a 19 px line (ascent 15 + descent 4),
+        and it overshoots by exactly one pixel at each end. Everywhere else in the app that costs
+        nothing, because every other ⊘ sits in a 24 or 28 px table row. The Stats laps tile is the
+        one surface whose box IS the line height with nothing around it, so it was the one place
+        the apex and base arcs were sliced off — measured from the window composite, ink filling
+        rows 0..18 of a 19 px box for a glyph that wants 21.
+
+        A QLabel's sizeHint takes `QFontMetrics::height()`, which is a FONT property (ascent +
+        descent) and knows nothing about the string. `tightBoundingRect` is the string's real ink.
+        Taking the larger of the two is the whole fix, and it is general: it does not name ⊘, it
+        does not care which mark a future tile prints, and it costs nothing (the max is the line
+        box) for the ~30 tiles whose value is digits.
+
+        It deliberately does NOT split the run across two mechanisms. `25 · 24 ⊘ · 3 ⚠` is one ink
+        run in one face; turning the ⊘ into an icon pixmap while the ⚠ two characters later stayed
+        text would make one line out of two vocabularies, which is the defect #189 exists to
+        prevent, not a fix for it."""
+        fm = self.value.fontMetrics()
+        need = max(fm.height(), fm.tightBoundingRect(self.value.text()).height())
+        if self.value.minimumHeight() != need:
+            self.value.setMinimumHeight(need)
+        return need
 
 
 class PanelHeader(QWidget):

@@ -339,11 +339,16 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
     it immediately surfaced seven call sites in FOUR files this lane does not own, so each is
     exempted BY NAME below rather than fixed in a PR whose pixel proof does not cover them.
 
-    Six of the seven are the same shape and the shape is argued in the `_CALLS` preamble above: a
+    All six left are the same shape and the shape is argued in the `_CALLS` preamble above: a
     DIALOG'S MEASURE (400 / 720 / 560 / 380 / 460 px) and a button's 88 px floor are extents, and
     the SPACE scale has nothing to say about them. They are listed here because the check cannot
-    tell an extent from a gap, not because anyone thinks they are wrong. The seventh
-    (`SPARK_HEIGHT = 96`) is a genuine off-scale literal, in the stats lane's file."""
+    tell an extent from a gap, not because anyone thinks they are wrong.
+
+    THE SEVENTH IS GONE. `stats_panel.SPARK_HEIGHT = 96` was the one entry that was NOT an extent
+    excuse — a genuine off-scale literal — and it is `2 * theme.SPACE_3XL` now: the same rendered
+    96 px said in the app's own units, with the measured decomposition beside it (a 71.5 px data
+    band, a 23 px bottom axis, and the 4 px of border every QGraphicsView here reserves so a focus
+    ring costs no re-layout). The ratchet below is `<=`, so spending an exemption cannot go red."""
     EXEMPT: set[tuple[str, str]] = {
         # --- extents, not gaps: a dialog's own measure (see the paragraph above). Not this lane's.
         ("app.py", "StudioWindow._ask_export_options"),        # 400 px export-dialog measure
@@ -352,8 +357,6 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
         ("help_dialog.py", "ShortcutsDialog.__init__"),        # 560 px reading measure
         ("help_dialog.py", "AboutDialog.__init__"),            # 380 px card measure
         ("help_dialog.py", "PrivacyDialog.__init__"),          # 460 px reading measure
-        # --- a real one, owned by the stats lane: SPARK_HEIGHT = 96, a sparkline's height.
-        ("stats_panel.py", "StatsView.__init__"),
     }
     offenders = []
     total = onscale = 0
@@ -379,7 +382,7 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
     # literal still has to be argued in this file's prose, or written as a derivation of the scale
     # the way theme.focus_pad, theme.pill_radius, widgets.space_at_least and
     # lap_table.GRID_TEXT_INSET already are.
-    assert len(EXEMPT) <= 7, f"the exemption list GREW to {len(EXEMPT)}: {sorted(EXEMPT)}"
+    assert len(EXEMPT) <= 6, f"the exemption list GREW to {len(EXEMPT)}: {sorted(EXEMPT)}"
     print(f"test_no_studio_module_hand_picks_a_layout_dimension OK "
           f"({onscale}/{total} literal calls on the scale, {len(EXEMPT)} exempted surfaces)")
 
@@ -1012,15 +1015,17 @@ def test_every_grid_row_is_one_of_the_two_declared_heights():
     used enumerates QAbstractButton / QComboBox / QSlider / QHeaderView sections and has no `row`
     kind at all, so a clickable table ROW had never been in scope.
 
-    KNOWN GAP, named rather than skipped: the Library dialog's grid still takes Qt's default 30 and
-    is not asserted here, because studio/library_dialog.py belongs to another lane of this design
-    wave. It is one dict entry away once that lands — `LIBRARY: dlg.table`, `GRID_ROW_H`."""
+    THE KNOWN GAP IS CLOSED. This guard shipped naming one — "the Library dialog's grid still takes
+    Qt's default 30 ... one dict entry away once that lands" — because library_dialog.py belonged to
+    another lane of this wave. That lane landed, the dialog reads GRID_ROW_H, and the entry is in
+    the dict below: nine fixed grids measured, none of them at a height nobody chose."""
     from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableView
     from test_central_view_realqt import _real_central_view
     from test_coaching_panel_layout import _panel as _coaching_panel
     from test_coaching_panel_layout import _rows as _coaching_rows
 
     from studio import stats as stats_service
+    from studio.library_dialog import LibraryDialog
 
     view, session = _real_central_view()[:2]
     view.resize(1440, 900)
@@ -1043,18 +1048,24 @@ def test_every_grid_row_is_one_of_the_two_declared_heights():
     # The Coaching grid is the one that must NOT take either token, and the synthetic session gives
     # it no rows — so it comes from its own fixture, or the exemption below would be untested prose.
     coach = _coaching_panel(_coaching_rows(6), (1200, 800))
+    # ...and the Library dialog, for the same reason: it is not a child of the central view, so
+    # nothing here would look at it unless it is brought.
+    dlg = LibraryDialog({"entries": [
+        {"track": "Daytona MK", "date": "2026-08-12", "best": 68.42, "theoretical": 67.9,
+         "paths": ["/tmp/a.MP4"], "verified": True}]}, open_recording=lambda _p: None)
 
     stats = view.stats_view
     named = {"LAPS": view.table.table, "CORNERS": view.corner_table.table,
              "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
              "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
-             "STATS/PER LAP": stats.lap_table, "COACHING": coach.table}
+             "STATS/PER LAP": stats.lap_table, "COACHING": coach.table, "LIBRARY": dlg.table}
     by_widget = {id(t): n for n, t in named.items()}
-    # Every table in the real view PLUS the coaching fixture, named where we know it and labelled
-    # structurally where we do not — a new grid is measured whether or not anyone updated the dict.
+    # Every table in the real view PLUS the coaching + library fixtures, named where we know it and
+    # labelled structurally where we do not — a new grid is measured whether or not anyone updated
+    # the dict.
     tables = [(by_widget.get(id(t), f"<unnamed {type(t).__name__} under "
                                     f"{type(t.parentWidget()).__name__}>"), t)
-              for t in (*view.findChildren(QTableView), coach.table)]
+              for t in (*view.findChildren(QTableView), coach.table, dlg.table)]
 
     offenders, heights, prose = [], {}, {}
     for name, table in tables:
@@ -1080,13 +1091,14 @@ def test_every_grid_row_is_one_of_the_two_declared_heights():
                 f"declared pointer floor HIT_MIN={theme.HIT_MIN}")
     view.hide()
     coach.hide()
+    dlg.hide()
     assert not offenders, "grid rows off the two declared heights:\n  " + "\n  ".join(offenders)
     # The guard is only worth having if it exercises BOTH tokens and the prose exemption — a run
     # that happened to see one height would pass for the wrong reason.
     assert theme.GRID_ROW_H in heights.values() and theme.GRID_ROW_DENSE_H in heights.values(), (
         f"both grid-row tokens must be exercised by a real table: {heights}")
     assert prose, "the ResizeToContents prose row must be exercised, or its exemption is untested"
-    assert len(heights) >= 7, f"too few real grids measured: {heights}"
+    assert len(heights) >= 8, f"too few real grids measured: {heights}"
     # ...and the two tokens are the tokens they claim to be, not two new numbers.
     assert (theme.GRID_ROW_H, theme.GRID_ROW_DENSE_H) == (theme.CTRL_H, theme.HIT_MIN)
     assert theme.GRID_ROW_DENSE_H >= theme.HIT_MIN

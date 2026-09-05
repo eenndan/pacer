@@ -33,14 +33,43 @@ DROPPED_FIX_CONCERN_FRAC = 0.08
 # found in this recording.", the charts "No lap data to plot." and the status bar "no complete laps
 # detected in this recording — the GPS may not have locked, or the recording is too short" — four
 # phrasings of one fact in a single frame, with the status bar restating the table's reason almost
-# verbatim (QA L10-08). Each surface now states the HEADLINE and appends only what it can add:
-# the panels have room for the REASON, the map owns the NEXT ACTION (it is the surface the
-# start/finish line is dragged on), and the status bar carries the headline alone.
+# verbatim (QA L10-08).
+#
+# ...AND THEN NOTHING READ IT. Measured on the shipped app (QA D2-02): a grep over `studio/` found
+# NO_LAPS_REASON and NO_LAPS_NEXT_ACTION at their DEFINITION LINES ONLY — zero consumers — while
+# four panels kept private copies and two of those had diverged. The design that left them
+# divergable was the one in the paragraph above: "each surface appends only what it can add", with
+# the panels owning the REASON and the map owning the NEXT ACTION. On a zero-lap recording every
+# one of those surfaces is on screen AT ONCE, so what the split actually produced was the lap panel
+# saying "Open another recording with ⌘O" while the charts panel and the map, 523 px to its right
+# in the same frame, said "drag the start/finish line" — two mutually exclusive instructions for
+# one fact (QA D2-01, HIGH).
+#
+# So there is no per-surface subset any more. There are two ways out of a zero-lap recording —
+# the line is in the wrong place, or the recording is the wrong recording — and `no_laps_body()`
+# is the only way to ask for either, which is what makes stating one without the other impossible
+# rather than merely discouraged. The status bar still carries the HEADLINE alone: it has one line,
+# and a headline is the half that is true in one line.
 NO_LAPS_HEADLINE = "No complete laps in this recording."
 NO_LAPS_REASON = ("The GPS may not have locked, or the recording is too short to cross the "
                   "start/finish line.")
 NO_LAPS_NEXT_ACTION = ("If this is the right track, drag the start/finish line on the map to set "
                        "where a lap begins.")
+# The second way out, and it is an ADDITION rather than a replacement: `lap_table.NO_LAPS_ACTION`
+# said this and ONLY this, which is how the contradiction arose. Its intent survives here, stated
+# after the drag action rather than instead of it.
+NO_LAPS_ALT_ACTION = "If it is the wrong recording, open another with ⌘O."
+
+
+def no_laps_body() -> str:
+    """The zero-lap BODY, whole: why it happened, then BOTH ways out, in that order.
+
+    THE FUNCTION IS THE FIX — the constants alone were already there and were already ignored. A
+    surface cannot state one action without the other because there is no way to ask for half of
+    this string, and a surface that re-authors it has to do so visibly, next to a call that says
+    what it should have said. `tests/test_state_surfaces.py` reads every zero-lap surface's live
+    text and asserts this exact string is inside it."""
+    return f"{NO_LAPS_REASON} {NO_LAPS_NEXT_ACTION} {NO_LAPS_ALT_ACTION}"
 
 
 @dataclass(frozen=True)

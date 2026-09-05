@@ -757,7 +757,7 @@ def test_opportunities_panel_is_the_coaching_tab_page():
     view.select_lap_tab(3)
     assert view.table_stack.currentIndex() == 3
     assert view.opportunities.body.currentIndex() == 1, "too few clean laps -> the friendly state"
-    assert view.opportunities.empty_label.text(), "the excluded state must carry a friendly message"
+    assert view.opportunities.empty_state.text(), "the excluded state must carry a friendly message"
     print("test_opportunities_panel_is_the_coaching_tab_page OK")
 
 
