@@ -7,9 +7,9 @@ Kept separate from the library index (that file is a data catalogue; this is UI 
 
 A generic get/set dict of persisted UI choices: the speed display unit (``studio/units.py``),
 the colour-blind palette, the last-opened folder, the excluded-strip toggle, the lap panel's
-active tab, the grid-splitter sizes and the Library dialog's size. Every read is guarded and
-defaults to the safe value, so a missing / corrupt file is never fatal (each choice just starts
-at its default).
+active tab, the grid-splitter sizes, the map key's collapse and the Library dialog's size. Every
+read is guarded and defaults to the safe value, so a missing / corrupt file is never fatal (each
+choice just starts at its default).
 """
 
 from __future__ import annotations
@@ -47,6 +47,13 @@ LAST_DIR = "last_dir"
 EXCLUDED_VISIBLE = "excluded_visible"
 LAP_PANEL_TAB = "lap_panel_tab"
 GRID_SIZES = "grid_sizes"
+# Whether the map's floating "Map key" plate is collapsed to its title row. Default False =
+# expanded (the key explains four painted glyphs a first-time user has no other way to read).
+# Shipped, the collapse was per-MapView state, so a user who put the key away got it back on the
+# next launch AND on every recording they opened in the same session — the plate is 46% of the map
+# canvas's height at 1440x900, so that is the one layout choice on the map worth remembering.
+# Coerced to bool, like EXCLUDED_VISIBLE.
+MAP_KEY_COLLAPSED = "map_key_collapsed"
 # The Library dialog's size as [width, height] in logical px, or absent until the user actually
 # resizes it (so a later change to the dialog's own default still reaches everyone who never
 # touched it). Shape-guarded on read; the dialog additionally clamps whatever comes back to the
@@ -170,6 +177,22 @@ def excluded_visible(path: str | None = None) -> bool:
 def set_excluded_visible(on: bool, path: str | None = None) -> None:
     """Persist the excluded-strip visibility (the View-menu hide toggle)."""
     set(EXCLUDED_VISIBLE, bool(on), path)
+
+
+def map_key_collapsed(path: str | None = None) -> bool:
+    """Whether the map's "Map key" plate opens collapsed to its title row (default False =
+    expanded). Coerced to bool so a corrupt file never crashes the map."""
+    return bool(get(MAP_KEY_COLLAPSED, False, path))
+
+
+def set_map_key_collapsed(collapsed: bool, path: str | None = None) -> None:
+    """Persist the map key's collapse. Fully guarded — remembering the state of a decorative plate
+    must never disrupt the map — so an unwritable prefs file is swallowed (mirrors
+    ``set_last_dir`` / ``set_library_size``). MapView calls this from the plate's own click."""
+    try:
+        set(MAP_KEY_COLLAPSED, bool(collapsed), path)
+    except OSError:
+        pass
 
 
 def library_size(path: str | None = None) -> tuple[int, int] | None:
