@@ -162,6 +162,14 @@ def _font(size: int, weight: QFont.Weight = theme.W_REGULAR) -> QFont:
 
 # Title auto-fit: try these pixel sizes (biggest first) before falling back to eliding the smallest.
 _TITLE_PX_STEPS = (58, 50, 44)
+# The SAME two-step for the coaching reason — a full sentence, at the card's own 936 px measure.
+# MEASURED, not chosen: the app's own longest opportunity sentence ("brake later / shorter (~0.50 s
+# longer on the brakes), and it carries to the apex") is 1086 px at 30 px, i.e. 150 px past the
+# content box and 78 px past the IMAGE, and it was drawn with neither a fit nor an elide — cut
+# mid-word with ink in the last 4 pixel columns of the PNG. 27 px still overruns the widest at
+# 977 px; 24 px holds every sentence the three fixtures produce (869 px worst), and anything longer
+# still elides rather than smearing off the edge. This is the artifact a user SENDS to someone.
+_REASON_PX_STEPS = (30, 27, 24)
 
 # Map plate: the thumbnail scales to this width; the plate's height then hugs the scaled thumbnail
 # (L5 — a wide landscape grab no longer letterboxes into a fixed-tall plate), within these bounds.
@@ -184,22 +192,33 @@ def map_plate_height(thumb_w: int, thumb_h: int) -> int:
     return int(min(MAP_PLATE_H_MAX, max(MAP_PLATE_H_MIN, scaled_h + MAP_PLATE_INNER)))
 
 
-def _fit_title(p: QPainter, text: str, avail: int) -> tuple[str, QFont]:
-    """Fit the track title into `avail` px of header width (M10). Try progressively smaller title
-    fonts; the first that fits whole wins (a moderately long name just shrinks). If even the
-    smallest still overruns, elide-right at that size so the tail is cut with an ellipsis instead of
-    smearing off the edge / into the stamp. Short names take the first (biggest) size unchanged."""
+def _fit_line(p: QPainter, text: str, avail: int, steps: tuple[int, ...],
+              weight: QFont.Weight = theme.W_REGULAR) -> tuple[str, QFont]:
+    """Fit one line into `avail` px: try `steps` (biggest first) and take the first size that holds
+    the whole string, else elide-right at the smallest so the tail is cut with an ellipsis instead
+    of smearing off the edge of the image. Returns (text-to-draw, font).
+
+    ONE fitting mechanism for the card, not two. This is `_fit_title`'s own two-step, generalised
+    when the coaching reason turned out to be drawn with no fit at all (see `_REASON_PX_STEPS`) —
+    a second mechanism would have been a second set of numbers to keep true."""
     if avail <= 0:
         avail = 1
-    font = _font(_TITLE_PX_STEPS[-1], theme.W_SEMIBOLD)
-    for px in _TITLE_PX_STEPS:
-        font = _font(px, theme.W_SEMIBOLD)
+    font = _font(steps[-1], weight)
+    for px in steps:
+        font = _font(px, weight)
         p.setFont(font)
         if p.fontMetrics().horizontalAdvance(text) <= avail:
             return text, font
     # Still too wide at the smallest step -> elide at that size.
     p.setFont(font)
     return p.fontMetrics().elidedText(text, Qt.ElideRight, avail), font
+
+
+def _fit_title(p: QPainter, text: str, avail: int) -> tuple[str, QFont]:
+    """Fit the track title into `avail` px of header width (M10) — a moderately long name just
+    shrinks; one that still overruns the smallest step is elided so it cannot smear into the
+    stamp. Short names take the first (biggest) size unchanged."""
+    return _fit_line(p, text, avail, _TITLE_PX_STEPS, theme.W_SEMIBOLD)
 
 
 def _draw_text(p: QPainter, x: int, y: int, text: str, font: QFont, colour: str,
@@ -312,7 +331,10 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
         # the time lost reads in the "behind" hue (time given away)
         _draw_text(p, 0, opp_top + 60, f"+{opp.time_lost_s:.2f} s", _font(46, theme.W_SEMIBOLD),
                    theme.behind_colour(), align_right_at=right)
-        _draw_text(p, pad, opp_top + 110, opp.reason, _font(30), theme.C.text_dim)
+        # The reason is the only line on the card that is a SENTENCE, and it was the only one drawn
+        # with neither an `align_right_at` nor a fit — see _REASON_PX_STEPS for what that measured.
+        reason, reason_font = _fit_line(p, opp.reason, right - pad, _REASON_PX_STEPS)
+        _draw_text(p, pad, opp_top + 110, reason, reason_font, theme.C.text_dim)
     else:
         _draw_text(p, pad, opp_top, "Drive a few more clean laps for coaching tips.",
                    _font(28), theme.C.text_muted)

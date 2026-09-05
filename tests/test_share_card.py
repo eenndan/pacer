@@ -269,6 +269,97 @@ def test_title_fit_shrinks_then_elides_long_names_keeps_short_unchanged():
     print(f"M10 title fit: short stays {biggest}px whole; long -> {px}px elided '{txt}'")
 
 
+def _reason_fit(text: str, avail: int = share_card.CARD_W - 2 * 72):
+    """`_fit_line` against the reason's own steps on a real paint device. (fitted_text, px, width)"""
+    from PySide6.QtGui import QPainter
+    img = QImage(share_card.CARD_W, share_card.CARD_H, QImage.Format_ARGB32)
+    p = QPainter(img)
+    try:
+        txt, font = share_card._fit_line(p, text, avail, share_card._REASON_PX_STEPS)
+        p.setFont(font)
+        return txt, font.pixelSize(), p.fontMetrics().horizontalAdvance(txt)
+    finally:
+        p.end()
+
+
+# The app's own longest opportunity sentences, produced by the REAL formatter rather than typed out
+# — a phrasing change in studio/coaching.py must reach this guard. The braking lever plus the
+# "carries to" consequence clause is the widest combination the model can emit.
+def _longest_real_reasons():
+    long_brake = coaching.Opportunity(
+        cid=1, direction=1, time_lost=0.9, entry_dist=100.0,
+        reason=coaching.Reason(kind=coaching.REASON_BRAKING, contribution=0.4,
+                               apex_speed_deficit=0.0, brake_extra_s=0.50, coast_extra_s=0.0,
+                               sigma=0.1),
+        phases=coaching.PhaseLoss(entry=0.05, apex=0.40, exit=0.05))
+    long_coast = coaching.Opportunity(
+        cid=2, direction=-1, time_lost=0.9, entry_dist=100.0,
+        reason=coaching.Reason(kind=coaching.REASON_COASTING, contribution=0.4,
+                               apex_speed_deficit=0.0, brake_extra_s=0.0, coast_extra_s=1.25,
+                               sigma=0.1),
+        phases=coaching.PhaseLoss(entry=0.40, apex=0.05, exit=0.05))
+    return [coaching.reason_sentence(o, u) for o in (long_brake, long_coast)
+            for u in ("kmh", "mph")]
+
+
+def test_the_coaching_reason_is_fitted_like_every_other_line_on_the_card():
+    """SW1-01: the reason was the ONE text draw on the card with neither an `align_right_at` nor a
+    fit — an unbounded drawText from x=72 on a 1080 px canvas whose content box ends at 1008.
+
+    Measured on three real recordings, at the shipped 30 px: the widest sentence the model emits is
+    1086 px, i.e. 150 px past the content box and 78 px past the IMAGE, cut mid-word with no
+    ellipsis — and on two of the three fixtures the overflowing sentence is the rank-0 one the card
+    actually draws. This is the artifact a user SENDS to someone.
+
+    Swept rather than sampled, one character at a time, because the failure is a threshold: for
+    every prefix of every sentence the model can emit, the fitted line must sit inside the box."""
+    avail = share_card.CARD_W - 2 * 72
+    worst = ("", 0)
+    for sentence in _longest_real_reasons():
+        for n in range(1, len(sentence) + 1):
+            txt, _px, width = _reason_fit(sentence[:n])
+            assert width <= avail, (
+                f"'{sentence[:n]}' fitted to {width} px in a {avail} px box as '{txt}'")
+            if width > worst[1]:
+                worst = (txt, width)
+    # ...and the real sentences are still WHOLE — the fix is a fit, not a silent truncation.
+    for sentence in _longest_real_reasons():
+        txt, px, width = _reason_fit(sentence)
+        assert txt == sentence, f"the shipped sentence was elided at {px}px: {txt!r}"
+        assert px in share_card._REASON_PX_STEPS, px
+    # A pathological string still elides rather than smearing off the edge.
+    txt, px, width = _reason_fit("x" * 400)
+    assert txt.endswith("…") and width <= avail, (txt[-8:], width)
+    assert px == share_card._REASON_PX_STEPS[-1], px
+    print(f"test_the_coaching_reason_is_fitted_like_every_other_line_on_the_card OK "
+          f"(worst fitted line {worst[1]} px in {avail})")
+
+
+def test_no_card_ink_reaches_the_edge_of_the_image():
+    """The same finding, read from the RENDERED PIXELS rather than from the fit — the defect was
+    visible as ink in the last 4 pixel COLUMNS of the PNG. Everything the card draws lives inside
+    [pad, CARD_W - pad]; nothing may cross that on any sentence the model can emit.
+
+    `CARD_W - pad` itself is INSIDE the box, not outside it: the map plate's rounded rect is drawn
+    to exactly that x, so its 1 px border legitimately inks that column on every card. The
+    assertion is about everything to the RIGHT of the content edge."""
+    import dataclasses
+
+    edge = share_card.CARD_W - 72
+    base = share_card.card_data(FakeSession(), unit="kmh")
+    assert base.top_opp is not None
+    for sentence in [*_longest_real_reasons(), "x" * 400]:
+        data = dataclasses.replace(
+            base, top_opp=dataclasses.replace(base.top_opp, reason=sentence))
+        img = share_card.render_card(data, _one_px_png(), palette=theme.PALETTE_STANDARD)
+        bg = img.pixel(5, 5)
+        spill = [x for x in range(edge + 1, share_card.CARD_W)
+                 if any(img.pixel(x, y) != bg for y in range(share_card.CARD_H))]
+        assert not spill, f"ink in columns {spill[:6]}… of the PNG for {sentence[:40]!r}"
+    print("test_no_card_ink_reaches_the_edge_of_the_image OK "
+          f"(0 ink columns > {edge} on {len(_longest_real_reasons()) + 1} cards)")
+
+
 def test_title_does_not_collide_with_the_stamp_on_a_degraded_long_name():
     """M10 (render): a long track name on a DEGRADED (stamped) session must fit in the width LEFT of
     the amber '(est)' stamp — the two share the header band. We measure the fitted title at its
@@ -607,6 +698,8 @@ if __name__ == "__main__":
     test_render_card_without_thumbnail_and_on_both_palettes()
     test_render_card_stamped_and_degraded_still_renders()
     test_title_fit_shrinks_then_elides_long_names_keeps_short_unchanged()
+    test_the_coaching_reason_is_fitted_like_every_other_line_on_the_card()
+    test_no_card_ink_reaches_the_edge_of_the_image()
     test_title_does_not_collide_with_the_stamp_on_a_degraded_long_name()
     test_map_plate_height_hugs_the_thumbnail_aspect()
     test_render_card_with_a_wide_landscape_thumbnail()

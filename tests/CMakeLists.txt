@@ -612,6 +612,18 @@ add_test(NAME test_map_key
 set_tests_properties(test_map_key PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The burned-in overlay's DIGITS (design wave 2, SW1-02). #196/#197 gave every column-aligning
+# surface in the app tabular figures; export_video._font stayed a bare QFont() with zero feature
+# tags, so the one output the user cannot re-render kept nine digit advances — and _paint_readout
+# places everything after the hero speed by that advance, sliding the unit label and the Δ cue
+# 147 px past the digit box at 1080p (296 at 4K) between two 3-digit speeds. Read from the
+# COMPOSITED pixels (what _paint_packed_frame hands the encoder), swept over every output height
+# the export offers, in the SHIPPED face via _qtapp.themed_app. Offscreen: it paints QImages.
+add_test(NAME test_export_typography
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_typography.py)
+set_tests_properties(test_export_typography PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The GLYPH guard (feat/icon-vocabulary, design wave 2 D1) — the third vocabulary, beside
 # test_design_system's dimensions and test_contrast's colour. The app had FOUR ways to draw a mark
 # and only theme.icon()'s Phosphor layer was designed: a literal Unicode character in a label falls
@@ -655,7 +667,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_coaching_panel_layout test_focus_cues test_pb_toast test_app_chrome
                         test_charts_panel test_lap_table_affordances test_export_gates
                         test_golden_hermetic test_design_system test_inline_styles
-                        test_first_run_path test_map_key test_video_view_compare)
+                        test_first_run_path test_map_key test_video_view_compare
+                        test_export_typography)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

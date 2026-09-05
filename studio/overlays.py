@@ -12,6 +12,7 @@ the tests, exactly as before."""
 from __future__ import annotations
 
 import os
+from typing import NamedTuple
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
@@ -33,6 +34,22 @@ from .theme import C
 # StudioWindow._set_demo_busy, which sets it — the width the button is floored at and the text that
 # fills it are the same fact, and a second copy of the string is a button that grows again.
 BUSY_DEMO_LABEL = "Fetching the demo clip…"
+# The welcome column's two action labels, owned here for the same reason: `column_metrics` floors
+# the loading card's Cancel at the width THIS string asks for, so the one button on screen does not
+# move between the two frames of one wait.
+OPEN_LABEL = "Open recording…"
+DEMO_LABEL = "Open demo"
+# The drop glyph's pixmap side. Named because the loading card reserves a leading row of exactly
+# this height for its busy bar, so the shared 22 px headline lands on the same baseline in both
+# frames instead of 52 px higher in the second one.
+DROP_GLYPH_PX = 36
+# How many lines the column's SECONDARY line reserves. MEASURED, not chosen: at the card's own
+# measure the welcome tagline takes two, and the loading card's one-line recording label reserves
+# the same two so the two columns are the same height — which is what makes the vertical centring
+# put their cards in the same place. tests/test_first_run_path.py asserts the tagline still takes
+# exactly this many, so a copy edit that changes it goes red here rather than silently un-anchoring
+# the seam.
+SECONDARY_LINES = 2
 
 # The PB toast's dismiss mark, in the app's ONE glyph vocabulary (PR #189: a character in a
 # user-visible string must be drawn by the app's own UI face, or it must be a theme.icon() pixmap).
@@ -41,6 +58,58 @@ BUSY_DEMO_LABEL = "Fetching the demo clip…"
 # `ph.x` at ICON_PX is **10x10, cy 0.0**: 2.8x the ink, centred, and drawn by a face something
 # chose. Named here so tests/test_glyph_vocabulary.py can bind to the button's own declaration.
 DISMISS_ICON = "ph.x"
+
+
+class ColumnMetrics(NamedTuple):
+    """The welcome column's own measurements, so the SECOND frame of the wait can be built on them
+    instead of on a second set of numbers.
+
+    Every field is read off a real widget under the live stylesheet (see `column_metrics`), never
+    re-typed: the two frames are two milliseconds apart, so anything the eye has to relocate has to
+    be derived from one source or it drifts the first time a label or a type step changes."""
+
+    glyph_h: int       # the leading glyph row — the drop icon's pixmap side
+    error_h: int       # the reserved error slot ABOVE the card, on the canvas
+    secondary_h: int   # the reserved height of the column's secondary line
+    primary_w: int     # what the PRIMARY action asks for ("Open recording…")
+    secondary_w: int   # what the secondary action is floored at (its busy label)
+
+
+def column_metrics() -> ColumnMetrics:
+    """Measure the welcome column from throwaway widgets polished against the live stylesheet.
+
+    Throwaway, and deliberately so: the second frame is built when the first one is already gone
+    (`_show_welcome` DESTROYS the view), so there is nothing left to ask. Polishing an unparented
+    widget is how `WelcomeView` already reads its own error-slot line height and its demo button's
+    busy width — the app stylesheet reaches every widget, shown or not, so `sizeHint()` here is the
+    size the real control takes."""
+    err = QLabel("")
+    err.setProperty("role", "WelcomeError")
+    err.ensurePolished()
+    sub = QLabel("")
+    sub.setProperty("role", "WelcomeSubtitle")
+    sub.ensurePolished()
+    primary = QPushButton(OPEN_LABEL)
+    primary.setProperty("variant", "primary")
+    primary.ensurePolished()
+    secondary = QPushButton(DEMO_LABEL)
+    secondary.ensurePolished()
+    return ColumnMetrics(
+        glyph_h=DROP_GLYPH_PX,
+        error_h=WelcomeView.ERROR_LINES * err.fontMetrics().height(),
+        secondary_h=SECONDARY_LINES * sub.fontMetrics().height(),
+        primary_w=primary.sizeHint().width(),
+        secondary_w=busy_button_width(secondary, BUSY_DEMO_LABEL),
+    )
+
+
+def busy_button_width(btn: QPushButton, busy_text: str) -> int:
+    """The width `btn` would ask for if its label were `busy_text` — its own sizeHint with the two
+    strings' advances swapped, so the style's padding is whatever the style says rather than a
+    number copied out of a stylesheet."""
+    fm = btn.fontMetrics()
+    return (btn.sizeHint().width()
+            + fm.horizontalAdvance(busy_text) - fm.horizontalAdvance(btn.text()))
 
 
 class WelcomeView(QWidget):
@@ -96,7 +165,8 @@ class WelcomeView(QWidget):
 
         # A small muted drop glyph above the wordmark, reinforcing "drop a file here" without hue.
         self.drop_icon = QLabel()
-        self.drop_icon.setPixmap(theme.icon("ph.download-simple", color=C.text_muted).pixmap(36, 36))
+        self.drop_icon.setPixmap(theme.icon("ph.download-simple", color=C.text_muted)
+                                 .pixmap(DROP_GLYPH_PX, DROP_GLYPH_PX))
         self.drop_icon.setAlignment(Qt.AlignCenter)
         zone.addWidget(self.drop_icon)
 
@@ -113,11 +183,11 @@ class WelcomeView(QWidget):
 
         buttons = QHBoxLayout()
         buttons.setAlignment(Qt.AlignCenter)
-        self.open_btn = QPushButton("Open recording…")
+        self.open_btn = QPushButton(OPEN_LABEL)
         self.open_btn.setProperty("variant", "primary")
         self.open_btn.setDefault(True)
         self.open_btn.clicked.connect(on_open)
-        self.demo_btn = QPushButton("Open demo")
+        self.demo_btn = QPushButton(DEMO_LABEL)
         self.demo_btn.clicked.connect(on_demo)
         # FLOOR THE DEMO BUTTON AT ITS BUSY WIDTH. `StudioWindow._set_demo_busy` swaps the label to
         # "Fetching the demo clip…" the moment it is clicked, which grew the button 98 -> 177 px;
@@ -125,10 +195,7 @@ class WelcomeView(QWidget):
         # widened and moved with it — 9,151 px changed, in response to a click on the OTHER button
         # (QA D4-06). Sizing the button for the widest thing it will ever say costs 79 px of a card
         # that is 89.9% empty canvas, and buys a row that does not move.
-        self.demo_btn.setMinimumWidth(
-            self.demo_btn.sizeHint().width()
-            + self.demo_btn.fontMetrics().horizontalAdvance(BUSY_DEMO_LABEL)
-            - self.demo_btn.fontMetrics().horizontalAdvance(self.demo_btn.text()))
+        self.demo_btn.setMinimumWidth(busy_button_width(self.demo_btn, BUSY_DEMO_LABEL))
         buttons.addWidget(self.open_btn)
         buttons.addWidget(self.demo_btn)
         zone.addLayout(buttons)
@@ -161,8 +228,7 @@ class WelcomeView(QWidget):
         # and was CLIPPED top and bottom inside the three lines reserved for it. Caught in the
         # window composite; a maximumWidth read would have reported the intended 427 px and passed.
         self.error_label.setFixedWidth(self.drop_zone.sizeHint().width())
-        self.error_label.setMinimumHeight(
-            self.ERROR_LINES * self.error_label.fontMetrics().height())
+        self.error_label.setMinimumHeight(column_metrics().error_h)
         policy = self.error_label.sizePolicy()
         policy.setRetainSizeWhenHidden(True)   # the slot exists whether or not it has anything in it
         self.error_label.setSizePolicy(policy)
@@ -233,6 +299,8 @@ class PBToast(QWidget):
         # None until then, and None again after dismiss(), which is what makes _place a no-op for
         # a card that is on its way out.
         self._host: QWidget | None = None
+        # A callable returning the rectangle this card must not cover, injected by show_for.
+        self._keepout = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
         lay.setSpacing(theme.SPACE_XXS)
@@ -354,8 +422,14 @@ class PBToast(QWidget):
             return parent.rect(), False
         return shown, True
 
-    def show_for(self, parent: QWidget):
+    def show_for(self, parent: QWidget, keepout=None):
         """Show the toast over `parent` and keep it on its anchor for as long as it lives.
+
+        `keepout` is an optional CALLABLE returning a QRect in `parent`'s coordinates that this
+        card must not cover, or None. A callable and not a rect, because the card is placed three
+        times over 120 ms and the thing being protected moves under it during that (`_place`).
+        The caller supplies it — this module stays Qt-only and knows nothing about laps or grids —
+        and see `_place` for what it is for.
 
         PLACING IT ONCE IS NOT ENOUGH, and that is what this method learned the hard way. The
         caller is `StudioWindow._load`, which runs `_build_ui()` — constructing a NEW CentralView
@@ -398,6 +472,7 @@ class PBToast(QWidget):
         auto-dismiss clock starts when the card becomes visible, so the wait is not taken out of
         the 6 s anyone gets to read it."""
         self._host = parent
+        self._keepout = keepout
         parent.installEventFilter(self)
         # Owned by this widget (never QTimer.singleShot's static form), so a card dismissed inside
         # the settle window takes its pending re-places to the grave with it.
@@ -439,10 +514,22 @@ class PBToast(QWidget):
         BOTTOM, not top, and that is the whole placement decision. The anchor region is a panel's
         BODY (`anchor_region`), so its top edge is immediately under that panel's header — and the
         lap grid puts its own column headers there, so a card inset from the top would land on a
-        header again, one level down. Its bottom edge has nothing structural on it: the rows a card
-        covers there are the ones furthest from the ★ best lap this card is about, and they scroll.
-        It also puts the card in the window's bottom-left, which is where a transient notification
-        conventionally lives, instead of centred on the splitter between two columns.
+        header again, one level down. It also puts the card in the window's bottom-left, which is
+        where a transient notification conventionally lives, instead of centred on the splitter
+        between two columns.
+
+        BUT NOT OVER THE ROW IT IS ANNOUNCING, WHICH THE BOTTOM DID NOT GUARANTEE. This method
+        used to justify the bottom edge with "the rows a card covers there are the ones furthest
+        from the ★ best lap this card is about, and they scroll" — and the app's own load path
+        falsifies both halves: it selects the session best and scrolls it into view, and a session
+        best is usually late, so the grid arrives at its scroll MAXIMUM with that row at the bottom.
+        Measured at 1440x900 the card covered all 27 px of it across 60.5 % of its width, including
+        the `1:08.771` Time cell the card exists to celebrate (68.5 % at 1280x800, 77.0 % at the
+        window's own 973x528 minimum), with the table already at scroll max so it could not be
+        scrolled clear. So the caller may name a rectangle to keep clear (`show_for(keepout=…)`)
+        and the card is LIFTED just above it — still bottom-anchored, still inside the region,
+        still covering nothing structural, and unchanged when there is nothing to avoid or no room
+        to avoid it.
 
         Clamped rather than trusted: a region shorter or narrower than the card (a panel dragged
         small) pins the card to the region's top-left and lets it overhang, because a celebration
@@ -460,9 +547,26 @@ class PBToast(QWidget):
         x = region.left() + max(0, (region.width() - self.width()) // 2)
         y = max(region.top() + theme.SPACE_M,
                 region.bottom() + 1 - theme.SPACE_M - self.height())
+        y = self._clear_of_keepout(region, x, y)
         self.move(max(0, min(x, max(0, parent.width() - self.width()))),
                   max(0, min(y, max(0, parent.height() - self.height()))))
         return settled
+
+    def _clear_of_keepout(self, region: QRect, x: int, y: int) -> int:
+        """`y`, raised to sit SPACE_M above the caller's keep-out rectangle when the card at
+        (x, y) would overlap it — and left exactly as it was when it would not, when the caller
+        named nothing, or when lifting it would push the card out of its own anchor region.
+
+        The last clause is why this returns a y rather than moving the card: a region too short to
+        hold both keeps today's placement, so the worst case is the behaviour that shipped rather
+        than a card half outside the panel it belongs to."""
+        avoid = self._keepout() if callable(self._keepout) else None
+        if avoid is None or avoid.isEmpty():
+            return y
+        if not QRect(x, y, self.width(), self.height()).intersects(avoid):
+            return y
+        lifted = avoid.top() - theme.SPACE_M - self.height()
+        return lifted if lifted >= region.top() + theme.SPACE_M else y
 
     @staticmethod
     def _dismiss_icon(hover: bool) -> QIcon:
