@@ -339,6 +339,10 @@ class _MapLegend(QWidget):
         self.brake_glyphs: list[tuple[str, str]] = []
         self._font = theme.ui_font(theme.CAPTION)
         self._title_font = theme.ui_font(theme.PANEL_HEADER, theme.W_SEMIBOLD)
+        # One-entry cache for the title caret (see _caret_pixmap): paintEvent runs whenever the
+        # plot under this plate repaints, so building a qtawesome icon in it would be a per-frame
+        # cost during playback.
+        self._caret_cache: dict = {}
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self._relayout()
 
@@ -426,9 +430,15 @@ class _MapLegend(QWidget):
         p.setFont(self._title_font)
         p.setPen(QPen(QColor(C.text_dim)))
         collapsed = self.painted_collapsed()
-        caret = "▾" if not collapsed else "▸"
-        p.drawText(QRectF(_LEGEND_PAD, _LEGEND_PAD, self._w - 2 * _LEGEND_PAD, _LEGEND_ROW_H),
-                   int(Qt.AlignVCenter | Qt.AlignLeft), f"{caret}  Map key")
+        # The caret sits in the SAME glyph column the key rows use, so the title word starts on the
+        # label column instead of 6 px short of it (it used to be a character inside the title).
+        caret = self._caret_pixmap(collapsed)
+        cw, ch = caret.width() / caret.devicePixelRatio(), caret.height() / caret.devicePixelRatio()
+        p.drawPixmap(QPointF(_LEGEND_PAD + (_LEGEND_GLYPH_W - cw) / 2.0,
+                             _LEGEND_PAD + (_LEGEND_ROW_H - ch) / 2.0), caret)
+        tx = _LEGEND_PAD + _LEGEND_GLYPH_W + _LEGEND_GAP
+        p.drawText(QRectF(tx, _LEGEND_PAD, self._w - tx - _LEGEND_PAD, _LEGEND_ROW_H),
+                   int(Qt.AlignVCenter | Qt.AlignLeft), "Map key")
         if collapsed:
             p.end()
             return
@@ -444,6 +454,22 @@ class _MapLegend(QWidget):
                        int(Qt.AlignVCenter | Qt.AlignLeft), label)
             y += _LEGEND_ROW_H
         p.end()
+
+    def _caret_pixmap(self, collapsed: bool):
+        """The title row's disclosure caret, as a Phosphor pixmap at this screen's pixel ratio.
+
+        It used to be a literal "▾"/"▸" in the title string. Neither mark is in Inter, so Qt fell
+        back to .AppleSystemUIFont and painted 3.2x4.5 px of ink at CAPTION — against 8.7x8.0 for
+        the "M" beside it, and 40% of ph.caret-down's 10x6 — for the one mark that says this plate
+        is a control at all. Cached one entry deep, keyed by state + ratio + tone, because this
+        widget repaints with the plot under it."""
+        key = (collapsed, round(self.devicePixelRatioF(), 3), C.text_dim)
+        px = self._caret_cache.get(key)
+        if px is None:
+            px = icon("ph.caret-right" if collapsed else "ph.caret-down", color=C.text_dim).pixmap(
+                QSize(theme.ICON_PX, theme.ICON_PX), self.devicePixelRatioF())
+            self._caret_cache = {key: px}
+        return px
 
     def _paint_glyph(self, p: QPainter, kind: str, cell: QRectF):
         """Draw one key glyph centred in `cell`, mirroring the on-map marker for that kind."""
