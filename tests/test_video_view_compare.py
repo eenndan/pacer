@@ -24,6 +24,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ...and this directory, so the D3 mode/tab-chain test can borrow test_central_view_realqt's
+# `_real_central_view` builder rather than growing a second copy of it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Build the panes with the inert media triplet (no decoder/audio device) but the FULL production
 # widget tree + signal wiring — set BEFORE importing the studio widgets (read once at construction).
@@ -34,7 +37,9 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
-from studio import chapters  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
+
+from studio import chapters, theme  # noqa: E402
 from studio.player_pane import PlayerPane  # noqa: E402
 from studio.video_view import PaneSpec, VideoView  # noqa: E402
 
@@ -434,18 +439,35 @@ def _overlap(cell):
 def test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time():
     """L8-01: at the app's own default size the compare strip's three children demanded 316 px in a
     243 px box, and QHBoxLayout resolved the shortfall by painting the Δ badge 67 px ON TOP of the
-    lap picker — with no tooltip, so the covered lap time was unrecoverable. The strip now budgets
-    its width: no two children may overlap at ANY width, and the picker always gets at least the
-    width its own content needs, so the lap TIME is never the thing that yields."""
-    # 620/520/380 px of VideoView = compare cells of 306/256/186 px, i.e. windows from ~1700 down to
-    # ~1050 px wide. 300 is below the width the lap label itself needs (168 px) — there the only
-    # promise left is that nothing is painted on top of anything else.
-    for width in (620, 520, 380, 300):
-        view = _compare_view(width)
+    lap picker — with no tooltip, so the covered lap time was unrecoverable. The strip budgets its
+    width: no two children may overlap at ANY width, and the picker always gets at least the width
+    its own content needs, so the lap TIME is never the thing that yields.
+
+    SWEPT AT 1 px, not sampled, because a one-size test is exactly what let a one-pixel elision
+    bug through in an earlier wave: the strip changes form somewhere in this range and the pixel it
+    changes at is the one worth checking. ONE view, resized — a VideoView per pixel is 460 decode
+    stacks and ~10 minutes of CI."""
+    view = _compare_view(760)
+    for width in range(300, 761, 1):
+        view.resize(width, 420)
+        # SIX turns, not two: setMinimumWidth inside a resizeEvent posts a LayoutRequest that is
+        # processed on a LATER turn, so a two-turn settle reads the PREVIOUS width's geometry and
+        # reports an overhang that never paints. (Measured: the tree converges in one layout pass.)
+        _settle(6)
         for side, cell in ((0, view._cell_a), (1, view._cell_b)):
             assert _overlap(cell) == 0, (
                 f"side {side} at view width {width}: the strip's children overlap by "
                 f"{_overlap(cell)} px (cell {cell.width()} px)")
+            # Nothing may paint outside its own PANE either — the cross-recording defect, where a
+            # 260 px constant floor on the picker put 21 px of combo past a 254 px cell.
+            for name, w in (("picker", cell.picker), ("badge", cell.badge),
+                            ("role", cell.caption)):
+                if not w.isVisibleTo(cell):
+                    continue
+                assert w.geometry().right() < cell.width(), (
+                    f"side {side} at view width {width}: the {name} paints "
+                    f"{w.geometry().right() + 1 - cell.width()} px past its own "
+                    f"{cell.width()} px pane")
             if width < 380:
                 continue
             # The lap text is the one thing that never yields: the picker got at least its own
@@ -458,9 +480,8 @@ def test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time():
             fm = cell.caption.fontMetrics()
             assert fm.horizontalAdvance(cell.caption.text()) <= cell.caption.width(), (
                 f"side {side} at view width {width}: the role caption is clipped")
-        _ALIVE.append(view)
-    print("test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time OK: 0 px overlap at "
-          "620/520/380/300 px with the lap time intact")
+    print("test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time OK: 0 px overlap and "
+          "0 px overhang at every width 300..760, with the lap time intact from 380")
 
 
 def test_l8_01_narrow_strip_falls_back_to_the_short_role_word():
@@ -470,13 +491,200 @@ def test_l8_01_narrow_strip_falls_back_to_the_short_role_word():
     wide = _compare_view(620)
     assert wide._cell_b.caption.text() == "REFERENCE"
     _ALIVE.append(wide)
-    narrow = _compare_view(340)
+    narrow = _compare_view(240)
     assert narrow._cell_b.caption.text() == "REF", narrow._cell_b.caption.text()
     assert narrow._cell_b.caption.toolTip().startswith("REFERENCE — "), (
         narrow._cell_b.caption.toolTip())
     assert _overlap(narrow._cell_b) == 0
     _ALIVE.append(narrow)
     print("test_l8_01_narrow_strip_falls_back_to_the_short_role_word OK")
+
+
+def test_the_compare_strip_is_a_bar_and_both_panes_wear_the_same_one():
+    """D3/V-03 + V-06. The strip was two loose labels and a combo in a bare grid: a `#PaneCaption`
+    wearing a surface-coloured square beside a `#PaneBadge` compositing the window CANVAS, three
+    children 21/28/21 px tall with no vertical alignment, and a 5 px inset / 6 px spacing that were
+    on no scale. And the form was chosen PER CELL from each pane's own role word and picker
+    content, so the two panes could disagree — two side-by-side videos starting at different y.
+
+    Asserted here as four facts, at four widths, in the shape they are now true BY CONSTRUCTION:
+    one themed bar per pane, both the same height, both the same picker width, everything on the
+    scale."""
+    from studio.widgets import PanelHeader
+    for width in (760, 620, 520, 400):
+        view = _compare_view(width)
+        a, b = view._cell_a, view._cell_b
+        for side, cell in ((0, a), (1, b)):
+            strip = cell.strip
+            assert strip.property("role") == "PanelHeader", side
+            assert strip.testAttribute(Qt.WA_StyledBackground), (
+                f"side {side}: the strip is a QWidget SUBCLASS, so Qt paints its QSS box only when "
+                f"told to — without this it composites the canvas and says nothing")
+            m = strip.layout().contentsMargins()
+            assert (m.left(), m.top(), m.right(), m.bottom()) == (
+                theme.SPACE_S, theme.SPACE_XXS, theme.SPACE_S, theme.SPACE_XXS), (side, m)
+            assert strip.layout().horizontalSpacing() == theme.SPACE_S, side
+            assert strip.layout().verticalSpacing() == theme.SPACE_XXS, side
+            # the role word no longer wears a fill of its own; the bar behind it provides one
+            assert cell.caption.property("role") == "BarLabel", side
+            assert cell.caption.objectName() != "PaneCaption", side
+        assert a.strip.height() == b.strip.height(), (
+            f"at {width} px the two panes' strips are {a.strip.height()} and {b.strip.height()} px "
+            f"— their videos start at different y")
+        assert a.strip.two_row == b.strip.two_row, (width, a.strip.two_row, b.strip.two_row)
+        assert a.strip.height() == a.strip.height_for(bool(a.strip.two_row)), (
+            "the strip's height is DECLARED, not accumulated")
+        assert a.picker.minimumWidth() == b.picker.minimumWidth(), (
+            f"at {width} px the pickers floor at {a.picker.minimumWidth()} and "
+            f"{b.picker.minimumWidth()} px — each is still measuring its own widest item")
+        # one row is PANEL_HDR_H, the same token the panel header above it takes
+        if not a.strip.two_row:
+            assert a.strip.height() == theme.PANEL_HDR_H, a.strip.height()
+        _ALIVE.append(view)
+    # ...and PanelHeader is what it is MODELLED on, so the two must not drift apart.
+    assert PanelHeader.CONTENT_H == theme.PANEL_HDR_H - 2 * theme.SPACE_XXS
+    print("test_the_compare_strip_is_a_bar_and_both_panes_wear_the_same_one OK")
+
+
+def test_the_picker_is_capped_by_its_pane_not_by_a_constant():
+    """D3/V-02 (HIGH). `set_lap_choices` floored the picker at `max(150, min(sizeHint, 260))`, and
+    Qt honours an explicit minimumWidth OVER the space the layout has, so a cross-recording pane B
+    carrying `GX010099 · Tuesday evening · lap 1 · 0:37.955` stood 260 px wide inside a 254 px
+    cell: 21 px of combo past its own pane with the drop-arrow sliced off, and at 1280x800 its
+    minimum dragged the whole strip wider than the cell and clipped `REFERENCE` to `REFEREN` and
+    the Δ badge to `ame lap`.
+
+    The label here is the exact string that produced those numbers. The cap is the CELL now, so the
+    combo elides its own item (gracefully, with the full text in its tooltip) instead of painting
+    past the pane and clipping its neighbours mid-word."""
+    label = "GX010099 · Tuesday evening · lap 1 · 0:37.955"
+    view = _compare_view(760, labels_b=(label,))
+    for width in range(300, 761, 1):
+        view.resize(width, 420)
+        # SIX turns, not two: setMinimumWidth inside a resizeEvent posts a LayoutRequest that is
+        # processed on a LATER turn, so a two-turn settle reads the PREVIOUS width's geometry and
+        # reports an overhang that never paints. (Measured: the tree converges in one layout pass.)
+        _settle(6)
+        cell = view._cell_b
+        assert cell.picker.minimumWidth() <= cell.width(), (
+            f"at view width {width} the picker's own floor ({cell.picker.minimumWidth()} px) "
+            f"exceeds the {cell.width()} px pane it lives in")
+        assert cell.picker.geometry().right() < cell.width(), (
+            f"at view width {width} the picker paints "
+            f"{cell.picker.geometry().right() + 1 - cell.width()} px past its own pane")
+        # the role word and the Δ keep their full width whatever the lap label does
+        fm = cell.caption.fontMetrics()
+        assert fm.horizontalAdvance(cell.caption.text()) <= cell.caption.width(), width
+        assert cell.badge.width() >= cell.badge.sizeHint().width(), width
+        # the full label is always recoverable
+        assert label in cell.picker.toolTip(), cell.picker.toolTip()
+    print("test_the_picker_is_capped_by_its_pane_not_by_a_constant OK: 0 px overhang at every "
+          "width 300..760 with a 273 px lap label")
+
+
+def test_the_transport_is_on_the_bar_system():
+    """D3/V-01 + V-11. The video panel's control zone was the only chrome in the window that never
+    joined the bar system: three rows at 26 / 28 / 21 px, painted on the window CANVAS, with a 0 px
+    gutter (▶'s left edge at x=0 while the `VIDEO` label 300 px above was inset 8), SPACE_XS
+    between every control so two playback buttons and three view toggles read as one 4 px run, and
+    a full-width readout band whose centre drifted to x=716 of a 1432 px bar when maximized.
+
+    Asserted against the OTHER bars in the app rather than against numbers typed here, because
+    "agrees with the system" is the actual claim: whatever a PanelToolbar is, this is one."""
+    from studio.widgets import PanelToolbar
+    _themed()
+    view = VideoView(_cmap("PRIMARY"))
+    view.resize(560, 420)
+    view.show()
+    _settle()
+    _ALIVE.append(view)
+
+    assert isinstance(view.transport, PanelToolbar), type(view.transport).__name__
+    assert view.transport.height() == theme.TOOLBAR_H, view.transport.height()
+    assert view.scrub_row.height() == theme.TOOLBAR_H, view.scrub_row.height()
+    for name, bar in (("scrub_row", view.scrub_row), ("transport", view.transport)):
+        assert bar.property("role") == "PanelHeader", name
+        assert bar.testAttribute(Qt.WA_StyledBackground), (
+            f"{name} carries the themed box but was never told to paint it")
+        m = bar.layout().contentsMargins()
+        assert (m.left(), m.top(), m.right(), m.bottom()) == (
+            theme.SPACE_S, theme.SPACE_XXS, theme.SPACE_S, theme.SPACE_XXS), (name, m)
+    # THE GUTTER: the first control on each bar starts where the panel's own identity does.
+    for name, w in (("play", view.play_btn), ("slider", view.slider)):
+        assert w.mapTo(view, w.rect().topLeft()).x() == theme.SPACE_S, (
+            f"{name} starts at x={w.mapTo(view, w.rect().topLeft()).x()}, not SPACE_S")
+    # GROUPING: SPACE_XS inside a group, SPACE_S between the groups (▶🔇 timecode ‹ › ⌾ Compare ⤢).
+    gap = view.mute_btn.x() - (view.play_btn.x() + view.play_btn.width())
+    assert gap == theme.SPACE_XS, f"within the playback group the gap is {gap}, not SPACE_XS"
+    across = view.readout.x() - (view.mute_btn.x() + view.mute_btn.width())
+    assert across == theme.SPACE_S, f"between groups the gap is {across}, not SPACE_S"
+    # THE TIMECODE IS INLINE, beside the ▶ it describes — not a band of its own under the buttons.
+    assert view.readout.parentWidget() is view.transport, view.readout.parentWidget()
+    assert view.readout.height() == theme.CTRL_H, view.readout.height()
+    # ...and it stays put when the panel gets very wide (V-11: the cluster in the corner).
+    view.resize(1432, 420)
+    _settle()
+    assert view.readout.x() < view.width() // 4, (
+        f"maximized, the timecode sits at x={view.readout.x()} of {view.width()} — it has drifted "
+        f"away from the transport it belongs to")
+    assert (view.fullscreen_btn.x() + view.fullscreen_btn.width()
+            == view.width() - theme.SPACE_S), (
+        "the view toggles must ride the bar's right edge, not stay in a cluster at x=0")
+    print("test_the_transport_is_on_the_bar_system OK")
+
+
+def test_the_panel_says_it_changed_mode_and_the_bar_says_what_it_spans():
+    """D3/V-04 + V-07, on the REAL CentralView (the chip and the tab chain are the shell's).
+
+    Entering compare replaces one video with two, re-ranges the scrub bar from the whole session to
+    a single lap and empties its 22-tick ruler — and the identity row went on reading exactly
+    `VIDEO`, while the bar looked pixel-identical. `PanelHeader`'s `status` slot, which exists for
+    precisely this, was empty. And the two lap pickers were tab stops 16 and 17 of 17: sixteen
+    presses from the ⛶ 40 px above them, because a lazily-created child is appended to the END of
+    the top-level focus chain."""
+    from test_central_view_realqt import _real_central_view
+    view = _real_central_view()[0]
+    view.resize(1280, 800)
+    view.show()
+    _settle(8)
+    chip = view._compare_chip
+    assert chip in view._video_header.status, "the COMPARING chip is not in the status slot"
+    assert not chip.isVisible(), "nothing is being compared yet"
+    before_span = view.video.slider.toolTip()
+    n_before = len(view.video.slider._lap_ticks)
+
+    view.compare.on_toggled(True)
+    _settle(10)
+    assert chip.isVisible(), "the panel holds two videos and its identity row does not say so"
+    assert chip.text() == "COMPARING", chip.text()
+    # THE BAR SAYS WHAT IT SPANS. The ruler is empty here (one lap, no boundaries to mark), which
+    # is exactly the state in which the old tooltip lost its only clue and gained nothing.
+    tip = view.video.slider.toolTip()
+    assert "compared lap" in tip, f"the re-ranged scrub bar says nothing about its span: {tip!r}"
+    assert tip != before_span, "the tooltip is identical before and after the range changed"
+    assert len(view.video.slider._lap_ticks) == 0, "compare confines the bar to one lap"
+    # THE TAB CHAIN. The two pickers follow the video panel's own ⛶ immediately.
+    a, b = view.video.compare_pickers()
+    assert a is not None and b is not None
+    view._video_max_btn.setFocus()
+    _settle(2)
+    view.focusNextPrevChild(True)
+    _settle(2)
+    assert _APP.focusWidget() is a, (
+        f"one Tab from the video ⛶ must reach pane A's picker, got "
+        f"{type(_APP.focusWidget()).__name__}")
+    view.focusNextPrevChild(True)
+    _settle(2)
+    assert _APP.focusWidget() is b, "the second Tab must reach pane B's picker"
+
+    view.compare.on_toggled(False)
+    _settle(10)
+    assert not chip.isVisible(), "the chip outlived the compare it was about"
+    assert "compared lap" not in view.video.slider.toolTip(), view.video.slider.toolTip()
+    assert len(view.video.slider._lap_ticks) == n_before, "the whole-session ruler did not come back"
+    view.hide()
+    _ALIVE.append(view)
+    print("test_the_panel_says_it_changed_mode_and_the_bar_says_what_it_spans OK")
 
 
 def test_l8_02_lap_ruler_decimates_instead_of_hatching():
@@ -756,6 +964,12 @@ def _run_all():
     # apply the real theme, so they run after the geometry-agnostic wiring tests above.
     test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time()
     test_l8_01_narrow_strip_falls_back_to_the_short_role_word()
+    # D3 (design wave 2): the pane strip is a themed BAR, one form for both panes, and the picker's
+    # width floor is capped by the pane it lives in rather than by a constant.
+    test_the_compare_strip_is_a_bar_and_both_panes_wear_the_same_one()
+    test_the_picker_is_capped_by_its_pane_not_by_a_constant()
+    test_the_transport_is_on_the_bar_system()
+    test_the_panel_says_it_changed_mode_and_the_bar_says_what_it_spans()
     test_l8_02_lap_ruler_decimates_instead_of_hatching()
     test_l8_03_fullscreen_button_is_disabled_while_comparing()
     test_l8_07_scrub_slider_clears_the_hit_target_floor()

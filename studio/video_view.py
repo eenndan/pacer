@@ -22,11 +22,17 @@ The slider + emitted position are GLOBAL session ms (multi-chapter summed); the 
 global<->chapter and switches sources under the hood. In compare mode the slider spans lap A's
 window via the primary pane's clamp.
 
-Transport layout: the scrub bar has its own full-width row under the video (a media-player
-transport, not a control squeezed in beside five buttons) and the buttons sit under it. Every
-piece of chrome here is width-budgeted rather than assumed to fit — see `_LapRulerSlider.tick_plan`
-(the ruler decimates to the pixels it has) and `_PaneCell._fit_strip` (the compare strip picks a
-form that fits instead of letting Qt overlap the boxes).
+Transport layout: TWO BARS under the video, both on the app's bar system (`PanelHeader`'s surface
++ hairline, `SPACE_S` gutters, `TOOLBAR_H`) — the scrub bar has a row to itself (a media-player
+transport, not a control squeezed in beside five buttons) and the transport is a `PanelToolbar`
+holding two GROUPS around its stretch: playback (▶ 🔇) and the timecode on the left, the view
+toggles (g-meter · Compare · ⤢) on the right. Before this, the video panel was the only control
+zone in the window that was not on a bar: three rows at 26/28/21 px painted on the window canvas
+with a 0 px gutter, against six other bars that agreed to the pixel.
+
+Every piece of chrome here is width-budgeted rather than assumed to fit — see
+`_LapRulerSlider.tick_plan` (the ruler decimates to the pixels it has) and `_PaneStrip` (the
+compare strip picks a form that fits instead of letting Qt overlap the boxes).
 """
 
 from __future__ import annotations
@@ -51,7 +57,7 @@ from PySide6.QtWidgets import (
 
 from . import chapters, theme
 from .player_pane import PlayerPane
-from .widgets import ToggleButton, icon_button
+from .widgets import PanelToolbar, ToggleButton, icon_button
 
 # The transport bar's own icon-button size constants (_ICON_PX 18 / _ICON_BTN 32x30) are gone: the
 # app has ONE icon button now (widgets.icon_button, theme.ICON_BTN, theme.ICON_PX), and these were
@@ -62,18 +68,6 @@ from .widgets import ToggleButton, icon_button
 # 0 = primary (left, drives telemetry); 1 = secondary (right, video-only). Used by the lap-picker
 # repoint signal so app knows which side to repoint.
 PRIMARY, SECONDARY = 0, 1
-
-# Horizontal inset (px) inside each compare cell so the native QVideoWidget surface (which on macOS
-# composites above sibling chrome) doesn't swallow the splitter handle's mouse events.
-_PANE_INSET = 5
-
-# Width budget (px) for each pane's lap picker — the SOLE home of the lap text. The floor is the
-# picker's OWN content width (set_lap_choices measures it), never a magic number, so the lap TIME
-# can't be elided away; _PICKER_MAX_W caps a pathological label so one picker can't pin the strip.
-_PICKER_MIN_W = 150
-_PICKER_MAX_W = 260
-# Gap (px) between the compare strip's children, on both of its rows.
-_STRIP_SPACING = 6
 
 # The scrub bar is the video panel's primary hit target and the lap ruler's canvas: it gets its own
 # full-width row under the video, a HIT_MIN handle and a widget one sub-step taller (the 24px hit
@@ -139,10 +133,26 @@ class _LapRulerSlider(QSlider):
     def __init__(self, orientation):
         super().__init__(orientation)
         self._lap_ticks: list[int] = []  # boundary values in slider units (ms), sorted/unique
+        self._span_note = ""             # what this bar currently spans, when that is not obvious
         # The decimation step (and so the tooltip) is a function of the range and the width; both
         # change under the ruler as chapters load and the panel is resized.
         self.rangeChanged.connect(lambda *_: self._refresh_tooltip())
         self._refresh_tooltip()
+
+    def set_span_note(self, note: str) -> None:
+        """Say WHAT THIS BAR MEASURES when that changes under the user (empty = the obvious case).
+
+        Entering compare re-ranges the slider from the whole session to one lap — 1729 s to 68.7 s
+        on the fixture — and clears every one of its 22 ruler ticks, and the bar looked identical
+        before and after: same length, same handle, same groove, and the only visible difference
+        was that the tooltip's "the ticks mark every lap boundary" clause quietly disappeared. This
+        is the smallest honest fix and it uses the instrument the ruler already uses for exactly
+        this job: the tooltip is where this bar says what it is showing. The decimation ladder and
+        the `bracketable` gate are untouched — they are measured and correct."""
+        note = str(note or "")
+        if note != self._span_note:
+            self._span_note = note
+            self._refresh_tooltip()
 
     def set_lap_ticks(self, values: list[int]) -> None:
         """Set lap-boundary ticks (global ms); out-of-range values clamp at paint, empty clears.
@@ -239,6 +249,8 @@ class _LapRulerSlider(QSlider):
         at a decimated step the user has to be told they are not seeing every lap. The bracket
         clause is added only when a bracket can actually be drawn at this width."""
         tip = _SEEK_TIP
+        if self._span_note:
+            tip = f"{tip} · {self._span_note}"
         if self._lap_ticks:
             plan = self.tick_plan()
             step = plan["step"]
@@ -277,18 +289,111 @@ class _LapRulerSlider(QSlider):
         painter.end()
 
 
-class _PaneCell(QWidget):
-    """Compare-pane chrome: a strip (fixed role caption · lap picker · Δ badge) above the PlayerPane.
-    Owns no playback state. The lap identity lives ONLY in the picker; the caption is a fixed role
-    word, the badge yields width first. Selecting a lap emits `repointRequested(lap_id)`.
+class _PaneStrip(QWidget):
+    """One compare pane's IDENTITY BAR: the role word · the lap picker · the Δ badge.
 
-    THE STRIP IS BUDGETED, NOT WISHED FOR (`_fit_strip`). Three width-inflexible children in one
-    QHBoxLayout demanded 316 px inside the 243 px a pane gets at the app's own default window size,
-    and Qt resolves that shortfall by OVERLAPPING the boxes — the Δ badge painted on top of the lap
-    time, unrecoverably. So the strip is a QGridLayout that measures what it has and picks a form
-    that fits: one row while all three fit, otherwise the picker drops to a full-width second row
-    (role + Δ above it), and if even that is too narrow the role word goes to its short form. The
-    lap time is the one thing that never yields."""
+    It is the compare-mode twin of `widgets.PanelHeader` and wears exactly its chrome — the themed
+    `role="PanelHeader"` surface + bottom hairline, `SPACE_S / SPACE_XXS` margins, `SPACE_S`
+    spacing, every child vertically centred, a DECLARED height. Before this it was two loose labels
+    and a combo dropped into a bare grid: `QLabel#PaneCaption` wore a square surface fill,
+    `QLabel#PaneBadge` beside it composited the window CANVAS, the three children stood 21/28/21 px
+    tall with no vertical alignment, and the container's 5 px inset / 6 px spacing were off the
+    spacing scale — one strip, two backgrounds, three heights and two invented numbers.
+
+    WHY IT IS NOT LITERALLY A `PanelHeader`, which is what the measurement proposed. PanelHeader is
+    ONE declared row, and these three children do not fit one row at any width the app can be
+    driven to except maximized. Measured under the shipped theme, with the app's own labels:
+    `THIS LAP` 50 px + the lap picker's 168 px content + `Δ -0.19 s` 83 px + 5 x SPACE_S of margins
+    and spacing = **333 px** (347 for `REFERENCE`), against a compare cell of **253 px** at the
+    app's default 1440x900, **224** at 1280x800 and **200** at the window's own 973x528 minimum.
+    Only the maximized panel (713 px) fits. Deleting the width budget in favour of one row would
+    have restored exactly the L8-01 defect it was written for — Qt resolves a shortfall by
+    OVERLAPPING the boxes, painting the Δ on top of the lap time — or, if the picker's minimum is
+    capped to the deficit instead, elided the lap TIME out of the one control that carries it, at
+    every window size the app ships at.
+
+    So the budget survives, and it is now the only thing that varies: two DECLARED forms, chosen
+    ONCE for both panes (see `VideoView._fit_strips`) so the two videos always start at the same y.
+
+      * one row  — `theme.PANEL_HDR_H`, the height of the panel header this is the pane-level twin
+        of, which also clears the CTRL_H picker inside it.
+      * two rows — role + Δ on a label row, the picker full-width beneath it: the same SPACE_XXS
+        margins and row gap, plus one CTRL_H control. A derivation, not a constant, so the label
+        row is whatever this app's font stack actually resolves (the shape `theme.focus_pad` and
+        `widgets.space_at_least` already use).
+
+    The lap time and the Δ never yield; the role word yields to its short form, then goes (it is
+    always in the tooltip, and pane A is always the left one).
+    """
+
+    #: Columns: 0 role · 1 picker · 2 elastic gap · 3 Δ (pinned right). Which cells are occupied is
+    #: `set_two_row`'s call; the gap column carries the stretch in both forms.
+    _GAP_COL = 2
+
+    def __init__(self, role_label: QLabel, picker: QComboBox, badge: QLabel, parent=None):
+        super().__init__(parent)
+        # The themed bar: surface + the bottom hairline every other bar in the window wears...
+        self.setProperty("role", "PanelHeader")
+        # ...AND THE BAR HAS TO BE TOLD TO PAINT IT. QStyleSheetStyle::polish sets
+        # WA_StyledBackground only for a BARE QWidget (`metaObject() == QWidget::staticMetaObject`);
+        # a subclass — which this is — honours neither the background nor the border and says
+        # nothing. That silently flattened four panel headers and both toolbars once (#185).
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.role_label, self.picker, self.badge = role_label, picker, badge
+        grid = QGridLayout(self)
+        grid.setContentsMargins(theme.SPACE_S, theme.SPACE_XXS, theme.SPACE_S, theme.SPACE_XXS)
+        grid.setHorizontalSpacing(theme.SPACE_S)
+        grid.setVerticalSpacing(theme.SPACE_XXS)
+        grid.setColumnStretch(self._GAP_COL, 1)
+        self._grid = grid
+        self._two_row: bool | None = None
+        self.set_two_row(False)
+
+    def height_for(self, two_row: bool) -> int:
+        """The strip's DECLARED height in each form — see the class prose for why there are two."""
+        if not two_row:
+            return theme.PANEL_HDR_H
+        return (2 * theme.SPACE_XXS + self.role_label.sizeHint().height()
+                + theme.SPACE_XXS + theme.CTRL_H)
+
+    def set_two_row(self, two_row: bool) -> None:
+        """Mount the three children in the one-row or two-row form and pin the matching height.
+        Idempotent, so a resize storm re-parents nothing."""
+        if two_row == self._two_row:
+            return
+        self._two_row = two_row
+        for wdg in (self.role_label, self.picker, self.badge):
+            self._grid.removeWidget(wdg)
+        # AlignVCenter is load-bearing, for the reason PanelHeader._add gives: without it a grid
+        # stretches any child whose vertical policy allows it to the full row height, which is how
+        # a 21 px caption, a 28 px combo and a 21 px badge shipped as three different heights on
+        # what is meant to be one line.
+        self._grid.addWidget(self.role_label, 0, 0, Qt.AlignVCenter)
+        self._grid.addWidget(self.badge, 0, 3, Qt.AlignVCenter)
+        if two_row:
+            self._grid.addWidget(self.picker, 1, 0, 1, 4, Qt.AlignVCenter)
+        else:
+            self._grid.addWidget(self.picker, 0, 1, Qt.AlignVCenter)
+        self.setFixedHeight(self.height_for(two_row))
+
+    @property
+    def two_row(self) -> bool | None:
+        return self._two_row
+
+
+class _PaneCell(QWidget):
+    """Compare-pane chrome: a `_PaneStrip` identity bar above the PlayerPane. Owns no playback
+    state. The lap identity lives ONLY in the picker; the role label is a fixed word, the badge
+    yields width first. Selecting a lap emits `repointRequested(lap_id)`.
+
+    THE STRIP IS FULL-BLEED IN THE CELL and the VIDEO is what carries the horizontal inset, which
+    is a change of which child pays for what. The inset exists so the native QVideoWidget surface
+    (which on macOS composites above sibling chrome) cannot swallow the splitter handle's mouse
+    events — that is a property of the VIDEO, never of a QLabel — and while the strip paid it too,
+    pane A's role word sat 5 px from the panel edge against the `VIDEO` label's 8 px directly above
+    it. Full-bleed, each pane's strip is a panel header one level down: its identity is SPACE_S
+    from its own pane's left edge and its Δ SPACE_S from the right, exactly as `VIDEO` and ⛶ are.
+    """
 
     repointRequested = Signal(int)  # the newly-picked lap id for this side
 
@@ -304,18 +409,27 @@ class _PaneCell(QWidget):
         self._labels: list[str] = []   # last-applied picker item labels (guards the repopulate)
         self._role_full, self._role_short = self._ROLES[side]
 
-        # fixed role word; Fixed size so the picker (not it) grows
+        # The fixed role word. A BarLabel — the app's "a label inside a bar" role, transparent,
+        # because the bar behind it now provides the surface. It was a `#PaneCaption`, whose rule
+        # painted a surface-coloured square around the word while the identically-typed Δ beside it
+        # was transparent and composited canvas: one strip, two backgrounds.
         self.caption = QLabel(self._role_full)
-        self.caption.setObjectName("PaneCaption")
+        self.caption.setProperty("role", "BarLabel")
         self.caption.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self.caption.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        # BOTH panes' role words reserve the width of the WIDEST of them, so the two strips share
+        # one column grid: in a side-by-side comparison the pickers beside them then start at the
+        # same x and end at the same x, instead of pane A's floating 14 px right of pane B's
+        # because "THIS LAP" is shorter than "REFERENCE".
+        self.caption.setMinimumWidth(max(
+            self.caption.fontMetrics().horizontalAdvance(full)
+            for full, _short in self._ROLES.values()))
         self.caption.setToolTip(self._role_full)
 
-        # sole home of lap identity; the width floor is re-derived from its own content in
-        # set_lap_choices so the lap TIME can never be elided out of it.
+        # sole home of lap identity; the width floor is re-derived in set_lap_choices from its own
+        # content AND from the cell it has to fit inside (see picker_room).
         self.picker = QComboBox()
         self.picker.setToolTip("Pick the lap shown in this pane")
-        self.picker.setMinimumWidth(_PICKER_MIN_W)
         self.picker.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.picker.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.picker.currentIndexChanged.connect(self._on_pick)
@@ -329,65 +443,48 @@ class _PaneCell(QWidget):
         self._badge_colour: str | None = None
         self._badge_text = "Δ —"   # last-applied badge text (guards the per-tick setText)
 
-        # Columns: 0 caption · 1 picker · 2 elastic gap · 3 badge (pinned right). Which cells are
-        # occupied is _fit_strip's call; the gap column carries the stretch in both forms.
-        self._strip = QGridLayout()
-        self._strip.setContentsMargins(0, 0, 0, 0)
-        self._strip.setHorizontalSpacing(_STRIP_SPACING)
-        self._strip.setVerticalSpacing(2)
-        self._strip.setColumnStretch(2, 1)
-        self._two_row: bool | None = None
-        self._apply_strip_rows(False)
+        self.strip = _PaneStrip(self.caption, self.picker, self.badge)
 
         lay = QVBoxLayout(self)
-        # horizontal inset so the native video surface doesn't swallow the splitter handle (see _PANE_INSET).
-        lay.setContentsMargins(_PANE_INSET, 0, _PANE_INSET, 0)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addLayout(self._strip)
-        lay.addWidget(self.pane, 1)
+        lay.addWidget(self.strip)
+        # The VIDEO carries the handle inset, not the whole cell (see the class prose). A LAYOUT,
+        # not a wrapper widget: the theme's base rule paints every bare QWidget canvas-coloured.
+        video_row = QHBoxLayout()
+        video_row.setContentsMargins(theme.SPACE_XS, 0, theme.SPACE_XS, 0)
+        video_row.setSpacing(0)
+        video_row.addWidget(self.pane)
+        lay.addLayout(video_row, 1)
 
     # ------------------------------------------------------------------ the strip's width budget
-    def _apply_strip_rows(self, two_row: bool) -> None:
-        """Mount the strip's three children in the one-row or two-row form. Idempotent (a no-op when
-        the form is already the live one), so a resize storm re-parents nothing."""
-        if two_row == self._two_row:
-            return
-        self._two_row = two_row
-        for wdg in (self.caption, self.picker, self.badge):
-            self._strip.removeWidget(wdg)
-        self._strip.addWidget(self.caption, 0, 0)
-        self._strip.addWidget(self.badge, 0, 3)
-        if two_row:
-            self._strip.addWidget(self.picker, 1, 0, 1, 4)   # full width on its own row
-        else:
-            self._strip.addWidget(self.picker, 0, 1)
+    @property
+    def two_row(self) -> bool | None:
+        return self.strip.two_row
 
     def _caption_w(self, text: str) -> int:
-        """What the caption label would be WIDE if it carried `text` (its QSS padding included)."""
-        fm = self.caption.fontMetrics()
-        pad = self.caption.sizeHint().width() - fm.horizontalAdvance(self.caption.text())
-        return fm.horizontalAdvance(text) + max(pad, 0)
+        """What the role label would be WIDE if it carried `text` — never below the reserved
+        widest-role width, which is the column both panes share."""
+        return max(self.caption.fontMetrics().horizontalAdvance(text),
+                   self.caption.minimumWidth())
 
-    def _fit_strip(self) -> None:
-        """Pick the strip form that FITS the width this cell actually has — the fix for the badge
-        painting over the lap time. Depends only on the cell width and font metrics (never on the
-        children's current geometry), so it converges in one pass and cannot oscillate.
+    def strip_need(self) -> int:
+        """The width this cell's strip needs to hold all three children on ONE row: the role word,
+        the picker's own content, the Δ, and the bar's five SPACE_S gaps (two margins + three
+        spacings, the middle one collapsed onto the elastic column). `VideoView._fit_strips` takes
+        the max over both panes so the two never disagree about the form."""
+        return (self._caption_w(self._role_full) + self.picker.sizeHint().width()
+                + self.badge.sizeHint().width() + 5 * theme.SPACE_S)
 
-        The ladder, in the order things yield: one row → the picker takes a full-width second row →
-        the role word goes short → the role word goes (it is still in the tooltip, and pane A is
-        always the left one). The lap time and the Δ never yield."""
-        avail = self.width() - 2 * _PANE_INSET
-        if avail <= 0:
-            return
-        gaps = 3 * _STRIP_SPACING          # the grid keeps its column spacing even where a cell is empty
-        full = self._caption_w(self._role_full)
-        short = self._caption_w(self._role_short)
+    def apply_strip_form(self, two_row: bool) -> None:
+        """Mount the form `VideoView` chose for BOTH panes, and drop the role word to its short
+        form (then hide it) if even the two-row strip cannot spare its width."""
+        gaps = 5 * theme.SPACE_S
+        avail = self.width()
         badge = self.badge.sizeHint().width()
-        picker = self.picker.minimumWidth()
-        one_row = avail >= full + picker + badge + gaps
-        if one_row or avail >= full + badge + gaps:
+        if avail >= self._caption_w(self._role_full) + badge + gaps:
             role, shown = self._role_full, True
-        elif avail >= short + badge + gaps:
+        elif avail >= self._caption_w(self._role_short) + badge + gaps:
             role, shown = self._role_short, True
         else:
             role, shown = self._role_short, False   # too narrow even for "REF" beside the Δ
@@ -395,15 +492,46 @@ class _PaneCell(QWidget):
             self.caption.setText(role)
         if self.caption.isVisibleTo(self) != shown:
             self.caption.setVisible(shown)
-        self._apply_strip_rows(not one_row)
+        self.strip.set_two_row(two_row)
+
+    def picker_room(self) -> int:
+        """How much width THIS cell can give its picker — the cap that replaced a constant.
+
+        The shipped floor was `max(150, min(sizeHint, 260))` and Qt honours an explicit
+        `minimumWidth` OVER the space the layout has (qSmartMinSize takes it in place of
+        minimumSizeHint), so in cross-recording compare the combo stood 260 px wide inside a 254 px
+        pane: it painted 21 px past its own cell with the drop-arrow sliced off by the panel edge,
+        and at 1280x800 its minimum dragged the whole strip wider than the cell and clipped
+        `REFERENCE` to `REFEREN` and the Δ badge to `ame lap`. A constant cannot know how much room
+        a pane has; the pane can. Below its content width the combo ELIDES its current item, which
+        is a QComboBox's own graceful behaviour and leaves the full label in the popup and in the
+        tooltip — where the QLabels beside it would have silently clipped mid-word."""
+        if self.strip.two_row:
+            # the picker owns a row of its own: only the bar's two margins are spent on it
+            return max(self.width() - 2 * theme.SPACE_S, 0)
+        return max(self.width() - (5 * theme.SPACE_S + self.badge.sizeHint().width()
+                                   + (self._caption_w(self.caption.text())
+                                      if self.caption.isVisibleTo(self) else 0)), 0)
+
+    def set_picker_width(self, floor: int) -> None:
+        """Pin the picker's width floor to the one `VideoView` derived for BOTH panes."""
+        if self.picker.minimumWidth() != floor:
+            self.picker.setMinimumWidth(floor)
+
+    def fit_alone(self) -> None:
+        """Re-fit this cell against its own width — the resize path, before the sibling cell is
+        known to exist (a secondary is created lazily). VideoView._fit_strips re-runs across the
+        pair as soon as there is a pair."""
+        self.apply_strip_form(bool(self.strip.two_row))
+        self.set_picker_width(min(self.picker.sizeHint().width(), self.picker_room()))
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
-        self._fit_strip()
+        self.fit_alone()
 
     def showEvent(self, ev):
         super().showEvent(ev)
-        self._fit_strip()   # first real width + a polished (QSS padding applied) caption
+        self.fit_alone()
 
     # ------------------------------------------------------------------ content
     def set_lap_choices(self, lap_ids: list[int], current: int,
@@ -420,32 +548,34 @@ class _PaneCell(QWidget):
             self.picker.clear()
             for lid, text in zip(ids, labels, strict=True):  # parallel by construction
                 self.picker.addItem(text, lid)
-            # Re-derive the width floor from the content itself: AdjustToContents sizes the hint to
-            # the WIDEST item (frame + arrow included), so this is exactly the width at which the
-            # lap time stops being elided. Capped, so one long label can't pin the whole strip.
-            self.picker.setMinimumWidth(
-                max(_PICKER_MIN_W, min(self.picker.sizeHint().width(), _PICKER_MAX_W)))
         if current in self._lap_ids:
             idx = self._lap_ids.index(current)
             if self.picker.currentIndex() != idx:
                 self.picker.setCurrentIndex(idx)
         self.picker.blockSignals(False)
-        self._fit_strip()
+        # AdjustToContents sizes the HINT to the widest item (frame + arrow included) — the width at
+        # which the lap time stops being elided — and picker_room caps that against the cell. The
+        # tooltip carries the current item in full, so an elided combo is still readable without
+        # opening it.
+        self.picker.setToolTip(f"Pick the lap shown in this pane — {self.picker.currentText()}"
+                               if self.picker.currentText() else "Pick the lap shown in this pane")
+        self.fit_alone()
 
     def set_caption(self, text: str):
-        """Compat shim: the app passes rich "lap N · time" text; show it as the role caption's
-        TOOLTIP (the label stays the fixed role word — identity lives in the picker). The tooltip
-        also carries the FULL role word, which the label itself drops at narrow widths."""
+        """Compat shim: the app passes rich "lap N · time" text (cross-recording compare prefixes
+        the reference RECORDING); show it as the role label's TOOLTIP — the label stays the fixed
+        role word, identity lives in the picker. The tooltip also carries the FULL role word, which
+        the label itself drops at narrow widths."""
         self.caption.setToolTip(f"{self._role_full} — {text}" if text else self._role_full)
 
     def set_badge(self, text: str, colour: str | None):
         """Set the Δ badge text/colour (app-driven per tick), guarded: re-apply only on an actual
         change so a stable compare view does zero per-tick label work (setText relayout / QSS
-        re-parse). A changed Δ can change the badge's width, so re-fit the strip with it."""
+        re-parse). A changed Δ can change the badge's width, so re-fit the picker beside it."""
         if text != self._badge_text:
             self._badge_text = text
             self.badge.setText(text)
-            self._fit_strip()
+            self.fit_alone()
         if colour != self._badge_colour:
             self._badge_colour = colour
             # ONE call, both branches: an empty sheet clears any previous tint back to the themed
@@ -473,6 +603,11 @@ class VideoView(QWidget):
     # button OR a double-click on the video content). CentralView owns the enter/exit; the shell only
     # forwards the intent (mirrors compareToggled's input-only contract).
     videoFocusRequested = Signal()
+    # The two-pane stage was mounted / dropped — a LAYOUT fact, emitted on the transition only, for
+    # the shell to reflect in the panel's identity row (the COMPARING chip) and in the tab chain.
+    # Not a state mirror: CompareController remains the single source of truth for 'are we
+    # comparing', and this says only what the view now holds.
+    compareModeChanged = Signal(bool)
 
     def __init__(self, source: str | chapters.ChapterMap | None):
         super().__init__()
@@ -592,25 +727,45 @@ class VideoView(QWidget):
                   self.fullscreen_btn, self.slider):
             w.setFocusPolicy(Qt.NoFocus)
 
+        self.readout = QLabel("")  # the media TIMECODE, driven by the app
+        self.readout.setObjectName("Readout")  # caption style, dimmed, tabular (global QSS)
+        # LEFT, not centred: it is now inline beside the ▶ it describes, not a full-width footer
+        # band whose centre drifted to x=716 of a 1432 px bar when the panel was maximized.
+        self.readout.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+
         # The scrub bar gets its OWN full-width row under the video, the way every media player lays
         # a transport out. Sharing one row with the buttons cost it ~200px of travel (16.4 s per
         # pixel on a 65-lap session, an unreadable lap ruler) and left no width for a text label on
-        # the compare button.
-        row = QHBoxLayout()
-        row.addWidget(self.play_btn)
-        row.addWidget(self.mute_btn)
-        row.addWidget(self.gmeter_btn)
-        row.addWidget(self.compare_btn)
-        row.addWidget(self.fullscreen_btn)
-        row.addStretch(1)
+        # the compare button. That row is now A BAR: it wears the same themed surface + hairline,
+        # the same SPACE_S gutter and the same TOOLBAR_H as the map's and the charts' toolbars, so
+        # the groove and its HIT_MIN handle stop running edge to edge against the panel border while
+        # the `VIDEO` label 36 px above sits inset 8.
+        self.scrub_row = QWidget()
+        self.scrub_row.setProperty("role", "PanelHeader")
+        # Redundant TODAY — a BARE QWidget gets WA_StyledBackground from QStyleSheetStyle::polish —
+        # and set anyway, because the day this becomes a subclass it silently stops painting and
+        # nothing says so. That is how four panel headers and both toolbars went flat in #185.
+        self.scrub_row.setAttribute(Qt.WA_StyledBackground, True)
+        self.scrub_row.setFixedHeight(theme.TOOLBAR_H)
+        scrub_lay = QHBoxLayout(self.scrub_row)
+        scrub_lay.setContentsMargins(theme.SPACE_S, theme.SPACE_XXS,
+                                     theme.SPACE_S, theme.SPACE_XXS)
+        scrub_lay.setSpacing(0)
+        scrub_lay.addWidget(self.slider, 1, Qt.AlignVCenter)
 
-        self.readout = QLabel("")  # F2: time / speed / current lap, driven by app
-        self.readout.setObjectName("Readout")  # caption style, dimmed, tabular (global QSS)
-        self.readout.setAlignment(Qt.AlignCenter)
+        # The transport, as ONE PanelToolbar with TWO GROUPS around its stretch. Shipped, the five
+        # buttons sat at a uniform SPACE_XS in a bare layout at x=0 on the window canvas, so two
+        # PLAYBACK controls and three VIEW toggles read as one undifferentiated 4 px run — and
+        # maximized they stayed a 211 px cluster in the bottom-left corner of a 1432 px panel with
+        # the timecode centred 716 px away. Grouped, the gap says which controls belong together:
+        # SPACE_XS within a group, the bar's own SPACE_S between them.
+        self.transport = PanelToolbar(
+            (self.gmeter_btn, self.compare_btn, self.fullscreen_btn),
+            leading=((self.play_btn, self.mute_btn), self.readout))
 
         # The STAGE holds the video surface(s): one pane normally, a 2-pane splitter in compare
-        # mode. Its layout is rebuilt on enter/exit compare; everything else (transport, readout)
-        # is untouched. In single mode the primary pane sits directly in the stage layout.
+        # mode. Its layout is rebuilt on enter/exit compare; everything else (the two bars) is
+        # untouched. In single mode the primary pane sits directly in the stage layout.
         self._stage = QWidget()
         self._stage_lay = QVBoxLayout(self._stage)
         self._stage_lay.setContentsMargins(0, 0, 0, 0)
@@ -618,11 +773,13 @@ class VideoView(QWidget):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
+        # ZERO, because the bands meet at their own hairlines now, exactly as a panel's header meets
+        # its toolbar meets its content. The 4 px it was put canvas between four bands that had no
+        # rule between any of them.
+        lay.setSpacing(0)
         lay.addWidget(self._stage, 1)
-        lay.addWidget(self.slider)
-        lay.addLayout(row)
-        lay.addWidget(self.readout)
+        lay.addWidget(self.scrub_row)
+        lay.addWidget(self.transport)
 
     # ------------------------------------------------------------- public API (drives the pane)
     def _panes_mounted(self) -> bool:
@@ -633,6 +790,19 @@ class VideoView(QWidget):
         own layout fact, read by the fan-out/g-meter helpers that act on whichever panes are live."""
         return (self._splitter is not None
                 and self._stage_lay.indexOf(self._splitter) != -1)
+
+    @property
+    def stage(self) -> QWidget:
+        """The video panel's BODY — the picture (one pane, or the two-pane compare splitter), with
+        none of this view's own chrome in it.
+
+        Public because a transient overlay has to be able to ask for it. `CentralView.overlay_anchor`
+        hands the PB toast a panel's body, and for map and charts that is `self.map` / `self.plots`
+        — the content widget, headers and toolbars excluded by construction. `self.video` is not the
+        equivalent: it is the panel body PLUS the transport, so a card placed SPACE_M above its
+        bottom edge lands on the transport bar. (It always did — on 87 px of scrub row, buttons and
+        readout — but none of those was a declared `PanelToolbar`, so nothing could see it.)"""
+        return self._stage
 
     @property
     def is_multi(self) -> bool:
@@ -872,9 +1042,11 @@ class VideoView(QWidget):
             self._splitter = QSplitter(Qt.Horizontal)
             self._splitter.addWidget(self._cell_a)
             self._splitter.addWidget(self._cell_b)
-            # Real drag handle: 8px, no collapse, opaque resize. Ignored/Expanding cells stop the
-            # QVideoWidget aspect hint pinning the split; 1:1 stretch keeps 50/50.
-            self._splitter.setHandleWidth(8)
+            # Real drag handle, no collapse, opaque resize. Ignored/Expanding cells stop the
+            # QVideoWidget aspect hint pinning the split; 1:1 stretch keeps 50/50. The width is the
+            # TOKEN, not the literal 8 it duplicated — the QSS draws this handle's grip from
+            # theme.SPLITTER_HANDLE_PX, so a literal here is a second copy of one number.
+            self._splitter.setHandleWidth(theme.SPLITTER_HANDLE_PX)
             self._splitter.setChildrenCollapsible(False)
             self._splitter.setOpaqueResize(True)
             for cell in (self._cell_a, self._cell_b):
@@ -887,7 +1059,8 @@ class VideoView(QWidget):
 
         # Swap the stage layout to the splitter (the primary pane re-parents into _cell_a). Guarded on
         # the DERIVED mounted state so a re-seed (already two-pane) doesn't re-swap.
-        if not self._panes_mounted():
+        entering = not self._panes_mounted()
+        if entering:
             self._stage_lay.removeWidget(self.pane)
             self._stage_lay.addWidget(self._splitter, 1)
             self.secondary.show()
@@ -897,6 +1070,11 @@ class VideoView(QWidget):
         QTimer.singleShot(0, self._equalize_panes)
         # Reflect the controller's compare-ON state onto the button (no re-emit; see _set_compare_visual).
         self._set_compare_visual(True)
+        # The panel now holds TWO videos where it held one, its scrub bar spans a lap instead of the
+        # session and its lap ruler is empty — say so in the identity row. On the TRANSITION only:
+        # a re-seed after a picker repoint is not a mode change.
+        if entering:
+            self.compareModeChanged.emit(True)
 
         # Seed each pane's window + caption + picker from its spec (the app seeks the panes to their starts).
         self.pane.set_lap_window(*pane_a.window)
@@ -905,6 +1083,7 @@ class VideoView(QWidget):
         self._cell_b.set_caption(pane_b.caption)
         self._cell_a.set_lap_choices(pane_a.choices, pane_a.lap_id, pane_a.choice_labels)
         self._cell_b.set_lap_choices(pane_b.choices, pane_b.lap_id, pane_b.choice_labels)
+        self._fit_strips()   # the picker contents just changed -> re-pick ONE form for both panes
         # Confine the global scrub slider to lap A's window so a drag can't escape the lap.
         self._set_slider_window(pane_a.window)
         self._apply_lap_ticks()  # confined to one lap now -> the whole-session lap ruler is cleared
@@ -923,6 +1102,7 @@ class VideoView(QWidget):
         pane.set_lap_window(*spec.window)
         cell.set_caption(spec.caption)
         cell.set_lap_choices(spec.choices, spec.lap_id, spec.choice_labels)
+        self._fit_strips()   # a new widest item can change which strip form both panes take
         # A PRIMARY repoint changes lap A's window — re-confine the global scrub to the new window
         # so the slider keeps tracking the (telemetry-driving) primary pane within its lap.
         if side == PRIMARY:
@@ -949,6 +1129,7 @@ class VideoView(QWidget):
         full_ms = self._whole_session_max_ms()
         if full_ms > 0:
             self.slider.setRange(0, full_ms)
+        self.slider.set_span_note("")    # the whole session again, which needs no saying
         self._apply_lap_ticks()  # whole-session range again -> restore the lap ruler
         self._teardown_secondary()
         # Drop the cell wrappers + splitter (the primary pane has been reparented out of _cell_a).
@@ -958,6 +1139,7 @@ class VideoView(QWidget):
                 w.deleteLater()
         self._cell_a = self._cell_b = self._splitter = None
         self._sync_fullscreen_enabled()  # single video again -> the ⤢ gesture is back
+        self.compareModeChanged.emit(False)  # drop the identity row's COMPARING chip
 
     def _teardown_secondary(self):
         """STOP + close the secondary pane's overlay and schedule the pane (its player+audio) for
@@ -972,9 +1154,54 @@ class VideoView(QWidget):
         sec.setParent(None)
         sec.deleteLater()     # schedule the pane widget itself for deletion on the event loop
 
+    def compare_pickers(self) -> tuple[QComboBox | None, QComboBox | None]:
+        """The two compare lap pickers, or (None, None) outside compare — so the shell can put them
+        in the tab chain right after the video panel's own ⛶ instead of wherever Qt appended them.
+        The cells are built LAZILY and Qt adds a new child at the END of the top-level focus chain,
+        which made these the LAST two of seventeen tab stops in the window: sixteen presses to reach
+        a control 40 px below where the user started."""
+        if self._cell_a is None or self._cell_b is None:
+            return None, None
+        return self._cell_a.picker, self._cell_b.picker
+
+    def _fit_strips(self) -> None:
+        """Choose ONE strip form and apply it to BOTH panes, from whichever needs more room.
+
+        Per-cell fitting is exactly how the two panes came to disagree: the form depends on the role
+        word's width (`THIS LAP` 50 px against `REFERENCE` 64) and on each picker's own widest item
+        (166 against 150), so at some widths pane A sat on one row while pane B sat on two — two
+        side-by-side videos starting at different y, in a UI whose entire job is that they line up.
+        Decided here, from data that does not depend on the current form (font metrics and content
+        size hints), so it converges in one pass and cannot oscillate."""
+        cells = [c for c in (self._cell_a, self._cell_b) if c is not None]
+        if len(cells) < 2:
+            return
+        two_row = any(c.width() < c.strip_need() for c in cells)
+        for c in cells:
+            c.apply_strip_form(two_row)
+        # ...and ONE picker width for both, for the same reason. Each picker used to floor on its
+        # OWN widest item, so pane A (which lists the ★ best lap) stood 166 px against pane B's 150
+        # — a 16 px difference between two controls that are the same control on either side of a
+        # comparison, and 164 px in cross-recording compare. The pair takes the wider content need,
+        # capped by the tighter pane's room.
+        want = min(max(c.picker.sizeHint().width() for c in cells),
+                   min(c.picker_room() for c in cells))
+        for c in cells:
+            c.set_picker_width(want)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._fit_strips()   # the cells' width changed with the panel's
+
     def _equalize_panes(self):
         """Split the two panes 50/50 from the splitter's live width (falls back to a [1000,1000]
-        ratio before any width is known)."""
+        ratio before any width is known).
+
+        THE ODD PIXEL IS ARITHMETIC, NOT A CHOICE: two integer widths cannot sum to an odd number
+        and be equal, so at a splitter width where `w - handle` is odd one pane is 1 px wider than
+        the other. Measured, that is the whole of the panes' geometric asymmetry — the 16 px the
+        two PICKERS used to differ by was not arithmetic at all (each floored on its own widest
+        item) and is fixed at its source, in _PaneCell."""
         if self._splitter is None or self._splitter.count() < 2:
             return
         w = self._splitter.width()
@@ -982,14 +1209,17 @@ class VideoView(QWidget):
             handle = self._splitter.handleWidth()
             half = max((w - handle) // 2, 1)
             self._splitter.setSizes([half, w - handle - half])
+            self._fit_strips()
         else:
             self._splitter.setSizes([1000, 1000])
 
     def _on_splitter_moved(self, _pos: int, _index: int):
         """Re-pin BOTH g-meter overlays after a splitter-handle drag (each pane re-pins its own
-        overlay to its video corner; cheap no-op when an overlay is hidden)."""
+        overlay to its video corner; cheap no-op when an overlay is hidden), and re-fit the strips
+        for the cells' new widths."""
         for pane in self._panes():
             pane.sync_gmeter()
+        self._fit_strips()
 
     # ------------------------------------------------------------- audio (mute)
     def toggle_mute(self):
@@ -1081,6 +1311,8 @@ class VideoView(QWidget):
         self.slider.setRange(lo, hi)
         self.slider.setValue(min(max(self.slider.value(), lo), hi))
         self.slider.blockSignals(False)
+        # ...and say so: this bar now spans ONE LAP, not the session (see set_span_note).
+        self.slider.set_span_note("this bar spans the compared lap, not the whole session")
 
     def set_compare_seek_fanout(self, fn) -> None:
         """Inject the compare-mode fan-out hook: called from _on_slider_moved with the primary's new

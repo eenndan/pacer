@@ -239,18 +239,51 @@ def test_the_focus_ring_is_paid_for_out_of_the_padding_not_the_box():
 # things, not spaces between them, and the SPACE scale has nothing to say about 560 or 220. The
 # defect an extent can carry is a different assertion, and it has its own check below (4b).
 _CALLS = ("setContentsMargins", "setSpacing", "setFixedHeight", "setFixedSize",
-          "setHorizontalSpacing", "setVerticalSpacing")
+          "setHorizontalSpacing", "setVerticalSpacing",
+          # ...and the two the walker could not see, added when the video lane found six off-scale
+          # numbers in one file that this check reported as clean. `setHandleWidth` sets a
+          # DIVIDER's width, which is the same quantity `theme.SPLITTER_HANDLE_PX` declares and one
+          # view was duplicating as a literal 8. `setMinimumWidth` is the extent that hurt: a
+          # combo's floor of `max(150, min(hint, 260))` is honoured OVER the space the layout has,
+          # so 260 px of picker painted 21 px past a 254 px pane. Both are sizes a call site had
+          # picked; both are now on the hook.
+          "setHandleWidth", "setMinimumWidth")
 
 
 def _dimension_literals(path):
-    """EVERY literal-argument layout-dimension call in one source file, as
+    """EVERY hand-picked layout-dimension call in one source file, as
     (lineno, call, values, owner) — where `owner` is `Class.method`, or the bare function, or the
     module-level name being bound.
 
     The same walker shape as tests/test_contrast.py:_hue_reads, and for the same reason: an
     exemption should name the DECISION that made the value (a widget's constructor), not a line
-    number that moves the moment someone adds an import."""
+    number that moves the moment someone adds an import.
+
+    IT RESOLVES MODULE-LEVEL CONSTANTS, and that is the half that was missing. The walker used to
+    take all-literal calls only — a `Name` argument made `len(vals) != len(args)` and the call was
+    skipped as "a token read", which is exactly what a token read looks like AND exactly what
+    `setContentsMargins(_PANE_INSET, 0, _PANE_INSET, 0)` looked like with `_PANE_INSET = 5` five
+    lines up. A name that resolves to an integer literal in the SAME module is not a token; it is a
+    hand-picked number with a nicer spelling, and this file's whole subject is that those are the
+    same thing. `theme.SPACE_S` is an ATTRIBUTE, not a Name, so a real token read is still skipped.
+    """
+    src = ast.parse(open(path, encoding="utf-8").read(), path)
+    # module-level `NAME = <int literal>` — the spelling `_PANE_INSET = 5` hid behind
+    consts = {t.id: n.value.value
+              for n in src.body if isinstance(n, ast.Assign)
+              for t in n.targets
+              if isinstance(t, ast.Name) and isinstance(n.value, ast.Constant)
+              and isinstance(n.value.value, int) and not isinstance(n.value.value, bool)}
     out = []
+
+    def value_of(arg):
+        """The integer this argument is, or None if it is a token / an expression / not an int."""
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, int) \
+                and not isinstance(arg.value, bool):
+            return arg.value
+        if isinstance(arg, ast.Name) and arg.id in consts:
+            return consts[arg.id]
+        return None
 
     def visit(node, owner):
         if isinstance(node, ast.ClassDef):
@@ -262,14 +295,13 @@ def _dimension_literals(path):
             owner = names[0] if names else owner
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr in _CALLS and node.args):
-            vals = [a.value for a in node.args
-                    if isinstance(a, ast.Constant) and isinstance(a.value, int)]
-            if len(vals) == len(node.args):        # all-literal calls only; a token read is fine
+            vals = [value_of(a) for a in node.args]
+            if all(v is not None for v in vals):   # a token read anywhere and the call is fine
                 out.append((node.lineno, node.func.attr, tuple(vals), owner))
         for ch in ast.iter_child_nodes(node):
             visit(ch, owner)
 
-    visit(ast.parse(open(path, encoding="utf-8").read(), path), None)
+    visit(src, None)
     return out
 
 
@@ -297,8 +329,32 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
     IS stated per surface is which kind of surface it is: the two copy cards take the reading inset,
     the Shortcuts reference and the export dialog take control spacing because they are a table and
     a form, and the loading card takes SPACE_L between its three groups because it is glanced at and
-    clicked, not read."""
-    EXEMPT: set[tuple[str, str]] = set()
+    clicked, not read.
+
+    AND THEN THE WALKER GREW TWO EYES, so the empty set is not empty any more. It was reporting a
+    file clean while that file hand-picked six dimensions: `setContentsMargins(_PANE_INSET, 0,
+    _PANE_INSET, 0)` was skipped because a `Name` argument read like a token, and neither
+    `setHandleWidth` nor `setMinimumWidth` was on the list at all. Resolving module-level int
+    constants and adding those two calls is what makes "the backlog is empty" mean something — and
+    it immediately surfaced seven call sites in FOUR files this lane does not own, so each is
+    exempted BY NAME below rather than fixed in a PR whose pixel proof does not cover them.
+
+    Six of the seven are the same shape and the shape is argued in the `_CALLS` preamble above: a
+    DIALOG'S MEASURE (400 / 720 / 560 / 380 / 460 px) and a button's 88 px floor are extents, and
+    the SPACE scale has nothing to say about them. They are listed here because the check cannot
+    tell an extent from a gap, not because anyone thinks they are wrong. The seventh
+    (`SPARK_HEIGHT = 96`) is a genuine off-scale literal, in the stats lane's file."""
+    EXEMPT: set[tuple[str, str]] = {
+        # --- extents, not gaps: a dialog's own measure (see the paragraph above). Not this lane's.
+        ("app.py", "StudioWindow._ask_export_options"),        # 400 px export-dialog measure
+        ("coaching_panel.py", "OpportunitiesDialog.__init__"),  # 720 px dialog measure
+        ("coaching_panel.py", "OpportunitiesDialog._go_button"),  # 88 px button floor
+        ("help_dialog.py", "ShortcutsDialog.__init__"),        # 560 px reading measure
+        ("help_dialog.py", "AboutDialog.__init__"),            # 380 px card measure
+        ("help_dialog.py", "PrivacyDialog.__init__"),          # 460 px reading measure
+        # --- a real one, owned by the stats lane: SPARK_HEIGHT = 96, a sparkline's height.
+        ("stats_panel.py", "StatsView.__init__"),
+    }
     offenders = []
     total = onscale = 0
     for fn in sorted(os.listdir(_STUDIO)):
@@ -316,11 +372,14 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
         + "\n  ".join(offenders))
     # The backlog may only shrink. A phase that migrates a surface deletes its entry; a phase that
     # adds one has to say so out loud, here, in prose. 11 after Phase 1-3, 9 after Phase 4, 8 after
-    # 5, and ZERO after Phase 6 — so the ceiling is now the floor, and the next off-scale literal
-    # cannot be waved through with an exemption at all. It has to be argued in this file's prose
-    # against an empty set, or written as a derivation of the scale the way theme.focus_pad,
-    # theme.pill_radius, widgets.space_at_least and lap_table.GRID_TEXT_INSET already are.
-    assert not EXEMPT, f"the exemption list GREW to {len(EXEMPT)}: {sorted(EXEMPT)}"
+    # 5, ZERO after Phase 6 — and 7 again the moment the walker could SEE two more calls and a
+    # constant behind a name, which is the honest reading: the set was empty because the check was
+    # short-sighted, not because the app had run out of hand-picked numbers. A ratchet, `<=` and
+    # never `==`, so deleting one of these later cannot turn the build red. Every new off-scale
+    # literal still has to be argued in this file's prose, or written as a derivation of the scale
+    # the way theme.focus_pad, theme.pill_radius, widgets.space_at_least and
+    # lap_table.GRID_TEXT_INSET already are.
+    assert len(EXEMPT) <= 7, f"the exemption list GREW to {len(EXEMPT)}: {sorted(EXEMPT)}"
     print(f"test_no_studio_module_hand_picks_a_layout_dimension OK "
           f"({onscale}/{total} literal calls on the scale, {len(EXEMPT)} exempted surfaces)")
 
@@ -464,19 +523,26 @@ def test_all_four_panel_headers_are_one_height():
         # way whether a fifth panel grows a control row (a design change worth arguing) or MAP
         # loses one (a regression). Neither is a direction, so this is not a ratchet to loosen: it
         # is a fact to state precisely. Asked as an identity it names the offender either way.
+        # WHICH panels have a toolbar, not HOW MANY (see the note above). VIDEO joined MAP and
+        # CHARTS when its transport became one: it is a row of five controls, and it was the only
+        # control zone in the window that was not on a bar — three rows at 26/28/21 px on the
+        # window canvas with a 0 px gutter, against six bars that agreed to the pixel.
         owners = {name for name, panel in panels.items() if panel.findChildren(PanelToolbar)}
-        assert owners == {"MAP", "CHARTS"}, (
-            f"only MAP and CHARTS have controls, so only they get a toolbar: {sorted(owners)}")
+        assert owners == {"MAP", "CHARTS", "VIDEO"}, (
+            f"only MAP, CHARTS and VIDEO have controls, so only they get a toolbar: "
+            f"{sorted(owners)}")
         toolbars = view.findChildren(PanelToolbar)
         assert len(toolbars) == len(owners), (
             f"a panel grew a SECOND toolbar: {len(toolbars)} rows across {sorted(owners)}")
         for t in toolbars:
             assert t.height() == theme.TOOLBAR_H, (t.height(), theme.TOOLBAR_H)
-            for c in t.controls:
+            # leading + controls: a toolbar may now hold a group on either side of its stretch, and
+            # "every control in a toolbar shares one height" has to hold for all of them.
+            for c in (*t.leading, *t.controls):
                 assert c.height() == theme.CTRL_H, (
                     f"every control in a toolbar shares one height: {c!r} is {c.height()}")
     print(f"test_all_four_panel_headers_are_one_height OK "
-          f"(4 headers @ {theme.PANEL_HDR_H}, 2 toolbars @ {theme.TOOLBAR_H})")
+          f"(4 headers @ {theme.PANEL_HDR_H}, 3 toolbars @ {theme.TOOLBAR_H})")
 
 
 def _arrows(bar):

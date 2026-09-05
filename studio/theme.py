@@ -1449,9 +1449,9 @@ QLabel[role="BarLabel"] {{
    It is a role rather than the one-line `font-family` patch it shipped as, for the reason the
    UI_STACK / MONO_STACK block above already documents in prose: that patch was a hand-typed COPY of
    MONO_STACK, and this file has been bitten once by exactly that duplication. It is also not a
-   one-off — #Readout, #PaneCaption and #PaneBadge are all "dimmed small type in the mono face" and
-   all have names; this was the fourth instance of a pattern the theme had already role-ified three
-   times, and the only one that spelled its font out in a view file. */
+   one-off — #Readout and #PaneBadge are both "dimmed small type in the mono face" and both have
+   names; this was another instance of a pattern the theme had already role-ified, and the only one
+   that spelled its font out in a view file. */
 QLabel[role="KeyCap"] {{
     background: transparent;
     color: {C.text_dim};
@@ -1584,42 +1584,39 @@ QPushButton#PBToastClose {{
 QPushButton#PBToastClose:hover {{
     color: {C.text};
 }}
-/* slim multi-chapter banner strip */
-QLabel#ChapterBanner {{
-    background-color: {C.surface};
-    color: {C.text_dim};
-    font-size: {CAPTION}px;
-    font-weight: 500;
-    padding: {SPACE_XS}px {SPACE_M}px;
-    border-left: {SPACE_XXS}px solid {C.accent};
-    border-bottom: {BORDER_PX}px solid {C.border};
-}}
-/* video time/speed/lap readout (caption, dimmed, tabular) */
+/* The multi-chapter banner strip (#ChapterBanner) is GONE, and so is #PaneCaption.
+
+   The banner was a full-width fifth band above the video that printed the recording label and the
+   current chapter — the label the window TITLE already carries, and the chapter the transport
+   timecode already printed 300 px below it. It is a `widgets.chip` in the video panel's identity
+   row now, in the `status` slot PanelHeader has for exactly this, beside the word it qualifies.
+
+   #PaneCaption was the compare pane's role word, and its `background-color: surface` painted a
+   filled square around `THIS LAP` while the identically-typed Δ badge beside it was transparent
+   and composited the window canvas — one strip, two backgrounds. The strip is a themed bar now
+   (video_view._PaneStrip) and the role word is a plain [role="BarLabel"], like every other label
+   that sits inside a bar this app draws. */
+/* video TIMECODE readout — inline in the transport toolbar, so like #DiffBox in the charts header
+   it has no background of its own: the bar provides the surface. It had one, because it used to be
+   a full-width band of its own under the buttons. */
 QLabel#Readout {{
-    background-color: {C.surface};
+    background: transparent;
     color: {C.text_dim};
     font-family: {MONO_STACK};
     font-size: {CAPTION}px;
-    padding: {SPACE_XS}px {SPACE_S}px;
-}}
-/* per-pane caption strip in compare mode: "lap N  m:ss.mmm" (tabular, dimmed, surface bg). */
-QLabel#PaneCaption {{
-    background-color: {C.surface};
-    color: {C.text_dim};
-    font-family: {MONO_STACK};
-    font-size: {CAPTION}px;
-    font-weight: 600;
-    padding: {SPACE_XS}px {SPACE_S}px;
 }}
 /* per-pane "Δ vs other" badge in compare mode: tabular, transparent so it sits inline in the
-   caption strip; only its Δ-value COLOUR is driven per-tick (a merged `color:` rule). */
+   pane's identity bar; only its Δ-value COLOUR is driven per-tick (a merged `color:` rule).
+
+   No padding, for the same reason [role="BarLabel"] has none: the bar around it already spends
+   SPACE_S on its own margin, and a second SPACE_S here stood the Δ 16 px from the pane's right
+   edge while the ⛶ in the panel header directly above stood at 8. */
 QLabel#PaneBadge {{
     background: transparent;
     color: {C.text_dim};
     font-family: {MONO_STACK};
     font-size: {CAPTION}px;
     font-weight: 600;
-    padding: {SPACE_XS}px {SPACE_S}px;
 }}
 /* in-panel empty state: shown when a recording has zero complete laps. Surface bg covers the panel.
    text_dim, NOT text_muted: this is the panel's ONLY content, so it is enabled prose and has to
