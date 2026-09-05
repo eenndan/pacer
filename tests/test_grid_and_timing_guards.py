@@ -196,6 +196,68 @@ def test_apply_grid_sizes_refuses_a_stored_deleted_panel():
     print("test_apply_grid_sizes_refuses_a_stored_deleted_panel OK")
 
 
+# --------------------------------------------------- D4-04: the restore has to beat the paint
+def test_the_persisted_layout_is_on_the_first_painted_frame():
+    """D4-04. A returning user — anyone who has ever dragged a splitter — used to watch the
+    BUILT-IN DEFAULT grid paint first, fully rendered with their real data, and then every panel
+    jump. Measured on the real three-chapter drop, sampling the window composite and all three
+    splitters on the wall clock at a 0.10 ms median interval from `loadFinished`: two distinct
+    layouts, the default held for 78 ms (left column +185 px, video -94 px, map +185 px right and
+    +180 px taller, charts +180 px down). Both restore passes were on timers, and the
+    `singleShot(0)` did not run until +108 ms because a zero-timer still queues behind the first
+    layout/paint burst of a freshly installed view.
+
+    THE ASSERTION IS THE ABSENCE OF AN EVENT-LOOP TURN. `show()` delivers the ShowEvent
+    synchronously (QWidget::setVisible activates the widget's layout first, which is why the
+    splitters have real extents by then), so reading the sizes with no `processEvents()` in
+    between reads exactly what the first paint would carry. A test that settles first passes on
+    the old code."""
+    _built, session, _t0, _t1 = _real_central_view()
+    stored = [[700, 732], [297, 543], [498, 342]]
+
+    def ratio(sizes):
+        return sizes[0] / float(sum(sizes))
+
+    for w, h in ((1440, 900), (1280, 800)):
+        view = CentralView(session, ["/tmp/stadium.MP4"], sidecar_path=None, grid_sizes=stored)
+        view.resize(w, h)
+        view.show()          # <- ShowEvent, synchronously. NOT ONE processEvents() below.
+        first = [view._main_splitter.sizes(), view._left_splitter.sizes(),
+                 view._right_splitter.sizes()]
+        for name, got, want in zip(("main", "left", "right"), first, stored, strict=True):
+            assert abs(ratio(got) - ratio(want)) < 0.02, (
+                f"{w}x{h}: the FIRST painted frame carries {name}={got} "
+                f"(ratio {ratio(got):.3f}), not the persisted {want} ({ratio(want):.3f}) — the "
+                f"restore is behind the paint again")
+
+        # ...and the two deferred passes are still there, still idempotent: after the event loop
+        # has run them both, nothing has moved. (They are the net for a view shown before its
+        # top-level activated a layout; deleting them is not what this fix does.)
+        _settle(10)
+        settled = [view._main_splitter.sizes(), view._left_splitter.sizes(),
+                   view._right_splitter.sizes()]
+        assert settled == first, f"{w}x{h}: a deferred pass moved the grid {first} -> {settled}"
+        view.hide()
+        view.dispose()
+
+    # The deferred passes are load-bearing, so pin their existence structurally rather than
+    # trusting the idempotence check above to notice if someone deletes them.
+    import ast
+    source = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "studio", "central_view.py"), encoding="utf-8").read()
+    show = next(n for n in ast.walk(ast.parse(source))
+                if isinstance(n, ast.FunctionDef) and n.name == "showEvent")
+    delays = sorted(call.args[0].value for call in ast.walk(show)
+                    if isinstance(call, ast.Call)
+                    and getattr(call.func, "attr", "") == "singleShot"
+                    and isinstance(call.args[0], ast.Constant))
+    assert delays == [0, 120], (
+        f"CentralView.showEvent schedules {delays} ms restores; the 0 ms pass cures min-size "
+        f"clamping and the 120 ms one survives the deferred top-level layout passes (which is "
+        f"the same 120 ms overlays.PBToast waits out). Both stay.")
+    print("test_the_persisted_layout_is_on_the_first_painted_frame OK")
+
+
 # --------------------------------------------------------------- MAP-02: both writers
 def _fake_view(valid_lap_ids, path):
     """The duck-typed slice of CentralView that _save_sidecar / _on_lines actually touch, so the
@@ -460,6 +522,7 @@ def _run_all():
     test_no_drag_can_delete_a_panel()
     test_maximize_still_fills_the_window_and_leaves_the_grid_uncollapsible()
     test_apply_grid_sizes_refuses_a_stored_deleted_panel()
+    test_the_persisted_layout_is_on_the_first_painted_frame()
     test_a_zero_lap_placement_is_never_written_to_the_sidecar()
     test_a_zero_lap_state_is_never_pushed_onto_the_undo_stack()
     test_a_timing_edit_is_acknowledged_while_it_blocks()

@@ -257,14 +257,40 @@ class CentralView(QWidget):
 
     # ------------------------------------------------------------------ lifecycle
     def showEvent(self, event):
-        """First show: restore the persisted grid-splitter sizes (deferred one event-loop turn
-        so the splitters carry their REAL post-layout sizes — a pre-show setSizes gets warped
-        by min-size clamping at the unshown widget's tiny default geometry)."""
+        """First show: restore the persisted grid-splitter sizes — SYNCHRONOUSLY here, and then
+        twice more on timers.
+
+        THE FIRST PASS IS THE ONE THE USER SEES. Both restores used to be deferred, and a
+        returning user (anyone who has ever dragged a splitter) therefore watched their studio
+        paint the BUILT-IN DEFAULT layout first, fully rendered with their real data, and then
+        jump. Measured on the real three-chapter drop with a persisted `main=[700, 732]`, sampling
+        the window composite and all three splitters on the wall clock at a 0.10 ms median
+        interval from `loadFinished`: the default `main=[515, 917]` was painted at +53 ms and held
+        for **78 ms** — the `singleShot(0)` did not run until +108 ms, because a zero-timer is
+        still queued BEHIND the first layout/paint burst of a freshly installed 66-lap view. Every
+        panel then moved at once: left column +185 px wide, video −94 px tall, map +185 px right
+        and +180 px taller (a full axis re-tick), charts +180 px down. `overlays.PBToast` already
+        knew — it defers itself 120 ms with a comment saying the restore MOVES the lap panel. The
+        toast waited; the panels did not.
+
+        The pre-show `setSizes` this used to warn about is a different moment: `_layout_panels`
+        runs before the widget has any geometry at all, and a restore there IS warped by min-size
+        clamping. By the time a ShowEvent is delivered the splitters already carry their real
+        post-layout extents (measured: 1440x854, `main=[515, 917]` at showEvent ENTRY), so the
+        synchronous pass lands undistorted and the first frame is the user's own layout.
+
+        BOTH DEFERRED PASSES STAY, and they are not belt-and-braces: they are the correctness net
+        for the case the synchronous pass cannot serve — a view shown before its top-level has
+        activated its layout (no geometry yet), and the deferred top-level layout passes that
+        re-split by stretch factor and would otherwise override whichever splitter they touch
+        last. `_apply_grid_sizes` is idempotent, so running it three times costs three clamped
+        `setSizes` on already-correct splitters and changes nothing."""
         super().showEvent(event)
         pending = getattr(self, "_pending_grid_sizes", None)
         if pending is not None:
             self._pending_grid_sizes = None
-            # Twice, idempotently: once right after this event burst, once after the deferred
+            self._apply_grid_sizes(pending)
+            # Then twice, idempotently: once right after this event burst, once after the deferred
             # top-level layout passes (which re-split by stretch factor and would otherwise
             # override the restore of whichever splitter they touch last).
             QTimer.singleShot(0, lambda: self._apply_grid_sizes(pending))
