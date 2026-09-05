@@ -14,21 +14,26 @@ listed here MUST stay in lockstep with the actual bindings, which are defined in
 in the menu bar (``⇧⌘S``, not ``⌘⇧S``) on whatever platform it runs — see ``_key_text``. The
 drag / double-click interactions have no key binding — they're handled in MapView (the draggable
 start/finish line), ScrubController (the chart cursor), CentralView (double-click a panel header
-or the ⛶ button to maximize that panel) and VideoView (double-click the video / the ⤢ transport
-button to fill the screen) — so they're documented here as the only place a user can learn them.
+or the maximize button to maximize that panel) and VideoView (double-click the video / the
+fullscreen transport button to fill the screen) — so they're documented here as the only place a
+user can learn them. Both of those buttons are documented with THEIR OWN glyph (see
+MAXIMIZE_GLYPH), not with a lookalike character.
 If you change a binding in app.py, change it HERE too — tests/test_help_dialog.py fails the build
 when a live binding has no row.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from typing import NamedTuple
+
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QScrollArea,
     QVBoxLayout,
@@ -37,6 +42,38 @@ from PySide6.QtWidgets import (
 
 from . import APP_NAME, __version__, theme
 from .widgets import WrapLabel
+
+# ---------------------------------------------------------------- the two documented BUTTONS
+# THE CARD PAINTS THE BUTTON'S OWN GLYPH, NOT A LOOKALIKE (D1-06).
+#
+# Two adjacent Layout rows documented two controls with characters neither control uses: ⛶ (U+26F6,
+# which Inter lacks, so macOS resolved it to STIX Two Math — 8x8 px of ink) for the panel-maximize
+# button, which actually paints Phosphor ph.corners-out at 10x10, and ⤢ (U+2922 -> Apple Symbols,
+# 6x5 px) for the video-fullscreen button, which paints ph.arrows-out at 10x10. Two rows of one key
+# column, two fallback faces, neither used by any button in the app. Change the button's glyph and
+# the documentation silently became wrong.
+#
+# These are the names the buttons paint, and tests/test_glyph_vocabulary.py asserts each one
+# against its own control — `central_view._MAXIMIZE_GLYPH` for the panel button and the literal
+# `ToggleButton(glyph=...)` argument in `video_view` for the transport one, read out of the source.
+#
+# NAMED HERE RATHER THAN IMPORTED, on purpose. Importing central_view would drag the entire view
+# stack (map + charts + pyqtgraph + the media pipeline) into a Help dialog that is otherwise a leaf,
+# and `_MAXIMIZE_GLYPH` is private to that module — while the video button has NO constant to
+# import at all, it passes its glyph inline to ToggleButton. So one mechanism covers both, and it
+# is a stronger one than an import: an import guarantees the same STRING, the test guarantees the
+# button actually paints it.
+MAXIMIZE_GLYPH = "ph.corners-out"        # central_view's panel-maximize button
+VIDEO_FULLSCREEN_GLYPH = "ph.arrows-out"  # video_view's transport fullscreen button
+
+
+class GlyphKey(NamedTuple):
+    """A key-column cell that ends in a CONTROL'S GLYPH rather than a keystroke: the words, then
+    the Phosphor icon that control paints. `text` is what `_key_text` returns for the row, so the
+    "every live binding is documented" guard reads it exactly like any other key."""
+
+    text: str
+    glyph: str
 
 # ---------------------------------------------------------------- shortcut catalogue
 # (key, what it does). Grouped by the same mental model the app uses: File (getting footage in),
@@ -49,7 +86,7 @@ from .widgets import WrapLabel
 # _key_text at build time so a modifier row can never drift from the menu bar's own glyphs. The
 # StandardKey members stay unresolved here on purpose: resolving one needs the platform theme,
 # i.e. a live QGuiApplication, which does not exist at import time.
-Keys = str | QKeySequence | QKeySequence.StandardKey
+Keys = str | QKeySequence | QKeySequence.StandardKey | GlyphKey
 SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = [
     ("File", [
         (QKeySequence.StandardKey.Open, "Open a recording"),
@@ -68,7 +105,11 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = [
         ("G", "Toggle the g-meter overlay"),
         ("C", "Toggle compare mode (two laps side by side)"),
         ("1 · 2 · 3 · 4", "Lap-panel tabs: Laps · Corners · Stats · Coaching"),
-        (QKeySequence("Ctrl+Shift+S"), "Session statistics, full-window (again / ⛶ to restore)"),
+        # The DESCRIPTION named the maximize button by a character the button does not paint, in a
+        # sentence — where an icon cannot go. It names the button in words instead; the Layout
+        # group below is where the glyph itself is documented.
+        (QKeySequence("Ctrl+Shift+S"),
+         "Session statistics, full-window (again / the panel-maximize button to restore)"),
     ]),
     ("Editing", [
         # "timing-line", matching the menu item it documents: ⌘Z takes back SECTOR-line edits too,
@@ -76,9 +117,11 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = [
         (QKeySequence.StandardKey.Undo, "Undo the last timing-line edit"),
     ]),
     ("Layout", [
-        ("Double-click header  ·  ⛶", "Maximize a panel to fill the window (Esc / again to restore)"),
+        (GlyphKey("Double-click header  ·", MAXIMIZE_GLYPH),
+         "Maximize a panel to fill the window (Esc / again to restore)"),
         (QKeySequence.StandardKey.FullScreen, "Enter / exit full screen"),
-        ("Double-click video  ·  ⤢", "Make the video fill the screen (Esc / again to restore)"),
+        (GlyphKey("Double-click video  ·", VIDEO_FULLSCREEN_GLYPH),
+         "Make the video fill the screen (Esc / again to restore)"),
         ("Drag any splitter", "Resize the panels (the layout is remembered)"),
     ]),
     ("Help", [
@@ -124,13 +167,60 @@ APP_BLURB = (
 
 
 def _key_text(key: Keys) -> str:
-    """The glyphs for one row's key column. A str is literal (a plain letter, or a drag gesture
-    with no binding); a QKeySequence / StandardKey is rendered with Qt's OWN native text, which is
+    """The TEXT of one row's key column. A str is literal (a plain letter, or a drag gesture
+    with no binding); a GlyphKey contributes its words (its glyph is painted beside them, see
+    _key_widget); a QKeySequence / StandardKey is rendered with Qt's OWN native text, which is
     what the menu bar paints — so the card cannot disagree with the menus it documents, and a
     non-macOS run reads "Ctrl+Shift+S" instead of Mac glyphs."""
+    if isinstance(key, GlyphKey):
+        return key.text
     if isinstance(key, str):
         return key
     return QKeySequence(key).toString(QKeySequence.NativeText)
+
+
+def _key_cap(text: str) -> QLabel:
+    """One KEY CAP label: BarLabel's dimmed small-header type in the MONO face, so the glyphs line
+    up into a gutter. It shipped as BarLabel + a one-line `font-family` patch that spelled the whole
+    mono stack out by hand — a literal copy of theme.MONO_STACK, in a file that cannot see it
+    drift. It is theme's [role="KeyCap"] now; see that rule for why this is a missing role rather
+    than a legitimate one-off."""
+    label = QLabel(text)
+    label.setProperty("role", "KeyCap")
+    label.setAlignment(Qt.AlignRight | Qt.AlignTop)
+    return label
+
+
+def _key_widget(key: Keys) -> QWidget:
+    """The whole key column for one row: a KeyCap label, plus — for a GlyphKey — the Phosphor icon
+    the documented control actually paints, rendered through the same `theme.icon()` the button
+    itself goes through (see MAXIMIZE_GLYPH).
+
+    The pair is right-aligned inside the gutter like every other cap, so the icon lands where a
+    trailing character used to and the column still reads as a column."""
+    if not isinstance(key, GlyphKey):
+        return _key_cap(_key_text(key))
+    box = QWidget()
+    row = QHBoxLayout(box)
+    row.setContentsMargins(0, 0, 0, 0)
+    # SPACE_XS between the words and the glyph — the gap WITHIN one cell. The string it replaces
+    # carried two mono spaces (13.2 px); ICON_PX's box already contributes ~3 px of padding around
+    # its ~10 px of ink, so the sub-step lands the ink where the character's did.
+    row.setSpacing(theme.SPACE_XS)
+    row.addStretch(1)                       # the caps are a right-aligned gutter
+    row.addWidget(_key_cap(key.text))
+    icon = QLabel()
+    icon.setFixedSize(QSize(theme.ICON_PX, theme.ICON_PX))
+    icon.setAlignment(Qt.AlignCenter)
+    # C.text_dim: the KeyCap role's own colour, so the glyph reads at the same weight as the words
+    # it completes rather than louder than them.
+    icon.setPixmap(theme.icon(key.glyph, color=theme.C.text_dim)
+                   .pixmap(QSize(theme.ICON_PX, theme.ICON_PX)))
+    # A pixmap has no text for a screen reader; the meaning has to stay in the accessibility tree.
+    icon.setAccessibleName(key.glyph)
+    row.addWidget(icon)
+    row.setAlignment(Qt.AlignTop)
+    return box
 
 
 def _copy_column(spacing: int, inset: int = theme.SPACE_XL) -> tuple[QScrollArea, QVBoxLayout]:
@@ -280,15 +370,7 @@ class ShortcutsDialog(QDialog):
         grid.setVerticalSpacing(theme.SPACE_S)
         grid.setColumnStretch(1, 1)
         for r, (key, desc) in enumerate(rows):
-            key_label = QLabel(_key_text(key))
-            # A KEY CAP: BarLabel's dimmed small-header type in the MONO face, so the glyphs line
-            # up into a gutter. It shipped as BarLabel + a one-line `font-family` patch that spelled
-            # the whole mono stack out by hand — a literal copy of theme.MONO_STACK, in a file that
-            # cannot see it drift. It is theme's [role="KeyCap"] now; see that rule for why this is
-            # a missing role rather than a legitimate one-off.
-            key_label.setProperty("role", "KeyCap")
-            key_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
-            grid.addWidget(key_label, r, 0)
+            grid.addWidget(_key_widget(key), r, 0)
             grid.addWidget(WrapLabel(desc), r, 1)
         return body
 

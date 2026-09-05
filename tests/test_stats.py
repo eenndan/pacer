@@ -658,7 +658,10 @@ def test_stats_view_renders_every_group():
     _app()
     from studio.stats_panel import StatsView
     v = StatsView(_fake_view_session())
-    assert v.t_laps.value.text() == "2 · 1⊘ · 1⚠"          # valid · excluded · dropout
+    # valid · excluded · dropout. The count and its mark are SEPARATED (D1-04): unspaced, the ⊘ and
+    # the digit before it merged into one 40x19 ink run on the composite, and the tile's own legend
+    # and the DATA TRUST row below both already spaced it.
+    assert v.t_laps.value.text() == "2 · 1 ⊘ · 1 ⚠"
     assert v.t_duration.value.text() == "1:13:27"
     assert v.t_distance.value.text() == "65.6 km"
     assert v.t_clock.value.text() == "19:16–20:30"
