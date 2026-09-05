@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QEvent, QIODevice, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, QRect, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QActionGroup,
     QDesktopServices,
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QHBoxLayout,
     QInputDialog,
     QLabel,
     QMainWindow,
@@ -59,7 +60,7 @@ from .central_view import CentralView, undo_summary
 from .coaching_panel import OpportunitiesDialog
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
-from .overlays import BUSY_DEMO_LABEL, PBToast, WelcomeView
+from .overlays import BUSY_DEMO_LABEL, PBToast, WelcomeView, column_metrics
 from .session import DEFAULT_SAMPLE, fmt_time
 from .widgets import chip, set_tone
 from .workers import DemoResolveWorker, SessionLoadWorker, VideoExportWorker
@@ -78,6 +79,10 @@ STATUS_MS = 6000
 # card up forever (QA L10-01/L10-06). The FIRST load has nothing to keep on screen, so it shows
 # the card immediately (see _arm_loading_placeholder).
 LOAD_PLACEHOLDER_MS = 400
+# "this attribute was not there" — distinct from a stored None/False, so a save/restore around an
+# export grab can put a widget back EXACTLY as it was instead of inventing state on it
+# (_grab_report_map_png).
+_ABSENT = object()
 # The two "a file on disk exists and this build could not use it" notices, module-level because the
 # tests assert them against the branch that raises them rather than against a re-typed literal.
 #
@@ -953,41 +958,111 @@ class StudioWindow(QMainWindow):
         There is deliberately no dashed border here: dashes mean "drop a file here", which stopped
         being true the moment a file was dropped. (This is the shape D2 §8.1's proposed
         `widgets.EmptyState` takes — icon?/title/body/busy/action on one rhythm — so it can adopt
-        that object when it lands, without a competing one being invented here first.)"""
+        that object when it lands, without a competing one being invented here first.)
+
+        THE RHYTHM LANDED; THE ANCHORS DID NOT, AND THAT IS WHAT THE FOUR `column_metrics` READS
+        ARE FOR. Sharing margins, spacing and the headline role made the two frames the same
+        MATERIAL while leaving them in different PLACES — measured after that fix, the headline
+        jumped 57.0 px and the one button 108.7 px, both FURTHER than before it (13.5 and 62.9),
+        because three correct repairs each moved one frame without re-measuring the other. Four
+        reads off the welcome column close it, and none of them undoes a repair:
+
+          * the same reserved ERROR SLOT above the card. D2-09 put the welcome's failure message on
+            the canvas above its card; the loading card had no such slot, so the two cards were
+            centred against different column heights.
+          * a leading row of exactly the drop glyph's height, holding the busy bar. The welcome's
+            glyph sits 52 px above its headline; without that row the loading headline started at
+            the card's top margin. The bar moving up into it is also the better reading — the
+            indicator, then what it is doing, then how to stop it.
+          * the secondary line reserving the tagline's two lines, so the two columns are the same
+            HEIGHT and vertical centring puts their cards in the same place. The slot exists even
+            when there is no recording label (the demo fetch), for the same reason the error slot
+            exists when there is no error.
+          * Cancel floored at the PRIMARY action's width, in an action row that reserves the
+            secondary action's slot beside it. D4-06 floored `demo_btn` at its busy width so a
+            click on it stops moving the row; that correctly slid the centred pair, which left
+            "Open recording…" 97 px left of a centred Cancel. Reserving the same second slot here
+            puts Cancel in the primary's place instead of in the pair's centre."""
+        m = column_metrics()
         label = chapters.recording_label(paths)
         headline = title or "Loading telemetry…"
         container = QWidget()
         outer = QVBoxLayout(container)
         outer.setAlignment(Qt.AlignCenter)
+        # The welcome frame's reserved error slot — the SAME widget, empty and hidden with
+        # RetainSizeWhenHidden. This card has no failure message of its own, but it must be centred
+        # against the same column or it sits higher than the frame it replaces. A real hidden
+        # widget rather than `outer.addSpacing(...)`: Qt marks an explicit spacing item so the
+        # layout puts NO spacing beside it, which would have dropped the 6 px the welcome column
+        # has under its slot and left the two cards 1 px apart for no stated reason.
+        error_slot = QLabel("")
+        error_slot.setProperty("role", "WelcomeError")
+        error_slot.setAlignment(Qt.AlignCenter)
+        error_slot.setWordWrap(True)
+        error_slot.setMinimumHeight(m.error_h)
+        slot_policy = error_slot.sizePolicy()
+        slot_policy.setRetainSizeWhenHidden(True)
+        error_slot.setSizePolicy(slot_policy)
+        error_slot.setVisible(False)
+        outer.addWidget(error_slot, 0, Qt.AlignCenter)
         card = QFrame()
         v = QVBoxLayout(card)
         v.setAlignment(Qt.AlignCenter)
-        v.setContentsMargins(theme.SPACE_3XL, theme.SPACE_2XL,
-                             theme.SPACE_3XL, theme.SPACE_2XL)
+        # The welcome zone's own margins PLUS its dashed hairline, which is part of that box and
+        # not of this one (`QFrame#WelcomeDropZone { border: SPACE_XXS dashed }`). Without it the
+        # two cards differ by exactly the border on all four sides — 427x239 against 423x235 — and
+        # the content inside them by 2 px, which is the whole residual once the rows line up.
+        v.setContentsMargins(theme.SPACE_3XL + theme.SPACE_XXS, theme.SPACE_2XL + theme.SPACE_XXS,
+                             theme.SPACE_3XL + theme.SPACE_XXS, theme.SPACE_2XL + theme.SPACE_XXS)
         v.setSpacing(theme.SPACE_L)
         outer.addWidget(card, 0, Qt.AlignCenter)
-        title_label = QLabel(headline)
-        title_label.setProperty("role", "Title")
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setWordWrap(True)
-        v.addWidget(title_label, 0, Qt.AlignCenter)
-        if label:
-            subject = QLabel(label)
-            subject.setProperty("role", "LoadingTitle")
-            subject.setAlignment(Qt.AlignCenter)
-            subject.setWordWrap(True)
-            v.addWidget(subject, 0, Qt.AlignCenter)
         bar = QProgressBar()
         bar.setObjectName("LoadingBar")
         bar.setRange(0, 0)          # indeterminate: self-animates, no timer to leak, dies with the widget
         bar.setTextVisible(False)
         bar.setFixedWidth(220)
-        v.addWidget(bar, 0, Qt.AlignCenter)
-        if on_cancel is not None:
+        # The glyph slot, holding the bar: a plain QWidget with no objectName, so it paints nothing
+        # (Qt only runs the stylesheet's box painting for a QWidget subclass with WA_StyledBackground
+        # set) and only carries the row's height.
+        busy_row = QWidget()
+        busy_row.setFixedHeight(m.glyph_h)
+        busy = QVBoxLayout(busy_row)
+        busy.setContentsMargins(0, 0, 0, 0)
+        busy.addWidget(bar, 0, Qt.AlignCenter)
+        v.addWidget(busy_row, 0, Qt.AlignCenter)
+        title_label = QLabel(headline)
+        title_label.setProperty("role", "Title")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setWordWrap(True)
+        v.addWidget(title_label, 0, Qt.AlignCenter)
+        subject = QLabel(label)
+        subject.setProperty("role", "LoadingTitle")
+        subject.setAlignment(Qt.AlignCenter)
+        subject.setWordWrap(True)
+        subject.setMinimumHeight(m.secondary_h)
+        if not label:   # the demo fetch names no recording — the SLOT still has to be there
+            policy = subject.sizePolicy()
+            policy.setRetainSizeWhenHidden(True)
+            subject.setSizePolicy(policy)
+            subject.setVisible(False)
+        v.addWidget(subject, 0, Qt.AlignCenter)
+        if on_cancel is not None:   # every production path passes one; see _arm_loading_placeholder
             cancel = QPushButton("Cancel")
             cancel.setObjectName("LoadingCancel")
+            cancel.setMinimumWidth(m.primary_w)
             cancel.clicked.connect(on_cancel)
-            v.addWidget(cancel, 0, Qt.AlignCenter)
+            actions = QHBoxLayout()
+            actions.setAlignment(Qt.AlignCenter)
+            actions.setContentsMargins(0, 0, 0, 0)
+            actions.addWidget(cancel)
+            # The welcome row's SECOND slot, kept open. A real (empty) widget for the same reason
+            # the error slot above is one — an `addSpacing` item suppresses the layout spacing
+            # beside it, which is 16 px of the offset this row exists to remove. It paints the
+            # canvas the blanket QWidget rule gives it, which is the colour already behind it.
+            reserved = QWidget()
+            reserved.setFixedWidth(m.secondary_w)
+            actions.addWidget(reserved)
+            v.addLayout(actions)
         # Held so a long UI-thread stage can rename the headline on the card ALREADY ON SCREEN
         # (see _announce_stage) instead of leaving it asserting a stage that finished.
         self._loading_card = container
@@ -1835,9 +1910,46 @@ class StudioWindow(QMainWindow):
             toast = PBToast(title, body, on_progress=self._open_library,
                              on_share=on_share, parent=self)
             self._pb_toast = toast
-            toast.show_for(self)
+            toast.show_for(self, keepout=self._pb_card_keepout)
         except Exception as exc:  # noqa: BLE001 — a celebration must never break a load
             print(f"studio: personal-best moment not shown ({exc!r}).", flush=True)
+
+    def _pb_card_keepout(self):
+        """The band the PB card must not cover, in this window's coordinates: the lap grid's
+        SELECTED row, full viewport width. None when there isn't one to protect.
+
+        WHY THE SELECTION IS THE RIGHT RECTANGLE. An overlay may cover rows; it may not cover the
+        row the app has just put the user on. On the path this card fires from that row IS the ★
+        session best — the load selects it and scrolls it into view — so the rectangle protected
+        here is the one holding the very lap time the card is announcing. Read through the
+        selection rather than through the lap table's own best-lap bookkeeping so this stays
+        public Qt on a widget another module owns: a QAbstractItemView's selection, its
+        `visualRect` and its viewport.
+
+        Returns None — i.e. "place the card as before" — for every uncertainty: no view, no grid,
+        the Laps page not the one on screen (the grid is then not visible), nothing selected, the
+        selected row scrolled out of the viewport, or any raise at all. A celebration must never
+        break a load, and this runs three times per celebration."""
+        try:
+            grid = getattr(getattr(getattr(self, "view", None), "table", None), "table", None)
+            if grid is None or not grid.isVisible():
+                return None
+            model = grid.selectionModel()
+            rows = model.selectedRows() if model is not None else []
+            if not rows:
+                return None
+            viewport = grid.viewport()
+            band = QRect()
+            for index in rows:
+                cell = grid.visualRect(index)
+                band = band.united(QRect(0, cell.y(), viewport.width(), cell.height()))
+            band = band.intersected(viewport.rect())
+            if band.isEmpty():
+                return None
+            return QRect(viewport.mapTo(self, band.topLeft()), band.size())
+        except Exception as exc:  # noqa: BLE001 — placement is best-effort; never fail a load
+            print(f"studio: personal-best card keep-out not resolved ({exc!r}).", flush=True)
+            return None
 
     def _open_library(self):
         """File ▸ Library…: open the session-library dialog (a sortable list of analyzed
@@ -2592,30 +2704,54 @@ class StudioWindow(QMainWindow):
         it. Its "Drag = start / sector line" row goes with the chrome — it describes a gesture a
         still image can't offer, pointing at handles this grab just hid. Falls back to the plain
         grab for a bare widget (tests) with no such context; every legend touch is best-effort,
-        because chrome must never fail an export."""
+        because chrome must never fail an export.
+
+        AND THE PLATE IS FORCED **OPEN**, because keeping it is not the same as showing it. PR #190
+        made the key's collapse a PERSISTED preference (before it, collapse reset on every launch
+        and every recording, so a report from a fresh window always carried the full key). One
+        click on the plate, ever, and every report from then on shipped a 34 px `› Map key` title
+        bar instead of the 88 px three-row key — a document whose own map paints brake triangles
+        and corner-apex dots with nothing anywhere explaining them, plus a disclosure chevron in a
+        still image where a click does nothing. An on-screen preference must not decide what a
+        document says, so the grab opens the plate and puts the user's choice back afterwards; the
+        choice is written by `_MapLegend.mousePressEvent`'s toggle callback, which this never
+        touches, so `prefs.map_key_collapsed()` is untouched too.
+
+        What is NOT overridden is `_fits`: #190's short-canvas fallback is physics, not a
+        preference. `_reposition_key` re-derives it from the canvas the splitter actually left, so
+        a map dragged below the plate's own height still exports the title-only plate — forcing it
+        open there would hand the document a plate clipped at the canvas edge, which is the exact
+        defect #190 fixed."""
         grab_clean = getattr(map_view, "grab_clean", None)
         if grab_clean is None:
             return self._grab_png(map_view)
         with grab_clean():
             key = getattr(map_view, "_map_key", None)
             rows = getattr(key, "_ROWS", None)
-            shadowed = False
+            # The user's collapse choice, or _ABSENT for a legend that has no such concept (a
+            # bare stand-in): restoring it must not INVENT the attribute on the way back.
+            collapsed = getattr(key, "_collapsed", _ABSENT)
+            touched = False
             try:
                 if rows is not None:
                     # Instance-level shadow of the legend's class-level row list; `_relayout` sizes
                     # the plate to the new row count and the map re-pins it to its corner.
                     key._ROWS = tuple(r for r in rows if r[0] != "start")
-                    shadowed = True
+                    if collapsed is not _ABSENT:
+                        key._collapsed = False  # the DOCUMENT's key, not the screen's preference
+                    touched = True
                     key._relayout()
-                    map_view._reposition_key()
+                    map_view._reposition_key()  # re-derives _fits from the real canvas height
                     key.show()
             except Exception as exc:  # noqa: BLE001 — a legend tweak never fails an export
                 print(f"studio: report map key not adjusted ({exc!r}).", flush=True)
             try:
                 return self._grab_png(map_view)
             finally:
-                if shadowed:
+                if touched:
                     del key._ROWS  # back to the class attribute
+                    if collapsed is not _ABSENT:
+                        key._collapsed = collapsed
                     key._relayout()
                     map_view._reposition_key()
 

@@ -566,6 +566,101 @@ def test_the_loading_card_is_the_welcome_screens_second_frame():
     print("test_the_loading_card_is_the_welcome_screens_second_frame OK")
 
 
+def _frame_anchors(win):
+    """(headline rect, primary-control rect, card rect) of whichever frame is on screen, in the
+    WINDOW's coordinates — the only space in which "did it move" is a question about the eye."""
+    from PySide6.QtCore import QPoint, QRect
+
+    def rect(w):
+        return QRect(w.mapTo(win, QPoint(0, 0)), w.size())
+
+    central = win.centralWidget()
+    if isinstance(central, WelcomeView):
+        title = next(q for q in central.findChildren(QLabel) if q.text() == "Pacer")
+        return rect(title), rect(central.open_btn), rect(central.drop_zone)
+    title = win._loading_headline
+    cancel = next(b for b in central.findChildren(QPushButton)
+                  if b.objectName() == "LoadingCancel")
+    return rect(title), rect(cancel), rect(title.parentWidget())
+
+
+def test_the_two_frames_of_one_wait_are_anchored_to_each_other():
+    """SW2-02: PR #191 made the loading card the welcome screen's second frame in MATERIAL — same
+    margins, same 16 px rhythm, same 22 px role="Title" headline — and left it in a different
+    PLACE. Measured two milliseconds apart at 1440x900, after that fix: the headline's centre
+    jumped 57.0 px and the one button on screen 108.7 px, both FURTHER than before it (13.5 and
+    62.9), because three correct repairs each moved one frame without re-measuring the other.
+
+    Both anchors must now coincide EXACTLY, and swept 1 px at a time rather than sampled at two
+    sizes: the columns are vertically centred, so the failure mode is an odd/even parity in
+    `(window - column) / 2` that a two-size test walks straight past."""
+    win = StudioWindow([])
+    win.show()
+    try:
+        worst = {"headline": (0, None), "button": (0, None)}
+        sizes = ([(1440, h) for h in range(700, 901)]
+                 + [(w, 900) for w in range(973, 1441)])
+        for size in sizes:
+            win._show_welcome()
+            win.resize(*size)
+            _settle(6)
+            w_head, w_btn, w_card = _frame_anchors(win)
+            win._show_loading_placeholder(["/nowhere/GX010062.MP4"], on_cancel=lambda: None)
+            _settle(4)
+            l_head, l_btn, l_card = _frame_anchors(win)
+            for name, a, b in (("headline", w_head, l_head), ("button", w_btn, l_btn)):
+                dx = b.center().x() - a.center().x()
+                dy = b.center().y() - a.center().y()
+                jump = (dx * dx + dy * dy) ** 0.5
+                if jump > worst[name][0]:
+                    worst[name] = (jump, (size, a, b))
+            assert w_card == l_card, (
+                f"{size}: the two frames' cards are {w_card} and {l_card}")
+        for name, (jump, where) in worst.items():
+            assert jump == 0, f"the {name} moves {jump:.1f} px between the two frames at {where}"
+    finally:
+        win.close()
+        _settle()
+    print(f"test_the_two_frames_of_one_wait_are_anchored_to_each_other OK "
+          f"({len(sizes)} sizes swept at 1 px, headline and button both 0.0 px)")
+
+
+def test_the_loading_cards_reserved_lines_are_the_welcome_columns_own():
+    """The two reservations the anchor rests on, checked against the thing they are copied from —
+    so a copy edit or a type-step change goes RED here instead of silently un-anchoring the seam.
+
+      * `SECONDARY_LINES` is the number of lines the welcome tagline actually takes at the card's
+        own measure. The loading card's one-line recording label reserves the same, which is what
+        makes the two columns the same height under a centred layout.
+      * `column_metrics().primary_w` is what "Open recording…" asks for, and Cancel is floored at
+        it, so the one button on screen lands in the primary's slot rather than in the centred
+        pair's middle (D4-06 floored the demo button, which slid that pair 40 px left)."""
+    from studio.overlays import SECONDARY_LINES, column_metrics
+
+    win = StudioWindow([])
+    win.resize(1440, 900)
+    win.show()
+    _settle(8)
+    try:
+        welcome = win.centralWidget()
+        subtitle = next(q for q in welcome.findChildren(QLabel)
+                        if q.property("role") == "WelcomeSubtitle")
+        m = column_metrics()
+        assert subtitle.height() == m.secondary_h, (
+            f"the tagline is {subtitle.height()} px but the loading card reserves "
+            f"{m.secondary_h} ({SECONDARY_LINES} lines)")
+        assert welcome.open_btn.width() == m.primary_w, (welcome.open_btn.width(), m.primary_w)
+        assert welcome.demo_btn.width() == m.secondary_w, (welcome.demo_btn.width(), m.secondary_w)
+        assert welcome.error_label.height() == m.error_h, (welcome.error_label.height(), m.error_h)
+        assert welcome.drop_icon.height() == m.glyph_h, (welcome.drop_icon.height(), m.glyph_h)
+    finally:
+        win.close()
+        _settle()
+    print("test_the_loading_cards_reserved_lines_are_the_welcome_columns_own OK "
+          f"(glyph {m.glyph_h} · error {m.error_h} · secondary {m.secondary_h} · "
+          f"primary {m.primary_w} · secondary action {m.secondary_w})")
+
+
 def test_the_demo_card_offers_the_same_cancel_the_file_card_does():
     """D2-13: the demo fetch showed the SAME card in the SAME place for the SAME kind of wait, and
     shipped without the one control that card has — so the only multi-second wait in the app you
@@ -615,6 +710,8 @@ def _run_all():
     test_the_status_bar_exists_before_the_first_message()
     test_the_loading_card_names_the_stage_that_is_about_to_block()
     test_the_loading_card_is_the_welcome_screens_second_frame()
+    test_the_two_frames_of_one_wait_are_anchored_to_each_other()
+    test_the_loading_cards_reserved_lines_are_the_welcome_columns_own()
     test_the_demo_card_offers_the_same_cancel_the_file_card_does()
     print("ALL FIRST-RUN-PATH TESTS OK")
     _ = chapters

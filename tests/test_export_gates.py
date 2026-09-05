@@ -293,14 +293,26 @@ def test_the_report_is_written_in_the_display_unit_and_the_csv_is_not():
 
 # ============================================================ L12-04 — a document's map grab
 class _FakeLegend(QWidget):
-    """The map key's surface the report grab touches: a row list, a relayout, a visibility flag."""
+    """The map key's surface the report grab touches: a row list, a relayout, a visibility flag —
+    AND ITS TWO COLLAPSE INPUTS, which this stand-in did not have.
+
+    `_MapLegend` has had them since PR #190: `_collapsed` is the USER's choice and is PERSISTED to
+    prefs.json, `_fits` is whether the canvas is tall enough for the full plate, and
+    `painted_collapsed()` is the OR of the two. A fake with no collapse concept cannot fail the
+    thing this section tests, so `test_the_report_map_keeps_its_key_…` went on passing while one
+    click on the plate, ever, shipped every later report a title-only key."""
 
     _ROWS = (("marker", "Video position"), ("brake", "Brake point"),
              ("corner", "Corner apex (C#)"), ("start", "Drag = start / sector line"))
 
-    def __init__(self):
+    def __init__(self, collapsed=False, fits=True):
         super().__init__()
         self.relayouts = 0
+        self._collapsed = collapsed   # the user's persisted choice
+        self._fits = fits             # room on the canvas for the full plate
+
+    def painted_collapsed(self):
+        return self._collapsed or not self._fits
 
     def _relayout(self):
         self.relayouts += 1
@@ -309,10 +321,10 @@ class _FakeLegend(QWidget):
 class _FakeMap(QWidget):
     """A grab-able widget with the MapView contract the two clean grabs use."""
 
-    def __init__(self):
+    def __init__(self, collapsed=False, fits=True):
         super().__init__()
         self.resize(60, 40)
-        self._map_key = _FakeLegend()
+        self._map_key = _FakeLegend(collapsed=collapsed, fits=fits)
         self._map_key.setParent(self)
         self._map_key.show()
         self.at_grab = []
@@ -334,7 +346,8 @@ class _FakeMap(QWidget):
         return _ctx()
 
     def grab(self):
-        self.at_grab.append((self._map_key.isHidden(), tuple(self._map_key._ROWS)))
+        self.at_grab.append((self._map_key.isHidden(), tuple(self._map_key._ROWS),
+                             self._map_key.painted_collapsed()))
         return super().grab()
 
 
@@ -348,8 +361,9 @@ def test_the_report_map_keeps_its_key_and_loses_the_interaction_chrome():
     png = win._grab_report_map_png(fake)
     assert png[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
     assert len(fake.at_grab) == 1, fake.at_grab
-    hidden, rows = fake.at_grab[0]
+    hidden, rows, painted_collapsed = fake.at_grab[0]
     assert not hidden, "the report grab hid the map key a document needs"
+    assert not painted_collapsed, "the report grab kept the key but painted it collapsed"
     labels = [label for _kind, label in rows]
     assert "Brake point" in labels and "Corner apex (C#)" in labels, labels
     assert not any(kind == "start" for kind, _label in rows), labels
@@ -363,6 +377,49 @@ def test_the_report_map_keeps_its_key_and_loses_the_interaction_chrome():
     assert not fake._map_key.isHidden(), "the live map key stayed hidden after the grab"
     win.hide()
     print("test_the_report_map_keeps_its_key_and_loses_the_interaction_chrome OK")
+
+
+def test_the_report_map_opens_a_key_the_user_collapsed_on_screen():
+    """SW4-01: an on-screen PREFERENCE must not decide what a document says.
+
+    PR #190 made the map key's collapse persist. Before it, collapse reset on every launch and on
+    every recording, so a report exported from a fresh window always carried the full key; after
+    it, one click on the plate — ever — put a 34 px `› Map key` title bar into every report from
+    then on, in a document whose own map paints brake triangles and corner-apex dots with nothing
+    anywhere explaining them. Measured through the app's own grab on the real MapView: 88 px and
+    three rows with the preference open, 34 px and the title alone with it closed.
+
+    So the grab opens the plate, and puts the user's choice back — the toggle callback that writes
+    prefs.json is never invoked, so `prefs.map_key_collapsed()` cannot move either."""
+    win = _window(FakeSession())
+    fake = _FakeMap(collapsed=True)
+    win._grab_report_map_png(fake)
+    _hidden, rows, painted_collapsed = fake.at_grab[0]
+    assert not painted_collapsed, (
+        "the exported document got the collapsed plate the SCREEN was set to")
+    assert len(rows) == 3, rows
+    assert fake._map_key._collapsed is True, (
+        "the export changed the user's on-screen collapse choice")
+    win.hide()
+    print("test_the_report_map_opens_a_key_the_user_collapsed_on_screen OK")
+
+
+def test_the_report_map_leaves_the_short_canvas_fallback_alone():
+    """...and the other half: `_fits` is PHYSICS, not a preference, so the grab must not override
+    it. One drag of the map/charts splitter takes the canvas to 72 px (also the window's own
+    973x528 minimum), where the three-row plate wants 88 px + an 8 px inset. #190's fallback paints
+    the title-only plate there rather than letting Qt cut the plate at the canvas edge; forcing it
+    open for the export would hand the document exactly that clipped plate. Measured: the whole map
+    figure is 917x96 in that state, so the plate would be 92 % of it and still not fit."""
+    win = _window(FakeSession())
+    fake = _FakeMap(collapsed=False, fits=False)
+    win._grab_report_map_png(fake)
+    _hidden, _rows, painted_collapsed = fake.at_grab[0]
+    assert painted_collapsed, (
+        "the grab forced a plate open on a canvas with no room for it — the clipped-plate defect")
+    assert fake._map_key._fits is False
+    win.hide()
+    print("test_the_report_map_leaves_the_short_canvas_fallback_alone OK")
 
 
 def test_the_report_map_grab_survives_a_map_without_the_contract():
@@ -668,6 +725,8 @@ def _run_all():
     test_the_mp4_export_obeys_the_same_trust_verdict_as_the_lap_card()
     test_the_report_is_written_in_the_display_unit_and_the_csv_is_not()
     test_the_report_map_keeps_its_key_and_loses_the_interaction_chrome()
+    test_the_report_map_opens_a_key_the_user_collapsed_on_screen()
+    test_the_report_map_leaves_the_short_canvas_fallback_alone()
     test_the_report_map_grab_survives_a_map_without_the_contract()
     test_the_report_figure_width_divides_out_the_screens_pixel_ratio()
     test_the_report_export_states_a_layout_width_for_every_figure()
