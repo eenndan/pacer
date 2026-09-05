@@ -520,7 +520,7 @@ def test_map_empty_state_shown_only_with_zero_valid_laps():
     text = mv2._empty_state.text()
     assert text, "empty-state placeholder must carry a message"
     assert "start/finish" in text.lower() and "drag" in text.lower(), text
-    assert mv2._empty_state.property("role") == "EmptyState"
+    assert mv2._empty_state.objectName() == "EmptyState"   # widgets.EmptyState, the one object
 
     # Recovering laps (a dragged start line → refresh_overlays) hides the empty state again.
     no_laps._valid_cache = [0, 1]

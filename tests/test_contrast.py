@@ -449,6 +449,13 @@ HOSTS = {
     "QLabel#PBToastBody": (C.surface_active,),
     "QPushButton#PBToastLink": (C.surface_active,),
     "QPushButton#PBToastClose": (C.surface_active,),
+    # The app's ONE empty state (widgets.EmptyState). Its container carries the surface when it
+    # replaces a panel's content (`card="true"`) and nothing when it floats on the window canvas,
+    # so its two type roles have to clear AA on BOTH — which is the point of the object: the same
+    # words at the same size on either surface, rather than a role that meant `C.surface` at five
+    # sites and `C.canvas` at a sixth.
+    'QLabel[role="EmptyTitle"]': (C.canvas, C.surface),
+    'QLabel[role="EmptyBody"]': (C.canvas, C.surface),
     # The welcome / loading overlays fill the window, so their type is on the canvas.
     'QLabel[role="WelcomeSubtitle"]': (C.canvas,),
     'QLabel[role="WelcomeError"]': (C.canvas,),
@@ -694,7 +701,7 @@ def test_text_muted_is_confined_to_wcag_exempt_disabled_chrome():
     assert contrast(C.text_dim, C.canvas) >= 4.5
     qss = theme._build_qss()
     # the four roles that were borrowing the disabled token are off it
-    for role in ('QLabel[role="EmptyState"]', 'QLabel[role="WelcomeSubtitle"]',
+    for role in ('QLabel[role="EmptyBody"]', 'QLabel[role="WelcomeSubtitle"]',
                  'QLabel[role="WelcomeError"]'):
         block = qss.split(role)[1].split("}")[0]
         assert C.text_muted not in block, f"{role} is still using the disabled-chrome token"
@@ -782,7 +789,7 @@ def test_the_theme_never_takes_a_widgets_own_font_away():
 
     The app-wide default belongs in apply_theme's app.setFont(), which LOSES to setFont. A widget
     that genuinely wants a fixed size still takes a rule of its own, keyed on objectName or a role
-    property (#DiffBox, [role="EmptyState"] …) — those match one surface, not every widget."""
+    property (#DiffBox, [role="EmptyBody"] …) — those match one surface, not every widget."""
     from PySide6.QtWidgets import QLabel, QWidget
 
     # 1. the shape: no blanket selector may declare a font. Comments go first — a QSS comment can

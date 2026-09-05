@@ -234,7 +234,7 @@ def test_zero_valid_laps_never_asks_for_a_lap():
 
     ct = _keep(LT.CornerTable(_FakeCornerSession()))            # laps exist, none selected
     ct.refresh()
-    assert "Select a lap" in ct.empty.text(), ct.empty.text()
+    assert "No lap selected" in ct.empty.text(), ct.empty.text()
 
     ct = _keep(LT.CornerTable(_FakeCornerSession(n=0)))         # a lap, but no corners
     ct.set_lap(0)

@@ -520,8 +520,17 @@ class StatsView(QWidget):
         self.provisional_banner.setToolTip(PROVISIONAL_TOOLTIP)
         self.provisional_banner.setVisible(False)
         col.addWidget(self.provisional_banner)
+        # NOT AN EMPTY STATE — a BANNER, and that distinction is the whole of QA D2-06. It wore
+        # `role="EmptyState"`, the same role five centred, card-backed placeholders wore, while
+        # this one rendered LEFT-aligned; the reason it did is that the page BELOW it keeps
+        # rendering (SESSION totals and the DATA TRUST card are real with or without a lap), so it
+        # qualifies content rather than replacing it. One role producing two presentations is not a
+        # role. It takes the amber call-to-action treatment its own sibling two lines up already
+        # owns — the two are mutually exclusive by construction (see refresh: the provisional
+        # banner needs `valid`, this needs `not valid`), so they are one banner slot with two
+        # messages, never a stack of two amber strips.
         self.no_laps_note = QLabel(NO_LAPS_TEXT)
-        self.no_laps_note.setProperty("role", "EmptyState")  # the lap grid's empty-state styling
+        self.no_laps_note.setObjectName("ProvisionalBanner")
         self.no_laps_note.setWordWrap(True)
         self.no_laps_note.setVisible(False)
         col.addWidget(self.no_laps_note)

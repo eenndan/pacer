@@ -18,7 +18,6 @@ import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
-    QLabel,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -28,7 +27,7 @@ from . import data_quality, theme, units
 from ._signal import fmt_time, lap_label
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
 from .theme import C
-from .widgets import ToggleButton, budget_plot_gutters, budget_plot_min_height
+from .widgets import EmptyState, ToggleButton, budget_plot_gutters, budget_plot_min_height
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -392,10 +391,10 @@ class PlotsView(QWidget):
         # E1: empty-state placeholder shown (via the stack) when there are no laps to plot. L6-07:
         # it names the recovery action too, and refresh() switches the three chart controls off with
         # it — they were staying live and inert over a chart that cannot draw anything.
-        self._empty = QLabel(EMPTY_TEXT)
-        self._empty.setProperty("role", "EmptyState")
-        self._empty.setAlignment(Qt.AlignCenter)
-        self._empty.setWordWrap(True)
+        # The app's ONE empty-state object. This pane is the widest of the four, which is exactly
+        # why it needed the object: unbounded, its sentence set 134 characters per line against the
+        # map's 57 in the same frame (QA D2-12).
+        self._empty = EmptyState(EMPTY_HEADLINE, data_quality.no_laps_body())
 
         # The view is now JUST the charts; the x-mode toggle lives in app.py's consolidated bar.
         self._stack = QStackedWidget()

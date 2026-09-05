@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 
 from . import data_quality, theme, units
 from ._signal import fmt_time, lap_label
-from .widgets import NUM_ROLE, NumItem, set_tone
+from .widgets import NUM_ROLE, EmptyState, NumItem, set_tone
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -875,11 +875,10 @@ class LapTable(QWidget):
         self.table.viewport().installEventFilter(self)   # re-fit on every real width change
 
         # Empty state: zero valid laps would show a blank grid, so stack a placeholder and flip to
-        # it in refresh().
-        self._empty = QLabel(NO_LAPS_TEXT)
-        self._empty.setProperty("role", "EmptyState")
-        self._empty.setAlignment(Qt.AlignCenter)
-        self._empty.setWordWrap(True)
+        # it in refresh(). The app's ONE empty-state object (widgets.EmptyState) — headline in its
+        # own slot, body at the app's one measure, card surface — where this was a single wrapped
+        # QLabel fusing both into one string with "\n\n" and setting 72 characters per line.
+        self._empty = EmptyState(NO_LAPS_HEADLINE, data_quality.no_laps_body())
         self._stack = QStackedWidget()
         self._stack.addWidget(self.table)   # index 0: the populated table
         self._stack.addWidget(self._empty)  # index 1: the empty-state placeholder
@@ -1831,11 +1830,10 @@ class CornerTable(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         self._num_font = theme.mono_font(theme.TABLE)
         # Empty state (was a bare header grid — the one surface without one): says WHY there
-        # are no rows (no lap selected vs no corners detected) instead of a silent void.
-        self.empty = QLabel("")
-        self.empty.setProperty("role", "EmptyState")
-        self.empty.setAlignment(Qt.AlignCenter)
-        self.empty.setWordWrap(True)
+        # are no rows (no lap selected vs no corners detected) instead of a silent void. Same
+        # object as the Laps grid's, so the two pages of one panel cannot present the same fact
+        # two ways; refresh() sets both slots at once through set_state.
+        self.empty = EmptyState("")
         self.empty.setVisible(False)
         # The Δ-baseline caption (L3-05) — visible only on the lap the Δ columns measure against,
         # where every Δ is a dash. Muted, one line, above the grid it explains.
@@ -2050,11 +2048,17 @@ class CornerTable(QWidget):
         self._hover_row = -1
         self.empty.setVisible(not stats)
         if not stats:
-            self.empty.setText(
-                NO_LAPS_TEXT if not self._has_selectable_laps() else
-                "Select a lap to see its corners." if not ok else
-                "No corners detected for this session yet — corner analysis needs a few "
-                "clean laps of track shape.")
+            # WHAT HAPPENED in the title, WHY + WHAT NEXT in the body — the same split the Laps
+            # grid, the charts panel, the map and the Library dialog now make, so the three cases
+            # differ in their words and in nothing else.
+            self.empty.set_state(*(
+                (NO_LAPS_HEADLINE, data_quality.no_laps_body())
+                if not self._has_selectable_laps() else
+                ("No lap selected.",
+                 "Pick a lap in the Laps tab to see its corner times, apex speeds and grip.")
+                if not ok else
+                ("No corners detected yet.",
+                 "Corner analysis needs a few clean laps of track shape for this session.")))
         corner_list = self.session.corners.corner_list() if stats else []
         bests = self.session.corners.corner_session_bests() if stats else []
         # Per-corner grip utilisation (%); [] when there's no g signal → the column shows a dash.

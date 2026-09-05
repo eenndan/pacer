@@ -1050,9 +1050,9 @@ def test_panel_shows_need_more_laps_state_not_empty_box():
     panel = OpportunitiesPanel(s)
     assert panel.body.currentIndex() == 1, "too few laps -> the excluded (friendly) page"
     assert panel.table.rowCount() == 0, "the excluded state must not fill the table"
-    msg = panel.empty_label.text().lower()
+    msg = panel.empty_state.text().lower()
     assert "clean" in msg and "lap" in msg, msg
-    assert str(K.MIN_LAPS) in panel.empty_label.text(), "the friendly state names the lap minimum"
+    assert str(K.MIN_LAPS) in panel.empty_state.text(), "the friendly state names the lap minimum"
     print("ok panel: <MIN_LAPS -> friendly need-more-laps state, no empty box")
 
 
