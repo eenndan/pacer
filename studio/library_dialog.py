@@ -13,7 +13,7 @@ Layout::
     │  N analyzed recordings  (M of N when filtered) │  ← header count, of what is ON SCREEN
     │  [search…]                    [track filter ▾] │  ← live filter row (track/date substring + a
     ├───────────────────────────────────────────────┤     per-track combo, plus an Unknown-track
-    │  Date │ Track │ Best │ Theoretical             │     bucket) so it scales to 50–200
+    │  Date │ Track │ Best │ Ideal lap               │     bucket) so it scales to 50–200
     │  …      …       …      …                        │  ← sortable table (one row / recording);
     │  “No recordings match …” when the filter empties│     missing-file rows greyed + disabled; an
     ├───────────────────────────────────────────────┤     UNTRUSTWORTHY row carries a muted trust tag
@@ -31,10 +31,12 @@ given but FLOORED on the way back in (``_MIN_BROWSABLE_H``), so one drag to the 
 leave every future open showing 0.97 of one row; the privacy paragraph is a ``WrapLabel`` so the
 layout's own minimum accounts for the height its text really wraps to.
 
-Date/Best/Theoretical sort numerically via ``_NumItem``; Track sorts as text. The Open button +
+Date/Best/Ideal sort numerically via ``_NumItem``; Track sorts as text. The Open button +
 a double-click re-open the selected row's recording (disabled for a missing/junk row). Every time
-this dialog prints a lap time — the Best/Theoretical cells, the summary line, the chart's left axis
+this dialog prints a lap time — the Best/Ideal cells, the summary line, the chart's left axis
 (``_LapTimeAxis``) — it goes through ``_signal.fmt_time``, so one frame never carries two formats.
+The Ideal-lap column shows an em dash, and says why on hover, in the two states where it would
+otherwise reprint the Best-lap cell — see ``_ideal_cell``.
 
 TRUST (library schema v2): the table SHOWS every session, but an untrustworthy one (provisional
 start line / estimated timing / GPS dropout — see ``library.trust_label``) gets a muted tag and is
@@ -74,10 +76,35 @@ from .theme import C
 from .widgets import NUM_ROLE, EmptyState, WrapLabel
 from .widgets import NumItem as _NumItem
 
-# Column layout — index → header. Date/Best/Theoretical sort numerically (a key in NUM_ROLE);
+# Column layout — index → header. Date/Best/Ideal sort numerically (a key in NUM_ROLE);
 # Track sorts as text.
+#
+# The fourth column was headed "Theoretical" and, on every recording anyone had, printed a value
+# byte-identical to the "Best lap" cell beside it: the stored `theoretical` was the sum of the
+# session-best sector splits, sector lines default to none, and a lap with no sector line is one
+# sub-sector whose split is its lap time. It now carries `Session.theoretical_best` — the ideal lap,
+# the quickest time through each corner and each straight stitched together — so it is named for
+# what it holds and for what the rest of the app calls that number (the hero's "Δideal", the chart's
+# "Ideal lap" toggle). Two states still refuse to print a number rather than print a duplicate; see
+# `_ideal_cell_value`.
 _COL_DATE, _COL_TRACK, _COL_BEST, _COL_THEO = range(4)
-_HEADERS = ["Date", "Track", "Best lap", "Theoretical"]
+_HEADERS = ["Date", "Track", "Best lap", "Ideal lap"]
+
+# What the Ideal-lap cell hovers with when it has no number to show, appended to the row's own file
+# identity. Two causes, one em dash, and the user is told which:
+_IDEAL_STALE_TIP = (
+    "Ideal lap: not stored for this recording.\nIt was analyzed before pacer built the ideal lap "
+    "from your corners and straights, and the old value was just a copy of the best lap — so it "
+    "was retired rather than shown. Open this recording again to fill it in.")
+_IDEAL_ONE_DONOR_TIP = (
+    "Ideal lap: same as the best lap for this recording.\nOne lap was quickest through every "
+    "corner and every straight, so the ideal IS that lap — there is nothing stitched to show.")
+# "Same as the best lap" means same to the LAST DIGIT THIS TABLE PRINTS: `fmt_time` renders
+# `m:ss.mmm`, so half a displayed millisecond is the width of a tie. The same shape as the Δ
+# surfaces' `theme.DELTA_EVEN_EPS_S` (half a displayed centisecond), for the same reason — a
+# threshold that says "these would render the same string" needs no other justification, and one
+# picked in float-noise units (1e-9) would still let this column print two identical cells.
+_IDEAL_SAME_S = 0.0005
 
 # NUM_ROLE is studio.widgets' (it owns the shared numeric-sort cell `_NumItem` reads); the two
 # files each declared their own `Qt.UserRole` literal for the same job. `_NumItem` keeps its local
@@ -266,6 +293,30 @@ def _entry_tooltip(entry: dict) -> str:
         if len(paths) > 1:
             lines.append(f"+ {_plural(len(paths) - 1, 'more chapter')}")
     return "\n".join(lines)
+
+
+def _ideal_cell(entry: dict) -> tuple[float | None, str | None]:
+    """(value, why-there-is-none) for the Ideal-lap cell.
+
+    A number when the entry holds a real stitched ideal. Otherwise ``(None, reason)`` for the two
+    states where printing one would be a lie rather than a lap time:
+
+      * the entry predates schema v3, so its ``theoretical`` was retired by the migration (it held
+        a copy of ``best`` under the old definition — see studio/library.py);
+      * the ideal came out equal to the best lap, which means one lap won every segment.
+
+    The dialog is PACER-FREE and reads a plain dict, so it cannot call ``ideal_donor_lap_id()``
+    the way export_data and the Stats tile do. Equality with ``best`` is that state's signature:
+    the composite is a sum of per-segment minima over the clean laps, so it ties the best lap
+    exactly when one lap supplied every one of them, and any genuinely stitched ideal is strictly
+    faster (0.22–1.64 s on the recordings measured). A degenerate session ALSO writes the tie
+    through ``Session.library_entry``, which is why this is checked on read."""
+    theo, best = entry.get("theoretical"), entry.get("best")
+    if theo is None:
+        return None, _IDEAL_STALE_TIP
+    if best is not None and abs(float(theo) - float(best)) <= _IDEAL_SAME_S:
+        return None, _IDEAL_ONE_DONOR_TIP
+    return float(theo), None
 
 
 def _date_sort_key(date: str | None) -> float | None:
@@ -736,7 +787,7 @@ class LibraryDialog(QDialog):
             date = e.get("date")
             track = e.get("track")
             best = e.get("best")
-            theo = e.get("theoretical")
+            theo, theo_reason = _ideal_cell(e)
 
             date_item = _NumItem(date or "—")
             date_item.setData(NUM_ROLE, _date_sort_key(date))
@@ -776,7 +827,15 @@ class LibraryDialog(QDialog):
                 # Track is the one STRETCH column, so it is the one that elides (31 px of overflow
                 # at the dialog's own 489 px minimum width): its tooltip LEADS with its own full
                 # label, so the clipped tail is readable rather than merely truncated.
-                it.setToolTip(f"{track_text}\n\n{tooltip}" if col == _COL_TRACK else tooltip)
+                # ...and the Ideal-lap cell LEADS with why it is empty when it is, for the same
+                # reason: an em dash beside a real lap time reads as missing data, and one of the
+                # two causes is "re-open this recording", which the user can act on.
+                if col == _COL_TRACK:
+                    it.setToolTip(f"{track_text}\n\n{tooltip}")
+                elif col == _COL_THEO and theo_reason:
+                    it.setToolTip(f"{theo_reason}\n\n{tooltip}")
+                else:
+                    it.setToolTip(tooltip)
                 if disabled:
                     it.setForeground(dim)
                     it.setFlags(it.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)

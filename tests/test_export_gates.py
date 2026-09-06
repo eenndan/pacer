@@ -131,6 +131,12 @@ class FakeSession:
     def ideal_total(self):
         return 22.9
 
+    def ideal_donor_lap_id(self):
+        # None = the ideal is stitched from more than one lap (the normal case). card_data reads
+        # this to decide whether the card has an honest gap to state; a fake that omits it makes
+        # `_share_card_blocked` swallow the AttributeError and grey the card action out.
+        return None
+
     def session_date(self):
         return "2026-09-01"
 

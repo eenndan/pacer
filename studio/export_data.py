@@ -32,9 +32,11 @@ DROPOUT_FLAG = "gps-dropout"
 # laps.csv trailer (the session-summary footer rows mirroring the lap table's footer below
 # the table): a labeled section AFTER the lap rows, separated by one blank row, led by its own
 # `summary,time_s` mini-header so the file stays cleanly parseable (split on the blank row, or
-# filter the `summary` marker). Each (label, Session accessor) pair matches lap_table's
-# FOOTER_ROWS so the CSV trailer and the app's footer can never disagree. A None value (no
-# valid laps / a sector column with no data) writes a blank time cell, like the app's em-dash.
+# filter the `summary` marker). Each pair is (label, Session accessor), so the trailer can only
+# ever print what the app's own surfaces print. A None value (no valid laps / no corner
+# partition) writes a blank time cell, like the app's em-dash. The LABELS are the file's
+# machine-readable contract and stay as they are: "Theoretical best" is the ideal lap, which the
+# app's live surfaces call Δideal.
 SUMMARY_MARKER = "summary"
 SUMMARY_ROWS = (("Theoretical best", "theoretical_best"), ("Best rolling", "best_rolling_lap"))
 
@@ -111,23 +113,28 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
 
 def laps_summary(session) -> list[tuple[str, str]]:
     """The session-summary footer values for the laps.csv trailer — `(label, value_str)` per
-    SUMMARY_ROWS, mirroring the app's two stitched targets (F1): "Theoretical best" (the sum of the
-    session-best sector splits, shown in Stats ▸ SECTORS) and "Best rolling" (the fastest
+    SUMMARY_ROWS, mirroring the app's two stitched targets (F1): "Theoretical best" (the ideal lap
+    — the quickest time through each corner and each straight, stitched together; the same number
+    `Session.theoretical_best` feeds the app's hero Δideal) and "Best rolling" (the fastest
     start-anywhere full loop, shown in Stats ▸ PACE). The value is 3-decimal seconds (the same
     `_f3` precision as the lap rows' time_s column) or "" when the accessor returns None (no valid
-    laps / an all-partial sector column) — the app's tile shows the em-dash there. Read straight
-    from `Session.theoretical_best` / `best_rolling_lap`, so the trailer always equals what the app
-    displays.
+    laps / no corner partition) — the app's tile shows the em-dash there. Read straight from the
+    Session accessors, so the trailer always equals what the app displays.
 
-    On a 0-sector track the "Theoretical best" row is DROPPED (M2): with no sector lines it
-    degenerates to the best lap time — a bare duplicate that can read slower than "Best rolling" —
-    and the export has no tooltip to explain the clash, so (like the app, which hides the tile with
-    its SECTORS section) it's simply omitted. It returns once the track has sector lines."""
-    has_sectors = session.sector_count() > 0
+    THE ROW IS DROPPED WHEN THE IDEAL IS A DUPLICATE, AND SECTOR LINES ARE NOT WHAT DECIDES THAT.
+    This gate used to be `sector_count() == 0`, from the era when the theoretical best WAS the sum
+    of the session-best sector splits and a track with no sector line collapsed to one sub-sector
+    whose split is the best lap time. It now reads `ideal_donor_lap_id()`, which is the actual
+    degenerate condition: not None means ONE lap won every segment, so the "ideal" is that lap and
+    printing it beside the lap rows is a bare duplicate. The old gate is not merely stale, it was
+    inverted on the recordings that matter — D24 and Sandown both have ZERO sector lines, so the
+    export dropped the row on exactly the sessions where the ideal is now 0.94–1.64 s faster than
+    anything driven. (The Stats tile carries the twin of this gate.)"""
+    degenerate = session.ideal_donor_lap_id() is not None
     out: list[tuple[str, str]] = []
     for label, accessor in SUMMARY_ROWS:
-        if accessor == "theoretical_best" and not has_sectors:
-            continue  # omit the degenerate = best-lap duplicate on a 0-sector track
+        if accessor == "theoretical_best" and degenerate:
+            continue  # one lap won every segment: the "ideal" IS that lap, so it says nothing
         v = getattr(session, accessor)()
         out.append((label, _f3(v) if v is not None else ""))
     return out

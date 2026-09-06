@@ -851,7 +851,10 @@ def test_plots_brake_and_coast_overlays():
             return 0, {0: (sx, np.full(100, 60.0))}, {0: (sx, np.zeros(100))}
 
         def delta_to_ideal(self, ids, x_mode="distance"):
-            return None  # P7: no ideal envelope here → the Δ chart keeps its Δ-to-best baseline
+            return None  # P7: no ideal here → the Δ chart keeps its Δ-to-best baseline
+
+        def ideal_donor_lap_id(self):
+            return None  # plots_view reads this on every plotted refresh
 
         def sector_plot_positions(self, m):
             return []
@@ -901,6 +904,9 @@ def test_plots_brake_glyphs_ride_their_own_lap_curve():
             speed = {0: (sx, spd0.copy()), 1: (sx, spd1.copy())}
             dl = {i: (sx, np.zeros(100)) for i in ids}
             return 0, {i: speed[i] for i in ids if i in speed}, dl
+
+        def ideal_donor_lap_id(self):
+            return None  # plots_view reads this on every plotted refresh
 
         def sector_plot_positions(self, m):
             return []
@@ -956,6 +962,9 @@ def test_plots_speed_legend_hides_past_threshold_no_truncation():
             dl = {i: (sx, np.zeros(50)) for i in ids}
             return 0, speed, dl
 
+        def ideal_donor_lap_id(self):
+            return None  # plots_view reads this on every plotted refresh
+
         def sector_plot_positions(self, m):
             return []
 
@@ -1002,7 +1011,10 @@ def test_plots_brake_throttle_band_toggle():
             return 0, {0: (sx, spd.copy())}, {0: (sx, np.zeros(100))}
 
         def delta_to_ideal(self, ids, x_mode="distance"):
-            return None  # P7: no ideal envelope here → the Δ chart keeps its Δ-to-best baseline
+            return None  # P7: no ideal here → the Δ chart keeps its Δ-to-best baseline
+
+        def ideal_donor_lap_id(self):
+            return None  # plots_view reads this on every plotted refresh
 
         def sector_plot_positions(self, m):
             return []

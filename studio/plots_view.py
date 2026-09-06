@@ -97,10 +97,11 @@ SECTOR_LABEL_COLOR = C.text_dim
 # The delta plot's y=0 reference line — a faint hairline, same weight as the gridlines.
 def zero_line_pen():
     return pg.mkPen(C.border, width=theme.line_width(1))
-# D1: the SYNTHETIC ideal-lap baseline (lower-envelope theoretical best). Best-SECTOR colour to
-# echo the lap table's theoretical-best cells, dashed so it never reads as a real driven lap. Built
-# at DRAW time (not frozen at import) so it follows the active palette's best-sector hue (purple →
-# teal in the colour-blind palette), matching the lap-table cells.
+# D1: the SYNTHETIC ideal-lap baseline (the corner/straight partition composite). It wears the
+# palette's SYNTHESIZED-BEST hue — the same one the lap table's per-sector session bests use —
+# because it is the same kind of value: a per-piece minimum taken across laps, not a lap. Dashed so
+# it never reads as a real driven lap. Built at DRAW time (not frozen at import) so it follows the
+# active palette (purple → teal in the colour-blind palette), matching those cells.
 def _ideal_line_pen():
     return pg.mkPen(theme.best_sector_colour(), width=theme.line_width(1), style=Qt.DashLine)
 # F5: brake glyphs (sized by peak decel) ride the speed curve; coast spans shade a neutral band.
@@ -174,9 +175,20 @@ BT_CAPTION = theme.estimated_label("brake / throttle")
 NO_DATA_TIP = ("Unavailable: this recording has no complete laps, so there is nothing to plot. Drag "
                "the start/finish line on the map to set where a lap begins.")
 IDEAL_IS_BASELINE_TIP = (
-    "Unavailable here: with only the best lap drawn, the lower chart is ALREADY Δ to the ideal — the "
-    "y = 0 line IS the synthetic ideal envelope, so there is nothing left to overlay. Select a "
-    "second lap and this overlays the ideal on the Δ-to-best chart.")
+    "Unavailable here: with only the best lap drawn, the lower chart is ALREADY Δ to the ideal — "
+    "the y = 0 line IS the ideal lap and the curve above it is your gap to it, so this overlay "
+    "would draw the same comparison mirrored. Select a second lap and it overlays the ideal on "
+    "the Δ-to-best chart.")
+# ...and the state where there is no ideal to overlay because it is not a composite at all. The
+# ideal is the per-segment minimum over the clean laps; when ONE lap is quickest through every
+# corner and every straight, that minimum is just that lap, so `ideal − best` is a flat zero line.
+# Drawing it — or swapping the whole chart's baseline to it, which is what used to happen on a
+# single-valid-lap recording — states "you are exactly on your ideal lap, all lap", which is the
+# defect this whole feature was fixed for, surviving in one state.
+IDEAL_IS_ONE_LAP_TIP = (
+    "Unavailable here: one lap was quickest through every corner and every straight, so your "
+    "ideal lap IS that lap — there is nothing stitched to overlay. It returns as soon as a "
+    "different lap is quickest somewhere.")
 # L6-07: the empty state names the cause AND the way out. It used to say so in this file's OWN
 # words ("No lap data to plot." + a charts-specific reason), which made it the third of four
 # phrasings of one fact in one frame (QA D2-01/D2-02). The panel it sits in is captioned
@@ -251,8 +263,9 @@ class PlotsView(QWidget):
         # at the bottom of the speed plot when the toggle is on.
         self._brake_throttle_items: list = []
         self._brake_throttle_data: list = []  # [(xs, intensity)]
-        # P3: the synthetic ideal-lap trough (most-negative Δ), captured in _draw_ideal so refresh()
-        # can keep the sub-zero ideal band visible when a much-slower lap's Δ dominates the y-range.
+        # (No ideal-trough slot: the P3 "_keep_ideal_visible" clamp this comment used to describe
+        # was deleted with the attribute it cached — see the note beside autoRange() in refresh(),
+        # which _draw_ideal now runs before, so the trough is inside the natural fit.)
         # M8: the reserved (band_bottom, band_top) y-range the brake/throttle strip draws into,
         # computed in refresh() from the fitted SPEED-curve span and sitting BELOW the lowest speed
         # trough (None until refresh() has run with the toggle on).
@@ -276,10 +289,11 @@ class PlotsView(QWidget):
         # freezes out of the colour-blind flip (tests/test_contrast.py pins exactly this pairing).
         self.ideal_btn = ToggleButton(
             "Ideal lap", glyph="ph.star-four", on_colour=theme.best_sector_colour,
-            tooltip="Ideal lap: overlay the SYNTHETIC theoretical ideal Δ — the best you've driven "
-                    "at each point on track, stitched together (dashed purple, dips below the y=0 "
-                    "best-lap line). Not a single drivable lap; it shows where your achievable lap "
-                    "is faster than your best.")
+            tooltip="Ideal lap: overlay the SYNTHETIC theoretical ideal Δ — your quickest time "
+                    "through each corner and each straight, stitched together (dashed; it drops "
+                    "below the y=0 best-lap line and finishes there, by the whole gap). Not a "
+                    "single drivable lap; it shows WHERE your achievable lap is faster than your "
+                    "best, and by how much.")
         self.ideal_btn.toggled.connect(self._on_ideal_toggled)
 
         # D3 opt-in: a SYNTHETIC brake/throttle band under the speed curve. Default off so the
@@ -317,6 +331,10 @@ class PlotsView(QWidget):
         # D1: a legend on the Δ plot too, used ONLY by the synthetic ideal-lap entry (lap Δ curves
         # are drawn unnamed there, so it stays a single quiet line item explaining the dashed line).
         self._delta_legend = self.p_delta.addLegend(offset=(8, 8))
+        # True while THIS session's ideal has a single donor — one lap quickest through every
+        # segment, so the "ideal" is that lap and neither the baseline swap nor the overlay has a
+        # stitched curve to show (see IDEAL_IS_ONE_LAP_TIP). Refreshed on every plotted refresh().
+        self._ideal_is_one_lap = False
         # P7: True while the Δ chart is referenced to the ideal lap instead of the best lap
         # (decided per refresh() — never on the ~30 Hz tick). Drives the y-label + legend wording.
         self._delta_ideal_mode = False
@@ -454,12 +472,20 @@ class PlotsView(QWidget):
         switching the axis. L6-02: the `Ideal lap` toggle is the same dead end in ONE more state —
         when the best lap is drawn alone the lower chart is ALREADY referenced to the ideal, so
         `_draw_ideal` early-returns and the click changed 0 of 441 077 pixels while the button lit
-        amber. Both now go grey and say why in their own tooltip."""
+        amber. And a THIRD: a session whose ideal has a single donor has no stitched curve to draw
+        at all, so the overlay would be a flat zero line on top of the baseline. All three go grey
+        and say why in their own tooltip."""
         self._set_control_enabled(self.x_mode_combo, plotted, NO_DATA_TIP)
         self._set_control_enabled(self.brake_throttle_btn, plotted, NO_DATA_TIP)
+        if not plotted:
+            reason = NO_DATA_TIP
+        elif self._delta_ideal_mode:
+            reason = IDEAL_IS_BASELINE_TIP
+        else:
+            reason = IDEAL_IS_ONE_LAP_TIP
         self._set_control_enabled(
-            self.ideal_btn, plotted and not self._delta_ideal_mode,
-            NO_DATA_TIP if not plotted else IDEAL_IS_BASELINE_TIP)
+            self.ideal_btn,
+            plotted and not self._delta_ideal_mode and not self._ideal_is_one_lap, reason)
 
     # ----------------------------------------------------------- cursor scrub
     def is_dragging(self) -> bool:
@@ -876,6 +902,9 @@ class PlotsView(QWidget):
             self._sync_chart_controls(plotted=False)  # L6-07: nothing to toggle on a blank page
             return
         self._stack.setCurrentIndex(0)
+        # Decided ONCE per plotted refresh, before anything reads it: both the baseline swap and
+        # the overlay refuse a single-donor ideal, and the toggle's reason has to agree with them.
+        self._ideal_is_one_lap = self.session.ideal_donor_lap_id() is not None
         best, speed, delta = result
         # P7: pick the lower chart's baseline for THIS selection (Δ-to-best, or Δ-to-ideal when the
         # best lap is alone and its Δ to itself would be a flat zero line). Refresh-time only — the
@@ -990,16 +1019,27 @@ class PlotsView(QWidget):
         Δ is `lap − lap` ≡ 0: a flat line on an otherwise empty chart (a third of the charts panel
         saying nothing — the common case, since clicking the session best is exactly what a driver
         does). That one case returns `delta_to_ideal` instead — the SAME lap on the SAME shared
-        x-axis, referenced to the synthetic ideal-lap envelope the session already computes (the
-        Δideal the hero readout leads with), so it is a baseline swap, not new math.
+        x-axis, referenced to the synthetic ideal lap the session already computes (the Δideal the
+        hero readout leads with), so it is a baseline swap, not new math.
+
+        This swap only started paying since the ideal became the corner/straight composite. Against
+        the old envelope the best lap's Δ-to-ideal was itself near-flat (0.159 s peak on D24,
+        returning to exactly 0 at the flag), so the escape from one empty chart landed on another;
+        it now rises to +0.94 s on D24 one chapter and +1.64 s on three, ending at the whole gap.
 
         Falls back silently to Δ-to-best when a second lap is selected, when the ideal can't be
-        built (too few clean laps), or when the baseline is the cross-recording REFERENCE — a local
-        lap already reads a real curve against that, and the sentinel has no local lap arrays."""
+        built (too few clean laps), when the baseline is the cross-recording REFERENCE — a local
+        lap already reads a real curve against that, and the sentinel has no local lap arrays — and
+        when the ideal has a SINGLE DONOR. That last one is the case this escape hatch was written
+        to avoid: on a one-valid-lap recording the ideal is that lap, so the swap traded a flat zero
+        line for an identical flat zero line and relabelled the axis "Δ to ideal" and the legend
+        "· Δ to ideal (synthetic)" over it — a comparison the chart was not making. Δ-to-best is
+        also zero there, but it is honestly zero: the lap IS the reference, and the hero readout
+        already says so on hover."""
         if len(draw_ids) != 1 or draw_ids[0] != baseline or baseline == REFERENCE_ID:
             return delta, False
         ideal = self.session.delta_to_ideal(draw_ids, x_mode=x_mode)
-        if not ideal:
+        if not ideal or self._ideal_is_one_lap:
             return delta, False
         return ideal, True
 
@@ -1007,8 +1047,9 @@ class PlotsView(QWidget):
         """The Δ axis's hover: the baseline SPELLED OUT, including the reference recording the
         short axis label can only abbreviate as "ref"."""
         if self._delta_baseline_kind == DELTA_BASELINE_IDEAL:
-            return ("Δ against the SYNTHETIC ideal lap — your own best sections stitched together, "
-                    "shown because the best lap alone would be a flat zero line against itself.")
+            return ("Δ against the SYNTHETIC ideal lap — your quickest corners and straights "
+                    "stitched together, shown because the best lap alone would be a flat zero "
+                    "line against itself.")
         if self._delta_baseline_kind == DELTA_BASELINE_REFERENCE:
             tag = self.session.reference_label() or "the reference recording"
             return f"Δ against the reference recording's best lap ({tag}), not this session's best."
@@ -1020,16 +1061,30 @@ class PlotsView(QWidget):
         return f"{self._curve_label(lid, False)} · Δ to ideal (synthetic)"
 
     def _draw_ideal(self, x_mode: str):
-        """D1: draw the synthetic ideal-lap baseline on the Δ plot when the toggle is on.
+        """D1: draw the synthetic ideal-lap curve on the Δ plot when the toggle is on.
 
-        `ideal_delta_to_best` returns the ideal envelope expressed on delta()'s own Δ-to-best
-        axis (ideal − best ≤ 0), so it lays under the existing curves in the same reference frame
-        and honors both x-modes. Dashed purple + a clearly-synthetic legend entry so it can't be
-        mistaken for a real driven lap. No-op (and no legend entry) when the ideal can't be built
-        (e.g. no clean lap). P7: also skipped in ideal mode — there the y=0 line already IS the
-        ideal envelope, so this overlay (ideal − best) would draw a second, differently-referenced
-        copy of the same curve."""
-        if not self._show_ideal or self._delta_ideal_mode:
+        `ideal_delta_to_best` returns the ideal expressed on delta()'s own Δ-to-best axis
+        (ideal − best ≤ 0), so it lays under the existing curves in the same reference frame and
+        honors both x-modes. Dashed + a clearly-synthetic legend entry so it can't be mistaken for
+        a real driven lap. No-op (and no legend entry) when the ideal can't be built (e.g. no clean
+        lap). P7: also skipped in ideal mode — there the y=0 line already IS the ideal, so this
+        overlay would draw the same comparison mirrored — and skipped when the ideal has a single
+        donor, where `ideal − best` is a flat zero line (see IDEAL_IS_ONE_LAP_TIP).
+
+        THE CURVE NOW LANDS SOMEWHERE. Against the old envelope it dipped a little and came back to
+        exactly 0 at the flag — by construction, since that ideal's value at the flag WAS the best
+        lap time — so the one thing a reader took from it ("how much is on the table") was zero on
+        every recording. It now ends at the whole gap: −0.94 s on D24 one chapter, −1.64 s on
+        three, −1.14 s on Sandown, drawn against a y=0 line that is the best lap.
+
+        The legend entry does NOT restate that end value, and that is a measurement, not an
+        oversight. Adding it ("ideal lap (synthetic) −0.94 s") widened the legend plate from 162 to
+        207 px and the plate is opaque, so it blanketed part of the curve the user actually
+        selected: on D24 the selected lap's Δ trace went from 0 of 400 samples covered to 19 at
+        1440x900, and from 50 to 75 (12.5 % → 18.75 %) at 1280x800. The hero readout already shows
+        this gap continuously and reaches exactly this value at the flag, so the plate was buying a
+        second copy of a number with a slice of the one curve the chart is for."""
+        if not self._show_ideal or self._delta_ideal_mode or self._ideal_is_one_lap:
             return
         series = self.session.ideal_delta_to_best(x_mode=x_mode)
         if series is None:
