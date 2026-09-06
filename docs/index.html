@@ -3,352 +3,295 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pacer Studio — transponder-accurate race telemetry from a GoPro you already own</title>
-<meta name="description" content="Pacer turns a single GoPro recording into a full telemetry workstation — transponder-validated lap timing, track map, deltas, synced video, coaching. Free, 100% local, private.">
+<title>Pacer Studio — a race-telemetry workstation validated against a transponder</title>
+<meta name="description" content="Case study: a macOS desktop app that turns one GoPro recording into transponder-validated lap timing, a racing line, deltas and synced video. Lap times unbiased to ±0.003 s over 107 clean laps. Built as an engineering showcase; source is the only distribution.">
 
-<!-- Open Graph / Twitter -->
-<meta property="og:type" content="website">
-<meta property="og:title" content="Pacer Studio — transponder-accurate race telemetry from a GoPro you already own">
-<meta property="og:description" content="Free, 100% local, private race telemetry. Transponder-validated lap timing (mean within ±0.003 s) from the GPS your GoPro already records.">
+<!-- The mark is the app's own icon (studio/assets/pacer.icns, drawn by studio/dev/make_icon.py):
+     two right-pointing chevrons, the darker accent_press one BEHIND, the accent one in front.
+     Inlined as a data: URI so the page stays self-contained — no CDN, no external request. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2026%2026'%3E%3Cpath%20d='M4%205%2012%2013%204%2021'%20fill='none'%20stroke='%23D98E12'%20stroke-width='2.6'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3Cpath%20d='M12%205%2020%2013%2012%2021'%20fill='none'%20stroke='%23F5A623'%20stroke-width='2.6'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
+
+<!-- Open Graph / Twitter — a case study still wants to render when it is shared. -->
+<meta property="og:type" content="article">
+<meta property="og:title" content="Pacer Studio — a race-telemetry workstation validated against a transponder">
+<meta property="og:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Unbiased to ±0.003 s against transponder ground truth over 107 clean laps. An engineering case study.">
 <meta property="og:image" content="media/og.png">
+<meta property="og:image:width" content="2560">
+<meta property="og:image:height" content="1280">
 <meta property="og:url" content="https://eenndan.github.io/pacer/">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pacer Studio — transponder-accurate race telemetry from a GoPro you already own">
-<meta name="twitter:description" content="Free, 100% local, private race telemetry. Transponder-validated lap timing (mean within ±0.003 s) from the GPS your GoPro already records.">
+<meta name="twitter:title" content="Pacer Studio — a race-telemetry workstation validated against a transponder">
+<meta name="twitter:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Unbiased to ±0.003 s against transponder ground truth over 107 clean laps. An engineering case study.">
 <meta name="twitter:image" content="media/og.png">
 
 <style>
+  /* ------------------------------------------------------------------ tokens
+     DERIVED FROM studio/theme.py, WHICH IS THE SINGLE SOURCE OF TRUTH.
+     Every hue below is a `theme.C` token, spelled with its Python name so a drift is a grep
+     away; every length is a SPACE_ or RADIUS_ step from the same file. This page used to carry
+     eight hand-copied hexes and its own private lengths (12 px radii, 9/14/18/22/26/34/40/72 px
+     gaps) — the hexes had NOT drifted, but `#1a1206` (button text on amber) was never a token at
+     all and the lengths were off-scale in fourteen places.
+     Anything the page needs that the app does not have a token for is marked PAGE-ONLY and says
+     what it is for. tests/test_landing_page.py fails the build if a hue here stops matching
+     theme.C. */
   :root {
-    --canvas:  #15181E;
-    --panel:   #21252E;
-    --border:  #2D323C;
-    --text:    #DDE1E8;
-    --dim:     #9AA1AD;
-    --accent:  #F5A623;
-    --accent-h:#FFB838;
-    --green:   #5DD6A0;
-    --maxw:    1080px;
+    /* neutrals — theme.C */
+    --canvas:        #15181E;   /* C.canvas  */
+    --bg:            #1A1D23;   /* C.bg      */
+    --surface:       #21252E;   /* C.surface */
+    --border:        #2D323C;   /* C.border  */
+    --border-strong: #3A414D;   /* C.border_strong */
+    --text:          #DDE1E8;   /* C.text     — 13.6:1 on canvas */
+    --text-dim:      #9AA1AD;   /* C.text_dim — 5.9:1 on surface; the dimmest tier allowed to carry body text */
+    /* accent — theme.C */
+    --accent:        #F5A623;   /* C.accent       */
+    --accent-hover:  #FFB838;   /* C.accent_hover */
+    --accent-press:  #D98E12;   /* C.accent_press — the icon's back chevron */
+    --accent-tint:   rgba(245,166,35,0.16);  /* C.accent_tint — the app's accent FILL */
+    /* semantics — theme.C */
+    --ahead:         #5DD6A0;   /* C.ahead */
+    /* The sticky bar, which has to sit translucently over content the app has no analogue for.
+       Same hue, declared here so it is checked like every other one. */
+    --canvas-88:     rgba(21,24,30,0.88);    /* C.canvas */
+
+    /* spatial scale — theme.py SPACE_* / RADIUS_* */
+    --space-xs:  4px;  --space-s:  8px;  --space-m:  12px;
+    --space-l:  16px;  --space-xl: 24px; --space-2xl: 32px; --space-3xl: 48px;
+    --radius-s:  4px;  /* something the pointer can press */
+    --radius-m:  8px;  /* cards and chips */
+
+    /* type scale — theme.py BODY/EMPHASIS/CAPTION for the running text. The DISPLAY steps are
+       PAGE-ONLY: a web headline is read at arm's length on a 1440 px canvas, not inside a 36 px
+       panel header, and theme.HERO (22) is sized for a live readout beside a video. */
+    --body:      15px;  /* theme.EMPHASIS — the page's reading size */
+    --small:     13px;  /* theme.BODY     — captions, card prose */
+    --caption:   11px;  /* theme.CAPTION  — eyebrows, figure credits */
+
+    /* PAGE-ONLY: measures and chrome the app has no token for. */
+    --maxw:      1080px;  /* the page's own column */
+    --measure:    720px;  /* prose measure — ~70ch at --body, typography's readable band */
+    --nav-h:       56px;  /* sticky bar: SPACE_3XL + SPACE_S */
   }
 
   * { box-sizing: border-box; }
-
   html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 
   body {
     margin: 0;
     background: var(--canvas);
     color: var(--text);
-    font-family: -apple-system, "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
+    /* theme.UI_FAMILIES, minus the webfont itself: Inter is bundled INSIDE the app
+       (studio/assets/fonts) and is deliberately not fetched here — no CDN, no @font-face, no
+       third-party request. Visitors who have Inter get the app's face; everyone else gets the
+       same fallback chain the app uses. */
+    font-family: "Inter", -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+    font-size: var(--body);
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
 
   a { color: var(--accent); text-decoration: none; }
-  a:hover { color: var(--accent-h); }
-
-  img { max-width: 100%; height: auto; display: block; }
-
-  .wrap {
-    max-width: var(--maxw);
-    margin: 0 auto;
-    padding: 0 24px;
+  a:hover { color: var(--accent-hover); }
+  a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-s);
   }
+
+  /* Alt text has to be readable when an image 404s or the network drops — this page's whole
+     argument is carried by seven PNGs. */
+  img { max-width: 100%; height: auto; display: block; color: var(--text-dim); font-size: var(--small); }
+
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--space-xl); }
 
   /* ---------- header ---------- */
   header {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: rgba(21, 24, 30, 0.85);
+    position: sticky; top: 0; z-index: 10;
+    background: var(--canvas-88);
     backdrop-filter: saturate(140%) blur(8px);
     border-bottom: 1px solid var(--border);
   }
-  .navbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 60px;
-  }
+  .navbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-l); height: var(--nav-h); }
   .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-weight: 700;
-    font-size: 17px;
-    letter-spacing: 0.2px;
-    color: var(--text);
+    display: flex; align-items: center; gap: var(--space-s);
+    font-weight: 700; font-size: 17px; letter-spacing: 0.2px; color: var(--text);
   }
   .brand:hover { color: var(--text); }
-  .brand svg { display: block; }
+  .brand svg { display: block; flex: none; }
+  .nav-links { display: flex; align-items: center; gap: var(--space-l); font-size: var(--small); }
+  .nav-links a { color: var(--text-dim); }
+  .nav-links a:hover { color: var(--accent-hover); }
   .btn {
     display: inline-block;
-    padding: 9px 16px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 14px;
-    border: 1px solid var(--border);
+    padding: var(--space-s) var(--space-m);
+    border-radius: var(--radius-s);
+    font-weight: 600; font-size: var(--small);
+    border: 1px solid var(--border-strong);
+    background: var(--surface); color: var(--text);
     transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
   }
-  .btn-primary {
-    background: var(--accent);
-    color: #1a1206;
-    border-color: var(--accent);
-  }
-  .btn-primary:hover {
-    background: var(--accent-h);
-    border-color: var(--accent-h);
-    color: #1a1206;
-  }
-  .btn-ghost {
-    background: transparent;
-    color: var(--text);
-  }
-  .btn-ghost:hover {
-    border-color: var(--accent);
-    color: var(--accent-h);
-    background: rgba(245, 166, 35, 0.06);
-  }
+  .btn:hover { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-hover); }
 
   /* ---------- sections ---------- */
-  section { padding: 72px 0; border-bottom: 1px solid var(--border); }
+  /* 72 px = SPACE_3XL + SPACE_XL. A section rule on a long page needs more air than the widest
+     single step, and the scale's own answer to that is a sum of steps, not a new step. */
+  section { padding: calc(var(--space-3xl) + var(--space-xl)) 0; border-bottom: 1px solid var(--border); }
   section:last-of-type { border-bottom: 0; }
 
   .eyebrow {
-    text-transform: uppercase;
-    letter-spacing: 1.6px;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--accent);
-    margin: 0 0 14px;
+    text-transform: uppercase; letter-spacing: 1.6px;
+    font-size: var(--caption); font-weight: 700; color: var(--accent);
+    margin: 0 0 var(--space-m);
   }
   h1 {
-    font-size: clamp(30px, 5vw, 46px);
-    line-height: 1.12;
-    letter-spacing: -0.5px;
-    margin: 0 0 18px;
-    font-weight: 800;
+    font-size: clamp(28px, 4.6vw, 42px);
+    line-height: 1.14; letter-spacing: -0.5px; font-weight: 800;
+    margin: 0 0 var(--space-l); max-width: 900px;
   }
   h2 {
-    font-size: clamp(24px, 3.4vw, 32px);
-    line-height: 1.18;
-    letter-spacing: -0.3px;
-    margin: 0 0 16px;
-    font-weight: 800;
+    font-size: clamp(22px, 3.2vw, 30px);
+    line-height: 1.2; letter-spacing: -0.3px; font-weight: 800;
+    margin: 0 0 var(--space-m);
   }
-  h3 { font-size: 18px; margin: 0 0 8px; font-weight: 700; }
-  p.lead { font-size: 18px; color: var(--dim); max-width: 720px; }
-  .muted { color: var(--dim); }
+  h3 { font-size: var(--body); margin: 0 0 var(--space-s); font-weight: 700; }
+  p { max-width: var(--measure); }
+  p.lead { font-size: 17px; color: var(--text-dim); }
+  .muted { color: var(--text-dim); }
+  .section-head { max-width: var(--measure); margin-bottom: var(--space-2xl); }
 
-  /* ---------- hero ---------- */
-  .hero { padding-top: 64px; }
-  .hero h1 { max-width: 900px; }
-  .hero .accent { color: var(--accent); }
-  .cta-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin: 26px 0 22px;
-  }
-  .cta-row .btn { padding: 12px 22px; font-size: 15px; }
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 34px;
-  }
-  .chip {
-    font-size: 13px;
-    color: var(--dim);
-    background: var(--panel);
-    border: 1px solid var(--border);
-    padding: 5px 12px;
-    border-radius: 999px;
-  }
-  .chip strong { color: var(--text); font-weight: 600; }
+  /* ---------- figures ---------- */
+  figure { margin: 0; }
   .figure {
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-m);
     overflow: hidden;
-    background: var(--panel);
-    box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+    background: var(--surface);
   }
-  .figure img { width: 100%; }
+  .figure img { width: 100%; padding: 0; }
+  .figure figcaption {
+    font-size: var(--small); color: var(--text-dim);
+    padding: var(--space-m) var(--space-l);
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .figure figcaption strong { color: var(--text); font-weight: 600; }
+
+  /* ---------- hero ---------- */
+  .hero { padding-top: var(--space-2xl); }
+  .hero .accent { color: var(--accent); }
+  .hero .figure { margin-top: var(--space-xl); }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+    border-radius: 0 var(--radius-m) var(--radius-m) 0;
+    padding: var(--space-m) var(--space-l);
+    margin: var(--space-l) 0 0;
+    max-width: var(--measure);
+    color: var(--text-dim);
+    font-size: var(--small);
+  }
+  .callout strong { color: var(--text); }
 
   /* ---------- accuracy ---------- */
-  .accuracy-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 40px;
-    align-items: center;
-  }
-  .stat-list {
-    list-style: none;
-    padding: 0;
-    margin: 22px 0 0;
-  }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2xl); align-items: start; }
+  .stat-list { list-style: none; padding: 0; margin: var(--space-xl) 0 0; }
   .stat-list li {
-    display: flex;
-    align-items: baseline;
-    gap: 14px;
-    padding: 12px 0;
-    border-top: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: var(--space-m);
+    padding: var(--space-m) 0; border-top: 1px solid var(--border);
   }
   .stat-list li:last-child { border-bottom: 1px solid var(--border); }
   .stat-val {
-    color: var(--green);
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    min-width: 128px;
-    font-size: 17px;
+    color: var(--ahead); font-weight: 700; font-variant-numeric: tabular-nums;
+    min-width: 132px; font-size: var(--body);
   }
-  .stat-label { color: var(--dim); font-size: 15px; }
+  .stat-label { color: var(--text-dim); font-size: var(--small); }
 
-  /* ---------- features ---------- */
-  .feature-gallery {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
-    margin-bottom: 40px;
-  }
+  /* ---------- cards ---------- */
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-xl); }
   .card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-m); overflow: hidden;
+    display: flex; flex-direction: column;
   }
-  .card img { width: 100%; border-bottom: 1px solid var(--border); }
-  .card .card-body { padding: 16px 18px 20px; }
-  .card p { margin: 0; color: var(--dim); font-size: 14px; }
+  .card > img { width: 100%; border-bottom: 1px solid var(--border); }
+  .card .card-body { padding: var(--space-l); }
+  .card p { margin: 0; color: var(--text-dim); font-size: var(--small); }
 
   .feature-list {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px 28px;
-    list-style: none;
-    padding: 0;
-    margin: 0;
+    display: grid; grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-m) var(--space-2xl);
+    list-style: none; padding: 0; margin: var(--space-2xl) 0 0;
   }
   .feature-list li {
-    padding-left: 24px;
-    position: relative;
-    color: var(--dim);
-    font-size: 15px;
+    padding-left: var(--space-xl); position: relative;
+    color: var(--text-dim); font-size: var(--small);
   }
   .feature-list li::before {
-    content: "›";
-    position: absolute;
-    left: 6px;
-    top: -1px;
-    color: var(--accent);
-    font-weight: 700;
-    font-size: 17px;
+    content: "›"; position: absolute; left: var(--space-s); top: -1px;
+    color: var(--accent); font-weight: 700; font-size: var(--body);
   }
   .feature-list li strong { color: var(--text); font-weight: 600; }
 
   /* ---------- built ---------- */
-  .built-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 20px;
-    margin-top: 8px;
-  }
   .built-card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 22px 24px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-m); padding: var(--space-l) var(--space-xl);
   }
   .built-card.wide { grid-column: 1 / -1; }
-  .built-card h3 { color: var(--text); }
-  .built-card p { margin: 0; color: var(--dim); font-size: 15px; }
+  .built-card p { margin: 0; color: var(--text-dim); font-size: var(--small); max-width: none; }
   code {
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-family: "SF Mono", "JetBrains Mono", Menlo, monospace;   /* theme.MONO_FAMILIES */
     font-size: 0.92em;
-    background: var(--canvas);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 1px 6px;
+    background: var(--canvas); border: 1px solid var(--border);
+    border-radius: var(--radius-s); padding: 1px var(--space-xs);
     color: var(--text);
   }
-  .gate-highlight {
-    color: var(--green);
-    font-weight: 600;
-  }
+  .hi { color: var(--ahead); font-weight: 600; }
 
   /* ---------- non-goals ---------- */
-  .nongoals {
-    list-style: none;
-    padding: 0;
-    margin: 8px 0 0;
-    display: grid;
-    gap: 12px;
-    max-width: 780px;
-  }
+  .nongoals { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-m); max-width: 780px; }
   .nongoals li {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--dim);
-    border-radius: 8px;
-    padding: 14px 18px;
-    color: var(--dim);
-    font-size: 15px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 3px solid var(--border-strong);
+    border-radius: var(--radius-m);
+    padding: var(--space-m) var(--space-l);
+    color: var(--text-dim); font-size: var(--small);
   }
   .nongoals li strong { color: var(--text); }
 
   /* ---------- build block ---------- */
   pre {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 18px 20px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-m);
+    padding: var(--space-l) var(--space-xl);
     overflow-x: auto;
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-    font-size: 14px;
-    line-height: 1.7;
-    color: var(--text);
-    margin: 18px 0 0;
+    font-family: "SF Mono", "JetBrains Mono", Menlo, monospace;   /* theme.MONO_FAMILIES */
+    font-size: var(--small); line-height: 1.7; color: var(--text);
+    margin: 0;
   }
   pre code { background: none; border: 0; padding: 0; color: inherit; }
-  .comment { color: var(--dim); }
-
-  .note {
-    margin-top: 22px;
-    font-size: 14px;
-    color: var(--dim);
-    border-left: 3px solid var(--accent);
-    padding: 4px 0 4px 16px;
-  }
+  .comment { color: var(--text-dim); }
 
   /* ---------- footer ---------- */
-  footer {
-    padding: 40px 0 56px;
-    color: var(--dim);
-    font-size: 14px;
-  }
-  footer .foot-links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 20px;
-    margin-bottom: 14px;
-  }
-  footer p { margin: 6px 0; max-width: 760px; }
-
-  .section-head { max-width: 760px; margin-bottom: 34px; }
+  footer { padding: var(--space-2xl) 0 var(--space-3xl); color: var(--text-dim); font-size: var(--small); }
+  footer .foot-links { display: flex; flex-wrap: wrap; gap: var(--space-l); margin-bottom: var(--space-m); }
+  footer p { margin: var(--space-s) 0 0; max-width: 780px; }
 
   /* ---------- responsive ---------- */
   @media (max-width: 860px) {
-    .accuracy-grid { grid-template-columns: 1fr; gap: 28px; }
-    .feature-gallery { grid-template-columns: 1fr; }
+    .split { grid-template-columns: 1fr; gap: var(--space-xl); }
+    .grid-2 { grid-template-columns: 1fr; }
     .feature-list { grid-template-columns: 1fr; }
-    .built-grid { grid-template-columns: 1fr; }
   }
-  @media (max-width: 520px) {
-    section { padding: 52px 0; }
-    .navbar .btn span.long { display: none; }
-    .stat-val { min-width: 110px; }
+  @media (max-width: 560px) {
+    section { padding: var(--space-2xl) 0; }
+    .nav-links a.long { display: none; }
+    .stat-list li { flex-direction: column; gap: 0; }
+    .stat-val { min-width: 0; }
   }
 </style>
 </head>
@@ -359,12 +302,16 @@
   <div class="wrap navbar">
     <a class="brand" href="#top" aria-label="Pacer Studio">
       <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
-        <path d="M4 5 L12 13 L4 21" stroke="#F5A623" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M12 5 L20 13 L12 21" stroke="#F5A623" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+        <path d="M4 5 L12 13 L4 21" stroke="var(--accent-press)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M12 5 L20 13 L12 21" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       Pacer Studio
     </a>
-    <a class="btn btn-ghost" href="https://github.com/eenndan/pacer">View on <span class="long">GitHub</span></a>
+    <div class="nav-links">
+      <a class="long" href="#accuracy">Accuracy</a>
+      <a class="long" href="#built">How it's built</a>
+      <a class="btn" href="https://github.com/eenndan/pacer">Source on GitHub</a>
+    </div>
   </div>
 </header>
 
@@ -373,26 +320,19 @@
 <!-- ===================== HERO ===================== -->
 <section class="hero">
   <div class="wrap">
-    <p class="eyebrow">Race telemetry · GoPro-native · macOS</p>
-    <h1>Transponder-accurate race telemetry from a GoPro you already own — <span class="accent">free, 100% local, private.</span></h1>
-    <p class="lead">Pacer turns a single GoPro recording into a full telemetry workstation — track map, lap-by-lap deltas, synced video, driving analysis, and a g-meter — from the GPS and motion data the camera already records. No transponder, no data logger, no cloud, no extra hardware.</p>
+    <p class="eyebrow">Case study · race telemetry · macOS</p>
+    <h1>One GoPro file in. Lap timing, a racing line, deltas and synced video out — <span class="accent">checked against a real transponder.</span></h1>
+    <p class="lead">Pacer Studio is a working macOS desktop app that turns a single GoPro recording into a telemetry workstation, using only the GPS and motion streams the camera already writes. No transponder, no data logger, no cloud, no extra hardware.</p>
+    <p class="lead">It is also an engineering showcase, and this page is the case study: what it claims, how each claim is checked, and where the limits are.</p>
 
-    <div class="cta-row">
-      <a class="btn btn-primary" href="https://github.com/eenndan/pacer">View on GitHub</a>
-      <a class="btn btn-ghost" href="#build">Build from source</a>
+    <div class="callout">
+      <strong>There is no download.</strong> Source is the only distribution — <a href="#build">three commands with pixi</a>. Code signing, notarization, a <code>.dmg</code>, and any platform other than Apple&nbsp;Silicon macOS are deliberate <a href="#non-goals">non-goals</a>, not a to-do list.
     </div>
 
-    <div class="chips">
-      <span class="chip"><strong>100% local</strong></span>
-      <span class="chip"><strong>private</strong></span>
-      <span class="chip"><strong>free</strong></span>
-      <span class="chip"><strong>GoPro-native</strong></span>
-      <span class="chip"><strong>macOS</strong></span>
-    </div>
-
-    <figure class="figure" style="margin:0">
-      <img src="media/hero.png" width="1600" height="1000"
-           alt="Pacer — dark-theme desktop app on real footage: speed-coloured track map with brake points, synced GoPro video, distance-aligned Δ-to-best charts, sortable lap table, and coaching">
+    <figure class="figure">
+      <img src="media/hero.png" width="2880" height="1800"
+           alt="The Pacer Studio window on a real kart session: GoPro video with its own transport, a speed-coloured track map with brake points and a named key, the SPEED · Δ TO IDEAL charts reading Δideal +0.58 s, and the tabbed lap panel with lap 42 starred as the session best at 1:08.201.">
+      <figcaption>One window on one recording. The four panels are independently resizable and any one of them maximises to the whole window; the lap panel below the video is four full-height pages — <strong>Laps, Corners, Stats, Coaching</strong> — on one tab bar.</figcaption>
     </figure>
   </div>
 </section>
@@ -400,73 +340,107 @@
 <!-- ===================== ACCURACY ===================== -->
 <section id="accuracy">
   <div class="wrap">
-    <div class="accuracy-grid">
+    <div class="section-head">
+      <p class="eyebrow">The claim, and the receipt</p>
+      <h2>Lap timing, validated out-of-sample against a transponder.</h2>
+      <p class="muted">Most consumer and phone tools time laps off the video or sample clock, which drifts on the order of 0.1% — enough to quietly bias every lap in a session. Pacer times on the camera's own <strong>GPS true-clock</strong>, where every GPS sample carries its own timestamp, and interpolates each start/finish crossing along the chord between the two real fixes that straddle the line.</p>
+    </div>
+
+    <div class="split">
       <div>
-        <p class="eyebrow">Accuracy — the moat</p>
-        <h2>Validated out-of-sample against a real transponder.</h2>
-        <p class="muted">Pacer times laps on the camera's own <strong>GPS true-clock</strong> instead of the video/sample clock that consumer tools use (which drifts ~0.1%). The result sits at the noise floor of 10 Hz GPS — and we can show, with data, that it's irreducible from the streams a GoPro records.</p>
         <ul class="stat-list">
-          <li><span class="stat-val">±0.003 s</span><span class="stat-label">mean error — essentially unbiased</span></li>
-          <li><span class="stat-val">σ ≈ 0.05–0.09 s</span><span class="stat-label">spread ≈ 0.13% of a ~68 s kart lap</span></li>
-          <li><span class="stat-val">r ≥ 0.99</span><span class="stat-label">per-lap correlation to the transponder</span></li>
-          <li><span class="stat-val">1,150+ laps</span><span class="stat-label">compared across two recordings</span></li>
+          <li><span class="stat-val">±0.003 s</span><span class="stat-label">mean error against transponder ground truth — essentially unbiased</span></li>
+          <li><span class="stat-val">σ 0.0527 s</span><span class="stat-label">per-lap spread on the cleaner-GPS recording (median DOP 1.4)</span></li>
+          <li><span class="stat-val">σ 0.0871 s</span><span class="stat-label">and on the noisier one (median DOP 2.4) — the hardware sets the floor, not the algorithm</span></li>
+          <li><span class="stat-val">0.13 %</span><span class="stat-label">that worse σ, as a fraction of a ~68 s kart lap</span></li>
+          <li><span class="stat-val">107 clean laps</span><span class="stat-label">48 and 59, from 57 and 65 aligned laps, across two recordings</span></li>
         </ul>
-        <p style="margin-top:26px">
-          <a href="https://github.com/eenndan/pacer/blob/main/docs/ACCURACY.md">Read the full accuracy analysis →</a>
-        </p>
+        <p class="muted" style="margin-top: var(--space-xl)">That is a modest sample, and it is the honest one: 107 is the number of laps actually compared, not the span of lap IDs they occupied in a 24-hour transponder log. An earlier version of this page printed “1,150+ laps”, which was those ID ranges added together — wrong by a factor of ten, in the flattering direction.</p>
       </div>
-      <figure class="figure" style="margin:0">
-        <img src="media/accuracy.png" width="1200" height="560"
-             alt="Pacer lap-time error vs a real transponder — mean within ±0.003 s, σ ≈ 0.05–0.09 s">
+      <figure class="figure">
+        <img src="media/accuracy.png" width="2400" height="1080" loading="lazy" decoding="async"
+             alt="Error bars of Pacer's lap time minus the transponder's, for two recordings: Recording A (higher-noise GPS) mean +0.0030 s, σ 0.0871 s over 48 clean of 57 aligned laps; Recording B (cleaner GPS) mean +0.0015 s, σ 0.0527 s over 59 clean of 65 aligned laps.">
+        <figcaption>Both rows are the <strong>shipping</strong> pipeline — GPS9 true clock, clock rate 1.0, boxcar w=13 — not a tuned-for-the-benchmark variant. The chart is drawn from the numbers in code, so it cannot go stale independently of them.</figcaption>
       </figure>
     </div>
+
+    <div class="callout">
+      <strong>The pairing is automatic, and it is not circular.</strong> No lap is hand-matched: Pacer's per-lap <em>duration</em> sequence is correlated against every candidate window of the transponder log and the alignment taken at the maximum. Because that offset is <em>chosen</em> to maximise r, the r at the winner is an argmax, not an accuracy statistic — so the number worth quoting is the <strong>margin</strong>. The fingerprint matches at <strong>r ≥ 0.99 at exactly one offset and below 0.29 at every other</strong>. The session Pacer timed is provably the session the transponder timed.
+    </div>
+
+    <p style="margin-top: var(--space-xl)">
+      <a href="https://github.com/eenndan/pacer/blob/main/docs/ACCURACY.md">Read the full accuracy analysis, including the three findings that show the limit is the GPS and not the code&nbsp;→</a>
+    </p>
   </div>
 </section>
 
-<!-- ===================== FEATURES ===================== -->
-<section id="features">
+<!-- ===================== HONESTY ===================== -->
+<section id="honesty">
   <div class="wrap">
     <div class="section-head">
-      <p class="eyebrow">Features</p>
-      <h2>The analysis a dedicated data logger would give you.</h2>
-      <p class="muted">Lap and sector times, a racing line you can pick apart, deltas to your best lap, braking and grip — without buying or wiring anything.</p>
+      <p class="eyebrow">Honesty as a design rule</p>
+      <h2>A number that will not say how much to trust it is a number you should not use.</h2>
+      <p class="muted">The two screenshots below are the ones this project is actually about. Both show a readout disclosing something that would have made it look better to leave out.</p>
     </div>
 
-    <div class="feature-gallery">
-      <div class="card">
-        <img src="media/map.png" alt="Track map — racing line coloured by speed, with brake points and sector lines">
-        <div class="card-body">
-          <h3>Track map</h3>
-          <p>Racing line coloured by speed, Δ-to-best, grip, or elevation — with brake points and draggable start/sector lines you can re-position to re-segment the session.</p>
-        </div>
-      </div>
-      <div class="card">
-        <img src="media/plots.png" alt="Distance-aligned speed and Δ-to-best charts">
-        <div class="card-body">
-          <h3>Δ-to-best charts</h3>
-          <p>Speed and cumulative time delta against your best lap, distance-aligned so corners line up.</p>
-        </div>
-      </div>
-      <div class="card">
-        <img src="media/coaching.png" alt="Coaching — corner-by-corner time loss vs your best lap">
-        <div class="card-body">
-          <h3>Coaching</h3>
-          <p>Where you're losing time to your best lap, corner by corner.</p>
-        </div>
-      </div>
+    <div class="grid-2">
+      <figure class="figure">
+        <img src="media/ideal-lap.png" width="976" height="940" loading="lazy" decoding="async"
+             alt="Stats ▸ IDEAL LAP: theoretical best 1:06.563 over 65 laps, −1.64 s on the table vs your best, stitched from 18 of 65 clean laps across 12 corners and 13 straights, with a table of every segment's gain, how many laps were already that fast there, and which lap set the mark.">
+        <figcaption>The ideal lap is a <strong>sum of per-segment minima</strong> — an order statistic, so it falls the longer you stay out. On this recording it reads −0.90 s at 5 laps and −1.64 s at 65, for the same driving. So the tile states its sample, names the donor laps, and the gain column <strong>sums to the headline</strong>, with a note accounting for the rows below its 0.05 s floor.</figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="media/data-trust.png" width="1296" height="948" loading="lazy" decoding="async"
+             alt="Stats ▸ DATA TRUST: timing on the GPS9 true clock with 0% of moving fixes rejected; g-meter using IMU lateral and GPS-derived longitudinal; IMU↔GPS cross-check agreeing at lateral r=+0.96, lateral gain ×1.11, longitudinal r=+0.81 over 971016 samples. Below it, the friction circle with a 1.37 g grip envelope.">
+        <figcaption>DATA TRUST names the clock, the rejected-fix rate, and which axis of the g-meter comes from where. The cross-check reports a <strong>gain</strong> as well as an r, because r is scale-blind: a channel can correlate at 0.96 and still be 11% out.</figcaption>
+      </figure>
     </div>
 
     <ul class="feature-list">
-      <li><strong>True-clock lap &amp; sector timing</strong> — GPS9 cameras (Hero 9+) time on the camera clock; older GPS5 cameras fall back to the video clock and flag estimates.</li>
-      <li><strong>Synced GoPro video</strong> — scrub the lap and the footage follows, frame-accurate.</li>
-      <li><strong>Dual-lap &amp; cross-recording compare</strong> — play two laps side by side, including the best lap of another recording of the same track.</li>
-      <li><strong>Sortable lap table</strong> — every lap and its sector splits, session best highlighted.</li>
-      <li><strong>G-meter</strong> — a live accelerometer overlay driven by the camera's IMU.</li>
-      <li><strong>Driving channels</strong> — brake events, coasting, and per-corner grip utilization from the validated vehicle-frame g.</li>
-      <li><strong>Shareable lap card</strong> — a clean image summary of a lap to post or send.</li>
-      <li><strong>Video-overlay export</strong> — burn the telemetry overlay onto the footage (via ffmpeg).</li>
-      <li><strong>Session library</strong> — a local index of everything you've analysed.</li>
+      <li><strong>One spelling of “estimated”.</strong> Inferred channels — brake, coast, grip, braking-point hints — carry the canonical <code>(est)</code> marker from a single constant, so the app can never spell it four ways.</li>
+      <li><strong>Provisional timing is demoted, not hidden.</strong> On a track with no start line set, lap times render muted and a banner says the timing is unverified until you drag the line.</li>
+      <li><strong>The g-meter's forward axis is the GPS speed derivative</strong>, not the IMU, because the IMU's forward axis is vibration-dominated on a kart. The screenshot above says so on screen.</li>
+      <li><strong>Older cameras say so.</strong> GPS9 cameras (Hero 9+) time on the camera clock; GPS5 cameras fall back to the video clock and are flagged.</li>
     </ul>
+  </div>
+</section>
+
+<!-- ===================== WHAT IT DOES ===================== -->
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">What it does</p>
+      <h2>The analysis a dedicated data logger would give you.</h2>
+    </div>
+
+    <div class="grid-2">
+      <figure class="figure">
+        <img src="media/map.png" width="2864" height="2572" loading="lazy" decoding="async"
+             alt="The track map maximised to the whole window: a kart circuit's racing line coloured by speed from 32 to 88 km/h, twelve labelled corners, brake-point markers, the draggable start/finish line, and an open key naming every mark.">
+        <figcaption><strong>The racing line is a data channel.</strong> Colour it by speed, Δ vs best, grip, or elevation; drag the start line or add sectors to re-segment the session. Every mark on the plot is named in a key you can open.</figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="media/overlay.png" width="1440" height="810" loading="lazy" decoding="async"
+             alt="A frame of a real exported overlay video: onboard kart footage with a lap-and-delta pill reading LAP 51, 0:28.733, Δ +0.17, a g-meter dial, a mini track map, and a 60 km/h speed readout burned in.">
+        <figcaption><strong>The analysis leaves the app.</strong> A real frame from an exported overlay video — lap, split, live delta, speed, g-meter and mini-map composited onto the footage with ffmpeg. There is also a shareable lap-card image, and a data export of laps CSV + per-lap channels CSV + a one-page HTML session report.</figcaption>
+      </figure>
+    </div>
+
+    <ul class="feature-list">
+      <li><strong>True-clock lap &amp; sector timing</strong> — the validated core, above.</li>
+      <li><strong>Δ-to-ideal and Δ-to-best</strong> — the live readout leads with your gap to the synthesised ideal; the charts are distance-aligned so corners line up.</li>
+      <li><strong>Synced GoPro video</strong> — scrub the lap and the footage follows, frame-accurate; chapter siblings are chained automatically.</li>
+      <li><strong>Dual-lap and cross-recording compare</strong> — play two laps side by side, including the best lap of another recording of the same track.</li>
+      <li><strong>A tabbed lap panel</strong> — Laps, Corners (per-lap), Stats and Coaching as four full-height pages, on the digits 1–4.</li>
+      <li><strong>A session statistics page</strong> — pace distribution, the g-g friction circle, corner/braking/straights reports and the data-trust card. ⌘⇧S opens it full-window.</li>
+      <li><strong>Coaching</strong> — every corner ranked by time lost against your own best lap, taken as the median over your clean laps, each with a measured reason and a consistency badge.</li>
+      <li><strong>Session library</strong> — a local index of everything you've analysed, charting personal-best progression per track.</li>
+      <li><strong>km/h or mph, and colour-blind-safe cues</strong> — both under View, both persisted.</li>
+    </ul>
+
+    <p style="margin-top: var(--space-xl)">
+      <a href="https://github.com/eenndan/pacer/blob/main/docs/FIRST_LAP.md">Walk through a first recording, step by step&nbsp;→</a>
+    </p>
   </div>
 </section>
 
@@ -475,25 +449,34 @@
   <div class="wrap">
     <div class="section-head">
       <p class="eyebrow">How it's built</p>
-      <h2>One desktop app on a small, fast C++ core — chosen to stay legible and correct rather than clever.</h2>
+      <h2>One desktop app on a small C++ core, with the correctness argument mechanised.</h2>
+      <p class="muted">The interesting part of this project is not the feature list — it is that almost every claim above is held by something that fails a build when it stops being true.</p>
     </div>
 
-    <div class="built-grid">
+    <div class="grid-2">
       <div class="built-card">
-        <h3>C++23 core</h3>
-        <p>A small, fast core (<code>pacer/</code>) does the load-bearing work — GPMF ingest, geometry, lap/sector segmentation, and GPS9 true-clock timing. It's a clean-room, independently authored implementation.</p>
+        <h3>A 1,873-line C++23 core</h3>
+        <p>Everything load-bearing — GPMF ingest, geometry, lap and sector segmentation, GPS9 true-clock timing — lives in <code>pacer/</code>, a clean-room, independently authored implementation. Small enough to read in an afternoon, which is the point.</p>
       </div>
       <div class="built-card">
-        <h3>nanobind + PySide6</h3>
-        <p>The core's types are bound to Python via nanobind (litgen-generated), consumed by a PySide6 + pyqtgraph desktop UI (<code>studio/</code>) that does the draggable map handles and frame-accurate video↔telemetry sync natively.</p>
+        <h3>Generated bindings, gated against drift</h3>
+        <p>The core's types reach Python through litgen-generated nanobind glue. CI regenerates that glue and fails if the committed file differs — so hand-editing the generated layer is not a thing that can quietly happen.</p>
       </div>
       <div class="built-card wide">
         <h3>The golden-equivalence gate</h3>
-        <p>Every core-math refactor is proven <span class="gate-highlight">byte-identical (max|Δ| = 0)</span> against a dense fingerprint of a real recording's whole analysis API before it lands — and CI runs the same machinery over a deterministic synthetic session. <strong style="color:var(--text)">Correctness is a gate, not a hope.</strong></p>
+        <p>Every core-math refactor is proven <span class="hi">byte-identical</span> before it lands: a dense fingerprint of a Session's <em>whole</em> public analysis API on a real 11.8 GB recording, compared leaf-by-leaf at <span class="hi">eps 0 across 120k+ leaves</span>. A deterministic synthetic session runs the same machinery in CI, so the gate survives on a machine that has never seen the footage. Refactors that cannot move a number, provably don't.</p>
+      </div>
+      <div class="built-card wide">
+        <h3>Guards that fail the build, not a style guide that asks nicely</h3>
+        <p>The design system is enforced by tests, each walking the app's own source rather than a snapshot: a <strong>dimensional</strong> guard (every padding, radius and height in the stylesheet must be a declared step), a <strong>glyph</strong> guard (every character in a user-visible string must be drawn by the app's own face — Qt silently falls back per character, and eight marks were resolving into five foreign fonts), an <strong>inline-style</strong> guard (thirty-four scattered <code>setStyleSheet</code> strings are down to five named exemptions, each with prose saying whose decision it is), and a <strong>contrast</strong> guard holding every text role to WCAG AA and every step of the map's colour ramp apart by more than the CIE76 JND <em>under a deuteranopia simulation</em>. Their exemption lists must each name a decision and are checked in both directions, so a dead exemption is also a failure.</p>
+      </div>
+      <div class="built-card wide">
+        <h3>The real app, driven offscreen, on real footage</h3>
+        <p>Dev harnesses in <code>studio/dev/</code> boot the actual window offscreen on an actual recording. Every screenshot on this page is produced that way, by one command, so a marketing image nobody can regenerate cannot quietly start lying. The suite drives the real widget tree too, and one test boots the app twice at pinned device pixel ratios behind a <strong>write tripwire on every write path Python and Qt expose</strong> — because the app had been silently re-saving a tracked asset on every launch, and the suite missed it for running at exactly the one DPI that reproduced the committed bytes. <strong>87 CTest registrations</strong> run on every change — one of them is this page, checked against the app's own design tokens and its own images.</p>
       </div>
       <div class="built-card wide">
         <h3>Built solo, with LLM coding agents under discipline</h3>
-        <p>Pacer is developed solo, with the implementation handed to LLM coding agents under a strict discipline: every change is one focused pull request, gated by the golden-equivalence check (<code>max|Δ| = 0</code> on real footage) and the full ctest suite before it merges. The rigor above — transponder validation, the byte-identical core-math gate, the out-of-sample research — is what makes that workflow safe. The guardrails do the trusting so the agents can do the typing.</p>
+        <p>The implementation is handed to LLM coding agents under a strict protocol: one focused pull request per change, gated by the golden-equivalence check and the full suite before it merges. The rigour above is what makes that workflow safe — the guardrails do the trusting, so the agents can do the typing. The commit history is the honest record of it, including the parts that were measured and thrown away.</p>
       </div>
     </div>
   </div>
@@ -505,12 +488,14 @@
     <div class="section-head">
       <p class="eyebrow">Non-goals</p>
       <h2>What Pacer deliberately isn't.</h2>
-      <p class="muted">Stating the boundaries is part of the design.</p>
+      <p class="muted">Stating the boundaries is part of the design. None of these is a roadmap item.</p>
     </div>
     <ul class="nongoals">
-      <li><strong>Not a mobile app.</strong> It's an offline desktop deep-analysis tool, for sitting down with a session after the fact.</li>
-      <li><strong>Not a live / in-car system.</strong> No real-time HUD, no OBD-II or CAN, no in-session telemetry — Pacer reads recorded GoPro footage.</li>
-      <li><strong>macOS Apple Silicon only, today.</strong> The build and app target arm64 macOS.</li>
+      <li><strong>Not distributed as a binary.</strong> Source is the only distribution. There is no signed or notarized build, no <code>.dmg</code>, no Homebrew formula, and none is planned — this is a portfolio and craft project, not a product looking for install counts.</li>
+      <li><strong>Not cross-platform.</strong> The build and the app target Apple Silicon macOS. No Windows, no Linux.</li>
+      <li><strong>Not a live or in-car system.</strong> No real-time HUD, no OBD-II or CAN, no in-session telemetry — Pacer reads recorded GoPro footage, after the fact.</li>
+      <li><strong>Not a mobile app,</strong> and not a cloud service. Everything runs locally; nothing is uploaded anywhere.</li>
+      <li><strong>Not vendor-neutral.</strong> It reads GoPro GPMF. Other cameras and loggers are out of scope.</li>
     </ul>
   </div>
 </section>
@@ -519,9 +504,9 @@
 <section id="build">
   <div class="wrap">
     <div class="section-head">
-      <p class="eyebrow">Get Pacer</p>
-      <h2>A Mac (Apple Silicon) and a GoPro is all you need.</h2>
-      <p class="muted">Today Pacer installs from source — one command with <a href="https://pixi.sh">pixi</a>, no manual toolchain setup. A prebuilt, double-clickable <code>Pacer Studio.app</code> (<code>.dmg</code>) is planned but not yet published.</p>
+      <p class="eyebrow">Build it</p>
+      <h2>A Mac with Apple Silicon, a GoPro file, and three commands.</h2>
+      <p class="muted"><a href="https://pixi.sh">pixi</a> brings CMake, Ninja, Python, Qt, Catch2 and ffmpeg, pinned by a lockfile, so there is no manual toolchain step. The C++ compiler is the one already on the machine — Apple's Xcode command-line tools.</p>
     </div>
 <pre><code><span class="comment"># 3rdparty deps (gpmf-parser, nanobind)</span>
 git submodule update --init --recursive
@@ -529,9 +514,11 @@ git submodule update --init --recursive
 <span class="comment"># environment + editable Python bindings</span>
 pixi install
 
-<span class="comment"># build + launch on a recording</span>
-pixi run studio -- /path/to/GX010060.MP4</code></pre>
-    <p class="note">GoPro chapter siblings (<code>GX01…</code>, <code>GX02…</code>) are chained automatically. On a track Pacer doesn't know yet, it places a sensible start/finish line and flags the timing as provisional — drag the line on the map to where a lap begins and it's remembered for that recording.</p>
+<span class="comment"># build + launch on your own recording</span>
+pixi run studio -- /path/to/YOUR_RECORDING.MP4</code></pre>
+    <div class="callout">
+      On a track Pacer doesn't know yet it places a sensible start/finish line and flags the timing as <strong>provisional</strong>; drag the line on the map to where a lap begins and it is remembered for that recording. <a href="https://github.com/eenndan/pacer/blob/main/docs/FIRST_LAP.md">Read your first lap</a> walks the rest.
+    </div>
   </div>
 </section>
 
@@ -539,12 +526,15 @@ pixi run studio -- /path/to/GX010060.MP4</code></pre>
 <footer>
   <div class="wrap">
     <div class="foot-links">
-      <a href="https://github.com/eenndan/pacer">GitHub repository</a>
-      <a href="https://github.com/eenndan/pacer/blob/main/docs/ACCURACY.md">Accuracy analysis</a>
-      <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">License (CC BY-NC-SA 4.0)</a>
+      <a href="https://github.com/eenndan/pacer">Source</a>
+      <a href="https://github.com/eenndan/pacer/blob/main/README.md">README</a>
+      <a href="https://github.com/eenndan/pacer/blob/main/docs/FIRST_LAP.md">First lap</a>
+      <a href="https://github.com/eenndan/pacer/blob/main/docs/ACCURACY.md">Accuracy</a>
+      <a href="https://github.com/eenndan/pacer/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">License</a>
     </div>
     <p>Pacer © 2025–2026 eenndan, licensed under <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>. NonCommercial use only; derivatives must be shared alike.</p>
-    <p class="muted">Pacer installs from source today — the prebuilt <code>.dmg</code> is not yet published. GPS/IMU parsing uses GoPro's <a href="https://github.com/gopro/gpmf-parser">gpmf-parser</a>.</p>
+    <p class="muted">GPS and IMU parsing uses GoPro's <a href="https://github.com/gopro/gpmf-parser">gpmf-parser</a>. Every image on this page is produced by one command, <code>studio/dev/media_capture.py</code>: the app shots are the real window rendered offscreen on a real recording, and the accuracy chart is drawn from the numbers in code rather than hand-designed. One caveat, stated because this page is about stating them: the hero's video pane is a real frame from the same recording composited into the window's own render, because an offscreen Qt render cannot capture a macOS video surface.</p>
   </div>
 </footer>
 
