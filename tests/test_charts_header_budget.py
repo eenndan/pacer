@@ -422,6 +422,126 @@ def test_the_hero_never_prints_a_minus_sign_against_the_ideal():
               f"(raw floor {floor:.5f} s, 0 minus signs printed)")
 
 
+def test_the_hero_withholds_the_ideal_when_the_ideal_is_a_lap_you_drove():
+    """THE SIXTH SURFACE. #211 gave five surfaces one gate — `ideal_donor_lap_id() is not None`,
+    i.e. one lap was quickest through every corner and every straight, so the "ideal" IS that lap
+    — and left the app's LARGEST TEXT ungated.
+
+    Measured on the owner's real one-valid-lap recording (Sandown chapter 3, where ideal == best ==
+    23.231227933627977 exactly), the hero printed `Δideal +0.00 s` for 2 324 of 2 324 samples of
+    the lap, under a `vs ideal` chip whose tooltip still described a lap "stitched together … (not
+    a single lap you have driven)" and above a header reading `SPEED · Δ TO BEST`, a greyed `Ideal
+    lap` toggle and a Stats page with no IDEAL LAP section. `+0.00` against the ideal is the app
+    saying "you are level with your ideal lap" — the sentence the share card was rewritten to stop
+    printing. #211's PR body claimed the hero "already explains why on hover"; it does not, and
+    that claim is what this test replaces.
+
+    Forced here on the real view rather than mocked at the widget: the session's donor accessor is
+    the one thing changed, and the state is then pushed through `rebuild_derived_views` — the same
+    seam a start-line drag goes through — so this pins that the chip is re-synced by the real
+    rebuild and not just by a helper called from a test."""
+    with _Themed((1440, 900)) as view:
+        s = view.session
+        best = s.best_lap_id()
+        assert s.ideal_donor_lap_id() is None, "fixture must START stitched"
+        base_tip = view.ideal_readout_btn.toolTip()
+        assert view.ideal_readout_btn.isEnabled() and view.ideal_readout_btn.isChecked()
+
+        real = s.ideal_donor_lap_id
+        s.ideal_donor_lap_id = lambda: best          # one lap won every segment
+        try:
+            view.rebuild_derived_views(reselect=False)
+            btn = view.ideal_readout_btn
+            assert not btn.isEnabled(), "the chip must go dead with its five siblings"
+            assert not btn.isChecked(), "…and stop claiming the hero is measured against an ideal"
+            assert btn.toolTip().startswith(base_tip), (
+                "the reason is APPENDED — the chip must keep saying what it is")
+            assert "quickest through every corner" in btn.toolTip(), btn.toolTip()
+
+            # The hero, over the WHOLE best lap: not one sample may print Δideal.
+            lo, hi = s.lap_window(best)
+            ideal_frames = []
+            for k in range(201):
+                t = lo + (hi - lo) * k / 200
+                view._update_diff_box(t, 42.0, best)
+                if "ideal" in view.diff_box.text().lower():
+                    ideal_frames.append((round(t, 3), view.diff_box.text()))
+            assert not ideal_frames, ideal_frames[:3]
+            assert view.diff_box.text().startswith("Δ "), view.diff_box.text()
+            # ...and the tooltip does not print it one level down either — which is what
+            # `theme.format_ideal_run` would have rendered here (`Δideal +0.00 s`).
+            tip = view.diff_box.toolTip()
+            assert "Δideal" not in tip, tip
+            assert "IS that lap" in tip, tip
+
+            # THE OTHER FIVE SURFACES AGREE, in the same frame.
+            assert view.plots.ideal_btn.isEnabled() is False
+            assert "IDEAL" not in view._plots_label.text(), view._plots_label.text()
+            assert view.stats_view.t_theoretical.isHidden()
+        finally:
+            s.ideal_donor_lap_id = real
+        # ...and it all comes back when the ideal is stitched again.
+        view.rebuild_derived_views(reselect=False)
+        assert view.ideal_readout_btn.isEnabled() and view.ideal_readout_btn.isChecked()
+        assert view.ideal_readout_btn.toolTip() == base_tip
+        view._update_diff_box(s.lap_window(best)[0], 42.0, best)
+        assert view.diff_box.text().startswith("Δideal"), view.diff_box.text()
+        print("test_the_hero_withholds_the_ideal_when_the_ideal_is_a_lap_you_drove OK "
+              "(201 samples, 0 printed Δideal in the one-donor state)")
+
+
+def test_the_hero_says_on_screen_that_its_ideal_readout_is_floored():
+    """F3. `theme.format_ideal_run` clamps the DISPLAYED Δideal at 0 and the Δ chart 130 px below
+    draws the same quantity UNCLAMPED — deliberately, both of them. But the clamp was stated only
+    in a source comment, so on the default screen (best lap selected → the chart is baselined to
+    the ideal) the two surfaces visibly disagree: on SD_30_08 the curve sits 8.9 px below its own
+    y = 0 line on 297 of 1 308 frames while the hero above it prints `+0.00`.
+
+    The clause appears exactly where the clamp is doing visible work, in BOTH toggle states, and
+    is silent otherwise — a note on every frame would be noise about a number that is usually
+    positive. The negative control is a positive sample from the same lap."""
+    with _Themed((1440, 900)) as view:
+        s = view.session
+        worst = (0.0, None, None)
+        for lap in s.valid_lap_ids():
+            lo, hi = s.lap_window(lap)
+            for k in range(201):
+                t = lo + (hi - lo) * k / 200
+                raw = s.delta_to_ideal_at(lap, t)
+                if raw is not None and raw < worst[0]:
+                    worst = (raw, lap, t)
+        raw, lap, t = worst
+        assert raw < -theme.DELTA_EVEN_EPS_S, (
+            f"fixture floor is {raw:.5f} s — it must clear the dead band or this asserts nothing")
+
+        for checked in (True, False):
+            view.ideal_readout_btn.setChecked(checked)
+            view._update_diff_box(t, 42.0, lap)
+            tip = view.diff_box.toolTip()
+            assert "floors at +0.00" in tip, (checked, tip)
+            assert f"{abs(raw):.2f} s up on the lap that donated" in tip, (checked, tip)
+            assert "dip below its own zero line" in tip, (checked, tip)
+        # The hero itself still prints no minus sign — the clause explains the clamp, it does not
+        # undo it.
+        view.ideal_readout_btn.setChecked(True)
+        view._update_diff_box(t, 42.0, lap)
+        assert "-" not in view.diff_box.text().split("     ")[0], view.diff_box.text()
+
+        # NEGATIVE CONTROL: a sample where the raw value is comfortably positive says nothing.
+        pos = next(tt for tt in (s.lap_window(lap)[0] + (s.lap_window(lap)[1]
+                                                         - s.lap_window(lap)[0]) * k / 200
+                                 for k in range(201))
+                   if (s.delta_to_ideal_at(lap, tt) or 0.0) > 0.05)
+        for checked in (True, False):
+            view.ideal_readout_btn.setChecked(checked)
+            view._update_diff_box(pos, 42.0, lap)
+            assert "floors at +0.00" not in view.diff_box.toolTip(), (checked,
+                                                                      view.diff_box.toolTip())
+        view.ideal_readout_btn.setChecked(True)
+        print("test_the_hero_says_on_screen_that_its_ideal_readout_is_floored OK "
+              f"(clause shown at raw {raw:.4f} s, silent at +{s.delta_to_ideal_at(lap, pos):.4f} s)")
+
+
 def test_the_hero_never_recommends_the_reference_that_cannot_move():
     """D4-08. The census says this readout is the ONLY surface above 13 px in the whole first
     painted frame (22 px, against 167 at 13 and 8 at 11). The DEFAULT reference no longer needs a
@@ -491,6 +611,8 @@ def _run_all():
     test_every_maximize_button_clears_the_hit_target_floor()
     test_the_hero_is_no_longer_a_structural_zero_on_the_best_lap()
     test_the_hero_never_prints_a_minus_sign_against_the_ideal()
+    test_the_hero_withholds_the_ideal_when_the_ideal_is_a_lap_you_drove()
+    test_the_hero_says_on_screen_that_its_ideal_readout_is_floored()
     test_the_hero_never_recommends_the_reference_that_cannot_move()
     print("ALL CHARTS/MAP PANEL-CHROME TESTS OK")
 

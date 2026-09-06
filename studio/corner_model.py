@@ -524,8 +524,16 @@ class CornerModel:
         WHY IT MATTERS, measured: drawing each segment as a straight line in (distance, time)
         instead sent `Session.delta_to_ideal_at` to −0.87 s on 18.4 % of samples on the Sandown
         recording — a 163 m / 9.9 s corner is nowhere near constant pace, so the line is nowhere
-        near anything anybody drove. Following the donor cuts the worst excursion to −0.052 s and
-        under 1 % of samples, which is then a real "you were up on the ideal through here"."""
+        near anything anybody drove. Following the donor cuts the worst excursion to **−0.159 s**
+        (2.09 % of samples on Sandown chapter 1, 6.42 % on SD_30_08 — the per-recording table is
+        in `theme.format_ideal_run`'s note), which is then a real "you were up on the ideal through
+        here" rather than an artefact of the drawing.
+
+        Those two figures read −0.052 s / "under 1 %" until this sweep was redone: the original was
+        measured on a fixture set that substituted Sandown chapter **3** — one valid lap, so the
+        excursion is identically zero — for chapter 1, which is where the real floor is. See
+        `Session.delta_to_ideal` for the full note; the lesson is that the sweep passed because its
+        fixture could not express the property, not because the bound held."""
         sb = self.segment_bests()
         if sb is None:
             return None

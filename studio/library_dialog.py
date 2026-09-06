@@ -92,10 +92,25 @@ _HEADERS = ["Date", "Track", "Best lap", "Ideal lap"]
 
 # What the Ideal-lap cell hovers with when it has no number to show, appended to the row's own file
 # identity. Two causes, one em dash, and the user is told which:
+#
+# ...EXCEPT that the FIRST of them is not one cause but two, and the entry carries no field that
+# separates them. This tip used to assert the v2->v3 migration ("It was analyzed before pacer
+# built the ideal lap … Open this recording again to fill it in"), keyed on `theoretical is None`.
+# But `Session.library_entry` writes None whenever `theoretical_best()` is None, which includes a
+# session written by TODAY's app that has no corner partition — proven at the code path: a fresh
+# v3 entry with no corner detected reads back identically to a migrated v2 one. That row was being
+# told a story about its own history that may be false, and given an instruction (re-open it) that
+# cannot change the value. The stored keys are `best date degraded dropout fingerprint lap_count
+# paths stem theoretical track verified` — nothing distinguishes "retired by the migration" from
+# "never had one" — so the tip states the FACT and names the two possible causes without asserting
+# either, and the instruction is conditional on the cause that re-opening can actually fix.
+# Telling them apart needs a stored flag on the migrated entries (studio/library.py `_migrate` /
+# `_norm_entry`); see this PR's hand-off note.
 _IDEAL_STALE_TIP = (
-    "Ideal lap: not stored for this recording.\nIt was analyzed before pacer built the ideal lap "
-    "from your corners and straights, and the old value was just a copy of the best lap — so it "
-    "was retired rather than shown. Open this recording again to fill it in.")
+    "Ideal lap: not stored for this recording.\nEither it was analyzed before pacer built the "
+    "ideal lap from your corners and straights (the old value was a copy of the best lap, so the "
+    "migration retired it), or pacer found no corners here to stitch one from. Re-opening the "
+    "recording fills it in if there are corners to find.")
 _IDEAL_ONE_DONOR_TIP = (
     "Ideal lap: same as the best lap for this recording.\nOne lap was quickest through every "
     "corner and every straight, so the ideal IS that lap — there is nothing stitched to show.")
@@ -301,8 +316,11 @@ def _ideal_cell(entry: dict) -> tuple[float | None, str | None]:
     A number when the entry holds a real stitched ideal. Otherwise ``(None, reason)`` for the two
     states where printing one would be a lie rather than a lap time:
 
-      * the entry predates schema v3, so its ``theoretical`` was retired by the migration (it held
-        a copy of ``best`` under the old definition — see studio/library.py);
+      * the entry has no stored ``theoretical`` — either it predates schema v3 and the migration
+        retired the value (it held a copy of ``best`` under the old definition — see
+        studio/library.py), or it was written by a v3 writer for a recording with no corner
+        partition. **The entry carries nothing that tells those two apart**, so the tip names both
+        rather than guessing on read (see ``_IDEAL_STALE_TIP``);
       * the ideal came out equal to the best lap, which means one lap won every segment.
 
     The dialog is PACER-FREE and reads a plain dict, so it cannot call ``ideal_donor_lap_id()``

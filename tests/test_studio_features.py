@@ -554,6 +554,9 @@ def test_plots_view_shows_empty_state_when_no_laps():
         def delta_to_ideal(self, ids, x_mode="distance"):
             return None  # P7: no ideal here → the Δ chart keeps its Δ-to-best baseline
 
+        def ideal_delta_to_best(self, x_mode="distance"):
+            return None  # the OVERLAY's accessor; the toggle's enablement reads it too
+
         def ideal_donor_lap_id(self):
             return None  # plots_view reads this on every plotted refresh
 
@@ -1209,6 +1212,43 @@ class _ViewSpy:
         return _rec
 
 
+class _ChipSpy:
+    """The `vs ideal` chip's surface, Qt-free.
+
+    The rebuild seam gained a step: it re-syncs the hero's reference chip on the SAME fact the
+    Stats IDEAL LAP block and the `Ideal lap` toggle gate on (`ideal_donor_lap_id`), because that
+    was the one surface #211 left ungated. This spy is what lets the Qt-free seam test keep
+    running the real `rebuild_derived_views` body — and lets it assert the sync happened."""
+
+    def __init__(self):
+        self.enabled = True
+        self.checked = True
+        self.tip = ""
+        self.blocked = False
+
+    def setToolTip(self, text):
+        self.tip = text
+
+    def toolTip(self):
+        return self.tip
+
+    def setEnabled(self, on):
+        self.enabled = bool(on)
+
+    def isEnabled(self):
+        return self.enabled
+
+    def setChecked(self, on):
+        self.checked = bool(on)
+
+    def isChecked(self):
+        return self.checked
+
+    def blockSignals(self, on):
+        was, self.blocked = self.blocked, bool(on)
+        return was
+
+
 def _rebuild_window(comparing=False):
     """A CentralView built WITHOUT __init__ (no Qt/pacer), with every derived-view collaborator
     replaced by a _ViewSpy and the two leaf refresh helpers (_refresh_driving_channels /
@@ -1235,6 +1275,13 @@ def _rebuild_window(comparing=False):
     # session.corners.corner_map_markers is the one session read the seam makes directly
     # (set_corners arg); stub the corners service so no pacer is needed.
     w.session = SimpleNamespace(corners=SimpleNamespace(corner_map_markers=lambda: []))
+
+    # The hero's reference chip + the two pieces of state _sync_ideal_readout owns. This session
+    # stub answers neither ideal accessor, so the seam must land on "none" — a chip that offers a
+    # reference the session cannot supply is the defect the sync exists to prevent.
+    w.ideal_readout_btn = _ChipSpy()
+    w._ideal_readout_wanted = True
+    w._ideal_state = "stitched"
 
     # Replace the two leaf helpers + the selection step with counters so we can assert each was
     # invoked exactly through the seam (the real bodies push to plots/map and are tested elsewhere).
@@ -1340,6 +1387,13 @@ def test_apply_reference_change_now_refreshes_corners_and_driving_channels():
     assert "refresh" in w.view.corner_table.calls
     assert rec.select == 1 and rec.sector == 1
     assert rec.update_ref == 1, "_update_reference_status not called after the rebuild"
+    # ...and the hero's reference chip is re-synced by the SAME seam, on the same fact the Stats
+    # block and the chart toggle gate on. A reference load re-partitions nothing, but a start-line
+    # drag comes through here too, and that CAN turn a stitched ideal into a single-donor one.
+    assert w.view._ideal_state == "none", w.view._ideal_state
+    assert not w.view.ideal_readout_btn.isEnabled()
+    assert not w.view.ideal_readout_btn.isChecked()
+    assert "no corners" in w.view.ideal_readout_btn.toolTip()
     print("test_apply_reference_change_now_refreshes_corners_and_driving_channels OK")
 
 

@@ -236,6 +236,39 @@ def test_library_menu_item_comes_back_the_moment_there_is_a_library():
     print("test_library_menu_item_comes_back_the_moment_there_is_a_library OK")
 
 
+def test_the_library_menu_item_names_the_columns_the_dialog_actually_has():
+    """F4. `File ▸ Library…`'s tooltip is a description of the dialog's four columns, so it is
+    wrong the moment one of them is renamed and nothing else can catch it — the dialog's own tests
+    read `_HEADERS`, and this string is on a QAction in another module.
+
+    That is exactly how it broke: #211 renamed the fourth column from "Theoretical" to "Ideal lap"
+    (and renamed the noun everywhere else — the chart toggle, the panel header, the chip, the hero,
+    the share card) while this tooltip went on offering "theoretical best", a column the dialog no
+    longer has. Read structurally off `library_dialog._HEADERS` so the next rename cannot drift
+    either.
+
+    The `laps.csv` trailer's "Theoretical best" is deliberately NOT in scope: that label is a
+    machine-readable export contract (export_data.SUMMARY_ROWS), not a description of a widget."""
+    from studio import library_dialog
+    win = StudioWindow([])
+    win.resize(1440, 900)
+    win.show()
+    _settle(4)
+    try:
+        # The un-gated (feature) text, not the empty-library reason — _gate_action stashes it.
+        action = getattr(win, LIBRARY_GATED)
+        tip = action.property("featureTip") or action.toolTip()
+        low = tip.lower()
+        for header in library_dialog._HEADERS:
+            assert header.lower() in low, (
+                f"the menu item does not name the dialog's {header!r} column: {tip!r}")
+        assert "theoretical" not in low, (
+            f"the menu item still offers the retired column name: {tip!r}")
+    finally:
+        win.hide()
+    print("test_the_library_menu_item_names_the_columns_the_dialog_actually_has OK")
+
+
 def test_a_loaded_session_re_enables_them_without_opening_a_menu():
     """The gate must come back UP with the view, at _build_ui time — not on the next pull-down,
     because ⌘⇧S is a shortcut on a disabled action until something re-enables it."""
@@ -343,6 +376,7 @@ def _run_all():
     test_escape_still_leaves_video_focus_and_window_fullscreen()
     test_session_only_menu_items_are_disabled_before_the_first_load()
     test_library_menu_item_comes_back_the_moment_there_is_a_library()
+    test_the_library_menu_item_names_the_columns_the_dialog_actually_has()
     test_a_loaded_session_re_enables_them_without_opening_a_menu()
     test_jump_marks_and_reveals_the_corner_row_it_landed_on()
     test_jump_does_not_overwrite_the_persisted_lap_panel_tab()
