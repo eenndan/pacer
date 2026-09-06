@@ -133,8 +133,9 @@ Depth: **[AGENTS.md](AGENTS.md)** (the authoritative developer reference) and
 The hard part of a tool like this is not computing a number, it is refusing to present one better
 than it is. So that is a rule with an owner in the code:
 
-- **one canonical `(est)`.** `theme.ESTIMATED_MARK` is the single spelling, so the app can never
-  print `(est)`, `(EST)`, `ESTIMATED` and `(est.)` on four surfaces.
+- **one canonical `(est)`.** `theme.ESTIMATED_MARK` is the only place the wording lives, so the app
+  cannot end up spelling it four ways — `(est)` here, `(EST)` there, `ESTIMATED` and `(est.)`
+  elsewhere.
 - **provisional timing demotes what depends on it** — an auto-fitted start line means no
   personal-best celebration and a lap table that says why.
 - **the shareable outputs are gated.** The lap card and the overlay MP4 read the same trust verdict
