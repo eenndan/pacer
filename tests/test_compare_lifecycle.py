@@ -60,6 +60,7 @@ theme.apply_theme(_APP)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VIDEO_VIEW = os.path.join(REPO, "studio", "video_view.py")
+WIDGETS = os.path.join(REPO, "studio", "widgets.py")
 
 #: How many enter/exit cycles each subprocess drives, and how many run AT ONCE. Both numbers are
 #: measured against the broken build, not guessed: 600 cycles killed 4 of 6 solo runs, 1500 killed
@@ -151,19 +152,30 @@ def _fill_before_mount(path):
     return hits
 
 
-def test_video_view_mounts_every_layout_before_it_fills_it():
-    """`studio/video_view.py` is the one file that mounts widgets which are ALREADY LIVE in another
-    layout (the primary pane moves between the stage and a compare cell on every toggle), so it is
-    the file where the half-move above is reachable. Every layout here is mounted first.
+def test_the_widget_movers_mount_every_layout_before_they_fill_it():
+    """The files that can be handed a widget which is ALREADY LIVE in another layout, where the
+    half-move above turns into a crash. Every layout in them is mounted first.
 
-    Scoped to this file on purpose. The same shape exists in builder code elsewhere in `studio/`
-    (`widgets.PanelToolbar._mount` is the one that takes caller-supplied widgets), where it is
-    latent rather than live because those callers pass freshly-constructed, unparented widgets."""
-    hits = _fill_before_mount(VIDEO_VIEW)
-    assert hits == [], (
-        "a layout in studio/video_view.py is filled before it is mounted; this file moves a LIVE "
-        "widget between layouts, where that is half a move (see the test above):\n  "
-        + "\n  ".join(hits))
+    Two files, for two different reasons, and the distinction is the point:
+
+    * `studio/video_view.py` moves a live widget by DESIGN — the primary pane travels between the
+      stage and a compare cell on every toggle — so the defect was reachable from a button, and was
+      (PR #200: 5 of 6 processes SIGSEGVd).
+    * `studio/widgets.py::PanelToolbar._mount` takes CALLER-SUPPLIED widgets. It was latent only
+      because every caller today happens to pass a freshly-constructed, unparented control; the
+      signature accepts any widget, so the first caller that hands over a mounted one inherits the
+      same crash. "No current caller triggers it" is a property of the callers, not of the code, and
+      it is not a thing a guard should rely on.
+
+    Scoped to these two rather than all of `studio/` on purpose: a builder that only ever
+    constructs its own children cannot half-move anything, and widening this to files that cannot
+    express the defect would make it a style rule instead of a crash guard."""
+    for path, why in ((VIDEO_VIEW, "moves the primary pane between layouts on every compare toggle"),
+                      (WIDGETS, "accepts caller-supplied widgets that may already be mounted")):
+        hits = _fill_before_mount(path)
+        assert hits == [], (
+            f"a layout in {os.path.relpath(path, REPO)} is filled before it is mounted, and this "
+            f"file {why} — where that is half a move (see the test above):\n  " + "\n  ".join(hits))
 
 
 # ------------------------------------------------------------------ the crash guard
