@@ -20,7 +20,7 @@ isn't a plain importable module:
 | `pacer._pacer` native extension (`.so`) + the `pacer` package | the C++ core; found via the installed `pacer` package, so the bundle uses the same binary the app imports |
 | **PySide6 incl. QtMultimedia plugins** | the synced-video player needs the AVFoundation media backend; collected wholesale because the default hook can miss media plugins |
 | pyqtgraph + qtawesome Qt-side data | icon fonts / styling loaded via `__file__` |
-| `studio/assets/` (Inter fonts, `caret-down.png`) and `studio/mk_centerline.json` | loaded via `os.path.dirname(__file__)`; mirrored into the bundle so those paths resolve |
+| `studio/assets/` (Inter fonts, `pacer.icns`) and `studio/mk_centerline.json` | loaded via `os.path.dirname(__file__)`; mirrored into the bundle so those paths resolve. The QComboBox chevron used to live here too as a tracked `caret-down.png` the app re-rendered on every boot — PR #206 moved it to a per-process temp dir, which is also what stopped the frozen `.app` silently losing its chevron (`px.save` fails inside a read-only signed bundle) |
 | the tiny `3rdparty/.../hero6.mp4` sample | `Session.DEFAULT_SAMPLE` (the launch / "Open demo" fallback). Resolved via `sys._MEIPASS` when frozen |
 | **`ffmpeg` + `ffprobe`** binaries at the bundle root | a Finder-launched `.app` has no PATH ffmpeg; a runtime hook wires the app to the bundled ones (see below) |
 

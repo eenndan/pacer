@@ -11,7 +11,7 @@ What this bundles (the things the app loads at runtime that are NOT plain import
     installed `pacer` package rather than hard-coding the build path.
   * PySide6 + QtMultimedia: collected wholesale so the multimedia/AVFoundation backend plugins
     ship (the video player needs them; PyInstaller's default hook can miss the media plugins).
-  * studio's runtime data loaded via __file__ — studio/assets (fonts + caret-down.png) and
+  * studio's runtime data loaded via __file__ — studio/assets (Inter fonts + pacer.icns) and
     studio/mk_centerline.json — and the bundled sample clip Session.DEFAULT_SAMPLE opens.
   * ffmpeg + ffprobe binaries at the bundle root; a runtime hook (rthook_ffmpeg.py) exports
     PACER_FFMPEG / PACER_FFPROBE so studio.export_video finds them with no PATH ffmpeg.
