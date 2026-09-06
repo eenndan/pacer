@@ -7,10 +7,15 @@ the reason Pacer exists.
 
 ## 1 · Open a recording
 
-Drag a GoPro `.MP4` onto the window, or **File ▸ Open**. GoPro chapter siblings (`GX01…`, `GX02…`)
-are chained automatically.
+Drag a GoPro `.MP4` onto the window, or **File ▸ Open**.
 
 Pacer reads the GPS9 + motion data the camera already recorded — no transponder, no extra sensors.
+
+**A long recording is split into chapters** (`GX01…`, `GX02…`, same 4-digit recording number), and
+Pacer lays them on one timeline. **Dropping** a chapter chains its siblings for you; **File ▸ Open**
+deliberately opens exactly the file you picked. Either way, if you end up looking at part of a
+recording the window says so — *"1 of 3 chapters — File ▸ Load full recording to analyse the whole
+recording"* — and that menu item is live.
 
 > **About the "Open demo" button.** It resolves a small real lapping clip in three steps —
 > `PACER_DEMO_MP4`, then a local cache, then a one-time download of a release asset. **That asset
