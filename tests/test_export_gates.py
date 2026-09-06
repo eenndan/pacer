@@ -28,6 +28,17 @@
   * L11-08 — "Reveal in Finder" discarded openUrl()'s bool and said nothing either way, while its
     peer "Back up…" reported both outcomes.
 
+  * D2-B (this wave) — the overlay export never told you it finished. _run_video_export had ZERO
+    coverage, which is exactly why: the only test touching the GUI path built a VideoExportWorker
+    directly and skipped the dialog. Measured on the real window: after a SUCCESSFUL export the
+    modal was still up, its label still read "Rendering lap 4 overlay video…", its bar had snapped
+    back to empty (value -1 of 700 — `reset()` under `setAutoClose(False)` resets the bar but does
+    not hide) and its one button still read "Cancel", so dismissing your finished export told you
+    you cancelled it. The success line was painted BEHIND that WindowModal dialog and expired in 6 s.
+    All three outcomes now take the modal down, and the five failure dialogs name the product in
+    their BODY (macOS drops a QMessageBox title — the load path was fixed for this, the export
+    never was).
+
   * PR #153's handoff — track_db refuses to overwrite a different circuit stored under the same
     name; the confirm that turns that refusal into a question lives here.
 
@@ -57,7 +68,7 @@ for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db
     _mod._app_support_dir = (lambda d=_dir: d)
 sidecar.sidecar_path = lambda _p, _d=_SEAMS: os.path.join(_d, "test.pacer.json")
 
-from PySide6.QtCore import QBuffer, QIODevice  # noqa: E402
+from PySide6.QtCore import QBuffer, QIODevice, QThread, QTimer, Signal  # noqa: E402
 from PySide6.QtGui import QDesktopServices, QImage  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -67,13 +78,17 @@ from PySide6.QtWidgets import (  # noqa: E402
     QInputDialog,
     QLabel,
     QMessageBox,
+    QProgressBar,
+    QProgressDialog,
+    QPushButton,
     QWidget,
 )
 
 _APP = QApplication.instance() or QApplication([])
 
+from studio import app as studio_app  # noqa: E402
 from studio import coaching, data_quality, export_data, export_video  # noqa: E402
-from studio.app import StudioWindow  # noqa: E402
+from studio.app import APP_NAME, StudioWindow  # noqa: E402
 
 # The four File ▸ Export data actions L1-03 is about, by the attribute the window keeps them on.
 DATA_EXPORTS = ("_export_laps_action", "_export_channels_action", "_export_report_action",
@@ -261,6 +276,347 @@ def test_the_mp4_export_obeys_the_same_trust_verdict_as_the_lap_card():
         assert quiet.trust == [], quiet.seen
         win.hide()
     print("test_the_mp4_export_obeys_the_same_trust_verdict_as_the_lap_card OK")
+
+
+# ============================================================ D2-B — the export's terminal state
+class _FakeVideoWorker(QThread):
+    """VideoExportWorker's whole signal surface with no thread, no Renderer and no ffmpeg.
+
+    It deliberately does NOT run: nothing is emitted until the driver below asks, from inside the
+    modal loop — which is where the real worker's queued signals land, since `dlg.exec()` is the
+    only event loop running while a render is in flight."""
+
+    progress = Signal(int, int)
+    finished_export = Signal(bool, str)
+
+    def __init__(self, _session, _spec):
+        super().__init__()
+        self.cancels = 0
+
+    def cancel(self):
+        self.cancels += 1
+
+    def start(self):            # never spawn a thread
+        pass
+
+    def wait(self, *_a, **_k):
+        return True
+
+
+class _FakeSpec:
+    """ExportSpec's two attributes _run_video_export touches: where it wrote, and the temp
+    concat-list file the chapter resolution may have made."""
+
+    class _Source:
+        def __init__(self):
+            self.cleanups = 0
+
+        def cleanup(self):
+            self.cleanups += 1
+
+    def __init__(self, out_path):
+        self.out_path = out_path
+        self.source = self._Source()
+
+
+def _visible_state(win, dlg):
+    """Everything a user can actually see about an in-flight/finished export."""
+    bar = dlg.findChild(QProgressBar)
+    return {
+        "dialog_up": bool(dlg.isVisible()),
+        "button": dlg.findChild(QPushButton).text(),
+        "label": dlg.findChild(QLabel).text(),
+        "bar": (bar.value(), bar.maximum()),
+        "status": win.statusBar().currentMessage(),
+    }
+
+
+def _run_export_to_completion(win, *, ok, message="", lap=2, click_cancel=False,
+                              click_reveal=False, openurl=True,
+                              out_path="/tmp/GX010099_lap3_overlay.mp4"):
+    """Drive the REAL _run_video_export end to end with the render faked out.
+
+    QDialog.exec is swapped for a driver that emits the worker's progress and its final
+    ok/message from inside the modal loop, so the completion handler runs exactly where it runs
+    in production. Returns (mid_render, at_the_end, modals, worker, spec)."""
+    spec = _FakeSpec(out_path)
+    made, modals, mid = [], [], {}
+    orig_worker, orig_exec = studio_app.VideoExportWorker, QDialog.exec
+    orig_box_exec, orig_warning = QMessageBox.exec, QMessageBox.warning
+    orig_openurl = QDesktopServices.openUrl
+    end = {}
+
+    def _box_exec(box, *_a, **_k):
+        modals.append({"kind": "box", "title": box.windowTitle(), "body": box.text(),
+                       "icon": box.icon(),
+                       "buttons": {b.text(): box.buttonRole(b) for b in box.buttons()},
+                       "default": box.defaultButton().text() if box.defaultButton() else None})
+        if click_reveal:
+            for b in box.buttons():
+                if b.text() == "Reveal in Finder":
+                    b.click()
+        return 0
+
+    def _warning(_parent, title, text, *_a, **_k):
+        modals.append({"kind": "warning", "title": title, "body": text})
+        return QMessageBox.Ok
+
+    def _exec(dlg):
+        if not isinstance(dlg, QProgressDialog):
+            return orig_exec(dlg)
+        worker = made[-1]
+        worker.progress.emit(0, 700)
+        worker.progress.emit(350, 700)          # a determinate bar, part-way through
+        mid.update(_visible_state(win, dlg))
+        if click_cancel:
+            dlg.cancel()                        # exactly what pressing the button does
+            dlg.canceled.emit()
+        worker.finished_export.emit(ok, message)
+        end.update(_visible_state(win, dlg))
+        return QDialog.Accepted
+
+    def _worker(session, sp):
+        made.append(_FakeVideoWorker(session, sp))
+        return made[-1]
+
+    studio_app.VideoExportWorker = _worker
+    QDialog.exec = _exec
+    QMessageBox.exec = _box_exec
+    QMessageBox.warning = staticmethod(_warning)
+    QDesktopServices.openUrl = staticmethod(lambda _url, a=openurl: a)
+    try:
+        win.statusBar().clearMessage()
+        win._run_video_export(spec, lap)
+    finally:
+        studio_app.VideoExportWorker = orig_worker
+        QDialog.exec = orig_exec
+        QMessageBox.exec = orig_box_exec
+        QMessageBox.warning = orig_warning
+        QDesktopServices.openUrl = orig_openurl
+    return mid, end, modals, made[-1], spec
+
+
+def test_a_finished_video_export_takes_the_modal_down_and_says_so():
+    """The owner's report: "when video is finished exporting, there must be a clean message - now
+    it does not say anything and the button keeps saying 'cancel'."
+
+    Measured on main, after a SUCCESSFUL export: dialog_up True, label 'Rendering lap 4 overlay
+    video…', bar (-1, 700) — empty, as if the render had restarted — button 'Cancel'. The user had
+    to press Cancel to dismiss the thing they had just waited two minutes for, and the one success
+    signal was painted behind that modal."""
+    win = _window(FakeSession())
+    mid, end, modals, worker, spec = _run_export_to_completion(win, ok=True)
+
+    # While it runs, nothing changes: a determinate bar and a real Cancel.
+    assert mid["dialog_up"] and mid["bar"] == (350, 700) and mid["button"] == "Cancel", mid
+    assert "Rendering" in mid["label"], mid
+
+    # ...and the moment it finishes, the modal is gone. That is the whole fix.
+    assert not end["dialog_up"], (
+        f"the progress dialog outlived the render: {end}")
+    assert end["bar"] != (-1, 700), (
+        f"reset() blanked the bar under a stale label instead of closing: {end}")
+    assert worker.cancels == 0, "taking the dialog down fired cancel() on a finished worker"
+    assert spec.source.cleanups == 1, "the temp concat-list file was not cleaned up"
+
+    # One completion message, in the app's own vocabulary, naming the product in the BODY.
+    assert len(modals) == 1 and modals[0]["kind"] == "box", modals
+    box = modals[0]
+    assert box["icon"] == QMessageBox.Information, box["icon"]
+    assert APP_NAME in box["body"], box["body"]
+    assert "GX010099_lap3_overlay.mp4" in box["body"], box["body"]
+    assert "lap 3" in box["body"], f"the box names the lap by its 0-based id: {box['body']!r}"
+
+    # By ROLE, never by index: QDialogButtonBox reorders per platform (macOS puts the accept
+    # button rightmost, the Qt layout puts it first), so a positional assertion here would be a
+    # different test on every OS.
+    assert box["buttons"].get("Done") == QMessageBox.AcceptRole, box["buttons"]
+    assert box["buttons"].get("Reveal in Finder") == QMessageBox.ActionRole, box["buttons"]
+    assert "Cancel" not in box["buttons"], (
+        f"the terminal state still offers a Cancel: {list(box['buttons'])}")
+    assert box["default"] == "Done", box["default"]
+
+    # The status line the app already emitted, now in the clear rather than behind a modal — and
+    # still the same lower-case "exported <basename>" every other export writes.
+    assert end["status"] == "exported GX010099_lap3_overlay.mp4", end["status"]
+    win.hide()
+    print("test_a_finished_video_export_takes_the_modal_down_and_says_so OK")
+
+
+def test_the_finished_export_reveals_in_finder_and_reports_both_outcomes():
+    """L11-08's rule, applied to the new affordance: openUrl can decline, and nothing else on
+    screen changes when it does. The idiom is the SHARED _reveal_in_finder, not a third copy.
+
+    It reveals the containing FOLDER: openUrl on the .mp4 itself would play it in QuickTime, which
+    is not what "Reveal in Finder" means."""
+    win = _window(FakeSession())
+    for answer, expected in ((True, "revealed"), (False, "could not open")):
+        _mid, end, _modals, _worker, _spec = _run_export_to_completion(
+            win, ok=True, click_reveal=True, openurl=answer,
+            out_path="/tmp/pacer-reveal/GX010099_lap3_overlay.mp4")
+        assert expected in end["status"], f"openUrl -> {answer}: {end['status']!r}"
+        assert "/tmp/pacer-reveal" in end["status"], end["status"]
+        assert ".mp4" not in end["status"], (
+            f"the reveal opened the file, not its folder: {end['status']!r}")
+    # Not clicking it leaves the plain confirmation.
+    _mid, end, _modals, _w, _s = _run_export_to_completion(win, ok=True)
+    assert end["status"].startswith("exported "), end["status"]
+    win.hide()
+    print("test_the_finished_export_reveals_in_finder_and_reports_both_outcomes OK")
+
+
+def test_a_cancelled_video_export_takes_the_modal_down_and_says_so():
+    """Cancel already hid the dialog (QProgressDialog::cancel() force-hides regardless of
+    autoClose), so this pins the half that was NOT broken against the fix breaking it — including
+    that the completion handler's disconnect is a no-op on an already-cancelled run, and that no
+    completion box appears for a file that was never written."""
+    win = _window(FakeSession())
+    _mid, end, modals, worker, spec = _run_export_to_completion(
+        win, ok=False, message="cancelled", click_cancel=True)
+    assert not end["dialog_up"], end
+    assert worker.cancels == 1, f"the Cancel button did not reach the worker: {worker.cancels}"
+    assert end["status"] == "video export cancelled", end["status"]
+    assert modals == [], f"a cancelled export raised a dialog: {modals}"
+    assert spec.source.cleanups == 1
+    win.hide()
+    print("test_a_cancelled_video_export_takes_the_modal_down_and_says_so OK")
+
+
+def test_a_failed_video_export_takes_the_modal_down_and_names_the_product():
+    """On main the failure box came up IN FRONT of a progress dialog still reading "Rendering…",
+    and said "The render failed: …" with no title (macOS drops it) and no product name anywhere."""
+    win = _window(FakeSession())
+    _mid, end, modals, _worker, spec = _run_export_to_completion(
+        win, ok=False, message="ffmpeg exited with code 1")
+    assert not end["dialog_up"], f"the failure box was raised over a live progress dialog: {end}"
+    assert len(modals) == 1 and modals[0]["kind"] == "warning", modals
+    body = modals[0]["body"]
+    assert APP_NAME in body, f"the export failure never names {APP_NAME}: {body!r}"
+    assert "ffmpeg exited with code 1" in body, body
+    assert APP_NAME in modals[0]["title"], modals[0]["title"]
+    assert spec.source.cleanups == 1
+    win.hide()
+    print("test_a_failed_video_export_takes_the_modal_down_and_names_the_product OK")
+
+
+def test_the_real_modal_loop_unwinds_when_a_finished_export_opens_its_box():
+    """The four tests above swap QDialog.exec, so none of them exercises the thing the fix actually
+    turns on: `dlg.hide()` called from a slot running INSIDE a live `dlg.exec()`, with a nested
+    QMessageBox opened immediately afterwards.
+
+    It is `QDialog::setVisible(false)` that exits a modal event loop — `close()` would work too but
+    routes through QProgressDialog::closeEvent, which EMITS canceled(). If either half of that ever
+    stopped holding, the app would hang on every successful export while every assertion above
+    stayed green. So this runs the REAL loop and delivers the worker's completion through a QTimer,
+    exactly as the real QThread's queued signal arrives — nothing else can deliver it, since
+    dlg.exec() is the only event loop running during a render.
+
+    A 4 s watchdog force-hides the dialog, so a regression is a failed assertion instead of a suite
+    that hangs for ctest's 1500 s default."""
+    win = _window(FakeSession())
+    spec = _FakeSpec("/tmp/GX010099_lap3_overlay.mp4")
+    boxes, watchdog = [], {"fired": False}
+
+    class _TimerWorker(_FakeVideoWorker):
+        """start() schedules the emissions instead of running them, which is what starting a real
+        QThread amounts to from this side: they land once an event loop is spinning."""
+
+        def start(self):
+            QTimer.singleShot(0, lambda: self.progress.emit(350, 700))
+            QTimer.singleShot(0, lambda: self.finished_export.emit(True, ""))
+
+    def _bark():
+        watchdog["fired"] = True
+        for d in win.findChildren(QProgressDialog):
+            d.hide()
+
+    orig_worker, orig_box_exec = studio_app.VideoExportWorker, QMessageBox.exec
+    studio_app.VideoExportWorker = _TimerWorker
+    QMessageBox.exec = lambda box, *_a, **_k: boxes.append(box.text()) or 0
+    QTimer.singleShot(4000, _bark)
+    try:
+        win._run_video_export(spec, 2)          # a REAL dlg.exec(), no stub
+    finally:
+        studio_app.VideoExportWorker = orig_worker
+        QMessageBox.exec = orig_box_exec
+
+    assert not watchdog["fired"], (
+        "dlg.exec() did not return when the finished export hid the dialog — the export would hang")
+    assert len(boxes) == 1 and APP_NAME in boxes[0], boxes
+    assert [d.isVisible() for d in win.findChildren(QProgressDialog)] == [False], \
+        "a progress dialog was left visible after the real loop unwound"
+    assert win.statusBar().currentMessage() == "exported GX010099_lap3_overlay.mp4", \
+        win.statusBar().currentMessage()
+    win.hide()
+    print("test_the_real_modal_loop_unwinds_when_a_finished_export_opens_its_box OK")
+
+
+def _video_export_dialog_bodies(win, session, src):
+    """Every message the overlay export can raise, driven through the REAL entry points."""
+    seen = []
+    orig_warning, orig_available = QMessageBox.warning, export_video.ffmpeg_available
+    orig_ask, orig_save = StudioWindow._ask_export_options, StudioWindow._export_save_path
+    orig_build = export_video.build_lap_spec
+    orig_run = StudioWindow._run_video_export
+    QMessageBox.warning = staticmethod(
+        lambda _p, title, text, *a, **k: (seen.append((title, text)), QMessageBox.Cancel)[-1])
+    try:
+        win.session = session
+        # 1. no ffmpeg on PATH
+        export_video.ffmpeg_available = lambda: False
+        win._paths = [src]
+        win._export_overlay_video()
+        # 2. a session with no source video file to render onto
+        export_video.ffmpeg_available = lambda: True
+        win._paths = []
+        win._export_overlay_video()
+        # 3. the provisional-timing confirm (a question, but the same titleless box)
+        win._paths = [src]
+        win.session = FakeSession(verified=False)
+        win._export_overlay_video()
+        # 4. build_lap_spec refuses the window
+        win.session = session
+        StudioWindow._ask_export_options = lambda _s, _lap: object()
+        StudioWindow._export_save_path = lambda _s, *a, **k: "/tmp/pacer-unwritten.mp4"
+        StudioWindow._run_video_export = lambda *a, **k: None
+        def _boom(*_a, **_k):
+            raise ValueError("the lap window falls outside the footage")
+        export_video.build_lap_spec = _boom
+        win._export_overlay_video()
+    finally:
+        QMessageBox.warning = orig_warning
+        export_video.ffmpeg_available = orig_available
+        StudioWindow._ask_export_options = orig_ask
+        StudioWindow._export_save_path = orig_save
+        StudioWindow._run_video_export = orig_run
+        export_video.build_lap_spec = orig_build
+    return seen
+
+
+def test_every_video_export_dialog_names_the_product_in_its_body():
+    """D2-10, applied to the export. macOS DROPS a QMessageBox's window title, so a body that does
+    not name the product leaves an unattributed sentence in an untitled box — measured empty in all
+    five of the load path's failure cases, which is why that path carries the name in its body.
+    All five of the export's own dialogs said "Export overlay video" in the title and named nothing
+    in the body. The fifth (the render failure) is covered by the test above, which drives the
+    worker; these four are the ones reachable before a render starts."""
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "GX010099.MP4")
+        open(src, "wb").close()
+        win = _window(FakeSession(), paths=(src,))
+        bodies = _video_export_dialog_bodies(win, FakeSession(), src)
+    assert len(bodies) == 4, [t for t, _b in bodies]
+    for title, body in bodies:
+        assert APP_NAME in body, f"{title!r} names nothing in its body: {body!r}"
+        assert APP_NAME in title, f"{title!r} does not name the product either"
+    # The case messages themselves are untouched — this is a naming line in front of them.
+    joined = "\n".join(b for _t, b in bodies)
+    assert "ffmpeg/ffprobe on PATH" in joined, joined
+    assert "no source video file" in joined, joined
+    assert "auto-fitted" in joined and "Save it as a track" in joined, joined
+    assert "falls outside the footage" in joined, joined
+    win.hide()
+    print("test_every_video_export_dialog_names_the_product_in_its_body OK")
 
 
 # ============================================================ L12-01 — the report's unit
@@ -723,6 +1079,12 @@ def _run_all():
     test_a_zero_lap_recording_disables_every_data_export_with_a_reason()
     test_a_zero_lap_export_writes_nothing_and_says_why()
     test_the_mp4_export_obeys_the_same_trust_verdict_as_the_lap_card()
+    test_a_finished_video_export_takes_the_modal_down_and_says_so()
+    test_the_finished_export_reveals_in_finder_and_reports_both_outcomes()
+    test_a_cancelled_video_export_takes_the_modal_down_and_says_so()
+    test_a_failed_video_export_takes_the_modal_down_and_names_the_product()
+    test_the_real_modal_loop_unwinds_when_a_finished_export_opens_its_box()
+    test_every_video_export_dialog_names_the_product_in_its_body()
     test_the_report_is_written_in_the_display_unit_and_the_csv_is_not()
     test_the_report_map_keeps_its_key_and_loses_the_interaction_chrome()
     test_the_report_map_opens_a_key_the_user_collapsed_on_screen()

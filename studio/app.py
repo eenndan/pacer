@@ -2042,16 +2042,30 @@ class StudioWindow(QMainWindow):
             print(f"studio: could not clear the library index ({exc!r}).", flush=True)
         return library.load()
 
+    def _reveal_in_finder(self, directory: str) -> bool:
+        """Open `directory` in Finder and REPORT BOTH OUTCOMES on the status bar. Returns whether
+        the handler took it.
+
+        THE BOTH-OUTCOMES RULE IS THE POINT (QA L11-08, pinned by test_export_gates): a reveal is a
+        request to a system handler that can decline — ``QDesktopServices.openUrl`` returns a bool —
+        and nothing else on screen changes when it does, so a click that produced silence was
+        indistinguishable from a click that worked.
+
+        A DIRECTORY, never a file: ``openUrl`` on an .mp4 would *play* it in QuickTime, which is not
+        what "Reveal in Finder" means. Both callers hand it a folder — the library index's folder,
+        and the folder an overlay export just wrote into."""
+        if QDesktopServices.openUrl(QUrl.fromLocalFile(directory)):
+            self.statusBar().showMessage(f"revealed {directory} in Finder", STATUS_MS)
+            return True
+        print(f"studio: the system declined to open {directory!r}.", flush=True)
+        self.statusBar().showMessage(f"could not open {directory} in Finder", STATUS_MS)
+        return False
+
     def _reveal_library(self) -> None:
         """Data portability: open the app-support FOLDER that holds ``library.json`` in Finder, so
         the durable index is findable/copyable. Reveals the DIRECTORY (created lazily on the first
         save; ``os.makedirs`` here so a never-saved library still opens to an existing folder rather
-        than a Finder error).
-
-        Reports BOTH outcomes on the status bar, like its peer "Back up…" one row over: the button
-        is a request to a handler that can decline (``openUrl`` returns False), and nothing else on
-        screen changes when it does — a click that produced silence was indistinguishable from a
-        click that worked."""
+        than a Finder error), then hands off to the shared _reveal_in_finder."""
         directory = os.path.dirname(library.library_path())
         try:
             os.makedirs(directory, exist_ok=True)
@@ -2059,11 +2073,7 @@ class StudioWindow(QMainWindow):
             print(f"studio: could not open the library folder ({exc!r}).", flush=True)
             self.statusBar().showMessage(f"could not open {directory}: {exc}", STATUS_MS)
             return
-        if QDesktopServices.openUrl(QUrl.fromLocalFile(directory)):
-            self.statusBar().showMessage(f"revealed {directory} in Finder", STATUS_MS)
-        else:
-            print(f"studio: the system declined to open {directory!r}.", flush=True)
-            self.statusBar().showMessage(f"could not open {directory} in Finder", STATUS_MS)
+        self._reveal_in_finder(directory)
 
     def _backup_library(self) -> None:
         """Data portability: copy ``library.json`` to a user-chosen path (``QFileDialog`` →
@@ -2977,29 +2987,42 @@ class StudioWindow(QMainWindow):
 
         It WARNS rather than refusing, because unlike a brag card a provisional clip is still
         useful — reviewing your own footage doesn't need a verified start line. What it must not be
-        is silent. Default is Cancel, and the way out (save the track) is named."""
+        is silent. Default is Cancel, and the way out (save the track) is named.
+
+        The BODY names the product, for the reason _load_failure_dialog states at length: macOS
+        drops a QMessageBox's window title, so the title argument below is a no-op there and the
+        first sentence is the only naming this dialog gets (QA D2-10, never applied to the export)."""
         return QMessageBox.warning(
-            self, "Export overlay video",
-            "This recording's timing is provisional: the start/finish line was auto-fitted, not "
-            "confirmed by you, so the lap time is an estimate.\n\n"
+            self, f"{APP_NAME} — export overlay video",
+            f"{APP_NAME} can export this lap, but the recording's timing is provisional: the "
+            "start/finish line was auto-fitted, not confirmed by you, so the lap time is an "
+            "estimate.\n\n"
             "That estimate gets burned into the video, with nothing in the frame to say so — which "
             "is why the shareable lap card is switched off for this session. Save it as a track "
             "(File ▸ Save as track…) to confirm the line first.\n\n"
             "Export anyway?",
             QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) == QMessageBox.Yes
 
+    # Every failure this export can raise says the product's name IN THE BODY. macOS drops a
+    # QMessageBox's window title (documented at _show_error_report and _load_failure_dialog, pinned
+    # by test_app_chrome), so "The render failed: …" used to arrive as an unattributed sentence in a
+    # titleless box — the load path was fixed for exactly this and the export never was.
+    _EXPORT_FAIL_TITLE = f"{APP_NAME} — could not export video"
+
     def _export_overlay_video(self):
         if self._no_laps_to_export():
             return
         if not export_video.ffmpeg_available():
-            QMessageBox.warning(self, "Export overlay video",
+            QMessageBox.warning(self, self._EXPORT_FAIL_TITLE,
+                                f"{APP_NAME} can't render an overlay video on this machine: "
                                 "ffmpeg was not found. The video export needs ffmpeg/ffprobe on "
                                 "PATH (they ship with the pixi environment).")
             return
         src = self._paths[0] if getattr(self, "_paths", None) else ""
         if not src or not os.path.exists(src):
-            QMessageBox.warning(self, "Export overlay video",
-                                "This session has no source video file to render onto.")
+            QMessageBox.warning(self, self._EXPORT_FAIL_TITLE,
+                                f"{APP_NAME} can't render an overlay video for this session: "
+                                "it has no source video file to render onto.")
             return
         lap = self._export_lap_id()  # the primary/selected lap, falling back to the best lap
         win = export_video.lap_window_for_export(self.session, lap) if lap is not None else None
@@ -3025,14 +3048,30 @@ class StudioWindow(QMainWindow):
         try:
             spec = export_video.build_lap_spec(self.session, out, lap, config=config)
         except ValueError as exc:
-            QMessageBox.warning(self, "Export overlay video",
-                                f"This lap can't be exported:\n{exc}")
+            QMessageBox.warning(self, self._EXPORT_FAIL_TITLE,
+                                f"{APP_NAME} can't export this lap:\n{exc}")
             return
         self._run_video_export(spec, lap)
 
     def _run_video_export(self, spec, lap: int):
         """Run the render on a worker QThread behind a cancellable modal dialog. Starts indeterminate
-        ("Preparing…"), flips to a determinate bar on the first frame's progress."""
+        ("Preparing…"), flips to a determinate bar on the first frame's progress, and ALWAYS reaches
+        a terminal state: the modal comes down the moment the render stops, whatever the outcome.
+
+        THE MODAL USED TO OUTLIVE THE RENDER. `setAutoClose(False)` is deliberate — Qt closes a
+        QProgressDialog by itself when value reaches maximum, which here is the last FRAME, several
+        seconds before ffmpeg has finished muxing — but the completion handler then called
+        `dlg.reset()`, and `QProgressDialog::reset()` only hides when `autoClose()` is true. Measured
+        on the real window: after a SUCCESSFUL export the dialog was still up, its label still read
+        "Rendering lap 4 overlay video…", its bar had snapped back to empty (`QProgressBar.value()`
+        == -1 of 700 — reset() resets the bar too, so it looks like the render restarted), and its
+        one button still read "Cancel". The only success signal was a 6 s status line painted BEHIND
+        a WindowModal dialog. Dismissing your finished export told you that you cancelled it.
+
+        So: hide() rather than reset() (hiding a QDialog exits its exec() loop; close() would go
+        through QProgressDialog::closeEvent, which EMITS canceled()), the cancel connection is
+        dropped first so the button can no longer mean "cancel" on a finished worker, and success
+        hands off to _video_export_finished."""
         dlg = QProgressDialog(f"Preparing lap {lap_label(lap)} overlay video…", "Cancel", 0, 0, self)
         dlg.setWindowTitle("Export overlay video")
         dlg.setWindowModality(Qt.WindowModal)
@@ -3055,16 +3094,22 @@ class StudioWindow(QMainWindow):
                 dlg.setValue(done)
 
         def on_done(ok: bool, message: str):
-            dlg.reset()
+            # The render is over, so the button can no longer mean "cancel": drop the connection
+            # BEFORE the dialog goes, then hide it. (On the cancel path the dialog is already
+            # hidden — QProgressDialog::cancel() force-hides regardless of autoClose — and this is
+            # simply a no-op.)
+            dlg.canceled.disconnect(worker.cancel)
+            dlg.hide()
             worker.wait()
             self._video_worker = None
             spec.source.cleanup()  # free any temp concat-list file the chapter resolution wrote
             if ok:
-                self.statusBar().showMessage(f"exported {os.path.basename(spec.out_path)}", STATUS_MS)
+                self._video_export_finished(spec.out_path, lap)
             elif message == "cancelled":
                 self.statusBar().showMessage("video export cancelled", STATUS_MS)
             else:
-                QMessageBox.warning(self, "Export overlay video",
+                QMessageBox.warning(self, self._EXPORT_FAIL_TITLE,
+                                    f"{APP_NAME} couldn't finish the overlay video.\n\n"
                                     f"The render failed:\n{message}")
 
         worker.progress.connect(on_progress)
@@ -3072,6 +3117,38 @@ class StudioWindow(QMainWindow):
         dlg.canceled.connect(worker.cancel)
         worker.start()
         dlg.exec()
+
+    def _video_export_finished(self, out_path: str, lap: int) -> None:
+        """The one thing a finished export owes the user: a plain sentence saying it finished, and
+        the file it made.
+
+        WHY A BOX AND NOT JUST THE STATUS LINE. Every other export here writes instantly and a
+        transient status line is proportionate (`exported laps.csv`). An overlay video takes
+        minutes, so the user is watching a modal when it ends — and an MP4, unlike a CSV, is a thing
+        you then go and do something with. A QProgressDialog cannot host that: it lays its label,
+        bar and single button out itself, and that button's click is wired to `canceled()`, so
+        "flip Cancel to Done" would leave the app's terminal state on a signal named cancel with
+        nowhere to put a reveal. The progress modal comes down and this replaces it.
+
+        The status line the app already emitted is kept and moved AFTER the box, so it gets its full
+        STATUS_MS in the clear instead of expiring behind a modal — and it stays the same
+        lower-case "exported <basename>" every other export writes.
+
+        Reveal opens the CONTAINING FOLDER (see _reveal_in_finder) and reports both outcomes, so its
+        message lands on top of the "exported" one — the more recent, more specific fact."""
+        name = os.path.basename(out_path)
+        folder = os.path.dirname(os.path.abspath(out_path))
+        # The body carries the product name: macOS drops the window title (see _EXPORT_FAIL_TITLE).
+        box = QMessageBox(QMessageBox.Information, f"{APP_NAME} — export finished",
+                          f"{APP_NAME} exported lap {lap_label(lap)} as an overlay video.\n\n"
+                          f"{name}\n{folder}", parent=self)
+        reveal_btn = box.addButton("Reveal in Finder", QMessageBox.ActionRole)
+        done_btn = box.addButton("Done", QMessageBox.AcceptRole)
+        box.setDefaultButton(done_btn)
+        box.exec()
+        self.statusBar().showMessage(f"exported {name}", STATUS_MS)
+        if box.clickedButton() is reveal_btn:
+            self._reveal_in_finder(folder)
 
     # ----------------------------------------------- cross-recording reference (F7)
     def _load_reference_file(self):
