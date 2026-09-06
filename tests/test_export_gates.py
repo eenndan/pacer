@@ -46,6 +46,7 @@ Fake sessions throughout (the duck-typed surface these entry points reach throug
 telemetry file and no render. Run: QT_QPA_PLATFORM=offscreen python tests/test_export_gates.py
 """
 import json
+import math
 import os
 import sys
 import tempfile
@@ -75,6 +76,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QComboBox,
     QDialog,
     QFileDialog,
+    QFormLayout,
     QInputDialog,
     QLabel,
     QMessageBox,
@@ -576,7 +578,12 @@ def _video_export_dialog_bodies(win, session, src):
         win._export_overlay_video()
         # 4. build_lap_spec refuses the window
         win.session = session
-        StudioWindow._ask_export_options = lambda _s, _lap: object()
+        # A real ExportChoice, not a bare sentinel: _export_overlay_video reads BOTH of its fields
+        # (the config goes to build_lap_spec, the lead widens the window before the source is
+        # resolved), so a stand-in that is not one would fail on the plumbing rather than on the
+        # dialog this section is measuring.
+        StudioWindow._ask_export_options = lambda _s, _lap: studio_app.ExportChoice(
+            config=export_video.OverlayConfig(), lead=0.0)
         StudioWindow._export_save_path = lambda _s, *a, **k: "/tmp/pacer-unwritten.mp4"
         StudioWindow._run_video_export = lambda *a, **k: None
         def _boom(*_a, **_k):
@@ -878,7 +885,8 @@ def _clear_export_preset():
     every test in the process and by every run on a machine where the user has ever chosen one.
     A test that assumes an unstored state has to say so — and clear it."""
     data = prefs.load()
-    for key in (StudioWindow._PREF_EXPORT_RES, StudioWindow._PREF_EXPORT_QUALITY):
+    for key in (StudioWindow._PREF_EXPORT_RES, StudioWindow._PREF_EXPORT_QUALITY,
+                StudioWindow._PREF_EXPORT_LEAD):
         data.pop(key, None)
     prefs.save(data)
 
@@ -891,6 +899,27 @@ def _run_options_dialog(win, on_dialog):
         return win._ask_export_options(0)
     finally:
         QDialog.exec = orig
+
+
+def _combo(dlg, label):
+    """The options dialog's combo for a form row, found by that row's LABEL.
+
+    W10-06's successor. These guards used to index into `dlg.findChildren(QComboBox)` — `[0]` is
+    Resolution, `[1]` is Quality — which is a positional assumption about a form that grows: a row
+    inserted anywhere but the end silently re-points every index, and the tests then assert about a
+    control nobody meant to drive. (The Run-up / run-off row was appended last, so the old indices
+    would still have been right; that is luck, not a guarantee.) Matching the visible label is what
+    makes the lookup say which control it means."""
+    form = dlg.findChild(QFormLayout)
+    assert form is not None, "the export options dialog has no form layout"
+    for row in range(form.rowCount()):
+        item = form.itemAt(row, QFormLayout.LabelRole)
+        if item is not None and item.widget() is not None and item.widget().text() == label:
+            field = form.itemAt(row, QFormLayout.FieldRole)
+            assert field is not None and isinstance(field.widget(), QComboBox), label
+            return field.widget()
+    labels = [form.itemAt(r, QFormLayout.LabelRole).widget().text() for r in range(form.rowCount())]
+    raise AssertionError(f"no {label!r} row in the export options dialog (rows: {labels})")
 
 
 def test_the_hint_refreshes_on_the_quality_combo_too():
@@ -910,25 +939,63 @@ def test_the_hint_refreshes_on_the_quality_combo_too():
 
     def on_dialog(dlg):
         hint = [w for w in dlg.findChildren(QLabel) if "Output:" in w.text()][0]
-        combos = dlg.findChildren(QComboBox)
+        res, quality, lead = (_combo(dlg, "Resolution"), _combo(dlg, "Quality"),
+                              _combo(dlg, "Run-up / run-off"))
         # The starting state is asserted, not assumed — the default preset is the top of each list.
-        assert (combos[0].currentIndex(), combos[1].currentIndex()) == (1, 0), (
-            "with no stored preset the dialog must open at 1080p/High, got "
-            f"{(combos[0].currentIndex(), combos[1].currentIndex())}")
+        assert (res.currentIndex(), quality.currentIndex(), lead.currentIndex()) == (1, 0, 0), (
+            "with no stored preset the dialog must open at 1080p/High/no run-up, got "
+            f"{(res.currentIndex(), quality.currentIndex(), lead.currentIndex())}")
         texts.append(hint.text())
-        combos[1].setCurrentIndex(1)          # Quality: High -> Standard (a real transition)
-        assert combos[1].currentIndex() == 1
+        quality.setCurrentIndex(1)            # Quality: High -> Standard (a real transition)
+        assert quality.currentIndex() == 1
         texts.append(hint.text())
-        combos[0].setCurrentIndex(0)          # Resolution: 1080p -> 720p (a real transition)
-        assert combos[0].currentIndex() == 0
+        res.setCurrentIndex(0)                # Resolution: 1080p -> 720p (a real transition)
+        assert res.currentIndex() == 0
+        texts.append(hint.text())
+        lead.setCurrentIndex(2)               # Run-up: none -> 10 s (a real transition)
+        assert lead.currentIndex() == 2
         texts.append(hint.text())
         return QDialog.Rejected
 
     _run_options_dialog(win, on_dialog)
     assert texts[0] != texts[1], f"the quality combo left the hint unchanged: {texts[0]!r}"
     assert texts[1] != texts[2], f"the resolution combo left the hint unchanged: {texts[1]!r}"
+    # The run-up makes the clip LONGER, so it moves both numbers the size line quantifies. It was
+    # the third combo added to a hint that only two were wired to; the size estimate would have
+    # gone on describing an unpadded clip.
+    assert texts[2] != texts[3], f"the run-up combo left the hint unchanged: {texts[2]!r}"
     win.hide()
     print("test_the_hint_refreshes_on_the_quality_combo_too OK")
+
+
+def test_the_hint_never_promises_a_run_up_the_footage_cannot_give():
+    """The size line is derived from a DURATION, and with a run-up that duration is no longer
+    `lap_time`. Deriving it as `lap_time + 2 * lead` would be wrong at exactly the place a user
+    notices — the first lap, where the recording has nothing before the start line to give.
+
+    This fake's lap runs 0.000 .. 23.231, so a 10 s run-up can only be a 10 s run-OFF. The hint
+    goes through `export_video.lap_window_for_export`, the same funnel the render resolves its
+    window with, so it reports 33.231 s and not 43.231."""
+    win = _window(FakeSession())
+    assert win._export_clip_seconds(0, 0.0) == 23.231
+    assert win._export_clip_seconds(0, 10.0) == 33.231, win._export_clip_seconds(0, 10.0)
+    # and the frame count in the size line follows it (ceil(duration x 30))
+    hint = win._export_size_hint(win._export_clip_seconds(0, 10.0), 1080, "high")
+    assert f"{int(33.231 * 30) + 1} frames" in hint, hint
+    # A lap the session cannot place has no honest duration, so the hint says nothing rather than
+    # guessing — the same contract _export_size_hint already has for "Source" and for a NaN lap.
+    class _Unplaceable(FakeSession):
+        def lap_window(self, _lap_id):
+            return None
+
+    unplaceable = _window(_Unplaceable())
+    assert math.isnan(unplaceable._export_clip_seconds(0, 5.0))
+    assert unplaceable._export_size_hint(unplaceable._export_clip_seconds(0, 5.0), 1080, "high") \
+        == ""
+    unplaceable.hide()
+    win.hide()
+    print("test_the_hint_never_promises_a_run_up_the_footage_cannot_give OK "
+          "(23.231 s + 10 s run-up/run-off = 33.231 s, not 43.231 s)")
 
 
 # ============================================================ L12-08 — remember it for real
@@ -936,24 +1003,33 @@ def test_the_export_preset_survives_a_new_window():
     """The picker claimed to remember the choice; it was window-instance state that died with the
     window. It is a preference now, like the unit and the palette."""
     picked = _window(FakeSession())
-    _run_options_dialog(picked, lambda dlg: (dlg.findChildren(QComboBox)[0].setCurrentIndex(0),
-                                             dlg.findChildren(QComboBox)[1].setCurrentIndex(1),
-                                             QDialog.Accepted)[-1])
+    choice = _run_options_dialog(picked, lambda dlg: (
+        _combo(dlg, "Resolution").setCurrentIndex(0),
+        _combo(dlg, "Quality").setCurrentIndex(1),
+        _combo(dlg, "Run-up / run-off").setCurrentIndex(2),
+        QDialog.Accepted)[-1])
     picked.hide()
+    # The accepted choice carries the run-up out of the dialog as SECONDS, not as an index — it is
+    # what widens the export window, so a picker that stored it and forgot to return it would
+    # remember a preference the render never applies.
+    assert choice.lead == 10.0, choice
     stored = json.load(open(prefs.prefs_path(), encoding="utf-8"))
     assert stored.get(StudioWindow._PREF_EXPORT_RES) == 0, stored
     assert stored.get(StudioWindow._PREF_EXPORT_QUALITY) == 1, stored
+    assert stored.get(StudioWindow._PREF_EXPORT_LEAD) == 2, stored
 
     seen = {}
 
     def on_reopen(dlg):
-        combos = dlg.findChildren(QComboBox)
-        seen["idx"] = (combos[0].currentIndex(), combos[1].currentIndex())
+        seen["idx"] = (_combo(dlg, "Resolution").currentIndex(),
+                       _combo(dlg, "Quality").currentIndex(),
+                       _combo(dlg, "Run-up / run-off").currentIndex())
         return QDialog.Rejected
 
     fresh = _window(FakeSession())          # a different StudioWindow, as after a relaunch
     _run_options_dialog(fresh, on_reopen)
-    assert seen["idx"] == (0, 1), f"a fresh window reopened on {seen['idx']}, not the saved preset"
+    assert seen["idx"] == (0, 1, 2), \
+        f"a fresh window reopened on {seen['idx']}, not the saved preset"
     fresh.hide()
     print("test_the_export_preset_survives_a_new_window OK")
 
@@ -964,17 +1040,20 @@ def test_a_garbage_stored_preset_falls_back_to_the_default():
     win = _window(FakeSession())
     prefs.set(StudioWindow._PREF_EXPORT_RES, 99)
     prefs.set(StudioWindow._PREF_EXPORT_QUALITY, "high")
+    prefs.set(StudioWindow._PREF_EXPORT_LEAD, -1)
     seen = {}
 
     def on_dialog(dlg):
-        combos = dlg.findChildren(QComboBox)
-        seen["idx"] = (combos[0].currentIndex(), combos[1].currentIndex())
+        seen["idx"] = (_combo(dlg, "Resolution").currentIndex(),
+                       _combo(dlg, "Quality").currentIndex(),
+                       _combo(dlg, "Run-up / run-off").currentIndex())
         return QDialog.Rejected
 
     _run_options_dialog(win, on_dialog)
-    assert seen["idx"] == (1, 0), seen
+    assert seen["idx"] == (1, 0, 0), seen
     prefs.set(StudioWindow._PREF_EXPORT_RES, 1)
     prefs.set(StudioWindow._PREF_EXPORT_QUALITY, 0)
+    prefs.set(StudioWindow._PREF_EXPORT_LEAD, 0)
     win.hide()
     print("test_a_garbage_stored_preset_falls_back_to_the_default OK")
 
@@ -1094,6 +1173,7 @@ def _run_all():
     test_the_report_export_states_a_layout_width_for_every_figure()
     test_the_options_hint_quantifies_the_size_and_the_work()
     test_the_hint_refreshes_on_the_quality_combo_too()
+    test_the_hint_never_promises_a_run_up_the_footage_cannot_give()
     test_the_export_preset_survives_a_new_window()
     test_a_garbage_stored_preset_falls_back_to_the_default()
     test_reveal_in_finder_reports_both_outcomes()

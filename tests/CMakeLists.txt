@@ -729,3 +729,18 @@ add_test(NAME test_corner_grid_budget
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_grid_budget.py)
 set_tests_properties(test_corner_grid_budget PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# LEAD-IN / LEAD-OUT (0 / 5 / 10 s) on the overlay export. The feature is one combo and four ways
+# to ship a wrong clip, so this file is organised as those four: the WINDOW and its clamps (a
+# negative t0 is invisible to guard_validate_window on the CONCAT branch, where time_offset = t0
+# makes local_t0 zero by construction — asserted here as a measurement, not as prose; and nothing
+# bounded t1 at all, so an over-long window produced a short clip and a bar stuck below 100 %); the
+# LAP through the run-up (laps are contiguous, so lap_at_time answers lap N-1 for all of it); the
+# LIVE values (speed and g are time-indexed, and gating them on lap membership would burn "— km/h"
+# over footage doing 88); and the G-ENVELOPE, which must be the exported lap's whatever padding the
+# clip carries. Pixel assertions go through the shipped font stack; one real ffmpeg round trip
+# checks a padded clip's muxed duration (~2 s).
+add_test(NAME test_export_padding
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_padding.py)
+set_tests_properties(test_export_padding PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
