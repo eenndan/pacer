@@ -168,6 +168,22 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **A video export of a lap that crosses a chapter boundary is no longer a second out of sync.**
+  Any lap whose window spans two GoPro chapter files decodes through ffmpeg's concat demuxer, and
+  that path used to position itself with a concat `inpoint` at the lap start. `inpoint` is
+  keyframe-granular: the picture began at the keyframe at or *before* the lap, up to a whole GOP
+  early, while every burned-in overlay frame was stamped from the requested time exactly — so the
+  speed, the Δ and the lap clock described a moment up to a second later than the footage under it, for
+  the entire clip. Measured on the real three-chapter test recording against the chapter's own
+  frames, exact-pixel: **0.956 s early on lap 22, 0.193 s on lap 47** (it depends on where in the
+  keyframe interval the lap begins), with no run-up and with 10 s of it alike. The span
+  now declares each chapter's duration in the concat list — which is the only thing that makes a
+  concat input seekable, and which pins the concatenated clock to the same numbers the app's global
+  clock is built from — and seeks it with the ordinary accurate seek the single-chapter path
+  already used. The first frame is now the frame that was asked for, byte for byte, and the audio
+  moves with it. Laps that sit inside one chapter are untouched. As a side effect the export's
+  up-front "window past the end of the footage" guard starts working on seam-crossing laps: the old
+  list made ffprobe report no duration at all, so that check had been silently skipping.
 - **Both Δ columns on the Corners tab keep their names in a narrow panel.** A "Δbest" (seconds)
   column and a "Δapex" (km/h) column could paint the same bare `…`, leaving a reader no way to tell
   which was which. Two causes, both closed. The width the budget buys for a header was computed as

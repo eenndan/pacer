@@ -273,12 +273,41 @@ class OverlayConfig:
 # [offset_i, offset_i+dur_i); studio/chapters.ChapterMap). ffmpeg can only `-ss` into a SINGLE
 # file's own (local) clock, so a global window resolves to either one chapter file (offset =
 # chapter.offset) or a CONCAT over a seam-crossing span. The concat demuxer plays the spanned files
-# back-to-back as one stream; the first chapter carries a concat `inpoint` at the window's local
-# start (a fast keyframe seek that, unlike a plain `-ss` before a concat input, actually lands),
-# making that stream begin at the lap so its local clock is 0 at the global t0.
+# back-to-back as ONE stream whose clock starts at the FIRST spanned chapter, so both branches take
+# the same shift: local = global - offset_of_the_first_file.
 #
-# `time_offset` is the global->local shift (local = global - time_offset): the chapter offset for a
-# single chapter, t0 for a concat span, 0 for a plain single file (global == local).
+# EVERY LIST ENTRY CARRIES ITS `duration`, AND THAT IS LOAD-BEARING — IT IS WHAT MAKES THE CONCAT
+# STREAM SEEKABLE AT ALL. Without a declared duration for every file the concat demuxer refuses to
+# seek (`concat_seek` bails; ffmpeg logs "could not seek to position ..."), and an `-ss` before the
+# input degrades into decoding the whole span from its start. The picture is still RIGHT — ffmpeg's
+# accurate seek discards its way there — but on the real 3x1729 s D24 recording half a second of
+# picture out of lap 22's window cost 663 s undeclared against 1.2 s declared. Correct and
+# unshippable is still unshippable.
+#
+# AND THEY ARE THE RIGHT DURATIONS TO DECLARE. They are the SAME numbers ChapterMap accumulates its
+# offsets from, so the concat stream's clock is the app's global clock by construction. Letting
+# ffmpeg re-derive them per file would be the inconsistent choice: the single-chapter branch seeks
+# `t0 - offset_i` with offsets built from these, so a span that placed its seam anywhere else would
+# disagree with the chapter branch about where chapter i+1 begins. On D24 the two agree to
+# 0.027 / 0.027 / 1.055 ms of the video streams — well inside one 16.7 ms frame — and the span hands
+# over to the next chapter at +0.0000 s of the declared seam, measured frame by frame across it.
+#
+# WHAT THIS REPLACED, AND WHY IT HAD TO GO. The first spanned chapter used to carry a concat
+# `inpoint` at the window's local start, with `time_offset = t0` so both ffmpeg commands seeked with
+# `-ss 0`. `inpoint` is KEYFRAME-GRANULAR: the decoded picture began at the keyframe at or before
+# the requested instant, i.e. up to one GOP early, while `frame_times` stamped every overlay frame
+# from t0 exactly. The burned-in numbers therefore described a moment up to a second later than the
+# picture under them, on every seam-crossing export (D24 laps 22 and 47), at any padding. Measured
+# by exact-pixel comparison against the chapter's own frames (mean |delta| = 0.000 against a median
+# of 34.8-44.9): lap 22 started -0.956 s early with no run-up and -0.950 s with 10 s of it; lap 47,
+# whose start sat closer to a keyframe, -0.193 s and -0.186 s. The audio came out with it (-0.977 /
+# -0.200 s), so the clip was internally in sync and only the OVERLAY was wrong. With the durations
+# declared, ffmpeg's ordinary accurate `-ss` lands on the same frame the single-chapter branch
+# lands on: +0.005..+0.031 s, which is the render's own fps grid and is what a single-chapter lap
+# has always returned.
+#
+# `time_offset` is the global->local shift (local = global - time_offset): the first spanned
+# chapter's offset for BOTH chaptered branches, 0 for a plain single file (global == local).
 @dataclass(frozen=True)
 class VideoSource:
     """The file-local ffmpeg source for an export, resolved from the global window via a
@@ -314,10 +343,18 @@ def resolve_video_source(chapter_map, t0: float, t1: float,
                          tmp_dir: str | None = None) -> VideoSource:
     """Resolve the GLOBAL window [t0, t1) to a VideoSource via a `ChapterMap`:
       * single chapter -> `-i <that file>`, time_offset = chapter.offset;
-      * spans a seam   -> a concat demuxer over chapters [i0..i1] with an `inpoint` at the lap start
-                          on the first; time_offset = t0 (the lap is the concatenation's t=0). The
-                          concat list is written under `tmp_dir`; the caller frees it via cleanup().
-    Raises ValueError if `chapter_map` has no chapters."""
+      * spans a seam   -> the concat demuxer over chapters [i0..i1], every entry carrying its
+                          `duration` (what makes the span seekable — see the section comment above);
+                          time_offset = chapters[i0].offset, exactly as for a single chapter, so the
+                          same accurate `-ss local` seeks both branches. The concat list is written
+                          under `tmp_dir`; the caller frees it via cleanup().
+    Raises ValueError if `chapter_map` has no chapters.
+
+    BOTH BRANCHES NOW MEAN THE SAME THING BY `local`, which is the point: the concat stream's clock
+    starts where chapter i0 starts, so `t0 - offset_i0` addresses the same instant in the span as it
+    does in the file. The old concat branch instead made the stream begin AT the lap (via a
+    keyframe-granular `inpoint`) and seeked with `-ss 0`, which is how the picture came out up to a
+    GOP ahead of the overlay stamped on it."""
     chs = list(getattr(chapter_map, "chapters", []) or [])
     if not chs:
         raise ValueError("resolve_video_source needs a ChapterMap with at least one chapter")
@@ -328,31 +365,41 @@ def resolve_video_source(chapter_map, t0: float, t1: float,
     start = chs[i0]
     if i1 <= i0:
         return VideoSource(probe_path=start.path, time_offset=float(start.offset))
-    # Concat the spanned chapters; inpoint trims the first to the lap start (fast keyframe seek), so
-    # the stream begins at t0 -> time_offset = t0 and decode/encode seek with -ss 0.
+    # Concat the spanned chapters as one stream that starts where chapter i0 starts, so the seek is
+    # the same `global - offset_i0` the single-chapter branch uses.
     span = chs[i0:i1 + 1]
-    inpoint = max(0.0, t0 - start.offset)        # local start within the first spanned chapter
     tmp = tmp_dir or os.environ.get("TMPDIR") or "/tmp"
-    list_path = _mk_concat_list(span, tmp, first_inpoint=inpoint)
-    return VideoSource(probe_path=start.path, time_offset=float(t0),
+    list_path = _mk_concat_list(span, tmp)
+    return VideoSource(probe_path=start.path, time_offset=float(start.offset),
                        concat_list_path=list_path)
 
 
-def _mk_concat_list(chapters_span, tmp_dir: str,
-                    first_inpoint: float | None = None) -> str:
-    """Write an ffmpeg concat-demuxer list file for `chapters_span` into `tmp_dir`; returns its
-    path. `first_inpoint` (seconds) adds an `inpoint` after the first file (lap-start keyframe
-    seek)."""
+def _mk_concat_list(chapters_span, tmp_dir: str) -> str:
+    """Write an ffmpeg concat-demuxer list file for `chapters_span` into `tmp_dir`; returns its path.
+
+    Every entry declares the chapter's own `duration`. That is not decoration: the concat demuxer
+    only supports SEEKING when the duration of every file in the list is known up front, and an
+    `-ss` into a span without them collapses into decoding the span from its beginning — 663 s
+    against 1.2 s for the same half-second of D24 picture. Declaring them also pins the concat
+    stream's clock to the very numbers `ChapterMap` accumulated its offsets from.
+
+    A chapter whose duration is unknown (0.0 — a map built without media durations, where the global
+    offsets are already degenerate) suppresses the directives for the whole span rather than
+    declaring a zero-length file. That costs speed and nothing else: the undeclared seek still lands
+    on the exact frame (measured, exact-pixel, on a synthetic span), it just decodes its way there.
+    A slow correct seek beats a fast wrong one."""
     import tempfile
     fd, list_path = tempfile.mkstemp(prefix="pacer_export_concat_", suffix=".txt", dir=tmp_dir)
+    durations = [float(getattr(c, "duration", 0.0) or 0.0) for c in chapters_span]
+    declare = all(d > 0.0 for d in durations)
     lines = []
-    for idx, c in enumerate(chapters_span):
+    for c, dur in zip(chapters_span, durations, strict=True):
         ap = os.path.abspath(c.path)
         # concat-demuxer quoting: a literal ' inside a single-quoted token is '\''.
         esc = ap.replace("'", "'\\''")
         lines.append(f"file '{esc}'\n")
-        if idx == 0 and first_inpoint and first_inpoint > 0:
-            lines.append(f"inpoint {first_inpoint:.6f}\n")
+        if declare:
+            lines.append(f"duration {dur:.6f}\n")
     with os.fdopen(fd, "w") as f:
         f.write("".join(lines))
     return list_path
@@ -462,19 +509,20 @@ def lap_window_for_export(session, lap_id: int, lead_in: float = 0.0,
     Unpadded (the default) this is exactly `Session.lap_window`, unchanged.
 
     THE PADDING HAPPENS IN THIS FUNNEL, and it happens BEFORE `resolve_video_source` ever sees the
-    window. Source resolution is what picks the chapter file, the concat span and the first
-    chapter's `inpoint`, so a lead-in that reaches back across a chapter seam has to widen the
-    window first or it resolves against the wrong file. Both callers (`build_lap_spec` and app.py's
-    pre-flight check) come through here, which is what keeps the app's guard and the spec build
-    describing the same window.
+    window. Source resolution is what picks the chapter file and the concat span, so a lead-in that
+    reaches back across a chapter seam has to widen the window first or it resolves against the
+    wrong file. Both callers (`build_lap_spec` and app.py's pre-flight check) come through here,
+    which is what keeps the app's guard and the spec build describing the same window.
 
     THE CLAMPS ARE NOT COSMETIC — each one is a wrong clip that would otherwise ship:
 
-      * a negative `t0` is silently wrong rather than loudly wrong. `guard_validate_window` refuses
-        a negative source-LOCAL t0, but only on the single-chapter branch; on the CONCAT branch
-        `resolve_video_source` sets `time_offset = t0`, so `local_t0` computes to 0, the guard
-        passes, ffmpeg decodes from global 0 and every frame is stamped |t0| seconds early — the
-        overlay and the picture desynced for the entire clip.
+      * a negative `t0` is silently wrong rather than loudly wrong. It asks for footage before the
+        recording began: `chapter_at` clamps to chapter 0, so the source resolves happily and ffmpeg
+        decodes from wherever it can, with every frame stamped |t0| seconds early — the overlay and
+        the picture desynced for the entire clip. `guard_validate_window` refuses it twice over (the
+        GLOBAL test, and now the source-LOCAL one on both branches), but a refused export is still a
+        failed export; the clamp is what makes the first lap of a recording simply export with less
+        run-up than was asked for.
       * there is no upper bound anywhere else. A `t1` past the end of the footage makes
         `frame_times` size the render for frames that do not exist; the decoder's short read is
         treated by `run_chunk` as a clean finish (`produced > 0`), so the export "succeeds" with a
@@ -607,11 +655,16 @@ def output_size(src_w: int, src_h: int, cfg: OverlayConfig) -> tuple[int, int]:
 
 def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
                      hwaccel: bool = False) -> list[str]:
-    """DECODE argv: -ss spec.local_t0 before the input (keyframe seek) + -t duration, scale to
-    out_w x out_h, force the constant `fps`, emit rgb24 rawvideo to stdout; -an/-sn/-dn drop
-    non-video. Input is spec.source.input_args() (chapter file or concat span); the source-LOCAL
-    seek is what makes a chaptered export read the right footage. `hwaccel` adds `-hwaccel
-    videotoolbox` to offload the decode (a big CPU relief on a core-starved machine)."""
+    """DECODE argv: -ss spec.local_t0 before the input + -t duration, scale to out_w x out_h, force
+    the constant `fps`, emit rgb24 rawvideo to stdout; -an/-sn/-dn drop non-video. Input is
+    spec.source.input_args() (chapter file or concat span); the source-LOCAL seek is what makes a
+    chaptered export read the right footage. `hwaccel` adds `-hwaccel videotoolbox` to offload the
+    decode (a big CPU relief on a core-starved machine).
+
+    That `-ss` is ffmpeg's ACCURATE input seek: it lands on the keyframe at or before the target and
+    then decodes forward and discards up to it, so the first frame out is the frame at t0 rather
+    than the keyframe's. Which is the whole reason the seam branch stopped positioning itself with a
+    concat `inpoint` — `inpoint` has no such second half, and left the picture a GOP ahead."""
     hw = ["-hwaccel", "videotoolbox"] if hwaccel else []
     return [
         FFMPEG, "-nostdin", "-loglevel", "error",
@@ -722,16 +775,24 @@ def guard_validate_window(spec: ExportSpec) -> None:
       * the source-LOCAL seek time lands at/after the probed source duration (with a small
         epsilon) — i.e. the seek is past the end of the file(s), which decodes nothing.
 
-    THE GLOBAL CHECK EXISTS BECAUSE THE LOCAL ONE CANNOT SEE THE CONCAT BRANCH. There, and only
-    there, `resolve_video_source` sets `time_offset = t0`, so `local_t0` is 0 BY CONSTRUCTION for
-    any t0 whatsoever — a negative global t0 sails through the local test, ffmpeg decodes from
-    global 0, and every frame of the clip is stamped |t0| seconds early. `lap_window_for_export`
-    clamps the padded window so this cannot arise; this is the backstop for a caller that builds a
-    spec by hand.
+    THE TWO t0 CHECKS ARE NOT REDUNDANT, THEY FAIL DIFFERENTLY. The LOCAL one now covers both
+    chaptered branches — a concat span takes `time_offset = chapters[i0].offset` like a single
+    chapter, so `local_t0` is a real seek into the span and a negative one is visible (it was 0 BY
+    CONSTRUCTION while the span carried an `inpoint` and seeked with `-ss 0`, which is exactly why
+    the global test was added). The GLOBAL one still fires first and says the true thing: a window
+    that starts before the recording is a window whose OVERLAY is wrong, not merely a seek that
+    misses. It also catches a source whose `time_offset` is negative or absent, where a negative
+    global t0 can still produce a non-negative local one. `lap_window_for_export` clamps the padded
+    window so neither can arise from the app; this is the backstop for a caller that builds a spec
+    by hand.
 
     The duration check is skipped silently if ffprobe couldn't read a duration (we don't block a
-    render on an unreadable probe). This is a FAST, message-bearing failure — distinct from the
-    no-progress watchdog, which catches a render that launches but then wedges."""
+    render on an unreadable probe) — and it had been skipping on EVERY seam-crossing export, because
+    `ffprobe -show_entries format=duration` answers "N/A" for a concat list carrying an `inpoint`.
+    Declaring the per-file durations gives it a real number (3459.456054 s over the two D24 chapters
+    lap 22 spans), so on the branch the guard was written for it now runs. This is a FAST,
+    message-bearing failure — distinct from the no-progress watchdog, which catches a render that
+    launches but then wedges."""
     if spec.duration <= 0:
         raise ValueError(
             f"export window is empty (t0={spec.t0:.3f}, t1={spec.t1:.3f}); nothing to render")
