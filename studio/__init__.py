@@ -14,5 +14,8 @@ Run:  pixi run studio [GoPro.MP4 ...]   (or: python -m studio [files])
 # these, the PyInstaller spec regex-reads __version__, and every user-facing title/label imports
 # APP_NAME via `from . import APP_NAME`). Keep this a leaf: no submodule imports here, so
 # `from . import APP_NAME` can never cycle.
-__version__ = "0.1.0"
+# The version is DUPLICATED in two pyproject.toml files that cannot import this one (pyproject.toml
+# names the .dmg; bindings/pacer/pyproject.toml is the bindings package). tests/test_version.py
+# pins all three together — bump them in one commit.
+__version__ = "0.2.0"
 APP_NAME = "Pacer Studio"

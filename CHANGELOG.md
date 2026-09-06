@@ -4,12 +4,37 @@ All notable changes to Pacer are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims to follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] — 2026-09-06
 
-Everything merged since v0.1.0 (~100 PRs), grouped by theme.
+Everything merged since v0.1.0 — 195 pull requests, 458 commits — grouped by theme.
 
 ### Added
 
+- **The ideal lap is a plan now, and it says what it was built from.** With the theoretical best
+  finally a lap nobody drove (see *Fixed*), Stats gained an **IDEAL LAP** block under PACE: the
+  target, the gap it claims against your best, and beneath them the **decomposition** — every
+  corner and straight the composite is stitched from, the time your best lap gives away there, how
+  many of your clean laps have already driven that segment at least that fast, and the lap that set
+  the mark. The gains over every segment sum *exactly* to the headline (residual < 1e-14 on all
+  five test recordings) and the note under the table accounts for the rows below its 0.05 s floor,
+  so the table and the tile above it always add up. Rows rank by gain × beat-rate and both factors
+  are columns, so the order is checkable by eye. The block replaced a tile that had been *hidden*
+  on every recording the owner has: it used to gate on "this session has sector lines", which is
+  the state of none of them.
+- **The ideal lap discloses its sample, because it is an order statistic and not a floor.** A sum
+  of per-segment minima falls as a session accumulates laps: measured over 200 random subsets per
+  lap count, D24's three chapters read **67.957 s at 5 laps and 66.563 s at 65**, still dropping
+  0.38 s per doubling with the decrement *growing* — same driving, same recording, a gap that
+  prints −0.90 s or −1.64 s depending only on how long you stayed out. Nothing on screen said so.
+  Now the tile's caption carries the lap count, a sample line names the donors and the partition
+  ("Stitched from 18 of your 65 clean laps, across the 12 corners and 13 straights pacer found
+  here"), the hero's `vs ideal` chip — the only ideal surface with no prose beside it — appends the
+  same counts, and both tooltips carry the mechanism and the rate. The Library gained a fifth
+  column, **Laps**, from a `lap_count` every entry has stored since schema v1 and never rendered.
+  The ideal column stays sortable: the *best lap* is a minimum over the same laps and falls
+  0.033–0.221 s per doubling — on two of five recordings it is the more sample-dependent of the two
+  — so un-sorting one while ranking the other would advertise a distinction the numbers do not
+  support. The confound belongs to the row, so the row states its sample.
 - **A control vocabulary in `studio/widgets.py` + `studio/theme.py`** (mostly developer-facing) —
   one way to build each of the three things the app clicks on, replacing nine hand-rolled copies.
   `icon_button()` is the single square glyph button (it replaces two undeclared size families,
@@ -96,6 +121,21 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Changed
 
+- **Every surface that shows the ideal lap reads the one ideal, and stops apologising for it.** Six
+  of them described, hid or duplicated the number the old maths produced. The hero's note explaining
+  that `Δideal` is "structurally zero on your best lap" is gone — on the default selection it now
+  sweeps 0.00 → +1.64 s across a D24 lap, so the apology was documenting a defect rather than a
+  property. (The Δ-to-*best* note stays: that one is still measurably 0.000 s for the whole lap.)
+  The Library's "Theoretical" column is **Ideal lap** everywhere the app writes prose, while the
+  `laps.csv` trailer keeps its old label because that one is a machine-readable contract. The
+  ideal's display clamps at zero and now says so on hover exactly when the clamp is doing visible
+  work: inside a segment the ideal replays its donor's pace, so a lap that brakes later can be
+  transiently ahead — measured over 420,088 samples on five recordings the floor is −0.159 s on
+  2.09 % of them, and the shipped hero had been printing a minus sign on up to 4.02 % of frames
+  under a colour ramp that asserted the gap could never go negative. And the three states where
+  there is no composite to show — one lap donating every segment, no corner partition at all, no
+  ideal on the session — now disable the surfaces that cannot answer, with the reason, instead of
+  printing `+0.00` or a bare em dash one level down.
 - **Every surface in the app is on the spacing scale** (mostly internal). The dimensional guard
   shipped with a migration backlog of eight exempt surfaces; it is now empty, and the exemption set
   is pinned at zero so the next off-scale literal has to be argued for rather than excused. The last
@@ -168,6 +208,39 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
 
 ### Fixed
 
+- **The "ideal lap" had never once shown a lap nobody drove.** On every recording tested it came out
+  *byte-identical to the best lap* — 68.20060941901284 s against 68.20060941901284 s on D24's three
+  chapters, and the same equality on all five, in both implementations, by construction.
+  `ideal_lap_elapsed()` took the pointwise minimum of *cumulative elapsed* on a 400-bin
+  normalized-distance grid; but every lap starts at elapsed 0 and every lap ends at `s = 1`, so the
+  minimum at the flag **is** the best lap time. A theoretical best is `∫ min(rate)`, and this
+  computed `min(∫ rate)` — a curve that banked time mid-lap and handed all of it back at the line.
+  The sum-of-best-sectors path degenerated for a different reason: sector lines default to none, a
+  lap with no sector line is one sub-sector whose split is its own lap time, and on D24 that
+  "theoretical best" landed **0.136 s slower than the best rolling lap** — a target already beaten.
+  Downstream, the hero `Δideal` (the app's largest text, at 22 px) carried nothing Δ-to-best did
+  not, the share card's gap was structurally zero so it always printed *"level with your ideal
+  lap"*, and the Library's Theoretical column was a byte-identical duplicate of the Best lap column
+  beside it.
+
+  Both are now the **corner/straight composite**: per segment of the 2N+1 corner-and-straight
+  partition, the fastest you drove it across your clean, dropout-free laps. `segment_times()`
+  asserts a lap's segments sum *exactly* to its lap time, so stitching one lap's best corner 3 onto
+  another's best back straight double-counts nothing and drops nothing — the guarantee the sector
+  path never had, where each lap projected the same midpoint onto its own odometer and the pieces
+  tiled nothing. On D24's three chapters the ideal is **66.563 s against a 68.201 s best: 1.637 s
+  on the table, drawn from 18 donor laps of 65**; 1.141 s on Sandown, 0.939 s on one D24 chapter.
+  Ten of the 25 segments carry more than 0.05 s and hold 1.387 s of the total. It is not
+  noise-mining: split-half over disjoint halves of the laps lands at 67.977 / 68.078 s, leave-one-
+  lap-out spreads 0.075 s, and even a *second*-best-per-segment composite is 0.658 s under the best
+  lap. Three details earn their keep — a lap donates a segment only if it carries at least half that
+  segment's reference span (the boundary projection can collapse a real segment to zero width on one
+  lap, which a naive minimum banks as free time nobody drove: 1 cell in 885 on Sandown, worth
+  0.111 s of a claimed 1.252 s); between the partition edges the curve follows its **donor's own
+  profile** rather than a straight line (drawing a 163 m / 9.9 s corner as a line sent the live
+  Δ-to-ideal to −0.87 s on 18.4 % of samples); and a session where one lap wins every segment, or
+  where no corner is detected at all, is *detected and withheld* rather than silently republished as
+  the best lap under another name.
 - **A video export of a lap that crosses a chapter boundary is no longer a second out of sync.**
   Any lap whose window spans two GoPro chapter files decodes through ffmpeg's concat demuxer, and
   that path used to position itself with a concat `inpoint` at the lap start. `inpoint` is
@@ -184,6 +257,39 @@ Everything merged since v0.1.0 (~100 PRs), grouped by theme.
   moves with it. Laps that sit inside one chapter are untouched. As a side effect the export's
   up-front "window past the end of the footage" guard starts working on seam-crossing laps: the old
   list made ffprobe report no duration at all, so that check had been silently skipping.
+- **Nothing burned into an exported clip can spill out of the pill behind it, and the audio can no
+  longer cut the video short.** Fitting both HUD pills to their own ink left the width *budget*
+  load-bearing, and the budget was an estimate re-derived from the same series the painter reads
+  under different conventions — two functions sampling one series two ways, which is the shape of
+  both overflows. The speed budget masked `tt < t1` while the per-frame lookup is a *ceiling*
+  search, so every frame past the last in-window sample read the first sample at or after the end:
+  at 10 Hz GPS and 30 fps that is the last two or three frames of every clip, measured at **+9.57 px
+  of ink outside the readout pill**. The Δ budget sampled its window with the endpoint excluded and
+  so never asked about the instant a lead-out *freezes* on — **+6.59 px outside the strip pill, held
+  there for the full 10 s**, glyph without its dark backing. Rather than patch two estimators, the
+  budget now asks the painter: it walks the render's own frame times through the render's own lookup
+  and the painters' own run builders, so the set the pill is measured against *is* the set the
+  compositor draws. Four estimators and two fallback constants are gone; exactness costs 28.5 ms on
+  a 90.6 s lap (0.03 % of the render) and moved 0 of 378 real D24 pill widths. Separately, a clip
+  clamped to the end of the footage delivered one frame fewer than it promised — not the decoder,
+  which wrote every frame it was asked for, but the muxer: `-shortest` ends the file with the
+  shortest stream, and a GoPro chapter's audio can be shorter than its video (D24 chapter 3: video
+  1590.005083 s, audio 1589.994667 s), so the last video frame was dropped and the progress bar sat
+  at 100 % over a clip 0.011 s short. The audio is padded with silence now, making the video — the
+  stream whose length the export promised — the shortest one: 480 of 480 frames at exactly
+  16.000000 s.
+- **Running pacer no longer writes into its own source tree — and a frozen `.app` keeps its combo
+  chevron.** Applying the theme rendered the QComboBox chevron to a PNG and saved it over a
+  *tracked* file on every boot, so merely launching the app, or running any test that themes a
+  QApplication, left `git status` dirty. "Write it only when the bytes change" would have been the
+  same bug with a smaller window: the committed bytes reproduce only offscreen at 96 dpi — which is
+  exactly how the test suite runs, and the only reason this survived — while a normal desktop boot
+  writes a different `pHYs` chunk and a Retina one writes a different 48×48 image altogether. The
+  file was never a cache either; nothing ever read it back. Its real lifetime is one process, so it
+  is rendered into a per-process temp directory the interpreter removes on exit and the tracked PNG
+  is deleted. Two pacer windows at different device pixel ratios can no longer fight over one file,
+  and inside a read-only signed bundle — where the save simply failed and the stylesheet fell back
+  to the native arrow — the chevron the app designed is finally the one it draws.
 - **Both Δ columns on the Corners tab keep their names in a narrow panel.** A "Δbest" (seconds)
   column and a "Δapex" (km/h) column could paint the same bare `…`, leaving a reader no way to tell
   which was which. Two causes, both closed. The width the budget buys for a header was computed as
@@ -1047,5 +1153,6 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/eenndan/pacer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/eenndan/pacer/releases/tag/v0.1.0

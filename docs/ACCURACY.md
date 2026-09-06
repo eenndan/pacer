@@ -1,25 +1,35 @@
 # How accurate is Pacer's lap timing — and how do we know?
 
-![Pacer lap-time error vs a real transponder: mean within ±0.003 s, σ ≈ 0.05–0.09 s across two recordings](media/accuracy.png)
+![Pacer lap-time error vs a real transponder: σ 0.053 s and 0.087 s over 107 clean laps across two recordings, mean error within ±0.003 s](media/accuracy.png)
 
 **Pacer's lap times are validated out-of-sample against a real transponder** — the kind of hard
-ground truth a race series uses to score a session. Across the two recordings we tested, the timing
-is essentially **unbiased** (mean error within **±0.003 s**), with a spread of **σ ≈ 0.05–0.09 s**.
-On a ~68 s kart lap that σ is about **0.13%**, and the per-lap correlation to the transponder is
-**r ≥ 0.99**. That is at the noise floor of 10 Hz GPS: the remaining error is per-fix positional
-noise on the samples that straddle the finish line, and we can show — with data — that it is
-irreducible from the streams a GoPro records.
+ground truth a race series uses to score a session. Over **107 clean laps** across two recordings,
+the per-lap spread against that ground truth is **σ 0.053 s and 0.087 s**, and the timing is
+essentially **unbiased** (mean error within **±0.003 s**). On a ~68 s kart lap the worse
+recording's σ is about **0.13%**. That is at the noise floor of 10 Hz GPS: the remaining error is
+per-fix positional noise on the samples that straddle the finish line, and we can show — with data
+— that it is irreducible from the streams a GoPro records.
+
+That is a modest sample, and it is the honest one: 107 is the number of laps actually compared,
+not the span of lap IDs they occupied in a 24-hour transponder log.
 
 ## The validated numbers
 
-Two GoPro recordings of the same kart, each holding a full session of laps, timed by Pacer's
-**default shipping pipeline** and compared lap-for-lap against the transponder. The residual is
-`pacer lap time − transponder lap time`, measured only on clean (non-dropout) laps.
+Two GoPro recordings of the same kart, each holding one session, timed by Pacer's **default
+shipping pipeline** and compared lap-for-lap against the transponder. The residual is
+`pacer lap time − transponder lap time`, measured only on **clean** laps — racing laps (≤ 72 s on
+both clocks) with no GPS dropout.
 
-| Recording | GPS quality (median DOP) | Laps | Mean error | σ (std) | Correlation |
-|-----------|--------------------------|------|------------|---------|-------------|
-| **A** — higher-noise GPS | 2.4 | 300+ | **+0.0030 s** | **0.0871 s** | 0.992 |
-| **B** — cleaner GPS | 1.4 | 850+ | **+0.0015 s** | **0.0527 s** | 0.997 |
+| Recording | GPS quality (median DOP) | Laps aligned | Clean laps measured | Mean error | σ (std) |
+|-----------|--------------------------|--------------|---------------------|------------|---------|
+| **A** — higher-noise GPS | 2.4 | 57 (transponder laps 302–358) | 48 | **+0.0030 s** | **0.0871 s** |
+| **B** — cleaner GPS | 1.4 | 65 (transponder laps 856–920) | 59 | **+0.0015 s** | **0.0527 s** |
+
+Those are lap *counts*. An earlier version of this page printed "300+" and "850+" for the same two
+rows: those were the transponder log's lap **ID ranges** — it runs continuously for a 24-hour race
+across many drivers — not the number of laps compared. The aligned count is the length of the
+range (358 − 302 + 1 = 57; 920 − 856 + 1 = 65), and the clean count drops the GPS-dropout and
+non-racing laps on top of that. The correction is a factor of ten, in the unflattering direction.
 
 The two rows tell the whole story: **recording-level GPS quality sets the floor.** Recording B has
 roughly half the spread of A for one reason only — its GPS was cleaner (median DOP 1.4 vs 2.4, ~1%
@@ -35,11 +45,22 @@ does. Both are unbiased to well under a hundredth of a second.
   start/finish line.
 - **Default pipeline, nothing special.** These numbers come from the shipping configuration —
   GPS9 true-clock, clock rate = 1.0, boxcar smoothing w=13 — not a tuned-for-the-benchmark variant.
-- **Auto-locked to the transponder.** The transponder log and the Pacer laps are aligned by
-  duration-correlation, so the comparison is objective and needs no hand-matching of laps.
-- **Reproducible.** The harness is [`studio/dev/_validate_wallclock.py`](../studio/dev/_validate_wallclock.py).
-  The transponder CSV is a private reference input and is **never committed** — the method is public;
-  the ground-truth file stays out of the repo.
+- **Auto-locked to the transponder — and the lock is *unique*.** No lap is hand-matched. The app's
+  per-lap *duration* sequence is correlated against every candidate contiguous window of the
+  transponder log and the alignment is taken at the maximum. Because that offset is *chosen* to
+  maximise r, the r value at the winner is not an independent accuracy statistic — the **margin
+  over every rival offset is**. The per-lap duration fingerprint matches at **r ≥ 0.99 at exactly
+  one offset and below 0.29 at every other** (a margin of ≈ +0.70 on recording A): the session
+  Pacer timed is provably the session the transponder timed. Three further signals bound the same
+  window independently — the GPS9 wall clock, elapsed time since the green flag, and the long
+  pit/driver-change laps that bracket the stint.
+- **Reproducible — on recording B.** The harness is
+  [`studio/dev/_validate_wallclock.py`](../studio/dev/_validate_wallclock.py). The transponder CSV
+  is a private reference input and is **never committed** — the method is public; the ground-truth
+  file stays out of the repo. Recording B's footage is intact and its row can be re-derived
+  end-to-end. Recording A's footage no longer exists (a tool overwrote it), so row A is a
+  historical measurement, reported here as it was recorded in
+  [`studio/docs/`](../studio/docs/gps-accuracy-research.md) at the time.
 
 ## Three findings that show where the limit actually is
 
