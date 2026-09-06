@@ -810,3 +810,13 @@ set_tests_properties(test_export_pill_budget PROPERTIES
 # telemetry file, so it needs neither the offscreen env nor the PYTHONPATH block above.
 add_test(NAME test_version
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_version.py)
+
+# THE PUBLIC PAGES (docs/index.html + the markdown beside it) — the one surface nothing checked.
+# It went 458 commits carrying a lap count wrong by 10x, two `<img>`s whose files had been deleted,
+# two more pinned to intrinsic sizes their files no longer had, a palette hand-copied out of
+# theme.py, and — found while fixing those — a `*/` inside comment PROSE that closed its comment
+# early and made CSS error recovery swallow the whole `:root` block, so the page shipped with no
+# tokens at all. Imports `studio.theme` for the token values (Pacer-free, no QApplication) and is
+# otherwise stdlib, so like test_version it needs neither the offscreen env nor the PYTHONPATH.
+add_test(NAME test_landing_page
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_landing_page.py)
