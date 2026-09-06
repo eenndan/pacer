@@ -338,25 +338,57 @@ def test_spec_local_t0_is_global_minus_offset():
 
 def test_resolve_source_seam_uses_concat_over_spanned_chapters():
     """A lap that crosses a chapter SEAM resolves to a CONCAT demuxer over exactly the spanned
-    chapters, with time_offset = the FIRST spanned chapter's offset (so the seek is local within the
-    concatenation). The concat list lists those chapters in order (with per-file inpoint/outpoint so
-    a deep input-seek is reliable) so frames/audio flow across the boundary."""
+    chapters, with time_offset = the FIRST spanned chapter's offset — the SAME shift the
+    single-chapter branch uses, so `local = global - offset` addresses the same instant either way
+    and one accurate `-ss` serves both. Every entry declares its `duration`: that is what makes the
+    span seekable at all (without it ffmpeg cannot seek a concat input and decodes the span from its
+    start — 663 s against 1.2 s for half a second of D24 picture), and it pins the concat clock to
+    the numbers ChapterMap's offsets are built from.
+
+    NO `inpoint`. Trimming the first chapter to the lap made the stream begin at the lap and both
+    commands seek `-ss 0` — but `inpoint` is keyframe-granular, so the picture began up to a GOP
+    BEFORE t0 while `frame_times` stamped every overlay frame from t0. Measured on D24 lap 22:
+    -0.956 s of picture, and -0.977 s of audio with it."""
     cm = _chapter_map_3x(1000.0)
-    # window 980..1040 spans ch0 (ends at 1000) into ch1 -> concat [ch0, ch1] with an inpoint at
-    # 980 on ch0, so the stream STARTS at the lap; time_offset = t0 (=> local seek 0).
+    # window 980..1040 spans ch0 (ends at 1000) into ch1 -> concat [ch0, ch1], stream clock starting
+    # at ch0's global offset (0) => local seek 980, the same number a single-chapter ch0 window gets.
     src = ev.resolve_video_source(cm, 980.0, 1040.0)
     try:
         assert src.concat_list_path is not None, "a seam-crossing window must be a concat source"
-        assert src.time_offset == 980.0, "stream starts at the lap (inpoint) -> offset = t0"
+        assert src.time_offset == 0.0, "the span's clock starts at the FIRST spanned chapter"
         ia = src.input_args()
         assert ia[:5] == ["-f", "concat", "-safe", "0", "-i"] and ia[5] == src.concat_list_path
         listing = open(src.concat_list_path).read()
         assert "GX010001.MP4" in listing and "GX020001.MP4" in listing, "lists the 2 spanned chapters"
         assert "GX030001.MP4" not in listing, "does NOT list the un-spanned 3rd chapter"
-        assert "inpoint 980" in listing, "the first spanned chapter is trimmed to the lap start"
-        # with the stream starting at the lap, the file-local seek is 0 (a fast keyframe seek)
+        assert "inpoint" not in listing, "a keyframe-granular inpoint desyncs the overlay"
+        assert listing.count("duration 1000.000000") == 2, (
+            f"every spanned file must declare its duration or the span is unseekable:\n{listing}")
+        # the seek is the real offset into the span, and BOTH commands carry it
         spec = ev.ExportSpec(out_path="/out.mp4", lap_id=9, t0=980.0, t1=1040.0, source=src)
-        assert spec.local_t0 == 0.0
+        assert spec.local_t0 == 980.0
+        dec = ev.build_decode_cmd(spec, 640, 360, 30.0)
+        enc = ev.build_encode_cmd(spec, 640, 360, 30.0)
+        assert dec[dec.index("-ss") + 1] == f"{980.0:.6f}"
+        assert enc[enc.index("-ss") + 1] == f"{980.0:.6f}"
+    finally:
+        src.cleanup()
+
+
+def test_resolve_source_seam_omits_durations_when_a_chapter_has_none():
+    """A ChapterMap built WITHOUT media durations (0.0) must not have `duration 0.000000` written
+    into the list — that would declare a zero-length file and mis-time the whole span. The span
+    falls back to no directives: unseekable, so ffmpeg decodes its way down to the seek, which is
+    slow and lands on the right frame anyway (measured exact-pixel on a synthetic span). Slow and
+    right beats fast and wrong. Such a map's global offsets are already degenerate."""
+    cm = chapters.ChapterMap(["/v/GX010001.MP4", "/v/GX020001.MP4"], [0.0, 0.0])
+    src = ev.resolve_video_source(cm, 0.0, 10.0)
+    try:
+        # both chapters are zero-length, so chapter_at(9.999999) is the LAST one -> a real span
+        assert src.concat_list_path is not None
+        listing = open(src.concat_list_path).read()
+        assert "duration" not in listing, listing
+        assert listing.count("file '") == 2, listing
     finally:
         src.cleanup()
 

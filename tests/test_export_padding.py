@@ -4,13 +4,13 @@ The feature is one number in a dialog and four ways to ship a wrong clip. Each o
 section here:
 
   1. THE WINDOW, and its clamps. Padding is applied in `lap_window_for_export`, the one funnel both
-     callers go through, and BEFORE `resolve_video_source` — which is what picks the chapter file,
-     the concat span and the first chapter's `inpoint`. A lead-in that reaches back across a
-     chapter seam has to widen the window first or it resolves against the wrong file. A negative
-     t0 is the dangerous case: `guard_validate_window`'s local-seek test cannot see it on the
-     CONCAT branch, where `time_offset = t0` makes `local_t0` zero by construction. And nothing
-     bounded t1 at all, so an over-long window produced a short clip and a progress bar that
-     stopped short of 100 %.
+     callers go through, and BEFORE `resolve_video_source` — which is what picks the chapter file
+     and the concat span. A lead-in that reaches back across a chapter seam has to widen the window
+     first or it resolves against the wrong file. A negative t0 is the dangerous case: it asks for
+     footage from before the recording and stamps every frame |t0| seconds early.
+     `guard_validate_window` refuses it on the GLOBAL t0, which is the check that survives whatever
+     a source's `time_offset` happens to be. And nothing bounded t1 at all, so an over-long window
+     produced a short clip and a progress bar that stopped short of 100 %.
   2. THE LAP, through the lead-in. Laps are contiguous: `lap_at_time` answers lap N−1 for every
      frame of lap N's run-up. The overlay keys off the EXPORTED lap instead, marked pending.
   3. THE LIVE VALUES. Speed and g are time-indexed and valid everywhere; gating them on lap
@@ -185,21 +185,28 @@ def test_the_footage_bound_is_the_chapter_table_and_not_the_telemetry():
     print("test_the_footage_bound_is_the_chapter_table_and_not_the_telemetry OK")
 
 
-def test_a_negative_t0_is_invisible_to_the_local_guard_on_the_concat_branch():
+def test_a_negative_t0_is_refused_on_the_global_clock_whatever_the_source_says():
     """The trap, stated as a measurement rather than as prose.
 
-    On the CONCAT branch `resolve_video_source` sets `time_offset = t0`, so `local_t0` is 0 for any
-    t0 whatsoever — including a negative one. The guard's local-seek test therefore passes, ffmpeg
-    decodes from global 0, and every frame is stamped |t0| seconds early. So: the local test really
-    is blind here (asserted), the GLOBAL test catches it, and the funnel never emits one anyway."""
+    A negative t0 asks for footage from before the recording; whatever ffmpeg then decodes, every
+    frame is stamped |t0| seconds early. The GLOBAL test is the one that always sees it, because
+    `local_t0` is only as honest as the source's `time_offset`: a source whose offset happens to
+    equal t0 reports `local_t0 == 0.0` and the local test passes (asserted below on a hand-built
+    source — it is exactly what the concat branch used to do for EVERY t0, which is why the global
+    test exists).
+
+    On today's concat branch `time_offset` is the first spanned chapter's offset, so `local_t0` is a
+    real seek into the span and the LOCAL test sees a negative t0 too — also asserted, because that
+    is the property the seam fix bought and a regression would be silent."""
     cm = chapters.ChapterMap(["/v/A.MP4", "/v/B.MP4"], [100.0, 100.0])
     src = ev.resolve_video_source(cm, -4.0, 120.0, tmp_dir=os.environ.get("TMPDIR", "/tmp"))
     try:
         assert src.concat_list_path is not None, "expected the seam-spanning concat branch"
+        assert src.time_offset == 0.0, "the span's clock starts at the first spanned chapter"
         bad = ev.ExportSpec(out_path="/o.mp4", lap_id=1, t0=-4.0, t1=120.0, source=src)
-        assert bad.local_t0 == 0.0, (
-            f"local_t0 {bad.local_t0} — the premise of this test is that the concat branch makes "
-            "it zero by construction, which is why the local guard cannot see the problem")
+        assert bad.local_t0 == -4.0, (
+            f"local_t0 {bad.local_t0} — the concat branch must carry a REAL offset into the span, "
+            "so a window starting before the recording is visible to the local test too")
         try:
             ev.guard_validate_window(bad)
             raise AssertionError("a negative global t0 was accepted")
@@ -207,11 +214,21 @@ def test_a_negative_t0_is_invisible_to_the_local_guard_on_the_concat_branch():
             assert "before the recording" in str(exc), exc
     finally:
         src.cleanup()
+    # A source whose time_offset absorbs t0 hides it from the local test — the global test does not
+    # depend on the source at all, and still refuses.
+    blind = ev.ExportSpec(out_path="/o.mp4", lap_id=1, t0=-4.0, t1=120.0,
+                          source=ev.VideoSource(probe_path="/v/A.MP4", time_offset=-4.0))
+    assert blind.local_t0 == 0.0, "premise: this source's local seek looks clean"
+    try:
+        ev.guard_validate_window(blind)
+        raise AssertionError("a negative global t0 was accepted behind a shifted time_offset")
+    except ValueError as exc:
+        assert "before the recording" in str(exc), exc
     # and the funnel cannot produce one: 10 s of run-up on a lap that starts 3 s in gives t0 = 0.
     s = PadStub(lap0=3.0)
     assert ev.lap_window_for_export(s, 0, 10.0, 10.0)[0] == 0.0
-    print("test_a_negative_t0_is_invisible_to_the_local_guard_on_the_concat_branch OK "
-          "(local_t0 == 0.0 for global t0 == -4.0)")
+    print("test_a_negative_t0_is_refused_on_the_global_clock_whatever_the_source_says OK "
+          "(concat local_t0 == -4.0; a shifted-offset source reports 0.0 and is still refused)")
 
 
 def test_the_lead_in_is_part_of_the_window_the_source_is_resolved_from():
@@ -229,7 +246,9 @@ def test_the_lead_in_is_part_of_the_window_the_source_is_resolved_from():
         assert tight.source.time_offset == 100.0 and tight.local_t0 == 4.0
         assert wide.source.concat_list_path is not None, (
             "a lead-in across the seam must resolve to a concat span, not to chapter B alone")
-        assert wide.local_t0 == 0.0 and wide.t0 == 94.0
+        # the span's clock starts at chapter A, so the seek is the run-up's own position in A
+        assert wide.source.time_offset == 0.0
+        assert wide.local_t0 == 94.0 and wide.t0 == 94.0
     finally:
         tight.source.cleanup()
         wide.source.cleanup()
