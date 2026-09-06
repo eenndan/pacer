@@ -240,10 +240,18 @@ the golden gate above.
 `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) in the same PR — grouped Added/Changed/Fixed, one
 scannable line, no per-commit noise. Internal refactors/tests/docs don't.
 
-**Release recipe:** the version lives in TWO places that must move together —
-[studio/\_\_init\_\_.py](studio/__init__.py) `__version__` (regex-read by `packaging/pacer.spec`,
-shown in the About card) and [pyproject.toml](pyproject.toml) `version` (pip metadata). Bump BOTH,
-retitle `[Unreleased]` → `[x.y.z] — date` in the changelog, then tag.
+**Release recipe:** the version lives in **THREE** places that must move together —
+
+| file | role |
+|---|---|
+| [studio/\_\_init\_\_.py](studio/__init__.py) `__version__` | **canonical** — regex-read by `packaging/pacer.spec`, shown in the About card |
+| [pyproject.toml](pyproject.toml) `version` | pip metadata — and `packaging/build_macos.sh` names the `.dmg` from it |
+| [bindings/pacer/pyproject.toml](bindings/pacer/pyproject.toml) `version` | the bindings package's own metadata |
+
+Bump ALL THREE, retitle `[Unreleased]` → `[x.y.z] — date` in the changelog and add its compare link
+at the foot of the file, then tag. [tests/test_version.py](tests/test_version.py) fails the build on
+any of those four steps missed — it reads each site the way *its own consumer* reads it. The recipe
+had been documentation-only since it was written, and it still named the wrong number of files.
 
 ---
 
