@@ -708,7 +708,26 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
                      encoder: str = SW_H264) -> list[str]:
     """MUX argv: input 0 = our rgb24 rawvideo on stdin; input 1 = the source audio over the SAME
     source-LOCAL window (mirrors the decode, so audio stays in sync across a seam). Map video+audio,
-    encode H.264 (`encoder`) + AAC, -shortest."""
+    encode H.264 (`encoder`) + AAC, `-af apad -shortest`.
+
+    `-shortest` ENDS THE CLIP WITH THE SHORTEST STREAM, AND ON THE LAST FRAME OF A RECORDING THAT
+    IS THE AUDIO. A GoPro chapter's audio track can be a hair shorter than its video: measured on
+    D24 chapter 3, video 1590.005083 s vs audio 1589.994667 s — 10.4 ms, which is the
+    container duration `ChapterMap.total_duration` is built from minus the audio's own. So a
+    run-off clamped to the end of the footage asks for 16.000 s of a track that holds 15.989 s,
+    `-shortest` cuts the output there, and the muxer drops the last VIDEO frame we had already
+    composited and written. Measured, real ffmpeg, 480p: requested 480 frames, wrote 480, the file
+    held 479 (15.989 s, −0.011 s) — and reproduced identically at 483→482, 510→509 and
+    2100→2099, i.e. the loss is exactly one frame whenever `t1 == total_duration`, on the muxer's
+    side of the pipe rather than the decoder's.
+
+    `apad` pads the audio with silence, which makes the VIDEO the shortest stream — and the video's
+    length is the one this export PROMISED (`frame_times`, the progress bar's denominator and
+    `RenderResult.frames` are all that count). The two flags belong together: `apad` alone would
+    run forever, `-shortest` alone truncates to whichever input ran out first. Measured after:
+    480/480 frames, 16.000000 s, on the same windows; an interior window is unchanged (720/720,
+    24.000000 s) and a source with NO audio stream is unaffected (the `-map 1:a:0?` is optional and
+    the filter has nothing to run on)."""
     return [
         FFMPEG, "-nostdin", "-loglevel", "error", "-y",
         # input 0: raw composited video from our pipe
@@ -719,7 +738,7 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
         "-map", "0:v:0", "-map", "1:a:0?",
         *_video_codec_args(encoder, out_w, out_h, fps, spec.config.quality),
         "-c:a", "aac", "-b:a", "192k",
-        "-shortest",
+        "-af", "apad", "-shortest",
         spec.out_path,
     ]
 
@@ -1116,19 +1135,18 @@ class _MapInset:
 # rather than by coincidence. Both widths are resolved ONCE per export (OverlayPainter.__init__)
 # from the widest string the export can burn, never per frame — a pill that breathed as the speed
 # gained a digit would be worse than one that is too wide.
+#
+# THE PILLS FIT THEIR INK WITH ZERO SLACK, so "the widest string the export can burn" has to be a
+# FACT, not an estimate. It is: `_burned_runs` runs the render's own per-frame lookup over the
+# render's own frame times and through the painters' own run builders, so the set of strings the
+# budget measures IS the set the compositor will draw. Two functions sampling the same series with
+# two different conventions is what this replaced, and it had cost a pixel overflow twice over —
+# see `_burned_runs`.
 _READOUT_PAD_FRAC = 0.26      # readout: left/right inner padding, as a fraction of the pill HEIGHT
 _READOUT_GAP_K = 4.0          # readout: hero number -> unit label, in k units (k = height / 44)
 _STRIP_PAD_L_FRAC = 0.42      # strip: the ink starts further in — the amber progress fill runs
 _STRIP_PAD_R_FRAC = 0.20      #        under it, and a flush label would sit on the fill's edge
 _RUN_GAP_K = 16.0             # the gap between two separate RUNS (elapsed time -> Δ), in k units
-
-# The widest hero speed to budget for when the session exposes no usable speed track. Three digits
-# covers anything a camera bolted to a vehicle will read; with tabular figures a speed's width is
-# decided by its digit COUNT alone, so this is a width, not a value.
-_SPEED_BUDGET_FALLBACK = "888"
-# Δ budget when the session cannot be sampled: one integer digit and change.
-_DELTA_BUDGET_FALLBACK = 9.99
-_DELTA_BUDGET_SAMPLES = 128
 
 # What the strip carries INSTEAD of a Δ when the exported lap is the session's best (see
 # `strip_tail`). "★" is in the shipped face — verified by rendering it through `_draw_text`, the
@@ -1145,16 +1163,18 @@ _PENDING_TIME = fmt_time(float("nan"))
 
 def readout_pill_width(pill_h: float, speed_texts, unit_label: str) -> float:
     """The bottom-left readout pill's width at pill height `pill_h`: the padding, the widest hero
-    speed string this export can burn, the gap, the unit label, and the padding again.
+    speed string, the gap, the unit label, and the padding again.
 
-    `speed_texts` is that export's own set of candidate hero strings (`_speed_text_candidates`).
-    The em dash `theme.speed_number` returns outside a lap is added here unconditionally, so a
-    frame between laps can never overflow a pill fitted to digits."""
+    PURE GEOMETRY — it measures the strings it is handed and decides nothing about WHICH strings
+    those are. `_burned_runs` owns that, and hands it the exact set the compositor will draw (the
+    em dash included, when and only when a frame draws one). It used to add
+    `theme.speed_number(None, None)` here unconditionally as insurance against a set that was only
+    an estimate; with an enumerated set that insurance would just be a wider pill than the export
+    can fill."""
     k = pill_h / 44.0
     fm_big = QFontMetricsF(_font(pill_h * 0.74, bold=True))
     fm_unit = QFontMetricsF(_font(pill_h * 0.34, bold=True))
-    hero = max(fm_big.horizontalAdvance(t)
-               for t in (*speed_texts, theme.speed_number(None, None)))
+    hero = max((fm_big.horizontalAdvance(t) for t in speed_texts), default=0.0)
     return (2.0 * pill_h * _READOUT_PAD_FRAC + hero + _READOUT_GAP_K * k
             + fm_unit.horizontalAdvance(unit_label))
 
@@ -1165,77 +1185,15 @@ def strip_pill_width(pill_h: float, labels, tails) -> float:
     widest Δ (or the `★ BEST` mark), and the right padding.
 
     Both runs are measured in the SAME face at the SAME size the painter draws them in, so the
-    box cannot disagree with the ink."""
+    box cannot disagree with the ink. Like `readout_pill_width` this is pure geometry over the
+    strings `_burned_runs` enumerated; the widest label and the widest tail need not come from the
+    same frame, and summing the two maxima is the conservative direction."""
     k = pill_h / 44.0
     fm = QFontMetricsF(_font(pill_h * 0.54, bold=True))
-    label_w = max(fm.horizontalAdvance(t) for t in labels)
+    label_w = max((fm.horizontalAdvance(t) for t in labels), default=0.0)
     tail_w = max((fm.horizontalAdvance(t) for t in tails if t), default=0.0)
     gap = _RUN_GAP_K * k if tail_w else 0.0
     return pill_h * _STRIP_PAD_L_FRAC + label_w + gap + tail_w + pill_h * _STRIP_PAD_R_FRAC
-
-
-def _speed_text_candidates(session, spec: ExportSpec) -> tuple[str, ...]:
-    """Every hero-speed string this export can burn. With tabular figures a speed's WIDTH is
-    decided by its digit COUNT, so the widest is the fastest sample inside the exported window —
-    read off the session's own per-sample km/h track and formatted through the very
-    `theme.speed_number` the painter calls, so rounding (99.6 -> "100") is counted too. Falls back
-    to `_SPEED_BUDGET_FALLBACK` when the session exposes no usable track."""
-    tt, tv = getattr(session, "tt", None), getattr(session, "tv", None)
-    if tt is not None and tv is not None and len(tv) and len(tt) == len(tv):
-        tt = np.asarray(tt, dtype=float)
-        tv = np.asarray(tv, dtype=float)
-        sel = (tt >= spec.t0) & (tt < spec.t1)
-        vals = tv[sel] if bool(sel.any()) else tv
-        if len(vals) and bool(np.isfinite(vals).any()):
-            top = float(np.nanmax(vals))
-            return (theme.speed_number(top, spec.lap_id, spec.config.speed_unit),)
-    return (_SPEED_BUDGET_FALLBACK,)
-
-
-def _strip_label_candidates(spec: ExportSpec) -> tuple[str, ...]:
-    """The ends of the strip's "LAP n   m:ss.mmm" run. The lap number is fixed for an export and
-    the elapsed time runs from zero to the LAP's own duration (`lap_duration`, not the padded clip
-    length — the clock counts the lap), so those two bracket every string in between (with tabular
-    figures, width follows the character count). An export with a lead-in can also show the pending
-    clock, which is measured rather than assumed to be narrower."""
-    lap = f"LAP {lap_label(spec.lap_id)}"
-    ends = [f"{lap}   {fmt_time(0.0)}", f"{lap}   {fmt_time(spec.lap_duration)}"]
-    if spec.lead_in > 0:
-        ends.append(f"{lap}   {_PENDING_TIME}")
-    return tuple(ends)
-
-
-def _strip_tail_candidates(session, spec: ExportSpec) -> tuple[str, ...]:
-    """The widest thing that can follow the elapsed time: the `★ BEST` mark on a best-lap export,
-    else the Δ run at this lap's own peak |Δ| in BOTH signs (`-` and `+` are not the same width,
-    and the strip has to hold either)."""
-    if spec.is_best:
-        return (_BEST_MARK,)
-    peak = _peak_abs_delta(session, spec)
-    return tuple(theme.format_delta_run(sign * peak, units=False, arrow=False)
-                 for sign in (-1.0, 1.0))
-
-
-def _peak_abs_delta(session, spec: ExportSpec) -> float:
-    """The largest |Δ| this export can burn, sampled across the window — the Δ's width is its digit
-    count, and a strip fitted to `Δ -0.31` that a later `Δ -12.40` overflows is worse than one
-    budgeted for the lap's real range. A Δ curve is an integral of pace, so it has no spikes to
-    miss: 128 samples resolve the digit-count boundary comfortably on a lap-length window. The
-    accessor is the SAME one the per-frame lookup uses (`overlay_values_at`), so a session this
-    cannot read is a session the render could not have painted either.
-
-    Sampled across the LAP, not the padded clip: the Δ is only drawn between the lines, and asking
-    `delta_at_lap` about a time the lap does not contain would budget for a number this export can
-    never burn."""
-    getter = getattr(session, "delta_at_lap", None)
-    if not callable(getter) or spec.lap_duration <= 0:
-        return _DELTA_BUDGET_FALLBACK
-    peak = 0.0
-    for t in np.linspace(spec.lap_t0, spec.lap_t1, _DELTA_BUDGET_SAMPLES, endpoint=False):
-        d = getter(spec.lap_id, float(t))
-        if d is not None and np.isfinite(d):
-            peak = max(peak, abs(float(d)))
-    return peak
 
 
 def strip_tail(delta_s: float | None, is_best: bool = False,
@@ -1260,6 +1218,92 @@ def strip_tail(delta_s: float | None, is_best: bool = False,
             export_delta_colour(delta_s, palette))
 
 
+# ------------------------------------------------------------------ what each frame actually says
+# The two functions below are THE decision about which strings a frame carries. Both painters call
+# them, and so does the pill budget (`_burned_runs`) — which is the whole point: a budget that
+# re-derives the strings from the same series under a different sampling convention is a budget
+# that can disagree with the ink, and it did, twice. See `_burned_runs` for both numbers.
+def _readout_runs(vals: OverlayValues, unit: str | None) -> tuple[str, str]:
+    """The two runs `_paint_readout` draws for one frame: (hero speed number, unit label).
+    `theme.speed_number` is the shared formatter the live #DiffBox uses (real speed only while a
+    lap is current, else an em dash); `unit` converts + names it (km/h default)."""
+    return theme.speed_number(vals.speed_kmh, vals.lap_id, unit), units.speed_label(unit)
+
+
+def _strip_runs(session, vals: OverlayValues, lap_t0: float, is_best: bool,
+                palette: str | None) -> tuple[str, str, str, float] | None:
+    """The runs `_paint_strip` draws for one frame: (label, tail, tail colour, progress fraction),
+    or None when there is no lap to name.
+
+    EVERYTHING HERE IS LAP-SCOPED, so it is all gated on `vals.lap_started`: through a lead-in the
+    strip names the exported lap with a pending clock, an empty fill and no tail. The elapsed time
+    is clamped into [0, span] at BOTH ends — identical to the unclamped form for every frame
+    between the lines, and the difference is exactly what stops a lead-out's clock overrunning the
+    lap. `lap_t0` is the LAP's start, used only when the session cannot supply a lap window (with a
+    lead-in the clip's own t0 would count the run-up)."""
+    if vals.lap_id is None:
+        return None
+    win = session.lap_window(vals.lap_id)
+    if win is not None:
+        ls, le = win
+        span = le - ls
+        elapsed = 0.0 if span <= 0 else min(max(vals.t - ls, 0.0), span)
+        frac = 0.0 if span <= 0 else elapsed / span
+    else:
+        frac = 0.0
+        elapsed = max(0.0, vals.t - lap_t0)
+    clock = fmt_time(elapsed) if vals.lap_started else _PENDING_TIME
+    label = f"LAP {lap_label(vals.lap_id)}   {clock}"
+    tail, colour = strip_tail(vals.delta_s, is_best, palette) if vals.lap_started else ("", "")
+    return label, tail, colour, frac
+
+
+def _burned_runs(session, spec: ExportSpec, fps: float) -> tuple[list[str], list[str], list[str]]:
+    """Every string this export will burn: (hero speeds, strip labels, strip tails).
+
+    THE BUDGET ASKS THE PAINTER RATHER THAN RE-DERIVING. It walks the render's own frame times
+    (`frame_times`, at the fps the render resolved), reads each one through the render's own
+    per-frame lookup (`overlay_values_at`, with the spec, so the lap and its clamps are the
+    exported lap's), and formats through the painters' own run builders. There is no second
+    sampling convention left to disagree with, which is what a pill fitted with ZERO slack needs.
+
+    It replaced four estimators, and two of them were wrong at the edges of the window:
+
+      * the speed budget masked `tt < spec.t1` while the per-frame lookup is
+        `session.index_at_time` — `np.searchsorted`, a CEILING. Every frame past the last in-window
+        sample reads the first sample AT OR AFTER `t1`, which the mask excluded: at 10 Hz GPS /
+        30 fps, the last ~2-3 frames of every clip. Constructed (99.4 km/h inside `[0, 10)`,
+        142 km/h from the sample at `t = 10.0`): the budget said `('99',)` and 2 frames burned
+        `142`, painting +9.57 px of ink right of the readout pill's right edge, measured on the
+        composite.
+      * the Δ budget sampled `np.linspace(lap_t0, lap_t1, 128, endpoint=False)` and so never asked
+        about `lap_t1 - _LAP_CLOCK_EPS` — the exact instant a lead-out FREEZES the clock and the Δ
+        on. Constructed (Δ reaching 9.9995 s at the flag): the budget fitted `Δ ±9.92` and the
+        run-off held `Δ +10.00` for 300 frames — +6.59 px outside the strip pill for 10.00 s,
+        drawn as an unclipped QPainterPath, so it kept its glyph and lost the dark backing that is
+        the pill's entire reason to exist.
+
+    Cost is not a reason to estimate instead: measured on a real 90.6 s D24 lap with 10 s of
+    padding, all 2719 frames resolve in 28.5 ms — 0.03 % of that clip's render.
+
+    Returns lists, not sets, so the order is the frames' order and a failure is reproducible. A
+    window with no frames (only reachable by building a painter by hand — `guard_validate_window`
+    refuses an empty window before the renderer builds one) still measures its first instant, so
+    the pills always have a width."""
+    times = frame_times(spec.t0, spec.t1, fps)
+    if not len(times):
+        times = np.asarray([spec.t0], dtype=float)
+    speeds, labels, tails = [], [], []
+    for t in times:
+        vals = overlay_values_at(session, float(t), spec)
+        speeds.append(_readout_runs(vals, spec.config.speed_unit)[0])
+        runs = _strip_runs(session, vals, spec.lap_t0, spec.is_best, spec.config.palette)
+        if runs is not None:
+            labels.append(runs[0])
+            tails.append(runs[1])
+    return speeds, labels, tails
+
+
 def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues,
                    unit: str | None = None) -> None:
     """Bottom-left SPEED readout: a hero speed number + a small unit label ("km/h"/"mph"), haloed,
@@ -1277,10 +1321,9 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues,
     pad = box.height() * _READOUT_PAD_FRAC
     inner = box.adjusted(pad, 0, -pad, 0)
     # --- HERO speed: big number + small unit ---
-    # theme.speed_number is the shared formatter the live #DiffBox uses (real speed only while a lap
-    # is current, else dash) — kept identical, no drift; `unit` converts + names it (km/h default).
-    speed_num = theme.speed_number(vals.speed_kmh, vals.lap_id, unit)
-    unit_label = units.speed_label(unit)
+    # `_readout_runs` decides both strings, and the pill budget asks IT what this export will draw
+    # — so the box the text lands in was measured on this very string.
+    speed_num, unit_label = _readout_runs(vals, unit)
     big = _font(box.height() * 0.74, bold=True)
     unit_font = _font(box.height() * 0.34, bold=True)
     fm_big = QFontMetricsF(big)
@@ -1305,40 +1348,23 @@ def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: flo
     time measurement, not a speed one. `palette` picks the vivid green/red vs blue/orange hue axis;
     `is_best` replaces it with the `★ BEST` mark (see `strip_tail`, which owns both decisions).
 
-    EVERYTHING IN THIS STRIP IS LAP-SCOPED, so a padded export gates all of it on
-    `vals.lap_started`: through the lead-in the strip names the EXPORTED lap with a pending clock,
-    an empty fill and no Δ — the lap has not begun, and a clock counting a lap that has not started
-    would be a made-up number. The clock is clamped INTO the lap at both ends, so a lead-out holds
-    the finishing time and the finishing Δ rather than running on past the flag. `t0` is the LAP's
-    start, used only when the session cannot supply a lap window."""
+    `_strip_runs` owns WHAT this frame says — the lap-scoped gating, the clamped clock and the
+    tail — because the pill budget has to ask the same question and get the same answer. `t0` is
+    the LAP's start, used only when the session cannot supply a lap window."""
     k = box.height() / 44.0
     p.setBrush(_c(EXPORT.halo, 165))
     p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
     p.drawRoundedRect(box, 8 * k, 8 * k)
-    if vals.lap_id is None:
+    runs = _strip_runs(session, vals, t0, is_best, palette)
+    if runs is None:
         return
-    win = session.lap_window(vals.lap_id)
-    if win is not None:
-        ls, le = win
-        span = le - ls
-        # Clamped into [0, span]: identical to the unclamped form for every frame BETWEEN the
-        # lines, and the difference is exactly what stops a lead-out's clock overrunning the lap.
-        elapsed = 0.0 if span <= 0 else min(max(vals.t - ls, 0.0), span)
-        frac = 0.0 if span <= 0 else elapsed / span
-    else:
-        frac = 0.0
-        elapsed = max(0.0, vals.t - t0)
-    clock = fmt_time(elapsed) if vals.lap_started else _PENDING_TIME
-    label = f"LAP {lap_label(vals.lap_id)}   {clock}"
+    label, tail, colour, frac = runs
     font = _font(box.height() * 0.54, bold=True)
     inner = box.adjusted(box.height() * _STRIP_PAD_L_FRAC, 0,
                          -box.height() * _STRIP_PAD_R_FRAC, 0)
     # Measured before anything is drawn, because the Δ's position decides where the progress
     # fill's TRACK ends. The Δ is placed by accumulating the label's advance — the same
     # tabular-figures guarantee the readout relies on, so it cannot slide as the clock ticks.
-    # Before the line there is no Δ and no `★ BEST` verdict to state: both are claims about a lap
-    # that has not been driven yet.
-    tail, colour = strip_tail(vals.delta_s, is_best, palette) if vals.lap_started else ("", "")
     tail_x = inner.x() + QFontMetricsF(font).horizontalAdvance(label) + _RUN_GAP_K * k
     # THE FILL'S TRACK IS THE CLOCK'S SECTION, NOT THE WHOLE PILL. It ends midway through the gap
     # before the Δ, and that is a legibility requirement rather than a taste: measured on the
@@ -1371,11 +1397,15 @@ class OverlayPainter:
     SAME set_lap/set_g sequence the live tick uses, so the burned dial's EMA/envelope evolve
     identically). `paint_frame_with_state` mutates the passed QImage in place."""
 
-    def __init__(self, session, spec: ExportSpec, out_w: int, out_h: int):
+    def __init__(self, session, spec: ExportSpec, out_w: int, out_h: int, fps: float):
         self._session = session
         self._spec = spec
         self._w, self._h = out_w, out_h
         cfg = spec.config
+        # The render's OWN frame rate, and it is REQUIRED: the pill budget below resolves the exact
+        # strings this export will burn by walking this export's frame times, so a painter built at
+        # one fps and pumped at another would be fitted to a different set of frames than it draws.
+        self._fps = float(fps)
         # Global size scale for the export overlays: 1.0 at 1080p, growing/shrinking with the output
         # height so line widths, the g-dot, the map marker + glyph outlines all look right at 720p
         # through 4K (the brief's "sizes that scale with out_height"). The g-dial + map-inset paint
@@ -1389,20 +1419,19 @@ class OverlayPainter:
         mw, mh = cfg.map_w_frac * out_w, cfg.map_h_frac * out_h
         self._map = _MapInset(session, QRectF(out_w - m - mw, out_h - m - mh, mw, mh),
                               spec.lap_id, scale_k=self._k)
-        # readout: BOTTOM-LEFT. Both pills are FITTED to the widest text this export can burn,
-        # resolved once here rather than per frame (a pill that breathed as the speed gained a
-        # digit would be worse than one that is too wide). See the HUD pill geometry block.
+        # Both pills are FITTED to the widest text this export WILL burn — enumerated once here by
+        # replaying the render's own per-frame lookup over its own frame times, never re-derived
+        # and never per frame (a pill that breathed as the speed gained a digit would be worse than
+        # one that is too wide). See `_burned_runs` and the HUD pill geometry block.
+        speeds, labels, tails = _burned_runs(session, spec, self._fps)
+        # readout: BOTTOM-LEFT.
         rh = max(cfg.readout_h_frac * out_h, 22.0)
         self._readout_rect = QRectF(
             m, out_h - m - rh,
-            readout_pill_width(rh, _speed_text_candidates(session, spec),
-                               units.speed_label(cfg.speed_unit)), rh)
+            readout_pill_width(rh, speeds, units.speed_label(cfg.speed_unit)), rh)
         # lap strip: TOP-LEFT.
         sh = max(cfg.strip_h_frac * out_h, 20.0)
-        self._strip_rect = QRectF(
-            m, m,
-            strip_pill_width(sh, _strip_label_candidates(spec),
-                             _strip_tail_candidates(session, spec)), sh)
+        self._strip_rect = QRectF(m, m, strip_pill_width(sh, labels, tails), sh)
         # Headless g-meter dial, driven exactly like the live overlay so its filtering matches (incl.
         # the axis-provenance tag: IMU lateral · GPS longitudinal, not a bare source name).
         self._dial = gmeter_overlay.GMeterOverlay()
@@ -1587,7 +1616,9 @@ class Renderer:
         self._out_w, self._out_h = output_size(src_w, src_h, spec.config)
         self._fps = resolve_fps(spec.config, src_fps)
         self._times = frame_times(spec.t0, spec.t1, self._fps)
-        self._painter = OverlayPainter(session, spec, self._out_w, self._out_h)
+        # The painter is handed the SAME fps, because its pill budget replays these very frame
+        # times to learn what it will draw (see `_burned_runs`).
+        self._painter = OverlayPainter(session, spec, self._out_w, self._out_h, self._fps)
         # Resolve the encoder ONCE (probes VideoToolbox). `_encoder` is the concrete ffmpeg -c:v
         # name actually used; `_fallback_allowed` lets a failed VT encode retry on libx264.
         self._encoder = resolve_encoder(spec.config.encoder)

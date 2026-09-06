@@ -777,3 +777,24 @@ add_test(NAME test_export_seam
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_seam.py)
 set_tests_properties(test_export_seam PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# The PILL BUDGET and the clip's promised LENGTH (design wave 2, sw-export F2/F3/F4). #202/#203
+# fitted both HUD pills to their own ink with ZERO slack — measured worst `need - pill` = +0.00 px
+# across every frame of 21 D24 laps — which makes the width budget load-bearing, and the budget was
+# an ESTIMATE re-derived from the same series the painter reads under different conventions: the
+# speed budget masked `tt < t1` where the per-frame lookup is a CEILING searchsorted (+9.57 px of
+# ink outside the readout pill on the last 2 frames of a clip), and the Δ budget sampled
+# `endpoint=False` and so never asked about the instant a lead-out FREEZES on (+6.59 px outside the
+# strip pill, held for 10.00 s). `_burned_runs` now walks the render's own frame times through its
+# own lookup and the painters' own run builders. Pinned on COMPOSITED pixels against a CHROME-ONLY
+# control render (so the pill's own antialiased stroke is subtracted rather than guessed at), over
+# the sweep's own 720 samples — 5 heights x 2 units x 2 palettes x 6 contents x 3 frames x 2 pills
+# — on ALL FOUR edges, the vertical one included because nothing in the wave had measured it. Plus
+# F2: `-shortest` let a chapter's AUDIO decide the clip length (D24 ch3 video 1590.005083 s vs
+# audio 1589.994667 s), so a run-off clamped to the footage bound delivered 479 of 480 composited
+# frames with the progress bar at 100 %; `-af apad` makes the video the shortest stream. Offscreen:
+# it paints QImages; no ffmpeg needed (the argv is built, not run).
+add_test(NAME test_export_pill_budget
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_pill_budget.py)
+set_tests_properties(test_export_pill_budget PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

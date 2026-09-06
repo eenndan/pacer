@@ -422,7 +422,7 @@ def test_speed_reads_the_real_speed_through_the_padding():
 def _drive(s, pad, fps=10.0):
     """Run a padded export's per-frame loop WITHOUT ffmpeg, returning the dial state per frame."""
     spec = _spec(s, 1, pad, out_height=360)
-    painter = ev.OverlayPainter(s, spec, 640, 360)
+    painter = ev.OverlayPainter(s, spec, 640, 360, fps)
     out = []
     for t in ev.frame_times(spec.t0, spec.t1, fps):
         vals = ev.overlay_values_at(s, float(t), spec)

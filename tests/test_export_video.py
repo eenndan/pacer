@@ -1338,7 +1338,12 @@ def test_both_hud_pills_are_fitted_to_their_own_ink():
 
     Now both measure their own text. The check is the RATIO, swept over the heights the export
     offers: content (the runs the painter actually places, plus the stated padding) must fill the
-    pill, and the pill must still hold its widest string with the padding intact."""
+    pill, and the pill must still hold its widest string with the padding intact.
+
+    The content is measured from `_burned_runs` — the painter's own enumeration of what this export
+    will draw — which is the same list the pill was fitted to, so this is a check that
+    `readout_pill_width`/`strip_pill_width` spend the whole box on ink and padding and nothing
+    else. That the enumeration is CORRECT is `test_export_pill_budget.py`'s job."""
     from PySide6.QtGui import QFontMetricsF
     s = StubSession(lap_id=2, t0=0.0, dur=64.238, n=600)
     worst = 1.0
@@ -1346,14 +1351,14 @@ def test_both_hud_pills_are_fitted_to_their_own_ink():
         out_w = int(out_h * 16 / 9)
         spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=0.0, t1=64.238,
                              config=ev.OverlayConfig(out_height=out_h))
-        painter = ev.OverlayPainter(s, spec, out_w, out_h)
+        painter = ev.OverlayPainter(s, spec, out_w, out_h, 30.0)
+        speeds, labels, tails = ev._burned_runs(s, spec, 30.0)
         # --- readout: pad + widest hero + gap + unit + pad, measured the painter's own way
         rh = painter._readout_rect.height()
         k = rh / 44.0
         fm_big = QFontMetricsF(ev._font(rh * 0.74, bold=True))
         fm_u = QFontMetricsF(ev._font(rh * 0.34, bold=True))
-        hero = max(fm_big.horizontalAdvance(t)
-                   for t in (*ev._speed_text_candidates(s, spec), "—"))
+        hero = max(fm_big.horizontalAdvance(t) for t in speeds)
         content = (2 * rh * ev._READOUT_PAD_FRAC + hero + ev._READOUT_GAP_K * k
                    + fm_u.horizontalAdvance("km/h"))
         ratio = content / painter._readout_rect.width()
@@ -1362,8 +1367,8 @@ def test_both_hud_pills_are_fitted_to_their_own_ink():
         sh = painter._strip_rect.height()
         sk = sh / 44.0
         fm_s = QFontMetricsF(ev._font(sh * 0.54, bold=True))
-        label = max(fm_s.horizontalAdvance(t) for t in ev._strip_label_candidates(spec))
-        tail = max(fm_s.horizontalAdvance(t) for t in ev._strip_tail_candidates(s, spec))
+        label = max(fm_s.horizontalAdvance(t) for t in labels)
+        tail = max(fm_s.horizontalAdvance(t) for t in tails if t)
         s_content = (sh * ev._STRIP_PAD_L_FRAC + label + ev._RUN_GAP_K * sk + tail
                      + sh * ev._STRIP_PAD_R_FRAC)
         s_ratio = s_content / painter._strip_rect.width()
@@ -1377,33 +1382,42 @@ def test_both_hud_pills_are_fitted_to_their_own_ink():
 
 def test_the_readout_pill_holds_every_speed_this_export_can_burn():
     """The pill is fitted ONCE per export, so it has to be fitted to the widest string, not to the
-    first frame's. Two traps, both pinned: a between-laps frame draws `theme.speed_number`'s EM
-    DASH, which is wider than one digit; and the hero number is ROUNDED, so a session peaking at
-    99.6 km/h burns "100" — three digits from a two-digit maximum."""
+    first frame's. Two traps, both pinned: the hero number is ROUNDED, so a session peaking at
+    99.6 km/h burns "100" — three digits from a two-digit maximum; and a session with no usable
+    speed track burns `theme.speed_number`'s EM DASH on every frame, which the pill must hold.
+
+    Both come out of `_burned_runs`, which enumerates the strings rather than estimating them —
+    so the dash is budgeted when and only when a frame draws one (it used to be added to every
+    pill unconditionally, as insurance against an estimate)."""
     from PySide6.QtGui import QFontMetricsF
     s = StubSession(lap_id=2, t0=0.0, dur=60.0, n=600)
     s.tv = np.full(600, 99.6)                             # peaks at 99.6 -> "100", three digits
     spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=0.0, t1=60.0)
-    assert ev._speed_text_candidates(s, spec) == ("100",), ev._speed_text_candidates(s, spec)
+    speeds, _labels, _tails = ev._burned_runs(s, spec, 30.0)
+    assert set(speeds) == {"100"}, sorted(set(speeds))
     rh = 44.0
-    w = ev.readout_pill_width(rh, ev._speed_text_candidates(s, spec), "km/h")
+    w = ev.readout_pill_width(rh, speeds, "km/h")
     fm = QFontMetricsF(ev._font(rh * 0.74, bold=True))
     fm_u = QFontMetricsF(ev._font(rh * 0.34, bold=True))
     pad = 2 * rh * ev._READOUT_PAD_FRAC
-    for text in ("100", "888", "—", "0"):
+    for text in ("100", "0"):
         need = pad + fm.horizontalAdvance(text) + ev._READOUT_GAP_K + fm_u.horizontalAdvance("km/h")
         assert need <= w + 1e-6, f"{text!r} needs {need:.1f} px in a {w:.1f} px pill"
-    # no usable track at all -> the stated 3-digit budget, never a crash
+    # no usable track at all -> every frame burns the em dash, and the pill is fitted to it
     nt = StubSession(lap_id=2, t0=0.0, dur=60.0, n=4)
     nt.tv = np.asarray([])
-    assert ev._speed_text_candidates(nt, spec) == (ev._SPEED_BUDGET_FALLBACK,)
+    dash_speeds, _l, _t = ev._burned_runs(nt, spec, 30.0)
+    assert set(dash_speeds) == {"—"}, sorted(set(dash_speeds))
+    w_dash = ev.readout_pill_width(rh, dash_speeds, "km/h")
+    need = pad + fm.horizontalAdvance("—") + ev._READOUT_GAP_K + fm_u.horizontalAdvance("km/h")
+    assert need <= w_dash + 1e-6, f"the dash needs {need:.1f} px in a {w_dash:.1f} px pill"
     print("test_the_readout_pill_holds_every_speed_this_export_can_burn OK")
 
 
 def test_the_strip_pill_is_budgeted_for_this_laps_real_delta_range():
     """`Δ -0.31` and `Δ -12.40` are not the same width, and the strip is sized once. The budget is
-    sampled from the session's OWN Δ curve (the same accessor the per-frame lookup uses), so a lap
-    that swings to double digits gets a pill that holds it."""
+    the session's OWN Δ curve read through the per-frame lookup the render uses, so a lap that
+    swings to double digits gets a pill that holds it."""
     from PySide6.QtGui import QFontMetricsF
 
     class _BigDelta(StubSession):
@@ -1413,13 +1427,13 @@ def test_the_strip_pill_is_budgeted_for_this_laps_real_delta_range():
     small = StubSession(lap_id=2, t0=0.0, dur=60.0, n=600)
     big = _BigDelta(lap_id=2, t0=0.0, dur=60.0, n=600)
     spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=0.0, t1=60.0)
-    assert ev._strip_tail_candidates(small, spec) == ("Δ +0.00", "Δ +0.00")
-    assert "Δ -12.40" in ev._strip_tail_candidates(big, spec)
+    s_speeds, s_labels, s_tails = ev._burned_runs(small, spec, 30.0)
+    b_speeds, b_labels, b_tails = ev._burned_runs(big, spec, 30.0)
+    assert set(s_tails) == {"Δ +0.00"}, sorted(set(s_tails))
+    assert set(b_tails) == {"Δ -12.40"}, sorted(set(b_tails))
     fm = QFontMetricsF(ev._font(44.0 * 0.54, bold=True))
-    w_small = ev.strip_pill_width(44.0, ev._strip_label_candidates(spec),
-                                  ev._strip_tail_candidates(small, spec))
-    w_big = ev.strip_pill_width(44.0, ev._strip_label_candidates(spec),
-                                ev._strip_tail_candidates(big, spec))
+    w_small = ev.strip_pill_width(44.0, s_labels, s_tails)
+    w_big = ev.strip_pill_width(44.0, b_labels, b_tails)
     assert w_big > w_small, (w_small, w_big)
     # "Δ +0.00" -> "Δ -12.40" is exactly ONE extra digit cell (plus the +/- advance difference),
     # and with tabular figures a digit cell is a fixed width — so this is an equality in disguise.
@@ -1427,7 +1441,9 @@ def test_the_strip_pill_is_budgeted_for_this_laps_real_delta_range():
     # a best-lap export is sized for the mark instead
     best = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=0.0, t1=60.0,
                          is_best=True)
-    assert ev._strip_tail_candidates(small, best) == (ev._BEST_MARK,)
+    _sp, _lb, best_tails = ev._burned_runs(small, best, 30.0)
+    assert set(best_tails) == {ev._BEST_MARK}, sorted(set(best_tails))
+    assert s_speeds and b_speeds                          # both sessions do burn a speed
     print("test_the_strip_pill_is_budgeted_for_this_laps_real_delta_range OK")
 
 
@@ -1522,9 +1538,9 @@ def test_overlay_painter_size_scale_tracks_height():
     overlays scale with resolution — 720p < 1080p < 1440p."""
     s = StubSession()
     spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=100.0, t1=160.0)
-    p720 = ev.OverlayPainter(s, spec, 1280, 720)
-    p1080 = ev.OverlayPainter(s, spec, 1920, 1080)
-    p1440 = ev.OverlayPainter(s, spec, 2560, 1440)
+    p720 = ev.OverlayPainter(s, spec, 1280, 720, 30.0)
+    p1080 = ev.OverlayPainter(s, spec, 1920, 1080, 30.0)
+    p1440 = ev.OverlayPainter(s, spec, 2560, 1440, 30.0)
     assert p720._k < p1080._k < p1440._k
     assert abs(p1080._k - 1.0) < 1e-9                        # 1.0 at 1080p
 
