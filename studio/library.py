@@ -17,7 +17,8 @@ Schema (version 3) — one JSON object::
         "stem":        "GX010062",          # first-chapter stem, for display
         "track":       <registry track name or null>,
         "date":        "YYYY-MM-DD" | null,  # GPS9 wall-clock date (Session.session_date)
-        "lap_count":   <int>,                # valid lap count
+        "lap_count":   <int>,                # valid lap count — THE SAMPLE both time columns
+                                             #   below are a minimum over (see the note)
         "best":        <float seconds> | null,    # best lap time
         "theoretical": <float seconds> | null,    # Session.theoretical_best — the IDEAL lap
                                              #   (v3 meaning; see the v2→v3 note below)
@@ -36,6 +37,21 @@ measured against. A stored v2 number cannot be reinterpreted as a v3 one, and sh
 column would silently mix definitions, so the v2→v3 migration NULLS the field (see ``_migrate``) —
 every entry is kept, only that one value is retired, and it returns for real the next time the
 recording is opened.
+
+``lap_count`` IS PART OF THE ANSWER, NOT METADATA. Both ``best`` and ``theoretical`` are MINIMA
+over the session's laps, so both fall as a session gets longer, and a table that ranks either
+without showing the count ranks session length as much as pace. Measured over random subsets of
+the clean laps of the owner's five recordings, per doubling of lap count: ``theoretical`` falls
+0.068 / 0.174 / 0.194 / 0.241 / 0.384 s and ``best`` falls 0.033 / 0.080 / 0.094 / 0.148 /
+0.221 s — the ideal is the more sample-dependent of the two on three recordings and the LESS on
+the other two, which is why the dialog shows the count for the ROW rather than qualifying one
+column. The sharpest real instance is in this index today: Sandown chapter 1 (23 laps) stores
+47.933 and Sandown chapters 1–3 (59 laps) stores 47.374 — 0.56 s apart, same driver, same day,
+same track, and nothing between them but how many laps were loaded. ``studio/library_dialog.py``
+renders it as the ``Laps`` column; see ``studio/corner_model.py IdealSample`` for the full table.
+It is the count of VALID laps, while the ideal is minimised over the CLEAN ones (valid, no GPS
+dropout) — the same number on all five of the owner's recordings, and an over-statement by the
+dropout count on a recording that has one.
 
 The three TRUST flags (``verified``/``degraded``/``dropout``, schema v2) let the PB progression
 EXCLUDE an untrustworthy "best": a PROVISIONAL start line (``not verified``) or a data-quality-

@@ -124,6 +124,23 @@ _IDEAL_CHIP_TIP = (
     "corner and each straight, stitched together into one synthetic lap (not a single lap you "
     "have driven); OFF = Δ to your best single lap. The other number is always in the readout's "
     "tooltip.")
+# WHAT THAT IDEAL WAS MINIMISED OVER, appended per session by _sync_ideal_readout.
+#
+# The hero is the app's largest text and the only ideal surface with no prose beside it, so a
+# reader who never opens Stats meets Δideal here and nowhere else. The number is an order
+# statistic: on D24's three chapters the same driving reads a 0.90 s gap over 5 laps and a 1.64 s
+# gap over 65 (random subsets, 200 draws per N), and the corner count it is partitioned by moves
+# 11↔12 with the start/finish line. Stats says so under its tiles; here it goes on the chip's
+# hover, which is where the reference is chosen.
+#
+# APPENDED to _IDEAL_CHIP_TIP, never replacing it — same contract as the two unavailable-state
+# reasons below, and tests/test_central_view_realqt.py pins the constant's own honesty words
+# ("stitched together", "not a single") on this tooltip.
+_IDEAL_CHIP_SAMPLE = (
+    "\n\nOn this recording it is stitched from {donors} of your {laps} clean laps across "
+    "{corners} corners. It is a minimum over those laps, so it falls as you record more of them "
+    "(0.07–0.38 s per doubling of lap count, measured) and moves when dragging the start/finish "
+    "line changes which corners pacer finds. The Stats page prints both counts under it.")
 
 # THE SIXTH SURFACE. #211 gave the Δ chart, the `Ideal lap` toggle, the Stats IDEAL LAP block, the
 # laps.csv trailer, the share card and the Library cell ONE gate — `ideal_donor_lap_id() is not
@@ -1569,8 +1586,20 @@ class CentralView(QWidget):
         ok = self._ideal_state == "stitched"
         btn = self.ideal_readout_btn
         # APPENDED, never replaced: the chip's own tooltip is the only thing naming what it is.
-        reason = _IDEAL_ONE_LAP_REASON if self._ideal_state == "one_lap" else _IDEAL_NONE_REASON
-        btn.setToolTip(_IDEAL_CHIP_TIP if ok else f"{_IDEAL_CHIP_TIP}\n\n{reason}")
+        # In the working state the appendix is the SAMPLE (_IDEAL_CHIP_SAMPLE); in the two
+        # unavailable ones it is the reason there is nothing to reference. Both come off the same
+        # getattr-guarded read as the state above — a duck-typed view-test session that cannot
+        # answer `ideal_sample` simply gets the constant, exactly as it does for the other reads.
+        smp = getattr(self.session, "ideal_sample", lambda: None)() if ok else None
+        if smp is not None:
+            appendix = _IDEAL_CHIP_SAMPLE.format(donors=smp.donors, laps=smp.laps,
+                                                 corners=smp.corners)
+        elif ok:
+            appendix = ""
+        else:
+            appendix = "\n\n" + (_IDEAL_ONE_LAP_REASON if self._ideal_state == "one_lap"
+                                 else _IDEAL_NONE_REASON)
+        btn.setToolTip(_IDEAL_CHIP_TIP + appendix)
         btn.setEnabled(ok)
         # Programmatic, so it must not be mistaken for the user's own choice (see the handler).
         want = self._ideal_readout_wanted and ok

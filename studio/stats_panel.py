@@ -258,13 +258,35 @@ ROLLING_TOOLTIP = ("Best rolling — the fastest single complete loop regardless
 # through set_timing_lines at 0/1/2/3 lines, ideal_total is byte-identical), and the ideal is
 # strictly faster than the best lap whenever two laps donate. The one clause that was true and
 # load-bearing is kept verbatim: A REFERENCE TARGET, NOT A LAP YOU DROVE.
+#
+# ...and BOTH ideal tooltips now close with the same paragraph, because the thing they were both
+# missing is the same fact about both numbers: they are ORDER STATISTICS. The line under the tiles
+# states the sample; this states why the sample is part of the answer, which is the half a caption
+# cannot carry — the brief for this disclosure was "the number where a reader sees it, the
+# mechanism on hover".
+#
+# Every figure is measured, not asserted: `ideal_total` over random subsets of each recording's
+# clean laps (200 draws per N) falls 0.068 / 0.174 / 0.194 / 0.241 / 0.384 s per doubling of lap
+# count on the owner's five, and on D24's three chapters the decrement GROWS with N (0.31 s over
+# 8→15 laps, 0.42 s over 30→65) rather than shrinking — nothing is being approached. Over six
+# start-line positions per recording the detected corner count moves 11↔12 on D24 and 7↔8 on
+# Sandown, and the headline gap by up to +69 %. The full table and its sources are in
+# corner_model.IdealSample; this is the version a reader gets on hover.
+IDEAL_SAMPLE_TOOLTIP = (
+    "\n\nIt is a MINIMUM over the clean laps counted under the tiles, so it is partly a measure "
+    "of how many laps you recorded: measured on real recordings it falls 0.07–0.38 s per doubling "
+    "of lap count and keeps falling — there is no floor it settles on. It also moves when the "
+    "corners are re-detected, which happens every time you drag the start/finish line. Compare it "
+    "with another session only when the two have a similar lap count and corner count.")
 THEORETICAL_TOOLTIP = ("Theoretical best — your quickest time through each corner and each "
                        "straight, stitched into one lap. A reference target, not a lap you "
                        "drove: no single lap was this fast all the way round, but every piece "
-                       "of it is a piece you drove. The table below says where it lives.")
+                       "of it is a piece you drove. The table below says where it lives."
+                       + IDEAL_SAMPLE_TOOLTIP)
 IDEAL_GAP_TOOLTIP = ("What the theoretical best says is still on the table: your best lap minus "
                      "the stitched ideal. It is time you have already demonstrated, one segment "
-                     "at a time, on laps you drove — not a simulation and not a lap record.")
+                     "at a time, on laps you drove — not a simulation and not a lap record."
+                     + IDEAL_SAMPLE_TOOLTIP)
 IDEAL_COLUMNS = ["Segment", "Gain (s)", "Laps as fast", "Best on lap"]
 # A row under this is not advice — it is a rounding difference between two laps of the same
 # corner, and a plan is not 25 rows long. The remainder is never hidden: the note under the table
@@ -279,6 +301,15 @@ IDEAL_TOOLTIP = (
     "Ranked by gain × the share of laps that already matched it — so a smaller gain you make "
     "routinely sits above a bigger one you made once. Both factors are columns, so you can check "
     "the order by eye. Click a row to ring that corner on the map.")
+
+
+def _plural(n: int, noun: str) -> str:
+    """"1 corner" / "7 corners" — the same one-line helper library_dialog carries, because the
+    sample line counts three things whose smallest legal value is 1. It is reachable: a layout
+    where the detector finds ONE corner still builds a 3-segment partition and can still stitch a
+    genuine ideal, and "the 1 corners and 2 straights" is exactly the defect this page already
+    fixed once on the median tile ("median · 1 clean laps")."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
 def _fmt_hms(seconds: float) -> str:
@@ -713,6 +744,29 @@ class StatsView(QWidget):
         self.t_ideal_gap = Tile("on the table · vs your best")
         self.t_ideal_gap.setToolTip(IDEAL_GAP_TOOLTIP)
         col.addLayout(self._grid(self.t_theoretical, self.t_ideal_gap))
+        # WHAT THE TWO TILES ABOVE WERE MINIMISED OVER — the line this block was missing.
+        #
+        # Both numbers are order statistics: `-1.64 s from 65 laps` and `-0.84 s from 5 laps` are
+        # the SAME DRIVING on D24's three chapters, measured over random subsets. Without the
+        # counts a reader has no way to know that, and the app was inviting exactly that mistake —
+        # the Library's Ideal-lap column holds two rows 0.56 s apart for no reason but lap count.
+        #
+        # IT SITS BETWEEN THE TILES AND THE TABLE, not in a tooltip and not only in the remainder
+        # note under the table: the tiles are the surface a reader takes the number off, and the
+        # note is ~10 rows further down a page that is already ~1400 px tall here. The remainder
+        # note keeps the arithmetic ("these N segments hold X of the Y"); this keeps the sample, so
+        # neither says the other's sentence twice.
+        #
+        # A WrapLabel at the app's prose measure, same construction as `ideal_note` — a paragraph
+        # the column has to make room for, capped so a maximized 1728 px dashboard does not set it
+        # to 130 characters a line, and NOT a longer tile caption: at 1280x800 the Stats body's
+        # minimum width is 444 px against a 445 px viewport, so a caption that grows its grid
+        # column by a single pixel puts a horizontal scrollbar on the page.
+        self.ideal_sample = WrapLabel("")
+        self.ideal_sample.setProperty("role", "Note")
+        self.ideal_sample.setFont(theme.ui_font(theme.CAPTION))
+        self.ideal_sample.setMaximumWidth(theme.EMPTY_MEASURE_PX)
+        col.addWidget(self.ideal_sample)
         self.ideal_table = self._make_table(IDEAL_COLUMNS)
         self.ideal_table.setToolTip(IDEAL_TOOLTIP)
         # Interactive like CORNERS / BRAKING / STRAIGHTS — a row of a table headed "where it
@@ -1125,7 +1179,8 @@ class StatsView(QWidget):
         item.setFont(theme.mono_font(theme.TABLE))
         return item
 
-    def _set_target_tile(self, tile: Tile, value, tip: str, text: str | None = None):
+    def _set_target_tile(self, tile: Tile, value, tip: str, text: str | None = None,
+                         caption: str | None = None):
         """Render a stitched TARGET tile (theoretical best / best rolling / the ideal's gap).
 
         These are not laps anyone drove — they are composed from the session's best splits and
@@ -1137,9 +1192,17 @@ class StatsView(QWidget):
 
         `text` overrides the m:ss.mmm formatting for a target that is a DIFFERENCE rather than a
         lap time ("-1.64 s"). It is still a synthesized number and still takes the mute — the rule
-        is about where the number came from, not about how it is printed."""
+        is about where the number came from, not about how it is printed.
+
+        `caption` re-labels the tile per refresh, for a target whose SAMPLE belongs on it — the
+        ideal's "theoretical best · 65 laps", the same shape the measured `median · 65 clean laps`
+        beside it already uses. It goes through this method rather than a bare `tile.set()` after
+        it, because a second `set()` re-runs `_claim_ink_height` on a value this method has just
+        styled, and the colour-then-font ordering below exists precisely because that path is
+        order-sensitive."""
         session = self.session
-        tile.set((text if text is not None else fmt_time(value)) if value is not None else None)
+        tile.set((text if text is not None else fmt_time(value)) if value is not None else None,
+                 caption)
         provisional = not getattr(session, "timing_verified", True)
         quality = getattr(session, "timing_quality", None)
         muted = provisional or bool(quality is not None and quality.degraded)
@@ -1404,9 +1467,27 @@ class StatsView(QWidget):
         if not has:
             self.ideal_table.setRowCount(0)
             self.ideal_note.setText("")
+            self.ideal_sample.setText("")
             return
         total = sb.total
-        self._set_target_tile(self.t_theoretical, total, THEORETICAL_TOOLTIP)
+        # THE SAMPLE, ON BOTH TILES AND IN THE LINE UNDER THEM. `sample` is the one accessor
+        # (corner_model.IdealSample) so this block and the hero's `vs ideal` chip cannot answer
+        # "how many laps is this over" differently.
+        #
+        # The CAPTION carries the lap count and the tooltip carries the mechanism, which is the
+        # split this page already uses for its other sampled target: `median · 65 clean laps`
+        # names its own n on the tile and explains it on hover. Only the theoretical tile's
+        # caption grows — `on the table · vs your best` is at the width the grid column already
+        # affords, and the line below carries the count for both.
+        smp = sb.sample
+        self._set_target_tile(self.t_theoretical, total, THEORETICAL_TOOLTIP,
+                              caption=f"theoretical best · {smp.laps} laps")
+        straights = smp.segments - smp.corners
+        self.ideal_sample.setText(
+            f"Stitched from {smp.donors} of your {smp.laps} clean laps, across the "
+            f"{_plural(smp.corners, 'corner')} and {_plural(straights, 'straight')} pacer found "
+            "here. Both counts set it: the ideal is the minimum over those laps of those pieces, "
+            "so more laps find a lower one and a different set of corners cuts it differently.")
         # The best lap's time READ OFF THE COMPOSITE, not off `session.lap_time`. They are the
         # same number — `corners.segment_times` asserts a lap's segments sum exactly to its lap
         # time, which is the guarantee the whole composite stands on — and taking it from the same
@@ -1478,21 +1559,26 @@ class StatsView(QWidget):
         shown_s = round(sum(round(r.gain, 2) for r in shown), 2)
         gap_s = round(gap, 2)
         rest_s = round(gap_s - shown_s, 2)
+        # The "Stitched from N of your M clean laps" sentence used to open this note and now opens
+        # `ideal_sample` above the table, where it sits with the tiles it qualifies instead of
+        # under ten rows of decomposition. One sentence, one place: printing the sample twice on
+        # one block is how two surfaces drift apart.
         self.ideal_note.setText(
-            f"Stitched from {len(sb.donor_ids())} of your {len(sb.lap_ids)} clean laps. These "
-            f"{len(shown)} segments hold {shown_s:.2f} s of the {gap_s:.2f} s; the other "
+            f"These {len(shown)} segments hold {shown_s:.2f} s of the {gap_s:.2f} s; the other "
             f"{len(rest)} hold {rest_s:.2f} s between them, under "
             f"{IDEAL_GAIN_FLOOR:.2f} s each. Ranked by gain × how often you have already matched "
             "your best lap there.")
 
     def _set_ideal_visible(self, on: bool) -> None:
-        """Show/hide the IDEAL LAP block as a UNIT — heading, both tiles, the table and the
-        remainder note. A tile left behind under a hidden heading is the defect this exists to
-        prevent (it is what the old SECTORS placement would have produced the moment the two
-        gates disagreed)."""
+        """Show/hide the IDEAL LAP block as a UNIT — heading, both tiles, the sample line, the
+        table and the remainder note. A tile left behind under a hidden heading is the defect this
+        exists to prevent (it is what the old SECTORS placement would have produced the moment the
+        two gates disagreed), and a sample line describing a composite that is not on screen is
+        the same defect one widget over."""
         self._ideal_section.setVisible(on)
         self.t_theoretical.setVisible(on)
         self.t_ideal_gap.setVisible(on)
+        self.ideal_sample.setVisible(on)
         self.ideal_table.setVisible(on)
         self.ideal_note.setVisible(on)
 

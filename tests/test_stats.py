@@ -936,8 +936,12 @@ def test_ideal_decomposition_table_is_a_plan_not_a_taunt():
     note = v.ideal_note.text()
     assert "These 2 segments hold 0.48 s of the 0.51 s" in note, note
     assert "the other 3 hold 0.03 s between them" in note, note
-    assert "Stitched from 2 of your 3 clean laps" in note, note
     assert "Ranked by gain" in note, note
+    # THE SAMPLE moved OFF this note and onto its own line between the tiles and the table, so it
+    # sits with the numbers it qualifies instead of under ten rows of decomposition. It is still
+    # printed exactly once on the block: the note must not have kept a copy.
+    assert "Stitched from 2 of your 3 clean laps" in v.ideal_sample.text(), v.ideal_sample.text()
+    assert "Stitched from" not in note, note
     # ...and the same three numbers read STRUCTURALLY off the rendered surfaces, so this guard
     # keeps working when the fixture changes and cannot go blind again on a fixture whose gains
     # happen to round cleanly.
@@ -952,6 +956,88 @@ def test_ideal_decomposition_table_is_a_plan_not_a_taunt():
     assert sorted(gains, key=lambda k: -gains[k]) == ["C1", "C2"], gains
     assert labels[0] == "C2", "a gain-ordered table leads with C1; this one must not"
     print("test_ideal_decomposition_table_is_a_plan_not_a_taunt OK")
+
+
+def test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it():
+    """THE IDEAL IS AN ORDER STATISTIC, AND THE PAGE NOW SAYS SO ON THE SURFACE, not only on hover.
+
+    `SegmentBests.total` is a sum of per-segment minima, so it falls as a session accumulates laps
+    and moves again when the corner partition is re-cut. Measured over random subsets of the
+    owner's five recordings it falls 0.068–0.384 s per DOUBLING of lap count with no plateau, and
+    driven through this very block on D24's three chapters the tile reads `-0.55 s` over 6 clean
+    laps and `-1.64 s` over 65 — the same driving, the same recording. Before this, the tile,
+    the caption and the hero all printed the number with nothing beside it and the counts lived
+    only in the last sentence of a note under a ten-row table.
+
+    Three placements, and each is load-bearing for a different reader:
+      * the TILE CAPTION carries the lap count, so the number and its sample cannot be read apart
+        — the same shape the measured `median · N clean laps` tile beside it already uses;
+      * the SAMPLE LINE between the tiles and the table carries the donor count and the PARTITION
+        (N corners + N+1 straights), which is what visibly changes when a start/finish-line drag
+        re-detects the corners;
+      * the TOOLTIPS carry the mechanism and the measured rate, on BOTH tiles, because it is one
+        fact about both numbers.
+
+    And the sample appears exactly ONCE on the block: the remainder note used to open with it and
+    must not have kept a copy (two surfaces stating one fact is how they drift)."""
+    _app()
+    from studio.stats_panel import IDEAL_SAMPLE_TOOLTIP, StatsView
+    v = StatsView(_fake_view_session())
+    sb = v.session.ideal_segment_bests()
+    smp = sb.sample
+    assert (smp.donors, smp.laps, smp.corners, smp.segments) == (2, 3, 2, 5), smp
+
+    assert v.t_theoretical.caption.text() == "theoretical best · 3 laps", \
+        v.t_theoretical.caption.text()
+    line = v.ideal_sample.text()
+    assert "Stitched from 2 of your 3 clean laps" in line, line
+    # N corners and N+1 straights, printed as `segments - corners` so the sentence stays true if
+    # the partition ever stops being 2N+1 rather than printing a derived lie.
+    assert "2 corners and 3 straights" in line, line
+    assert line.count("Stitched from") == 1, line
+    assert "Stitched from" not in v.ideal_note.text(), v.ideal_note.text()
+
+    for tile in (v.t_theoretical, v.t_ideal_gap):
+        assert IDEAL_SAMPLE_TOOLTIP.strip() in tile.toolTip(), tile.toolTip()
+        assert "per doubling of lap count" in tile.toolTip(), tile.toolTip()
+    # …and the retired copy is still gone from the theoretical tile (the #211 guard, re-checked
+    # here because this test rewrote that constant).
+    for dead in ("best sector", "sector splits"):
+        assert dead not in v.t_theoretical.toolTip(), dead
+
+    # SINGULARS. `corners` and `straights` and `laps` all have 1 as a legal value, and this page
+    # has shipped "median · 1 clean laps" once already.
+    from studio import stats_panel
+    assert stats_panel._plural(1, "corner") == "1 corner"
+    assert stats_panel._plural(2, "corner") == "2 corners"
+
+    # THE LINE FOLLOWS THE NUMBER. Restrict the composite to two laps — what a shorter recording
+    # does — and the caption, the line and the tile all move together, in the same frame.
+    from studio.corner_model import SegmentBests
+    # Laps 1 and 2 — it must keep the BEST lap (the subject the decomposition is measured against,
+    # which `_composite_lap_ids` guarantees by appending it) and it must keep two distinct donors,
+    # or the block hides instead of re-rendering and this guard would pass on a stale caption.
+    keep, times = [1, 2], sb.times[1:]
+    donors = [keep[int(times[:, j].argmin())] for j in range(times.shape[1])]
+    two = SegmentBests(labels=sb.labels, cids=sb.cids, lap_ids=keep,
+                       times=times, admitted=sb.admitted[1:],
+                       bests=[float(c.min()) for c in times.T], donors=donors,
+                       s_edges=sb.s_edges, donor_span=sb.donor_span)
+    assert two.single_donor_id() is None and len(two.donor_ids()) == 2, two.donor_ids()
+    was_gap = v.t_ideal_gap.value.text()
+    v.session.ideal_segment_bests = lambda: two
+    v.session.ideal_total = lambda: two.total
+    v.session.ideal_donor_lap_id = lambda: two.single_donor_id()
+    v.refresh()
+    assert v.t_theoretical.caption.text() == "theoretical best · 2 laps", \
+        v.t_theoretical.caption.text()
+    assert "Stitched from 2 of your 2 clean laps" in v.ideal_sample.text(), v.ideal_sample.text()
+    # Fewer laps, a SLOWER ideal and therefore a smaller gap — the property the disclosure exists
+    # for, on the rendered strings rather than on the model.
+    assert two.total >= sb.total, (two.total, sb.total)
+    assert abs(float(v.t_ideal_gap.value.text()[:-2])) < abs(float(was_gap[:-2])), (
+        was_gap, v.t_ideal_gap.value.text())
+    print("test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it OK")
 
 
 def test_ideal_block_hides_when_it_would_duplicate_a_lap_you_drove():
@@ -973,6 +1059,9 @@ def test_ideal_block_hides_when_it_would_duplicate_a_lap_you_drove():
     assert one.t_ideal_gap.isHidden() and one.ideal_table.isHidden()
     assert one.ideal_table.rowCount() == 0 and one.ideal_note.text() == ""
     assert one.ideal_note.isHidden()
+    # …and the SAMPLE line with them. A sentence counting the laps of a composite that is not on
+    # screen is the same "tile left behind under a hidden heading" defect, one widget over.
+    assert one.ideal_sample.isHidden() and one.ideal_sample.text() == ""
 
     none = StatsView(_fake_view_session(ideal=False))
     assert none.session.ideal_segment_bests() is None

@@ -13,8 +13,8 @@ Layout::
     │  N analyzed recordings  (M of N when filtered) │  ← header count, of what is ON SCREEN
     │  [search…]                    [track filter ▾] │  ← live filter row (track/date substring + a
     ├───────────────────────────────────────────────┤     per-track combo, plus an Unknown-track
-    │  Date │ Track │ Best │ Ideal lap               │     bucket) so it scales to 50–200
-    │  …      …       …      …                        │  ← sortable table (one row / recording);
+    │  Date │ Track │ Laps │ Best │ Ideal lap        │     bucket) so it scales to 50–200
+    │  …      …       …      …      …                 │  ← sortable table (one row / recording);
     │  “No recordings match …” when the filter empties│     missing-file rows greyed + disabled; an
     ├───────────────────────────────────────────────┤     UNTRUSTWORTHY row carries a muted trust tag
     │  <selected track> · 12 sessions · best … · …    │  ← light cross-session progress summary line
@@ -31,12 +31,18 @@ given but FLOORED on the way back in (``_MIN_BROWSABLE_H``), so one drag to the 
 leave every future open showing 0.97 of one row; the privacy paragraph is a ``WrapLabel`` so the
 layout's own minimum accounts for the height its text really wraps to.
 
-Date/Best/Ideal sort numerically via ``_NumItem``; Track sorts as text. The Open button +
+Date/Laps/Best/Ideal sort numerically via ``_NumItem``; Track sorts as text. The Open button +
 a double-click re-open the selected row's recording (disabled for a missing/junk row). Every time
 this dialog prints a lap time — the Best/Ideal cells, the summary line, the chart's left axis
 (``_LapTimeAxis``) — it goes through ``_signal.fmt_time``, so one frame never carries two formats.
 The Ideal-lap column shows an em dash, and says why on hover, in the two states where it would
 otherwise reprint the Best-lap cell — see ``_ideal_cell``.
+
+The LAPS column is not decoration: ``Best lap`` and ``Ideal lap`` are both minima over the
+session's laps, so both fall as a session gets longer and a ranking of either is partly a ranking
+of session length. Showing the sample for the whole ROW is this dialog's answer — see ``_COL_LAPS``
+for why that beats refusing to sort the ideal, and the three header tooltips for the measured
+rates.
 
 TRUST (library schema v2): the table SHOWS every session, but an untrustworthy one (provisional
 start line / estimated timing / GPS dropout — see ``library.trust_label``) gets a muted tag and is
@@ -87,8 +93,48 @@ from .widgets import NumItem as _NumItem
 # what it holds and for what the rest of the app calls that number (the hero's "Δideal", the chart's
 # "Ideal lap" toggle). Two states still refuse to print a number rather than print a duplicate; see
 # `_ideal_cell_value`.
-_COL_DATE, _COL_TRACK, _COL_BEST, _COL_THEO = range(4)
-_HEADERS = ["Date", "Track", "Best lap", "Ideal lap"]
+#
+# THE FIFTH COLUMN IS THE SAMPLE, and it is here because the two time columns beside it are both
+# MINIMA over the session's laps. A minimum over more laps is never larger, so ranking either one
+# across sessions ranks session length as well as pace — and this index holds the demonstration:
+# Sandown chapter 1 (23 laps) stores an ideal of 47.933 and Sandown chapters 1–3 (59 laps) stores
+# 47.374. 0.56 s apart, same driver, same day, same track, one recording a subset of the other;
+# the entire difference is how many laps were loaded.
+#
+# WHY A COLUMN AND NOT A SORT REFUSAL ON `Ideal lap`. Suppressing that one column's sort was the
+# obvious fix and it is the wrong one, measured: over random subsets of the clean laps the BEST
+# LAP falls 0.033–0.221 s per doubling of lap count against the ideal's 0.068–0.384 s, and on two
+# of the five recordings (D24 1 chapter, SD_30_08) the best lap is the MORE sample-dependent of
+# the two. A dialog that refused to rank the ideal while happily ranking the best lap beside it
+# would be advertising a distinction the numbers do not support. The confound belongs to the ROW,
+# so the disclosure is a per-row count that both columns can be read against — and it is sortable
+# itself, which is what makes "these two rows are 0.56 s apart because one is 36 laps longer"
+# something a user can check in one click rather than a claim in a tooltip.
+#
+# It costs no schema change: `lap_count` has been stored on every entry since v1 (it is what
+# `_entry_junk` reads to quarantine a no-laps row) and was simply never shown.
+_COL_DATE, _COL_TRACK, _COL_LAPS, _COL_BEST, _COL_THEO = range(5)
+_HEADERS = ["Date", "Track", "Laps", "Best lap", "Ideal lap"]
+
+# The two time columns' header hovers — the MECHANISM behind the Laps column beside them. On the
+# headers rather than the cells because it is a property of the column, and because the cells'
+# hover is already spoken for (every cell names the recording's file, which is the only thing
+# telling two same-day sessions apart).
+_LAPS_HEADER_TIP = (
+    "Valid laps in the recording — the sample the two time columns are a minimum over.\n"
+    "Both of them fall as a session gets longer, so sort by this before reading a ranking of "
+    "either as a ranking of pace.")
+_BEST_HEADER_TIP = (
+    "Best lap — the fastest single lap of the recording.\n"
+    "A minimum over the session's laps, so it falls as the session gets longer: measured over "
+    "random subsets of the owner's recordings, 0.03–0.22 s per doubling of lap count. The Laps "
+    "column is the sample it was taken over.")
+_THEO_HEADER_TIP = (
+    "Ideal lap — the quickest time through each corner and each straight, stitched into one lap.\n"
+    "A sum of per-segment minima, so it falls faster than the best lap does as a session gets "
+    "longer: 0.07–0.38 s per doubling of lap count on the owner's recordings, with no plateau. "
+    "Two rows are comparable on this number only if their Laps are comparable — Sandown chapter 1 "
+    "(23 laps) and Sandown chapters 1–3 (59 laps) are 0.56 s apart on the same driving.")
 
 # What the Ideal-lap cell hovers with when it has no number to show, appended to the row's own file
 # identity. Two causes, one em dash, and the user is told which:
@@ -448,8 +494,12 @@ class LibraryDialog(QDialog):
         self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(_COL_TRACK, QHeaderView.Stretch)
-        for col in (_COL_DATE, _COL_BEST, _COL_THEO):
+        for col in (_COL_DATE, _COL_LAPS, _COL_BEST, _COL_THEO):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        # The sample's mechanism, on the columns it is about (see the header-tip constants).
+        for col, tip in ((_COL_LAPS, _LAPS_HEADER_TIP), (_COL_BEST, _BEST_HEADER_TIP),
+                         (_COL_THEO, _THEO_HEADER_TIP)):
+            self.table.horizontalHeaderItem(col).setToolTip(tip)
         self._fill_rows()
         self.table.setSortingEnabled(True)
         # Newest-first so the auto-selected (first usable) row is the most recent recording.
@@ -832,12 +882,19 @@ class LibraryDialog(QDialog):
 
             track_item = QTableWidgetItem(track_text)
 
+            # The SAMPLE both time cells beside it are a minimum over (see _COL_LAPS). Numeric
+            # like them, so "sort by Laps" answers "is this ranking pace or session length?" in
+            # one click. A junk row's 0 is printed rather than dashed: it is the true count and it
+            # is why that row is quarantined.
+            laps = e.get("lap_count")
+            laps_item = _NumItem(str(laps) if isinstance(laps, int) else "—")
+            laps_item.setData(NUM_ROLE, None if not isinstance(laps, int) else float(laps))
             best_item = _NumItem(fmt_time(best) if best is not None else "—")
             best_item.setData(NUM_ROLE, best)
             theo_item = _NumItem(fmt_time(theo) if theo is not None else "—")
             theo_item.setData(NUM_ROLE, theo)
 
-            items = (date_item, track_item, best_item, theo_item)
+            items = (date_item, track_item, laps_item, best_item, theo_item)
             tooltip = _entry_tooltip(e)
             for col, it in enumerate(items):
                 # Every cell hovers to the recording's file identity — the columns show only track +
