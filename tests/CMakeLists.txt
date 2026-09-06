@@ -732,8 +732,9 @@ set_tests_properties(test_corner_grid_budget PROPERTIES
 
 # LEAD-IN / LEAD-OUT (0 / 5 / 10 s) on the overlay export. The feature is one combo and four ways
 # to ship a wrong clip, so this file is organised as those four: the WINDOW and its clamps (a
-# negative t0 is invisible to guard_validate_window on the CONCAT branch, where time_offset = t0
-# makes local_t0 zero by construction — asserted here as a measurement, not as prose; and nothing
+# negative t0 asks for footage from before the recording and stamps every frame early —
+# guard_validate_window refuses it on the GLOBAL t0, the check that holds whatever a source's
+# time_offset is, asserted here as a measurement rather than as prose; and nothing
 # bounded t1 at all, so an over-long window produced a short clip and a bar stuck below 100 %); the
 # LAP through the run-up (laps are contiguous, so lap_at_time answers lap N-1 for all of it); the
 # LIVE values (speed and g are time-indexed, and gating them on lap membership would burn "— km/h"
@@ -758,4 +759,21 @@ set_tests_properties(test_export_padding PROPERTIES
 add_test(NAME test_repo_write_safety
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_repo_write_safety.py)
 set_tests_properties(test_repo_write_safety PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# THE SEAM-CROSSING branch of the overlay export's source resolution. A lap window that spans a
+# GoPro chapter boundary decodes through the concat demuxer, and its first frame out has to BE the
+# frame at t0 — frame_times stamps every burned-in overlay from t0, so a miss desyncs the numbers
+# from the picture for the whole clip. It missed: the span trimmed its first chapter with a concat
+# `inpoint` and seeked -ss 0, and `inpoint` is keyframe-granular, so the picture began up to a GOP
+# early (measured -0.956 s on D24 lap 22, at any padding, with the audio -0.977 s with it). The span now
+# declares each file's `duration` — the ONLY thing that makes a concat input seekable at all, worth
+# 1.2 s against 663 s for the same half-second of D24 picture — and takes the first chapter's
+# offset, so ffmpeg's accurate -ss lands where the single-chapter branch lands. Two synthetic 4 s
+# chapters with a 1.000 s GOP, driven through real ffmpeg: the first frame and the seam handover as
+# exact pixels, the audio start by cross-correlation, and the pre-fix `inpoint` list decoded
+# alongside as a control so the test cannot pass vacuously (~3 s).
+add_test(NAME test_export_seam
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_seam.py)
+set_tests_properties(test_export_seam PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
