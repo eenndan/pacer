@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -451,11 +451,26 @@ class _PaneCell(QWidget):
         lay.addWidget(self.strip)
         # The VIDEO carries the handle inset, not the whole cell (see the class prose). A LAYOUT,
         # not a wrapper widget: the theme's base rule paints every bare QWidget canvas-coloured.
+        #
+        # THE TWO LINES BELOW ARE IN THIS ORDER ON PURPOSE, and swapping them crashed the app.
+        # `QLayout::addWidget` delegates the move to `QLayout::addChildWidget`, which does TWO
+        # things: it pulls the widget out of whatever layout currently holds it
+        # (`removeWidgetRecursively`), and it reparents it onto `parentWidget()`. On a row that has
+        # not been mounted yet that second half CANNOT RUN — a free-standing QLayout has no
+        # parentWidget — so the call did only the first half: it silently deleted the PRIMARY
+        # pane's item out of the LIVE `_stage_lay` (measured: `indexOf(pane)` 0 -> -1,
+        # `_stage_lay.count()` 1 -> 0) and left the pane still parented to the old stage, in no
+        # layout at all, until `addLayout`'s `reparentChildWidgets` finished the move a few
+        # statements later. Qt prints nothing. Entering compare 200 times through that half-move
+        # SIGSEGVd 5 of 6 processes, inside PySide's per-type metaobject lookup, on the next
+        # `PlayerPane(...)` (S5-01); mounting the row first is 0 of 12. Adding the pane to a row
+        # that already knows its parent is one atomic, complete move — which is exactly what this
+        # line did before the row existed.
         video_row = QHBoxLayout()
         video_row.setContentsMargins(theme.SPACE_XS, 0, theme.SPACE_XS, 0)
         video_row.setSpacing(0)
-        video_row.addWidget(self.pane)
         lay.addLayout(video_row, 1)
+        video_row.addWidget(self.pane)
 
     # ------------------------------------------------------------------ the strip's width budget
     @property
@@ -493,6 +508,19 @@ class _PaneCell(QWidget):
         if self.caption.isVisibleTo(self) != shown:
             self.caption.setVisible(shown)
         self.strip.set_two_row(two_row)
+
+    def floor_width(self) -> int:
+        """The narrowest this pane can be and still SAY WHAT IT IS: the short role word beside the
+        Δ, inside the bar's own five gaps — the last rung of `apply_strip_form`'s ladder, below
+        which the role word is hidden and the pane stops identifying itself.
+
+        WIDTH-INDEPENDENT on purpose (font metrics and the badge's own hint, nothing else), which
+        `minimumSizeHint` is not: the strip's minimum SHRINKS as the cell narrows, because
+        `fit_alone` re-derives the picker's floor from `picker_room`, which is a function of the
+        cell's current width. Clamping a drag against that ratchets — measured, a pane walked down
+        to 63 px against a 187 px hint, one drag step at a time. See `VideoView._clamp_panes`."""
+        return (self._caption_w(self._role_short) + self.badge.sizeHint().width()
+                + 5 * theme.SPACE_S)
 
     def picker_room(self) -> int:
         """How much width THIS cell can give its picker — the cap that replaced a constant.
@@ -1047,6 +1075,8 @@ class VideoView(QWidget):
             # TOKEN, not the literal 8 it duplicated — the QSS draws this handle's grip from
             # theme.SPLITTER_HANDLE_PX, so a literal here is a second copy of one number.
             self._splitter.setHandleWidth(theme.SPLITTER_HANDLE_PX)
+            # setChildrenCollapsible(False) is kept for what it does say — no double-click collapse
+            # — but it does NOT carry the floor on its own here; `_clamp_panes` does. See there.
             self._splitter.setChildrenCollapsible(False)
             self._splitter.setOpaqueResize(True)
             for cell in (self._cell_a, self._cell_b):
@@ -1056,6 +1086,9 @@ class VideoView(QWidget):
             self._equalize_panes()
             # also re-pin overlays on handle drag (belt-and-braces; the native surface may not emit a Move).
             self._splitter.splitterMoved.connect(self._on_splitter_moved)
+            # ...and keep an even split even when the STAGE resizes — see eventFilter for why the
+            # hook is the splitter's own resize and not this view's.
+            self._splitter.installEventFilter(self)
 
         # Swap the stage layout to the splitter (the primary pane re-parents into _cell_a). Guarded on
         # the DERIVED mounted state so a re-seed (already two-pane) doesn't re-swap.
@@ -1193,6 +1226,70 @@ class VideoView(QWidget):
         super().resizeEvent(ev)
         self._fit_strips()   # the cells' width changed with the panel's
 
+    def eventFilter(self, obj, event):
+        """An EVEN split stays even across a resize.
+
+        `_equalize_panes` ran only on ENTRY, so from then on Qt redistributed the stage's width
+        delta by its own rules and the two panes drifted: swept at 1 px from the window's own 973
+        minimum to 1500, 30 of 528 widths left the panes 2 px apart rather than the 1 px that is
+        unavoidable arithmetic (two integers cannot sum to an odd number and be equal).
+
+        THE HOOK IS THE SPLITTER'S OWN RESIZE, not this view's. `VideoView.resizeEvent` runs before
+        the layout has given the splitter its new width, so equalizing there divides the OLD width
+        and Qt then redistributes the difference — measured, doing it there turned 30 bad widths
+        into 264 of 528. Here the splitter already has its new geometry.
+
+        Gated on the panes CURRENTLY being even, so a deliberate drag to 30/70 survives every later
+        resize (measured: 0.299 / 0.301 / 0.300 / 0.301 across 1000-1500 px). Re-equalizing
+        unconditionally would throw the user's own split away, which is a worse defect than the
+        pixel it fixes."""
+        if obj is self._splitter and event.type() == QEvent.Resize and self._panes_even():
+            self._equalize_panes()
+        return super().eventFilter(obj, event)
+
+    def _panes_even(self) -> bool:
+        """Are the two panes still on the 50/50 split the stage opens at (within the odd pixel)?
+        The question `eventFilter` asks before re-imposing it."""
+        if self._splitter is None or self._splitter.count() < 2:
+            return False
+        sizes = self._splitter.sizes()
+        return len(sizes) == 2 and abs(sizes[0] - sizes[1]) <= 1
+
+    def _clamp_panes(self) -> None:
+        """Keep a dragged pane at or above its own minimum — the floor `setChildrenCollapsible`
+        cannot carry here.
+
+        `setChildrenCollapsible(False)` refuses to collapse a child below its MINIMUM SIZE, and the
+        cells are `QSizePolicy.Ignored` (deliberately: it is what stops the native QVideoWidget's
+        aspect hint pinning the split). `qSmartMinSize` reads Ignored as "this widget has no width
+        opinion" and returns 0 before it consults anything else, so the promise was vacuous and one
+        real handle drag put a pane at 0 px — measured [253, 254] -> [507, 0] at 1440x900 — with no
+        window resize, maximize, restore or repoint bringing it back.
+
+        A CLAMP rather than `setMinimumWidth` on the cells, because a minimum propagates: pinning
+        the cells at a 199 px floor raised the video panel's minimum width from 312 to 406 and the
+        central widget's from 873 to 967, spent for a floor the user only meets at the very end of
+        a drag. The clamp costs the layout nothing — measured, the panel's minimum is the same 312
+        comparing as it is with one video — and cannot make a window un-resizable.
+
+        The floor is each cell's `floor_width` — the width at which its identity bar stops being
+        able to name the pane — and NOT its `minimumSizeHint`, which is a function of the cell's
+        current width and therefore ratchets under a drag (measured: a pane walked down to 63 px
+        against a 187 px hint). It yields when the whole stage cannot afford both floors (the panes
+        then just split what there is), so this can never demand width that does not exist."""
+        sp = self._splitter
+        if sp is None or sp.count() < 2 or self._cell_a is None or self._cell_b is None:
+            return
+        sizes = sp.sizes()
+        if len(sizes) != 2:
+            return
+        total = sizes[0] + sizes[1]
+        lo = max(self._cell_a.floor_width(), 0)
+        hi = max(self._cell_b.floor_width(), 0)
+        a = total // 2 if lo + hi > total else min(max(sizes[0], lo), total - hi)
+        if [a, total - a] != sizes:
+            sp.setSizes([a, total - a])   # setSizes does not re-emit splitterMoved: no recursion
+
     def _equalize_panes(self):
         """Split the two panes 50/50 from the splitter's live width (falls back to a [1000,1000]
         ratio before any width is known).
@@ -1217,6 +1314,7 @@ class VideoView(QWidget):
         """Re-pin BOTH g-meter overlays after a splitter-handle drag (each pane re-pins its own
         overlay to its video corner; cheap no-op when an overlay is hidden), and re-fit the strips
         for the cells' new widths."""
+        self._clamp_panes()   # first: the strips below fit to whatever width survives the clamp
         for pane in self._panes():
             pane.sync_gmeter()
         self._fit_strips()

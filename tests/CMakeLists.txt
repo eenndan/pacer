@@ -677,3 +677,18 @@ add_test(NAME test_state_surfaces
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_state_surfaces.py)
 set_tests_properties(test_state_surfaces PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# COMPARE LIFECYCLE guard (S5-01) — the compare toggle SIGSEGVd after a few dozen enter/exit
+# cycles, because _PaneCell filled a free-standing QHBoxLayout with the LIVE primary pane before
+# mounting that row: QLayout::addChildWidget then does half a move (drops the widget from its
+# current layout, cannot reparent it — a free-standing layout has no parentWidget). Two guards:
+# a deterministic AST pass over studio/video_view.py (no layout is filled before it is mounted)
+# plus the Qt behaviour it exists for, and a subprocess loop asserting a clean exit code, because
+# the fault is a SIGSEGV that no in-process assertion could survive. ~45 s: three subprocesses of
+# 600 enter/exit cycles each, which killed 5 of 6 processes on the broken build.
+# Real widgets under the real theme -> run offscreen; PACER_NO_MEDIA is set by the test itself, so
+# no footage and no session are needed.
+add_test(NAME test_compare_lifecycle
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_compare_lifecycle.py)
+set_tests_properties(test_compare_lifecycle PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
