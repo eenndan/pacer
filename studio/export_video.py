@@ -373,7 +373,15 @@ class ExportSpec:
     against. It is a VERDICT about this export rather than a layout knob, which is why it lives
     here and not on the frozen `OverlayConfig`: `build_lap_spec` resolves it once from
     `session.best_lap_id()`, and the compositor reads it every frame. See `_paint_strip` for what
-    it changes and why it has to."""
+    it changes and why it has to.
+
+    `lead_in`/`lead_out` = the run-up and run-off actually APPLIED (seconds), so `t0`/`t1` are the
+    RENDERED window and the LAP's own window is `[lap_t0, lap_t1)` inside it. They are the applied
+    amounts and not the requested ones because `lap_window_for_export` clamps the padding to the
+    footage: on the first and last laps of a recording there is less run-up/run-off to be had than
+    was asked for, and every consumer here needs the truth rather than the request. They live on
+    the spec for the same reason `is_best` does — the WINDOW is the spec's job; `OverlayConfig`
+    carries layout/output knobs."""
     out_path: str
     lap_id: int
     t0: float
@@ -382,6 +390,8 @@ class ExportSpec:
     config: OverlayConfig = field(default_factory=OverlayConfig)
     source: VideoSource | None = None
     is_best: bool = False
+    lead_in: float = 0.0
+    lead_out: float = 0.0
 
     def __post_init__(self):
         # Back-compat: a caller that passed only `src_path` (the legacy single-file API + the
@@ -392,10 +402,32 @@ class ExportSpec:
             self.source = single_file_source(self.src_path)
         elif not self.src_path:
             self.src_path = self.source.probe_path
+        # Negative padding would put the lap window OUTSIDE the rendered one; clamp rather than
+        # raise, so a bad caller degrades to "no padding" instead of failing an export.
+        self.lead_in = max(0.0, float(self.lead_in))
+        self.lead_out = max(0.0, float(self.lead_out))
 
     @property
     def duration(self) -> float:
         return max(0.0, self.t1 - self.t0)
+
+    @property
+    def lap_t0(self) -> float:
+        """Media time of the START LINE — where the rendered window begins once the lead-in is
+        taken off. Equals `t0` for an unpadded export."""
+        return self.t0 + self.lead_in
+
+    @property
+    def lap_t1(self) -> float:
+        """Media time of the FINISH LINE (half-open, like `Session.lap_window`). Equals `t1` for
+        an unpadded export."""
+        return self.t1 - self.lead_out
+
+    @property
+    def lap_duration(self) -> float:
+        """The LAP's own length — what the strip's clock counts up to, and what every Δ/lap
+        budget is measured over. Not `duration`, which is the whole rendered clip."""
+        return max(0.0, self.lap_t1 - self.lap_t0)
 
     @property
     def local_t0(self) -> float:
@@ -405,16 +437,64 @@ class ExportSpec:
 
 
 # --------------------------------------------------------------------------- trim math
-def lap_window_for_export(session, lap_id: int) -> tuple[float, float] | None:
-    """The MEDIA-clock (t0, t1) window for `lap_id` (== Session.lap_window: start, start+lap_time),
-    or None if unusable. Half-open, so every frame in [t0, t1) reports this lap."""
+def footage_duration(session) -> float | None:
+    """The FOOTAGE's total length on the global media clock, or None when the session cannot state
+    one (no `ChapterMap` — the single-file and duck-typed sessions).
+
+    Deliberately NOT `session.tt[-1]`: `load._clean` trims the stationary lead-in and the cool-down
+    out of the TELEMETRY, so the trace spans strictly less time than the video does. Bounding a
+    lead-in by the telemetry would refuse run-up footage that plainly exists — the footage bound is
+    the chapter table's own cumulative duration."""
+    chapter_map = getattr(session, "chapters", None)
+    total = getattr(chapter_map, "total_duration", None) if chapter_map is not None else None
+    try:
+        total = float(total)
+    except (TypeError, ValueError):
+        return None
+    return total if total > 0 else None
+
+
+def lap_window_for_export(session, lap_id: int, lead_in: float = 0.0,
+                          lead_out: float = 0.0) -> tuple[float, float] | None:
+    """The MEDIA-clock (t0, t1) window to RENDER for `lap_id`: the lap's own window
+    (== Session.lap_window: start, start+lap_time) widened by `lead_in` seconds of run-up and
+    `lead_out` of run-off, clamped to the footage. None if the lap window itself is unusable.
+    Unpadded (the default) this is exactly `Session.lap_window`, unchanged.
+
+    THE PADDING HAPPENS IN THIS FUNNEL, and it happens BEFORE `resolve_video_source` ever sees the
+    window. Source resolution is what picks the chapter file, the concat span and the first
+    chapter's `inpoint`, so a lead-in that reaches back across a chapter seam has to widen the
+    window first or it resolves against the wrong file. Both callers (`build_lap_spec` and app.py's
+    pre-flight check) come through here, which is what keeps the app's guard and the spec build
+    describing the same window.
+
+    THE CLAMPS ARE NOT COSMETIC — each one is a wrong clip that would otherwise ship:
+
+      * a negative `t0` is silently wrong rather than loudly wrong. `guard_validate_window` refuses
+        a negative source-LOCAL t0, but only on the single-chapter branch; on the CONCAT branch
+        `resolve_video_source` sets `time_offset = t0`, so `local_t0` computes to 0, the guard
+        passes, ffmpeg decodes from global 0 and every frame is stamped |t0| seconds early — the
+        overlay and the picture desynced for the entire clip.
+      * there is no upper bound anywhere else. A `t1` past the end of the footage makes
+        `frame_times` size the render for frames that do not exist; the decoder's short read is
+        treated by `run_chunk` as a clean finish (`produced > 0`), so the export "succeeds" with a
+        clip shorter than asked for and a progress bar that stops before 100 %.
+
+    Neither clamp can shrink the LAP: they only take back padding that ran off the end of the
+    recording, so the first and last laps of a session export with as much run-up/run-off as
+    exists and no less of the lap."""
     win = session.lap_window(lap_id)
     if win is None:
         return None
-    t0, t1 = win
-    if not (t1 > t0):
+    lap_t0, lap_t1 = float(win[0]), float(win[1])
+    if not (lap_t1 > lap_t0):
         return None
-    return float(t0), float(t1)
+    t0 = min(lap_t0, max(0.0, lap_t0 - max(0.0, float(lead_in))))
+    t1 = lap_t1 + max(0.0, float(lead_out))
+    total = footage_duration(session)
+    if total is not None:
+        t1 = max(lap_t1, min(t1, total))
+    return t0, t1
 
 
 def frame_times(t0: float, t1: float, fps: float) -> np.ndarray:
@@ -443,20 +523,36 @@ def resolve_fps(cfg: OverlayConfig, src_fps: float) -> float:
 
 
 # --------------------------------------------------------------------------- per-frame values
+# A lap window is half-open, so the finish instant itself is not IN the lap. The lap clock is
+# clamped a hair short of it when a lead-out freezes the clock/Δ at their final values, rather than
+# asking `delta_at_lap` for a time the lap does not contain.
+_LAP_CLOCK_EPS = 1e-3
+
+
 @dataclass
 class OverlayValues:
     """The telemetry values shown for ONE frame at media time `t` — exactly what the live readout
-    shows at t (so a frame grab can be cross-checked against the app). `speed_kmh`/`delta_s` are
-    None outside a valid lap; `g` is None when there's no IMU signal."""
+    shows at t (so a frame grab can be cross-checked against the app). `speed_kmh` is None only
+    when there is no trace; `delta_s` is None before the start line; `g` is None when there's no
+    IMU signal.
+
+    `lap_started`/`lap_finished` place the frame against the EXPORTED lap. They matter only for a
+    padded export, and they default to "the lap is running" so an unpadded frame is described
+    exactly as it always was. Everything LAP-scoped (the clock, the progress fill, the Δ, the
+    g-envelope) is gated on them; everything TIME-scoped (the speed, the g dot, the map marker) is
+    not, because those are valid at any media time and blanking them over footage where the kart is
+    plainly doing 88 would be a lie."""
     t: float
     lap_id: int | None
     speed_kmh: float | None
     delta_s: float | None
     g: tuple[float, float, float] | None
     marker_index: int | None
+    lap_started: bool = True
+    lap_finished: bool = False
 
 
-def overlay_values_at(session, t: float) -> OverlayValues:
+def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> OverlayValues:
     """Resolve the overlay values at media time `t` the SAME way app._apply_readout does:
 
       * lap        = session.lap_at_time(t)
@@ -466,13 +562,33 @@ def overlay_values_at(session, t: float) -> OverlayValues:
       * g          = session.g_at_time(t)            (kart-frame lat/long/total in g)
 
     Single-sourcing these here keeps the burned-in numbers identical to the app's, and makes the
-    per-frame lookup unit-testable against a synthetic Session (no Qt, no ffmpeg)."""
-    lap_id = session.lap_at_time(t)
+    per-frame lookup unit-testable against a synthetic Session (no Qt, no ffmpeg).
+
+    WITH A `spec`, THE LAP IS THE EXPORTED ONE — resolved from `spec.lap_id`, never from
+    `lap_at_time(t)`. That is not a shortcut, it is the whole correctness of a padded export: laps
+    are CONTIGUOUS, so every frame of a lead-in sits inside lap N−1 and `lap_at_time` answers N−1
+    for all of it. Left alone the strip would read `LAP 11  1:02.4` under a nearly-full progress
+    bar and then snap to `LAP 12  0:00.0`, and `delta_at_lap` would hand back the wrong lap's
+    baseline. The clip is of lap N; it says lap N throughout, marked pending until the line.
+
+    The lap CLOCK is clamped into the lap, so a lead-out freezes the Δ at the gap the lap actually
+    finished on rather than extrapolating past the flag. Speed, marker and g are read at the real
+    `t` — `index_at_time` and `gmeter.at_time` both clamp and never return None, so they are valid
+    outside the lap and are the reason the padding shows live footage with live numbers."""
+    if spec is None:
+        lap_id = session.lap_at_time(t)
+        started, finished, clock_t = lap_id is not None, False, t
+    else:
+        lap_id = spec.lap_id
+        started = t >= spec.lap_t0 - 1e-9
+        finished = t >= spec.lap_t1
+        clock_t = min(max(t, spec.lap_t0), max(spec.lap_t0, spec.lap_t1 - _LAP_CLOCK_EPS))
     i = session.index_at_time(t)
     speed = float(session.tv[i]) if i is not None and len(session.tv) else None
-    delta = session.delta_at_lap(lap_id, t) if lap_id is not None else None
+    delta = session.delta_at_lap(lap_id, clock_t) if (lap_id is not None and started) else None
     g = session.g_at_time(t) if getattr(session, "has_gmeter", False) else None
-    return OverlayValues(t=t, lap_id=lap_id, speed_kmh=speed, delta_s=delta, g=g, marker_index=i)
+    return OverlayValues(t=t, lap_id=lap_id, speed_kmh=speed, delta_s=delta, g=g, marker_index=i,
+                         lap_started=started, lap_finished=finished)
 
 
 # --------------------------------------------------------------------------- ffmpeg commands
@@ -601,9 +717,17 @@ def guard_validate_window(spec: ExportSpec) -> None:
 
     Raises ValueError when:
       * the window is empty (duration <= 0), or
+      * the GLOBAL t0 is negative (a window that starts before the recording), or
       * the source-LOCAL seek time is negative (a window before the source's start), or
       * the source-LOCAL seek time lands at/after the probed source duration (with a small
         epsilon) — i.e. the seek is past the end of the file(s), which decodes nothing.
+
+    THE GLOBAL CHECK EXISTS BECAUSE THE LOCAL ONE CANNOT SEE THE CONCAT BRANCH. There, and only
+    there, `resolve_video_source` sets `time_offset = t0`, so `local_t0` is 0 BY CONSTRUCTION for
+    any t0 whatsoever — a negative global t0 sails through the local test, ffmpeg decodes from
+    global 0, and every frame of the clip is stamped |t0| seconds early. `lap_window_for_export`
+    clamps the padded window so this cannot arise; this is the backstop for a caller that builds a
+    spec by hand.
 
     The duration check is skipped silently if ffprobe couldn't read a duration (we don't block a
     render on an unreadable probe). This is a FAST, message-bearing failure — distinct from the
@@ -611,6 +735,10 @@ def guard_validate_window(spec: ExportSpec) -> None:
     if spec.duration <= 0:
         raise ValueError(
             f"export window is empty (t0={spec.t0:.3f}, t1={spec.t1:.3f}); nothing to render")
+    if spec.t0 < -1e-3:
+        raise ValueError(
+            f"export window starts before the recording (t0={spec.t0:.3f}s < 0) — a lead-in was "
+            f"not clamped to the footage; every frame would be stamped {abs(spec.t0):.3f}s early")
     local = spec.local_t0
     if local < -1e-3:
         raise ValueError(
@@ -946,6 +1074,13 @@ _DELTA_BUDGET_SAMPLES = 128
 # export's own QPainterPath.addText path, not by asking the font.
 _BEST_MARK = "★ BEST"
 
+# What the strip's clock reads before the START LINE, on an export with a lead-in. Rendered through
+# `fmt_time` on a non-finite time rather than typed out, because the em dash for "no value yet" is
+# already this codebase's convention (`fmt_time`, `theme.speed_number`, `format_delta_value`) and a
+# second spelling of it here would be a second convention. A frozen `0:00.000` was the alternative
+# and reads as a broken clock; this reads as a lap that has not started, which is what it is.
+_PENDING_TIME = fmt_time(float("nan"))
+
 
 def readout_pill_width(pill_h: float, speed_texts, unit_label: str) -> float:
     """The bottom-left readout pill's width at pill height `pill_h`: the padding, the widest hero
@@ -997,11 +1132,16 @@ def _speed_text_candidates(session, spec: ExportSpec) -> tuple[str, ...]:
 
 
 def _strip_label_candidates(spec: ExportSpec) -> tuple[str, ...]:
-    """The two ends of the strip's "LAP n   m:ss.mmm" run. The lap number is fixed for an export
-    and the elapsed time runs from zero to the lap's own duration, so these two bracket every
-    string in between (with tabular figures, width follows the character count)."""
+    """The ends of the strip's "LAP n   m:ss.mmm" run. The lap number is fixed for an export and
+    the elapsed time runs from zero to the LAP's own duration (`lap_duration`, not the padded clip
+    length — the clock counts the lap), so those two bracket every string in between (with tabular
+    figures, width follows the character count). An export with a lead-in can also show the pending
+    clock, which is measured rather than assumed to be narrower."""
     lap = f"LAP {lap_label(spec.lap_id)}"
-    return (f"{lap}   {fmt_time(0.0)}", f"{lap}   {fmt_time(spec.duration)}")
+    ends = [f"{lap}   {fmt_time(0.0)}", f"{lap}   {fmt_time(spec.lap_duration)}"]
+    if spec.lead_in > 0:
+        ends.append(f"{lap}   {_PENDING_TIME}")
+    return tuple(ends)
 
 
 def _strip_tail_candidates(session, spec: ExportSpec) -> tuple[str, ...]:
@@ -1021,12 +1161,16 @@ def _peak_abs_delta(session, spec: ExportSpec) -> float:
     budgeted for the lap's real range. A Δ curve is an integral of pace, so it has no spikes to
     miss: 128 samples resolve the digit-count boundary comfortably on a lap-length window. The
     accessor is the SAME one the per-frame lookup uses (`overlay_values_at`), so a session this
-    cannot read is a session the render could not have painted either."""
+    cannot read is a session the render could not have painted either.
+
+    Sampled across the LAP, not the padded clip: the Δ is only drawn between the lines, and asking
+    `delta_at_lap` about a time the lap does not contain would budget for a number this export can
+    never burn."""
     getter = getattr(session, "delta_at_lap", None)
-    if not callable(getter) or spec.duration <= 0:
+    if not callable(getter) or spec.lap_duration <= 0:
         return _DELTA_BUDGET_FALLBACK
     peak = 0.0
-    for t in np.linspace(spec.t0, spec.t1, _DELTA_BUDGET_SAMPLES, endpoint=False):
+    for t in np.linspace(spec.lap_t0, spec.lap_t1, _DELTA_BUDGET_SAMPLES, endpoint=False):
         d = getter(spec.lap_id, float(t))
         if d is not None and np.isfinite(d):
             peak = max(peak, abs(float(d)))
@@ -1098,7 +1242,14 @@ def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: flo
 
     THE Δ LIVES HERE, after the elapsed time, because that is the section it belongs to: it is a
     time measurement, not a speed one. `palette` picks the vivid green/red vs blue/orange hue axis;
-    `is_best` replaces it with the `★ BEST` mark (see `strip_tail`, which owns both decisions)."""
+    `is_best` replaces it with the `★ BEST` mark (see `strip_tail`, which owns both decisions).
+
+    EVERYTHING IN THIS STRIP IS LAP-SCOPED, so a padded export gates all of it on
+    `vals.lap_started`: through the lead-in the strip names the EXPORTED lap with a pending clock,
+    an empty fill and no Δ — the lap has not begun, and a clock counting a lap that has not started
+    would be a made-up number. The clock is clamped INTO the lap at both ends, so a lead-out holds
+    the finishing time and the finishing Δ rather than running on past the flag. `t0` is the LAP's
+    start, used only when the session cannot supply a lap window."""
     k = box.height() / 44.0
     p.setBrush(_c(EXPORT.halo, 165))
     p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
@@ -1108,19 +1259,25 @@ def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: flo
     win = session.lap_window(vals.lap_id)
     if win is not None:
         ls, le = win
-        frac = 0.0 if le <= ls else max(0.0, min(1.0, (vals.t - ls) / (le - ls)))
-        elapsed = max(0.0, vals.t - ls)
+        span = le - ls
+        # Clamped into [0, span]: identical to the unclamped form for every frame BETWEEN the
+        # lines, and the difference is exactly what stops a lead-out's clock overrunning the lap.
+        elapsed = 0.0 if span <= 0 else min(max(vals.t - ls, 0.0), span)
+        frac = 0.0 if span <= 0 else elapsed / span
     else:
         frac = 0.0
         elapsed = max(0.0, vals.t - t0)
-    label = f"LAP {lap_label(vals.lap_id)}   {fmt_time(elapsed)}"
+    clock = fmt_time(elapsed) if vals.lap_started else _PENDING_TIME
+    label = f"LAP {lap_label(vals.lap_id)}   {clock}"
     font = _font(box.height() * 0.54, bold=True)
     inner = box.adjusted(box.height() * _STRIP_PAD_L_FRAC, 0,
                          -box.height() * _STRIP_PAD_R_FRAC, 0)
     # Measured before anything is drawn, because the Δ's position decides where the progress
     # fill's TRACK ends. The Δ is placed by accumulating the label's advance — the same
     # tabular-figures guarantee the readout relies on, so it cannot slide as the clock ticks.
-    tail, colour = strip_tail(vals.delta_s, is_best, palette)
+    # Before the line there is no Δ and no `★ BEST` verdict to state: both are claims about a lap
+    # that has not been driven yet.
+    tail, colour = strip_tail(vals.delta_s, is_best, palette) if vals.lap_started else ("", "")
     tail_x = inner.x() + QFontMetricsF(font).horizontalAdvance(label) + _RUN_GAP_K * k
     # THE FILL'S TRACK IS THE CLOCK'S SECTION, NOT THE WHOLE PILL. It ends midway through the gap
     # before the Δ, and that is a legibility requirement rather than a taste: measured on the
@@ -1191,20 +1348,58 @@ class OverlayPainter:
         _src = session.gmeter_source() if hasattr(session, "gmeter_source") else "accl"
         _long = session.gmeter_long_source() if hasattr(session, "gmeter_long_source") else None
         self._dial.set_source(_src, _long)
+        # --- lap-scoped envelope bookkeeping (see feed_g / advance_and_snapshot) ---
+        self._fed_before_line = False        # g was pushed while the lap was still pending
+        self._crossed_line = False           # the start line has been reached
+        self._lap_end_state = None           # the dial state at the last frame INSIDE the lap
 
     def feed_g(self, vals: OverlayValues) -> None:
         """Advance the headless g-meter dial by one tick with this frame's lap + g — the same
         order app._apply_readout feeds it (set_gmeter_lap then set_g), so the envelope resets on
-        the lap boundary and the EMA dot tracks identically to the live meter."""
-        if vals.lap_id is not None:
+        the lap boundary and the EMA dot tracks identically to the live meter.
+
+        THE ENVELOPE HAS TO BE RESET AT THE START LINE, EXPLICITLY. `GMeterOverlay.set_lap` resets
+        it only when it is already holding a lap (`self._lap is not None`) — a deliberate rule for
+        the live meter, where None means "between laps, keep what you have". In a padded export
+        that rule bakes the run-up into the lap's peaks: the lead-in is fed `set_g` (the dot must
+        stay live over footage the kart is plainly driving), so its g accumulates into the hull,
+        and the one `set_lap` at the line then finds `self._lap is None` and skips the reset. The
+        peaks the clip burns for the lap would include the braking that happened before it."""
+        if vals.lap_started and not self._crossed_line:
+            self._crossed_line = True
+            if self._fed_before_line:
+                self._dial.reset_envelope()   # drop the run-up's hull/peaks; re-seed the dot EMA
+        if vals.lap_started:
             self._dial.set_lap(vals.lap_id)
+        else:
+            self._fed_before_line = True
         self._dial.set_g(vals.g)
 
     def advance_and_snapshot(self, vals: OverlayValues):
         """Advance the dial one tick (order-dependent: EMA/envelope accumulate) and return an
-        immutable `DialState` snapshot."""
+        immutable `DialState` snapshot.
+
+        THE ENVELOPE PAINTED IS THE EXPORTED LAP'S, and only its: empty before the start line,
+        live between the lines, and FROZEN at the finish. The dot is never gated — it is the live
+        signal at this media time, and the padding exists to show live footage.
+
+        The freeze is the same honesty argument as the reset. The dial's four cardinal numbers are
+        read as "the peak g of this lap"; a 10 s run-off is where you brake hardest and turn into
+        the pit lane, and letting that grow the numbers would end the clip on a peak the lap never
+        produced. Frozen, the peaks are identical at every frame from the line onward whether the
+        export carries 0 s of padding or 10 s."""
         self.feed_g(vals)
-        return self._dial._dial_state()
+        st = self._dial._dial_state()
+        if not vals.lap_started:
+            return replace(st, hull_pts=[], peak_fwd=0.0, peak_back=0.0,
+                           peak_left=0.0, peak_right=0.0)
+        if vals.lap_finished and self._lap_end_state is not None:
+            end = self._lap_end_state
+            return replace(st, hull_pts=end.hull_pts, peak_fwd=end.peak_fwd,
+                           peak_back=end.peak_back, peak_left=end.peak_left,
+                           peak_right=end.peak_right)
+        self._lap_end_state = st
+        return st
 
     def paint_frame_with_state(self, img: QImage, vals: OverlayValues, dial_state) -> None:
         """Paint all overlay elements onto `img` (an RGB frame at the output size) from a precomputed
@@ -1223,7 +1418,9 @@ class OverlayPainter:
         p.restore()
         self._map.paint(p, vals.marker_index)
         _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
-        _paint_strip(p, self._strip_rect, self._session, vals, self._spec.t0,
+        # The strip's fallback elapsed origin is the LAP's start, not the clip's — with a lead-in
+        # those differ, and a session with no lap window would otherwise count the run-up.
+        _paint_strip(p, self._strip_rect, self._session, vals, self._spec.lap_t0,
                      self._spec.config.palette, self._spec.is_best)
         p.end()
 
@@ -1415,7 +1612,7 @@ class Renderer:
                         "the video export produced no frames — the source/lap window may be "
                         "invalid (it does not map onto any footage). Nothing was written.")
                 return True
-            vals = overlay_values_at(self._session, float(self._times[self._i]))
+            vals = overlay_values_at(self._session, float(self._times[self._i]), self._spec)
             dial = self._painter.advance_and_snapshot(vals)
             try:
                 stdin.write(self._paint_packed(raw, vals, dial))
@@ -1615,7 +1812,8 @@ class Renderer:
 
 def build_lap_spec(session, out_path: str, lap_id: int,
                    config: OverlayConfig | None = None,
-                   src_path: str | None = None) -> ExportSpec:
+                   src_path: str | None = None,
+                   lead_in: float = 0.0, lead_out: float = 0.0) -> ExportSpec:
     """Build the `ExportSpec` for `lap_id`, resolving the VIDEO SOURCE from the session's chapters.
     Raises ValueError if the lap has no usable window. Source:
       * `session.chapters` (a ChapterMap) present -> resolve_video_source (single chapter or a concat
@@ -1629,11 +1827,19 @@ def build_lap_spec(session, out_path: str, lap_id: int,
     itself, with nothing in frame saying so. Resolved here, at the one place a lap becomes an
     export, rather than at paint time: a per-frame `best_lap_id()` would be the same answer a
     thousand times over. A session that does not expose the accessor (the duck-typed ones the
-    tests use) simply gets `False` — the Δ, exactly as before."""
-    win = lap_window_for_export(session, lap_id)
-    if win is None:
+    tests use) simply gets `False` — the Δ, exactly as before.
+
+    `lead_in`/`lead_out` widen the RENDERED window by that many seconds of run-up and run-off. They
+    are applied here, in `lap_window_for_export`, BEFORE the source is resolved — a lead-in that
+    reaches back over a chapter seam has to be part of the window the concat span is chosen from.
+    What lands on the spec is what the footage could actually give (the funnel clamps at the
+    recording's edges), which is why the applied amounts are re-derived from the two windows rather
+    than copied from the arguments."""
+    lap_win = lap_window_for_export(session, lap_id)
+    if lap_win is None:
         raise ValueError(f"lap {lap_id} has no usable export window")
-    t0, t1 = win
+    lap_t0, lap_t1 = lap_win
+    t0, t1 = lap_window_for_export(session, lap_id, lead_in, lead_out)   # never None here
     chapter_map = getattr(session, "chapters", None)
     if chapter_map is not None and getattr(chapter_map, "chapters", None):
         source = resolve_video_source(chapter_map, t0, t1)
@@ -1646,16 +1852,19 @@ def build_lap_spec(session, out_path: str, lap_id: int,
     best_id = best() if callable(best) else None
     return ExportSpec(out_path=out_path, lap_id=lap_id, t0=t0, t1=t1,
                       source=source, config=config or OverlayConfig(),
-                      is_best=best_id is not None and int(best_id) == int(lap_id))
+                      is_best=best_id is not None and int(best_id) == int(lap_id),
+                      lead_in=lap_t0 - t0, lead_out=t1 - lap_t1)
 
 
 def render_lap(session, src_path: str, out_path: str, lap_id: int,
                config: OverlayConfig | None = None,
-               progress=None, cancel=None) -> RenderResult:
+               progress=None, cancel=None,
+               lead_in: float = 0.0, lead_out: float = 0.0) -> RenderResult:
     """Build the lap spec and render to completion (headless/tests). Raises ValueError if the lap
     window is unusable; `src_path` is the fallback single-file source when the session has no
-    ChapterMap."""
-    spec = build_lap_spec(session, out_path, lap_id, config=config, src_path=src_path)
+    ChapterMap. `lead_in`/`lead_out` add run-up/run-off seconds (see `lap_window_for_export`)."""
+    spec = build_lap_spec(session, out_path, lap_id, config=config, src_path=src_path,
+                          lead_in=lead_in, lead_out=lead_out)
     try:
         return Renderer(session, spec).run(progress=progress, cancel=cancel)
     finally:

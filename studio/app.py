@@ -9,6 +9,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 from PySide6.QtCore import QBuffer, QEvent, QIODevice, QRect, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
@@ -83,6 +84,18 @@ LOAD_PLACEHOLDER_MS = 400
 # export grab can put a widget back EXACTLY as it was instead of inventing state on it
 # (_grab_report_map_png).
 _ABSENT = object()
+
+
+class ExportChoice(NamedTuple):
+    """What the overlay-video options picker returns (None on cancel): the overlay `config` and
+    `lead`, the seconds of run-up/run-off to add at each end of the lap.
+
+    `lead` is deliberately NOT folded into `config`. An `OverlayConfig` carries layout and output
+    knobs — resolution, quality, unit, palette — while the padding decides the export's WINDOW,
+    which `export_video.build_lap_spec` has to widen before it can even resolve which chapter
+    file(s) the clip comes from. Two different jobs, two different values."""
+    config: object
+    lead: float
 # The two "a file on disk exists and this build could not use it" notices, module-level because the
 # tests assert them against the branch that raises them rather than against a re-typed literal.
 #
@@ -2817,11 +2830,20 @@ class StudioWindow(QMainWindow):
     _EXPORT_QUALITY_OPTIONS = [
         ("High — larger file", "high"), ("Standard — smaller file", "standard"),
     ]
-    # The picker's two choices persist across relaunches like every other UI choice (the unit, the
-    # palette, the lap-panel tab). Kept as call-site keys on prefs' generic get/set: the pair means
+    # Run-up / run-off: the same number of seconds of footage before the start line and after the
+    # finish, so a clip does not begin and end on a hard cut at the timing line. It is one choice
+    # rather than two because it is one thing — "give the lap some room" — and the value goes to
+    # export_video.build_lap_spec, which widens the window BEFORE the video source is resolved.
+    _EXPORT_LEAD_OPTIONS = [
+        ("None — cut on the timing line", 0.0), ("5 s before and after", 5.0),
+        ("10 s before and after", 10.0),
+    ]
+    # The picker's three choices persist across relaunches like every other UI choice (the unit, the
+    # palette, the lap-panel tab). Kept as call-site keys on prefs' generic get/set: they mean
     # nothing outside this dialog, and prefs.py is a store, not a registry of every screen's state.
     _PREF_EXPORT_RES = "export_res_idx"
     _PREF_EXPORT_QUALITY = "export_quality_idx"
+    _PREF_EXPORT_LEAD = "export_lead_idx"
 
     # SIZE ESTIMATE. The dialog sells a file-size trade-off ("larger file" / "smaller file"), so it
     # has to put a number on it — the two presets really are ~3x apart. The estimate is derived per
@@ -2847,14 +2869,34 @@ class StudioWindow(QMainWindow):
             return default
         return value if isinstance(value, int) and 0 <= value < count else default
 
-    def _remember_export_prefs(self, res_idx: int, quality_idx: int) -> None:
-        """Persist the picker's two choices. Fully guarded, like set_last_dir: remembering a
+    def _remember_export_prefs(self, res_idx: int, quality_idx: int, lead_idx: int) -> None:
+        """Persist the picker's three choices. Fully guarded, like set_last_dir: remembering a
         preference must never disrupt an export the user has already confirmed."""
         try:
             prefs.set(self._PREF_EXPORT_RES, int(res_idx))
             prefs.set(self._PREF_EXPORT_QUALITY, int(quality_idx))
+            prefs.set(self._PREF_EXPORT_LEAD, int(lead_idx))
         except OSError as exc:
             print(f"studio: export preset not remembered ({exc!r}).", flush=True)
+
+    def _export_clip_seconds(self, lap: int, lead: float) -> float:
+        """How long the exported CLIP is for `lap` with `lead` seconds of run-up and run-off —
+        measured through `export_video.lap_window_for_export`, the same funnel the render resolves
+        its window with, so the dialog's estimate can never describe a different clip than the one
+        that gets rendered.
+
+        That matters most where the padding cannot be honoured: on the first and last lap of a
+        recording the funnel clamps to the footage, and `lap_time + 2 * lead` would then promise
+        seconds of run-up that do not exist. NaN when the lap has no usable window (the size hint
+        then says nothing at all, which is its contract)."""
+        session = getattr(self, "session", None)
+        if session is None:
+            return float("nan")
+        try:
+            win = export_video.lap_window_for_export(session, lap, lead_in=lead, lead_out=lead)
+        except Exception:  # noqa: BLE001 — a hint must never take down the dialog it annotates
+            return float("nan")
+        return (win[1] - win[0]) if win is not None else float("nan")
 
     def _export_size_hint(self, dur: float, out_height: int, quality: str) -> str:
         """The second line of the picker's hint: about how big this export lands, how many frames
@@ -2878,8 +2920,9 @@ class StudioWindow(QMainWindow):
                 f"with {encoder}. Real size follows how much the footage moves.")
 
     def _ask_export_options(self, lap: int):
-        """Modal resolution + quality picker returning an export_video.OverlayConfig, or None on
-        cancel. Both choices persist across relaunches (prefs), like the unit and the palette."""
+        """Modal resolution + quality + run-up/run-off picker returning an `ExportChoice`, or None
+        on cancel. All three choices persist across relaunches (prefs), like the unit and the
+        palette."""
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Export overlay video — lap {lap_label(lap)}")
         dlg.setMinimumWidth(400)
@@ -2929,8 +2972,14 @@ class StudioWindow(QMainWindow):
             q_combo.addItem(label)
         q_combo.setCurrentIndex(                                          # default High
             self._export_pref_index(self._PREF_EXPORT_QUALITY, 0, len(self._EXPORT_QUALITY_OPTIONS)))
+        lead_combo = QComboBox(dlg)
+        for label, _s in self._EXPORT_LEAD_OPTIONS:
+            lead_combo.addItem(label)
+        lead_combo.setCurrentIndex(                                       # default None
+            self._export_pref_index(self._PREF_EXPORT_LEAD, 0, len(self._EXPORT_LEAD_OPTIONS)))
         form.addRow("Resolution", res_combo)
         form.addRow("Quality", q_combo)
+        form.addRow("Run-up / run-off", lead_combo)
         col.addLayout(form)
 
         # States the target height + never-upscale rule (no ffprobe here; matches output_size()),
@@ -2947,17 +2996,28 @@ class StudioWindow(QMainWindow):
         def _update_hint():
             h = self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1]
             quality = self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1]
+            lead = self._EXPORT_LEAD_OPTIONS[lead_combo.currentIndex()][1]
             if h >= 99999:
                 lines = ["Output: source resolution (never upscaled) — size follows your footage."]
             else:
                 lines = [f"Output: up to {h}p tall, source aspect — never upscaled past source."]
-            size = self._export_size_hint(dur, h, quality)
+            # The clip's REAL length, through the exporter's own funnel, so the megabytes and the
+            # frame count below are the ones this export will actually render — and so the run-up
+            # a recording cannot give (the first lap, the last lap) is reported as what remains
+            # rather than as what was asked for.
+            clip = self._export_clip_seconds(lap, lead)
+            if lead and clip > 0 and math.isfinite(dur):
+                lines.append(f"Clip: {fmt_time(clip)} — the lap plus {clip - dur:.1f} s of "
+                             "footage around it.")
+            size = self._export_size_hint(clip, h, quality)
             if size:
                 lines.append(size)
             hint.setText("  ".join(lines))
-        # BOTH combos, not just Resolution: the quality choice is the one the copy sells hardest.
+        # ALL THREE combos: the quality choice is the one the copy sells hardest, and the run-up
+        # changes both numbers in the size line by changing how long the clip is.
         res_combo.currentIndexChanged.connect(_update_hint)
         q_combo.currentIndexChanged.connect(_update_hint)
+        lead_combo.currentIndexChanged.connect(_update_hint)
         _update_hint()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dlg)
@@ -2968,15 +3028,18 @@ class StudioWindow(QMainWindow):
         if dlg.exec() != QDialog.Accepted:
             return None
         ri, qi = res_combo.currentIndex(), q_combo.currentIndex()
-        self._remember_export_prefs(ri, qi)   # survives this window, and the relaunch
+        li = lead_combo.currentIndex()
+        self._remember_export_prefs(ri, qi, li)   # survives this window, and the relaunch
         out_height = self._EXPORT_RES_OPTIONS[ri][1]
         quality = self._EXPORT_QUALITY_OPTIONS[qi][1]
         # Burn the current display unit + semantic palette into the overlay so the export matches the
         # on-screen readout (incl. the colour-blind Δ hue axis — the exported clip is the shared
         # artifact, so it must follow the user's colour-blind choice, not stay red/green).
-        return export_video.OverlayConfig(out_height=out_height, quality=quality,
-                                          speed_unit=self._speed_unit,
-                                          palette=theme.active_palette())
+        return ExportChoice(
+            config=export_video.OverlayConfig(out_height=out_height, quality=quality,
+                                              speed_unit=self._speed_unit,
+                                              palette=theme.active_palette()),
+            lead=self._EXPORT_LEAD_OPTIONS[li][1])
 
     def _confirm_provisional_video(self) -> bool:
         """Ask before burning a PROVISIONAL lap time into an MP4. The overlay export is the app's
@@ -3035,18 +3098,22 @@ class StudioWindow(QMainWindow):
         if self._share_card_blocked() and not self._confirm_provisional_video():
             self.statusBar().showMessage("video export cancelled", STATUS_MS)
             return
-        # Pick resolution + quality FIRST (so a cancel here writes nothing), then the save path.
-        config = self._ask_export_options(lap)
-        if config is None:
+        # Pick resolution + quality + run-up FIRST (so a cancel here writes nothing), then the
+        # save path.
+        choice = self._ask_export_options(lap)
+        if choice is None:
             return
         out = self._export_save_path(f"Export overlay video — lap {lap_label(lap)}",
                                      f"_lap{lap_label(lap)}_overlay.mp4", "MP4 video (*.mp4)")
         if not out:
             return
-        # Resolve the lap window to its chapter file(s) + local seek; refuses a bad window with a
-        # ValueError rather than launching a doomed ffmpeg.
+        # Resolve the (run-up widened) lap window to its chapter file(s) + local seek; refuses a bad
+        # window with a ValueError rather than launching a doomed ffmpeg. The padding goes through
+        # build_lap_spec rather than being applied here, because the window has to be widened
+        # BEFORE the video source is resolved — a lead-in can reach back over a chapter seam.
         try:
-            spec = export_video.build_lap_spec(self.session, out, lap, config=config)
+            spec = export_video.build_lap_spec(self.session, out, lap, config=choice.config,
+                                               lead_in=choice.lead, lead_out=choice.lead)
         except ValueError as exc:
             QMessageBox.warning(self, self._EXPORT_FAIL_TITLE,
                                 f"{APP_NAME} can't export this lap:\n{exc}")
