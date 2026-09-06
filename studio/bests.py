@@ -1,6 +1,7 @@
 """Bests (F1): the session-summary "best" cluster extracted from Session — the headline best
-lap, the per-column session-best splits (the purple cells), the theoretical best (their sum),
-and the best rolling lap. numpy-only (no pacer core).
+lap, the per-column session-best splits (the purple cells), the theoretical best (the ideal lap,
+delegated to the corner-partition composite), and the best rolling lap. numpy-only (no pacer
+core).
 
 DEPENDENCY INJECTION (like studio/render_cache.py + corner_model/driving_channels): the
 constructor takes Session-bound callables over Session's own primitives, so NO method here
@@ -54,7 +55,10 @@ class Bests:
     `valid_lap_ids` / `lap_has_dropout` are the memoized lap-set accessors; `lap_time` is the
     per-lap time (reads Session's pacer `laps.lap_time`); `lap_sector_splits` the per-lap split
     columns; `sector_line_count` the number of sector lines; `lap_columns` the per-lap array
-    fetch. `best_cache_get` / `best_cache_set` read/write Session's `_best_cache` memo slot and
+    fetch; `ideal_total` the corner-partition ideal lap time that `theoretical_best` IS
+    (Session.ideal_total → the corner service's segment composite — INJECTED rather than
+    recomputed here, so the hero readout and the lap-table footer can never disagree).
+    `best_cache_get` / `best_cache_set` read/write Session's `_best_cache` memo slot and
     `unset` is Session's "not computed" sentinel (None is a legal cached "no best lap")."""
 
     def __init__(self, *,
@@ -64,6 +68,7 @@ class Bests:
                  lap_sector_splits: Callable[[int], list[float]],
                  sector_line_count: Callable[[], int],
                  lap_columns: Callable[[int], tuple],
+                 ideal_total: Callable[[], float | None],
                  best_cache_get: Callable[[], object],
                  best_cache_set: Callable[[object], None],
                  unset: object):
@@ -73,6 +78,7 @@ class Bests:
         self._lap_sector_splits = lap_sector_splits
         self._sector_line_count = sector_line_count
         self._lap_columns = lap_columns
+        self._ideal_total = ideal_total
         self._best_cache_get = best_cache_get
         self._best_cache_set = best_cache_set
         self._unset = unset
@@ -103,9 +109,10 @@ class Bests:
         """The session-best (minimum) split per sub-sector COLUMN, computed independently per
         column across all VALID laps — exactly the values the lap table paints purple (F5).
         N sector lines → N+1 columns; a column with no finite data → None. Hoisted here from
-        lap_table so the table's purple cells and the theoretical-best footer read ONE
-        computation and can never disagree. With NO sector lines a lap is a single sub-sector
-        whose split is its lap time, so the one column's best is the best lap time.
+        lap_table so every surface painting a purple cell reads ONE computation. With NO sector
+        lines a lap is a single sub-sector whose split is its lap time, so the one column's best
+        is the best lap time — which is why these no longer define `theoretical_best` (see it):
+        sector lines are a DISPLAY split of the table, not the ideal lap's segmentation.
 
         Recomputed per call (refresh-time only, never per-tick): the inputs are the cached
         per-lap `lap_sector_splits`, so memoizing here would only add another slot to clear
@@ -114,7 +121,8 @@ class Bests:
         # missing trailing column (i<len(sp) guard).
         n_splits = self._sector_line_count() + 1
         # Dropout laps are excluded (see best_candidate_ids): a reconstructed-distance lap must
-        # not own a purple session-best split or feed theoretical_best.
+        # not own a purple session-best split. (The ideal lap excludes them by the same rule, in
+        # CornerModel._composite_lap_ids.)
         all_splits = [self._lap_sector_splits(lap_id) for lap_id in self.best_candidate_ids()]
         best: list[float | None] = []
         for i in range(n_splits):
@@ -126,17 +134,27 @@ class Bests:
         return best
 
     def theoretical_best(self) -> float | None:
-        """The THEORETICAL BEST lap time (seconds): the sum of the session-best sector splits
-        (`session_best_splits` — the purple cells), i.e. the lap you'd drive by stitching every
-        best sector together. Always exactly the sum of the purple cells, because both read the
-        same accessor. With no sector lines a lap is one sub-sector, so this DEGENERATES to the
-        best lap time by definition (documented choice: the footer row stays meaningful before
-        any sectors are placed instead of reading '—'). None when no valid laps exist or some
-        column has no finite split (every lap partial there)."""
-        bests = self.session_best_splits()
-        if not bests or any(b is None for b in bests):
-            return None
-        return float(sum(bests))
+        """The THEORETICAL BEST lap time (seconds) — the same number as `Session.ideal_total`,
+        by delegation. ONE definition of the ideal lap for every surface.
+
+        It is the sum of the per-segment minima of the CORNER/STRAIGHT partition: the lap you
+        would drive by stitching together your quickest run through each corner and each straight
+        (studio/corner_model.py SegmentBests). None when there is no corner partition to
+        composite on.
+
+        WHY NOT the sum of the session-best SECTOR splits, which this used to be: sector lines
+        default to NONE, and with no sector line a lap is a single sub-sector whose split is its
+        lap time — so the "sum of best sectors" was identically the BEST LAP TIME on every
+        recording anyone owns. It also moved the wrong way when information was added (placing one
+        sector line on D24 took it from 68.393 s to 68.651 s) because each lap projected the same
+        midpoint onto its own odometer and the pieces tiled nothing. `corners.segment_times`
+        asserts its 2N+1 pieces sum exactly to the lap time, which is the guarantee that makes a
+        cross-lap composite legitimate.
+
+        `session_best_splits` (the purple cells) is unchanged and still the per-column minimum —
+        sector lines remain a DISPLAY split of the lap table, they just no longer define the
+        ideal."""
+        return self._ideal_total()
 
     def best_rolling_lap(self) -> float | None:
         """The BEST ROLLING lap time (seconds): the fastest single COMPLETE loop of the track

@@ -698,6 +698,9 @@ class Session:
             # filled by every lap and comparable across them.
             sector_line_count=self.effective_sector_count,
             lap_columns=self._lap_columns,
+            # theoretical_best IS the ideal lap — one definition, reached through Session so the
+            # corner service's cache (and its invalidation) is the only copy of the number.
+            ideal_total=self.ideal_total,
             best_cache_get=lambda: self._best_cache,
             best_cache_set=self._set_best_cache,
             unset=_UNSET,
@@ -2466,48 +2469,68 @@ class Session:
             delta[lid] = (x, elapsed_on_grid - best_elapsed_on_grid)
         return best, speed, delta
 
-    # ----------------------------------------------- ideal-lap envelope (D1)
+    # ----------------------------------------------- ideal lap (D1)
+    def ideal_segment_bests(self) -> corner_model.SegmentBests | None:
+        """The ideal lap's SEGMENT COMPOSITE — the per-segment minima, donors, per-lap matrix and
+        partition edges (studio/corner_model.py SegmentBests). Every ideal number on every surface
+        is a reduction of this one object. None when there is no corner partition to composite on.
+        Thin delegator to the corner service (the ~call sites read it through Session)."""
+        return self.corners.segment_bests()
+
     def ideal_lap_elapsed(self) -> np.ndarray | None:
-        """The IDEAL-LAP elapsed curve on the 400-point normalized-distance grid (s∈[0,1]): the
-        continuous analogue of `theoretical_best` (the discrete 3-sector ideal).
+        """The IDEAL-LAP elapsed curve on the 400-point normalized-distance grid (s∈[0,1]).
 
-        For each grid point it is the MINIMUM cumulative elapsed time across the dropout-free
-        CLEAN laps (`consistency_lap_ids` — the same set every consistency stat runs on), each
-        resampled onto the shared s-grid exactly as `delta()` does. The pointwise min of valid
-        cumulative curves can momentarily dip below a later sample, so it is made monotonic
-        non-decreasing (`np.maximum.accumulate`) to remain a valid elapsed curve — a small
-        correction, since the laps already increase. Starts at 0 (every lap's elapsed[0] is 0).
+        The ideal is the CORNER/STRAIGHT PARTITION composite (`ideal_segment_bests`): each of the
+        2N+1 segments is driven by whichever clean lap was quickest through it, and this curve is
+        the running total of those minima, evaluated at the partition edges and linearly
+        interpolated onto the shared grid.
 
-        This is a SYNTHETIC curve — no single lap drove it — so callers must label it as such.
-        Returns None when no clean lap has a usable (≥2 points, positive odometer) trace.
-        Independent of any cross-recording reference: the ideal is always the DRIVER's own best
-        achievable, so it ignores `_ref_arrays`.
-        """
-        s_grid = self._DELTA_S_GRID
-        env: np.ndarray | None = None
-        for lid in self.consistency_lap_ids():
-            dist, _speed_kmh, elapsed = self._lap_arrays(lid)
-            if len(dist) < 2 or dist[-1] <= 0:
-                continue
-            elapsed_on_grid = np.interp(s_grid, dist / dist[-1], elapsed)
-            env = elapsed_on_grid if env is None else np.minimum(env, elapsed_on_grid)
-        if env is None:
-            return None
-        # Enforce a valid (non-decreasing) cumulative-elapsed curve after the pointwise min.
-        return np.maximum.accumulate(env)
+        WHY NOT the pointwise minimum of the laps' cumulative-elapsed curves, which this replaced:
+        every lap's cumulative elapsed ENDS at its own lap time and every lap's normalized
+        distance ends at 1, so that minimum at s=1 was, identically and by construction, the BEST
+        LAP TIME — an "ideal" that could never differ from a lap the driver had already driven. It
+        computed `min(∫ rate)`; a theoretical best is `∫ min(rate)`. (It also needed an
+        `np.maximum.accumulate` repair after the min; a running total of non-negative segment
+        times is non-decreasing already, so that repair is gone.)
+
+        Between two edges the curve follows THE DONOR'S own pace through that segment
+        (`CornerModel.ideal_elapsed`) — the ideal lap is a real drive, so its shape is the shape
+        its donors drove. A lap can still be transiently AHEAD of it inside a segment even though
+        it is behind at both ends; see `delta_to_ideal`.
+
+        This is a SYNTHETIC curve — no single lap drove all of it — so callers must label it as
+        such. None when there is no partition or no clean lap with a usable trace. Independent of
+        any cross-recording reference: the ideal is always the DRIVER's own best achievable, so it
+        ignores `_ref_arrays`."""
+        return self.corners.ideal_elapsed(self._DELTA_S_GRID)
 
     def ideal_total(self) -> float | None:
-        """The IDEAL lap's total elapsed (s) — the continuous theoretical best, ≈ the sum of the
-        clean laps' best per-distance segments. ≤ every clean lap's time (it's their lower
-        envelope). None when no clean lap has a usable trace."""
-        env = self.ideal_lap_elapsed()
-        return None if env is None else float(env[-1])
+        """The IDEAL lap time (s) — the sum of the per-segment minima of the corner/straight
+        partition. STRICTLY less than the best lap time whenever two different laps donate,
+        because each lap's own segments sum exactly to its lap time (`corners.segment_times`
+        asserts it), so a sum of minima can only equal the best lap when one lap wins everything.
+        None when there is no corner partition (see `ideal_segment_bests`)."""
+        sb = self.ideal_segment_bests()
+        return None if sb is None else sb.total
+
+    def ideal_donor_lap_id(self) -> int | None:
+        """The lap id when ONE lap wins every segment — the "ideal" is then that lap, not a
+        synthetic one, and a surface must say which lap rather than print a byte-identical
+        duplicate of the best-lap readout. None when the composite is genuinely stitched from
+        more than one lap (the normal case) or there is no partition at all."""
+        sb = self.ideal_segment_bests()
+        return None if sb is None else sb.single_donor_id()
 
     def ideal_delta_to_best(self, x_mode: str = "distance") -> tuple[np.ndarray, np.ndarray] | None:
         """The SYNTHETIC ideal lap drawn on `delta()`'s own Δ-to-best axis: `(x, dy)` where
-        dy(s) = ideal_elapsed(s) − best_elapsed(s) ≤ 0 (the ideal is at least as fast as the best
-        lap at every distance, since the best lap is one of the laps forming the envelope), ending
-        at ideal_total − best_time ≤ 0.
+        dy(s) = ideal_elapsed(s) − best_elapsed(s), ending at ideal_total − best_time, which is
+        NEGATIVE whenever more than one lap donates a segment.
+
+        dy ≤ 0 holds at every PARTITION EDGE (the ideal took the minimum there, and the best lap
+        was one of the candidates). Between edges the ideal follows its DONOR's pace while the
+        best lap follows its own, so dy can rise fractionally above 0 mid-segment where the best
+        lap's line differs from the donor's through the same corner. Measured across the real
+        recordings the largest such excursion is +0.019 s, against end values of −0.22 … −1.64 s.
 
         This shares the existing best-lap delta's reference frame (best lap = the y=0 line), so the
         ideal reads as a secondary curve dipping below zero — "you could be THIS much faster, and
@@ -2538,14 +2561,27 @@ class Session:
 
     def delta_to_ideal(self, lap_ids, x_mode: str = "distance") -> LapSeries | None:
         """Δ-to-IDEAL for each requested lap over the 400-point grid, mirroring `delta()`'s
-        return shape (a {lap_id: (x, dy)} map) but referenced to the synthetic ideal-lap envelope
-        instead of the best lap. dy(s) = elapsed_lap(s) − ideal_elapsed(s) ≥ 0 (a lap can't beat
-        the envelope it helped form), and dy at s=1 ≈ lap_time − ideal_total.
+        return shape (a {lap_id: (x, dy)} map) but referenced to the synthetic ideal lap instead
+        of the best lap. dy(s) = elapsed_lap(s) − ideal_elapsed(s), and dy at s=1 ≈ lap_time −
+        ideal_total.
+
+        SIGN — this is NOT one-way. At every partition EDGE the ideal took the minimum over the
+        clean laps, so dy ≥ 0 there for any lap that donated. INSIDE a segment the ideal follows
+        its donor's line, so a lap that brakes later and carries more speed to the apex can be
+        transiently AHEAD of it and give the time back by the exit — genuinely useful information,
+        and the reason this is no longer clamped or asserted non-negative.
+
+        The excursions are SMALL. Swept at 25 ms of media clock over every clean lap of the real
+        recordings (372 k samples), the most negative dy is −0.052 s and under 1 % of samples are
+        negative at all, against end-of-lap values of +0.22 … +9.24 s. Drawing the ideal's
+        interior as a straight line instead — which is what a partition composite does if it does
+        not consult its donors — put that at −0.87 s on 18.4 % of samples; see
+        `CornerModel.ideal_elapsed`.
 
         `x_mode` matches `delta()`: 'distance' → x = s × active-baseline total (the SAME shared
         axis the best-lap Δ draws on, so the curves overlay); 'time' → x = this lap's own elapsed
-        into the lap. Returns None when the ideal can't be built (no clean lap) or no requested
-        lap is drawable."""
+        into the lap. Returns None when the ideal can't be built (no partition / no clean lap) or
+        no requested lap is drawable."""
         ideal = self.ideal_lap_elapsed()
         if ideal is None:
             return None
@@ -2666,10 +2702,10 @@ class Session:
 
     def _ideal_envelope(self) -> np.ndarray | None:
         """The ideal-lap elapsed curve (`ideal_lap_elapsed`) MEMOIZED on the `_DELTA_GRID_N` grid,
-        so the per-tick `delta_to_ideal_at` re-uses one synthetic envelope instead of rebuilding it
-        (a min over every clean lap, resampled) on every 30 Hz frame. The cache is dropped whenever
-        the timing lines move (set_timing_lines → the lap arrays change), like the other per-lap
-        memos — see `_drop_ideal_cache`."""
+        so the per-tick `delta_to_ideal_at` re-uses one synthetic curve instead of rebuilding it
+        (the segment composite over every clean lap, resampled) on every 30 Hz frame. The cache is
+        dropped whenever the timing lines move (set_timing_lines → the lap arrays change), like
+        the other per-lap memos — see `_drop_ideal_cache`."""
         cached = getattr(self, "_ideal_cache", _UNSET)
         if cached is _UNSET:
             cached = self.ideal_lap_elapsed()
@@ -2687,9 +2723,9 @@ class Session:
         per-tick scalar analogue of `delta_to_ideal`'s 400-grid curve, and the moat number the
         live readout leads with ("you're 0.42 s off your achievable lap, here").
 
-        dy = elapsed_lap(s) − ideal_elapsed(s) ≥ 0: the lap can't beat the synthetic envelope it
-        helped form, so this is how much time the IDEAL lap has banked by this track position. At
-        the finish (s=1) it ≈ lap_time − ideal_total.
+        dy = elapsed_lap(s) − ideal_elapsed(s): how much time the IDEAL lap has banked by this
+        track position. At the finish (s=1) it ≈ lap_time − ideal_total. It can go slightly
+        NEGATIVE inside a segment — see `delta_to_ideal` for why that is real and how small.
 
         Cheap by construction: the ideal envelope is memoized (`_ideal_envelope`) and the source
         lap's curve is the same cached `LapCurve` `delta_at_lap` uses, so a tick is two O(log n)

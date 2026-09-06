@@ -45,7 +45,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
-from _synthetic import bare_session, odometer, seed_cols  # noqa: E402
+from _synthetic import bare_session, odometer, seed_cols, seed_corner_basis  # noqa: E402
 
 from studio import data_quality, gapfill, theme  # noqa: E402
 from studio.lap_table import (  # noqa: E402
@@ -148,6 +148,10 @@ def _session_with_splits(splits, n_lines):
     s = bare_session(valid=sorted(splits))
     s.lap_sector_splits = lambda lid: splits[lid]
     s.laps = SimpleNamespace(sectors=SimpleNamespace(sector_lines=[object()] * n_lines))
+    # `theoretical_best` is the corner-partition ideal now, so it resolves best_lap_id -> the
+    # `_best_cache` memo slot. Session.__init__ always sets it (session.py:171); bare_session
+    # only seeds it for a non-None best, so seed the "no best lap" value explicitly.
+    s._best_cache = None
     # session_best_splits now excludes GPS-dropout laps (A1), so it reads each lap's trace via
     # lap_has_dropout -> seed a trivial steady (dropout-free) trace per lap so all stay candidates.
     steady_t = np.arange(20) * 0.1
@@ -169,7 +173,8 @@ def test_best_split_per_sector_is_column_min():
     s = _session_with_splits(splits, n_lines=2)  # 2 sector lines -> 3 columns
     best = s.session_best_splits()
     assert best == [34.2, 10.6, 22.6], best
-    # No-data columns -> None (and theoretical_best is undefined there).
+    # No-data columns -> None. (theoretical_best no longer sums these columns — it is the
+    # corner-partition ideal; with no corner basis on this fixture it is None either way.)
     s2 = _session_with_splits({0: []}, n_lines=1)
     assert s2.session_best_splits() == [None, None]
     assert s2.theoretical_best() is None
@@ -643,7 +648,13 @@ def _ideal_chart_session():
         laps_count=lambda: len(laps),
         lap_time=lambda i: float(times_by_lap[i][-1] - times_by_lap[i][0]),
         start_timestamp=lambda i: float(times_by_lap[i][0]),
+        sectors=SimpleNamespace(sector_lines=[]),
     )
+    # The ideal lap is the CORNER/STRAIGHT partition composite, so a session with no detected
+    # corner has no ideal at all. seed_cols lays every lap out straight (ys = 0), so seed the
+    # basis explicitly — everything downstream of it (projection, drift gate, the segment-sum
+    # assertion) is the real code.
+    seed_corner_basis(s)
     return s
 
 
