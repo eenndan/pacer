@@ -34,9 +34,32 @@ build = { cmd = "cmake --build build/Release", depends-on = ["configure"] }
 # --output-on-failure), surfacing the in-test faulthandler watchdog dump instead of an opaque
 # 20-min job cancel that shows nothing (what made the C1 off-thread-load CI hang diagnosable).
 test = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 480", depends-on = ["build"] }
-# Fast inner loop for agents: the full suite minus the one slow test (test_export_video,
-# ~110 s ffmpeg encode). ~18 s for the other 45 — run this while iterating, `test` before a PR.
-test-fast = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 120 -E test_export_video", depends-on = ["build"] }
+# Fast inner loop for agents: the full suite minus the two slow tests. Run this while iterating,
+# `test` before a PR.
+#
+# THE EXCLUSION LIST HAS TO BE RE-MEASURED, NOT ASSUMED. It named test_export_video alone and
+# described it as "~110 s ffmpeg encode, ~18 s for the other 45" — both stale. Measured 2026-09-07:
+#
+#   test_compare_lifecycle  96.0 s      test_export_pill_budget  16.2 s
+#   test_stats              20.7 s      test_central_view_realqt 15.8 s
+#   test_pb_toast           19.9 s      test_export_video        10.3 s
+#   ...then a long tail; whole suite 281 s over 86 tests
+#
+# So the named exclusion had become the SIXTH slowest test (its real-ffmpeg cases were trimmed and
+# most now run on a 1.5 s synthetic lavfi clip), while the actual outlier was not excluded at all.
+#
+# Be honest about what this buys: excluding both leaves 84 tests in ~220 s. That is a third off, not
+# the ~18 s the old comment promised — the remaining time is spread thin across offscreen-Qt suites
+# that each build a real StudioWindow, and there is no single test left worth cutting. Do not add
+# exclusions to chase a number; re-measure and update this table instead.
+#
+# test_compare_lifecycle is expensive on purpose and must NOT be trimmed to fit here: it is the
+# regression guard for a SIGSEGV (a live widget half-moved between layouts), and a crash cannot be
+# asserted in-process — it runs 3 subprocesses x 1500 enter/exit cycles, a count sized by
+# measurement (600 cycles killed 4 of 6 processes; 1500 killed 6 of 6). Shrinking it to save inner-
+# loop time would buy speed by weakening the only thing standing between that crash and `main`.
+# So it is excluded from the fast loop and runs in full `test` and in CI, where it belongs.
+test-fast = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 120 -E 'test_export_video|test_compare_lifecycle'", depends-on = ["build"] }
 # One-command core-math equivalence gate: the SYNTHETIC golden fingerprint (the CI half of the
 # golden gate). Run after any Session/timing/geometry/delta change; expects EQUIVALENT.
 golden = { cmd = "ctest --test-dir build/Release -R test_golden_synthetic --output-on-failure", depends-on = ["build"] }
