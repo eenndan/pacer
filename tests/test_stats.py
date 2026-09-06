@@ -614,15 +614,54 @@ def _fake_stats_service(*, has_g=True, laps=True):
     )
 
 
+def _fake_segment_bests(single_donor=False):
+    """A three-lap, five-segment composite for the IDEAL LAP block — hand-built so every number
+    on the page is arithmetic a reader of this file can check.
+
+    Lap 1 is the session best (the stub's `best_lap_id`). Its gains against the per-segment
+    minima are, in segment order: 0.00 (S/F → C1), 0.28 (C1), 0.02 (C1 → C2), 0.20 (C2), 0.00
+    (C2 → S/F) — 0.50 s in total, of which 0.48 s clears the 0.05 s display floor. C1 is the
+    BIGGER gain and only one other lap matched it (beat 2/3); C2 is smaller and every lap matched
+    it (beat 3/3), so the ranking has to put C2 first — 0.20 × 3/3 = 0.200 over 0.28 × 2/3 =
+    0.187 — while a raw-gain order would lead with C1.
+
+    (A positive gain always has beat ≥ 2: the donor is by definition at least as fast as the
+    subject, so it counts itself and the subject. The fixture spends its whole discriminating
+    range on that floor rather than pretending a 1/3 is reachable.)
+
+    `single_donor=True` collapses it to the state where one lap wins everything and the page must
+    hide the block instead of printing a duplicate of the best lap."""
+    from studio.corner_model import SegmentBests
+    times = np.array([
+        [1.00, 9.90, 3.00, 5.10, 2.00],     # lap 0 — owns C1 and the C1 → C2 straight
+        [1.00, 10.18, 3.02, 5.20, 2.00],    # lap 1 — the best lap (the subject), 21.40
+        [1.00, 10.60, 3.10, 5.00, 2.00],    # lap 2 — owns C2
+    ])
+    if single_donor:
+        times = np.array([[1.0, 9.9, 3.0, 5.0, 2.0],
+                          [1.1, 10.0, 3.1, 5.1, 2.1],
+                          [1.2, 10.1, 3.2, 5.2, 2.2]])
+    bests = [float(c.min()) for c in times.T]
+    donors = [int(times[:, j].argmin()) for j in range(times.shape[1])]
+    return SegmentBests(labels=["start", "C1", "C1-C2", "C2", "C2-finish"], cids=[1, 2],
+                        lap_ids=[0, 1, 2], times=times,
+                        admitted=np.ones(times.shape, bool), bests=bests, donors=donors,
+                        s_edges=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                        donor_span=[(0.0, 0.0)] * times.shape[1])
+
+
 def _fake_view_session(*, has_g=True, sectors=True, laps=True, track_name="Test Circuit",
-                       excluded=(5,)):
+                       excluded=(5,), ideal=True, single_donor=False, verified=True):
     """The duck-typed read surface StatsView touches — a stub session, no Session machinery.
 
     `laps=False` is the 0-lap recording, `track_name=None` the unregistered track, `excluded=()`
     a session where the median band dropped nothing — the three trust states the DATA TRUST card
-    has to tell apart."""
+    has to tell apart. `ideal=False` is a recording with no corner partition and `single_donor`
+    the one where a single lap wins every segment: the two states the IDEAL LAP block hides on.
+    `verified=False` is the provisional start line that mutes the synthesized targets."""
     from studio.data_quality import TimingQuality
     from studio.gmeter import CrossCheck
+    sb = _fake_segment_bests(single_donor) if (ideal and laps) else None
     cross = CrossCheck(n=1000, lat_corr=0.9, long_corr=0.4, lat_rms_accl=0.5, lat_rms_gps=0.5,
                        long_rms_accl=0.3, long_rms_gps=0.3, align_yaw_deg=10.0,
                        align_reflect=False, ok=True)
@@ -631,11 +670,16 @@ def _fake_view_session(*, has_g=True, sectors=True, laps=True, track_name="Test 
         valid_lap_ids=lambda: ([0, 1] if laps else []),
         track_name=track_name,
         lap_count=lambda: (2 + len(excluded) if laps else 1),
-        # The two stitched TARGETS moved here from the Laps tab's SESSION-BESTS footer:
-        # theoretical (sum of the session-best splits) renders inside SECTORS, rolling in PACE.
-        theoretical_best=lambda: (68.0 if sectors and laps else None),
+        # The stitched TARGETS. `best_rolling` renders in PACE; the theoretical best and its
+        # decomposition are the IDEAL LAP block, read off the segment composite (NOT off
+        # `theoretical_best()`, which is the same number by a longer route — one object, one
+        # definition, so the tile and the table beneath it cannot disagree).
+        theoretical_best=lambda: (None if sb is None else sb.total),
+        ideal_segment_bests=lambda: sb,
+        ideal_total=lambda: (None if sb is None else sb.total),
+        ideal_donor_lap_id=lambda: (None if sb is None else sb.single_donor_id()),
         best_rolling_lap=lambda: (68.15 if laps else None),
-        timing_verified=True,
+        timing_verified=verified,
         excluded_lap_ids=lambda: list(excluded),
         dropout_lap_ids=lambda: ({1} if laps else set()),
         sector_sigmas=lambda: ([0.15, None] if sectors and laps else []),
@@ -689,18 +733,24 @@ def test_stats_view_renders_every_group():
     assert v.lap_table.item(0, 0).text() == "1"              # clean lap: no suffix
     assert v.sector_table.rowCount() == 2
     assert v.sector_table.item(1, 2).text() == "—"           # None median -> em-dash
-    # The two stitched targets, each beside the data it comes from (they used to live in a
+    # The stitched targets, each beside the data it comes from (they used to live in a
     # SESSION-BESTS footer on the Laps tab, which cost that grid two lap rows).
     assert v.t_rolling.value.text() == "1:08.150"            # PACE, next to best/median/race pace
-    assert v.t_theoretical.value.text() == "1:08.000"        # SECTORS, above the per-sector table
-    # Shown here (this fake HAS sector lines) — the counterpart of the 0-sector hide asserted in
-    # test_stats_view_hides_signal_absent_sections, so neither direction is vacuous.
-    assert not v.t_theoretical.isHidden() and not v._sector_section.isHidden()
+    # The IDEAL LAP block: 1.00 + 9.90 + 3.00 + 5.00 + 2.00 = 20.90 s of per-segment minima,
+    # against the best lap's own 21.40 — see _fake_segment_bests for the matrix.
+    assert not v._ideal_section.isHidden() and not v.t_theoretical.isHidden()
+    assert v.t_theoretical.value.text() == "0:20.900"
+    assert v.t_ideal_gap.value.text() == "-0.50 s"
     # Verified + high-quality timing: rendered as normal tiles, never the provisional muting.
     assert not v.t_rolling.value.font().italic()
     assert not v.t_theoretical.value.font().italic()
+    assert not v.t_ideal_gap.value.font().italic()
     assert "not a lap you drove" in v.t_theoretical.toolTip()
     assert "not a lap you drove" in v.t_rolling.toolTip()
+    # …and the retired copy is GONE. Every clause of it was false once the ideal stopped being a
+    # sum of sector splits, and the tile is no longer gated on sector lines at all.
+    for dead in ("best sector", "sector splits", "Shown only with sector lines"):
+        assert dead not in v.t_theoretical.toolTip(), dead
     assert "agree" in v.trust_card.text()                   # the cross-check's first UI surface
     assert "GPS9 true clock" in v.trust_card.text()
     print("test_stats_view_renders_every_group OK")
@@ -712,16 +762,157 @@ def test_stats_view_hides_signal_absent_sections():
     v = StatsView(_fake_view_session(has_g=False, sectors=False))
     assert v._driving_section.isHidden() and v.gg.isHidden()     # no g -> no g sections
     assert v._sector_section.isHidden() and v.sector_table.isHidden()
-    # The theoretical best hides WITH its section: on a 0-sector track it degenerates to the best
-    # lap time (a duplicate of the starred best that can even read slower than the rolling best),
-    # so it carries no information — the rule the Laps footer used to hand-code. Rolling stays.
-    assert v.t_theoretical.isHidden()
+    # THE THEORETICAL BEST NO LONGER HIDES WITH SECTORS, and this assertion is the gate fix.
+    # It used to inherit this section's 0-sector hide, which was right while it was a sum of best
+    # SECTOR splits (one sector = one lap = the best lap time). It is a corner/straight composite
+    # now — sector lines do not touch it — and `sector_count()` is 0 on EVERY recording the owner
+    # has, so the old gate hid the corrected number on all five of them. Same fake, sectors off,
+    # ideal intact: the block stays.
+    assert not v.t_theoretical.isHidden() and not v._ideal_section.isHidden()
+    assert v.ideal_table.rowCount() > 0
     assert not v.t_rolling.isHidden() and v.t_rolling.value.text() == "1:08.150"
     assert v.t_peak_lat.value.text() == "—"                      # None, never a fake 0
     assert v.lap_table.item(0, 5).text() == "—"                  # per-lap g cells dash too
     assert v.lap_table.item(0, 2).text() == "95.0"               # speed needs no g signal
     assert v.lap_table.item(0, 4).text() == "48.0"               # Min speed needs no g either
     print("test_stats_view_hides_signal_absent_sections OK")
+
+
+def test_ideal_decomposition_table_is_a_plan_not_a_taunt():
+    """The IDEAL LAP table (N8): where the gap lives, on which lap, and how repeatable it is.
+
+    Pinned on the hand-built composite in `_fake_segment_bests`, whose numbers are:
+
+        row  segment      gain   beat   donor   priority
+        1    C2           0.20    3/3   lap 3   0.200   <- smaller, every lap matched it
+        2    C1           0.28    2/3   lap 1   0.187   <- BIGGER, matched once
+        -    C1 → C2      0.02    2/3   lap 1   under the 0.05 s floor
+        -    S/F → C1     0.00    3/3   lap 1   under the floor
+        -    C2 → S/F     0.00    3/3   lap 1   under the floor
+
+    So the table leads with the smaller gain, and a raw-gain order would lead with the bigger
+    one. That inversion is the whole feature: measured on the owner's recordings D24's largest
+    single gain (C2, 0.213 s, matched on 42 of 65 laps) and Sandown's (C5, 0.224 s, 13 of 59)
+    rank differently for exactly this reason, and Sandown's biggest falls to third."""
+    _app()
+    from studio.stats_panel import IDEAL_GAIN_FLOOR, RING_ROLE, StatsView
+    v = StatsView(_fake_view_session())
+    t = v.ideal_table
+    assert t.rowCount() == 2, [t.item(r, 0).text() for r in range(t.rowCount())]
+    labels = [t.item(r, 0).text() for r in range(t.rowCount())]
+    assert set(labels) == {"C1", "C2"}, labels
+    assert labels == ["C2", "C1"], labels          # the ranking, not the gain order
+    gains = {t.item(r, 0).text(): float(t.item(r, 1).text()) for r in range(t.rowCount())}
+    assert gains == {"C1": 0.28, "C2": 0.20}, gains
+    beats = {t.item(r, 0).text(): t.item(r, 2).text() for r in range(t.rowCount())}
+    assert beats == {"C1": "2 / 3", "C2": "3 / 3"}, beats
+    # The donor lap is 1-BASED on screen (the app-wide rule) — lap id 0 prints as "1".
+    donors = {t.item(r, 0).text(): t.item(r, 3).text() for r in range(t.rowCount())}
+    assert donors == {"C1": "1", "C2": "3"}, donors
+    # Rows point the map at the corner they name (a straight would point at the corner feeding
+    # it); the rows below the floor are not on screen at all.
+    assert [t.item(r, 0).data(RING_ROLE) for r in range(t.rowCount())] == [
+        int(lbl[1:]) for lbl in labels]
+    assert IDEAL_GAIN_FLOOR == 0.05
+    # THE NOTE CLOSES THE ARITHMETIC. The tile says 0.50 s; the table shows 0.50 s of it in two
+    # rows and the note accounts for the remaining three segments (0.02 s). A top-N list under a
+    # total that does not add up is the defect this line exists to prevent.
+    note = v.ideal_note.text()
+    assert "These 2 segments hold 0.48 s of the 0.50 s" in note, note
+    assert "the other 3 hold 0.02 s between them" in note, note
+    assert "Stitched from 2 of your 3 clean laps" in note, note
+    assert "Ranked by gain" in note, note
+    # Every cell of a row carries that row's own arithmetic, because NEITHER visible column is
+    # sorted — the order is their product, and the CORNERS table's marked-loss column is on
+    # record in this app as unreadable for exactly that reason.
+    tip = t.item(0, 0).toolTip()
+    assert "Ranked 1 of 2 by" in tip, tip
+    assert t.item(0, 1).toolTip() == tip and t.item(0, 3).toolTip() == tip
+    # NEGATIVE CONTROL: the retired ordering really would have got it wrong here.
+    assert sorted(gains, key=lambda k: -gains[k]) == ["C1", "C2"], gains
+    assert labels[0] == "C2", "a gain-ordered table leads with C1; this one must not"
+    print("test_ideal_decomposition_table_is_a_plan_not_a_taunt OK")
+
+
+def test_ideal_block_hides_when_it_would_duplicate_a_lap_you_drove():
+    """The two states the block must NOT print, and they are the only two.
+
+      * ONE lap won every segment — the "ideal" IS that lap, so a tile would be a byte-identical
+        duplicate of the ★ best. (`ideal_donor_lap_id()` names it; the house precedent is to hide
+        a degenerate synthesized target, not to print it.)
+      * no corner partition at all — the "partition" is the whole lap and its minimum is the best
+        lap time again, the original defect.
+
+    Sector lines are absent in BOTH fakes and present in neither hide reason, which is the point:
+    the gate moved off `sector_count()` entirely."""
+    _app()
+    from studio.stats_panel import StatsView
+    one = StatsView(_fake_view_session(single_donor=True))
+    assert one.session.ideal_donor_lap_id() is not None
+    assert one._ideal_section.isHidden() and one.t_theoretical.isHidden()
+    assert one.t_ideal_gap.isHidden() and one.ideal_table.isHidden()
+    assert one.ideal_table.rowCount() == 0 and one.ideal_note.text() == ""
+    assert one.ideal_note.isHidden()
+
+    none = StatsView(_fake_view_session(ideal=False))
+    assert none.session.ideal_segment_bests() is None
+    assert none._ideal_section.isHidden() and none.ideal_table.isHidden()
+
+    # …and the zero-lap recording, where there is no best lap to decompose against.
+    empty = StatsView(_fake_view_session(laps=False))
+    assert empty._ideal_section.isHidden() and empty.t_theoretical.isHidden()
+    print("test_ideal_block_hides_when_it_would_duplicate_a_lap_you_drove OK")
+
+
+def test_ideal_targets_mute_with_the_timing_they_borrow_authority_from():
+    """Both IDEAL LAP tiles are SYNTHESIZED, so both take `_set_target_tile`'s provisional
+    treatment — muted, italic, and carrying the start-line note above their own tooltip — while
+    the measured PACE tiles beside them stay upright, because those ARE laps you drove.
+
+    The TABLE is deliberately not muted: its cells are measured segment times and differences
+    between them, the same standing the CORNERS and STRAIGHTS reports have, and the page's own
+    amber banner already qualifies the page (ledger A26/A7 — a page that hides the map carries
+    its own trust chrome)."""
+    _app()
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session(verified=False))
+    assert v.provisional_banner.isVisible() or not v.isVisible()   # the page's own chrome
+    assert v.t_theoretical.value.font().italic()
+    assert v.t_ideal_gap.value.font().italic()
+    assert v.t_rolling.value.font().italic()
+    assert not v.t_best.value.font().italic(), "a lap you DROVE must not be muted"
+    assert not v.t_median.value.font().italic()
+    for tile in (v.t_theoretical, v.t_ideal_gap, v.t_rolling):
+        assert "start/finish line" in tile.toolTip(), tile.toolTip()
+    assert "not a lap you drove" in v.t_theoretical.toolTip()
+    # …and it is reversible: the same fake with a verified line renders upright.
+    ok = StatsView(_fake_view_session())
+    assert not ok.t_theoretical.value.font().italic()
+    assert not ok.t_ideal_gap.value.font().italic()
+    print("test_ideal_targets_mute_with_the_timing_they_borrow_authority_from OK")
+
+
+def test_the_two_synthesized_targets_do_not_contradict_each_other():
+    """The page now carries TWO synthesized lap times, and `_set_digest`'s own comment records
+    that a rounding-level disagreement between two such surfaces was already treated as a defect.
+
+    They are reconcilable because they are anchored differently, and each tooltip now says so:
+    the digest is a TYPICAL lap with its top-3 corners fixed, the ideal is your quickest time
+    through every segment stitched together. Measured on the owner's five recordings the ideal is
+    the faster of the two by 0.33 to 2.67 s and the order ideal < best < projected never breaks —
+    so neither tile can be read as a target the other has already beaten."""
+    _app()
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session())
+    digest_tip, ideal_tip = v.t_digest.toolTip(), v.t_theoretical.toolTip()
+    # Each names its own ANCHOR (IA-04: the caption names the base, the tooltip names the maths).
+    assert "MEDIAN" in digest_tip and "median lap" in v.t_digest.caption.text()
+    assert "each corner and each straight" in ideal_tip, ideal_tip
+    # …and the digest points at the other one rather than leaving a reader to guess why two
+    # synthesized targets on one page disagree.
+    assert "IDEAL LAP" in digest_tip, digest_tip
+    assert "Different anchors" in digest_tip, digest_tip
+    print("test_the_two_synthesized_targets_do_not_contradict_each_other OK")
 
 
 def test_stats_tiles_paint_a_value_over_a_smaller_caption():

@@ -4,9 +4,11 @@ header toggle.
 A read-only, scrollable column of stat groups over studio/stats.py's SessionStats service +
 the existing Session accessors — SESSION totals, the DATA TRUST card (what the page's numbers
 are worth: the start-line/track/exclusion caveats, the timing clock, the g provenance and the
-IMU↔GPS cross-check), PACE distribution, SPEED & G peaks, the g-g friction circle, DRIVING
-(brake/coast reductions), per-SECTOR best/median/σ, and a per-lap statistics table. Compact in
-the quadrant; the panel-maximize button in the header turns it into a full-window dashboard.
+IMU↔GPS cross-check), PACE distribution, the IDEAL LAP and its decomposition (the theoretical
+best, what it says is on the table, and which segments that time lives in), SPEED & G peaks, the
+g-g friction circle, DRIVING (brake/coast reductions), per-SECTOR best/median/σ, and a per-lap
+statistics table. Compact in the quadrant; the panel-maximize button turns it into a full-window
+dashboard.
 (It paints ph.corners-out — "fill this window quadrant". The transport's ph.arrows-out button is
 a different action, "fill the SCREEN with the video", and this line used to name that one.)
 
@@ -250,10 +252,33 @@ ROLLING_TOOLTIP = ("Best rolling — the fastest single complete loop regardless
                    "starts: the minimum time from passing any track position to passing it "
                    "again one lap later (windows spanning a GPS-dropout ⚠ lap are excluded). "
                    "A reference target, not a lap you drove.")
-THEORETICAL_TOOLTIP = ("Theoretical best — the sum of the session-best sector splits (the purple "
-                       "cells on the Laps tab): the lap you'd drive by stitching every best "
-                       "sector together. A reference target, not a lap you drove. Shown only "
-                       "with sector lines — without them it degenerates to the best lap time.")
+# Every clause of the old copy — "the sum of the session-best sector splits", "the purple cells on
+# the Laps tab", "shown only with sector lines", "without them it degenerates to the best lap time"
+# — described a number that no longer exists. Sector lines do not touch the ideal any more (driven
+# through set_timing_lines at 0/1/2/3 lines, ideal_total is byte-identical), and the ideal is
+# strictly faster than the best lap whenever two laps donate. The one clause that was true and
+# load-bearing is kept verbatim: A REFERENCE TARGET, NOT A LAP YOU DROVE.
+THEORETICAL_TOOLTIP = ("Theoretical best — your quickest time through each corner and each "
+                       "straight, stitched into one lap. A reference target, not a lap you "
+                       "drove: no single lap was this fast all the way round, but every piece "
+                       "of it is a piece you drove. The table below says where it lives.")
+IDEAL_GAP_TOOLTIP = ("What the theoretical best says is still on the table: your best lap minus "
+                     "the stitched ideal. It is time you have already demonstrated, one segment "
+                     "at a time, on laps you drove — not a simulation and not a lap record.")
+IDEAL_COLUMNS = ["Segment", "Gain (s)", "Laps as fast", "Best on lap"]
+# A row under this is not advice — it is a rounding difference between two laps of the same
+# corner, and a plan is not 25 rows long. The remainder is never hidden: the note under the table
+# states how many segments were left out and what they are worth, so the rows on screen and the
+# tile above them still add up (see _refresh_ideal).
+IDEAL_GAIN_FLOOR = 0.05
+IDEAL_TOOLTIP = (
+    "Where the theoretical best lives: per segment of the corner/straight partition, the time "
+    "your BEST lap gives away against your quickest time through it, the lap that set that "
+    "quickest time, and how many of your clean laps drove that segment at least as fast as your "
+    "best lap did. The gains over EVERY segment sum exactly to the gap under the tile above.\n\n"
+    "Ranked by gain × the share of laps that already matched it — so a smaller gain you make "
+    "routinely sits above a bigger one you made once. Both factors are columns, so you can check "
+    "the order by eye. Click a row to ring that corner on the map.")
 
 
 def _fmt_hms(seconds: float) -> str:
@@ -667,6 +692,58 @@ class StatsView(QWidget):
         spark_plot.addItem(self._spark_pb_dots)
         col.addWidget(self.spark)
 
+        # --- the IDEAL LAP, and where it lives
+        #
+        # IT SITS HERE, DIRECTLY UNDER PACE, because the two numbers it must not contradict are
+        # in the row above it: "best lap" (which it is derived from) and "median lap · top 3
+        # fixed" (the OTHER synthesized target on this page). Measured on all five of the owner's
+        # recordings the three are strictly ordered — ideal < best < projected — because they
+        # answer different questions from different anchors, and the tooltips now say which is
+        # which rather than leaving a reader to guess why one target reads slower than the other.
+        #
+        # It also moved OUT of the SECTORS group, where the tile used to inherit that section's
+        # 0-sector hide. The ideal is no longer a sum of sector splits, so that gate was hiding
+        # the number on precisely the recordings it is now worth showing on: sector_count() == 0
+        # on ALL FIVE (D24 1ch and 3ch, Sandown 1ch and 3ch, SD_30_08), so the corrected ideal —
+        # 0.22 to 1.64 s under the best lap — was invisible everywhere it had been fixed.
+        self._ideal_section = self._section("IDEAL LAP")
+        col.addWidget(self._ideal_section)
+        self.t_theoretical = Tile("theoretical best")
+        self.t_theoretical.setToolTip(THEORETICAL_TOOLTIP)
+        self.t_ideal_gap = Tile("on the table · vs your best")
+        self.t_ideal_gap.setToolTip(IDEAL_GAP_TOOLTIP)
+        col.addLayout(self._grid(self.t_theoretical, self.t_ideal_gap))
+        self.ideal_table = self._make_table(IDEAL_COLUMNS)
+        self.ideal_table.setToolTip(IDEAL_TOOLTIP)
+        # Interactive like CORNERS / BRAKING / STRAIGHTS — a row of a table headed "where it
+        # lives" that cannot show you where is half an answer. Same corner_clicked pathway
+        # (maximize-aware in CentralView); a STRAIGHT row rings the corner FEEDING it, which is
+        # the rule the STRAIGHTS table already follows.
+        #
+        # NOT SORTABLE, and that is the one place it departs from those three. The row order IS
+        # the content here — it is the ranking the tooltip explains — and a header click would
+        # silently replace an argued order with an arbitrary one while the tooltip kept claiming
+        # the first.
+        self.ideal_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.ideal_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.ideal_table.setFocusPolicy(Qt.ClickFocus)
+        self.ideal_table.itemSelectionChanged.connect(self._on_ideal_row_selected)
+        col.addWidget(self.ideal_table)
+        # The arithmetic the table cannot show: a top-N list under a total is a contradiction
+        # unless the remainder is named. Filled per refresh, hidden with the section.
+        #
+        # A WrapLabel (not QLabel + setWordWrap) because it is a PARAGRAPH the column has to make
+        # room for — the trap widgets.WrapLabel exists for, and the reason three other surfaces
+        # painted their second line outside their own box. Capped at the app's prose measure and
+        # left UN-ALIGNED in the layout, the pair of moves the zero-lap prose above documents: a
+        # maximized dashboard is 1728 px wide and an uncapped note would set ~130 characters to
+        # the line.
+        self.ideal_note = WrapLabel("")
+        self.ideal_note.setProperty("role", "Note")
+        self.ideal_note.setFont(theme.ui_font(theme.CAPTION))
+        self.ideal_note.setMaximumWidth(theme.EMPTY_MEASURE_PX)
+        col.addWidget(self.ideal_note)
+
         # --- SPEED & G peaks
         self._speed_section = self._section("SPEED · G")
         col.addWidget(self._speed_section)
@@ -759,14 +836,9 @@ class StatsView(QWidget):
         # --- per-SECTOR best/median/σ (hidden without sector lines)
         self._sector_section = self._section("SECTORS")
         col.addWidget(self._sector_section)
-        # The sum of THIS section's best splits. It lives here rather than in PACE because these
-        # are literally its inputs — and it inherits the section's 0-sector hide for free: with no
-        # sector lines it degenerates to the best lap time (a duplicate of the ★ starred best that
-        # can even read slower than the rolling best), so it carries no information there.
-        self.t_theoretical = Tile("theoretical best")
-        self.t_theoretical.setToolTip(THEORETICAL_TOOLTIP)
-        self._sector_target_grid = self._grid(self.t_theoretical)
-        col.addLayout(self._sector_target_grid)
+        # (The "theoretical best" tile used to live here, summing this section's best splits and
+        # inheriting its 0-sector hide. It is neither of those things now — see the IDEAL LAP
+        # block above for where it went and why.)
         self.sector_table = self._make_table(SECTOR_COLUMNS)
         col.addWidget(self.sector_table)
 
@@ -1053,17 +1125,21 @@ class StatsView(QWidget):
         item.setFont(theme.mono_font(theme.TABLE))
         return item
 
-    def _set_target_tile(self, tile: Tile, value, tip: str):
-        """Render a stitched TARGET tile (theoretical best / best rolling).
+    def _set_target_tile(self, tile: Tile, value, tip: str, text: str | None = None):
+        """Render a stitched TARGET tile (theoretical best / best rolling / the ideal's gap).
 
         These are not laps anyone drove — they are composed from the session's best splits and
         loops — so they share the lap timing's authority: while the timing is PROVISIONAL (an
         arbitrary start line) OR the clock is DEGRADED (media-clock / low-GPS estimate) the value
         is muted + italic and carries the explaining note, restored to the normal tile once
         Verified AND high-quality. Kept byte-for-byte in spirit with the Laps footer this moved
-        from; the measured PACE tiles beside it are unmuted because they ARE laps you drove."""
+        from; the measured PACE tiles beside it are unmuted because they ARE laps you drove.
+
+        `text` overrides the m:ss.mmm formatting for a target that is a DIFFERENCE rather than a
+        lap time ("-1.64 s"). It is still a synthesized number and still takes the mute — the rule
+        is about where the number came from, not about how it is printed."""
         session = self.session
-        tile.set(fmt_time(value) if value is not None else None)
+        tile.set((text if text is not None else fmt_time(value)) if value is not None else None)
         provisional = not getattr(session, "timing_verified", True)
         quality = getattr(session, "timing_quality", None)
         muted = provisional or bool(quality is not None and quality.degraded)
@@ -1163,6 +1239,7 @@ class StatsView(QWidget):
         self._set_target_tile(self.t_rolling, rolling, ROLLING_TOOLTIP)
         self._set_digest(session, pace)
         self._refresh_spark(session)
+        self._refresh_ideal(session)
 
         # SPEED · G — session peaks over the per-lap stats
         rows = st.lap_stats() if st is not None else []
@@ -1290,7 +1367,128 @@ class StatsView(QWidget):
             f"{len(rows)} corner losses ({saved:.2f} s, measured vs your best lap's "
             "corners). Anchored to the typical lap, not best-minus-losses: your best lap "
             "already banks some of those corners — so this target can read SLOWER than your "
-            "best lap and still be the honest one. The Coaching tab lists the corners.")
+            "best lap and still be the honest one. The Coaching tab lists the corners.\n\n"
+            "It is not the IDEAL LAP below and cannot be compared with it directly: this one is "
+            "a TYPICAL lap with three corners fixed, that one is your quickest time through "
+            "every segment stitched together. Different anchors, different questions — measured "
+            "on the owner's recordings the ideal is 0.33 to 2.67 s the faster of the two.")
+
+    def _refresh_ideal(self, session):
+        """The IDEAL LAP block: the theoretical best, what it says is on the table, and the
+        DECOMPOSITION — which segments that gap lives in, on which lap you drove each one, and
+        how repeatable it is.
+
+        THE GATE IS NOT THE OLD ONE, and that is the point of this block. The tile used to hide
+        when `sector_count() == 0`, which was right while the "theoretical best" was a sum of
+        best SECTOR splits — with no sector line a lap is one sector and the sum degenerated to
+        the best lap time. It is a corner/straight composite now, so sector lines have nothing to
+        do with it (driven through set_timing_lines at 0/1/2/3 lines the total is byte-identical),
+        and `sector_count()` is 0 on every recording the owner has: the old gate hid the corrected
+        number on all five of them. The condition that actually means "this would be a duplicate
+        of a lap you already see" is `ideal_donor_lap_id()` — one lap won every segment, so the
+        ideal IS that lap — and that is what hides it now, along with the no-composite case
+        (`ideal_total() is None`: no corner detected, so the "partition" is the whole lap).
+
+        The tiles take `_set_target_tile`'s PROVISIONAL/DEGRADED mute: both are synthesized, so
+        both share the lap timing's authority. The TABLE does not, for the same reason the
+        CORNERS and STRAIGHTS reports beside it do not — its cells are measured segment times
+        and differences between them, and the page's own trust banner already qualifies the page.
+        """
+        sb = getattr(session, "ideal_segment_bests", lambda: None)()
+        best_id = session.best_lap_id() if hasattr(session, "best_lap_id") else None
+        single = (session.ideal_donor_lap_id()
+                  if hasattr(session, "ideal_donor_lap_id") else None)
+        rows = sb.decomposition(best_id) if (sb is not None and best_id is not None) else None
+        has = sb is not None and single is None and rows is not None
+        self._set_ideal_visible(has)
+        if not has:
+            self.ideal_table.setRowCount(0)
+            self.ideal_note.setText("")
+            return
+        total = sb.total
+        self._set_target_tile(self.t_theoretical, total, THEORETICAL_TOOLTIP)
+        # The best lap's time READ OFF THE COMPOSITE, not off `session.lap_time`. They are the
+        # same number — `corners.segment_times` asserts a lap's segments sum exactly to its lap
+        # time, which is the guarantee the whole composite stands on — and taking it from the same
+        # matrix the gains come from makes `gap == Σ gains` true by construction rather than by
+        # agreement between two accessors. The tile and the table cannot drift.
+        gap = float(sb.times[sb.lap_ids.index(best_id)].sum()) - total
+        # SIGNED, and negative, because that is the direction the number moves your lap time —
+        # the same convention the hero's `vs ideal` chip and the trend tile use. Formatted with
+        # the ASCII sign f-strings produce, not a typographic minus: this is a MONO tile and the
+        # app's one measured mark-in-a-mono-face defect is exactly that substitution.
+        self._set_target_tile(self.t_ideal_gap, gap, IDEAL_GAP_TOOLTIP, text=f"{-gap:+.2f} s")
+
+        shown = [r for r in rows if r.gain >= IDEAL_GAIN_FLOOR]
+        rest = [r for r in rows if r.gain < IDEAL_GAIN_FLOOR]
+        mono = theme.mono_font(theme.TABLE)
+
+        def num(text: str) -> QTableWidgetItem:
+            item = QTableWidgetItem(text)
+            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item.setFont(mono)
+            return item
+
+        t = self.ideal_table
+        t.blockSignals(True)
+        t.clearSelection()
+        t.setRowCount(len(shown))
+        for r, row in enumerate(shown):
+            name = QTableWidgetItem(row.label)
+            name.setData(RING_ROLE, row.ring_cid)
+            cells = [name, num(f"{row.gain:.2f}"), num(f"{row.beat} / {row.n}"),
+                     # 1-BASED, the app-wide display rule for a lap number (the ★ best lap, the
+                     # Vmax tile's caption, the sparkline's x axis). None only on a POINT segment,
+                     # which carries no gain and therefore never clears the floor above.
+                     num(DASH if row.donor is None else str(row.donor + 1))]
+            # WHY THIS ROW IS HERE, on the row. Neither visible column is sorted — the order is
+            # their PRODUCT — and the app has been here before: the CORNERS table's loss column is
+            # marked by σ × median-loss and read "as if it were ordered by its own numbers and was
+            # not", which is recorded there as a defect a reader is given no way out of. The way
+            # out is the arithmetic, per row, in the reader's own numbers.
+            tip = (f"{row.label}: your best lap gave away {row.gain:.2f} s here. "
+                   f"{row.beat} of {row.n} clean laps drove it at least as fast as your best lap "
+                   f"did"
+                   + ("" if row.donor is None else f"; the quickest was lap {row.donor + 1}")
+                   + f". Ranked {r + 1} of {len(shown)} by {row.gain:.2f} × {row.beat}/{row.n} = "
+                     f"{row.priority:.3f}.")
+            for c, cell in enumerate(cells):
+                cell.setToolTip(tip)
+                t.setItem(r, c, cell)
+        t.blockSignals(False)
+        self._fit_table(t)
+        # The remainder, always — the tile above states the WHOLE gap and the table shows part of
+        # it, so without this line the page would print a total and a list that do not add up
+        # (the same class of defect the digest tile's rounding note records at _set_digest).
+        shown_s = sum(r.gain for r in shown)
+        self.ideal_note.setText(
+            f"Stitched from {len(sb.donor_ids())} of your {len(sb.lap_ids)} clean laps. These "
+            f"{len(shown)} segments hold {shown_s:.2f} s of the {gap:.2f} s; the other "
+            f"{len(rest)} hold {gap - shown_s:.2f} s between them, under "
+            f"{IDEAL_GAIN_FLOOR:.2f} s each. Ranked by gain × how often you have already matched "
+            "your best lap there.")
+
+    def _set_ideal_visible(self, on: bool) -> None:
+        """Show/hide the IDEAL LAP block as a UNIT — heading, both tiles, the table and the
+        remainder note. A tile left behind under a hidden heading is the defect this exists to
+        prevent (it is what the old SECTORS placement would have produced the moment the two
+        gates disagreed)."""
+        self._ideal_section.setVisible(on)
+        self.t_theoretical.setVisible(on)
+        self.t_ideal_gap.setVisible(on)
+        self.ideal_table.setVisible(on)
+        self.ideal_note.setVisible(on)
+
+    def _on_ideal_row_selected(self):
+        """A decomposition row rings the corner it names — the corner itself for a corner row,
+        the corner FEEDING it for a straight (SegmentBests.ring_cid). Same corner_clicked
+        pathway as the other three tables."""
+        rows = self.ideal_table.selectionModel().selectedRows()
+        if rows:
+            item = self.ideal_table.item(rows[0].row(), 0)
+            self.corner_clicked.emit(item.data(RING_ROLE) if item else None)
+        else:
+            self.corner_clicked.emit(None)
 
     def refresh_palette(self):
         """Re-render after a colour-blind-palette flip: the best-lap ★ row tint + the purple
@@ -1331,7 +1529,12 @@ class StatsView(QWidget):
         both groups behind ONE explanatory block carrying the status bar's copy and the next
         action. SESSION stays (its recorded time/distance/clock are real, lap or no lap) and so
         does DATA TRUST — it is the diagnostic for why no lap was found. Reversible: a
-        re-segmentation that finds laps restores every tile."""
+        re-segmentation that finds laps restores every tile.
+
+        The IDEAL LAP block is deliberately NOT listed here. It is not a tile-per-statistic group
+        with a lap gate; it has its own composite gate in `_refresh_ideal`, which runs after this
+        and which zero laps already fail (no best lap → no corner basis → no composite). Adding
+        it here would be a second gate that agrees with the first only by luck."""
         self.no_laps_note.setVisible(not has_laps)
         self._show_no_laps_prose(not has_laps)
         for section in (self._pace_section, self._speed_section):
@@ -1419,14 +1622,6 @@ class StatsView(QWidget):
         has = bool(sigmas)
         self._sector_section.setVisible(has)
         self.sector_table.setVisible(has)
-        # The theoretical best hides WITH the section — the 0-sector rule, for free (see the
-        # tile's comment in __init__). Recomputed each refresh so a later sector-line edit
-        # reveals it.
-        self.t_theoretical.setVisible(has)
-        self._set_target_tile(
-            self.t_theoretical,
-            session.theoretical_best() if hasattr(session, "theoretical_best") else None,
-            THEORETICAL_TOOLTIP)
         if not has:
             self.sector_table.setRowCount(0)
             return
