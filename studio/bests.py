@@ -145,11 +145,22 @@ class Bests:
         WHY NOT the sum of the session-best SECTOR splits, which this used to be: sector lines
         default to NONE, and with no sector line a lap is a single sub-sector whose split is its
         lap time — so the "sum of best sectors" was identically the BEST LAP TIME on every
-        recording anyone owns. It also moved the wrong way when information was added (placing one
-        sector line on D24 took it from 68.393 s to 68.651 s) because each lap projected the same
-        midpoint onto its own odometer and the pieces tiled nothing. `corners.segment_times`
-        asserts its 2N+1 pieces sum exactly to the lap time, which is the guarantee that makes a
-        cross-lap composite legitimate.
+        recording anyone owns.
+
+        It also moved the wrong way when information was added, because each lap projected the same
+        sector midpoint onto its OWN odometer: the pieces were different physical stretches of
+        different lengths and tiled nothing, so a new line could hand back time. The figure this
+        comment used to cite for that ("one sector line on D24 took it from 68.393 s to 68.651 s")
+        was measured on `GX010060`, a recording that has since been destroyed, and does not
+        reproduce — on the intact D24 the old definition moves monotonically DOWN. The property is
+        real and was re-measured on Sandown chapter 1, where the second sector line hands back
+        +0.115 s (one lane) or +0.129 s (another, independently). **That the two disagree is itself
+        the point**: `_add_sector` re-spaces the whole set rather than refining it, so the number
+        depended on the path taken to place the lines. A quantity that cannot be measured twice the
+        same way is not a target.
+
+        `corners.segment_times` asserts its 2N+1 pieces sum exactly to the lap time, which is the
+        guarantee that makes a cross-lap composite legitimate — the pieces tile the lap.
 
         `session_best_splits` (the purple cells) is unchanged and still the per-column minimum —
         sector lines remain a DISPLAY split of the lap table, they just no longer define the
