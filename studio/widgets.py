@@ -880,11 +880,23 @@ class PanelToolbar(QWidget):
                 group = QHBoxLayout()
                 group.setContentsMargins(0, 0, 0, 0)
                 group.setSpacing(theme.SPACE_XS)
+                # MOUNT THE GROUP BEFORE FILLING IT. `QLayout::addWidget` -> `addChildWidget` does
+                # two things: drop the widget from whatever layout currently holds it, AND reparent
+                # it onto `parentWidget()`. A free-standing QHBoxLayout has no `parentWidget()`, so
+                # only the first half runs — the widget is orphaned from its old layout and given no
+                # new parent. Qt prints nothing and the tree looks correct once __init__ returns,
+                # which is exactly why it is invisible to a structural test. The identical shape in
+                # `_PaneCell.__init__` half-moved the LIVE primary PlayerPane and SIGSEGVd the
+                # compare toggle after a few dozen cycles (5 of 6 processes; PR #200), crashing in
+                # `SignalManager::retrieveMetaObject` while constructing an unrelated QObject.
+                # Here it is latent only because every caller today passes a fresh, unparented
+                # control — but the signature accepts any widget, so the first caller that hands
+                # over a mounted one gets that crash. One line's position is the whole fix.
+                row.addLayout(group)
                 for c in item:
                     self._pin(c)
                     group.addWidget(c, 0, Qt.AlignVCenter)
                     flat.append(c)
-                row.addLayout(group)
             else:
                 self._pin(item)
                 row.addWidget(item, 0, Qt.AlignVCenter)
