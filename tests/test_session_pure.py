@@ -57,6 +57,7 @@ from studio._signal import (  # noqa: E402
     _band_lap_ids,
     _banded_out_lap_ids,
 )
+from studio.corner_model import SegmentBests  # noqa: E402
 from studio.load import (  # noqa: E402
     _HEURISTIC_HALF_M,
     MIN_START_SPEED,
@@ -1066,6 +1067,176 @@ def test_ideal_donor_admission_refuses_a_collapsed_segment():
     finally:
         corners_mod.project_boundaries = real_project
     print("test_ideal_donor_admission_refuses_a_collapsed_segment OK")
+
+
+# --- the DECOMPOSITION: from taunt into plan (N8) -----------------------------------------
+#
+# A lap time you never drove, with nothing attached, is a taunt. These pin the three things that
+# turn it into a plan: the gains ADD UP to the headline, the achievability count means what it
+# says, and the ranking puts the repeatable gain above the lucky one.
+
+
+def test_decomposition_gains_sum_to_the_headline_gap():
+    """The arithmetic the Stats page prints under the tile: summed over EVERY segment, the best
+    lap's gains equal `best lap time − ideal_total` exactly. It holds because each lap's segment
+    times sum exactly to its lap time, so `Σ(own − best) = own_total − Σbest`.
+
+    This is what makes a top-N slice of the table safe to show: the remainder is computable, and
+    the page states it. A decomposition that only approximately summed would make the table and
+    the tile above it disagree — the defect class `_set_digest`'s rounding note records."""
+    s, ids = make_ideal_session()
+    sb = s.ideal_segment_bests()
+    best = s.best_lap_id()
+    rows = sb.decomposition(best)
+    assert rows is not None and len(rows) == len(sb.bests), rows
+    headline = _lap_times(s, ids)[best] - sb.total
+    assert headline > 1e-3, headline
+    assert abs(sum(r.gain for r in rows) - headline) < 1e-9, (sum(r.gain for r in rows), headline)
+    # Every gain is a real deficit, never negative: the segment best is a minimum OVER a set the
+    # subject belongs to.
+    assert all(r.gain >= -1e-12 for r in rows), [r.gain for r in rows]
+    # …and every OTHER lap's decomposition sums to its own gap, not just the best lap's.
+    for lid in ids:
+        other = sb.decomposition(lid)
+        assert abs(sum(r.gain for r in other)
+                   - (_lap_times(s, ids)[lid] - sb.total)) < 1e-9, lid
+    assert sb.decomposition(999) is None, "a lap outside the composite has no decomposition"
+    print("test_decomposition_gains_sum_to_the_headline_gap OK")
+
+
+def test_beat_counts_are_not_a_fixed_tolerance_hit_rate():
+    """ACHIEVABILITY, and why it is not `hit_counts(0.1)`.
+
+    The count is 'how many clean laps drove this segment at least as fast as the subject did'.
+    Ties count, so the subject always counts itself and the number is never 0; it is bounded by
+    the laps ADMITTED on that segment; and — the property the fixed tolerance did not have — it
+    is invariant under a change of the segment's DURATION.
+
+    That last one is the whole reason `hit_counts(tol)` was replaced. A fixed 0.1 s window over
+    segments running 0.16 s to 10.07 s on the real recordings covered 62 % of one and 1 % of
+    another, and its 'achievability' tracked segment duration at r = -0.95 / -0.82 / -0.80 /
+    -0.95 across the four. Here the same laps are re-timed with every segment scaled by 3x and
+    the counts must not move."""
+    s, ids = make_ideal_session()
+    sb = s.ideal_segment_bests()
+    best = s.best_lap_id()
+    counts = sb.beat_counts(best)
+    assert counts is not None and len(counts) == len(sb.bests)
+    own = sb.times[sb.lap_ids.index(best)]
+    for j, (hit, n) in enumerate(counts):
+        assert 1 <= hit <= n <= len(sb.lap_ids), (j, hit, n)
+        assert n == int(sb.admitted[:, j].sum()), j
+        expect = int(((sb.times[:, j] <= own[j]) & sb.admitted[:, j]).sum())
+        assert hit == expect, (j, hit, expect)
+    # Scale-invariance: 3x every segment time (a slower track, identical relative driving) and
+    # the counts are unchanged. `hit_counts(0.1)` could not survive this — a 0.1 s window over
+    # 3x-longer segments admits a strictly different set.
+    scaled = SegmentBests(labels=sb.labels, cids=sb.cids, lap_ids=sb.lap_ids,
+                          times=sb.times * 3.0, admitted=sb.admitted,
+                          bests=[b * 3.0 for b in sb.bests], donors=sb.donors,
+                          s_edges=sb.s_edges, donor_span=sb.donor_span)
+    assert scaled.beat_counts(best) == counts
+
+    # NEGATIVE CONTROL, on a column built to make the difference unmistakable: three laps at
+    # 1.00 / 1.05 / 1.20 s through one segment. A fixed 0.1 s window round the best admits two
+    # of them; stretch the same driving 3x (3.00 / 3.15 / 3.60) and it admits ONE, because 0.1 s
+    # is now a third of the window it was. `beat_counts` reports 3 both times — the subject is
+    # the slowest, and all three are at least as fast as it, at either scale.
+    col = np.array([[1.00], [1.05], [1.20]])
+    one = SegmentBests(labels=["a"], cids=[], lap_ids=[0, 1, 2], times=col,
+                       admitted=np.ones((3, 1), bool), bests=[1.00], donors=[0],
+                       s_edges=[0.0, 1.0], donor_span=[(0.0, 0.0)])
+    three = SegmentBests(labels=["a"], cids=[], lap_ids=[0, 1, 2], times=col * 3.0,
+                         admitted=np.ones((3, 1), bool), bests=[3.00], donors=[0],
+                         s_edges=[0.0, 1.0], donor_span=[(0.0, 0.0)])
+    assert one.beat_counts(2) == three.beat_counts(2) == [(3, 3)]
+    fixed_1x = int((col[:, 0] <= 1.00 + 0.1).sum())
+    fixed_3x = int(((col[:, 0] * 3.0) <= 3.00 + 0.1).sum())
+    assert (fixed_1x, fixed_3x) == (2, 1), (fixed_1x, fixed_3x)
+    assert sb.beat_counts(999) is None
+    print("test_beat_counts_are_not_a_fixed_tolerance_hit_rate OK")
+
+
+def test_decomposition_ranks_a_repeatable_gain_above_a_lucky_one():
+    """THE RANKING, and the reason it is not raw gain. Two segments, hand-built:
+
+      * a BIG gain nobody repeats — 0.30 s, and exactly one lap of ten matched the subject.
+      * a SMALLER gain the driver makes routinely — 0.20 s, matched on eight laps of ten.
+
+    Ranked by gain the taunt wins. Ranked by gain × beat/n the plan does: 0.20 × 0.8 = 0.160
+    beats 0.30 × 0.1 = 0.030. Both factors are columns on the Stats page, so the order is
+    checkable by eye against the two numbers beside it.
+
+    Measured on the owner's own recordings this is not a hypothetical: D24's largest single gain
+    (C2, 0.213 s) and Sandown's (C5, 0.224 s) are both outranked, and on Sandown C5 falls to
+    third behind two gains 0.05-0.09 s smaller that were matched on 22 of 59 laps against its 13.
+    """
+    n_laps, n_seg = 10, 2
+    times = np.zeros((n_laps, n_seg))
+    # segment 0: the subject (lap 0) is 0.30 s off the best, and only lap 1 also beat it.
+    times[:, 0] = 10.0
+    times[0, 0] = 10.0
+    times[1, 0] = 9.70
+    times[2:, 0] = 10.5
+    # segment 1: the subject is 0.20 s off, and eight of the ten are at least as quick.
+    times[:, 1] = 5.00
+    times[0, 1] = 5.20
+    times[1, 1] = 5.00
+    times[2:9, 1] = 5.05
+    times[9, 1] = 5.40
+    sb = SegmentBests(labels=["a", "b"], cids=[1], lap_ids=list(range(n_laps)), times=times,
+                      admitted=np.ones((n_laps, n_seg), bool),
+                      bests=[float(times[:, 0].min()), float(times[:, 1].min())],
+                      donors=[1, 1], s_edges=[0.0, 0.5, 1.0], donor_span=[(0.0, 0.0)] * n_seg)
+    rows = sb.decomposition(0)
+    big = next(r for r in rows if r.index == 0)
+    repeatable = next(r for r in rows if r.index == 1)
+    assert abs(big.gain - 0.30) < 1e-9 and (big.beat, big.n) == (2, 10), big
+    assert abs(repeatable.gain - 0.20) < 1e-9 and (repeatable.beat, repeatable.n) == (9, 10)
+    assert big.gain > repeatable.gain, "the fixture must make the taunt the BIGGER gain"
+    assert rows[0] is repeatable, [(r.index, r.priority) for r in rows]
+    assert repeatable.priority > big.priority
+    # …and the retired ordering really would have got it wrong (negative control).
+    assert sorted(rows, key=lambda r: -r.gain)[0] is big
+    print("test_decomposition_ranks_a_repeatable_gain_above_a_lucky_one OK")
+
+
+def test_decomposition_drops_a_segment_the_subject_never_drove():
+    """A cell the SUBJECT is not admitted on carries a time it did not drive (the collapse
+    `MIN_DONOR_SPAN_FRAC` exists for), so its gain is measured against a fiction and its
+    neighbour's is inflated by the same amount. The pair still sums correctly — the headline is
+    safe — but neither number is advice, so the row is dropped rather than shown."""
+    times = np.array([[10.0, 0.0, 5.0], [9.0, 2.0, 5.5], [11.0, 1.8, 4.0]])
+    admitted = np.ones((3, 3), bool)
+    admitted[0, 1] = False                       # the subject's collapsed cell
+    sb = SegmentBests(labels=["a", "b", "c"], cids=[1], lap_ids=[0, 1, 2], times=times,
+                      admitted=admitted,
+                      bests=[9.0, 1.8, 4.0], donors=[1, 2, 2],
+                      s_edges=[0.0, 0.3, 0.6, 1.0], donor_span=[(0.0, 0.0)] * 3)
+    rows = sb.decomposition(0)
+    assert [r.index for r in sorted(rows, key=lambda r: r.index)] == [0, 2], rows
+    # …and lap 1, which IS admitted everywhere, still gets all three.
+    assert len(sb.decomposition(1)) == 3
+    print("test_decomposition_drops_a_segment_the_subject_never_drove OK")
+
+
+def test_display_labels_are_the_straights_tables_own_spelling():
+    """The decomposition and the STRAIGHTS table list the SAME pieces of track a few hundred
+    pixels apart on one page, so they must spell them the same way. `SegmentBests.display_label`
+    is pinned against `stats.straights_report`'s labels rather than re-deriving the convention:
+    corners are "C4", straights are "C3 → C4", and the timing line is "S/F" at both ends —
+    including the WRAP, where the S/F straight is fed by the LAST corner (`ring_cid`)."""
+    s, _ids = make_ideal_session()
+    sb = s.ideal_segment_bests()
+    report = s.straights_report()
+    assert report, "fixture must produce straights to compare against"
+    assert [sb.display_label(j) for j in range(0, len(sb.bests), 2)] == [r.label for r in report]
+    assert [sb.ring_cid(j) for j in range(0, len(sb.bests), 2)] == [r.ring_cid for r in report]
+    # The odd entries are the corners, named and pointing at themselves.
+    for j in range(1, len(sb.bests), 2):
+        cid = sb.cids[(j - 1) // 2]
+        assert sb.display_label(j) == f"C{cid}" and sb.ring_cid(j) == cid, j
+    print("test_display_labels_are_the_straights_tables_own_spelling OK")
 
 
 def make_rolling_session(n=401):
