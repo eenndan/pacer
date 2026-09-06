@@ -744,3 +744,18 @@ add_test(NAME test_export_padding
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_padding.py)
 set_tests_properties(test_export_padding PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# THE APP MAY NOT WRITE INTO ITS OWN SOURCE TREE. theme.apply_theme rendered the QComboBox chevron
+# straight into the TRACKED studio/assets/caret-down.png on every boot, so running pacer — or any
+# test that themes a QApplication — left `git status` dirty. It hid because the render is
+# DETERMINISTIC PER ENVIRONMENT and the suite runs in the one environment whose bytes match the
+# committed file (offscreen at 96 dpi): cocoa writes a different pHYs chunk and DPR 2 writes a
+# different image entirely. So this file boots the theme in a SUBPROCESS at QT_SCALE_FACTOR 1 AND
+# 2 (a QApplication reads the scale once, at construction), asserts the DPR it got, tripwires
+# every write path Python and Qt expose, and diffs `git status` across the boot. The chevron must
+# still PAINT — read from the window composite and diffed against the rule-stripped fallback —
+# because "wrote nothing" is also true of a render that failed.
+add_test(NAME test_repo_write_safety
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_repo_write_safety.py)
+set_tests_properties(test_repo_write_safety PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

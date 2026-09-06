@@ -8,6 +8,7 @@ tokens), register_fonts, apply_theme, ui_font, mono_font, delta_colour, LAP_SEEK
 from __future__ import annotations
 
 import os
+import tempfile
 
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPalette
@@ -848,25 +849,61 @@ def icon(name: str, color: str | None = None) -> QIcon:
     return qta.icon(name, color=color or C.text, color_active=color or C.accent)
 
 
-_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+# THE GENERATED CHEVRON IS PROCESS SCRATCH, NOT A REPO ASSET — and it used to be both.
+#
+# QSS `image:` takes a URL, so the only way to hand QComboBox::down-arrow a Phosphor glyph is to
+# put a PNG on disk first. That PNG was written to studio/assets/caret-down.png — a TRACKED file —
+# on every single apply_theme, so merely starting the app dirtied the working copy. Measured on
+# this machine, one boot each:
+#
+#     env                      bytes  IHDR   pHYs           vs the file that was committed
+#     offscreen, DPR 1           321  24x24  3780 (96 dpi)   IDENTICAL
+#     cocoa,     DPR 1           321  24x24  3937 (100 dpi)  8 bytes differ (the pHYs chunk)
+#     offscreen, QT_SCALE_FACTOR=2  570  48x48  3780         a different image entirely
+#
+# So "only write when the bytes would change" is not a fix, it is the same bug with a smaller
+# window: the committed bytes are reproducible ONLY offscreen at 96 dpi, which is exactly how the
+# suite runs, which is the only reason this survived. On the platform the user actually runs
+# (cocoa) the render never equals the committed file, and on a Retina panel it is not even the same
+# size — no single committed byte string can be clean in all three, and a rasterizer or Qt bump
+# moves all three at once.
+#
+# The file is also not a CACHE, which is what settled where it goes: nothing ever reads it back.
+# This function re-renders unconditionally on every boot and `_caret_asset_path` is a per-PROCESS
+# memo, so the bytes on disk have never once been loaded by a later run. Its real lifetime is one
+# process — exactly a temp dir's — and putting it there also means two pacer windows open at
+# different device pixel ratios cannot fight over one file, and a frozen .app (whose own
+# studio/assets lives inside a read-only signed bundle) can still write it. The app-support seam
+# the library/prefs/track_db/demo caches use would work too, but it would make ~30 test files that
+# theme a QApplication write into the user's real ~/Library/Application Support/pacer — the suite
+# is deliberately hermetic there (tests/_qtapp.py).
+#
+# tests/test_repo_write_safety.py boots the theme at BOTH device pixel ratios with a tripwire on
+# every write path Python and Qt expose, and fails if any of them lands in the source tree.
+_caret_tmp_dir: tempfile.TemporaryDirectory | None = None
 # Cached path of the generated combobox-chevron PNG (set on first _caret_down_asset() success).
 _caret_asset_path: str | None = None
 
 
 def _caret_down_asset() -> str | None:
-    """Render ph.caret-down tinted to C.text_dim to a cached PNG for QComboBox::down-arrow,
-    because QSS has no transform so the old border arrow renders as an L-bracket. Returns None →
-    native arrow (qtawesome missing / render fails)."""
-    global _caret_asset_path
+    """Render ph.caret-down tinted to C.text_dim to a PNG for QComboBox::down-arrow, because QSS
+    has no transform so the old border arrow renders as an L-bracket. Returns None → native arrow
+    (qtawesome missing / render fails).
+
+    The PNG goes in a per-process temp dir that is removed when the interpreter exits — NEVER in
+    studio/assets/, which is tracked; see the block above for the measurement that settled that."""
+    global _caret_asset_path, _caret_tmp_dir
     if _caret_asset_path is not None:
         return _caret_asset_path
     try:
         import qtawesome as qta
-        from PySide6.QtCore import QSize
         # @2x source so the down-scaled 12px arrow stays crisp on HiDPI displays.
         px = qta.icon("ph.caret-down", color=C.text_dim).pixmap(QSize(24, 24))
-        os.makedirs(_ASSETS_DIR, exist_ok=True)
-        path = os.path.join(_ASSETS_DIR, "caret-down.png")
+        # Held at module scope: TemporaryDirectory cleans itself up via a weakref finalizer, so
+        # dropping this reference would delete the directory out from under the live stylesheet.
+        if _caret_tmp_dir is None:
+            _caret_tmp_dir = tempfile.TemporaryDirectory(prefix="pacer-ui-")
+        path = os.path.join(_caret_tmp_dir.name, "caret-down.png")
         if not px.save(path, "PNG"):
             return None
     except Exception as exc:  # missing dep / render / IO — degrade to the native arrow
