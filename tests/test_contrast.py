@@ -254,12 +254,36 @@ def test_hero_ideal_readout_follows_the_palette():
         assert cb != std, "the hero readout must MOVE with the palette, like every other Δ surface"
         # ...and it is the SAME hue the other Δ surfaces use, not a third one
         assert cb == theme.delta_colour(0.94)
-        # the neutral/no-lap cases are unchanged in both palettes: there is no "ahead of ideal"
-        for d in (None, 0.0):
-            assert theme.format_ideal_readout(d, 37.0, 2, "mph")[1] is None
+        # The ramp is ONE-WAY, and since the ideal became a segment composite that is a decision
+        # rather than an impossibility: `delta_to_ideal_at` CAN come back negative inside a
+        # segment (floor -0.159 s, 1.3 % of samples on the owner's worst recording) because the
+        # ideal replays its donor's pace there. It cannot at a partition edge or at the flag, so
+        # "ahead of the ideal" is not a thing a lap can be, and the display clamps at 0 instead of
+        # growing an ahead side. See the note above theme.format_ideal_run.
+        for d in (None, 0.0, -0.052, -0.159, -3.0):
+            assert theme.format_ideal_readout(d, 37.0, 2, "mph")[1] is None, d
     finally:
         theme.set_palette(theme.PALETTE_STANDARD)
     print("test_hero_ideal_readout_follows_the_palette OK")
+
+
+def test_the_ideal_readout_clamps_instead_of_printing_a_minus_sign():
+    """The other half of the one-way ramp: the TEXT. A negative Δideal is clamped to +0.00 rather
+    than rendered, so the app's largest number cannot print a minus sign against a target that
+    cannot be beaten over any segment — and `Δideal -0.00` (a known-open ledger item) is
+    unreachable rather than merely unlikely. The clamp lives in ONE place, so the hero readout and
+    the tooltip that carries the same number on the other reference agree by construction."""
+    assert theme.format_ideal_run(None) == "Δideal —"
+    assert theme.format_ideal_run(1.6374) == "Δideal +1.64 s"
+    for d in (-1e-9, -0.004, -0.052, -0.15857, -3.0):
+        assert theme.format_ideal_run(d) == "Δideal +0.00 s", d
+        text, colour = theme.format_ideal_readout(d, 37.0, 2)
+        assert "-" not in text.split("     ")[0], (d, text)
+        assert colour is None, d
+    # The unit is part of it: the tooltip spelling used to be format_delta_value alone and read
+    # "Δideal +1.05" beside a hero that said "Δideal +1.05 s" (ledger §C).
+    assert theme.format_ideal_run(1.05).endswith(" s")
+    print("test_the_ideal_readout_clamps_instead_of_printing_a_minus_sign OK")
 
 
 def test_best_lap_curve_colour_follows_the_palette_in_both_directions():
@@ -922,6 +946,7 @@ def _run_all():
     test_no_module_constant_freezes_a_palette_hue()
     test_no_bare_palette_hue_is_read_anywhere_in_studio()
     test_hero_ideal_readout_follows_the_palette()
+    test_the_ideal_readout_clamps_instead_of_printing_a_minus_sign()
     test_best_lap_curve_colour_follows_the_palette_in_both_directions()
     test_ideal_star_icon_and_ideal_line_share_one_accessor()
     test_colourblind_map_ramp_steps_clear_the_jnd_under_deuteranopia()

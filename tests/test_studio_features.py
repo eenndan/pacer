@@ -552,7 +552,10 @@ def test_plots_view_shows_empty_state_when_no_laps():
             return None
 
         def delta_to_ideal(self, ids, x_mode="distance"):
-            return None  # P7: no ideal envelope here → the Δ chart keeps its Δ-to-best baseline
+            return None  # P7: no ideal here → the Δ chart keeps its Δ-to-best baseline
+
+        def ideal_donor_lap_id(self):
+            return None  # plots_view reads this on every plotted refresh
 
     pv = PlotsView(_Sess(has_laps=False))
     pv.refresh()
@@ -595,6 +598,9 @@ def test_plots_view_ideal_toggle_adds_labeled_curve():
         def delta_to_ideal(self, ids, x_mode="distance"):
             return None  # P7: this test pins the D1 OVERLAY, so keep the Δ-to-best baseline
 
+        def ideal_donor_lap_id(self):
+            return None  # a stitched ideal — the overlay has a real curve to draw
+
         def lap_time(self, lid):
             return 60.0
 
@@ -625,11 +631,12 @@ def test_plots_view_ideal_toggle_adds_labeled_curve():
 
 
 def _ideal_chart_session():
-    """A REAL (bare) Session with three seeded laps, driving the REAL delta / ideal-envelope math.
+    """A REAL (bare) Session with three seeded laps, driving the REAL delta / ideal-lap math.
 
-    Lap 0 is the session best; lap 1 is slower overall but covers the first half FASTER, so the
-    synthetic ideal envelope (the pointwise min over the clean laps) dips strictly below lap 0 —
-    i.e. lap 0's Δ-to-ideal is a genuine non-zero curve while its Δ-to-best is identically 0."""
+    Lap 0 is the session best; lap 1 is slower overall but covers the first half FASTER, so it wins
+    the early segments of the corner partition and the stitched ideal comes out strictly faster
+    than lap 0 — i.e. lap 0's Δ-to-ideal is a genuine non-zero curve while its Δ-to-best is
+    identically 0."""
     specs = {  # lap_id: (n, dt, t0, total_dist, speed profile over u ∈ [0, π])
         0: (200, 0.10, 100.0, 1000.0, None),                                  # the best lap
         1: (200, 0.11, 400.0, 1000.0, lambda u: 1.0 + 3.0 * np.cos(u / 2) ** 2),  # fast start

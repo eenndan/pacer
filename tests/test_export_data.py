@@ -27,7 +27,13 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _synthetic import bare_session, odometer, reset_corner_caches, seed_cols  # noqa: E402
+from _synthetic import (  # noqa: E402
+    bare_session,
+    odometer,
+    reset_corner_caches,
+    seed_cols,
+    seed_corner_basis,
+)
 
 from studio import export_data, gmeter, units  # noqa: E402
 from studio._signal import fmt_time  # noqa: E402
@@ -81,6 +87,39 @@ def _sector_line(x):
     """A vertical sector line crossing the synthetic straight-line lap (ys = 0) at x."""
     return SimpleNamespace(first=SimpleNamespace(x=float(x), y=-5.0),
                            second=SimpleNamespace(x=float(x), y=5.0))
+
+
+def make_stitched_session(*, n_sector_lines=0):
+    """A 3-lap session whose IDEAL IS GENUINELY STITCHED, for the trailer's summary gate.
+
+    `make_session` below is the opposite case and neither obviously nor accidentally: its lap 1 is
+    quickest everywhere, so one lap wins every segment of the corner partition and the "ideal" IS
+    that lap. Here the pace CROSSES — lap 1 is fast early / slow late, lap 0 the reverse — so more
+    than one lap donates, `ideal_donor_lap_id()` is None, and the ideal is strictly faster than any
+    lap driven. `n_sector_lines` exists to prove the summary gate does not read it."""
+    def slow_fast(u):
+        return 0.8 + 1.4 * np.sin(u / 2)
+
+    def fast_slow(u):
+        return 2.2 - 1.4 * np.sin(u / 2)
+
+    t0, d0 = odometer(122, 0.1, 100.0, 1000.0, slow_fast)
+    t1, d1 = odometer(120, 0.1, float(t0[-1]), 1000.0, fast_slow)
+    t2, d2 = odometer(118, 0.1, float(t1[-1]), 1000.0)
+    laps_arr = {0: (t0, d0), 1: (t1, d1), 2: (t2, d2)}
+    s = bare_session(laps=laps_arr, best=2, valid=[0, 1, 2])
+    for lap_id, (t, d) in laps_arr.items():
+        seed_cols(s, lap_id, t, d)
+    s.laps = FakeLaps(
+        {lap_id: {"time": float(t[-1] - t[0]), "dist": float(d[-1]),
+                  "entry_mps": 10.0 + lap_id, "lat": 52.0 + d * 1e-5 * np.pi,
+                  "lon": -0.7 + d * 1.3e-5}
+         for lap_id, (t, d) in laps_arr.items()},
+        sector_lines=[_sector_line(200.0 + 150.0 * i) for i in range(n_sector_lines)])
+    s.track_name = "Daytona MK"
+    seed_corner_basis(s, ((200.0, 300.0), (600.0, 750.0)), 1000.0)
+    s._gmeter = gmeter._empty()
+    return s
 
 
 def make_session(*, with_sectors=True, with_corners=True, with_g=True):
@@ -183,15 +222,24 @@ def test_write_laps_csv_matches_table():
     assert got[1:1 + n_data] == [cells for _lap_id, cells in rows]
     assert n_data == len(s.valid_lap_ids())
     # The summary trailer: a blank separator row, a `summary,time_s` mini-header, then one
-    # labeled row per SUMMARY_ROWS value — EXACTLY equal to the Session accessors (3-dec).
+    # labeled row per laps_summary() value — EXACTLY equal to the Session accessors (3-dec).
+    # laps_summary is the writer's own source, and it GATES the theoretical row (see the gate
+    # test below), so the expectation is taken from it rather than from SUMMARY_ROWS.
     assert got[1 + n_data] == []  # blank separator between lap rows and trailer
     assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s"]
     trailer = got[3 + n_data:]
-    assert len(trailer) == len(export_data.SUMMARY_ROWS)
-    for (label, accessor), row in zip(export_data.SUMMARY_ROWS, trailer, strict=True):
+    summary = export_data.laps_summary(s)
+    assert [label for label, _v in summary] == ["Best rolling"], (
+        "this fixture's lap 1 is quickest in every segment, so its ideal is that lap and the "
+        "trailer withholds it")
+    assert len(trailer) == len(summary)
+    for (label, value), row in zip(summary, trailer, strict=True):
         assert row[0] == f"{export_data.SUMMARY_MARKER}: {label}"
-        v = getattr(s, accessor)()
-        assert row[1] == (f"{v:.3f}" if v is not None else "")
+        assert row[1] == value
+    accessors = dict(export_data.SUMMARY_ROWS)
+    for label, value in summary:
+        v = getattr(s, accessors[label])()
+        assert value == (f"{v:.3f}" if v is not None else "")
     # theoretical <= rolling <= best lap time holds on the synthetic session too.
     th, ro = s.theoretical_best(), s.best_rolling_lap()
     best = s.lap_time(s.best_lap_id())
@@ -199,29 +247,47 @@ def test_write_laps_csv_matches_table():
     assert th <= ro + 1e-9 and ro <= best + 1e-9
 
 
-def test_laps_summary_drops_theoretical_without_sectors():
-    """M2: on a 0-sector track theoretical_best degenerates to the best lap time — a bare
-    duplicate that can read slower than 'Best rolling', with no tooltip in the export to explain
-    it — so the CSV/HTML summary DROPS the Theoretical-best row (mirrors the app hiding the tile).
-    Only 'Best rolling' remains. With sectors present both rows return."""
-    s0 = make_session(with_sectors=False)
-    summary0 = export_data.laps_summary(s0)
-    assert [label for label, _v in summary0] == ["Best rolling"], summary0
-    # Cross-check it lands in the written CSV trailer: exactly one summary row after the mini-header.
-    with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "laps.csv")
-        export_data.write_laps_csv(path, s0)
-        with open(path, newline="", encoding="utf-8") as f:
-            got = list(csv.reader(f))
-    n_data = len(s0.valid_lap_ids())
-    assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s"]
-    trailer = got[3 + n_data:]
-    assert len(trailer) == 1
-    assert trailer[0][0] == f"{export_data.SUMMARY_MARKER}: Best rolling"
-    # With sectors, both summary rows return (the Theoretical row is a real sum-of-best-sectors).
-    s1 = make_session(with_sectors=True)
-    assert [label for label, _v in export_data.laps_summary(s1)] == [
-        "Theoretical best", "Best rolling"]
+def test_laps_summary_gate_is_the_ideal_not_the_sector_count():
+    """The trailer withholds "Theoretical best" exactly when the ideal is a DUPLICATE of a lap the
+    driver drove — one lap winning every segment — and not one row earlier or later.
+
+    The gate used to be `sector_count() == 0`, inherited from the era when the theoretical best was
+    the sum of the session-best sector splits and a track with no sector line collapsed to a single
+    sub-sector whose split is the best lap time. That gate is not merely stale, it was INVERTED on
+    the recordings that matter: D24 and Sandown both carry ZERO sector lines, so the export dropped
+    the row on exactly the sessions where the ideal is now 0.94–1.64 s faster than anything driven.
+
+    So: a stitched ideal publishes the row with NO sector lines, a degenerate one withholds it WITH
+    sector lines, and adding lines to either changes nothing."""
+    for n_lines in (0, 2):
+        stitched = make_stitched_session(n_sector_lines=n_lines)
+        assert stitched.ideal_donor_lap_id() is None
+        assert stitched.sector_count() == n_lines
+        labels = [label for label, _v in export_data.laps_summary(stitched)]
+        assert labels == ["Theoretical best", "Best rolling"], (n_lines, labels)
+        # ...and the value published is the ideal itself, strictly faster than the best lap.
+        value = dict(export_data.laps_summary(stitched))["Theoretical best"]
+        assert value == f"{stitched.theoretical_best():.3f}"
+        assert stitched.theoretical_best() < stitched.lap_time(stitched.best_lap_id()) - 1e-3
+
+    for with_sectors in (False, True):
+        one_donor = make_session(with_sectors=with_sectors)
+        assert one_donor.ideal_donor_lap_id() is not None, "fixture must be the degenerate case"
+        labels = [label for label, _v in export_data.laps_summary(one_donor)]
+        assert labels == ["Best rolling"], (with_sectors, labels)
+
+    # Cross-check both ends land in the written CSV trailer, not just in laps_summary().
+    for session, want in ((make_stitched_session(), 2), (make_session(), 1)):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "laps.csv")
+            export_data.write_laps_csv(path, session)
+            with open(path, newline="", encoding="utf-8") as f:
+                got = list(csv.reader(f))
+        n_data = len(session.valid_lap_ids())
+        assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s"]
+        trailer = got[3 + n_data:]
+        assert len(trailer) == want, (want, trailer)
+        assert trailer[-1][0] == f"{export_data.SUMMARY_MARKER}: Best rolling"
 
 
 # ------------------------------------------------------------------------- channels CSV
@@ -465,7 +531,7 @@ if __name__ == "__main__":
     test_laps_table_schema_and_values()
     test_laps_table_degenerate_schema()
     test_write_laps_csv_matches_table()
-    test_laps_summary_drops_theoretical_without_sectors()
+    test_laps_summary_gate_is_the_ideal_not_the_sector_count()
     test_channels_csv_roundtrip_exact()
     test_channels_csv_without_g_signal()
     test_channels_csv_g_long_is_clean_gps_not_raw_imu()

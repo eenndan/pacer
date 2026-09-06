@@ -9,9 +9,9 @@ fingerprint = (GoPro prefix, recording number) so every chapter of a recording m
 entry — neither the path list nor the media duration is stable across a single-chapter vs a full
 chaptered open of the SAME recording.
 
-Schema (version 2) — one JSON object::
+Schema (version 3) — one JSON object::
 
-    {"version": 2,
+    {"version": 3,
      "entries": [
        {"fingerprint": "GX0062",            # the chapter-invariant identity key (see above)
         "stem":        "GX010062",          # first-chapter stem, for display
@@ -19,12 +19,23 @@ Schema (version 2) — one JSON object::
         "date":        "YYYY-MM-DD" | null,  # GPS9 wall-clock date (Session.session_date)
         "lap_count":   <int>,                # valid lap count
         "best":        <float seconds> | null,    # best lap time
-        "theoretical": <float seconds> | null,    # Session.theoretical_best
+        "theoretical": <float seconds> | null,    # Session.theoretical_best — the IDEAL lap
+                                             #   (v3 meaning; see the v2→v3 note below)
         "verified":    <bool>,               # session.timing_verified — a TRUSTED start/finish line
         "degraded":    <bool>,               # session.timing_quality.degraded — ESTIMATED absolute timing
         "dropout":     <bool>,               # the session's best lap (or any valid lap) had a GPS dropout
         "paths":       ["/abs/GX010062.MP4", ...]}, # the chapter file path(s) as opened (absolute)
        ...]}
+
+``theoretical`` CHANGED MEANING at v3, which is why the schema moved. Up to v2 it was the sum of
+the session-best sector splits — and since sector lines default to none, and a lap with no sector
+line is one sub-sector whose split is its lap time, every entry any user has on disk holds a value
+byte-identical to its own ``best``. From v3 it is ``Session.theoretical_best``, the corner/straight
+partition composite: a real target, 0.22–1.64 s faster than the best lap on the recordings this was
+measured against. A stored v2 number cannot be reinterpreted as a v3 one, and showing the two in one
+column would silently mix definitions, so the v2→v3 migration NULLS the field (see ``_migrate``) —
+every entry is kept, only that one value is retired, and it returns for real the next time the
+recording is opened.
 
 The three TRUST flags (``verified``/``degraded``/``dropout``, schema v2) let the PB progression
 EXCLUDE an untrustworthy "best": a PROVISIONAL start line (``not verified``) or a data-quality-
@@ -64,7 +75,7 @@ import shutil
 
 _log = logging.getLogger(__name__)
 
-VERSION = 2
+VERSION = 3
 
 # v1→v2 back-compat default for the three trust flags on a LEGACY (pre-flags) entry. A schema-v1
 # library was written before per-entry trust existed, so its bests must NOT be retroactively
@@ -179,7 +190,18 @@ def _migrate(data: dict, from_version: int) -> dict:
     trusted-unknown default (``_TRUST_UNKNOWN``: verified, not degraded, no dropout) so a pre-
     existing PB stays in the chart. ``_norm_entry`` fills the same default for any that slip through
     absent, so this back-fill is belt-and-suspenders; doing it here keeps the migration explicit and
-    self-documenting (the point of #55: the transform lives in one hook)."""
+    self-documenting (the point of #55: the transform lives in one hook).
+
+    v2 → v3 (``theoretical`` changed meaning): a v2 value is the sum of the session-best SECTOR
+    splits, which on a track with no sector lines — the default, and every recording measured — is
+    the entry's own ``best``, to the last bit. v3's value is the corner/straight composite. The
+    number is not convertible: nothing in the entry carries the segment times a composite needs.
+    The honest move is therefore to RETIRE that one field rather than let one column print two
+    definitions, so it is set to None; the dialog shows an em dash and says why on hover, and the
+    real value is written back the next time that recording is opened. This is the only migration
+    that drops a value, and it drops the value BECAUSE keeping it would be a lie — every entry, and
+    every other field on it (including ``best``, which the PB history runs on), survives untouched.
+    """
     if from_version < 2:
         # entries may be a non-list here (a corrupt shape load() rejects AFTER migration); guard so
         # the back-fill is a no-op on a bad shape rather than crashing.
@@ -189,6 +211,12 @@ def _migrate(data: dict, from_version: int) -> dict:
                 if isinstance(e, dict):
                     for key, default in _TRUST_UNKNOWN.items():
                         e.setdefault(key, default)
+    if from_version < 3:
+        entries = data.get("entries")
+        if isinstance(entries, list):
+            for e in entries:
+                if isinstance(e, dict) and e.get("theoretical") is not None:
+                    e["theoretical"] = None
     return data
 
 

@@ -635,18 +635,50 @@ def format_delta_speed(d: float | None, speed_kmh: float | None,
 
 # The hero readout LEADS with Δ-to-IDEAL — the product's moat number ("how far off your own
 # achievable lap are you, right here") — rather than Δ-to-best. Labelled "Δideal" so it can never be
-# read as the plain best-lap Δ; the IDEAL gap is always ≥ 0 (you can't beat the envelope you helped
-# form), so it carries the single "behind"/amber colour rather than the two-way ahead/behind ramp.
+# read as the plain best-lap Δ.
+#
+# THE DISPLAY CLAMPS AT ZERO, AND THAT IS A DECISION, NOT AN INVARIANT. This comment used to assert
+# that "the IDEAL gap is always >= 0 (you can't beat the envelope you helped form)". Since the ideal
+# became the corner/straight partition composite (`Session.ideal_segment_bests`) that is true at
+# every partition EDGE and at the flag — the minimum was taken over the clean laps there — but NOT
+# pointwise. Inside a segment the ideal replays its DONOR lap's pace, and a lap that carries more
+# speed into the same corner is transiently ahead of that donor. Swept at 25 ms of media clock over
+# every valid lap of the owner's five real recordings (420 088 samples):
+#
+#   recording            floor      raw Δ < 0     prints a minus sign
+#   D24 1 chapter       -0.016 s      0.94 %          0.30 %
+#   D24 3 chapters      -0.003 s      0.08 %          0.00 %
+#   Sandown chapter 1   -0.159 s      2.09 %          1.26 %
+#   Sandown 3 chapters  -0.051 s      0.47 %          0.37 %
+#   SD_30_08            -0.039 s      6.42 %          4.02 %
+#
+# against end-of-lap values of +0.22 … +9.24 s. So it is a ±0.16 s wobble on a number whose job is
+# to read 0 … +1.6 s, and the next partition edge always takes it back: over a segment, and over
+# the lap, you cannot be ahead of the ideal. A two-way ramp would flash the "ahead" hue on the
+# app's LARGEST text for a tenth of a second to report something that is not true at any
+# granularity the ideal is defined on — so the DISPLAYED value is clamped at 0 (`format_ideal_run`)
+# and the ramp stays one-way. Same shape as the DELTA_EVEN_EPS_S dead band above: a clamp that
+# exists, is stated, and is applied at the display boundary only. `Session.delta_to_ideal_at` keeps
+# returning the raw signed number, and the Δ chart draws it unclamped — there a sub-zero excursion
+# has a track position to belong to, which is the whole point of the overlay.
+def format_ideal_run(d_ideal: float | None) -> str:
+    """'Δideal <v> s' (em dash and no unit when there is no value) — the ONE rendering of the
+    Δ-to-ideal scalar, so the hero readout and the tooltip that carries it on the other reference
+    can never print the same number two ways. A negative `d_ideal` is CLAMPED to 0 first (see the
+    note above); that also makes `Δideal -0.00` unreachable by construction."""
+    shown = 0.0 if (d_ideal is not None and d_ideal < 0.0) else d_ideal
+    return f"Δideal {format_delta_value(shown)}" + (" s" if shown is not None else "")
+
+
 def format_ideal_readout(d_ideal: float | None, speed_kmh: float | None,
                          lap: int | None, unit: str | None = None) -> tuple[str, str | None]:
     """Hero #DiffBox readout (text, colour): 'Δideal <v> s<5 spaces><n> <unit>', leading with the
-    Δ-to-ideal scalar. `d_ideal` is `Session.delta_to_ideal_at` (≥ 0 by construction, None outside a
-    lap / before an ideal exists). Colour = `C.behind` when there's real time on the table, else
-    neutral — there is no "ahead of ideal", so this never goes green. `unit` (km/h default) applies
-    to the speed number only."""
-    v = format_delta_value(d_ideal)
-    delta_run = f"Δideal {v}" + (" s" if d_ideal is not None else "")
-    text = f"{delta_run}     {format_speed_run(speed_kmh, lap, unit)}"
+    Δ-to-ideal scalar. `d_ideal` is `Session.delta_to_ideal_at` (None outside a lap / before an
+    ideal exists; slightly negative inside a segment, clamped for display — see the note above).
+    Colour = `C.behind` when there's real time on the table, else neutral: the ramp is one-way
+    because the clamped value has no "ahead" side. `unit` (km/h default) applies to the speed
+    number only."""
+    text = f"{format_ideal_run(d_ideal)}     {format_speed_run(speed_kmh, lap, unit)}"
     # behind_colour(), NOT the raw C.behind token: this is the app's LARGEST text and it carries
     # the ahead/behind meaning, so it must follow the colour-blind palette like every other Δ
     # surface. Read as a constant it stayed the standard red in BOTH palettes (max per-channel

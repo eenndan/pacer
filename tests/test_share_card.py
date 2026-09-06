@@ -52,13 +52,14 @@ class FakeSession:
     """The minimal Session surface share_card.card_data reaches through — duck-typed, no pacer."""
 
     def __init__(self, *, track="Daytona MK", verified=True, degraded=False, best_id=3,
-                 best_time=68.42, ideal=67.90, date="2026-06-29", opps=None):
+                 best_time=68.42, ideal=67.90, date="2026-06-29", opps=None, ideal_donor=None):
         self.track_name = track
         self.timing_verified = verified
         self.timing_quality = _quality(degraded)
         self._best_id = best_id
         self._best_time = best_time
         self._ideal = ideal
+        self._ideal_donor = ideal_donor  # a lap id => ONE lap won every segment (degenerate)
         self._date = date
         self._opps = opps if opps is not None else coaching.Opportunities(
             enough=True, n_laps=5, median_lap_id=3, rows=[_apex_opp()])
@@ -71,6 +72,9 @@ class FakeSession:
 
     def ideal_total(self):
         return self._ideal
+
+    def ideal_donor_lap_id(self):
+        return self._ideal_donor
 
     def session_date(self):
         return self._date
@@ -194,6 +198,47 @@ def test_even_ideal_card_renders_with_the_clean_copy():
     img = share_card.render_card(d, None, palette=theme.PALETTE_STANDARD)
     assert not img.isNull() and img.width() == share_card.CARD_W
     print("test_even_ideal_card_renders_with_the_clean_copy OK")
+
+
+def test_single_donor_session_withholds_the_ideal_block():
+    """When ONE lap is quickest through every corner and every straight, the ideal IS that lap —
+    so the card states no gap at all rather than printing "level with your ideal lap" over a
+    session with one usable lap.
+
+    That copy used to be the ONLY thing this card could print: the old ideal was the pointwise
+    minimum of the laps' cumulative-elapsed curves, which at the flag is the best lap time on every
+    recording, so the gap was structurally 0. It is now a real state with a real cause, and the
+    house rule for a synthesized value that has collapsed onto a real one is to hide it (see
+    export_data.laps_summary). The card still renders — only the Δ block is absent."""
+    degenerate = FakeSession(best_time=48.98, ideal=48.98, ideal_donor=3)
+    d = share_card.card_data(degenerate, unit="kmh")
+    assert d.delta_to_ideal_s is None, d.delta_to_ideal_s
+    assert not d.blocked, "a one-donor session is still a shareable best lap"
+    assert d.best_time == "0:48.980", d.best_time
+    img = share_card.render_card(d, None, palette=theme.PALETTE_STANDARD)
+    assert not img.isNull() and img.width() == share_card.CARD_W
+    # ...and a session with the SAME numbers but more than one donor does print the gap, so the
+    # withholding is keyed on the donor and not on the times being equal.
+    stitched = share_card.card_data(FakeSession(best_time=48.98, ideal=47.93), unit="kmh")
+    assert stitched.delta_to_ideal_s is not None
+    assert share_card.hero_delta_line(stitched.delta_to_ideal_s) == "+1.05 s vs your ideal lap"
+    print("test_single_donor_session_withholds_the_ideal_block OK")
+
+
+def test_ideal_sublabel_fits_the_card_content_box_unelided():
+    """The Δ-to-ideal sublabel is drawn with no fit and no elide at 24 px from the card's own
+    `pad`, so its width is a hard constraint, not a preference. It names what the ideal is, and
+    that wording changed with the maths (it used to say "best-at-each-point", which described the
+    deleted envelope), so the width is pinned here rather than eyeballed once."""
+    from PySide6.QtGui import QFontMetrics
+    box = share_card.CARD_W - 2 * 72     # the card's content width (pad = 72 in render_card)
+    w = QFontMetrics(share_card._font(24)).horizontalAdvance(share_card.IDEAL_SUBLABEL)
+    assert w <= box, f"{share_card.IDEAL_SUBLABEL!r} is {w} px in a {box} px content box"
+    # It must still say what kind of thing this is: synthesized from pieces, not a lap driven.
+    lower = share_card.IDEAL_SUBLABEL.lower()
+    assert "not a single drivable lap" in lower, share_card.IDEAL_SUBLABEL
+    assert "corners" in lower and "straights" in lower, share_card.IDEAL_SUBLABEL
+    print(f"test_ideal_sublabel_fits_the_card_content_box_unelided OK ({w} px / {box} px)")
 
 
 # --------------------------------------------------------------------- render-layer tests
@@ -694,6 +739,8 @@ if __name__ == "__main__":
     test_card_data_survives_coaching_error()
     test_hero_delta_line_reads_cleanly_on_both_branches()
     test_even_ideal_card_renders_with_the_clean_copy()
+    test_single_donor_session_withholds_the_ideal_block()
+    test_ideal_sublabel_fits_the_card_content_box_unelided()
     test_render_card_is_a_nonempty_image_of_the_right_size()
     test_render_card_without_thumbnail_and_on_both_palettes()
     test_render_card_stamped_and_degraded_still_renders()

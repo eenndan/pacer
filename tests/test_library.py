@@ -64,6 +64,7 @@ from studio.library_dialog import (  # noqa: E402
     _ALL_TRACKS,
     _COL_BEST,
     _COL_DATE,
+    _COL_THEO,
     _COL_TRACK,
     _DEFAULT_SIZE,
     _MIN_BROWSABLE_H,
@@ -580,10 +581,11 @@ def test_trust_label_reasons_and_priority():
     assert library.trust_label(_entry("A", verified=False, dropout=True)) == "provisional"
 
 
-def test_real_v1_file_migrates_to_v2_all_entries_preserved():
-    """THE #55 VALIDATION: a real on-disk schema-v1 file (no trust flags) round-trips to v2 with
-    EVERY legacy entry preserved and back-filled to trusted-unknown — a pre-existing PB history is
-    NOT retroactively discarded (all legacy bests stay eligible for the PB chart)."""
+def test_real_v1_file_migrates_forward_all_entries_preserved():
+    """THE #55 VALIDATION: a real on-disk schema-v1 file (no trust flags) round-trips to the
+    CURRENT version with EVERY legacy entry preserved and back-filled to trusted-unknown — a
+    pre-existing PB history is NOT retroactively discarded (all legacy bests stay eligible for the
+    PB chart)."""
     # Two v1-shaped entries WITHOUT any trust flags (the pre-#55-user file on disk).
     v1_a = {"fingerprint": "GX0060", "stem": "GX010060", "track": "MK", "date": "2024-05-01",
             "lap_count": 8, "best": 68.4, "theoretical": 67.9, "paths": []}
@@ -594,18 +596,69 @@ def test_real_v1_file_migrates_to_v2_all_entries_preserved():
         with open(p, "w") as f:
             json.dump({"version": 1, "entries": [v1_a, v1_b]}, f)
         idx = library.load(p)
-        # Re-stamped to v2, both entries survived, each back-filled trusted-unknown.
-        assert idx["version"] == 2 == library.VERSION
+        # Re-stamped forward, both entries survived, each back-filled trusted-unknown.
+        assert idx["version"] == library.VERSION
         assert {e["fingerprint"] for e in idx["entries"]} == {"GX0060", "GX0061"}
         for e in idx["entries"]:
             assert e["verified"] is True and e["degraded"] is False and e["dropout"] is False
         # The legacy bests are trustworthy → still charted (back-compat: history is not discarded).
         assert library.pb_series(idx, "MK") == [("2024-05-01", 68.4), ("2024-06-01", 67.1)]
-        # A save writes the migrated v2 file back with no data loss.
+        # A save writes the migrated file back with no data loss.
         library.save(idx, p)
         back = library.load(p)
-        assert back["version"] == 2
+        assert back["version"] == library.VERSION
         assert {e["fingerprint"] for e in back["entries"]} == {"GX0060", "GX0061"}
+
+
+def test_v2_theoretical_is_retired_not_reinterpreted():
+    """v2 → v3. ``theoretical`` CHANGED MEANING, so the stored number is retired rather than
+    carried across a definition change.
+
+    Up to v2 it was the sum of the session-best SECTOR splits. Sector lines default to none, and a
+    lap with no sector line is one sub-sector whose split is its lap time, so on every recording
+    measured the stored value was byte-identical to that entry's own ``best`` — the Library's
+    fourth column was a copy of its third. From v3 it is the corner/straight partition composite,
+    a real target 0.22–1.64 s faster than the best lap. Nothing on the entry carries the segment
+    times needed to convert one into the other, and a column that prints both definitions at once
+    is the exact dishonesty this fixes, so the migration nulls it: the value comes back for real
+    the next time that recording is opened.
+
+    THE CONSTRAINT THAT MATTERS: it is the only field that moves. Every entry survives, and
+    ``best`` — the field the whole PB history runs on — is untouched."""
+    v2 = [{"fingerprint": "GX0060", "stem": "GX010060", "track": "MK", "date": "2024-05-01",
+           "lap_count": 8, "best": 68.4, "theoretical": 68.4, "verified": True,
+           "degraded": False, "dropout": False, "paths": []},
+          {"fingerprint": "GX0061", "stem": "GX010061", "track": "MK", "date": "2024-06-01",
+           "lap_count": 9, "best": 67.1, "theoretical": None, "verified": False,
+           "degraded": True, "dropout": True, "paths": []}]
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        with open(p, "w") as f:
+            json.dump({"version": 2, "entries": [dict(e) for e in v2]}, f)
+        idx = library.load(p)
+
+        assert idx["version"] == library.VERSION == 3
+        assert len(idx["entries"]) == 2, "a migration may never lose an entry"
+        for before, after in zip(v2, idx["entries"], strict=True):
+            assert after["theoretical"] is None, after
+            # ...and NOTHING else moved.
+            moved = {k for k in before if k != "theoretical" and before[k] != after[k]}
+            assert not moved, moved
+        # The PB history is unaffected: it reads `best`, which the migration did not touch.
+        assert library.pb_series(idx, "MK") == [("2024-05-01", 68.4)]
+        # A save + reload keeps the retirement (it is not re-derived from anything).
+        library.save(idx, p)
+        assert [e["theoretical"] for e in library.load(p)["entries"]] == [None, None]
+
+    # A v1 file crosses BOTH migrations in one load: trust flags back-filled, theoretical retired.
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "library.json")
+        with open(p, "w") as f:
+            json.dump({"version": 1, "entries": [
+                {"fingerprint": "GX0062", "stem": "GX010062", "track": "MK", "date": "2024-07-01",
+                 "lap_count": 8, "best": 68.4, "theoretical": 68.4, "paths": []}]}, f)
+        e = library.load(p)["entries"][0]
+        assert e["theoretical"] is None and e["verified"] is True and e["best"] == 68.4
 
 
 def test_upsert_writes_v2_trust_flags():
@@ -711,6 +764,55 @@ def test_dialog_lists_both_entries_sorted():
         # Best column carries the numeric sort key (seconds), so it orders by value.
         assert dlg.table.item(1, _COL_BEST).data(NUM_ROLE) == 70.0
         dlg.deleteLater()
+
+
+def test_dialog_ideal_column_never_reprints_the_best_lap_cell():
+    """The fourth column is the IDEAL lap, and it must never be a copy of the third.
+
+    It was headed "Theoretical" and printed the sum of the session-best SECTOR splits. Sector lines
+    default to none, and a lap with no sector line is one sub-sector whose split is its lap time —
+    so on every recording the owner has, the two columns rendered the same string, and unlike the
+    Stats tile and the CSV trailer this column was never gated. Three states, three behaviours:
+
+      * a real stitched ideal  → the time, right there;
+      * a pre-v3 entry whose value the migration retired → em dash + "open it again";
+      * an ideal equal to the best lap (one lap won every segment) → em dash + why.
+
+    The two em-dash cases are told apart on HOVER, because "—" alone reads as missing data and one
+    of the two has an action attached to it."""
+    from studio.library_dialog import _HEADERS, _IDEAL_ONE_DONOR_TIP, _IDEAL_STALE_TIP
+
+    assert _HEADERS[_COL_THEO] == "Ideal lap", _HEADERS
+    idx = {"version": library.VERSION, "entries": [
+        _entry("GX010060", date="2024-05-01", best=68.400, theo=67.312),   # stitched
+        _entry("GX010061", date="2024-05-02", best=68.400, theo=None),     # retired by migration
+        _entry("GX010062", date="2024-05-03", best=68.400, theo=68.400),   # one donor
+        # ...and a tie that is only a tie once rendered: `fmt_time` prints milliseconds, so a
+        # 0.3 ms "gain" is two identical cells, which is the thing being prevented.
+        _entry("GX010063", date="2024-05-04", best=68.400, theo=68.4003),
+    ]}
+    dlg = LibraryDialog(idx, _OpenSpy())
+    want = {
+        "2024-05-01": ("1:07.312", None),
+        "2024-05-02": ("—", _IDEAL_STALE_TIP),
+        "2024-05-03": ("—", _IDEAL_ONE_DONOR_TIP),
+        "2024-05-04": ("—", _IDEAL_ONE_DONOR_TIP),
+    }
+    for date, (text, reason) in want.items():
+        row = _row_with_date(dlg, date)
+        cell = dlg.table.item(row, _COL_THEO)
+        best_cell = dlg.table.item(row, _COL_BEST)
+        assert cell.text() == text, (date, cell.text())
+        assert cell.text() != best_cell.text() or text == "—", (date, cell.text())
+        if reason is None:
+            assert not cell.toolTip().startswith("Ideal lap:"), (date, cell.toolTip())
+        else:
+            assert cell.toolTip().startswith(reason), (date, cell.toolTip())
+            # the row's file identity is APPENDED, never replaced — every cell keeps it
+            assert dlg.table.item(row, _COL_DATE).toolTip() in cell.toolTip(), date
+        # A withheld value must not sort as a lap time either (blank key, not 0.0).
+        assert cell.data(NUM_ROLE) == (None if text == "—" else 67.312), date
+    dlg.deleteLater()
 
 
 def test_dialog_pb_chart_hides_pyqtgraph_chrome():

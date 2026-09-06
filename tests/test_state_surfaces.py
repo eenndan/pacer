@@ -135,6 +135,9 @@ def _plots_view():
         def delta_to_ideal(self, ids, x_mode="distance"):
             return None
 
+        def ideal_donor_lap_id(self):
+            return None
+
         def lap_window(self, lid):
             return None
 

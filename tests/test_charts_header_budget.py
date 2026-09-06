@@ -25,8 +25,11 @@ finding was a way that over-subscription surfaced:
   * L2-08 — the ⛶ buttons were 26x22, under the 24x24 hit-target floor, and they are the only
     always-visible affordance that restores a maximized panel.
   * IA-03 — the largest text in the window (the hero) is Δ-to-ideal on the lap the app opens on,
-    which is the BEST lap, where the ideal is structurally ~0. What is fixable is the honesty: say
-    why the number cannot move.
+    which is the BEST lap, where the ideal used to be structurally ~0. That was first answered with
+    honesty (a hover note saying why the number could not move) and has since been answered at the
+    source: the ideal is the corner/straight composite, which is strictly faster than any single
+    lap, so the hero moves on the best lap too. The note is gone and the movement is asserted —
+    along with the clamp that keeps the same readout from printing a minus sign inside a segment.
 
 WHAT CHANGED, AND WHY THE CONTRACTS SURVIVED THE REWRITE. The fix for all of that was a four-tier
 width-budget ladder (`_measure_plots_budget` / `_fit_plots_header` + a resize `eventFilter`) that
@@ -345,39 +348,91 @@ def test_every_maximize_button_clears_the_hit_target_floor():
 
 
 # ============================================================ the hero readout
-def test_hero_readout_explains_its_structural_zero_on_the_best_lap():
-    """IA-03. The window's largest text is Δ-to-ideal, and on the best lap it cannot move: the
-    ideal is stitched from that lap's own sections. Say so on hover — without dropping the
-    Δ-to-best number the box promises to keep one hover away."""
+def test_the_hero_is_no_longer_a_structural_zero_on_the_best_lap():
+    """IA-03, INVERTED. This test used to require the hero to APOLOGISE on hover ("Δideal stays
+    near zero here by construction"), because the ideal was the pointwise minimum of the laps'
+    cumulative-elapsed curves — a curve whose value at the flag is identically the best lap time,
+    so the app's largest text was a structural null in the state the app always opens in.
+
+    The ideal is now the corner/straight partition composite and is strictly faster than any single
+    lap, so the apology would be false. What is asserted instead is the property that made it
+    false: on the BEST lap — the default selection — the hero moves by a real amount, and the
+    Δ-to-best number it promises to keep one hover away is still there, now with nothing appended.
+    (On the real recordings the same sweep reads +0.94 s on D24 one chapter and +1.64 s on three.)"""
     with _Themed((1440, 900)) as view:
-        best = view.session.best_lap_id()
+        s = view.session
+        best = s.best_lap_id()
         assert best is not None, "the synthetic session must have a best lap"
-        others = [i for i in view.session.valid_lap_ids() if i != best]
         assert view.ideal_readout_btn.isChecked(), "the hero leads with Δ-to-ideal by default"
+        assert s.ideal_donor_lap_id() is None, (
+            "fixture must have a STITCHED ideal (>1 donor), or this asserts nothing")
+
+        lo, hi = s.lap_window(best)
+        swept = [s.delta_to_ideal_at(best, lo + (hi - lo) * k / 200) for k in range(201)]
+        swept = [v for v in swept if v is not None]
+        span = max(swept) - min(swept)
+        assert span > 0.5, (
+            f"Δideal moved only {span:.4f} s across the BEST lap — if the ideal has gone back to "
+            f"being the best lap, that is the defect this test replaced, not a copy problem")
 
         view._update_diff_box(0.0, 42.0, best)
         tip = view.diff_box.toolTip()
-        assert "by construction" in tip, tip
-        assert "best lap here" in tip, "the Δ-to-best number must survive the explanation"
+        assert "best lap here" in tip, "the Δ-to-best number must stay one hover away"
+        assert "by construction" not in tip and "near zero" not in tip, (
+            f"the hero no longer has a structural zero to excuse on the best lap: {tip!r}")
+        print("test_the_hero_is_no_longer_a_structural_zero_on_the_best_lap OK "
+              f"(Δideal spans {span:.3f} s on the best lap)")
 
-        view._update_diff_box(0.0, 42.0, others[0])
-        assert "by construction" not in view.diff_box.toolTip(), view.diff_box.toolTip()
-        print("test_hero_readout_explains_its_structural_zero_on_the_best_lap OK")
+
+def test_the_hero_never_prints_a_minus_sign_against_the_ideal():
+    """The clamp in `theme.format_ideal_run`, measured on a real view rather than in the abstract.
+
+    At every partition EDGE the ideal took the minimum over the clean laps, so Δideal >= 0 there
+    and at the flag. INSIDE a segment it replays its donor's pace, and a lap that carries more
+    speed through the same corner is transiently ahead of it: this fixture's lap 1 reaches
+    -0.077 s, and on the owner's recordings the floor is -0.159 s on 1.3 % of samples. Negative is
+    real information about a donor's pace, and it is NOT "you beat your ideal" — over any segment,
+    and over the lap, that cannot happen. So the app's largest text clamps it at zero rather than
+    flashing an ahead-coloured minus sign a driver would read as an achievement."""
+    with _Themed((1440, 900)) as view:
+        s = view.session
+        floor, printed_minus = 0.0, []
+        for lap in s.valid_lap_ids():
+            lo, hi = s.lap_window(lap)
+            for k in range(201):
+                t = lo + (hi - lo) * k / 200
+                raw = s.delta_to_ideal_at(lap, t)
+                if raw is None:
+                    continue
+                floor = min(floor, raw)
+                view._update_diff_box(t, 42.0, lap)
+                text = view.diff_box.text()
+                if "-" in text.split("     ")[0]:
+                    printed_minus.append((lap, round(t, 3), raw, text))
+        assert floor < -1e-3, (
+            f"fixture floor is {floor:.5f} s — it must go genuinely negative or the clamp is "
+            f"untested here")
+        assert not printed_minus, printed_minus[:3]
+        # ...and the raw session value is UNCLAMPED, so the chart still sees the real excursion.
+        assert min(s.delta_to_ideal_at(lap, t) or 0.0
+                   for lap in s.valid_lap_ids()
+                   for t in (lambda w: [w[0] + (w[1] - w[0]) * k / 200 for k in range(201)])(
+                       s.lap_window(lap))) == floor
+        print("test_the_hero_never_prints_a_minus_sign_against_the_ideal OK "
+              f"(raw floor {floor:.5f} s, 0 minus signs printed)")
 
 
 def test_the_hero_never_recommends_the_reference_that_cannot_move():
     """D4-08. The census says this readout is the ONLY surface above 13 px in the whole first
-    painted frame (22 px, against 167 at 13 and 8 at 11), and on arrival it says `+0.00`. The note
-    that explains that used to offer two ways out — "pick another lap, or switch this readout to
-    Δ-to-best, for a number that moves" — and the second one is FALSE, which is what this test
-    exists to stop coming back. On the best lap, Δ-to-best is not near zero, it IS zero: that lap
-    is the reference. Measured on the real recording over the whole default lap, 400 samples:
-    Δideal prints a non-zero value on 33.2% of it, Δ-to-best on 0.0%.
+    painted frame (22 px, against 167 at 13 and 8 at 11). The DEFAULT reference no longer needs a
+    note at all (see the test above — the ideal moves on the best lap now), but the OTHER one,
+    reachable in one click from the same header, still hands the user a permanent 0.00: on the best
+    lap Δ-to-best is not near zero, it IS zero, because that lap is the reference.
 
-    So the advice is measured here rather than reviewed: whatever action the note names has to be
-    one this session's own numbers say produces a number that moves, and the one that cannot must
-    not be named. And the OTHER reference — reachable in one click from the same header — now has
-    to explain itself too, because it used to hand the user a permanent 0.00 with no note at all."""
+    So the advice is measured here rather than reviewed: the note that survives must name an action
+    this session's own numbers say produces a number that moves, and must not name the one that
+    cannot. Measured on the real recording over the whole default lap, 400 samples: Δ-to-best
+    prints a non-zero value on 0.0 % of it."""
     with _Themed((1440, 900)) as view:
         s = view.session
         best = s.best_lap_id()
@@ -393,24 +448,31 @@ def test_the_hero_never_recommends_the_reference_that_cannot_move():
         assert cannot_move <= theme.DELTA_EVEN_EPS_S, (
             f"Δ-to-best moved {cannot_move:.4f} s on the BEST lap — if that is now real, the note "
             f"below may name it again, but re-measure on a real recording first")
-        # (b) the action it DOES name: it produces one that does.
+        # (b) the reference that DOES move — on any lap, including the best one, which is why the
+        # default branch carries no note at all any more.
         can_move = sweep(s.delta_to_ideal_at, others[0])
+        can_move_here = sweep(s.delta_to_ideal_at, best)
         assert can_move > theme.DELTA_EVEN_EPS_S, (
             f"picking another lap only moved Δideal {can_move:.4f} s — the note's advice is no "
             f"longer true on this fixture and the copy needs rewriting, not the test")
+        assert can_move_here > theme.DELTA_EVEN_EPS_S, (
+            f"Δideal moved {can_move_here:.4f} s on the BEST lap — if that is now ~0 the ideal has "
+            f"regressed to the best lap and the deleted apology was right after all")
 
+        # The DEFAULT reference needs no advice: it is not stuck, so it does not apologise.
         view._update_diff_box(0.0, 42.0, best)
         tip = view.diff_box.toolTip()
-        assert "Pick another lap" in tip, tip
-        assert "Δ-to-best" not in tip, (
-            "the hero's own explanation recommends switching to the reference measured above as "
-            f"incapable of moving on this lap: {tip!r}")
+        assert "Pick another lap" not in tip, (
+            f"Δideal moves {can_move_here:.4f} s on this very lap — there is nothing to excuse: "
+            f"{tip!r}")
 
-        # the other reference, one click away, explains itself as well.
+        # The other reference, one click away, DOES explain itself — and never by recommending a
+        # switch back to the reference measured above as incapable of moving on this lap.
         view.ideal_readout_btn.setChecked(False)
         view._update_diff_box(0.0, 42.0, best)
         flipped = view.diff_box.toolTip()
         assert "reference" in flipped and "Pick another lap" in flipped, flipped
+        assert "Δ-to-best" not in flipped, flipped
         view._update_diff_box(0.0, 42.0, others[0])
         assert "Pick another lap" not in view.diff_box.toolTip(), view.diff_box.toolTip()
         view.ideal_readout_btn.setChecked(True)
@@ -427,7 +489,8 @@ def _run_all():
     test_no_panel_chrome_children_ever_overlap_at_the_column_minimum()
     test_the_charts_column_floor_is_the_headers_own_honest_need()
     test_every_maximize_button_clears_the_hit_target_floor()
-    test_hero_readout_explains_its_structural_zero_on_the_best_lap()
+    test_the_hero_is_no_longer_a_structural_zero_on_the_best_lap()
+    test_the_hero_never_prints_a_minus_sign_against_the_ideal()
     test_the_hero_never_recommends_the_reference_that_cannot_move()
     print("ALL CHARTS/MAP PANEL-CHROME TESTS OK")
 

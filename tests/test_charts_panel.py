@@ -57,10 +57,14 @@ class _StubSession:
     `laps` is {lap_id: (xs, speed_kmh, delta_s)}. Everything else (corner math, timing, media) is
     outside this widget's reach, so it is not faked."""
 
-    def __init__(self, laps, best=None, ideal=True, reference=None):
+    def __init__(self, laps, best=None, ideal=True, reference=None, ideal_donor=None):
         self._laps = {int(k): tuple(np.asarray(a, float) for a in v) for k, v in laps.items()}
         self._best = best
         self._ideal = ideal
+        # A lap id here means ONE lap won every segment of the corner partition, so the "ideal" IS
+        # that lap: neither the baseline swap nor the overlay has a stitched curve to draw. None
+        # (the default) is the normal, stitched case.
+        self._ideal_donor = ideal_donor
         # F7: the cross-recording reference's source label, or None. When set, `delta()` reports
         # REFERENCE_ID as its baseline id, which is what makes the lower chart's baseline that
         # other recording's lap (plots_view.refresh).
@@ -93,6 +97,9 @@ class _StubSession:
         base = plots_view.REFERENCE_ID if self._reference is not None else self._best
         return base, speed, delta
 
+    def ideal_donor_lap_id(self):
+        return self._ideal_donor
+
     def delta_to_ideal(self, ids, x_mode="distance"):
         if not self._ideal:
             return None
@@ -124,9 +131,11 @@ def _laps(n, points=400):
     return out
 
 
-def _view(n=6, best=0, ideal=True, size=(900, 520), select=None, reference=None):
+def _view(n=6, best=0, ideal=True, size=(900, 520), select=None, reference=None,
+          ideal_donor=None):
     """A real, laid-out PlotsView over n stub laps, refreshed and settled."""
-    v = plots_view.PlotsView(_StubSession(_laps(n), best=best, ideal=ideal, reference=reference))
+    v = plots_view.PlotsView(_StubSession(_laps(n), best=best, ideal=ideal, reference=reference,
+                                          ideal_donor=ideal_donor))
     v.resize(*size)
     v.show()
     v.set_laps(range(n) if select is None else select)
@@ -178,6 +187,49 @@ def test_ideal_toggle_is_live_only_where_it_can_draw():
     assert len([1 for plot, _c in v._curves if plot is v.p_delta]) == before + 1
     v.deleteLater()
     print("test_ideal_toggle_is_live_only_where_it_can_draw OK")
+
+
+def test_a_single_donor_ideal_is_neither_a_baseline_nor_an_overlay():
+    """The THIRD dead end, and the one that still shipped the original defect.
+
+    The ideal is the per-segment minimum over the clean laps. When ONE lap is quickest through
+    every corner and every straight — a one-valid-lap recording is the guaranteed case, and the
+    owner has one — that minimum IS that lap. `delta_to_ideal` is then identically zero, so with the
+    best lap drawn alone the chart swapped its baseline to the ideal and drew a FLAT ZERO LINE with
+    the axis relabelled "Δ to ideal (s)" and the legend reading "· Δ to ideal (synthetic)": the app
+    stating "you are exactly on your ideal lap, the whole way round", which is precisely the claim
+    this feature was fixed for making. Measured on the real Sandown chapter-3 recording (1 valid
+    lap): y-range [-0.0, 0.0].
+
+    So the swap refuses, the overlay refuses, and the toggle goes grey with its own reason."""
+    v = _view(n=3, best=0, select=[0], ideal_donor=0)
+    assert v._ideal_is_one_lap is True
+    assert v._delta_ideal_mode is False, "a one-donor ideal must not take over the baseline"
+    assert v._delta_baseline_kind == plots_view.DELTA_BASELINE_BEST
+    assert v.p_delta.getAxis("left").labelText == plots_view.DELTA_LABEL_BEST
+    assert not [c.name() for _p, c in v._curves if _p is v.p_delta and c.name()], (
+        "no curve may be labelled as measured against the ideal here")
+
+    assert v.ideal_btn.isEnabled() is False
+    tip = v.ideal_btn.toolTip()
+    assert tip.startswith("Ideal lap:"), tip           # the label survives the reason
+    assert tip.endswith(plots_view.IDEAL_IS_ONE_LAP_TIP), tip
+    assert "quickest through every corner" in tip, tip
+
+    # ...and even with the flag forced on, the overlay draws nothing.
+    before = len([1 for plot, _c in v._curves if plot is v.p_delta])
+    v._show_ideal = True
+    v.refresh()
+    for _ in range(4):
+        _APP.processEvents()
+    assert len([1 for plot, _c in v._curves if plot is v.p_delta]) == before
+    v.deleteLater()
+
+    # The SAME session shape with a stitched ideal keeps every one of those behaviours.
+    w = _view(n=3, best=0, select=[0])
+    assert w._ideal_is_one_lap is False and w._delta_ideal_mode is True
+    w.deleteLater()
+    print("test_a_single_donor_ideal_is_neither_a_baseline_nor_an_overlay OK")
 
 
 # ============================================================================ L6-03
@@ -629,6 +681,7 @@ def _run_all():
     test_the_delta_axis_names_the_reference_it_is_measured_against()
     test_the_baseline_signal_carries_the_kind_not_a_two_state_flag()
     test_ideal_toggle_is_live_only_where_it_can_draw()
+    test_a_single_donor_ideal_is_neither_a_baseline_nor_an_overlay()
     test_identity_curves_carry_a_cue_that_survives_deuteranopia()
     test_chart_series_stays_palette_independent()
     test_brake_glyphs_carry_a_shape_channel_that_survives_deuteranopia()

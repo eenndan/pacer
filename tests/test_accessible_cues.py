@@ -468,7 +468,10 @@ class _FakeChartSession:
         return 0, {0: (sx, np.full(100, 60.0))}, {0: (sx, np.zeros(100))}
 
     def delta_to_ideal(self, ids, x_mode="distance"):
-        return None  # P7: no ideal envelope here → the Δ chart keeps its Δ-to-best baseline
+        return None  # P7: no ideal here → the Δ chart keeps its Δ-to-best baseline
+
+    def ideal_donor_lap_id(self):
+        return None  # not a single-donor ideal (plots_view reads this on every plotted refresh)
 
     def sector_plot_positions(self, m):
         return []

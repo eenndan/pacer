@@ -90,34 +90,28 @@ _HERO_TEMPLATES = (
 )
 _HERO_PAD_PX = 20   # the QSS's `#DiffBox { padding: 2px 8px }` (16) + a rounding px per side
 
-# WHY THE HERO READOUT EXPLAINS ITSELF ON THE BEST LAP, AND WHY IT NO LONGER OFFERS THE ACTION IT
-# USED TO. A font-size census of every visible text-bearing widget at the FIRST PAINTED FRAME of a
-# real three-chapter drop ranks exactly ONE surface above 13 px: this readout, 22 px semibold at
-# [830, 537, 391, 30], reading `Δideal +0.00 s     73 km/h`, against 167 surfaces at 13 px and 8 at
-# 11. The app's largest number on arrival is a structural null, because the default selection is
-# the session best and the ideal is stitched from that lap's own sections. That is a real finding
-# (D4-08) and it is bigger than "the arrival frame": sampled 400 times across the whole default lap
-# on the real recording, `Δideal` prints a non-zero value on only **33.2%** of it (max 0.159 s), and
-# `Δ`-to-best prints one on **0.0%** of it — exactly 0.000 s everywhere, because on the best lap the
-# reference IS the lap.
+# WHY THE HERO READOUT NEEDS NO APOLOGY ON THE BEST LAP ANY MORE. A font-size census of every
+# visible text-bearing widget at the FIRST PAINTED FRAME of a real three-chapter drop ranks exactly
+# ONE surface above 13 px: this readout, 22 px semibold at [830, 537, 391, 30], against 167 surfaces
+# at 13 px and 8 at 11. It used to read `Δideal +0.00 s     73 km/h` there and carried a note saying
+# why — the ideal was the pointwise minimum of the laps' cumulative-elapsed curves, which at the
+# flag is identically the best lap time, so the app's largest number was a structural null in the
+# state the app always opens in (D4-08). The ideal is now the corner/straight partition composite,
+# which is strictly faster than any single lap, so that note is gone: on the DEFAULT selection (the
+# session best) the hero sweeps 0.00 → +0.94 s on D24 one chapter, +1.64 s on three, +1.14 s on
+# Sandown — measured at 25 ms of media clock across the whole lap. There is nothing left to excuse.
 #
-# Which is why the old advice had to go. The note used to end "...pick another lap, or switch this
-# readout to Δ-to-best, for a number that moves", and half of that sentence is measurably false:
-# switching the reference on this lap produces a number that moves LESS — it never moves at all.
-# Picking another lap is the action that works: on laps 0/1/2 of the same recording Δideal reaches
-# 1.688 / 1.917 / 1.763 s and is non-zero on ~99% of each. So the note names only that, and the
-# OTHER reference now carries its own note instead of arriving unexplained.
+# The OTHER reference still needs its note, and that one is not a defect: Δ-to-best on the best lap
+# is exactly 0.000 for the whole lap, because the reference IS the lap. Switching to it is the one
+# gesture that makes this readout stop moving, so the note names the action that does work.
 #
 # What is deliberately NOT done here: swapping the readout for the selected lap's TIME while the
 # playhead has not moved. It would put a headline on the arrival frame and take it away on the
-# first pixel of scrub — handing back a `+0.00` for two thirds of that lap — and it would make the
-# app's largest surface change what it MEANS on an incidental gesture. It is also not "one branch
-# in the same label": #DiffBox has a single QSS `font-size`, and its layout floor (_hero_min_width
-# below) is a plain-text advance over _HERO_TEMPLATES, so a second type step inside it means rich
-# text, a second template set and a re-derived floor.
-_BEST_LAP_IDEAL_NOTE = (
-    "\nThis IS your best lap, and the ideal is stitched from your own best sections, so Δideal "
-    "stays near zero here by construction. Pick another lap for a number that moves.")
+# first pixel of scrub, and it would make the app's largest surface change what it MEANS on an
+# incidental gesture. It is also not "one branch in the same label": #DiffBox has a single QSS
+# `font-size`, and its layout floor (_hero_min_width below) is a plain-text advance over
+# _HERO_TEMPLATES, so a second type step inside it means rich text, a second template set and a
+# re-derived floor.
 _BEST_LAP_BEST_NOTE = (
     "\nThis IS your best lap, so it is the reference this Δ is measured against: it reads exactly "
     "zero for the whole lap. Pick another lap for a number that moves.")
@@ -475,10 +469,10 @@ class CentralView(QWidget):
         self.ideal_readout_btn = ToggleButton("vs ideal", checked=True)
         self.ideal_readout_btn.setProperty("role", "Chip")
         self.ideal_readout_btn.setToolTip(
-            "Hero readout reference: ON = Δ to your THEORETICAL IDEAL — the best you've driven at "
-            "each point on track, stitched together into a synthetic curve (not a single drivable "
-            "lap); OFF = Δ to your best single lap. The other number is always in the readout's "
-            "tooltip.")
+            "Hero readout reference: ON = Δ to your THEORETICAL IDEAL — your quickest time through "
+            "each corner and each straight, stitched together into one synthetic lap (not a single "
+            "lap you have driven); OFF = Δ to your best single lap. The other number is always in "
+            "the readout's tooltip.")
         self.ideal_readout_btn.toggled.connect(self._on_ideal_readout_toggled)
 
         # Which chapter the video is in — a CHIP in the panel's identity row, shown only for a
@@ -1502,17 +1496,12 @@ class CentralView(QWidget):
         if self.ideal_readout_btn.isChecked():
             text, sem_colour = theme.format_ideal_readout(d_ideal, sp, lap_id, self._speed_unit)
             tip = f"Δ to your best lap here: {theme.format_delta_run(d_best)}"
-            # IA-03: this readout is the largest text in the window, and on the BEST lap it is a
-            # structural null — the ideal is the best-of-each-point stitched from the driver's own
-            # laps, so the lap that formed most of it can barely differ from it. The app opens with
-            # the playhead in exactly that lap. Rather than let 22 px of "+0.00" read as an
-            # achievement, say WHY it is zero — appended, never replacing the Δ-to-best number the
-            # box promises to keep one hover away.
-            if on_best:
-                tip += _BEST_LAP_IDEAL_NOTE
         else:
             text, sem_colour = theme.format_delta_speed(d_best, sp, lap_id, self._speed_unit)
-            tip = f"Δ to your IDEAL achievable lap here: Δideal {theme.format_delta_value(d_ideal)}"
+            # theme.format_ideal_run, not a local f-string over format_delta_value: that spelling
+            # dropped the unit, so the hovered number read `Δideal +1.05` beside a hero that says
+            # `Δideal +1.05 s`, and it skipped the display clamp the hero applies.
+            tip = f"Δ to your IDEAL achievable lap here: {theme.format_ideal_run(d_ideal)}"
             # ...and the SAME honesty for the other reference, which had none. Δ-to-best on the
             # best lap is not "near" zero, it is zero: this lap IS the reference. See the note.
             if on_best:

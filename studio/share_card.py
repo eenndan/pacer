@@ -44,20 +44,30 @@ from ._signal import fmt_time
 CARD_W = 1080
 CARD_H = 1350
 
-# The honest label for the Δ-to-ideal: the ideal is the per-point lower envelope of the clean
-# laps (session.ideal_total), NOT a lap anyone actually drove — kept consistent with the plots'
-# "SYNTHETIC theoretical ideal … Not a single drivable lap" wording (D1/#53).
+# The honest label for the Δ-to-ideal: the ideal is `session.ideal_total` — the quickest time the
+# driver has done through each corner and each straight, stitched together — NOT a lap anyone
+# actually drove. Kept consistent with the plots' "SYNTHETIC theoretical ideal … Not a single
+# drivable lap" wording (D1/#53). The sublabel is drawn UNELIDED at 24 px from `pad`; it measures
+# 661 px against the card's 936 px content box (the string it replaces measured 632), so it fits
+# with 275 px to spare — pinned by tests/test_share_card.py.
 IDEAL_LABEL = "vs your ideal lap"
-IDEAL_SUBLABEL = "synthetic best-at-each-point — not a single drivable lap"
+IDEAL_SUBLABEL = "your best corners and straights — not a single drivable lap"
 
 
 def hero_delta_line(gap: float) -> str:
     """The Δ-to-ideal hero line, one coherent voice across both branches.
 
-    A positive gap reads as time still on the table ("+0.31 s vs your ideal lap"); a gap at (or
-    below) the even-epsilon means the best lap already sits ON the synthetic per-point envelope, so
-    it reads plainly as "level with your ideal lap" — never the doubled "on your ideal lap vs your
-    ideal lap" template bug the two-branch string concat used to produce."""
+    A positive gap reads as time still on the table ("+1.64 s vs your ideal lap"); a gap at (or
+    below) the even-epsilon means the best lap already sits ON the ideal, so it reads plainly as
+    "level with your ideal lap" — never the doubled "on your ideal lap vs your ideal lap" template
+    bug the two-branch string concat used to produce.
+
+    The EVEN branch used to be the only outcome the card could ever print, because the old ideal
+    was the pointwise minimum of the laps' cumulative-elapsed curves and therefore equalled the
+    best lap time exactly on every recording. With the corner/straight composite it is a real
+    guard rather than the shipped behaviour: `card_data` now withholds the gap entirely for the
+    one state that can still produce a duplicate (one lap winning every segment), so this branch
+    survives only for a rounding-level tie."""
     if gap > theme.DELTA_EVEN_EPS_S:
         return f"+{gap:.2f} s {IDEAL_LABEL}"
     return "level with your ideal lap"
@@ -84,7 +94,7 @@ class CardData:
     date: str             # "YYYY-MM-DD" or "" (GPS5 stream / empty session)
     best_time: str        # the best lap, m:ss.mmm (or "—")
     best_lap_id: int | None
-    delta_to_ideal_s: float | None  # best_time − ideal_total ≥ 0 (how far off the envelope), or None
+    delta_to_ideal_s: float | None  # best_time − ideal_total > 0, or None (no ideal / one donor)
     unit: str             # the active speed unit id (km/h default) — for any speed reads
     top_opp: TopOpp | None          # the #1 opportunity, or None (< MIN_LAPS clean laps / none losing)
     blocked: bool         # True ⇒ do NOT render a card (provisional / no valid lap)
@@ -116,19 +126,27 @@ def card_data(session, *, unit: str | None = None) -> CardData:
     Honesty verdict (see the module doc): ``blocked`` when the timing is PROVISIONAL (unverified
     start line) or there is no valid best lap — an unverified lap time is not a brag. ``stamp`` is
     set (but the card still renders) when the timing is data-quality DEGRADED, so the number is
-    shown honestly as estimated. The Δ-to-ideal is ``best_time − ideal_total`` (≥ 0, how far the
-    best lap is off the synthetic per-point envelope), labelled honestly by the caller."""
+    shown honestly as estimated. The Δ-to-ideal is ``best_time − ideal_total`` (how far the best
+    lap is off the stitched ideal), labelled honestly by the caller, or None where there is no
+    honest gap to state — see below."""
     unit = units.normalize_unit(unit)
     track = (session.track_name or "Unknown track")
 
     best_id = session.best_lap_id()
     best_time = fmt_time(session.lap_time(best_id)) if best_id is not None else "—"
 
-    # Δ-to-ideal: how far the best lap is off the synthetic lower-envelope ("ideal") lap. Positive
-    # (the best lap can't beat the envelope it helped form). None when no ideal can be built.
+    # Δ-to-ideal: how far the best lap is off the synthetic ideal (the corner/straight composite).
+    # Positive — a composite of per-segment minima cannot be slower than any lap that donated.
+    # None, so the card omits the block entirely, when there is no ideal to state:
+    #   * no corner partition / no clean lap (`ideal_total` is None), or
+    #   * ONE lap won every segment (`ideal_donor_lap_id`), which is the degenerate case the whole
+    #     feature used to be stuck in. The ideal is then that lap, so a Δ against it is a boast
+    #     about nothing — the card would print "level with your ideal lap" over a session with a
+    #     single usable lap. The house rule for a synthesized value that has collapsed onto a real
+    #     one is to hide it (export_data.laps_summary, stats_panel's tile), not to dress it up.
     delta_ideal = None
     ideal_total = session.ideal_total()
-    if best_id is not None and ideal_total is not None:
+    if best_id is not None and ideal_total is not None and session.ideal_donor_lap_id() is None:
         gap = float(session.lap_time(best_id)) - float(ideal_total)
         delta_ideal = gap if gap > 0 else 0.0
 
