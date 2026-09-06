@@ -9,8 +9,8 @@ frame-accurate video↔telemetry sync (all in Python — see [the spike](dev/spi
 
 ```bash
 pixi run studio                              # short demo clip (hero6 sample, map+video only)
-pixi run studio -- /path/to/GX010060.MP4     # one chapter only (DEFAULT — single-file, as before)
-pixi run studio -- --full /path/to/GX010060.MP4  # opt-in: discover + chain ALL sibling chapters
+pixi run studio -- /path/to/GX010062.MP4     # one chapter only (DEFAULT — single-file, as before)
+pixi run studio -- --full /path/to/GX010062.MP4  # opt-in: discover + chain ALL sibling chapters
 pixi run studio -- a.MP4 b.MP4               # explicit chaptered recording (chained in order)
 ```
 
@@ -47,11 +47,13 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 ┌──────────────┬───────────────────────────┐
 │  VideoView   │   MapView (track + lines) │   video ⇄ telemetry sync:
 ├──────────────┼───────────────────────────┤   • video plays → red map marker sweeps
-│  LapTable    │   PlotsView (speed/delta) │   • drag the marker → video seeks
-└──────────────┴───────────────────────────┘   • drag a plot cursor → scrub within the lap
-                                                • drag start/sector lines → re-segment laps
-                                                  (sector lines also drawn on the charts)
-                                                • click a lap-table header → sort numerically
+│  Lap panel   │   PlotsView (speed/delta) │   • drag the marker → video seeks
+│  Laps·Corners│                           │   • drag a plot cursor → scrub within the lap
+│  ·Stats      │                           │   • drag start/sector lines → re-segment laps
+│  ·Coaching   │                           │     (sector lines also drawn on the charts)
+└──────────────┴───────────────────────────┘   • click a lap-table header → sort numerically
+                                                • digits 1-4 → switch the lap panel's tab
+                                                • ⛶ / double-click a header → maximize a quadrant
                                                 • 🔇/🔊 → mute/unmute the clip audio
 ```
 
@@ -77,6 +79,7 @@ gap-fill unit tests live in [`tests/test_gapfill.py`](../tests/test_gapfill.py) 
 | Tune GPS smoothing | `_signal.py` (`SMOOTH_WINDOW`, the boxcar) + `load._smooth_track` | `tests/test_session_pure.py`; measure with `dev/denoise_check.py` |
 | Add / tune a driving channel (F5) | `driving.py` (algorithm) + `driving_channels.py` (the Session service) + the overlays in `plots_view.py` / `map_view.py` | `tests/test_driving.py` |
 | Add a session statistic (Stats page) | `stats.py` (pure reducer + the `SessionStats` service) + `stats_panel.py` (the tile/table/chart) | `tests/test_stats.py` |
+| Show the **ideal lap** on a new surface | read `session.ideal_total` / `ideal_lap_elapsed` / `delta_to_ideal` (never re-derive it) **and gate on `session.ideal_donor_lap_id() is None`**, printing `ideal_sample`'s counts beside the number | `tests/test_session_pure.py`, `tests/test_export_gates.py` |
 | Add a coaching reason | `coaching.py` (the reason selection + `reason_sentence`) | `tests/test_coaching.py` |
 | Add a lap-table column | `lap_table.py` | `tests/test_studio_features.py` |
 | Add an export / overlay field | `export_video.py` (the composite) + `gmeter_overlay.py` | `tests/test_export_video.py` |
@@ -102,7 +105,7 @@ Session facade). Edit the algorithm; the service just caches + delegates.
 | [scrub_controller.py](scrub_controller.py) | **ScrubController** — the plot-cursor scrub cluster, extracted from `app.py`'s StudioWindow: owns the scrub state, scopes the drag to the lap captured at grab, and **coalesces** the seeks + cursor/marker/readout refresh to ≤1 per 30 Hz tick (`apply_tick`); in compare mode the drag is distance-locked across both panes. A Qt-free, pacer-free control-layer collaborator. |
 | [compare_controller.py](compare_controller.py) | **CompareController** — the dual-lap compare-mode cluster, extracted from StudioWindow: owns the on/off flag + the pinned (A,B) lap ids, the enter/exit orchestration (suspend/restore auto-follow, re-seek both panes to their lap's start line) and the per-tick upkeep (pane times, "Δ vs other" badges, secondary g, and the map **ghost** — lap B's kart placed at `index_at_time(t_b)`, the same `t_b` the Δ badge used, cleared on exit). Qt-free, pacer-free. |
 | [theme.py](theme.py) | The **dark "Refined Minimal" design system** — single source of truth: the colour/scale tokens (`C`), Inter font registration, the dark `QPalette` + global QSS, the pyqtgraph background, and `icon(...)` (Phosphor glyphs via `qtawesome`, lazily imported). Pacer-free, LLM-editable. |
-| [gmeter.py](gmeter.py) | **Vehicle-frame g** from the GoPro **accelerometer** — pure numpy, pacer-free. Transforms `ACCL`/`GRAV`/`CORI` (camera frame) into kart-frame lateral/longitudinal g (gravity removed via GRAV; rotate by `conj(CORI)`; project horizontal; **per-chapter** align to GPS ENU). Cross-checks against **GPS-derived g** and falls back to it if the IMU is absent/unreliable. Precomputed at load; `at_time(t)` is a cheap lookup. See [docs/gmeter-validation.md](docs/gmeter-validation.md). |
+| [gmeter.py](gmeter.py) | **Vehicle-frame g** — pure numpy, pacer-free. Transforms `ACCL`/`GRAV`/`CORI` (camera frame) into kart-frame lateral/longitudinal g (gravity removed via GRAV; rotate by `conj(CORI)`; project horizontal; align to GPS ENU **per chapter**, then **de-drift the yaw across the chapter** — CORI is gyro-integrated with no magnetometer and creeps 0.08–0.15 °/s, so ONE fit per chapter is only right in the middle laps; the yaw is fitted in overlapping 90 s windows and interpolated per sample). The shipped meter is **MIXED**: lateral is the IMU (r≈+0.90 vs GPS, 96.5 % sign agreement), **longitudinal is the GPS speed derivative** (`long_g_gps`) because the IMU forward axis is vibration-inflated (r≈+0.36) — `long_source()` says so and `gmeter_overlay.source_label` prints `"IMU lat · GPS long"` rather than one sensor's name. Cross-checks both against GPS-derived g and falls back **wholly** to GPS (`source="gps"`) if the IMU is absent or the lateral correlation is below 0.4 (a helmet cam). Precomputed at load; `at_time(t)` is a cheap lookup. See [docs/gmeter-validation.md](docs/gmeter-validation.md). |
 | [gmeter_overlay.py](gmeter_overlay.py) | The subtle **"G meter"** dial (pacer-free Qt): thin 0.5/1.0 g rings + a soft white dot (**no centre-to-dot line**) showing the **felt force** the driver's body feels (**brake→up, accel→down, right→left, left→right**) + a translucent **red max-G envelope** (convex hull) + **amber cardinal peak-g numbers**. The dot is **EMA-low-passed** (chin-mount shake filter) and the peaks/hull are **robust** (high-percentile + clamped) so a helmet shake can't blow them out; envelope/peaks accumulate **per lap** (`set_lap`). A frameless translucent top-level window composited over the video, pinned **top-right** and **scaled to the video**; `set_g((lat,long,total))` + `set_lap(id)` each tick. The dial's paint body is extracted into a module-level **`paint_dial(painter, w, h, DialState)`** (the widget's `paintEvent` snapshots `self` into a `DialState` and delegates) so the **offline video exporter** (`export_video.py`) can burn the SAME dial in — verified **pixel-identical** to the pre-extraction widget. `paint_dial` also takes an opt-in **`export=True`** flag that renders a vivid, **no-box**, white-ringed dial with **big outlined cardinal numbers** + a glowing dot for burning over bright footage (`_paint_dial_export`/`_export_dial_geom`); the **live widget always uses the default** so its on-screen look is unchanged (tested). |
 | [chapters.py](chapters.py) | Pure-Python (no `pacer`): the GoPro chaptered-filename parser, sibling **discovery/grouping** (same recording number, same folder, ordered by chapter), and the **`ChapterMap`** global↔chapter time mapping (per-chapter offset table). Unit-tested in [`tests/test_chapters.py`](../tests/test_chapters.py). |
 | [map_view.py](map_view.py) | Best lap (faint) + current/playing lap (highlighted) + **freely-draggable** start/sector timing lines + video marker (drag **constrained to the current lap** so it never jumps laps). An **opt-in "Snap" toggle** in the map header (default **off**) snaps just the **released** handle to the nearest trace point (`session.nearest_index`) before the one re-segmentation — the other endpoint never moves. Each lap is drawn as measured (solid) + reconstructed gap-fill (dashed/dimmed) segments. **Corner labels** (`C1…Cn`, from `session.corner_map_markers`) sit at the detected apexes with subtle direction-coloured dots (cyan = left, coral = right) — a self-contained overlay, app-pushed; `highlight_corner(cid)` rings ONE apex in accent (the consistency panel's click-to-locate cue, F6). **Brake-point glyphs (F5)** — a ▼ at each braking-zone onset (from `session.lap_brake_map_markers`), sized by peak decel, in the lap's series colour — are a second self-contained overlay, app-pushed on lap change and showing **both laps in compare** (the Circuit Tools braking-zone comparison). The full all-laps trace is intentionally not drawn (perf + clarity). A **rainbow track map** header toggle (OFF → Speed → Δ-vs-best) paints the **current lap's** line as a channel colour gradient: the channel is quantized into 16 buckets drawn by ≤16 `PlotCurveItem`s (per-bucket pens from `theme.rainbow_colors` — red = slow/losing → green = fast/gaining; NaN breaks + `connect='finite'` hold each bucket's disjoint runs, and dropout gaps are never painted as chords). Speed comes from the cached lap columns; Δ resamples the **existing** 400-grid `delta()` onto the lap's point distances (one `np.interp` — never recomputed). A slim min/max legend shows only while painted; the bucket items rebuild **only** on lap/channel change or re-segment (never on the 30 Hz tick), and OFF restores the exact normal rendering (the overlay items are only hidden — byte-identical). In **compare mode** a second hollow **ghost marker** (smaller ring, lap-B accent `theme.CHART_SERIES[1]`, not draggable) shows the other compared lap's kart at equal elapsed-into-lap — created lazily on the first compare tick, updated by `setPos` only (as cheap as the red marker), and **removed on exit** so the item state returns byte-identical; outside compare the tick path does zero ghost work (instrumented via `ghost_updates`). Unit-tested in [`tests/test_rainbow_map.py`](../tests/test_rainbow_map.py) and [`tests/test_map_ghost.py`](../tests/test_map_ghost.py). |
@@ -111,18 +114,18 @@ Session facade). Edit the algorithm; the service just caches + delegates.
 | [consistency.py](consistency.py) | **Consistency statistics** (F6) — pure numpy, pacer-free: sample σ (ddof=1) of lap times / per-sector splits / per-corner times, the per-corner **median time lost** vs that corner's session best, and the **inconsistency ranking** — score = σ × median-loss (the product is the AND: a corner must be BOTH erratic and slow to rank; rationale in the module doc) — plus the running-PB mask for the trend sparkline. Every statistic runs over `Session.consistency_lap_ids()` — the valid, GPS-dropout-free laps (the ⚠ rule). |
 | [coaching.py](coaching.py) | **Auto coaching summary (F10)** — pure numpy, pacer-free; the capstone that **composes** the corner model (F2), driving channels (F5) and consistency stats (F6) WITHOUT recomputing any of them. Per corner, the **median time lost vs the best lap's same corner** over the consistency laps (the ⚠-clean set) — ranked **biggest realistic gain first**. **Every ranked row** gets the **dominant MEASURED reason**, chosen deterministically as the largest seconds-of-loss contribution among four signals: **apex** (the typical lap's apex/min speed deficit vs best ⇒ "carry more apex speed"), **braking** (more time on the brakes than best in the corner's approach window — the **overlap** of each brake event with that window, integrated on the lap's own `elapsed`→`dist` clock, so an application that begins upstream of the cut still counts its in-window part ⇒ "brake later/shorter"), **coasting** (a coast inside the corner the best lap lacks ⇒ "back to throttle sooner") and **line** (high cross-lap σ ⇒ "be consistent here"); ties broken by a fixed reason priority, `REASON_NONE` only when nothing fires. The "typical" lap is the **median-lap-time** lap (deterministic). Everything numbers-only — no ML, no randomness; `summarize()` is byte-identical across calls. Excluded (`enough=False`) under `MIN_LAPS` (3) clean laps. `Session.coaching_opportunities()` owns the pacer-side extraction; `Session.corner_entry_media_time(lap, cid)` gives the jump-to seek target. |
 | [coaching_panel.py](coaching_panel.py) | **OpportunitiesPanel + OpportunitiesDialog (F10)** — the coaching front door, both pacer-free consumers of `coaching.Opportunities`. The **panel** is the lap panel's **Coaching tab page** (top-3 corner · time lost · reason at full height — no strip, no collapse, no height cap; the headline sentence frames the page); the **dialog** is the fuller modal. Dialog: three rows — corner (id + direction glyph), **time lost** (`+s`, red), the **reason sentence with numbers**, and a **"Go →"** button that calls an injected `jump_to(cid, entry_dist)`: the app **selects the corner** (map apex ring via `MapView.highlight_corner` + the Corners view on the best lap) and **seeks the video to the best lap's ENTRY** to that corner (`Session.corner_entry_media_time`). Opened from **Coaching ▸ "Opportunities…"**, rebuilt from a fresh summary each open (zero per-tick cost). The `<MIN_LAPS` excluded state and the "no corner loses time" case show a **friendly message** (no table, no crash). Unit-tested in [`tests/test_coaching.py`](../tests/test_coaching.py). |
-| [driving.py](driving.py) | **Driving channels (F5)** — pure numpy, pacer-free. Off the **validated vehicle-frame g** (`gmeter.py`, GPS-cross-checked): **brake events** (onset where smoothed `long_g < −θ_b` with release hysteresis; peak decel + duration), **coasting spans** (`\|long_g\| < θ_c` AND `\|lat_g\| < θ_lat` AND ~flat speed), and **per-corner grip utilization** (median `\|g\|` / the lap's own envelope-max inside each F2 corner window, in (0,1]). **θ_b/θ_c/θ_lat are derived from the session's OWN g distribution — no magic constants** (θ_b = the median of the *braking-only* decel, duty-cycle independent; documented with the measured D24 distribution + the load-time `describe()` print). Validated on the real recordings: the ACCL brake onsets correlate **r≈1.00** in track position with the independent **GPS speed-derivative** method (~4–6 m median offset) and yield **zero** false onsets on the full-throttle straight. Session caches `lap_brake_events()` / `lap_coasting_spans()` / `lap_corner_grip()` per segmentation. |
+| [driving.py](driving.py) | **Driving channels (F5)** — pure numpy, pacer-free. **Brake and coast run on the longitudinal g derived from the GPS SPEED trace** (`_signal.speed_long_g`, `d\|v\|/dt`), **not** the IMU forward axis: on the real recordings that axis is vibration-dominated (~2× RMS, r≈0.4 against the GPS-derived signal — [docs/gmeter-validation.md](docs/gmeter-validation.md)), so it mis-scales the threshold and misses about **a third of the braking**. (The often-quoted **r≈1.00, ~4–6 m median offset** is the track-position agreement between the two methods *on the onsets they both find* — a cross-method agreement, not a validation of the shipped channel, and blind to the events the IMU never fires on.) Channels: **brake events** (onset where the smoothed long-g drops below −θ_b, Schmitt release hysteresis; fragments of ONE maneuver re-fused by `merge_brake_maneuvers` unless the driver got clearly back on the throttle → peak decel + duration), **coasting spans** (off power, *decelerating* from drag/engine braking: `COAST_DRAG_MIN < decel < θ_b` while moving — the throttle-off-to-brake gap; the earlier "speed stays flat" test rejected real coasts), the **D3 brake/throttle band** (the SAME g mapped to a bounded pedal-style intensity — a visualisation, not a second detector), the **D4 braking-point optimizer** (`estimate_a_max` + `optimal_brake_distance` vs the matched event → `metres_later`; ESTIMATED, constant-decel physics), and **per-corner grip utilization** (median `\|g\|` / the lap's own envelope-max inside each F2 corner window, in (0,1]) — the one channel still fed by the **IMU lateral** g, the axis that *does* validate (r≈+0.90 vs GPS, 96.5 % sign agreement). **θ_b is the only derived threshold and comes from the session's OWN braking-decel distribution — no magic constants** (floored to a physical brake application, adapted up to a low percentile of that distribution, clamped; documented with the measured D24 numbers + the load-time `describe()` print). Session caches `lap_brake_events()` / `lap_coasting_spans()` / `lap_corner_grip()` per segmentation. |
 | [driving_channels.py](driving_channels.py) | **DrivingChannels** (F5) — the Session-bound caching **service** over the pure `driving.py` algorithm: brake events, coasting spans, per-corner grip + the session thresholds. Thresholds are cached for the recording (the g series is constant); only the per-lap results drop on re-segment. numpy-only. |
 | [stats.py](stats.py) | **Session statistics** (the Stats page) — pure numpy reducers (moving time with a dropout-gap skip, path distance, wall-clock rendering, the pace distribution, peak-g conventions, the half-open lap-window mask, sector medians) + **SessionStats**, the Session-bound DI **service**: whole-recording totals (survive a re-segment), per-lap vmax/avg/peak-g/brake/coast reductions (dropped on re-segment, like the driving channels), session Vmax, the g-g friction-circle cloud, and the **corner-by-corner session report** (`corner_report` — best/median/σ/loss + apex speeds + median grip per corner, composed from the corner model + driving channels without recomputing them). Everything is a REDUCTION of already-validated channels (peak longitudinal g reads the GPS speed-derivative, never the vibration-inflated IMU forward axis); a signal-absent statistic is `None`, never a fake 0. Pacer-free. |
-| [stats_panel.py](stats_panel.py) | **StatsView** — the session-statistics dashboard, the 3rd page of the lap panel's stack behind the **Laps \| Corners \| Stats** header toggle (⤢ maximize = a full-window dashboard). Stat-tile groups (SESSION / PACE — incl. the **best rolling** target / SPEED·G / DRIVING), the **g-g friction circle**, per-sector best/median/σ under the **theoretical best** target tile, the **DATA TRUST card** — the IMU↔GPS cross-check's first in-app surface (it was stdout-only) — a per-lap statistics table (★ best lap, unit-aware speeds), the **lap-time trend sparkline** (PB dots + session-best baseline — absorbed from the retired ConsistencyPanel), and the **CORNERS session table** (sortable via the lap-table `_NumItem` idiom; worst-corner loss cells tinted; row click rings the apex on the map, maximize-aware). Refreshed on load/re-segment only (zero per-tick cost); signal-absent sections hide, absent values render an em-dash. |
+| [stats_panel.py](stats_panel.py) | **StatsView** — the session-statistics dashboard, the **Stats** page (3rd tab) of the lap panel's `QTabBar` → `QStackedWidget` (⛶ maximize = a full-window dashboard). Stat-tile groups (SESSION / PACE — incl. the **best rolling** target / SPEED·G / DRIVING), the **g-g friction circle**, its own **IDEAL LAP** section (the **theoretical best** + "on the table · vs your best" tiles, the per-segment gain table naming which lap donated each piece and how many clean laps already matched it — the gains sum **exactly** to the gap under the tile, with a note accounting for the rows below `IDEAL_GAIN_FLOOR` — and the `IdealSample` disclosure of what the minimum was taken over), per-sector best/median/σ under SECTORS, the **DATA TRUST card** — the IMU↔GPS cross-check's first in-app surface (it was stdout-only) — a per-lap statistics table (★ best lap, unit-aware speeds), the **lap-time trend sparkline** (PB dots + session-best baseline — absorbed from the retired ConsistencyPanel), and the **CORNERS session table** (sortable via the lap-table `_NumItem` idiom; worst-corner loss cells tinted; row click rings the apex on the map, maximize-aware). Refreshed on load/re-segment only (zero per-tick cost); signal-absent sections hide, absent values render an em-dash. |
 | [gapfill.py](gapfill.py) | **GPS-gap reconstruction (map only)** — pure numpy. Detects interior dropouts and fills them with cross-lap borrow (primary) / reference centerline (fallback) / spline, tagged measured-vs-inferred. No `pacer`. |
 | [render_cache.py](render_cache.py) | **LapRenderCache** — the per-lap MAP-RENDERING cache cluster extracted from `Session`: the gap-aware draw segments (`lap_trace_segments`, via `gapfill`) + the lazily-built reference-centerline fallback donor. Pacer-free (Session injects callables over its cached per-lap arrays); invalidated from `Session.set_timing_lines` on re-segment. Session keeps thin delegators, so callers are unchanged. |
-| [bests.py](bests.py) | **Bests** (F1) — the session-summary "best" cluster extracted from Session: the headline best lap, the per-column session-best splits (the purple cells), the theoretical best (their sum), and the best rolling lap. DI over Session's own primitives (like `render_cache` / `corner_model`); numpy-only, no pacer. |
+| [bests.py](bests.py) | **Bests** (F1) — the session-summary "best" cluster extracted from Session: the headline best lap, the per-column session-best splits (the purple cells), the **theoretical best** (which *delegates* to `Session.ideal_total` — the corner/straight partition composite, NOT the sum of the sector splits it once was; the docstring holds the full WHY-NOT), and the best rolling lap. DI over Session's own primitives (like `render_cache` / `corner_model`); numpy-only, no pacer. |
 | [timeline.py](timeline.py) | **Timeline** (E2) — the per-Session cursor / plot / video-sync coordinate conversions grouped off the Session facade: plot-x↔media-time (both axis modes), index / lap-at-time (half-open windows), map-nearest (whole-trace vs lap-scoped). Pure numpy over Session-injected callables; Session keeps thin delegators. |
 | [reference.py](reference.py) + [mk_centerline.json](mk_centerline.json) | Georeferenced Daytona MK centerline (traced from `gmaps_pict.png`, similarity-ICP aligned to the GPS aggregate) — the gap-fill fallback for sections no lap covers. Rebuild via [dev/build_reference.py](dev/build_reference.py). |
 | [cross_reference.py](cross_reference.py) | **Cross-recording reference lap (F7)** — pure numpy, pacer-free. A `ReferenceLap` value object holding ANOTHER recording's best lap as the primary session consumes it: its arc-length curves `(dist, speed, elapsed)` for the Δ charts / lap-table per-corner Δ (aligned by **normalized distance**, so the recordings' differing lap lengths/start lines just work — the same machinery `delta()` uses) plus its racing line **pre-aligned into the primary's local frame** via `reference.fit_loop_to_loop` for the map overlay (suppressed if the closed-loop fit RMS exceeds the track-width tolerance; the charts/table are frame-independent and unaffected). `Session.load_reference(paths)` does the one pacer-backed step (load the 2nd Session headless) + the same-track / has-laps guard; everything else lives here. **Dormant when absent** — no reference ⇒ every "vs best" path falls back to the local best lap, byte-identical. |
-| [plots_view.py](plots_view.py) | Speed (top) + lap-vs-best delta (bottom) on **one shared, x-linked x-axis** (dist/time toggle drives both; delta aligned by **normalized distance** → endpoint = laptime diff), so the two cursors always align. Downsampled/clipped curves + a synced cursor that is also a **draggable scrubber** + a **hover dot** on the delta curve + subtle **sector boundary guide lines** (`set_sector_lines`, app-fed) + **F5 driving overlays**: **brake-point glyphs** (▼ riding the speed curve at each onset, from `session.lap_brake_plot_positions`) and **shaded coasting bands** (`session.lap_coasting_plot_spans`), both app-fed in the current axis mode and showing **both laps in compare** — pacer-free, it only emits `scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded`/`modeChanged(mode)` (mode = `time`\|`distance`); the `ScrubController` converts + seeks, and app owns the live Δ/speed readout box. |
-| [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best, **purple = per-sector session best**, **⚠ = GPS-dropout lap (low-confidence; time/distance/map less reliable, with a row tooltip)**. Base row text is the theme's primary off-white (dark table surface). **Every header is click-to-sort** by the underlying numeric value (asc/desc); highlights and the ⚠ flag follow the laps across a sort. The two stitched targets that used to sit in a SESSION-BESTS footer here now live on the Stats page (it cost the grid 63px — two lap rows — and could not be collapsed): **Theoretical best** in `stats_panel` ▸ SECTORS, **Best rolling** in ▸ PACE. Also hosts **`CornerTable`** — the panel's "Corners" mode (header toggle in `app.py`): one row per detected corner for the selected lap (time-in-corner, Δ vs best, apex/entry/exit speeds; per-corner **session best in purple**; a **Grip (est)** column (F5) = ESTIMATED friction-circle utilisation from `session.lap_corner_grip` (clean GPS-derived longitudinal + IMU lateral g vs the session envelope; ~100% = at the session's grip limit), a dash when there's no g signal), stacked with the laps table so Laps mode stays byte-identical. |
+| [plots_view.py](plots_view.py) | Speed (top) + delta (bottom) on **one shared, x-linked x-axis** (dist/time toggle drives both; delta aligned by **normalized distance** → endpoint = laptime diff), so the two cursors always align. The lower chart's baseline is **Δ-to-best by default with the synthetic IDEAL lap drawn over it** (`session.ideal_delta_to_best`, its own pen), and it **switches wholesale to Δ-to-IDEAL — relabelling its axis `Δ to ideal (s)` — when the only lap drawn is the best lap**, whose Δ against itself is a flat zero line. The baseline is carried as a **string key** (`DELTA_BASELINE_*`), not a bool, so a third baseline never has to re-tangle it; the ideal overlay's toggle carries a tooltip for each of the two states where there is nothing to overlay (the ideal already IS the y=0 line; or one lap was quickest through every segment, so the composite is that lap). Downsampled/clipped curves + a synced cursor that is also a **draggable scrubber** + a **hover dot** on the delta curve + subtle **sector boundary guide lines** (`set_sector_lines`, app-fed) + **F5 driving overlays**: **brake-point glyphs** (▼ riding the speed curve at each onset, from `session.lap_brake_plot_positions`) and **shaded coasting bands** (`session.lap_coasting_plot_spans`), both app-fed in the current axis mode and showing **both laps in compare** — pacer-free, it only emits `scrubStarted`/`scrubMoved(x, mode)`/`scrubEnded`/`modeChanged(mode)` (mode = `time`\|`distance`); the `ScrubController` converts + seeks, and app owns the live Δ/speed readout box. |
+| [lap_table.py](lap_table.py) | Lap time / dist / entry speed + per-sector split columns (S1…Sn) once sectors are added. Multi-select to compare; **▶** marks the playing lap, blue = selection, green = best, **purple = per-sector session best**, **⚠ = GPS-dropout lap (low-confidence; time/distance/map less reliable, with a row tooltip)**. Base row text is the theme's primary off-white (dark table surface). **Every header is click-to-sort** by the underlying numeric value (asc/desc); highlights and the ⚠ flag follow the laps across a sort. The two stitched targets that used to sit in a SESSION-BESTS footer here now live on the Stats page (it cost the grid 63px — two lap rows — and could not be collapsed): **Theoretical best** in `stats_panel` ▸ IDEAL LAP, **Best rolling** in ▸ PACE. Also hosts **`CornerTable`** — the panel's "Corners" tab page: one row per detected corner for the selected lap (time-in-corner, Δ vs best, apex/entry/exit speeds; per-corner **session best in purple**; a **Grip (est)** column (F5) = ESTIMATED friction-circle utilisation from `session.lap_corner_grip` (clean GPS-derived longitudinal + IMU lateral g vs the session envelope; ~100% = at the session's grip limit), a dash when there's no g signal), stacked with the laps table so Laps mode stays byte-identical. |
 | [export_data.py](export_data.py) | **Data export (F11)** — pure Python (no `pacer`, no Qt), fed only by Session accessors: `write_laps_csv` (one row per lap: time/dist/entry + S-splits + per-corner time/apex-speed + the ⚠ flag, human 3-decimals, plus a labeled **summary trailer** — theoretical-best / best-rolling, mirroring the Stats page's two target tiles), `write_channels_csv` (per-sample t/elapsed/lat/lon/x/y/dist/speed m/s+km/h + kart-frame g — float-`repr` values, EXACT round-trip vs the Session arrays), `write_report_html` (one self-contained page: session header, laps table, embedded base64-PNG map+chart snapshots; no JS). `app.py`'s **File ▸ Export** submenu owns the save dialogs + widget grabs; nothing is written without an explicit save. Unit-tested in [`tests/test_export_data.py`](../tests/test_export_data.py). |
 | [library.py](library.py) | **Session library (F8)** — pure path/JSON, pacer-free (the sidecar's twin): a versioned local index at `~/Library/Application Support/pacer/library.json` (atomic tmp+`os.replace`, app-support dir auto-created). One entry per **recording fingerprint** (`<first-chapter stem>\|<total duration to 0.1s>`, so a single-chapter and a full chaptered open of the same recording share ONE entry — re-opening **updates in place**, no duplicate) carrying track / date (GPS9 wall clock) / lap count / best / theoretical / paths. `load` **self-heals to a safe empty index** on ANY corruption (same philosophy as the sidecar revert guard); `upsert_and_save` is the post-load call; `pb_series(track)` extracts the dated best-lap progression. `_app_support_dir` is the single seam the tests monkeypatch (never the real `~/Library`). The values are fed from **`Session.library_entry(paths)`** (pacer stays on the Session side). |
 | [library_dialog.py](library_dialog.py) | **The File ▸ Library… dialog (F8)** — self-contained, pacer-free, over a loaded `library` index. A **sortable** list (date / track / best / theoretical, numeric sort keys so times order by value); an **Open** button + double-click that re-open the selected recording through an injected callback (`app._load`); **missing-file rows greyed + disabled** (not openable); and a per-track **PB-progression mini-chart** (best-lap vs date, a pyqtgraph `DateAxisItem` plot) for the selected row. A missing/empty index just shows an empty library. |
@@ -182,7 +185,10 @@ Session facade). Edit the algorithm; the service just caches + delegates.
 - **GPS9 true-clock timing is unbiased — VALIDATED OUT-OF-SAMPLE, no calibration factor** (rate =
   1.0). Validated against the kart's real lap-timing **transponder** on a SECOND, independent
   recording (0062) by `studio/dev/_validate_wallclock.py`: clean-lap residual mean **+0.0015 s /
-  ±0.053 s** (0060: +0.0030 s / 0.087 s), each recording's own best-fit rate ≈1.0 (−22 / −46 ppm).
+  ±0.053 s over 59 clean laps** (0060: +0.0030 s / 0.087 s over 48), each recording's own best-fit
+  rate ≈1.0 (−22 / −46 ppm). **`csv_lap_range` in the dump is an ID range, not a count** — the
+  transponder log runs a 24 h race, so 0062's lock `856–920` is **65 aligned laps**, not 850+
+  (`csv_ids = [start + k for k in range(len(valid))]`, so its LENGTH is the aligned count).
   A previously-committed clock-rate factor (0.999514) was **REMOVED** as an overfit to dropout-tail
   skew (it worsened the clean-lap RMS on both recordings). GPS-dropout laps are inherently ±noisy
   (their dropout is mid-lap) → **flagged** low-confidence, not absorbed into a clock rate. Full
@@ -204,7 +210,19 @@ Session facade). Edit the algorithm; the service just caches + delegates.
   speed + delta plots share **one x-axis** driven by the dist/time toggle and kept x-linked
   (`delta(ids, x_mode=…)`: distance = s×best_distance metres, time = time-into-lap), so the two
   cursors always line up vertically at the same moment. `session.delta_at_time(t)` gives the
-  current-moment Δ-to-best for the live readout box.
+  current-moment Δ-to-best; the live readout box **leads with Δ-to-IDEAL**
+  (`session.delta_to_ideal_at`) and keeps this one in its tooltip.
+- **The IDEAL lap (D1)** is the other baseline, and the one the product is built around:
+  `session.ideal_segment_bests` → `ideal_lap_elapsed` / `ideal_total` / `delta_to_ideal`. It is the
+  **corner/straight partition composite** — the per-segment minimum over the clean laps, stitched.
+  Because corners + straights *partition* the lap exactly (`corners.py` asserts Σ segment Δ == lap
+  Δ), the composite is a real drive: `ideal_total` is the exact sum of its pieces, and
+  `ideal_sample` reports what that minimum was taken over (donors / laps / corners) so no surface
+  states the number without stating its sample. When ONE lap is quickest through every segment the
+  minimum IS that lap — `ideal_donor_lap_id` is then non-None, and **every** ideal surface must
+  gate on it rather than print a flat zero / `Δideal +0.00 s`. That gate had to be applied to the
+  Δ chart, the ideal toggle, the Stats IDEAL LAP block, the laps.csv trailer, the share card, the
+  Library cell **and** the hero readout: if you add a surface that shows the ideal, gate it.
 - **Per-sector splits** (`session.lap_sector_splits`) project each sector line to a cum-distance on
   each lap and split the time there — correct (sums to lap time) for every lap, no reliance on
   fragile geometric crossing of short lines.
@@ -234,7 +252,7 @@ Session facade). Edit the algorithm; the service just caches + delegates.
   wins) so 4K HEVC stays responsive; pause-on-grab / resume-iff-was-playing. **No feedback loop:**
   the drag ignores the playback tick (`_user_dragging`) and programmatic `setValue` is
   `_suppress`-guarded. Tests in `tests/test_scrub_conversion.py` + `tests/test_controllers.py`.
-- **Charts auto-follow the current lap (`app._follow_current_lap`, UI-only):** the charts always show
+- **Charts auto-follow the current lap (`central_view._follow_current_lap`, UI-only):** the charts always show
   **whichever lap the playhead is in vs the best lap** — as playback (or a main-slider scrub) crosses
   a lap boundary they switch to the now-current lap, keeping best as the reference overlay; the table
   `▶`/selection + map overlay stay coherent. It's a cheap **edge check** on `session.lap_at_time(t)`
@@ -245,10 +263,17 @@ Session facade). Edit the algorithm; the service just caches + delegates.
   replaced by `[current, best]` only once playback moves on. Because the current lap is always among
   the displayed laps, the **scrub cursor / Δ box / hover work in the followed lap**.
 - **Live Δ/speed readout + delta-plot hover dot:** an always-on box above the plots
-  (`app._update_diff_box`) shows the **current-moment Δ-to-best (priority) + speed** from
-  `session.delta_at_lap` + the trace speed at the resolved index — green when meaningfully ahead
-  of best, red when behind, neutral within ±`theme.DELTA_EVEN_EPS_S` of zero — updating
-  live as the video plays or the cursor scrubs. The delta plot additionally shows a **hover dot**
+  (`central_view._update_diff_box`) shows the **current-moment Δ + speed**, updating live as the
+  video plays or the cursor scrubs — green when meaningfully ahead, red when behind, neutral
+  within ±`theme.DELTA_EVEN_EPS_S` of zero. Its **default reference is the IDEAL lap**
+  (`Δideal`, from `session.delta_to_ideal_at` on the memoized envelope grid), because that is the
+  target the rest of the app is built around; a **`vs ideal` chip** flips it to lead with
+  `session.delta_at_lap` (Δ-to-best) instead. **Whichever number is not leading is in the box's
+  tooltip** — re-prioritized, never removed. The lead is gated on the ideal being a real
+  *composite*, and on the **state, not the chip**: where one lap is quickest through every segment
+  the "ideal" IS that lap, so leading with it would print `Δideal +0.00 s` on the app's largest
+  surface; `_sync_ideal_readout` disables + unchecks the chip there and says which case applies.
+  The delta plot additionally shows a **hover dot**
   (`ScatterPlotItem` + `TextItem` on `scene().sigMouseMoved`) that snaps to the nearest delta-curve
   sample under the mouse and labels its Δ value (+ distance/time there), independent of the playback
   cursor, hidden on mouse-leave. The hover handler is a cheap nearest-index lookup on the cached
@@ -266,10 +291,18 @@ Session facade). Edit the algorithm; the service just caches + delegates.
   kept-point times have an interior gap > `gapfill.GAP_TIME_S` (0.35 s) had a real dropout, so its
   time/distance/map are less reliable. A pure, read-only helper (changes no analysis value); the
   table shows the ⚠ marker + tooltip.
-- **Theoretical best + best rolling lap (`session.theoretical_best` / `session.best_rolling_lap`,
-  target tiles in `stats_panel.py`):** the theoretical best is the EXACT sum of the per-column
-  session-best splits (`session.session_best_splits` — hoisted from the table so the purple cells
-  and the Stats tile share one computation; with no sector lines it degenerates to the best lap time).
+- **Theoretical best = THE IDEAL LAP (`session.theoretical_best` → `session.ideal_total`), + best
+  rolling lap (`session.best_rolling_lap`), target tiles in `stats_panel.py`:** the theoretical
+  best is the sum of the per-segment minima of the **corner/straight partition**
+  (`corner_model.SegmentBests`) — the lap you would drive by stitching your quickest run through
+  each corner and each straight. **ONE definition of the ideal lap for every surface**; every
+  `Session.ideal_*` accessor and `Bests.theoretical_best` reach the same cached number.
+  It is **no longer** the sum of the session-best SECTOR splits, which it used to be: sector lines
+  default to NONE, so with no line a lap is one sub-sector whose split *is* its lap time — the old
+  definition was identically the BEST LAP TIME on every recording anyone owns (the flat-zero Δ),
+  and it moved the wrong way when a line was added, because each lap projected the same midpoint
+  onto its OWN odometer. See `bests.theoretical_best`'s docstring for the full WHY-NOT, incl. which
+  of its old supporting figures were measured on a since-destroyed recording and were re-measured.
   The best rolling lap is the fastest start-ANYWHERE full loop (the MoTeC/RS3 "rolling lap"):
   per consecutive valid-lap pair, every sample is an anchor whose window ends when the next lap
   passes the **same spatial point** (nearest same-direction point within a narrow arc + chord
@@ -277,8 +310,9 @@ Session facade). Edit the algorithm; the service just caches + delegates.
   line-length differences and rejected; constants carry the measured WHYs). Windows straddling a
   ⚠ dropout lap are excluded; complete laps always count, so rolling ≤ best lap time. Both
   render as Stats tiles that mute + italicise while the timing is provisional or the clock is
-  degraded (they are stitched targets, not laps anyone drove); the theoretical tile hides with the
-  SECTORS section on a 0-sector track.
+  degraded (they are stitched targets, not laps anyone drove). The theoretical tile moved **out of
+  SECTORS into its own IDEAL LAP section** when the definition changed — it used to inherit that
+  section's 0-sector hide, which hid the ideal on exactly the recordings that have no sector lines.
 - **Sector boundaries on the charts (`session.sector_plot_positions`, UI-only):** the sector lines
   draw as subtle dotted vertical guide lines on BOTH plots, labelled `S/F`/`S1`/`S2`…; positions are
   computed in `session` (the same midpoint→best-lap-trace projection the split times use) and mapped
@@ -301,8 +335,8 @@ Session facade). Edit the algorithm; the service just caches + delegates.
 ### Chaptered sessions
 
 A long GoPro recording is split at a file-size limit (≈12 GB ≈ 28 min for 4K) into **chapters**
-that share a recording number and increment a chapter index, e.g. recording 0060 =
-`GX010060.MP4` + `GX020060.MP4` + `GX030060.MP4`. They are contiguous in time (split mid-lap,
+that share a recording number and increment a chapter index, e.g. recording 0062 =
+`GX010062.MP4` + `GX020062.MP4` + `GX030062.MP4`. They are contiguous in time (split mid-lap,
 not at a lap), so a lap can span a chapter boundary.
 
 - **Opt-in, default unchanged.** Opening one chapter loads only that file (the single-file
@@ -326,15 +360,16 @@ not at a lap), so a lap can span a chapter boundary.
   target chapter isn't loaded (the deferred local seek applies on `LoadedMedia`); and at
   `EndOfMedia` it **auto-advances** to the next chapter and keeps playing from 0. **Known
   limitation:** switching source at a seam reopens the file, so a brief hitch there is expected.
-- **UI.** The window title and a banner above the video show e.g. `recording 0060 · 3 chapters`
+- **UI.** The window title and a banner above the video show e.g. `recording 0062 · 3 chapters`
   and the current chapter (`— chapter 2 of 3`); the banner is hidden for a single file.
 - **Sources:** GPMF/GoPro `.MP4` only. pacer supplies the telemetry time axis; the app brings its own video player (pacer doesn't decode pixels).
 - `dev/_smoke.py` is a headless self-test: `python -m studio.dev._smoke`.
 
 ### G-meter overlay (friction circle, from the real accelerometer)
 
-A classic friction-circle g-meter overlaid on the video, driven by the GoPro's **real
-accelerometer** (`ACCL`), synced to playback. Toggle with the **`G`** button under the video.
+A classic friction-circle g-meter overlaid on the video, synced to playback. Toggle with the
+**`G`** button under the video. Its **lateral** axis is the GoPro's real accelerometer (`ACCL`);
+its **longitudinal** axis is the GPS speed derivative — see "Mixed on purpose" below.
 
 - **Core binding (additive).** `pacer/gps-source` now parses, alongside GPS, three IMU streams on
   the **media clock** (so they sync to the video / span chapters like GPS): `ACCL` (200 Hz, m/s²),
@@ -346,14 +381,29 @@ accelerometer** (`ACCL`), synced to playback. Toggle with the **`G`** button und
   project onto the horizontal plane, then split per-sample into **longitudinal** (along the GPS
   velocity) and **lateral** (perpendicular) g. The one free DOF — CORI-world yaw vs GPS north —
   is fit **per chapter** against the GPS-derived g (CORI resets each chapter; a single global fit
-  fails). All precomputed at load; the overlay does a cheap `session.g_at_time(t)` lookup at the
-  ~30 Hz tick.
-- **GPS cross-check + honest fallback.** The loader also derives g from the GPS trajectory
+  fails: lateral r collapses 0.90 → 0.10). All precomputed at load; the overlay does a cheap
+  `session.g_at_time(t)` lookup at the ~30 Hz tick.
+- **…and the yaw DRIFTS inside a chapter, so one fit per chapter is not enough.** CORI is
+  gyro-integrated with no magnetometer, so its world reference creeps — measured **+0.08 °/s**
+  (D24) and **+0.15 °/s** (Sandown), i.e. 130–200° end-to-end over a ~27 min chapter. A single
+  per-chapter fit is therefore only correct where the drift crosses its mean (the middle laps);
+  toward either end the g comes out rotated, which scales lateral g by `cos(error)` and eventually
+  **inverts** it — the per-lap lateral *gain* tracked `cos(residual yaw)` on every lap of both
+  recordings, which is why **r alone cannot catch this** (r stayed high while the gain fell to
+  0.28). So the yaw is fitted in **overlapping 90 s windows** and interpolated per sample, with
+  gates on moving samples / real cornering / acceleration-direction spread (near-collinear vectors
+  fit noise). Lap-1 gain on D24 went 0.28 → 1.05.
+- **Mixed on purpose, and the dial says so.** The loader also derives g from the GPS trajectory
   (`long = d|v|/dt`, `lat = v²·curvature`) and prints the agreement at startup. On the test
-  recording (kart-mounted cam): **lateral r ≈ 0.90, 96.5 % sign agreement**, longitudinal magnitude
-  matched. If the lateral correlation is poor (e.g. a head-dominated **helmet cam**) or the IMU is
-  absent (older GoPro), the meter **falls back to the GPS-derived g** (`source="gps"`) rather than
-  shipping garbage. See [docs/gmeter-validation.md](docs/gmeter-validation.md) for the full numbers.
+  recording (kart-mounted cam) **lateral r ≈ 0.90 with 96.5 % sign agreement** — so lateral ships
+  from the IMU. Longitudinal does **not**: the forward axis is vibration-inflated (r ≈ +0.36,
+  ~2× RMS), so the dial's braking/accel axis is the **GPS speed derivative** instead
+  (`GMeter.long_g_gps` / `long_source()`). A bare source name would misattribute one of the two
+  axes, so `gmeter_overlay.source_label` prints the composed **`"IMU lat · GPS long"`** on the live
+  dial. If the lateral correlation is below 0.4 (a head-dominated **helmet cam**) or the IMU is
+  absent (older GoPro), the meter **falls back wholly to GPS-derived g** (`source="gps"`) rather
+  than shipping garbage. See [docs/gmeter-validation.md](docs/gmeter-validation.md) for the full
+  numbers.
 - **The widget (`gmeter_overlay.py`).** A subtle **"G meter"** dial: a faint see-through backdrop,
   thin 0.5/1.0 g rings, a soft white **dot (no centre-to-dot line)**, a translucent **red max-G
   envelope** (convex hull of the grip used), and **amber peak-g numbers at the four cardinals**
