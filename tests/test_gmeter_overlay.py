@@ -513,19 +513,36 @@ def _painted_strings(export: bool, w=280, h=280, k=1.0, st=None):
 
 
 def test_export_dial_paints_the_same_labels_as_the_live_dial():
-    """L9-03 / L12-05: the burned-in dial must not be more silent than the screen it came from.
-    The exporter sets DialState.source ('IMU lat · GPS long') and snapshots it; the export painter
-    used to drop it, so a shared MP4 carried four bare numbers with no provenance and no unit.
-    Same DialState, same box -> the same SET of strings in both modes, with exactly ONE documented
-    exception: the "G METER" title, dropped on purpose so the export dial fills more of its box
-    (`_export_dial_geom`'s docstring). A second divergence is a regression."""
+    """L9-03 / L12-05, as amended: the burned-in dial must not be more silent than the screen it
+    came from about what its NUMBERS MEAN — the four direction captions and the labelled rings that
+    carry the unit. It used to paint none of them, so a shared MP4 carried four bare digits.
+
+    TWO strings are live-only, and this test's job is to hold the list at exactly those two:
+
+      * the "G METER" title, dropped so the export dial fills more of its box
+        (`_export_dial_geom`);
+      * the PROVENANCE TAG (`st.source`, "IMU lat · GPS long"), dropped from the video only.
+
+    The tag's reason is worth keeping written down, because it is the rule this relaxes. The dial
+    mixes sensors: its LATERAL axis is the IMU (r ~ +0.89 against GPS) and its BRAKING/ACCEL axis
+    is the GPS speed-derivative, because the IMU's forward axis is vibration-inflated (r ~ +0.36)
+    — so a bare source name would misattribute the braking axis, which is why `source_label`
+    composes the mixed string at all. What changed is WHERE that is stated: a nine-pixel line of
+    sensor plumbing under a dial in a shared clip is not where a viewer reads provenance, and
+    dropping it hands its reserved band back to the dial (+10.1 % radius). The LIVE meter — the
+    surface a driver reads the numbers off to act on them — still carries it, and this test still
+    requires it there. `source_label` keeps its exact string either way.
+    See studio/docs/gmeter-validation.md."""
     from studio import gmeter_overlay as g
     st = _label_state()
     live = set(_painted_strings(False, st=st))
     exp = set(_painted_strings(True, st=st))
-    assert st.source in live, live
-    assert st.source in exp, f"the EXPORT dial must paint its provenance tag; painted {sorted(exp)}"
-    assert live - exp == {g._TITLE}, f"live-only {sorted(live - exp)} (only the title may differ)"
+    assert st.source in live, f"the LIVE dial must still paint its provenance tag; painted {live}"
+    assert st.source not in exp, (
+        "the EXPORT dial must not burn the provenance tag into the video; painted "
+        f"{sorted(exp)}")
+    assert live - exp == {g._TITLE, st.source}, (
+        f"live-only {sorted(live - exp)} — exactly the title and the provenance tag may differ")
     assert exp - live == set(), f"export-only {sorted(exp - live)}"
 
 
@@ -553,7 +570,7 @@ def test_legend_labels_do_not_collide_with_each_other():
     from studio import gmeter_overlay as g
     for (w, h), want_rings in (((120, 140), 1), ((240, 280), 2)):
         cx, cy, r = g.dial_geom(w, h)
-        fm = QFontMetricsF(g._font(g._legend_pt(r)))
+        fm = QFontMetricsF(g._font(g._legend_px(r)))
         items = g._legend_items(cx, cy, r, fm)
         assert len([t for _, _, t in items if t.startswith("TURN")]) == 2, items
         boxes = [fm.boundingRect(rect, int(flags), text) for rect, flags, text in items]
@@ -638,7 +655,7 @@ def test_source_tag_contrast_is_legible():
     lo, hi = sorted([lum(ink), lum(bg)])
     ratio = (hi + 0.05) / (lo + 0.05)
     assert ratio >= 3.0, f"source tag contrast {ratio:.2f}:1 (ink {ink.tolist()} bg {bg.tolist()})"
-    print(f"ok source-tag contrast {ratio:.2f}:1 at {g._TAG_PT} pt")
+    print(f"ok source-tag contrast {ratio:.2f}:1 at {g._TAG_PX} px")
 
 
 if __name__ == "__main__":

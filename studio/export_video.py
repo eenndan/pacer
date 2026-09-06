@@ -45,6 +45,7 @@ from PySide6.QtGui import (
 
 from . import gmeter_overlay, theme, units
 from ._signal import fmt_time, lap_label
+from .export_palette import EXPORT
 
 
 # --------------------------------------------------------------------------- ffmpeg discovery
@@ -366,7 +367,13 @@ class ExportSpec:
     file(s) + a local seek offset; `src_path` is a single-file back-compat shortcut (synthesized into
     `source` if `source` is omitted). ffmpeg seeks with the source-LOCAL time (`t0/t1 -
     source.time_offset`), never the global t0. `lap_id` is the lap whose Δ baseline + sector strip +
-    g-meter scope are shown."""
+    g-meter scope are shown.
+
+    `is_best` = the exported lap IS the session's best lap, i.e. the lap every Δ is measured
+    against. It is a VERDICT about this export rather than a layout knob, which is why it lives
+    here and not on the frozen `OverlayConfig`: `build_lap_spec` resolves it once from
+    `session.best_lap_id()`, and the compositor reads it every frame. See `_paint_strip` for what
+    it changes and why it has to."""
     out_path: str
     lap_id: int
     t0: float
@@ -374,6 +381,7 @@ class ExportSpec:
     src_path: str = ""
     config: OverlayConfig = field(default_factory=OverlayConfig)
     source: VideoSource | None = None
+    is_best: bool = False
 
     def __post_init__(self):
         # Back-compat: a caller that passed only `src_path` (the legacy single-file API + the
@@ -646,27 +654,14 @@ def _font(px: float, bold: bool = False) -> QFont:
 
 
 # --------------------------------------------------------------------------- export palette
-# Export palette: opaque, high-contrast colours for burning over bright footage (the live theme.C
-# is dim-on-dark and washes out). Legibility comes from a dark halo under every glyph/line (see
-# _draw_text / _stroke_polyline), which is what lets the g-meter and map drop their grey backdrops.
-class EXPORT:
-    """Vivid, opaque, export-tuned colours for burning overlays onto BRIGHT footage. Separate from
-    the live theme tokens (which are dim-on-dark). Hex strings; use these in the composite only."""
-
-    # text / structure
-    text = "#FFFFFF"            # primary readout text — pure white (max contrast over footage)
-    text_dim = "#E6EAF0"        # secondary text (units / labels) — near-white, still bright
-    halo = "#0A0C10"            # the dark outline/shadow colour under every bright element
-    # accent (amber) — brighter + fully saturated vs the theme's #F5A623
-    accent = "#FFB21E"          # primary accent: lap line, g-dial envelope, lap-strip fill
-    accent_bright = "#FFD34D"   # highlight (g dot glow, marker ring)
-    # semantics — PUNCHY, fully-saturated ahead/behind (theme's #5DD6A0/#E8746B are too soft here)
-    ahead = "#26E07A"           # ahead / gaining — vivid green
-    behind = "#FF4D4D"          # behind / losing — vivid red
-    neutral = "#FFFFFF"         # dead-even Δ — white (no semantic colour)
-    marker = "#FF5A36"          # map current-position marker — hot coral (pops on green/grey)
-    grid = "#FFFFFF"            # g-dial rings / crosshair — white at moderate alpha (set per use)
-
+# The export palette (opaque, high-contrast colours for burning over bright footage — the live
+# theme.C is dim-on-dark and washes out) lives in `export_palette.EXPORT`, imported above and
+# re-exported here so `export_video.EXPORT` keeps working. It moved there because `gmeter_overlay`
+# needs five of the same colours for the burned-in dial and cannot import this module (this module
+# imports IT), so it carried a hand-synced second copy — see that module's docstring.
+#
+# Legibility comes from a dark halo under every glyph/line (see _draw_text / _stroke_polyline),
+# which is what lets the g-meter and map drop their grey backdrops.
 
 # Colour-blind-safe EXPORT semantics: the SAME vivid-for-legibility intent as EXPORT.ahead/behind,
 # but on a deuteranopia-safe blue/orange hue axis (matching the interactive PALETTE_COLORBLIND). A
@@ -918,17 +913,163 @@ class _MapInset:
         p.drawEllipse(m, 4.6 * k, 4.6 * k)
 
 
+# --------------------------------------------------------------------------- HUD pill geometry
+# Both bottom-left readout and top-left lap strip are PILLS FITTED TO THEIR OWN INK.
+#
+# They used to be `max(out_w * 0.30, 260)` and `max(out_w * 0.26, 220)` — a fraction of the FRAME,
+# with no relation at all to what they hold. Measured on the shipped face, the readout's content
+# filled 34.8 % of its pill at 720p, 35.6 % at 1080p and 35.1 % at 2160p, and the strip's 46-47 %
+# at all three: a HUD element two and a half times the size of what it says, at every resolution
+# the export offers. That is what made the frame read as boxed rather than composed.
+#
+# The padding fractions below are exactly the padding the two painters already inset their content
+# by; lifting them out of the painters is what makes the box and the text agree by construction
+# rather than by coincidence. Both widths are resolved ONCE per export (OverlayPainter.__init__)
+# from the widest string the export can burn, never per frame — a pill that breathed as the speed
+# gained a digit would be worse than one that is too wide.
+_READOUT_PAD_FRAC = 0.26      # readout: left/right inner padding, as a fraction of the pill HEIGHT
+_READOUT_GAP_K = 4.0          # readout: hero number -> unit label, in k units (k = height / 44)
+_STRIP_PAD_L_FRAC = 0.42      # strip: the ink starts further in — the amber progress fill runs
+_STRIP_PAD_R_FRAC = 0.20      #        under it, and a flush label would sit on the fill's edge
+_RUN_GAP_K = 16.0             # the gap between two separate RUNS (elapsed time -> Δ), in k units
+
+# The widest hero speed to budget for when the session exposes no usable speed track. Three digits
+# covers anything a camera bolted to a vehicle will read; with tabular figures a speed's width is
+# decided by its digit COUNT alone, so this is a width, not a value.
+_SPEED_BUDGET_FALLBACK = "888"
+# Δ budget when the session cannot be sampled: one integer digit and change.
+_DELTA_BUDGET_FALLBACK = 9.99
+_DELTA_BUDGET_SAMPLES = 128
+
+# What the strip carries INSTEAD of a Δ when the exported lap is the session's best (see
+# `strip_tail`). "★" is in the shipped face — verified by rendering it through `_draw_text`, the
+# export's own QPainterPath.addText path, not by asking the font.
+_BEST_MARK = "★ BEST"
+
+
+def readout_pill_width(pill_h: float, speed_texts, unit_label: str) -> float:
+    """The bottom-left readout pill's width at pill height `pill_h`: the padding, the widest hero
+    speed string this export can burn, the gap, the unit label, and the padding again.
+
+    `speed_texts` is that export's own set of candidate hero strings (`_speed_text_candidates`).
+    The em dash `theme.speed_number` returns outside a lap is added here unconditionally, so a
+    frame between laps can never overflow a pill fitted to digits."""
+    k = pill_h / 44.0
+    fm_big = QFontMetricsF(_font(pill_h * 0.74, bold=True))
+    fm_unit = QFontMetricsF(_font(pill_h * 0.34, bold=True))
+    hero = max(fm_big.horizontalAdvance(t)
+               for t in (*speed_texts, theme.speed_number(None, None)))
+    return (2.0 * pill_h * _READOUT_PAD_FRAC + hero + _READOUT_GAP_K * k
+            + fm_unit.horizontalAdvance(unit_label))
+
+
+def strip_pill_width(pill_h: float, labels, tails) -> float:
+    """The top-left lap strip's width at pill height `pill_h`: the left padding (which the amber
+    progress fill runs under), the widest "LAP n   m:ss.mmm" the lap can produce, the run gap, the
+    widest Δ (or the `★ BEST` mark), and the right padding.
+
+    Both runs are measured in the SAME face at the SAME size the painter draws them in, so the
+    box cannot disagree with the ink."""
+    k = pill_h / 44.0
+    fm = QFontMetricsF(_font(pill_h * 0.54, bold=True))
+    label_w = max(fm.horizontalAdvance(t) for t in labels)
+    tail_w = max((fm.horizontalAdvance(t) for t in tails if t), default=0.0)
+    gap = _RUN_GAP_K * k if tail_w else 0.0
+    return pill_h * _STRIP_PAD_L_FRAC + label_w + gap + tail_w + pill_h * _STRIP_PAD_R_FRAC
+
+
+def _speed_text_candidates(session, spec: ExportSpec) -> tuple[str, ...]:
+    """Every hero-speed string this export can burn. With tabular figures a speed's WIDTH is
+    decided by its digit COUNT, so the widest is the fastest sample inside the exported window —
+    read off the session's own per-sample km/h track and formatted through the very
+    `theme.speed_number` the painter calls, so rounding (99.6 -> "100") is counted too. Falls back
+    to `_SPEED_BUDGET_FALLBACK` when the session exposes no usable track."""
+    tt, tv = getattr(session, "tt", None), getattr(session, "tv", None)
+    if tt is not None and tv is not None and len(tv) and len(tt) == len(tv):
+        tt = np.asarray(tt, dtype=float)
+        tv = np.asarray(tv, dtype=float)
+        sel = (tt >= spec.t0) & (tt < spec.t1)
+        vals = tv[sel] if bool(sel.any()) else tv
+        if len(vals) and bool(np.isfinite(vals).any()):
+            top = float(np.nanmax(vals))
+            return (theme.speed_number(top, spec.lap_id, spec.config.speed_unit),)
+    return (_SPEED_BUDGET_FALLBACK,)
+
+
+def _strip_label_candidates(spec: ExportSpec) -> tuple[str, ...]:
+    """The two ends of the strip's "LAP n   m:ss.mmm" run. The lap number is fixed for an export
+    and the elapsed time runs from zero to the lap's own duration, so these two bracket every
+    string in between (with tabular figures, width follows the character count)."""
+    lap = f"LAP {lap_label(spec.lap_id)}"
+    return (f"{lap}   {fmt_time(0.0)}", f"{lap}   {fmt_time(spec.duration)}")
+
+
+def _strip_tail_candidates(session, spec: ExportSpec) -> tuple[str, ...]:
+    """The widest thing that can follow the elapsed time: the `★ BEST` mark on a best-lap export,
+    else the Δ run at this lap's own peak |Δ| in BOTH signs (`-` and `+` are not the same width,
+    and the strip has to hold either)."""
+    if spec.is_best:
+        return (_BEST_MARK,)
+    peak = _peak_abs_delta(session, spec)
+    return tuple(theme.format_delta_run(sign * peak, units=False, arrow=False)
+                 for sign in (-1.0, 1.0))
+
+
+def _peak_abs_delta(session, spec: ExportSpec) -> float:
+    """The largest |Δ| this export can burn, sampled across the window — the Δ's width is its digit
+    count, and a strip fitted to `Δ -0.31` that a later `Δ -12.40` overflows is worse than one
+    budgeted for the lap's real range. A Δ curve is an integral of pace, so it has no spikes to
+    miss: 128 samples resolve the digit-count boundary comfortably on a lap-length window. The
+    accessor is the SAME one the per-frame lookup uses (`overlay_values_at`), so a session this
+    cannot read is a session the render could not have painted either."""
+    getter = getattr(session, "delta_at_lap", None)
+    if not callable(getter) or spec.duration <= 0:
+        return _DELTA_BUDGET_FALLBACK
+    peak = 0.0
+    for t in np.linspace(spec.t0, spec.t1, _DELTA_BUDGET_SAMPLES, endpoint=False):
+        d = getter(spec.lap_id, float(t))
+        if d is not None and np.isfinite(d):
+            peak = max(peak, abs(float(d)))
+    return peak
+
+
+def strip_tail(delta_s: float | None, is_best: bool = False,
+               palette: str | None = None) -> tuple[str, str]:
+    """What follows the elapsed time in the lap strip, and the colour to draw it in.
+
+    Best lap -> the `★ BEST` mark in the export accent, and NO Δ at all. The export defaults to
+    the best lap and `delta_at_lap` compares a lap against its own curve, so today's clip burns
+    `Δ +0.00` for its entire length with nothing in frame saying why. The app has copy for exactly
+    this (central_view: "This IS your best lap, so it is the reference this Δ is measured
+    against… Pick another lap for a number that moves") — but a video has no tooltip to hover, so
+    the mark has to BE the explanation.
+
+    Any other lap -> the shared tight Δ run in the vivid ahead/behind colour for `palette`.
+    `theme.format_delta_run(units=False, arrow=False)` and `export_delta_colour` stay the
+    formatter and the colour decision, shared with the live readout so the two cannot drift (that
+    includes theme's `-0.00` dead band, which the export must never burn into a delivered file).
+    `arrow=False` is deliberate — the accessibility ▲/▼ lives on the interactive readout."""
+    if is_best:
+        return _BEST_MARK, EXPORT.accent
+    return (theme.format_delta_run(delta_s, units=False, arrow=False),
+            export_delta_colour(delta_s, palette))
+
+
 def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues,
-                   unit: str | None = None, palette: str | None = None) -> None:
-    """Bottom-left delta/speed readout: a hero speed number + small unit label ("km/h"/"mph") and a
-    vivid delta cue (export_delta_colour in `palette`'s hue axis), all haloed, on a slim dark pill.
-    `unit` (km/h default) converts the speed number + names the unit — matching what's on screen;
-    `palette` (the active palette when None) picks the vivid green/red vs blue/orange Δ pair."""
+                   unit: str | None = None) -> None:
+    """Bottom-left SPEED readout: a hero speed number + a small unit label ("km/h"/"mph"), haloed,
+    on a slim dark pill fitted to that text (`readout_pill_width`). `unit` (km/h default) converts
+    the speed number + names the unit — matching what's on screen.
+
+    THE Δ IS NOT HERE ANY MORE. It used to sit one run right of "km/h", inside the SPEED box,
+    where the only thing it could read as was a qualifier on the speed. A Δ measures TIME, so it
+    now follows the elapsed time in the lap strip — same formatter, same colour rule, one section
+    up. See `_paint_strip` / `strip_tail`."""
     k = box.height() / 44.0   # the readout box is ~44 px tall at 1080p; scale radii/strokes with it
     p.setBrush(_c(EXPORT.halo, 165))
     p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
     p.drawRoundedRect(box, 9 * k, 9 * k)
-    pad = box.height() * 0.26
+    pad = box.height() * _READOUT_PAD_FRAC
     inner = box.adjusted(pad, 0, -pad, 0)
     # --- HERO speed: big number + small unit ---
     # theme.speed_number is the shared formatter the live #DiffBox uses (real speed only while a lap
@@ -941,27 +1082,23 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues,
     base_y = inner.y() + (inner.height() + fm_big.ascent() - fm_big.descent()) / 2.0
     x = inner.x()
     _draw_text(p, QPointF(x, base_y), speed_num, big, EXPORT.text, halo=2.4 * k)
-    x += fm_big.horizontalAdvance(speed_num) + 4 * k
+    # Placed by ACCUMULATING ADVANCES, which is only stable because `_font` is tabular — see
+    # tests/test_export_typography.py, which pins on composited pixels that everything after the
+    # hero number holds still across speeds. Removing the Δ run must not change that property.
+    x += fm_big.horizontalAdvance(speed_num) + _READOUT_GAP_K * k
     fm_unit = QFontMetricsF(unit_font)
     _draw_text(p, QPointF(x, base_y - (fm_big.ascent() - fm_unit.ascent()) * 0.15),
                unit_label, unit_font, EXPORT.text_dim, halo=1.8 * k)
-    x += fm_unit.horizontalAdvance(unit_label) + 16 * k
-    # --- Δ cue: punchy vivid colour ---
-    # theme.format_delta_run(units=False) = the export's tight "Δ +0.00" form (shared with the live
-    # box, so no drift); colour from export_delta_colour. arrow=False here: the burned-in overlay
-    # font isn't guaranteed to carry the ▲/▼ glyphs and the export keeps its own vivid palette — the
-    # accessibility arrow lives on the interactive Δ readout, not the video export.
-    delta_txt = theme.format_delta_run(vals.delta_s, units=False, arrow=False)
-    dcol = export_delta_colour(vals.delta_s, palette)
-    dfont = _font(box.height() * 0.50, bold=True)
-    fm_d = QFontMetricsF(dfont)
-    dy = inner.y() + (inner.height() + fm_d.ascent() - fm_d.descent()) / 2.0
-    _draw_text(p, QPointF(x, dy), delta_txt, dfont, dcol, halo=2.2 * k)
 
 
-def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: float) -> None:
-    """Lap/sector strip (top-left): "LAP n  m:ss.mmm" with a vivid amber time-progress fill, on the
-    same slim dark pill as the readout."""
+def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: float,
+                 palette: str | None = None, is_best: bool = False) -> None:
+    """Lap/sector strip (top-left): "LAP n   m:ss.mmm" then the Δ, over a vivid amber time-progress
+    fill, on the same slim dark pill as the readout (fitted to its text — `strip_pill_width`).
+
+    THE Δ LIVES HERE, after the elapsed time, because that is the section it belongs to: it is a
+    time measurement, not a speed one. `palette` picks the vivid green/red vs blue/orange hue axis;
+    `is_best` replaces it with the `★ BEST` mark (see `strip_tail`, which owns both decisions)."""
     k = box.height() / 44.0
     p.setBrush(_c(EXPORT.halo, 165))
     p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
@@ -972,24 +1109,42 @@ def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: flo
     if win is not None:
         ls, le = win
         frac = 0.0 if le <= ls else max(0.0, min(1.0, (vals.t - ls) / (le - ls)))
-        if frac > 0:
-            # progress fill clipped to the pill so the rounded corners stay clean.
-            clip = QPainterPath()
-            clip.addRoundedRect(box, 8 * k, 8 * k)
-            p.save()
-            p.setClipPath(clip)
-            fill = QRectF(box.x(), box.y(), box.width() * frac, box.height())
-            p.setBrush(_c(EXPORT.accent, 120))
-            p.setPen(Qt.NoPen)
-            p.drawRect(fill)
-            p.restore()
         elapsed = max(0.0, vals.t - ls)
     else:
+        frac = 0.0
         elapsed = max(0.0, vals.t - t0)
     label = f"LAP {lap_label(vals.lap_id)}   {fmt_time(elapsed)}"
-    inner = box.adjusted(box.height() * 0.42, 0, -box.height() * 0.2, 0)
-    _text_at(p, inner, Qt.AlignVCenter | Qt.AlignLeft, label,
-             _font(box.height() * 0.54, bold=True), EXPORT.text, halo=2.2 * k)
+    font = _font(box.height() * 0.54, bold=True)
+    inner = box.adjusted(box.height() * _STRIP_PAD_L_FRAC, 0,
+                         -box.height() * _STRIP_PAD_R_FRAC, 0)
+    # Measured before anything is drawn, because the Δ's position decides where the progress
+    # fill's TRACK ends. The Δ is placed by accumulating the label's advance — the same
+    # tabular-figures guarantee the readout relies on, so it cannot slide as the clock ticks.
+    tail, colour = strip_tail(vals.delta_s, is_best, palette)
+    tail_x = inner.x() + QFontMetricsF(font).horizontalAdvance(label) + _RUN_GAP_K * k
+    # THE FILL'S TRACK IS THE CLOCK'S SECTION, NOT THE WHOLE PILL. It ends midway through the gap
+    # before the Δ, and that is a legibility requirement rather than a taste: measured on the
+    # composited pixels, the amber fill lands at RGB(159,124,55), against which the vivid Δ
+    # colours run down to 1.19:1 (standard "behind" red) and 1.21:1 (colour-blind "ahead" blue) —
+    # while on the plain dark pill the same colours are 2.68:1 and 2.73:1. The Δ's whole job is to
+    # carry a colour, and the bar it would sit on measures the clock beside it, so the bar stops
+    # where the clock does. (The glyph SHAPE was never at risk: every run has its dark halo.)
+    track_w = max(1.0, (tail_x - _RUN_GAP_K * k * 0.5) - box.x()) if tail else box.width()
+    if frac > 0:
+        # progress fill clipped to the pill so the rounded corners stay clean.
+        clip = QPainterPath()
+        clip.addRoundedRect(box, 8 * k, 8 * k)
+        p.save()
+        p.setClipPath(clip)
+        p.setBrush(_c(EXPORT.accent, 120))
+        p.setPen(Qt.NoPen)
+        p.drawRect(QRectF(box.x(), box.y(), track_w * frac, box.height()))
+        p.restore()
+    _text_at(p, inner, Qt.AlignVCenter | Qt.AlignLeft, label, font, EXPORT.text, halo=2.2 * k)
+    if not tail:
+        return
+    _text_at(p, QRectF(tail_x, inner.y(), max(1.0, inner.right() - tail_x), inner.height()),
+             Qt.AlignVCenter | Qt.AlignLeft, tail, font, colour, halo=2.2 * k)
 
 
 class OverlayPainter:
@@ -1016,12 +1171,20 @@ class OverlayPainter:
         mw, mh = cfg.map_w_frac * out_w, cfg.map_h_frac * out_h
         self._map = _MapInset(session, QRectF(out_w - m - mw, out_h - m - mh, mw, mh),
                               spec.lap_id, scale_k=self._k)
-        # readout: BOTTOM-LEFT.
+        # readout: BOTTOM-LEFT. Both pills are FITTED to the widest text this export can burn,
+        # resolved once here rather than per frame (a pill that breathed as the speed gained a
+        # digit would be worse than one that is too wide). See the HUD pill geometry block.
         rh = max(cfg.readout_h_frac * out_h, 22.0)
-        self._readout_rect = QRectF(m, out_h - m - rh, max(out_w * 0.30, 260.0), rh)
+        self._readout_rect = QRectF(
+            m, out_h - m - rh,
+            readout_pill_width(rh, _speed_text_candidates(session, spec),
+                               units.speed_label(cfg.speed_unit)), rh)
         # lap strip: TOP-LEFT.
         sh = max(cfg.strip_h_frac * out_h, 20.0)
-        self._strip_rect = QRectF(m, m, max(out_w * 0.26, 220.0), sh)
+        self._strip_rect = QRectF(
+            m, m,
+            strip_pill_width(sh, _strip_label_candidates(spec),
+                             _strip_tail_candidates(session, spec)), sh)
         # Headless g-meter dial, driven exactly like the live overlay so its filtering matches (incl.
         # the axis-provenance tag: IMU lateral · GPS longitudinal, not a bare source name).
         self._dial = gmeter_overlay.GMeterOverlay()
@@ -1059,9 +1222,9 @@ class OverlayPainter:
                                   export=True, scale_k=self._g_rect.width() / 280.0)
         p.restore()
         self._map.paint(p, vals.marker_index)
-        _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit,
-                       self._spec.config.palette)
-        _paint_strip(p, self._strip_rect, self._session, vals, self._spec.t0)
+        _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
+        _paint_strip(p, self._strip_rect, self._session, vals, self._spec.t0,
+                     self._spec.config.palette, self._spec.is_best)
         p.end()
 
 
@@ -1458,7 +1621,15 @@ def build_lap_spec(session, out_path: str, lap_id: int,
       * `session.chapters` (a ChapterMap) present -> resolve_video_source (single chapter or a concat
         over a seam-crossing span);
       * no ChapterMap -> the plain single file (`src_path`, else `session.video_path`), offset 0.
-    The caller OWNS the returned spec's `source` and must call `spec.source.cleanup()` when done."""
+    The caller OWNS the returned spec's `source` and must call `spec.source.cleanup()` when done.
+
+    It also resolves the BEST-LAP VERDICT (`ExportSpec.is_best`). The exporter had never once
+    called `session.best_lap_id()`, and the app's video export defaults to the best lap — so the
+    shared MP4 burned `Δ +0.00` across its whole length, against a baseline that was the lap
+    itself, with nothing in frame saying so. Resolved here, at the one place a lap becomes an
+    export, rather than at paint time: a per-frame `best_lap_id()` would be the same answer a
+    thousand times over. A session that does not expose the accessor (the duck-typed ones the
+    tests use) simply gets `False` — the Δ, exactly as before."""
     win = lap_window_for_export(session, lap_id)
     if win is None:
         raise ValueError(f"lap {lap_id} has no usable export window")
@@ -1471,8 +1642,11 @@ def build_lap_spec(session, out_path: str, lap_id: int,
         if not path:
             raise ValueError("session has no video source to export")
         source = single_file_source(path)
+    best = getattr(session, "best_lap_id", None)
+    best_id = best() if callable(best) else None
     return ExportSpec(out_path=out_path, lap_id=lap_id, t0=t0, t1=t1,
-                      source=source, config=config or OverlayConfig())
+                      source=source, config=config or OverlayConfig(),
+                      is_best=best_id is not None and int(best_id) == int(lap_id))
 
 
 def render_lap(session, src_path: str, out_path: str, lap_id: int,

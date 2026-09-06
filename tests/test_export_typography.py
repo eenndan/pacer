@@ -61,8 +61,8 @@ class _FakeSession:
         return (10.0, 95.0)
 
 
-def _values(speed):
-    return ev.OverlayValues(t=42.0, lap_id=7, speed_kmh=float(speed), delta_s=-1.25,
+def _values(speed, t=42.0):
+    return ev.OverlayValues(t=t, lap_id=7, speed_kmh=float(speed), delta_s=-1.25,
                             g=None, marker_index=None)
 
 
@@ -74,31 +74,36 @@ def _canvas(out_h):
 
 
 def _readout_box(out_h):
-    """The readout's rect, derived exactly as OverlayPainter.__init__ derives it."""
-    w, h = int(out_h * 16 / 9), int(out_h)
+    """The readout's rect, derived through the SAME width function OverlayPainter.__init__ calls.
+
+    Both pills are now FITTED to the widest text a given export can burn, so the box is no longer
+    a frame fraction this file can re-type — it is a measurement. Going through
+    `ev.readout_pill_width` is what keeps the test's box and the shipped box from drifting apart;
+    the budget passed here ("199") is this file's own widest SPEED_GROUPS entry."""
+    h = int(out_h)
     cfg = ev.OverlayConfig()
     m = cfg.margin_frac * h
     rh = max(cfg.readout_h_frac * h, 22.0)
-    return QRectF(m, h - m - rh, max(w * 0.30, 260.0), rh)
+    return QRectF(m, h - m - rh, ev.readout_pill_width(rh, ("199",), "km/h"), rh)
 
 
 def _strip_box(out_h):
-    w, h = int(out_h * 16 / 9), int(out_h)
+    h = int(out_h)
     cfg = ev.OverlayConfig()
     m = cfg.margin_frac * h
     sh = max(cfg.strip_h_frac * h, 20.0)
-    return QRectF(m, m, max(w * 0.26, 220.0), sh)
+    return QRectF(m, m, ev.strip_pill_width(sh, ("LAP 8   1:25.000",), ("Δ -12.34",)), sh)
 
 
-def _paint(out_h, box, speed, strip=False):
+def _paint(out_h, box, speed, strip=False, t=42.0):
     img = _canvas(out_h)
     p = QPainter(img)
     p.setRenderHint(QPainter.Antialiasing, True)
     p.setRenderHint(QPainter.TextAntialiasing, True)
     if strip:
-        ev._paint_strip(p, box, _FakeSession(), _values(speed), 10.0)
+        ev._paint_strip(p, box, _FakeSession(), _values(speed, t=t), 10.0, "standard")
     else:
-        ev._paint_readout(p, box, _values(speed), "kmh", "standard")
+        ev._paint_readout(p, box, _values(speed), "kmh")
     p.end()
     return img
 
@@ -193,11 +198,149 @@ def test_the_lap_strip_holds_still_too():
     print(f"test_the_lap_strip_holds_still_too OK ({len(OUT_HEIGHTS)} heights)")
 
 
+class _NoWindowSession:
+    """`lap_window` -> None, which is the strip's own no-progress-fill branch. Used to isolate the
+    TEXT: with the amber fill out of the picture the only thing that can move between two frames
+    is a glyph."""
+
+    @staticmethod
+    def lap_window(_lap_id):
+        return None
+
+
+def test_the_strips_new_delta_does_not_slide_under_the_elapsed_time():
+    """The Δ moved into the strip, one run AFTER the elapsed time — which means it inherited the
+    property `_paint_readout`'s unit label needed: it is placed by accumulating the label's
+    advance, so a face with nine digit widths would slide it every time the clock ticked.
+
+    Isolated by killing the progress fill (`_NoWindowSession`), so the ONLY thing that can differ
+    between two frames is glyph ink; then swept over same-length elapsed times whose digits differ
+    everywhere (`0:11.111` .. `0:88.888`). Every differing pixel column must lie inside the
+    elapsed time's own cells — i.e. nothing at or beyond where the Δ starts moved."""
+    worst = 0
+    for out_h in OUT_HEIGHTS:
+        box = _strip_box(out_h)
+        fm = QFontMetricsF(ev._font(box.height() * 0.54, bold=True))
+        inner_x = box.x() + box.height() * ev._STRIP_PAD_L_FRAC
+        # where the label's own cells end (its advance, not its ink) + the halo it may bleed by
+        label_end = inner_x + fm.horizontalAdvance("LAP 8   0:11.111")
+        allow = 2.2 * box.height() / 44.0 + 1.0
+
+        def _paint_at(elapsed, box=box, out_h=out_h):
+            img = _canvas(out_h)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.setRenderHint(QPainter.TextAntialiasing, True)
+            ev._paint_strip(p, box, _NoWindowSession(), _values(88, t=10.0 + elapsed), 10.0,
+                            "standard")
+            p.end()
+            return img
+
+        base = _paint_at(11.111)
+        for elapsed in (22.222, 33.333, 44.444, 55.555, 66.666, 77.777, 88.888):
+            cols = _differing_columns(base, _paint_at(elapsed), box)
+            beyond = [x for x in cols if x > label_end + allow]
+            assert not beyond, (
+                f"{out_h}p elapsed 0:11.111 -> {elapsed}: {len(beyond)} pixel columns past the "
+                f"elapsed time's cells moved (out to x={max(beyond)}, cells end "
+                f"{label_end:.1f}) — the Δ is sliding under the clock")
+            worst = max(worst, len(cols))
+    print("test_the_strips_new_delta_does_not_slide_under_the_elapsed_time OK "
+          f"({len(OUT_HEIGHTS)} heights x 7 elapsed times, 0 columns past the clock, "
+          f"<= {worst} inside it)")
+
+
+def test_the_best_lap_strip_carries_the_mark_instead_of_a_delta():
+    """The best-lap verdict, as pixels rather than as a string compare: the SAME strip rendered
+    with `is_best=True` must differ from the Δ version, and the mark it draws has to be real ink in
+    the shipped face (`★` is U+2605; the export draws through `QPainterPath.addText`, which returns
+    an empty path for a glyph the face cannot supply — a missing mark would be a SILENT blank)."""
+    for out_h in (720, 1080, 2160):
+        box = _strip_box(out_h)
+
+        def _paint_best(is_best, box=box, out_h=out_h):
+            img = _canvas(out_h)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.Antialiasing, True)
+            p.setRenderHint(QPainter.TextAntialiasing, True)
+            ev._paint_strip(p, box, _NoWindowSession(), _values(88), 10.0, "standard", is_best)
+            p.end()
+            return img
+
+        fm = QFontMetricsF(ev._font(box.height() * 0.54, bold=True))
+        inner_x = box.x() + box.height() * ev._STRIP_PAD_L_FRAC
+        label_end = inner_x + fm.horizontalAdvance("LAP 8   0:32.000")
+        cols = _differing_columns(_paint_best(False), _paint_best(True), box)
+        assert cols, f"{out_h}p: is_best changed nothing in the strip"
+        # everything that changed is in the TAIL run, past the clock — the lap line is untouched
+        assert min(cols) > label_end - 1.0, (
+            f"{out_h}p: is_best altered pixels at x={min(cols)}, inside the lap/time run "
+            f"(ends {label_end:.1f})")
+        # and the mark is really drawn: its ink spans at least the advance of "★ BEST" minus halo
+        assert max(cols) - min(cols) + 1 >= fm.horizontalAdvance(ev._BEST_MARK) * 0.5, (
+            f"{out_h}p: the ★ BEST mark painted only {max(cols) - min(cols) + 1} px of ink")
+    print("test_the_best_lap_strip_carries_the_mark_instead_of_a_delta OK (720/1080/2160p)")
+
+
+def test_the_progress_fill_never_runs_under_the_delta():
+    """A legibility constraint the move CREATED, and the number that settles it.
+
+    The strip carries an amber time-progress fill. Moving the Δ into the strip put a semantic
+    colour on top of that fill for the back half of every lap — and measured on the composited
+    pixels the fill lands at RGB(159,124,55), against which the vivid Δ colours fall to 1.19:1
+    (standard "behind" red) and 1.21:1 (colour-blind "ahead" blue). On the plain dark pill the
+    same two are 2.68:1 and 2.73:1. The glyph SHAPE was never at risk — every run carries its dark
+    halo — but a Δ whose entire job is to carry a colour cannot have that colour washed out.
+
+    So the fill's TRACK is the clock's section, ending in the gap before the Δ. Proved
+    geometrically at frac = 1 (the worst case, the last frame of the lap): the fill's own painted
+    columns, isolated against an identical frame with no lap window, must all lie left of the Δ's
+    leftmost ink."""
+    for out_h in OUT_HEIGHTS:
+        box = _strip_box(out_h)
+        t_end = 95.0                     # _FakeSession's lap window is (10, 95) -> frac == 1.0
+
+        def _paint_one(session, blank_tail, box=box, out_h=out_h, t_end=t_end):
+            orig = ev.strip_tail
+            if blank_tail:
+                ev.strip_tail = lambda d, is_best=False, palette=None: ("", "#FFFFFF")
+            try:
+                img = _canvas(out_h)
+                p = QPainter(img)
+                p.setRenderHint(QPainter.Antialiasing, True)
+                p.setRenderHint(QPainter.TextAntialiasing, True)
+                # t0 == the lap start, so the no-window branch shows the SAME elapsed time and the
+                # two frames differ by the fill alone.
+                ev._paint_strip(p, box, session, _values(88, t=t_end), 10.0, "standard")
+                p.end()
+                return img
+            finally:
+                ev.strip_tail = orig
+
+        # The fill's extent: the SAME frame with and without a lap window (so the label, the Δ and
+        # the pill are identical and the fill is the only difference). The tail must stay REAL in
+        # both — it is what decides the track's end, so blanking it here would measure a track
+        # this code never draws.
+        no_fill = _paint_one(_NoWindowSession(), False)
+        fill_cols = _differing_columns(no_fill, _paint_one(_FakeSession(), False), box)
+        # The Δ's ink: the same no-fill frame with the tail blanked.
+        tail_cols = _differing_columns(_paint_one(_NoWindowSession(), True), no_fill, box)
+        assert fill_cols, f"{out_h}p: the progress fill painted nothing at frac=1"
+        assert tail_cols, f"{out_h}p: the Δ painted nothing"
+        assert max(fill_cols) < min(tail_cols), (
+            f"{out_h}p: the amber fill reaches x={max(fill_cols)} but the Δ's ink starts at "
+            f"x={min(tail_cols)} — a semantic colour is sitting on the progress bar (1.19:1)")
+    print(f"test_the_progress_fill_never_runs_under_the_delta OK ({len(OUT_HEIGHTS)} heights)")
+
+
 def _run_all():
     test_every_export_glyph_size_has_one_digit_advance()
     test_the_export_face_is_the_one_the_layout_was_budgeted_in()
     test_the_burned_in_readout_does_not_move_when_the_speed_changes()
     test_the_lap_strip_holds_still_too()
+    test_the_strips_new_delta_does_not_slide_under_the_elapsed_time()
+    test_the_best_lap_strip_carries_the_mark_instead_of_a_delta()
+    test_the_progress_fill_never_runs_under_the_delta()
     print("ALL EXPORT-TYPOGRAPHY TESTS OK")
 
 

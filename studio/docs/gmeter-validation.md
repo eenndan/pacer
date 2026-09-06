@@ -109,3 +109,26 @@ to GPS. The loader prints the cross-check summary at startup so the verdict is a
 For this recording the recommendation is **ACCL** — it agrees with GPS and gives a higher-fidelity
 (200 Hz) signal than the GPS derivative. If a future recording is a helmet cam, prefer the GPS
 fallback.
+
+## Where the provenance is STATED (and where it is not)
+
+The dial mixes sensors — that is the direct consequence of the table above. Its **lateral** axis is
+the IMU (r ≈ +0.89 against GPS, near-identical RMS, 96.5 % sign agreement); its **braking/accel**
+axis is the **GPS speed-derivative**, because the IMU forward axis is vibration-inflated
+(r ≈ +0.36). A bare source name would therefore misattribute the braking axis, which is why
+`gmeter_overlay.source_label` composes the mixed string `"IMU lat · GPS long"` rather than printing
+one sensor's name.
+
+That string is stated on the **live on-screen dial** — the surface where a driver reads the numbers
+in order to act on them, and where the app's other trust chrome lives. It is **deliberately not
+burned into the exported video**: a nine-pixel line of sensor plumbing under a dial in a clip
+someone watches is not where provenance is read, and the reserved band it occupied is worth more
+as dial (dropping it grows the export dial's radius 10.1 % — 76.5 → 84.2 px at 1080p — and its face
+21 % in area, for free). `source_label` keeps its exact string, the exporter still sets it, and
+`DialState.source` still carries it; only `_paint_dial_export` stops drawing it.
+
+The divergence is pinned in both directions by
+`tests/test_gmeter_overlay.test_export_dial_paints_the_same_labels_as_the_live_dial`: exactly two
+strings may be live-only — the "G METER" title and this tag — and everything that says what the
+numbers MEAN (the four direction captions, the labelled `0.5 g` / `1.0 g` rings that carry the
+unit) must still appear in both.

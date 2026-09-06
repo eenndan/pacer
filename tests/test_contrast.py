@@ -767,11 +767,17 @@ def test_format_delta_value_never_prints_negative_zero():
 def test_exported_overlay_readout_never_burns_negative_zero():
     """The same clamp, through the EXPORT path that put it in the delivered file: the video
     overlay's Δ string is composed by theme.format_delta_run, so a noise-level Δ can no longer be
-    rendered into a frame."""
+    rendered into a frame.
+
+    The Δ has since MOVED — out of the speed readout and into the lap strip's time section, where
+    a time measurement belongs — so the composer this follows is `export_video.strip_tail`. The
+    dead band travelled with it, which is the point: an exported clip is the one surface whose
+    recipient cannot re-render it."""
     from studio import export_video
-    assert hasattr(export_video, "_paint_readout")
+    assert hasattr(export_video, "strip_tail")
     for d in (-1e-15, -0.0049, 0.0):
         assert theme.format_delta_run(d, units=False, arrow=False) == "Δ +0.00"
+        assert export_video.strip_tail(d)[0] == "Δ +0.00"
     print("test_exported_overlay_readout_never_burns_negative_zero OK")
 
 

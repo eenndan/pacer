@@ -31,11 +31,16 @@ import types
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from _qtapp import themed_app  # noqa: E402
 
-_APP = QApplication.instance() or QApplication([])
+# The SHIPPED font stack, not a bare QApplication. This file now measures WIDTHS — both HUD pills
+# are fitted to their own text — and a width measured in a face the app does not ship is measuring
+# nothing (see tests/_qtapp). Before this, the bare app had no bundled fonts registered, so
+# `theme.mono_font` fell through Inter to the mono stack and Qt substituted whatever it could find.
+_APP = themed_app()
 
 from studio import chapters  # noqa: E402
 from studio import export_video as ev  # noqa: E402
@@ -1208,12 +1213,22 @@ def test_format_delta_speed_exact_strings_and_spacing():
     assert theme.speed_number(None, 2) == "—"
 
 
-def test_paint_readout_pulls_shared_semantics():
-    """The export readout sources its Δ colour from the shared theme.delta_colour decision (via
-    export_delta_colour) — assert _paint_readout calls export_delta_colour, which is the shared-rule
-    entry point. A light spy guard so the painter can't silently fork the Δ rule again."""
+def test_paint_strip_pulls_shared_semantics():
+    """The export's Δ sources its colour from the shared theme.delta_colour decision (via
+    export_delta_colour) — a light spy guard so the painter can't silently fork the Δ rule again.
+
+    The Δ moved out of `_paint_readout` and into `_paint_strip`, after the elapsed time: a Δ is a
+    TIME measurement and sat in the SPEED box, where it could only read as a qualifier on the
+    speed. So the spy follows it — and the readout is asserted to have stopped calling the rule at
+    all, which is what proves the run really left rather than being drawn twice."""
     from PySide6.QtCore import QRectF
     from PySide6.QtGui import QImage, QPainter
+
+    class _Win:
+        @staticmethod
+        def lap_window(_lap):
+            return (100.0, 160.0)
+
     seen = []
     orig = ev.export_delta_colour
     ev.export_delta_colour = lambda d, palette=None: seen.append(d) or orig(d, palette)
@@ -1224,10 +1239,164 @@ def test_paint_readout_pulls_shared_semantics():
         vals = ev.OverlayValues(t=130.0, lap_id=2, speed_kmh=88.0, delta_s=-0.31,
                                 g=None, marker_index=10)
         ev._paint_readout(p, QRectF(10, 150, 260, 44), vals)
+        assert seen == [], "the readout must not draw the Δ any more; it moved to the lap strip"
+        ev._paint_strip(p, QRectF(10, 10, 260, 44), _Win(), vals, 100.0)
         p.end()
     finally:
         ev.export_delta_colour = orig
     assert seen == [-0.31]                                # the painter routed Δ through the shared rule
+
+
+def test_the_best_lap_strip_drops_the_delta_and_says_why():
+    """The export defaults to the best lap and `delta_at_lap` compares a lap against its own curve,
+    so the shared MP4 burned `Δ +0.00` from the first frame to the last with nothing saying why.
+
+    `strip_tail` is the single decision: on a best-lap export it returns the `★ BEST` mark and the
+    Δ is not composed AT ALL (asserted through the same spy — a Δ that is computed and then not
+    drawn would still be a Δ the code believes in). Every other lap is unchanged, formatter and
+    colour rule included."""
+    from studio import theme
+    seen = []
+    orig = ev.export_delta_colour
+    ev.export_delta_colour = lambda d, palette=None: seen.append(d) or orig(d, palette)
+    try:
+        best_text, best_colour = ev.strip_tail(0.0, is_best=True)
+        assert seen == [], "a best-lap export must not even ASK for a Δ colour"
+        assert best_text == ev._BEST_MARK == "★ BEST"
+        assert best_colour == ev.EXPORT.accent
+        # the ordinary lap: the shared tight run, the shared colour rule, arrow=False kept
+        text, colour = ev.strip_tail(-0.31, is_best=False)
+        assert text == theme.format_delta_run(-0.31, units=False, arrow=False) == "Δ -0.31"
+        assert colour == ev.export_delta_colour(-0.31)
+        # and theme's dead band still reaches the file (a -0.00 must never be burned in)
+        assert ev.strip_tail(-1e-15)[0] == "Δ +0.00"
+    finally:
+        ev.export_delta_colour = orig
+
+
+def test_build_lap_spec_resolves_the_best_lap_verdict():
+    """`build_lap_spec` is where a lap becomes an export, so it is where the best-lap verdict is
+    resolved — the exporter had never called `session.best_lap_id()` at all (grep: zero references)
+    while the app's video export defaults to that very lap."""
+    class _Best(StubSession):
+        def __init__(self, best, **kw):
+            super().__init__(**kw)
+            self._best = best
+            self.video_path = "/in.MP4"
+
+        def best_lap_id(self):
+            return self._best
+
+    assert ev.build_lap_spec(_Best(2, lap_id=2), "/o.mp4", 2).is_best is True
+    assert ev.build_lap_spec(_Best(5, lap_id=2), "/o.mp4", 2).is_best is False
+    assert ev.build_lap_spec(_Best(None, lap_id=2), "/o.mp4", 2).is_best is False
+    # a duck-typed session with no accessor at all keeps the old behaviour (a Δ, no mark)
+    s = StubSession(lap_id=2)
+    s.video_path = "/in.MP4"
+    assert not hasattr(s, "best_lap_id")
+    assert ev.build_lap_spec(s, "/o.mp4", 2).is_best is False
+    assert ev.ExportSpec(src_path="/in.MP4", out_path="/o.mp4", lap_id=1,
+                         t0=0.0, t1=1.0).is_best is False       # default off
+
+
+def test_both_hud_pills_are_fitted_to_their_own_ink():
+    """The pills were `max(out_w * 0.30, 260)` and `max(out_w * 0.26, 220)` — a fraction of the
+    FRAME, with no relation to their contents. Measured on the shipped face that left the readout's
+    ink filling ~35 % of its pill and the strip's ~46 % at every output height.
+
+    Now both measure their own text. The check is the RATIO, swept over the heights the export
+    offers: content (the runs the painter actually places, plus the stated padding) must fill the
+    pill, and the pill must still hold its widest string with the padding intact."""
+    from PySide6.QtGui import QFontMetricsF
+    s = StubSession(lap_id=2, t0=0.0, dur=64.238, n=600)
+    worst = 1.0
+    for out_h in (480, 720, 1080, 1440, 2160):
+        out_w = int(out_h * 16 / 9)
+        spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=0.0, t1=64.238,
+                             config=ev.OverlayConfig(out_height=out_h))
+        painter = ev.OverlayPainter(s, spec, out_w, out_h)
+        # --- readout: pad + widest hero + gap + unit + pad, measured the painter's own way
+        rh = painter._readout_rect.height()
+        k = rh / 44.0
+        fm_big = QFontMetricsF(ev._font(rh * 0.74, bold=True))
+        fm_u = QFontMetricsF(ev._font(rh * 0.34, bold=True))
+        hero = max(fm_big.horizontalAdvance(t)
+                   for t in (*ev._speed_text_candidates(s, spec), "—"))
+        content = (2 * rh * ev._READOUT_PAD_FRAC + hero + ev._READOUT_GAP_K * k
+                   + fm_u.horizontalAdvance("km/h"))
+        ratio = content / painter._readout_rect.width()
+        assert abs(ratio - 1.0) < 1e-6, f"{out_h}p readout fills {ratio:.3f} of its pill"
+        # --- strip: the same, with the tail run
+        sh = painter._strip_rect.height()
+        sk = sh / 44.0
+        fm_s = QFontMetricsF(ev._font(sh * 0.54, bold=True))
+        label = max(fm_s.horizontalAdvance(t) for t in ev._strip_label_candidates(spec))
+        tail = max(fm_s.horizontalAdvance(t) for t in ev._strip_tail_candidates(s, spec))
+        s_content = (sh * ev._STRIP_PAD_L_FRAC + label + ev._RUN_GAP_K * sk + tail
+                     + sh * ev._STRIP_PAD_R_FRAC)
+        s_ratio = s_content / painter._strip_rect.width()
+        assert abs(s_ratio - 1.0) < 1e-6, f"{out_h}p strip fills {s_ratio:.3f} of its pill"
+        # and both are strictly narrower than the frame-fraction boxes they replaced
+        assert painter._readout_rect.width() < max(out_w * 0.30, 260.0), out_h
+        assert painter._strip_rect.width() < max(out_w * 0.26, 220.0), out_h
+        worst = min(worst, ratio, s_ratio)
+    print(f"test_both_hud_pills_are_fitted_to_their_own_ink OK (worst fill {worst:.3f})")
+
+
+def test_the_readout_pill_holds_every_speed_this_export_can_burn():
+    """The pill is fitted ONCE per export, so it has to be fitted to the widest string, not to the
+    first frame's. Two traps, both pinned: a between-laps frame draws `theme.speed_number`'s EM
+    DASH, which is wider than one digit; and the hero number is ROUNDED, so a session peaking at
+    99.6 km/h burns "100" — three digits from a two-digit maximum."""
+    from PySide6.QtGui import QFontMetricsF
+    s = StubSession(lap_id=2, t0=0.0, dur=60.0, n=600)
+    s.tv = np.full(600, 99.6)                             # peaks at 99.6 -> "100", three digits
+    spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=0.0, t1=60.0)
+    assert ev._speed_text_candidates(s, spec) == ("100",), ev._speed_text_candidates(s, spec)
+    rh = 44.0
+    w = ev.readout_pill_width(rh, ev._speed_text_candidates(s, spec), "km/h")
+    fm = QFontMetricsF(ev._font(rh * 0.74, bold=True))
+    fm_u = QFontMetricsF(ev._font(rh * 0.34, bold=True))
+    pad = 2 * rh * ev._READOUT_PAD_FRAC
+    for text in ("100", "888", "—", "0"):
+        need = pad + fm.horizontalAdvance(text) + ev._READOUT_GAP_K + fm_u.horizontalAdvance("km/h")
+        assert need <= w + 1e-6, f"{text!r} needs {need:.1f} px in a {w:.1f} px pill"
+    # no usable track at all -> the stated 3-digit budget, never a crash
+    nt = StubSession(lap_id=2, t0=0.0, dur=60.0, n=4)
+    nt.tv = np.asarray([])
+    assert ev._speed_text_candidates(nt, spec) == (ev._SPEED_BUDGET_FALLBACK,)
+    print("test_the_readout_pill_holds_every_speed_this_export_can_burn OK")
+
+
+def test_the_strip_pill_is_budgeted_for_this_laps_real_delta_range():
+    """`Δ -0.31` and `Δ -12.40` are not the same width, and the strip is sized once. The budget is
+    sampled from the session's OWN Δ curve (the same accessor the per-frame lookup uses), so a lap
+    that swings to double digits gets a pill that holds it."""
+    from PySide6.QtGui import QFontMetricsF
+
+    class _BigDelta(StubSession):
+        def delta_at_lap(self, lap_id, t):
+            return -12.4 if lap_id == self._lap else None
+
+    small = StubSession(lap_id=2, t0=0.0, dur=60.0, n=600)
+    big = _BigDelta(lap_id=2, t0=0.0, dur=60.0, n=600)
+    spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=0.0, t1=60.0)
+    assert ev._strip_tail_candidates(small, spec) == ("Δ +0.00", "Δ +0.00")
+    assert "Δ -12.40" in ev._strip_tail_candidates(big, spec)
+    fm = QFontMetricsF(ev._font(44.0 * 0.54, bold=True))
+    w_small = ev.strip_pill_width(44.0, ev._strip_label_candidates(spec),
+                                  ev._strip_tail_candidates(small, spec))
+    w_big = ev.strip_pill_width(44.0, ev._strip_label_candidates(spec),
+                                ev._strip_tail_candidates(big, spec))
+    assert w_big > w_small, (w_small, w_big)
+    # "Δ +0.00" -> "Δ -12.40" is exactly ONE extra digit cell (plus the +/- advance difference),
+    # and with tabular figures a digit cell is a fixed width — so this is an equality in disguise.
+    assert w_big - w_small >= fm.horizontalAdvance("0") * 0.9, (w_small, w_big)
+    # a best-lap export is sized for the mark instead
+    best = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=0.0, t1=60.0,
+                         is_best=True)
+    assert ev._strip_tail_candidates(small, best) == (ev._BEST_MARK,)
+    print("test_the_strip_pill_is_budgeted_for_this_laps_real_delta_range OK")
 
 
 # --------------------------------------------------------------------------- export restyle: quality
