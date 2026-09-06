@@ -43,6 +43,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from . import theme
+from .export_palette import EXPORT
 from .theme import C
 
 _c = theme.qcolor  # QColor from a theme hex token (+ optional alpha) — shared home in theme.py
@@ -53,14 +54,15 @@ _RINGS = (0.5, 1.0)              # labelled rings (g) — the values ARE drawn (
 
 _TAG_BAND_H = 13                 # live dial: bottom strip reserved for the source tag ALONE, so it
                                  # can never overprint the bottom cardinal number (dial_geom pays
-                                 # for it out of the dial's height)
-_EXPORT_TAG_FRAC = 0.055         # export dial: the same reserved strip, as a fraction of the box
+                                 # for it out of the dial's height). The EXPORT dial has no such
+                                 # band — it does not paint the tag (see _paint_dial_export).
 _LEGEND_MIN_R = 26.0             # below this dial radius the in-dial legend is dropped (no room)
-_LEGEND_PT_RANGE = (5.5, 8.0)    # live: direction captions + ring labels (see _legend_pt)
-_TAG_PT = 6.5                    # live: source tag (was 6.0 at C.text_muted -> 2.2:1, a smear)
+_LEGEND_PX_RANGE = (5.5, 8.0)    # live: direction captions + ring labels (see _legend_px)
+_TAG_PX = 6.5                    # live: source tag (was 6.0 at C.text_muted -> 2.2:1, a smear)
 
 _TITLE = "G METER"               # live caption; the EXPORT dial deliberately drops it (see
-                                 # _export_dial_geom) — it is the ONLY string that differs
+                                 # _export_dial_geom). It and the source tag are the only two
+                                 # strings the two modes differ by — both live-only, both reasoned.
 
 # What each cardinal peak MEANS. The dial shows FELT force (see the module doc), so the pointer
 # swings LEFT in a right-hand corner: the caption names the DRIVING INPUT behind the number, not
@@ -78,9 +80,31 @@ _ENVELOPE_MAX_PTS = 240          # cap on hull input points per scope (ring buff
 _RESET_ON_LAP = True             # reset the envelope + peaks at each lap boundary
 
 
-def _font(pt: float, bold: bool = False) -> QFont:
-    f = QFont()
-    f.setPointSizeF(pt)
+def _font(px: float, bold: bool = False) -> QFont:
+    """The dial's one face, at an explicit PIXEL size and with TABULAR FIGURES.
+
+    IT NEVER JOINED THE #196/#197 FIX either. This was a bare ``QFont()`` with ``setPointSizeF``,
+    which is two defects on a dial whose every box is measured in pixels:
+
+      * PROPORTIONAL figures. Measured on the shipped Inter build, the sizes the dial asks for
+        carried 8 or 9 distinct digit advances (2.84..4.52 px at the legend size, 4.47..7.09 at
+        the peak-number size), so the four cardinal peaks — the numbers a driver reads off the
+        face — were drawn in a face that gives ``1`` and ``8`` different widths.
+      * DPI-DERIVED sizes. A point size is resolved against the SCREEN's logical DPI, but
+        ``dial_geom``'s title strip, tag band, 18 px margin and 44x12 number boxes are all
+        pixels. Measured: on a 96 dpi logical screen ``_font(8.0)`` came out at 11 px with a line
+        height of 13.3 — inside a 12 px box — while the same call on a 72 dpi screen gives 8 px.
+        The EXPORT dial makes that worse still: its canvas is fixed pixels and has no screen at
+        all, so the burned-in glyph sizes depended on whatever display the render happened to run
+        on. The numeric constants are unchanged; they are simply read as the pixels the boxes
+        around them were always budgeted in.
+
+    Routed through ``theme.mono_font`` rather than re-deriving the tag, so the dial follows the
+    app's own fallback ORDER (Inter+tnum -> Inter -> the mono stack only when Inter is absent);
+    ``setPixelSize`` must FOLLOW that call, because ``mono_font`` returns a point-sized font."""
+    size = max(1, int(round(px)))
+    f = theme.mono_font(size)
+    f.setPixelSize(size)
     f.setBold(bold)
     return f
 
@@ -150,11 +174,11 @@ def dial_to_screen(cx, cy, r, fx, fy):
     return cx + dx, cy + dy
 
 
-def _legend_pt(r: float) -> float:
-    """Live legend type size for a dial of radius `r`. The lower bound is what lets BOTH lateral
-    captions sit side by side inside the 120x140 minimum overlay; it grows with the dial so a
-    maximised video pane does not leave the legend stranded at caption size."""
-    lo, hi = _LEGEND_PT_RANGE
+def _legend_px(r: float) -> float:
+    """Live legend type size (pixels) for a dial of radius `r`. The lower bound is what lets BOTH
+    lateral captions sit side by side inside the 120x140 minimum overlay; it grows with the dial so
+    a maximised video pane does not leave the legend stranded at caption size."""
+    lo, hi = _LEGEND_PX_RANGE
     return min(hi, max(lo, r * 0.15))
 
 
@@ -210,13 +234,16 @@ def _legend_items(cx: float, cy: float, r: float, fm: QFontMetricsF):
 
 
 # --------------------------------------------------------------------------- export palette
-# Export-render palette: vivid/opaque for burning over bright footage (live uses C.* tokens).
-# Kept local to mirror export_video.EXPORT without importing it (this module is pacer-free).
-_EX_TEXT = "#FFFFFF"
-_EX_HALO = "#0A0C10"          # dark outline/shadow under every bright element
-_EX_ACCENT = "#FFB21E"        # envelope amber (brighter + saturated vs C.accent)
-_EX_ACCENT_HI = "#FFD34D"     # dot glow highlight
-_EX_GRID = "#FFFFFF"          # rings / crosshair (white at moderate alpha)
+# The export-render palette (vivid/opaque for burning over bright footage; the live dial uses C.*
+# tokens) is now `export_palette.EXPORT`, imported at the top. These five names were a second,
+# hand-copied definition of colours `export_video.EXPORT` also declares — this module cannot import
+# export_video (export_video imports THIS one), which is exactly why the palette moved out to a
+# module they can both read. Aliased locally so the paint bodies below read unchanged.
+_EX_TEXT = EXPORT.text
+_EX_HALO = EXPORT.halo        # dark outline/shadow under every bright element
+_EX_ACCENT = EXPORT.accent    # envelope amber (brighter + saturated vs C.accent)
+_EX_ACCENT_HI = EXPORT.accent_bright   # dot glow highlight
+_EX_GRID = EXPORT.grid        # rings / crosshair (white at moderate alpha)
 
 
 def _draw_text_outlined(p: QPainter, rect: QRectF, flags, text: str, font: QFont,
@@ -251,13 +278,15 @@ def _draw_text_outlined(p: QPainter, rect: QRectF, flags, text: str, font: QFont
 
 
 def _export_dial_geom(w: float, h: float):
-    """Dial centre+radius for export: larger number margin, no title strip so the dial fills more
-    of the box, and a reserved bottom strip (`_EXPORT_TAG_FRAC`) for the provenance tag so it
-    cannot land on the bottom cardinal number."""
-    tag_h = _EXPORT_TAG_FRAC * min(w, h)
+    """Dial centre+radius for export: a larger margin for the bigger outlined cardinal numbers, and
+    NO reserved strips — neither the live dial's title band nor the provenance-tag band it used to
+    keep at the bottom (`_EXPORT_TAG_FRAC`, 5.5 % of the box). The export dial paints neither
+    string (see `_paint_dial_export`), so both bands go back into the dial: measured, the radius
+    grows 10.1 % (76.5 -> 84.2 px on the 280.8 px 1080p dial, 51.0 -> 56.2 at 720p, 153.0 -> 168.5
+    at 2160p) and the face 21 % in area, for free, and the dial re-centres in its own box."""
     margin = 0.20 * min(w, h)          # room for the larger outlined cardinal numbers
-    r = max((min(w, h - tag_h) - 2 * margin) / 2.0, 8.0)
-    return w / 2.0, (h - tag_h) / 2.0, r
+    r = max((min(w, h) - 2 * margin) / 2.0, 8.0)
+    return w / 2.0, h / 2.0, r
 
 
 def _export_legend_font(k: float) -> QFont:
@@ -266,20 +295,17 @@ def _export_legend_font(k: float) -> QFont:
     return _font(max(6.0, 8.5 * k))
 
 
-def _export_tag_font(k: float) -> QFont:
-    """The export dial's provenance-tag type (a hair larger than the legend — it is the line that
-    sources every number on the dial)."""
-    return _font(max(6.5, 9.0 * k))
-
-
 def paint_dial(p: QPainter, w: float, h: float, st: DialState,
                export: bool = False, scale_k: float = 1.0) -> None:
-    """Paint the dial (backdrop, rings, legend, envelope, peaks, dot, source tag) sized to (w,h) at
-    the origin. Single source for the live widget + the offline exporter; no widget state touched.
+    """Paint the dial (backdrop, rings, legend, envelope, peaks, dot, and — live only — the source
+    tag) sized to (w,h) at the origin. Single source for the live widget + the offline exporter; no
+    widget state touched.
 
-    Both modes paint the SAME set of labels — direction captions, labelled rings and the source
-    tag (`_legend_items` + `st.source`). Only the styling differs; a label the screen shows and the
-    burned-in export drops would leave a shared video making claims it cannot source.
+    Both modes paint the same MEANING-BEARING labels: the four direction captions and the labelled
+    rings that carry the unit (`_legend_items`). Two strings are live-only, both deliberate: the
+    "G METER" title (see `_export_dial_geom`) and the provenance tag `st.source` (see
+    `_paint_dial_export`). Anything else diverging is a regression —
+    tests/test_gmeter_overlay.py pins the set difference in both directions.
 
     export=False = on-screen look; export=True = the burn-over-bright variant (no box, white rings,
     brighter envelope, bigger glowing dot, large outlined numbers). `scale_k` scales export
@@ -349,7 +375,7 @@ def _paint_dial_static(p: QPainter, w: float, h: float, st: DialState) -> None:
     # in-dial legend: the four direction captions + the labelled rings (which carry the unit).
     # Drawn after the envelope wash so the captions stay readable through it, before the peak
     # numbers so those stay the loudest text on the face.
-    legend_f = _font(_legend_pt(r))
+    legend_f = _font(_legend_px(r))
     p.setFont(legend_f)
     p.setPen(QPen(_c(C.text_dim, 195)))
     for rect, flags, text in _legend_items(cx, cy, r, QFontMetricsF(legend_f)):
@@ -372,7 +398,7 @@ def _paint_dial_static(p: QPainter, w: float, h: float, st: DialState) -> None:
     # `_TAG_BAND_H` strip dial_geom reserves for it, so it never lands on the bottom peak number;
     # C.text_dim (not text_muted) because at 6.5 pt the tertiary token was an illegible smear.
     p.setPen(QPen(_c(C.text_dim, 225)))
-    p.setFont(_font(_TAG_PT))
+    p.setFont(_font(_TAG_PX))
     # a wider box so "IMU lat · GPS long" isn't clipped (still bottom-right anchored)
     p.drawText(QRectF(w - 96, h - _TAG_BAND_H, 92, _TAG_BAND_H - 1),
                Qt.AlignRight | Qt.AlignVCenter, st.source)
@@ -398,13 +424,23 @@ def _paint_dial_dot(p: QPainter, w: float, h: float, st: DialState) -> None:
 
 def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float) -> None:
     """The export g-dial: no backdrop box, white high-contrast rings, a brighter amber envelope,
-    big outlined cardinal-g numbers, the same legend + provenance tag the live dial paints, and a
+    big outlined cardinal-g numbers, the same direction/ring legend the live dial paints, and a
     bigger haloed dot. Layout via _export_dial_geom; `k` scales strokes/glyphs with the output
     height.
 
-    No "G METER" title strip — that omission is deliberate (see `_export_dial_geom`), so the dial
-    fills more of the box. The source tag is NOT part of that trade: it is the only thing on the
-    burned-in dial that says where the numbers came from."""
+    TWO STRINGS THE LIVE DIAL PAINTS AND THIS ONE DOES NOT, both deliberate:
+
+      * the "G METER" title strip, dropped so the dial fills more of its box;
+      * the PROVENANCE TAG (`st.source`, "IMU lat · GPS long"). This is the owner's decision for
+        the VIDEO only — it is a nine-pixel line of sensor plumbing sitting under a dial in a clip
+        someone watches, and dropping it hands its reserved band back to the dial (+10.1 % radius,
+        see `_export_dial_geom`). The rule it relaxes is real and is stated in `source_label`: the
+        dial's LATERAL axis is the IMU (r ~ +0.89 against GPS) while its BRAKING/ACCEL axis is the
+        GPS speed-derivative (the IMU forward axis is vibration-inflated, r ~ +0.36), so a bare
+        source name would misattribute the braking axis. That is why `source_label` keeps its
+        exact string and the LIVE dial keeps painting it: the place the app states its g
+        provenance is the on-screen meter, where a driver is reading the numbers to act on them.
+        See studio/docs/gmeter-validation.md."""
     k = max(0.5, float(k))
     cx, cy, r = _export_dial_geom(w, h)
 
@@ -466,14 +502,8 @@ def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float)
                         Qt.AlignLeft | Qt.AlignVCenter, f"{st.peak_right:.1f}", fnt, _EX_TEXT,
                         halo=2.2 * k)
 
-    # --- provenance tag, in the strip _export_dial_geom reserves at the bottom. The exporter
-    # already sets it ("IMU lat · GPS long") and snapshots it into DialState; painting it is what
-    # makes the shared MP4 say where its numbers came from instead of showing bare digits.
-    tag_h = _EXPORT_TAG_FRAC * min(w, h)
-    tag_f = _export_tag_font(k)
-    _draw_text_outlined(p, QRectF(0, h - tag_h, w, tag_h),
-                        Qt.AlignHCenter | Qt.AlignVCenter, st.source, tag_f, _EX_TEXT,
-                        halo=1.8 * k)
+    # (No provenance tag here — see this function's docstring. `st.source` is still SET by the
+    # exporter and still painted by the live dial; the export just does not burn it into the file.)
 
     # --- the live felt-force dot: a bigger soft glow + a dark-haloed bright core ---
     if st.have:
