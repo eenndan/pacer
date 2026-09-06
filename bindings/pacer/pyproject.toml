@@ -4,7 +4,9 @@ dependencies = ["litgen @ git+https://github.com/pthom/litgen@b83e0ca75952031dba
 description = "Python bindings for the pacer C++ telemetry core"
 name = "pacer"
 requires-python = ">= 3.11"
-version = "0.1.0"
+# Keep in lockstep with studio/__init__.py __version__ (canonical) and the root pyproject.toml.
+# Pinned by tests/test_version.py.
+version = "0.2.0"
 
 [build-system]
 requires = [

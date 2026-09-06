@@ -5,7 +5,9 @@ description = "Race-telemetry analysis studio (GoPro GPS/IMU → laps, deltas, s
 license = { text = "CC BY-NC-SA 4.0" }
 name = "pacer"
 requires-python = ">= 3.11"
-version = "0.1.0"
+# Keep in lockstep with studio/__init__.py __version__ (canonical) and bindings/pacer/pyproject.toml
+# — packaging/build_macos.sh names the .dmg from THIS line. Pinned by tests/test_version.py.
+version = "0.2.0"
 
 [build-system]
 requires = ["scikit-build-core >=0.10", "nanobind >=1.3.2", "litgen"]
