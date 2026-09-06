@@ -612,6 +612,18 @@ add_test(NAME test_map_key
 set_tests_properties(test_map_key PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The burned-in overlay's DIGITS (design wave 2, SW1-02). #196/#197 gave every column-aligning
+# surface in the app tabular figures; export_video._font stayed a bare QFont() with zero feature
+# tags, so the one output the user cannot re-render kept nine digit advances — and _paint_readout
+# places everything after the hero speed by that advance, sliding the unit label and the Δ cue
+# 147 px past the digit box at 1080p (296 at 4K) between two 3-digit speeds. Read from the
+# COMPOSITED pixels (what _paint_packed_frame hands the encoder), swept over every output height
+# the export offers, in the SHIPPED face via _qtapp.themed_app. Offscreen: it paints QImages.
+add_test(NAME test_export_typography
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_typography.py)
+set_tests_properties(test_export_typography PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The GLYPH guard (feat/icon-vocabulary, design wave 2 D1) — the third vocabulary, beside
 # test_design_system's dimensions and test_contrast's colour. The app had FOUR ways to draw a mark
 # and only theme.icon()'s Phosphor layer was designed: a literal Unicode character in a label falls
@@ -655,7 +667,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_coaching_panel_layout test_focus_cues test_pb_toast test_app_chrome
                         test_charts_panel test_lap_table_affordances test_export_gates
                         test_golden_hermetic test_design_system test_inline_styles
-                        test_first_run_path test_map_key test_video_view_compare)
+                        test_first_run_path test_map_key test_video_view_compare
+                        test_export_typography)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
@@ -691,4 +704,28 @@ set_tests_properties(test_state_surfaces PROPERTIES
 add_test(NAME test_compare_lifecycle
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_compare_lifecycle.py)
 set_tests_properties(test_compare_lifecycle PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# A MEASURE BOUNDS CONTENT — it may not become the minimum of the thing carrying it. The design
+# wave spent two per-instance measurements on dimensions a widget SHARES: EmptyState's measure
+# pinned the pane's own minimum (a one-way ratchet — one zero-lap recording had three window
+# minimums, 929/1018/1049, decided by resize history), and Tile claimed its ink height per STRING,
+# so the one tile printing a ⊘ stood 2 px taller than its row-mates and dropped its caption below
+# theirs. Also holds the Stats zero-lap block, whose paragraph moved out of an 11 px one-line
+# banner role into the app's prose step at the app's prose measure. Swept at 1 px in BOTH
+# directions: a one-size check is what let the ratchet through.
+add_test(NAME test_measure_floors
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_measure_floors.py)
+set_tests_properties(test_measure_floors PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# The corner grid's cell floors as a DIGIT BUDGET. #196's tabular figures widened them by 12 px
+# and nothing went red; the horizontal-scrollbar band moved 58 px of window across the wave. This
+# proves from the WINDOW COMPOSITE that the floors hold no slack (a pixel below any of them elides
+# that column's widest VALUE), and pins what they want on a 2-digit circuit and on a CONSTRUCTED
+# 3-digit one — the faster circuit no fixture on this machine produces, and the case that inverted
+# when `1` went from the narrowest digit to the widest.
+add_test(NAME test_corner_grid_budget
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_grid_budget.py)
+set_tests_properties(test_corner_grid_budget PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

@@ -27,6 +27,29 @@ NUM_ROLE = Qt.UserRole
 DASH = "—"
 
 
+#: Every mark a `Tile` value can print, in one string, so the value row is measured on the TYPE
+#: STEP rather than on whichever tile happens to be the tallest today. The digits and separators
+#: are what ~30 of them print; `⊘ ⚠ ★` are the status marks the Stats page prints beside a count
+#: (tests/test_glyph_vocabulary.py owns the rule that they stay TEXT in the app's own face, which
+#: is why they are part of this run and not pixmaps); the letters carry the unit suffixes and are
+#: here for their ascender and descender. See `Tile._claim_ink_height`.
+VALUE_INK = "0123456789:.,+-—·%gkmh⊘⚠★"
+
+#: `VALUE_INK`'s ink height per resolved font — a `tightBoundingRect` over 25 glyphs is not free
+#: and every `Tile.set()` would otherwise re-measure a constant.
+_VALUE_INK_H: dict[str, int] = {}
+
+
+def _longest_word_px(label: QLabel) -> int:
+    """The narrowest a word-wrapped label can be set without breaking a word — a font metric.
+
+    What `QLabel.minimumSizeHint()` reports for an UNPINNED wrapping label, measured from the
+    label's live font (the QSS one, after polish) so it cannot drift from what the app ships.
+    See `EmptyState.minimumSizeHint` for why the pinned label can no longer be asked."""
+    fm = label.fontMetrics()
+    return max((fm.horizontalAdvance(word) for word in label.text().split()), default=0)
+
+
 def space_at_least(px: float) -> int:
     """The smallest spacing step that is at least `px` — a MEASURED gap, snapped to the scale.
 
@@ -525,13 +548,60 @@ class EmptyState(QWidget):
 
         Pinning the width here is what makes the cap a measure. It is width-driven and monotone —
         the value depends only on this widget's own width — so it cannot oscillate, and in a pane
-        narrower than the cap it simply yields the pane."""
+        narrower than the cap it simply yields the pane. That last clause is only true because of
+        `minimumSizeHint` below: `setFixedWidth` pins a MINIMUM as well as a maximum, and a
+        minimum is what a pane cannot shrink past."""
         super().resizeEvent(event)
         room = max(0, self.width() - 2 * theme.SPACE_XL)
         measure = min(room, theme.EMPTY_MEASURE_PX)
         for label in (self.title, self.body):
             if label.width() != measure:
                 label.setFixedWidth(measure)
+
+    def minimumSizeHint(self):
+        """The narrowest this state can be — WITHOUT the measure, which is not a minimum.
+
+        THE MEASURE WAS A ONE-WAY RATCHET, and this is the line that stops it. `resizeEvent` pins
+        the labels with `setFixedWidth`, which sets `minimumWidth` as well as `maximumWidth`;
+        `qSmartMinSize` reads an explicit minimum straight through, so the layout's minimum became
+        `measure + 2*SPACE_XL` — up to 488 px — and a pane cannot shrink below its child's
+        minimum. The measure therefore only ever went UP: on a zero-lap recording, opening at
+        1440 and dragging back to 1280 left the lap pane at 488 px where a window OPENED at 1280
+        gives 457, and the window's own resize floor moved 1018 -> 1049 px and never returned.
+        One recording, three minimums (929 / 1018 / 1049), decided by resize history. The Stats
+        tab — the one zero-lap surface #195 deliberately kept off this object — ratcheted 0 px,
+        which is what named the object as the cause.
+
+        A CAP BOUNDS CONTENT; IT MUST NOT BOUND THE WIDGET. So the width reported here is the
+        narrowest the SLOTS can wrap to — the LONGEST WORD, which is what a word-wrapped QLabel
+        reports for itself when nobody has pinned it, and exactly what the plain QLabels this
+        object replaced reported before #195 — plus the state's own inset. `resizeEvent` then
+        re-derives the measure at whatever width the pane hands over, so the promise the docstring
+        above makes ("in a pane narrower than the cap it simply yields the pane") is now true at
+        every width, not only at widths the pane has never exceeded.
+
+        The longest word is measured HERE rather than read off `QLabel.minimumSizeHint()`, and
+        that is not a preference: `QLabelPrivate::sizeForWidth` opens with
+        `if (q->minimumWidth() > 0) w = qMax(w, q->minimumWidth())`, so once `setFixedWidth` has
+        pinned the label its own `sizeForWidth(0)` — the call that would answer "longest word" —
+        is answered at the PINNED width instead, and the label reports the measure back as its
+        minimum. Asking Qt would have returned the ratchet.
+
+        The HEIGHT is taken from the real layout minimum: the wrapped body's height is genuinely a
+        minimum (`WrapLabel` re-asserts it on every resize) and nothing about the measure inflates
+        it. Only the width is the ratchet.
+
+        Neither `setMaximumWidth` alone nor a stretch policy is the answer here, and both were
+        measured: under a centring layout an aligned item takes `min(available, maximum,
+        sizeHint)`, and a wrapping QLabel's `sizeHint` is `sizeForWidth`'s roughly-square block —
+        which is how the first port of this object set 196 px inside a 440 px allowance. The pin
+        stays; what goes is its leak into the minimum."""
+        hint = super().minimumSizeHint()
+        wrapped = max(_longest_word_px(self.title),
+                      _longest_word_px(self.body) if self.body.isVisible() else 0,
+                      self.icon_label.minimumSizeHint().width()
+                      if self.icon_label is not None and self.icon_label.isVisible() else 0)
+        return QSize(min(hint.width(), wrapped + 2 * theme.SPACE_XL), hint.height())
 
     def _show_slot(self, widget, gap, gap_px: int, on: bool) -> None:
         """Show/hide one optional slot AND its own gap, so neither can outlive the other."""
@@ -603,7 +673,7 @@ class Tile(QWidget):
             self.caption.setText(caption)
 
     def _claim_ink_height(self) -> int:
-        """Give the value label the height its own INK needs, not just its font's line box.
+        """Give the value label the height this TYPE STEP's ink needs — one number for every tile.
 
         THE RESIDUAL PR #189 COULD NOT REACH, in numbers. That PR's rule is about FALLBACK — a
         character in a user-visible string must be drawn by the app's own face — and it measured
@@ -625,9 +695,27 @@ class Tile(QWidget):
         It deliberately does NOT split the run across two mechanisms. `25 · 24 ⊘ · 3 ⚠` is one ink
         run in one face; turning the ⊘ into an icon pixmap while the ⚠ two characters later stayed
         text would make one line out of two vocabularies, which is the defect #189 exists to
-        prevent, not a fix for it."""
+        prevent, not a fix for it.
+
+        AND IT IS CLAIMED ON THE TYPE STEP, NOT ON THE STRING, which is the half PR #194 got
+        wrong. Measured per string, the height is whatever THIS tile happens to print: on a
+        recording whose laps tile reads `25 · 24 ⊘` that tile asked for 37 px while its two
+        row-mates asked for 35, and a shared grid row is as tall as its tallest member — so the
+        ⊘ tile's caption sat 2 px below both neighbours' and `Tile.sizeHint` stopped being one
+        number (28 of 28 tiles at 35 px was a measured property of this class, and #194 made it
+        false). The row is a ROW; its height cannot depend on which of its cells has data.
+
+        So the ink is measured over `VALUE_INK`, every mark the tile vocabulary can print, once
+        per font rather than once per string. Every tile then claims the same height whatever it
+        is showing, the 2 px is paid by all of them or by none, and a tile that later starts
+        printing a ⊘ cannot move its neighbours. It stays a MEASUREMENT — on a face whose marks
+        fit their own line box the max is `fm.height()` and nothing is spent."""
         fm = self.value.fontMetrics()
-        need = max(fm.height(), fm.tightBoundingRect(self.value.text()).height())
+        key = self.value.font().toString()
+        need = _VALUE_INK_H.get(key)
+        if need is None:
+            need = max(fm.height(), fm.tightBoundingRect(VALUE_INK).height())
+            _VALUE_INK_H[key] = need
         if self.value.minimumHeight() != need:
             self.value.setMinimumHeight(need)
         return need

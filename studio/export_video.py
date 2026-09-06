@@ -621,8 +621,26 @@ _c = theme.qcolor  # QColor from a theme hex token (+ optional alpha) — shared
 
 
 def _font(px: float, bold: bool = False) -> QFont:
-    f = QFont()
-    f.setPixelSize(max(1, int(round(px))))
+    """The one face every burned-in overlay element is drawn in, at an explicit PIXEL size (the
+    export is a fixed-pixel canvas, so it must never scale with a screen's point DPI) and with
+    TABULAR FIGURES.
+
+    IT NEVER JOINED THE TABULAR-FIGURES FIX. This was a bare ``QFont()`` carrying zero feature
+    tags, so while #196/#197 gave every column-aligning surface in the app one digit advance, the
+    file the user exports kept nine (5.28..8.42 px at 13 px). ``_paint_readout`` places everything
+    after the hero speed with ``x += fm_big.horizontalAdvance(speed_num)``, so the unit label and
+    the Δ cue SLID 15.2 px between two 3-digit speeds at 1080p — 30.3 px at 4K — and the lap
+    strip's elapsed time did the same. Numbers jittering under a fixed label is exactly what
+    tabular figures exist to prevent, and here it is burned into a file that cannot be re-rendered.
+
+    Routed through ``theme.mono_font`` rather than re-deriving the tag here, so the export follows
+    the app's own fallback ORDER (Inter+tnum → Inter → the mono stack only when Inter is absent).
+    The face does not move on the normal path: ``QApplication``'s font is Inter and so is
+    ``mono_font``'s, so the tag is the only difference. ``bold`` stays a ``setBold`` rather than a
+    weight argument, so every existing export weight is byte-identical."""
+    size = max(1, int(round(px)))
+    f = theme.mono_font(size)
+    f.setPixelSize(size)
     f.setBold(bold)
     return f
 

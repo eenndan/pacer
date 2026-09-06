@@ -278,6 +278,126 @@ def test_the_toast_sits_in_the_lap_panels_body():
           f"(card {card} in body {body}; collapsed-panel fallback keeps it at {card2})")
 
 
+def _lap_grid_at_scroll_max(win):
+    """The window's real lap grid in the state the app's own load path arrives in: MORE laps than
+    the viewport holds, scrolled to the maximum, with the row the load selected at the bottom.
+
+    The shared fixture's session has two laps, which no viewport in this app has to scroll for, so
+    the grid is padded here — the placement under test is geometry, and what it needs is a grid
+    whose selected row is at the BOTTOM of the viewport. On the real D24 recording (21 valid laps)
+    the app gets there by itself: it selects the session best, scrolls it into view, and the best
+    lap is usually late. Returns (grid, the selected row's band in window coordinates)."""
+    from PySide6.QtWidgets import QTableWidgetItem
+
+    from studio.lap_table import LAP_ROLE
+
+    grid = win.view.table.table
+    viewport = grid.viewport()
+    lap_id = grid.item(0, 0).data(LAP_ROLE)
+    while grid.rowCount() * grid.verticalHeader().defaultSectionSize() < viewport.height() * 2:
+        r = grid.rowCount()
+        grid.insertRow(r)
+        # Carrying a real lap id, because LapTable's own selection slot reads column 0's LAP_ROLE
+        # and a bare padded row makes it raise inside a Qt slot (swallowed, but noise in the log).
+        item = QTableWidgetItem("")
+        item.setData(LAP_ROLE, lap_id)
+        grid.setItem(r, 0, item)
+    for _ in range(4):
+        _APP.processEvents()
+    row = grid.rowCount() - 1
+    grid.selectRow(row)
+    bar = grid.verticalScrollBar()
+    bar.setValue(bar.maximum())
+    for _ in range(6):
+        _APP.processEvents()
+    cell = grid.visualRect(grid.model().index(row, 0))
+    band = QRect(0, cell.y(), viewport.width(), cell.height()).intersected(viewport.rect())
+    assert not band.isEmpty(), "the fixture must leave the selected row inside the viewport"
+    return grid, QRect(viewport.mapTo(win, band.topLeft()), band.size())
+
+
+def test_the_toast_does_not_cover_the_row_it_is_announcing():
+    """SW3-02: `_place` bottom-anchors the card and justified that with "the rows a card covers
+    there are the ones furthest from the ★ best lap this card is about, and they scroll". The
+    app's own load path falsifies both halves — it SELECTS the session best and scrolls it into
+    view, so the grid arrives at its scroll MAXIMUM with that row at the bottom, under the card.
+
+    Measured on `main` at 1440x900: the card covered all 27 px of the ★ row across 60.5 % of its
+    width — the `1:08.771` Time cell included — 68.5 % at 1280x800 and 77.0 % at the window's own
+    973x528 minimum, with the table already at scroll max so it could not be scrolled clear. The
+    pixel under the overlap read `#2E3440` (the card) with it up and `#3A3326` (the amber best-lap
+    tint) with it hidden.
+
+    Checked at all three sizes, and against the case there is nothing to avoid — the fix is
+    conditional, and a card with no keep-out must sit exactly where it always did."""
+    from test_central_view_realqt import _studiowindow_with_view
+
+    for size in ((1440, 900), (1280, 800), (973, 528)):
+        win, _view = _studiowindow_with_view()
+        win.resize(*size)
+        win.show()
+        for _ in range(10):
+            _APP.processEvents()
+        grid, band = _lap_grid_at_scroll_max(win)
+        body = QRect(win.view.table_stack.mapTo(win, QPoint(0, 0)), win.view.table_stack.size())
+
+        toast = PBToast(_TITLE, _BODY, on_progress=lambda: None, on_share=lambda: None, parent=win)
+        toast.show_for(win, keepout=win._pb_card_keepout)
+        _spin(0.4)
+        card = QRect(toast.mapTo(win, QPoint(0, 0)), toast.size())
+        assert win._pb_card_keepout() == band, (win._pb_card_keepout(), band)
+        assert not card.intersects(band), (
+            f"{size} scroll=max: the card at {card} covers the selected row {band} by "
+            f"{card.intersected(band).width()}x{card.intersected(band).height()}")
+        # ...and everything #188/#194 established still holds: inside the panel body, below its
+        # middle (the grid's own column headers live at the top of that body).
+        assert body.contains(card), (size, card, body)
+        assert card.bottom() > body.center().y(), (size, card, body)
+        toast.dismiss()
+
+        # NOTHING SELECTED — no row to protect, so the keep-out reports None and the placement
+        # must be identical to the one that shipped.
+        grid.clearSelection()
+        for _ in range(6):
+            _APP.processEvents()
+        assert win._pb_card_keepout() is None, win._pb_card_keepout()
+        with_keepout = PBToast(_TITLE, _BODY, on_progress=lambda: None, on_share=lambda: None,
+                               parent=win)
+        with_keepout.show_for(win, keepout=win._pb_card_keepout)
+        _spin(0.4)
+        unguarded = QRect(with_keepout.mapTo(win, QPoint(0, 0)), with_keepout.size())
+        plain = PBToast(_TITLE, _BODY, on_progress=lambda: None, on_share=lambda: None, parent=win)
+        plain.show_for(win)
+        _spin(0.4)
+        assert unguarded == QRect(plain.mapTo(win, QPoint(0, 0)), plain.size()), (
+            f"{size}: a keep-out with nothing to avoid moved the card")
+        with_keepout.dismiss()
+        plain.dismiss()
+        win.hide()
+    print("test_the_toast_does_not_cover_the_row_it_is_announcing OK "
+          "(3 sizes, selected row at scroll max + no selection)")
+
+
+def test_an_unliftable_keepout_keeps_the_placement_that_shipped():
+    """The fallback clause, which is what keeps the worst case no worse than today. A keep-out the
+    card cannot be lifted above — one that starts at the very top of the anchor region — must leave
+    the placement exactly as it was rather than pushing the card out of the panel it belongs to."""
+    win, _view, toast = _window_with_toast((1440, 900))
+    shipped = QRect(toast.mapTo(win, QPoint(0, 0)), toast.size())
+    body = QRect(win.view.table_stack.mapTo(win, QPoint(0, 0)), win.view.table_stack.size())
+    toast._keepout = lambda: QRect(body.left(), body.top(), body.width(), body.height() - 4)
+    toast._place()
+    for _ in range(4):
+        _APP.processEvents()
+    assert QRect(toast.mapTo(win, QPoint(0, 0)), toast.size()) == shipped, "the card was displaced"
+    # An empty / absent keep-out is the same no-op.
+    toast._keepout = lambda: QRect()
+    toast._place()
+    assert QRect(toast.mapTo(win, QPoint(0, 0)), toast.size()) == shipped
+    win.hide()
+    print(f"test_an_unliftable_keepout_keeps_the_placement_that_shipped OK ({shipped})")
+
+
 def _spin(seconds: float):
     """Turn the event loop for real wall-clock time — processEvents alone returns in microseconds,
     and the placement this file now checks is deliberately deferred by a timer."""
@@ -407,4 +527,6 @@ if __name__ == "__main__":
     test_the_toast_sits_in_the_lap_panels_body()
     test_the_toast_lands_in_the_lap_panel_on_the_apps_own_load_path()
     test_the_toast_follows_its_anchor_when_the_window_resizes()
+    test_the_toast_does_not_cover_the_row_it_is_announcing()
+    test_an_unliftable_keepout_keeps_the_placement_that_shipped()
     print("\nAll PB-toast hit-target + anchoring tests passed.")

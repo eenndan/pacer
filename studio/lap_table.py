@@ -347,9 +347,19 @@ def header_floors(table, floors: list[int], natural: list[int], avail: int) -> l
       1. Every stem fits — grant them all. Unchanged.
       2. The CELL floors alone already exceed the viewport. The horizontal scrollbar this budget
          yields to avoid is up ALREADY, for reasons that have nothing to do with headers (at 973 px
-         the corner table's cell floors want 394 px of a 392 px viewport), so withholding the stems
+         the corner table's cell floors want 429 px of a 392 px viewport), so withholding the stems
          buys nothing whatsoever — it only costs every column its name. Grant them all; the scroll
          range grows by those 19 px and the scrollbar that was going to be there is there.
+
+         THAT 429 WAS 394 WHEN THIS WAS WRITTEN, and re-measuring it is the point: the number is
+         the CELL floors' and this function cannot move it, so it drifts under any change to what
+         a cell prints. It has grown 35 px across the design wave — the corner-direction icon
+         moving into column 0's decoration slot (#189) and tabular figures making every digit take
+         the widest advance (#196/#197, where `1` went 5.281 -> 8.422 px, so a 1-heavy value is
+         now the WIDEST rather than the narrowest). Case 2 therefore covers more of the size range
+         than it did: 973-1243 px of window on GX010062 with a non-selected-best lap, against the
+         973-1146 recorded below. See CornerTable._column_budget for what that costs and what is
+         left to spend.
       3. There is slack, just not enough. Spend it, AMBIGUITY FIRST: a header whose label shares a
          prefix with another column's is the one whose elision can be mistaken for its neighbour's
          ("Δbest"/"Δapex" — the pair this whole budget was re-tuned around), so it is served before
@@ -357,16 +367,23 @@ def header_floors(table, floors: list[int], natural: list[int], avail: int) -> l
          the slack names as many columns as it can buy.
 
     WHAT CASE 3 STILL CANNOT DO, stated rather than papered over. Sweeping the corner table over
-    every window width the app permits, 973 to 1440: the two Δ headers now paint the same string
+    every window width the app permits, 973 to 1440: the two Δ headers painted the same string
     over 1147-1168 px and nowhere else — 22 px of window, down from 227 — because there the
-    viewport's slack is 0-7 px and the cheaper of the two Δ stems costs 8. Closing that band would
+    viewport's slack was 0-7 px and the cheaper of the two Δ stems costs 8. Closing that band would
     mean summoning the horizontal scrollbar ~50 px of window earlier than today to buy two glyphs,
     which is L3-03's defect traded for A52's, and the scrollbar is the more expensive of the two.
-    Above it, 1169-1193 keeps the two apart ("…"/"Δa…") while Δbest is still short of its own stem,
-    and from 1200 px up EVERY header in the table keeps its two glyphs. Below it — the 174 px from
-    the app's own minimum to 1146 — case 2 now names all eight, where the old all-or-nothing yield
-    named none. The scrollbar band is unchanged by all of this: measured before and after, the
-    corner table's horizontal scrollbar appears over exactly 973-1146 either way."""
+    Above it, 1169-1193 kept the two apart ("…"/"Δa…") while Δbest was still short of its own stem,
+    and from 1200 px up EVERY header in the table kept its two glyphs. Below it, case 2 names all
+    eight, where the old all-or-nothing yield named none.
+
+    RE-SWEPT AFTER THE DESIGN WAVE, that band is 0 px wide: at every one of the 468 widths the app
+    permits, at least one of the two Δ headers keeps its stem, because the wider cell floors put
+    the whole 973-1243 range into case 2 — which grants all eight. The collision case 3 was tuned
+    for is currently unreachable on this fixture, and the reason is the same growth that widened
+    the scrollbar band, so the two move together and neither number may be quoted without the
+    other. The scrollbar band is unchanged BY THIS FUNCTION, which is the invariant that matters
+    here and still holds: it is decided by the CELL floors alone (`sum(floors) > avail`), and this
+    function only ever hands out slack that exists above them."""
     hdr = table.horizontalHeader()
     fm = QFontMetrics(hdr.font())
     pad = _header_pad_px(hdr)
@@ -1892,7 +1909,27 @@ class CornerTable(QWidget):
         is short — 24 of the 54px the default quadrant is missing come from there, the rest from
         the "Grip (est)" header, whose full wording is already in its tooltip. That trade needs
         every header to stay unambiguous once elided, which is why the two Δ columns are named
-        without a space — see CORNER_COLUMNS."""
+        without a space — see CORNER_COLUMNS.
+
+        THE FLOORS ARE A DIGIT BUDGET, AND THEY HAVE NO SLACK IN THEM. Measured at 1 px from the
+        window composite, narrowing any one of the eight sections by a single pixel below the
+        floor this returns elides that column's widest VALUE — over-charge 0 px on all eight
+        (tests/test_corner_grid_budget.py). So when the eight floors outgrow the pane there is
+        nothing here to give back: every pixel is either a glyph or the style's own box
+        (`QTableView::item` padding + the view's text margin + the grid line, ~24 px per column).
+        The only levers left are outside this method — what a cell PRINTS, and the cell padding
+        in theme.py.
+
+        WHICH MAKES THE DIGIT COUNT A LAYOUT INPUT, so it is stated. Under tabular figures every
+        digit takes the widest advance, so a column's floor is set by its longest STRING and no
+        longer by which digits are in it — and the direction inverted: `1` was the narrowest digit
+        (5.281 px) and is now the widest (8.422 px), so the 1-heavy values a fast circuit produces
+        were the CHEAP case before #196 and are the expensive one now. On GX010062 (2-digit corner
+        speeds) the eight floors want 429 px; give `Entry` a third digit — any circuit quicker than
+        Daytona MK — and they want 438; give apex, entry and exit all three and they want 456. The
+        default quadrant hands this table 441 px at a 1280 px window, so the second of those three
+        is the last one that fits, and the third scrolls. Case 2 in `header_floors` is what makes
+        that legible rather than anonymous."""
         hdr = self.table.horizontalHeader()
         n = self.table.columnCount()
         cells = [self.table.sizeHintForColumn(c) if self.table.rowCount() else 0 for c in range(n)]
