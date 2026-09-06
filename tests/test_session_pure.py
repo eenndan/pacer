@@ -1020,6 +1020,79 @@ def test_theoretical_best_is_the_ideal_lap_one_definition():
     print("test_theoretical_best_is_the_ideal_lap_one_definition OK")
 
 
+def test_ideal_sample_counts_what_the_composite_was_minimised_over():
+    """`SegmentBests.sample` / `Session.ideal_sample()` — the four counts every surface printing
+    the ideal now prints with it, and the arithmetic that ties them to the partition.
+
+    ONE accessor, because three surfaces print these numbers (the Stats block's tile caption and
+    sample line, the hero's `vs ideal` chip, and — as `lap_count` — the Library's Laps column) and
+    two of them used to derive nothing at all. `segments == 2 * corners + 1` is not decoration: it
+    is the identity that makes "N corners and N+1 straights" a true sentence about a partition
+    whose pieces tile the lap, and the sample line prints the straight count as
+    `segments - corners` so a partition that ever stopped satisfying it would print the truth
+    rather than a derived lie."""
+    s, ids = make_ideal_session()
+    sb = s.ideal_segment_bests()
+    smp = s.ideal_sample()
+    assert smp == sb.sample
+    assert smp.donors == len(sb.donor_ids()) and smp.donors > 1   # genuinely stitched
+    assert smp.laps == len(sb.lap_ids) == len(ids)
+    assert smp.corners == len(sb.cids) == 2
+    assert smp.segments == len(sb.bests) == 2 * smp.corners + 1
+    assert smp.donors <= smp.laps
+    # It takes the SAME gate as every other ideal accessor: no partition, no sample. A surface
+    # printing "stitched from 0 of your 0 clean laps" under a dash is the failure mode.
+    s2, _ = make_ideal_session()
+    reset_corner_caches(s2, basis=None)
+    assert s2.ideal_total() is None and s2.ideal_sample() is None
+    print("test_ideal_sample_counts_what_the_composite_was_minimised_over OK")
+
+
+def test_the_ideal_falls_as_laps_are_added_which_is_why_the_sample_is_on_screen():
+    """THE PREMISE OF THE WHOLE DISCLOSURE, pinned: the composite is an ORDER STATISTIC over the
+    session's clean laps, so dropping a lap can only make it slower or leave it alone — and adding
+    one can only make it faster. A "theoretical best" is therefore partly a measure of how long
+    the session was, and the number on its own is not comparable between sessions.
+
+    Measured on the owner's five recordings over random subsets of the clean laps (200 draws per
+    N), `ideal_total` falls 0.068 / 0.174 / 0.194 / 0.241 / 0.384 s per DOUBLING of lap count with
+    no plateau — on D24's three chapters the same driving reads a 0.90 s gap over 5 laps and a
+    1.64 s gap over 65. That table is in corner_model.IdealSample; this is the property it rests
+    on, in a form that fails if the composite ever stops being a minimum.
+
+    Every proper subset here is checked, not one sample: with three crossing-pace laps that is all
+    six of them, and each must also report its own lap count through `sample`."""
+    s, ids = make_ideal_session()
+    full = s.ideal_total()
+    assert full is not None
+    seen = 0
+    for keep in ([0, 1], [0, 2], [1, 2], [0], [1], [2]):
+        sub, _ = make_ideal_session()
+        # The service's INJECTED valid-lap accessor — the seam `_composite_lap_ids` reads, i.e.
+        # the same one a shorter recording moves. Re-seed the hand-built basis afterwards:
+        # `invalidate()` (which seed_corner_basis calls) drops it along with everything else, and
+        # a synthetic straight-line lap has no real curvature to re-detect.
+        sub.corners._valid_lap_ids = lambda _k=list(keep): list(_k)
+        seed_corner_basis(sub, _IDEAL_CORNERS)
+        got = sub.ideal_total()
+        smp = sub.ideal_sample()
+        # `_composite_lap_ids` appends the best lap when the subset excluded it, so the count the
+        # surface prints is the set actually minimised over — never the set that was asked for.
+        assert smp.laps == len(set(keep) | {s.best_lap_id()}), (keep, smp)
+        assert got >= full - 1e-12, (
+            f"the ideal over {keep} came out {got:.9f}, FASTER than the ideal over all "
+            f"{len(ids)} laps ({full:.9f}) — a minimum over fewer laps cannot be smaller")
+        seen += 1
+    assert seen == 6
+    # …and the sentence a reader is given: strictly slower on at least one subset, i.e. the
+    # disclosure is about a real difference and not a theoretical one.
+    two = make_ideal_session()[0]
+    two.corners._valid_lap_ids = lambda: [0, 2]
+    seed_corner_basis(two, _IDEAL_CORNERS)
+    assert two.ideal_total() > full + 1e-9, (two.ideal_total(), full)
+    print("test_the_ideal_falls_as_laps_are_added_which_is_why_the_sample_is_on_screen OK")
+
+
 def _distinct_total_ideal_session():
     """The crossing-pace fixture with DISTINCT lap totals (1000 / 1002 / 1004 m — 0.2 % drift,
     inside corners.NORMALIZED_DRIFT_MAX = 0.5 %, so the projection stays on its deterministic

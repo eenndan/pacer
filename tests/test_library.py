@@ -64,6 +64,7 @@ from studio.library_dialog import (  # noqa: E402
     _ALL_TRACKS,
     _COL_BEST,
     _COL_DATE,
+    _COL_LAPS,
     _COL_THEO,
     _COL_TRACK,
     _DEFAULT_SIZE,
@@ -813,6 +814,84 @@ def test_dialog_ideal_column_never_reprints_the_best_lap_cell():
         # A withheld value must not sort as a lap time either (blank key, not 0.0).
         assert cell.data(NUM_ROLE) == (None if text == "—" else 67.312), date
     dlg.deleteLater()
+
+
+def test_the_table_shows_the_sample_its_two_time_columns_are_minima_over():
+    """BOTH TIME COLUMNS RANK AN ORDER STATISTIC, so the row carries the sample.
+
+    `Best lap` is the minimum of the session's lap times and `Ideal lap` is a sum of per-segment
+    minima over the same laps; both therefore fall as a session gets longer, and a cross-session
+    ranking of either is partly a ranking of session length. The demonstration is in the owner's
+    own library: Sandown chapter 1 (23 laps) stores 48.983 / 47.933 and Sandown chapters 1-3
+    (59 laps) — the SAME driving, one recording a superset of the other — stores 48.515 / 47.374.
+    0.47 s and 0.56 s apart, entirely on lap count. Those are the two rows this test builds.
+
+    WHY A COLUMN AND NOT A SORT REFUSAL on `Ideal lap`, which was the obvious alternative:
+    measured over random subsets of the clean laps, the ideal falls 0.068-0.384 s per doubling of
+    lap count and the BEST LAP falls 0.033-0.221 s — and on two of the owner's five recordings
+    (D24 1 chapter, SD_30_08) the best lap is the MORE sample-dependent of the two. Un-sorting one
+    column while the other kept its sort would advertise a distinction the numbers do not support,
+    so BOTH sorts stay and the confound is named for the row. This test pins that decision: it
+    fails if either time column loses its sort, and it fails if the sample stops being shown."""
+    from studio.library_dialog import _HEADERS
+    idx = {"version": library.VERSION, "entries": [
+        _entry("GX010059", track="Sandown", date="2026-05-09", laps=23,
+               best=48.9826803911227, theo=47.932965352611006),
+        _entry("GX020059", track="Sandown", date="2026-05-10", laps=59,
+               best=48.51475683761055, theo=47.37392114779569),
+    ]}
+    dlg = LibraryDialog(idx, _OpenSpy())
+    t = dlg.table
+    assert _HEADERS[_COL_LAPS] == "Laps", _HEADERS
+    assert t.columnCount() == len(_HEADERS) == 5
+
+    short = _row_with_date(dlg, "2026-05-09")
+    long_ = _row_with_date(dlg, "2026-05-10")
+    assert t.item(short, _COL_LAPS).text() == "23"
+    assert t.item(long_, _COL_LAPS).text() == "59"
+    # The measured confound, on the rendered strings: the longer session wins BOTH columns.
+    assert t.item(long_, _COL_THEO).text() < t.item(short, _COL_THEO).text()
+    assert t.item(long_, _COL_BEST).text() < t.item(short, _COL_BEST).text()
+
+    # It sorts as a NUMBER, like the three columns it sits among — "9" must not sort above "23".
+    assert t.item(short, _COL_LAPS).data(NUM_ROLE) == 23.0
+    assert t.item(long_, _COL_LAPS).data(NUM_ROLE) == 59.0
+    t.sortItems(_COL_LAPS, Qt.AscendingOrder)
+    assert [t.item(r, _COL_LAPS).text() for r in range(t.rowCount())] == ["23", "59"]
+    t.sortItems(_COL_LAPS, Qt.DescendingOrder)
+    assert [t.item(r, _COL_LAPS).text() for r in range(t.rowCount())] == ["59", "23"]
+
+    # BOTH time columns keep their sort — the decision above, asserted rather than described.
+    for col in (_COL_BEST, _COL_THEO):
+        t.sortItems(col, Qt.AscendingOrder)
+        assert [t.item(r, _COL_LAPS).text() for r in range(t.rowCount())] == ["59", "23"], col
+    assert t.isSortingEnabled()
+
+    # The MECHANISM is on the three headers it is about, and nowhere else: the cell hovers are
+    # spoken for by the row's file identity (the only thing telling two same-day sessions apart),
+    # which the sample must not have displaced.
+    tips = [t.horizontalHeaderItem(c).toolTip() for c in range(t.columnCount())]
+    assert tips[_COL_DATE] == "" and tips[_COL_TRACK] == "", tips
+    # The Laps header says what the count IS FOR; the two time headers carry the measured rate,
+    # each for its own column, so neither can be read as the only sampled one.
+    assert "the sample the two time columns are a minimum over" in tips[_COL_LAPS]
+    for col in (_COL_BEST, _COL_THEO):
+        assert "per doubling of lap count" in tips[col], (col, tips[col])
+        assert "Laps column" in tips[col] or "their Laps" in tips[col], (col, tips[col])
+    for col in range(t.columnCount()):
+        cell = t.item(0, col)
+        assert dlg.table.item(0, _COL_DATE).toolTip().split("\n")[0] in cell.toolTip(), col
+
+    # A no-laps row prints its true 0 rather than a dash: it is the count, and it is why the row
+    # is quarantined (_entry_junk reads the same field).
+    idx2 = {"version": library.VERSION,
+            "entries": [_entry("GX010099", date="2026-01-01", laps=0, best=None, theo=None)]}
+    dlg2 = LibraryDialog(idx2, _OpenSpy())
+    assert _entry_junk(idx2["entries"][0])
+    assert dlg2.table.item(0, _COL_LAPS).text() == "0"
+    dlg2.deleteLater()
+    dlg.deleteLater()
+    print("test_the_table_shows_the_sample_its_two_time_columns_are_minima_over OK")
 
 
 def test_dialog_pb_chart_hides_pyqtgraph_chrome():

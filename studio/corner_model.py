@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 
@@ -44,6 +45,52 @@ POINT_SPAN_M = 0.5
 # ≤ 0.0001. Any threshold in (0.01, 0.9) selects exactly the same cells; 0.5 sits in the middle of
 # a gap four orders of magnitude wide, so this is a separator, not a tuned knob.
 MIN_DONOR_SPAN_FRAC = 0.5
+
+
+class IdealSample(NamedTuple):
+    """WHAT THE IDEAL LAP WAS MINIMISED OVER — the four counts any surface printing the composite
+    has to print with it, because the composite is a function of all four.
+
+    `SegmentBests.total` is a sum of per-segment MINIMA. A minimum over more laps is never larger
+    and is usually smaller, so the "ideal" falls as a session accumulates laps, and it falls again
+    when the partition is cut finer. Both are properties of an order statistic over a partition,
+    not of the driving — so two ideals are only comparable when these counts are comparable.
+
+    Measured on the owner's five recordings (random subsets of the clean laps, 200 draws per N,
+    `ideal_total` as the app computes it):
+
+    | recording        | 5 laps | 10 | 20 | 40 | all | per doubling of N |
+    |------------------|--------|----|----|----|-----|-------------------|
+    | D24 1 chapter    | 68.333 | 68.057 | 67.844 | — | 67.831 (21) | 0.174 s |
+    | D24 3 chapters   | 67.957 | 67.578 | 67.192 | 66.832 | 66.563 (65) | **0.384 s** |
+    | Sandown ch 1     | 48.585 | 48.225 | 47.982 | — | 47.933 (23) | 0.241 s |
+    | Sandown 3 ch     | 48.338 | 47.998 | 47.735 | 47.483 | 47.374 (59) | 0.194 s |
+    | SD_30_08         | 13.025 | 12.945 | 12.878 | — | 12.856 (25) | 0.068 s |
+
+    There is no plateau: on D24 3 chapters the decrement per doubling GROWS with N (0.31 s over
+    8→15 laps, 0.42 s over 30→65). The gap the app headlines ("on the table") therefore grows with
+    lap count on all five — D24 3 chapters reads −0.90 s at 5 laps and −1.64 s at 65, same driving.
+
+    THE BEST LAP HAS THE SAME PROPERTY, WHICH IS WHY THE DISCLOSURE IS PER RECORDING AND NOT PER
+    COLUMN. The best lap is also a minimum over the session's laps: measured the same way it falls
+    0.221 / 0.148 / 0.033 / 0.094 / 0.080 s per doubling on those five, i.e. FASTER than the ideal
+    on two of them (D24 1 chapter and SD_30_08). Suppressing the ideal's ranking while leaving the
+    best lap's alone would fix the smaller half of the problem on 2 of 5 recordings; naming the
+    sample fixes both. See studio/library_dialog.py's Laps column.
+
+    `corners` / `segments` are the partition's size, and they move when the corner detector re-runs
+    — which it does on every start/finish-line drag. Measured over six start-line positions per
+    recording the detected corner count moves 11↔12 on D24 and 7↔8 on Sandown, and the headline gap
+    with it: D24 1 chapter 0.94 s at the fitted line, 1.08 … 1.48 s over those six positions
+    (+58 %); Sandown 3 chapters 1.14 s, 1.16 … 1.93 s (+69 %). A mechanical midpoint refinement
+    (every segment split in two, no new information) buys another 0.30 … 1.67 s. So a user who
+    drags the line and sees the gap move is looking at a re-cut partition, not at their driving —
+    and `corners`/`segments` on screen is what lets them see that."""
+
+    donors: int    # distinct laps that won at least one segment (SegmentBests.donor_ids)
+    laps: int      # clean laps the minimum ran over (SegmentBests.lap_ids)
+    corners: int   # corners in the partition
+    segments: int  # 2N+1 pieces the lap was cut into
 
 
 @dataclass(frozen=True)
@@ -120,8 +167,22 @@ class SegmentBests:
     def total(self) -> float:
         """The ideal lap time (s) — the sum of the per-segment minima. ≤ every donor lap's time,
         because each donor's own segments sum exactly to its lap time and a sum of minima can
-        never exceed the minimum of those sums."""
+        never exceed the minimum of those sums.
+
+        IT IS AN ORDER STATISTIC, NOT A FLOOR, and every surface that prints it must print
+        `sample` beside it. A minimum over more laps is never larger, so this number keeps falling
+        as the session grows and moves again when the partition is re-cut — measured, tabulated
+        and sourced in `IdealSample`. Nothing here is wrong; what would be wrong is showing the
+        number without the counts that set it."""
         return float(sum(self.bests))
+
+    @property
+    def sample(self) -> IdealSample:
+        """The four counts this composite is a minimum over — see `IdealSample`, which carries the
+        measured table. One accessor so the Stats block, the hero chip and any future surface print
+        the same four numbers rather than each deriving their own."""
+        return IdealSample(donors=len(self.donor_ids()), laps=len(self.lap_ids),
+                           corners=len(self.cids), segments=len(self.bests))
 
     def cumulative(self) -> np.ndarray:
         """The ideal's elapsed time at each partition edge (2N+2 values, 0 … total) — the ideal
@@ -183,8 +244,40 @@ class SegmentBests:
         another, and the "achievability" it reported correlated with segment DURATION at
         r = −0.95 / −0.82 / −0.80 / −0.95 on the four real recordings. Ranking by
         gain × that rate put a 0.039 s straight at the top of D24's plan, above a 0.213 s corner.
-        This count is scale-free (r = −0.04 … −0.50 against the same durations) and it is also
-        the question a driver is actually asking: have I been here before, or was that once?
+
+        THIS COUNT IS SCALE-FREE BY CONSTRUCTION, WHICH IS A STRONGER CLAIM THAN A CORRELATION AND
+        IS THE ONE THAT IS TRUE. It is the subject's RANK among the admitted laps: multiply any
+        segment's column by an arbitrary c > 0 and `times[:, j] <= row[j]` is unchanged, while
+        `admitted` is a function of the SPANS and not of the times at all — so every pair this
+        returns is identical. `hit_counts(0.1)` is not: the same rescaling changes its answer.
+        Both halves are pinned, with the negative control, by
+        tests/test_session_pure.py::test_beat_counts_are_not_a_fixed_tolerance_hit_rate.
+
+        The correlation this docstring used to lead with ("r = −0.04 … −0.50 against the same
+        durations") does not reproduce and understated the coupling. Re-measured independently on
+        FIVE recordings, subject = the best lap, non-point segments only, beat rate against each
+        segment's mean duration:
+
+        | recording      | n  | r      | Spearman | permutation p |
+        |----------------|----|--------|----------|---------------|
+        | D24 1 ch       | 24 | −0.176 | −0.239   | 0.264 |
+        | D24 3 ch       | 24 | −0.340 | −0.331   | 0.117 |
+        | Sandown ch 1   | 15 | −0.297 | −0.289   | 0.297 |
+        | Sandown 3 ch   | 15 | −0.602 | −0.596   | **0.019** |
+        | SD_30_08       |  5 | −0.905 | −0.900   | 0.067 (exact, 120 permutations) |
+
+        One of five is distinguishable from chance, and the strongest r sits on the recording with
+        FIVE segments, where n makes p ≥ 0.017 unreachable at any effect size. A residual negative
+        correlation is also what a real track produces — a short piece of road has less room to
+        differ, so more laps land level with the subject — and because the statistic is provably
+        invariant to scale, that correlation is a fact about the driving, not about the units. The
+        rejected `hit_counts` had no such defence: its coupling came from a tolerance measured in
+        seconds against segments of unequal length.
+
+        It is also the question a driver is actually asking: have I been here before, or was that
+        once? And both of its factors are printed as columns beside the row, with the product in
+        the row's own tooltip, so the ranking is checkable by eye — the app's standing answer to a
+        ranking whose factor a reader cannot see (stats_panel's note at the CORNERS table).
 
         It is deliberately measured against the SUBJECT lap rather than against the segment best.
         The gain a row shows is the distance from the subject to the best, and the honest

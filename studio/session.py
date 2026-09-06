@@ -2509,9 +2509,25 @@ class Session:
         partition. STRICTLY less than the best lap time whenever two different laps donate,
         because each lap's own segments sum exactly to its lap time (`corners.segment_times`
         asserts it), so a sum of minima can only equal the best lap when one lap wins everything.
-        None when there is no corner partition (see `ideal_segment_bests`)."""
+        None when there is no corner partition (see `ideal_segment_bests`).
+
+        IT IS A FUNCTION OF HOW MANY LAPS YOU RECORDED, and a surface that prints it without
+        `ideal_sample()` is inviting the reader to compare two numbers that are not comparable.
+        Measured over random subsets of the clean laps it falls 0.07 … 0.38 s per DOUBLING of lap
+        count on the owner's five recordings, with no plateau; the full table, the best-lap
+        control and the partition sensitivity are in `corner_model.IdealSample`."""
         sb = self.ideal_segment_bests()
         return None if sb is None else sb.total
+
+    def ideal_sample(self) -> corner_model.IdealSample | None:
+        """What `ideal_total()` was minimised over: donors, clean laps, corners, segments
+        (`corner_model.IdealSample`, which carries the measured sample-size table). None when
+        there is no composite — the same gate every other ideal accessor takes.
+
+        The ONE source for the counts the Stats block and the hero chip print, so the two cannot
+        drift or answer "how many laps is this over" differently."""
+        sb = self.ideal_segment_bests()
+        return None if sb is None else sb.sample
 
     def ideal_donor_lap_id(self) -> int | None:
         """The lap id when ONE lap wins every segment — the "ideal" is then that lap, not a

@@ -444,7 +444,15 @@ def test_the_hero_withholds_the_ideal_when_the_ideal_is_a_lap_you_drove():
         s = view.session
         best = s.best_lap_id()
         assert s.ideal_donor_lap_id() is None, "fixture must START stitched"
-        base_tip = view.ideal_readout_btn.toolTip()
+        # The CONSTANT, not the live tooltip: in the stitched state the chip also carries the
+        # session's SAMPLE ("stitched from N of your M clean laps…"), which is per-session and
+        # must NOT survive into a state with no composite to have a sample of. Reading the live
+        # string as the base made this guard assert the two appendices stack.
+        from studio.central_view import _IDEAL_CHIP_TIP as base_tip
+        stitched_tip = view.ideal_readout_btn.toolTip()
+        assert stitched_tip.startswith(base_tip), stitched_tip
+        assert "clean laps" in stitched_tip, (
+            "the working state must say what the ideal was minimised over", stitched_tip)
         assert view.ideal_readout_btn.isEnabled() and view.ideal_readout_btn.isChecked()
 
         real = s.ideal_donor_lap_id
@@ -483,7 +491,10 @@ def test_the_hero_withholds_the_ideal_when_the_ideal_is_a_lap_you_drove():
         # ...and it all comes back when the ideal is stitched again.
         view.rebuild_derived_views(reselect=False)
         assert view.ideal_readout_btn.isEnabled() and view.ideal_readout_btn.isChecked()
-        assert view.ideal_readout_btn.toolTip() == base_tip
+        # Byte-identical to the working state it started in — the one-donor reason is gone and the
+        # sample is back, neither left behind on the other's state.
+        assert view.ideal_readout_btn.toolTip() == stitched_tip
+        assert "IS that lap" not in view.ideal_readout_btn.toolTip()
         view._update_diff_box(s.lap_window(best)[0], 42.0, best)
         assert view.diff_box.text().startswith("Δideal"), view.diff_box.text()
         print("test_the_hero_withholds_the_ideal_when_the_ideal_is_a_lap_you_drove OK "
