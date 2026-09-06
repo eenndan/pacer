@@ -619,23 +619,33 @@ def _fake_segment_bests(single_donor=False):
     on the page is arithmetic a reader of this file can check.
 
     Lap 1 is the session best (the stub's `best_lap_id`). Its gains against the per-segment
-    minima are, in segment order: 0.00 (S/F → C1), 0.28 (C1), 0.02 (C1 → C2), 0.20 (C2), 0.00
-    (C2 → S/F) — 0.50 s in total, of which 0.48 s clears the 0.05 s display floor. C1 is the
-    BIGGER gain and only one other lap matched it (beat 2/3); C2 is smaller and every lap matched
-    it (beat 3/3), so the ranking has to put C2 first — 0.20 × 3/3 = 0.200 over 0.28 × 2/3 =
-    0.187 — while a raw-gain order would lead with C1.
+    minima are, in segment order: 0.000 (S/F → C1), 0.284 (C1), 0.024 (C1 → C2), 0.204 (C2),
+    0.000 (C2 → S/F) — 0.512 s in total, of which the two above the 0.05 s display floor print as
+    0.28 and 0.20. C1 is the BIGGER gain and only one other lap matched it (beat 2/3); C2 is
+    smaller and every lap matched it (beat 3/3), so the ranking has to put C2 first — 0.204 × 3/3
+    = 0.204 over 0.284 × 2/3 = 0.189 — while a raw-gain order would lead with C1.
 
     (A positive gain always has beat ≥ 2: the donor is by definition at least as fast as the
     subject, so it counts itself and the subject. The fixture spends its whole discriminating
     range on that floor rather than pretending a 1/3 is reachable.)
 
+    THE THIRD DECIMAL IS LOAD-BEARING, and it is why this matrix changed. It used to hold gains of
+    exactly 0.28 and 0.20 against a 0.50 s gap — numbers that round cleanly, so summing the raw
+    floats and summing the printed cells gave the SAME answer and the note's pinned assertion
+    passed either way. On all four of the owner's real recordings they do not agree (D24 3 chapters
+    printed cells adding to 1.40 under a note saying 1.39; Sandown chapter 1 printed 0.92 under a
+    note saying 0.94), so the guard was blind to the defect it exists to catch. With these gains
+    the two spellings differ: the printed cells sum to 0.48, the raw floats to 0.488 → "0.49", and
+    the gap rounds to 0.51 — so a note built the wrong way states a total the column above it does
+    not reach AND misses the tile by a penny in the other direction.
+
     `single_donor=True` collapses it to the state where one lap wins everything and the page must
     hide the block instead of printing a duplicate of the best lap."""
     from studio.corner_model import SegmentBests
     times = np.array([
-        [1.00, 9.90, 3.00, 5.10, 2.00],     # lap 0 — owns C1 and the C1 → C2 straight
-        [1.00, 10.18, 3.02, 5.20, 2.00],    # lap 1 — the best lap (the subject), 21.40
-        [1.00, 10.60, 3.10, 5.00, 2.00],    # lap 2 — owns C2
+        [1.00, 9.900, 3.000, 5.100, 2.00],   # lap 0 — owns C1 and the C1 → C2 straight
+        [1.00, 10.184, 3.024, 5.204, 2.00],  # lap 1 — the best lap (the subject), 21.412
+        [1.00, 10.600, 3.100, 5.000, 2.00],  # lap 2 — owns C2
     ])
     if single_donor:
         times = np.array([[1.0, 9.9, 3.0, 5.0, 2.0],
@@ -737,10 +747,10 @@ def test_stats_view_renders_every_group():
     # SESSION-BESTS footer on the Laps tab, which cost that grid two lap rows).
     assert v.t_rolling.value.text() == "1:08.150"            # PACE, next to best/median/race pace
     # The IDEAL LAP block: 1.00 + 9.90 + 3.00 + 5.00 + 2.00 = 20.90 s of per-segment minima,
-    # against the best lap's own 21.40 — see _fake_segment_bests for the matrix.
+    # against the best lap's own 21.412 — see _fake_segment_bests for the matrix.
     assert not v._ideal_section.isHidden() and not v.t_theoretical.isHidden()
     assert v.t_theoretical.value.text() == "0:20.900"
-    assert v.t_ideal_gap.value.text() == "-0.50 s"
+    assert v.t_ideal_gap.value.text() == "-0.51 s"
     # Verified + high-quality timing: rendered as normal tiles, never the provisional muting.
     assert not v.t_rolling.value.font().italic()
     assert not v.t_theoretical.value.font().italic()
@@ -778,17 +788,120 @@ def test_stats_view_hides_signal_absent_sections():
     print("test_stats_view_hides_signal_absent_sections OK")
 
 
+_IDEAL_NOTE_RE = re.compile(
+    r"These (\d+) segments hold (-?\d+\.\d\d) s of the (-?\d+\.\d\d) s; "
+    r"the other (\d+) hold (-?\d+\.\d\d) s between them")
+
+
+def _ideal_page_numbers(v):
+    """Every number the IDEAL LAP block prints, read off the RENDERED widgets: the `Gain (s)`
+    cells, the note's three figures, and the gap tile. Strings only — no session accessor — so
+    this measures what a reader can add up, not what the model believes."""
+    t = v.ideal_table
+    cells = [float(t.item(r, 1).text()) for r in range(t.rowCount())]
+    m = _IDEAL_NOTE_RE.search(v.ideal_note.text())
+    assert m, f"the note's shape changed; this guard cannot read it: {v.ideal_note.text()!r}"
+    tile = v.t_ideal_gap.value.text()
+    assert tile.endswith(" s") and tile[0] == "-", tile
+    return SimpleNamespace(cells=cells, n_shown=int(m[1]), shown=float(m[2]), gap=float(m[3]),
+                           n_rest=int(m[4]), rest=float(m[5]), tile=abs(float(tile[:-2])))
+
+
+def _assert_ideal_page_adds_up(v):
+    """F1 — THE PAGE ADDS UP IN THE READER'S OWN NUMBERS, at 2 dp, on the surfaces themselves.
+
+    Three claims, none of which the model can satisfy on its own behalf:
+      * the note's "these N segments hold X s" IS the sum of the printed cells;
+      * X + the stated remainder IS the note's own total;
+      * that total IS the number on the gap tile.
+
+    Written structurally rather than as a pinned string because the pinned string is exactly how
+    this shipped broken: `tests/test_stats.py` asserted "These 2 segments hold 0.48 s of the
+    0.50 s" over a fixture whose gains were 0.28 and 0.20 — numbers that round cleanly, so
+    summing the raw floats and summing the printed cells agreed and the guard could not tell the
+    two spellings apart. On all four of the owner's real recordings they disagree."""
+    n = _ideal_page_numbers(v)
+    assert n.n_shown == len(n.cells), (n.n_shown, n.cells)
+    assert round(sum(n.cells), 2) == n.shown, (
+        f"the note says {n.n_shown} segments hold {n.shown:.2f} s, but the cells above it print "
+        f"{n.cells} = {round(sum(n.cells), 2):.2f}")
+    assert round(n.shown + n.rest, 2) == n.gap, (n.shown, n.rest, n.gap)
+    assert n.gap == n.tile, (
+        f"the note's total {n.gap:.2f} s is not the tile's {n.tile:.2f} s")
+    return n
+
+
+def test_the_ideal_note_adds_up_in_the_numbers_on_screen():
+    """F1, swept rather than sampled: 240 composites whose gains carry a THIRD decimal, which is
+    where the two spellings of "the total" come apart.
+
+    The shipped note summed the raw floats. Measured on the real recordings that put a 1.40 s
+    column under a 1.39 s sentence (D24, 3 chapters) and a 0.92 s column under a 0.94 s one
+    (Sandown chapter 1) — a reader adding the cells and the stated remainder landed a penny off
+    the tile in either direction. One fixture cannot show that (the previous one could not), so
+    this sweeps the rounding space and carries its own NEGATIVE CONTROL: the retired spelling is
+    re-derived here from the same rows and asserted to fail on a real share of the draws.
+
+    Every number is read back off the rendered widgets by `_assert_ideal_page_adds_up`."""
+    _app()
+    from studio.corner_model import SegmentBests
+    from studio.stats_panel import IDEAL_GAIN_FLOOR, StatsView
+    rng = np.random.default_rng(20260906)
+    n_seg = 7                      # 3 corners -> 2N+1 segments, the smallest realistic plan
+    idx = np.arange(n_seg)
+    old_spelling_failures = 0
+    checked = 0
+    for _ in range(240):
+        gains = np.round(rng.uniform(0.0, 0.30, n_seg), 3)
+        base = np.full(n_seg, 3.0)
+        # Two donors, so the block is never the single-donor state: lap 0 owns the even segments,
+        # lap 2 the odd ones, and lap 1 (the subject / best lap) is `gains` slower everywhere.
+        times = np.stack([base + np.where(idx % 2 == 0, 0.0, 0.5),
+                          base + gains,
+                          base + np.where(idx % 2 == 1, 0.0, 0.5)])
+        sb = SegmentBests(
+            labels=[f"s{j}" for j in range(n_seg)], cids=[1, 2, 3], lap_ids=[0, 1, 2],
+            times=times, admitted=np.ones(times.shape, bool),
+            bests=[float(c.min()) for c in times.T],
+            donors=[int(times[:, j].argmin()) for j in range(n_seg)],
+            s_edges=list(np.linspace(0.0, 1.0, n_seg + 1)),
+            donor_span=[(0.0, 0.0)] * n_seg)
+        if sb.single_donor_id() is not None:
+            continue
+        s = _fake_view_session()
+        s.ideal_segment_bests = lambda sb=sb: sb
+        s.ideal_total = lambda sb=sb: sb.total
+        s.theoretical_best = lambda sb=sb: sb.total
+        s.ideal_donor_lap_id = lambda sb=sb: sb.single_donor_id()
+        v = StatsView(s)
+        if v.ideal_table.rowCount() == 0:
+            continue               # every gain fell under the display floor: no plan to check
+        checked += 1
+        _assert_ideal_page_adds_up(v)
+        # NEGATIVE CONTROL — the retired spelling, on these very rows.
+        shown = [g for g in gains if g >= IDEAL_GAIN_FLOOR]
+        if f"{sum(shown):.2f}" != f"{round(sum(round(float(g), 2) for g in shown), 2):.2f}":
+            old_spelling_failures += 1
+        v.deleteLater()
+    assert checked >= 200, checked
+    assert old_spelling_failures >= 20, (
+        f"only {old_spelling_failures} of {checked} draws separate the two spellings — this sweep "
+        f"is not exercising the rounding it exists to pin")
+    print(f"test_the_ideal_note_adds_up_in_the_numbers_on_screen OK ({checked} composites; the "
+          f"retired raw-float spelling misses the printed column on {old_spelling_failures})")
+
+
 def test_ideal_decomposition_table_is_a_plan_not_a_taunt():
     """The IDEAL LAP table (N8): where the gap lives, on which lap, and how repeatable it is.
 
     Pinned on the hand-built composite in `_fake_segment_bests`, whose numbers are:
 
         row  segment      gain   beat   donor   priority
-        1    C2           0.20    3/3   lap 3   0.200   <- smaller, every lap matched it
-        2    C1           0.28    2/3   lap 1   0.187   <- BIGGER, matched once
-        -    C1 → C2      0.02    2/3   lap 1   under the 0.05 s floor
-        -    S/F → C1     0.00    3/3   lap 1   under the floor
-        -    C2 → S/F     0.00    3/3   lap 1   under the floor
+        1    C2          0.204    3/3   lap 3   0.204   <- smaller, every lap matched it
+        2    C1          0.284    2/3   lap 1   0.189   <- BIGGER, matched once
+        -    C1 → C2     0.024    2/3   lap 1   under the 0.05 s floor
+        -    S/F → C1    0.000    3/3   lap 1   under the floor
+        -    C2 → S/F    0.000    3/3   lap 1   under the floor
 
     So the table leads with the smaller gain, and a raw-gain order would lead with the bigger
     one. That inversion is the whole feature: measured on the owner's recordings D24's largest
@@ -814,14 +927,21 @@ def test_ideal_decomposition_table_is_a_plan_not_a_taunt():
     assert [t.item(r, 0).data(RING_ROLE) for r in range(t.rowCount())] == [
         int(lbl[1:]) for lbl in labels]
     assert IDEAL_GAIN_FLOOR == 0.05
-    # THE NOTE CLOSES THE ARITHMETIC. The tile says 0.50 s; the table shows 0.50 s of it in two
-    # rows and the note accounts for the remaining three segments (0.02 s). A top-N list under a
-    # total that does not add up is the defect this line exists to prevent.
+    # THE NOTE CLOSES THE ARITHMETIC — IN THE READER'S OWN NUMBERS. The tile says -0.51 s; the two
+    # printed cells add to 0.48 and the note accounts for the remaining three segments (0.03 s),
+    # so 0.48 + 0.03 = 0.51 = the tile. A top-N list under a total that does not add up is the
+    # defect this line exists to prevent, and summing the RAW gains (0.488 -> "0.49") is how it
+    # shipped anyway on all four real recordings — see `_fake_segment_bests` for why the third
+    # decimal is in this fixture.
     note = v.ideal_note.text()
-    assert "These 2 segments hold 0.48 s of the 0.50 s" in note, note
-    assert "the other 3 hold 0.02 s between them" in note, note
+    assert "These 2 segments hold 0.48 s of the 0.51 s" in note, note
+    assert "the other 3 hold 0.03 s between them" in note, note
     assert "Stitched from 2 of your 3 clean laps" in note, note
     assert "Ranked by gain" in note, note
+    # ...and the same three numbers read STRUCTURALLY off the rendered surfaces, so this guard
+    # keeps working when the fixture changes and cannot go blind again on a fixture whose gains
+    # happen to round cleanly.
+    _assert_ideal_page_adds_up(v)
     # Every cell of a row carries that row's own arithmetic, because NEITHER visible column is
     # sorted — the order is their product, and the CORNERS table's marked-loss column is on
     # record in this app as unreadable for exactly that reason.

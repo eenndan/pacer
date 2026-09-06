@@ -470,6 +470,13 @@ class _FakeChartSession:
     def delta_to_ideal(self, ids, x_mode="distance"):
         return None  # P7: no ideal here → the Δ chart keeps its Δ-to-best baseline
 
+    def ideal_delta_to_best(self, x_mode="distance"):
+        # ...and the OVERLAY's own accessor. `_draw_ideal` has always read it; the `Ideal lap`
+        # toggle's enablement now reads it too (it is the exact condition for "clicking this would
+        # draw nothing"), so a stub that answers `delta_to_ideal` and not this one is an
+        # INCOMPLETE session surface rather than a session without an ideal.
+        return None
+
     def ideal_donor_lap_id(self):
         return None  # not a single-donor ideal (plots_view reads this on every plotted refresh)
 

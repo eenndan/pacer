@@ -232,6 +232,47 @@ def test_a_single_donor_ideal_is_neither_a_baseline_nor_an_overlay():
     print("test_a_single_donor_ideal_is_neither_a_baseline_nor_an_overlay OK")
 
 
+def test_the_ideal_toggle_is_dead_when_there_is_no_ideal_at_all():
+    """The FOURTH dead end, and the one the first three left live.
+
+    `_sync_chart_controls` gated on `plotted and not _delta_ideal_mode and not _ideal_is_one_lap`.
+    A session with laps to plot and NO ideal — no corner partition, so `ideal_delta_to_best`
+    returns None and `_draw_ideal` early-returns — makes all three of those false, so the toggle
+    stayed enabled and latched amber over a chart it could not change. That is §A47's shape ("the
+    charts panel promised series it could not draw", fixed by #156) surviving one state further,
+    and it is the same fact the hero's `vs ideal` chip and the Stats IDEAL LAP block withhold on.
+
+    Both selections are checked, because the two branches reach it differently: with two laps the
+    baseline swap never applies, and with the best lap ALONE the swap is refused for want of a
+    curve — which used to leave `_delta_ideal_mode` False and the toggle live."""
+    for select in ([0, 1], [0]):
+        v = _view(n=3, best=0, select=select, ideal=False)
+        assert v._ideal_missing is True, select
+        assert v._delta_ideal_mode is False and v._ideal_is_one_lap is False, select
+        assert v.ideal_btn.isEnabled() is False, (
+            f"the ideal toggle is live over a chart it cannot draw on (selection {select})")
+        tip = v.ideal_btn.toolTip()
+        assert tip.startswith("Ideal lap:"), tip        # the label survives the reason
+        assert tip.endswith(plots_view.NO_IDEAL_TIP), tip
+        assert "no corners" in tip, tip
+        # ...and even forced on, the overlay draws nothing (the reason is real, not decorative).
+        before = len([1 for plot, _c in v._curves if plot is v.p_delta])
+        v._show_ideal = True
+        v.refresh()
+        for _ in range(4):
+            _APP.processEvents()
+        assert len([1 for plot, _c in v._curves if plot is v.p_delta]) == before, select
+        v.deleteLater()
+
+    # NEGATIVE CONTROL — the same shape WITH an ideal keeps the toggle live and its own tooltip.
+    w = _view(n=3, best=0, select=[0, 1])
+    assert w._ideal_missing is False
+    assert w.ideal_btn.isEnabled() is True
+    assert plots_view.NO_IDEAL_TIP not in w.ideal_btn.toolTip()
+    w.deleteLater()
+    print("test_the_ideal_toggle_is_dead_when_there_is_no_ideal_at_all OK")
+
+
 # ============================================================================ L6-03
 def test_identity_curves_carry_a_cue_that_survives_deuteranopia():
     """No two curves the panel can draw at once are separated by colour ALONE below the JND.
@@ -682,6 +723,7 @@ def _run_all():
     test_the_baseline_signal_carries_the_kind_not_a_two_state_flag()
     test_ideal_toggle_is_live_only_where_it_can_draw()
     test_a_single_donor_ideal_is_neither_a_baseline_nor_an_overlay()
+    test_the_ideal_toggle_is_dead_when_there_is_no_ideal_at_all()
     test_identity_curves_carry_a_cue_that_survives_deuteranopia()
     test_chart_series_stays_palette_independent()
     test_brake_glyphs_carry_a_shape_channel_that_survives_deuteranopia()

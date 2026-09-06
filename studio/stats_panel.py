@@ -1460,11 +1460,28 @@ class StatsView(QWidget):
         # The remainder, always — the tile above states the WHOLE gap and the table shows part of
         # it, so without this line the page would print a total and a list that do not add up
         # (the same class of defect the digest tile's rounding note records at _set_digest).
-        shown_s = sum(r.gain for r in shown)
+        #
+        # AND IT ADDS UP IN THE READER'S OWN NUMBERS, which is the rule `_set_digest` (L5-02)
+        # already writes down 190 lines above and this line was breaking. The cells are printed at
+        # 2 dp; summing the RAW floats made the note disagree with the column above it on 4 of 4
+        # real recordings — D24 3 chapters printed 0.21 0.21 0.13 0.12 0.08 0.17 0.13 0.10 0.11
+        # 0.14 (= 1.40) over a sentence saying 1.39, so a reader adding the visible cells and the
+        # stated remainder got 1.65 under a tile printing -1.64 s. Sandown chapter 1 was off the
+        # other way (0.92 printed, 0.94 stated). The three numbers here are therefore:
+        #   shown_s — the SUM OF THE PRINTED CELLS, each rounded exactly as the table rounds it;
+        #   gap_s   — the TILE's own number, rounded exactly as _set_target_tile rounds it;
+        #   rest_s  — whatever closes the arithmetic, BY CONSTRUCTION rather than by agreement.
+        # `rest_s` is a difference, not a second sum, for that last reason: summing the sub-floor
+        # rows at 2 dp would give a number that happens to close on today's data and would not on
+        # tomorrow's. A rounding penny can therefore land in the remainder — that is where it is
+        # cheapest, since those rows are not on screen to contradict it.
+        shown_s = round(sum(round(r.gain, 2) for r in shown), 2)
+        gap_s = round(gap, 2)
+        rest_s = round(gap_s - shown_s, 2)
         self.ideal_note.setText(
             f"Stitched from {len(sb.donor_ids())} of your {len(sb.lap_ids)} clean laps. These "
-            f"{len(shown)} segments hold {shown_s:.2f} s of the {gap:.2f} s; the other "
-            f"{len(rest)} hold {gap - shown_s:.2f} s between them, under "
+            f"{len(shown)} segments hold {shown_s:.2f} s of the {gap_s:.2f} s; the other "
+            f"{len(rest)} hold {rest_s:.2f} s between them, under "
             f"{IDEAL_GAIN_FLOOR:.2f} s each. Ranked by gain × how often you have already matched "
             "your best lap there.")
 

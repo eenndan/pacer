@@ -1358,8 +1358,13 @@ class StudioWindow(QMainWindow):
         # File ▸ Library: the full browse + per-track PB chart over the session-library index.
         menu.addSeparator()
         self._library_action = menu.addAction("Library…")
+        # The four columns, NAMED AS THE DIALOG NAMES THEM. #211 renamed the fourth from
+        # "Theoretical" to "Ideal lap" (library_dialog._HEADERS) and left this description of it
+        # behind, so the menu item promised a column the dialog does not have. The laps.csv
+        # trailer's "Theoretical best" is deliberately NOT renamed with it — that label is a
+        # machine-readable contract (export_data.SUMMARY_ROWS), not a description of a widget.
         self._library_action.setToolTip(
-            "Browse your analyzed recordings (date / track / best lap / theoretical best), "
+            "Browse your analyzed recordings (date / track / best lap / ideal lap), "
             "re-open any of them, and see per-track PB progression")
         self._library_action.triggered.connect(self._open_library)
         # Data portability: reveal the app-support folder that holds library.json (so the durable

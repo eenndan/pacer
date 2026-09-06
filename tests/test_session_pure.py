@@ -543,8 +543,18 @@ def test_sector_splits_no_longer_define_the_theoretical_best():
     It could not be. Sector lines default to NONE, and with no line a lap is a single sub-sector
     whose split is its lap time, so the sum was identically the best lap time on every recording
     anyone owns (pinned below, on the same fixture that used to assert it AS the ideal). It also
-    moved the wrong way when a line was added — on D24, 68.393 s → 68.651 s — because each lap
-    projects the same midpoint onto its own odometer and the pieces tile nothing."""
+    moved the wrong way when a line was added, because each lap projects the same midpoint onto
+    its own odometer and the pieces tile nothing.
+
+    THAT SECOND CLAIM USED TO CITE "on D24, 68.393 s → 68.651 s". Those numbers do not reproduce
+    and cannot ever be checked: they were measured on ~/Desktop/D24/GX010060.MP4, which an agent
+    overwrote with a 2.3 MB JSON dump. Re-derived on the D24 recording that survives (GX010062,
+    `sum(session_best_splits())` at 0/1/2/3 evenly spaced lines — the retired formula, unchanged
+    by the wave) the old target falls monotonically: 68.771 → 68.684 → 68.540 → 68.287. The
+    non-monotonicity is real but it is NOT on D24 at one line — on Sandown chapter 1 the same
+    sweep reads 48.983 → 48.506 → **48.635** → 48.329, so the second line put 0.129 s BACK on a
+    target that is supposed to only improve with information. Cite that one; it is on a recording
+    that still exists."""
     s, lap_a, lap_b = make_two_lap_sector_session()
     bests = s.session_best_splits()
     assert len(bests) == 3 and all(b > 0 for b in bests), bests
@@ -785,8 +795,15 @@ def test_ideal_excludes_dropout_and_band_excluded_laps():
 
 def test_more_segments_never_make_the_ideal_slower():
     """PROPERTY 6 — adding information must not make the target worse. This FAILED on record:
-    placing one sector line on D24 moved the theoretical best from 68.393 s to 68.651 s, because
-    each lap projected the same midpoint onto its own odometer and the pieces tiled nothing.
+    adding a sector line could move the old theoretical best UP, because each lap projected the
+    same midpoint onto its own odometer and the pieces tiled nothing. Measured on the real
+    recordings with `sum(session_best_splits())` at 0/1/2/3 lines: Sandown chapter 1 reads
+    48.983 → 48.506 → **48.635** → 48.329 — the second line gives 0.129 s back.
+
+    (This docstring used to cite "68.393 s to 68.651 s on D24". Those numbers came from
+    GX010060.MP4, the recording an agent destroyed, and do not reproduce on the D24 that survives:
+    GX010062 goes 68.771 → 68.684 → 68.540 → 68.287, monotonically down. The Sandown figures above
+    are re-derived on a file that still exists, which is the only kind of number worth pinning.)
 
     Two halves. (a) SECTOR LINES no longer touch the ideal at all — it is now invariant to them,
     which is stronger than monotone (verified byte-identical across 0/1/2/3 lines on the three

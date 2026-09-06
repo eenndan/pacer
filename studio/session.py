@@ -2571,12 +2571,22 @@ class Session:
         transiently AHEAD of it and give the time back by the exit — genuinely useful information,
         and the reason this is no longer clamped or asserted non-negative.
 
-        The excursions are SMALL. Swept at 25 ms of media clock over every clean lap of the real
-        recordings (372 k samples), the most negative dy is −0.052 s and under 1 % of samples are
+        The excursions are SMALL, and the measured numbers are the ones in `theme.py`'s
+        `format_ideal_run` note (the single place this sweep is tabulated per recording): the
+        floor is **−0.159 s**, and 2.09 % of samples on Sandown chapter 1 / 6.42 % on SD_30_08 are
         negative at all, against end-of-lap values of +0.22 … +9.24 s. Drawing the ideal's
         interior as a straight line instead — which is what a partition composite does if it does
         not consult its donors — put that at −0.87 s on 18.4 % of samples; see
         `CornerModel.ideal_elapsed`.
+
+        WHY THIS DOCSTRING ONCE SAID −0.052 s / "under 1 %", and why that is worth recording. Both
+        figures came from a sweep whose fixture set listed a row as "Sandown, 1 chapter" that was
+        actually Sandown chapter **3** — a recording with ONE valid lap, where the ideal is that
+        lap and the quantity this docstring bounds cannot vary at all. The real chapter 1 (23 valid
+        laps) was never swept, and it is where the −0.159 s floor lives. The bound was wrong by 3×
+        on the floor and up to 9× on the rate, and it was wrong for a reason no re-reading of the
+        code could catch: **the property was measured on a fixture that cannot express it.** A
+        degenerate fixture does not fail a sweep, it passes one.
 
         `x_mode` matches `delta()`: 'distance' → x = s × active-baseline total (the SAME shared
         axis the best-lap Δ draws on, so the curves overlay); 'time' → x = this lap's own elapsed

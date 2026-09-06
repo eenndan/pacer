@@ -189,6 +189,16 @@ IDEAL_IS_ONE_LAP_TIP = (
     "Unavailable here: one lap was quickest through every corner and every straight, so your "
     "ideal lap IS that lap — there is nothing stitched to overlay. It returns as soon as a "
     "different lap is quickest somewhere.")
+# ...and the FOURTH dead end, which the three above did not cover: a session with laps to plot and
+# no ideal AT ALL. `_draw_ideal` early-returns on `ideal_delta_to_best() is None` — no corner
+# partition, or no baseline curve to express one against — while none of `plotted`,
+# `_delta_ideal_mode` or `_ideal_is_one_lap` is true, so the toggle stayed live and latched amber
+# over a chart it could not change. That is §A47's shape ("the charts panel promised series it
+# could not draw", fixed by #156) surviving in one more state, and it is the same fact the hero's
+# `vs ideal` chip and the Stats IDEAL LAP block already withhold on.
+NO_IDEAL_TIP = (
+    "Unavailable here: pacer found no corners on this recording, so there is no corner/straight "
+    "partition to stitch an ideal lap from and nothing to overlay.")
 # L6-07: the empty state names the cause AND the way out. It used to say so in this file's OWN
 # words ("No lap data to plot." + a charts-specific reason), which made it the third of four
 # phrasings of one fact in one frame (QA D2-01/D2-02). The panel it sits in is captioned
@@ -335,6 +345,11 @@ class PlotsView(QWidget):
         # segment, so the "ideal" is that lap and neither the baseline swap nor the overlay has a
         # stitched curve to show (see IDEAL_IS_ONE_LAP_TIP). Refreshed on every plotted refresh().
         self._ideal_is_one_lap = False
+        # ...and True while there is no ideal to overlay AT ALL — `ideal_delta_to_best` is the
+        # exact thing `_draw_ideal` needs, so this asks it rather than re-deriving the condition
+        # from a second accessor that could drift from it (see NO_IDEAL_TIP). Refreshed on every
+        # plotted refresh(), never on the ~30 Hz tick.
+        self._ideal_missing = False
         # P7: True while the Δ chart is referenced to the ideal lap instead of the best lap
         # (decided per refresh() — never on the ~30 Hz tick). Drives the y-label + legend wording.
         self._delta_ideal_mode = False
@@ -473,19 +488,26 @@ class PlotsView(QWidget):
         when the best lap is drawn alone the lower chart is ALREADY referenced to the ideal, so
         `_draw_ideal` early-returns and the click changed 0 of 441 077 pixels while the button lit
         amber. And a THIRD: a session whose ideal has a single donor has no stitched curve to draw
-        at all, so the overlay would be a flat zero line on top of the baseline. All three go grey
-        and say why in their own tooltip."""
+        at all, so the overlay would be a flat zero line on top of the baseline. The FOURTH is a
+        session with laps and no ideal at all (NO_IDEAL_TIP) — the state the first three left live.
+        All four go grey and say why in their own tooltip.
+
+        The four are ordered most-specific-cause first, so a session that is BOTH (say) empty and
+        ideal-less names the reason the user can act on."""
         self._set_control_enabled(self.x_mode_combo, plotted, NO_DATA_TIP)
         self._set_control_enabled(self.brake_throttle_btn, plotted, NO_DATA_TIP)
         if not plotted:
             reason = NO_DATA_TIP
         elif self._delta_ideal_mode:
             reason = IDEAL_IS_BASELINE_TIP
-        else:
+        elif self._ideal_is_one_lap:
             reason = IDEAL_IS_ONE_LAP_TIP
+        else:
+            reason = NO_IDEAL_TIP
         self._set_control_enabled(
             self.ideal_btn,
-            plotted and not self._delta_ideal_mode and not self._ideal_is_one_lap, reason)
+            plotted and not self._delta_ideal_mode and not self._ideal_is_one_lap
+            and not self._ideal_missing, reason)
 
     # ----------------------------------------------------------- cursor scrub
     def is_dragging(self) -> bool:
@@ -905,6 +927,10 @@ class PlotsView(QWidget):
         # Decided ONCE per plotted refresh, before anything reads it: both the baseline swap and
         # the overlay refuse a single-donor ideal, and the toggle's reason has to agree with them.
         self._ideal_is_one_lap = self.session.ideal_donor_lap_id() is not None
+        # The same decision for the fourth dead end. One 400-point interp per plotted refresh —
+        # the same order of cost as the `delta_to_ideal` call _delta_series already makes here, and
+        # refresh() runs on a selection / axis change, not on the tick.
+        self._ideal_missing = self.session.ideal_delta_to_best(x_mode=x_mode) is None
         best, speed, delta = result
         # P7: pick the lower chart's baseline for THIS selection (Δ-to-best, or Δ-to-ideal when the
         # best lap is alone and its Δ to itself would be a flat zero line). Refresh-time only — the

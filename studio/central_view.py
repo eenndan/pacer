@@ -116,6 +116,71 @@ _BEST_LAP_BEST_NOTE = (
     "\nThis IS your best lap, so it is the reference this Δ is measured against: it reads exactly "
     "zero for the whole lap. Pick another lap for a number that moves.")
 
+# The `vs ideal` chip's own tooltip, held as a constant so the states that take the chip away can
+# APPEND their reason to it and restore it verbatim afterwards — the same contract
+# plots_view._set_control_enabled has with the three chart controls.
+_IDEAL_CHIP_TIP = (
+    "Hero readout reference: ON = Δ to your THEORETICAL IDEAL — your quickest time through each "
+    "corner and each straight, stitched together into one synthetic lap (not a single lap you "
+    "have driven); OFF = Δ to your best single lap. The other number is always in the readout's "
+    "tooltip.")
+
+# THE SIXTH SURFACE. #211 gave the Δ chart, the `Ideal lap` toggle, the Stats IDEAL LAP block, the
+# laps.csv trailer, the share card and the Library cell ONE gate — `ideal_donor_lap_id() is not
+# None`, i.e. one lap was quickest through every corner and every straight, so the "ideal" IS that
+# lap — and left the hero, the largest text in the app, ungated. Measured on the owner's real
+# one-valid-lap recording (Sandown chapter 3, where ideal == best == 23.231227933627977 exactly):
+# the hero printed `Δideal +0.00 s` for 2 324 of 2 324 samples of the lap, above a panel header
+# reading `SPEED · Δ TO BEST`, a greyed-out `Ideal lap` toggle and a Stats page with no IDEAL LAP
+# section — while the chip beside it went on describing a lap "stitched together … (not a single
+# lap you have driven)", which is the opposite of the truth there. `+0.00` against the ideal is
+# the app saying "you are level with your ideal lap": the exact sentence the share card was
+# rewritten to stop printing. #211 argued the hero "already explains why on hover"; measured, it
+# does not — `_BEST_LAP_BEST_NOTE` is appended only in the UNCHECKED branch and it explains
+# Δ-to-BEST being zero, not Δideal.
+#
+# ...and a fourth state nobody enumerated: no corner partition at all, so there is no composite to
+# reference. The hero degraded to `Δideal —` on its own there (honest, but empty) while the chip
+# still offered a reference that does not exist. Both states now hand the hero to Δ-to-best, which
+# is a number that moves, and say why on the chip and in the hover.
+_IDEAL_ONE_LAP_REASON = (
+    "Unavailable on this recording: one lap was quickest through every corner and every straight, "
+    "so your ideal lap IS that lap and a Δ against it would read zero the whole way round. The "
+    "readout is measured against your best lap instead. It comes back as soon as a different lap "
+    "is quickest somewhere.")
+_IDEAL_NONE_REASON = (
+    "Unavailable on this recording: pacer found no corners here, so there is no corner/straight "
+    "partition to stitch an ideal lap from. The readout is measured against your best lap "
+    "instead.")
+# The same two facts as the hero's own hover — where the alternative would be printing
+# `Δideal +0.00 s` in a tooltip, which is the claim the chip was gated for making, one level down.
+_IDEAL_HOVER_REASONS = {
+    "one_lap": ("No Δ to an ideal lap here: one lap was quickest through every corner and every "
+                "straight, so your ideal lap IS that lap."),
+    "none": ("No Δ to an ideal lap here: pacer found no corners on this recording, so there is "
+             "nothing to stitch one from."),
+}
+
+# THE DISPLAY CLAMP, SAID OUT LOUD ON SCREEN. `theme.format_ideal_run` floors the printed Δideal
+# at 0 and the reasoning is written down beside its sweep table — over a segment, and over the
+# lap, you cannot be ahead of the ideal, so a two-way ramp would flash the "ahead" hue on the
+# app's largest text for a tenth of a second to report something that is not true at any
+# granularity the ideal is defined on. But the clamp was stated ONLY in that source comment, and
+# the Δ chart 130 px below draws the same quantity UNCLAMPED (deliberately — there a sub-zero
+# excursion has a track position to belong to). On the DEFAULT screen those two surfaces visibly
+# disagree: with the best lap selected the chart is baselined to the ideal, and on SD_30_08 the
+# best lap's raw value is negative on 297 of 1 308 frames, drawing the curve 8.9 px below its own
+# y = 0 line (-0.0195 s in a [-0.037, +0.235] view over a 124.7 px box) while the hero above it
+# prints `+0.00`. One clause on the hover closes that, and it appears exactly when the clamp is
+# doing visible work: |raw| > theme.DELTA_EVEN_EPS_S, the same dead band every other Δ surface
+# snaps to zero, so it stays silent on the float noise that makes 40.7 % of a one-donor
+# recording's samples "negative" at -0.0004 s.
+_IDEAL_CLAMPED_NOTE = (
+    "\nRight here you are {raw:.2f} s up on the lap that donated this segment — not up on the "
+    "ideal, which you cannot be over a whole segment. The readout floors at +0.00; the Δ chart "
+    "draws the raw value, which is why its curve can dip below its own zero line while this "
+    "reads zero.")
+
 
 class UndoOutcome(NamedTuple):
     """What an Edit ▸ Undo actually restored: whether the START/FINISH line moved, and how the
@@ -468,12 +533,16 @@ class CentralView(QWidget):
         # [role="Chip"] rule in theme.py.
         self.ideal_readout_btn = ToggleButton("vs ideal", checked=True)
         self.ideal_readout_btn.setProperty("role", "Chip")
-        self.ideal_readout_btn.setToolTip(
-            "Hero readout reference: ON = Δ to your THEORETICAL IDEAL — your quickest time through "
-            "each corner and each straight, stitched together into one synthetic lap (not a single "
-            "lap you have driven); OFF = Δ to your best single lap. The other number is always in "
-            "the readout's tooltip.")
+        self.ideal_readout_btn.setToolTip(_IDEAL_CHIP_TIP)
         self.ideal_readout_btn.toggled.connect(self._on_ideal_readout_toggled)
+        # Which of the three ideal states this session is in — "stitched" (the normal case),
+        # "one_lap" or "none". Decided ONCE per rebuild in _sync_ideal_readout, because
+        # _update_diff_box reads it at ~30 Hz and must not re-ask the session. Seeded here so the
+        # readout is safe before the first rebuild (and on the __new__ unit-test path).
+        self._ideal_state = "stitched"
+        # The user's own choice of reference, remembered across a state that takes the chip away
+        # (the same "restore exactly what it said before" contract _set_control_enabled has).
+        self._ideal_readout_wanted = True
 
         # Which chapter the video is in — a CHIP in the panel's identity row, shown only for a
         # multi-chapter session. It was a full-width banner strip ABOVE the video: a fifth band in
@@ -1471,12 +1540,57 @@ class CentralView(QWidget):
         if self.plots.is_dragging():
             self.plots.set_playhead_time(t, force=True)
 
-    def _on_ideal_readout_toggled(self, _on: bool):
+    def _on_ideal_readout_toggled(self, on: bool):
         """Flip the hero readout between leading with Δ-to-ideal (checked) and Δ-to-best (unchecked),
         then re-render it for the current moment so the swap is immediate (not deferred to the next
-        tick)."""
+        tick). A USER flip is also remembered, so a state that takes the chip away and gives it back
+        restores the reference they chose rather than the default (_sync_ideal_readout blocks this
+        signal for its own programmatic flips, which is what keeps the two apart)."""
+        self._ideal_readout_wanted = bool(on)
         self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
                               self._last_diff_lap)
+
+    def _sync_ideal_readout(self):
+        """The ONE owner of the `vs ideal` chip's enabled/checked state, and of the hero's
+        knowledge of which ideal state this session is in — the gate #211 applied to five surfaces
+        and not to this one (see _IDEAL_ONE_LAP_REASON above).
+
+        Called from rebuild_derived_views, so it tracks a re-segmentation / reference load exactly
+        as _sync_chart_controls does for the three chart controls, and reads its two session facts
+        ONCE per rebuild rather than on the ~30 Hz tick. `ideal_segment_bests` is memoized on the
+        corner service, so both reads are O(1) after the first.
+
+        getattr-guarded on both accessors: CentralView is built over duck-typed sessions in the
+        view tests, and a session that cannot answer "is there an ideal" has no ideal."""
+        donor = getattr(self.session, "ideal_donor_lap_id", lambda: None)()
+        total = getattr(self.session, "ideal_total", lambda: None)()
+        self._ideal_state = ("none" if total is None else
+                            "one_lap" if donor is not None else "stitched")
+        ok = self._ideal_state == "stitched"
+        btn = self.ideal_readout_btn
+        # APPENDED, never replaced: the chip's own tooltip is the only thing naming what it is.
+        reason = _IDEAL_ONE_LAP_REASON if self._ideal_state == "one_lap" else _IDEAL_NONE_REASON
+        btn.setToolTip(_IDEAL_CHIP_TIP if ok else f"{_IDEAL_CHIP_TIP}\n\n{reason}")
+        btn.setEnabled(ok)
+        # Programmatic, so it must not be mistaken for the user's own choice (see the handler).
+        want = self._ideal_readout_wanted and ok
+        if btn.isChecked() != want:
+            blocked = btn.blockSignals(True)
+            btn.setChecked(want)
+            btn.blockSignals(blocked)
+        # Re-render for the current moment once the playback state exists (it does not yet on the
+        # first rebuild, which runs inside __init__ before the poster seek).
+        if getattr(self, "_playback", None) is not None:
+            self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
+                                  self._last_diff_lap)
+
+    def _ideal_clamp_note(self, d_ideal: float | None) -> str:
+        """The one clause that says the printed Δideal is FLOORED, shown exactly when the floor is
+        doing visible work (see _IDEAL_CLAMPED_NOTE). Empty otherwise — a note on every frame would
+        be noise about a number that is usually positive."""
+        if d_ideal is None or d_ideal >= -theme.DELTA_EVEN_EPS_S:
+            return ""
+        return _IDEAL_CLAMPED_NOTE.format(raw=abs(float(d_ideal)))
 
     def _update_diff_box(self, t: float, sp: float | None, lap_id: int | None):
         """Refresh the hero Δ/speed box for the current moment. By default it LEADS with Δ-to-IDEAL
@@ -1487,21 +1601,33 @@ class CentralView(QWidget):
 
         Both deltas are cheap per-tick scalars on the already-resolved lap: delta_at_lap (Δ-to-best)
         and delta_to_ideal_at (Δ-to-ideal, grid-based + memoized envelope), so the ~30 Hz path adds
-        only two O(log n) np.interps."""
+        only two O(log n) np.interps.
+
+        THE LEAD IS GATED ON THERE BEING AN IDEAL TO LEAD WITH, and on the STATE rather than on the
+        chip: the chip is the affordance (disabled + unchecked by _sync_ideal_readout), this is the
+        gate. Keyed on the chip alone, one programmatic setChecked would put `Δideal +0.00 s` back
+        on the app's largest surface on a recording where the ideal is a lap the driver drove."""
         # Stash the moment so a toggle can re-render without a tick (see _on_ideal_readout_toggled).
         self._last_diff_speed, self._last_diff_lap = sp, lap_id
         d_best = self.session.delta_at_lap(lap_id, t) if lap_id is not None else None
         d_ideal = self.session.delta_to_ideal_at(lap_id, t) if lap_id is not None else None
         on_best = lap_id is not None and lap_id == self.session.best_lap_id()
-        if self.ideal_readout_btn.isChecked():
+        stitched = self._ideal_state == "stitched"
+        if stitched and self.ideal_readout_btn.isChecked():
             text, sem_colour = theme.format_ideal_readout(d_ideal, sp, lap_id, self._speed_unit)
-            tip = f"Δ to your best lap here: {theme.format_delta_run(d_best)}"
+            tip = (f"Δ to your best lap here: {theme.format_delta_run(d_best)}"
+                   + self._ideal_clamp_note(d_ideal))
         else:
             text, sem_colour = theme.format_delta_speed(d_best, sp, lap_id, self._speed_unit)
             # theme.format_ideal_run, not a local f-string over format_delta_value: that spelling
             # dropped the unit, so the hovered number read `Δideal +1.05` beside a hero that says
-            # `Δideal +1.05 s`, and it skipped the display clamp the hero applies.
-            tip = f"Δ to your IDEAL achievable lap here: {theme.format_ideal_run(d_ideal)}"
+            # `Δideal +1.05 s`, and it skipped the display clamp the hero applies. And in the two
+            # states with no stitched ideal it is not called at all — it would render
+            # `Δideal +0.00 s`, the claim this whole gate exists to stop, one level down in a
+            # tooltip where nothing else would contradict it.
+            tip = (f"Δ to your IDEAL achievable lap here: {theme.format_ideal_run(d_ideal)}"
+                   + self._ideal_clamp_note(d_ideal)) if stitched else \
+                _IDEAL_HOVER_REASONS[self._ideal_state]
             # ...and the SAME honesty for the other reference, which had none. Δ-to-best on the
             # best lap is not "near" zero, it is zero: this lap IS the reference. See the note.
             if on_best:
@@ -1598,6 +1724,12 @@ class CentralView(QWidget):
         # corner losses shift on a re-segmentation; recomputed per build, never on the 30 Hz tick).
         self.opportunities.refresh()
         self.stats_view.refresh()
+        # The hero's reference chip: which of the three ideal states this session is in can change
+        # under a re-segmentation (a start-line drag re-partitions and re-picks the donors), so it
+        # is decided here with the rest of the session-derived state, beside the Stats IDEAL LAP
+        # block that gates on the same fact. Runs before the selection step below, so the first
+        # _update_diff_box of the new state already knows it.
+        self._sync_ideal_readout()
         # Re-push driving channels explicitly: the selection step below can early-out on an
         # unchanged primary-lap id while the channels did change.
         self._refresh_driving_channels()
