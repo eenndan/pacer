@@ -170,6 +170,115 @@ def test_compare_splitter_equal_and_draggable():
     print(f"test_compare_splitter_equal_and_draggable OK: entry {sizes} -> drag {moved}")
 
 
+def test_sw3_01_no_handle_position_can_empty_a_pane():
+    """SW3-01: a real handle drag must never leave a pane at 0 px.
+
+    `setChildrenCollapsible(False)` does not carry that on its own here. It refuses to collapse a
+    child below its MINIMUM SIZE, and the cells are `QSizePolicy.Ignored` — deliberately, so the
+    native QVideoWidget's aspect hint cannot pin the split — which `qSmartMinSize` reads as "no
+    width opinion" and answers 0. Measured through the real window before the fix: one drag took
+    [253, 254] to [507, 0], and no resize, maximize, restore or repoint brought it back.
+
+    Swept at 1 px over EVERY handle position (and past both ends), not sampled: the failure was a
+    single position, and a one-position test is what let it ship."""
+    view = VideoView(_cmap("PRIMARY"))
+    view.resize(800, 400)
+    view.show()
+    view.set_compare(_spec(0, (0.0, 10.0), "A", [0, 1]),
+                     _spec(1, (20.0, 30.0), "B", [0, 1]))
+    _APP.processEvents()
+    sp = view._splitter
+    floor = min(view._cell_a.floor_width(), view._cell_b.floor_width())
+    assert floor > 0, "a cell with no floor_width has no floor to enforce"
+
+    narrowest, worst_pos = 10 ** 9, None
+    for pos in range(-40, sp.width() + 40):
+        sp.moveSplitter(pos, 1)
+        _APP.processEvents()
+        s = sp.sizes()
+        assert len(s) == 2, s
+        if min(s) < narrowest:
+            narrowest, worst_pos = min(s), pos
+    assert narrowest > 0, (
+        f"a handle position empties a compare pane: sizes hit {narrowest} px at pos {worst_pos}")
+    assert narrowest >= floor, (
+        f"a pane was dragged to {narrowest} px, under the {floor} px at which its identity bar "
+        f"stops naming it (pos {worst_pos})")
+    print(f"test_sw3_01_no_handle_position_can_empty_a_pane OK: narrowest pane over "
+          f"{sp.width() + 80} handle positions = {narrowest} px (floor {floor})")
+
+
+def test_sw3_01_the_floor_costs_the_panel_no_minimum_width():
+    """...and it is a CLAMP, not a `setMinimumWidth` on the cells, because a minimum propagates:
+    pinning the cells at their own hint raised the video panel's minimum width from 312 to 406 and
+    the central widget's from 873 to 967. Entering compare must not make the window less
+    resizable than it was with one video in the panel."""
+    view = VideoView(_cmap("PRIMARY"))
+    view.resize(800, 400)
+    view.show()
+    _APP.processEvents()
+    single = view.minimumSizeHint().width()
+    view.set_compare(_spec(0, (0.0, 10.0), "A", [0, 1]),
+                     _spec(1, (20.0, 30.0), "B", [0, 1]))
+    _APP.processEvents()
+    view._splitter.moveSplitter(0, 1)      # sit on the clamp
+    _APP.processEvents()
+    comparing = view.minimumSizeHint().width()
+    assert comparing <= single, (
+        f"entering compare raised the video panel's minimum width from {single} to {comparing} px")
+    for cell in (view._cell_a, view._cell_b):
+        assert cell.minimumWidth() == 0, (
+            "the pane floor leaked into the cell's minimumWidth, which propagates up the layout")
+    print(f"test_sw3_01_the_floor_costs_the_panel_no_minimum_width OK: "
+          f"minimum {single} px single, {comparing} px comparing")
+
+
+def test_sw3_03_an_even_split_stays_even_across_a_resize():
+    """SW3-03: two panes that are 50/50 stay 50/50 when the stage resizes.
+
+    `_equalize_panes` ran only on ENTRY, so afterwards Qt redistributed the width delta by its own
+    rules: swept at 1 px from 900 to 1500 px of stage width, some widths left the panes 2 px apart
+    rather than the 1 px that is unavoidable arithmetic (two integers cannot sum to an odd number
+    and be equal). Swept, not sampled, for the reason above.
+
+    The second half of the contract matters as much: a DELIBERATE split must survive. Re-imposing
+    50/50 on every resize would throw the user's own drag away, which is worse than the pixel."""
+    view = VideoView(_cmap("PRIMARY"))
+    view.resize(900, 420)
+    view.show()
+    view.set_compare(_spec(0, (0.0, 10.0), "A", [0, 1]),
+                     _spec(1, (20.0, 30.0), "B", [0, 1]))
+    _APP.processEvents()
+    sp = view._splitter
+
+    worst, worst_w = 0, None
+    for w in range(900, 1501):
+        view.resize(w, 420)
+        _APP.processEvents()
+        s = sp.sizes()
+        if len(s) == 2 and abs(s[0] - s[1]) > worst:
+            worst, worst_w = abs(s[0] - s[1]), w
+    assert worst <= 1, (
+        f"an even split drifted to {worst} px apart at stage width {worst_w}; only the odd pixel "
+        f"is arithmetic")
+
+    # ...and a deliberate 30/70 drag survives every later resize.
+    view.resize(1440, 420)
+    _APP.processEvents()
+    total = sum(sp.sizes())
+    sp.setSizes([int(total * 0.3), total - int(total * 0.3)])
+    _APP.processEvents()
+    for w in (1000, 1200, 1500, 1440):
+        view.resize(w, 420)
+        _APP.processEvents()
+        a, b = sp.sizes()
+        ratio = a / max(a + b, 1)
+        assert 0.26 <= ratio <= 0.34, (
+            f"a deliberate 30/70 split was reset to {ratio:.3f} by a resize to {w} px")
+    print(f"test_sw3_03_an_even_split_stays_even_across_a_resize OK: worst drift {worst} px over "
+          f"601 stage widths; a 30/70 drag holds at {ratio:.3f}")
+
+
 # --------------------------------------------------------------- Issue 3 (deferred-seek gate)
 class _GatePlayer:
     """A QMediaPlayer stand-in that records setSource + setPosition and lets a test report a
@@ -949,6 +1058,10 @@ def _run_all():
     test_same_recording_compare_still_uses_primary_source()
     test_panespec_round_trips_onto_each_pane()
     test_compare_splitter_equal_and_draggable()
+    # SW3 (design wave 2): the pane splitter's floor and its even split, both swept at 1 px.
+    test_sw3_01_no_handle_position_can_empty_a_pane()
+    test_sw3_01_the_floor_costs_the_panel_no_minimum_width()
+    test_sw3_03_an_even_split_stays_even_across_a_resize()
     test_deferred_seek_waits_for_the_right_chapter_file()
     test_source_is_chapter_headless_null_player_is_true()
     # D6: slider range reconciles the GPMF metadata total with the real video duration.
