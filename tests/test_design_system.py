@@ -946,6 +946,7 @@ def test_no_table_header_floats_off_its_data():
     stats = view.stats_view
     tables = {"LAPS": view.table.table, "CORNERS": view.corner_table.table,
               "COACHING": coach.table, "LIBRARY": dlg.table,
+              "STATS/IDEAL LAP": stats.ideal_table,
               "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
               "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
               "STATS/PER LAP": stats.lap_table}

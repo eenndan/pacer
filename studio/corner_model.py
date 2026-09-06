@@ -47,6 +47,35 @@ MIN_DONOR_SPAN_FRAC = 0.5
 
 
 @dataclass(frozen=True)
+class SegmentGain:
+    """One row of the ideal lap's DECOMPOSITION — where a subject lap's gap to the composite
+    lives, and whether that gain is a PLAN or a taunt (`SegmentBests.decomposition`).
+
+    `gain` is the seconds the subject gives away in this segment; the gains over all segments
+    sum EXACTLY to `subject lap time − SegmentBests.total`, because a lap's segment times sum
+    exactly to its lap time. `beat` is how many of the composite's laps drove this segment at
+    least as fast as the subject did — the ACHIEVABILITY, and the difference between "you have
+    done this 42 times" and "you did it once".
+
+    `priority` is the order the surface presents: `gain × beat/n`. Both factors are on screen,
+    so the ranking is checkable by eye against the two columns beside it."""
+
+    index: int              # segment index into SegmentBests (0 … 2N)
+    label: str              # "C4" / "C3 → C4" / "S/F → C1" — stats.straights_report's convention
+    gain: float             # s the subject lap gives away here (≥ 0)
+    beat: int               # laps that drove it at least as fast as the subject (includes it)
+    n: int                  # laps admitted on this segment
+    donor: int | None       # 0-based lap id owning the segment best (None on a POINT segment)
+    ring_cid: int | None    # the corner a surface should point at for this row
+
+    @property
+    def priority(self) -> float:
+        """gain × the share of laps that already matched the subject here. See the class note —
+        and `SegmentBests.beat_counts` for why the share is not a fixed-tolerance hit rate."""
+        return self.gain * self.beat / self.n if self.n else 0.0
+
+
+@dataclass(frozen=True)
 class SegmentBests:
     """The IDEAL LAP as a composite of the corner/straight partition — the per-segment minimum
     over the session's clean laps, and everything a caller needs to explain it.
@@ -60,6 +89,9 @@ class SegmentBests:
 
     Fields:
       labels    — 2N+1 segment names in track order, ["start", "C1", "C1-C2", …, "C{N}-finish"].
+                  The MODEL's names; a surface prints `display_label`, which is the app's.
+      cids      — the N corner ids in track order (Corner.cid), so a row can name the corner it
+                  belongs to and point a map ring at it without re-reading the corner list.
       lap_ids   — the laps that contributed a row, in session order (see CornerModel.segment_bests
                   for the set).
       times     — (len(lap_ids), 2N+1) float: each lap's own segment times.
@@ -75,6 +107,7 @@ class SegmentBests:
     """
 
     labels: list[str]
+    cids: list[int]
     lap_ids: list[int]
     times: np.ndarray
     admitted: np.ndarray
@@ -117,15 +150,80 @@ class SegmentBests:
         row = self.times[self.lap_ids.index(lap_id)]
         return [float(row[j] - self.bests[j]) for j in range(len(self.bests))]
 
-    def hit_counts(self, tol: float = 0.1) -> list[tuple[int, int]]:
-        """Per segment, (laps within `tol` of the segment best, laps admitted there) —
-        ACHIEVABILITY. A gain hit once in 65 laps and one hit in 28 are different propositions
-        and only the second is a plan; a caller showing a gain without this is taunting."""
+    def display_label(self, j: int) -> str:
+        """Segment `j`'s name as the app writes it: a corner is "C4", a straight is "C3 → C4"
+        with the timing line spelled "S/F" at both ends ("S/F → C1", "C12 → S/F").
+
+        This is `stats.straights_report`'s convention, deliberately and not by coincidence: the
+        STRAIGHTS table and the ideal-lap decomposition list the SAME pieces of track a few
+        hundred pixels apart, and two spellings of one segment would read as two segments.
+        tests/test_stats_panel_realqt.py pins the two against each other."""
+        if j % 2:
+            return f"C{self.cids[(j - 1) // 2]}"
+        left = f"C{self.cids[j // 2 - 1]}" if j else "S/F"
+        right = f"C{self.cids[j // 2]}" if j // 2 < len(self.cids) else "S/F"
+        return f"{left} → {right}"
+
+    def ring_cid(self, j: int) -> int | None:
+        """The corner segment `j` should point a map ring at: itself if it is a corner, and the
+        corner FEEDING it if it is a straight — including the wrap, where the S/F straight is fed
+        by the last corner (again `stats.straights_report`'s rule, `ring_cid`)."""
+        if not self.cids:
+            return None
+        return self.cids[(j - 1) // 2] if j % 2 else self.cids[j // 2 - 1]
+
+    def beat_counts(self, lap_id: int) -> list[tuple[int, int]] | None:
+        """Per segment, (laps that drove it at least as fast as `lap_id` did, laps admitted
+        there) — ACHIEVABILITY. None when that lap did not contribute a row. Ties count, so the
+        subject always counts itself and the first number is never 0.
+
+        THIS REPLACES `hit_counts(tol)`, WHICH MEASURED SEGMENT LENGTH. That method counted laps
+        within a FIXED 0.1 s of the segment best, over segments whose own duration on these
+        recordings runs 0.16 s to 10.07 s — so the tolerance was 62 % of one segment and 1 % of
+        another, and the "achievability" it reported correlated with segment DURATION at
+        r = −0.95 / −0.82 / −0.80 / −0.95 on the four real recordings. Ranking by
+        gain × that rate put a 0.039 s straight at the top of D24's plan, above a 0.213 s corner.
+        This count is scale-free (r = −0.04 … −0.50 against the same durations) and it is also
+        the question a driver is actually asking: have I been here before, or was that once?
+
+        It is deliberately measured against the SUBJECT lap rather than against the segment best.
+        The gain a row shows is the distance from the subject to the best, and the honest
+        achievability question about that gain is how routinely the subject's own time there is
+        beaten — not how many laps landed inside an arbitrary window around a single minimum."""
+        if lap_id not in self.lap_ids:
+            return None
+        row = self.times[self.lap_ids.index(lap_id)]
         out = []
-        for j, best in enumerate(self.bests):
+        for j in range(len(self.bests)):
             adm = self.admitted[:, j]
-            out.append((int(((self.times[:, j] <= best + tol) & adm).sum()), int(adm.sum())))
+            out.append((int(((self.times[:, j] <= row[j]) & adm).sum()), int(adm.sum())))
         return out
+
+    def decomposition(self, lap_id: int) -> list[SegmentGain] | None:
+        """`lap_id`'s gap to the composite, segment by segment, ranked most-actionable first
+        (`SegmentGain.priority` = gain × beat/n). None when that lap did not contribute a row.
+
+        Every segment appears, including the 0.00 s ones — a caller decides what is worth
+        showing and must account for the rest, because the gains SUM to the headline gap and a
+        top-N slice that does not say so is a table contradicting the tile above it.
+
+        One exception, and it is a correctness exception rather than a display one: a segment the
+        subject lap is not ADMITTED on is dropped. `corners.project_boundaries` can collapse a
+        segment to zero width on one lap and push its time into the neighbour, so that lap's
+        `gain` there is measured against a time it never drove (and its neighbour's is inflated
+        by the same amount). The pair still sums correctly — which is why the headline is safe —
+        but neither number is advice. Not observed on any of the owner's recordings; guarded
+        because the admission rule exists precisely because it does happen."""
+        gains = self.gains_vs(lap_id)
+        beats = self.beat_counts(lap_id)
+        if gains is None or beats is None:
+            return None
+        i = self.lap_ids.index(lap_id)
+        rows = [SegmentGain(index=j, label=self.display_label(j), gain=gains[j],
+                            beat=beats[j][0], n=beats[j][1], donor=self.donors[j],
+                            ring_cid=self.ring_cid(j))
+                for j in range(len(self.bests)) if self.admitted[i, j]]
+        return sorted(rows, key=lambda r: -r.priority)
 
 
 class CornerModel:
@@ -402,7 +500,8 @@ class CornerModel:
             for j in range(times.shape[1])
         ]
         self._segment_bests_cache = SegmentBests(
-            labels=labels, lap_ids=lap_ids, times=times, admitted=admitted, bests=bests,
+            labels=labels, cids=[int(c.cid) for c in corner_list], lap_ids=lap_ids,
+            times=times, admitted=admitted, bests=bests,
             donors=donors,
             s_edges=[e / total_ref for e in ref_edges] if total_ref > 0 else ref_edges,
             donor_span=[(0.0, 0.0) if donors[j] is None else
