@@ -7,7 +7,8 @@ sample as its neighbour on SOME laps and one sample away on others. While the co
 was made per lap, those laps returned a DIFFERENT number of boundaries — so an S column stopped
 meaning the same stretch of track from row to row, `session_best_splits()` took a per-column min
 across incomparable pieces (on the 21-lap D24 fixture: a 0.199 s sliver as the S2 session best)
-and `theoretical_best()` summed them.
+and the purple row summed them. (That sum used to BE `theoretical_best()`; the ideal lap is the
+corner-partition composite now, so the sum is asserted directly below.)
 
 `make_partial_session` distils that to two laps: the SAME two lines are 0 m apart on the coarse
 lap's odometer and 2 m apart on the fine lap's. Every test below asserts on the SESSION-wide
@@ -120,11 +121,15 @@ def test_collapsed_line_is_reported_and_gives_one_effective_count():
     print("test_collapsed_line_is_reported_and_gives_one_effective_count OK")
 
 
-def test_session_bests_carry_no_sliver_and_theoretical_stays_achievable():
+def test_session_bests_carry_no_sliver_and_their_sum_stays_achievable():
     """`session_best_splits()` must not take a sub-second sliver from a mis-projected lap as a
-    sector best, and `theoretical_best()` — the SUM of those cells — must stay <= the fastest
-    real lap. Summing incomparable pieces broke both (a 0.331 s S2 best and a 61.359 s
-    'theoretical' best on this fixture, above the 60.000 s fastest lap)."""
+    sector best, and their SUM must stay <= the fastest real lap. Summing incomparable pieces
+    broke both (a 0.331 s S2 best and a 61.359 s 'theoretical' best on this fixture, above the
+    60.000 s fastest lap).
+
+    That sum is no longer `theoretical_best()` — the ideal lap is the corner-partition composite
+    now — but it is still what the lap table's purple row shows, so the sliver guard still has to
+    hold. Asserted on the sum directly."""
     fastest = min(TIME_A, TIME_B)
     for gap in SWEEP_M:
         s = make_partial_session(FIRST_LINE_X + gap)
@@ -132,15 +137,13 @@ def test_session_bests_carry_no_sliver_and_theoretical_stays_achievable():
         assert bests and all(b is not None for b in bests), (gap, bests)
         # Every column is filled by every lap, so the bests span the whole lap exactly once.
         assert len(bests) == s.effective_sector_count() + 1, (gap, bests)
-        theo = s.theoretical_best()
-        assert theo is not None, gap
-        assert abs(theo - float(sum(bests))) < 1e-9, (gap, theo, bests)
+        theo = float(sum(bests))
         assert theo <= fastest + 1e-9, (gap, theo, fastest)
         # At the offsets that used to go mixed the collapsed line contributes no column at all,
         # so no cell can be the fragment between two lines one lap fused (0.331 s on main).
         if gap in MIXED_BEFORE_M:
             assert min(bests) > 10.0, (gap, bests)
-    print("test_session_bests_carry_no_sliver_and_theoretical_stays_achievable OK")
+    print("test_session_bests_carry_no_sliver_and_their_sum_stays_achievable OK")
 
 
 def test_well_separated_lines_are_untouched():

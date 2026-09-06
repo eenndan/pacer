@@ -15,6 +15,7 @@ stub at the call site — only what a test genuinely needs is faked.
 """
 import numpy as np
 
+from studio import corners
 from studio.session import Session
 
 
@@ -71,6 +72,24 @@ def reset_corner_caches(session, *, basis=_MISSING):
     cm.invalidate()
     if basis is not _MISSING:
         cm._basis_cache = basis  # seeded basis (or None); the per-lap stats stay real-projected
+
+
+def seed_corner_basis(session, spans=((200.0, 300.0), (600.0, 750.0)), total=1000.0):
+    """Give a synthetic session a CORNER PARTITION: seed `reset_corner_caches`'s basis with a
+    hand-built corner list on the reference odometer.
+
+    `seed_cols` lays every lap out as a straight line along +x (ys = 0), so real curvature
+    detection finds nothing — which means the whole ideal-lap family (Session.ideal_total /
+    ideal_lap_elapsed / delta_to_ideal / theoretical_best, all of which are the corner/straight
+    partition composite) returns None on an unseeded synthetic session. Everything downstream of
+    the basis is still REAL: the per-lap projection, the drift gate, and the
+    `corners.segment_times` sum assertion all run against it.
+
+    `spans` is [(enter, exit), …] in reference-odometer metres, giving a 2N+1 partition."""
+    return reset_corner_caches(session, basis=(
+        [corners.Corner(cid=i + 1, enter=float(lo), exit=float(hi), apex=(lo + hi) / 2.0,
+                        direction=1 if i % 2 == 0 else -1, turn_deg=90.0)
+         for i, (lo, hi) in enumerate(spans)], float(total)))
 
 
 def reset_driving_caches(session):

@@ -1,10 +1,11 @@
 """CornerModel — the per-segmentation corner analysis extracted from Session: the detected
 corner list + reference total, the per-lap projected corner stats (incl. the cross-recording
-reference's under reference_id), and the per-corner session-best times. All derive from the
-current segmentation, so Session composes this service + delegates.
+reference's under reference_id), the per-corner session-best times, and the IDEAL-LAP segment
+composite (`segment_bests`). All derive from the current segmentation, so Session composes this
+service + delegates.
 
 PACER-FREE (numpy on Session's cached per-lap primitives). `invalidate()` (from
-set_timing_lines) drops all three caches on re-segment; `invalidate_stats()` drops only the
+set_timing_lines) drops every cache on re-segment; `invalidate_stats()` drops only the
 per-lap stats when a cross-recording reference changes (the detection windows are unchanged).
 
 DEPENDENCY INJECTION (like studio/render_cache.py): the constructor takes Session-bound
@@ -15,6 +16,7 @@ Session — Session owns the pacer side + wires its privates into the callables.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -23,6 +25,107 @@ from . import corners
 # "not yet computed" sentinel (None is a legal cached value); module-local to avoid importing
 # Session.
 _UNSET = object()
+
+# ------------------------------------------------------- ideal-lap donor admission (D1)
+# A partition edge pair closer together than this ON THE REFERENCE ODOMETER is a POINT, not a
+# segment. Two cases produce one: the first corner can begin on the start line (and the last can
+# end on it), and the detector can leave a sub-metre sliver between two corners it did not merge.
+# A point carries ~0 s on every lap, so every lap "wins" it with 0 and it contributes nothing to
+# the composite either way — it must NOT be mistaken for a lap that collapsed (below).
+POINT_SPAN_M = 0.5
+# A lap may donate a segment only if it actually DROVE it. `corners.project_boundaries` clamps a
+# crossed spatial match onto its neighbour (np.maximum.accumulate), which can collapse a real
+# segment to ZERO width on ONE lap while it is full width on all the others. That lap's time for
+# the segment went to the NEIGHBOURING segment, so a naive min would bank a free 0 that nobody
+# drove — measured at 0.111 s of a claimed 1.252 s on the Sandown recording.
+#
+# Threshold evidence (four real recordings, 2,929 (lap, segment) cells): every cell that is not a
+# hard collapse carries ≥ 0.93 of the segment's reference span, and every collapsed one carries
+# ≤ 0.0001. Any threshold in (0.01, 0.9) selects exactly the same cells; 0.5 sits in the middle of
+# a gap four orders of magnitude wide, so this is a separator, not a tuned knob.
+MIN_DONOR_SPAN_FRAC = 0.5
+
+
+@dataclass(frozen=True)
+class SegmentBests:
+    """The IDEAL LAP as a composite of the corner/straight partition — the per-segment minimum
+    over the session's clean laps, and everything a caller needs to explain it.
+
+    WHY a partition and not a distance envelope: `corners.segment_times` asserts that a lap's
+    2N+1 segment times SUM EXACTLY to its lap time, so summing one lap's best C3 with another's
+    best back straight double-counts nothing and drops nothing — the pieces tile the lap. A
+    pointwise minimum of cumulative-elapsed curves (what this replaced) cannot make that claim:
+    every lap's cumulative elapsed ends at its own lap time, so the min at the finish line is
+    just the BEST LAP TIME and the "ideal" is a structural duplicate of it.
+
+    Fields:
+      labels    — 2N+1 segment names in track order, ["start", "C1", "C1-C2", …, "C{N}-finish"].
+      lap_ids   — the laps that contributed a row, in session order (see CornerModel.segment_bests
+                  for the set).
+      times     — (len(lap_ids), 2N+1) float: each lap's own segment times.
+      admitted  — (len(lap_ids), 2N+1) bool: which cells may donate (see MIN_DONOR_SPAN_FRAC).
+      bests     — 2N+1 minima over the admitted cells.
+      donors    — 2N+1 lap ids, the argmin per segment; None for a POINT segment (best == 0),
+                  where every lap ties at 0 and naming a winner would be arbitrary.
+      s_edges   — 2N+2 normalized distances [0…1] of the partition edges on the REFERENCE
+                  odometer — the x positions the cumulative ideal is defined at.
+      donor_span— 2N+1 (enter, exit) odometer metres of each segment ON ITS DONOR'S own lap, so
+                  the ideal curve can follow the donor's real pace through the segment instead of
+                  a straight line (CornerModel.ideal_elapsed).
+    """
+
+    labels: list[str]
+    lap_ids: list[int]
+    times: np.ndarray
+    admitted: np.ndarray
+    bests: list[float]
+    donors: list[int | None]
+    s_edges: list[float]
+    donor_span: list[tuple[float, float]]
+
+    @property
+    def total(self) -> float:
+        """The ideal lap time (s) — the sum of the per-segment minima. ≤ every donor lap's time,
+        because each donor's own segments sum exactly to its lap time and a sum of minima can
+        never exceed the minimum of those sums."""
+        return float(sum(self.bests))
+
+    def cumulative(self) -> np.ndarray:
+        """The ideal's elapsed time at each partition edge (2N+2 values, 0 … total) — the ideal
+        LAP CURVE's y, sampled at `s_edges`. Non-decreasing by construction (every segment time
+        is ≥ 0), which is why the old envelope's `np.maximum.accumulate` repair is gone."""
+        return np.concatenate(([0.0], np.cumsum(np.asarray(self.bests, float))))
+
+    def donor_ids(self) -> list[int]:
+        """The distinct laps the composite actually draws on, sorted. A correct ideal draws on
+        more than one; exactly one means the ideal IS that lap (see `single_donor_id`)."""
+        return sorted({d for d in self.donors if d is not None})
+
+    def single_donor_id(self) -> int | None:
+        """The lap id when ONE lap wins every non-point segment — the ideal is then that lap, not
+        a synthetic one, and a surface must say so rather than print a duplicate of it. None when
+        the composite is genuinely stitched (the normal case) or draws on no segment at all."""
+        ids = self.donor_ids()
+        return ids[0] if len(ids) == 1 else None
+
+    def gains_vs(self, lap_id: int) -> list[float] | None:
+        """Per segment, how much time `lap_id` leaves on the table there (its own time minus the
+        segment best, ≥ 0). None when that lap did not contribute a row. This is the ideal's
+        DECOMPOSITION — where the gap lives, not just how big it is."""
+        if lap_id not in self.lap_ids:
+            return None
+        row = self.times[self.lap_ids.index(lap_id)]
+        return [float(row[j] - self.bests[j]) for j in range(len(self.bests))]
+
+    def hit_counts(self, tol: float = 0.1) -> list[tuple[int, int]]:
+        """Per segment, (laps within `tol` of the segment best, laps admitted there) —
+        ACHIEVABILITY. A gain hit once in 65 laps and one hit in 28 are different propositions
+        and only the second is a plan; a caller showing a gain without this is taunting."""
+        out = []
+        for j, best in enumerate(self.bests):
+            adm = self.admitted[:, j]
+            out.append((int(((self.times[:, j] <= best + tol) & adm).sum()), int(adm.sum())))
+        return out
 
 
 class CornerModel:
@@ -55,14 +158,16 @@ class CornerModel:
         self._basis_cache: object = _UNSET  # (corners, total_ref) or None
         self._stats_cache: dict[int, list[corners.CornerStat]] = {}  # per-lap stats + the reference's own under reference_id
         self._bests_cache: object = _UNSET  # per-corner session-best time
+        self._segment_bests_cache: object = _UNSET  # the ideal-lap segment composite
 
     def invalidate(self) -> None:
         """Drop EVERY corner cache — called from Session.set_timing_lines (the single
         re-segmentation point): the corner set is detected on + projected through the
-        segmentation, so all three are stale after a timing-line change."""
+        segmentation, so all of them are stale after a timing-line change."""
         self._basis_cache = _UNSET
         self._stats_cache.clear()
         self._bests_cache = _UNSET
+        self._segment_bests_cache = _UNSET
 
     def invalidate_stats(self) -> None:
         """Drop ONLY the per-lap stats (not the corner detection) — called from
@@ -200,6 +305,155 @@ class CornerModel:
             min(st[i].time for st in per_lap) for i in range(n)
         ] if per_lap and n else []
         return self._bests_cache
+
+    # ------------------------------------------------------------------ ideal lap (D1)
+    def _composite_lap_ids(self) -> list[int]:
+        """The laps the ideal composite may draw on: `Session.consistency_lap_ids()` — VALID and
+        DROPOUT-FREE, the same set every consistency statistic runs on. A dropout lap's distance
+        is speed-integral reconstructed, so its segment boundaries (and therefore its segment
+        TIMES) are exactly the ones that must not be allowed to win a segment.
+
+        The BEST lap is appended when the dropout rule excluded it — the same guarantee
+        `basis()` makes for the detection profile. It is what keeps `total <= best lap time`
+        true in the degenerate session where every valid lap is dropout-flagged and
+        `best_candidate_ids` fell back to the flagged set."""
+        ids = [i for i in self._valid_lap_ids() if not self._lap_has_dropout(i)]
+        best = self._best_lap_id()
+        if best is not None and best not in ids:
+            ids.append(best)
+        return ids
+
+    def segment_bests(self) -> SegmentBests | None:
+        """The IDEAL LAP: the per-segment minimum of the corner/straight partition over the
+        clean laps (`_composite_lap_ids`), with its donors, its per-lap matrix and the partition
+        edges. None when there is no corner partition to composite on — no basis, or no corner
+        detected, in which case the "partition" is the whole lap and its minimum is just the best
+        lap time. That degenerate value is NOT returned dressed as an ideal: callers hide it,
+        following the precedent at stats_panel/export_data.
+
+        Each lap's times come from `corners.segment_times`, which asserts they sum exactly to
+        that lap's time — the guarantee that makes a cross-lap composite legitimate. A lap is
+        refused a segment whose projected span collapsed on it (MIN_DONOR_SPAN_FRAC).
+
+        Cached; cleared on re-segment (`invalidate`)."""
+        if self._segment_bests_cache is not _UNSET:
+            return self._segment_bests_cache
+        self._segment_bests_cache = None
+        basis = self.basis()
+        if basis is None or not basis[0]:
+            return None
+        corner_list, total_ref = basis
+
+        # Partition edges on the REFERENCE odometer: start, each corner's enter/exit, finish.
+        # This is the shared frame every lap's own edges are projected FROM, so it is where the
+        # composite curve's x lives. (Each lap's own edges are `corners.project_boundaries` of
+        # these onto its odometer — computed per lap inside segment_times.)
+        ref_edges = [0.0]
+        for c in corner_list:
+            ref_edges.extend((float(c.enter), float(c.exit)))
+        ref_edges.append(float(total_ref))
+        ref_span = np.diff(np.asarray(ref_edges, float))
+        # A POINT segment (corner starts on the line, or two corners nearly touch) carries ~0 s on
+        # every lap; nobody can collapse it further, so every lap is admitted there.
+        is_point = ref_span <= POINT_SPAN_M
+        floor = np.where(is_point, -1.0, MIN_DONOR_SPAN_FRAC * ref_span)
+
+        labels = ["start"]
+        for i, c in enumerate(corner_list):
+            labels.append(c.label)
+            nxt = corner_list[i + 1].label if i + 1 < len(corner_list) else "finish"
+            labels.append(f"{c.label}-{nxt}")
+
+        ref_trace = self._best_trace()
+        rows, spans, edges, lap_ids = [], [], [], []
+        for lid in self._composite_lap_ids():
+            dist, _speed_kmh, elapsed = self._lap_arrays(lid)
+            if len(dist) < 2 or float(dist[-1]) <= 0:
+                continue
+            traces = self._lap_traces(lid, ref_trace)
+            total_lap = float(dist[-1])
+            rows.append(corners.segment_times(corner_list, total_ref, dist, elapsed, traces))
+            # The same edges segment_times interpolates at — the admission test's input, and the
+            # donor's own odometer frame for the ideal curve. project_boundaries is the public
+            # half of corners._window_edges; the two constant endpoints (0, total_lap) are never
+            # projected, so they cannot collapse.
+            interior = corners.project_boundaries(ref_edges[1:-1], total_ref, total_lap,
+                                                  traces=traces)
+            lap_edges = np.concatenate(([0.0], interior, [total_lap]))
+            edges.append(lap_edges)
+            spans.append(np.diff(lap_edges))
+            lap_ids.append(lid)
+        if not rows:
+            return None
+
+        times = np.asarray(rows, float)
+        edges = np.asarray(edges, float)
+        admitted = np.asarray(spans, float) >= floor[None, :]
+        # A segment no lap is admitted on cannot happen while a point segment admits everyone,
+        # but a min over an empty set would be inf — fall back to the whole column rather than
+        # poison the total.
+        for j in range(times.shape[1]):
+            if not admitted[:, j].any():
+                admitted[:, j] = True
+        masked = np.where(admitted, times, np.inf)
+        bests = [float(v) for v in masked.min(axis=0)]
+        donors: list[int | None] = [
+            None if bests[j] <= 0.0 else lap_ids[int(masked[:, j].argmin())]
+            for j in range(times.shape[1])
+        ]
+        self._segment_bests_cache = SegmentBests(
+            labels=labels, lap_ids=lap_ids, times=times, admitted=admitted, bests=bests,
+            donors=donors,
+            s_edges=[e / total_ref for e in ref_edges] if total_ref > 0 else ref_edges,
+            donor_span=[(0.0, 0.0) if donors[j] is None else
+                        (float(edges[lap_ids.index(donors[j]), j]),
+                         float(edges[lap_ids.index(donors[j]), j + 1]))
+                        for j in range(times.shape[1])],
+        )
+        return self._segment_bests_cache
+
+    def ideal_elapsed(self, s_grid) -> np.ndarray | None:
+        """The IDEAL LAP's elapsed-time curve sampled at normalized distances `s_grid` ∈ [0,1] —
+        the y of `Session.ideal_lap_elapsed`. None when there is no composite.
+
+        Inside each segment the curve follows THE DONOR'S OWN PACE, not a straight line: the ideal
+        lap is a real drive (this lap's C3, that lap's back straight), so its shape through a
+        segment is the shape its donor drove. The donor's segment time is already exactly the
+        segment's best, so replaying its profile lands on the right value at both edges with no
+        rescaling — the curve is exact at the edges and honest in between.
+
+        WHY IT MATTERS, measured: drawing each segment as a straight line in (distance, time)
+        instead sent `Session.delta_to_ideal_at` to −0.87 s on 18.4 % of samples on the Sandown
+        recording — a 163 m / 9.9 s corner is nowhere near constant pace, so the line is nowhere
+        near anything anybody drove. Following the donor cuts the worst excursion to −0.052 s and
+        under 1 % of samples, which is then a real "you were up on the ideal through here"."""
+        sb = self.segment_bests()
+        if sb is None:
+            return None
+        s = np.asarray(s_grid, float)
+        s_edges = np.asarray(sb.s_edges, float)
+        cum = sb.cumulative()
+        n_seg = len(sb.bests)
+        # Each grid point belongs to the segment whose [s_edges[j], s_edges[j+1]) contains it.
+        idx = np.clip(np.searchsorted(s_edges, s, side="right") - 1, 0, n_seg - 1)
+        out = cum[idx].copy()
+        for j in range(n_seg):
+            here = idx == j
+            lo_s, hi_s = float(s_edges[j]), float(s_edges[j + 1])
+            donor = sb.donors[j]
+            # A point segment (or a segment nobody donates) contributes its whole time at once:
+            # the curve steps at the edge and there is no interior to shape.
+            if not here.any() or donor is None or hi_s <= lo_s:
+                continue
+            d_lo, d_hi = sb.donor_span[j]
+            if d_hi <= d_lo:
+                continue
+            dist, _speed_kmh, elapsed = self._lap_arrays(donor)
+            frac = (s[here] - lo_s) / (hi_s - lo_s)
+            d_on_donor = d_lo + frac * (d_hi - d_lo)
+            t0 = float(np.interp(d_lo, dist, elapsed))
+            out[here] = cum[j] + (np.interp(d_on_donor, dist, elapsed) - t0)
+        return out
 
     # ------------------------------------------------------------------ map / seek glue
     def corner_map_markers(self) -> list[tuple[str, float, float, int]]:

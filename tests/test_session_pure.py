@@ -19,10 +19,12 @@ Pins five math-dense invariants that had no coverage, each driven on synthetic i
   * `delta()` endpoint: on the 400-point normalized-distance grid the delta curve's LAST
     value equals laptime_lap − laptime_best in BOTH x-modes (test_compare covers
     delta_between — a separate implementation; this pins delta() itself).
-  * theoretical / rolling best (F1-roadmap): `session_best_splits` is the per-column min and
-    `theoretical_best` its EXACT sum (with the documented no-sectors degenerate == best lap
-    time); `best_rolling_lap` finds a known faster straddling window on a two-lap session,
-    excludes windows spanning a GPS-dropout lap, and degrades to the best complete lap.
+  * theoretical / rolling best (F1-roadmap): `session_best_splits` is the per-column min;
+    `best_rolling_lap` finds a known faster straddling window on a two-lap session, excludes
+    windows spanning a GPS-dropout lap, and degrades to the best complete lap.
+  * THE IDEAL LAP (§6b): the corner/straight-partition composite that `theoretical_best` now IS —
+    six properties, each written so the `ideal == best lap time` degeneracy that shipped FAILS
+    them (it satisfied every one of the seven lower-envelope invariants that used to live there).
 Run: python tests/test_session_pure.py
 """
 import math
@@ -34,9 +36,17 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _synthetic import bare_session, odometer, seed_cols, seed_lap  # noqa: E402
+from _synthetic import (  # noqa: E402
+    bare_session,
+    odometer,
+    reset_corner_caches,
+    seed_cols,
+    seed_corner_basis,
+    seed_lap,
+)
 
 import pacer  # noqa: E402
+from studio import corners as corners_mod  # noqa: E402
 from studio._signal import (  # noqa: E402
     LAP_BAND_HI,
     LAP_BAND_LO,
@@ -525,208 +535,537 @@ def test_session_best_splits_is_column_min_of_lap_splits():
     print("test_session_best_splits_is_column_min_of_lap_splits OK")
 
 
-def test_theoretical_best_is_exact_sum_of_best_splits():
-    """`theoretical_best` is the EXACT float sum of `session_best_splits` (the purple cells),
-    and — both laps' splits being real sums to their lap times — it is ≤ the best lap time."""
+def test_sector_splits_no_longer_define_the_theoretical_best():
+    """The sum of the session-best SECTOR splits is still computable and still what the lap
+    table's purple row shows — but it is NO LONGER `theoretical_best`.
+
+    It could not be. Sector lines default to NONE, and with no line a lap is a single sub-sector
+    whose split is its lap time, so the sum was identically the best lap time on every recording
+    anyone owns (pinned below, on the same fixture that used to assert it AS the ideal). It also
+    moved the wrong way when a line was added — on D24, 68.393 s → 68.651 s — because each lap
+    projects the same midpoint onto its own odometer and the pieces tile nothing."""
     s, lap_a, lap_b = make_two_lap_sector_session()
     bests = s.session_best_splits()
-    th = s.theoretical_best()
-    assert th == float(sum(bests)), (th, bests)
+    assert len(bests) == 3 and all(b > 0 for b in bests), bests
+    # Still a real per-column minimum, and still ≤ the best lap time.
     best_laptime = float(min(sum(s.lap_sector_splits(lap_a)), sum(s.lap_sector_splits(lap_b))))
-    assert th <= best_laptime + 1e-12, (th, best_laptime)
-    print("test_theoretical_best_is_exact_sum_of_best_splits OK")
-
-
-def test_theoretical_best_no_sectors_degenerates_to_best_lap():
-    """The documented no-sector-lines choice: one sub-sector per lap (its lap time), so
-    `session_best_splits` is the one-column [best lap time] and theoretical == best lap time."""
-    s, lap_a, lap_b = make_two_lap_sector_session()
+    assert float(sum(bests)) <= best_laptime + 1e-12
+    # With NO sector line the "ideal by sectors" IS the best lap time — the degeneracy that
+    # shipped as the app's largest readout.
     s.laps.sectors = SimpleNamespace(sector_lines=[])
     laptimes = [float(sum(s.lap_sector_splits(lid))) for lid in (lap_a, lap_b)]
-    bests = s.session_best_splits()
-    assert len(bests) == 1 and abs(bests[0] - min(laptimes)) < 1e-9, (bests, laptimes)
-    assert abs(s.theoretical_best() - min(laptimes)) < 1e-9
-    print("test_theoretical_best_no_sectors_degenerates_to_best_lap OK")
+    one_col = s.session_best_splits()
+    assert len(one_col) == 1 and abs(one_col[0] - min(laptimes)) < 1e-9, (one_col, laptimes)
+    # And `theoretical_best` no longer takes that value: this fixture has no corner partition,
+    # so it reports None (hidden) rather than the best lap time dressed as a target.
+    assert s.theoretical_best() is None
+    print("test_sector_splits_no_longer_define_the_theoretical_best OK")
 
 
-# --------------------------------------------- 6b) ideal-lap envelope / Δ-to-ideal (D1)
+# --------------------------------------------- 6b) the IDEAL LAP (corner composite, D1)
+#
+# The ideal lap used to be the pointwise MINIMUM of the laps' cumulative-elapsed curves on a
+# normalized-distance grid. Every lap's elapsed ends at its own lap time and every lap's
+# normalized distance ends at 1, so that minimum at s=1 was — identically, on every recording
+# anyone owns — THE BEST LAP TIME. `theoretical_best` (the sum of the session-best SECTOR splits)
+# degenerated the same way, because sector lines default to none and a lap with no sector line is
+# a single sub-sector whose split is its lap time. Both shipped, and the app's largest scalar
+# readout was a structural zero in the state it is always in on arrival.
+#
+# None of the seven invariants that used to live here could catch that: they all asserted
+# properties of a lower envelope (≤ every lap, non-decreasing, Δ ≥ 0) which `ideal == best` also
+# satisfies. The tests below are written so `ideal == best` FAILS them.
 
-def make_ideal_session():
-    """A bare Session of THREE clean laps with CROSSING pace so the per-distance lower envelope
-    is genuinely synthetic (no single lap is fastest everywhere). All three are seeded into both
-    caches and marked valid + clean, so `consistency_lap_ids` (valid ∧ no-dropout) returns them.
+_IDEAL_CORNERS = ((200.0, 300.0), (600.0, 750.0))
 
-    Lap A is fast early / slow late, lap C is slow early / fast late, lap B is middling. The
-    ideal envelope therefore takes A's early segment and C's late one — strictly below every
-    lap's elapsed at the cross-over region. The 0.1 s sample step is well under gapfill's 0.35 s
-    gap threshold, so `lap_has_dropout` is False for all three."""
-    la, lb, lc = 2, 5, 9
-    ta, da = odometer(120, 0.1, 100.0, 1000.0, lambda u: 2.2 - 1.4 * np.sin(u / 2))      # fast→slow
-    tb, db = odometer(118, 0.1, 300.0, 1000.0)                                            # middling
-    tc, dc = odometer(122, 0.1, 500.0, 1000.0, lambda u: 0.8 + 1.4 * np.sin(u / 2))      # slow→fast
-    s = bare_session({la: (ta, da), lb: (tb, db), lc: (tc, dc)},
-                     best=lb, valid=[la, lb, lc])
-    for lid, (t, d) in ((la, (ta, da)), (lb, (tb, db)), (lc, (tc, dc))):
+
+def make_ideal_session(spans=_IDEAL_CORNERS, sector_lines=()):
+    """THREE clean laps with CROSSING pace over a seeded two-corner partition.
+
+    Lap 0 is slow early / fast late, lap 1 is fast early / slow late, lap 2 is middling and is the
+    seeded best. So lap 1 wins the early segments and lap 0 the late ones: the composite draws on
+    more than one donor and is STRICTLY faster than any single lap — the whole point, and what the
+    old lower envelope could not produce at s=1 no matter how the laps crossed. All three are
+    valid, dropout-free (the 0.1 s sample step is well under gapfill's 0.35 s threshold) and
+    seeded into both caches, so `consistency_lap_ids` returns all three.
+
+    The lap ids are CONSECUTIVE and the lap clocks CONTIGUOUS, so `best_rolling_lap` has real
+    straddling windows to find — lap 0's fast second half joins lap 1's fast first half, making
+    the rolling best strictly faster than the best lap. Without that, "ideal ≤ best rolling"
+    (property 4) is vacuous: the shipped `ideal == best lap time` satisfies it.
+
+    All three laps are 1000 m, so `corners.project_boundaries` stays on its normalized branch and
+    the partition edges are deterministic."""
+    def slow_fast(u):
+        return 0.8 + 1.4 * np.sin(u / 2)
+
+    def fast_slow(u):
+        return 2.2 - 1.4 * np.sin(u / 2)
+
+    t0, d0 = odometer(122, 0.1, 100.0, 1000.0, slow_fast)
+    t1, d1 = odometer(120, 0.1, float(t0[-1]), 1000.0, fast_slow)
+    t2, d2 = odometer(118, 0.1, float(t1[-1]), 1000.0)
+    s = bare_session({0: (t0, d0), 1: (t1, d1), 2: (t2, d2)}, best=2, valid=[0, 1, 2])
+    for lid, (t, d) in ((0, (t0, d0)), (1, (t1, d1)), (2, (t2, d2))):
         seed_cols(s, lid, t, d)
-    s.laps = SimpleNamespace(laps_count=lambda: 10)
-    return s, (la, lb, lc)
+    s.laps = SimpleNamespace(
+        laps_count=lambda: 3,
+        lap_time=lambda i: float(s._dist_cache[i][2][-1]),
+        sectors=SimpleNamespace(sector_lines=list(sector_lines)),
+    )
+    seed_corner_basis(s, spans)
+    return s, (0, 1, 2)
 
 
-def test_ideal_envelope_le_every_clean_lap_at_each_grid_point():
-    """The ideal envelope ≤ every clean lap's elapsed at EVERY one of the 400 grid points — the
-    defining lower-envelope property (the made-monotonic step only raises a momentary dip back to
-    a value still ≤ the running pointwise min, so the bound holds), and it is non-decreasing,
-    starting at 0."""
+def _lap_times(s, ids):
+    return {lid: float(s._lap_arrays(lid)[2][-1]) for lid in ids}
+
+
+# --- property 1: the ideal is a lap you never drove -------------------------------------
+
+def test_ideal_is_strictly_faster_than_the_best_lap():
+    """PROPERTY 1 — the regression test for the defect that shipped. With more than one lap
+    donating a segment, the ideal is STRICTLY faster than the best lap; `ideal == best_lap_time`
+    fails here. It is also strictly faster than EVERY clean lap, and equals the sum of the
+    per-segment minima exactly (one number, no second computation)."""
     s, ids = make_ideal_session()
+    ideal = s.ideal_total()
+    times = _lap_times(s, ids)
+    sb = s.ideal_segment_bests()
+    assert sb is not None and len(sb.donor_ids()) >= 2, "fixture must have >1 donor"
+    assert ideal == float(sum(sb.bests)), (ideal, sb.bests)
+    for lid, laptime in times.items():
+        assert ideal < laptime - 1e-9, (lid, ideal, laptime)
+    # And it is not a rounding-level difference: the crossing-pace fixture leaves real time on
+    # the table, exactly as the real recordings do (0.22 s … 1.64 s there).
+    assert min(times.values()) - ideal > 1e-3, (ideal, times)
+    print("test_ideal_is_strictly_faster_than_the_best_lap OK")
+
+
+# --- property 2: it draws on more than one lap --------------------------------------------
+
+def test_ideal_composite_draws_on_more_than_one_donor():
+    """PROPERTY 2 — the composite is stitched, not copied. More than one distinct lap wins a
+    segment, `single_donor_id()` is therefore None, and every donor is a clean lap. The old
+    envelope had exactly ONE donor at s=1 (the best lap) by construction."""
+    s, ids = make_ideal_session()
+    sb = s.ideal_segment_bests()
+    donors = sb.donor_ids()
+    assert len(donors) > 1, donors
+    assert set(donors) <= set(ids), donors
+    assert sb.single_donor_id() is None
+    assert s.ideal_donor_lap_id() is None
+    # Every non-point segment names a donor, and that donor's own time there IS the segment best.
+    for j, best in enumerate(sb.bests):
+        if best <= 0.0:
+            assert sb.donors[j] is None, j
+            continue
+        row = sb.lap_ids.index(sb.donors[j])
+        assert abs(float(sb.times[row, j]) - best) < 1e-12, (j, sb.donors[j])
+    print("test_ideal_composite_draws_on_more_than_one_donor OK")
+
+
+def test_segment_times_partition_each_lap_exactly():
+    """The guarantee that makes a cross-lap composite legitimate: each lap's 2N+1 segment times
+    SUM EXACTLY to that lap's own time (`corners.segment_times` asserts it; this pins that the
+    composite is built on that guarantee and not on some other decomposition). Summing one lap's
+    best corner with another's best straight therefore double-counts nothing and drops nothing."""
+    s, ids = make_ideal_session()
+    sb = s.ideal_segment_bests()
+    times = _lap_times(s, ids)
+    assert sb.times.shape == (len(ids), 2 * len(_IDEAL_CORNERS) + 1)
+    for row, lid in enumerate(sb.lap_ids):
+        assert abs(float(sb.times[row].sum()) - times[lid]) < 1e-9, lid
+    # The partition edges span the whole lap, in order, on the reference odometer.
+    assert sb.s_edges[0] == 0.0 and abs(sb.s_edges[-1] - 1.0) < 1e-12
+    assert all(b >= a - 1e-12 for a, b in zip(sb.s_edges[:-1], sb.s_edges[1:], strict=True))
+    print("test_segment_times_partition_each_lap_exactly OK")
+
+
+# --- property 3: Δ-to-ideal is its own number ---------------------------------------------
+
+def test_delta_to_ideal_at_flag_is_laptime_minus_ideal_and_not_delta_to_best():
+    """PROPERTY 3 — at the flag Δ-to-ideal == lap_time − ideal_total, and it is NOT the same
+    number as Δ-to-best. On the shipped code the two were identical for every lap, because the
+    ideal WAS the best lap; here they differ by exactly (best_lap_time − ideal) for every lap."""
+    s, ids = make_ideal_session()
+    ideal = s.ideal_total()
+    times = _lap_times(s, ids)
+    best = s.best_lap_id()
+    gap = times[best] - ideal
+    assert gap > 1e-3, gap
+    for lid in ids:
+        for mode in ("distance", "time"):
+            _x, dy = s.delta_to_ideal([lid], mode)[lid]
+            assert abs(float(dy[-1]) - (times[lid] - ideal)) < 1e-9, (lid, mode)
+        # Δ-to-BEST at the flag is lap_time − best_lap_time; the two differ by the ideal's gap.
+        to_best = times[lid] - times[best]
+        to_ideal = float(s.delta_to_ideal([lid], "distance")[lid][1][-1])
+        assert abs((to_ideal - to_best) - gap) < 1e-9, (lid, to_ideal, to_best)
+        assert abs(to_ideal - to_best) > 1e-3, lid
+    # The BEST lap is the case that mattered: its Δ-to-best is 0 by definition, so a Δ-to-ideal
+    # that also read 0 was the app's biggest readout showing a structural null.
+    best_to_ideal = float(s.delta_to_ideal([best], "distance")[best][1][-1])
+    assert best_to_ideal > 1e-3, best_to_ideal
+    print("test_delta_to_ideal_at_flag_is_laptime_minus_ideal_and_not_delta_to_best OK")
+
+
+# --- property 4: it beats the best rolling lap too ----------------------------------------
+
+def test_ideal_le_best_rolling_and_best_lap():
+    """PROPERTY 4 — the ideal is a target, so it must not be SLOWER than a lap the driver has
+    already effectively done. On D24 the shipped theoretical best was 68.771 s against a best
+    rolling of 68.635 s: 0.136 s slower than an already-beaten number."""
+    s, ids = make_ideal_session()
+    ideal, rolling = s.ideal_total(), s.best_rolling_lap()
+    times = _lap_times(s, ids)
+    assert rolling is not None
+    # The constraint has to BITE: the fixture's contiguous, crossing-pace laps give a straddling
+    # window strictly faster than the best lap, so `ideal <= rolling` is not satisfiable by the
+    # shipped `ideal == best lap time`.
+    assert rolling < min(times.values()) - 1e-6, (rolling, times)
+    assert ideal <= rolling + 1e-9, (ideal, rolling)
+    assert ideal <= min(times.values()) + 1e-9, (ideal, times)
+    print("test_ideal_le_best_rolling_and_best_lap OK")
+
+
+# --- property 5: the excluded stay excluded -----------------------------------------------
+
+def test_ideal_excludes_dropout_and_band_excluded_laps():
+    """PROPERTY 5 — only VALID, DROPOUT-FREE laps donate. A lap outside the valid band never
+    appears; a lap with an interior GPS dropout is dropped too, because its distance is
+    speed-integral reconstructed, which is exactly what makes its segment BOUNDARIES (and so its
+    segment times) untrustworthy. Both are checked by making a fast lap ineligible and asserting
+    the ideal does not improve."""
+    ringer = 7  # a lap fast enough to win EVERY segment if it were ever admitted
+
+    def with_ringer(*, valid, dropout):
+        s, ids = make_ideal_session()
+        tr, dr = odometer(120, 0.05, 900.0, 1000.0)   # half the sample step -> half the lap time
+        seed_lap(s, ringer, tr, dr)
+        seed_cols(s, ringer, tr, dr)
+        if valid:
+            s._valid_cache = [*ids, ringer]
+        if dropout:
+            # A >0.35 s interior gap in the ringer's point times is what lap_has_dropout reads.
+            gappy = np.concatenate((tr[:60], tr[60:] + 5.0))
+
+            def _point_times(lid, _g=gappy, _t=tr):
+                return _g if lid == ringer else _t
+
+            s._lap_point_times = _point_times
+        seed_corner_basis(s, _IDEAL_CORNERS)
+        return s, ids
+
+    base_s, _ids = with_ringer(valid=False, dropout=False)
+    base = base_s.ideal_total()
+    base_donors = set(base_s.ideal_segment_bests().donor_ids())
+
+    # NEGATIVE CONTROL — the ringer really is fast enough to change the answer. If it is admitted
+    # (valid, no dropout) it wins every segment and the ideal collapses onto it. Without this the
+    # two assertions below would pass on a ringer nobody would have picked anyway.
+    admitted, _ = with_ringer(valid=True, dropout=False)
+    assert admitted.ideal_total() < base - 1e-3, (admitted.ideal_total(), base)
+    assert admitted.ideal_donor_lap_id() == ringer
+
+    # BAND: not in valid_lap_ids -> never donates, ideal unchanged.
+    banded, _ = with_ringer(valid=False, dropout=False)
+    assert banded.ideal_total() == base, "a lap outside the valid band donated to the ideal"
+
+    # DROPOUT: valid, but its distance is reconstructed -> excluded by the same rule.
+    dropped, _ = with_ringer(valid=True, dropout=True)
+    assert dropped.lap_has_dropout(ringer) is True, "fixture must actually flag the dropout"
+    assert dropped.ideal_total() == base, "a GPS-dropout lap donated to the ideal"
+    assert set(dropped.ideal_segment_bests().donor_ids()) == base_donors
+    print("test_ideal_excludes_dropout_and_band_excluded_laps OK")
+
+
+# --- property 6: more segmentation never makes the target worse ---------------------------
+
+def test_more_segments_never_make_the_ideal_slower():
+    """PROPERTY 6 — adding information must not make the target worse. This FAILED on record:
+    placing one sector line on D24 moved the theoretical best from 68.393 s to 68.651 s, because
+    each lap projected the same midpoint onto its own odometer and the pieces tiled nothing.
+
+    Two halves. (a) SECTOR LINES no longer touch the ideal at all — it is now invariant to them,
+    which is stronger than monotone (verified byte-identical across 0/1/2/3 lines on the three
+    real recordings too). (b) REFINING THE PARTITION — splitting a segment in two — can only
+    lower the ideal, because a minimum over a refinement is taken over strictly more freedom."""
+    coarse, ids = make_ideal_session(spans=((200.0, 300.0),))
+    base = coarse.ideal_total()
+
+    # (a) sector lines are a DISPLAY split now: same lap arrays, more columns, same ideal.
+    for n in (1, 2, 3):
+        lines = [_seg(x, -5.0, x, 5.0) for x in np.linspace(1000.0 / (n + 1), 1000.0, n,
+                                                            endpoint=False)]
+        withlines, _ = make_ideal_session(spans=((200.0, 300.0),), sector_lines=lines)
+        assert withlines.session_best_splits() is not None
+        assert len(withlines.session_best_splits()) == n + 1
+        assert withlines.ideal_total() == base, (n, withlines.ideal_total(), base)
+        assert withlines.theoretical_best() == base, n
+
+    # (b) a finer corner partition is a refinement of the coarse one -> never slower.
+    finer, _ = make_ideal_session(spans=((200.0, 300.0), (600.0, 750.0)))
+    finest, _ = make_ideal_session(spans=((200.0, 300.0), (450.0, 520.0), (600.0, 750.0)))
+    assert finer.ideal_total() <= base + 1e-9, (finer.ideal_total(), base)
+    assert finest.ideal_total() <= finer.ideal_total() + 1e-9
+    # and refinement genuinely buys something on a crossing-pace session (not a no-op assert)
+    assert finest.ideal_total() < base - 1e-6, (finest.ideal_total(), base)
+    print("test_more_segments_never_make_the_ideal_slower OK")
+
+
+# --- the curve, the per-tick scalar, and the degenerate states ----------------------------
+
+def test_ideal_curve_is_the_running_segment_total_at_the_partition_edges():
+    """The ideal CURVE is the composite's running total, exact at every partition edge and
+    following each segment's DONOR in between (the ideal lap is a real drive, so its shape
+    through a segment is the shape its donor drove). It starts at 0, is non-decreasing — with no
+    `np.maximum.accumulate` repair, which a running total of non-negative times does not need —
+    and ends at `ideal_total`."""
+    s, _ids = make_ideal_session()
     env = s.ideal_lap_elapsed()
+    sb = s.ideal_segment_bests()
     assert env is not None and len(env) == Session._DELTA_GRID_N == 400
-    assert abs(float(env[0])) < 1e-9                              # starts at 0
-    assert np.all(np.diff(env) >= -1e-12)                        # non-decreasing (valid elapsed)
+    assert abs(float(env[0])) < 1e-9
+    assert np.all(np.diff(env) >= -1e-9), float(np.diff(env).min())
+    assert abs(float(env[-1]) - s.ideal_total()) < 1e-9
+    # Exact at the edges: resampling the 400-grid curve at each edge reproduces the running sum.
     s_grid = np.linspace(0.0, 1.0, Session._DELTA_GRID_N)
-    for lid in ids:
-        dist, _spd, elapsed = s._lap_arrays(lid)
-        lap_on_grid = np.interp(s_grid, dist / dist[-1], elapsed)
-        assert np.all(env <= lap_on_grid + 1e-9), lid
-    # Genuinely synthetic (crossing pace): the envelope matches no single lap everywhere — each
-    # lap is strictly slower than the ideal somewhere — so the ideal isn't a copy of one lap.
-    for lid in ids:
-        dist, _spd, elapsed = s._lap_arrays(lid)
-        lap_on_grid = np.interp(s_grid, dist / dist[-1], elapsed)
-        assert np.any(env < lap_on_grid - 1e-6), lid
-    print("test_ideal_envelope_le_every_clean_lap_at_each_grid_point OK")
+    cum = sb.cumulative()
+    for j, s_edge in enumerate(sb.s_edges):
+        got = float(np.interp(s_edge, s_grid, env))
+        assert abs(got - float(cum[j])) < 5e-3, (j, s_edge, got, float(cum[j]))
+    # The curve is NOT a straight line between edges — it carries the donor's pace.
+    inside = (s_grid > sb.s_edges[1]) & (s_grid < sb.s_edges[2])
+    if inside.sum() > 3:
+        chord = np.interp(s_grid[inside], [sb.s_edges[1], sb.s_edges[2]],
+                          [cum[1], cum[2]])
+        assert np.abs(env[inside] - chord).max() > 1e-6, "donor shape collapsed to a chord"
+    print("test_ideal_curve_is_the_running_segment_total_at_the_partition_edges OK")
 
 
-def test_ideal_total_le_every_clean_lap_time_and_eq_envelope_end():
-    """`ideal_total` == the envelope's last value and ≤ every clean lap's time (a lower envelope
-    can't end above the fastest lap)."""
+def test_delta_to_ideal_is_non_negative_at_the_partition_edges():
+    """Δ-to-ideal is NOT one-way, and that is correct. At every partition EDGE the ideal took the
+    minimum over the clean laps, so every donor lap is at or behind it there. INSIDE a segment the
+    ideal follows its donor's line, so a lap that brakes later can be transiently AHEAD — real
+    information, and the reason nothing here clamps or asserts pointwise ≥ 0.
+
+    Measured on the real recordings (372 k samples at 25 ms of media clock): the most negative
+    value is −0.052 s and under 1 % of samples are negative, against end-of-lap values of
+    +0.22 … +9.24 s. This pins the SHAPE of that claim — non-negative at the edges, bounded and
+    small in between — so a future change that makes the interior wander gets caught."""
     s, ids = make_ideal_session()
-    env = s.ideal_lap_elapsed()
-    assert abs(s.ideal_total() - float(env[-1])) < 1e-12
-    for lid in ids:
-        laptime = float(s._lap_arrays(lid)[2][-1])
-        assert s.ideal_total() <= laptime + 1e-9, lid
-    print("test_ideal_total_le_every_clean_lap_time_and_eq_envelope_end OK")
-
-
-def test_delta_to_ideal_nonneg_and_endpoint_is_laptime_minus_ideal():
-    """`delta_to_ideal` ≥ 0 at every grid point (a lap can't beat the envelope it formed), in
-    BOTH x-modes, and dy at s=1 ≈ lap_time − ideal_total. Even the fastest lap's Δ-to-ideal is
-    ≥ 0 and its endpoint equals its (small, ≥0) margin over the synthetic ideal."""
-    s, ids = make_ideal_session()
-    ideal_total = s.ideal_total()
+    sb = s.ideal_segment_bests()
+    s_grid = np.linspace(0.0, 1.0, Session._DELTA_GRID_N)
     for mode in ("distance", "time"):
         series = s.delta_to_ideal(list(ids), mode)
         assert series is not None
         for lid in ids:
             x, dy = series[lid]
             assert len(x) == len(dy) == 400
-            assert np.all(dy >= -1e-9), (mode, lid, float(dy.min()))
-            laptime = float(s._lap_arrays(lid)[2][-1])
-            assert abs(float(dy[-1]) - (laptime - ideal_total)) < 1e-9, (mode, lid)
-    # The fastest clean lap still has a ≥0 (and finite) margin over the ideal.
-    fastest = min(ids, key=lambda i: float(s._lap_arrays(i)[2][-1]))
-    end = float(s.delta_to_ideal([fastest], "distance")[fastest][1][-1])
-    assert end >= -1e-9
-    print("test_delta_to_ideal_nonneg_and_endpoint_is_laptime_minus_ideal OK")
+            for s_edge in sb.s_edges:
+                at_edge = float(np.interp(s_edge, s_grid, dy))
+                assert at_edge >= -5e-3, (mode, lid, s_edge, at_edge)
+            # bounded in between — an excursion is a line difference, not a lap's worth of time
+            assert float(dy.min()) > -0.25 * s.ideal_total(), (mode, lid, float(dy.min()))
+    print("test_delta_to_ideal_is_non_negative_at_the_partition_edges OK")
 
 
 def test_delta_to_ideal_at_matches_grid_and_is_cheap():
-    """The per-tick scalar `delta_to_ideal_at(lap, t)` (the moat number the live readout leads
-    with) AGREES with the grid-based `delta_to_ideal` curve resampled at the lap's own track
-    fraction, is ≥ 0 (a lap can't beat the envelope it formed), and at the lap finish equals
-    lap_time − ideal_total. The envelope is MEMOIZED so the 30 Hz path stays cheap."""
+    """The per-tick scalar `delta_to_ideal_at(lap, t)` (the number the live readout leads with)
+    AGREES with the grid-based `delta_to_ideal` curve resampled at the lap's own track fraction,
+    and at the lap finish equals lap_time − ideal_total. The curve is MEMOIZED so the 30 Hz path
+    stays cheap."""
     s, ids = make_ideal_session()
     ideal_total = s.ideal_total()
     s_grid = np.linspace(0.0, 1.0, Session._DELTA_GRID_N)
     for lid in ids:
         times, dist, _elapsed = s._dist_cache[lid]
-        # Sample a few media times across the lap; the scalar must match the grid Δ-to-ideal at the
-        # SAME normalized track fraction the lap is at, at that instant.
         grid = s.delta_to_ideal([lid], "distance")[lid][1]  # dy on the 400 s-grid
         for frac in (0.0, 0.25, 0.6, 1.0):
             t = float(times[0] + frac * (times[-1] - times[0]))
             got = s.delta_to_ideal_at(lid, t)
-            assert got is not None and got >= -1e-9, (lid, frac, got)
+            assert got is not None, (lid, frac)
             s_here = float(np.interp(t, times, dist)) / float(dist[-1])
             want = float(np.interp(s_here, s_grid, grid))
             # The scalar interps elapsed DIRECTLY at t; the grid curve resamples elapsed onto 400
             # points first, so `want` carries one extra grid-discretization step — agree to the
             # 400-grid resolution, not bit-for-bit (the scalar is the more accurate of the two).
-            assert abs(got - want) < 1e-4, (lid, frac, got, want)
-        # At the lap finish the scalar is lap_time − ideal_total (the table's Δ-to-ideal number).
+            assert abs(got - want) < 1e-3, (lid, frac, got, want)
         finish = s.delta_to_ideal_at(lid, float(times[-1]))
         laptime = float(times[-1] - times[0])
         assert abs(finish - (laptime - ideal_total)) < 1e-9, (lid, finish)
-    # Memoized: the second call reuses the cached envelope (same object), not a fresh rebuild.
     first = s._ideal_envelope()
-    assert s._ideal_envelope() is first, "ideal envelope must be memoized for the per-tick path"
+    assert s._ideal_envelope() is first, "ideal curve must be memoized for the per-tick path"
     print("test_delta_to_ideal_at_matches_grid_and_is_cheap OK")
 
 
 def test_delta_to_ideal_at_none_without_ideal_or_degenerate():
-    """`delta_to_ideal_at` returns None (no crash) when there's no clean lap to build the ideal,
-    and the memoized envelope drops on a fresh slot — the per-tick path degrades gracefully."""
-    s = bare_session(valid=[])
-    s.laps = SimpleNamespace(laps_count=lambda: 0)
+    """`delta_to_ideal_at` returns None (no crash) when there's no partition to build the ideal
+    on, and the memoized curve drops on a fresh slot — the per-tick path degrades gracefully."""
+    s = bare_session(valid=[], best=None)
+    s._best_cache = None  # bare_session only seeds the memo for a non-None best; Session.__init__
+    s.laps = SimpleNamespace(laps_count=lambda: 0)  # always sets it (session.py:171)
     assert s.delta_to_ideal_at(0, 0.0) is None
     # _drop_ideal_cache is a safe no-op before the slot exists, and clears it once set.
     s._drop_ideal_cache()
-    s2, ids = make_ideal_session()
+    s2, _ids = make_ideal_session()
     assert s2._ideal_envelope() is not None
     s2._drop_ideal_cache()
-    assert not hasattr(s2, "_ideal_cache"), "drop must forget the memoized envelope"
+    assert not hasattr(s2, "_ideal_cache"), "drop must forget the memoized curve"
     print("test_delta_to_ideal_at_none_without_ideal_or_degenerate OK")
 
 
-def test_ideal_delta_to_best_nonpositive_shares_best_axis():
-    """`ideal_delta_to_best` (the ideal drawn on delta()'s own Δ-to-best axis) is ≤ 0 everywhere
-    (the ideal is at least as fast as the best lap it contains) and ends at ideal_total −
-    best_time. Distance mode's x ends at the active baseline total; time mode's at the best lap's
-    own time."""
-    s, (la, lb, lc) = make_ideal_session()
-    best_time = float(s._lap_arrays(lb)[2][-1])  # lb is the seeded best
+def test_ideal_delta_to_best_ends_below_zero_on_the_best_axis():
+    """`ideal_delta_to_best` (the ideal drawn on delta()'s own Δ-to-best axis) ENDS STRICTLY BELOW
+    zero — on the shipped code it ended at exactly 0, which is why the chart overlay could only
+    ever draw a curve returning to the y=0 line. It is ≤ 0 at every partition edge; between edges
+    the ideal follows its donor and the best lap its own line, so it can rise fractionally above
+    (measured at most +0.019 s on the real recordings)."""
+    s, _ids = make_ideal_session()
+    best_time = float(s._lap_arrays(s.best_lap_id())[2][-1])
     ideal_total = s.ideal_total()
+    sb = s.ideal_segment_bests()
+    s_grid = np.linspace(0.0, 1.0, Session._DELTA_GRID_N)
     for mode in ("distance", "time"):
         x, dy = s.ideal_delta_to_best(mode)
         assert len(x) == len(dy) == 400
-        assert np.all(dy <= 1e-9), (mode, float(dy.max()))
+        assert float(dy[-1]) < -1e-3, (mode, float(dy[-1]))
         assert abs(float(dy[-1]) - (ideal_total - best_time)) < 1e-9, mode
+        for s_edge in sb.s_edges:
+            assert float(np.interp(s_edge, s_grid, dy)) <= 5e-3, (mode, s_edge)
     x_dist, _ = s.ideal_delta_to_best("distance")
     assert abs(float(x_dist[-1]) - s.active_baseline_total_distance()) < 1e-9
     x_time, _ = s.ideal_delta_to_best("time")
     assert abs(float(x_time[-1]) - best_time) < 1e-9
-    print("test_ideal_delta_to_best_nonpositive_shares_best_axis OK")
+    print("test_ideal_delta_to_best_ends_below_zero_on_the_best_axis OK")
 
 
-def test_ideal_single_clean_lap_equals_that_lap():
-    """Edge case: ONE clean lap → the ideal envelope IS that lap (its elapsed resampled onto the
-    grid), ideal_total == its lap time, and its own Δ-to-ideal is ~0 throughout."""
+def test_ideal_single_donor_is_detectable_not_a_silent_duplicate():
+    """DEGENERATE STATE, made visible. With ONE clean lap the ideal IS that lap — a correct
+    answer, but printing it beside the best-lap readout is printing the same number twice. So
+    `ideal_donor_lap_id()` names the lap, and a surface can say "your lap 4" instead. (This is the
+    real state of a short recording: the Sandown single chapter has one valid lap.)"""
     lap = 4
     t, d = odometer(120, 0.1, 50.0, 900.0)
     s = bare_session({lap: (t, d)}, best=lap, valid=[lap])
     seed_cols(s, lap, t, d)
-    s.laps = SimpleNamespace(laps_count=lambda: 5)
-    s_grid = np.linspace(0.0, 1.0, Session._DELTA_GRID_N)
-    dist, _spd, elapsed = s._lap_arrays(lap)
-    lap_on_grid = np.interp(s_grid, dist / dist[-1], elapsed)
-    env = s.ideal_lap_elapsed()
-    assert np.allclose(env, lap_on_grid, atol=1e-9)
+    s.laps = SimpleNamespace(laps_count=lambda: 5, lap_time=lambda i: float(t[-1] - t[0]),
+                             sectors=SimpleNamespace(sector_lines=[]))
+    seed_corner_basis(s, _IDEAL_CORNERS, total=900.0)
+    elapsed = s._lap_arrays(lap)[2]
     assert abs(s.ideal_total() - float(elapsed[-1])) < 1e-9
+    assert s.ideal_donor_lap_id() == lap, s.ideal_donor_lap_id()
+    assert s.ideal_segment_bests().single_donor_id() == lap
     _x, dy = s.delta_to_ideal([lap], "distance")[lap]
-    assert np.all(np.abs(dy) < 1e-9)
-    print("test_ideal_single_clean_lap_equals_that_lap OK")
+    assert np.all(np.abs(dy) < 1e-6)
+    print("test_ideal_single_donor_is_detectable_not_a_silent_duplicate OK")
 
 
-def test_ideal_none_without_clean_laps():
-    """No clean lap (no valid ids) → every ideal accessor returns None (and the renderer no-ops),
-    not a crash."""
-    s = bare_session(valid=[])
-    s.laps = SimpleNamespace(laps_count=lambda: 0)
+def test_ideal_none_without_a_corner_partition():
+    """No corner partition → every ideal accessor returns None, and `theoretical_best` with it.
+    A lap with no detected corner is ONE segment, whose minimum over the laps is just the best lap
+    time — the exact degeneracy this replaced. It is not returned dressed as an ideal; callers
+    hide it, following stats_panel/export_data's precedent for a degenerate synthesized value."""
+    s, _ids = make_ideal_session()
+    reset_corner_caches(s, basis=None)
+    assert s.ideal_segment_bests() is None
     assert s.ideal_lap_elapsed() is None
     assert s.ideal_total() is None
-    assert s.delta_to_ideal([0], "distance") is None
+    assert s.ideal_donor_lap_id() is None
+    assert s.theoretical_best() is None
+    assert s.delta_to_ideal([2], "distance") is None
     assert s.ideal_delta_to_best("distance") is None
-    print("test_ideal_none_without_clean_laps OK")
+    # and with no laps at all
+    s2 = bare_session(valid=[])
+    s2._best_cache = None
+    s2.laps = SimpleNamespace(laps_count=lambda: 0)
+    assert s2.ideal_lap_elapsed() is None
+    assert s2.ideal_total() is None
+    print("test_ideal_none_without_a_corner_partition OK")
+
+
+def test_theoretical_best_is_the_ideal_lap_one_definition():
+    """`Bests.theoretical_best` IS `Session.ideal_total` — one definition of the ideal lap for
+    every surface, by delegation rather than by a second computation that could drift. The
+    session-best SECTOR splits are unchanged and still the per-column minimum; they just no longer
+    define the ideal, so a 0-sector session no longer reports its own best lap as its target."""
+    s, ids = make_ideal_session()
+    assert s.theoretical_best() == s.ideal_total()
+    assert s.theoretical_best() < min(_lap_times(s, ids).values()) - 1e-9
+    # The purple cells still work, and with no sector line they are still [best lap time] — which
+    # is exactly why they cannot be the ideal.
+    splits = s.session_best_splits()
+    assert len(splits) == 1
+    assert abs(splits[0] - min(_lap_times(s, ids).values())) < 1e-9
+    assert s.theoretical_best() < splits[0] - 1e-9
+    print("test_theoretical_best_is_the_ideal_lap_one_definition OK")
+
+
+def _distinct_total_ideal_session():
+    """The crossing-pace fixture with DISTINCT lap totals (1000 / 1002 / 1004 m — 0.2 % drift,
+    inside corners.NORMALIZED_DRIFT_MAX = 0.5 %, so the projection stays on its deterministic
+    normalized branch). The distinct totals are what let the collapse test below identify ONE
+    lap inside `project_boundaries`, which only ever sees the totals."""
+    t0, d0 = odometer(122, 0.1, 100.0, 1000.0, lambda u: 0.8 + 1.4 * np.sin(u / 2))
+    t1, d1 = odometer(120, 0.1, float(t0[-1]), 1004.0, lambda u: 2.2 - 1.4 * np.sin(u / 2))
+    t2, d2 = odometer(118, 0.1, float(t1[-1]), 1002.0)
+    s = bare_session({0: (t0, d0), 1: (t1, d1), 2: (t2, d2)}, best=2, valid=[0, 1, 2])
+    for lid, (t, d) in ((0, (t0, d0)), (1, (t1, d1)), (2, (t2, d2))):
+        seed_cols(s, lid, t, d)
+    s.laps = SimpleNamespace(laps_count=lambda: 3,
+                             lap_time=lambda i: float(s._dist_cache[i][2][-1]),
+                             sectors=SimpleNamespace(sector_lines=[]))
+    seed_corner_basis(s, _IDEAL_CORNERS, total=1002.0)
+    return s, (0, 1, 2), {0: 1000.0, 1: 1004.0, 2: 1002.0}
+
+
+def test_ideal_donor_admission_refuses_a_collapsed_segment():
+    """A lap may only donate a segment it actually DROVE. `corners.project_boundaries` clamps a
+    crossed spatial match onto its neighbour (np.maximum.accumulate), which can collapse a real
+    segment to ZERO width on one lap while it is full width on the others. That lap's time went to
+    the NEIGHBOURING segment, so taking its free 0 invents time nobody drove — measured on the
+    Sandown recording at 1 cell in 885, worth 0.111 s of a claimed 1.252 s.
+
+    Injected here at the clamp's own seam: the same pure function both `segment_times` and the
+    admission span read, so the collapsed lap's time really does move to its neighbour."""
+    base_s, _ids, totals = _distinct_total_ideal_session()
+    honest = base_s.ideal_segment_bests().total
+
+    j = 2                       # the straight between C1 and C2 — real on every lap
+    victim = 1                  # the fast-early / slow-late lap
+    real_project = corners_mod.project_boundaries
+
+    def collapsing(d_ref, total_ref, total_lap, *, traces=None):
+        out = np.asarray(real_project(d_ref, total_ref, total_lap, traces=traces), float)
+        # edges = [0, *out, total_lap], so segment j spans out[j-1]..out[j]. Pull the far edge
+        # back onto the near one: span exactly 0, which is the clamp's signature.
+        if abs(total_lap - totals[victim]) < 1e-6 and len(out) > j:
+            out = out.copy()
+            out[j] = out[j - 1]
+        return out
+
+    corners_mod.project_boundaries = collapsing
+    try:
+        s2, _ids2, _t = _distinct_total_ideal_session()
+        got = s2.ideal_segment_bests()
+        assert got is not None
+        row = got.lap_ids.index(victim)
+        assert abs(float(got.times[row, j])) < 1e-12, "fixture must actually collapse the segment"
+        assert not got.admitted[row, j], "the collapsed cell must be refused"
+        assert got.donors[j] != victim, "a collapsed cell must not win its segment"
+        assert got.bests[j] > 0.0, "the segment best must come from a lap that drove it"
+        # Refusing it keeps the total honest — it never claims MORE than the uncollapsed run.
+        assert got.total >= honest - 1e-9, (got.total, honest)
+        # Without the guard the free 0 would have been taken: the naive min IS strictly smaller.
+        naive = float(got.times.min(axis=0).sum())
+        assert naive < got.total - 1e-6, (naive, got.total)
+        # The victim still donates the segments it did drive — the refusal is per CELL, not
+        # per lap, so one bad projection does not throw away a whole lap's evidence.
+        assert got.admitted[row].sum() == got.times.shape[1] - 1
+    finally:
+        corners_mod.project_boundaries = real_project
+    print("test_ideal_donor_admission_refuses_a_collapsed_segment OK")
 
 
 def make_rolling_session(n=401):
@@ -822,17 +1161,21 @@ def test_lap_sector_splits_no_zero_split_from_dupe_line():
     print("test_lap_sector_splits_no_zero_split_from_dupe_line OK")
 
 
-def test_theoretical_best_not_poisoned_by_degenerate_lap():
+def test_session_best_splits_not_poisoned_by_degenerate_lap():
     """D11 headline: a single lap with a degenerate (here near-zero) split must NOT drag the
-    per-column session best toward 0 / the theoretical best below a real lap's best stitch.
+    per-column session best toward 0.
 
-    The session-best columns and theoretical_best computed WITH a degenerate lap present equal
-    those computed from the same valid laps with the degenerate lap excluded (the > 0 filter in
-    session_best_splits ignores its poisoned column entry) — and the theoretical best is never
-    faster than every real lap's worst column would allow."""
+    The session-best columns computed WITH a degenerate lap present equal those computed from the
+    same valid laps with the degenerate lap excluded (the > 0 filter in session_best_splits
+    ignores its poisoned column entry).
+
+    `theoretical_best` no longer reads these columns at all — it is the corner-partition ideal
+    (see test_theoretical_best_is_the_ideal_lap_one_definition), so a poisoned SPLIT can no longer
+    reach the headline target by that route either. The sum is still checked here because it is
+    what the lap table's purple row shows."""
     s, lap_a, lap_b = make_two_lap_sector_session()  # 2 lines -> 3 fully-filled columns
     clean_bests = s.session_best_splits()
-    clean_theo = s.theoretical_best()
+    clean_theo = float(sum(clean_bests))
     assert clean_bests and all(b is not None for b in clean_bests), clean_bests
     assert all(b > 0 for b in clean_bests), clean_bests
 
@@ -857,7 +1200,7 @@ def test_theoretical_best_not_poisoned_by_degenerate_lap():
     s.lap_sector_splits = patched
     try:
         poisoned_bests = s.session_best_splits()
-        poisoned_theo = s.theoretical_best()
+        poisoned_theo = float(sum(poisoned_bests))
     finally:
         s.lap_sector_splits = orig
         s._valid_cache = [lap_a, lap_b]
@@ -868,7 +1211,7 @@ def test_theoretical_best_not_poisoned_by_degenerate_lap():
     assert poisoned_theo == clean_theo, (poisoned_theo, clean_theo)
     # And concretely: the middle column's best is a real positive split, not the injected 0.
     assert poisoned_bests[1] > 0.0, poisoned_bests
-    print("test_theoretical_best_not_poisoned_by_degenerate_lap OK")
+    print("test_session_best_splits_not_poisoned_by_degenerate_lap OK")
 
 
 def test_session_best_splits_filters_nonpositive_keeps_tiny_positive():
@@ -884,7 +1227,9 @@ def test_session_best_splits_filters_nonpositive_keeps_tiny_positive():
     s.lap_sector_splits = lambda lid: fake[lid]
     bests = s.session_best_splits()
     assert bests == [10.0, 1e-6, 20.0], bests   # the 0 lost to the tiny-positive, not vice-versa
-    assert s.theoretical_best() == float(sum([10.0, 1e-6, 20.0]))
+    # theoretical_best is the corner-partition ideal now, not this sum — and this fixture has no
+    # corner basis, so it is None rather than a 30.000001 s "target" nobody could aim at.
+    assert s.theoretical_best() is None
     print("test_session_best_splits_filters_nonpositive_keeps_tiny_positive OK")
 
 
@@ -922,7 +1267,9 @@ def test_best_excludes_dropout_lap_then_falls_back():
     split0, split1 = s.lap_sector_splits(0)[0], s.lap_sector_splits(1)[0]
     assert split0 < split1, (split0, split1)        # the dropout lap really is faster ...
     assert s.session_best_splits() == [split1]      # ... yet the clean (slower) lap owns purple
-    assert abs(s.theoretical_best() - split1) < 1e-9
+    # The ideal excludes the dropout lap by the SAME rule (CornerModel._composite_lap_ids); with
+    # no corner basis on this fixture there is no partition, so it reports None.
+    assert s.theoretical_best() is None
 
     # Fallback: when both laps are dropouts the set degrades to all valid, best = fastest.
     s2 = _two_lap_dropout_session()
