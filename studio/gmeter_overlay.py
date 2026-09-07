@@ -22,6 +22,14 @@ resets at the lap boundary (`_RESET_ON_LAP` / `reset_envelope()`).
 
 `pacer`-free: the app feeds set_g + set_lap at the ~30 Hz tick. The convention flip + filtering
 are display concerns and live here; the validated g values in gmeter.py are untouched.
+
+THREE OBJECTS, and the split is load-bearing rather than tidiness. `DialFilter` is the
+bookkeeping (EMA'd dot, per-lap hull, robust peaks) with no Qt base class; `DialState` is an
+immutable snapshot of it; `paint_dial` is a free function that draws a snapshot into any
+QPainter. `GMeterOverlay` is then only the WINDOW. The offline video exporter runs on a worker
+QThread and needs the first three but must never touch the fourth — a QWidget created off the
+GUI thread is the SIGSEGV shape this repo has post-mortemed twice (see
+tests/test_export_thread_safety.py).
 """
 
 from __future__ import annotations
@@ -140,6 +148,152 @@ class DialState:
     peak_left: float = 0.0
     peak_right: float = 0.0
     source: str = "accl"
+
+
+class DialFilter:
+    """The dial's BOOKKEEPING — the EMA'd dot, the per-lap hull points, the robust cardinal peaks,
+    the lap scope and the provenance label — with no QWidget anywhere in it.
+
+    Why it is its own object. Two callers drive this exact same filtering: the live
+    `GMeterOverlay` at the ~30 Hz UI tick, and `export_video.OverlayPainter`, once per rendered
+    frame. The exporter used to get it by CONSTRUCTING A GMeterOverlay — i.e. a frameless
+    translucent top-level QWidget — inside `Renderer.__init__`, which `VideoExportWorker.run()`
+    runs on a QThread. Creating (and destroying) a top-level widget off the GUI thread is
+    undefined behaviour in Qt and is the shape this repo has post-mortemed as a SIGSEGV twice
+    (see tests/test_compare_lifecycle.py); it survived only because the export dial is never
+    `show()`n, so nothing ever asked the window system for a backing store. The render path never
+    needed the widget at all — it only calls the free function `paint_dial` with a `DialState`
+    snapshot — so the state it DID need lives here and the widget became a thin shell over it.
+
+    Every method keeps the widget's exact semantics, including the ones that read as quirks and
+    are load-bearing (`set_lap` does NOT reset on the first lap it is ever handed; a None lap is
+    held). The mutators return True when the painted dial changed, which is precisely where
+    `GMeterOverlay` used to call `self.update()` — so the repaint pattern is unchanged too.
+
+    `version` counts every change to the STATIC dial layer (envelope, peaks, source tag); the
+    widget keys its cached static pixmap on it."""
+
+    def __init__(self) -> None:
+        # Filtered felt-force pointer in g; axes: +x = thrown right, +y(down) = thrown back (accel),
+        # -y(up) = thrown forward (brake). Peaks are the robust per-direction max felt-g (all >= 0).
+        self.fx = 0.0
+        self.fy = 0.0
+        self.have = False
+        self.ema_init = False
+        self.source = source_label("accl")    # display label (see source_label); default IMU-only
+        self.hull_pts: list[tuple[float, float]] = []     # filtered felt points (ring buffer)
+        self.recent: list[tuple[float, float]] = []       # rolling window for percentile peaks
+        self.peak_fwd = 0.0
+        self.peak_back = 0.0
+        self.peak_left = 0.0
+        self.peak_right = 0.0
+        self.lap: int | None = None
+        self.version = 0
+
+    # ------------------------------------------------------------------ data in
+    def set_g(self, g: tuple[float, float, float] | None) -> bool:
+        """Push the current kart-frame (lateral_g, longitudinal_g, total_g). None blanks the live
+        dot (keeps the template + the accumulated envelope). Applies the felt-force convention and
+        the shake low-pass, and grows the envelope + robust cardinal peaks. Returns True when the
+        painted dial changed."""
+        if g is None:
+            if not self.have:
+                return False
+            self.have = False
+            return True
+        lat, lon, _total = g
+        # Felt-force convention (see module doc): felt x = +lateral, felt y = +longitudinal.
+        fx, fy = lat, lon
+        # Shake low-pass (EMA) so the dot tracks vehicle g, not head/mount jitter.
+        if not self.ema_init:
+            self.fx, self.fy, self.ema_init = fx, fy, True
+        else:
+            a = _DOT_EMA_ALPHA
+            self.fx += a * (fx - self.fx)
+            self.fy += a * (fy - self.fy)
+        self.have = True
+        self._accumulate(self.fx, self.fy)
+        return True
+
+    def _accumulate(self, fx: float, fy: float) -> None:
+        """Grow per-lap envelope + robust cardinal peaks from the filtered felt point. Peaks use a
+        percentile of the recent window and the hull point is clamped to them, so a lone shake spike
+        can't balloon either."""
+        self.recent.append((fx, fy))
+        if len(self.recent) > _PEAK_WINDOW:
+            self.recent.pop(0)
+        # Robust peak per cardinal: percentile of the rolling window so a single shake sample can't win.
+        right, left, back, fwd = [], [], [], []
+        for px, py in self.recent:
+            if px > 0:
+                right.append(px)
+            elif px < 0:
+                left.append(-px)
+            if py > 0:
+                back.append(py)     # accelerating (felt down)
+            elif py < 0:
+                fwd.append(-py)     # braking (felt up)
+        self.peak_right = max(self.peak_right, _pct(right, _PEAK_PERCENTILE))
+        self.peak_left = max(self.peak_left, _pct(left, _PEAK_PERCENTILE))
+        self.peak_back = max(self.peak_back, _pct(back, _PEAK_PERCENTILE))
+        self.peak_fwd = max(self.peak_fwd, _pct(fwd, _PEAK_PERCENTILE))
+        # Clamp the hull candidate to the robust per-direction peaks so one spike can't balloon the blob.
+        hx = min(fx, self.peak_right) if fx >= 0 else max(fx, -self.peak_left)
+        hy = min(fy, self.peak_back) if fy >= 0 else max(fy, -self.peak_fwd)
+        self.hull_pts.append((hx, hy))
+        if len(self.hull_pts) > _ENVELOPE_MAX_PTS:
+            self.hull_pts.pop(0)
+        # A new felt sample changed the hull points AND (possibly) the cardinal peaks — both live in
+        # the widget's cached static layer, so invalidate it. Bump unconditionally: cheap, and the
+        # peaks can tick up on any sample. (Once the envelope is full the hull_pts *content* still
+        # shifts, so a length-only key would go stale here — the version counter is the safe choice.)
+        self.version += 1
+
+    def set_lap(self, lap_id: int | None) -> bool:
+        """Set the current lap. A change to a new valid lap resets the envelope + peaks (when
+        _RESET_ON_LAP); None (lead-in / between laps) is held so the envelope persists. Returns
+        True when that reset actually happened (the only case that repaints)."""
+        if lap_id is None or lap_id == self.lap:
+            return False
+        did_reset = False
+        if _RESET_ON_LAP and self.lap is not None:
+            self.reset_envelope()
+            did_reset = True
+        self.lap = lap_id
+        return did_reset
+
+    def set_source(self, source: str, long_source: str | None = None) -> bool:
+        """Label the dial's axis provenance, shown small in the corner. `source` is the lateral
+        (IMU) source id ("accl"/"gps"); `long_source` the longitudinal one (the GPS speed-derivative
+        when present) — the two usually differ, so the tag reads "IMU lat · GPS long" rather than a
+        bare "ACCL" that would misattribute the GPS-derived braking axis to the IMU. Returns True
+        when the label actually changed."""
+        label = source_label(source, long_source)
+        if label == self.source:
+            return False
+        self.source = label
+        self.version += 1   # the source tag lives in the cached static layer — invalidate it
+        return True
+
+    def reset_envelope(self) -> None:
+        """Clear the envelope + cardinal peaks and re-seed the dot EMA so the pointer starts fresh
+        on the new scope's first sample (no carry-over from the previous lap)."""
+        self.hull_pts.clear()
+        self.recent.clear()
+        self.peak_fwd = self.peak_back = self.peak_left = self.peak_right = 0.0
+        # Re-seed the dot EMA: the next set_g seeds fx/fy from its own value (no carry-over).
+        self.ema_init = False
+        self.fx = self.fy = 0.0
+        self.version += 1   # envelope + peaks cleared → the cached static layer is stale
+
+    # ------------------------------------------------------------------ data out
+    def snapshot(self) -> DialState:
+        """Snapshot the filtering state into a pure DialState for paint_dial (the same snapshot the
+        live widget and the exporter both render from, so the burned dial matches the screen)."""
+        return DialState(
+            fx=self.fx, fy=self.fy, have=self.have, hull_pts=list(self.hull_pts),
+            peak_fwd=self.peak_fwd, peak_back=self.peak_back,
+            peak_left=self.peak_left, peak_right=self.peak_right, source=self.source)
 
 
 def dial_geom(w: float, h: float):
@@ -525,6 +679,14 @@ def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float)
 
 
 class GMeterOverlay(QWidget):
+    """The LIVE on-screen dial: a window that owns a `DialFilter` and repaints when it changes.
+
+    Everything that is not a window — the EMA, the envelope, the peaks, the lap scope, the source
+    label — is the filter's (see `DialFilter` for why it is separable). This class keeps the
+    widget-only concerns: the frameless translucent top-level window, the static-layer pixmap
+    cache, and calling `update()` at exactly the points it always did (each mutator repaints iff
+    the filter reports the painted dial changed)."""
+
     def __init__(self, parent: QWidget | None = None):
         # Frameless translucent top-level window so it composites above the native video surface
         # (a child widget would be hidden behind it on macOS); positioned by the VideoView.
@@ -535,118 +697,38 @@ class GMeterOverlay(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setMinimumSize(120, 140)
-        # Filtered felt-force pointer in g; axes: +x = thrown right, +y(down) = thrown back (accel),
-        # -y(up) = thrown forward (brake). Peaks are the robust per-direction max felt-g (all >= 0).
-        self._fx = 0.0
-        self._fy = 0.0
-        self._have = False
-        self._ema_init = False
-        self._source = source_label("accl")   # display label (see source_label); default IMU-only
-        self._hull_pts: list[tuple[float, float]] = []     # filtered felt points (ring buffer)
-        self._recent: list[tuple[float, float]] = []       # rolling window for percentile peaks
-        self._peak_fwd = 0.0
-        self._peak_back = 0.0
-        self._peak_left = 0.0
-        self._peak_right = 0.0
-        self._lap: int | None = None
+        self._filter = DialFilter()
         # --- static-layer cache (a per-frame repaint blits this + draws only the moving dot) ---
-        # `_env_version` bumps whenever ANY static-layer content changes (the grip envelope points,
-        # the cardinal peaks, or the source tag). The cached pixmap is keyed by (size, palette,
-        # env_version), so the convex hull + all the ring/backdrop/number drawing recompute exactly
-        # ONCE per envelope change — not every ~30 Hz tick that only moves the dot.
-        self._env_version = 0
+        # The cached pixmap is keyed by (size, palette, `_filter.version`), which bumps whenever ANY
+        # static-layer content changes (the grip envelope points, the cardinal peaks, or the source
+        # tag), so the convex hull + all the ring/backdrop/number drawing recompute exactly ONCE per
+        # envelope change — not every ~30 Hz tick that only moves the dot.
         self._static_pixmap = None          # QPixmap | None
         self._static_key: tuple | None = None
 
     # ------------------------------------------------------------------ data in
     def set_g(self, g: tuple[float, float, float] | None) -> None:
-        """Push the current kart-frame (lateral_g, longitudinal_g, total_g). None blanks the live
-        dot (keeps the template + the accumulated envelope). Applies the felt-force convention and
-        the shake low-pass, grows the envelope + robust cardinal peaks, and repaints."""
-        if g is None:
-            if self._have:
-                self._have = False
-                self.update()
-            return
-        lat, lon, _total = g
-        # Felt-force convention (see module doc): felt x = +lateral, felt y = +longitudinal.
-        fx, fy = lat, lon
-        # Shake low-pass (EMA) so the dot tracks vehicle g, not head/mount jitter.
-        if not self._ema_init:
-            self._fx, self._fy, self._ema_init = fx, fy, True
-        else:
-            a = _DOT_EMA_ALPHA
-            self._fx += a * (fx - self._fx)
-            self._fy += a * (fy - self._fy)
-        self._have = True
-        self._accumulate(self._fx, self._fy)
-        self.update()
-
-    def _accumulate(self, fx: float, fy: float) -> None:
-        """Grow per-lap envelope + robust cardinal peaks from the filtered felt point. Peaks use a
-        percentile of the recent window and the hull point is clamped to them, so a lone shake spike
-        can't balloon either."""
-        self._recent.append((fx, fy))
-        if len(self._recent) > _PEAK_WINDOW:
-            self._recent.pop(0)
-        # Robust peak per cardinal: percentile of the rolling window so a single shake sample can't win.
-        right, left, back, fwd = [], [], [], []
-        for px, py in self._recent:
-            if px > 0:
-                right.append(px)
-            elif px < 0:
-                left.append(-px)
-            if py > 0:
-                back.append(py)     # accelerating (felt down)
-            elif py < 0:
-                fwd.append(-py)     # braking (felt up)
-        self._peak_right = max(self._peak_right, _pct(right, _PEAK_PERCENTILE))
-        self._peak_left = max(self._peak_left, _pct(left, _PEAK_PERCENTILE))
-        self._peak_back = max(self._peak_back, _pct(back, _PEAK_PERCENTILE))
-        self._peak_fwd = max(self._peak_fwd, _pct(fwd, _PEAK_PERCENTILE))
-        # Clamp the hull candidate to the robust per-direction peaks so one spike can't balloon the blob.
-        hx = min(fx, self._peak_right) if fx >= 0 else max(fx, -self._peak_left)
-        hy = min(fy, self._peak_back) if fy >= 0 else max(fy, -self._peak_fwd)
-        self._hull_pts.append((hx, hy))
-        if len(self._hull_pts) > _ENVELOPE_MAX_PTS:
-            self._hull_pts.pop(0)
-        # A new felt sample changed the hull points AND (possibly) the cardinal peaks — both live in
-        # the cached static layer, so invalidate it. Bump unconditionally: cheap, and the peaks can
-        # tick up on any sample. (Once the envelope is full the hull_pts *content* still shifts, so a
-        # length-only key would go stale here — the version counter is the safe choice.)
-        self._env_version += 1
+        """Push the current kart-frame (lateral_g, longitudinal_g, total_g) and repaint if the
+        dial changed. See `DialFilter.set_g`."""
+        if self._filter.set_g(g):
+            self.update()
 
     def set_lap(self, lap_id: int | None) -> None:
-        """Set the current lap. A change to a new valid lap resets the envelope + peaks (when
-        _RESET_ON_LAP); None (lead-in / between laps) is held so the envelope persists."""
-        if lap_id is None or lap_id == self._lap:
-            return
-        if _RESET_ON_LAP and self._lap is not None:
-            self.reset_envelope()
-        self._lap = lap_id
+        """Set the current lap; a change to a new valid lap resets the envelope + peaks (and only
+        then is there anything to repaint). See `DialFilter.set_lap`."""
+        if self._filter.set_lap(lap_id):
+            self.update()
 
     def set_source(self, source: str, long_source: str | None = None) -> None:
-        """Label the dial's axis provenance, shown small in the corner. `source` is the lateral
-        (IMU) source id ("accl"/"gps"); `long_source` the longitudinal one (the GPS speed-derivative
-        when present) — the two usually differ, so the tag reads "IMU lat · GPS long" rather than a
-        bare "ACCL" that would misattribute the GPS-derived braking axis to the IMU."""
-        label = source_label(source, long_source)
-        if label == self._source:
-            return
-        self._source = label
-        self._env_version += 1   # the source tag lives in the cached static layer — invalidate it
-        self.update()
+        """Label the dial's axis provenance, shown small in the corner. See
+        `DialFilter.set_source`."""
+        if self._filter.set_source(source, long_source):
+            self.update()
 
     def reset_envelope(self) -> None:
-        """Clear the envelope + cardinal peaks and re-seed the dot EMA so the pointer starts fresh
-        on the new scope's first sample (no carry-over from the previous lap)."""
-        self._hull_pts.clear()
-        self._recent.clear()
-        self._peak_fwd = self._peak_back = self._peak_left = self._peak_right = 0.0
-        # Re-seed the dot EMA: the next set_g seeds _fx/_fy from its own value (no carry-over).
-        self._ema_init = False
-        self._fx = self._fy = 0.0
-        self._env_version += 1   # envelope + peaks cleared → the cached static layer is stale
+        """Clear the envelope + cardinal peaks and re-seed the dot EMA. See
+        `DialFilter.reset_envelope`."""
+        self._filter.reset_envelope()
         self.update()
 
     # ------------------------------------------------------------------ painting
@@ -661,10 +743,7 @@ class GMeterOverlay(QWidget):
     def _dial_state(self) -> DialState:
         """Snapshot the live filtering state into a pure DialState for paint_dial (same snapshot
         the exporter renders from, so the burned dial matches the screen)."""
-        return DialState(
-            fx=self._fx, fy=self._fy, have=self._have, hull_pts=list(self._hull_pts),
-            peak_fwd=self._peak_fwd, peak_back=self._peak_back,
-            peak_left=self._peak_left, peak_right=self._peak_right, source=self._source)
+        return self._filter.snapshot()
 
     def _static_layer(self, st: DialState):
         """Return the cached static-dial QPixmap for the current size + palette + envelope-version,
@@ -672,7 +751,7 @@ class GMeterOverlay(QWidget):
         drawing actually run — exactly once per envelope change, NOT once per ~30 Hz tick."""
         w, h = self.width(), self.height()
         dpr = self.devicePixelRatioF()
-        key = (w, h, round(dpr, 4), theme.active_palette(), self._env_version)
+        key = (w, h, round(dpr, 4), theme.active_palette(), self._filter.version)
         if self._static_pixmap is not None and self._static_key == key:
             return self._static_pixmap
         # Render the static layer once into a transparent pixmap at the widget's device pixel ratio
