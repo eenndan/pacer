@@ -340,6 +340,17 @@ add_test(NAME test_library
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_library.py)
 set_tests_properties(test_library PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Preferences store (studio.prefs) — the library's discipline applied to the OTHER app-support JSON
+# file, which had none: `set` is load-modify-save over a `load` that returns {} on corruption, so one
+# bad byte plus any preference write silently persisted the wipe of all ten stored choices. Covers
+# the .bak taken before that first overwrite (corrupt bytes preserved verbatim, later writes still
+# heal the file and leave the sidecar alone, a healthy write churns no backup), the `version` field
+# now being READ (unstamped/older migrates forward keeping every key; a newer file is best-effort +
+# backed up before the downgrade), the per-key fallbacks under corruption, and the round-trips for
+# the two accessors that had none (excluded_visible / map_key_collapsed). studio.prefs imports
+# studio.units only — no Qt, no pacer, no telemetry file, so no env block.
+add_test(NAME test_prefs
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_prefs.py)
 # Data safety (data-safety-undo-privacy): the timing-line UNDO history (Session pushes the prior
 # lines before each edit + restores the latest through apply_timing_lines_latlon — segmentation +
 # PB baseline recompute identically; no-op with no history; confirmed-state preserved; bounded
