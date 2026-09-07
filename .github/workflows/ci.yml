@@ -115,9 +115,18 @@ jobs:
       - name: Build the .app (PyInstaller — no .dmg)
         # Same rationale as the ctest/smoke PYTHONPATH: point `import pacer` at the cmake-deployed
         # bindings package so the spec bundles the real _pacer.so on a fresh CI env.
+        #
+        # ensurepip first: `pip` is NOT in [tool.pixi.dependencies], so a fresh env solved from the
+        # lockfile has no pip and `python -m pip install` dies with "No module named pip". A dev box
+        # hides this — the editable install pulls pip in — which is why it survived review. This job
+        # only runs on a v* tag or a manual dispatch, and there had been NO tag since the job was
+        # added, so the very first time it ever executed was v0.2.0, where it failed on this line.
+        # Bootstrapping keeps PyInstaller opt-in (docs/PACKAGING.md: "intentionally not a project
+        # dependency") rather than adding it to the env for everyone.
         env:
           PYTHONPATH: ${{ github.workspace }}/bindings/pacer
         run: |
+          pixi run python -m ensurepip --upgrade
           pixi run python -m pip install pyinstaller
           pixi run pyinstaller --noconfirm --clean packaging/pacer.spec
       - name: Assert the .app bundle is well-formed
