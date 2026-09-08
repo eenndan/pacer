@@ -366,8 +366,9 @@ class PlayerPane(QWidget):
             self._position_gmeter()
             self.gmeter.set_g(g)
 
-    def set_gmeter_source(self, source: str, long_source: str | None = None):
-        self.gmeter.set_source(source, long_source)
+    # (No `set_gmeter_source` here any more. The dial's axis provenance was a tag on its face; it
+    # is now one sentence on the g-meter toggle's tooltip, which VideoView owns — so the fact never
+    # needs to reach a pane. See video_view.set_gmeter_source and review §6.5.)
 
     def set_gmeter_lap(self, lap_id):
         """Tell the overlay which lap drives it so its max-G envelope resets at the lap boundary."""

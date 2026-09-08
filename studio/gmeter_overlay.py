@@ -1,4 +1,4 @@
-"""GMeterOverlay: a subtle "G meter" dial painted over the video (felt-force convention).
+"""GMeterOverlay: a "G meter" dial painted over the video (felt-force convention).
 
 Native-window trick: on macOS a QVideoWidget renders through a native surface the window-server
 composites independently of Qt's z-order, so a plain child overlay is hidden behind the video.
@@ -13,19 +13,53 @@ g_at_time's accel convention is +lateral=left, +long=accelerating):
   * turning left  -> pointer RIGHT
 Screen mapping: dx = +lateral*scale, dy = +longitudinal*scale.
 
+WHAT THE FACE CARRIES, and why it is this short. The dial used to be ELEVEN text items inside a
+120x140 px card — a title, four cardinal peak numbers, four direction words, two labelled rings
+and a sensor-provenance tag — set in three grey tiers between 6 and 8 px. Rendered and measured
+(critical review 2026-09-07 §6.5) the side numbers ran into the card edge, the moving dot sat on
+top of the right-hand one, and the ring captions were drawn centred ON the ring strokes they
+named. It read as a debug widget: a legend with an instrument behind it.
+
+It is now the shape every top-tier overlay converges on — a DOT WITH A TRAIL inside TWO RINGS,
+and ONE number:
+
+  * two rings: the outer boundary at `_FULL_SCALE_G` and one reference ring at `_SCALE_RING_G`;
+  * one scale caption ("1.0") annotating the reference ring, sitting at the radial MIDPOINT of
+    the annulus between the two strokes so it lands on neither (`_scale_caption`);
+  * the grip envelope (the convex hull of the lap's filtered felt points) — a SHAPE, not text;
+  * the dot, and the ~3 s trail behind it, which is what makes the direction of travel legible
+    without four words saying it;
+  * one readout: the current |g|, in the band under the dial.
+
+The two facts the deleted words carried did not evaporate, they MOVED. The felt-force convention
+and the axis provenance ("IMU lat · GPS long") are one sentence on the g-meter toggle's tooltip
+(`source_sentence`, rendered by `VideoView.set_gmeter_source`) — a hover on the control that
+turns the dial on, rather than nine pixels of sensor plumbing burned into a shared clip. That is
+also why `DialState` no longer carries `source`: the dial never paints it, so it does not hold it.
+
+NO SIGNAL, NO INSTRUMENT. `Session.g_at_time` returns None only when the recording produced no g
+series at all, so a dial that has never been handed a sample (`DialState.seen` False) is a dial
+with nothing to measure. The export then paints NOTHING — a clip off a recording with no
+accelerometer gets no dial, instead of the rings, legend and four `0.0` it used to burn in — and
+the live dial paints its resting template with an em-dash readout. On screen the toggle is
+already disabled with "No accelerometer data in this recording" (see central_view), so the
+explanation has a home and the dial does not have to fake one.
+
 Chin-mount shake: the dot is an EMA of the felt-force g; the envelope + cardinal peaks use a
 high-percentile (robust) peak so a single shake spike can't blow them out.
 
-Envelope = a convex hull of accumulated filtered felt points (grip used this scope); the four
-cardinal numbers are the robust peak felt-g per direction. Scope defaults to the current lap and
-resets at the lap boundary (`_RESET_ON_LAP` / `reset_envelope()`).
+Envelope = a convex hull of accumulated filtered felt points (grip used this scope). The four
+cardinal peaks are no longer PAINTED individually, but they are still computed and still in the
+snapshot: they clamp the hull candidate (the anti-spike gate), the exporter freezes and blanks
+them at the lap boundaries, and tests/test_export_padding.py reads them. Scope defaults to the
+current lap and resets at the lap boundary (`_RESET_ON_LAP` / `reset_envelope()`).
 
 `pacer`-free: the app feeds set_g + set_lap at the ~30 Hz tick. The convention flip + filtering
 are display concerns and live here; the validated g values in gmeter.py are untouched.
 
 THREE OBJECTS, and the split is load-bearing rather than tidiness. `DialFilter` is the
-bookkeeping (EMA'd dot, per-lap hull, robust peaks) with no Qt base class; `DialState` is an
-immutable snapshot of it; `paint_dial` is a free function that draws a snapshot into any
+bookkeeping (EMA'd dot, trail, per-lap hull, robust peaks) with no Qt base class; `DialState` is
+an immutable snapshot of it; `paint_dial` is a free function that draws a snapshot into any
 QPainter. `GMeterOverlay` is then only the WINDOW. The offline video exporter runs on a worker
 QThread and needs the first three but must never touch the fourth — a QWidget created off the
 GUI thread is the SIGSEGV shape this repo has post-mortemed twice (see
@@ -56,31 +90,57 @@ from .theme import C
 
 _c = theme.qcolor  # QColor from a theme hex token (+ optional alpha) — shared home in theme.py
 
-# Outer ring g; a 1.0 g corner sits well inside and a ~1.5 g spike still lands within the dial.
+# THE TWO RINGS. The outer boundary is full scale — a 1.0 g corner sits well inside it and a
+# ~1.5 g spike still lands within the face. The inner one is the reference the eye measures
+# against, and the only ring the face names (`_scale_caption`).
 _FULL_SCALE_G = 1.6
-_RINGS = (0.5, 1.0)              # labelled rings (g) — the values ARE drawn (see _legend_items)
+_SCALE_RING_G = 1.0
 
-_TAG_BAND_H = 13                 # live dial: bottom strip reserved for the source tag ALONE, so it
-                                 # can never overprint the bottom cardinal number (dial_geom pays
-                                 # for it out of the dial's height). The EXPORT dial has no such
-                                 # band — it does not paint the tag (see _paint_dial_export).
-_LEGEND_MIN_R = 26.0             # below this dial radius the in-dial legend is dropped (no room)
-_LEGEND_PX_RANGE = (5.5, 8.0)    # live: direction captions + ring labels (see _legend_px)
-_TAG_PX = 6.5                    # live: source tag (was 6.0 at C.text_muted -> 2.2:1, a smear)
+# THE FACE'S BOX, in fractions of it rather than in px, because the same numbers now lay out the
+# 120x140 live card AND the export dial's square from 720p to 4K (`dial_geom` is shared).
+_MARGIN_FRAC = 0.06              # ring inset from the box edge (floored at theme.SPACE_S so the
+                                 # 120 px minimum keeps a hairline's worth of air)
+_READOUT_BAND_FRAC = 0.15        # bottom strip reserved for the ONE readout (|g|). The dial's
+                                 # height is paid out of the rest, so nothing can ever land on it.
+_CAPTION_CLEAR_PX = 1.6          # air the scale caption keeps from each ring stroke (the strokes
+                                 # are 1.0-1.2 px wide, so this clears their antialiasing too).
+                                 # There is no size floor: `_scale_caption` drops the caption when
+                                 # the annulus cannot hold it, which is the same rule at every size.
 
-_TITLE = "G METER"               # live caption; the EXPORT dial deliberately drops it (see
-                                 # _export_dial_geom). It and the source tag are the only two
-                                 # strings the two modes differ by — both live-only, both reasoned.
+# TYPE, as a fraction of the dial radius so both modes and every output size scale together.
+# The floors are what the review's "~6 px ring labels" finding cost: nothing on the face is set
+# below 8 px any more, and the readout — the loudest thing on it — starts at 12.
+_READOUT_PX_MIN, _READOUT_PX_FRAC = 12.0, 0.22
+_CAPTION_PX_MIN, _CAPTION_PX_FRAC = 8.0, 0.10
 
-# What each cardinal peak MEANS. The dial shows FELT force (see the module doc), so the pointer
-# swings LEFT in a right-hand corner: the caption names the DRIVING INPUT behind the number, not
-# the direction the pointer moved — that is the whole ambiguity a bare number leaves open.
-_DIR_BRAKE = "BRAKE"             # top    — peak felt-forward g (braking)
-_DIR_ACCEL = "ACCEL"             # bottom — peak felt-back g (accelerating)
-_DIR_TURN_R = "TURN R"           # left   — felt LEFT, i.e. a RIGHT-hand corner
-_DIR_TURN_L = "TURN L"           # right  — felt RIGHT, i.e. a LEFT-hand corner
+_NO_VALUE = "—"                  # the app's no-value mark; the readout with no g signal at all
 
 _DOT_EMA_ALPHA = 0.30            # dot low-pass per 30Hz sample (~0.1s tc); tames chin-mount shake
+
+# THE TRAIL. The dot's own recent path, which is what tells you it is sweeping from brake to apex
+# without four words saying so. Drawn from the RAW filtered points, not the peak-clamped hull
+# ones, so the trail's head is the dot itself and not a point beside it (`dial_to_screen` clamps
+# an excursion to the rim, which is a self-limiting way to show a real one).
+# It is painted in the DOT's colour (the off-white text token / EXPORT.text), not the accent: the
+# grip envelope under it is amber, and rendered on real D24 an amber trail disappeared into the
+# amber wash exactly where it matters — inside the envelope. Dot and trail read as one object.
+#
+# It is DECIMATED, and that was found by rendering it. Storing every 30 Hz tick put ~36 vertices
+# inside the couple of dial-millimetres the dot travels in a second, and the EMA's residual jitter
+# then drew a white scribble around the dot instead of a path — the signal is honest, the picture
+# was not. Committing one vertex every `_TRAIL_EVERY` ticks and keeping the newest sample glued to
+# the head (see `_accumulate`) spans ~2.9 s of driving in vertices far enough apart to read as
+# brake -> turn-in -> apex.
+_TRAIL_PTS = 30                  # committed vertices
+_TRAIL_EVERY = 3                 # ticks per committed vertex (~2.9 s of history at 30 Hz)
+_TRAIL_WIDTH_FRAC = 0.028        # newest segment's width as a fraction of the dial radius
+_TRAIL_TAPER = 0.30              # oldest segment's width, as a fraction of the newest
+
+# The dot, in fractions of the dial radius, with the old fixed pixel sizes as floors: at the 120 px
+# minimum it is exactly the dot it always was, and it no longer stays a 2.6 px speck on a dial four
+# times that size.
+_DOT_CORE_FRAC, _DOT_CORE_MIN = 0.030, 2.6
+_DOT_GLOW_FRAC, _DOT_GLOW_MIN = 0.075, 7.0
 
 _PEAK_PERCENTILE = 90.0          # cardinal peak = this percentile of recent felt-g (robust)
 _PEAK_WINDOW = 90                # samples (~3 s at 30 Hz) feeding the percentile peak
@@ -95,12 +155,14 @@ def _font(px: float, bold: bool = False) -> QFont:
     which is two defects on a dial whose every box is measured in pixels:
 
       * PROPORTIONAL figures. Measured on the shipped Inter build, the sizes the dial asks for
-        carried 8 or 9 distinct digit advances (2.84..4.52 px at the legend size, 4.47..7.09 at
-        the peak-number size), so the four cardinal peaks — the numbers a driver reads off the
-        face — were drawn in a face that gives ``1`` and ``8`` different widths.
-      * DPI-DERIVED sizes. A point size is resolved against the SCREEN's logical DPI, but
-        ``dial_geom``'s title strip, tag band, 18 px margin and 44x12 number boxes are all
-        pixels. Measured: on a 96 dpi logical screen ``_font(8.0)`` came out at 11 px with a line
+        carried 8 or 9 distinct digit advances (2.84..4.52 px at the caption size, 4.47..7.09 at
+        the number size), so the numbers a driver reads off the face were drawn in a face that
+        gives ``1`` and ``8`` different widths. It matters more now, not less: the four cardinal
+        peaks that first motivated this have been replaced by ONE readout, and a hero number that
+        rewrites its own width thirty times a second is the whole reason tabular figures exist.
+      * DPI-DERIVED sizes. A point size is resolved against the SCREEN's logical DPI, but every
+        box ``dial_geom`` hands out — the readout band, the margin, the ring radii — is pixels.
+        Measured: on a 96 dpi logical screen ``_font(8.0)`` came out at 11 px with a line
         height of 13.3 — inside a 12 px box — while the same call on a 72 dpi screen gives 8 px.
         The EXPORT dial makes that worse still: its canvas is fixed pixels and has no screen at
         all, so the burned-in glyph sizes depended on whatever display the render happened to run
@@ -124,10 +186,13 @@ _SRC_NAME = {"accl": "IMU", "gps": "GPS"}
 
 
 def source_label(lat_source: str, long_source: str | None = None) -> str:
-    """The tiny corner tag naming the dial's axis provenance. Same source both axes -> that name
-    ("IMU" / "GPS"); mixed (the usual IMU-lateral + GPS-longitudinal meter) -> "IMU lat · GPS long"
-    so the braking/accel axis the driver reads is labelled by where it actually comes from — not a
-    bare "ACCL" that misattributes the GPS-derived longitudinal to the IMU."""
+    """The dial's axis provenance, as a label. Same source both axes -> that name ("IMU" / "GPS");
+    mixed (the usual IMU-lateral + GPS-longitudinal meter) -> "IMU lat · GPS long" so the
+    braking/accel axis the driver reads is labelled by where it actually comes from — not a bare
+    "ACCL" that misattributes the GPS-derived longitudinal to the IMU.
+
+    This used to be painted on the dial's face at 6.5 px. It is now a clause of `source_sentence`,
+    on the toggle that turns the dial on."""
     lat = _SRC_NAME.get(lat_source, lat_source.upper())
     if long_source is None or long_source == lat_source:
         return lat
@@ -135,19 +200,59 @@ def source_label(lat_source: str, long_source: str | None = None) -> str:
     return f"{lat} lat · {lon} long"
 
 
+# What the dial's face no longer says, said once, where it can be said in words: on the tooltip of
+# the control that turns the dial on. Two clauses, and neither is decoration —
+#   * the CONVENTION, because the dot shows the force the driver FEELS (a right-hand corner throws
+#     the dot LEFT), which four 6 px words used to whisper on the face;
+#   * the PROVENANCE, because the meter mixes sensors: lateral is the IMU (r ~ +0.89 against GPS)
+#     and braking/accel is the GPS speed-derivative, the IMU forward axis being vibration-inflated
+#     (r ~ +0.36). See studio/docs/gmeter-validation.md.
+_CONVENTION_SENTENCE = ("The dot is the force you feel: braking pushes it up, accelerating down, "
+                        "and a right-hand corner throws it left.")
+_PROVENANCE = {
+    "IMU lat · GPS long": "Cornering g comes from the IMU; braking and acceleration from the GPS "
+                          "speed derivative, which the vibration-inflated IMU forward axis is not "
+                          "trustworthy enough to carry.",
+    "IMU": "Both axes come from the IMU.",
+    "GPS": "No usable accelerometer, so both axes are derived from the GPS trajectory.",
+}
+
+
+def source_sentence(lat_source: str, long_source: str | None = None) -> str:
+    """The g-meter toggle's tooltip body: the felt-force convention, then where the numbers come
+    from. The dial's face carries neither any more (see the module docstring) — this is where they
+    went, and it is the only place the app states the dial's provenance now."""
+    label = source_label(lat_source, long_source)
+    tail = _PROVENANCE.get(label)
+    if tail is None:                      # an unrecognised pairing still names itself honestly
+        tail = f"Axis sources: {label}."
+    return f"{_CONVENTION_SENTENCE}\n{tail}"
+
+
 @dataclass
 class DialState:
     """Pure draw state for paint_dial; snapshotted by both the live widget and the offline
-    exporter so the burned dial matches the screen."""
+    exporter so the burned dial matches the screen.
+
+    `seen` is the one field that is about the RECORDING rather than the instant: False means this
+    dial has never been handed a g sample. `Session.g_at_time` returns None only for a recording
+    with no g series at all (`GMeter.at_time` clamps inside the series and never returns None
+    otherwise), so `not seen` is exactly "there is nothing to meter here" — which is why
+    `paint_dial` may act on it. See the module docstring.
+
+    The four `peak_*` are no longer painted individually; they are still the anti-spike clamp on
+    the hull, still what the exporter freezes at the finish line, and still read by
+    tests/test_export_padding.py."""
     fx: float = 0.0
     fy: float = 0.0
     have: bool = False
+    seen: bool = False
+    trail: list[tuple[float, float]] = field(default_factory=list)
     hull_pts: list[tuple[float, float]] = field(default_factory=list)
     peak_fwd: float = 0.0
     peak_back: float = 0.0
     peak_left: float = 0.0
     peak_right: float = 0.0
-    source: str = "accl"
 
 
 class DialFilter:
@@ -170,8 +275,9 @@ class DialFilter:
     held). The mutators return True when the painted dial changed, which is precisely where
     `GMeterOverlay` used to call `self.update()` — so the repaint pattern is unchanged too.
 
-    `version` counts every change to the STATIC dial layer (envelope, peaks, source tag); the
-    widget keys its cached static pixmap on it."""
+    `version` counts every change to the STATIC dial layer (the grip envelope); the widget keys
+    its cached static pixmap on it. The trail, the dot and the |g| readout all move every tick and
+    are therefore NOT in that layer — see `_paint_dial_moving`."""
 
     def __init__(self) -> None:
         # Filtered felt-force pointer in g; axes: +x = thrown right, +y(down) = thrown back (accel),
@@ -180,7 +286,11 @@ class DialFilter:
         self.fy = 0.0
         self.have = False
         self.ema_init = False
-        self.source = source_label("accl")    # display label (see source_label); default IMU-only
+        # Has this dial EVER been handed a g sample? False after any number of ticks means the
+        # recording has no g series at all (see DialState.seen) — the no-instrument state.
+        self.seen = False
+        self.trail: list[tuple[float, float]] = []        # recent filtered points (ring buffer)
+        self._trail_tick = 0                              # decimation phase (see _accumulate)
         self.hull_pts: list[tuple[float, float]] = []     # filtered felt points (ring buffer)
         self.recent: list[tuple[float, float]] = []       # rolling window for percentile peaks
         self.peak_fwd = 0.0
@@ -212,6 +322,7 @@ class DialFilter:
             self.fx += a * (fx - self.fx)
             self.fy += a * (fy - self.fy)
         self.have = True
+        self.seen = True            # a real sample: this recording has something to meter
         self._accumulate(self.fx, self.fy)
         return True
 
@@ -219,6 +330,19 @@ class DialFilter:
         """Grow per-lap envelope + robust cardinal peaks from the filtered felt point. Peaks use a
         percentile of the recent window and the hull point is clamped to them, so a lone shake spike
         can't balloon either."""
+        # The trail takes the RAW filtered point (the dot's own position), so its head IS the dot.
+        # It lives in the per-frame layer, so it costs the static cache nothing.
+        #
+        # Decimated (see `_TRAIL_EVERY`) by OVERWRITING the head until a vertex is due: the last
+        # element is therefore always the live point — the stroke stays welded to the dot — while
+        # only every third one is kept, which is what makes the path read as a path.
+        self._trail_tick = (self._trail_tick + 1) % _TRAIL_EVERY
+        if self.trail and self._trail_tick:
+            self.trail[-1] = (fx, fy)
+        else:
+            self.trail.append((fx, fy))
+            if len(self.trail) > _TRAIL_PTS:
+                self.trail.pop(0)
         self.recent.append((fx, fy))
         if len(self.recent) > _PEAK_WINDOW:
             self.recent.pop(0)
@@ -243,10 +367,10 @@ class DialFilter:
         self.hull_pts.append((hx, hy))
         if len(self.hull_pts) > _ENVELOPE_MAX_PTS:
             self.hull_pts.pop(0)
-        # A new felt sample changed the hull points AND (possibly) the cardinal peaks — both live in
-        # the widget's cached static layer, so invalidate it. Bump unconditionally: cheap, and the
-        # peaks can tick up on any sample. (Once the envelope is full the hull_pts *content* still
-        # shifts, so a length-only key would go stale here — the version counter is the safe choice.)
+        # A new felt sample changed the hull points, which live in the widget's cached static
+        # layer, so invalidate it. Bump unconditionally: cheap, and the clamped hull candidate can
+        # move on any sample. (Once the envelope is full the hull_pts *content* still shifts, so a
+        # length-only key would go stale here — the version counter is the safe choice.)
         self.version += 1
 
     def set_lap(self, lap_id: int | None) -> bool:
@@ -262,57 +386,61 @@ class DialFilter:
         self.lap = lap_id
         return did_reset
 
-    def set_source(self, source: str, long_source: str | None = None) -> bool:
-        """Label the dial's axis provenance, shown small in the corner. `source` is the lateral
-        (IMU) source id ("accl"/"gps"); `long_source` the longitudinal one (the GPS speed-derivative
-        when present) — the two usually differ, so the tag reads "IMU lat · GPS long" rather than a
-        bare "ACCL" that would misattribute the GPS-derived braking axis to the IMU. Returns True
-        when the label actually changed."""
-        label = source_label(source, long_source)
-        if label == self.source:
-            return False
-        self.source = label
-        self.version += 1   # the source tag lives in the cached static layer — invalidate it
-        return True
-
     def reset_envelope(self) -> None:
-        """Clear the envelope + cardinal peaks and re-seed the dot EMA so the pointer starts fresh
-        on the new scope's first sample (no carry-over from the previous lap)."""
+        """Clear the envelope + cardinal peaks + the trail and re-seed the dot EMA so the pointer
+        starts fresh on the new scope's first sample (no carry-over from the previous lap).
+
+        The trail is cleared for the same reason the EMA is re-seeded: leaving it would draw a
+        stroke from the old lap's last corner, through the re-seeded origin, to the new lap's first
+        sample — a path the kart never took. `seen` is NOT cleared: it is a fact about the
+        recording, not about the scope."""
+        self.trail.clear()
+        self._trail_tick = 0
         self.hull_pts.clear()
         self.recent.clear()
         self.peak_fwd = self.peak_back = self.peak_left = self.peak_right = 0.0
         # Re-seed the dot EMA: the next set_g seeds fx/fy from its own value (no carry-over).
         self.ema_init = False
         self.fx = self.fy = 0.0
-        self.version += 1   # envelope + peaks cleared → the cached static layer is stale
+        self.version += 1   # envelope cleared → the cached static layer is stale
 
     # ------------------------------------------------------------------ data out
     def snapshot(self) -> DialState:
         """Snapshot the filtering state into a pure DialState for paint_dial (the same snapshot the
         live widget and the exporter both render from, so the burned dial matches the screen)."""
         return DialState(
-            fx=self.fx, fy=self.fy, have=self.have, hull_pts=list(self.hull_pts),
+            fx=self.fx, fy=self.fy, have=self.have, seen=self.seen,
+            trail=list(self.trail), hull_pts=list(self.hull_pts),
             peak_fwd=self.peak_fwd, peak_back=self.peak_back,
-            peak_left=self.peak_left, peak_right=self.peak_right, source=self.source)
+            peak_left=self.peak_left, peak_right=self.peak_right)
 
 
 def dial_geom(w: float, h: float):
-    """Centre + radius of the dial inside a (w, h) box. A slim title strip up top, a reserved
-    `_TAG_BAND_H` strip at the bottom for the source tag, and a uniform margin for the cardinal
-    peak numbers just outside the outer ring. Shared by the live widget (`GMeterOverlay._geom`)
-    and the offline renderer so both lay out identically.
+    """Centre + radius of the dial inside a (w, h) box, and the ONE geometry both modes use.
 
-    The bottom band is what keeps the source tag off the bottom cardinal number: without it the
-    two shared an 11 px band at the 120x140 minimum and the tag overprinted the number."""
-    title_h = 18
-    margin = 18                       # room for the cardinal peak numbers outside the ring
-    dial_top = title_h
-    dial_h = h - title_h - _TAG_BAND_H
-    r = (min(w, dial_h) - 2 * margin) / 2.0
-    r = max(r, 8.0)
-    cx = w / 2.0
-    cy = dial_top + dial_h / 2.0
-    return cx, cy, r
+    The face is the box minus a bottom band for the |g| readout, inset by a margin. Nothing is
+    painted outside the outer ring any more, so the margin only has to clear the box edge and the
+    export's haloed stroke — where the old live geometry spent 18 px of every side on cardinal
+    numbers and 18+13 px of height on a title strip and a tag band. Measured, at the 120x140
+    minimum the dial radius goes 36.5 -> 51.5 px (+41 %, and the face nearly doubles in area);
+    the ring no longer has numbers running off the card edge because there are none.
+
+    IT IS SHARED WITH THE EXPORT NOW, and that is the point rather than a saving. `paint_dial`
+    exists so the burned dial IS the on-screen dial; the export used to need its own
+    `_export_dial_geom` purely to reserve room for the big outlined cardinal numbers it painted
+    and the strips it didn't. With one composition there is one layout, at every output size."""
+    band = max(float(theme.SPACE_L), _READOUT_BAND_FRAC * h)
+    margin = max(float(theme.SPACE_S), _MARGIN_FRAC * min(w, h))
+    dial_h = h - band
+    r = max((min(w, dial_h) - 2 * margin) / 2.0, 8.0)
+    return w / 2.0, dial_h / 2.0, r
+
+
+def readout_rect(w: float, h: float) -> QRectF:
+    """The band under the dial that holds the single |g| readout — the only text outside the outer
+    ring, and the reason `dial_geom` pays for a band at all."""
+    band = max(float(theme.SPACE_L), _READOUT_BAND_FRAC * h)
+    return QRectF(0.0, h - band, w, band)
 
 
 def dial_to_screen(cx, cy, r, fx, fy):
@@ -328,63 +456,74 @@ def dial_to_screen(cx, cy, r, fx, fy):
     return cx + dx, cy + dy
 
 
-def _legend_px(r: float) -> float:
-    """Live legend type size (pixels) for a dial of radius `r`. The lower bound is what lets BOTH
-    lateral captions sit side by side inside the 120x140 minimum overlay; it grows with the dial so
-    a maximised video pane does not leave the legend stranded at caption size."""
-    lo, hi = _LEGEND_PX_RANGE
-    return min(hi, max(lo, r * 0.15))
+def _readout_px(r: float) -> float:
+    """Type size (px) of the |g| readout — the loudest thing on the face, and now the only number
+    on it. Proportional to the dial so a 120 px card and a 4K burn are the same design."""
+    return max(_READOUT_PX_MIN, r * _READOUT_PX_FRAC)
 
 
-def _legend_items(cx: float, cy: float, r: float, fm: QFontMetricsF):
-    """Layout for the in-dial legend, as [(rect, alignment flags, text), ...].
+def _caption_px(r: float) -> float:
+    """Type size (px) of the scale caption. Floored well above the ~6 px the old ring labels
+    reached, and kept clearly subordinate to the readout so the two never read as one pair."""
+    return max(_CAPTION_PX_MIN, r * _CAPTION_PX_FRAC)
 
-    Two things a bare four-number dial cannot say:
-      * WHICH DIRECTION each cardinal peak belongs to — four captions hugging the inside of the
-        rim (the felt-force convention means the LEFT number is a RIGHT-hand corner, so the
-        caption is essential, not decoration);
-      * WHAT UNIT the numbers are in — carried by the labelled rings ("0.5 g" / "1.0 g"), which
-        `_RINGS` has always been commented as having and which were never actually drawn.
 
-    Ring labels sit on the up-right diagonal of their own ring (the one part of the face with no
-    number, no crosshair and no resting dot) and are placed outermost-first: a label that would
-    collide with one already placed is dropped, so a small dial carries the 1.0 g reference only
-    and a large one carries both. Shared by the live and export painters so the burned-in dial
-    names exactly what the screen names."""
-    if r < _LEGEND_MIN_R:
-        return []
+def readout_text(st: DialState) -> str:
+    """The dial's one number: the magnitude of the felt-force pointer, in g.
+
+    It is the RADIUS OF THE DOT — hypot of the same filtered pair the dot is drawn at — not
+    `g_at_time`'s unfiltered total, so the number and the dot can never disagree on screen. One
+    decimal: the EMA has a ~0.1 s time constant, and a second decimal would churn every frame at
+    30 Hz without carrying a fact anyone can read. With no g signal at all, the app's no-value
+    mark rather than a fabricated `0.0`."""
+    if not st.seen:
+        return _NO_VALUE
+    return f"{math.hypot(st.fx, st.fy):.1f} g"
+
+
+def _scale_caption(cx: float, cy: float, r: float, fm: QFontMetricsF):
+    """(rect, text) for the ONE caption that gives the face its scale, or None when the gap between
+    the two rings is too narrow to hold it.
+
+    THE DEFECT THIS FIXES (review §6.5): the ring labels were centred exactly on the ring's own
+    up-right 45-degree point — drawn ON the stroke they named, a caption with a line through it.
+    It now sits at the RADIAL MIDPOINT of the annulus between the two rings, on the diagonal, which
+    is the placement with the most clearance from both by construction and needs no tuning as the
+    dial resizes. The diagonal is chosen because it is the one direction with no crosshair, no
+    readout and no resting dot.
+
+    IT IS THE BARE VALUE, and that was forced by measurement rather than taste. Rendered and
+    measured at four sizes, "1.0 g" does not fit this annulus at the 120x140 minimum at ANY radial
+    offset: its ink spans 18 px of a 19.3 px gap, so it lands on one stroke or the other whatever
+    you do. The bare "1.0" spans 12 px and clears both by 2.1 px. The unit is not lost — the
+    readout directly below it reads "1.1 g", in the largest type on the face — so the caption reads
+    as what it is, a tick label on a ring.
+
+    The DROP RULE keeps that honest on a machine whose face is wider than the shipped Inter: the
+    caption's radial half-extent (modelled from its own metrics, with 15 % of headroom over the
+    measured ink) plus the strokes' clearance must fit half the annulus, or nothing is drawn. A
+    missing tick label is a smaller failure than one with a ring through it."""
+    text = f"{_SCALE_RING_G:.1f}"
     fh = fm.height()
-    items = [
-        (QRectF(cx - r, cy - r + fh * 0.55, 2 * r, fh),
-         Qt.AlignHCenter | Qt.AlignVCenter, _DIR_BRAKE),
-        (QRectF(cx - r, cy + r - fh * 1.55, 2 * r, fh),
-         Qt.AlignHCenter | Qt.AlignVCenter, _DIR_ACCEL),
-    ]
-    # lateral captions share one row just BELOW the crosshair, hugging each rim: clear of the side
-    # numbers (which sit at the crosshair) and clear of the dot's resting position at the centre.
-    row_y = cy + fh * 0.90
-    inset = max(4.0, r * 0.10)
-    wl = fm.horizontalAdvance(_DIR_TURN_R)
-    wr = fm.horizontalAdvance(_DIR_TURN_L)
-    # Font metrics are platform-dependent: if the two captions cannot sit side by side with a real
-    # gap, drop them rather than let them run into each other (BRAKE/ACCEL and the rings stay).
-    if wl + wr + 2 * inset + fh * 0.4 <= 2 * r:
-        items.append((QRectF(cx - r + inset, row_y, wl, fh),
-                      Qt.AlignHCenter | Qt.AlignVCenter, _DIR_TURN_R))
-        items.append((QRectF(cx + r - inset - wr, row_y, wr, fh),
-                      Qt.AlignHCenter | Qt.AlignVCenter, _DIR_TURN_L))
-    placed: list[QRectF] = []
-    for gval in sorted(_RINGS, reverse=True):
-        rr = r * (gval / _FULL_SCALE_G)
-        text = f"{gval:.1f} g"
-        tw = fm.horizontalAdvance(text)
-        d = rr * 0.70710678                       # the ring's up-right 45-degree point
-        rect = QRectF(cx + d - tw / 2.0, cy - d - fh / 2.0, tw, fh)
-        if any(rect.intersects(prev) for prev in placed):
-            continue                              # too little room between rings at this size
-        items.append((rect, Qt.AlignHCenter | Qt.AlignVCenter, text))
-        placed.append(rect.adjusted(-fh * 0.25, -fh * 0.25, fh * 0.25, fh * 0.25))
-    return items
+    tw = fm.horizontalAdvance(text)
+    inner = r * (_SCALE_RING_G / _FULL_SCALE_G)
+    half_gap = (r - inner) / 2.0
+    # Measured: the ink's radial half-extent tracks (tw + fh) / 4 to within ~10 % at every size.
+    if (tw + fh) / 4.0 * 1.15 + _CAPTION_CLEAR_PX > half_gap:
+        return None
+    d = (inner + half_gap) * 0.70710678        # the annulus midpoint, on the 45-degree diagonal
+    return QRectF(cx + d - tw / 2.0, cy - d - fh / 2.0, tw, fh), text
+
+
+def _trail_segments(cx: float, cy: float, r: float, trail):
+    """The dot's recent path as [(QPointF a, QPointF b, recency), ...], oldest first, with recency
+    running 0 -> 1 so the painter can taper width and fade alpha along it. Empty for fewer than
+    two points (nothing to draw a stroke between)."""
+    if len(trail) < 2:
+        return []
+    pts = [QPointF(*dial_to_screen(cx, cy, r, fx, fy)) for (fx, fy) in trail]
+    n = len(pts) - 1
+    return [(pts[i], pts[i + 1], (i + 1) / n) for i in range(n)]
 
 
 # --------------------------------------------------------------------------- export palette
@@ -431,80 +570,58 @@ def _draw_text_outlined(p: QPainter, rect: QRectF, flags, text: str, font: QFont
     p.restore()
 
 
-def _export_dial_geom(w: float, h: float):
-    """Dial centre+radius for export: a larger margin for the bigger outlined cardinal numbers, and
-    NO reserved strips — neither the live dial's title band nor the provenance-tag band it used to
-    keep at the bottom (`_EXPORT_TAG_FRAC`, 5.5 % of the box). The export dial paints neither
-    string (see `_paint_dial_export`), so both bands go back into the dial: measured, the radius
-    grows 10.1 % (76.5 -> 84.2 px on the 280.8 px 1080p dial, 51.0 -> 56.2 at 720p, 153.0 -> 168.5
-    at 2160p) and the face 21 % in area, for free, and the dial re-centres in its own box."""
-    margin = 0.20 * min(w, h)          # room for the larger outlined cardinal numbers
-    r = max((min(w, h) - 2 * margin) / 2.0, 8.0)
-    return w / 2.0, h / 2.0, r
-
-
-def _export_legend_font(k: float) -> QFont:
-    """The export dial's legend type. Scales with the output height like every other export glyph;
-    the floor keeps a 720p burn readable (it is outlined white-on-halo, so small still reads)."""
-    return _font(max(6.0, 8.5 * k))
-
-
 def paint_dial(p: QPainter, w: float, h: float, st: DialState,
                export: bool = False, scale_k: float = 1.0) -> None:
-    """Paint the dial (backdrop, rings, legend, envelope, peaks, dot, and — live only — the source
-    tag) sized to (w,h) at the origin. Single source for the live widget + the offline exporter; no
-    widget state touched.
+    """Paint the dial — two rings, one scale caption, the grip envelope, the dot and its trail, and
+    the single |g| readout — sized to (w,h) at the origin. Single source for the live widget + the
+    offline exporter; no widget state touched.
 
-    Both modes paint the same MEANING-BEARING labels: the four direction captions and the labelled
-    rings that carry the unit (`_legend_items`). Two strings are live-only, both deliberate: the
-    "G METER" title (see `_export_dial_geom`) and the provenance tag `st.source` (see
-    `_paint_dial_export`). Anything else diverging is a regression —
-    tests/test_gmeter_overlay.py pins the set difference in both directions.
+    BOTH MODES NOW PAINT THE SAME STRINGS. The old face had two live-only ones (a "G METER" title
+    the export dropped for room, and the provenance tag the export deliberately did not burn into
+    someone's clip), and tests/test_gmeter_overlay.py existed to hold that difference at exactly
+    two. There is no difference left to hold: the title is gone from both and the provenance is on
+    the toggle's tooltip, so the burn and the screen say the same two things — the readout and the
+    scale caption. The test now pins set equality, which is a stronger contract than the old one.
 
-    export=False = on-screen look; export=True = the burn-over-bright variant (no box, white rings,
-    brighter envelope, bigger glowing dot, large outlined numbers). `scale_k` scales export
-    strokes/glyphs to the output height (1.0 ≈ a ~280 px dial at 1080p).
+    export=False = on-screen look; export=True = the burn-over-bright variant (no backdrop box,
+    white haloed rings, brighter envelope and trail, a bigger glowing dot, an outlined readout).
+    `scale_k` scales export strokes/glyphs to the output height (1.0 ≈ a ~280 px dial at 1080p);
+    the LAYOUT is `dial_geom` in both modes and does not need it.
 
-    The two layers (static template + moving dot) are painted here in one pass so a one-shot
-    caller (the offline exporter renders every frame fresh) stays byte-identical to the original.
-    The live widget instead caches the static layer and re-blits it per frame (see
-    `GMeterOverlay.paintEvent`); the split is a rendering-cost optimisation, not a visual change."""
+    The live split into a cached static layer + a moving layer is a rendering-cost optimisation,
+    not a visual change: painting both here in one pass is byte-identical to blitting the cache
+    and drawing the moving layer over it (pinned by test_cached_paint_is_pixel_identical...)."""
     p.setRenderHint(QPainter.Antialiasing, True)
     if export:
         _paint_dial_export(p, w, h, st, scale_k)
         return
     _paint_dial_static(p, w, h, st)
-    _paint_dial_dot(p, w, h, st)
+    _paint_dial_moving(p, w, h, st)
 
 
 def _paint_dial_static(p: QPainter, w: float, h: float, st: DialState) -> None:
-    """The SLOW-CHANGING live dial layer: backdrop box, caption, rings, crosshair, grip envelope,
-    legend (direction captions + labelled rings), cardinal peak numbers, source tag — everything
-    except the per-frame moving dot. Identical frame-to-frame at a given size while the
-    envelope/peaks/source are unchanged, so the live widget renders this once into a cached pixmap
-    (keyed by size + palette + envelope-version) and re-blits it every tick, drawing only the dot
-    on top."""
+    """The SLOW-CHANGING live layer: backdrop box, the two rings, the crosshair, the scale caption
+    and the grip envelope. Identical frame-to-frame at a given size while the envelope is
+    unchanged, so the live widget renders it once into a cached pixmap (keyed by size + palette +
+    envelope-version) and re-blits it every tick.
+
+    THE READOUT IS DELIBERATELY NOT HERE. It is a function of the dot's position, which moves on
+    every tick including ones that do not bump `version` (a `set_g(None)` blanks the dot without
+    touching the envelope) — cached, it would go stale and quietly report a g the dial is no
+    longer pointing at."""
     cx, cy, r = dial_geom(w, h)
 
     # panel-grey backing (C.surface) + theme hairline so the dial reads as app chrome over footage
     backdrop = QRectF(1, 1, w - 2, h - 2)
     p.setBrush(_c(C.surface, 168))
     p.setPen(QPen(_c(C.border, 200), 1))
-    p.drawRoundedRect(backdrop, 12, 12)
+    p.drawRoundedRect(backdrop, theme.RADIUS_M, theme.RADIUS_M)
 
-    # G METER caption, theme caption type
-    p.setPen(QPen(_c(C.text_dim, 235)))
-    title_f = _font(7.5, bold=True)
-    title_f.setLetterSpacing(QFont.AbsoluteSpacing, 1.4)
-    p.setFont(title_f)
-    p.drawText(QRectF(0, 3, w, 14), Qt.AlignHCenter | Qt.AlignVCenter, _TITLE)
-
-    # concentric rings: theme hairline, dimmed
+    # the reference ring — theme hairline, dim
     p.setBrush(Qt.NoBrush)
-    for gval in _RINGS:
-        rr = r * (gval / _FULL_SCALE_G)
-        p.setPen(QPen(_c(C.border, 190), 1.0))   # inner grid circles — theme hairline, dim
-        p.drawEllipse(QPointF(cx, cy), rr, rr)
+    p.setPen(QPen(_c(C.border, 190), 1.0))
+    rr = r * (_SCALE_RING_G / _FULL_SCALE_G)
+    p.drawEllipse(QPointF(cx, cy), rr, rr)
     # outer boundary ring — the interactive/hover hairline (C.border_strong), a touch stronger
     p.setPen(QPen(_c(C.border_strong, 215), 1.2))
     p.drawEllipse(QPointF(cx, cy), r, r)
@@ -526,86 +643,87 @@ def _paint_dial_static(p: QPainter, w: float, h: float, st: DialState) -> None:
             p.setPen(QPen(_c(C.accent_hover, 215), 1.4))  # bright amber rim = the grip envelope
             p.drawPath(path)
 
-    # in-dial legend: the four direction captions + the labelled rings (which carry the unit).
-    # Drawn after the envelope wash so the captions stay readable through it, before the peak
-    # numbers so those stay the loudest text on the face.
-    legend_f = _font(_legend_px(r))
-    p.setFont(legend_f)
-    p.setPen(QPen(_c(C.text_dim, 195)))
-    for rect, flags, text in _legend_items(cx, cy, r, QFontMetricsF(legend_f)):
-        p.drawText(rect, flags, text)
-
-    # cardinal peak-g numbers (robust max felt-g per direction)
-    p.setFont(_font(8.0, bold=True))
-    p.setPen(QPen(_c(C.text_dim, 235)))
-    off = 11
-    # forward (braking) at top, back (accel) at bottom, left/right on the sides
-    p.drawText(QRectF(cx - 22, cy - r - off - 6, 44, 12), Qt.AlignCenter, f"{st.peak_fwd:.1f}")
-    p.drawText(QRectF(cx - 22, cy + r + off - 6, 44, 12), Qt.AlignCenter, f"{st.peak_back:.1f}")
-    p.drawText(QRectF(cx - r - off - 22, cy - 6, 44, 12), Qt.AlignRight | Qt.AlignVCenter,
-               f"{st.peak_left:.1f}")
-    p.drawText(QRectF(cx + r + off - 22, cy - 6, 44, 12), Qt.AlignLeft | Qt.AlignVCenter,
-               f"{st.peak_right:.1f}")
-
-    # source tag (bottom-right): names the dial's axis provenance (IMU lateral · GPS longitudinal),
-    # not one source — `st.source` is already the display label (see source_label). It lives in the
-    # `_TAG_BAND_H` strip dial_geom reserves for it, so it never lands on the bottom peak number;
-    # C.text_dim (not text_muted) because at 6.5 pt the tertiary token was an illegible smear.
-    p.setPen(QPen(_c(C.text_dim, 225)))
-    p.setFont(_font(_TAG_PX))
-    # a wider box so "IMU lat · GPS long" isn't clipped (still bottom-right anchored)
-    p.drawText(QRectF(w - 96, h - _TAG_BAND_H, 92, _TAG_BAND_H - 1),
-               Qt.AlignRight | Qt.AlignVCenter, st.source)
+    # the one scale caption, floated off both ring strokes (see _scale_caption)
+    cap_f = _font(_caption_px(r))
+    item = _scale_caption(cx, cy, r, QFontMetricsF(cap_f))
+    if item is not None:
+        rect, text = item
+        p.setFont(cap_f)
+        p.setPen(QPen(_c(C.text_dim, 205)))
+        p.drawText(rect, Qt.AlignHCenter | Qt.AlignVCenter, text)
 
 
-def _paint_dial_dot(p: QPainter, w: float, h: float, st: DialState) -> None:
-    """The PER-FRAME live dial layer: the felt-force pointer (amber glow + dark-ringed off-white
-    core), the only element that moves every ~30 Hz tick. Painted on top of the static layer."""
-    if not st.have:
-        return
+def _paint_dial_moving(p: QPainter, w: float, h: float, st: DialState) -> None:
+    """The PER-FRAME live layer: the dot's trail, the felt-force dot itself, and the |g| readout —
+    the three things that change on every ~30 Hz tick. Painted on top of the static layer.
+
+    With no g signal at all (`st.seen` False) the trail and dot are skipped and the readout is the
+    no-value mark: the instrument at rest rather than a fabricated `0.0`."""
     cx, cy, r = dial_geom(w, h)
-    dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
-    grad = QRadialGradient(QPointF(dx, dy), 8)
-    grad.setColorAt(0.0, _c(C.accent_hover, 245))
-    grad.setColorAt(1.0, _c(C.accent_hover, 0))
-    p.setPen(Qt.NoPen)
-    p.setBrush(grad)
-    p.drawEllipse(QPointF(dx, dy), 7, 7)
-    p.setPen(QPen(_c(C.canvas, 220), 1.0))   # thin dark ring so the core reads off the glow
-    p.setBrush(_c(C.text, 250))
-    p.drawEllipse(QPointF(dx, dy), 2.6, 2.6)
+
+    if st.seen:
+        wide = max(1.6, r * _TRAIL_WIDTH_FRAC)
+        p.setBrush(Qt.NoBrush)
+        for a, b, f in _trail_segments(cx, cy, r, st.trail):
+            pen = QPen(_c(C.text, int(25 + 140 * f)),
+                       wide * (_TRAIL_TAPER + (1 - _TRAIL_TAPER) * f))
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.drawLine(a, b)
+
+    if st.have:
+        dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
+        glow = max(_DOT_GLOW_MIN, r * _DOT_GLOW_FRAC)
+        core = max(_DOT_CORE_MIN, r * _DOT_CORE_FRAC)
+        grad = QRadialGradient(QPointF(dx, dy), glow + 1.0)
+        grad.setColorAt(0.0, _c(C.accent_hover, 245))
+        grad.setColorAt(1.0, _c(C.accent_hover, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(grad)
+        p.drawEllipse(QPointF(dx, dy), glow, glow)
+        p.setPen(QPen(_c(C.canvas, 220), 1.0))   # thin dark ring so the core reads off the glow
+        p.setBrush(_c(C.text, 250))
+        p.drawEllipse(QPointF(dx, dy), core, core)
+
+    # the one readout, in the band dial_geom reserves for it — so it can never land on the dial
+    p.setFont(_font(_readout_px(r), bold=True))
+    p.setPen(QPen(_c(C.text if st.seen else C.text_dim, 245)))
+    p.drawText(readout_rect(w, h), Qt.AlignHCenter | Qt.AlignVCenter, readout_text(st))
 
 
 def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float) -> None:
-    """The export g-dial: no backdrop box, white high-contrast rings, a brighter amber envelope,
-    big outlined cardinal-g numbers, the same direction/ring legend the live dial paints, and a
-    bigger haloed dot. Layout via _export_dial_geom; `k` scales strokes/glyphs with the output
-    height.
+    """The export g-dial: the same composition as the screen (two rings, one scale caption, the
+    grip envelope, the trail, the dot, the |g| readout), restyled to survive being burned over
+    bright footage — no backdrop box, white haloed rings, a brighter amber envelope and trail, a
+    bigger glowing dot, and outlined text. Layout is the shared `dial_geom`; `k` scales strokes and
+    glyphs with the output height.
 
-    TWO STRINGS THE LIVE DIAL PAINTS AND THIS ONE DOES NOT, both deliberate:
+    NO SIGNAL, NO DIAL. Every export of a recording with no g series used to burn in a complete
+    instrument — two rings, a crosshair, six legend words and four `0.0` peaks — that measured
+    nothing, because `overlay_values_at` hands the painter `g=None` on every frame and the dial had
+    no way to tell that from "no sample yet" (review §6.5). `st.seen` is that distinction, and here
+    it means the dial is simply not painted: the clip carries the overlays it has data for. On
+    screen the same recording cannot even reach this state — `central_view` disables the g-meter
+    toggle and says why on its tooltip — so nothing is silently dropped.
 
-      * the "G METER" title strip, dropped so the dial fills more of its box;
-      * the PROVENANCE TAG (`st.source`, "IMU lat · GPS long"). This is the owner's decision for
-        the VIDEO only — it is a nine-pixel line of sensor plumbing sitting under a dial in a clip
-        someone watches, and dropping it hands its reserved band back to the dial (+10.1 % radius,
-        see `_export_dial_geom`). The rule it relaxes is real and is stated in `source_label`: the
-        dial's LATERAL axis is the IMU (r ~ +0.89 against GPS) while its BRAKING/ACCEL axis is the
-        GPS speed-derivative (the IMU forward axis is vibration-inflated, r ~ +0.36), so a bare
-        source name would misattribute the braking axis. That is why `source_label` keeps its
-        exact string and the LIVE dial keeps painting it: the place the app states its g
-        provenance is the on-screen meter, where a driver is reading the numbers to act on them.
-        See studio/docs/gmeter-validation.md."""
+    THE PROVENANCE TAG that used to be live-only is now on that toggle's tooltip for both
+    (`source_sentence`), so there is no longer any string one mode paints and the other does not.
+    The rule it states is real — the dial's LATERAL axis is the IMU (r ~ +0.89 against GPS) while
+    its BRAKING/ACCEL axis is the GPS speed-derivative, the IMU forward axis being vibration-
+    inflated (r ~ +0.36) — and it is stated in words on a hover instead of nine pixels of sensor
+    plumbing under a dial in a clip someone watches. See studio/docs/gmeter-validation.md."""
+    if not st.seen:
+        return
     k = max(0.5, float(k))
-    cx, cy, r = _export_dial_geom(w, h)
+    cx, cy, r = dial_geom(w, h)
 
     # --- rings (white, high-contrast) with a dark halo so they read on bright sky too ---
     p.setBrush(Qt.NoBrush)
-    for gval in _RINGS:
-        rr = r * (gval / _FULL_SCALE_G)
-        p.setPen(QPen(_c(_EX_HALO, 150), 3.0 * k))
-        p.drawEllipse(QPointF(cx, cy), rr, rr)
-        p.setPen(QPen(_c(_EX_GRID, 150), 1.4 * k))   # inner grid circles
-        p.drawEllipse(QPointF(cx, cy), rr, rr)
+    rr = r * (_SCALE_RING_G / _FULL_SCALE_G)
+    p.setPen(QPen(_c(_EX_HALO, 150), 3.0 * k))
+    p.drawEllipse(QPointF(cx, cy), rr, rr)
+    p.setPen(QPen(_c(_EX_GRID, 150), 1.4 * k))       # the reference ring
+    p.drawEllipse(QPointF(cx, cy), rr, rr)
     # outer boundary ring — brightest
     p.setPen(QPen(_c(_EX_HALO, 170), 4.2 * k))
     p.drawEllipse(QPointF(cx, cy), r, r)
@@ -635,29 +753,31 @@ def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float)
             p.setBrush(_c(_EX_ACCENT, 70))
             p.drawPath(path)
 
-    # --- in-dial legend, MIRRORED from the live dial: same direction captions, same labelled
-    # rings, same strings. The burned-in dial must not be more silent than the screen it came from.
-    legend_f = _export_legend_font(k)
-    for rect, flags, text in _legend_items(cx, cy, r, QFontMetricsF(legend_f)):
-        _draw_text_outlined(p, rect, flags, text, legend_f, _EX_TEXT, halo=1.5 * k)
+    # --- the dot's trail. One dark polyline underneath carries the halo (a per-segment halo would
+    # double the draw count for a stroke that is one shape), then the tapered fading amber over it.
+    segs = _trail_segments(cx, cy, r, st.trail)
+    if segs:
+        wide = max(2.0, r * _TRAIL_WIDTH_FRAC)
+        halo = QPen(_c(_EX_HALO, 150), wide + 2.4 * k)
+        halo.setCapStyle(Qt.RoundCap)
+        halo.setJoinStyle(Qt.RoundJoin)
+        p.setPen(halo)
+        p.setBrush(Qt.NoBrush)
+        p.drawPolyline(QPolygonF([a for a, _b, _f in segs] + [segs[-1][1]]))
+        for a, b, f in segs:
+            pen = QPen(_c(_EX_TEXT, int(35 + 175 * f)),
+                       wide * (_TRAIL_TAPER + (1 - _TRAIL_TAPER) * f))
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.drawLine(a, b)
 
-    # --- BIG cardinal peak-g numbers (robust max felt-g per direction), outlined ---
-    fnt = _font(max(8.0, 13.0 * k), bold=True)
-    off = 16 * k
-    bw, bh = 56 * k, 22 * k
-    _draw_text_outlined(p, QRectF(cx - bw / 2, cy - r - off - bh, bw, bh),
-                        Qt.AlignCenter, f"{st.peak_fwd:.1f}", fnt, _EX_TEXT, halo=2.2 * k)
-    _draw_text_outlined(p, QRectF(cx - bw / 2, cy + r + off, bw, bh),
-                        Qt.AlignCenter, f"{st.peak_back:.1f}", fnt, _EX_TEXT, halo=2.2 * k)
-    _draw_text_outlined(p, QRectF(cx - r - off - bw, cy - bh / 2, bw, bh),
-                        Qt.AlignRight | Qt.AlignVCenter, f"{st.peak_left:.1f}", fnt, _EX_TEXT,
-                        halo=2.2 * k)
-    _draw_text_outlined(p, QRectF(cx + r + off, cy - bh / 2, bw, bh),
-                        Qt.AlignLeft | Qt.AlignVCenter, f"{st.peak_right:.1f}", fnt, _EX_TEXT,
-                        halo=2.2 * k)
-
-    # (No provenance tag here — see this function's docstring. `st.source` is still SET by the
-    # exporter and still painted by the live dial; the export just does not burn it into the file.)
+    # --- the one scale caption, outlined; same string and same placement as the screen ---
+    cap_f = _font(_caption_px(r))
+    item = _scale_caption(cx, cy, r, QFontMetricsF(cap_f))
+    if item is not None:
+        rect, text = item
+        _draw_text_outlined(p, rect, Qt.AlignHCenter | Qt.AlignVCenter, text, cap_f, _EX_TEXT,
+                            halo=1.5 * k)
 
     # --- the live felt-force dot: a bigger soft glow + a dark-haloed bright core ---
     if st.have:
@@ -677,15 +797,20 @@ def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float)
         p.setBrush(_c(_EX_TEXT, 250))
         p.drawEllipse(QPointF(dx, dy), 4.0 * k, 4.0 * k)
 
+    # --- the one readout, in the band under the dial (the same band the screen uses) ---
+    rd_f = _font(_readout_px(r), bold=True)
+    _draw_text_outlined(p, readout_rect(w, h), Qt.AlignHCenter | Qt.AlignVCenter,
+                        readout_text(st), rd_f, _EX_TEXT, halo=2.2 * k)
+
 
 class GMeterOverlay(QWidget):
     """The LIVE on-screen dial: a window that owns a `DialFilter` and repaints when it changes.
 
-    Everything that is not a window — the EMA, the envelope, the peaks, the lap scope, the source
-    label — is the filter's (see `DialFilter` for why it is separable). This class keeps the
-    widget-only concerns: the frameless translucent top-level window, the static-layer pixmap
-    cache, and calling `update()` at exactly the points it always did (each mutator repaints iff
-    the filter reports the painted dial changed)."""
+    Everything that is not a window — the EMA, the trail, the envelope, the peaks, the lap scope —
+    is the filter's (see `DialFilter` for why it is separable). This class keeps the widget-only
+    concerns: the frameless translucent top-level window, the static-layer pixmap cache, and
+    calling `update()` at exactly the points it always did (each mutator repaints iff the filter
+    reports the painted dial changed)."""
 
     def __init__(self, parent: QWidget | None = None):
         # Frameless translucent top-level window so it composites above the native video surface
@@ -698,11 +823,11 @@ class GMeterOverlay(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setMinimumSize(120, 140)
         self._filter = DialFilter()
-        # --- static-layer cache (a per-frame repaint blits this + draws only the moving dot) ---
-        # The cached pixmap is keyed by (size, palette, `_filter.version`), which bumps whenever ANY
-        # static-layer content changes (the grip envelope points, the cardinal peaks, or the source
-        # tag), so the convex hull + all the ring/backdrop/number drawing recompute exactly ONCE per
-        # envelope change — not every ~30 Hz tick that only moves the dot.
+        # --- static-layer cache (a per-frame repaint blits this + draws the moving layer) ---
+        # The cached pixmap is keyed by (size, palette, `_filter.version`), which bumps whenever the
+        # static layer's content changes (the grip envelope points), so the convex hull + all the
+        # ring/backdrop/caption drawing recompute exactly ONCE per envelope change — not every
+        # ~30 Hz tick that only moves the dot, its trail and the readout.
         self._static_pixmap = None          # QPixmap | None
         self._static_key: tuple | None = None
 
@@ -719,14 +844,8 @@ class GMeterOverlay(QWidget):
         if self._filter.set_lap(lap_id):
             self.update()
 
-    def set_source(self, source: str, long_source: str | None = None) -> None:
-        """Label the dial's axis provenance, shown small in the corner. See
-        `DialFilter.set_source`."""
-        if self._filter.set_source(source, long_source):
-            self.update()
-
     def reset_envelope(self) -> None:
-        """Clear the envelope + cardinal peaks and re-seed the dot EMA. See
+        """Clear the envelope + cardinal peaks + trail and re-seed the dot EMA. See
         `DialFilter.reset_envelope`."""
         self._filter.reset_envelope()
         self.update()
@@ -768,15 +887,15 @@ class GMeterOverlay(QWidget):
         return pm
 
     def paintEvent(self, _event):
-        # Per-frame cost = blit the cached static layer + draw ONLY the moving dot. The backdrop,
-        # rings, crosshair, caption, grip envelope (convex hull) and cardinal numbers are rendered
-        # once into `_static_pixmap` and reused until the envelope/size/palette changes; only the
-        # felt-force dot is re-drawn each ~30 Hz tick (the sole element that moves).
+        # Per-frame cost = blit the cached static layer + draw the moving one. The backdrop, the
+        # two rings, the crosshair, the scale caption and the grip envelope (convex hull) are
+        # rendered once into `_static_pixmap` and reused until the envelope/size/palette changes;
+        # the trail, the dot and the |g| readout are re-drawn each ~30 Hz tick.
         st = self._dial_state()
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.drawPixmap(0, 0, self._static_layer(st))
-        _paint_dial_dot(p, self.width(), self.height(), st)
+        _paint_dial_moving(p, self.width(), self.height(), st)
         p.end()
 
 

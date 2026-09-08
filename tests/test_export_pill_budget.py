@@ -294,7 +294,15 @@ def _cases():
     Each is a (name, session, spec kwargs) the two pills have to hold: a 3-digit speed, a
     double-digit Δ in both signs, the `★ BEST` mark, the all-ones values (`1` is the narrow digit,
     so a 1-heavy string is the widest departure a proportional face would make), a small negative
-    Δ, and a 10-minute lap whose clock gains a digit."""
+    Δ, and a 10-minute lap whose clock gains a digit.
+
+    THE LAST CASE IS ABOUT THE OTHER OVERLAY. Every case here had `has_gmeter` false, so the sweep
+    had never once composited a frame with a g-dial actually drawn on it — a gap that predates the
+    §6.5 dial redesign and that the redesign makes conspicuous, because the dial now paints
+    NOTHING at all without a g signal (a clip off a recording with no accelerometer gets no dial).
+    Without a live case this sweep would have gone from measuring an idle dial to measuring no dial
+    and still reported 720 green samples. `dial_g` turns the signal on so the redesigned face — its
+    rings, trail, dot and readout — is in the composite the pill margins are measured against."""
     tt = np.round(np.arange(0.0, 200.001, 0.1), 6)
     n = len(tt)
     return [
@@ -307,6 +315,8 @@ def _cases():
         ("delta_small_neg", Stub(tt, np.full(n, 88.0), 0.0, 64.238, lambda t: -0.31), {}),
         ("ten_minute_lap", Stub(tt, np.full(n, 88.0), 0.0, 190.0, lambda t: 0.0),
          {"lead_out": 5.0}),
+        ("dial_g", Stub(tt, np.full(n, 88.0), 0.0, 64.238, lambda t: 0.0, has_g=True),
+         {"lead_in": 5.0, "lead_out": 5.0}),
     ]
 
 
@@ -314,7 +324,7 @@ def test_no_run_paints_outside_its_pill():
     """The sweep's own assertion, re-run against the new budget: nothing either painter draws may
     land outside the pill it was fitted to, on ANY of the four edges.
 
-    720 composited samples — 5 output heights x 2 units x 2 palettes x 6 content cases x 3 frames
+    840 composited samples — 5 output heights x 2 units x 2 palettes x 7 content cases x 3 frames
     x 2 pills. The VERTICAL axis is in here because nothing in the export wave had ever measured
     it: the pills are fitted horizontally, and their height comes from a frame fraction, so a
     descender or a halo escaping the box is a separate failure mode from the one F3/F4 describe.

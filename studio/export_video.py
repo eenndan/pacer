@@ -1438,8 +1438,7 @@ class OverlayPainter:
         sh = max(cfg.strip_h_frac * out_h, 20.0)
         self._strip_rect = QRectF(m, m, strip_pill_width(sh, labels, tails), sh)
         # The g-meter dial's FILTERING STATE, driven exactly like the live overlay so the burned
-        # dial matches the screen (incl. the axis-provenance tag: IMU lateral · GPS longitudinal,
-        # not a bare source name).
+        # dial matches the screen.
         #
         # A `DialFilter`, NOT a `GMeterOverlay`: this constructor runs on `VideoExportWorker`'s
         # QThread, and `GMeterOverlay` is a frameless translucent top-level QWidget. Creating and
@@ -1448,10 +1447,10 @@ class OverlayPainter:
         # libx264 fallback path. The render path never wanted the widget: it only calls the free
         # `gmeter_overlay.paint_dial` with a `DialState` snapshot, which the filter provides.
         # tests/test_export_thread_safety.py holds this line to it.
+        # The dial no longer carries its axis provenance (it was a 6.5 px tag the export never
+        # burned in anyway; it is a sentence on the on-screen toggle's tooltip now — review §6.5),
+        # so there is nothing to seed here beyond the filtering itself.
         self._dial = gmeter_overlay.DialFilter()
-        _src = session.gmeter_source() if hasattr(session, "gmeter_source") else "accl"
-        _long = session.gmeter_long_source() if hasattr(session, "gmeter_long_source") else None
-        self._dial.set_source(_src, _long)
         # --- lap-scoped envelope bookkeeping (see feed_g / advance_and_snapshot) ---
         self._fed_before_line = False        # g was pushed while the lap was still pending
         self._crossed_line = False           # the start line has been reached

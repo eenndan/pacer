@@ -264,11 +264,16 @@ def test_building_and_driving_the_painter_off_thread_creates_no_widget():
     assert th.dial_type is gmeter_overlay.DialFilter, th.dial_type
     # ...and it really ran: the lap frames carry a grown envelope and non-zero cardinal peaks.
     last = th.states[-1]
-    assert last.have and len(last.hull_pts) > 10, (last.have, len(last.hull_pts))
+    assert last.have and last.seen and len(last.hull_pts) > 10, (last.have, len(last.hull_pts))
     assert last.peak_right > 0.1 and last.peak_fwd > 0.1, (last.peak_right, last.peak_fwd)
-    assert last.source == "IMU lat · GPS long", last.source
+    # ...including the dot's TRAIL, which the redesign added to the same filter and which the
+    # painter therefore also has to build off-thread. (The provenance tag that used to be asserted
+    # here is gone from the dial entirely — it is a sentence on the on-screen toggle's tooltip now;
+    # tests/test_gmeter_overlay.py pins both halves of that move.)
+    assert len(last.trail) > 2 and last.trail[-1] == (last.fx, last.fy), last.trail
     print(f"ok  60 frames built+driven+painted on a QThread; widget census unchanged "
-          f"(peaks R={last.peak_right:.2f} F={last.peak_fwd:.2f}, hull {len(last.hull_pts)} pts)")
+          f"(peaks R={last.peak_right:.2f} F={last.peak_fwd:.2f}, hull {len(last.hull_pts)} pts, "
+          f"trail {len(last.trail)} pts)")
 
 
 def test_the_live_widget_still_owns_the_same_filter(_=None):
@@ -278,7 +283,6 @@ def test_the_live_widget_still_owns_the_same_filter(_=None):
     plain = gmeter_overlay.DialFilter()
     seq = [(0.5, -0.2, 0.54), (-0.9, 0.3, 0.95), (0.1, 0.8, 0.81), None, (1.4, -1.1, 1.78)]
     for holder in (widget, plain):
-        holder.set_source("accl", "gps")
         holder.set_lap(4)
         for g in seq * 20:
             holder.set_g(g)
