@@ -25,7 +25,9 @@ Run BEFORE refactoring to write golden_session.json, then AFTER to write a candi
 (via studio.dev.golden_compare). This was the F1 god-object-decomposition equivalence gate.
 Usage:  python -m studio.dev.golden_session_dump <out.json> [--force]
         The argument is the OUTPUT file (must end in .json, must not already exist).
-        The RECORDING to dump is REAL / $PACER_GOLDEN_MP4 — never a CLI argument.
+        The RECORDING to dump is REAL / $PACER_GOLDEN_MP4 — never a CLI argument. It must be a
+        real MP4: the tool refuses (exit 2) a path that is missing, not an MP4 container, or
+        unreadable by the GPMF parser, rather than fingerprinting whatever it can open.
 """
 from __future__ import annotations
 
@@ -41,11 +43,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 # The gate's reference recording. Overridable, because the default path is only a convention — and
-# a file that EXISTS while failing to parse used to surface as a bare "Failed to open file". (The
-# default path is in fact such a file: this tool's own CLI destroyed it, writing a JSON dump over
-# 11.9 GB of the owner's footage. Its argument is the OUTPUT — see the usage note above.) Point
-# PACER_GOLDEN_MP4 at any real recording; both sides of a comparison just have to use the same one.
-REAL = os.path.expanduser(os.environ.get("PACER_GOLDEN_MP4", "~/Desktop/D24/GX010060.MP4"))
+# a file that EXISTS while failing to parse used to surface as a bare "Failed to open file".
+#
+# THE DEFAULT IS CHAPTER **2**, and that is not a typo. GX010060.MP4 — the obvious default, and the
+# one this line carried — is the file this tool's own CLI destroyed, writing a JSON dump over
+# 11.9 GB of the owner's footage (its argument is the OUTPUT; see the usage note above). It still
+# EXISTS, still parses as a GoPro name, and is 2.4 MB of JSON, so every run of the real-D24 gate
+# that did not set PACER_GOLDEN_MP4 fingerprinted nothing at all. GX020060.MP4 is intact.
+# Point PACER_GOLDEN_MP4 at any real recording; both sides of a comparison just have to use the
+# same one (the fingerprint is recording-specific — a before/after pair taken on DIFFERENT
+# recordings compares nothing).
+REAL = os.path.expanduser(os.environ.get("PACER_GOLDEN_MP4", "~/Desktop/D24/GX020060.MP4"))
 
 
 def _round(v):
@@ -304,7 +312,19 @@ def main():
         print(f"FATAL: real session not found at {REAL} "
               "(set PACER_GOLDEN_MP4 to another recording)", file=sys.stderr)
         sys.exit(2)
-    try:  # present-but-unparseable → say so here, don't raise from deep inside the loader
+    # PRESENT-BUT-NOT-A-RECORDING, in two escalating probes, because `Session.load` no longer
+    # raises on one: it now SKIPS a path that isn't an MP4 (chapters.split_non_mp4) so a chaptered
+    # recording survives one destroyed chapter. That is right for the app and wrong for a gate —
+    # a fingerprint taken over "whatever of this recording could be opened" is not a fingerprint of
+    # the recording. So the gate insists on the file it was pointed at, itself, and says which of
+    # the two ways it failed.
+    from studio import chapters
+    if not chapters.is_mp4_container(REAL):
+        print(f"FATAL: {REAL} exists but is not an MP4 at all (its first box header is not an ISO "
+              "media box) — something has overwritten it. Set PACER_GOLDEN_MP4 to a real "
+              "recording; on the dev Desktop, ~/Desktop/D24/GX020060.MP4.", file=sys.stderr)
+        sys.exit(2)
+    try:  # an MP4 that the GPMF parser still refuses → say so here, not from deep in the loader
         import pacer
         pacer.GPMFSource(REAL)
     except Exception as exc:  # noqa: BLE001

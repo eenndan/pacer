@@ -116,6 +116,18 @@ add_test(NAME test_load_pipeline
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_pipeline.py)
 set_tests_properties(test_load_pipeline PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# A sibling chapter that is NOT VIDEO (fix/destroyed-fixture-hazards): chapters.discover_siblings
+# groups on FILENAMES, so a file wearing a chapter's name while holding something else was handed
+# to GPMFSource and failed the WHOLE recording — measured on the owner's own ~/Desktop/D24, where
+# GX010060.MP4 is 2.4 MB of JSON a dev tool wrote over 11.9 GB of footage, so File ▸ Load full
+# recording on 0060 was dead. Pins the is_mp4_container probe, the split + the notice that NAMES
+# what was left out, that discovery is deliberately NOT filtered (sidecar/library key on [0]'s
+# stem), the Session.load skip on a synthetic recording built from the committed hero6 clip, and
+# the all-junk raise. Real Session.load + a StudioWindow -> Qt offscreen.
+add_test(NAME test_unreadable_chapter
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_unreadable_chapter.py)
+set_tests_properties(test_unreadable_chapter PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Start-line widen decision (test/fit-start-line-widen): load._fit_start_line keeps a sufficient
 # registry line but widens (1.15/1.3/1.5 about the midpoint) to recover band-laps a too-short line
 # missed — it sets known-track lap segmentation. Both branches pinned on a synthetic circle Laps.
@@ -668,7 +680,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_charts_panel test_lap_table_affordances test_export_gates
                         test_golden_hermetic test_design_system test_inline_styles
                         test_first_run_path test_map_key test_video_view_compare
-                        test_export_typography)
+                        test_export_typography test_unreadable_chapter)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

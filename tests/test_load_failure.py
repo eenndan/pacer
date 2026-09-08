@@ -148,7 +148,10 @@ def test_failure_message_generic_branch_is_reachable():
     with tempfile.TemporaryDirectory() as root:
         path = os.path.join(root, "GX010097.MP4")
         with open(path, "wb") as f:
-            f.write(b"\x00" * 64)
+            # A REAL MP4 box header, not 64 zero bytes: a GoPro-named file whose contents are not
+            # an MP4 container is now its own case (the destroyed-stub branch), so the generic
+            # fallback needs an input that gets PAST every classified case to be reached at all.
+            f.write(b"\x00\x00\x00\x18ftypmp41" + b"\x00" * 64)
         msg = StudioWindow._load_failure_message([path], ValueError("some numpy blow-up"))
         assert "may be corrupt or unsupported" in msg, msg
         assert "ValueError" not in msg, msg
