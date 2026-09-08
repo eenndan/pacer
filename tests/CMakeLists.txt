@@ -717,6 +717,23 @@ add_test(NAME test_compare_lifecycle
 set_tests_properties(test_compare_lifecycle PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
+# EXPORT THREAD-SAFETY guard — the same GUI-thread rule as the lifecycle guard above, on the other
+# surface that breaks it. Every video export ran `Renderer` on VideoExportWorker's QThread, and
+# `OverlayPainter.__init__` built a `GMeterOverlay` there: a frameless translucent Qt.Tool TOP-LEVEL
+# widget, constructed AND destroyed off the GUI thread, twice when a VideoToolbox encode fell back
+# to libx264. It never crashed only because the dial is never show()n. The dial's bookkeeping now
+# lives in a Qt-free `gmeter_overlay.DialFilter`; this pins that. Structural half: walk the call
+# graph from VideoExportWorker.run / Renderer / OverlayPainter through every studio class-or-
+# function they construct, and require no QWidget subclass (with player_pane.PlayerPane as a
+# positive control, so the walk cannot pass by resolving nothing). Behavioural half: build and
+# drive an OverlayPainter on a real QThread and require the process's widget census to be
+# unchanged. Both halves fail on the pre-fix build (census 0 -> 1; the walk names export_video.py's
+# GMeterOverlay line). Seconds, no footage; real theme + fonts -> run offscreen.
+add_test(NAME test_export_thread_safety
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_thread_safety.py)
+set_tests_properties(test_export_thread_safety PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
 # A MEASURE BOUNDS CONTENT — it may not become the minimum of the thing carrying it. The design
 # wave spent two per-instance measurements on dimensions a widget SHARES: EmptyState's measure
 # pinned the pane's own minimum (a one-way ratchet — one zero-lap recording had three window
