@@ -1,6 +1,8 @@
-"""map_render — Qt-free pure-numpy track-map math unit tests (synthetic data).
+"""map_render — pure-numpy track-map math unit tests (synthetic data).
 
-studio.map_render is the extracted pure core of the track map (no Qt, no pacer):
+studio.map_render is the extracted pure core of the track map — every function is numpy in, numpy
+out, and pacer-free; the module itself is NOT Qt-free at import (it takes `MAP_RAINBOW_N` from
+`theme`), which is why this test runs offscreen:
   * `bucketize` — values → bucket ids over [lo, hi]: known mappings, hi lands in the TOP bucket
     (clamped), NaN → -1, degenerate (flat) range → the middle bucket, explicit lo/hi override.
   * `bucket_polylines` — per-bucket draw arrays: consecutive same-bucket segments share their
@@ -255,7 +257,7 @@ def test_rainbow_channel_degenerate_lap_is_none():
 
 
 def test_grip_display_max_is_the_module_constant():
-    """The grip display ceiling lives in map_render (Qt-free) — the single source the widget reads."""
+    """The grip display ceiling lives in map_render (the pure layer) — the widget's single source."""
     assert map_render.GRIP_UTIL_DISPLAY_MAX == 1.2
     print("test_grip_display_max_is_the_module_constant OK")
 

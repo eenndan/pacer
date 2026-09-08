@@ -40,9 +40,11 @@ _STUDIO = os.path.join(_REPO, "studio")
 # layer). If a deliberate new pipeline module joins them, add it here in the same PR.
 ALLOWED = {"session", "load", "ingest", "tracks"}
 
-# Qt lives behind more than one distribution name: pyqtgraph and shiboken6 ARE Qt (importing
-# either pulls PySide6 in), so a module can't dodge the contract by importing the charting layer.
-QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "PyQt5", "PyQt6", "qtpy"}
+# Qt lives behind more than one distribution name: pyqtgraph, shiboken6 and qtawesome ARE Qt
+# (importing any of them pulls a binding in — qtawesome via qtpy), so a module can't dodge the
+# contract by importing the charting or icon layer instead. `theme` imports qtawesome lazily and
+# already imports PySide6 outright, so listing it closes a future hole, not a live one.
+QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", "qtpy"}
 
 # The ONLY top-level studio/*.py modules permitted to import Qt DIRECTLY — the view layer plus the
 # three Qt-infrastructure modules. Everything absent from this set is data/analysis/persistence and
@@ -114,16 +116,21 @@ def _type_checking_only(tree: ast.Module) -> set[int]:
 
 
 def _import_names(node: ast.AST) -> list[str]:
-    """The dotted module names one import statement pulls in. Relative studio imports are
-    normalised to `studio.<module>` (`from . import theme`, `from .theme import X`)."""
-    if isinstance(node, ast.Import):
+    """The dotted module names one import statement pulls in, with every studio spelling
+    normalised to `studio.<module>`. All five reach the same module and all five must be seen —
+    `from studio import theme` is the one an agent is most likely to write, and it hides the
+    module name in `node.names` where a naive `node.module` read drops it entirely
+    (`test_the_import_scanner_sees_every_studio_spelling` pins this)."""
+    if isinstance(node, ast.Import):                     # import studio.theme
         return [a.name for a in node.names]
     if isinstance(node, ast.ImportFrom):
-        if node.level:                                   # from . / from .mod
+        if node.level:                                   # from . import theme / from .theme import X
             if node.module:
                 return ["studio." + node.module]
             return ["studio." + a.name for a in node.names]
-        return [node.module or ""]
+        if node.module == "studio":                      # from studio import theme
+            return ["studio." + a.name for a in node.names]
+        return [node.module or ""]                       # from studio.theme import X / anything else
     return []
 
 
@@ -217,8 +224,40 @@ def test_the_data_core_does_not_reach_qt_through_a_studio_import():
           f"exactly {len(reaching)} modules, {sorted(reaching - ALLOWED_QT)} only indirectly")
 
 
+def test_the_import_scanner_sees_every_studio_spelling():
+    """A guard is only as good as its scanner, so pin the scanner itself.
+
+    Python spells "this module imports studio.theme" five ways, and an earlier cut of
+    `_import_names` read `node.module` for the absolute forms — which is the literal string
+    `"studio"` for `from studio import theme`, hiding the module name in `node.names`. That one
+    spelling therefore contributed NO edge: `from studio import theme` in `bests.py` passed this
+    file green while `import studio.bests` really did load PySide6. It is also the spelling an
+    agent writing new code is most likely to reach for. Each case below is a real breach in
+    disguise; all five must normalise to the same edge."""
+    cases = {
+        "from . import theme": "relative, module in names",
+        "from .theme import MAP_RAINBOW_N": "relative, module in .module",
+        "from studio import theme": "absolute package form — the one that used to escape",
+        "from studio.theme import MAP_RAINBOW_N": "absolute, module in .module",
+        "import studio.theme": "plain import",
+    }
+    for src, why in cases.items():
+        node = ast.parse(src).body[0]
+        assert _import_names(node) == ["studio.theme"], (
+            f"import scanner blind spot ({why}): `{src}` normalised to {_import_names(node)}, not "
+            f"['studio.theme'] — a module could reach Qt through this spelling and the transitive "
+            f"check above would never see the edge.")
+    # Multiple names on one line, and a non-module attribute, both behave.
+    both = ast.parse("from studio import theme, units").body[0]
+    assert _import_names(both) == ["studio.theme", "studio.units"]
+    attr = ast.parse("from studio import APP_NAME").body[0]      # a constant, not a module …
+    assert _import_names(attr) == ["studio.APP_NAME"]            # … dropped later: not in `mods`
+    print(f"test_the_import_scanner_sees_every_studio_spelling OK — {len(cases)} spellings, one edge")
+
+
 if __name__ == "__main__":
     test_only_the_data_layer_imports_pacer()
     test_only_the_view_layer_imports_qt()
     test_the_data_core_does_not_reach_qt_through_a_studio_import()
-    print("\n3 layering tests passed")
+    test_the_import_scanner_sees_every_studio_spelling()
+    print("\n4 layering tests passed")

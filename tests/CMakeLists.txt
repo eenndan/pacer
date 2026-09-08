@@ -176,7 +176,7 @@ add_test(NAME test_rainbow_map
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_rainbow_map.py)
 set_tests_properties(test_rainbow_map PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-# map_render (E2): the Qt-free pure-numpy track-map math extracted from map_view — bucketize /
+# map_render (E2): the pure-numpy track-map math extracted from map_view — bucketize /
 # bucket_polylines / resample_grid_to_points + the rainbow_channel per-channel value/bucket math
 # (speed/Δ/grip, the Δ+grip negation, the grip fixed scale, the GPS-dropout NaN-mask, the None
 # gates). Imports studio.theme -> Qt, so run offscreen; no telemetry file.

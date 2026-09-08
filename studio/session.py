@@ -1577,10 +1577,14 @@ class Session:
 
     def lap_trace_xy(self, lap_id: int):
         """Local-meter (xs, ys) of a single lap's trace — the PUBLIC accessor for a lap's racing
-        line. Three consumers: highlighting the lap on the map, the cross-recording reference
-        overlay fit, and the offline exporter's map inset (`export_video._MapInset`). Everything
-        outside Session goes through here rather than the cached `_lap_trace_xyt` behind it; the
-        per-sample media TIMES that method also returns have no consumer beyond Session itself."""
+        line, and the one anything outside Session should call. Consumers: the default sector
+        suggestion (below), the cross-recording racing-line overlay fit (`load_reference` calls it
+        on the REFERENCE session), the offline exporter's map inset (`export_video._MapInset`), and
+        `dev/denoise_check`. The on-screen map does NOT come through here — it draws gap-aware
+        segments via `lap_trace_segments` / `LapRenderCache`, which take the private 3-tuple by
+        injection. That private form is also read directly by `dev/denoise_check._lap_fills`, which
+        needs the per-sample TIMES for `gapfill.reconstruct_lap`; it sits with `_donors_for` /
+        `_median_sample_dt` in the dev-tooling delegator group below."""
         xs, ys, _ = self._lap_trace_xyt(lap_id)
         return xs, ys
 
