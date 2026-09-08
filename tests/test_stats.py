@@ -1007,9 +1007,11 @@ def test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it():
 
     # SINGULARS. `corners` and `straights` and `laps` all have 1 as a legal value, and this page
     # has shipped "median · 1 clean laps" once already.
-    from studio import stats_panel
-    assert stats_panel._plural(1, "corner") == "1 corner"
-    assert stats_panel._plural(2, "corner") == "2 corners"
+    # The pluralizer moved to _signal (the exported report prints the same sentence and cannot
+    # import a Qt view); IdealSample.sentence() is now the ONE place that composes it.
+    from studio._signal import plural
+    assert plural(1, "corner") == "1 corner"
+    assert plural(2, "corner") == "2 corners"
 
     # THE LINE FOLLOWS THE NUMBER. Restrict the composite to two laps — what a shorter recording
     # does — and the caption, the line and the tile all move together, in the same frame.

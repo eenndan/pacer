@@ -57,6 +57,46 @@ def seed_cols(session, lap_id, times, dists):
     )
 
 
+def seed_trace(session, laps_arr):
+    """Seed the WHOLE-RECORDING trace (`tt`/`tv`/`tx`/`ty`) by concatenating the seeded laps.
+
+    `Session.stats` (studio/stats.py's SessionStats) is wired over these four, so a bare Session
+    without them raises `AttributeError: 'Session' object has no attribute 'tt'` the moment anything
+    asks for `totals()` — which is now every caller of `export_data.stats_summary` as well as the
+    Stats page. `laps_arr` is the same `{lap_id: (times, dists)}` mapping fed to `bare_session`;
+    the trace is laid out along +x like `seed_cols` does (ys = 0), so `path_distance` measures the
+    odometer and speed is its real derivative rather than a constant.
+
+    Concatenated in LAP-ID ORDER, which is session order for every fixture here — the totals are a
+    reduction over the trace, so a shuffled one would report a duration the laps do not add up to.
+    Each lap's odometer is OFFSET by the running total rather than restarting at 0: a per-lap
+    odometer concatenated raw is a sawtooth, whose seam steps back several hundred metres and would
+    make the trace's own speed channel negative there (and `path_distance`'s chord gate reject it).
+
+    THE TIME AXIS IS THEN FORCED STRICTLY INCREASING, which a real trace's is by construction and
+    some fixtures' hand-picked lap windows are not: `test_export_data.make_session` starts its three
+    laps at t=10/25/40 s with ~12 s of samples each, so they OVERLAP, and a raw concatenation gives
+    a time axis that steps backwards (`np.gradient` then divides by a zero dt and the speed channel
+    comes back NaN). Sorting and keeping only strictly-later samples is the minimal repair, and it
+    leaves a fixture whose laps ARE contiguous completely untouched."""
+    keys = sorted(laps_arr)
+    times = np.concatenate([np.asarray(laps_arr[k][0], float) for k in keys])
+    chunks, offset = [], 0.0
+    for k in keys:
+        d = np.asarray(laps_arr[k][1], float)
+        chunks.append(d + offset)
+        offset += float(d[-1])
+    dists = np.concatenate(chunks)
+    order = np.argsort(times, kind="stable")
+    times, dists = times[order], dists[order]
+    keep = np.concatenate(([True], np.diff(times) > 0))
+    times, dists = times[keep], dists[keep]
+    session.tt = times
+    session.tv = np.gradient(dists, times) * 3.6  # km/h, the unit SessionStats expects
+    session.tx = dists
+    session.ty = np.zeros_like(dists)
+
+
 _MISSING = object()  # "no basis seed" sentinel for reset_corner_caches
 
 

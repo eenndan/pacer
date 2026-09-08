@@ -18,13 +18,17 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
+from ._signal import DASH as _DASH
 
 #: The numeric sort key a `NumItem` cell compares on (see below). One role for both tables.
 NUM_ROLE = Qt.UserRole
 
 #: The "no signal" value — an em-dash, never a fake 0. The app-wide convention the Stats page
-#: established and every `Tile` now inherits by default.
-DASH = "—"
+#: established and every `Tile` now inherits by default. Re-exported from `_signal`, which is
+#: where it had to live once the Qt-free export writers started printing the same mark for the
+#: same absent accessors (a report showing "0.00" where the page shows "—" is the whole rule
+#: inverted, and two constants is how that happens).
+DASH = _DASH
 
 
 #: Every mark a `Tile` value can print, in one string, so the value row is measured on the TYPE

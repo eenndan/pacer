@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import data_quality, theme, units
-from ._signal import fmt_time
+from ._signal import fmt_hms, fmt_time
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the digest tile
 # and the coaching headline can never state different totals for the same three corners — L5-02.
@@ -303,21 +303,10 @@ IDEAL_TOOLTIP = (
     "the order by eye. Click a row to ring that corner on the map.")
 
 
-def _plural(n: int, noun: str) -> str:
-    """"1 corner" / "7 corners" — the same one-line helper library_dialog carries, because the
-    sample line counts three things whose smallest legal value is 1. It is reachable: a layout
-    where the detector finds ONE corner still builds a 3-segment partition and can still stitch a
-    genuine ideal, and "the 1 corners and 2 straights" is exactly the defect this page already
-    fixed once on the median tile ("median · 1 clean laps")."""
-    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
-
-
-def _fmt_hms(seconds: float) -> str:
-    """A duration as m:ss, or h:mm:ss from an hour up — session totals span both."""
-    s = max(int(round(seconds)), 0)
-    h, rem = divmod(s, 3600)
-    m, sec = divmod(rem, 60)
-    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+# `_plural` and `_fmt_hms` used to live here. Both moved to `_signal` (plural / fmt_hms) when the
+# exported session report became a second caller: export_data is Qt-free by contract and cannot
+# import this module, and a second copy of "1 corner"/"7 corners" or of the h:mm:ss rounding is
+# exactly how the exported page starts disagreeing with the page it was exported from.
 
 
 # --------------------------------------------------------------- pyqtgraph pen accessors
@@ -1261,8 +1250,8 @@ class StatsView(QWidget):
         self.t_laps.set(" · ".join(lap_bits) if valid else None)
         tot = st.totals() if st is not None else None
         if tot is not None and tot.duration_s > 0:
-            self.t_duration.set(_fmt_hms(tot.duration_s))
-            self.t_moving.set(_fmt_hms(tot.moving_s))
+            self.t_duration.set(fmt_hms(tot.duration_s))
+            self.t_moving.set(fmt_hms(tot.moving_s))
             self._set_distance(tot)
             clock = (f"{tot.start_clock}–{tot.end_clock}"
                      if tot.start_clock and tot.end_clock else None)
@@ -1479,15 +1468,14 @@ class StatsView(QWidget):
         # names its own n on the tile and explains it on hover. Only the theoretical tile's
         # caption grows — `on the table · vs your best` is at the width the grid column already
         # affords, and the line below carries the count for both.
+        # BOTH STRINGS COME OFF `IdealSample` ITSELF (caption / sentence), not from a local
+        # f-string. The laps.csv trailer and the exported HTML report print the same two, and a
+        # leaving-the-app surface has no tooltip to fall back on when it drifts — so the disclosure
+        # is defined on the value object that owns the counts (§5.4).
         smp = sb.sample
         self._set_target_tile(self.t_theoretical, total, THEORETICAL_TOOLTIP,
-                              caption=f"theoretical best · {smp.laps} laps")
-        straights = smp.segments - smp.corners
-        self.ideal_sample.setText(
-            f"Stitched from {smp.donors} of your {smp.laps} clean laps, across the "
-            f"{_plural(smp.corners, 'corner')} and {_plural(straights, 'straight')} pacer found "
-            "here. Both counts set it: the ideal is the minimum over those laps of those pieces, "
-            "so more laps find a lower one and a different set of corners cuts it differently.")
+                              caption=smp.caption())
+        self.ideal_sample.setText(smp.sentence())
         # The best lap's time READ OFF THE COMPOSITE, not off `session.lap_time`. They are the
         # same number — `corners.segment_times` asserts a lap's segments sum exactly to its lap
         # time, which is the guarantee the whole composite stands on — and taking it from the same

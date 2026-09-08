@@ -1332,6 +1332,14 @@ class StudioWindow(QMainWindow):
             "A one-page self-contained report: session stats, lap table, map + chart snapshots — "
             "in the speed unit you're reading on screen")
         self._export_report_action.triggered.connect(self._export_report)
+        # N13's second half: the report's stats groups, as text, one keystroke from a chat window.
+        # It is the report's OWN content (export_data.stats_summary_text) — the pasted block and
+        # the exported page cannot say different things about the same session.
+        self._copy_stats_action = self._export_menu.addAction("Copy stats summary")
+        self._copy_stats_action.setToolTip(
+            "Copy this session's statistics — pace, ideal lap, peaks, driving — as plain text, "
+            "with the ideal lap's lap count, ready to paste into a chat")
+        self._copy_stats_action.triggered.connect(self._copy_stats_summary)
         # The shareable lap card (image): the one-tap social output. Two actions — save the PNG,
         # or copy it to the clipboard to paste straight into a chat. Greyed (in _sync_export_menu)
         # when there's no VERIFIED lap to brag about (an unverified/provisional time never becomes
@@ -2365,7 +2373,8 @@ class StudioWindow(QMainWindow):
         self._export_menu.setEnabled(has)
         has_laps = has and self._has_valid_laps()
         for action in (self._export_laps_action, self._export_channels_action,
-                       self._export_report_action, self._export_video_action):
+                       self._export_report_action, self._copy_stats_action,
+                       self._export_video_action):
             self._gate_action(action, has_laps, self._NO_LAPS_REASON)
         # The lap card also needs the timing to be TRUSTED. With a lap in hand the only thing
         # card_data can still be blocked on is the provisional start line, so the reason is exact.
@@ -2640,6 +2649,28 @@ class StudioWindow(QMainWindow):
                 source_label=chapters.recording_label(self._paths) or "session",
                 images=images, unit=self._speed_unit), path):
             self.statusBar().showMessage(f"exported {os.path.basename(path)}", STATUS_MS)
+
+    def _copy_stats_summary(self):
+        """File ▸ Export ▸ "Copy stats summary" (N13): the session's statistics as plain text on
+        the clipboard, ready to paste into a chat.
+
+        The text is `export_data.stats_summary_text` — the SAME builder the HTML report renders its
+        groups from, off the same Session/SessionStats accessors the Stats page reads, so the
+        pasted block, the exported page and the screen are three renderings of one computation.
+        Guarded exactly like `_copy_share_card`: a clipboard hiccup reports and returns, it never
+        disrupts the app."""
+        if self._no_laps_to_export():
+            return
+        try:
+            text = export_data.stats_summary_text(
+                self.session, self._speed_unit,
+                title=chapters.recording_label(self._paths) or "")
+            QApplication.clipboard().setText(text)
+        except Exception as exc:  # noqa: BLE001 — a clipboard failure must not disrupt the app
+            print(f"studio: stats summary not copied ({exc!r}).", flush=True)
+            self.statusBar().showMessage("could not copy the stats summary", STATUS_MS)
+            return
+        self.statusBar().showMessage("stats summary copied — paste it into a chat", STATUS_MS)
 
     def _run_export(self, write, path: str) -> bool:
         """Run a writer (`write()`) under an OSError guard; on failure show a warning dialog +
