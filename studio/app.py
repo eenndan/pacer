@@ -1863,8 +1863,10 @@ class StudioWindow(QMainWindow):
         the chapter it had just chained, "0.57 s faster than your previous best". The comparison is
         by TRACK, and the partial load had already put this recording's own entry under that track
         (one upsert earlier, seconds ago). The ENTRY'S FINGERPRINT is what makes the promise true,
-        so it is passed in: an identity already in the index is a recording this library has logged
-        before, whose moment was decided then (library.pb_moment)."""
+        so it is passed in: library.pb_moment partitions the index on it and takes the prior from
+        the OTHER recordings — so the same outing can no longer be the bar, while a full chain that
+        genuinely beats a DIFFERENT recording on that track still celebrates (see there for why
+        suppressing on mere presence would swallow exactly that)."""
         if self._library_excludes(paths):
             return None
         moment = None
@@ -1942,7 +1944,9 @@ class StudioWindow(QMainWindow):
         ("Internal C++ object (QTimer) already deleted"), zero toasts on screen. Every genuine PB
         after the first one was silently swallowed, and §3.2's false partial→full toast was usually
         the one that spent the single slot. Tidying up after the last celebration must not be able
-        to cancel the next one, so it happens first, guarded on its own (`_clear_pb_toast`)."""
+        to cancel the next one, so it happens first, guarded on its own (`_clear_pb_toast`) — with
+        its own blanket except, so "fully guarded" above still holds for the whole method and the
+        load path behind it."""
         self._clear_pb_toast()
         try:
             title, body = library.pb_moment_text(moment, fmt_time)
@@ -1975,14 +1979,22 @@ class StudioWindow(QMainWindow):
         moment to trip on, and `shiboken6.isValid` is what tells a live card from the Python wrapper
         of one whose C++ half `deleteLater` has already collected (the `destroyed` hook normally
         clears those, so this is the belt to its braces: the same-turn window before that signal
-        has run, and any future path that assigns `_pb_toast` without it)."""
+        has run, and any future path that assigns `_pb_toast` without it).
+
+        The except is BLANKET on purpose, even though the failure this method exists for is a
+        RuntimeError. Moving out of `_show_pb_moment`'s try bought back the celebration but took
+        the containment with it: `_show_pb_moment` is called unguarded from `_on_session_loaded`
+        immediately before `loadFinished.emit()`, and `dismiss()` runs Python of its own (`hide()`
+        reaches the host's event filter), so ANY escape from here strands a completed load with no
+        `loadFinished` — the §3.4 shape. Tidying up after a celebration may fail; it may not take
+        the load with it."""
         old = getattr(self, "_pb_toast", None)
         self._pb_toast = None
         if old is None or not shiboken6.isValid(old):
             return
         try:
             old.dismiss()
-        except RuntimeError as exc:  # the C++ half went away between the check and the call
+        except Exception as exc:  # noqa: BLE001 — see above: this must never reach the load path
             print(f"studio: previous personal-best card not dismissed ({exc!r}).", flush=True)
 
     def _pb_card_keepout(self):

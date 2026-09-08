@@ -494,10 +494,11 @@ def pb_moment(index: dict, track: str | None, best: float | None,
       * ``{"kind": "first", "track", "best"}`` when the track has NO prior best (first session logged
         here) — a gentler acknowledgement, not a "PB beaten";
       * ``None`` when there's nothing to celebrate: no track, no valid best, a session that ties /
-        is slower than the existing PB — or a recording this index has ALREADY logged (below).
+        is slower than the existing PB — or a session whose improvement was already announced
+        (below).
 
     A RECORDING CANNOT BE ITS OWN PREVIOUS BEST, and `fingerprint_key` is what makes that true. The
-    comparison is by TRACK, so any entry of the same track is a candidate prior — including THIS
+    comparison is by TRACK, so every entry of the same track is a candidate prior — including THIS
     recording's own entry, which is in the index the moment it has been analysed once. Opening one
     chapter and then clicking "Load full recording" therefore celebrated the SAME outing beating
     itself: 22 laps at 1:08.771 upserted under fingerprint GX0062, then 66 laps of the same
@@ -505,21 +506,42 @@ def pb_moment(index: dict, track: str | None, best: float | None,
     faster than your previous best" — as did opening a second chapter of one outing (both fingerprint
     to GX0062; the key strips the chapter index by construction, see ``fingerprint``).
 
-    So a `fingerprint_key` already present in the index means this recording has been logged here
-    before and its moment was decided then: there is nothing new to celebrate and None is returned.
-    That is the whole rule — the presence check also removes the only way an entry could have been
-    its own prior, so ``prior_best`` needs no exclusion of its own. It deliberately covers the plain
-    re-open too (which until now reported None only by the coincidence that the same laps produce
-    the same best — re-analyse with a dragged start line and the old number becomes a "previous
-    best" to beat). Callers with no identity to offer pass nothing and get the old behaviour."""
+    So the index is PARTITIONED by that identity and the prior is taken from the OTHER recordings
+    only. Everything else follows from that one split:
+
+      * no other recording has a trustworthy best here → there is no bar. A recording already in
+        the index is not a new session (it is a re-open, a second chapter, or the full chain of one
+        already logged), so it gets nothing; a genuinely new one gets its "first".
+      * this recording's OWN stored best already beats that prior → the improvement is not news:
+        it was the story when that number was logged, and re-announcing it every time the same
+        outing is re-opened with one more chapter is the defect above wearing a different hat.
+        Only a TRUSTWORTHY own entry can silence a celebration, matching what ``prior_best`` will
+        admit — a provisional/degraded/dropout "best" is not in the PB set and must not act like it.
+      * otherwise the ordinary comparison against the other recordings' best decides.
+
+    Suppressing on mere PRESENCE would be wrong, and measurably so: with a previous day's recording
+    at 68.500 on the track, a chapter at 68.771 (correctly silent, it is slower) followed by the
+    full 66-lap chain at 68.201 is a GENUINE 0.299 s personal best over that other recording, and a
+    presence check swallows it on the very gesture this fix is about. It is also what makes the plain
+    re-open silent honestly rather than by coincidence (it used to report None only because the same
+    laps produce the same best — re-analyse with a start line dragged since and the recording's own
+    older number became a "previous best" to beat).
+
+    Callers with no identity to offer pass nothing: the partition is then empty and the behaviour is
+    exactly what it always was."""
     if not track or best is None or not math.isfinite(best):
         return None
-    if fingerprint_key and any(
-            e.get("fingerprint") == fingerprint_key for e in index.get("entries", [])):
-        return None
-    prior = prior_best(index, track)
+    # Split by identity — by POSITION, never by value: two entries can compare equal.
+    mine, others = [], []
+    for e in index.get("entries", []):
+        target = mine if fingerprint_key and e.get("fingerprint") == fingerprint_key else others
+        target.append(e)
+    prior = prior_best({"entries": others}, track)
     if prior is None:
-        return {"kind": "first", "track": track, "best": float(best)}
+        return None if mine else {"kind": "first", "track": track, "best": float(best)}
+    own = [float(e["best"]) for e in mine if e.get("best") is not None and is_trustworthy(e)]
+    if own and min(own) < prior:
+        return None
     if best < prior:
         return {"kind": "beat", "track": track, "best": float(best),
                 "prior": float(prior), "improvement": float(prior) - float(best)}
@@ -540,7 +562,8 @@ def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | 
     lives, so the app just passes ``session.timing_verified`` / ``session.timing_quality.degraded``
     + the entry's track/best/fingerprint and the gate stays tested in one spot. `degraded` defaults
     False so the common high-quality path is unchanged; `fingerprint_key` is the entry's identity
-    key, forwarded to ``pb_moment`` so a recording can never be its own previous best (see there)."""
+    key, forwarded to ``pb_moment``, which partitions the index on it so a recording is compared
+    against the OTHER recordings rather than against itself (see there)."""
     if not verified or degraded:
         return None
     return pb_moment(index, track, best, fingerprint_key)
