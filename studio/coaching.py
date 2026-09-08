@@ -282,7 +282,8 @@ def corner_phase_losses(
     window is the same window `lap_corner_stats` measured rather than a two-knot warp of its own.
     `lap_align`/`best_align` are that warp ALREADY BUILT (`corners.lap_alignment`): a caller looping
     over the corners of one lap should build it once and pass it, or the lap's spatial match re-runs
-    per corner — 106 ms of a 168 ms `Session.phase_report` on the 38-lap D24 0060 pair.
+    per corner — 106 ms of a 168 ms `Session.phase_report` on the 38-lap D24 0060 pair (43.9 ms
+    once hoisted).
     Returns a zero PhaseLoss when either trace is unusable or the window is degenerate."""
     lap_dist = np.asarray(lap_dist, float)
     lap_speed_kmh = np.asarray(lap_speed_kmh, float)

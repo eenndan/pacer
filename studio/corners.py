@@ -172,7 +172,7 @@ def lap_alignment(frame, total_ref: float, total_lap: float, *,
     BUILD IT ONCE PER LAP when you are projecting many windows of the same lap.
     `coaching.corner_phase_losses` is called per (lap, corner) — deriving the lap's warp inside
     each of those calls cost 106 ms of a 168 ms `Session.phase_report` on the 38-lap D24 0060 pair.
-    Passing it in put that back to 61 ms."""
+    Hoisting it to once per lap took that to 43.9 ms."""
     total_ref = float(total_ref)
     total_lap = float(total_lap)
     if traces is None or line_length_drift(total_lap, total_ref) <= NORMALIZED_DRIFT_MAX:
