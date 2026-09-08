@@ -1,14 +1,33 @@
-"""Layering-contract test (the load-bearing architecture invariant).
+"""Layering-contract test — the load-bearing architecture invariant, in BOTH directions.
 
-The rule (AGENTS.md + studio/README): only the four data/pipeline modules — `session`, `load`,
-`ingest`, `tracks` — may `import pacer` (the C++ core). Every studio VIEW / controller / helper
-stays **pacer-free** and goes through `Session`. That contract holds today with zero violations,
-but nothing enforced it: an agent could `import pacer` into a view for convenience and every other
-gate (build, ruff, the offscreen widget tests) would still pass — silently eroding the layering.
+**Direction 1 (pacer).** Only the four data/pipeline modules — `session`, `load`, `ingest`,
+`tracks` — may `import pacer` (the C++ core). Every studio VIEW / controller / helper stays
+**pacer-free** and goes through `Session`.
+
+**Direction 2 (Qt).** The mirror rule, stated in `studio/_signal.py` ("this module is numpy-only
+so [it] can be shared without dragging a pacer (or Qt) import anywhere") and in ~6 `studio/README`
+rows ("pacer-free AND Qt-free", "Qt-free pure-numpy core", …): the analysis/pipeline layer imports
+no Qt, so it stays importable, testable and reasonable-about headlessly. Only the view /
+Qt-infrastructure modules in `ALLOWED_QT` may reach PySide6.
+
+Both contracts hold today with zero violations, but until this file only the FIRST was enforced:
+an agent could `import pacer` into a view, or `from PySide6.QtCore import QTimer` into
+`session.py` / `stats.py` / `corners.py`, and every other gate (build, ruff, the offscreen widget
+tests) would still pass — silently eroding the layering from whichever side happened to be
+unguarded.
+
+Two ways a module reaches Qt, and both are pinned:
+  * DIRECTLY — it names PySide6 (or pyqtgraph/shiboken6, which are Qt) in an import. `ALLOWED_QT`.
+  * TRANSITIVELY — it imports a studio module that does. A direct-only scan would wave through
+    `session.py` importing `theme`, which is the same breakage by one more hop. `QT_REACHING`.
+
+Both sets are pinned by EXACT equality (like `ALLOWED` below), so an allow-list that quietly stops
+being true fails too and the sets stay honest.
 
 This test walks the source with `ast` (no import side-effects, no Qt, no pacer, no telemetry file,
-sub-100 ms) and fails the moment the pacer-import set drifts from the allow-list. `studio/dev/`
-tools are standalone scripts, not part of the app, and are intentionally out of scope. Run:
+sub-100 ms). `studio/dev/` tools are standalone scripts, not part of the app, and are intentionally
+out of scope for both directions — they are Qt/pacer harnesses by nature (6 of them import Qt:
+`_smoke`, `denoise_check`, `make_icon`, `media_capture`, `spike_video_sync`, `ui_capture`). Run:
     python tests/test_layering.py
 """
 import ast
@@ -20,6 +39,48 @@ _STUDIO = os.path.join(_REPO, "studio")
 # The ONLY top-level studio/*.py modules permitted to import the pacer core (the data/pipeline
 # layer). If a deliberate new pipeline module joins them, add it here in the same PR.
 ALLOWED = {"session", "load", "ingest", "tracks"}
+
+# Qt lives behind more than one distribution name: pyqtgraph and shiboken6 ARE Qt (importing
+# either pulls PySide6 in), so a module can't dodge the contract by importing the charting layer.
+QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "PyQt5", "PyQt6", "qtpy"}
+
+# The ONLY top-level studio/*.py modules permitted to import Qt DIRECTLY — the view layer plus the
+# three Qt-infrastructure modules. Everything absent from this set is data/analysis/persistence and
+# must stay Qt-free. Three members are not windows and are here on purpose:
+#   * export_video / share_card — offline, event-loop-free RENDERERS. They use QPainter/QImage as a
+#     rasterizer to burn overlays into an MP4 / a PNG; they construct no window and run off the UI
+#     thread. Qt is their drawing library, not their UI.
+#   * workers — QThread/QObject wrappers (QtCore only), the seam that carries loads off the UI thread.
+# `theme` and `widgets` are the shared Qt style/primitive layer every view sits on.
+ALLOWED_QT = {
+    "app", "central_view", "coaching_panel", "export_video", "gmeter_overlay", "help_dialog",
+    "lap_table", "library_dialog", "map_view", "overlays", "player_pane", "plots_view",
+    "share_card", "stats_panel", "theme", "video_view", "widgets", "workers",
+}
+
+# Every module from which Qt is REACHABLE through studio's own import graph = ALLOWED_QT plus the
+# three modules that reach it in one more hop. All three are deliberate and measured:
+#   * __main__ — the entry point; it imports `app` by definition.
+#   * compare_controller — needs `theme.format_delta_run` / `theme.delta_colour` (the app's single
+#     Δ formatter) and video_view's `PaneSpec` dataclass; its OWN code is Qt-free.
+#   * map_render — pure numpy except for one constant, `from .theme import MAP_RAINBOW_N`.
+# The last two are the reason this second check exists: a direct-import scan calls them Qt-free
+# (their own source names no Qt), but `import studio.map_render` really does load PySide6. Shrink
+# this set — don't grow it: anything NEW here is a data-layer module that just gained a view import.
+QT_REACHING = ALLOWED_QT | {"__main__", "compare_controller", "map_render"}
+
+_CONTRACT = ("the Qt-free data core (studio/_signal.py's module doc + the studio/README rows): "
+             "analysis / pipeline / persistence modules import no Qt so they stay headless")
+
+
+def _modules() -> list[str]:
+    """Every top-level studio module name (studio/dev is out of scope — see the module doc)."""
+    return sorted(fn[:-3] for fn in os.listdir(_STUDIO) if fn.endswith(".py"))
+
+
+def _parse(name: str) -> ast.Module:
+    path = os.path.join(_STUDIO, name + ".py")
+    return ast.parse(open(path, encoding="utf-8").read(), filename=path)
 
 
 def _imports_pacer(path: str) -> bool:
@@ -34,6 +95,55 @@ def _imports_pacer(path: str) -> bool:
             if mod == "pacer" or mod.startswith("pacer."):
                 return True
     return False
+
+
+def _type_checking_only(tree: ast.Module) -> set[int]:
+    """`id()`s of the nodes inside `if TYPE_CHECKING:` blocks. Those imports never execute, so a
+    view type annotated for the type-checker is NOT a runtime Qt dependency (scrub_controller
+    imports MapView/PlotsView/VideoView this way and genuinely stays Qt-free at import time)."""
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If):
+            test = node.test
+            name = (test.id if isinstance(test, ast.Name) else
+                    test.attr if isinstance(test, ast.Attribute) else None)
+            if name == "TYPE_CHECKING":
+                for stmt in node.body:
+                    out.update(id(sub) for sub in ast.walk(stmt))
+    return out
+
+
+def _import_names(node: ast.AST) -> list[str]:
+    """The dotted module names one import statement pulls in. Relative studio imports are
+    normalised to `studio.<module>` (`from . import theme`, `from .theme import X`)."""
+    if isinstance(node, ast.Import):
+        return [a.name for a in node.names]
+    if isinstance(node, ast.ImportFrom):
+        if node.level:                                   # from . / from .mod
+            if node.module:
+                return ["studio." + node.module]
+            return ["studio." + a.name for a in node.names]
+        return [node.module or ""]
+    return []
+
+
+def _scan(name: str, mods: set[str]) -> tuple[bool, set[str]]:
+    """`(imports_qt_directly, studio_modules_imported_at_runtime)` for one studio module.
+    Function-level (deferred) imports COUNT — a module that reaches a view only from inside a
+    function still owns that dependency. `if TYPE_CHECKING:` imports do not (they never run)."""
+    tree = _parse(name)
+    skip = _type_checking_only(tree)
+    qt, deps = False, set()
+    for node in ast.walk(tree):
+        if id(node) in skip or not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        for dotted in _import_names(node):
+            head, _, rest = dotted.partition(".")
+            if head in QT_ROOTS:
+                qt = True
+            elif head == "studio" and rest.split(".")[0] in mods:
+                deps.add(rest.split(".")[0])
+    return qt, deps - {name}
 
 
 def test_only_the_data_layer_imports_pacer():
@@ -55,6 +165,60 @@ def test_only_the_data_layer_imports_pacer():
     print(f"test_only_the_data_layer_imports_pacer OK — pacer imported by exactly {sorted(importers)}")
 
 
+def test_only_the_view_layer_imports_qt():
+    """The reverse direction: exactly `ALLOWED_QT` may name PySide6/pyqtgraph/shiboken6."""
+    mods = set(_modules())
+    importers = {m for m in mods if _scan(m, mods)[0]}   # `__init__` included: it is a leaf by rule
+    extra = importers - ALLOWED_QT      # a data/analysis module reached into Qt
+    missing = ALLOWED_QT - importers    # an allow-listed view no longer imports Qt
+    assert not extra, (
+        f"Qt-free contract broken: studio/{sorted(extra)[0]}.py imports Qt but is not part of the "
+        f"view layer {sorted(ALLOWED_QT)} (offenders: {sorted(extra)}). This breaks {_CONTRACT}. "
+        f"Move the Qt code into a view and keep the module numpy-only, or — if this really is a "
+        f"new view / Qt-infrastructure module — add it to ALLOWED_QT in the same PR.")
+    assert not missing, (
+        f"allow-list drift: {sorted(missing)} no longer import Qt — drop them from ALLOWED_QT so "
+        f"the contract stays exact (a stale allow-list silently re-opens the door).")
+    print(f"test_only_the_view_layer_imports_qt OK — Qt imported by exactly {sorted(importers)}")
+
+
+def test_the_data_core_does_not_reach_qt_through_a_studio_import():
+    """Transitive closure: `import studio.<m>` must not load Qt for any data-layer module.
+
+    The direct scan above cannot see this — `session.py` gaining `from . import theme` names no Qt
+    at all yet drags the whole toolkit in. Walks studio's own import graph and pins the set of
+    modules from which Qt is reachable."""
+    mods = set(_modules())
+    scanned = {m: _scan(m, mods) for m in mods}
+
+    def reaches_qt(m: str, seen: set[str]) -> bool:
+        if m in seen:
+            return False
+        seen.add(m)
+        direct, deps = scanned[m]
+        return direct or any(reaches_qt(d, seen) for d in deps)
+
+    def why(m: str) -> list[str]:
+        return sorted(d for d in scanned[m][1] if reaches_qt(d, set()))
+
+    reaching = {m for m in mods if reaches_qt(m, set())}
+    extra = reaching - QT_REACHING
+    missing = QT_REACHING - reaching
+    assert not extra, (
+        "Qt-free contract broken transitively: " + "; ".join(
+            f"studio/{m}.py imports {why(m)}, which import(s) Qt" for m in sorted(extra)) +
+        f". The module names no Qt itself, but `import studio.{sorted(extra)[0]}` loads PySide6, "
+        f"which breaks {_CONTRACT}. Take the value from a Qt-free module (or move it to one) — or, "
+        f"if the module genuinely belongs to the view layer, add it to QT_REACHING in the same PR.")
+    assert not missing, (
+        f"allow-list drift: Qt is no longer reachable from {sorted(missing)} — drop them from "
+        f"QT_REACHING so the contract stays exact.")
+    print(f"test_the_data_core_does_not_reach_qt_through_a_studio_import OK — Qt reachable from "
+          f"exactly {len(reaching)} modules, {sorted(reaching - ALLOWED_QT)} only indirectly")
+
+
 if __name__ == "__main__":
     test_only_the_data_layer_imports_pacer()
-    print("\n1 layering test passed")
+    test_only_the_view_layer_imports_qt()
+    test_the_data_core_does_not_reach_qt_through_a_studio_import()
+    print("\n3 layering tests passed")

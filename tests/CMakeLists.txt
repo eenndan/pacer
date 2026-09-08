@@ -36,8 +36,10 @@ add_test(NAME test_import_ergonomics
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_import_ergonomics.py)
 set_tests_properties(test_import_ergonomics PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-# Layering contract (test/layering-contract): ONLY session/load/ingest/tracks may import the pacer
-# core — every view/controller/helper stays pacer-free. A pure `ast` walk of studio/*.py: no pacer,
+# Layering contract, BOTH directions (test/layering-contract, test/layering-qt-direction): ONLY
+# session/load/ingest/tracks may import the pacer core — every view/controller/helper stays
+# pacer-free; and only the view/Qt-infrastructure modules may import Qt (directly OR through a
+# studio import), so the data core stays headless. A pure `ast` walk of studio/*.py: no pacer,
 # no Qt, no telemetry file, so it needs neither the offscreen env nor the PYTHONPATH block below.
 add_test(NAME test_layering
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_layering.py)

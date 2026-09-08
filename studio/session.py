@@ -1576,7 +1576,11 @@ class Session:
         return {lap_id for lap_id in self.valid_lap_ids() if self.lap_has_dropout(lap_id)}
 
     def lap_trace_xy(self, lap_id: int):
-        """Local-meter (xs, ys) of a single lap's trace, for highlighting on the map."""
+        """Local-meter (xs, ys) of a single lap's trace — the PUBLIC accessor for a lap's racing
+        line. Three consumers: highlighting the lap on the map, the cross-recording reference
+        overlay fit, and the offline exporter's map inset (`export_video._MapInset`). Everything
+        outside Session goes through here rather than the cached `_lap_trace_xyt` behind it; the
+        per-sample media TIMES that method also returns have no consumer beyond Session itself."""
         xs, ys, _ = self._lap_trace_xyt(lap_id)
         return xs, ys
 

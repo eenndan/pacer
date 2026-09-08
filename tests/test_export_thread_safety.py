@@ -196,8 +196,8 @@ class _Stub:
     def gmeter_long_source(self):
         return "gps"
 
-    def _lap_trace_xyt(self, lap_id):
-        return (self.tx, self.ty, self.tt) if lap_id == self._lap else None
+    def lap_trace_xy(self, lap_id):
+        return (self.tx, self.ty) if lap_id == self._lap else None
 
 
 class _PainterThread(QThread):

@@ -1005,10 +1005,13 @@ class _MapInset:
         # The exported lap's own line — the ONLY line drawn. We project it (and find the marker's
         # position along it for the tail). The full-session arrays are kept only as a fallback line
         # and to map a marker_index (which indexes the full trace) to a frame point.
+        # Through Session's PUBLIC `lap_trace_xy` (what the map highlight reads), not the private
+        # `_lap_trace_xyt` this once reached into: the old hasattr guard was vestigial — `session.tx`
+        # is read unguarded four lines up. The None / <2-point fallbacks are the degenerate-lap path.
         lx = ly = None
-        got = session._lap_trace_xyt(lap_id) if hasattr(session, "_lap_trace_xyt") else None
+        got = session.lap_trace_xy(lap_id)
         if got is not None:
-            glx, gly, _ = got
+            glx, gly = got
             if len(glx) >= 2:
                 lx, ly = np.asarray(glx, dtype=float), np.asarray(gly, dtype=float)
         # Fit the LAP's bbox (not the whole session) into the box so a single lap fills the inset;
