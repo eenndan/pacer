@@ -10,10 +10,11 @@ k's ended. To treat the whole recording as ONE session we
   2. lay them on ONE global time axis: chapter i covers global [offset_i, offset_i+dur_i),
      where offset_i is the cumulative duration of the chapters before it.
 
-This module is PURE PYTHON and `pacer`-free: it only parses filenames and does the offset
-arithmetic, so it is trivially unit-testable without a telemetry file. session.py owns the
-actual telemetry chaining (via the C++ `SequentialGPSSource`); the durations that build the
-offset table come from the GPMF/media (passed in by the caller).
+This module is PURE PYTHON and `pacer`-free: it parses filenames, does the offset arithmetic and
+(for `is_mp4_container`) reads the first 8 bytes of a file, so it is trivially unit-testable without
+a telemetry file. session.py owns the actual telemetry chaining (via the C++
+`SequentialGPSSource`); the durations that build the offset table come from the GPMF/media (passed
+in by the caller).
 
 GoPro naming (confirmed on disk): ``GX<CC><NNNN>.MP4`` — a 2-letter prefix (GX/GH/GP), then
 the 2-digit chapter index ``CC``, then the 4-digit recording number ``NNNN``, then ``.MP4``.
@@ -65,7 +66,16 @@ def discover_siblings(path: str) -> list[str]:
     the result and a lone chapter loads exactly as today.
 
     Returns ``[path]`` unchanged if the name isn't a GoPro chaptered name (e.g. the sample
-    clip), so this is safe to call on any opened file."""
+    clip), so this is safe to call on any opened file.
+
+    NAMES ONLY — it does not ask whether a sibling can be OPENED, deliberately. This list is what
+    the recording IS: ``sidecar.sidecar_path`` takes ``[0]``'s stem VERBATIM, so dropping an
+    unopenable first chapter here would silently re-key the user's hand-placed start/finish line
+    onto ``GX02….pacer.json`` and lose it. (The LIBRARY survives either way —
+    ``library.fingerprint`` strips the chapter index, which is exactly why a single-chapter and a
+    full-chain open share one entry. Both halves are pinned in tests/test_unreadable_chapter.py.)
+    Whether a chapter can be READ is a load-time question, answered once by ``split_non_mp4``
+    inside ``Session.load``."""
     info = parse_gopro_name(path)
     if info is None:
         return [path]
@@ -95,6 +105,122 @@ def discover_siblings(path: str) -> list[str]:
             seen.add(key)
             ordered.append(full)
     return ordered
+
+
+# The top-level ISO base-media-format box types an .MP4 may legitimately OPEN with. Every GoPro
+# file measured starts `00 00 00 14 'ftyp'`; the rest are the boxes other muxers put first (a
+# QuickTime-flavoured file can lead with `wide`/`mdat`, and `free`/`skip`/`junk` are padding).
+# The set is deliberately PERMISSIVE: the expensive mistake here is refusing a real chapter, not
+# admitting a foreign one — anything admitted still has to survive the GPMF parser.
+_ISO_BOX_TYPES = frozenset(
+    (b"ftyp", b"moov", b"mdat", b"free", b"skip", b"junk", b"wide", b"pnot", b"uuid"))
+
+
+# `probe_mp4`'s three answers. THREE, not a bool, and the third is the whole point: "I read this
+# file and it is not video" and "I could not read this file" are different facts about the world and
+# must lead to opposite behaviour. The first is permanent and local to one file — skip it, name it,
+# analyse the rest. The second is temporary and says nothing about the contents (a chmod, a still-
+# copying file, an unmounted volume, a path that has moved) — a chapter that might be perfectly
+# intact, so it goes to the loader to fail LOUDLY, exactly as it did before any of this existed.
+# Collapsing them was this module's own first bug: an unreadable-but-intact chapter got told its
+# contents "have been overwritten", and a moved one was dropped from the analysis in silence.
+MP4_CONTAINER = "mp4_container"
+MP4_NOT_A_CONTAINER = "not_a_container"
+MP4_UNREADABLE = "unreadable"
+
+
+def probe_mp4(path: str) -> str:
+    """Read `path`'s first box header -> `MP4_CONTAINER` / `MP4_NOT_A_CONTAINER` /
+    `MP4_UNREADABLE`. A cheap 8-byte read; no decoding, no `pacer`, no media stack.
+
+    This exists because a file can carry a perfectly valid GoPro NAME and not be video at all.
+    ``~/Desktop/D24/GX010060.MP4`` on the owner's machine is 2.4 MB of JSON that a dev tool wrote
+    over 11.9 GB of footage; it parses as chapter 1 of recording 0060, so ``discover_siblings``
+    hands it to every load of that recording and the GPMF parser answers with a bare
+    ``RuntimeError: Failed to open file`` that takes the whole 3-chapter session down with it.
+
+    `MP4_UNREADABLE` covers every reason the bytes did not arrive: missing, a directory, no read
+    permission, an I/O error, a volume that went away. It is NOT a verdict on the contents.
+    `MP4_CONTAINER` is not a claim that the file is a GoPro recording or that it holds telemetry —
+    only that it is not junk wearing an .MP4 name. A file too short to hold a box header (a 0-byte
+    interrupted copy) reads fine and is `MP4_NOT_A_CONTAINER`."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8)
+    except OSError:
+        return MP4_UNREADABLE
+    return (MP4_CONTAINER if len(head) == 8 and head[4:8] in _ISO_BOX_TYPES
+            else MP4_NOT_A_CONTAINER)
+
+
+def is_mp4_container(path: str) -> bool:
+    """`probe_mp4(path) == MP4_CONTAINER` — the yes/no form, for callers that have already ruled
+    out the unreadable case (the golden gate, which insists on the one file it was pointed at)."""
+    return probe_mp4(path) == MP4_CONTAINER
+
+
+def split_non_mp4(paths: list[str]) -> tuple[list[str], list[str]]:
+    """Partition `paths` into ``(kept, skipped)``, preserving order. `skipped` holds ONLY the paths
+    that were successfully READ and proved not to be MP4 containers.
+
+    The ONE place a load decides that a discovered chapter is not video. Callers load `kept` and
+    NAME `skipped` (see `skipped_notice`) — a chapter that silently vanishes is the failure mode
+    this replaces, not an improvement on it.
+
+    An UNREADABLE path is deliberately KEPT, not skipped. Skipping it would mean answering "this
+    chapter is not video" without having read a byte of it, and silently analysing a subset of a
+    recording because one file was locked, still copying, or on a volume that had gone away. Those
+    paths go to the loader, which fails on them exactly as it always has — loudly, naming the file,
+    with the app's existing "check it has finished copying / that you have permission" message.
+    Nothing is lost for the case this function exists for: the destroyed stub reads perfectly."""
+    kept, skipped = [], []
+    for p in paths:
+        (skipped if probe_mp4(p) == MP4_NOT_A_CONTAINER else kept).append(p)
+    return kept, skipped
+
+
+# How many skipped files `skipped_notice` names before it summarises the rest — three basenames is
+# about the longest tail the status bar can carry beside the other clauses.
+_MAX_NAMED_SKIPS = 3
+
+
+def skipped_notice(skipped: list[str], *, where: str = "") -> str | None:
+    """The one-line, user-visible fact that a load left a file out, or None when it left none out.
+
+    NAMES the files, like the multi-recording drop notice names the recordings it did not open:
+    the user's folder contains something the app refused, and "some of your footage was ignored"
+    without saying which is worse than silence.
+
+    `where` scopes the sentence to a recording other than the one on screen (the cross-recording
+    REFERENCE is the only one today). Without it the app would hold a reference to a different
+    number of chapters than the user chose and mention it on the console only — the same silence
+    this whole notice exists to end, exempted for the one surface every Δ is measured against."""
+    names = [os.path.basename(p) for p in skipped]
+    if not names:
+        return None
+    scope = f" from {where}" if where else ""
+    if len(names) == 1:
+        return (f"Skipped {names[0]}{scope} — not a readable video file; "
+                "analysed the rest of the recording")
+    shown = ", ".join(names[:_MAX_NAMED_SKIPS])
+    if len(names) > _MAX_NAMED_SKIPS:
+        shown += f", +{len(names) - _MAX_NAMED_SKIPS} more"
+    return (f"Skipped {len(names)} files{scope} that aren't readable video ({shown}); "
+            "analysed the rest of the recording")
+
+
+def loaded_label(chapter_map, requested: list[str]) -> str:
+    """`recording_label` for the chapters a load ACTUALLY PRODUCED (a `ChapterMap`), falling back
+    to the `requested` paths when there is no map.
+
+    Not the request itself. The two differ only when a chapter was skipped as not-video, and there
+    the difference is the whole point: labelling a 2-chapter session "recording 0060 · 3 chapters"
+    contradicts the status line standing beside it that says one chapter was left out. Shared by
+    the window title / export labels and by the cross-recording reference's badge, so the primary
+    and the reference cannot drift into two answers."""
+    paths = ([c.path for c in chapter_map.chapters] if chapter_map is not None
+             else list(requested or []))
+    return recording_label(paths)
 
 
 def order_chapters(paths: list[str]) -> list[str]:

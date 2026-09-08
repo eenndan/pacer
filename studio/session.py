@@ -175,6 +175,11 @@ class Session:
         # Detected registry track name, or None for an unknown track (start line auto-fitted).
         # Persisted into the timing-line sidecar and used by the app's "unknown track" notice.
         self.track_name: str | None = None
+        # Chapter files this session was asked to load and LEFT OUT because they are not video
+        # (see Session.load / chapters.split_non_mp4). Empty for every ordinary load and for a
+        # Session built directly; the app names them in its one untimed status notice, so a load
+        # can never quietly analyse less footage than it was handed.
+        self.skipped_chapters: list[str] = []
         # Timing-trust marker (see timing_verified): True once the USER has explicitly placed/
         # confirmed the start/finish line (a drag, or a restored sidecar that recorded the
         # confirmation). A detected track is trusted on its own (track_name), so this only matters
@@ -253,10 +258,36 @@ class Session:
 
         Per-sample time comes from the GPS9 fix timestamps, re-anchored per run to the media
         clock. The GPS track is quality-gated and boxcar-smoothed (window `smooth_window`)
-        before the core sees it; `smooth_window=1` disables smoothing (raw trace, for baselines)."""
+        before the core sees it; `smooth_window=1` disables smoothing (raw trace, for baselines).
+
+        A path that was READ and proved NOT TO BE AN MP4 AT ALL is dropped here, before the loader
+        ever sees it, and recorded on `session.skipped_chapters` for the caller to state.
+        `discover_siblings` groups chapters by NAME, so one file wearing a chapter's name and
+        holding something else takes the whole recording down: on the owner's own machine
+        `~/Desktop/D24/GX010060.MP4` is 2.4 MB of JSON a dev tool wrote over 11.9 GB of footage,
+        and "Load full recording" on 0060 therefore died in the GPMF parser with `Failed to open
+        file` — 24 laps of intact chapters 2+3 unreachable because of a file neither of them needs.
+        THE ONE PLACE this is decided: every route in (the window, a reference load, the golden
+        dump, a dev script) comes through here.
+
+        A path that could not be READ is NOT skipped (see `chapters.split_non_mp4`): unreadable is
+        not a verdict on the contents, and dropping a locked / still-copying / moved chapter would
+        analyse a silent subset of the user's recording. Those go to the loader and fail loudly,
+        exactly as before. Skipping is never silent either — it prints, and the app names the file
+        in its session notice. If NOTHING is loadable there is no session to build, so that raises
+        rather than returning a mysteriously empty one."""
+        paths, skipped = chapters.split_non_mp4(list(paths))
+        if skipped:
+            print(f"studio: skipping {len(skipped)} file(s) that are not readable video: "
+                  f"{', '.join(os.path.basename(p) for p in skipped)}", flush=True)
+        if skipped and not paths:
+            raise ValueError(
+                "none of these files is a readable video: "
+                + ", ".join(os.path.basename(p) for p in skipped))
         (laps, cs, video_path, chapter_map, imu, track_name,
          timing_quality) = load_recording(paths, smooth_window)
         session = cls(laps, cs, video_path, chapter_map)
+        session.skipped_chapters = skipped
         session.track_name = track_name
         session._timing_quality = timing_quality
         # Record the loader's own placement NOW, before app.py restores any sidecar over it: it is
@@ -333,7 +364,11 @@ class Session:
             ref = Session.load(paths)
         except Exception as exc:  # noqa: BLE001 — a bad reference must never break the session
             return f"could not load the reference recording ({type(exc).__name__}: {exc})"
-        return self.set_reference_session(ref, source_label=chapters.recording_label(paths))
+        # Labelled by what the reference SESSION holds, not by what was asked for — the same rule
+        # the window's own title follows (see chapters.loaded_label). A reference badged
+        # "· 3 chapters" while two were loaded is a claim about the comparison's inputs.
+        return self.set_reference_session(
+            ref, source_label=chapters.loaded_label(ref.chapters, paths))
 
     def set_reference_session(self, ref: Session, source_label: str = "") -> str | None:
         """Adopt an already-loaded `Session` as the reference (the guard + extraction half of

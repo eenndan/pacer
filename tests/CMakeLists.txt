@@ -116,6 +116,18 @@ add_test(NAME test_load_pipeline
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_pipeline.py)
 set_tests_properties(test_load_pipeline PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# A sibling chapter that is NOT VIDEO (fix/destroyed-fixture-hazards): chapters.discover_siblings
+# groups on FILENAMES, so a file wearing a chapter's name while holding something else was handed
+# to GPMFSource and failed the WHOLE recording — measured on the owner's own ~/Desktop/D24, where
+# GX010060.MP4 is 2.4 MB of JSON a dev tool wrote over 11.9 GB of footage, so File ▸ Load full
+# recording on 0060 was dead. Pins the is_mp4_container probe, the split + the notice that NAMES
+# what was left out, that discovery is deliberately NOT filtered (sidecar/library key on [0]'s
+# stem), the Session.load skip on a synthetic recording built from the committed hero6 clip, and
+# the all-junk raise. Real Session.load + a StudioWindow -> Qt offscreen.
+add_test(NAME test_unreadable_chapter
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_unreadable_chapter.py)
+set_tests_properties(test_unreadable_chapter PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Start-line widen decision (test/fit-start-line-widen): load._fit_start_line keeps a sufficient
 # registry line but widens (1.15/1.3/1.5 about the midpoint) to recover band-laps a too-short line
 # missed — it sets known-track lap segmentation. Both branches pinned on a synthetic circle Laps.
@@ -271,6 +283,19 @@ add_test(NAME test_load_affordances
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_affordances.py)
 set_tests_properties(test_load_affordances PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The load / reference LIFECYCLE (2026-09-07 review §3.4/§3.5/§3.7/§3.8): the load-SUCCESS path's
+# strand (a raising CentralView.__init__ leaving the loading card up forever with loadFinished
+# never emitted) and the same guard on the two other rebuilds that ARE a recovery (_cancel_load,
+# _on_load_failed); the reference load's single-flight + view guards (its docstring promised both,
+# the body had neither); and the five riskiest previously-untested paths — closeEvent mid-load AND
+# mid-EXPORT (the render QThread was held on an attribute the drain never saw), Load full recording,
+# the REAL _forget_recording ordering, the queued second open actually opening B, and the ideal-lap
+# row selection. Real Qt + real worker QThreads, so run offscreen; both persistence stores are
+# diverted to a temp dir inside the module.
+add_test(NAME test_load_lifecycle
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_lifecycle.py)
+set_tests_properties(test_load_lifecycle PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1")
 # Corner model (studio.corners, F-corner): synthetic stadium-loop detection (count/
 # positions/directions vs construction), distribution-derived threshold (+ noise
 # stability), the corner/straight partition identity, and the CornerTable + map
@@ -602,6 +627,18 @@ add_test(NAME test_pb_toast
 set_tests_properties(test_pb_toast PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The PB celebration's IDENTITY + LIFETIME (critical review 2026-09-07 §3.2/§3.3): a recording must
+# not be its own previous best — opening one chapter and then this window's own "Load full
+# recording" announced the same outing beating itself, 0.57 s, under a Share button — and the card
+# must fire more than once per window (dismiss() ends in deleteLater(), the stale wrapper raised
+# inside the blanket except and every later celebration was swallowed). Drives the real
+# _update_library over real chapter files on disk and the real _show_pb_moment on a real
+# StudioWindow, so run offscreen; the library index is redirected to a temp dir inside the test.
+add_test(NAME test_pb_moment_lifecycle
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_pb_moment_lifecycle.py)
+set_tests_properties(test_pb_moment_lifecycle PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Export + library entry points (fix/qa-app-export-plumbing, QA sweep L12-02/L1-03/L12-04/L12-07/
 # L12-08/L11-08): the overlay MP4 obeys the same timing-trust verdict as the lap card, a 0-valid-lap
 # recording can no longer write a header-only CSV and reports success, the report's map grab keeps
@@ -684,7 +721,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_golden_synthetic test_studio_features test_rainbow_map test_map_render
                         test_map_chrome test_compare test_map_ghost test_cross_reference
                         test_delta_engine test_controllers test_central_view_realqt
-                        test_load_failure test_load_affordances test_validate_wallclock
+                        test_load_failure test_load_affordances test_load_lifecycle
+                        test_validate_wallclock
                         test_corners test_consistency test_gmeter test_gmeter_overlay
                         test_export_data test_export_disclosures
                         test_driving test_coaching test_library test_export_video
@@ -695,7 +733,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_charts_panel test_lap_table_affordances test_export_gates
                         test_golden_hermetic test_design_system test_inline_styles
                         test_first_run_path test_map_key test_video_view_compare
-                        test_export_typography)
+                        test_export_typography test_unreadable_chapter
+                        test_pb_moment_lifecycle)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
