@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import corners as corners_mod
 from . import units
 from .corners import project_boundaries
 
@@ -258,6 +259,8 @@ def corner_phase_losses(
     lap_traces: tuple | None = None,
     best_traces: tuple | None = None,
     frame=None,
+    lap_align=corners_mod.DERIVE_ALIGNMENT,
+    best_align=corners_mod.DERIVE_ALIGNMENT,
     grid_n: int = PHASE_GRID_N,
 ) -> PhaseLoss:
     """Decompose ONE corner's Δt-vs-best into entry / apex(mid) / exit thirds (seconds).
@@ -277,6 +280,9 @@ def corner_phase_losses(
     byte-identical to the pre-gate output. `frame` is the WHOLE partition's reference boundaries
     (every corner's enter/exit): a lap's warp is built from all of them, so this one corner's
     window is the same window `lap_corner_stats` measured rather than a two-knot warp of its own.
+    `lap_align`/`best_align` are that warp ALREADY BUILT (`corners.lap_alignment`): a caller looping
+    over the corners of one lap should build it once and pass it, or the lap's spatial match re-runs
+    per corner — 106 ms of a 168 ms `Session.phase_report` on the 38-lap D24 0060 pair.
     Returns a zero PhaseLoss when either trace is unusable or the window is degenerate."""
     lap_dist = np.asarray(lap_dist, float)
     lap_speed_kmh = np.asarray(lap_speed_kmh, float)
@@ -285,19 +291,19 @@ def corner_phase_losses(
     if len(lap_dist) < 2 or len(best_dist) < 2 or not (c_exit > c_enter):
         return _NO_PHASES
 
-    def _proj(total: float | None, traces: tuple | None) -> tuple[float, float]:
+    def _proj(total: float | None, traces: tuple | None, align) -> tuple[float, float]:
         # Project the reference-odometer window [c_enter, c_exit] onto a lap's own odometer via the
         # shared drift gate (identity if a total is missing or equals the corner basis' total — the
-        # best lap's own frame; traces enable the spatial fallback above the drift bound).
+        # best lap's own frame; traces enable the spatial alignment above the drift bound).
         if (corner_dist_total and total and corner_dist_total > 0
                 and total != corner_dist_total):
             proj = project_boundaries([c_enter, c_exit], corner_dist_total, total,
-                                      traces=traces, frame=frame)
+                                      traces=traces, frame=frame, alignment=align)
             return float(proj[0]), float(proj[1])
         return c_enter, c_exit
 
-    lap0, lap1 = _proj(lap_total, lap_traces)
-    best0, best1 = _proj(best_total, best_traces)
+    lap0, lap1 = _proj(lap_total, lap_traces, lap_align)
+    best0, best1 = _proj(best_total, best_traces, best_align)
     # Equal-distance thirds of each lap's own projected window (same fraction → same track third).
     lap_edges = np.linspace(lap0, lap1, 4)
     best_edges = np.linspace(best0, best1, 4)
@@ -438,8 +444,15 @@ def summarize(
                   if best_dist is not None and best_elapsed is not None else (None, None))
 
     # The WHOLE partition's reference boundaries: each lap's drift-gated warp is built from all of
-    # them, so a per-corner phase window is the same window the Corners table measured.
+    # them, so a per-corner phase window is the same window the Corners table measured. The two
+    # warps are built ONCE here, not once per corner inside the loop below.
     phase_frame = [b for c in corners for b in (float(c.enter), float(c.exit))]
+    med_align = (corners_mod.lap_alignment(phase_frame, corner_dist_total, median_lap_total,
+                                           traces=median_traces)
+                 if corner_dist_total and median_lap_total else None)
+    best_align = (corners_mod.lap_alignment(phase_frame, corner_dist_total, best_lap_total,
+                                            traces=best_traces)
+                  if corner_dist_total and best_lap_total else None)
 
     # Build a row per corner with a positive median loss; rank by the loss (biggest first).
     ranked_idx = [i for i in np.argsort(-losses, kind="stable") if losses[i] > 1e-9]
@@ -453,6 +466,7 @@ def summarize(
             corner_dist_total=corner_dist_total, lap_total=median_lap_total,
             best_total=best_lap_total,
             lap_traces=median_traces, best_traces=best_traces, frame=phase_frame,
+            lap_align=med_align, best_align=best_align,
         ) if have_phases else _NO_PHASES)
         # L5-04: every ranked row is analysed unless a cap is asked for, so the "How to find it"
         # cell of a row below any cut is a MEASURED "nothing fired" rather than an un-run analysis.

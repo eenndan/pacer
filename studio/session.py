@@ -2041,8 +2041,12 @@ class Session:
         best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
         best_total = self.best_lap_total_distance()
         # Every lap's drift-gated warp is built from the WHOLE partition (corners.project_boundaries'
-        # `frame`), so a phase window is the same window the Corners table measured.
+        # `frame`), so a phase window is the same window the Corners table measured. Each lap's warp
+        # is built ONCE, outside the per-corner loop (corners_alg.lap_alignment's note).
         phase_frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+        best_align = (corners_alg.lap_alignment(phase_frame, corner_dist_total, best_total,
+                                                traces=best_traces)
+                      if corner_dist_total and best_total else None)
         triples_by_lap: list[list[tuple[float, float, float]]] = []
         for i in ids:
             if i == best:
@@ -2053,6 +2057,9 @@ class Session:
             _lt, lap_xs, lap_ys, _lv, lap_cum = self._lap_columns(i)
             lap_traces = (best_xs, best_ys, best_cum, lap_xs, lap_ys, lap_cum)
             lap_total = float(dist[-1])
+            lap_align = (corners_alg.lap_alignment(phase_frame, corner_dist_total, lap_total,
+                                                   traces=lap_traces)
+                         if corner_dist_total else None)
             row: list[tuple[float, float, float]] = []
             for c in corner_list:
                 ph = coaching.corner_phase_losses(
@@ -2060,7 +2067,8 @@ class Session:
                     float(c.enter), float(c.exit),
                     corner_dist_total=corner_dist_total, lap_total=lap_total,
                     best_total=best_total,
-                    lap_traces=lap_traces, best_traces=best_traces, frame=phase_frame)
+                    lap_traces=lap_traces, best_traces=best_traces, frame=phase_frame,
+                    lap_align=lap_align, best_align=best_align)
                 row.append((ph.entry, ph.apex, ph.exit))
             triples_by_lap.append(row)
         if not triples_by_lap:

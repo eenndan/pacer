@@ -155,8 +155,56 @@ def _spatial_matches(d_ref, total_ref: float,
     return out
 
 
+# "no alignment supplied — derive it here". A distinct sentinel because None is the LEGAL value
+# meaning "this lap keeps the normalized projection", which a caller must be able to pass through.
+DERIVE_ALIGNMENT = object()
+
+
+def lap_alignment(frame, total_ref: float, total_lap: float, *,
+                  traces: tuple | None = None) -> tuple | None:
+    """ONE comparison lap's odometer alignment to the reference lap, as the (knot_ref, knot_lap)
+    pair of a monotone piecewise-linear warp — or None when the normalized projection applies
+    verbatim (no traces, drift inside NORMALIZED_DRIFT_MAX, or no spatial match survived).
+
+    `frame` is the reference-odometer boundary set the warp is fitted to; the two timing-line
+    anchors are added here. See project_boundaries for what the warp is and why it exists.
+
+    BUILD IT ONCE PER LAP when you are projecting many windows of the same lap.
+    `coaching.corner_phase_losses` is called per (lap, corner) — deriving the lap's warp inside
+    each of those calls cost 106 ms of a 168 ms `Session.phase_report` on the 38-lap D24 0060 pair.
+    Passing it in put that back to 61 ms."""
+    total_ref = float(total_ref)
+    total_lap = float(total_lap)
+    if traces is None or line_length_drift(total_lap, total_ref) <= NORMALIZED_DRIFT_MAX:
+        return None
+    ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum = traces
+    knots = np.asarray(frame, float)
+    matched = _spatial_matches(knots, total_ref, ref_xs, ref_ys, ref_cum,
+                               lap_xs, lap_ys, lap_cum)
+    # The two exact timing-line anchors plus every surviving match, in track order, kept strictly
+    # increasing on both axes (a match that crosses its accepted neighbour is a mis-match, and
+    # dropping it costs only interpolation).
+    knot_ref = [0.0]
+    knot_lap = [0.0]
+    for i in np.argsort(knots, kind="stable"):
+        d, m = float(knots[i]), float(matched[i])
+        if not np.isfinite(m) or not (knot_ref[-1] < d < total_ref) \
+                or not (knot_lap[-1] < m < total_lap):
+            continue
+        knot_ref.append(d)
+        knot_lap.append(m)
+    if len(knot_ref) == 1:
+        # Nothing matched anywhere: the two anchors alone ARE the normalized map, so say so and let
+        # the caller return it verbatim rather than re-deriving it through np.interp.
+        return None
+    knot_ref.append(total_ref)
+    knot_lap.append(total_lap)
+    return np.asarray(knot_ref, float), np.asarray(knot_lap, float)
+
+
 def project_boundaries(d_ref, total_ref: float, total_lap: float, *,
-                       traces: tuple | None = None, frame=None) -> np.ndarray:
+                       traces: tuple | None = None, frame=None,
+                       alignment=DERIVE_ALIGNMENT) -> np.ndarray:
     """Project reference-odometer corner-window boundaries `d_ref` onto a comparison lap's odometer.
 
     The DRIFT-GATED alignment shared by lap_corner_stats / segment_times / driving / coaching: when
@@ -192,36 +240,21 @@ def project_boundaries(d_ref, total_ref: float, total_lap: float, *,
     `frame`, when given, is the FULL reference-odometer boundary set the lap's warp is built from,
     so a caller asking about ONE corner (coaching.corner_phase_losses) gets the SAME alignment as a
     caller asking about the whole partition (lap_corner_stats / segment_bests / driving_channels).
-    Defaults to `d_ref` itself — which is already the full set at every whole-partition call site."""
+    Defaults to `d_ref` itself — which is already the full set at every whole-partition call site.
+
+    `alignment` is that warp, already built (`lap_alignment`) — pass it when projecting many
+    windows of the SAME lap so the spatial match runs once for the lap instead of once per window.
+    None is a legal value meaning "this lap keeps the normalized projection"."""
     d_ref = np.asarray(d_ref, float)
     total_ref = float(total_ref)
     total_lap = float(total_lap)
     normalized = d_ref * (total_lap / total_ref) if total_ref > 0 else d_ref.copy()
-    if traces is None or line_length_drift(total_lap, total_ref) <= NORMALIZED_DRIFT_MAX:
+    if alignment is DERIVE_ALIGNMENT:
+        alignment = lap_alignment(d_ref if frame is None else frame, total_ref, total_lap,
+                                  traces=traces)
+    if alignment is None:
         return normalized
-    ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum = traces
-    knots = d_ref if frame is None else np.asarray(frame, float)
-    matched = _spatial_matches(knots, total_ref, ref_xs, ref_ys, ref_cum,
-                               lap_xs, lap_ys, lap_cum)
-    # Assemble the warp: the two exact timing-line anchors plus every surviving match, in track
-    # order, kept strictly increasing on both axes (a match that crosses its accepted neighbour is
-    # a mis-match, and dropping it costs only interpolation).
-    knot_ref = [0.0]
-    knot_lap = [0.0]
-    for i in np.argsort(knots, kind="stable"):
-        d, m = float(knots[i]), float(matched[i])
-        if not np.isfinite(m) or not (knot_ref[-1] < d < total_ref) \
-                or not (knot_lap[-1] < m < total_lap):
-            continue
-        knot_ref.append(d)
-        knot_lap.append(m)
-    if len(knot_ref) == 1:
-        # Nothing matched anywhere: the two anchors alone ARE the normalized map, so return it
-        # verbatim rather than re-deriving it through np.interp.
-        return normalized
-    knot_ref.append(total_ref)
-    knot_lap.append(total_lap)
-    return np.interp(d_ref, knot_ref, knot_lap)
+    return np.interp(d_ref, alignment[0], alignment[1])
 
 
 # --- model constants -------------------------------------------------------------------
