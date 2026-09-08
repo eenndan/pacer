@@ -191,6 +191,38 @@ def test_copy_cards_refuse_to_shrink_below_their_copy():
     print("test_copy_cards_refuse_to_shrink_below_their_copy OK")
 
 
+def test_a_copy_card_opens_at_the_height_its_copy_needs():
+    """A card that FITS must open without a scrollbar — measured on the first open.
+
+    `_fit_to_copy` lays the body out at the width the card will really give it and then reads the
+    height back off the layout. The resize was being undone before the read: `widgetResizable`
+    means the scroll area owns the body's width, so the paragraphs measured at the viewport's
+    412 px rather than the 400 px asked for, came out one wrapped line short, and the privacy card
+    opened 16 px under its own copy with a scrollbar it did not need — 643 px where its copy wants
+    659.
+
+    IT WAS INVISIBLE UNTIL A BUG WAS FIXED. widgets.WrapLabel used to ratchet its minimum height
+    upwards and never back down, so a paragraph that had once measured taller kept the extra line,
+    and the 16 px this arithmetic was losing were being supplied by that. The two are only
+    separable from the outside by asserting the card's height against its own content, which is
+    what this does.
+
+    Shortcuts is deliberately not in the list: it is the one card whose copy genuinely outgrows
+    its cap, so its scrollbar is the feature (see test_copy_cards_scroll_rather_than_clip)."""
+    for cls in (AboutDialog, PrivacyDialog):
+        d = _shown(cls())
+        scroll = d.findChildren(QScrollArea)[0]
+        body = scroll.widget()
+        short = body.height() - scroll.viewport().height()
+        assert short <= 0, (
+            f"{cls.__name__} opened {short}px short of its own copy — the body is "
+            f"{body.height()}px inside a {scroll.viewport().height()}px viewport")
+        assert not scroll.verticalScrollBar().isVisible(), (
+            f"{cls.__name__} opened with a scrollbar over copy that fits")
+        d.close()
+    print("test_a_copy_card_opens_at_the_height_its_copy_needs OK")
+
+
 def test_copy_cards_scroll_rather_than_clip():
     """The backstop for a card whose copy outgrows the display: the paragraphs live in a scroll
     area, so even a screen-capped height keeps every line reachable."""

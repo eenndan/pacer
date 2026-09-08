@@ -1411,7 +1411,7 @@ def test_stats_view_tiles_reflow_with_pane_width():
     _pump()
     assert v._tile_cols == 2, v._tile_cols
     # The digest tile sits within the first two columns now (row-major re-place).
-    g, tiles = v._tile_grids[1]                    # the PACE grid
+    g, tiles, _group = v._tile_grids[1]            # the PACE grid
     idx = tiles.index(v.t_digest)
     r, c = idx // 2, idx % 2
     assert g.itemAtPosition(r, c) is not None and g.itemAtPosition(r, c).widget() is v.t_digest
@@ -1544,7 +1544,7 @@ def _pace_layout(v):
 
     Mapped to the PAGE, not read off the tiles' own x: they sit inside a section column now, so a
     local coordinate would measure the column and call a page twice as wide the same width."""
-    _g, tiles = v._tile_grids[1]
+    _g, tiles, _group = v._tile_grids[1]
     vis = [t for t in tiles if t.isVisible()]
     return (len({t.mapTo(v, t.rect().topLeft()).y() for t in vis}),
             max(t.mapTo(v, t.rect().topLeft()).x() + t.width() for t in vis))
@@ -2227,10 +2227,15 @@ def test_the_friction_circles_axis_titles_fit_inside_the_chart():
 
 
 # --------------------------------------------------- the ⌘⇧S dashboard composes at width
-#: The two MAXIMIZED pane widths the app's shipped window sizes give this page, measured on the
-#: real CentralView (1280x800 -> 1260 px, 1920x1200 -> 1900). The quadrant widths above are the
-#: page's first duty; these are the surface ⌘⇧S opens onto.
-DASHBOARD_WIDTHS = (1260, 1900)
+#: The MAXIMIZED pane widths the app's shipped window sizes give this page, measured on the real
+#: CentralView (1280x800 -> 1260 px, 1440x900 -> 1420, 1920x1200 -> 1900). The quadrant widths
+#: above are the page's first duty; these are the surface ⌘⇧S opens onto.
+#:
+#: 1420 IS THE ONE THAT WAS MISSING, and its absence is what let a P1 ship green. It is the app's
+#: OWN DEFAULT window maximized, and it sat between the other two in exactly the band where a
+#: width-only packer produced its narrowest columns — three of 449 px, against report tables that
+#: want up to 718. A guard list that samples the extremes of a range is not sampling the range.
+DASHBOARD_WIDTHS = (1260, 1420, 1900)
 
 
 def test_the_dashboard_composes_into_columns_and_the_quadrant_does_not():
@@ -2251,9 +2256,22 @@ def test_the_dashboard_composes_into_columns_and_the_quadrant_does_not():
         v = _laid_out(width)
         cols = v._column_count()
         assert 2 <= cols <= 3, f"a {width}px maximized page is still {cols} column(s)"
-        # ...and the columns are EQUAL, so every section's right edge lands on one grid.
-        widths = {c.width() for c in v._columns if c.isVisible()}
-        assert max(widths) - min(widths) <= 1, f"columns of {sorted(widths)} at {width}px"
+        # ...and every column got AT LEAST the width it declared it needs. Not "the columns are
+        # equal", which is what this asserted first and is exactly the assumption the P1 was made
+        # of: equal thirds of 1420 px are 449 px each, and three of the five report tables want
+        # more than that. A column is as wide as its widest non-reflowing member, and the packer
+        # only composes an arrangement it can pay for.
+        planned = v._planned_widths(v._layout)
+        for gcol, groups in enumerate(v._layout):
+            need = v._grid_column_min(groups)
+            assert planned[gcol] >= need, (
+                f"at {width}px grid column {gcol} is planned at {planned[gcol]}px for content "
+                f"that needs {need}px")
+            for group in groups:
+                got = v._columns[group].width()
+                assert got >= need, (
+                    f"at {width}px the column holding group {group} was laid out at {got}px "
+                    f"against a {need}px minimum")
         # The content has to actually REACH across the canvas: the old page's rightmost ink
         # stopped at ~700 px whatever the pane.
         right = max(c.x() + c.width() for c in v._columns)
@@ -2297,6 +2315,74 @@ def test_the_composed_page_keeps_the_shipped_section_order():
             f"  {headings(v)}\n  != {order}")
         v.hide()
     print(f"test_the_composed_page_keeps_the_shipped_section_order OK ({len(flat)} sections)")
+
+
+def _hidden_columns(v):
+    """Every visible report table that is hiding a column behind its OWN horizontal scrollbar,
+    as [(first header, px of column hidden)].
+
+    Asked of the WIDGET (`_needs_bar`), not of a subtraction: `content_width()` includes the frame
+    and two spare pixels, so a raw content-minus-viewport reads +4 px on a table that fits
+    perfectly, and a guard written that way is either always red or tuned to a constant nobody
+    can explain."""
+    from studio.stats_panel import _ReportTable
+    out = []
+    for t in v.findChildren(_ReportTable):
+        if t.isHidden() or not t._needs_bar():
+            continue
+        head = t.horizontalHeaderItem(0)
+        columns_px = t.content_width() - 2 * t.frameWidth() - 2
+        out.append(((head.text() if head else "?"), columns_px - t.viewport().width()))
+    return out
+
+
+def test_no_composed_column_hides_a_report_table_column():
+    """THE ASSERTION WHOSE ABSENCE LET A P1 SHIP GREEN.
+
+    Composing the page into columns narrower than its report tables does not wrap them — the
+    tables are content-sized and scroll (see _ReportTable) — it HIDES their rightmost columns
+    behind an inner scrollbar. Measured on D24 before the packer learned to ask: at the app's own
+    default 1440x900 window, maximized, `Apex best · Apex med · Grip %` were gone from CORNERS,
+    `Trap med · Exit Δ` from STRAIGHTS, `Brake s · Coast s` from PER LAP and `m later` from
+    BRAKING — 266 / 159 / 90 / 81 px of hidden columns on a page whose single-column form showed
+    all of them.
+
+    The outer page-level check below is NOT this check, and believing it was is how the defect got
+    through: the page fit its pane perfectly the whole time. The scroll had moved INSIDE the
+    tables, which is the one place `_ReportTable` is designed to put it and the one place nothing
+    was looking."""
+    for width in DASHBOARD_WIDTHS:
+        v = _laid_out(width)
+        hidden = _hidden_columns(v)
+        assert not hidden, (
+            f"at a {width}px composed page these tables hide columns: "
+            + ", ".join(f"{name} by {px}px" for name, px in hidden))
+        v.hide()
+    print(f"test_no_composed_column_hides_a_report_table_column OK ({DASHBOARD_WIDTHS})")
+
+
+def test_composing_never_hides_a_column_the_single_column_page_showed():
+    """The comparison that names the regression: composing may not LOSE a reader anything.
+
+    A quadrant is allowed to scroll a table — that is the shipped contract, and at 445 px the
+    widest table is 273 px too wide for the pane whatever anyone does. What is not allowed is for
+    the page to hide a column at a width where it did not have to, so this pins the composed page
+    against the SAME page at the same pane width forced to a single column: whatever the one-column
+    layout can show, the composed one shows too."""
+    for width in DASHBOARD_WIDTHS:
+        v = _laid_out(width)
+        composed = dict(_hidden_columns(v))
+        # ...the same page, same width, dealt into one column (what main renders here).
+        from studio.stats_panel import PAGE_LAYOUTS
+        v._layout = PAGE_LAYOUTS[-1]
+        v._place_columns(PAGE_LAYOUTS[-1])
+        _settle(8)
+        single = dict(_hidden_columns(v))
+        lost = {k: composed[k] for k in composed if k not in single}
+        assert not lost, (
+            f"at {width}px composing hid columns the single-column page showed: {lost}")
+        v.hide()
+    print("test_composing_never_hides_a_column_the_single_column_page_showed OK")
 
 
 def test_the_dashboard_never_scrolls_sideways_either():

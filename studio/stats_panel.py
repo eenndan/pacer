@@ -130,15 +130,47 @@ WIDE_PANE_PX = 1200       # column width from which a tile grid may run to TILES
 # So above two columns' worth of pane the page COMPOSES: the same sections, in the same order,
 # dealt into 2 and then 3 columns (StatsView._place_columns). Below that — every quadrant the app
 # opens at, and the whole 845x414 minimum — nothing changes at all: one column, one scroll.
-PAGE_COLS_MAX = 3
-# A section column is never set narrower than the app's own prose measure. It is the width this
-# page was designed at (the 1280x800 quadrant gives it 445, and 421 inside its gutters), it is
-# what the two zero-lap paragraphs and the ideal-lap notes are already capped to, and it is wide
-# enough for three tiles and the DATA TRUST card's term/value split. Two of them plus a gutter is
-# 904 px of pane, so the 1280x800 MAXIMIZED page (1260) composes into two and the 1920x1200 one
-# (1900) into three, while the widest quadrant either window has (675) stays a single column.
+# THE FLOOR FOR A COLUMN THAT HOLDS ONLY PROSE, TILES AND CHARTS — all of which reflow. It is the
+# app's own prose measure: the width this page was designed at (the 1280x800 quadrant gives it 445,
+# and 421 inside its gutters), what the zero-lap paragraphs and the ideal-lap notes are capped to,
+# and wide enough for three tiles and the DATA TRUST card's term/value split.
+#
+# IT IS A FLOOR AND NOT THE ANSWER, and that distinction is this page's P1. A column that holds a
+# REPORT TABLE cannot be set at a prose measure: the tables are content-sized and do not reflow —
+# they scroll (see _ReportTable) — so a column narrower than one of them does not wrap it, it HIDES
+# its rightmost columns behind an inner scrollbar. Measured on D24 the five tables want
+# 345 / 532 / 541 / 610 / 718 px, against the 440 this constant declares. Composing on this number
+# alone lost `Apex best · Apex med · Grip %` off CORNERS, `Trap med · Exit Δ` off STRAIGHTS,
+# `Brake s · Coast s` off PER LAP and `m later` off BRAKING at the app's DEFAULT 1440x900 window,
+# and truncated CORNERS mid-digit ("73.6 | 67.") at 1920x1200 — data the single-column page shows.
+#
+# So the packer asks each section group what its widest NON-REFLOWING member needs
+# (_group_min_width) and only composes an arrangement every column of which can be given it.
 PAGE_COL_MIN_PX = theme.EMPTY_MEASURE_PX
 PAGE_COL_GAP = theme.SPACE_XL   # between two section columns: the page's own large-surface step
+# The candidate compositions, in preference order. Each entry is the GRID COLUMNS; each grid column
+# lists the section groups stacked in it, top to bottom. Read down and then across, every one of
+# them is the same page in the same order — that is what makes them interchangeable at all.
+#
+# THE TWO 2-COLUMN FORMS ARE NOT REDUNDANT. Group 1 carries the 718 px CORNERS table, so a
+# composition that gives it a column of its own needs 718 + 610 + gutters = 1376 px of pane, which
+# the 1440x900 window has (1420) and the 1280x800 one (1260) does not. The second form stacks
+# groups 1 and 2 in ONE column — the widest, since both live there — and needs only 440 + 718 =
+# 1206, so the smaller window still composes instead of falling back to a 1260 px page with a
+# 700 px strip of content on it.
+#
+# The balanced form is preferred where both fit, and "balanced" is measured rather than assumed:
+# on D24 at the 718/718/654 px columns 1440x900 gives, the three groups stand 983 / 907 / 1338 px
+# tall — group 3 is the TALLEST, not the middle one. So 1+2 beside 3 is 1914 | 1338 (1.43x) where
+# 1 beside 2+3 is 983 | 2269 (2.31x).
+PAGE_LAYOUTS = (
+    ((0,), (1,), (2,)),      # three columns
+    ((0, 1), (2,)),          # two, the balanced pairing
+    ((0,), (1, 2)),          # two, when the widest table cannot be given a column to itself
+    ((0, 1, 2),),            # one — the quadrant page, and untouched by any of this
+)
+PAGE_COLS_MAX = max(len(layout) for layout in PAGE_LAYOUTS)
+GG_GROUP = 1              # the section group the friction circle lives in (it sizes from ITS column)
 GG_HEIGHT = 220           # px; the friction-circle plot's height in a normal pane
 GG_HEIGHT_WIDE = 300      # …and in a dashboard-width one (it is the page's only chart)
 # The plot's width is set EXPLICITLY (2:1 around the aspect-locked circle, leaving the axis
@@ -587,6 +619,16 @@ class _ReportTable(QTableWidget):
         self.setMaximumWidth(self._content_w)
         self._apply_height()
 
+    def content_width(self) -> int:
+        """The width at which this table shows every column — what it would LIKE to be.
+
+        Its layout minimum is deliberately 0 (below) and its maximum is this, so between the two it
+        takes whatever the pane gives and scrolls the difference. That is right for a quadrant and
+        wrong for a page CHOOSING its own columns: the chooser has to know the number before it
+        commits, or it composes a column that hides three of CORNERS' eight columns. `fit()` has
+        always computed it; this is the read the page's packer needs (see _group_min_width)."""
+        return self._content_w
+
     def minimumSizeHint(self):
         """Zero-width, full-height. Qt's own hint for a scroll area is wide enough to reserve room
         for content that this table is explicitly willing to scroll instead."""
@@ -629,9 +671,12 @@ class StatsView(QWidget):
         # C6 responsive tiles: every _grid registers here; _reflow_tiles re-places them when
         # the pane crosses a column threshold. Built at max columns, reflowed on first resize.
         self._tile_grids: list = []
-        self._tile_cols = TILES_PER_ROW
+        self._tile_cols = TILES_PER_ROW      # the WIDEST section column's tile columns
+        self._tile_cols_by_group = {}        # ...and each column's own, which is what is applied
+        self._group = 0             # the section group being built (see the COLUMN 2/3 markers)
         self._wide = False          # composed into columns? (a dashboard; drives the g-g size)
-        self._page_cols = 1         # section columns the page is currently dealt into
+        self._layout = PAGE_LAYOUTS[-1]      # the composition in force; the single column to start
+        self._column_tables: list[list] = [[] for _ in range(PAGE_COLS_MAX)]
         self._scroll = None
 
         body = QWidget()
@@ -722,7 +767,7 @@ class StatsView(QWidget):
             lay.setContentsMargins(0, 0, 0, 0)
             lay.setSpacing(theme.SPACE_XS)
             self._columns.append(holder)
-        self._place_columns(1)
+        self._place_columns(self._layout)
         col, col_mid, col_right = (c.layout() for c in self._columns)
 
         # --- SESSION totals
@@ -896,7 +941,7 @@ class StatsView(QWidget):
         # how fast, how much is left); this column is the measured g and the corner-by-corner
         # report those peaks are the summary of, with the friction circle — the page's one big
         # chart — leading it.
-        col = col_mid
+        col, self._group = col_mid, 1
 
         # --- SPEED & G peaks
         self._speed_section = self._section("SPEED · G")
@@ -1036,9 +1081,11 @@ class StatsView(QWidget):
         # ====================== COLUMN 3 — the three remaining report tables
         # BRAKING, STRAIGHTS and PER LAP are the page's tallest, narrowest content — three grids
         # of numbers that cap themselves at their own columns and so leave the most empty canvas
-        # beside them. Measured on D24 they are also the third of the page that balances the other
-        # two: ~1050 px against column 1's ~1000 and column 2's ~1100 at three columns.
-        col = col_right
+        # beside them. Measured on the laid-out D24 page the three groups run 983 / 907 / 1338 px,
+        # so this is the TALLEST of them and the one the 2-column forms hang a whole grid column
+        # on. Its widest member (STRAIGHTS, 610 px) is also what this column has to be GIVEN —
+        # see _group_min_width, and PAGE_COL_MIN_PX for what happens when a packer forgets to ask.
+        col, self._group = col_right, 2
 
         # --- braking repeatability + commitment (hidden without corners / a g signal)
         self._braking_section = self._section("BRAKING")
@@ -1130,9 +1177,12 @@ class StatsView(QWidget):
         g.setHorizontalSpacing(theme.SPACE_L)
         g.setVerticalSpacing(theme.SPACE_S)
         self._place_tiles(g, list(tiles), self._tile_cols)
-        # Registered for the responsive reflow (C6): a narrow quadrant re-places every grid
-        # at fewer columns instead of pushing the 4th column off-pane.
-        self._tile_grids.append((g, list(tiles)))
+        # Registered for the responsive reflow (C6) WITH THE SECTION GROUP IT SITS IN: a narrow
+        # quadrant re-places every grid at fewer columns instead of pushing the 4th column
+        # off-pane, and a composed page gives each grid its OWN column's answer — the three
+        # columns are no longer equal (see _place_columns), so one number for all of them would
+        # have to be the narrowest column's and would waste the widest.
+        self._tile_grids.append((g, list(tiles), self._group))
         return g
 
     @staticmethod
@@ -1167,48 +1217,125 @@ class StatsView(QWidget):
             g.setColumnStretch(c, 0)
         g.setColumnStretch(cols, 1)  # left-pack the tiles; slack stays right
 
-    def _place_columns(self, cols: int) -> None:
-        """(Re-)deal the three section columns into `cols` grid columns.
+    def _group_min_width(self, group: int) -> int:
+        """The narrowest a column carrying `group` may be SET — its widest non-reflowing member.
+
+        Everything else on this page yields to its column: prose wraps, tiles re-place, the
+        friction circle shrinks, the sparkline caps. A REPORT TABLE does neither — it is
+        content-sized and scrolls (see _ReportTable) — so it, and only it, can turn a narrow column
+        into hidden data. Hidden tables are excluded: a session with no corners has no CORNERS
+        table and must not be laid out around one."""
+        need = PAGE_COL_MIN_PX
+        for table in self._column_tables[group]:
+            if not table.isHidden():
+                need = max(need, table.content_width())
+        return need
+
+    def _grid_column_min(self, groups) -> int:
+        """What one GRID column must be given to carry `groups` stacked in it."""
+        return max(self._group_min_width(g) for g in groups)
+
+    def _choose_layout(self):
+        """The widest composition every column of which can actually be given its minimum.
+
+        Falls through PAGE_LAYOUTS in preference order; the single column is the floor and is
+        always legal, which is what keeps every quadrant (and the app's 845x414 minimum) on
+        exactly the page it has always rendered."""
+        room = self._pane_width() - 2 * theme.SPACE_M
+        for layout in PAGE_LAYOUTS:
+            need = (sum(self._grid_column_min(gc) for gc in layout)
+                    + (len(layout) - 1) * PAGE_COL_GAP)
+            if len(layout) == 1 or need <= room:
+                return layout
+        return PAGE_LAYOUTS[-1]
+
+    def _column_count(self) -> int:
+        """How many section columns the page is composed into RIGHT NOW — the arrangement in
+        force, not a re-derivation of it (the two could disagree between a resize and its
+        layout pass, and every reader of this wants the one on screen)."""
+        return len(self._layout)
+
+    def _place_columns(self, layout) -> None:
+        """(Re-)deal the three section columns into `layout`'s grid columns.
 
         removeWidget() FIRST, always, for the reason _place_tiles sets out at length — this runs
         again whenever the pane crosses a threshold, and QGridLayout.addWidget is not a "move" for
         a widget its own layout already holds.
 
-        THE 2-COLUMN CASE SPANS, and that is the whole reason this is a table and not `i // cols`.
-        A grid ROW is shared by every column in it, so stacking two of these columns in one grid
-        column and putting the third beside them would band the page: the third column's first
-        section would sit level with the first's, and the gap under the shorter of the two would be
-        the difference between them. Column 3 instead spans both rows, so the left grid column
-        stacks 1 over 2 and the right holds 3 whole — one item per band, no gaps anywhere. The
-        SPANNING column is the one measured shortest (see the COLUMN 3 note), because a spanning
-        item taller than the rows it spans is the one way this shape CAN open a gap: Qt would grow
-        both rows to fit it."""
-        places = {
-            3: ((0, 0, 1), (0, 1, 1), (0, 2, 1)),
-            2: ((0, 0, 1), (1, 0, 1), (0, 1, 2)),
-            1: ((0, 0, 1), (1, 0, 1), (2, 0, 1)),
-        }[max(1, min(PAGE_COLS_MAX, cols))]
+        A GRID COLUMN HOLDING ONE GROUP SPANS THE WHOLE BAND. A grid ROW is shared by every column
+        in it, so a column with one section beside a column with two would band the page: the lone
+        section's top would sit level with the first of the pair, and the gap under the shorter of
+        them would be the difference. Spanning gives every band exactly one item, and there is no
+        gap anywhere. The spanning column is always the SHORTER side (measured 983/907/1338 px per
+        group, so 1338 spans beside 983+907 and 983 spans beside 907+1338) — a spanning item taller
+        than the rows it spans is the one way this shape could still open a gap, because Qt would
+        grow both rows to fit it.
+
+        THE MINIMUMS ARE INSTALLED ONLY WHEN COMPOSED. Left to equal stretch alone Qt would hand
+        three EQUAL columns of 609 px to groups needing 440/718/610, which is exactly the P1 this
+        packer exists to stop. On the single column they are NOT installed: there the contract is
+        the quadrant's — a table too wide for the pane scrolls itself rather than making the whole
+        page scroll — and a 718 px floor would put a horizontal scrollbar under a 445 px page."""
         for holder in self._columns:
             self._column_grid.removeWidget(holder)
-        for holder, (row, gcol, span) in zip(self._columns, places, strict=True):
-            self._column_grid.addWidget(holder, row, gcol, span, 1)
-        # Equal stretch on the live columns and none on the rest: the columns are EQUAL THIRDS (or
-        # halves), so every section's right edge lands on the same grid whatever it contains.
+        rows = max(len(groups) for groups in layout)
+        for gcol, groups in enumerate(layout):
+            span = rows // len(groups)
+            for row, group in enumerate(groups):
+                self._column_grid.addWidget(self._columns[group], row * span, gcol, span, 1)
+        composed = len(layout) > 1
         for c in range(PAGE_COLS_MAX):
-            self._column_grid.setColumnStretch(c, 1 if c < cols else 0)
+            live = c < len(layout)
+            self._column_grid.setColumnStretch(c, 1 if live else 0)
+            self._column_grid.setColumnMinimumWidth(
+                c, self._grid_column_min(layout[c]) if (live and composed) else 0)
 
-    def _column_count(self) -> int:
-        """How many section columns the pane can carry at PAGE_COL_MIN_PX each."""
-        room = self._pane_width() - 2 * theme.SPACE_M
-        fits = (room + PAGE_COL_GAP) // (PAGE_COL_MIN_PX + PAGE_COL_GAP)
-        return max(1, min(PAGE_COLS_MAX, int(fits)))
+    def _planned_widths(self, layout) -> list[int]:
+        """What each grid column of `layout` will be LAID OUT at, computed rather than read back.
 
-    def _column_width(self, cols: int | None = None) -> int:
-        """The width ONE section column is laid out in — the pane less the page's gutters and the
-        inter-column gaps, split evenly. What the friction circle and the sparkline size from."""
-        cols = self._column_count() if cols is None else cols
-        room = self._pane_width() - 2 * theme.SPACE_M - (cols - 1) * PAGE_COL_GAP
-        return max(1, int(room / cols))
+        Read back is the obvious way and it does not work: the widgets carry the PREVIOUS
+        arrangement's widths until the layout pass that follows this one, so the friction circle
+        would be sized for the composition the page just left. So this reproduces the rule
+        QGridLayout applies to equal stretches over unequal minimums — hand every column an equal
+        share; any column whose minimum exceeds that share takes its minimum instead and leaves the
+        pool; repeat until the rest fit. Verified against the real laid-out geometry on D24 at all
+        three composed panes: 494/718 at 1260, 718/654 at 1420, 500/718/610 at 1900, exact in
+        every column.
+
+        Under- and over-reading are NOT symmetric here, which is why this is worth computing:
+        under-read only costs the friction circle some diameter, while an over-read pins a fixed-
+        width chart wider than the column that has to hold it."""
+        mins = [self._grid_column_min(groups) for groups in layout]
+        room = (self._pane_width() - 2 * theme.SPACE_M
+                - (len(layout) - 1) * PAGE_COL_GAP)
+        out = [0] * len(mins)
+        pending = list(range(len(mins)))
+        while pending:
+            share = room // len(pending)
+            over = [i for i in pending if mins[i] > share]
+            if not over:
+                for i in pending:
+                    out[i] = share
+                break
+            for i in over:
+                out[i] = mins[i]
+                room -= mins[i]
+                pending.remove(i)
+        return out
+
+    def _column_width(self, group: int = 0) -> int:
+        """The width the grid column carrying `group` is laid out in.
+
+        The whole body on a single column — what it has always been — and that column's planned
+        share once the page composes (see _planned_widths)."""
+        layout = self._layout
+        if len(layout) == 1:
+            return max(1, self._pane_width() - 2 * theme.SPACE_M)
+        planned = self._planned_widths(layout)
+        for gcol, groups in enumerate(layout):
+            if group in groups:
+                return max(1, planned[gcol])
+        return PAGE_COL_MIN_PX
 
     def _budget_gg_gutters(self):
         """Give the friction circle's axis TITLES the room they measure.
@@ -1233,7 +1360,7 @@ class StatsView(QWidget):
         wider than the pane it was ALSO the one thing on the page a horizontal scroll could not
         help you read (a circle you have to scroll is not a circle). Sizing it from the pane is
         the section yielding gracefully rather than being hidden."""
-        room = self._column_width()      # its own section column, not the whole page
+        room = self._column_width(GG_GROUP)   # its own section column, not the whole page
         height = max(GG_MIN_HEIGHT, min(int(height), int(room / GG_ASPECT)))
         width = int(height * GG_ASPECT)
         self.gg.setFixedHeight(height)
@@ -1318,34 +1445,48 @@ class StatsView(QWidget):
         what TILE_MIN_PX has always been calibrated against: the 1280x800 quadrant is a 445 px pane
         holding 421 px of body, and it packs THREE tiles into it. Comparing 421 against a "minimum"
         of 148 would drop that quadrant to two columns — a shipped surface changed to make an
-        arithmetic tidier."""
-        page_cols = self._column_count()
-        if page_cols != self._page_cols:
-            self._page_cols = page_cols
-            self._place_columns(page_cols)
-        column = self._column_width(page_cols)
+        arithmetic tidier.
+
+        AND IT IS ASKED PER SECTION GROUP, because the composed columns are not equal: they are
+        each their own content's minimum plus a share of the slack, so at 1920x1200 the three run
+        roughly 500 / 718 / 610 px. One count for all of them would have to be the narrowest
+        column's, which would leave the widest with four tiles' worth of empty gutter."""
+        layout = self._choose_layout()
+        if layout != self._layout:
+            self._layout = layout
+            self._place_columns(layout)
         # A page dealt into columns is a DASHBOARD; a single column is a quadrant, whatever its
         # width. That is the same distinction WIDE_PANE_PX drew when the page had one column and
         # the pane was the column — it is drawn on the column now that those differ.
-        wide = page_cols > 1
-        share = column + 2 * theme.SPACE_M
-        cols = max(2, min(TILES_PER_ROW_WIDE if column >= WIDE_PANE_PX else TILES_PER_ROW,
-                          share // TILE_MIN_PX))
+        wide = len(layout) > 1
         self._wide = wide
+        cols_by_group = {}
+        for group in range(PAGE_COLS_MAX):
+            share = self._column_width(group) + 2 * theme.SPACE_M
+            cols_by_group[group] = max(2, min(
+                TILES_PER_ROW_WIDE if share - 2 * theme.SPACE_M >= WIDE_PANE_PX else TILES_PER_ROW,
+                share // TILE_MIN_PX))
         # UNCONDITIONALLY, not only when the pane crosses a threshold: the friction circle's size
         # is a function of its column's actual width (see _set_gg_size), so a resize INSIDE a
         # class still changes it. Cheap — setFixedHeight/Width on an unchanged value is a no-op.
         self._set_gg_size(GG_HEIGHT_WIDE if wide else GG_HEIGHT)
-        if cols == self._tile_cols:
+        # The page's headline number stays what it has always been: the widest column's answer.
+        self._tile_cols = max(cols_by_group.values())
+        if cols_by_group == self._tile_cols_by_group:
             return
-        self._tile_cols = cols
-        for g, tiles in self._tile_grids:
-            self._place_tiles(g, tiles, cols)
+        self._tile_cols_by_group = cols_by_group
+        for g, tiles, group in self._tile_grids:
+            self._place_tiles(g, tiles, cols_by_group[group])
 
-    @staticmethod
-    def _make_table(columns: list[str]) -> QTableWidget:
-        """One report table (see _ReportTable): content-sized, scrolling itself when it must."""
-        return _ReportTable(columns, ROW_HEIGHT)
+    def _make_table(self, columns: list[str]) -> QTableWidget:
+        """One report table (see _ReportTable): content-sized, scrolling itself when it must.
+
+        Registered against the section group being built, because a table is the one thing on this
+        page that cannot yield to a narrow column — so the packer has to be able to ask a group
+        what its tables need before it composes (_group_min_width)."""
+        table = _ReportTable(columns, ROW_HEIGHT)
+        self._column_tables[self._group].append(table)
+        return table
 
     @staticmethod
     def _fit_table(t: QTableWidget):
@@ -1508,6 +1649,12 @@ class StatsView(QWidget):
         self._refresh_straights(session, unit, u_label)
         self._refresh_trust(session)
         self._refresh_lap_table(session, rows, unit, u_label)
+        # RE-PACK, because the packer's inputs are what this method just changed. A composition is
+        # legal only while every column can still be given its widest table's width, and a refresh
+        # is exactly when those move: a unit flip re-measures every speed column, a re-segmentation
+        # adds corners (and rows), and a session with no corners hides two tables outright. Without
+        # this the page would keep a 3-column arrangement decided for a narrower CORNERS table.
+        self._reflow_tiles()
 
     def _set_distance(self, tot):
         """The SESSION distance tile. The path length is speed-gated in the data layer (a GPS fix
