@@ -263,10 +263,100 @@ def test_high_drift_engages_spatial_and_recovers_true_position():
           f"max|gated-true|={float(np.max(np.abs(gated - true))):.1e} m")
 
 
-def test_high_drift_no_spatial_match_falls_back_per_boundary():
+def _laterally_displaced(xs, ys, cum, *, center: float, half_width: float, metres: float):
+    """The SAME trace with a smooth lateral bump of `metres` centred on odometer `center` — a
+    stretch where the comparison lap ran a different line, so the spatial match's 3 m closest-
+    approach gate fails THERE while the rest of the lap still matches. The bump is raised-cosine so
+    the heading stays inside _SPATIAL_HEADING_MIN_COS and only the distance gate does the rejecting."""
+    w = np.clip((np.asarray(cum, float) - center) / half_width, -1.0, 1.0)
+    return np.asarray(xs, float), np.asarray(ys, float) + metres * 0.5 * (1.0 + np.cos(np.pi * w))
+
+
+def test_projection_never_mixes_two_frames_within_one_lap():
+    """THE P0 REGRESSION (ideal-lap projection frames).
+
+    Above the drift bound the alignment used to be decided PER BOUNDARY: a boundary whose spatial
+    match passed the gates took the spatial value, and one whose match failed took the NORMALIZED
+    value — so a segment with one edge in each frame shrank or stretched by the whole local odometer
+    offset. On the D24 0060 pair that took 31 m out of a 42.8 m straight (72.9 % of the reference
+    span), and `CornerModel.segment_bests`' per-segment minimum then harvested those short windows:
+    the pair's ideal read 62.869 s against 65.226 s extrapolated from the same recording's 22
+    undistorted laps. Nothing downstream could see it, because a lap's segment times still summed
+    exactly to its lap time — the shrunk segment's time had simply moved into its neighbour.
+
+    The fixture reproduces the mechanism in miniature: lap B has the same geometry as the reference
+    except for one 6 m lateral excursion, and an odometer whose extra length is packed into the
+    bottom straight (0.7 % total drift, just over the gate). The excursion makes exactly one interior
+    boundary fail the 3 m gate while its neighbours match.
+
+    What is pinned: every segment's projected span is within a sample of the span it TRULY has on
+    lap B, and the pre-fix per-boundary rule is computed alongside and shown to violate that by
+    metres — so the property is not vacuously true of any projection."""
+    xs, ys, cum_a = stadium()
+    d, k = C.pooled_curvature([(xs, ys, cum_a)], cum_a[-1])
+    cs = C.detect_corners(d, k)
+    total_ref = float(cum_a[-1])
+    interior = np.asarray([v for c in cs for v in (c.enter, c.exit)], float)
+    # The odometer the real drifted laps have: distance TAKEN in one stretch (a wide line down the
+    # bottom straight, +5 %) and GIVEN BACK in another (a tight line along the top, −3 %). The two
+    # nearly cancel, so the LINE-LENGTH drift is only 0.7 % — just over the gate — while the local
+    # odometer offset between the two stretches reaches ~8 m. That gap is the whole defect: the
+    # drift scalar the gate reads does not measure the misalignment the projection has to repair.
+    diffs = np.diff(cum_a).astype(float)
+    diffs[cum_a[:-1] < STRAIGHT] *= 1.05
+    diffs[(cum_a[:-1] >= STRAIGHT + ARC) & (cum_a[:-1] < 2 * STRAIGHT + ARC)] *= 0.97
+    cum_b = np.concatenate(([0.0], np.cumsum(diffs)))
+    total_lap = float(cum_b[-1])
+    drift = C.line_length_drift(total_lap, total_ref)
+    assert C.NORMALIZED_DRIFT_MAX < drift < 0.01, drift
+    # C1's EXIT sits between the two stretches, where the offset is largest. Its neighbourhood ran
+    # a different line (6 m wide); the other boundaries share the reference's.
+    bxs, bys = _laterally_displaced(xs, ys, cum_a, center=float(interior[1]),
+                                    half_width=18.0, metres=6.0)
+    traces = (xs, ys, cum_a, bxs, bys, cum_b)
+
+    # TRUTH: xy index i on the reference is xy index i on lap B, whose odometer is cum_b[i].
+    idx = np.interp(interior, cum_a, np.arange(len(cum_a)))
+    true = np.interp(idx, np.arange(len(cum_b)), cum_b)
+    matched = C._spatial_matches(interior, total_ref, xs, ys, cum_a, bxs, bys, cum_b)
+    assert not np.isfinite(matched[1]), "fixture must make exactly the bumped boundary fail"
+    assert np.isfinite(matched[[0, 2, 3]]).all(), matched
+
+    got = C.project_boundaries(interior, total_ref, total_lap, traces=traces)
+    assert np.all(np.isfinite(got)) and np.all(np.diff(got) > 0), got
+
+    # The pre-fix rule, computed here so the assertion below is a comparison and not a hope.
+    normalized = interior * (total_lap / total_ref)
+    mixed = np.where(np.isfinite(matched), matched, normalized)
+
+    edges = lambda p: np.concatenate(([0.0], p, [total_lap]))  # noqa: E731
+    span_true = np.diff(edges(true))
+    err_new = np.abs(np.diff(edges(got)) - span_true)
+    err_mixed = np.abs(np.diff(edges(mixed)) - span_true)
+    # SWING = how far apart the two frames actually are here (the local odometer offset the mixed
+    # rule leaks into a segment). Stating the bounds as fractions of it keeps the test about the
+    # MECHANISM rather than about this fixture's metres.
+    swing = float((true - normalized).max() - (true - normalized).min())
+    assert swing > 5.0, swing            # the fixture must really separate the two frames
+    # One frame: a segment's error is only the warp's interpolation residual between knots…
+    assert err_new.max() < 0.3 * swing, (err_new, swing)
+    # …two frames: a segment loses essentially the whole offset, which is the defect.
+    assert err_mixed.max() > 0.8 * swing, (err_mixed, swing)
+    assert err_new.max() < 0.35 * err_mixed.max(), (err_new.max(), err_mixed.max())
+    # …and the unmatched boundary itself lands near the truth rather than back in the other frame.
+    assert abs(got[1] - true[1]) < 0.3 * swing, (got[1], true[1])
+    assert abs(normalized[1] - true[1]) > 0.8 * swing, (normalized[1], true[1])
+    print(f"ok no frame mixing: drift {drift:.4f}, frame swing {swing:.1f} m; boundary 1 unmatched "
+          f"→ interpolated (|Δtruth| {abs(got[1] - true[1]):.2f} m vs normalized "
+          f"{abs(normalized[1] - true[1]):.2f} m); max span error {err_new.max():.2f} m "
+          f"vs {err_mixed.max():.2f} m under the per-boundary rule")
+
+
+def test_high_drift_no_spatial_match_anywhere_is_exactly_the_normalized_map():
     """Defensive: above the bound but with a comparison trace whose geometry shares NO point within
-    the 3 m gate of the reference, every boundary falls back to its normalized value — never a NaN
-    or None where there was a number."""
+    the 3 m gate of the reference, the warp has no interior knots — and its two timing-line anchors
+    ARE the normalized map, so the result is byte-identical to it. Never a NaN or None where there
+    was a number."""
     xs, ys, cum_a = stadium()
     d, k = C.pooled_curvature([(xs, ys, cum_a)], cum_a[-1])
     cs = C.detect_corners(d, k)
@@ -280,7 +370,7 @@ def test_high_drift_no_spatial_match_falls_back_per_boundary():
     normalized = np.asarray(interior) * (cum_b[-1] / total_ref)
     assert np.array_equal(gated, normalized), (gated, normalized)
     assert np.all(np.isfinite(gated))
-    print("ok per-boundary fallback: no spatial match → normalized, all finite")
+    print("ok no match anywhere: the anchors alone == the normalized map, all finite")
 
 
 def test_segment_times_partition_holds_under_spatial_alignment():

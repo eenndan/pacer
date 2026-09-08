@@ -1111,14 +1111,17 @@ def _distinct_total_ideal_session():
     return s, (0, 1, 2), {0: 1000.0, 1: 1004.0, 2: 1002.0}
 
 
-def test_ideal_donor_admission_refuses_a_collapsed_segment():
-    """A lap may only donate a segment it actually DROVE. `corners.project_boundaries` clamps a
-    crossed spatial match onto its neighbour (np.maximum.accumulate), which can collapse a real
-    segment to ZERO width on one lap while it is full width on the others. That lap's time went to
-    the NEIGHBOURING segment, so taking its free 0 invents time nobody drove — measured on the
-    Sandown recording at 1 cell in 885, worth 0.111 s of a claimed 1.252 s.
+def test_ideal_donor_admission_refuses_a_collapsed_segment_AND_its_inflated_neighbour():
+    """A lap may only donate a segment whose window is a COMPARABLE PIECE OF TRACK.
 
-    Injected here at the clamp's own seam: the same pure function both `segment_times` and the
+    A projected boundary that lands short does two things at once, and the second one is why the
+    admission rule is symmetric (`corner_model.MAX_DONOR_SPAN_DEV`): the segment it closes collapses
+    (free 0 s nobody drove) and the segment it opens INFLATES by exactly the same width (time from
+    the neighbouring piece of track banked as if it belonged here). The old one-sided
+    `MIN_DONOR_SPAN_FRAC` floor caught only the first; on the D24 0060 pair the inflated halves ran
+    to 1.24× the expected span and polluted the neighbouring corner's Δ.
+
+    Injected here at the projection's own seam: the same pure function both `segment_times` and the
     admission span read, so the collapsed lap's time really does move to its neighbour."""
     base_s, _ids, totals = _distinct_total_ideal_session()
     honest = base_s.ideal_segment_bests().total
@@ -1151,12 +1154,18 @@ def test_ideal_donor_admission_refuses_a_collapsed_segment():
         # Without the guard the free 0 would have been taken: the naive min IS strictly smaller.
         naive = float(got.times.min(axis=0).sum())
         assert naive < got.total - 1e-6, (naive, got.total)
-        # The victim still donates the segments it did drive — the refusal is per CELL, not
-        # per lap, so one bad projection does not throw away a whole lap's evidence.
-        assert got.admitted[row].sum() == got.times.shape[1] - 1
+        # …and the OTHER half of the same displacement: segment j+1 opened early, so it is wider
+        # than this lap's own expected span and is refused too. (This is the assertion that moved
+        # when the floor became symmetric — under MIN_DONOR_SPAN_FRAC the inflated cell donated.)
+        assert not got.admitted[row, j + 1], "the inflated neighbour must be refused as well"
+        assert got.donors[j + 1] != victim
+        # The victim still donates every segment it did drive — the refusal is per CELL, not per
+        # lap, so one bad projection does not throw away a whole lap's evidence.
+        assert got.admitted[row].sum() == got.times.shape[1] - 2
+        assert got.admitted[row].sum() >= got.times.shape[1] - 2 > 0
     finally:
         corners_mod.project_boundaries = real_project
-    print("test_ideal_donor_admission_refuses_a_collapsed_segment OK")
+    print("test_ideal_donor_admission_refuses_a_collapsed_segment_AND_its_inflated_neighbour OK")
 
 
 # --- the DECOMPOSITION: from taunt into plan (N8) -----------------------------------------

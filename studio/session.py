@@ -2040,6 +2040,9 @@ class Session:
         _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
         best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
         best_total = self.best_lap_total_distance()
+        # Every lap's drift-gated warp is built from the WHOLE partition (corners.project_boundaries'
+        # `frame`), so a phase window is the same window the Corners table measured.
+        phase_frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
         triples_by_lap: list[list[tuple[float, float, float]]] = []
         for i in ids:
             if i == best:
@@ -2057,7 +2060,7 @@ class Session:
                     float(c.enter), float(c.exit),
                     corner_dist_total=corner_dist_total, lap_total=lap_total,
                     best_total=best_total,
-                    lap_traces=lap_traces, best_traces=best_traces)
+                    lap_traces=lap_traces, best_traces=best_traces, frame=phase_frame)
                 row.append((ph.entry, ph.apex, ph.exit))
             triples_by_lap.append(row)
         if not triples_by_lap:
