@@ -576,6 +576,18 @@ add_test(NAME test_pb_toast
 set_tests_properties(test_pb_toast PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The PB celebration's IDENTITY + LIFETIME (critical review 2026-09-07 §3.2/§3.3): a recording must
+# not be its own previous best — opening one chapter and then this window's own "Load full
+# recording" announced the same outing beating itself, 0.57 s, under a Share button — and the card
+# must fire more than once per window (dismiss() ends in deleteLater(), the stale wrapper raised
+# inside the blanket except and every later celebration was swallowed). Drives the real
+# _update_library over real chapter files on disk and the real _show_pb_moment on a real
+# StudioWindow, so run offscreen; the library index is redirected to a temp dir inside the test.
+add_test(NAME test_pb_moment_lifecycle
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_pb_moment_lifecycle.py)
+set_tests_properties(test_pb_moment_lifecycle PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Export + library entry points (fix/qa-app-export-plumbing, QA sweep L12-02/L1-03/L12-04/L12-07/
 # L12-08/L11-08): the overlay MP4 obeys the same timing-trust verdict as the lap card, a 0-valid-lap
 # recording can no longer write a header-only CSV and reports success, the report's map grab keeps
@@ -668,7 +680,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_charts_panel test_lap_table_affordances test_export_gates
                         test_golden_hermetic test_design_system test_inline_styles
                         test_first_run_path test_map_key test_video_view_compare
-                        test_export_typography)
+                        test_export_typography test_pb_moment_lifecycle)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()

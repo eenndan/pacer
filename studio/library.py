@@ -482,7 +482,8 @@ def restore(path: str | None = None) -> dict:
     return load(path)
 
 
-def pb_moment(index: dict, track: str | None, best: float | None) -> dict | None:
+def pb_moment(index: dict, track: str | None, best: float | None,
+              fingerprint_key: str | None = None) -> dict | None:
     """Decide the "new personal best" moment for a freshly-analysed session, comparing its `best`
     lap (seconds) against `track`'s ``prior_best`` in the CURRENT index (BEFORE this session is
     upserted). Pacer-free — the caller (app) supplies the values from Session accessors and owns the
@@ -492,12 +493,29 @@ def pb_moment(index: dict, track: str | None, best: float | None) -> dict | None
         this session beats it (``best < prior``) — the real celebration; ``improvement`` = prior−best (>0);
       * ``{"kind": "first", "track", "best"}`` when the track has NO prior best (first session logged
         here) — a gentler acknowledgement, not a "PB beaten";
-      * ``None`` when there's nothing to celebrate: no track, no valid best, or a session that ties /
-        is slower than the existing PB.
+      * ``None`` when there's nothing to celebrate: no track, no valid best, a session that ties /
+        is slower than the existing PB — or a recording this index has ALREADY logged (below).
 
-    A tie or a re-open of the same recording (its own entry is the prior best) reports None, so the
-    banner never fires on an unimproved number."""
+    A RECORDING CANNOT BE ITS OWN PREVIOUS BEST, and `fingerprint_key` is what makes that true. The
+    comparison is by TRACK, so any entry of the same track is a candidate prior — including THIS
+    recording's own entry, which is in the index the moment it has been analysed once. Opening one
+    chapter and then clicking "Load full recording" therefore celebrated the SAME outing beating
+    itself: 22 laps at 1:08.771 upserted under fingerprint GX0062, then 66 laps of the same
+    recording at 1:08.201 read that entry as the "previous best" and minted a shareable "0.57 s
+    faster than your previous best" — as did opening a second chapter of one outing (both fingerprint
+    to GX0062; the key strips the chapter index by construction, see ``fingerprint``).
+
+    So a `fingerprint_key` already present in the index means this recording has been logged here
+    before and its moment was decided then: there is nothing new to celebrate and None is returned.
+    That is the whole rule — the presence check also removes the only way an entry could have been
+    its own prior, so ``prior_best`` needs no exclusion of its own. It deliberately covers the plain
+    re-open too (which until now reported None only by the coincidence that the same laps produce
+    the same best — re-analyse with a dragged start line and the old number becomes a "previous
+    best" to beat). Callers with no identity to offer pass nothing and get the old behaviour."""
     if not track or best is None or not math.isfinite(best):
+        return None
+    if fingerprint_key and any(
+            e.get("fingerprint") == fingerprint_key for e in index.get("entries", [])):
         return None
     prior = prior_best(index, track)
     if prior is None:
@@ -508,8 +526,8 @@ def pb_moment(index: dict, track: str | None, best: float | None) -> dict | None
     return None
 
 
-def pb_moment_for(verified: bool, index: dict, track: str | None,
-                  best: float | None, degraded: bool = False) -> dict | None:
+def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | None,
+                  degraded: bool = False, fingerprint_key: str | None = None) -> dict | None:
     """``pb_moment`` gated on BOTH timing axes: returns None (never celebrates) when either
 
       * `verified` is False (TIMING TRUST) — a lap number referenced to an arbitrary provisional
@@ -520,11 +538,12 @@ def pb_moment_for(verified: bool, index: dict, track: str | None,
 
     The one place every half of the celebration decision (both trust gates + the PB comparison)
     lives, so the app just passes ``session.timing_verified`` / ``session.timing_quality.degraded``
-    + the entry's track/best and the gate stays tested in one spot. `degraded` defaults False so the
-    common high-quality path is unchanged."""
+    + the entry's track/best/fingerprint and the gate stays tested in one spot. `degraded` defaults
+    False so the common high-quality path is unchanged; `fingerprint_key` is the entry's identity
+    key, forwarded to ``pb_moment`` so a recording can never be its own previous best (see there)."""
     if not verified or degraded:
         return None
-    return pb_moment(index, track, best)
+    return pb_moment(index, track, best, fingerprint_key)
 
 
 def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
