@@ -209,6 +209,29 @@ EMPTY_TEXT = f"{EMPTY_HEADLINE}\n\n{data_quality.no_laps_body()}"
 # The chart block's inset from the panel — the FLOOR on all four edges. Left and bottom are then
 # widened to whatever the rotated axis titles measure (see PlotsView._budget_axis_gutters).
 PLOT_INSET = theme.SPACE_XXS
+
+
+def _axis_title_style() -> dict:
+    """The CSS the axis TITLES are set in — the colour, spelled at every call site that writes one.
+
+    An axis title is not styled by the same call as its tick labels, and pyqtgraph gives THREE
+    different calls a claim on it. `AxisItem.labelString` bakes `self.labelStyle` into the label's
+    HTML, and both `setPen` (the axis LINE) and `setTextPen` (the tick TEXT) end with
+    `self.labelStyle['color'] = <their own pen>.color().name()` and re-render it. So whichever of
+    the two ran LAST decides what the title paints in.
+
+    Here the line pen ran last (`_apply_axis_pens`, itself re-run on every device-pixel-ratio
+    change), so all three titles took C.border — a HAIRLINE colour — and painted rgb(45,50,60) on
+    the rgb(33,37,46) plot background: 1.19:1, against 5.7:1 for the tick labels 20 px away and
+    8.5:1 for the legend. Functionally invisible; the axis stopped being named.
+
+    Passing the colour EXPLICITLY at every `setLabel` is half the fix, and it is the half that
+    documents itself — the other half is `_apply_axis_pens` re-asserting the text pen after the
+    line pen, because a kwarg-less `setPen` will otherwise overwrite this again on the next
+    palette or screen change. A read, not a constant: `C` is a live palette accessor."""
+    return {"color": C.text_dim}
+
+
 class _SpeedAxis(pg.AxisItem):
     """The speed plot's left axis, with the ESTIMATED pedal strip's slice of the range de-ticked.
 
@@ -356,8 +379,8 @@ class PlotsView(QWidget):
         # ...and the same decision as a KIND, covering the cross-recording reference the bool
         # cannot express (see DELTA_BASELINE_*). Refresh-time only; emitted on change.
         self._delta_baseline_kind = DELTA_BASELINE_BEST
-        self.p_delta.setLabel("left", DELTA_LABEL_BEST)
-        self.p_delta.setLabel("bottom", "distance (m)")
+        self.p_delta.setLabel("left", DELTA_LABEL_BEST, **_axis_title_style())
+        self.p_delta.setLabel("bottom", "distance (m)", **_axis_title_style())
         # Sub-second deltas otherwise auto-scale to a "(x0.001)" SI prefix; keep plain seconds.
         self.p_delta.getAxis("left").enableAutoSIPrefix(False)
         self.p_delta.showGrid(x=True, y=True, alpha=0.10)
@@ -369,7 +392,7 @@ class PlotsView(QWidget):
         for plot, sides in ((self.p_speed, ("left",)), (self.p_delta, ("left", "bottom"))):
             for side in sides:
                 ax = plot.getAxis(side)
-                ax.setTextPen(C.text_dim)      # tick labels + axis title
+                ax.setTextPen(C.text_dim)      # the tick labels (see _axis_title_style for the title)
                 ax.setTickFont(theme.mono_font(11))  # tabular figures so digits column-align
                 ax.setStyle(maxTickLevel=1, hideOverlappingLabels=True)  # fewer, cleaner ticks
         self._apply_axis_pens()
@@ -785,7 +808,8 @@ class PlotsView(QWidget):
 
     def _apply_speed_axis_label(self):
         """Name the speed y-axis in the current display unit ('speed (km/h)' / 'speed (mph)')."""
-        self.p_speed.setLabel("left", f"speed ({units.speed_label(self._speed_unit)})")
+        self.p_speed.setLabel("left", f"speed ({units.speed_label(self._speed_unit)})",
+                              **_axis_title_style())
 
     def set_speed_unit(self, unit: str):
         """Switch the speed display unit live: re-label the y-axis and re-plot so the curves carry
@@ -856,7 +880,15 @@ class PlotsView(QWidget):
         measured 0.5 logical px on a Retina panel while the axis numerals beside it scaled."""
         for plot, sides in ((self.p_speed, ("left",)), (self.p_delta, ("left", "bottom"))):
             for side in sides:
-                plot.getAxis(side).setPen(pg.mkPen(C.border, width=theme.line_width(1)))
+                ax = plot.getAxis(side)
+                ax.setPen(pg.mkPen(C.border, width=theme.line_width(1)))
+                # ...and then re-assert the TEXT pen, which is not decoration here: AxisItem.setPen
+                # ends by writing ITS pen's colour into `labelStyle` and re-rendering the label, so
+                # the line above has just repainted the axis TITLE in the hairline colour (1.19:1 —
+                # see _axis_title_style). setTextPen writes the same key from the text colour, so
+                # running it second is what puts the title back at the tick labels' 5.7:1. Runs on
+                # every DPR change, which is exactly when this used to be undone again.
+                ax.setTextPen(C.text_dim)
 
     def event(self, ev):
         """Re-pen when the window moves to a screen with a different device-pixel ratio.
@@ -895,7 +927,8 @@ class PlotsView(QWidget):
         self._clear_brake_throttle()
 
         x_mode = self._axis_mode()
-        self.p_delta.setLabel("bottom", self._axis_label())  # shared x label lives on the Δ plot
+        # The shared x label lives on the Δ plot (the speed plot's bottom axis is hidden).
+        self.p_delta.setLabel("bottom", self._axis_label(), **_axis_title_style())
 
         # Hide the cursors before fitting: a visible InfiniteLine still holding the previous mode's
         # x would contribute that stale value to autoRange. Re-placed after the fit.
@@ -945,7 +978,8 @@ class PlotsView(QWidget):
             DELTA_BASELINE_IDEAL if self._delta_ideal_mode else
             DELTA_BASELINE_REFERENCE if baseline == REFERENCE_ID else
             DELTA_BASELINE_BEST)
-        self.p_delta.setLabel("left", DELTA_AXIS_LABELS[self._delta_baseline_kind])
+        self.p_delta.setLabel("left", DELTA_AXIS_LABELS[self._delta_baseline_kind],
+                              **_axis_title_style())
         # The axis label is short by necessity (see DELTA_LABEL_REF); the recording it abbreviates
         # is on the axis's own hover.
         self.p_delta.getAxis("left").setToolTip(self._delta_axis_tip())
