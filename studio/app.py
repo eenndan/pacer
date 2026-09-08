@@ -755,7 +755,9 @@ class StudioWindow(QMainWindow):
                 and prev_sidecar == self._sidecar_path):
             session.adopt_timing_history(prev_session)
 
-        label = chapters.recording_label(paths)
+        # The chapters that LOADED, not the ones asked for — see _loaded_label. Identical on every
+        # clean load (the chapter map is exactly `paths`); it only differs when one was skipped.
+        label = self._loaded_label()
         self.setWindowTitle(f"{APP_NAME} — {label}" if label else APP_NAME)
         # NAME THE SECOND STAGE BEFORE IT BLOCKS. Session.load is off-thread as documented, but
         # everything below this line is not: building the CentralView costs 647-674 ms warm and
@@ -811,6 +813,21 @@ class StudioWindow(QMainWindow):
             app.processEvents()
         return True
 
+    @staticmethod
+    def _label_for(session, requested: list[str]) -> str:
+        """`chapters.loaded_label` for a loaded `session` — the chapters it ACTUALLY HOLDS, falling
+        back to the `requested` paths when it has no chapter map.
+
+        (`_paths` deliberately keeps the full request — see _chapter_subset, which must NOT then
+        offer "Load full recording" as a way to reach a chapter that cannot be read.)"""
+        chapter_map = getattr(session, "chapters", None) if session is not None else None
+        return chapters.loaded_label(chapter_map, requested)
+
+    def _loaded_label(self) -> str:
+        """`_label_for` the CURRENT session — the window title, the save-as-track suggestion and
+        the export source label all read it."""
+        return self._label_for(getattr(self, "session", None), getattr(self, "_paths", []))
+
     def _chapter_subset(self) -> tuple[int, int] | None:
         """(chapters open, chapters on disk) when the loaded session is a STRICT SUBSET of its
         recording's chapters — else None (the whole recording, or a recording whose chapter set
@@ -852,6 +869,13 @@ class StudioWindow(QMainWindow):
             the revert-guard rejection below it and from the (correctly silent) absent case: the
             user's hand-placed start/finish line is being discarded, and the app then goes on to
             ask them to "drag it into place", i.e. to redo the work it just threw away (QA D2-04);
+          * a SKIPPED CHAPTER — a file the load was handed and left out because it is not video at
+            all (`Session.load` -> `chapters.split_non_mp4`). Named, not counted, for the same
+            reason the multi-drop warning names the recordings it did not open: a chapter of the
+            user's own footage was ignored, and "some of it" is worse than silence. Read off the
+            live session, so it survives a timing edit's re-decide like every other clause;
+          * the same for the cross-recording REFERENCE, in its own clause — it is the recording
+            every Δ on screen is measured against, and it was the one surface this rule skipped;
           * a PARTIAL RECORDING — the session is a strict subset of its chapters on disk. The two
             front doors disagree by 44 laps on the owner's own footage (dropping GX010062 loads 66
             across three chapters; picking the same file in File ▸ Open… loads 22) and NOTHING on
@@ -885,14 +909,22 @@ class StudioWindow(QMainWindow):
         # recording whose saved lines the user cared enough to place by hand.
         sidecar_notice = (SIDECAR_UNREADABLE_NOTICE
                           if getattr(self, "_timing_restore_unreadable", False) else None)
+        skipped_notice = chapters.skipped_notice(getattr(session, "skipped_chapters", []) or [])
+        # The cross-recording REFERENCE gets the same treatment. It is a second recording loaded
+        # through the same door, every Δ on screen is measured against it, and it was the one
+        # surface exempt from this rule — a reference that lost a chapter said so on the console
+        # only. Its own clause, because the two recordings are different facts.
+        ref_session = session.reference_session() if hasattr(session, "reference_session") else None
+        ref_skipped_notice = chapters.skipped_notice(
+            getattr(ref_session, "skipped_chapters", []) or [], where="the reference recording")
         subset = self._chapter_subset()
         chapter_notice = (f"{subset[0]} of {subset[1]} chapters — File ▸ Load full recording to "
                           "analyse the whole recording") if subset else None
         tracks_notice = (TRACKS_UNREADABLE_NOTICE
                          if getattr(self, "_tracks_unreadable", False) else None)
         drop_notice = getattr(self, "_drop_notice", None)
-        return " · ".join(p for p in (notice, sidecar_notice, chapter_notice, tracks_notice,
-                                      drop_notice) if p) or None
+        return " · ".join(p for p in (notice, sidecar_notice, skipped_notice, ref_skipped_notice,
+                                      chapter_notice, tracks_notice, drop_notice) if p) or None
 
     def _apply_session_notice(self) -> str | None:
         """Put the current _session_notice on the status bar and return it.
@@ -1143,7 +1175,7 @@ class StudioWindow(QMainWindow):
 
         The raw `type(exc).__name__: exc` is logged to the console and tucked behind the dialog's
         "Show details" — diagnostics for a bug report, not the user-facing message."""
-        offending = paths[0] if paths else "(no file)"
+        offending = self._offending_path(paths) or "(no file)"
         detail = f"{type(exc).__name__}: {exc}"
         message = self._load_failure_message(paths, exc)
         print(f"studio: failed to load {offending}: {detail}", flush=True)
@@ -1182,6 +1214,22 @@ class StudioWindow(QMainWindow):
             self._show_welcome(error=message, error_path=offending)
 
     @staticmethod
+    def _offending_path(paths: list[str]) -> str | None:
+        """The path a failed load actually CHOKED ON: the first one the loader was given, i.e. the
+        first that is not a proven not-a-container.
+
+        `paths[0]` is the wrong answer once `Session.load` skips non-video siblings, because the
+        skipped ones never reach the loader. On the owner's own D24 that is the live configuration
+        of every 0060 load — chapter 1 is the destroyed stub — so any failure in chapters 2 or 3
+        would have been reported against a file the loader never opened, in both the dialog body
+        and the welcome state's offending-path line. Falls back to `paths[0]` when every path was
+        skipped (the all-junk load, which is a real failure ABOUT those files)."""
+        for p in paths or ():
+            if chapters.probe_mp4(p) != chapters.MP4_NOT_A_CONTAINER:
+                return p
+        return paths[0] if paths else None
+
+    @staticmethod
     def _load_failure_message(paths: list[str], exc: Exception) -> str:
         """Map a load failure to a plain-language sentence that names the CASE and a next action (no
         raw Python class name).
@@ -1195,7 +1243,16 @@ class StudioWindow(QMainWindow):
           * a directory the user aimed at instead of the chapters inside it;
           * a path that isn't there at all;
           * a 0-byte file (an interrupted copy off the SD card);
-          * an OSError — present but unreadable (permissions, still copying);
+          * PRESENT BUT UNREADABLE — permissions, still copying, an unmounted volume. Decided on
+            the FILE (`chapters.MP4_UNREADABLE`), not only on `isinstance(exc, OSError)`: the
+            loader raises its own RuntimeError for a locked file and `Session.load` a ValueError,
+            so an OSError almost never arrives here and this case, though documented, was
+            unreachable for exactly the inputs it describes;
+          * a GoPro chapter NAME over contents that were READ and are not an MP4 container
+            (`chapters.MP4_NOT_A_CONTAINER`) — an overwritten file, which no re-copying fixes.
+            Only ever said about bytes we have actually seen: telling the owner of an intact but
+            momentarily unreadable chapter that it "has been overwritten" is the worst sentence
+            this table could produce, and it is the one the unreadable case above prevents;
           * opens but carries no GPMF/GPS track — split by whether the NAME is a GoPro chapter name
             (a truncated/incomplete copy of real footage) or not (the wrong file entirely);
           * anything else — a generic, honest fallback (the raw class name stays in the details/log).
@@ -1203,7 +1260,7 @@ class StudioWindow(QMainWindow):
         Pure + static: no Qt, no window state, so the whole table is unit-testable (tests/
         test_load_failure.py). A recording that OPENS but has zero GPS fixes does NOT raise — it
         loads as a 0-valid-lap session (see _session_notice), so it never reaches here."""
-        offending = paths[0] if paths else None
+        offending = StudioWindow._offending_path(paths)
         if offending is None:
             return ("Couldn't read telemetry from this recording — it may be corrupt or "
                     "unsupported. Try copying it off the SD card again.")
@@ -1218,16 +1275,48 @@ class StudioWindow(QMainWindow):
             empty = False
         if empty:
             return "That file is empty (0 bytes) — copy it off the camera's SD card again."
-        if isinstance(exc, OSError):
+        probe = chapters.probe_mp4(offending)
+        if isinstance(exc, OSError) or probe == chapters.MP4_UNREADABLE:
+            # PRESENT, and the bytes did not arrive. Says NOTHING about the contents, which is the
+            # entire reason it sits above the not-a-container branch: a chmod-000 / still-copying /
+            # unmounted-volume chapter is very probably intact footage, and the sentence below
+            # would tell its owner it had been destroyed. (`isinstance(exc, OSError)` alone never
+            # caught this: GPMFSource raises RuntimeError and Session.load ValueError.)
             return ("Couldn't read that file — check it has finished copying and that you have "
                     "permission to open it.")
+        not_a_gopro = ("This doesn't look like a GoPro recording with GPS metadata — open the "
+                       "original .MP4 the camera wrote.")
+        is_gopro_name = chapters.parse_gopro_name(offending) is not None
+        if probe == chapters.MP4_NOT_A_CONTAINER:
+            # Contents we READ, and they are not an MP4 at all — checked before the parser branch
+            # below, because Session.load now refuses such a path itself (with a ValueError, not
+            # the parser's RuntimeError) rather than handing it to GPMFSource.
+            #
+            # A GoPro chapter NAME over non-video contents gets its own sentence. The parser branch
+            # answers it with "the copy is probably incomplete — copy it off the SD card again",
+            # and re-copying cannot help a file that was overwritten IN PLACE; the advice also
+            # sends the user back to a camera whose card may have been reused since. This is the
+            # shape of ~/Desktop/D24/GX010060.MP4 — 2.4 MB of JSON a dev tool wrote over 11.9 GB of
+            # footage. A file the user merely RENAMED to .MP4 was never this recording, so it keeps
+            # the unchanged answer below.
+            if is_gopro_name:
+                # …but only advise ANOTHER CHAPTER when one could exist. When every path handed to
+                # this load is junk there is no other chapter to open, and the app would be
+                # prescribing the impossible next to a message saying nothing here is video.
+                others = [p for p in paths if p != offending]
+                if others and all(chapters.probe_mp4(p) == chapters.MP4_NOT_A_CONTAINER
+                                  for p in others):
+                    return ("None of this recording's chapters is video any more — they have been "
+                            "overwritten or replaced. Open a different recording.")
+                return ("That file has a GoPro chapter name but its contents aren't video — it "
+                        "has been overwritten or replaced. Open another chapter of this recording.")
+            return not_a_gopro
         if isinstance(exc, RuntimeError) and "open file" in str(exc).lower():
-            # GPMFSource couldn't find a GPMF/GPS track in this MP4.
-            if chapters.parse_gopro_name(offending) is not None:
+            # An MP4 GPMFSource couldn't find a GPMF/GPS track in.
+            if is_gopro_name:
                 return ("This is a GoPro file, but its telemetry track couldn't be read — the copy "
                         "is probably incomplete. Copy it off the SD card again.")
-            return ("This doesn't look like a GoPro recording with GPS metadata — open the "
-                    "original .MP4 the camera wrote.")
+            return not_a_gopro
         # Unknown cause — honest generic message; the raw class name stays in the details/log only.
         return ("Couldn't read telemetry from this recording — it may be corrupt or unsupported. "
                 "Try copying it off the SD card again.")
@@ -2437,7 +2526,7 @@ class StudioWindow(QMainWindow):
         if not self._can_save_track():  # defensive: action fired with nothing usable loaded
             self.statusBar().showMessage("no usable timing lines to save as a track", STATUS_MS)
             return
-        suggested = self.session.track_name or chapters.recording_label(self._paths) or ""
+        suggested = self.session.track_name or self._loaded_label() or ""
         # Name the trust state IN the prompt when the lines are still auto-fitted. Saving them is
         # the documented remedy (the map's amber banner says so), so this must not block — but the
         # save promotes them into the REUSABLE database, where every future recording here inherits
@@ -2637,7 +2726,7 @@ class StudioWindow(QMainWindow):
         # machine-readable files, and export_data's writers pass no unit.)
         if self._run_export(lambda: export_data.write_report_html(
                 path, self.session,
-                source_label=chapters.recording_label(self._paths) or "session",
+                source_label=self._loaded_label() or "session",
                 images=images, unit=self._speed_unit), path):
             self.statusBar().showMessage(f"exported {os.path.basename(path)}", STATUS_MS)
 
@@ -3283,8 +3372,11 @@ class StudioWindow(QMainWindow):
             return  # superseded by a newer reference load; drop this result
         if not hasattr(self, "session"):
             return  # the primary session went away while the reference loaded — nothing to attach to
+        # Labelled by what the reference SESSION holds, not what was asked for: a reference whose
+        # chapter 1 is not video is badged on every Δ surface, and "· 3 chapters" there would be a
+        # claim about the comparison's inputs that isn't true (see _label_for).
         reason = self.session.set_reference_session(
-            ref, source_label=chapters.recording_label(paths))
+            ref, source_label=self._label_for(ref, paths))
         if reason is not None:
             print(f"studio: reference not loaded — {reason}", flush=True)
             self.statusBar().clearMessage()
