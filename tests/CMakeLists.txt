@@ -671,7 +671,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_golden_synthetic test_studio_features test_rainbow_map test_map_render
                         test_map_chrome test_compare test_map_ghost test_cross_reference
                         test_delta_engine test_controllers test_central_view_realqt
-                        test_load_failure test_load_affordances test_validate_wallclock
+                        test_load_failure test_load_affordances test_load_lifecycle
+                        test_validate_wallclock
                         test_corners test_consistency test_gmeter test_gmeter_overlay
                         test_export_data test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card test_stats
