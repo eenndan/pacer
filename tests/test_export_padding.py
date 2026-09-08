@@ -438,9 +438,9 @@ def _peaks(st):
 def test_the_dial_peaks_are_the_same_with_ten_seconds_of_padding_as_with_none():
     """The proof obligation, frame for frame.
 
-    `GMeterOverlay.set_lap` resets the envelope only when it is ALREADY holding a lap, which in a
+    `DialFilter.set_lap` resets the envelope only when it is ALREADY holding a lap, which in a
     padded export it never is: the lead-in is fed `set_g` but no `set_lap`, so the run-up's g grows
-    the hull, and the one `set_lap` at the line finds `_lap is None` and skips the reset. The
+    the hull, and the one `set_lap` at the line finds `lap is None` and skips the reset. The
     run-up would be baked into the peaks the clip states for the lap. So the envelope is reset at
     the line and frozen at the finish, and the peaks of every LAP frame must match a 0 s export's
     exactly — including the last frame of the clip, which is in the run-off."""

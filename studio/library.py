@@ -511,7 +511,13 @@ def pb_moment(index: dict, track: str | None, best: float | None,
 
       * no other recording has a trustworthy best here → there is no bar. A recording already in
         the index is not a new session (it is a re-open, a second chapter, or the full chain of one
-        already logged), so it gets nothing; a genuinely new one gets its "first".
+        already logged), so it gets nothing; a genuinely new one gets its "first". This deliberately
+        covers the case where the track's ONLY entry is this recording's own and it is not in the PB
+        set at all — a track-less row, or a PROVISIONAL/degraded/dropout one — which the pre-fix code
+        greeted with "first lap logged here" because ``prior_best`` had filtered that row out. Those
+        laps are in the library; being unable to compare against them is not the same as never having
+        seen them, and "your first session on this track" about a recording the library already holds
+        is the same re-announcement in a friendlier voice.
       * this recording's OWN stored best already beats that prior → the improvement is not news:
         it was the story when that number was logged, and re-announcing it every time the same
         outing is re-opened with one more chapter is the defect above wearing a different hat.

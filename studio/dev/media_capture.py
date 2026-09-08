@@ -13,8 +13,8 @@ The POSITIONAL argument is the INPUT recording (chapter 1; siblings are discover
 `chapters.discover_siblings`). The OUTPUT directory is behind `--out`, and defaults to `docs/media`.
 That order matters: a previous agent destroyed 11.9 GB of the owner's only copy of a race recording
 by passing a path positionally to a tool whose `argv[1]` was its output. Never open `GX010060.MP4`
-or any `…060` chapter — that is the destroyed 2.4 MB stub, and `discover_siblings` pulls it into any
-0060 load.
+— that file is the destroyed 2.4 MB JSON stub (its intact siblings GX020060/GX030060 are fine;
+`Session.load` skips the stub and says so).
 
 WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
 
@@ -121,9 +121,11 @@ _LOAD_TIMEOUT_S = 300.0
 _SETTLE_PUMPS = 8
 
 # ~/Desktop/D24/GX010060.MP4 is a 2.4 MB JSON stub that overwrote 11.9 GB of the owner's footage.
-# `discover_siblings` routes EVERY 0060 chapter through it, so the whole recording is refused, not
-# just chapter 1.
-_BANNED_RE = re.compile(r"^G[XHLP]\d{2}0060\.MP4$", re.IGNORECASE)
+# The ban used to cover EVERY `…060` chapter, because `discover_siblings` routes them all through
+# the stub and `GPMFSource` then failed the whole recording. `Session.load` now skips a sibling
+# that isn't an MP4 (chapters.split_non_mp4), so chapters 2+3 open fine and only the stub itself
+# is refused here — opening it directly would still ask the media stack to play a JSON file.
+_BANNED_RE = re.compile(r"^G[XHLP]010060\.MP4$", re.IGNORECASE)
 
 # Which lap the shots describe, and where in it. The BEST lap is the one the app selects and stars,
 # and `_LAP_FRACTION` puts the playhead a third of the way round it — far enough in that the Δideal
@@ -224,8 +226,8 @@ def open_window(app: QApplication, recording: str, size=WINDOW) -> StudioWindow:
     images sit beside quotes 65. `discover_siblings` is the app's own File ▸ Load full recording
     path, so the pixels and the prose agree."""
     if _BANNED_RE.match(os.path.basename(recording)):
-        raise SystemExit(f"REFUSED: {recording} — recording 0060 is the destroyed stub, and "
-                         "discover_siblings would pull it into any 0060 chapter's load.")
+        raise SystemExit(f"REFUSED: {recording} is the destroyed 2.4 MB JSON stub, not footage — "
+                         "name another chapter of the recording (GX020060.MP4).")
     paths = chapters.discover_siblings(recording)
     print(f"media_capture: opening {len(paths)} chapter(s): "
           f"{', '.join(os.path.basename(p) for p in paths)}")

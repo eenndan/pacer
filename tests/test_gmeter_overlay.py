@@ -56,7 +56,7 @@ def test_dot_tracks_felt_force_after_filter():
     for _ in range(60):
         ov.set_g((-0.8, -0.5, 0.94))   # turning right (lat<0), braking (long<0)
     cx, cy, r = ov._geom()
-    dx, dy = ov._to_screen(cx, cy, r, ov._fx, ov._fy)
+    dx, dy = ov._to_screen(cx, cy, r, ov._filter.fx, ov._filter.fy)
     assert dx < cx and dy < cy, f"expected up-left dot, got dx={dx:.0f} dy={dy:.0f} c=({cx:.0f},{cy:.0f})"
 
 
@@ -71,7 +71,7 @@ def test_ema_filter_is_smoother_than_raw():
     filt = []
     for v in raw:
         ov.set_g((float(v), 0.0, abs(float(v))))
-        filt.append(ov._fx)
+        filt.append(ov._filter.fx)
     filt = np.array(filt)
     raw_j = np.std(np.diff(raw))
     filt_j = np.std(np.diff(filt[50:]))
@@ -86,11 +86,11 @@ def test_single_shake_spike_does_not_blow_out_peaks_or_envelope():
     ov.set_lap(1)
     for _ in range(120):
         ov.set_g((-0.4, 0.0, 0.4))     # steady right turn -> felt LEFT, ~0.4 g
-    peak_before = ov._peak_left
+    peak_before = ov._filter.peak_left
     assert 0.3 < peak_before < 0.5
     ov.set_g((-6.0, 0.0, 6.0))         # one absurd spike
-    assert ov._peak_left < 1.0, f"a single spike must not set the peak (got {ov._peak_left:.2f})"
-    max_hull = max((abs(x) for (x, _) in ov._hull_pts), default=0.0)
+    assert ov._filter.peak_left < 1.0, f"a single spike must not set the peak (got {ov._filter.peak_left:.2f})"
+    max_hull = max((abs(x) for (x, _) in ov._filter.hull_pts), default=0.0)
     assert max_hull < 1.2, f"a single spike must not balloon the hull (got {max_hull:.2f})"
 
 
@@ -101,11 +101,11 @@ def test_envelope_resets_on_lap_change():
     ov.set_lap(3)
     for _ in range(40):
         ov.set_g((0.8, 0.0, 0.8))
-    assert ov._peak_right > 0 and len(ov._hull_pts) > 0
+    assert ov._filter.peak_right > 0 and len(ov._filter.hull_pts) > 0
     ov.set_lap(None)                    # between laps -> HOLD
-    assert ov._peak_right > 0, "None lap must not reset the envelope"
+    assert ov._filter.peak_right > 0, "None lap must not reset the envelope"
     ov.set_lap(4)                       # new lap -> reset
-    assert ov._peak_right == 0.0 and len(ov._hull_pts) == 0, "lap change must reset the envelope"
+    assert ov._filter.peak_right == 0.0 and len(ov._filter.hull_pts) == 0, "lap change must reset the envelope"
 
 
 def test_reset_envelope_reseeds_dot_ema():
@@ -117,17 +117,17 @@ def test_reset_envelope_reseeds_dot_ema():
     # Drive a steady strong left-turn (felt RIGHT) so the EMA settles well away from origin.
     for _ in range(60):
         ov.set_g((0.9, 0.0, 0.9))
-    assert ov._ema_init is True
-    assert ov._fx > 0.5, ov._fx           # filtered dot sits to the felt-right
+    assert ov._filter.ema_init is True
+    assert ov._filter.fx > 0.5, ov._filter.fx           # filtered dot sits to the felt-right
     # Reset (e.g. new lap scope): the EMA must be re-seeded, not left carrying the old value.
     ov.reset_envelope()
-    assert ov._ema_init is False, "reset_envelope must clear _ema_init so the dot re-seeds"
-    assert ov._fx == 0.0 and ov._fy == 0.0, "filtered dot must be zeroed on reset"
+    assert ov._filter.ema_init is False, "reset_envelope must clear ema_init so the dot re-seeds"
+    assert ov._filter.fx == 0.0 and ov._filter.fy == 0.0, "filtered dot must be zeroed on reset"
     # The very next sample (a small opposite-direction g) must SEED the EMA to itself — NOT drift in
     # from the old (large, opposite) filtered value.
     ov.set_g((-0.2, 0.1, 0.22))
-    assert abs(ov._fx - (-0.2)) < 1e-9, f"dot must re-seed to the first new sample, got {ov._fx}"
-    assert abs(ov._fy - 0.1) < 1e-9, ov._fy
+    assert abs(ov._filter.fx - (-0.2)) < 1e-9, f"dot must re-seed to the first new sample, got {ov._filter.fx}"
+    assert abs(ov._filter.fy - 0.1) < 1e-9, ov._filter.fy
     print("test_reset_envelope_reseeds_dot_ema OK")
 
 
@@ -138,11 +138,11 @@ def test_lap_change_reseeds_dot_ema():
     ov.set_lap(3)
     for _ in range(60):
         ov.set_g((-0.8, 0.0, 0.8))   # felt LEFT, settled
-    assert ov._fx < -0.4
+    assert ov._filter.fx < -0.4
     ov.set_lap(4)                      # new lap -> reset (incl. the EMA)
-    assert ov._ema_init is False and ov._fx == 0.0
+    assert ov._filter.ema_init is False and ov._filter.fx == 0.0
     ov.set_g((0.3, 0.0, 0.3))
-    assert abs(ov._fx - 0.3) < 1e-9, "new lap's first sample must seed the dot, not drift from lap 3"
+    assert abs(ov._filter.fx - 0.3) < 1e-9, "new lap's first sample must seed the dot, not drift from lap 3"
     print("test_lap_change_reseeds_dot_ema OK")
 
 
@@ -293,7 +293,7 @@ def test_moving_dot_alone_does_not_recompute_static_layer():
         _paint(ov)
         base = calls["n"]
         for dx in (0.1, -0.2, 0.3):
-            ov._fx = dx            # move the dot only (no envelope change)
+            ov._filter.fx = dx            # move the dot only (no envelope change)
             _paint(ov)
         assert calls["n"] == base, "moving only the dot must not recompute the hull/static layer"
     finally:
@@ -369,7 +369,7 @@ def test_static_cache_key_reused_across_frames():
     assert ov._static_pixmap is pm1, "unchanged frame must reuse the SAME cached pixmap object"
     assert ov._static_key == key1
     # env_version is part of the key and monotonically identifies the envelope state.
-    assert key1[-1] == ov._env_version
+    assert key1[-1] == ov._filter.version
 
 
 def test_cached_paint_is_pixel_identical_to_full_render():
@@ -417,11 +417,11 @@ def test_source_change_invalidates_static_layer():
     ov = _fresh()
     _seed(ov)
     ov.set_source("accl")
-    v0 = ov._env_version
+    v0 = ov._filter.version
     ov.set_source("accl")               # unchanged -> no bump
-    assert ov._env_version == v0, "unchanged source must not invalidate the static layer"
+    assert ov._filter.version == v0, "unchanged source must not invalidate the static layer"
     ov.set_source("gps")                # changed -> bump
-    assert ov._env_version > v0, "a source change must invalidate the static layer"
+    assert ov._filter.version > v0, "a source change must invalidate the static layer"
 
 
 def test_source_label_names_axis_provenance():
@@ -446,12 +446,12 @@ def test_set_source_stores_the_mixed_label_and_invalidates():
     ov = _fresh()
     _seed(ov)
     ov.set_source("accl", "gps")
-    assert ov._source == "IMU lat · GPS long", ov._source
-    v0 = ov._env_version
+    assert ov._filter.source == "IMU lat · GPS long", ov._filter.source
+    v0 = ov._filter.version
     ov.set_source("accl", "gps")        # same resolved label -> no bump
-    assert ov._env_version == v0
+    assert ov._filter.version == v0
     ov.set_source("gps", "gps")         # GPS-only fallback -> label changes -> bump
-    assert ov._source == "GPS" and ov._env_version > v0
+    assert ov._filter.source == "GPS" and ov._filter.version > v0
     print("ok L6: g-meter tag labels IMU-lat/GPS-long provenance, not a bare source")
 
 

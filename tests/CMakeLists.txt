@@ -116,6 +116,18 @@ add_test(NAME test_load_pipeline
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_pipeline.py)
 set_tests_properties(test_load_pipeline PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# A sibling chapter that is NOT VIDEO (fix/destroyed-fixture-hazards): chapters.discover_siblings
+# groups on FILENAMES, so a file wearing a chapter's name while holding something else was handed
+# to GPMFSource and failed the WHOLE recording — measured on the owner's own ~/Desktop/D24, where
+# GX010060.MP4 is 2.4 MB of JSON a dev tool wrote over 11.9 GB of footage, so File ▸ Load full
+# recording on 0060 was dead. Pins the is_mp4_container probe, the split + the notice that NAMES
+# what was left out, that discovery is deliberately NOT filtered (sidecar/library key on [0]'s
+# stem), the Session.load skip on a synthetic recording built from the committed hero6 clip, and
+# the all-junk raise. Real Session.load + a StudioWindow -> Qt offscreen.
+add_test(NAME test_unreadable_chapter
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_unreadable_chapter.py)
+set_tests_properties(test_unreadable_chapter PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Start-line widen decision (test/fit-start-line-widen): load._fit_start_line keeps a sufficient
 # registry line but widens (1.15/1.3/1.5 about the midpoint) to recover band-laps a too-short line
 # missed — it sets known-track lap segmentation. Both branches pinned on a synthetic circle Laps.
@@ -271,6 +283,19 @@ add_test(NAME test_load_affordances
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_affordances.py)
 set_tests_properties(test_load_affordances PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The load / reference LIFECYCLE (2026-09-07 review §3.4/§3.5/§3.7/§3.8): the load-SUCCESS path's
+# strand (a raising CentralView.__init__ leaving the loading card up forever with loadFinished
+# never emitted) and the same guard on the two other rebuilds that ARE a recovery (_cancel_load,
+# _on_load_failed); the reference load's single-flight + view guards (its docstring promised both,
+# the body had neither); and the five riskiest previously-untested paths — closeEvent mid-load AND
+# mid-EXPORT (the render QThread was held on an attribute the drain never saw), Load full recording,
+# the REAL _forget_recording ordering, the queued second open actually opening B, and the ideal-lap
+# row selection. Real Qt + real worker QThreads, so run offscreen; both persistence stores are
+# diverted to a temp dir inside the module.
+add_test(NAME test_load_lifecycle
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_lifecycle.py)
+set_tests_properties(test_load_lifecycle PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1")
 # Corner model (studio.corners, F-corner): synthetic stadium-loop detection (count/
 # positions/directions vs construction), distribution-derived threshold (+ noise
 # stability), the corner/straight partition identity, and the CornerTable + map
@@ -340,6 +365,17 @@ add_test(NAME test_library
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_library.py)
 set_tests_properties(test_library PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Preferences store (studio.prefs) — the library's discipline applied to the OTHER app-support JSON
+# file, which had none: `set` is load-modify-save over a `load` that returns {} on corruption, so one
+# bad byte plus any preference write silently persisted the wipe of all ten stored choices. Covers
+# the .bak taken before that first overwrite (corrupt bytes preserved verbatim, later writes still
+# heal the file and leave the sidecar alone, a healthy write churns no backup), the `version` field
+# now being READ (unstamped/older migrates forward keeping every key; a newer file is best-effort +
+# backed up before the downgrade), the per-key fallbacks under corruption, and the round-trips for
+# the two accessors that had none (excluded_visible / map_key_collapsed). studio.prefs imports
+# studio.units only — no Qt, no pacer, no telemetry file, so no env block.
+add_test(NAME test_prefs
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_prefs.py)
 # Data safety (data-safety-undo-privacy): the timing-line UNDO history (Session pushes the prior
 # lines before each edit + restores the latest through apply_timing_lines_latlon — segmentation +
 # PB baseline recompute identically; no-op with no history; confirmed-state preserved; bounded
@@ -670,7 +706,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_golden_synthetic test_studio_features test_rainbow_map test_map_render
                         test_map_chrome test_compare test_map_ghost test_cross_reference
                         test_delta_engine test_controllers test_central_view_realqt
-                        test_load_failure test_load_affordances test_validate_wallclock
+                        test_load_failure test_load_affordances test_load_lifecycle
+                        test_validate_wallclock
                         test_corners test_consistency test_gmeter test_gmeter_overlay
                         test_export_data test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card test_stats
@@ -680,7 +717,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_charts_panel test_lap_table_affordances test_export_gates
                         test_golden_hermetic test_design_system test_inline_styles
                         test_first_run_path test_map_key test_video_view_compare
-                        test_export_typography test_pb_moment_lifecycle)
+                        test_export_typography test_unreadable_chapter
+                        test_pb_moment_lifecycle)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
@@ -716,6 +754,23 @@ set_tests_properties(test_state_surfaces PROPERTIES
 add_test(NAME test_compare_lifecycle
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_compare_lifecycle.py)
 set_tests_properties(test_compare_lifecycle PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# EXPORT THREAD-SAFETY guard — the same GUI-thread rule as the lifecycle guard above, on the other
+# surface that breaks it. Every video export ran `Renderer` on VideoExportWorker's QThread, and
+# `OverlayPainter.__init__` built a `GMeterOverlay` there: a frameless translucent Qt.Tool TOP-LEVEL
+# widget, constructed AND destroyed off the GUI thread, twice when a VideoToolbox encode fell back
+# to libx264. It never crashed only because the dial is never show()n. The dial's bookkeeping now
+# lives in a Qt-free `gmeter_overlay.DialFilter`; this pins that. Structural half: walk the call
+# graph from VideoExportWorker.run / Renderer / OverlayPainter through every studio class-or-
+# function they construct, and require no QWidget subclass (with player_pane.PlayerPane as a
+# positive control, so the walk cannot pass by resolving nothing). Behavioural half: build and
+# drive an OverlayPainter on a real QThread and require the process's widget census to be
+# unchanged. Both halves fail on the pre-fix build (census 0 -> 1; the walk names export_video.py's
+# GMeterOverlay line). Seconds, no footage; real theme + fonts -> run offscreen.
+add_test(NAME test_export_thread_safety
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_thread_safety.py)
+set_tests_properties(test_export_thread_safety PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
 # A MEASURE BOUNDS CONTENT — it may not become the minimum of the thing carrying it. The design

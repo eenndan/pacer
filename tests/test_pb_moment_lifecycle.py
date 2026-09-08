@@ -169,9 +169,23 @@ def test_an_identity_already_logged_is_not_a_first_session_on_a_newly_named_trac
     """The partition is by RECORDING, not by (recording, track): an entry stored with no track —
     the shape File ▸ Save as track… leaves behind before it rewrites the row — is still this
     recording, so a reload that now matches the track finds no OTHER recording's best and stays
-    silent rather than announcing "your first session here" about laps already in the library."""
+    silent rather than announcing "your first session here" about laps already in the library.
+
+    THE SAME FAMILY, PINNED SO IT IS INTENT RATHER THAN ACCIDENT: an own entry that is in the index
+    but NOT in the PB set (a PROVISIONAL chapter, a degraded one, a dropout best) is the other way
+    a track can have no comparable prior. Before the fix each of these printed "First lap logged
+    here" on the reload, because `prior_best` filtered the row out and the caller then read "no
+    prior" as "never seen". They stay silent now — the laps are already logged, and being unable to
+    compare against them is not the same as never having seen them."""
     idx = _index(_entry("GX010062", 68.771, 22, track=None))
     assert library.pb_moment(idx, _TRACK, 68.201, "GX0062") is None
+    # …and the untrustworthy shapes: a provisional chapter, then the verified full chain of the
+    # SAME recording at a brand-new track. main answers "first"; the partition answers nothing.
+    for flag in ({"verified": False}, {"degraded": True}, {"dropout": True}):
+        own = _entry("GX010062", 68.771, 22) | flag
+        assert not library.is_trustworthy(own), flag          # precondition: outside the PB set
+        assert library.prior_best(_index(own), _TRACK) is None  # …so there is no comparable prior
+        assert library.pb_moment(_index(own), _TRACK, 68.201, "GX0062") is None, flag
     print("test_an_identity_already_logged_is_not_a_first_session_on_a_newly_named_track OK")
 
 

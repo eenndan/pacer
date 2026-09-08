@@ -1846,7 +1846,12 @@ def test_reference_load_runs_on_worker_not_main_thread():
 def test_reference_load_supersedes_older_reference():
     """A second reference load must supersede an older in-flight one (bump the token), so a stale
     reference result is dropped rather than clobbering the newer one — mirroring the primary load's
-    token guard. Here we just assert the token bumps and the current worker is the latest."""
+    token guard.
+
+    The supersede is now QUEUED rather than started concurrently (the single-flight the method's
+    docstring always promised; see tests/test_load_lifecycle.py for the concurrency assertion). So
+    the current worker stays the FIRST one while it runs, and the second request is held — which is
+    what this asserts instead of "a second worker was started". The token half is unchanged."""
     from studio.app import StudioWindow
 
     w = StudioWindow([])
@@ -1860,7 +1865,13 @@ def test_reference_load_supersedes_older_reference():
         first_worker = w._ref_load_worker
         w._start_reference_load([_BUNDLED_SAMPLE])  # supersede before the first finishes
         assert w._ref_load_token == first_token + 1, (first_token, w._ref_load_token)
-        assert w._ref_load_worker is not first_worker
+        if first_worker is not None and first_worker.isRunning():
+            # Single-flight: no SECOND full Session.load runs alongside the first; the newer request
+            # waits for it. (The first can also have finished already on a fast sample, in which
+            # case the second starts straight away — still never two at once.)
+            assert w._ref_load_worker is first_worker, "a concurrent second reference load started"
+            assert w._pending_reference_load is not None, "the supersede was not queued"
+            assert w._pending_reference_load[0] == w._ref_load_token, w._pending_reference_load
         # A result stamped with the stale first token is ignored by the guard.
         applied = []
         w.session.set_reference_session = lambda ref, source_label="": (applied.append(ref), None)[1]
