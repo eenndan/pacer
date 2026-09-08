@@ -113,6 +113,13 @@ SIDECAR_UNREADABLE_NOTICE = ("saved timing lines couldn't be read — the .pacer
 # way to tell that from a genuinely new circuit (QA D2-16).
 TRACKS_UNREADABLE_NOTICE = ("your saved tracks couldn't be read — tracks.json is damaged, so no "
                             "circuit will be auto-detected")
+# A recording that READ cleanly and whose view then refused to build. Deliberately blames the app,
+# not the file: Session.load already succeeded, so nothing about the user's footage is in question
+# and "copy it off the SD card again" would send them to fix the wrong thing. It names the one
+# action that helps (the details go in a report) — see _recover_from_build_failure.
+VIEW_BUILD_FAILURE_MESSAGE = (
+    "This recording loaded, but Pacer couldn't build its session view — that's a bug in Pacer, "
+    "not a problem with your file. Help ▸ Report a problem… with the details below.")
 
 
 def _show_error_report(exc_type, exc, tb):
@@ -207,7 +214,9 @@ class StudioWindow(QMainWindow):
         # Async-load bookkeeping: a monotonically increasing token stamps each _load; the completion
         # slots ignore any worker result whose token is stale (a newer _load superseded it). All
         # in-flight workers are held in a set so no QThread is GC'd mid-run (a superseded worker keeps
-        # running to completion, then drops itself out); _load_worker is the current one.
+        # running to completion, then drops itself out); _load_worker is the current one. The set is
+        # ALSO what closeEvent drains, so every worker with a life of its own belongs in it — the
+        # demo fetch and the video export included, whatever the attribute is called.
         self._load_token = 0
         self._load_worker = None
         self._load_workers = set()
@@ -236,10 +245,16 @@ class StudioWindow(QMainWindow):
         # Reference (cross-recording compare) load bookkeeping — the reference Session.load is the SAME
         # ~1.4–4 s synchronous compute as the primary open, so it too runs on a SessionLoadWorker (a
         # freeze here was the worst kind: it hit the moat "race a friend's GoPro" path). Its own token
-        # supersedes/ignores a stale reference result; a reference load never runs concurrently with a
-        # primary load or a second reference load (see _load_reference_file).
+        # supersedes/ignores a stale reference result, and it is SINGLE-FLIGHT against itself: a second
+        # pick is queued rather than run alongside the first (see _start_reference_load).
+        #
+        # It is NOT serialized against the PRIMARY load, and this comment used to say it was. The two
+        # are independent reads with independent tokens, so a reference genuinely can land while a
+        # reload's card is up — which is why _apply_reference_change is view-guarded rather than
+        # assuming a view is on screen.
         self._ref_load_token = 0
         self._ref_load_worker = None
+        self._pending_reference_load = None  # the latest QUEUED (token, paths) while one is running
         self._tick_timer = None  # created on the first _build_ui; reused across reloads (window-owned)
         # Persisted lap-panel state, loaded from prefs so the choices survive a relaunch and
         # passed into each fresh CentralView: the active tab (Laps/Corners/Stats/Coaching), the
@@ -660,12 +675,16 @@ class StudioWindow(QMainWindow):
                 self._start_load_worker(token, paths)
 
     def _drain_load_workers(self, deadline_s: float = 60.0):
-        """Let any in-flight load worker (or the demo fetch, which is held in the same set) finish
-        before teardown, bounded so this can never hang on a stuck worker. Pump the event loop in
-        short slices (so the worker's queued completion signals — incl. _on_worker_finished
+        """Let every in-flight worker held in `_load_workers` — the primary load, the reference load,
+        the demo fetch and (since it too is a QThread that outlives its caller) the video export —
+        finish before teardown, bounded so this can never hang on a stuck worker. Pump the event loop
+        in short slices (so the workers' queued completion signals — incl. _on_worker_finished
         launching a still-pending load — can drain) and wait briefly per worker, giving up after
         `deadline_s`. The token is bumped past every in-flight worker, so whatever they emit is
-        ignored regardless."""
+        ignored regardless.
+
+        This waits; it does not cancel. A render can take minutes, so closeEvent cancels that one
+        FIRST and this joins the stopped thread."""
         app = QApplication.instance()
         start = time.monotonic()
         while any(w.isRunning() for w in list(self._load_workers)):
@@ -678,11 +697,20 @@ class StudioWindow(QMainWindow):
                 break
 
     def closeEvent(self, event):
-        """Drain any in-flight load worker so a QThread isn't destroyed mid-run on window close (Qt
-        would warn/crash). Uses the bounded drain so close can never hang on a stuck worker. The
-        token is already bumped past any in-flight worker, so its result is ignored regardless."""
+        """Drain every in-flight worker so a QThread isn't destroyed mid-run on window close (Qt
+        would warn/crash). Uses the bounded drain so close can never hang on a stuck worker. Both
+        tokens are bumped past any in-flight worker, so its result is ignored regardless."""
         self._pending_load = None  # don't start a queued load during teardown
+        self._pending_reference_load = None  # nor a queued reference load
         self._cancel_placeholder_timer()  # no loading card can appear mid-teardown
+        # A video export is a QThread too, and until it joined the drained set it was the ONE worker
+        # teardown ignored. Ask it to stop BEFORE the drain: the renderer checks the cancel flag once
+        # per frame, so it lands in about a frame instead of holding the close for the minutes a full
+        # render takes — and the drain below then joins it exactly like a load worker, so no running
+        # QThread is destroyed. Cancelled, not abandoned: the worker drops its partial MP4 itself.
+        video_worker = getattr(self, "_video_worker", None)
+        if video_worker is not None:
+            video_worker.cancel()
         # Bump the load token past every in-flight worker so nothing that lands mid-teardown is
         # applied — in particular a demo fetch that resolves now must not kick off a whole new load
         # into a window that is closing (_on_demo_resolved drops it on the same token rule).
@@ -706,6 +734,7 @@ class StudioWindow(QMainWindow):
         # a re-open of the SAME recording hands its undo history forward (below).
         prev_session = getattr(self, "session", None)
         prev_sidecar = getattr(self, "_sidecar_path", None)
+        prev_paths = list(getattr(self, "_paths", []) or [])
         self.session = session
         # Commit _paths only after a successful load, so a failed reload leaves both self.session
         # and _paths pointing at the still-good recording (every _paths consumer stays in sync).
@@ -772,10 +801,17 @@ class StudioWindow(QMainWindow):
         self._announce_stage("Building the session view…")
         QApplication.setOverrideCursor(Qt.BusyCursor)
         try:
-            self._build_ui()
+            build_failure = self._build_ui_guarded("building the session view")
         finally:
             # After the swap, not before: setCentralWidget is the last thing in the blocked run.
             QApplication.restoreOverrideCursor()
+        if build_failure is not None:
+            self._recover_from_build_failure(build_failure, paths,
+                                             prev_session, prev_paths, prev_sidecar)
+            # STILL EMITTED. Anything waiting on this load (the smoke gate, every test, a queued
+            # follow-up) waits on loadFinished, and a load that ends in recovery has still ENDED.
+            self.loadFinished.emit()
+            return
         # One-line, non-fatal: the statusbar mirrors the console "studio:" notice style.
         notice = self._apply_session_notice()
         if notice:
@@ -1120,8 +1156,15 @@ class StudioWindow(QMainWindow):
         # screen and throw away the working session it promises to keep. self.session still holds
         # the outgoing session throughout a reload, and is None only before the first one lands.
         if getattr(self, "session", None) is not None:
-            self._build_ui()
-            message = "Load cancelled — kept the recording already open."
+            # Guarded: this rebuild is the whole of "hand the window back", so if IT raises the card
+            # simply stays up and Cancel becomes a button that does nothing (the state this method
+            # exists to prevent). The welcome screen is a poor consolation but it is reachable.
+            if self._build_ui_guarded("cancelling a load") is None:
+                message = "Load cancelled — kept the recording already open."
+            else:
+                self._drop_unshowable_session()
+                self._show_welcome(error=VIEW_BUILD_FAILURE_MESSAGE)
+                message = "Load cancelled — couldn't restore the open recording."
         else:
             self._show_welcome()
             message = "Load cancelled."
@@ -1153,13 +1196,18 @@ class StudioWindow(QMainWindow):
         # failure that never raised the card leaves self.view live and central, so this is False
         # and the view is left untouched, exactly as before.
         view = getattr(self, "view", None)  # guarded: partial harnesses set session without a view
+        restored = True
         if reload_failed and self.centralWidget() is not view:
-            # The loading card is up over a still-good session: put the session's UI back.
-            self._build_ui()
-            self._apply_session_notice()
+            # The loading card is up over a still-good session: put the session's UI back. Guarded,
+            # because this rebuild is the ONLY thing standing between a failed reload and the very
+            # card this branch exists to take down.
+            restored = self._build_ui_guarded("restoring the session after a failed load") is None
+            if restored:
+                self._apply_session_notice()
         # The reassurance is only stated where it is TRUE (and now verifiable on screen behind the
-        # dialog); a first-load failure has no previous session, so the line is dropped there.
-        tail = "\n\nYour loaded session is unchanged." if reload_failed else ""
+        # dialog); a first-load failure has no previous session, so the line is dropped there — and
+        # neither does a session whose view could not be rebuilt, which is not "unchanged" at all.
+        tail = "\n\nYour loaded session is unchanged." if reload_failed and restored else ""
         # THE BODY HAS TO CARRY THE PRODUCT NAME, for exactly the reason _show_error_report states
         # 700 lines up and this dialog did not honour: macOS DROPS a QMessageBox's window title, so
         # the constructor's title argument leaves windowTitle() == '' — measured empty in all five
@@ -1180,6 +1228,12 @@ class StudioWindow(QMainWindow):
             # "Load full recording" stay reachable). A failed reload keeps the good _paths instead.
             self._paths = list(paths)
             self._show_welcome(error=message, error_path=offending)
+        elif not restored:
+            # The rebuild that hands the good session back is itself what raised: the dialog has
+            # already (correctly) stopped promising the session is unchanged, and the welcome state
+            # is the only reachable surface left — never the control-less card.
+            self._drop_unshowable_session()
+            self._show_welcome(error=VIEW_BUILD_FAILURE_MESSAGE, error_path=offending)
 
     @staticmethod
     def _load_failure_message(paths: list[str], exc: Exception) -> str:
@@ -1291,6 +1345,83 @@ class StudioWindow(QMainWindow):
             self._ref_chip.setVisible(False)
             self._ref_chip_mounted = False
         self._update_reference_status()
+
+    def _build_ui_guarded(self, stage: str) -> Exception | None:
+        """_build_ui with the ONE guarantee the loading card needs: a raise cannot strand the window
+        on it. Returns None on success, else the exception — the CALLER decides what goes on screen,
+        and every caller's fallback is a surface the user can act on.
+
+        Why a return value rather than a fallback in here: the four callers want four different
+        things back (a rolled-back session, the still-good session, the welcome state, the welcome
+        state with a load error), and only they know which. What is shared is the invariant — the
+        "Loading telemetry…" card, which carries a Cancel and nothing else, is never what a raise
+        leaves behind.
+
+        Broad by design. This does not catch a KNOWN failure mode; it catches the unknown one, in
+        the one place where an unknown one strands the app. The exception is logged in full (the
+        console keeps the traceback for a bug report) and handed back, never swallowed."""
+        try:
+            self._build_ui()
+        except Exception as exc:  # noqa: BLE001 — see the docstring: this is the anti-strand net
+            import traceback
+            print(f"studio: could not build the session view ({stage}): "
+                  f"{type(exc).__name__}: {exc}", flush=True)
+            traceback.print_exc()
+            return exc
+        return None
+
+    def _recover_from_build_failure(self, exc: Exception, paths: list[str],
+                                    prev_session, prev_paths: list[str], prev_sidecar):
+        """The load SUCCEEDED and the view build did not: put the window back on a reachable surface.
+
+        THE SUCCESS PATH'S #164 DOOR. `_on_session_loaded` commits `self.session` and then builds
+        the view; a `CentralView.__init__` that raises (a partially-valid session, a panel tripping
+        on a degenerate channel) left the session committed, `self.view` None, the control-less
+        "Loading telemetry…" card up FOREVER and `loadFinished` never emitted. And because the slot
+        runs on a QUEUED connection, PySide prints the traceback and returns — measured: nothing
+        else in the app ever learns the load ended. The FAILURE path was hardened against exactly
+        this shape (see _on_load_failed); this is the same recovery for its twin.
+
+        Recovery is a ROLLBACK, not a retry: the new session is the thing that could not be shown,
+        so re-running _build_ui on it would raise again. The OUTGOING session had a working view a
+        moment ago, so it is restored WHOLE — session, paths and sidecar move together, exactly as
+        _on_session_loaded commits them — and its view rebuilt through the same guard. With nothing
+        to go back to (a first load), or if the rollback build raises too, the welcome empty state
+        is what is left, and the half-committed session is dropped so every `hasattr(self,
+        "session")` reader agrees with what is on screen.
+
+        The dialog comes LAST, after the window is already back, for the reason the load-failure
+        dialog states: the reassurance is only shown where it is TRUE and verifiable behind it."""
+        offending = paths[0] if paths else "(no file)"
+        detail = f"{type(exc).__name__}: {exc}"
+        print(f"studio: could not open {offending}: {detail}", flush=True)
+        restored = False
+        if prev_session is not None:
+            self.session = prev_session
+            self._paths = list(prev_paths)
+            self._sidecar_path = prev_sidecar
+            restored = self._build_ui_guarded("restoring the previous session") is None
+        if restored:
+            self._apply_session_notice()
+        else:
+            self._drop_unshowable_session()
+            self._show_welcome(error=VIEW_BUILD_FAILURE_MESSAGE, error_path=offending)
+        tail = "\n\nYour loaded session is unchanged." if restored else ""
+        box = QMessageBox(QMessageBox.Critical, f"{APP_NAME} — could not open recording",
+                          f"{APP_NAME} read this recording, but couldn't build its session view."
+                          f"\n\n{VIEW_BUILD_FAILURE_MESSAGE}\n\n{offending}{tail}", parent=self)
+        box.setDetailedText(detail)
+        box.exec()
+
+    def _drop_unshowable_session(self):
+        """Forget a session that has no view and cannot get one, so every `hasattr(self, "session")`
+        reader agrees with the welcome state now on screen. Left committed, it keeps the
+        session-only menu items live over a session no surface can render — and the next gesture
+        that reaches `self.view` raises again, from somewhere with no recovery at all. The sidecar
+        link goes with it: it points at a recording that is no longer open."""
+        if hasattr(self, "session"):
+            del self.session
+        self._sidecar_path = None
 
     def _tick(self):
         """The ~30 Hz timer slot, delegating to the current view's tick(); no-op before first load."""
@@ -3156,6 +3287,12 @@ class StudioWindow(QMainWindow):
 
         worker = VideoExportWorker(self.session, spec)
         self._video_worker = worker  # keep a ref so the thread isn't GC'd mid-render
+        # AND put it in the DRAINED set. It was held on that attribute and nowhere else, so
+        # closeEvent's drain — which exists precisely so no QThread is destroyed mid-run — walked
+        # straight past the one worker that can still be running MINUTES after it started, and
+        # quitting mid-render destroyed a live QThread. closeEvent cancels it before draining (the
+        # renderer checks the flag once per frame), so joining it costs about one frame.
+        self._load_workers.add(worker)
         started = {"first": False}
 
         def on_progress(done: int, total: int):
@@ -3175,6 +3312,7 @@ class StudioWindow(QMainWindow):
             dlg.canceled.disconnect(worker.cancel)
             dlg.hide()
             worker.wait()
+            self._load_workers.discard(worker)
             self._video_worker = None
             spec.source.cleanup()  # free any temp concat-list file the chapter resolution wrote
             if ok:
@@ -3248,16 +3386,32 @@ class StudioWindow(QMainWindow):
         """Spawn the off-thread reference Session.load for `paths` (the file-picker-free half of
         _load_reference_file, so tests drive it without a dialog). Reuses the primary open's
         SessionLoadWorker; a lightweight status-bar "Loading reference…" replaces the whole-view
-        placeholder (the primary session stays shown). GUARD: a reference load must not run alongside a
-        primary load or a second reference load — bump the reference token (so a still-running older
-        reference worker's result is ignored) and, if one is already in flight, supersede it rather than
-        launch a concurrent second load."""
+        placeholder (the primary session stays shown).
+
+        SINGLE-FLIGHT, exactly as the primary _load is: only ONE reference load runs at a time, and a
+        superseding pick is QUEUED and started when the current worker finishes. The token bump comes
+        first regardless, so the older worker's result is dropped whether it was superseded before or
+        after it started.
+
+        THIS PARAGRAPH WAS THE DOCSTRING BEFORE IT WAS THE CODE. The body bumped the token and
+        started a worker unconditionally, so N rapid picks ran N concurrent full Session.loads — each
+        one a ~1.4–4 s numpy/C++ read of a whole recording — and kept exactly one result. The token
+        machine made that *correct*, which is why it never showed up as a bug; it is why the "must
+        not run alongside a second reference load" guard the docstring promised has to be real."""
         print(f"studio: loading reference recording — {len(paths)} chapter(s)…", flush=True)
         self.statusBar().showMessage("Loading reference…", STATUS_MS)
         # Bump the token: any in-flight reference worker started earlier is now stale; its result is
         # ignored when it finishes (see _on_reference_loaded / _on_reference_load_failed).
         self._ref_load_token += 1
         token = self._ref_load_token
+        if self._ref_load_worker is not None and self._ref_load_worker.isRunning():
+            self._pending_reference_load = (token, list(paths))
+            return
+        self._start_reference_worker(token, paths)
+
+    def _start_reference_worker(self, token: int, paths: list[str]):
+        """Spawn the single in-flight reference worker for `token` (see _start_reference_load's
+        single-flight rule)."""
         worker = SessionLoadWorker(token, paths)
         self._ref_load_worker = worker
         self._load_workers.add(worker)  # hold it so the QThread isn't GC'd mid-load (shared drain set)
@@ -3268,11 +3422,18 @@ class StudioWindow(QMainWindow):
 
     def _on_reference_worker_finished(self, worker):
         """A reference load worker's QThread finished: drop it from the shared in-flight set and
-        release it (see _release_worker)."""
+        release it (see _release_worker), then (single-flight) start the most recent QUEUED reference
+        load if one is pending and still current."""
         self._load_workers.discard(worker)
         if self._ref_load_worker is worker:
             self._ref_load_worker = None
         self._release_worker(worker)
+        pending = getattr(self, "_pending_reference_load", None)
+        if pending is not None:
+            self._pending_reference_load = None
+            token, paths = pending
+            if token == self._ref_load_token:  # still the latest pick — run it now
+                self._start_reference_worker(token, paths)
 
     def _on_reference_loaded(self, token: int, paths: list[str], ref):
         """Reference load succeeded (UI thread, queued signal): adopt the loaded Session as the
@@ -3329,8 +3490,11 @@ class StudioWindow(QMainWindow):
                 "Load a reference recording first (File ▸ Load reference recording…), then "
                 "compare against it.")
             return
-        # The compare controller lives on the live central view.
-        if not self.view.compare.enter_cross():
+        # The compare controller lives on the live central view — which is None between views (a
+        # reload's loading card is up), so this is asked for, not assumed. Same message either way:
+        # "the compare could not be set up" is exactly what a window mid-swap means.
+        view = getattr(self, "view", None)
+        if view is None or not view.compare.enter_cross():
             QMessageBox.information(
                 self, f"{APP_NAME} — cross-recording compare unavailable",
                 "The reference recording's lap could not be set up for compare.")
@@ -3338,9 +3502,21 @@ class StudioWindow(QMainWindow):
     def _apply_reference_change(self):
         """Refresh every "vs best" surface after the reference was loaded or cleared, and update the
         menu + status chip. The reference replaces the local best lap as the Δ / map / sector /
-        per-corner baseline, so it refreshes the same panels a re-segment does (via the shared seam)."""
-        # reselect: default-select in single mode, keep the pinned pair while comparing.
-        self.view.rebuild_derived_views(reselect=not self.view._comparing())
+        per-corner baseline, so it refreshes the same panels a re-segment does (via the shared seam).
+
+        VIEW-GUARDED, like _clear_reference. Its main caller (_on_reference_loaded) is a QUEUED slot,
+        so a reference that lands while the primary is RELOADING arrives with the loading card up and
+        `self.view` already None (the card disposes the outgoing view) — and the unguarded
+        `self.view.rebuild_derived_views(...)` raised straight out of that slot. The guard is here, at
+        the dereference, rather than duplicated in each caller, so no future caller can miss it.
+
+        Nothing is lost by skipping the refresh: the reference lives on the SESSION, and the fresh
+        CentralView the reload is about to build is constructed against that session — reference
+        included. The window chrome below is updated either way; it survives the swap."""
+        view = getattr(self, "view", None)
+        if view is not None:
+            # reselect: default-select in single mode, keep the pinned pair while comparing.
+            view.rebuild_derived_views(reselect=not view._comparing())
         self._update_reference_status()
 
     def _update_reference_status(self):

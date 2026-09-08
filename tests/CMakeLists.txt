@@ -271,6 +271,19 @@ add_test(NAME test_load_affordances
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_affordances.py)
 set_tests_properties(test_load_affordances PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The load / reference LIFECYCLE (2026-09-07 review §3.4/§3.5/§3.7/§3.8): the load-SUCCESS path's
+# strand (a raising CentralView.__init__ leaving the loading card up forever with loadFinished
+# never emitted) and the same guard on the two other rebuilds that ARE a recovery (_cancel_load,
+# _on_load_failed); the reference load's single-flight + view guards (its docstring promised both,
+# the body had neither); and the five riskiest previously-untested paths — closeEvent mid-load AND
+# mid-EXPORT (the render QThread was held on an attribute the drain never saw), Load full recording,
+# the REAL _forget_recording ordering, the queued second open actually opening B, and the ideal-lap
+# row selection. Real Qt + real worker QThreads, so run offscreen; both persistence stores are
+# diverted to a temp dir inside the module.
+add_test(NAME test_load_lifecycle
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_load_lifecycle.py)
+set_tests_properties(test_load_lifecycle PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1")
 # Corner model (studio.corners, F-corner): synthetic stadium-loop detection (count/
 # positions/directions vs construction), distribution-derived threshold (+ noise
 # stability), the corner/straight partition identity, and the CornerTable + map
