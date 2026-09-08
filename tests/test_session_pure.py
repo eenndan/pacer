@@ -46,6 +46,7 @@ from _synthetic import (  # noqa: E402
 )
 
 import pacer  # noqa: E402
+from studio import corner_model  # noqa: E402
 from studio import corners as corners_mod  # noqa: E402
 from studio._signal import (  # noqa: E402
     LAP_BAND_HI,
@@ -1166,6 +1167,49 @@ def test_ideal_donor_admission_refuses_a_collapsed_segment_AND_its_inflated_neig
     finally:
         corners_mod.project_boundaries = real_project
     print("test_ideal_donor_admission_refuses_a_collapsed_segment_AND_its_inflated_neighbour OK")
+
+
+def test_every_winning_segment_was_measured_on_a_comparable_window():
+    """THE FLAGSHIP NUMBER'S SECOND GUARD, stated as a property of the OUTPUT rather than of the
+    projection's internals — so it survives a rewrite of either half of the repair.
+
+    The ideal is a sum of per-segment minima, and a minimum is only meaningful if every candidate
+    was timed over the same piece of track. The defect this pins is the one that shipped for a
+    week: the winner of `C5 → C6` on the D24 0060 pair had been measured over 31 m of a 42.8 m
+    straight (72.9 % of the reference span) and won on the missing 11 m. Neither the partition
+    identity (`segment_times`' assertion) nor the decomposition sum could see it — both still held
+    exactly, because the lost time had moved into the neighbouring segment.
+
+    So: for EVERY segment, the DONOR's own projected window must be within MAX_DONOR_SPAN_DEV of
+    the span that segment has on the donor's lap. Equivalent to `admitted[donor, j]`, but asserted
+    from `donor_span` — the field the ideal CURVE is actually drawn from — so a future change that
+    admits a cell correctly while drawing it from a different window still fails here.
+
+    It also fails if `MAX_DONOR_SPAN_DEV` is loosened back toward the old one-sided floor, which
+    `test_projection_never_mixes_two_frames_within_one_lap` (the frame half) would not catch."""
+    s, ids = make_ideal_session()
+    sb = s.ideal_segment_bests()
+    assert sb is not None
+    total_ref = s.corners.basis()[1]
+    ref_span = np.diff(np.asarray(sb.s_edges, float) * total_ref)
+    worst = 0.0
+    checked = 0
+    for j, donor in enumerate(sb.donors):
+        if donor is None or ref_span[j] <= corner_model.POINT_SPAN_M:
+            continue                     # a POINT segment admits everyone by design
+        lo, hi = sb.donor_span[j]
+        dist, _sp, _el = s._lap_arrays(donor)
+        expected = ref_span[j] * (float(dist[-1]) / total_ref)
+        dev = abs((hi - lo) - expected) / expected
+        worst = max(worst, dev)
+        checked += 1
+        assert dev <= corner_model.MAX_DONOR_SPAN_DEV + 1e-9, (
+            f"segment {j} ({sb.display_label(j)}) was won on a {hi - lo:.2f} m window where the "
+            f"donor's own expected span is {expected:.2f} m ({dev * 100:.1f}% off)")
+    assert checked, "fixture must have real segments to check"
+    print(f"test_every_winning_segment_was_measured_on_a_comparable_window OK "
+          f"({checked} segments, worst {worst * 100:.2f}% vs the "
+          f"{corner_model.MAX_DONOR_SPAN_DEV * 100:.0f}% band)")
 
 
 # --- the DECOMPOSITION: from taunt into plan (N8) -----------------------------------------

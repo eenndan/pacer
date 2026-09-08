@@ -50,27 +50,85 @@ POINT_SPAN_M = 0.5
 # NOT EXPRESS THE PROBLEM. Its note claimed "every cell that is not a hard collapse carries ≥ 0.93
 # of the segment's reference span, and every collapsed one ≤ 0.0001 … a separator, not a tuned
 # knob". That is true of the recording it was measured on (D24 0062: 1 cell in 1,625 below 0.93)
-# and false of the owner's other one: on the D24 0060 pair 58 of 950 cells sit outside ±7 %, the
-# per-segment WINNERS run down to 0.732 of the reference span, and 11 of 23 winners are below 0.93.
-# The floor at 0.5 admitted every one of them.
+# and false of the owner's other one: on the D24 0060 pair 58 of its 874 non-point cells sit
+# outside ±7 % (74 of all 950), the per-segment WINNERS run down to 0.729 of the reference span,
+# and 10 of 23 winners are below 0.93. The floor at 0.5 admitted every one of them.
 #
-# Threshold evidence for 0.05, on the 0060 pair (38 clean laps, 23 non-point segments), against the
-# order statistic extrapolated from the recording's own 22 undistorted (below-drift-gate) laps,
-# which every candidate projects identically — 0.624 s per doubling of N, so N=38 predicts
-# 65.226 s:
+# ── WHAT THIS TEST IS: A BIAS TRIMMER, NOT A CLASSIFIER ───────────────────────────────────────
+# It measures deviation from UNIFORM line-length scaling, which is not the same quantity as
+# projection error, and the gap is measurable. Scoring every (lap, segment) cell against the
+# directly matched spatial position of BOTH its edges — ground truth to within
+# corners.SPATIAL_MATCH_MAX_M — on the three D24 fixtures:
 #
-#   admission         ideal      vs extrapolation   winner span-fraction min
-#   0.5 floor (old)   62.869 s        −2.357 s              0.732
-#   ±10 %             64.321 s        −0.906 s              0.905
-#   ±7 %              64.854 s        −0.372 s              0.930
-#   ±5 %              65.149 s        −0.078 s              0.950
-#   ±3 %              65.291 s        +0.065 s              0.970
+#   fixture     cells w/ true span err >5 %   of those REFUSED    clean cells REFUSED (FPR)
+#   0060 pair              59                     0   (0 %)          39 / 399   (10 %)
+#   0060 ch 1              42                     0   (0 %)          28 / 286   (10 %)
+#   0062                   25                     0   (0 %)          10 / 1462  ( 1 %)
 #
-# ±5 % is the smallest-bias setting and refuses 70 of 950 cells (7.4 %); the normalized-only repair
-# lands at 65.358 (+0.132) and the same test on 0062 moves the ideal by +0.15 s. It is a bias knob,
-# not a separator — there is no four-orders-of-magnitude gap to sit in, and the note that claimed
-# one is the reason this ranked as a P0 for a week.
+# Recall is 0 % STRUCTURALLY: every convictable cell sits on a lap below
+# corners.NORMALIZED_DRIFT_MAX, whose projection IS `ref_span × total_lap/total_ref`, so its
+# deviation from that is zero by construction and this test can never reject it however misaligned
+# the window is. And those laps are not clean: they carry a median 1.16 % / p90 9.02 % true span
+# error on the pair (1.03 / 9.42 on ch 1, 0.48 / 2.92 on 0062), 5 cells worse than −10 %.
+# Conversely 100 % of the cells it does refuse (39/39, 28/28, 10/10) have BOTH edges on directly
+# matched spatial knots — genuinely measured track, refused. It removes a downward bias from the
+# minimum; it does not identify bad cells, and nothing here should be read as if it did.
+#
+# ── CALIBRATION, AND HOW WIDE IT REALLY IS ────────────────────────────────────────────────────
+# The arbiter is each recording's own order statistic, fitted on its BELOW-gate laps (which every
+# candidate projects identically) and extrapolated to the full lap count. On the 0060 pair it reads
+# 0.623 s per doubling → 65.228 s at N = 38, and the candidates score:
+#
+#   admission         ideal      vs arbiter    winner span-fraction min
+#   0.5 floor (old)   62.869 s     −2.359 s           0.729
+#   ±10 %             64.321 s     −0.907 s           0.905
+#   ±7 %              64.854 s     −0.374 s           0.930
+#   ±5 % (shipped)    65.149 s     −0.079 s           0.950
+#   ±3 %              65.291 s     +0.063 s           0.970
+#
+# DO NOT READ −0.079 AS "THE BIAS". The same measurement is +0.252 on 0060 chapter 1 (same track,
+# same car, same session) and −0.255 on 0062: the cross-fixture spread is ±0.25 s, three times the
+# pair's residual, and that spread — not the pair's number — is this constant's honest width.
+# The arbiter is not artifact-free either; it is fitted on exactly the laps the paragraph above
+# shows this test cannot police. 0.05 is where the pair's bias is smallest while the other two
+# straddle zero; anything in [0.03, 0.07] is defensible on this evidence.
+#
+# ── WHAT IT IS WORTH, SPLIT HONESTLY ──────────────────────────────────────────────────────────
+# Against the pre-fix number, frame repair vs this constant: 0060 pair +0.981 / +1.299 s
+# (43 % / 57 %); 0060 ch 1 +0.824 / +1.607 (34 % / 66 %); 0062 +0.000 / +0.217 (0 % / 100 %).
+# THIS CONSTANT IS THE LARGER HALF ON ALL THREE. The frame repair is what makes it meaningful — it
+# is what stops one lap carrying two frames — but crediting the headline move to the projection
+# alone is wrong.
+#
+# ── DEFERRED ─────────────────────────────────────────────────────────────────────────────────
+# Because corners.NORMALIZED_DRIFT_MAX keeps below-drift laps on the normalized projection, this
+# test is inert on 22 of the pair's 38 laps. Warping EVERY lap and re-admitting at ±5 % moves the
+# pair a further +0.316 s (ch 1 +0.347, 0062 −0.071); at ±3 % it is +0.644 / +0.712 / +0.110. That
+# residual is the price of the byte-identity the drift gate buys, and it is the same follow-up
+# corners.NORMALIZED_DRIFT_MAX's note names.
 MAX_DONOR_SPAN_DEV = 0.05
+# ── SUB-RESOLUTION SEGMENTS: A KNOWN LIMITATION, DELIBERATELY NOT "FIXED" ─────────────────────
+# On a 2.3 m sliver the ±5 % band is ±0.11 m, an order of magnitude under the
+# ±corners.SPATIAL_MATCH_MAX_M the boundary matches are guaranteed to — so admission there is
+# decided by noise, and segment 4 of the 0060 pair refuses 4 of its 38 laps arbitrarily. 16 of the
+# pair's 23 real segments have a band under that tolerance at all.
+#
+# Exempting them (as POINT segments are exempt) was implemented and MEASURED, then reverted:
+#
+#   exempt ref_span ≤ 3.0 m   pair 65.145 (−0.004)  ch1 66.102 (0.000)  0062 66.781 (0.000)
+#     …but the pair's WINNER span-fraction floor falls 0.944 → 0.850, because a 2.3 m segment is
+#     then won on a window 0.35 m off — noise, admitted into a MINIMUM.
+#   exempt band < 3.0 m       pair 64.164 (−0.984)  ch1 65.037 (−1.066)  0062 66.563 (−0.217)
+#     …which exempts the 42.8 m straight this whole repair is about (band ±2.14 m) and reverts
+#     most of the fix.
+#
+# The narrow version buys 0.004 s of principle and costs a downward bias; the wide version undoes
+# the repair. AN ADMISSION RULE FEEDING A MINIMUM MUST FAIL CLOSED: rejecting a lap arbitrarily
+# only removes a candidate (bounded here by one 0.15 s segment), while admitting one arbitrarily
+# lets noise win the segment — the same failure direction as the defect this constant exists for.
+# So the noise is real, its cost is bounded and upward, and it stays. Resolving it properly means
+# not cutting sub-sample segments in the first place (a partition-design change: it moves
+# `IdealSample.corners`/`segments`, which every ideal-lap disclosure prints).
 
 
 class IdealSample(NamedTuple):
@@ -574,7 +632,9 @@ class CornerModel:
         ref_edges.append(float(total_ref))
         ref_span = np.diff(np.asarray(ref_edges, float))
         # A POINT segment (corner starts on the line, or two corners nearly touch) carries ~0 s on
-        # every lap; nobody can collapse it further, so every lap is admitted there.
+        # every lap; nobody can collapse it further, so every lap is admitted there. Sub-resolution
+        # segments are deliberately NOT exempt — see UNMEASURABLE_SPAN_M's note for the measurement
+        # that decided it.
         is_point = ref_span <= POINT_SPAN_M
 
         labels = ["start"]
@@ -710,10 +770,17 @@ class CornerModel:
         the corner's enter point onto this lap's odometer and reads elapsed->media there. None if
         unknown/degenerate. Absolute (lap start + elapsed).
 
-        Goes through the SAME drift-gated alignment as every sibling (`corners.project_boundaries`
-        with the whole partition as its frame, so the warp is the one `lap_corner_stats` built).
-        It was the last site left on the bare normalized fraction: on a drifted lap that landed the
-        seek up to ~12 m (~0.5 s) from the corner entry the Corners table was pointing at."""
+        Goes through the SAME drift-gated alignment as its siblings (`corners.project_boundaries`
+        with the whole partition as its frame, so the warp is the one `lap_corner_stats` built). On
+        a drifted lap the bare normalized fraction it used before landed the seek up to ~12 m from
+        the corner entry the Corners table was pointing at; measured move on the D24 0060 pair,
+        0.373 s.
+
+        IT IS NOT THE LAST UN-GATED PROJECTION IN THE APP. `coaching._win` still scales a corner
+        window by `lap_total / corner_dist_total` with no drift gate and no traces, and its output
+        feeds `Reason.brake_extra_s` / `coast_extra_s` — so a coaching row can carry a warp-derived
+        phase triple beside a normalized-frame reason. Pre-existing and untouched here; migrating
+        `_win` onto `lap_alignment` is the follow-up."""
         basis = self.basis()
         if basis is None or not basis[0]:
             return None

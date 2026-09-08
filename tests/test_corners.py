@@ -363,7 +363,7 @@ def test_high_drift_no_spatial_match_anywhere_is_exactly_the_normalized_map():
     total_ref = float(cum_a[-1])
     interior = [v for c in cs for v in (c.enter, c.exit)]
     cum_b = _scaled_odometer(cum_a, region_end=STRAIGHT, region_scale=1.06)
-    # Shove lap B's trace 1 km away so no point is within _SPATIAL_MATCH_MAX_M of the reference.
+    # Shove lap B's trace 1 km away so no point is within SPATIAL_MATCH_MAX_M of the reference.
     far_xs, far_ys = xs + 1000.0, ys + 1000.0
     traces = (xs, ys, cum_a, far_xs, far_ys, cum_b)
     gated = C.project_boundaries(interior, total_ref, float(cum_b[-1]), traces=traces)

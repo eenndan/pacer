@@ -424,6 +424,12 @@ def summarize(
 
     # Project [enter,exit] onto one lap's own odometer (scale lap_total/corner_dist_total); identity
     # if a total is missing. A lap's brake/coast events live in its own odometer, so this matches frames.
+    #
+    # STILL UN-GATED, and knowingly: this is the one corner-window projection that has not moved
+    # onto corners.lap_alignment, so on a >NORMALIZED_DRIFT_MAX lap the window feeding
+    # Reason.brake_extra_s / coast_extra_s is up to ~12 m from the window the row's own phase
+    # triple was measured in. Migrating it needs the (ref, lap) traces plumbed to this call site —
+    # the follow-up corner_model.corner_entry_media_time's note names.
     def _win(c, lap_total: float | None) -> tuple[float, float]:
         if (corner_dist_total and lap_total and corner_dist_total > 0
                 and lap_total != corner_dist_total):

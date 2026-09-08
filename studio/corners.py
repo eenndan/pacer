@@ -58,7 +58,10 @@ NORMALIZED_DRIFT_MAX = 0.005
 # fails ANY gate contributes no knot to the lap's warp (it is INTERPOLATED, never mixed frames).
 _SPATIAL_SEARCH_FRAC = 0.02      # ±2% of the comparison lap's samples (~21 m), floored at 5
 _SPATIAL_HEADING_MIN_COS = 0.5   # same-direction within 60° (rejects the other leg of a corner)
-_SPATIAL_MATCH_MAX_M = 3.0       # refined closest approach must be ≤ 3 m to count as the same point
+# PUBLIC because it is the projection's stated per-boundary resolution, and
+# corner_model.UNMEASURABLE_SPAN_M is defined against it — a segment shorter than this cannot be
+# measured by a projection built out of matches only accurate to it.
+SPATIAL_MATCH_MAX_M = 3.0        # refined closest approach must be ≤ 3 m to count as the same point
 
 
 def line_length_drift(total_lap: float, total_ref: float) -> float:
@@ -92,7 +95,7 @@ def _spatial_matches(d_ref, total_ref: float,
     the nearest same-direction comparison-lap sample within the ±_SPATIAL_SEARCH_FRAC arc is found,
     its two adjacent segments are projected onto, and the closer projection's chord parameter
     interpolates the comparison-lap odometer. NaN where no candidate passes the heading or
-    _SPATIAL_MATCH_MAX_M distance gate.
+    SPATIAL_MATCH_MAX_M distance gate.
 
     Takes the WHOLE boundary set in one call because the per-lap unit-tangent fields are O(n) and
     identical for every anchor — computing them once per lap instead of once per boundary is what
@@ -150,7 +153,7 @@ def _spatial_matches(d_ref, total_ref: float,
             if cand_d2 < best_d2:
                 best_d2, best_dist = cand_d2, cand_dist
         # Distance gate on the REFINED closest approach (same point only if within MATCH_MAX_M).
-        if best_d2 <= _SPATIAL_MATCH_MAX_M ** 2:
+        if best_d2 <= SPATIAL_MATCH_MAX_M ** 2:
             out[i] = best_dist
     return out
 
@@ -252,6 +255,11 @@ def project_boundaries(d_ref, total_ref: float, total_lap: float, *,
     if alignment is DERIVE_ALIGNMENT:
         alignment = lap_alignment(d_ref if frame is None else frame, total_ref, total_lap,
                                   traces=traces)
+    elif alignment is not None and abs(float(alignment[1][-1]) - total_lap) > 1e-6:
+        # A warp built for a DIFFERENT lap would otherwise project silently and wrongly — its last
+        # anchor is that lap's total. Cheap and exact: lap_alignment ends knot_lap at total_lap.
+        raise ValueError(
+            f"alignment was built for a lap of total {float(alignment[1][-1])} m, not {total_lap}")
     if alignment is None:
         return normalized
     return np.interp(d_ref, alignment[0], alignment[1])
