@@ -11,6 +11,9 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
+# The Qt-object liveness probe (PySide6's own runtime): a Python wrapper outlives the C++ object a
+# deleteLater() has collected, and _clear_pb_toast has to tell those two apart.
+import shiboken6
 from PySide6.QtCore import QBuffer, QEvent, QIODevice, QRect, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QActionGroup,
@@ -2121,13 +2124,23 @@ class StudioWindow(QMainWindow):
         with no valid laps (a junk row the library would surface forever).
 
         Returns the "new personal best" MOMENT (a library.pb_moment dict) or None. The moment is
-        decided against the index AS IT IS BEFORE THIS SESSION IS UPSERTED (so the recording being
-        added can't be its own prior PB), and ONLY when the timing is VERIFIED and NOT data-quality
-        degraded — a PB against an arbitrary provisional start line is meaningless, and a PB whose
-        absolute timing the app itself calls ESTIMATED (media-clock / low GPS) isn't one to
-        celebrate, so we never celebrate either. The caller shows the celebratory banner from the
-        returned moment; a library-write failure still returns the moment (the comparison already
-        succeeded)."""
+        decided against the index AS IT IS BEFORE THIS SESSION IS UPSERTED, and ONLY when the timing
+        is VERIFIED and NOT data-quality degraded — a PB against an arbitrary provisional start line
+        is meaningless, and a PB whose absolute timing the app itself calls ESTIMATED (media-clock /
+        low GPS) isn't one to celebrate, so we never celebrate either. The caller shows the
+        celebratory banner from the returned moment; a library-write failure still returns the
+        moment (the comparison already succeeded).
+
+        Deciding it BEFORE the upsert is NOT what stops a recording being its own prior PB — that
+        line used to claim it did, and the app celebrated exactly that: open one chapter, click
+        this window's own "Load full recording", and the toast announced the full recording beating
+        the chapter it had just chained, "0.57 s faster than your previous best". The comparison is
+        by TRACK, and the partial load had already put this recording's own entry under that track
+        (one upsert earlier, seconds ago). The ENTRY'S FINGERPRINT is what makes the promise true,
+        so it is passed in: library.pb_moment partitions the index on it and takes the prior from
+        the OTHER recordings — so the same outing can no longer be the bar, while a full chain that
+        genuinely beats a DIFFERENT recording on that track still celebrates (see there for why
+        suppressing on mere presence would swallow exactly that)."""
         if self._library_excludes(paths):
             return None
         moment = None
@@ -2136,11 +2149,13 @@ class StudioWindow(QMainWindow):
             # Decide the PB moment against the PRIOR index (before the upsert), gated on BOTH timing
             # axes — a provisional/unconfirmed start line makes the lap number meaningless, and a
             # data-quality-degraded (media-clock / low-GPS ESTIMATED) time isn't one to celebrate
-            # (library.pb_moment_for returns None for either).
+            # (library.pb_moment_for returns None for either) — and on this recording's own IDENTITY,
+            # which is what keeps the chapter it just chained from being its "previous best".
             prior_index = library.load()
             moment = library.pb_moment_for(
                 self.session.timing_verified, prior_index, entry.get("track"), entry.get("best"),
-                degraded=self.session.timing_quality.degraded)
+                degraded=self.session.timing_quality.degraded,
+                fingerprint_key=entry.get("fingerprint"))
             library.upsert_and_save(entry)
         except Exception as exc:  # noqa: BLE001 — the index is additive; never break a load
             print(f"studio: session library not updated ({exc!r}).", flush=True)
@@ -2192,21 +2207,69 @@ class StudioWindow(QMainWindow):
         """Show the transient "new personal best!" toast for a ``library.pb_moment`` result. Fully
         guarded — a celebration must never disrupt a load. The toast's "See your progress →" link
         opens the Library dialog's per-track PB-progression chart (the retention surface), and it
-        auto-dismisses. Held on the window (self._pb_toast) so a rapid reload replaces the old one."""
+        auto-dismisses. Held on the window (self._pb_toast) so a rapid reload replaces the old one.
+
+        CLEARING THE PREVIOUS CARD IS ITS OWN STEP, OUTSIDE THIS TRY, and that is the whole repair
+        for a window that celebrated at most once. `PBToast.dismiss()` ends in `deleteLater()`, so
+        after one turn of the event loop the C++ half is gone while this attribute still held the
+        Python wrapper; the next moment's `old.dismiss()` then raised on the deleted QTimer — INSIDE
+        the try — and the blanket except printed "personal-best moment not shown" and returned
+        before the new card was ever built. Measured on this method: second moment, RuntimeError
+        ("Internal C++ object (QTimer) already deleted"), zero toasts on screen. Every genuine PB
+        after the first one was silently swallowed, and §3.2's false partial→full toast was usually
+        the one that spent the single slot. Tidying up after the last celebration must not be able
+        to cancel the next one, so it happens first, guarded on its own (`_clear_pb_toast`) — with
+        its own blanket except, so "fully guarded" above still holds for the whole method and the
+        load path behind it."""
+        self._clear_pb_toast()
         try:
             title, body = library.pb_moment_text(moment, fmt_time)
-            old = getattr(self, "_pb_toast", None)
-            if old is not None:
-                old.dismiss()
             # Offer the one-tap share only when the card is actually shareable (verified lap) —
             # a PB moment is verified timing by construction, but stay honest via the same verdict.
             on_share = None if self._share_card_blocked() else self._share_pb_card
             toast = PBToast(title, body, on_progress=self._open_library,
                              on_share=on_share, parent=self)
             self._pb_toast = toast
+            # Let the reference die with the object it names, so this window never holds the wrapper
+            # of a deleted card — the state the defect above was made of, and the one every OTHER
+            # reader of `_pb_toast` (studio/dev/media_capture.py calls `.close()` on it) would hit.
+            toast.destroyed.connect(lambda *_: self._forget_pb_toast(toast))
             toast.show_for(self, keepout=self._pb_card_keepout)
         except Exception as exc:  # noqa: BLE001 — a celebration must never break a load
             print(f"studio: personal-best moment not shown ({exc!r}).", flush=True)
+
+    def _forget_pb_toast(self, toast):
+        """Drop a destroyed celebration card from `_pb_toast` — but only while it is still the one
+        being held, since a card that was replaced rather than dismissed is destroyed AFTER its
+        successor is on screen, and must not take that successor's reference with it."""
+        if getattr(self, "_pb_toast", None) is toast:
+            self._pb_toast = None
+
+    def _clear_pb_toast(self):
+        """Dismiss the celebration card still up, if there is one, and drop the reference either
+        way — never raising into the caller (see `_show_pb_moment`).
+
+        The reference is cleared FIRST so even a failure here leaves no stale wrapper for the next
+        moment to trip on, and `shiboken6.isValid` is what tells a live card from the Python wrapper
+        of one whose C++ half `deleteLater` has already collected (the `destroyed` hook normally
+        clears those, so this is the belt to its braces: the same-turn window before that signal
+        has run, and any future path that assigns `_pb_toast` without it).
+
+        The except is BLANKET on purpose, even though the failure this method exists for is a
+        RuntimeError. Moving out of `_show_pb_moment`'s try bought back the celebration but took
+        the containment with it: `_show_pb_moment` is called unguarded from `_on_session_loaded`
+        immediately before `loadFinished.emit()`, and `dismiss()` runs Python of its own (`hide()`
+        reaches the host's event filter), so ANY escape from here strands a completed load with no
+        `loadFinished` — the §3.4 shape. Tidying up after a celebration may fail; it may not take
+        the load with it."""
+        old = getattr(self, "_pb_toast", None)
+        self._pb_toast = None
+        if old is None or not shiboken6.isValid(old):
+            return
+        try:
+            old.dismiss()
+        except Exception as exc:  # noqa: BLE001 — see above: this must never reach the load path
+            print(f"studio: previous personal-best card not dismissed ({exc!r}).", flush=True)
 
     def _pb_card_keepout(self):
         """The band the PB card must not cover, in this window's coordinates: the lap grid's
