@@ -84,7 +84,16 @@ class Stub:
         return self._delta(float(t)) if lap_id == self._lap else None
 
     def g_at_time(self, t):
-        return (0.3, -0.4, 0.5) if self.has_gmeter else None
+        """A g that MOVES with t. It used to be a constant, which composited a dial whose 240 hull
+        points collapsed to one distinct value (envelope never painted) and whose 30 trail vertices
+        were identical (29 zero-length segments) — two of the dial's four elements exercised. The
+        sweep below is the only place the redesigned face meets the pills, so it should meet the
+        whole face."""
+        if not self.has_gmeter:
+            return None
+        lat = 0.85 * np.sin(0.7 * float(t))
+        lon = 0.55 * np.cos(0.41 * float(t) + 0.6)
+        return (float(lat), float(lon), float(np.hypot(lat, lon)))
 
     def gmeter_source(self):
         return "accl"

@@ -239,16 +239,23 @@ def test_both_modes_lay_out_on_one_shared_geometry():
             f"{band.top():.2f}) — the band exists so the number can never land on the face")
 
 
-def test_the_redesign_actually_made_the_dial_bigger():
+def test_the_small_card_and_the_export_box_got_their_room_back():
     """The eleven text items were not free: at the 120x140 minimum the old face spent 18 px of
     every side on cardinal numbers, plus an 18 px title strip and a 13 px tag band, leaving a
-    36.5 px radius. With nothing outside the ring but the readout the same card carries 51.5 px.
+    36.5 px radius. With nothing outside the ring but the readout the same card carries 51.5 px,
+    and the 280 px 1080p export box goes 84.2 -> 102.2 px.
 
-    Pinned as a floor rather than an equality — the point is that the room came back, and a later
-    change that quietly spends it again should have to say so here."""
+    AND IT IS NOT A FREE WIN AT EVERY SIZE, which is why this test names the two places it is one.
+    The old bands were fixed pixels; the readout band is 15 % of height, so above ~220 px wide the
+    new dial is SMALLER (-1 % at 240x269, -11 % at 561x628). That is the deliberate trade — the
+    default card is the one that read as a debug widget — and `dial_geom`'s docstring carries the
+    measured table. Pinned as floors, so a later change that quietly spends this room again has to
+    come and say so here."""
     from studio import gmeter_overlay as g
     _, _, r = g.dial_geom(120, 140)
     assert r >= 50.0, f"the 120x140 dial's radius fell back to {r:.1f} px (pre-redesign: 36.5)"
+    _, _, r_exp = g.dial_geom(280, 280)
+    assert r_exp >= 100.0, f"the 1080p export dial fell back to {r_exp:.1f} px (pre-redesign: 84.2)"
 
 
 def test_paint_dial_defaults_to_the_live_look():
@@ -322,6 +329,107 @@ def test_the_trail_survives_the_exporters_lap_gating():
                   dataclasses.replace(st, hull_pts=st.hull_pts, peak_fwd=st.peak_fwd)):
         assert gated.trail == st.trail, "the exporter's lap gating must not touch the trail"
         assert gated.have is st.have and gated.seen is st.seen
+
+
+def test_a_non_finite_sample_never_reaches_the_face():
+    """THE REGRESSION THE REDESIGN INTRODUCED, and the reason it needs its own guard.
+
+    The bundled `3rdparty/gpmf-parser/samples/hero8.mp4` loads with `has_gmeter` True and all 634
+    of its g samples are `(nan, 0.0, nan)` — a degenerate GRAV makes `gmeter.py`'s
+    `gdir / norm(gdir)` divide by zero. The OLD face survived that by accident: `max(0.0, nan)`
+    returns 0.0, so its four cardinal peaks printed four zeroes. Promoting one filtered value to
+    the single largest bold string removed that accident, and the dial burned **"nan g"** into
+    exported clips (plus `QPainterPath::arcTo: Adding arc where a parameter is NaN` for the dot and
+    hull at undefined coordinates).
+
+    The EMA is why this is a source-side fix and not a formatting one: `self.fx += a * (fx -
+    self.fx)` means one NaN sample poisons the pointer for the rest of the lap, not for one frame.
+    Driven here as a sequence — good samples, one NaN, good samples — because a single-sample test
+    would pass against a formatting-only patch."""
+    from studio import gmeter_overlay as g
+    ov = _fresh()
+    ov.set_lap(1)
+    for _ in range(20):
+        ov.set_g((0.5, -0.3, 0.58))
+    good = (ov._filter.fx, ov._filter.fy)
+    assert g.readout_text(ov._dial_state()).endswith(" g")
+
+    for poison in ((float("nan"), 0.0, float("nan")),
+                   (0.4, float("inf"), 1.0),
+                   (float("-inf"), float("nan"), float("nan"))):
+        ov.set_g(poison)
+        st = ov._dial_state()
+        assert (ov._filter.fx, ov._filter.fy) == good, (
+            f"{poison} poisoned the EMA: {(ov._filter.fx, ov._filter.fy)} — one bad sample would "
+            "then persist for the whole lap")
+        assert not st.have, f"{poison} left the dot live at a non-finite coordinate"
+        assert "nan" not in g.readout_text(st).lower(), g.readout_text(st)
+        assert "inf" not in g.readout_text(st).lower(), g.readout_text(st)
+    # a good sample after the poison brings the dial straight back
+    ov.set_g((0.5, -0.3, 0.58))
+    assert ov._dial_state().have and g.readout_text(ov._dial_state()).endswith(" g")
+
+    # ...and a hand-built state (paint_dial is a free function anyone may hand one) is caught too:
+    # nothing painted may read "nan", in either mode.
+    nan_st = _state(fx=float("nan"), fy=float("nan"),
+                    trail=[(float("nan"), 0.1), (0.2, 0.2), (0.3, 0.3)],
+                    hull_pts=[(float("nan"), 0.3), (-0.4, 0.2), (0.1, -0.5), (0.3, 0.4)])
+    for export in (False, True):
+        painted = _painted_strings(export, st=nan_st)
+        assert not any("nan" in s.lower() for s in painted), (export, painted)
+    assert g.readout_text(nan_st) == g._NO_VALUE
+    print("ok non-finite g is rejected at the door; hero8's all-NaN series cannot burn 'nan g'")
+
+
+def test_the_exported_trail_reads_LIGHT_over_bright_footage():
+    """The export trail is the dot's colour so that "dot and trail read as one object" — this
+    module's own words. It shipped inverted: ONE constant dark halo polyline at `wide + 2.4k`
+    (5.26 px on a 280 px dial) backed per-segment ink of `wide * 0.30..1.0`, i.e. 0.86-2.86 px, so
+    the halo was 2-6x wider than the ink it was supposed to be backing and won. Measured against a
+    trail-less render, the burned trail came out 83 % DARKER than bright sky while the live one was
+    neutral: a white comet on screen, a dark scribble in the file.
+
+    Both the halo's WIDTH and its ALPHA now taper with the ink's, so this measures the stroke's
+    CORE (its brightest third — on an antialiased 1-3 px stroke the halo fringe is most of the
+    pixel count in either direction, so a mean would be measuring the outline, not the stroke)."""
+    import dataclasses
+
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    from studio import gmeter_overlay as g
+    arc = [(0.35 * np.cos(a), -0.35 + 0.35 * np.sin(a)) for a in np.linspace(-1.2, 0.8, 30)]
+    st = _state(fx=arc[-1][0], fy=arc[-1][1], trail=[(float(x), float(y)) for x, y in arc])
+
+    def core_vs_backdrop(export, bg):
+        def render(with_trail):
+            img = QImage(280, 280, QImage.Format_RGB32)
+            img.fill(QColor(*bg))
+            p = QPainter(img)
+            g.paint_dial(p, 280, 280, st if with_trail else dataclasses.replace(st, trail=[]),
+                         export=export)
+            p.end()
+            return _rgb(img)
+
+        a, b = render(True), render(False)
+        ys, xs = np.where(np.abs(a - b).max(axis=2) > 6)
+        assert ys.size, "the trail painted nothing"
+
+        def lum(v):
+            return 0.2126 * v[..., 0] + 0.7152 * v[..., 1] + 0.0722 * v[..., 2]
+
+        vals = np.sort(lum(a[ys, xs]))
+        return float(vals[-max(1, len(vals) // 3):].mean()), float(lum(np.array(bg, dtype=int)))
+
+    for export, bg, label in ((False, (21, 24, 30), "live"),
+                              (True, (150, 170, 200), "export/bright sky"),
+                              (True, (40, 42, 46), "export/dark plate")):
+        core, back = core_vs_backdrop(export, bg)
+        assert core > back, (
+            f"{label}: the trail's core ({core:.1f}) is darker than its backdrop ({back:.1f}) — "
+            "the halo is drowning the ink it is supposed to be separating from the footage")
+        print(f"    {label}: trail core {core:.1f} vs backdrop {back:.1f} "
+              f"({(core - back) / back * 100:+.1f} %)")
+    print("ok the trail reads LIGHT in both modes, on bright and dark backdrops")
 
 
 def test_the_readout_is_the_dots_own_magnitude():

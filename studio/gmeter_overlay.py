@@ -135,6 +135,20 @@ _TRAIL_PTS = 30                  # committed vertices
 _TRAIL_EVERY = 3                 # ticks per committed vertex (~2.9 s of history at 30 Hz)
 _TRAIL_WIDTH_FRAC = 0.028        # newest segment's width as a fraction of the dial radius
 _TRAIL_TAPER = 0.30              # oldest segment's width, as a fraction of the newest
+# Alpha along the stroke, oldest -> newest. The floor is not zero: a tail that fades to nothing
+# leaves the EXPORT's dark halo as the only thing left at that end, which is how the burned trail
+# came out darker than the footage it was drawn over (see `_paint_dial_export`).
+_TRAIL_INK_ALPHA_MIN, _TRAIL_INK_ALPHA_MAX = 60, 235
+_TRAIL_HALO_ALPHA_FRAC = 0.55    # export: halo alpha as a fraction of the ink it backs
+_TRAIL_HALO_PAD_FRAC = 0.55      # export: halo width over the ink's, as a fraction of that ink's
+                                 # own width. PROPORTIONAL, not a constant pad: the stroke tapers
+                                 # to 30 % at the tail, so a fixed pad made the halo WIDER than the
+                                 # ink it backs at exactly the end that is already faintest.
+
+
+def _TRAIL_INK_ALPHA(f: float) -> int:      # noqa: N802 — reads as the constant pair above
+    """Trail ink alpha at recency `f` (0 = oldest vertex, 1 = the dot)."""
+    return int(_TRAIL_INK_ALPHA_MIN + (_TRAIL_INK_ALPHA_MAX - _TRAIL_INK_ALPHA_MIN) * f)
 
 # The dot, in fractions of the dial radius, with the old fixed pixel sizes as floors: at the 120 px
 # minimum it is exactly the dot it always was, and it no longer stays a 2.6 px speck on a dial four
@@ -146,6 +160,22 @@ _PEAK_PERCENTILE = 90.0          # cardinal peak = this percentile of recent fel
 _PEAK_WINDOW = 90                # samples (~3 s at 30 Hz) feeding the percentile peak
 _ENVELOPE_MAX_PTS = 240          # cap on hull input points per scope (ring buffer)
 _RESET_ON_LAP = True             # reset the envelope + peaks at each lap boundary
+
+
+def _finite(*vals: float) -> bool:
+    """True when every value is a real number Qt can place on a canvas.
+
+    The dial takes floats from a sensor pipeline, and `paint_dial` is a free function anyone may
+    hand a `DialState` to, so "is this a coordinate" is asked in three places: at the door
+    (`DialFilter.set_g`, which is where a NaN would otherwise poison the EMA permanently), in
+    `readout_text`, and on the dot before it is drawn. One helper so all three ask it the same
+    way. See `set_g` for the recording that made this necessary."""
+    return all(isinstance(v, (int, float)) and math.isfinite(v) for v in vals)
+
+
+def _finite_pts(pts):
+    """`pts` with every non-finite coordinate pair dropped — the hull's half of `_finite`."""
+    return [(x, y) for (x, y) in pts if _finite(x, y)]
 
 
 def _font(px: float, bold: bool = False) -> QFont:
@@ -302,11 +332,29 @@ class DialFilter:
 
     # ------------------------------------------------------------------ data in
     def set_g(self, g: tuple[float, float, float] | None) -> bool:
-        """Push the current kart-frame (lateral_g, longitudinal_g, total_g). None blanks the live
-        dot (keeps the template + the accumulated envelope). Applies the felt-force convention and
-        the shake low-pass, and grows the envelope + robust cardinal peaks. Returns True when the
-        painted dial changed."""
-        if g is None:
+        """Push the current kart-frame (lateral_g, longitudinal_g, total_g). None — or a sample
+        that is not finite — blanks the live dot (keeps the template + the accumulated envelope).
+        Applies the felt-force convention and the shake low-pass, and grows the envelope + robust
+        cardinal peaks. Returns True when the painted dial changed.
+
+        A NON-FINITE SAMPLE IS REJECTED HERE, AT THE DOOR, and that placement is the fix rather
+        than a nicety. The EMA below is `self.fx += a * (fx - self.fx)`, so ONE NaN does not make
+        one bad frame — it makes `self.fx` NaN forever, through every later sample, until a lap
+        boundary re-seeds it. Downstream that poisoned dot is the dial's single largest string
+        (`readout_text` formatted it as "nan g" and burned it into exported clips) and a pair of
+        undefined coordinates Qt draws the dot and hull at ("QPainterPath::arcTo: Adding arc where
+        a parameter is NaN").
+
+        It is real, not defensive programming: the bundled `hero8.mp4` loads with `has_gmeter`
+        True and all 634 of its g samples are `(nan, 0.0, nan)`, because a degenerate GRAV makes
+        `gmeter.py`'s `gdir / norm(gdir)` divide by zero. The four cardinal peaks this dial used to
+        paint happened to hide it — `max(0.0, nan)` returns 0.0, so the old face printed four
+        zeroes — which is exactly why promoting one filtered value to the hero number needs the
+        gate the peaks accidentally provided. (The upstream all-NaN series is a `gmeter.py` bug in
+        its own right: `has_data` is True for a series with no usable sample, so the toggle stays
+        enabled. That is core-math territory and not this PR's; the dial's job is to not lie about
+        it, which is `seen` staying False and the no-signal state taking over.)"""
+        if g is None or not _finite(g[0], g[1]):
             if not self.have:
                 return False
             self.have = False
@@ -421,9 +469,23 @@ def dial_geom(w: float, h: float):
     The face is the box minus a bottom band for the |g| readout, inset by a margin. Nothing is
     painted outside the outer ring any more, so the margin only has to clear the box edge and the
     export's haloed stroke — where the old live geometry spent 18 px of every side on cardinal
-    numbers and 18+13 px of height on a title strip and a tag band. Measured, at the 120x140
-    minimum the dial radius goes 36.5 -> 51.5 px (+41 %, and the face nearly doubles in area);
-    the ring no longer has numbers running off the card edge because there are none.
+    numbers and 18+13 px of height on a title strip and a tag band.
+
+    WHAT THAT COSTS AND WHERE, measured across the shipping sizes rather than quoted at its best
+    one. The old bands were FIXED pixels and this one is a fraction, so the trade is not uniform:
+
+        120x140   r 36.5 -> 51.5  (+41 %)      <- the default card, and the review's complaint
+        160x179   r 56.0 -> 66.5  (+19 %)
+        200x224   r 78.5 -> 83.2  (+6 %)
+        240x269   r 101.0 -> 99.9 (-1 %)       <- crossover, around 220 px wide
+        400x448   r 182.0 -> 166.4 (-9 %)
+        561x628   r 262.5 -> 233.2 (-11 %)
+
+    A big card gives up ~10 % of radius so that the small one — the default, the one that read as
+    a debug widget, and the one where six words and four numbers had nowhere to go — nearly doubles
+    its face in area. The EXPORT dial, which is the other thing this geometry now lays out, gains
+    outright: a 280 px 1080p box goes r 84.2 -> 102.2 (+21 %), because `_export_dial_geom`'s 20 %
+    margin existed only to park the big outlined cardinal numbers that are gone.
 
     IT IS SHARED WITH THE EXPORT NOW, and that is the point rather than a saving. `paint_dial`
     exists so the burned dial IS the on-screen dial; the export used to need its own
@@ -475,8 +537,10 @@ def readout_text(st: DialState) -> str:
     `g_at_time`'s unfiltered total, so the number and the dot can never disagree on screen. One
     decimal: the EMA has a ~0.1 s time constant, and a second decimal would churn every frame at
     30 Hz without carrying a fact anyone can read. With no g signal at all, the app's no-value
-    mark rather than a fabricated `0.0`."""
-    if not st.seen:
+    mark rather than a fabricated `0.0` — and equally for a pointer that is not a finite number,
+    which `set_g` no longer admits but a hand-built `DialState` still can. "nan g" is not a
+    reading, and this string gets burned into files."""
+    if not st.seen or not _finite(st.fx, st.fy):
         return _NO_VALUE
     return f"{math.hypot(st.fx, st.fy):.1f} g"
 
@@ -519,6 +583,7 @@ def _trail_segments(cx: float, cy: float, r: float, trail):
     """The dot's recent path as [(QPointF a, QPointF b, recency), ...], oldest first, with recency
     running 0 -> 1 so the painter can taper width and fade alpha along it. Empty for fewer than
     two points (nothing to draw a stroke between)."""
+    trail = [(fx, fy) for (fx, fy) in trail if _finite(fx, fy)]
     if len(trail) < 2:
         return []
     pts = [QPointF(*dial_to_screen(cx, cy, r, fx, fy)) for (fx, fy) in trail]
@@ -631,8 +696,8 @@ def _paint_dial_static(p: QPainter, w: float, h: float, st: DialState) -> None:
     p.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
 
     # grip envelope: low-alpha amber fill + brighter amber rim
-    if len(st.hull_pts) >= 3:
-        hull = _convex_hull(st.hull_pts)
+    if len(_finite_pts(st.hull_pts)) >= 3:
+        hull = _convex_hull(_finite_pts(st.hull_pts))
         if len(hull) >= 3:
             poly = QPolygonF([QPointF(*dial_to_screen(cx, cy, r, hx, hy))
                               for (hx, hy) in hull])
@@ -661,17 +726,22 @@ def _paint_dial_moving(p: QPainter, w: float, h: float, st: DialState) -> None:
     no-value mark: the instrument at rest rather than a fabricated `0.0`."""
     cx, cy, r = dial_geom(w, h)
 
-    if st.seen:
+    # Gated on `have`, not just `seen`, so the trail and the dot are literally the one object this
+    # module says they are. A blanked dot with its trail still drawn leaves a headless stroke whose
+    # head is a position nothing is claiming any more. (Not reachable from the app today —
+    # `g_at_time` returns None only for a recording with no series at all, which never sets
+    # `seen` — but it is one word to make the shape impossible rather than merely unvisited.)
+    if st.have and _finite(st.fx, st.fy):
         wide = max(1.6, r * _TRAIL_WIDTH_FRAC)
         p.setBrush(Qt.NoBrush)
         for a, b, f in _trail_segments(cx, cy, r, st.trail):
-            pen = QPen(_c(C.text, int(25 + 140 * f)),
+            pen = QPen(_c(C.text, int(_TRAIL_INK_ALPHA(f) * 0.72)),
                        wide * (_TRAIL_TAPER + (1 - _TRAIL_TAPER) * f))
             pen.setCapStyle(Qt.RoundCap)
             p.setPen(pen)
             p.drawLine(a, b)
 
-    if st.have:
+    if st.have and _finite(st.fx, st.fy):
         dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
         glow = max(_DOT_GLOW_MIN, r * _DOT_GLOW_FRAC)
         core = max(_DOT_CORE_MIN, r * _DOT_CORE_FRAC)
@@ -738,8 +808,8 @@ def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float)
     p.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
 
     # --- filled max-G envelope (grip used this lap): brighter amber, haloed outline ---
-    if len(st.hull_pts) >= 3:
-        hull = _convex_hull(st.hull_pts)
+    if len(_finite_pts(st.hull_pts)) >= 3:
+        hull = _convex_hull(_finite_pts(st.hull_pts))
         if len(hull) >= 3:
             poly = QPolygonF([QPointF(*dial_to_screen(cx, cy, r, hx, hy))
                               for (hx, hy) in hull])
@@ -755,20 +825,34 @@ def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float)
 
     # --- the dot's trail. One dark polyline underneath carries the halo (a per-segment halo would
     # double the draw count for a stroke that is one shape), then the tapered fading amber over it.
-    segs = _trail_segments(cx, cy, r, st.trail)
+    # --- the dot's trail. TWO TAPERED PASSES, all halo then all ink, and the taper is the point.
+    # It was one CONSTANT dark polyline at `wide + 2.4k` under per-segment ink of `wide * 0.30..1.0`
+    # — a 5.26 px halo backing 0.86-2.86 px of stroke at alpha 35-210, so the halo won. Measured by
+    # differencing the trail against a trail-less render, the burned trail came out 83.1 % DARKER
+    # than bright sky while the live one is neutral: the same element read as a white comet on
+    # screen and a dark scribble in the file, which is the opposite of what this module's own
+    # docstring promises. The halo now carries the ink's own width taper and a fraction of its
+    # alpha ramp, so it does what a halo is for (separating the stroke from the footage) instead of
+    # replacing it. Two passes rather than halo-then-ink per segment, so a segment's halo cannot
+    # land on its neighbour's ink at the joins.
+    segs = _trail_segments(cx, cy, r, st.trail) if (st.have and _finite(st.fx, st.fy)) else []
     if segs:
         wide = max(2.0, r * _TRAIL_WIDTH_FRAC)
-        halo = QPen(_c(_EX_HALO, 150), wide + 2.4 * k)
-        halo.setCapStyle(Qt.RoundCap)
-        halo.setJoinStyle(Qt.RoundJoin)
-        p.setPen(halo)
-        p.setBrush(Qt.NoBrush)
-        p.drawPolyline(QPolygonF([a for a, _b, _f in segs] + [segs[-1][1]]))
-        for a, b, f in segs:
-            pen = QPen(_c(_EX_TEXT, int(35 + 175 * f)),
-                       wide * (_TRAIL_TAPER + (1 - _TRAIL_TAPER) * f))
+
+        def _seg_pen(colour, alpha, f, grow=1.0):
+            pen = QPen(_c(colour, alpha),
+                       wide * (_TRAIL_TAPER + (1 - _TRAIL_TAPER) * f) * grow)
             pen.setCapStyle(Qt.RoundCap)
-            p.setPen(pen)
+            pen.setJoinStyle(Qt.RoundJoin)
+            return pen
+
+        p.setBrush(Qt.NoBrush)
+        for a, b, f in segs:
+            p.setPen(_seg_pen(_EX_HALO, int(_TRAIL_INK_ALPHA(f) * _TRAIL_HALO_ALPHA_FRAC), f,
+                              grow=1.0 + _TRAIL_HALO_PAD_FRAC))
+            p.drawLine(a, b)
+        for a, b, f in segs:
+            p.setPen(_seg_pen(_EX_TEXT, _TRAIL_INK_ALPHA(f), f))
             p.drawLine(a, b)
 
     # --- the one scale caption, outlined; same string and same placement as the screen ---
@@ -780,7 +864,7 @@ def _paint_dial_export(p: QPainter, w: float, h: float, st: DialState, k: float)
                             halo=1.5 * k)
 
     # --- the live felt-force dot: a bigger soft glow + a dark-haloed bright core ---
-    if st.have:
+    if st.have and _finite(st.fx, st.fy):
         dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
         gr = 13.0 * k
         grad = QRadialGradient(QPointF(dx, dy), gr)
