@@ -45,7 +45,12 @@ _APP = themed_app()
 from studio import chapters  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 
-REAL_MP4 = os.path.expanduser(os.environ.get("PACER_REAL_MP4", "~/Desktop/D24/GX010060.MP4"))
+# CHAPTER **2**, deliberately. The obvious default — GX010060.MP4, chapter 1 — is the file a dev
+# tool overwrote with a 2.4 MB JSON dump on the owner's machine. It exists, so these tests did not
+# fail; it does not parse, so `_real_media_usable` answered False and every real-media test in this
+# file skipped itself PERMANENTLY while reporting a clean run. GX020060.MP4 is intact, and
+# `chapters.discover_siblings` still expands it to the whole 0060 chain for the chaptered tests.
+REAL_MP4 = os.path.expanduser(os.environ.get("PACER_REAL_MP4", "~/Desktop/D24/GX020060.MP4"))
 
 
 def _real_media_usable() -> bool:
@@ -68,7 +73,8 @@ def _real_media_usable() -> bool:
 
 
 _REAL_MEDIA_OK: bool | None = None
-# The chaptered D24 recording (GX010060 + GX020060 + GX030060) for the gated real chaptered render.
+# The chaptered D24 recording (0060: chapters 1-3) for the gated real chaptered render. On the dev
+# machine chapter 1 is the destroyed stub, which Session.load skips — chapters 2+3 still chain.
 REAL_CHAPTER_DIR = os.path.dirname(REAL_MP4)
 
 
@@ -697,7 +703,7 @@ def test_real_render_smoke_if_ffmpeg_and_media():
 
 def test_real_chaptered_non_first_chapter_render_if_media():
     """THE BUG, end-to-end — GATED on ffmpeg + the chaptered D24 recording (skipped, not failed,
-    without them). Loads the FULL chaptered recording (GX010060 + siblings), finds a lap whose
+    without them). Loads the FULL chaptered recording (REAL_MP4 + siblings), finds a lap whose
     GLOBAL window falls OUTSIDE the first chapter, and renders a SHORT window of it.
 
     This is the exact case the old code broke: it seeked the global t0 into the FIRST chapter file,

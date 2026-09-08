@@ -1393,9 +1393,14 @@ def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: flo
 
 class OverlayPainter:
     """Composites the overlay elements onto each decoded frame. Built ONCE per export (it caches
-    the static map-inset geometry + a headless g-meter dial that it drives frame-to-frame with the
-    SAME set_lap/set_g sequence the live tick uses, so the burned dial's EMA/envelope evolve
-    identically). `paint_frame_with_state` mutates the passed QImage in place."""
+    the static map-inset geometry + a headless g-meter `DialFilter` that it drives frame-to-frame
+    with the SAME set_lap/set_g sequence the live tick uses, so the burned dial's EMA/envelope
+    evolve identically). `paint_frame_with_state` mutates the passed QImage in place.
+
+    NO QWidget IS CONSTRUCTED HERE, or anywhere else this class and `Renderer` reach: an export
+    runs on `VideoExportWorker`'s QThread, and Qt widgets may only be created and destroyed on the
+    GUI thread. QImage/QPixmap/QPainter are fine (paint devices, not widgets).
+    tests/test_export_thread_safety.py enforces it."""
 
     def __init__(self, session, spec: ExportSpec, out_w: int, out_h: int, fps: float):
         self._session = session
@@ -1432,9 +1437,18 @@ class OverlayPainter:
         # lap strip: TOP-LEFT.
         sh = max(cfg.strip_h_frac * out_h, 20.0)
         self._strip_rect = QRectF(m, m, strip_pill_width(sh, labels, tails), sh)
-        # Headless g-meter dial, driven exactly like the live overlay so its filtering matches (incl.
-        # the axis-provenance tag: IMU lateral · GPS longitudinal, not a bare source name).
-        self._dial = gmeter_overlay.GMeterOverlay()
+        # The g-meter dial's FILTERING STATE, driven exactly like the live overlay so the burned
+        # dial matches the screen (incl. the axis-provenance tag: IMU lateral · GPS longitudinal,
+        # not a bare source name).
+        #
+        # A `DialFilter`, NOT a `GMeterOverlay`: this constructor runs on `VideoExportWorker`'s
+        # QThread, and `GMeterOverlay` is a frameless translucent top-level QWidget. Creating and
+        # destroying one off the GUI thread is undefined behaviour in Qt — the exact SIGSEGV shape
+        # tests/test_compare_lifecycle.py exists for — and every export did it twice on the VT →
+        # libx264 fallback path. The render path never wanted the widget: it only calls the free
+        # `gmeter_overlay.paint_dial` with a `DialState` snapshot, which the filter provides.
+        # tests/test_export_thread_safety.py holds this line to it.
+        self._dial = gmeter_overlay.DialFilter()
         _src = session.gmeter_source() if hasattr(session, "gmeter_source") else "accl"
         _long = session.gmeter_long_source() if hasattr(session, "gmeter_long_source") else None
         self._dial.set_source(_src, _long)
@@ -1448,12 +1462,12 @@ class OverlayPainter:
         order app._apply_readout feeds it (set_gmeter_lap then set_g), so the envelope resets on
         the lap boundary and the EMA dot tracks identically to the live meter.
 
-        THE ENVELOPE HAS TO BE RESET AT THE START LINE, EXPLICITLY. `GMeterOverlay.set_lap` resets
-        it only when it is already holding a lap (`self._lap is not None`) — a deliberate rule for
+        THE ENVELOPE HAS TO BE RESET AT THE START LINE, EXPLICITLY. `DialFilter.set_lap` resets
+        it only when it is already holding a lap (`self.lap is not None`) — a deliberate rule for
         the live meter, where None means "between laps, keep what you have". In a padded export
         that rule bakes the run-up into the lap's peaks: the lead-in is fed `set_g` (the dot must
         stay live over footage the kart is plainly driving), so its g accumulates into the hull,
-        and the one `set_lap` at the line then finds `self._lap is None` and skips the reset. The
+        and the one `set_lap` at the line then finds `self.lap is None` and skips the reset. The
         peaks the clip burns for the lap would include the braking that happened before it."""
         if vals.lap_started and not self._crossed_line:
             self._crossed_line = True
@@ -1479,7 +1493,7 @@ class OverlayPainter:
         produced. Frozen, the peaks are identical at every frame from the line onward whether the
         export carries 0 s of padding or 10 s."""
         self.feed_g(vals)
-        st = self._dial._dial_state()
+        st = self._dial.snapshot()
         if not vals.lap_started:
             return replace(st, hull_pts=[], peak_fwd=0.0, peak_back=0.0,
                            peak_left=0.0, peak_right=0.0)

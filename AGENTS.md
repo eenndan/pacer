@@ -179,9 +179,11 @@ a Session's whole public analysis API) + [studio/dev/golden_compare.py](studio/d
   gates every future Session-math change in CI. Regenerate the baseline only after an intentional,
   reviewed change: `python tests/test_golden_synthetic.py --write-baseline`.
 
-Run the **manual D24 gate** around a core-math change (the fixture is hardcoded at
-`~/Desktop/D24/GX010060.MP4` — a ~11.8 GB dev-Desktop-only recording, **not committed**; CI never
-sees it and runs the synthetic gate above instead):
+Run the **manual D24 gate** around a core-math change (the fixture defaults to
+`~/Desktop/D24/GX020060.MP4` — a ~11.9 GB dev-Desktop-only recording, **not committed**; CI never
+sees it and runs the synthetic gate above instead. Chapter **2**, not 1: `GX010060.MP4` on that
+Desktop is a 2.4 MB JSON dump a dev tool wrote over the footage, and the gate now refuses it
+loudly instead of fingerprinting it. Override with `PACER_GOLDEN_MP4`):
 
 ```bash
 pixi run python -m studio.dev.golden_session_dump /tmp/before.json   # BEFORE the change

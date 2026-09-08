@@ -10,14 +10,35 @@ the colour-blind palette, the last-opened folder, the excluded-strip toggle, the
 active tab, the grid-splitter sizes, the map key's collapse and the Library dialog's size. Every
 read is guarded and defaults to the safe value, so a missing / corrupt file is never fatal (each
 choice just starts at its default).
+
+CORRUPTION + VERSION discipline — the same rules as ``library.py``, for the same reason. ``set`` is
+load-modify-save, so an unparseable file read as ``{}`` plus ANY later write (a unit toggle, a
+splitter drag) would silently PERSIST the wipe of every stored choice — one bad byte costing the
+user all ten:
+
+  * the ``version`` field is READ, not just written. An OLDER file — or an unversioned one, which
+    only a hand-edit can produce (every build has stamped it since this store shipped) — is
+    MIGRATED forward (``_migrate``), every key preserved; a NEWER one (a downgrade) is read
+    BEST-EFFORT, which for a flat key/value store means unknown keys survive the round-trip
+    untouched and only the version stamp moves down.
+  * only genuine FILE-level corruption (absent / unreadable / not JSON / not an object) falls back
+    to ``{}`` — and before any write would overwrite bytes it could not round-trip (that corruption,
+    or a newer file), ``save`` first copies them to a ``prefs.json.bak`` sidecar
+    (``_backup_unsafe``). The reset itself still happens — nothing can un-corrupt the bytes — but
+    the original survives, recoverable by hand from the folder the Library dialog's "Reveal in
+    Finder" opens, instead of being destroyed by the next preference the user touches.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
+import shutil
 
 from . import units
+
+_log = logging.getLogger(__name__)
 
 _FILENAME = "prefs.json"
 _APP_DIR_NAME = "pacer"
@@ -75,26 +96,120 @@ def prefs_path() -> str:
     return os.path.join(_app_support_dir(), _FILENAME)
 
 
-def load(path: str | None = None) -> dict:
-    """Load the prefs dict. Any corruption (absent / unreadable / not JSON / not a dict) → an
-    empty dict — a missing preference always falls back to its caller default. `path` defaults to
-    ``prefs_path()``."""
-    if path is None:
-        path = prefs_path()
+def _is_loadable_dict(path: str) -> tuple[bool, dict | None]:
+    """(readable_json_object, parsed) for `path`: True/parsed when the file exists and parses to a
+    JSON object, else (False, None). The seam ``load`` and ``save`` share so "genuine corruption" —
+    the only case that falls back to defaults, and the only one that triggers a backup — is decided
+    in ONE place (mirrors ``library._is_loadable_dict``)."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
+        return False, None
+    if not isinstance(data, dict):
+        return False, None
+    return True, data
+
+
+def _stored_version(data: dict) -> int:
+    """The schema number an on-disk prefs dict carries, or 0 when it carries none. Unlike the
+    library index — where a missing ``version`` means an untrustworthy top-level SHAPE, because the
+    entries under it have a schema to be wrong about — this store is flat and every value is
+    validated at read by its own accessor, so an unstamped file is a legacy file to migrate, NOT
+    corruption to discard: treating it as corruption would throw away exactly the preferences this
+    module exists to keep. `bool` is an int subclass and a schema number is never one, so it is
+    rejected explicitly."""
+    version = data.get("version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        return 0
+    return version
+
+
+def _migrate(data: dict, from_version: int) -> dict:
+    """Forward-migrate an OLDER on-disk prefs dict (`from_version` < ``VERSION``) to the current
+    schema, PRESERVING every key. The hook ``VERSION`` never had: the number was written on every
+    save and read by nothing, so the first schema bump had nowhere to put its transform and would
+    have had to choose between silently reinterpreting a stale value and wiping the file.
+
+    There is NO transform yet, deliberately: v1 is the first and only schema, and `from_version` is
+    0 only for an unstamped (hand-edited) file whose keys are already v1-shaped, so the identity IS
+    the correct v0→v1 migration — every preference is kept. The point is that a future rename /
+    reshape (say GRID_SIZES growing a fourth splitter) adds its ``if from_version < 2:`` block HERE,
+    beside the load path that calls it, instead of being invented at bump time. Per-version
+    transforms run in ascending order and each MUST keep every key it does not explicitly retire —
+    the rule ``library._migrate`` follows. Returns `data` (mutated in place)."""
+    return data
+
+
+def load(path: str | None = None) -> dict:
+    """Load the prefs dict. A VERSION mismatch is never treated as corruption: an older/unstamped
+    file is migrated forward (``_migrate``, every key kept) and a newer one — a downgrade — is read
+    best-effort, since a flat key/value store round-trips keys this build doesn't know. Only genuine
+    corruption (absent / unreadable / not JSON / not an object) → an empty dict, so every preference
+    falls back to its caller default; ``save`` then backs those bytes up before overwriting them.
+    `path` defaults to ``prefs_path()``."""
+    if path is None:
+        path = prefs_path()
+    ok, data = _is_loadable_dict(path)
+    if not ok:
         return {}
-    return data if isinstance(data, dict) else {}
+    version = _stored_version(data)
+    if version < VERSION:
+        _log.warning("prefs: migrating from version %d to %d (%s)", version, VERSION, path)
+        data = _migrate(data, version)
+    elif version > VERSION:
+        # save() backs the newer file up before it would ever be overwritten (see _backup_unsafe).
+        _log.warning("prefs: file is version %d, newer than this build's %d — reading "
+                     "best-effort (%s)", version, VERSION, path)
+    return data
+
+
+def backup_path(path: str | None = None) -> str:
+    """Absolute path of the prefs file's backup sidecar (``<prefs.json>.bak``) — the ONE slot a
+    backup here is written to, so "where the copy went" is stated in one place (mirrors
+    ``library.backup_path``). `path` defaults to ``prefs_path()``."""
+    if path is None:
+        path = prefs_path()
+    return path + ".bak"
+
+
+def _backup_unsafe(path: str) -> None:
+    """Before ``save`` would OVERWRITE an existing prefs file it could not round-trip — genuine
+    corruption (read as ``{}``, so the write persists a WIPE of every choice) or a NEWER
+    un-migratable one — copy it to a ``<path>.bak`` sidecar so the user's original bytes are never
+    silently lost. A healthy current/older file is rewritten normally, no backup churn.
+
+    Best-effort by design, exactly like ``library._copy_to_backup``: ``shutil.copy2`` (mtime
+    preserved), the single ``.bak`` slot overwritten rather than accumulating, and ANY failure
+    logged instead of raised — keeping a copy must never be the reason the write the user asked for
+    doesn't happen. Note the ``.bak`` survives the heal: the first write after corruption takes the
+    copy, and every write after that sees a healthy file and leaves the sidecar alone."""
+    if not os.path.exists(path):
+        return
+    ok, data = _is_loadable_dict(path)
+    unsafe = (not ok) or _stored_version(data or {}) > VERSION
+    if not unsafe:
+        return
+    try:
+        shutil.copy2(path, backup_path(path))
+        _log.warning("prefs: backed up an unreadable/newer prefs file to %s",
+                     os.path.basename(backup_path(path)))
+    except OSError as exc:
+        _log.warning("prefs: could not back up %s before overwrite (%r)", path, exc)
 
 
 def save(data: dict, path: str | None = None) -> None:
     """Write the prefs dict atomically (temp file + ``os.replace``). Creates the app-support dir
-    if missing. `path` defaults to ``prefs_path()``. Raises OSError on an unwritable destination."""
+    if missing. `path` defaults to ``prefs_path()``. Raises OSError on an unwritable destination.
+
+    DATA-SAFETY: before overwriting an existing file that could not be parsed or migrated, the
+    original is first copied to a ``prefs.json.bak`` sidecar (``_backup_unsafe``) — since ``set`` is
+    load-modify-save, one unparseable byte plus any later preference write would otherwise persist
+    the loss of every stored choice with no copy anywhere."""
     if path is None:
         path = prefs_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    _backup_unsafe(path)
     out = dict(data)
     out["version"] = VERSION
     tmp = path + ".tmp"
@@ -111,7 +226,9 @@ def get(key: str, default=None, path: str | None = None):
 
 def set(key: str, value, path: str | None = None) -> None:  # noqa: A001 — the natural verb here
     """Set one preference and persist it (load-modify-save). A write failure propagates; callers
-    that must never disrupt the app guard it."""
+    that must never disrupt the app guard it. Load-modify-save is why an unreadable file matters
+    here — it reads as ``{}``, so this one write also resets every OTHER stored choice; ``save``
+    copies the unreadable bytes to the ``.bak`` sidecar first so they survive the reset."""
     data = load(path)
     data[key] = value
     save(data, path)
