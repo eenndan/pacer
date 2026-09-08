@@ -437,13 +437,25 @@ class StudioWindow(QMainWindow):
         `error_path` is the OFFENDING FILE, passed separately rather than glued onto `error`: the
         view shows its basename and puts the absolute path on the tooltip, because a raw
         `/Users/…/track day 2026-08-30/holiday.mp4` inside a word-wrapping label is what drove the
-        drop zone from 403x239 to 727x303 and collapsed the tagline (QA D2-09)."""
+        drop zone from 403x239 to 727x303 and collapsed the tagline (QA D2-09).
+
+        THE SESSION-ONLY MENUS ARE RE-SYNCED HERE, beside the "Load full recording" disable that was
+        already doing it one action at a time. Every other caller reaches this state by *never having
+        had* a session, so the menus were already off and nobody noticed the gap; the recovery paths
+        arrive here FROM a loaded session, and left Session statistics, the excluded-laps toggle,
+        Opportunities and the reference picker enabled over a welcome screen. The handlers all
+        early-return, so this is advertising rather than a crash — except that a disabled QAction's
+        SHORTCUT is inert too, which is the whole reason ⌘⇧S is gated on the action at all (L1-06).
+        Both syncs derive from live state (`hasattr(self, "session")` / `self.view`), so calling them
+        from every welcome path can never over-disable anything."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle(APP_NAME)
         self.setCentralWidget(WelcomeView(self._open_file, self._open_demo, error,
                                           error_path=error_path, parent=self))
         if getattr(self, "_full_action", None) is not None:
             self._full_action.setEnabled(False)
+        self._sync_coaching_menu()
+        self._sync_view_menu()
 
     def _open_demo(self):
         """Welcome-screen "Open demo": resolve a real demo lapping recording OFF the UI thread
@@ -731,10 +743,11 @@ class StudioWindow(QMainWindow):
         self._loading_token = None
         self._cancel_placeholder_timer()  # the result beat the card: never blank the window now
         # The OUTGOING session + the recording it belonged to, captured before they are replaced —
-        # a re-open of the SAME recording hands its undo history forward (below).
-        prev_session = getattr(self, "session", None)
-        prev_sidecar = getattr(self, "_sidecar_path", None)
-        prev_paths = list(getattr(self, "_paths", []) or [])
+        # a re-open of the SAME recording hands its undo history forward (below), and a view build
+        # that RAISES rolls the whole commit back (see _recover_from_build_failure).
+        prev_commit = self._capture_load_commit()
+        prev_session = prev_commit["session"]
+        prev_sidecar = prev_commit["_sidecar_path"]
         self.session = session
         # Commit _paths only after a successful load, so a failed reload leaves both self.session
         # and _paths pointing at the still-good recording (every _paths consumer stays in sync).
@@ -806,8 +819,7 @@ class StudioWindow(QMainWindow):
             # After the swap, not before: setCentralWidget is the last thing in the blocked run.
             QApplication.restoreOverrideCursor()
         if build_failure is not None:
-            self._recover_from_build_failure(build_failure, paths,
-                                             prev_session, prev_paths, prev_sidecar)
+            self._recover_from_build_failure(build_failure, paths, prev_commit)
             # STILL EMITTED. Anything waiting on this load (the smoke gate, every test, a queued
             # follow-up) waits on loadFinished, and a load that ends in recovery has still ENDED.
             self.loadFinished.emit()
@@ -1370,8 +1382,33 @@ class StudioWindow(QMainWindow):
             return exc
         return None
 
-    def _recover_from_build_failure(self, exc: Exception, paths: list[str],
-                                    prev_session, prev_paths: list[str], prev_sidecar):
+    # Everything a successful load COMMITS about "which recording is open, and what the window says
+    # about it". Named once, so the snapshot and the restore below cannot drift apart — which is how
+    # the first version of this rollback put the session back while leaving the window titled after
+    # the recording that failed, under a status line derived from that recording's sidecar.
+    _LOAD_COMMIT_FLAGS = ("_sidecar_path", "_timing_restore_failed", "_timing_restore_unreadable",
+                          "_tracks_unreadable", "_drop_notice")
+
+    def _capture_load_commit(self) -> dict:
+        """Snapshot the whole load commit, so a rollback can restore the window WHOLE.
+
+        The four `_LOAD_COMMIT_FLAGS` after the sidecar path are the inputs `_session_notice` derives
+        the untimed status line from — a load overwrites all of them (`:752-775`) before the view is
+        built, so a rollback that restores only session/paths leaves the good session under the FAILED
+        recording's notices: measured, a sticky and false "saved timing lines couldn't be read — the
+        .pacer.json next to this recording is damaged", re-derived forever because the line is derived
+        state, not a message. The window TITLE is the same class of bug one attribute over.
+
+        `_drop_notice` is snapshotted for completeness but cannot be RESTORED here — `_load` overwrote
+        it before the worker even started, so what this captures is already the failed load's value.
+        The rollback clears it instead; see _recover_from_build_failure."""
+        state = {k: getattr(self, k, None) for k in self._LOAD_COMMIT_FLAGS}
+        state["session"] = getattr(self, "session", None)
+        state["paths"] = list(getattr(self, "_paths", []) or [])
+        state["title"] = self.windowTitle()
+        return state
+
+    def _recover_from_build_failure(self, exc: Exception, paths: list[str], prev_commit: dict):
         """The load SUCCEEDED and the view build did not: put the window back on a reachable surface.
 
         THE SUCCESS PATH'S #164 DOOR. `_on_session_loaded` commits `self.session` and then builds
@@ -1384,11 +1421,20 @@ class StudioWindow(QMainWindow):
 
         Recovery is a ROLLBACK, not a retry: the new session is the thing that could not be shown,
         so re-running _build_ui on it would raise again. The OUTGOING session had a working view a
-        moment ago, so it is restored WHOLE — session, paths and sidecar move together, exactly as
-        _on_session_loaded commits them — and its view rebuilt through the same guard. With nothing
-        to go back to (a first load), or if the rollback build raises too, the welcome empty state
-        is what is left, and the half-committed session is dropped so every `hasattr(self,
-        "session")` reader agrees with what is on screen.
+        moment ago, so it is restored WHOLE — everything `_capture_load_commit` names moves back
+        together (session, paths, sidecar, window title, and the flags `_session_notice` derives the
+        status line from), then its view is rebuilt through the same guard. WHOLE is the operative
+        word and it was not free: restoring only session/paths/sidecar left the good session titled
+        after the recording that failed, under that recording's sticky sidecar notice.
+
+        `_drop_notice` is CLEARED rather than restored. It describes how the load that just failed
+        was requested ("Dropped 2 recordings — opened <the doomed one>"), and `_load` overwrote the
+        previous session's value before the worker started, so there is nothing to put back — the
+        choice is a false statement or none, and none is right.
+
+        With nothing to go back to (a first load), or if the rollback build raises too, the welcome
+        empty state is what is left, and the half-committed session is dropped so every
+        `hasattr(self, "session")` reader agrees with what is on screen.
 
         The dialog comes LAST, after the window is already back, for the reason the load-failure
         dialog states: the reassurance is only shown where it is TRUE and verifiable behind it."""
@@ -1396,10 +1442,13 @@ class StudioWindow(QMainWindow):
         detail = f"{type(exc).__name__}: {exc}"
         print(f"studio: could not open {offending}: {detail}", flush=True)
         restored = False
-        if prev_session is not None:
-            self.session = prev_session
-            self._paths = list(prev_paths)
-            self._sidecar_path = prev_sidecar
+        if prev_commit["session"] is not None:
+            self.session = prev_commit["session"]
+            self._paths = list(prev_commit["paths"])
+            self.setWindowTitle(prev_commit["title"])
+            for flag in self._LOAD_COMMIT_FLAGS:
+                setattr(self, flag, prev_commit[flag])
+            self._drop_notice = None  # see the docstring: the failed load's, and unrestorable
             restored = self._build_ui_guarded("restoring the previous session") is None
         if restored:
             self._apply_session_notice()
@@ -1415,13 +1464,18 @@ class StudioWindow(QMainWindow):
 
     def _drop_unshowable_session(self):
         """Forget a session that has no view and cannot get one, so every `hasattr(self, "session")`
-        reader agrees with the welcome state now on screen. Left committed, it keeps the
-        session-only menu items live over a session no surface can render — and the next gesture
-        that reaches `self.view` raises again, from somewhere with no recovery at all. The sidecar
-        link goes with it: it points at a recording that is no longer open."""
+        reader agrees with the welcome state about to go on screen — the session-only menus included
+        (they derive from this attribute, and `_show_welcome` re-syncs them right after). Left
+        committed, the next gesture that reaches `self.view` raises again, from somewhere with no
+        recovery at all.
+
+        The sidecar link goes with it (it points at a recording that is no longer open), and so do
+        the notice flags: `_session_notice` derives the untimed status line from them, and they
+        describe a recording nothing on screen is showing."""
         if hasattr(self, "session"):
             del self.session
-        self._sidecar_path = None
+        for flag in self._LOAD_COMMIT_FLAGS:
+            setattr(self, flag, None if flag in ("_sidecar_path", "_drop_notice") else False)
 
     def _tick(self):
         """The ~30 Hz timer slot, delegating to the current view's tick(); no-op before first load."""
@@ -3439,11 +3493,27 @@ class StudioWindow(QMainWindow):
         """Reference load succeeded (UI thread, queued signal): adopt the loaded Session as the
         reference (the guard + apply half — set_reference_session — that load_reference already splits
         out) and refresh the derived views. Ignores a STALE result (a newer reference load superseded
-        this one). A guard refusal keeps the local best lap and surfaces the reason."""
+        this one). A guard refusal keeps the local best lap and surfaces the reason.
+
+        A reference is attached to a SESSION, so one that lands while a PRIMARY load is still in
+        flight has nowhere to go: `self.session` is the outgoing session, and a reload that succeeds
+        replaces it — measured, the reference was adopted, the chip appeared, and both vanished
+        silently the moment the new session was committed, with the user's pick simply gone. That
+        the reload might instead FAIL (in which case the outgoing session, and the reference on it,
+        survive) is not a reason to gamble the user's action on the outcome. So it is refused HERE,
+        deterministically, through the same channel every other reference refusal uses, and the user
+        can pick it again against the recording they actually end up looking at."""
         if token != self._ref_load_token:
             return  # superseded by a newer reference load; drop this result
         if not hasattr(self, "session"):
             return  # the primary session went away while the reference loaded — nothing to attach to
+        if getattr(self, "_loading_token", None) is not None:
+            reason = ("a new recording was opened while the reference was loading, so the reference "
+                      "was discarded — load it again once the new recording is open")
+            print(f"studio: reference not loaded — {reason}", flush=True)
+            self.statusBar().clearMessage()
+            QMessageBox.information(self, f"{APP_NAME} — reference not loaded", reason)
+            return
         reason = self.session.set_reference_session(
             ref, source_label=chapters.recording_label(paths))
         if reason is not None:
@@ -3504,15 +3574,18 @@ class StudioWindow(QMainWindow):
         menu + status chip. The reference replaces the local best lap as the Δ / map / sector /
         per-corner baseline, so it refreshes the same panels a re-segment does (via the shared seam).
 
-        VIEW-GUARDED, like _clear_reference. Its main caller (_on_reference_loaded) is a QUEUED slot,
-        so a reference that lands while the primary is RELOADING arrives with the loading card up and
-        `self.view` already None (the card disposes the outgoing view) — and the unguarded
-        `self.view.rebuild_derived_views(...)` raised straight out of that slot. The guard is here, at
-        the dereference, rather than duplicated in each caller, so no future caller can miss it.
+        VIEW-GUARDED, like _clear_reference: `self.view` is None whenever no view is mounted — between
+        a load's dispose and its rebuild, and on every welcome/recovery surface — and the unguarded
+        `self.view.rebuild_derived_views(...)` raised straight out of a queued slot there. The guard
+        is at the DEREFERENCE rather than duplicated in each caller, so no future caller can miss it.
 
-        Nothing is lost by skipping the refresh: the reference lives on the SESSION, and the fresh
-        CentralView the reload is about to build is constructed against that session — reference
-        included. The window chrome below is updated either way; it survives the swap."""
+        WHAT SKIPPING THE REFRESH DOES AND DOES NOT COST. It does not lose the reference: the
+        reference lives on the SESSION, so any view later built against THAT session carries it. It
+        is not a way to survive a RELOAD — a reload builds its view against a NEW session, which has
+        no reference, and an earlier version of this comment claimed otherwise. That case is refused
+        up front now (see _on_reference_loaded) rather than allowed to vanish silently here.
+
+        The window chrome below is updated either way; it survives the swap."""
         view = getattr(self, "view", None)
         if view is not None:
             # reselect: default-select in single mode, keep the pinned pair while comparing.

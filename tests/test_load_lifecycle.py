@@ -110,11 +110,13 @@ for _name in ("information", "warning", "critical", "question"):
 
 
 # ------------------------------------------------------------------ fixtures
-def _window():
+def _window(build_menu: bool = False):
     """A REAL StudioWindow over the synthetic 2-lap session (real `_build_ui`, real CentralView,
     real tick timer) plus the async-load bookkeeping the real `__init__` installs — the shared
-    fixture builds the window through `__new__`, so those attributes have to be seeded here."""
-    win, view = _realqt._studiowindow_with_view()
+    fixture builds the window through `__new__`, so those attributes have to be seeded here.
+
+    `build_menu` adds the real menu bar, for the tests that assert on action enablement."""
+    win, view = _realqt._studiowindow_with_view(build_menu=build_menu)
     win._load_token = 0
     win._load_worker = None
     win._load_workers = set()
@@ -195,7 +197,9 @@ class _StubLoad:
     """Context manager swapping `workers.Session` for a stub whose `load` takes `delay_s` and then
     returns `result(paths)` (or raises it). Records every call's paths, and the peak number of
     concurrent loads — which is what makes "single-flight" a falsifiable claim rather than a
-    docstring."""
+    docstring.
+
+    `delay_s` may be a callable of `paths`, for the tests that need one load to overtake another."""
 
     def __init__(self, result, delay_s=0.0):
         self._result, self._delay = result, delay_s
@@ -212,7 +216,8 @@ class _StubLoad:
                 outer._live += 1
                 outer.peak = max(outer.peak, outer._live)
                 try:
-                    time.sleep(outer._delay)
+                    delay = outer._delay
+                    time.sleep(delay(list(paths)) if callable(delay) else delay)
                     out = outer._result(list(paths))
                 finally:
                     outer._live -= 1
@@ -289,21 +294,37 @@ def test_a_raising_view_build_on_a_first_load_lands_on_the_welcome_state():
 
 
 def test_a_raising_view_build_on_a_reload_rolls_back_to_the_working_session():
-    """RELOAD, view build raises: the working session comes BACK — session, paths and sidecar
-    together — with a rebuilt view, and the dialog is allowed to say so.
+    """RELOAD, view build raises: the working session comes BACK — and WHOLE, which is a stronger
+    claim than it looks and was not free.
 
-    A rollback, not a retry: the incoming session is the thing that could not be shown, so
-    re-running `_build_ui` on it would raise again."""
+    `_on_session_loaded` commits far more than `self.session` before it builds the view: `_paths`,
+    the sidecar path, the WINDOW TITLE, and the four flags `_session_notice` derives the untimed
+    status line from. A rollback that restores only session/paths/sidecar leaves the good session
+    titled after the recording that FAILED, under that recording's notices — and because the status
+    line is derived state rather than a message, a false "saved timing lines couldn't be read" is
+    then re-derived forever, on every timing edit, for the rest of the session.
+
+    So the doomed load below flips EVERY one of those, and the assertions read them all back. A
+    rollback, not a retry: the incoming session is the thing that could not be shown, so re-running
+    `_build_ui` on it would raise again."""
     win, view = _window()
     good_session, good_paths = win.session, list(win._paths)
     win._sidecar_path = "/tmp/pacer-lifecycle-good.pacer.json"
     good_sidecar = win._sidecar_path
+    win.setWindowTitle(f"{app_mod.APP_NAME} — GOOD-RECORDING")
+    good_title = win.windowTitle()
+    win._timing_restore_failed = False
+    win._timing_restore_unreadable = False
+    win._tracks_unreadable = False
+    win._drop_notice = None
     DIALOGS.clear()
     finished = []
     win.loadFinished.connect(lambda: finished.append(True))
 
-    # Raise for the INCOMING session only, so the rollback's rebuild has a view class that works.
-    doomed = _stub_session()
+    # The doomed session trips EVERY notice flag on its way in: an unreadable sidecar, an unreadable
+    # track DB, and a multi-drop notice. None of them describe the session that survives.
+    doomed = _stub_session(
+        restore_saved_timing_lines=lambda _p: sidecar_mod.UNREADABLE)
 
     class _RaiseForDoomed(_StubView):
         def __init__(self, session, *a, **k):
@@ -311,11 +332,14 @@ def test_a_raising_view_build_on_a_reload_rolls_back_to_the_working_session():
                 raise ValueError("central-view-blew-up")
             super().__init__(session, *a, **k)
 
-    with _StubLoad(lambda paths: doomed), _SwapView(_RaiseForDoomed):
-        win._load(["/tmp/pacer-lifecycle-doomed.MP4"])
-        assert _pump(30.0, lambda: bool(finished)), "the load never reported finished"
-
+    orig_unreadable = app_mod.track_db.unreadable
+    app_mod.track_db.unreadable = lambda: True
     try:
+        with _StubLoad(lambda paths: doomed), _SwapView(_RaiseForDoomed):
+            win._load(["/tmp/pacer-lifecycle-doomed-GX010077.MP4"],
+                      drop_notice="Dropped 2 recordings — opened the doomed one.")
+            assert _pump(30.0, lambda: bool(finished)), "the load never reported finished"
+
         assert win.session is good_session, "the doomed session was left committed"
         assert list(win._paths) == good_paths, win._paths
         assert win._sidecar_path == good_sidecar, win._sidecar_path
@@ -324,9 +348,62 @@ def test_a_raising_view_build_on_a_reload_rolls_back_to_the_working_session():
         assert win.view is not view, "the rollback must build a FRESH view, not resurrect the old one"
         assert finished == [True], finished
         assert DIALOGS and "unchanged" in DIALOGS[-1][1], DIALOGS
+
+        # (1) The title is part of the commit, so it is part of the rollback. It used to read
+        #     "Pacer Studio — doomed-GX010077.MP4" over the good session.
+        assert win.windowTitle() == good_title, (
+            f"the window is titled after the recording that FAILED: {win.windowTitle()!r}")
+        assert "GX010077" not in win.windowTitle(), win.windowTitle()
+
+        # (2) ...and so are the notice flags. Asserted at the flags AND at the sentence they derive,
+        #     because the sentence is what the user actually reads.
+        assert win._timing_restore_unreadable is False, "the failed load's sidecar flag stuck"
+        assert win._tracks_unreadable is False, "the failed load's track-DB flag stuck"
+        assert win._timing_restore_failed is False
+        assert win._drop_notice is None, "the failed load's drop notice stuck"
+        notice = win._session_notice() or ""
+        for wrong in (app_mod.SIDECAR_UNREADABLE_NOTICE, app_mod.TRACKS_UNREADABLE_NOTICE,
+                      "Dropped 2 recordings"):
+            assert wrong not in notice, f"the restored session carries the failed load's notice: {notice!r}"
     finally:
+        app_mod.track_db.unreadable = orig_unreadable
         _teardown(win)
     print("test_a_raising_view_build_on_a_reload_rolls_back_to_the_working_session OK")
+
+
+def test_the_recovered_welcome_screen_stops_advertising_the_session_only_menus():
+    """The recovery paths reach the welcome screen FROM a loaded session, which no other caller
+    does — so they were the first to leave Session statistics, the excluded-laps toggle,
+    Opportunities and the reference picker enabled over a window with no session at all.
+
+    The handlers all early-return, so this is advertising rather than a crash — EXCEPT that a
+    disabled QAction's shortcut is inert too, which is the entire reason ⌘⇧S is gated on the action
+    (L1-06). Enabled, it stays a live keystroke that silently does nothing.
+
+    Driven through the worst branch: the build raises AND the rollback build raises too, so the
+    window ends on the welcome state with the session dropped."""
+    win, _view = _window(build_menu=True)
+    actions = ("_stats_action", "_excluded_action", "_opportunities_action", "_ref_action")
+    for name in actions:
+        assert getattr(win, name).isEnabled(), f"{name} should start enabled (a session is loaded)"
+    finished = []
+    win.loadFinished.connect(lambda: finished.append(True))
+
+    # _RaisingView raises for EVERY session, so the rollback rebuild fails too.
+    with _StubLoad(lambda paths: _stub_session()), _SwapView(_RaisingView):
+        win._load(["/tmp/pacer-lifecycle-menus.MP4"])
+        assert _pump(30.0, lambda: bool(finished)), "the load never reported finished"
+
+    try:
+        assert isinstance(win.centralWidget(), WelcomeView), type(win.centralWidget()).__name__
+        assert not hasattr(win, "session")
+        for name in actions:
+            assert not getattr(win, name).isEnabled(), \
+                f"{name} is still enabled (and its shortcut still live) on the welcome screen"
+        assert not win._full_action.isEnabled(), "Load full recording stayed enabled"
+    finally:
+        _teardown(win)
+    print("test_the_recovered_welcome_screen_stops_advertising_the_session_only_menus OK")
 
 
 def test_cancel_on_the_loading_card_with_a_raising_rebuild_still_hands_a_window_back():
@@ -436,6 +513,47 @@ def test_a_reference_landing_during_a_primary_reload_does_not_raise_in_its_queue
     finally:
         _teardown(win)
     print("test_a_reference_landing_during_a_primary_reload_does_not_raise_in_its_queued_slot OK")
+
+
+def test_a_reference_that_lands_while_a_new_recording_is_opening_is_refused_not_swallowed():
+    """A reference is attached to a SESSION, so one that lands while a PRIMARY load is in flight has
+    nowhere to go: `self.session` is the outgoing session, and the reload replaces it.
+
+    Measured before this guard: the reference was adopted, the chip appeared, and both vanished the
+    instant the new session was committed — the user's pick simply gone, with nothing said. (On main
+    this same scenario CRASHED in the queued slot instead; the view guard fixed the crash and left
+    the silence.) It is refused up front now, deterministically, through the same channel every other
+    reference refusal uses — rather than gambling the user's action on whether the reload happens to
+    fail, which is the only outcome in which attaching it would have been worth anything.
+
+    Driven end to end: a 0.8 s primary load overtaken by a 0.05 s reference load."""
+    win, _view = _window()
+    adopted = []
+    win.session.set_reference_session = lambda ref, source_label="": (adopted.append(ref), None)[1]
+    DIALOGS.clear()
+    finished = []
+    win.loadFinished.connect(lambda: finished.append(True))
+    primary, ref = "/tmp/lifecycle-primary.MP4", "/tmp/lifecycle-ref.MP4"
+
+    with _StubLoad(lambda paths: _stub_session(),
+                   delay_s=lambda p: 0.8 if p[0] == primary else 0.05), _SwapView(_StubView):
+        win._load([primary])
+        win._start_reference_load([ref])
+        assert _pump(30.0, lambda: bool(DIALOGS)), "the reference never reported back"
+        # The refusal lands WHILE the primary is still reading — that is the whole scenario.
+        assert win._loading_token is not None, "the primary load had already settled; race not driven"
+        assert _pump(30.0, lambda: bool(finished)), "the primary load never settled"
+
+    try:
+        assert adopted == [], "the reference was attached to a session about to be replaced"
+        assert "reference not loaded" in DIALOGS[0][0], DIALOGS
+        assert "discarded" in DIALOGS[0][1], DIALOGS[0][1]
+        # And the primary load landed normally: this must cost the OPEN nothing.
+        assert win.view is not None and win.centralWidget() is win.view
+        assert list(win._paths) == [primary], win._paths
+    finally:
+        _teardown(win)
+    print("test_a_reference_that_lands_while_a_new_recording_is_opening_is_refused_not_swallowed OK")
 
 
 def test_a_reference_load_failure_surfaces_the_reason_and_keeps_the_local_best_lap():
@@ -717,10 +835,14 @@ def test_the_loading_card_is_deterministic_while_the_event_loop_runs():
     1.45 s slices 0/8, one sleep past the load 0/8 — and in every skipped run the timer was already
     past its deadline when `_on_session_loaded` cancelled it.
 
-    A running app pumps continuously (its own ~30 Hz tick timer alone guarantees a pass every 33 ms),
-    so the deferred card is deterministic there, which is what this pins. Nothing in
-    `_arm_loading_placeholder` was changed: the 0/8 case needs a UI thread that is not running its
-    event loop, and a card cannot paint on one of those either.
+    A running app pumps continuously — `QApplication.exec()` IS the loop, so it dispatches whenever
+    there is anything to dispatch — and the deferred card is deterministic there, which is what this
+    pins. (On a RELOAD, which is the only case with a deferred card at all, the window's own ~30 Hz
+    tick timer is also live and forces a pass every 33 ms. That is a second guarantee, not the one
+    the argument rests on: the tick timer is created in `_build_ui`, so it does not exist during a
+    FIRST load — where `_arm_loading_placeholder` shows the card immediately and there is no timer
+    to lose.) Nothing in `_arm_loading_placeholder` was changed: the 0/8 case needs a UI thread that
+    is not running its event loop, and a card cannot paint on one of those either.
 
     HARNESS NOTE for the next lane: a driver that waits on a load with coarse sleeps will see no
     loading card. Pump in slices well under the load duration."""
