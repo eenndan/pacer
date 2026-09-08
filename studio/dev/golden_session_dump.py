@@ -312,14 +312,20 @@ def main():
         print(f"FATAL: real session not found at {REAL} "
               "(set PACER_GOLDEN_MP4 to another recording)", file=sys.stderr)
         sys.exit(2)
-    # PRESENT-BUT-NOT-A-RECORDING, in two escalating probes, because `Session.load` no longer
-    # raises on one: it now SKIPS a path that isn't an MP4 (chapters.split_non_mp4) so a chaptered
-    # recording survives one destroyed chapter. That is right for the app and wrong for a gate —
-    # a fingerprint taken over "whatever of this recording could be opened" is not a fingerprint of
-    # the recording. So the gate insists on the file it was pointed at, itself, and says which of
-    # the two ways it failed.
+    # PRESENT-BUT-NOT-A-RECORDING, in escalating probes, because `Session.load` no longer raises on
+    # one shape of it: it now SKIPS a path that was read and is not an MP4 (chapters.split_non_mp4)
+    # so a chaptered recording survives one destroyed chapter. That is right for the app and wrong
+    # for a gate — a fingerprint taken over "whatever of this recording could be opened" is not a
+    # fingerprint of the recording. So the gate insists on the file it was pointed at, itself, and
+    # says WHICH way it failed (an unreadable file is not an overwritten one).
     from studio import chapters
-    if not chapters.is_mp4_container(REAL):
+    probe = chapters.probe_mp4(REAL)
+    if probe == chapters.MP4_UNREADABLE:
+        print(f"FATAL: {REAL} exists but could not be read (permissions, a directory, or a volume "
+              "that went away) — this says nothing about its contents. Fix the access or set "
+              "PACER_GOLDEN_MP4 to another recording.", file=sys.stderr)
+        sys.exit(2)
+    if probe != chapters.MP4_CONTAINER:
         print(f"FATAL: {REAL} exists but is not an MP4 at all (its first box header is not an ISO "
               "media box) — something has overwritten it. Set PACER_GOLDEN_MP4 to a real "
               "recording; on the dev Desktop, ~/Desktop/D24/GX020060.MP4.", file=sys.stderr)

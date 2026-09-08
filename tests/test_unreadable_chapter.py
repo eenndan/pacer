@@ -69,11 +69,27 @@ FIXTURE = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero6.mp4")
 _JSON_STUB = json.dumps({"base": {"valid_lap_ids": [0, 1, 2]}}).encode() * 40
 
 
-def _have_fixture() -> bool:
+_SKIPPED: list[str] = []
+
+
+def _have_fixture(test_name: str) -> bool:
+    """Whether the committed clip is checked out — and if not, RECORD the skip by name.
+
+    Loud on purpose. The repo's known false-pass shape is a fixture-gated test that returns
+    silently while the runner prints a blanket "all tests passed"; `_run_all` refuses to print
+    that line once anything is in `_SKIPPED`."""
     if os.path.exists(FIXTURE):
         return True
-    print(f"skip: fixture {FIXTURE} not checked out (submodule)")
+    _SKIPPED.append(test_name)
+    print(f"SKIP {test_name}: fixture {FIXTURE} not checked out (submodule)")
     return False
+
+
+def _unreadable(path: str):
+    """`path`, chmod'd so its bytes cannot be read — the intact-but-locked chapter. Returns a
+    restore callable, because a 000 file inside a TemporaryDirectory breaks its cleanup."""
+    os.chmod(path, 0o000)
+    return lambda: os.chmod(path, 0o644)
 
 
 def _recording(root, *, junk_chapter=1, real_chapters=(2,), rec="0099"):
@@ -92,57 +108,104 @@ def _recording(root, *, junk_chapter=1, real_chapters=(2,), rec="0099"):
 
 
 # ==================================================== the probe itself
-def test_is_mp4_container_admits_real_media_and_refuses_junk():
-    """The discriminator, on every shape it has to separate. PERMISSIVE by design on the admit
-    side: refusing a real chapter would lose footage, admitting a foreign one only defers the
-    refusal to the GPMF parser, which is where it belongs."""
+def test_probe_mp4_separates_read_and_not_video_from_could_not_read():
+    """THREE answers, not two. "I read this and it is not video" is permanent and local to one
+    file; "I could not read this" says nothing about the contents and is usually temporary. The
+    first version of this probe collapsed them into a bool, and both defects that came out of that
+    (an intact locked chapter told it had been overwritten; a moved chapter dropped from the
+    analysis in silence) are pinned in the two tests below."""
     with tempfile.TemporaryDirectory() as root:
-        cases = {}
-        cases["json"] = os.path.join(root, "GX010060.MP4")
-        with open(cases["json"], "wb") as f:
+        not_video = {}
+        not_video["json"] = os.path.join(root, "GX010060.MP4")
+        with open(not_video["json"], "wb") as f:
             f.write(_JSON_STUB)
-        cases["text"] = os.path.join(root, "NotAVideo.MP4")
-        with open(cases["text"], "w", encoding="utf-8") as f:
+        not_video["text"] = os.path.join(root, "NotAVideo.MP4")
+        with open(not_video["text"], "w", encoding="utf-8") as f:
             f.write("a plain text file the user renamed to .MP4\n" * 40)
-        cases["zeros"] = os.path.join(root, "GX010098.MP4")
-        with open(cases["zeros"], "wb") as f:
+        not_video["zeros"] = os.path.join(root, "GX010098.MP4")
+        with open(not_video["zeros"], "wb") as f:
             f.write(b"\x00" * 16)          # the 16-byte name-only stubs other suites build
-        cases["empty"] = os.path.join(root, "Empty.MP4")
-        open(cases["empty"], "wb").close()
-        cases["missing"] = os.path.join(root, "NoSuchFile.MP4")
-        cases["folder"] = os.path.join(root, "AFolder.MP4")
-        os.makedirs(cases["folder"])
-        for key, path in cases.items():
-            assert not chapters.is_mp4_container(path), f"{key} was admitted as an MP4"
+        not_video["empty"] = os.path.join(root, "Empty.MP4")
+        open(not_video["empty"], "wb").close()
+        for key, path in not_video.items():
+            assert chapters.probe_mp4(path) == chapters.MP4_NOT_A_CONTAINER, key
+            assert not chapters.is_mp4_container(path), key
+
+        # COULD NOT READ — a different answer, on files whose contents are unknown.
+        unreadable = {"missing": os.path.join(root, "NoSuchFile.MP4"),
+                      "folder": os.path.join(root, "AFolder.MP4")}
+        os.makedirs(unreadable["folder"])
+        unreadable["locked"] = os.path.join(root, "GX010096.MP4")
+        with open(unreadable["locked"], "wb") as f:
+            f.write(b"\x00\x00\x00\x18ftypmp41" + b"\x00" * 64)   # REAL header, then locked
+        restore = _unreadable(unreadable["locked"])
+        try:
+            for key, path in unreadable.items():
+                assert chapters.probe_mp4(path) == chapters.MP4_UNREADABLE, key
+                assert not chapters.is_mp4_container(path), key
+        finally:
+            restore()
 
         # …and the admit side: a real MP4 header, and the truncated-real-chapter shape the load
         # failure table classifies separately (it IS an MP4, only an incomplete one).
         truncated = os.path.join(root, "GX010097.MP4")
         with open(truncated, "wb") as f:
             f.write(b"\x00\x00\x00\x18ftypmp41" + b"\x00" * 4096)
-        assert chapters.is_mp4_container(truncated)
+        assert chapters.probe_mp4(truncated) == chapters.MP4_CONTAINER
         for box in (b"moov", b"mdat", b"free", b"wide"):
             other = os.path.join(root, f"Other{box.decode()}.MP4")
             with open(other, "wb") as f:
                 f.write(b"\x00\x00\x00\x18" + box + b"\x00" * 32)
             assert chapters.is_mp4_container(other), box
-    if _have_fixture():
-        assert chapters.is_mp4_container(FIXTURE), "the committed sample is a real MP4"
-    print("test_is_mp4_container_admits_real_media_and_refuses_junk OK")
+    if _have_fixture("probe_mp4 on the committed clip"):
+        assert chapters.probe_mp4(FIXTURE) == chapters.MP4_CONTAINER
+    print("test_probe_mp4_separates_read_and_not_video_from_could_not_read OK")
 
 
 def test_split_non_mp4_partitions_and_keeps_order():
-    if not _have_fixture():
+    if not _have_fixture("split_non_mp4 partition"):
         return
     with tempfile.TemporaryDirectory() as root:
         paths = _recording(root, junk_chapter=2, real_chapters=(1, 3))
-        openable, skipped = chapters.split_non_mp4(paths)
-        assert [os.path.basename(p) for p in openable] == ["GX010099.MP4", "GX030099.MP4"]
+        kept, skipped = chapters.split_non_mp4(paths)
+        assert [os.path.basename(p) for p in kept] == ["GX010099.MP4", "GX030099.MP4"]
         assert [os.path.basename(p) for p in skipped] == ["GX020099.MP4"]
         # The partition is TOTAL — nothing invented, nothing lost.
-        assert sorted(openable + skipped) == sorted(paths)
+        assert sorted(kept + skipped) == sorted(paths)
     assert chapters.split_non_mp4([]) == ([], [])
     print("test_split_non_mp4_partitions_and_keeps_order OK")
+
+
+def test_split_non_mp4_never_skips_a_file_it_could_not_read():
+    """D2 — THE SILENT-SUBSET DEFECT. A chapter that is locked, still copying, on a volume that
+    went away, or simply MOVED is not junk: skipping it would analyse part of the user's recording
+    and label an absent file "not a readable video". Those paths are KEPT and go to the loader,
+    which fails loudly on them exactly as it did before any of this existed."""
+    if not _have_fixture("split_non_mp4 keeps unreadable paths"):
+        return
+    with tempfile.TemporaryDirectory() as root:
+        paths = _recording(root, junk_chapter=1, real_chapters=(2, 3))
+        restore = _unreadable(paths[2])          # chapter 3: intact footage, no read permission
+        try:
+            kept, skipped = chapters.split_non_mp4(paths)
+            assert [os.path.basename(p) for p in skipped] == ["GX010099.MP4"], skipped
+            assert paths[2] in kept, "an unreadable chapter must reach the loader, not vanish"
+            # …and the load then FAILS, rather than quietly analysing chapter 2 alone.
+            try:
+                Session.load(paths)
+                raised = None
+            except Exception as exc:  # noqa: BLE001
+                raised = exc
+            assert raised is not None, "a locked chapter was silently dropped from the analysis"
+        finally:
+            restore()
+
+        # A path that is not there at all is likewise kept, so the app keeps saying
+        # "Couldn't find that file — it may have been moved, renamed or deleted."
+        moved = os.path.join(root, "GX040099.MP4")
+        kept, skipped = chapters.split_non_mp4([*paths, moved])
+        assert moved in kept and moved not in skipped
+    print("test_split_non_mp4_never_skips_a_file_it_could_not_read OK")
 
 
 def test_skipped_notice_names_the_files():
@@ -156,33 +219,41 @@ def test_skipped_notice_names_the_files():
     assert "GX010060.MP4" in two and "GX040060.MP4" in two and "2 files" in two, two
     many = chapters.skipped_notice([f"/d/GX{i:02d}0060.MP4" for i in range(1, 7)])
     assert "6 files" in many and "+3 more" in many, many
+    # Scoped to another recording — the cross-recording reference (D5).
+    ref = chapters.skipped_notice(["/d/GX010060.MP4"], where="the reference recording")
+    assert "GX010060.MP4" in ref and "from the reference recording" in ref, ref
+    assert chapters.skipped_notice([], where="the reference recording") is None
     print("test_skipped_notice_names_the_files OK")
 
 
 # ==================================================== discovery is deliberately NOT filtered
-def test_discovery_still_lists_the_junk_sibling_and_keeps_the_recording_key():
-    """A CONTRACT, not an oversight. `sidecar.sidecar_path` and `library.fingerprint` identify a
-    recording by `discover_siblings(...)[0]`'s stem; dropping an unopenable chapter 1 there would
-    move the user's saved start/finish line and their library history onto chapter 2's stem. The
-    skip belongs to the LOAD, which is what actually cannot read the file."""
-    if not _have_fixture():
+def test_discovery_still_lists_the_junk_sibling_and_keeps_the_sidecar_key():
+    """A CONTRACT, not an oversight — and it is the SIDECAR that is at stake, not the library.
+    `sidecar.sidecar_path` takes `discover_siblings(...)[0]`'s stem VERBATIM, so filtering an
+    unopenable chapter 1 out of discovery would re-key the user's hand-placed start/finish line
+    onto `GX02….pacer.json` and lose it. `library.fingerprint` STRIPS the chapter index (which is
+    exactly why a single-chapter and a full-chain open share one entry), so library history
+    survives either way — asserted here so the justification cannot rot into folklore. The skip
+    belongs to the LOAD, which is what actually cannot read the file."""
+    if not _have_fixture("discovery keeps the sidecar key"):
         return
     with tempfile.TemporaryDirectory() as root:
         paths = _recording(root, junk_chapter=1, real_chapters=(2, 3))
         sibs = chapters.discover_siblings(paths[1])          # opened via an INTACT chapter
         assert [os.path.basename(p) for p in sibs] == [
             "GX010099.MP4", "GX020099.MP4", "GX030099.MP4"], sibs
-        # The recording key is unchanged by the junk chapter's presence.
+        # THE ONE THAT WOULD HAVE MOVED: the sidecar stem is chapter 1's, junk or not.
         assert sidecar.sidecar_path(paths[1]) == os.path.join(root, "GX010099.pacer.json")
+        # THE ONE THAT WOULD NOT: the library fingerprint is chapter-index-blind.
         assert library.fingerprint("GX010099") == library.fingerprint("GX020099")
-    print("test_discovery_still_lists_the_junk_sibling_and_keeps_the_recording_key OK")
+    print("test_discovery_still_lists_the_junk_sibling_and_keeps_the_sidecar_key OK")
 
 
 # ==================================================== the load skips it, and says so
 def test_load_skips_the_junk_sibling_and_records_it():
     """THE BUG, end to end: the full-recording load of a chaptered recording whose chapter 1 is not
     video. It must SUCCEED on the intact chapters and report the one it left out."""
-    if not _have_fixture():
+    if not _have_fixture("load skips the junk sibling"):
         return
     with tempfile.TemporaryDirectory() as root:
         paths = _recording(root, junk_chapter=1, real_chapters=(2, 3))
@@ -201,7 +272,7 @@ def test_load_skips_the_junk_sibling_and_records_it():
 def test_an_ordinary_load_reports_nothing_skipped():
     """The negative control: a clean recording's `skipped_chapters` is empty and the notice is
     silent, so the clause can never become background noise."""
-    if not _have_fixture():
+    if not _have_fixture("ordinary load reports nothing skipped"):
         return
     s = Session.load([FIXTURE])
     assert s.skipped_chapters == [], s.skipped_chapters
@@ -308,10 +379,125 @@ def test_the_failure_message_for_an_overwritten_chapter_does_not_blame_the_sd_ca
     print("test_the_failure_message_for_an_overwritten_chapter_does_not_blame_the_sd_card OK")
 
 
+def test_an_intact_but_unreadable_chapter_is_never_called_overwritten():
+    """D1 — THE WORST SENTENCE THIS TABLE COULD PRODUCE, and the first version of this fix produced
+    it. A chmod-000 chapter is almost certainly intact footage; the probe could not read it, the
+    loader raises its own RuntimeError (never an OSError), and control fell through into "it has
+    been overwritten or replaced". The app asserted that the user's footage was destroyed. It must
+    land on the permission sentence instead — which the docstring had been advertising all along."""
+    if not _have_fixture("unreadable chapter is not called overwritten"):
+        return
+    from studio.app import StudioWindow
+
+    with tempfile.TemporaryDirectory() as root:
+        locked = os.path.join(root, "GX010077.MP4")
+        shutil.copyfile(FIXTURE, locked)          # REAL, intact footage…
+        restore = _unreadable(locked)             # …that we simply cannot read right now
+        try:
+            try:
+                Session.load([locked])
+                exc = None
+            except Exception as e:  # noqa: BLE001 — mirrors SessionLoadWorker.run
+                exc = e
+            assert exc is not None
+            msg = StudioWindow._load_failure_message([locked], exc)
+            assert "permission" in msg, msg
+            assert "overwritten" not in msg and "replaced" not in msg, msg
+            assert "aren't video" not in msg, msg
+        finally:
+            restore()
+    print("test_an_intact_but_unreadable_chapter_is_never_called_overwritten OK")
+
+
+def test_the_failure_blames_the_chapter_the_loader_actually_opened():
+    """D3 — MISATTRIBUTION. With a junk chapter 1 beside a real chapter 2, the skipped file never
+    reaches the loader, so a failure in chapter 2 must not be reported against chapter 1. On the
+    owner's D24 that is the live configuration of every 0060 load."""
+    if not _have_fixture("failure blames the chapter the loader opened"):
+        return
+    from studio.app import StudioWindow
+
+    with tempfile.TemporaryDirectory() as root:
+        paths = _recording(root, junk_chapter=1, real_chapters=(2,))
+        assert StudioWindow._offending_path(paths) == paths[1], "blamed the skipped chapter"
+        # …and the message describes THAT file (a real MP4 whose telemetry failed), not the stub.
+        msg = StudioWindow._load_failure_message(
+            paths, RuntimeError(f"Failed to open file: {paths[1]}"))
+        assert "is a GoPro file" in msg, msg
+        assert "overwritten" not in msg, msg
+        # All-junk: nothing was handed to the loader, so the first path is the honest subject.
+        all_junk = _recording(root, junk_chapter=1, real_chapters=(), rec="0088")
+        assert StudioWindow._offending_path(all_junk) == all_junk[0]
+    print("test_the_failure_blames_the_chapter_the_loader_actually_opened OK")
+
+
+def test_an_all_junk_recording_is_not_told_to_open_another_chapter():
+    """D4 — DON'T PRESCRIBE THE IMPOSSIBLE. When every chapter handed to the load is junk there is
+    no other chapter to open, so the advice changes; a SINGLE junk file keeps "open another
+    chapter", because on disk there usually is one (that is the D24 case exactly)."""
+    with tempfile.TemporaryDirectory() as root:
+        from studio.app import StudioWindow
+        both = []
+        for cc in (1, 2):
+            p = os.path.join(root, f"GX{cc:02d}0087.MP4")
+            with open(p, "wb") as f:
+                f.write(_JSON_STUB)
+            both.append(p)
+        exc = ValueError("none of these files is a readable video: GX010087.MP4, GX020087.MP4")
+        msg = StudioWindow._load_failure_message(both, exc)
+        assert "different recording" in msg, msg
+        assert "another chapter" not in msg, msg
+        # One file, opened on its own: another chapter of it may well be on disk.
+        solo = StudioWindow._load_failure_message([both[0]], exc)
+        assert "another chapter" in solo, solo
+    print("test_an_all_junk_recording_is_not_told_to_open_another_chapter OK")
+
+
+def test_the_reference_recording_is_not_exempt_from_the_notice():
+    """D5 — the one surface the honesty rule skipped. Every Δ on screen is measured against the
+    cross-recording reference; a reference that lost a chapter reported to the console only."""
+    from test_central_view_realqt import _studiowindow_with_view
+
+    win, _view = _studiowindow_with_view()
+    try:
+        for attr, value in (("_drop_notice", None), ("_timing_restore_failed", False),
+                            ("_timing_restore_unreadable", False), ("_tracks_unreadable", False),
+                            ("_notice", None), ("_load_token", 0), ("_ref_load_token", 0),
+                            ("_load_workers", set()), ("_pending_load", None),
+                            ("_placeholder_timer", None)):
+            setattr(win, attr, value)
+        win.session.skipped_chapters = []
+
+        class _Ref:
+            skipped_chapters = ["/d/D24/GX010060.MP4"]
+
+        base = win._session_notice() or ""
+        win.session.reference_session = lambda: _Ref()
+        notice = win._session_notice()
+        assert "GX010060.MP4" in notice, notice
+        assert "from the reference recording" in notice, notice
+        assert notice.startswith(base), (base, notice)
+        # A reference with nothing skipped stays silent.
+        _Ref.skipped_chapters = []
+        assert win._session_notice() == (base or None)
+    finally:
+        win.close()
+        _APP.processEvents()
+    print("test_the_reference_recording_is_not_exempt_from_the_notice OK")
+
+
 def _run_all():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
             fn()
+    # NEVER print a blanket pass line over a silent skip. Half this file is gated on a submodule
+    # fixture, and "all tests passed" under a fixture that isn't checked out is the exact false-
+    # pass shape this repo has been bitten by before.
+    if _SKIPPED:
+        print(f"\nunreadable-chapter tests: {len(_SKIPPED)} SKIPPED (fixture absent) — "
+              + "; ".join(_SKIPPED))
+        print("the rest passed; this run did NOT cover the load path")
+        return
     print("\nall unreadable-chapter tests passed")
 
 
