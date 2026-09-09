@@ -139,6 +139,8 @@ _TRAIL_TAPER = 0.30              # oldest segment's width, as a fraction of the 
 # leaves the EXPORT's dark halo as the only thing left at that end, which is how the burned trail
 # came out darker than the footage it was drawn over (see `_paint_dial_export`).
 _TRAIL_INK_ALPHA_MIN, _TRAIL_INK_ALPHA_MAX = 60, 235
+_TRAIL_LIVE_ALPHA_FRAC = 0.72    # live: the ramp is softer than the export's (no halo under it,
+                                 # and it sits on app chrome rather than on footage)
 _TRAIL_HALO_ALPHA_FRAC = 0.55    # export: halo alpha as a fraction of the ink it backs
 _TRAIL_HALO_PAD_FRAC = 0.55      # export: halo width over the ink's, as a fraction of that ink's
                                  # own width. PROPORTIONAL, not a constant pad: the stroke tapers
@@ -722,8 +724,9 @@ def _paint_dial_moving(p: QPainter, w: float, h: float, st: DialState) -> None:
     """The PER-FRAME live layer: the dot's trail, the felt-force dot itself, and the |g| readout —
     the three things that change on every ~30 Hz tick. Painted on top of the static layer.
 
-    With no g signal at all (`st.seen` False) the trail and dot are skipped and the readout is the
-    no-value mark: the instrument at rest rather than a fabricated `0.0`."""
+    With no live pointer the trail and dot are both skipped — they are one object — and with no g
+    signal at all (`st.seen` False) the readout is the no-value mark too: the instrument at rest
+    rather than a fabricated `0.0`."""
     cx, cy, r = dial_geom(w, h)
 
     # Gated on `have`, not just `seen`, so the trail and the dot are literally the one object this
@@ -735,13 +738,12 @@ def _paint_dial_moving(p: QPainter, w: float, h: float, st: DialState) -> None:
         wide = max(1.6, r * _TRAIL_WIDTH_FRAC)
         p.setBrush(Qt.NoBrush)
         for a, b, f in _trail_segments(cx, cy, r, st.trail):
-            pen = QPen(_c(C.text, int(_TRAIL_INK_ALPHA(f) * 0.72)),
+            pen = QPen(_c(C.text, int(_TRAIL_INK_ALPHA(f) * _TRAIL_LIVE_ALPHA_FRAC)),
                        wide * (_TRAIL_TAPER + (1 - _TRAIL_TAPER) * f))
             pen.setCapStyle(Qt.RoundCap)
             p.setPen(pen)
             p.drawLine(a, b)
 
-    if st.have and _finite(st.fx, st.fy):
         dx, dy = dial_to_screen(cx, cy, r, st.fx, st.fy)
         glow = max(_DOT_GLOW_MIN, r * _DOT_GLOW_FRAC)
         core = max(_DOT_CORE_MIN, r * _DOT_CORE_FRAC)
