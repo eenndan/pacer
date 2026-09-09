@@ -588,11 +588,9 @@ class CornerModel:
             if len(cum_best) >= 8 and float(cum_best[-1]) > 0:
                 total_ref = float(cum_best[-1])
                 # The median curvature profile pools the session's clean laps (valid, no GPS
-                # dropout); the best lap is always included so a session where every lap is
-                # dropout-flagged still detects on the best lap alone.
-                ids = [i for i in self._valid_lap_ids() if not self._lap_has_dropout(i)]
-                if best not in ids:
-                    ids.append(best)
+                # dropout), best lap always included — `_clean_lap_ids`, which is now the one
+                # spelling of that rule rather than the first of three.
+                ids = self._clean_lap_ids()
                 traces = []
                 for lid in ids:
                     _lt, xs, ys, _lv, cum = self._lap_columns(lid)
@@ -666,12 +664,20 @@ class CornerModel:
         return stats
 
     def corner_session_bests(self) -> list[float]:
-        """Per-corner session-best time-in-corner across all VALID laps (the purple-cell
-        convention, matching the per-sector session bests). [] when no corners. Cached;
-        cleared on re-segment."""
+        """Per-corner session-best time-in-corner over the CLEAN laps (`_clean_lap_ids`) — the
+        purple-cell convention, and now actually matching the per-sector session bests its own
+        docstring has always claimed parity with. [] when no corners. Cached; cleared on
+        re-segment.
+
+        §4.1: this ran on the raw valid set while `session_best_splits`, `best_lap_id`,
+        `best_rolling_lap` and the ideal composite all excluded GPS-dropout laps. A dropout lap's
+        distance is speed-integral reconstructed, so its corner boundaries — and therefore the
+        time between them — are exactly what must not be allowed to win a corner. Latent on both
+        fixtures (neither has a dropout lap), which is why it survived: nothing on screen was
+        wrong until a recording with one arrived, and then only one column of it."""
         if self._bests_cache is not _UNSET:
             return self._bests_cache
-        per_lap = [self.lap_corner_stats(i) for i in self._valid_lap_ids()]
+        per_lap = [self.lap_corner_stats(i) for i in self._clean_lap_ids()]
         per_lap = [st for st in per_lap if st]
         n = len(self.corner_list())
         self._bests_cache = [
@@ -680,16 +686,22 @@ class CornerModel:
         return self._bests_cache
 
     # ------------------------------------------------------------------ ideal lap (D1)
-    def _composite_lap_ids(self) -> list[int]:
-        """The laps the ideal composite may draw on: `Session.consistency_lap_ids()` — VALID and
-        DROPOUT-FREE, the same set every consistency statistic runs on. A dropout lap's distance
-        is speed-integral reconstructed, so its segment boundaries (and therefore its segment
-        TIMES) are exactly the ones that must not be allowed to win a segment.
+    def _clean_lap_ids(self) -> list[int]:
+        """The laps ANY "best" in this service may be drawn from: `Session.consistency_lap_ids()`
+        — VALID and DROPOUT-FREE, the same set every consistency statistic runs on. A dropout
+        lap's distance is speed-integral reconstructed, so its segment boundaries (and therefore
+        its segment TIMES) are exactly the ones that must not be allowed to win a segment.
 
         The BEST lap is appended when the dropout rule excluded it — the same guarantee
         `basis()` makes for the detection profile. It is what keeps `total <= best lap time`
         true in the degenerate session where every valid lap is dropout-flagged and
-        `best_candidate_ids` fell back to the flagged set."""
+        `best_candidate_ids` fell back to the flagged set.
+
+        THREE SITES SPELLED THIS RULE OUT AND ONE OF THEM DID NOT (§4.1): the detection profile
+        and the ideal composite both filtered dropouts and appended the best lap; the per-corner
+        session bests — the purple cells, whose own docstring claimed parity with the per-sector
+        bests — ran on the raw valid set. One name, one rule, and the odd one out cannot drift
+        back."""
         ids = [i for i in self._valid_lap_ids() if not self._lap_has_dropout(i)]
         best = self._best_lap_id()
         if best is not None and best not in ids:
@@ -698,7 +710,7 @@ class CornerModel:
 
     def segment_bests(self) -> SegmentBests | None:
         """The IDEAL LAP: the per-segment minimum of the corner/straight partition over the
-        clean laps (`_composite_lap_ids`), with its donors, its per-lap matrix and the partition
+        clean laps (`_clean_lap_ids`), with its donors, its per-lap matrix and the partition
         edges. None when there is no corner partition to composite on — no basis, or no corner
         detected, in which case the "partition" is the whole lap and its minimum is just the best
         lap time. That degenerate value is NOT returned dressed as an ideal: callers hide it,
@@ -743,7 +755,7 @@ class CornerModel:
 
         ref_trace = self._best_trace()
         rows, spans, edges, lap_ids, expected = [], [], [], [], []
-        for lid in self._composite_lap_ids():
+        for lid in self._clean_lap_ids():
             dist, _speed_kmh, elapsed = self._lap_arrays(lid)
             if len(dist) < 2 or float(dist[-1]) <= 0:
                 continue

@@ -493,32 +493,73 @@ def fmt_trend(slope: float | None) -> str | None:
     return "0.00 s/lap" if round(slope, 2) == 0 else f"{slope:+.2f} s/lap"
 
 
-def theil_sen_slope(values) -> float | None:
-    """Robust trend: the MEDIAN of all pairwise slopes (Theil–Sen), in units per index step
-    (here: seconds per lap). Outlier-immune — one traffic lap can't fake a trend the way it
-    drags a least-squares fit. None with fewer than 2 finite values. O(n²) pairs is nothing
-    at session lap counts."""
+def theil_sen_slope(values, x=None) -> float | None:
+    """Robust trend: the MEDIAN of all pairwise slopes (Theil–Sen), per unit of `x`. Outlier-immune
+    — one traffic lap can't fake a trend the way it drags a least-squares fit. None with fewer than
+    2 finite values. O(n²) pairs is nothing at session lap counts.
+
+    `x` IS THE POINT (§4.2). Without it the step is the INDEX of the filtered series, so a session
+    whose clean laps are 1,2,3,10,11,12 — a pit stop, or three laps lost to a GPS dropout — is fitted
+    as if those were six consecutive laps, and a slope reported "per lap" is really per *clean* lap.
+    Passing the lap ids makes the gap a gap. Both series are filtered to the finite pairs together,
+    so `x` and `values` cannot fall out of step."""
     a = np.asarray(list(values), float)
-    a = a[np.isfinite(a)]
-    n = len(a)
-    if n < 2:
+    xs = np.arange(len(a), dtype=float) if x is None else np.asarray(list(x), float)
+    keep = np.isfinite(a) & np.isfinite(xs)
+    a, xs = a[keep], xs[keep]
+    if len(a) < 2:
         return None
-    i, j = np.triu_indices(n, k=1)
-    return float(np.median((a[j] - a[i]) / (j - i)))
+    i, j = np.triu_indices(len(a), k=1)
+    dx = xs[j] - xs[i]
+    ok = dx != 0
+    if not np.any(ok):
+        return None
+    return float(np.median((a[j][ok] - a[i][ok]) / dx[ok]))
 
 
-def best_consecutive_mean(values, n: int = RACE_PACE_N) -> float | None:
+def consecutive_runs(ids) -> list[list[int]]:
+    """Split a sorted id list into RUNS of consecutive integers: [1,2,3,10,11] -> [[1,2,3],[10,11]].
+
+    The one thing "3 consecutive laps" needs and a filtered list cannot provide."""
+    runs: list[list[int]] = []
+    for i in ids:
+        if runs and i == runs[-1][-1] + 1:
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    return runs
+
+
+def best_consecutive_mean(values, n: int = RACE_PACE_N, ids=None) -> float | None:
     """The best (lowest) mean over `n` CONSECUTIVE values — "race pace": the best sustained
     n-lap run, the honest companion to the single best lap. Windows containing a non-finite
     value are skipped (NaN propagates through the window sum); None when no full window
-    exists."""
+    exists.
+
+    `ids` MAKES "CONSECUTIVE" MEAN CONSECUTIVE (§4.2). The caller's series is already filtered to
+    the clean laps, so adjacency IN THAT LIST is not adjacency on track: a session whose clean laps
+    are 1,2,3,10,11,12 would otherwise report a three-lap "sustained run" spanning laps 3→10, i.e.
+    across whatever removed 4-9 — a pit stop, a spin, three laps a GPS dropout flagged. With the
+    lap ids the window is taken within each run of consecutively-numbered laps and never across a
+    gap. Omitted → the old index behaviour, for callers with no ids to give."""
     a = np.asarray(list(values), float)
     if len(a) < n:
         return None
-    means = np.convolve(a, np.ones(n) / n, mode="valid")  # NaN poisons its windows only
-    if not np.any(np.isfinite(means)):
-        return None
-    return float(np.nanmin(means))
+    if ids is None:
+        windows = [a]
+    else:
+        pos = {i: k for k, i in enumerate(ids)}
+        windows = [a[[pos[i] for i in run]] for run in consecutive_runs(list(ids))
+                   if len(run) >= n]
+    best = None
+    for w in windows:
+        if len(w) < n:
+            continue
+        means = np.convolve(w, np.ones(n) / n, mode="valid")
+        if np.any(np.isfinite(means)):
+            m = float(np.nanmin(means))
+            best = m if best is None else min(best, m)
+    return best
 
 
 def within_pct_of_best(values, pct: float) -> int | None:
@@ -691,16 +732,23 @@ class SessionStats:
     def pace_trend(self) -> float | None:
         """The robust lap-time trend (Theil–Sen median slope, s/lap; negative = getting
         faster) over the clean laps IN SESSION ORDER. Gated at TREND_MIN_LAPS — a slope
-        fitted to five laps is noise, so short sessions honestly report None."""
+        fitted to five laps is noise, so short sessions honestly report None.
+
+        Fitted against the LAP IDS, not the position in the filtered list (§4.2): the excluded and
+        dropout laps are holes in the series, and a slope of seconds *per lap* has to count them."""
         times = self._clean_times()
         if len(times) < TREND_MIN_LAPS:
             return None
-        return theil_sen_slope(times)
+        return theil_sen_slope(times, self._consistency_lap_ids())
 
     def race_pace(self) -> float | None:
         """The best mean of RACE_PACE_N consecutive clean laps — the sustained-run pace next
-        to the single glory lap. None with fewer than a full window of clean laps."""
-        return best_consecutive_mean(self._clean_times())
+        to the single glory lap. None with fewer than a full window of clean laps.
+
+        CONSECUTIVE ON TRACK (§4.2). The series is already filtered to the clean laps, so a window
+        taken over that list can span whatever was removed — a pit stop, a spin, laps a GPS dropout
+        flagged. The lap ids go with the times, and the window never crosses a gap."""
+        return best_consecutive_mean(self._clean_times(), ids=self._consistency_lap_ids())
 
     def pace_cov(self) -> float | None:
         """The consistency rating: coefficient of variation (σ/median %) of the clean lap

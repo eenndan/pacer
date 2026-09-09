@@ -49,7 +49,11 @@ _MOVING_MS = 4.0     # m/s; heading is ill-defined at a standstill (used for fit
 # validated GPS-derived g — see studio/docs/gmeter-validation.md and the brake/coast channels). A
 # 0.35 s boxcar removes the d|v|/dt spikes, leaving a signal that is both correctly scaled AND
 # smoother than the raw IMU. Lateral g (which the IMU gets right, r~0.9) is unchanged.
-_DIAL_LONG_SMOOTH_S = 0.35
+# PUBLIC because a second module now has to SAY it: the Stats page's "peak braking g" tile and
+# the g-g cloud both describe a signal smoothed over this window, and a window is the whole
+# story for a maximum (§4.3 — the per-lap peak runs a median 0.862 g smoothed against 1.081 g
+# raw on the D24 0060 pair). Read, never retyped, so the copy cannot drift from the signal.
+LONG_SMOOTH_S = 0.35
 
 # --- CORI yaw DRIFT ---------------------------------------------------------------------------
 # The GoPro derives CORI's world frame by integrating its gyro, with no magnetometer to hold it, so
@@ -385,7 +389,7 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
     long_g_gps = None
     if len(gps_t) >= 4:
         spd_kmh = np.interp(times, gps_t, np.asarray(gps_speed, float) * 3.6)
-        w = max(int(round(_DIAL_LONG_SMOOTH_S * _OUTPUT_HZ)), 1)
+        w = max(int(round(LONG_SMOOTH_S * _OUTPUT_HZ)), 1)
         long_g_gps = boxcar(speed_long_g(spd_kmh, times), w)
     return GMeter(times=times, lat_g=lat_g, long_g=long_g, cross=cross, source="accl",
                   long_g_gps=long_g_gps)

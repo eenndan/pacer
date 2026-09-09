@@ -1017,7 +1017,7 @@ def test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it():
     # does — and the caption, the line and the tile all move together, in the same frame.
     from studio.corner_model import SegmentBests
     # Laps 1 and 2 — it must keep the BEST lap (the subject the decomposition is measured against,
-    # which `_composite_lap_ids` guarantees by appending it) and it must keep two distinct donors,
+    # which `_clean_lap_ids` guarantees by appending it) and it must keep two distinct donors,
     # or the block hides instead of re-rendering and this guard would pass on a stale caption.
     keep, times = [1, 2], sb.times[1:]
     donors = [keep[int(times[:, j].argmin())] for j in range(times.shape[1])]
@@ -2588,6 +2588,88 @@ def test_the_cross_check_sample_count_is_grouped():
     assert "1,000 samples" in line, line
     v.hide()
     print("test_the_cross_check_sample_count_is_grouped OK")
+
+
+def test_the_peak_braking_tile_says_it_is_a_smoothed_peak():
+    """§4.3: the tile said "smoothed GPS speed derivative" and never said the WINDOW — and a window
+    is the whole story for a MAXIMUM.
+
+    Measured on the D24 0060 pair (38 valid laps): the per-lap peak runs a median 0.862 g as the
+    service reports it against 1.081 g on the same signal unsmoothed, and the session max the tile
+    prints reads 1.27 g where the instantaneous peak was 1.94 g. The smoothing is the right choice
+    — a raw d|v|/dt peak is GPS quantization noise, and this repo's rule is percentiles over raw
+    maxima — but a number 20-35% under the instantaneous one has to say which it is.
+
+    The window is READ from `gmeter.LONG_SMOOTH_S`, never retyped, so the copy cannot drift from the
+    signal it describes (the §5.5 lesson: a constant typed into honesty copy rots)."""
+    _APP  # noqa: B018
+    import pathlib
+
+    from studio import gmeter
+    from studio.stats_panel import GG_TOOLTIP, StatsView
+    from studio.stats_panel import __file__ as SP_FILE
+
+    view = StatsView(_fake_view_session())
+    tip = view.t_peak_brake.toolTip()
+    window = f"{gmeter.LONG_SMOOTH_S:g} s"
+    assert window in tip, (f"the tile never states the {window} window", tip)
+    assert "SUSTAINED" in tip, ("the tile must say WHICH peak this is", tip)
+    # ...and the friction circle, whose axis is the same signal.
+    assert window in GG_TOOLTIP and "SUSTAINED" in GG_TOOLTIP, GG_TOOLTIP
+    # INTERPOLATED, NOT TYPED — checked on the source rather than by reloading the module: a
+    # reload rebinds StatsView, and every later test in this process holding the old class would
+    # then be comparing two different types. The window may appear in this file only through the
+    # constant.
+    src = pathlib.Path(SP_FILE).read_text(encoding="utf-8")
+    literal = f"{gmeter.LONG_SMOOTH_S:g} s"
+    for line in src.splitlines():
+        if literal in line and "LONG_SMOOTH_S" not in line:
+            raise AssertionError(
+                f"stats_panel types the smoothing window as a literal — it must read the "
+                f"constant, or the copy rots the moment the signal changes: {line.strip()!r}")
+    print("ok brake-g: both g surfaces state the smoothing window, read from the constant")
+
+
+def test_race_pace_and_trend_do_not_treat_a_gap_as_consecutive():
+    """§4.2: both statistics ran over the clean-lap times with the lap IDS THROWN AWAY, so
+    adjacency in that filtered list stood in for adjacency on track.
+
+    A session whose clean laps are 1,2,3,10,11 — laps 4-9 gone to a pit stop, a spin, or a GPS
+    dropout — reported a three-lap "sustained run" spanning 3→10, and a trend in seconds "per lap"
+    that had counted six laps as three steps. Latent on both fixtures (their clean sequences are
+    gap-free), which is exactly why it needed a fixture with a hole in it."""
+    _APP  # noqa: B018
+    from studio.stats import best_consecutive_mean, consecutive_runs, theil_sen_slope
+
+    assert consecutive_runs([1, 2, 3, 10, 11]) == [[1, 2, 3], [10, 11]]
+    assert consecutive_runs([]) == []
+    assert consecutive_runs([7]) == [[7]]
+
+    # laps 1,2,3 are slow; 10,11 are fast. The only 3-lap RUN is 1-3, so race pace is its mean —
+    # NOT the mean of {3, 10, 11}, which is what an index window would find.
+    ids = [1, 2, 3, 10, 11]
+    times = [70.0, 70.0, 70.0, 60.0, 60.0]
+    across_the_gap = (70.0 + 60.0 + 60.0) / 3.0
+    assert abs(best_consecutive_mean(times, n=3) - across_the_gap) < 1e-9, (
+        "fixture must be one where the index window WOULD span the gap",
+        best_consecutive_mean(times, n=3), across_the_gap)
+    assert abs(best_consecutive_mean(times, n=3, ids=ids) - 70.0) < 1e-9, (
+        "race pace crossed a 6-lap gap and called it a sustained run",
+        best_consecutive_mean(times, n=3, ids=ids))
+
+    # ...and a run shorter than the window contributes nothing rather than being padded.
+    assert best_consecutive_mean([60.0, 61.0, 62.0], n=3, ids=[1, 2, 9]) is None
+
+    # The trend is per LAP, so the hole has to count: the same five times fitted against the ids
+    # give a shallower slope than the same times fitted against their positions.
+    by_index = theil_sen_slope(times)
+    by_lap = theil_sen_slope(times, ids)
+    assert by_index is not None and by_lap is not None
+    assert abs(by_lap) < abs(by_index), (
+        "a gap in the lap numbers must flatten a per-lap slope, not be invisible to it",
+        by_index, by_lap)
+    print(f"ok pace-gaps: race pace stays inside a run; trend {by_index:+.3f} s/step -> "
+          f"{by_lap:+.3f} s/lap once the gap counts")
 
 
 def test_corners_note_names_both_baselines_and_reconciles_them():
