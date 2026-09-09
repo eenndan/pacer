@@ -1131,8 +1131,12 @@ def test_ideal_donor_admission_refuses_a_collapsed_segment_AND_its_inflated_neig
     victim = 1                  # the fast-early / slow-late lap
     real_project = corners_mod.project_boundaries
 
-    def collapsing(d_ref, total_ref, total_lap, *, traces=None):
-        out = np.asarray(real_project(d_ref, total_ref, total_lap, traces=traces), float)
+    # **kw, not an explicit signature: this stands in for the REAL projection, whose keyword set
+    # grows (traces → frame → alignment). Spelling them out here made the stub silently stop
+    # matching its subject — the previous version raised TypeError the moment segment_bests began
+    # passing the lap's pre-built warp. Forward whatever the caller sends, verbatim.
+    def collapsing(d_ref, total_ref, total_lap, **kw):
+        out = np.asarray(real_project(d_ref, total_ref, total_lap, **kw), float)
         # edges = [0, *out, total_lap], so segment j spans out[j-1]..out[j]. Pull the far edge
         # back onto the near one: span exactly 0, which is the clamp's signature.
         if abs(total_lap - totals[victim]) < 1e-6 and len(out) > j:

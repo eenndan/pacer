@@ -51,6 +51,11 @@ MIN_DIST_LAPS = 2
 # Pace-trend gate: below this many clean laps a fitted slope is noise dressed as insight,
 # so the trend statistic reports None and the tile shows a dash.
 TREND_MIN_LAPS = 6
+# Pace-trend verdict band: a fitted slope within ±this (s/lap) reads "steady" — don't narrate
+# noise as a trend. Lives beside the statistic it qualifies rather than in the view, because the
+# exported report and the clipboard summary print the same verdict off the same slope and a
+# second copy of the band is how the file starts disagreeing with the screen.
+TREND_STEADY_BAND = 0.02
 # "Race pace" window: the best mean of this many CONSECUTIVE clean laps — the sustained-run
 # number next to the single glory lap.
 RACE_PACE_N = 3
@@ -462,6 +467,30 @@ def phase_matrix(cids, triples_by_lap) -> PhaseReport:
         x_sum += max(0.0, float(med[2]))
     share = PhaseShare(e_sum, a_sum, x_sum) if (e_sum + a_sum + x_sum) > 0 else None
     return PhaseReport(cids=list(cids), rows=rows, share=share)
+
+
+def trend_verdict(slope: float | None) -> str | None:
+    """The pace trend's plain-language verdict: "improving" / "fading" / "steady", or None for a
+    slope the sample was too short to fit (`TREND_MIN_LAPS`).
+
+    Pure and Qt-free so the Stats tile's caption ("trend · improving") and the exported summary's
+    row label are ONE rule. Sign convention is the app's: a negative slope means lap times are
+    falling, i.e. the driver is getting faster."""
+    if slope is None:
+        return None
+    if slope <= -TREND_STEADY_BAND:
+        return "improving"
+    if slope >= TREND_STEADY_BAND:
+        return "fading"
+    return "steady"
+
+
+def fmt_trend(slope: float | None) -> str | None:
+    """The trend VALUE as both surfaces print it: `+0.14 s/lap`, or a flat `0.00 s/lap` for a
+    signed near-zero (a "±0.00" display reads as a glitch). None passes through as None."""
+    if slope is None:
+        return None
+    return "0.00 s/lap" if round(slope, 2) == 0 else f"{slope:+.2f} s/lap"
 
 
 def theil_sen_slope(values) -> float | None:

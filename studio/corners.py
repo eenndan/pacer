@@ -16,6 +16,11 @@ lap whose line length drifts past NORMALIZED_DRIFT_MAX, by ONE monotone spatial 
 lap (project_boundaries). Never a mix of the two within a lap: that is what shrank segments by up
 to 27 % and made the ideal lap's headline 44 % artifact. Corners + straights partition each lap, so
 the telescoping sum of segment times equals the lap time exactly (asserted).
+
+That warp is ONE object per lap and every projection here is a read of it, so it is built once and
+passed down (`alignment=`); `corner_model.CornerModel.lap_alignment` owns the memo and its
+invalidation. The functions still derive it themselves when no caller supplies one, which is what
+keeps this module usable from the pure-numpy unit tests.
 """
 
 from __future__ import annotations
@@ -452,35 +457,41 @@ def detect_corners(dists, kappa, threshold: float | None = None) -> list[Corner]
 
 # ---------------------------------------------------------------------- projection
 def _window_edges(corner_list: list[Corner], total_ref: float, total_lap: float,
-                  traces: tuple | None = None) -> np.ndarray:
+                  traces: tuple | None = None,
+                  alignment=DERIVE_ALIGNMENT) -> np.ndarray:
     """All partition edges (lap odometer metres) for one lap: lap start, each corner's
     enter/exit projected onto the lap's odometer (the drift-gated alignment — normalized within
     NORMALIZED_DRIFT_MAX, one monotone spatial warp above; see project_boundaries), and the lap
     end. The lap start/end stay the literal 0 / total_lap — the timing line is the shared S/F point
     on both laps, which is exactly why it is also the warp's two anchors. `traces` (Session-fed)
-    enables the spatial alignment."""
+    enables the spatial alignment; `alignment` passes that lap's warp in already built
+    (`corner_model.CornerModel.lap_alignment` memoizes it)."""
     interior = []
     for c in corner_list:
         interior.extend((c.enter, c.exit))
     edges = [0.0]
     if interior:
-        edges.extend(project_boundaries(interior, total_ref, total_lap, traces=traces).tolist())
+        edges.extend(project_boundaries(interior, total_ref, total_lap, traces=traces,
+                                        alignment=alignment).tolist())
     edges.append(float(total_lap))
     return np.asarray(edges, float)
 
 
 def segment_times(corner_list: list[Corner], total_ref: float, dists, elapsed,
-                  traces: tuple | None = None) -> np.ndarray:
+                  traces: tuple | None = None,
+                  alignment=DERIVE_ALIGNMENT) -> np.ndarray:
     """Per-segment times of the corner/straight partition: 2N+1 entries [straight0, corner1, ...].
     One np.interp at the shared edges, so segments sum to the lap time exactly (asserted). `traces`
     (Session-fed) enables the drift-gated spatial alignment; omitted → the normalized projection.
+    `alignment` is that lap's warp already built — pass it (see project_boundaries) rather than
+    paying for the spatial match again.
 
     The sum holding does NOT mean the pieces are comparable across laps: it held throughout the
     projection defect project_boundaries documents, because a shrunken segment pushes its time into
     its neighbour. `corner_model.MAX_DONOR_SPAN_DEV` is where per-piece comparability is checked."""
     dists = np.asarray(dists, float)
     elapsed = np.asarray(elapsed, float)
-    edges = _window_edges(corner_list, total_ref, float(dists[-1]), traces)
+    edges = _window_edges(corner_list, total_ref, float(dists[-1]), traces, alignment)
     t_at = np.interp(edges, dists, elapsed)
     seg = np.diff(t_at)
     assert abs(float(seg.sum()) - float(elapsed[-1] - elapsed[0])) < 1e-9, \
@@ -490,7 +501,8 @@ def segment_times(corner_list: list[Corner], total_ref: float, dists, elapsed,
 
 def lap_corner_stats(corner_list: list[Corner], total_ref: float, dists, speed_kmh,
                      elapsed, ref: list[CornerStat] | None = None,
-                     traces: tuple | None = None) -> list[CornerStat]:
+                     traces: tuple | None = None,
+                     alignment=DERIVE_ALIGNMENT) -> list[CornerStat]:
     """Project the corner windows onto ONE lap and measure each corner: time-in-corner
     (from the same edge interpolation as segment_times, so corner times + straight times
     partition the lap exactly), apex = MIN speed over the in-window samples (+ its lap
@@ -500,18 +512,26 @@ def lap_corner_stats(corner_list: list[Corner], total_ref: float, dists, speed_k
     The window-boundary projection is the drift-gated alignment (project_boundaries): normalized
     distance within NORMALIZED_DRIFT_MAX, one monotone spatial warp for the whole lap above it.
     `traces` (Session-fed (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum)) enables the spatial
-    alignment; omitted (pure-numpy callers) → normalized, byte-identical to the pre-gate output."""
+    alignment; omitted (pure-numpy callers) → normalized, byte-identical to the pre-gate output.
+    `alignment` is this lap's warp already built — WITHOUT it this function derives the same warp
+    TWICE (once for the partition, once for the window edges below)."""
     dists = np.asarray(dists, float)
     speed_kmh = np.asarray(speed_kmh, float)
     elapsed = np.asarray(elapsed, float)
-    seg = segment_times(corner_list, total_ref, dists, elapsed, traces)
     total_lap = float(dists[-1])
+    # Derive the lap's warp ONCE here when the caller did not supply it, so the two projections
+    # below share it instead of each running the lap's spatial match.
+    if alignment is DERIVE_ALIGNMENT:
+        frame = [b for c in corner_list for b in (c.enter, c.exit)]
+        alignment = lap_alignment(frame, total_ref, total_lap, traces=traces) if frame else None
+    seg = segment_times(corner_list, total_ref, dists, elapsed, traces, alignment)
     # The same gated enter/exit boundaries segment_times partitions on, so the in-window apex/edge
     # speeds read off the identical window (interleaved [enter1, exit1, enter2, exit2, …]).
     interior = []
     for c in corner_list:
         interior.extend((c.enter, c.exit))
-    proj = (project_boundaries(interior, total_ref, total_lap, traces=traces)
+    proj = (project_boundaries(interior, total_ref, total_lap, traces=traces,
+                               alignment=alignment)
             if interior else np.empty(0))
     out: list[CornerStat] = []
     for i, c in enumerate(corner_list):

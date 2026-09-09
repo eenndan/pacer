@@ -49,7 +49,8 @@ class DrivingChannels:
                  active_baseline_total_distance: Callable[[], float | None],
                  corner_basis: Callable[[], tuple | None],
                  lap_corner_stats: Callable[[int], list],
-                 lap_elevation: Callable[[int], np.ndarray] | None = None):
+                 lap_elevation: Callable[[int], np.ndarray] | None = None,
+                 corner_alignment: Callable[[int, float], object] | None = None):
         self._gmeter = gmeter
         # Per-sample altitude for the lap (for the OPT-IN hill-compensated braking, driving.py);
         # optional so a bare/old construction still works — a None just keeps braking flat-ground.
@@ -65,6 +66,11 @@ class DrivingChannels:
         self._active_baseline_total_distance = active_baseline_total_distance
         self._corner_basis = corner_basis
         self._lap_corner_stats = lap_corner_stats
+        # The composed CornerModel's MEMOIZED per-lap warp (corner_model.lap_alignment). Optional
+        # so a bare/old construction still works — a None just derives the warp per call, which is
+        # what every one of the three projection sites below used to do (three spatial matches per
+        # lap per refresh, on top of the corner service's own).
+        self._corner_alignment = corner_alignment
         # thresholds + grip envelope: _UNSET until computed (None = legal no-g); both derive from the
         # g series, which is constant -> kept across re-segments.
         self._thresholds_cache: object = _UNSET
@@ -120,6 +126,18 @@ class DrivingChannels:
         if len(cum) < 2 or float(cum[-1]) <= 0:
             return None
         return (*ref_trace, xs, ys, cum)
+
+    def _corner_align(self, lap_id: int, total_lap: float):
+        """This lap's drift-gated warp from the corner service's MEMO, or the DERIVE sentinel when
+        no accessor was injected (then `project_boundaries` builds it itself, as before).
+
+        The three sites below all project the same whole-partition frame onto the same lap, so they
+        must read the same warp — sharing the corner service's memo is what makes "the SAME gate
+        lap_corner_stats uses", which each of their docstrings claims, true by construction instead
+        of by two parallel implementations agreeing (`_corner_traces` mirrors `_lap_traces`)."""
+        if self._corner_alignment is None:
+            return corners.DERIVE_ALIGNMENT
+        return self._corner_alignment(lap_id, float(total_lap))
 
     # ------------------------------------------------------------------ g + thresholds
     def _lap_g_arrays(self, lap_id: int):
@@ -200,7 +218,8 @@ class DrivingChannels:
             return None
         interior = [b for c in corner_list for b in (c.enter, c.exit)]
         proj = corners.project_boundaries(interior, total_ref, total_lap,
-                                          traces=self._corner_traces(lap_id))
+                                          traces=self._corner_traces(lap_id),
+                                          alignment=self._corner_align(lap_id, total_lap))
         return [(max(0.0, float(proj[2 * i]) - driving.CORNER_LEAD_M), float(proj[2 * i + 1]))
                 for i in range(len(corner_list))]
 
@@ -267,7 +286,8 @@ class DrivingChannels:
         # the old normalized projection in the common well-matched case.
         interior = [b for c in corner_list for b in (c.enter, c.exit)]
         proj = corners.project_boundaries(interior, total_ref, total_lap,
-                                          traces=self._corner_traces(lap_id))
+                                          traces=self._corner_traces(lap_id),
+                                          alignment=self._corner_align(lap_id, total_lap))
         windows = [(float(proj[2 * i]), float(proj[2 * i + 1])) for i in range(len(corner_list))]
         grip = driving.corner_grip(dists, long_g, lat_g, windows, self._grip_envelope())
         self._corner_grip_cache[lap_id] = grip
@@ -373,7 +393,8 @@ class DrivingChannels:
         # the old normalized projection in the common well-matched case.
         interior = [b for c in corner_list for b in (c.enter, c.exit)]
         proj = corners.project_boundaries(interior, total_ref, total_lap,
-                                          traces=self._corner_traces(lap_id))
+                                          traces=self._corner_traces(lap_id),
+                                          alignment=self._corner_align(lap_id, total_lap))
         out: list[driving.BrakePoint] = []
         for i, c in enumerate(corner_list):
             if i >= len(stats):

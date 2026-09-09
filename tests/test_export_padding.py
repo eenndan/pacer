@@ -107,8 +107,8 @@ class PadStub:
     def gmeter_source(self):
         return "accl"
 
-    def _lap_trace_xyt(self, lap_id):
-        return self.tx, self.ty, self.tt
+    def lap_trace_xy(self, lap_id):
+        return self.tx, self.ty
 
 
 def _spec(s, lap=1, pad=0.0, out="/out/clip.mp4", **cfg):

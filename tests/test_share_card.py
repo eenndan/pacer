@@ -29,7 +29,7 @@ from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
-from studio import coaching, share_card, theme  # noqa: E402
+from studio import coaching, corner_model, share_card, theme  # noqa: E402
 
 theme.register_fonts()
 
@@ -52,7 +52,13 @@ class FakeSession:
     """The minimal Session surface share_card.card_data reaches through — duck-typed, no pacer."""
 
     def __init__(self, *, track="Daytona MK", verified=True, degraded=False, best_id=3,
-                 best_time=68.42, ideal=67.90, date="2026-06-29", opps=None, ideal_donor=None):
+                 best_time=68.42, ideal=67.90, date="2026-06-29", opps=None, ideal_donor=None,
+                 ideal_laps=24):
+        # `ideal_laps=None` models a Session double with no `ideal_sample` accessor at all — the
+        # getattr-guarded degradation card_data takes, asserted below.
+        self._ideal_sample = (None if ideal_laps is None else
+                              corner_model.IdealSample(donors=11, laps=ideal_laps,
+                                                       corners=12, segments=25))
         self.track_name = track
         self.timing_verified = verified
         self.timing_quality = _quality(degraded)
@@ -76,6 +82,9 @@ class FakeSession:
     def ideal_donor_lap_id(self):
         return self._ideal_donor
 
+    def ideal_sample(self):
+        return self._ideal_sample
+
     def session_date(self):
         return self._date
 
@@ -94,6 +103,12 @@ def test_card_data_carries_the_expected_fields():
     assert d.best_time == "1:08.420", d.best_time
     assert d.best_lap_id == 3
     assert abs(d.delta_to_ideal_s - (68.42 - 67.90)) < 1e-6, d.delta_to_ideal_s
+    # §5.4: the SAMPLE travels with the gap, off `ideal_sample()` — the same accessor the Stats
+    # tile caption and the exported report read.
+    assert d.ideal_laps == 24, d.ideal_laps
+    # ...and a Session double with no `ideal_sample` accessor at all degrades to the un-counted
+    # line rather than crashing the one artifact a user SENDS to someone.
+    assert share_card.card_data(FakeSession(ideal_laps=None), unit="kmh").ideal_laps is None
     assert d.unit == "kmh"
     assert not d.blocked and d.stamp == ""
     assert d.top_opp is not None
@@ -229,16 +244,34 @@ def test_ideal_sublabel_fits_the_card_content_box_unelided():
     """The Δ-to-ideal sublabel is drawn with no fit and no elide at 24 px from the card's own
     `pad`, so its width is a hard constraint, not a preference. It names what the ideal is, and
     that wording changed with the maths (it used to say "best-at-each-point", which described the
-    deleted envelope), so the width is pinned here rather than eyeballed once."""
+    deleted envelope), so the width is pinned here rather than eyeballed once.
+
+    IT IS A FUNCTION NOW, so the width is pinned on the WIDEST FORM IT CAN PRINT, not on the one
+    today's fixture happens to produce: §5.4 put the sample size into the line ("over 24 laps"), and
+    a lap count is 1 to 3 digits. Measuring only the shipped string is how a pinned width rots the
+    first time the input grows — the exact failure mode this card's own "fits exactly" comments
+    were caught in once."""
     from PySide6.QtGui import QFontMetrics
     box = share_card.CARD_W - 2 * 72     # the card's content width (pad = 72 in render_card)
-    w = QFontMetrics(share_card._font(24)).horizontalAdvance(share_card.IDEAL_SUBLABEL)
-    assert w <= box, f"{share_card.IDEAL_SUBLABEL!r} is {w} px in a {box} px content box"
-    # It must still say what kind of thing this is: synthesized from pieces, not a lap driven.
-    lower = share_card.IDEAL_SUBLABEL.lower()
-    assert "not a single drivable lap" in lower, share_card.IDEAL_SUBLABEL
-    assert "corners" in lower and "straights" in lower, share_card.IDEAL_SUBLABEL
-    print(f"test_ideal_sublabel_fits_the_card_content_box_unelided OK ({w} px / {box} px)")
+    fm = QFontMetrics(share_card._font(24))
+    widths = {n: fm.horizontalAdvance(share_card.ideal_sublabel(n))
+              for n in (None, 1, 24, 999)}
+    for n, w in widths.items():
+        assert w <= box, f"{share_card.ideal_sublabel(n)!r} is {w} px in a {box} px content box"
+    # The counted forms must actually be the wider ones — a guard that the count is IN the string.
+    assert widths[999] > widths[None], widths
+    # It must still say what kind of thing this is: synthesized from pieces, not a lap driven...
+    for n in (None, 24):
+        lower = share_card.ideal_sublabel(n).lower()
+        assert "not a single drivable lap" in lower, lower
+        assert "corners" in lower and "straights" in lower, lower
+    # ...and, when there is a count, WHAT IT WAS MINIMISED OVER. The card is the app's most public
+    # and least hoverable surface; it was the one printing the ideal with no sample (§5.4).
+    assert "over 24 laps" in share_card.ideal_sublabel(24), share_card.ideal_sublabel(24)
+    # None is the no-sample fallback: the un-counted line, never the string "None".
+    assert "None" not in share_card.ideal_sublabel(None), share_card.ideal_sublabel(None)
+    print("test_ideal_sublabel_fits_the_card_content_box_unelided OK "
+          f"({widths[None]} / {widths[24]} / {widths[999]} px in a {box} px box)")
 
 
 # --------------------------------------------------------------------- render-layer tests

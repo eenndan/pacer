@@ -92,9 +92,12 @@ from studio import app as studio_app  # noqa: E402
 from studio import coaching, data_quality, export_data, export_video  # noqa: E402
 from studio.app import APP_NAME, StudioWindow  # noqa: E402
 
-# The four File ▸ Export data actions L1-03 is about, by the attribute the window keeps them on.
+# The File ▸ Export data actions L1-03 is about, by the attribute the window keeps them on.
+# "Copy stats summary" (N13) joined them: it publishes the same numbers the HTML report does, so
+# it takes the same has_laps gate and the same REASON tooltip — L1-03's finding was that a new
+# export action added later would be the one that silently skipped both.
 DATA_EXPORTS = ("_export_laps_action", "_export_channels_action", "_export_report_action",
-                "_export_video_action")
+                "_copy_stats_action", "_export_video_action")
 CARD_EXPORTS = ("_share_card_action", "_copy_card_action")
 
 
@@ -105,8 +108,13 @@ class FakeSession:
                  centroid=(52.0, -0.78)):
         self.track_name = track
         self.timing_verified = verified
+        # THE CONSTANTS, not hand-typed literals. `"media_fallback"` is not
+        # `MEDIA_CLOCK_FALLBACK` ("media_clock_fallback"), so `degraded=True` built a session whose
+        # `.degraded` was False — no caller passes it today, which is exactly why it went
+        # unnoticed, and the next test to use it would have passed vacuously.
         self.timing_quality = data_quality.TimingQuality(
-            clock="media_fallback" if degraded else "gps9_trueclock", dropped_fraction=0.0)
+            clock=(data_quality.MEDIA_CLOCK_FALLBACK if degraded
+                   else data_quality.GPS9_TRUECLOCK), dropped_fraction=0.0)
         self._laps = list(laps)
         self._centroid = centroid
 

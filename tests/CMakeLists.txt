@@ -36,8 +36,10 @@ add_test(NAME test_import_ergonomics
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_import_ergonomics.py)
 set_tests_properties(test_import_ergonomics PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-# Layering contract (test/layering-contract): ONLY session/load/ingest/tracks may import the pacer
-# core — every view/controller/helper stays pacer-free. A pure `ast` walk of studio/*.py: no pacer,
+# Layering contract, BOTH directions (test/layering-contract, test/layering-qt-direction): ONLY
+# session/load/ingest/tracks may import the pacer core — every view/controller/helper stays
+# pacer-free; and only the view/Qt-infrastructure modules may import Qt (directly OR through a
+# studio import), so the data core stays headless. A pure `ast` walk of studio/*.py: no pacer,
 # no Qt, no telemetry file, so it needs neither the offscreen env nor the PYTHONPATH block below.
 add_test(NAME test_layering
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_layering.py)
@@ -174,7 +176,7 @@ add_test(NAME test_rainbow_map
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_rainbow_map.py)
 set_tests_properties(test_rainbow_map PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-# map_render (E2): the Qt-free pure-numpy track-map math extracted from map_view — bucketize /
+# map_render (E2): the pure-numpy track-map math extracted from map_view — bucketize /
 # bucket_polylines / resample_grid_to_points + the rainbow_channel per-channel value/bucket math
 # (speed/Δ/grip, the Δ+grip negation, the grip fixed scale, the GPS-dropout NaN-mask, the None
 # gates). Imports studio.theme -> Qt, so run offscreen; no telemetry file.
@@ -304,12 +306,39 @@ add_test(NAME test_corners
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corners.py)
 set_tests_properties(test_corners PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Corner-warp MEMO + its INVALIDATION (perf/stats-refresh-memo). Every corner-window projection is
+# a read of one per-lap monotone warp; nine call paths derived it separately (144 spatial matches
+# in ONE stats_view.refresh on the D24 0060 pair), so it is now memoized on the corner service.
+# The risk is not the speed-up, it is a warp surviving a start-line drag and silently re-framing
+# every corner Δ. Drives drag → sector edit → undo → reference load against a from-scratch oracle,
+# with an explicit assertion that the fixture crosses NORMALIZED_DRIFT_MAX (below the gate every
+# warp is None and the file would assert nothing). Bare Session via tests/_synthetic — no Qt
+# widgets, no telemetry file; imports pacer transitively through studio.session.
+add_test(NAME test_corner_alignment_memo
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_alignment_memo.py)
+set_tests_properties(test_corner_alignment_memo PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Data-export writers (studio.export_data, F11): laps/channels CSV schema + the
 # float-repr round-trip exactness + the self-contained HTML report (XML-parsed, embedded
 # PNGs decoded), on bare Sessions seeded via tests/_synthetic with a FakeLaps duck-type.
 # Imports pacer transitively (the session chain), no Qt, no telemetry file.
 add_test(NAME test_export_data
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_data.py)
+# THE DISCLOSURE THAT LEAVES THE APP (critical review §5.4 + roadmap N13), and the ATOMICITY of the
+# three writers (§7.5, second half). The exported surfaces were the only ones exempt from the rule
+# every in-app surface follows: the share card printed "+4.56 s vs your ideal lap" with no lap
+# count and the laps.csv trailer printed "Theoretical best,62.869" bare, while the Stats tile the
+# number comes from is captioned `theoretical best · 24 laps` — and the ideal is an order statistic
+# that moves 67.957 -> 66.563 s between 5 and 65 laps of the SAME DRIVING. So this asserts the
+# exported TEXT against `theoretical_best()` / `ideal_sample()` directly (not "looks similar") on
+# the CSV, the HTML report, the clipboard summary and the card at once, plus every value
+# `stats_summary` publishes against the accessor the Stats page reads — "the report cannot drift
+# from the page" is a claim, and this is its test. The atomic half drives each writer twice, the
+# second time through a handle that dies MID-WRITE (the first draft poisoned the writer's data
+# source instead, which raises before the file is opened and let a deliberately non-atomic writer
+# pass). Bare Sessions via _synthetic; no Qt event loop, no telemetry file.
+add_test(NAME test_export_disclosures
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_disclosures.py)
 # Consistency stats (studio.consistency, F6): σ / median-loss / ranking exactness vs direct
 # numpy, the ⚠ dropout-lap exclusion on a bare Session, and the map corner-ring highlight
 # (offscreen Qt). The old ConsistencyPanel UI moved into the Stats page — see test_stats.
@@ -708,8 +737,10 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_delta_engine test_controllers test_central_view_realqt
                         test_load_failure test_load_affordances test_load_lifecycle
                         test_validate_wallclock
-                        test_corners test_consistency test_gmeter test_gmeter_overlay
-                        test_export_data test_driving test_coaching test_library test_export_video
+                        test_corners test_corner_alignment_memo
+                        test_consistency test_gmeter test_gmeter_overlay
+                        test_export_data test_export_disclosures
+                        test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card test_stats
                         test_lap_table_columns test_help_dialog test_grid_and_timing_guards
                         test_lap_table_empty_states test_charts_header_budget
@@ -904,3 +935,22 @@ add_test(NAME test_welcome_first_touch
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_welcome_first_touch.py)
 set_tests_properties(test_welcome_first_touch PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# AN AXIS TITLE IS TEXT, measured on painted pixels (fix/stats-dashboard-composition). The charts
+# panel's three axis titles shipped at 1.19:1 on the plot background — against 5.7:1 for the tick
+# labels beside them — because pyqtgraph lets THREE calls own one colour: `labelString` bakes
+# `labelStyle` into the label HTML, and both `setPen` (the axis LINE) and `setTextPen` (the tick
+# TEXT) end by writing `labelStyle['color']` from their own pen and re-rendering. The hairline pen
+# ran last, and re-ran on every device-pixel-ratio change, so passing a colour at `setLabel` is
+# only half the fix. Asserted on a RENDERED frame (a source check passes on the shipped build) at
+# both window sizes, through the unit / palette / DPR re-pen paths, on the Stats friction circle
+# whose titles went the same way via `_apply_pen_scale`, and with a NEGATIVE CONTROL that re-opens
+# the defect on a live widget (5.90:1 -> 1.59:1 -> 5.90:1). Also holds widgets.WrapLabel measuring
+# itself from a CLEARED minimum — QLabel.heightForWidth is clamped by the widget's own minimum, so
+# the old code ratcheted a two-line height into every later width (the DATA TRUST row-3 defect).
+# Real PlotsView + real StatsView + real pyqtgraph draws; needs the shipped theme, so run
+# offscreen. No telemetry file.
+add_test(NAME test_chart_axis_legibility
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_axis_legibility.py)
+set_tests_properties(test_chart_axis_legibility PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

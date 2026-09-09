@@ -18,13 +18,17 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
+from ._signal import DASH as _DASH
 
 #: The numeric sort key a `NumItem` cell compares on (see below). One role for both tables.
 NUM_ROLE = Qt.UserRole
 
 #: The "no signal" value — an em-dash, never a fake 0. The app-wide convention the Stats page
-#: established and every `Tile` now inherits by default.
-DASH = "—"
+#: established and every `Tile` now inherits by default. Re-exported from `_signal`, which is
+#: where it had to live once the Qt-free export writers started printing the same mark for the
+#: same absent accessors (a report showing "0.00" where the page shows "—" is the whole rule
+#: inverted, and two constants is how that happens).
+DASH = _DASH
 
 
 #: Every mark a `Tile` value can print, in one string, so the value row is measured on the TYPE
@@ -94,6 +98,24 @@ class WrapLabel(QLabel):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        # MEASURE FROM A CLEARED MINIMUM, and that is not tidiness — it is what stops the line
+        # above from becoming a one-way RATCHET.
+        #
+        # ``QLabel.heightForWidth`` is clamped by the widget's OWN minimum: QLabelPrivate::
+        # sizeForWidth ends in ``expandedTo(q->minimumSize())``. So asking for the height while
+        # the PREVIOUS answer is still installed can only ever return that answer or more — a
+        # label that once wrapped to two lines claims two lines at every later width, forever,
+        # however wide the pane becomes. Measured on the shipped widget: 1178 px wide -> 14 px,
+        # narrowed to 258 -> 28, widened back to 1178 -> still 28 (14 again the moment the
+        # minimum is cleared). That is the whole of the Stats DATA TRUST card's third row
+        # "always wrapping at any width" — 421 px of ink in 470 px of column, laid out two lines
+        # tall and painted vertically centred in it, because the page had once been 445 px wide.
+        #
+        # Same shape as the EmptyState measure that became a pane's minimum (tests/
+        # test_measure_floors.py): a number a widget computed about itself must not become the
+        # floor of the next computation.
+        if self.minimumHeight():
+            self.setMinimumHeight(0)
         need = self.heightForWidth(self.width())
         if need > 0 and need != self.minimumHeight():
             self.setMinimumHeight(need)

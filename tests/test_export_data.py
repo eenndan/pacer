@@ -33,6 +33,7 @@ from _synthetic import (  # noqa: E402
     reset_corner_caches,
     seed_cols,
     seed_corner_basis,
+    seed_trace,
 )
 
 from studio import export_data, gmeter, units  # noqa: E402
@@ -52,12 +53,19 @@ class FakeLaps:
     lat/lon (lap_channels), and the first point's GPS9 timestamp (session_date)."""
 
     def __init__(self, lap_data, sector_lines=(), first_ts_ms=TS_MS):
-        self._laps = lap_data  # {lap_id: {time, dist, entry_mps, lat, lon}}
+        self._laps = lap_data  # {lap_id: {time, dist, entry_mps, lat, lon, t0}}
         self.sectors = SimpleNamespace(sector_lines=list(sector_lines))
         self._first_ts_ms = first_ts_ms
 
     def lap_time(self, i):
         return self._laps[i]["time"]
+
+    def start_timestamp(self, i):
+        """The lap's media-clock start — `Session.lap_window`'s first half, which
+        `SessionStats.lap_stats` slices the g-meter by. Needed since the HTML report grew the
+        Stats groups (N13): the report now reaches the same per-lap g/brake reductions the
+        Stats page does, and those go through lap_window."""
+        return self._laps[i]["t0"]
 
     def get_lap_distance(self, i):
         return self._laps[i]["dist"]
@@ -110,8 +118,9 @@ def make_stitched_session(*, n_sector_lines=0):
     s = bare_session(laps=laps_arr, best=2, valid=[0, 1, 2])
     for lap_id, (t, d) in laps_arr.items():
         seed_cols(s, lap_id, t, d)
+    seed_trace(s, laps_arr)  # SessionStats is wired over tt/tv/tx/ty (the report's stats groups)
     s.laps = FakeLaps(
-        {lap_id: {"time": float(t[-1] - t[0]), "dist": float(d[-1]),
+        {lap_id: {"time": float(t[-1] - t[0]), "dist": float(d[-1]), "t0": float(t[0]),
                   "entry_mps": 10.0 + lap_id, "lat": 52.0 + d * 1e-5 * np.pi,
                   "lon": -0.7 + d * 1.3e-5}
          for lap_id, (t, d) in laps_arr.items()},
@@ -140,10 +149,12 @@ def make_session(*, with_sectors=True, with_corners=True, with_g=True):
     s = bare_session(laps=laps_arr, best=1, valid=[0, 1, 2])
     for lap_id, (t, d) in laps_arr.items():
         seed_cols(s, lap_id, t, d)
+    seed_trace(s, laps_arr)  # SessionStats is wired over tt/tv/tx/ty (the report's stats groups)
     lap_data = {
         lap_id: {
             "time": spans[lap_id],
             "dist": float(d[-1]),
+            "t0": float(t[0]),
             "entry_mps": 10.0 + lap_id,
             # Smooth synthetic degrees so float-repr round-trip sees awkward values.
             "lat": 52.0 + d * 1e-5 * np.pi,
@@ -226,20 +237,21 @@ def test_write_laps_csv_matches_table():
     # laps_summary is the writer's own source, and it GATES the theoretical row (see the gate
     # test below), so the expectation is taken from it rather than from SUMMARY_ROWS.
     assert got[1 + n_data] == []  # blank separator between lap rows and trailer
-    assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s"]
+    # The mini-header grew two columns for §5.4's disclosure (over_laps / note); columns 0 and 1
+    # are byte-identical to what they always were — see SummaryRow on why the label is pinned.
+    assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s", "over_laps", "note"]
     trailer = got[3 + n_data:]
     summary = export_data.laps_summary(s)
-    assert [label for label, _v in summary] == ["Best rolling"], (
+    assert [r.label for r in summary] == ["Best rolling"], (
         "this fixture's lap 1 is quickest in every segment, so its ideal is that lap and the "
         "trailer withholds it")
     assert len(trailer) == len(summary)
-    for (label, value), row in zip(summary, trailer, strict=True):
-        assert row[0] == f"{export_data.SUMMARY_MARKER}: {label}"
-        assert row[1] == value
+    for r, row in zip(summary, trailer, strict=True):
+        assert row == [f"{export_data.SUMMARY_MARKER}: {r.label}", r.value, r.over_laps, r.note]
     accessors = dict(export_data.SUMMARY_ROWS)
-    for label, value in summary:
-        v = getattr(s, accessors[label])()
-        assert value == (f"{v:.3f}" if v is not None else "")
+    for r in summary:
+        v = getattr(s, accessors[r.label])()
+        assert r.value == (f"{v:.3f}" if v is not None else "")
     # theoretical <= rolling <= best lap time holds on the synthetic session too.
     th, ro = s.theoretical_best(), s.best_rolling_lap()
     best = s.lap_time(s.best_lap_id())
@@ -263,17 +275,17 @@ def test_laps_summary_gate_is_the_ideal_not_the_sector_count():
         stitched = make_stitched_session(n_sector_lines=n_lines)
         assert stitched.ideal_donor_lap_id() is None
         assert stitched.sector_count() == n_lines
-        labels = [label for label, _v in export_data.laps_summary(stitched)]
+        labels = [r.label for r in export_data.laps_summary(stitched)]
         assert labels == ["Theoretical best", "Best rolling"], (n_lines, labels)
         # ...and the value published is the ideal itself, strictly faster than the best lap.
-        value = dict(export_data.laps_summary(stitched))["Theoretical best"]
-        assert value == f"{stitched.theoretical_best():.3f}"
+        row = {r.label: r for r in export_data.laps_summary(stitched)}["Theoretical best"]
+        assert row.value == f"{stitched.theoretical_best():.3f}"
         assert stitched.theoretical_best() < stitched.lap_time(stitched.best_lap_id()) - 1e-3
 
     for with_sectors in (False, True):
         one_donor = make_session(with_sectors=with_sectors)
         assert one_donor.ideal_donor_lap_id() is not None, "fixture must be the degenerate case"
-        labels = [label for label, _v in export_data.laps_summary(one_donor)]
+        labels = [r.label for r in export_data.laps_summary(one_donor)]
         assert labels == ["Best rolling"], (with_sectors, labels)
 
     # Cross-check both ends land in the written CSV trailer, not just in laps_summary().
@@ -284,7 +296,7 @@ def test_laps_summary_gate_is_the_ideal_not_the_sector_count():
             with open(path, newline="", encoding="utf-8") as f:
                 got = list(csv.reader(f))
         n_data = len(session.valid_lap_ids())
-        assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s"]
+        assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s", "over_laps", "note"]
         trailer = got[3 + n_data:]
         assert len(trailer) == want, (want, trailer)
         assert trailer[-1][0] == f"{export_data.SUMMARY_MARKER}: Best rolling"
@@ -409,9 +421,14 @@ def test_report_html_wellformed_with_images():
     # expectation the same naive-local way so this holds in any analysis-machine timezone.
     expected_date = datetime.datetime.fromtimestamp(TS_MS / 1000.0).strftime("%Y-%m-%d")
     assert s.session_date() == expected_date and expected_date in body_text
-    # One table row per lap (+1 header row) in the laps table (the second <table>).
-    tables = root.findall(".//table")
-    assert len(tables[1].findall("tr")) == len(s.valid_lap_ids()) + 1
+    # One table row per lap (+1 header row) in the laps table. Located by its own header cell
+    # rather than by ORDINAL: the page now carries a `table.meta` and one `table.kv` per stats
+    # group (N13) between the two, and "the second <table>" would silently start asserting the
+    # SESSION group's row count the next time a group is added.
+    laps_tables = [t for t in root.findall(".//table")
+                   if [th.text for th in t.findall("tr/th")][:1] == ["lap"]]
+    assert len(laps_tables) == 1, [t.get("class") for t in root.findall(".//table")]
+    assert len(laps_tables[0].findall("tr")) == len(s.valid_lap_ids()) + 1
     # Both images embedded as base64 data URIs that decode back to real PNG bytes.
     imgs = root.findall(".//img")
     assert len(imgs) == 2

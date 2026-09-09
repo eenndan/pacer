@@ -284,9 +284,11 @@ them; an interrupted `pixi add` once pruned them and broke the build mid-session
    very top of that file is the one hand-kept region.
 
 The studio app layers **ingest → load → session → controllers → views** (only `session.py`,
-`load.py`, `ingest.py`, and `tracks.py` may import `pacer`; views stay pacer-free). For the full
-studio architecture rules an agent must respect (local-meter coordinate space, that pacer-free-views
-contract, perf invariants), see [studio/README.md](studio/README.md).
+`load.py`, `ingest.py`, and `tracks.py` may import `pacer`; views stay pacer-free — and, in the
+mirror direction, only the view / Qt-infrastructure modules may import Qt, so the data core stays
+headless). Both directions are enforced by `tests/test_layering.py`. For the full studio
+architecture rules an agent must respect (local-meter coordinate space, those layering contracts,
+perf invariants), see [studio/README.md](studio/README.md).
 
 ---
 

@@ -41,6 +41,13 @@ G = 9.80665  # m/s^2 (standard gravity)
 MAX_LONG_G = 2.0  # clip d|v|/dt spikes: a GPS glitch can't manufacture a real brake
 
 
+# --- display conventions shared by the Qt views and the Qt-free export writers ---
+#: The "no signal" value — an em-dash, never a fake 0. `widgets.DASH` re-exports it for the views;
+#: it lives here so the exported report/clipboard summary print the SAME mark for the same absent
+#: accessor. `fmt_time` below already returns it for a non-finite input.
+DASH = "—"
+
+
 def fmt_time(seconds: float) -> str:
     """`m:ss.mmm` lap/split-time formatting (em-dash for a non-finite input). Lives here —
     the pacer-free numpy-helpers module — so the views (plots_view/lap_table/
@@ -51,6 +58,31 @@ def fmt_time(seconds: float) -> str:
         return "—"
     m, s = divmod(seconds, 60)
     return f"{int(m)}:{s:06.3f}"
+
+
+def fmt_hms(seconds: float) -> str:
+    """A DURATION as `m:ss`, or `h:mm:ss` from an hour up — session totals span both.
+
+    The lap-time twin of `fmt_time` (which is `m:ss.mmm`, right for a lap and wrong for a
+    28-minute recording), and it lives here for the same reason: the Stats page and the exported
+    session report both print the recording's "recorded"/"moving" totals off the SAME
+    `SessionStats.totals()` floats, so they must round and punctuate them the same way or the
+    exported document quietly disagrees with the screen it was exported from. Moved verbatim from
+    stats_panel's private `_fmt_hms` when export_data (Qt-free by contract, so it cannot import
+    stats_panel) became the second caller."""
+    s = max(int(round(seconds)), 0)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def plural(n: int, noun: str) -> str:
+    """"1 corner" / "7 corners" — the one-line count helper the ideal-lap disclosure needs on
+    three nouns whose smallest legal value is 1 (a layout where the detector finds ONE corner
+    still builds a 3-segment partition and can still stitch a genuine ideal). Shared from here
+    because that disclosure is now printed by a Qt view AND by a Qt-free export writer; the
+    private copies in stats_panel / library_dialog delegate to it."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
 def lap_label(lap_id: int) -> str:

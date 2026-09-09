@@ -16,13 +16,26 @@ widget in Qt's DEFAULT LIGHT palette — a false "unstyled / amateur" look that 
 missing-setup artefact, not a real bug. We therefore call `theme.register_fonts()` +
 `theme.apply_theme(app)` BEFORE building any widget (see the marked block below); that is the
 load-bearing line, do not remove it.
+
+GRAB AFTER THE QUEUE SETTLES, NOT AFTER THE CALL RETURNS. A widget is laid out and painted from
+QUEUED events, so `widget.grab()` on the line after the call that changed it captures the state
+BEFORE the change — a resize, a tab switch, a selection or a freshly shown dialog all need an
+`app.processEvents()` (and, for anything driven by a timer, a short pump loop) in between, or the
+PNG is a picture of the previous frame and reads as a bug that is not there. Below, one pump
+covers the five window/quadrant shots because nothing changes between them, and the dialog gets
+its own after `show()`; a new shot that CHANGES state needs its own pump before it.
+
+THE SEAMS ARE JAILED, so what you get is the SHIPPED DEFAULTS and not your own setup: prefs,
+library, track_db and the demo cache all resolve into a throwaway temp dir for the run. Use
+`--prefs FILE` to capture a deliberate variant (mph, the colour-blind palette). See
+`studio/dev/_jail.py` for the measurement that motivated it.
 """
 from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
-import tempfile
 import time
 
 # Offscreen Qt + inert media BEFORE any Qt import (the PlayerPane reads PACER_NO_MEDIA at
@@ -32,9 +45,10 @@ os.environ.setdefault("PACER_NO_MEDIA", "1")
 
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
-from studio import library, theme  # noqa: E402
+from studio import theme  # noqa: E402
 from studio.app import StudioWindow  # noqa: E402
 from studio.coaching_panel import OpportunitiesDialog  # noqa: E402
+from studio.dev import _jail  # noqa: E402
 
 # The bundled sample: a real GPMF clip so the tool runs with no user-supplied file.
 _DEFAULT_RECORDING = "3rdparty/gpmf-parser/samples/hero6.mp4"
@@ -66,13 +80,20 @@ def _grab(widget, path: str) -> None:
     print("wrote", path)
 
 
-def capture(recording: str, out_dir: str) -> None:
+def capture(recording: str, out_dir: str, prefs_file: str | None = None) -> None:
     os.makedirs(out_dir, exist_ok=True)
 
-    # Never touch the user's real session library — divert the index to a throwaway temp dir BEFORE
-    # any window is built (the load-time upsert reads this seam), like _smoke.py.
-    lib_dir = tempfile.mkdtemp(prefix="pacer-uicapture-lib-")
-    library._app_support_dir = lambda: lib_dir
+    # Jail EVERY app-support seam to a throwaway temp dir BEFORE any window is built — the
+    # load-time library upsert and StudioWindow.__init__'s six prefs reads both resolve their seam
+    # at call time, so patching later is too late for the reads that set what the shots look like.
+    # This diverted `library` alone until the seams were measured (studio/dev/_jail.py has the
+    # numbers: six reads, zero writes, and all six PNGs differing operator-to-operator).
+    jail = _jail.divert_app_support("pacer-uicapture-")
+    # --prefs: the jail makes the SHIPPED DEFAULTS the baseline, which is the point; this puts the
+    # variants back deliberately (mph, the colour-blind palette, a different lap-panel tab) instead
+    # of inheriting whatever the operator happens to have set.
+    if prefs_file:
+        shutil.copyfile(prefs_file, os.path.join(jail.dir, "prefs.json"))
 
     app = QApplication.instance() or QApplication([])
     # --- LOAD-BEARING: theme the app BEFORE building any widget. Without this the whole window
@@ -118,8 +139,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("recording", nargs="?", default=_DEFAULT_RECORDING,
                         help=f"GPMF recording to load (default: {_DEFAULT_RECORDING})")
     parser.add_argument("--out", default="/tmp/uxshots", help="directory for the PNGs")
+    parser.add_argument("--prefs", default=None, metavar="PREFS.JSON",
+                        help="capture with this prefs file instead of the shipped defaults "
+                             "(e.g. mph or the colour-blind palette). Copied into the jail; the "
+                             "user's real prefs are never read.")
     args = parser.parse_args(argv)
-    capture(args.recording, args.out)
+    capture(args.recording, args.out, prefs_file=args.prefs)
 
 
 if __name__ == "__main__":

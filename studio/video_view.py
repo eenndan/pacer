@@ -55,9 +55,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, theme
+from . import chapters, gmeter_overlay, theme
 from .player_pane import PlayerPane
 from .widgets import PanelToolbar, ToggleButton, icon_button
+
+# The g-meter toggle's own line. The dial's two SENTENCES — the felt-force convention and the axis
+# provenance — are appended to it by set_gmeter_source, because the dial's face no longer carries
+# them (review §6.5) and the overlay window itself is transparent to the mouse, so it can never
+# host a tooltip of its own.
+_GMETER_TOOLTIP = "Show/hide the g-meter overlay (G)"
 
 # The transport bar's own icon-button size constants (_ICON_PX 18 / _ICON_BTN 32x30) are gone: the
 # app has ONE icon button now (widgets.icon_button, theme.ICON_BTN, theme.ICON_PX), and these were
@@ -662,9 +668,9 @@ class VideoView(QWidget):
         # observed per-chapter video-track durations (ms); the slider ranges to the larger of these
         # and the GPMF total (see _on_duration / _whole_session_max_ms).
         self._chapter_video_ms: dict[int, int] = {}
-        # last g-meter source + visibility, so a lazily-created secondary pane is seeded on entry.
-        self._gmeter_source: str | None = None
-        self._gmeter_long_source: str | None = None
+        # last g-meter visibility, so a lazily-created secondary pane is seeded on entry. (The
+        # dial's axis PROVENANCE is not pane state any more — it is one sentence on the toggle's
+        # tooltip; see set_gmeter_source.)
         self._gmeter_visible = False
         self.secondary: PlayerPane | None = None
         # the source the live secondary opened on (normally self._source; the reference ChapterMap
@@ -691,8 +697,11 @@ class VideoView(QWidget):
         self.mute_btn.clicked.connect(self.toggle_mute)
 
         # g-meter show/hide toggle. Checkable: QSS :checked tints the button; the glyph also goes accent.
+        # Its tooltip is also where the DIAL'S OWN two sentences live now — the felt-force
+        # convention and the axis provenance — appended by set_gmeter_source once a session is
+        # loaded (see there). Until then the toggle just says what it does.
         self.gmeter_btn = ToggleButton(glyph="ph.gauge", icon_only=True,
-                                       tooltip="Show/hide the g-meter overlay (G)")
+                                       tooltip=_GMETER_TOOLTIP)
         self.gmeter_btn.toggled.connect(self.set_gmeter_visible)
 
         # Icon-only compare toggle (same transport vocab as g-meter). Off by default, enabled only
@@ -1042,11 +1051,10 @@ class VideoView(QWidget):
             self.secondary.set_muted(True)  # secondary audio ALWAYS muted (telemetry tool)
             # IMPORTANT: do NOT connect the secondary's positionChanged to _on_pane_position —
             # it must NEVER reach the app's telemetry sync. It is video-only.
-            # Seed the fresh secondary with the ACTIVE g-meter source + visibility so toggling the
-            # g-meter ON *then* entering compare shows the overlay on BOTH panes with the right
-            # source (the secondary missed the earlier set_gmeter_source / set_gmeter_visible).
-            if self._gmeter_source is not None:
-                self.secondary.set_gmeter_source(self._gmeter_source, self._gmeter_long_source)
+            # Seed the fresh secondary with the ACTIVE g-meter visibility so toggling the g-meter
+            # ON *then* entering compare shows the overlay on BOTH panes (the secondary missed the
+            # earlier set_gmeter_visible). The axis provenance no longer needs seeding — the dial
+            # does not carry it; it is on the shared toggle's tooltip (see set_gmeter_source).
             self.secondary.set_gmeter_visible(self._gmeter_visible)
             # Wire the secondary's playback state so the transport glyph reflects BOTH panes (they
             # auto-pause at different lap ends; the glyph must not lie — see _on_state).
@@ -1363,14 +1371,20 @@ class VideoView(QWidget):
             pane.set_g(g)
 
     def set_gmeter_source(self, source: str, long_source: str | None = None):
-        # Remember the source so a LAZILY-created secondary pane can be seeded with it on entry
-        # (set_compare), so the overlay reads the right sensor label on BOTH panes. `long_source`
-        # is the longitudinal-axis provenance (GPS speed-derivative), tagged distinctly from the
-        # IMU lateral axis.
-        self._gmeter_source = source
-        self._gmeter_long_source = long_source
-        for pane in self._panes():
-            pane.set_gmeter_source(source, long_source)
+        """State the dial's g provenance — on the TOGGLE'S TOOLTIP, which is where it lives now.
+
+        It used to be a 6.5 px tag burned onto the dial's own face, one of eleven text items in a
+        120x140 card (review §6.5). The dial does not carry it any more, so this no longer reaches
+        into the panes at all: the fact is about the RECORDING, one per window, and a tooltip can
+        say it in a sentence where the face could only whisper an abbreviation. The overlay itself
+        cannot host a tooltip — it is `WA_TransparentForMouseEvents`, so a pointer never enters it.
+
+        `source` is the lateral-axis id ("accl"/"gps"), `long_source` the longitudinal one (the GPS
+        speed-derivative on the usual meter); `source_sentence` composes the felt-force convention
+        and the mixed provenance from the pair. `central_view` calls this before it disables the
+        button on a recording with no g at all, so the "no accelerometer data" tooltip wins there."""
+        self.gmeter_btn.setToolTip(
+            f"{_GMETER_TOOLTIP}\n{gmeter_overlay.source_sentence(source, long_source)}")
 
     def set_gmeter_lap(self, lap_id):
         """Tell the PRIMARY overlay which lap is being driven (per-lap max-G envelope scope). In

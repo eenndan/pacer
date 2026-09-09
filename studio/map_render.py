@@ -1,11 +1,17 @@
-"""map_render — the Qt-free pure-numpy core of the track map (extracted from studio/map_view.py).
+"""map_render — the pure-numpy core of the track map (extracted from studio/map_view.py).
 
 What lives here (and ONLY here): the array math the rainbow line and the bucketed polyline
 rendering need — value→bucket quantization (`bucketize`), per-bucket draw-array grouping
 (`bucket_polylines`), grid→points Δ resampling (`resample_grid_to_points`), and the per-channel
 rainbow computation (`rainbow_channel`: the channel→value mapping, the Δ/grip NEGATION, the fixed
 grip scale, and the GPS-dropout NaN-masking of cross-gap segments). Each function takes plain numpy
-arrays and returns plain numpy arrays / scalars; nothing here imports Qt or pacer.
+arrays and returns plain numpy arrays / scalars, and no function here touches Qt or pacer.
+
+The MODULE, however, is not Qt-free at import: `from .theme import MAP_RAINBOW_N` takes one int
+from the palette module, and `theme` imports PySide6 — so `import studio.map_render` really does
+load Qt (measured; `tests/test_layering.py` pins it in `QT_REACHING` rather than `ALLOWED_QT`).
+Nothing depends on that being true; taking the constant from a Qt-free home would make the module
+genuinely headless and the guard would then require shrinking `QT_REACHING` in the same PR.
 
 The widget (MapView._build_rainbow) fetches the per-lap channel arrays from the Session and then
 calls `rainbow_channel`, turning the returned (seg_buckets, legend texts) into Qt curve items —
