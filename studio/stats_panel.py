@@ -748,9 +748,14 @@ class StatsView(QWidget):
         self.no_laps_prose.setProperty("role", "EmptyBody")
         self.no_laps_prose.setMaximumWidth(theme.EMPTY_MEASURE_PX)
         self.no_laps_prose.setVisible(False)
+        # MOUNT, THEN FILL (§3.9). Safe as written — the child is fresh and unparented — but
+        # `QLayout::addWidget` on a FREE-STANDING layout does half a move: it drops the widget from
+        # its old layout and cannot reparent it, because the layout it is being added to has no
+        # widget yet. That is the #200 SIGSEGV, and it costs two lines in the right order to make
+        # the shape safe for the first caller who hands over a mounted widget.
         self._no_laps_prose_row = QHBoxLayout()
-        self._no_laps_prose_row.addWidget(self.no_laps_prose)
         page.addLayout(self._no_laps_prose_row)
+        self._no_laps_prose_row.addWidget(self.no_laps_prose)
         self._show_no_laps_prose(False)
 
         # --- THE SECTION COLUMNS. Three widgets, each an ordinary vertical column of the sections
