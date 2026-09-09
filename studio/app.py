@@ -137,6 +137,22 @@ SIDECAR_UNREADABLE_NOTICE = ("saved timing lines couldn't be read — the .pacer
 # way to tell that from a genuinely new circuit (QA D2-16).
 TRACKS_UNREADABLE_NOTICE = ("your saved tracks couldn't be read — tracks.json is damaged, so no "
                             "circuit will be auto-detected")
+# THE TWO SILENT PERSIST FAILURES (§7.5). Both writes are deliberately best-effort — neither may
+# break a load or a drag — but "best-effort" had been implemented as a print to a console the user
+# does not have, so the failure was invisible ON EVERY SURFACE. Measured with the app-support dir
+# made read-only and a real recording loaded: `PermissionError(13)`, `library.json` absent, 0
+# entries, and the status bar said only "1 of 3 chapters" — nothing, anywhere, about the library.
+#
+# The consequence is not cosmetic: the Library and the whole PB history are built from that index,
+# so every session silently never happened, and the next PB toast compares against an index that
+# is missing everything. These are session-scoped FACTS ("this is still not being saved"), not
+# events, which is why they are `_session_notice` clauses (untimed) rather than transient messages.
+LIBRARY_UNWRITABLE_NOTICE = ("this session couldn't be added to your library — check permissions on "
+                             "~/Library/Application Support/pacer; the Library and PB history "
+                             "won't include it")
+SIDECAR_UNWRITABLE_NOTICE = ("your timing lines couldn't be saved next to the recording — check "
+                             "permissions on that folder; the placement holds for now but won't "
+                             "be there next time")
 # A recording that READ cleanly and whose view then refused to build. Deliberately blames the app,
 # not the file: Session.load already succeeded, so nothing about the user's footage is in question
 # and "copy it off the SD card again" would send them to fix the wrong thing. It names the one
@@ -997,14 +1013,19 @@ class StudioWindow(QMainWindow):
             # follow-up) waits on loadFinished, and a load that ends in recovery has still ENDED.
             self.loadFinished.emit()
             return
+        # Record this recording in the local session library (see _update_library) and, if this
+        # session's best lap beats the track's prior PB on verified timing, celebrate it.
+        #
+        # BEFORE the notice, not after, and that ordering is the fix: whether the library could be
+        # written is one of the facts the notice states (§7.5), and a notice decided first is
+        # necessarily silent about a failure that has not happened yet. Measured with a read-only
+        # app-support dir — the clause was in `_session_notice()` and still not on the status bar,
+        # because the only call that would have shown it had already run.
+        moment = self._update_library(paths)
         # One-line, non-fatal: the statusbar mirrors the console "studio:" notice style.
         notice = self._apply_session_notice()
         if notice:
             print(f"studio: {notice}", flush=True)
-
-        # Record this recording in the local session library (see _update_library) and, if this
-        # session's best lap beats the track's prior PB on verified timing, celebrate it.
-        moment = self._update_library(paths)
         if moment is not None:
             self._show_pb_moment(moment)
         self.loadFinished.emit()
@@ -1141,9 +1162,17 @@ class StudioWindow(QMainWindow):
                           "analyse the whole recording") if subset else None
         tracks_notice = (TRACKS_UNREADABLE_NOTICE
                          if getattr(self, "_tracks_unreadable", False) else None)
+        # The two writes that used to fail into a print (§7.5). The library flag is set by whichever
+        # of the two write paths ran last; the sidecar flag is owned by the view that does the write.
+        library_notice = (LIBRARY_UNWRITABLE_NOTICE
+                          if getattr(self, "_library_unwritable", False) else None)
+        sidecar_write_notice = (SIDECAR_UNWRITABLE_NOTICE
+                                if getattr(getattr(self, "view", None), "sidecar_write_failed",
+                                           False) else None)
         drop_notice = getattr(self, "_drop_notice", None)
         return " · ".join(p for p in (notice, sidecar_notice, skipped_notice, ref_skipped_notice,
-                                      chapter_notice, tracks_notice, drop_notice) if p) or None
+                                      chapter_notice, tracks_notice, library_notice,
+                                      sidecar_write_notice, drop_notice) if p) or None
 
     def _apply_session_notice(self) -> str | None:
         """Put the current _session_notice on the status bar and return it.
@@ -2358,8 +2387,19 @@ class StudioWindow(QMainWindow):
                 degraded=self.session.timing_quality.degraded,
                 fingerprint_key=entry.get("fingerprint"))
             library.upsert_and_save(entry)
-        except Exception as exc:  # noqa: BLE001 — the index is additive; never break a load
-            print(f"studio: session library not updated ({exc!r}).", flush=True)
+            self._library_unwritable = False
+        except OSError:
+            # The DISK said no. That is the one library failure the user can act on, so it is the
+            # one that earns a notice; the traceback goes to the logger rather than a print.
+            self._library_unwritable = True
+            _log.exception("session library not updated")
+        except Exception:  # noqa: BLE001 — the index is additive; never break a load
+            # ANYTHING ELSE IS OUR BUG, and must not be reported as theirs. The notice tells the
+            # user to check permissions on their app-support dir; saying that about a TypeError in
+            # our own entry construction sends them to fix a filesystem that is fine. (Caught in
+            # review: a stub session in test_load_failure raised AttributeError here and the
+            # status bar duly advised the user about permissions.) Logged, not surfaced.
+            _log.exception("session library not updated (not a write failure)")
         return moment
 
     def _library_excludes(self, paths: list[str]) -> bool:
@@ -2401,8 +2441,13 @@ class StudioWindow(QMainWindow):
             if self._library_excludes(paths):
                 return
             library.upsert_and_save(self.session.library_entry(paths))
-        except Exception as exc:  # noqa: BLE001 — the index is additive; never break the session
-            print(f"studio: session library not updated ({exc!r}).", flush=True)
+            self._library_unwritable = False
+        except OSError:
+            self._library_unwritable = True
+            _log.exception("session library entry not refreshed")
+            self._apply_session_notice()   # this path runs on a drag, long after the load notice
+        except Exception:  # noqa: BLE001 — the index is additive; never break the session
+            _log.exception("session library entry not refreshed (not a write failure)")
 
     def _show_pb_moment(self, moment: dict):
         """Show the transient "new personal best!" toast for a ``library.pb_moment`` result. Fully

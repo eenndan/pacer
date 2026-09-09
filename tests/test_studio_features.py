@@ -1973,6 +1973,80 @@ def test_install_excepthook_sets_handler_and_is_defensive_without_qapplication()
     print("test_install_excepthook_sets_handler_and_is_defensive_without_qapplication OK")
 
 
+def test_a_library_write_failure_reaches_the_status_bar():
+    """§7.5: `_update_library` is best-effort by design — the index is additive and a write must
+    never break a load — but "best-effort" was implemented as a `print`, which is not a surface.
+
+    Measured on a real recording with the app-support dir chmod'd read-only: `PermissionError(13)`,
+    `library.json` absent, 0 entries, and the status bar said only "1 of 3 chapters". The Library
+    and the entire PB history are built from that index, so every session silently never happened
+    and the next PB toast compares against an index missing everything.
+
+    Also pins the ORDERING that made the first attempt at this fix useless: the clause was in
+    `_session_notice()` and STILL not on screen, because the notice was applied before the library
+    write it describes."""
+    from studio import app as studio_app
+    from studio.app import LIBRARY_UNWRITABLE_NOTICE, StudioWindow
+
+    w = StudioWindow([_BUNDLED_SAMPLE])          # a notice needs a loaded session to describe
+    try:
+        assert _pump_until(lambda: w.view is not None), "async load never completed"
+        # the flag the write paths set, and the clause it must produce
+        w._library_unwritable = True
+        notice = w._session_notice()
+        assert notice and LIBRARY_UNWRITABLE_NOTICE in notice, notice
+        w._library_unwritable = False
+        assert LIBRARY_UNWRITABLE_NOTICE not in (w._session_notice() or ""), w._session_notice()
+
+        # ...and the write path actually sets it. `_update_library` swallows by design; what it
+        # must not do is swallow SILENTLY.
+        class _Sess:
+            def library_entry(self, paths):
+                return {"track": "T", "best": 60.0, "fingerprint": "f"}
+            timing_verified = True
+            timing_quality = SimpleNamespace(degraded=False)
+            def valid_lap_ids(self):
+                return [0, 1]
+
+        real_session = w.session
+        w.session = _Sess()                      # the bundled sample is library-EXCLUDED by design
+        orig = studio_app.library.upsert_and_save
+        studio_app.library.upsert_and_save = _raise_permission
+        try:
+            w._update_library(["/nowhere/GX010001.MP4"])
+        finally:
+            studio_app.library.upsert_and_save = orig
+            w.session = real_session
+        assert w._library_unwritable is True, "a failed library write must be remembered"
+        assert LIBRARY_UNWRITABLE_NOTICE in (w._session_notice() or ""), w._session_notice()
+    finally:
+        w.close()
+    print("test_a_library_write_failure_reaches_the_status_bar OK")
+
+
+def _raise_permission(*_a, **_k):
+    raise PermissionError(13, "Permission denied")
+
+
+def test_a_failed_timing_line_save_does_not_look_saved():
+    """§7.5: the sidecar write is best-effort too, and the drag stands on screen either way — so a
+    failed write was INDISTINGUISHABLE from a good one until the user reopened the recording and
+    found their start line gone. The view records the failure; the window's session notice (already
+    re-decided on every `timingEdited`) says so for as long as it is true."""
+    from studio.app import SIDECAR_UNWRITABLE_NOTICE, StudioWindow
+
+    w = StudioWindow([_BUNDLED_SAMPLE])
+    try:
+        assert _pump_until(lambda: w.view is not None), "async load never completed"
+        assert w.view.sidecar_write_failed is False, "a fresh view has not failed anything"
+        assert SIDECAR_UNWRITABLE_NOTICE not in (w._session_notice() or "")
+        w.view.sidecar_write_failed = True
+        assert SIDECAR_UNWRITABLE_NOTICE in (w._session_notice() or ""), w._session_notice()
+    finally:
+        w.close()
+    print("test_a_failed_timing_line_save_does_not_look_saved OK")
+
+
 def test_the_reporter_shows_once_and_never_off_the_gui_thread():
     """§3.6, measured before it was written. The shipped hook had no latch, no thread check, and
     `threading.excepthook` was never installed:
