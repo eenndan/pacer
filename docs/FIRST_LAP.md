@@ -17,12 +17,14 @@ deliberately opens exactly the file you picked. Either way, if you end up lookin
 recording the window says so — *"1 of 3 chapters — File ▸ Load full recording to analyse the whole
 recording"* — and that menu item is live.
 
-> **About the "Open demo" button.** It resolves a small real lapping clip in three steps —
-> `PACER_DEMO_MP4`, then a local cache, then a one-time download of a release asset. **That asset
-> has never been published**, so on a machine with neither the env var nor a cache the button will
-> tell you it couldn't fetch the clip and leave you on the welcome screen. It is honest about
-> failing, but it is not a substitute for your own footage yet. To use it today, point
-> `PACER_DEMO_MP4` (or `--demo` with `PACER_DEMO_URL`) at a recording you already have.
+> **About the "Open demo" button.** You will only see it if there is a demo clip on your machine to
+> open: Pacer looks for `PACER_DEMO_MP4` and then a local cache, and if neither resolves the button
+> is not shown at all. **The release asset it would otherwise download has never been published**
+> (distribution is a non-goal here), and a button whose only possible outcome is an apology is worse
+> than no button — so the welcome screen offers the one door that works: your own footage, opened or
+> dropped. To get the button, point `PACER_DEMO_MP4` at a recording you already have. `--demo` on
+> the command line still *attempts* the download (with `PACER_DEMO_URL` for a mirror) and says so
+> plainly if it can't.
 
 ## 2 · Set where a lap begins (only on a new track)
 

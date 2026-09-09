@@ -887,3 +887,20 @@ add_test(NAME test_version
 # otherwise stdlib, so like test_version it needs neither the offscreen env nor the PYTHONPATH.
 add_test(NAME test_landing_page
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_landing_page.py)
+
+# THE FIRST TOUCH (review §6.7) — what the welcome screen OFFERS before anything is loaded, in all
+# three demo-availability states. The second CTA used to be unconditional while the clip it resolves
+# comes from an env var, a cache, or a release asset that was never published, so on any machine
+# without the first two the obvious low-commitment click produced an apology as the first experience
+# of the app. Pins: the button exists iff studio.demo.demo_available(); PACER_DEMO_MP4 (the
+# demo-recording path) and a cached clip both light it up AND open that exact file end to end
+# through the production slots; `--demo` still tries the network even when the UI offers nothing;
+# the amber PRIMARY is never the smaller twin (resting and busy, both sizes); and the drop glyph is
+# the app's OWN mark, asserted from the window composite in named theme colours and against the
+# icon generator's geometry. Real StudioWindow + real theme -> offscreen; PYTHONPATH for the
+# cmake-deployed bindings (studio.app reaches studio.session); every persistence seam INCLUDING the
+# demo cache is redirected inside the test, so a developer with a cached clip measures what CI does.
+add_test(NAME test_welcome_first_touch
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_welcome_first_touch.py)
+set_tests_properties(test_welcome_first_touch PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

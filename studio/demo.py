@@ -76,17 +76,54 @@ def _try_download_demo(dest: str, url: str | None = None) -> bool:
     return os.path.isfile(dest)
 
 
+def _resolve_local() -> str | None:
+    """The OFFLINE half of the resolution order — the env var, then the cache — or None.
+
+    Its own function because two callers want exactly this and only this: `resolve_demo_recording`
+    before it considers the network, and `demo_available` (which must never reach it). Keeping it
+    separate also means a test that stands in for the WORKER's resolve — the suite monkeypatches
+    `resolve_demo_recording` to make a fetch slow, or to fail it — does not thereby decide whether
+    the UI offers the button, which is a different question answered from the real filesystem."""
+    env = os.environ.get("PACER_DEMO_MP4")
+    if env and os.path.isfile(env):
+        return env
+    cached = demo_cache_path()
+    return cached if os.path.isfile(cached) else None
+
+
 def resolve_demo_recording(allow_download: bool = True) -> str | None:
     """Resolve a demo recording PATH for `--demo`, or None if unavailable (then the caller opens
     the normal empty state). Order: PACER_DEMO_MP4 env -> the local cache -> a one-time download
     (when `allow_download`). `allow_download=False` makes this a pure, offline path lookup (the test
     path)."""
-    env = os.environ.get("PACER_DEMO_MP4")
-    if env and os.path.isfile(env):
-        return env
+    local = _resolve_local()
+    if local is not None:
+        return local
     cached = demo_cache_path()
-    if os.path.isfile(cached):
-        return cached
     if allow_download and _try_download_demo(cached):
         return cached
     return None
+
+
+def demo_available() -> bool:
+    """Is there a demo recording ON THIS MACHINE, RIGHT NOW, that a click could open?
+
+    This is what the welcome screen's second button is gated on, and it is deliberately the OFFLINE
+    half of `resolve_demo_recording` — the env var or the cache, no network. Two reasons, and both
+    are about not lying to the first-touch screen:
+
+      * THE THIRD STEP IS A PROMISE NOBODY KEPT. `_DEMO_URL` points at a release asset that was
+        never published (docs/FIRST_LAP.md says so in as many words, and distribution is an
+        explicit non-goal), so on a machine with neither the env var nor a cache the button could
+        only ever end at "Demo clip unavailable…" — the FIRST thing a portfolio reviewer who builds
+        from source would see, from the obvious low-commitment click. A button whose only outcome
+        is an apology should not be on screen.
+      * A REACHABILITY PROBE IS NOT FREE AND NOT HONEST EITHER. Asking the network whether the asset
+        exists means a blocking HEAD (or a worker + a button that changes its mind a second after
+        the window opens) to answer a question about a file that is not there. The offline answer is
+        exact, instant, and true.
+
+    `--demo` on the CLI still tries the download — an explicit request gets an explicit attempt, and
+    an explicit "couldn't fetch it" if that fails. This only decides whether the UI OFFERS it.
+    """
+    return _resolve_local() is not None

@@ -1555,14 +1555,19 @@ def test_welcome_state_when_no_recording():
     path. It must NOT fall back to the lapless bundled sample when the demo can't be resolved —
     that produced a blank-looking studio (the honest-first-run-UX fix).
 
+    The button is only OFFERED when a demo clip actually resolves (studio.demo.demo_available),
+    so the env seam points at a real file for the length of this test — the availability question
+    and the resolve-what-to-load question are deliberately separate seams now.
+
     The resolve runs on a DemoResolveWorker (QA L10-03), so each click is awaited rather than
     asserted on the next line."""
+    import tempfile
     import time
 
     from PySide6.QtWidgets import QApplication, QLabel
 
     from studio import app as app_mod
-    from studio.app import StudioWindow
+    from studio.app import DEMO_UNAVAILABLE_MESSAGE, StudioWindow
     from studio.overlays import WelcomeView
     app = QApplication.instance()
 
@@ -1573,6 +1578,12 @@ def test_welcome_state_when_no_recording():
             time.sleep(0.004)
         return until()
 
+    tmp = tempfile.mkdtemp(prefix="pacer-welcome-demo-")
+    clip = os.path.join(tmp, "pacer-demo-lap.mp4")
+    with open(clip, "wb") as f:
+        f.write(b"\x00" * 16)
+    prior = os.environ.get("PACER_DEMO_MP4")
+    os.environ["PACER_DEMO_MP4"] = clip
     w = StudioWindow([])
     try:
         cw = w.centralWidget()
@@ -1587,8 +1598,8 @@ def test_welcome_state_when_no_recording():
         assert _await_demo(w, lambda: bool(loaded)), "the demo resolve never settled"
         assert loaded == [["/demo/pacer-demo-lap.mp4"]], loaded
 
-        # Demo UNAVAILABLE (offline / download failed): no load, and the welcome state is re-shown
-        # with an honest message — NOT a silent fall back to the lapless bundled sample.
+        # Demo UNAVAILABLE (the clip went away under it): no load, and the welcome state is
+        # re-shown with an honest message — NOT a silent fall back to the lapless bundled sample.
         loaded.clear()
         app_mod.demo.resolve_demo_recording = lambda: None
         w._open_demo()
@@ -1598,8 +1609,12 @@ def test_welcome_state_when_no_recording():
         assert isinstance(cw2, WelcomeView), type(cw2)
         err = [lab for lab in cw2.findChildren(QLabel)
                if lab.property("role") == "WelcomeError"]
-        assert err and "unavailable" in err[0].text().lower(), "honest demo-unavailable message"
+        assert err and DEMO_UNAVAILABLE_MESSAGE in err[0].text(), "honest demo-unavailable message"
     finally:
+        if prior is None:
+            os.environ.pop("PACER_DEMO_MP4", None)
+        else:
+            os.environ["PACER_DEMO_MP4"] = prior
         w.close()
         w.deleteLater()
     print("test_welcome_state_when_no_recording OK")
