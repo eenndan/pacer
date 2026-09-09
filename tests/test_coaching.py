@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _qtapp import themed_app  # noqa: E402
 
 from studio import coaching as K  # noqa: E402
+from studio import corners as corners_mod  # noqa: E402
 from studio.corners import Corner  # noqa: E402
 
 
@@ -255,20 +256,30 @@ def test_dominant_reason_is_the_largest_contribution():
 
 # ----------------------------------------------- D2: entry/apex/exit Δt-vs-best decomposition
 def _flat_trace(d0: float, d1: float, v_kmh: float, n: int = 200):
-    """A constant-speed lap trace over [d0, d1]: (dist, speed_kmh). Constant v makes the time
-    integral analytic — time over a span L (m) at v (m/s) is L/v — so the thirds are exact."""
+    """A constant-speed lap as the decomposition now reads it: (dist, ELAPSED). Constant v keeps
+    the clock analytic — the time over a span L (m) at v (m/s) is exactly L/v — so the thirds are
+    exact. (These fixtures used to hand back speed, because the thirds were ∫ds/v; they are now
+    read off the lap's own clock, the same quantity `segment_times` measures.)"""
     dist = np.linspace(d0, d1, n)
-    return dist, np.full(n, float(v_kmh))
+    return dist, (dist - d0) / (float(v_kmh) / 3.6)
+
+
+def _clock_from_speed(dist: np.ndarray, v_kmh: np.ndarray) -> np.ndarray:
+    """The elapsed array a piecewise speed profile implies: cumulative ∫ds/v. For a fixture whose
+    speed changes mid-window, this is the exact clock that speed would have produced."""
+    v_mps = np.maximum(np.asarray(v_kmh, float), 1e-6) / 3.6
+    dt = np.diff(dist) / ((v_mps[:-1] + v_mps[1:]) / 2.0)
+    return np.concatenate([[0.0], np.cumsum(dt)])
 
 
 def test_phase_losses_sum_to_total_and_signs():
     """The three thirds telescope to the corner's total Δt-vs-best, and the sign is right:
     a lap slower than best ⇒ positive total; faster ⇒ negative."""
     enter, exit_ = 100.0, 220.0  # a 120 m corner window
-    best_dist, best_v = _flat_trace(0.0, 400.0, 80.0)   # best is fast everywhere
+    best_dist, best_t = _flat_trace(0.0, 400.0, 80.0)   # best is fast everywhere
     # SLOWER lap: 72 km/h through the window -> positive Δt over every third.
-    slow_dist, slow_v = _flat_trace(0.0, 400.0, 72.0)
-    pl = K.corner_phase_losses(slow_dist, slow_v, best_dist, best_v, enter, exit_)
+    slow_dist, slow_t = _flat_trace(0.0, 400.0, 72.0)
+    pl = K.corner_phase_losses(slow_dist, slow_t, best_dist, best_t, enter, exit_)
     # each third is 40 m: 40/(72/3.6) - 40/(80/3.6) = 40/20 - 40/22.222 = 2.0 - 1.8 = 0.2 s
     for v in pl.as_tuple():
         assert v > 0, ("slower than best must be a positive loss per third", pl)
@@ -276,8 +287,8 @@ def test_phase_losses_sum_to_total_and_signs():
     expected_total = (exit_ - enter) / (72.0 / 3.6) - (exit_ - enter) / (80.0 / 3.6)
     assert abs(pl.total - expected_total) < 1e-3, (pl.total, expected_total)
     # FASTER lap ⇒ negative total (each third negative).
-    fast_dist, fast_v = _flat_trace(0.0, 400.0, 88.0)
-    pf = K.corner_phase_losses(fast_dist, fast_v, best_dist, best_v, enter, exit_)
+    fast_dist, fast_t = _flat_trace(0.0, 400.0, 88.0)
+    pf = K.corner_phase_losses(fast_dist, fast_t, best_dist, best_t, enter, exit_)
     assert pf.total < 0 and all(v < 0 for v in pf.as_tuple()), pf
     print(f"ok phases: thirds sum to total; slow⇒+{pl.total:.3f}s, fast⇒{pf.total:.3f}s")
 
@@ -286,13 +297,14 @@ def test_phase_losses_all_on_entry_attributes_to_entry():
     """A lap that loses ALL its time in the entry third (slow there, on-best elsewhere) attributes
     the loss to entry — entry positive, apex/exit ~0, dominant == PHASE_ENTRY."""
     enter, exit_ = 100.0, 220.0  # thirds: [100,140] entry, [140,180] apex, [180,220] exit
-    best_dist, best_v = _flat_trace(0.0, 400.0, 80.0)
+    best_dist, best_t = _flat_trace(0.0, 400.0, 80.0)
     # Lap is 60 km/h in the entry third only, matches best (80) elsewhere. Build piecewise.
     n = 600
     lap_dist = np.linspace(0.0, 400.0, n)
     lap_v = np.full(n, 80.0)
     lap_v[(lap_dist >= 100.0) & (lap_dist < 140.0)] = 60.0
-    pl = K.corner_phase_losses(lap_dist, lap_v, best_dist, best_v, enter, exit_)
+    lap_t = _clock_from_speed(lap_dist, lap_v)
+    pl = K.corner_phase_losses(lap_dist, lap_t, best_dist, best_t, enter, exit_)
     assert pl.dominant == K.PHASE_ENTRY, pl
     assert pl.entry > 0.0, pl
     # apex/exit are on-best ⇒ ~0 (a tiny residual is just boundary interpolation smear at the
@@ -305,16 +317,65 @@ def test_phase_losses_all_on_entry_attributes_to_entry():
           f"exit={pl.exit:.3f}")
 
 
+def test_phase_thirds_telescope_to_the_corners_own_time():
+    """THE INVARIANT THE ∫ds/v DECOMPOSITION DID NOT HOLD: the three thirds are the corner's own
+    time, split three ways — so they must sum to exactly what the Corners table reports for that
+    corner (`corners.lap_corner_stats(...).time`), and the Δt triple must sum to exactly that
+    row's `delta` vs best.
+
+    It used to be an ∫ds/v approximation of the smoothed speed channel while the table read the
+    lap's clock, and the two disagreed on EVERY corner. Measured on the best lap of the D24 0060
+    pair, where there is no drift and nothing to compare against:
+
+        C7   clock 4.484 s  vs  ∫ds/v 4.870 s   (+0.385, +8.6%)   apex 31.1 km/h
+        C11  clock 6.384 s  vs  ∫ds/v 6.877 s   (+0.493, +7.7%)   apex 19.2 km/h
+
+    r = -0.46 between apex speed and the signed error — 1/v amplifies a speed error exactly where
+    the kart is slowest, which is where a corner's time is largest. On the coaching panel that
+    error sat beside a true-clock "time lost" and, on 4 of 11 D24 rows, netted the opposite sign.
+    This test fails if anyone reintroduces an estimator here."""
+    corner_list = _corners(3)
+    total = 400.0
+    # A lap whose speed varies over the whole trace, so an integral and a clock cannot agree by
+    # accident: the clock is built from the speed profile, then only the clock is handed over.
+    dist = np.linspace(0.0, total, 800)
+    v_kmh = 60.0 + 25.0 * np.sin(dist / 40.0)          # 35-85 km/h, slowest inside the corners
+    elapsed = _clock_from_speed(dist, v_kmh)
+    stats = corners_mod.lap_corner_stats(corner_list, total, dist, v_kmh, elapsed)
+    for c, st in zip(corner_list, stats, strict=True):
+        thirds = K.corner_best_thirds(dist, elapsed, c.enter, c.exit,
+                                      corner_dist_total=total, best_total=total)
+        assert abs(sum(thirds) - st.time) < 1e-9, (
+            f"C{c.cid}: thirds sum to {sum(thirds):.6f} s but the Corners table says "
+            f"{st.time:.6f} s — the decomposition is measuring a different quantity again")
+
+    # ...and the Δt triple telescopes to the same row's delta vs best.
+    slow_v = v_kmh * 0.92
+    slow_elapsed = _clock_from_speed(dist, slow_v)
+    ref = corners_mod.lap_corner_stats(corner_list, total, dist, v_kmh, elapsed)
+    slow_stats = corners_mod.lap_corner_stats(corner_list, total, dist, slow_v, slow_elapsed,
+                                              ref=ref)
+    for c, st in zip(corner_list, slow_stats, strict=True):
+        pl = K.corner_phase_losses(dist, slow_elapsed, dist, elapsed, c.enter, c.exit,
+                                   corner_dist_total=total, lap_total=total, best_total=total)
+        assert abs(pl.total - st.delta) < 1e-9, (
+            f"C{c.cid}: thirds net {pl.total:+.6f} s but the row's delta is {st.delta:+.6f} s")
+        assert pl.total > 0, ("a slower lap must decompose to a positive net", c.cid, pl)
+    print("ok phase-thirds: sum == the Corners table's own corner time, and the triple == its "
+          "delta, on every corner")
+
+
 def test_phase_losses_are_deterministic_and_degenerate_is_zero():
-    best_dist, best_v = _flat_trace(0.0, 400.0, 80.0)
-    slow_dist, slow_v = _flat_trace(0.0, 400.0, 72.0)
-    a = K.corner_phase_losses(slow_dist, slow_v, best_dist, best_v, 100.0, 220.0)
-    b = K.corner_phase_losses(slow_dist, slow_v, best_dist, best_v, 100.0, 220.0)
+    best_dist, best_t = _flat_trace(0.0, 400.0, 80.0)
+    slow_dist, slow_t = _flat_trace(0.0, 400.0, 72.0)
+    a = K.corner_phase_losses(slow_dist, slow_t, best_dist, best_t, 100.0, 220.0)
+    b = K.corner_phase_losses(slow_dist, slow_t, best_dist, best_t, 100.0, 220.0)
     assert a == b, "corner_phase_losses must be deterministic"
     # a degenerate (exit <= enter) window, and a too-short trace, both ⇒ zero phases
-    deg = K.corner_phase_losses(slow_dist, slow_v, best_dist, best_v, 220.0, 220.0)
+    deg = K.corner_phase_losses(slow_dist, slow_t, best_dist, best_t, 220.0, 220.0)
     assert deg.as_tuple() == (0.0, 0.0, 0.0), deg
-    short = K.corner_phase_losses(np.array([1.0]), np.array([10.0]), best_dist, best_v, 100.0, 220.0)
+    short = K.corner_phase_losses(np.array([1.0]), np.array([0.1]), best_dist, best_t,
+                                  100.0, 220.0)
     assert short.as_tuple() == (0.0, 0.0, 0.0), short
     print("ok phases-det: identical across calls; degenerate window/short trace ⇒ zero")
 
@@ -327,18 +388,18 @@ def test_phase_losses_projected_onto_each_laps_own_odometer():
     ~0 loss — proving the boundaries are projected, not taken literally."""
     enter, exit_ = 100.0, 220.0
     corner_total = 400.0
-    best_dist, best_v = _flat_trace(0.0, 400.0, 80.0)          # best lap == corner basis frame
+    best_dist, best_t = _flat_trace(0.0, 400.0, 80.0)          # best lap == corner basis frame
     # 1.05× longer odometer AND 1.05× faster ⇒ same time over the same track fraction.
     s = 1.05
     lap_total = corner_total * s
-    lap_dist, lap_v = _flat_trace(0.0, lap_total, 80.0 * s)
-    pl = K.corner_phase_losses(lap_dist, lap_v, best_dist, best_v, enter, exit_,
+    lap_dist, lap_t = _flat_trace(0.0, lap_total, 80.0 * s)
+    pl = K.corner_phase_losses(lap_dist, lap_t, best_dist, best_t, enter, exit_,
                                corner_dist_total=corner_total, lap_total=lap_total,
                                best_total=corner_total)
     assert all(abs(v) < 1e-6 for v in pl.as_tuple()), ("projected boundaries ⇒ ~0 loss", pl)
     # Without projection (literal window on the longer-odometer lap) the same trace WOULD register
     # a loss — the window covers a 1.05× longer slice of track. Confirms projection is doing work.
-    pl_literal = K.corner_phase_losses(lap_dist, lap_v, best_dist, best_v, enter, exit_)
+    pl_literal = K.corner_phase_losses(lap_dist, lap_t, best_dist, best_t, enter, exit_)
     assert pl_literal.total < -1e-3, ("literal (unprojected) window differs", pl_literal)
     print(f"ok phases-proj: projected per-lap ⇒ {pl.as_tuple()}; literal ⇒ {pl_literal.total:.3f}s")
 
@@ -348,13 +409,13 @@ def test_summarize_attaches_phase_decomposition():
     decomposition is consistent with the row's measured loss sign (slow corner ⇒ positive sum)."""
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     # one corner enter=50, exit=90 (see _corners). Best fast, typical slower over the window.
-    best_dist, best_v = _flat_trace(0.0, 200.0, 80.0)
-    med_dist, med_v = _flat_trace(0.0, 200.0, 70.0)
+    best_dist, best_t = _flat_trace(0.0, 200.0, 80.0)
+    med_dist, med_t = _flat_trace(0.0, 200.0, 70.0)
     opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
                       sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
                       median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[-3.0],
-                      median_dist=med_dist, median_speed_kmh=med_v,
-                      best_dist=best_dist, best_speed_kmh=best_v)
+                      median_dist=med_dist, median_elapsed=med_t,
+                      best_dist=best_dist, best_elapsed=best_t)
     row = opp.rows[0]
     pl = row.phases
     assert abs(pl.total - sum(pl.as_tuple())) < 1e-9
