@@ -3001,7 +3001,11 @@ class StudioWindow(QMainWindow):
         try:
             text = export_data.stats_summary_text(
                 self.session, self._speed_unit,
-                title=chapters.recording_label(self._paths) or "")
+                # The chapters that LOADED, not the ones asked for (#223's sweep — `_paths` is the
+                # REQUEST). They differ when a chapter was skipped as not-video, and there the
+                # difference is the whole point: with 3 requested and 2 loaded this title said
+                # "recording 0060 · 3 chapters" while the report beside it said 2.
+                title=self._loaded_label() or "")
             QApplication.clipboard().setText(text)
         except Exception as exc:  # noqa: BLE001 — a clipboard failure must not disrupt the app
             print(f"studio: stats summary not copied ({exc!r}).", flush=True)

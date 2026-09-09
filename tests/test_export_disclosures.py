@@ -231,6 +231,68 @@ def test_degenerate_ideal_is_withheld_from_every_surface_together():
     print("test_degenerate_ideal_is_withheld_from_every_surface_together OK")
 
 
+def test_the_clipboard_summary_states_the_timing_too():
+    """THE LEAST HOVERABLE SURFACE CARRIES THE LOUDEST CAVEAT (F1).
+
+    The clipboard block lands in a chat as raw text — no page, no tooltip, nothing to hover. On a
+    recording whose track is unrecognised (`timing_verified` False, the state any unknown circuit
+    loads in) the app DISABLES the share-card action outright and the report prints "PROVISIONAL",
+    while this text published a best lap, a median and `theoretical best · N laps` with no
+    qualifier anywhere in it. It now prints the SAME `_timing_meta` string the report row does.
+
+    Disclosure, not refusal: the action stays enabled, matching the report's own choice."""
+    s = make_stitched_session()
+    good = export_data.stats_summary_text(s, None)
+    assert "Timing: verified start line" in good, good[:200]
+
+    s.track_name = None
+    assert not s.timing_verified
+    text = export_data.stats_summary_text(s, None)
+    assert "PROVISIONAL" in text and "arbitrary point" in text, text[:400]
+    # ...and it says exactly what the report's Timing row says — one string, two renderings.
+    assert export_data._timing_meta(s) in text
+    assert export_data._timing_meta(s) in _write_report(s)
+    # The numbers are still published (disclosure, not refusal).
+    assert s.ideal_sample().caption() in text
+    print("test_the_clipboard_summary_states_the_timing_too OK")
+
+
+def test_pace_group_follows_the_pages_gate_not_the_pace_summarys():
+    """F3: the page shows PACE whenever there are VALID laps and dashes the tiles inside it; it
+    also sets `best rolling` OUTSIDE the pace branch, because a start-anywhere loop is not a pace
+    statistic.
+
+    Gating the exported group on `pace is not None` diverged on a real state: `pace` runs over the
+    CONSISTENCY laps (valid ∧ dropout-free), so a session whose every lap carries a GPS dropout has
+    valid laps and no pace summary — the page rendered PACE with dashes and a real `best rolling`,
+    the export dropped the whole group and the rolling number with it."""
+    s = make_stitched_session()
+    rolling = s.best_rolling_lap()
+    assert rolling is not None, "fixture must have a rolling target to lose"
+
+    # The divergent state: valid laps, no consistency laps ⇒ no pace summary.
+    s.consistency_lap_ids = lambda: []
+    s.stats.invalidate()
+    assert s.stats.pace() is None and s.valid_lap_ids()
+
+    sections = {sec.title: dict(sec.rows) for sec in export_data.stats_summary(s)}
+    assert "PACE" in sections, "the export dropped a group the page still renders"
+    pace = sections["PACE"]
+    assert pace["best rolling"] == fmt_time(rolling), pace
+    # ...and EVERY pace-derived row dashes rather than vanishing or faking a number. "within 1% of
+    # best" is the one that catches a careless fix: `stats.within_pct_of_best` returns 0 (not None)
+    # for an empty input, so reading it unconditionally puts "0 / 0" in a report whose page shows
+    # an em-dash — a zero manufactured from no laps.
+    assert all(v == "" for k, v in pace.items() if k != "best rolling"), pace
+    # Both renderings show it, with the em-dash for the absent values.
+    assert "best rolling" in _write_report(s)
+    assert f"best rolling   {fmt_time(rolling)}" in " ".join(
+        export_data.stats_summary_text(s, None).split()).replace("  ", " ") or \
+        fmt_time(rolling) in export_data.stats_summary_text(s, None)
+    print(f"test_pace_group_follows_the_pages_gate_not_the_pace_summarys OK "
+          f"(best rolling {fmt_time(rolling)} kept)")
+
+
 def test_report_states_what_the_timing_is_worth():
     """The exported page carries the trust verdict the app gates on. It used to state lap times
     with no qualifier anywhere on it, while the same session's card was greyed out entirely."""
@@ -294,12 +356,18 @@ class _FailingHandle:
         return self._f.__exit__(*exc)
 
 
-def _failing_open(allow: int):
-    """A drop-in `builtins.open` whose WRITE handles die after `allow` chunks (reads untouched)."""
-    real = open
+def _failing_fdopen(allow: int):
+    """A drop-in `os.fdopen` whose handles die after `allow` chunks.
 
-    def opener(path, mode="r", *a, **kw):
-        f = real(path, mode, *a, **kw)
+    `os.fdopen`, not `builtins.open`, because `_atomic_write` creates its temp with
+    `tempfile.mkstemp` (a unique name, so an export can never clobber a user's own `<file>.tmp` in
+    the folder they picked) and adopts the returned descriptor. Patching `open` stopped
+    intercepting anything the moment that changed — and the test said so, which is the point of
+    driving the failure through the real code path rather than a stub."""
+    real = os.fdopen
+
+    def opener(fd, mode="r", *a, **kw):
+        f = real(fd, mode, *a, **kw)
         return _FailingHandle(f, allow) if "w" in mode else f
 
     return opener
@@ -308,25 +376,44 @@ def _failing_open(allow: int):
 def _assert_atomic(name, write, allow):
     """Drive `write` once for real, then again with the handle dying after `allow` chunks; the
     file on disk must still be the FIRST (good) export, and nothing may be left beside it."""
-    import builtins
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, name)
         write(path)
         good = open(path, "rb").read()
         assert good, name
 
-        real_open = builtins.open
-        builtins.open = _failing_open(allow)
+        real_fdopen = os.fdopen
+        os.fdopen = _failing_fdopen(allow)
         try:
             write(path)
             raise AssertionError(f"{name}: the failing handle did not surface as an error")
         except OSError:
             pass
         finally:
-            builtins.open = real_open
+            os.fdopen = real_fdopen
 
         assert open(path, "rb").read() == good, f"{name}: a failed write damaged the good file"
         assert os.listdir(tmp) == [name], f"{name}: left {os.listdir(tmp)} behind"
+
+
+def test_a_users_own_tmp_file_beside_the_target_survives(fixture=None):
+    """F5: the temp is `mkstemp`-unique, so an export cannot destroy a user file that happens to
+    be named after the predictable temp the four app-support stores use.
+
+    Those stores write inside a directory the app owns, where `<file>.tmp` can only collide with
+    itself. These writers go wherever a save dialog pointed — so a fixed name would open, TRUNCATE
+    and then delete a user's `laps.csv.tmp`."""
+    s = fixture or make_stitched_session()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "laps.csv")
+        decoy = path + ".tmp"
+        with open(decoy, "w", encoding="utf-8") as f:
+            f.write("the user's own file, not ours\n")
+        export_data.write_laps_csv(path, s)
+        assert os.path.exists(decoy), "the export destroyed a user file beside the target"
+        assert open(decoy, encoding="utf-8").read() == "the user's own file, not ours\n"
+        assert sorted(os.listdir(tmp)) == ["laps.csv", "laps.csv.tmp"], os.listdir(tmp)
+    print("test_a_users_own_tmp_file_beside_the_target_survives OK")
 
 
 def test_writers_are_atomic_and_leave_no_partial_file():
@@ -355,7 +442,10 @@ if __name__ == "__main__":
     test_stats_summary_values_equal_the_session_accessors()
     test_absent_signals_are_groups_and_dashes_never_zeros()
     test_degenerate_ideal_is_withheld_from_every_surface_together()
+    test_the_clipboard_summary_states_the_timing_too()
+    test_pace_group_follows_the_pages_gate_not_the_pace_summarys()
     test_report_states_what_the_timing_is_worth()
     test_clipboard_text_is_plain_and_complete()
     test_writers_are_atomic_and_leave_no_partial_file()
+    test_a_users_own_tmp_file_beside_the_target_survives()
     print("\nALL EXPORT-DISCLOSURE TESTS PASSED")

@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import data_quality, theme, units
+from . import stats as stats_service
 from ._signal import fmt_hms, fmt_time
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the digest tile
@@ -215,9 +216,9 @@ BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the c
                    "model). Corners with no matched brake event are omitted. Honesty floor: "
                    "10 Hz GPS quantizes the onset by ~1.5 m — a σ at or below that is "
                    "measurement, not driving. Click a row to ring the corner on the map.")
-# Pace-trend verdict band: a fitted slope within ±this (s/lap) reads "steady" — don't
-# narrate noise as a trend.
-TREND_STEADY_BAND = 0.02
+# The pace-trend verdict band moved to `stats.TREND_STEADY_BAND`, beside the statistic it
+# qualifies: the exported report and the clipboard summary print the same verdict off the same
+# slope, and export_data is Qt-free by contract so it cannot reach into this module.
 SECTOR_COLUMNS = ["Sector", "Best", "Median", "σ (s)"]
 
 GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — lateral g across, "
@@ -1376,20 +1377,15 @@ class StatsView(QWidget):
 
     def _set_trend(self, slope: float | None):
         """The trend tile: signed s/lap + a plain-language verdict caption. A slope inside
-        ±TREND_STEADY_BAND reads "steady" (don't narrate noise); None (short session) is a
-        dash with the base caption."""
-        if slope is None:
+        ±`stats.TREND_STEADY_BAND` reads "steady" (don't narrate noise); None (short session) is
+        a dash with the base caption. Both the verdict and the value formatting come from the
+        stats layer (`trend_verdict` / `fmt_trend`), so the exported summary's row says exactly
+        what this tile says."""
+        verdict = stats_service.trend_verdict(slope)
+        if verdict is None:
             self.t_trend.set(None, "trend")
             return
-        if slope <= -TREND_STEADY_BAND:
-            verdict = "improving"
-        elif slope >= TREND_STEADY_BAND:
-            verdict = "fading"
-        else:
-            verdict = "steady"
-        # A ±0.00 display (signed near-zero) reads as a glitch — flatten it for "steady".
-        text = "0.00 s/lap" if round(slope, 2) == 0 else f"{slope:+.2f} s/lap"
-        self.t_trend.set(text, f"trend · {verdict}")
+        self.t_trend.set(stats_service.fmt_trend(slope), f"trend · {verdict}")
 
     def _set_digest(self, session, pace):
         """The coaching digest tile: the projected lap if the top-N corner losses were fixed,

@@ -22,6 +22,7 @@ from typing import NamedTuple
 import numpy as np
 
 from . import corners
+from ._signal import plural
 
 # "not yet computed" sentinel (None is a legal cached value); module-local to avoid importing
 # Session.
@@ -115,7 +116,6 @@ class IdealSample(NamedTuple):
         Deliberately says nothing this class's own docstring cannot back: the measured per-doubling
         table and the partition-sensitivity numbers are there, not baked into shipping copy (§5.5
         is the standing lesson about empirical constants in honesty text)."""
-        from ._signal import plural  # local: keeps this module's import list free of cycles
         return (f"Stitched from {self.donors} of your {self.laps} clean laps, across the "
                 f"{plural(self.corners, 'corner')} and {plural(self.straights, 'straight')} pacer "
                 "found here. Both counts set it: the ideal is the minimum over those laps of those "

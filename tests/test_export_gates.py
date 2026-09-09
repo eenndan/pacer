@@ -108,8 +108,13 @@ class FakeSession:
                  centroid=(52.0, -0.78)):
         self.track_name = track
         self.timing_verified = verified
+        # THE CONSTANTS, not hand-typed literals. `"media_fallback"` is not
+        # `MEDIA_CLOCK_FALLBACK` ("media_clock_fallback"), so `degraded=True` built a session whose
+        # `.degraded` was False — no caller passes it today, which is exactly why it went
+        # unnoticed, and the next test to use it would have passed vacuously.
         self.timing_quality = data_quality.TimingQuality(
-            clock="media_fallback" if degraded else "gps9_trueclock", dropped_fraction=0.0)
+            clock=(data_quality.MEDIA_CLOCK_FALLBACK if degraded
+                   else data_quality.GPS9_TRUECLOCK), dropped_fraction=0.0)
         self._laps = list(laps)
         self._centroid = centroid
 

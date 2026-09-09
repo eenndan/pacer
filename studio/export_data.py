@@ -36,11 +36,13 @@ import contextlib
 import csv
 import html
 import os
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
 from . import APP_NAME, units
+from . import stats as stats_service
 from ._signal import DASH, fmt_hms, fmt_time, lap_label
 
 # laps.csv `flag` column value mirroring the lap table's ⚠ low-confidence marker (a GPS
@@ -50,7 +52,8 @@ DROPOUT_FLAG = "gps-dropout"
 # laps.csv trailer (the session-summary footer rows mirroring the lap table's footer below
 # the table): a labeled section AFTER the lap rows, separated by one blank row, led by its own
 # `summary,time_s,over_laps,note` mini-header so the file stays cleanly parseable (split on the
-# blank row, or filter the `summary` marker). Each pair is (label, Session accessor), so the
+# blank row, or filter the `summary` marker — the rows are FOUR wide, so read them by index, not
+# as pairs; see `SummaryRow`). Each pair is (label, Session accessor), so the
 # trailer can only ever print what the app's own surfaces print. A None value (no valid laps / no
 # corner partition) writes a blank time cell, like the app's em-dash. The LABELS are the file's
 # machine-readable contract and stay as they are: "Theoretical best" is the ideal lap, which the
@@ -77,7 +80,15 @@ class SummaryRow(NamedTuple):
       * `over_laps` — the bare integer, for a machine (blank when the row is not a sample);
       * `note` — the human sentence, for the person who opens the file in a spreadsheet.
 
-    Both are empty strings on a row with nothing to disclose, so the trailer stays rectangular."""
+    Both are empty strings on a row with nothing to disclose, so the trailer stays rectangular.
+
+    WHAT THIS DOES BREAK, stated rather than glossed: the trailer rows are 4 wide where they were
+    2, so a consumer that splits on the blank row and feeds the trailer straight to `dict()` —
+    which is a shape THIS MODULE'S OWN header comment suggests ("split on the blank row, or filter
+    the `summary` marker") — now raises `ValueError: dictionary update sequence element #0 has
+    length 4; 2 is required`. Reading `row[0]` / `row[1]`, or `dict((r[0], r[1]) for r in ...)`,
+    is unaffected. There are no such consumers in-repo; the note is here because "additive" is
+    only true of the columns, not of every way a reader might have unpacked the row."""
 
     label: str      # the machine contract label, exactly as SUMMARY_ROWS spells it
     value: str      # 3-decimal seconds, or "" when the accessor returned None
@@ -97,16 +108,25 @@ def _atomic_write(path: str, body: Callable[[object], None], *, newline: str | N
 
     `body(f)` does the actual writing into an open UTF-8 text handle; `newline` is passed to
     `open` (the csv module requires `""`, the report wants the default). `os.replace` is atomic
-    within a filesystem, and the temp file is a SIBLING so it always is one — a temp in $TMPDIR
-    would degrade to a cross-device copy and lose the guarantee.
+    within a filesystem, and the temp is created in the DESTINATION'S OWN DIRECTORY so it always is
+    one — a temp in $TMPDIR would degrade to a cross-device copy and lose the guarantee.
+
+    THE TEMP NAME IS UNIQUE (`mkstemp`), NOT `path + ".tmp"`, and unlike the four persistence
+    stores this one has to be. They write inside an app-support directory the app owns, where a
+    predictable `<file>.tmp` can only ever collide with itself. This writes wherever the user
+    pointed a save dialog — so a fixed name would open, TRUNCATE and then delete (or worse,
+    `os.replace` away) a file of the user's called `laps.csv.tmp` that happened to be sitting
+    there. `mkstemp` also refuses to clobber, so two exports racing in one folder cannot interleave
+    into each other's file.
 
     On ANY exit that did not consume the temp (an exception from `body`, an ENOSPC in the flush on
     close, a KeyboardInterrupt) the partial file is removed, so a failed export leaves neither a
     truncated document at the user's chosen path nor litter beside it. Removal is itself guarded:
     failing to clean up must not replace the real error with a second one."""
-    tmp = path + ".tmp"
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".",
+                               prefix=f".{os.path.basename(path)}.", suffix=".part")
     try:
-        with open(tmp, "w", newline=newline, encoding="utf-8") as f:
+        with os.fdopen(fd, "w", newline=newline, encoding="utf-8") as f:
             body(f)
         os.replace(tmp, path)
     finally:
@@ -248,8 +268,9 @@ def write_laps_csv(path: str, session) -> None:
 
     THE TRAILER GREW TWO COLUMNS, IT DID NOT CHANGE ONE. Columns 0 and 1 are byte-identical to what
     they always were (the label is #212-F4's pinned machine contract), and `over_laps` / `note`
-    were appended to carry §5.4's missing disclosure — see `SummaryRow`. A parser reading
-    `row[0]`/`row[1]`, or `dict(csv.reader(...))`-style pairs, is unaffected.
+    were appended to carry §5.4's missing disclosure. A parser reading `row[0]` / `row[1]` is
+    unaffected; one that `dict()`s the trailer rows as pairs is NOT, because they are 4 wide now —
+    see `SummaryRow` for the exact breakage and why it is stated rather than glossed.
 
     ALWAYS SI (km/h / m / s), never the app's display unit: this file is the machine-readable
     contract, so `laps_table` is called with no `unit` and every column stays self-describing
@@ -315,6 +336,60 @@ def _sec(v, fmt: str = "{:.2f} s") -> str:
     return "" if v is None else fmt.format(v)
 
 
+def _distance_note(tot) -> str:
+    """The SESSION group's disclosure about its own `distance` row, or "" when there is nothing to
+    disclose — `stats_panel._set_distance`'s tooltip rule, in prose the export can print.
+
+    The path length is SPEED-GATED in the data layer (a GPS fix that teleports is not distance
+    driven), and the page says so in two states: below `stats.MIN_KEPT_FRAC` the value is withheld
+    entirely, and from a whole percent of rejected steps up the number stands with the caveat
+    attached. Both are disclosures the page makes on hover — so on a surface with no hover they
+    have to be printed, which is the same argument §5.4 makes about the ideal's lap count."""
+    kept = getattr(tot, "distance_kept_frac", 1.0)
+    if tot.distance_m is None:
+        return (f"Distance not shown: only {kept * 100:.0f}% of this trace's GPS steps are "
+                "physically possible at the speed the same trace reports — the rest are dropped "
+                "fixes, so a path length would be a fiction. The recorded time and the lap "
+                "statistics are unaffected.")
+    # A handful of rejected steps is not worth a caveat that would round to "0%" (a real 26-minute
+    # recording rejects 0.02%) — the page uses the same 1% floor.
+    if kept >= 0.99:
+        return ""
+    return (f"Distance: {(1 - kept) * 100:.0f}% of the raw GPS steps were rejected as impossible "
+            "at the speed the same trace reports (dropped fixes) and are not counted.")
+
+
+def _timing_meta(session) -> str:
+    """What every lap time on an exported surface is worth — the report's `Timing` meta row AND the
+    clipboard summary's `Timing:` header line, one string so the two cannot disagree.
+
+    Two facts, the same two the app gates on and in the same order it does:
+
+      * `timing_verified` False — the start/finish line was auto-fitted and never confirmed, so
+        every lap time and split is measured from an arbitrary point. This is what greys the share
+        card out entirely and what puts the amber banner on the map and the Stats page; a document
+        that leaves the app stating those times with no such qualifier is the same defect one
+        surface further out.
+      * `timing_quality.degraded` — the media-clock fallback and/or a concerning share of rejected
+        GPS fixes. `concerns()` is the shipped sentence list the in-app data-quality banner stacks,
+        joined here rather than re-worded.
+
+    Neither wrong ⇒ "verified start line · GPS9 true clock", the plain good case. getattr-guarded
+    throughout: a Session double without these is reported as the good case, never as a crash in
+    the middle of writing a report."""
+    bits = []
+    if not getattr(session, "timing_verified", True):
+        bits.append("PROVISIONAL — the start/finish line was auto-fitted and not confirmed, so "
+                    "every lap time and split below is measured from an arbitrary point")
+    quality = getattr(session, "timing_quality", None)
+    concerns = quality.concerns() if quality is not None else []
+    if concerns:
+        bits.append("ESTIMATED — " + " ".join(concerns))
+    if not bits:
+        bits.append("verified start line · GPS9 true clock")
+    return " · ".join(bits)
+
+
 def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
     """The Stats page's groups as data — for the HTML report and "Copy stats summary" (N13).
 
@@ -363,6 +438,7 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         lap_bits.append(f"{len(dropouts)} with a GPS dropout")
     rows = [("laps", " · ".join(lap_bits) if valid else "")]
     tot = st.totals() if st is not None else None
+    note = ""
     if tot is not None and tot.duration_s > 0:
         rows += [("recorded", fmt_hms(tot.duration_s)), ("moving", fmt_hms(tot.moving_s)),
                  # None below stats.MIN_KEPT_FRAC: the trace was too broken for a path length to
@@ -371,35 +447,61 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
                   else f"{tot.distance_m / 1000.0:.1f} km"),
                  ("on track", f"{tot.start_clock}–{tot.end_clock}"
                   if tot.start_clock and tot.end_clock else "")]
+        note = _distance_note(tot)
     else:
         rows += [("recorded", ""), ("moving", ""), ("distance", ""), ("on track", "")]
-    out.append(SummarySection("SESSION", rows))
+    out.append(SummarySection("SESSION", rows, note=note))
 
-    # --- PACE. `pace` is over the CONSISTENCY laps (valid ∧ dropout-free) — the same set every σ
-    # statistic runs over, so the exported group is internally consistent for the same reason the
-    # page's is. Singular at n=1, the defect the median tile shipped once ("median · 1 clean laps").
+    # --- PACE. GATED ON VALID LAPS, NOT ON THE PACE SUMMARY, because that is the page's gate
+    # (`refresh` shows the section whenever `valid_lap_ids()` is non-empty and dashes the tiles
+    # inside it) — and the difference is not cosmetic. `pace` runs over the CONSISTENCY laps
+    # (valid ∧ dropout-free); a session whose every lap carries a GPS dropout has valid laps and no
+    # consistency laps, so gating the GROUP on `pace` dropped the whole block from the export while
+    # the page rendered it. `best rolling` is the number that made it a real loss: it is a
+    # start-anywhere loop off `Session`, not a pace statistic, and the page sets it OUTSIDE the
+    # pace branch for exactly that reason — inside the gate it vanished from a session that still
+    # had one. So it is read here, outside, like `refresh()` does.
     pace = st.pace() if st is not None else None
-    if pace is not None:
-        count, n_within = st.laps_within_pct(1.0)
-        trend = st.pace_trend()
-        rolling = (session.best_rolling_lap()
-                   if hasattr(session, "best_rolling_lap") else None)
-        rp = st.race_pace()
-        cov = st.pace_cov()
-        out.append(SummarySection("PACE", [
-            ("best lap", fmt_time(pace.best)),
-            (f"median lap · {pace.n} clean lap{'' if pace.n == 1 else 's'}",
-             fmt_time(pace.median)),
-            ("race pace · best 3-lap run", "" if rp is None else fmt_time(rp)),
-            ("best rolling", "" if rolling is None else fmt_time(rolling)),
-            ("σ lap", _sec(pace.sigma)),
-            ("median − best", _sec(pace.spread, "+{:.2f} s")),
-            ("consistency · σ/median", _sec(cov, "{:.1f} %")),
-            ("within 1% of best", "" if count is None else f"{count} / {n_within}"),
-            # `+0.00 s/lap` reads as a glitch; the page flattens a signed near-zero the same way.
-            ("trend · s/lap", "" if trend is None else
-             ("0.00 s/lap" if round(trend, 2) == 0 else f"{trend:+.2f} s/lap")),
-        ]))
+    rolling = session.best_rolling_lap() if hasattr(session, "best_rolling_lap") else None
+    if valid:
+        # EVERY PACE-DERIVED VALUE IS READ ONLY WHEN THERE IS A DISTRIBUTION, which is the page's
+        # own structure (`refresh` fills these eight tiles inside `if pace is not None` and dashes
+        # all eight in the else). It is not defensive tidiness: `stats.within_pct_of_best` returns
+        # 0 — not None — for an empty input, so reading it unconditionally printed "0 / 0" into a
+        # report whose page shows an em-dash. A zero manufactured from no laps is exactly the
+        # None-not-zero rule inverted, on the surface least able to explain itself.
+        median_label = "median lap"
+        pace_rows = [("best lap", ""), (median_label, ""),
+                     ("race pace · best 3-lap run", ""), ("σ lap", ""), ("median − best", ""),
+                     ("consistency · σ/median", ""), ("within 1% of best", ""), ("trend", "")]
+        if pace is not None:
+            count, n_within = st.laps_within_pct(1.0)
+            trend = st.pace_trend()
+            rp = st.race_pace()
+            cov = st.pace_cov()
+            # "trend · improving" / "· steady" / "· fading" — the page's caption, off the SHARED
+            # verdict (stats.trend_verdict), so the exported row cannot narrate a different story
+            # from the tile. Falls back to the page's base caption on too short a sample.
+            verdict = stats_service.trend_verdict(trend)
+            pace_rows = [
+                ("best lap", fmt_time(pace.best)),
+                # The median's caption names its own n. Singular at n=1 — the defect this page
+                # shipped once as "median · 1 clean laps".
+                (f"median lap · {pace.n} clean lap{'' if pace.n == 1 else 's'}",
+                 fmt_time(pace.median)),
+                ("race pace · best 3-lap run", "" if rp is None else fmt_time(rp)),
+                ("σ lap", _sec(pace.sigma)),
+                ("median − best", _sec(pace.spread, "+{:.2f} s")),
+                ("consistency · σ/median", _sec(cov, "{:.1f} %")),
+                ("within 1% of best", "" if count is None else f"{count} / {n_within}"),
+                ("trend" if verdict is None else f"trend · {verdict}",
+                 stats_service.fmt_trend(trend) or ""),
+            ]
+        # `best rolling` sits AFTER the pace rows and OUTSIDE the branch above, where the page puts
+        # it: a start-anywhere loop off `Session` is not a pace statistic and survives a session
+        # that has no distribution at all.
+        pace_rows.insert(3, ("best rolling", "" if rolling is None else fmt_time(rolling)))
+        out.append(SummarySection("PACE", pace_rows))
 
     # --- IDEAL LAP. Same three gates as the page (`_refresh_ideal`): a composite exists, more than
     # one lap donated, and there is a best lap to measure the gap against.
@@ -460,8 +562,21 @@ def stats_summary_text(session, unit: str | None = None, *, title: str = "") -> 
     so a proportional font still lets the eye run down them; an absent value prints `DASH`, the
     same mark the page and the report show.
 
-    `title` is the recording label the caller has (app.py's `chapters.recording_label`); omitted
-    when there is none, rather than printed as an empty line."""
+    IT CARRIES THE TIMING VERDICT, in the header, for the same reason the report does — and more
+    urgently. This block lands in a chat as raw text with no page around it and nothing to hover,
+    so it is the LEAST qualified surface the numbers reach: measured on a recording whose track is
+    unrecognised (`timing_verified` False — the state any unknown circuit loads in), the app
+    DISABLES the share-card action outright and the report prints "PROVISIONAL — every lap time and
+    split below is measured from an arbitrary point", while this text published a best lap, a
+    median, a race pace and `theoretical best · 38 laps` with no qualifier anywhere in it. Same
+    `_timing_meta` the report row uses, so the two cannot say different things.
+
+    Disclosure, not refusal: the export path's standing choice (the report states the caveat rather
+    than withholding the document), so the menu action stays enabled.
+
+    `title` is the recording label the caller has (app.py's `_loaded_label` — the chapters that
+    LOADED, not the ones requested); omitted when there is none, rather than printed as an empty
+    line."""
     sections = stats_summary(session, unit)
     head = [f"{APP_NAME} — session summary"]
     bits = [b for b in (title, getattr(session, "track_name", "") or "",
@@ -469,6 +584,7 @@ def stats_summary_text(session, unit: str | None = None, *, title: str = "") -> 
             if b]
     if bits:
         head.append(" · ".join(bits))
+    head.append(f"Timing: {_timing_meta(session)}")
     out = ["\n".join(head)]
     for sec in sections:
         block = [sec.title]
@@ -501,36 +617,6 @@ p.note { margin: 0.25em 0 1em; max-width: 46em; color: #444; font-size: 0.9em; }
    write_report_html) shrinks a figure below its natural pixel size. */
 img { max-width: 100%; height: auto; border: 1px solid #ccc; margin: 0.5em 0; }
 """
-
-
-def _timing_meta(session) -> str:
-    """The report's `Timing` meta value: what every lap time on the page is worth.
-
-    Two facts, the same two the app gates on and in the same order it does:
-
-      * `timing_verified` False — the start/finish line was auto-fitted and never confirmed, so
-        every lap time and split is measured from an arbitrary point. This is what greys the share
-        card out entirely and what puts the amber banner on the map and the Stats page; a document
-        that leaves the app stating those times with no such qualifier is the same defect one
-        surface further out.
-      * `timing_quality.degraded` — the media-clock fallback and/or a concerning share of rejected
-        GPS fixes. `concerns()` is the shipped sentence list the in-app data-quality banner stacks,
-        joined here rather than re-worded.
-
-    Neither wrong ⇒ "verified start line · GPS9 true clock", the plain good case. getattr-guarded
-    throughout: a Session double without these is reported as the good case, never as a crash in
-    the middle of writing a report."""
-    bits = []
-    if not getattr(session, "timing_verified", True):
-        bits.append("PROVISIONAL — the start/finish line was auto-fitted and not confirmed, so "
-                    "every lap time and split below is measured from an arbitrary point")
-    quality = getattr(session, "timing_quality", None)
-    concerns = quality.concerns() if quality is not None else []
-    if concerns:
-        bits.append("ESTIMATED — " + " ".join(concerns))
-    if not bits:
-        bits.append("verified start line · GPS9 true clock")
-    return " · ".join(bits)
 
 
 def write_report_html(path: str, session, source_label: str = "",
