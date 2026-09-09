@@ -1169,47 +1169,84 @@ def test_ideal_donor_admission_refuses_a_collapsed_segment_AND_its_inflated_neig
     print("test_ideal_donor_admission_refuses_a_collapsed_segment_AND_its_inflated_neighbour OK")
 
 
-def test_every_winning_segment_was_measured_on_a_comparable_window():
-    """THE FLAGSHIP NUMBER'S SECOND GUARD, stated as a property of the OUTPUT rather than of the
-    projection's internals — so it survives a rewrite of either half of the repair.
+# The admission band this file asserts against, as a LITERAL. Reading
+# `corner_model.MAX_DONOR_SPAN_DEV` here would move the assertion with the very constant it exists
+# to hold: the first version of the guard below did exactly that and passed with the constant at
+# 0.50 AND at 0.0. Update this deliberately, and only with the measurement that justifies it.
+_ADMISSION_BAND = 0.05
 
-    The ideal is a sum of per-segment minima, and a minimum is only meaningful if every candidate
-    was timed over the same piece of track. The defect this pins is the one that shipped for a
-    week: the winner of `C5 → C6` on the D24 0060 pair had been measured over 31 m of a 42.8 m
-    straight (72.9 % of the reference span) and won on the missing 11 m. Neither the partition
-    identity (`segment_times`' assertion) nor the decomposition sum could see it — both still held
-    exactly, because the lost time had moved into the neighbouring segment.
 
-    So: for EVERY segment, the DONOR's own projected window must be within MAX_DONOR_SPAN_DEV of
-    the span that segment has on the donor's lap. Equivalent to `admitted[donor, j]`, but asserted
-    from `donor_span` — the field the ideal CURVE is actually drawn from — so a future change that
-    admits a cell correctly while drawing it from a different window still fails here.
+def test_a_shrunken_window_cannot_win_a_segment_however_fast_it_reads():
+    """THE ADMISSION HALF'S GUARD, in the flagship number's own failure shape.
 
-    It also fails if `MAX_DONOR_SPAN_DEV` is loosened back toward the old one-sided floor, which
-    `test_projection_never_mixes_two_frames_within_one_lap` (the frame half) would not catch."""
-    s, ids = make_ideal_session()
-    sb = s.ideal_segment_bests()
-    assert sb is not None
-    total_ref = s.corners.basis()[1]
-    ref_span = np.diff(np.asarray(sb.s_edges, float) * total_ref)
-    worst = 0.0
-    checked = 0
-    for j, donor in enumerate(sb.donors):
-        if donor is None or ref_span[j] <= corner_model.POINT_SPAN_M:
-            continue                     # a POINT segment admits everyone by design
-        lo, hi = sb.donor_span[j]
-        dist, _sp, _el = s._lap_arrays(donor)
-        expected = ref_span[j] * (float(dist[-1]) / total_ref)
-        dev = abs((hi - lo) - expected) / expected
-        worst = max(worst, dev)
-        checked += 1
-        assert dev <= corner_model.MAX_DONOR_SPAN_DEV + 1e-9, (
-            f"segment {j} ({sb.display_label(j)}) was won on a {hi - lo:.2f} m window where the "
-            f"donor's own expected span is {expected:.2f} m ({dev * 100:.1f}% off)")
-    assert checked, "fixture must have real segments to check"
-    print(f"test_every_winning_segment_was_measured_on_a_comparable_window OK "
-          f"({checked} segments, worst {worst * 100:.2f}% vs the "
-          f"{corner_model.MAX_DONOR_SPAN_DEV * 100:.0f}% band)")
+    The defect that shipped for a week was not a COLLAPSE — the test above covers that — but a
+    SHRINK: on the D24 0060 pair the winner of `C5 → C6` had been measured over 31 m of a 42.8 m
+    straight and won the segment on the missing 11 m. Neither the partition identity
+    (`segment_times`' assertion) nor the decomposition sum could see it; both still held exactly,
+    because the lost time had moved into the neighbouring segment. The only thing that can see it
+    is a check on the WINDOW.
+
+    Injected at the projection's seam: one lap's window for segment j is narrowed 20 %. The test
+    FIRST asserts that this makes its time there the fastest in the session — so the guard can
+    never be vacuously satisfied by a fixture where nothing is trying to win — and then asserts
+    that it does not win, is not admitted, and that the segment's actual winner was measured on a
+    window within `_ADMISSION_BAND` of ITS OWN expected span, read back from `donor_span` (the
+    field the ideal CURVE is drawn from, not the bool the admission wrote).
+
+    SCOPE: the admission half only. This test replaces the projection, so it cannot see a frame
+    regression; that is
+    tests/test_corners.py::test_projection_never_mixes_two_frames_within_one_lap's job. Between
+    them they cover the two halves, and neither covers the other's."""
+    shrink = 0.20
+    j = 2                       # the straight between C1 and C2 — real on every lap
+    victim = 1                  # the fast-early / slow-late lap
+    _base_s, _ids, totals = _distinct_total_ideal_session()
+    real_project = corners_mod.project_boundaries
+
+    def shrinking(d_ref, total_ref, total_lap, **kw):
+        out = np.asarray(real_project(d_ref, total_ref, total_lap, **kw), float)
+        # edges = [0, *out, total_lap], so segment j spans out[j-1]..out[j]. Pull the far edge in
+        # by 20 % of the segment: a real, non-degenerate window that is simply too short.
+        if abs(total_lap - totals[victim]) < 1e-6 and len(out) > j:
+            out = out.copy()
+            out[j] -= shrink * (out[j] - out[j - 1])
+        return out
+
+    corners_mod.project_boundaries = shrinking
+    try:
+        s2, _ids2, _t = _distinct_total_ideal_session()
+        got = s2.ideal_segment_bests()
+        assert got is not None
+        row = got.lap_ids.index(victim)
+        col = got.times[:, j]
+        # NON-VACUITY: the shrunken cell really is the fastest reading of that segment, so the
+        # only thing standing between it and the composite is the admission rule.
+        assert col[row] == col.min() and (col[row] < np.delete(col, row)).all(), (
+            "fixture must make the shrunken cell the fastest — otherwise this proves nothing")
+        assert not got.admitted[row, j], "a 20 %-short window must not be admitted"
+        assert got.donors[j] != victim, "…and must not win the segment"
+
+        total_ref = s2.corners.basis()[1]
+        ref_span = np.diff(np.asarray(got.s_edges, float) * total_ref)
+        worst, checked = 0.0, 0
+        for k, donor in enumerate(got.donors):
+            if donor is None or ref_span[k] <= corner_model.POINT_SPAN_M:
+                continue                 # a POINT segment admits everyone by design
+            lo, hi = got.donor_span[k]
+            dist, _sp, _el = s2._lap_arrays(donor)
+            expected = ref_span[k] * (float(dist[-1]) / total_ref)
+            dev = abs((hi - lo) - expected) / expected
+            worst = max(worst, dev)
+            checked += 1
+            assert dev <= _ADMISSION_BAND + 1e-9, (
+                f"segment {k} ({got.display_label(k)}) was won on a {hi - lo:.2f} m window where "
+                f"the donor's own expected span is {expected:.2f} m ({dev * 100:.1f} % off)")
+        assert checked, "fixture must have real segments to check"
+    finally:
+        corners_mod.project_boundaries = real_project
+    print(f"test_a_shrunken_window_cannot_win_a_segment_however_fast_it_reads OK "
+          f"(shrunken cell {col[row]:.3f}s beat every other lap and was still refused; "
+          f"{checked} winners within {_ADMISSION_BAND * 100:.0f} %, worst {worst * 100:.2f} %)")
 
 
 # --- the DECOMPOSITION: from taunt into plan (N8) -----------------------------------------

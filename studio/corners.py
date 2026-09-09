@@ -58,9 +58,9 @@ NORMALIZED_DRIFT_MAX = 0.005
 # fails ANY gate contributes no knot to the lap's warp (it is INTERPOLATED, never mixed frames).
 _SPATIAL_SEARCH_FRAC = 0.02      # ±2% of the comparison lap's samples (~21 m), floored at 5
 _SPATIAL_HEADING_MIN_COS = 0.5   # same-direction within 60° (rejects the other leg of a corner)
-# PUBLIC because it is the projection's stated per-boundary resolution, and
-# corner_model.UNMEASURABLE_SPAN_M is defined against it — a segment shorter than this cannot be
-# measured by a projection built out of matches only accurate to it.
+# PUBLIC because it is the projection's stated per-boundary resolution and is cited as such from
+# corner_model (see MAX_DONOR_SPAN_DEV's sub-resolution paragraph: a segment whose admission band
+# is far under this cannot be judged by a projection built out of matches only accurate to it).
 SPATIAL_MATCH_MAX_M = 3.0        # refined closest approach must be ≤ 3 m to count as the same point
 
 

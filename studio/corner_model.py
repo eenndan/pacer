@@ -51,8 +51,10 @@ POINT_SPAN_M = 0.5
 # of the segment's reference span, and every collapsed one ≤ 0.0001 … a separator, not a tuned
 # knob". That is true of the recording it was measured on (D24 0062: 1 cell in 1,625 below 0.93)
 # and false of the owner's other one: on the D24 0060 pair 58 of its 874 non-point cells sit
-# outside ±7 % (74 of all 950), the per-segment WINNERS run down to 0.729 of the reference span,
-# and 10 of 23 winners are below 0.93. The floor at 0.5 admitted every one of them.
+# outside ±7 %, the per-segment WINNERS run down to 0.729 of the reference span, and 10 of 23
+# winners are below 0.93. The floor at 0.5 admitted every one of them. (Non-point cells only: a
+# POINT column has ref_span 0, so "deviation from expected" is 0/0 there and the ratio is not
+# defined — every all-950 count of this quantity is a category error.)
 #
 # ── WHAT THIS TEST IS: A BIAS TRIMMER, NOT A CLASSIFIER ───────────────────────────────────────
 # It measures deviation from UNIFORM line-length scaling, which is not the same quantity as
@@ -70,9 +72,12 @@ POINT_SPAN_M = 0.5
 # deviation from that is zero by construction and this test can never reject it however misaligned
 # the window is. And those laps are not clean: they carry a median 1.16 % / p90 9.02 % true span
 # error on the pair (1.03 / 9.42 on ch 1, 0.48 / 2.92 on 0062), 5 cells worse than −10 %.
-# Conversely 100 % of the cells it does refuse (39/39, 28/28, 10/10) have BOTH edges on directly
-# matched spatial knots — genuinely measured track, refused. It removes a downward bias from the
-# minimum; it does not identify bad cells, and nothing here should be read as if it did.
+# Conversely, of the cells it DOES refuse, every one that can be scored at all was refused on
+# directly measured track: pair 39 scorable of 70 refusals, all 39 with both edges on matched
+# knots; ch 1 28 of 50, all 28; 0062 10 of 10. (The rest — 31 and 22 — have at least one
+# interpolated edge, so there is no ground truth to convict or acquit them with.) It removes a
+# downward bias from the minimum; it does not identify bad cells, and nothing here should be read
+# as if it did.
 #
 # ── CALIBRATION, AND HOW WIDE IT REALLY IS ────────────────────────────────────────────────────
 # The arbiter is each recording's own order statistic, fitted on its BELOW-gate laps (which every
@@ -102,10 +107,18 @@ POINT_SPAN_M = 0.5
 #
 # ── DEFERRED ─────────────────────────────────────────────────────────────────────────────────
 # Because corners.NORMALIZED_DRIFT_MAX keeps below-drift laps on the normalized projection, this
-# test is inert on 22 of the pair's 38 laps. Warping EVERY lap and re-admitting at ±5 % moves the
-# pair a further +0.316 s (ch 1 +0.347, 0062 −0.071); at ±3 % it is +0.644 / +0.712 / +0.110. That
-# residual is the price of the byte-identity the drift gate buys, and it is the same follow-up
-# corners.NORMALIZED_DRIFT_MAX's note names.
+# test is inert on 22 of the pair's 38 laps. What the gate costs, measured LIKE FOR LIKE — gated
+# vs warp-every-lap at the SAME admission tolerance, so the two changes are not conflated:
+#
+#              pair      ch 1      0062
+#   at ±5 %   +0.316 s  +0.347 s  −0.071 s
+#   at ±3 %   +0.501 s  +0.670 s  +0.060 s
+#
+# (The ±5 % row is also the move against the SHIPPED number, since that is the shipped tolerance.
+# An earlier draft quoted +0.644/+0.712/+0.110 for the ±3 % row by differencing against the ±5 %
+# shipped value, which folds the tolerance change into the gate's residual — hence this note about
+# which two things are being differenced.) That residual is the price of the byte-identity the
+# drift gate buys, and it is the same follow-up corners.NORMALIZED_DRIFT_MAX's note names.
 MAX_DONOR_SPAN_DEV = 0.05
 # ── SUB-RESOLUTION SEGMENTS: A KNOWN LIMITATION, DELIBERATELY NOT "FIXED" ─────────────────────
 # On a 2.3 m sliver the ±5 % band is ±0.11 m, an order of magnitude under the
@@ -633,8 +646,8 @@ class CornerModel:
         ref_span = np.diff(np.asarray(ref_edges, float))
         # A POINT segment (corner starts on the line, or two corners nearly touch) carries ~0 s on
         # every lap; nobody can collapse it further, so every lap is admitted there. Sub-resolution
-        # segments are deliberately NOT exempt — see UNMEASURABLE_SPAN_M's note for the measurement
-        # that decided it.
+        # segments are deliberately NOT exempt — see MAX_DONOR_SPAN_DEV's sub-resolution paragraph
+        # for the two exemptions that were implemented, measured and reverted.
         is_point = ref_span <= POINT_SPAN_M
 
         labels = ["start"]
