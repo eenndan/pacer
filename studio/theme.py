@@ -1878,6 +1878,20 @@ QLabel[role="EmptyTitle"] {{
     font-size: {EMPHASIS}px;
     font-weight: 600;
 }}
+/* A NOTE UNDER A TABLE: the sentence that says what the column above is measured against. Muted
+   and caption-sized so it reads as apparatus rather than as another number, and a role rather than
+   an inline stylesheet so it lands in the one place the app's type scale lives (the CORNERS
+   reconciliation line is the first of these; see stats_panel.CORNERS_TOOLTIP for why it exists).
+
+   text_dim, NOT text_muted: this is ENABLED prose a reader is meant to read, and text_muted is
+   reserved for DISABLED chrome (3.17:1 on surface — WCAG-exempt only because nothing enabled uses
+   it). tests/test_contrast.py caught exactly that when this rule first shipped muted: 3.68:1 on
+   canvas and 3.17:1 on surface, both under AA's 4.5. */
+QLabel[role="TableNote"] {{
+    background: transparent;
+    color: {C.text_dim};
+    font-size: {CAPTION}px;
+}}
 QLabel[role="EmptyBody"] {{
     background: transparent;
     color: {C.text_dim};

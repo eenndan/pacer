@@ -305,9 +305,20 @@ def test_stats_worst_loss_cells_carry_a_mark_and_the_score_that_chose_them():
     assert "σ × median loss" in tip, tip
     assert "entry +0.03" in tip and "exit +0.02" in tip, "the phase triple must survive"
     assert by_cid[10].toolTip() == "", "an unmarked cell must not claim a score"
-    # The mark is the app's existing attention glyph (the lap grid's dropout mark), so the shipped
-    # font ledger in tests/test_glyph_vocabulary.py already covers it — no new codepoint arrives.
-    assert WORST_LOSS_MARK.strip() == DROPOUT_MARK == "⚠"
+    # ...AND IT IS NOT THE DISTRUST GLYPH. This assertion used to pin the two marks EQUAL, on the
+    # grounds that reusing ⚠ meant "no new codepoint arrives" — a font argument standing in for a
+    # meaning argument. ⚠ says "this number may not be sound" (a GPS-dropout lap, a caveated trust
+    # term); these three cells say the opposite, that here is the most time available. The app's
+    # loudest advertised gains were wearing its distrust mark. ▲ is upside, and it is in the SAME
+    # measured ledger, so the font argument survives the fix intact.
+    assert WORST_LOSS_MARK.strip() == "▲", WORST_LOSS_MARK
+    assert WORST_LOSS_MARK.strip() != DROPOUT_MARK, (
+        "the priority mark and the distrust mark must not be the same glyph — that conflation is "
+        "the defect this line exists to prevent coming back")
+    assert DROPOUT_MARK == "⚠", DROPOUT_MARK
+    from test_glyph_vocabulary import _IN_THE_FACE
+    assert WORST_LOSS_MARK.strip() in _IN_THE_FACE, (
+        "the priority mark must be in the measured shipped-face ledger, like the one it replaced")
     # PREFIX, not suffix: every cell in the column still ends at the same decimal place, and the
     # numeric sort key is untouched by the mark.
     assert {len(c.text().split("+")[-1]) for c in by_cid.values()} == {4}, (

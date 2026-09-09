@@ -2590,6 +2590,71 @@ def test_the_cross_check_sample_count_is_grouped():
     print("test_the_cross_check_sample_count_is_grouped OK")
 
 
+def test_corners_note_names_both_baselines_and_reconciles_them():
+    """Stats ▸ CORNERS: two columns one tab apart are both called a loss and are measured against
+    DIFFERENT things — this page's Med loss against each corner's own Best (the quickest anyone
+    went through it), the Coaching tab's Time lost against your best lap's same corner.
+
+    On the D24 0060 pair they sum to 3.93 s and 1.02 s: a 3.8x gap, running 1.3x to 2450x corner
+    by corner. Neither surface said which baseline it used, so the honest reading of the two
+    screens was that one of them was broken. The header has no room to say it (measured: the
+    section is 100 px, "Med loss vs best corner" needs 148 px and elides), so the caption under
+    the table says it — and reconciles the page's three answers while it is there, with every
+    number READ rather than baked."""
+    _APP  # noqa: B018
+    from types import SimpleNamespace
+
+    from studio.stats import CornerReport
+    from studio.stats_panel import StatsView
+
+    def corner(cid, loss):
+        return CornerReport(cid=cid, direction=1, n=6, best_s=9.0, median_s=9.0 + loss,
+                            sigma_s=0.1, median_loss_s=loss, apex_best_kmh=60.0,
+                            apex_median_kmh=58.0, grip_median=0.8, score=0.1 * loss)
+
+    report = [corner(1, 0.20), corner(2, 0.30), corner(3, 0.50)]          # sums to 1.00 s
+    opp_rows = [SimpleNamespace(cid=3, time_lost=0.25), SimpleNamespace(cid=2, time_lost=0.15),
+                SimpleNamespace(cid=1, time_lost=0.10)]                    # sums to 0.50 s
+    sess = _fake_view_session()
+    sess.corner_report = lambda: report
+    sess.phase_report = lambda: None
+    sess.coaching_opportunities = lambda: SimpleNamespace(enough=True, rows=opp_rows)
+    view = StatsView(sess)
+    note = view.corners_note.text()
+
+    # BOTH baselines, in words, on the face — not only in a tooltip.
+    assert "own Best" in note, note
+    assert "against your best lap" in note, note
+    # ...and the three totals, computed from the data in front of it.
+    assert "1.00 s" in note, ("the Med loss column's own sum", note)
+    assert "0.50 s" in note, ("the coaching total, the number the other tab prints", note)
+    assert "0.25 s of it in its top 3" in note or "0.50 s of it in its top 3" in note, note
+    # It must never read as three estimates of one quantity.
+    assert "Different baselines" in note, note
+    # An empty report hides the note rather than leaving a stale sentence under nothing.
+    sess.corner_report = lambda: []
+    view.refresh()
+    assert view.corners_note.text() == "" and not view.corners_note.isVisible(), (
+        view.corners_note.text())
+    print("ok corners-note: both baselines named, three totals reconciled, hidden when empty")
+
+
+def test_digest_tooltip_reads_the_ideal_delta_instead_of_a_baked_range():
+    """The digest tile's tooltip used to promise "measured on the owner's recordings the ideal is
+    0.33 to 2.67 s the faster of the two" — an empirical range typed into shipping copy. On the
+    reviewed screen the two tiles were 5.0 s apart, i.e. the sentence was already false on the
+    owner's own data. It now reads the two numbers it is comparing."""
+    _APP  # noqa: B018
+    from studio.stats_panel import StatsView
+
+    view = StatsView(_fake_view_session())
+    tip = view.t_digest.toolTip()
+    assert tip, "the digest tile must still explain itself"
+    assert "0.33" not in tip and "2.67" not in tip, ("a baked empirical range came back", tip)
+    assert "here the ideal is" in tip, tip
+    print("ok digest-tooltip: the ideal delta is read, not baked")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it
