@@ -150,10 +150,10 @@ class StubSession:
     def gmeter_source(self):
         return "accl"
 
-    def _lap_trace_xyt(self, lap_id):
+    def lap_trace_xy(self, lap_id):
         if lap_id != self._lap:
             return None
-        return self.tx, self.ty, self.tt
+        return self.tx, self.ty
 
 
 # --------------------------------------------------------------------------- trim / frame math
@@ -1531,7 +1531,7 @@ def test_map_inset_degenerate_lap_falls_back_gracefully():
     from PySide6.QtCore import QRectF
 
     class NoLapTrace(StubSession):
-        def _lap_trace_xyt(self, lap_id):
+        def lap_trace_xy(self, lap_id):
             return None                                      # degenerate: no lap line
     s = NoLapTrace(lap_id=2, t0=0.0, dur=60.0, n=400)
     mi = ev._MapInset(s, QRectF(0, 0, 200, 160), 2, scale_k=1.0)

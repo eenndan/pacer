@@ -84,8 +84,9 @@ from PySide6.QtGui import (  # noqa: E402
 )
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
-from studio import APP_NAME, chapters, export_video, library, theme  # noqa: E402
+from studio import APP_NAME, chapters, export_video, theme  # noqa: E402
 from studio.app import StudioWindow  # noqa: E402
+from studio.dev import _jail  # noqa: E402
 from studio.theme import C  # noqa: E402
 
 # ====================================================================== capture geometry
@@ -756,13 +757,16 @@ def capture(recording: str, out_dir: str, only: set[str], work_dir: str,
     os.makedirs(work_dir, exist_ok=True)
     app = boot_app()
 
-    # Never touch the user's real session library — divert the index to a throwaway dir BEFORE any
-    # window is built (the load-time upsert reads this seam), like `_smoke.py` and `ui_capture.py`.
-    # If something upstream (the QA write-jail harness) already diverted it, leave ITS dir alone:
-    # re-patching would move the app's state out from under a jail that is watching the first one.
-    if getattr(library._app_support_dir, "__name__", "") != "<lambda>":
-        lib = tempfile.mkdtemp(prefix="pacer-media-lib-")
-        library._app_support_dir = lambda: lib
+    # Never touch the user's real app-support state — divert EVERY seam to a throwaway dir BEFORE
+    # any window is built (the load-time upsert reads one; StudioWindow.__init__ reads five more),
+    # like `_smoke.py` and `ui_capture.py`. An upstream jail (the QA write-jail harness) is adopted
+    # rather than replaced; see studio/dev/_jail.py.
+    #
+    # These shots are the ones that get PUBLISHED — docs/media, the landing page, the OG card — so
+    # "the shipped defaults" is the only correct baseline for them. There is deliberately no
+    # --prefs escape hatch here, unlike ui_capture: a published asset in someone's personal units
+    # is a bug, not a variant.
+    _jail.divert_app_support("pacer-media-")
 
     needs_app = only & {"hero", "ideal", "trust", "map", "overlay"}
     hero_png = os.path.join(out_dir, "hero.png")

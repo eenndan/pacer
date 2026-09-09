@@ -184,7 +184,7 @@ _RAINBOW_ORDER = ("off", "speed", "delta", "grip", "elevation")
 _RAINBOW_COMBO_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ to best",
                          "grip": theme.estimated_label("Line: Grip"), "elevation": "Line: Elevation"}
 # The per-channel rainbow value/bucket math (incl. the grip fixed scale + Δ/grip negation + the
-# GPS-dropout NaN-mask) lives in the Qt-free studio/map_render.py (rainbow_channel + helpers).
+# GPS-dropout NaN-mask) lives in the pure-numpy studio/map_render.py (rainbow_channel + helpers).
 
 
 class _RainbowOverlay:
@@ -1701,7 +1701,7 @@ class MapView(QWidget):
 
         The widget only fetches the lap's per-sample arrays from the session here; the per-channel
         value/bucket math (negation, grip fixed scale, GPS-dropout NaN-mask, the best-lap Δ hint) is
-        the Qt-free map_render.rainbow_channel pure function."""
+        the pure-numpy map_render.rainbow_channel function (it paints nothing)."""
         ch = self.session.lap_channels(lap_id)
         times, xs, ys, speed_kmh, cum = (
             ch["t_media_s"], ch["x_m"], ch["y_m"], ch["speed_kmh"], ch["dist_m"])

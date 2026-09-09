@@ -1005,10 +1005,13 @@ class _MapInset:
         # The exported lap's own line — the ONLY line drawn. We project it (and find the marker's
         # position along it for the tail). The full-session arrays are kept only as a fallback line
         # and to map a marker_index (which indexes the full trace) to a frame point.
+        # Through Session's PUBLIC `lap_trace_xy` (what the map highlight reads), not the private
+        # `_lap_trace_xyt` this once reached into: the old hasattr guard was vestigial — `session.tx`
+        # is read unguarded four lines up. The None / <2-point fallbacks are the degenerate-lap path.
         lx = ly = None
-        got = session._lap_trace_xyt(lap_id) if hasattr(session, "_lap_trace_xyt") else None
+        got = session.lap_trace_xy(lap_id)
         if got is not None:
-            glx, gly, _ = got
+            glx, gly = got
             if len(glx) >= 2:
                 lx, ly = np.asarray(glx, dtype=float), np.asarray(gly, dtype=float)
         # Fit the LAP's bbox (not the whole session) into the box so a single lap fills the inset;
@@ -1438,8 +1441,7 @@ class OverlayPainter:
         sh = max(cfg.strip_h_frac * out_h, 20.0)
         self._strip_rect = QRectF(m, m, strip_pill_width(sh, labels, tails), sh)
         # The g-meter dial's FILTERING STATE, driven exactly like the live overlay so the burned
-        # dial matches the screen (incl. the axis-provenance tag: IMU lateral · GPS longitudinal,
-        # not a bare source name).
+        # dial matches the screen.
         #
         # A `DialFilter`, NOT a `GMeterOverlay`: this constructor runs on `VideoExportWorker`'s
         # QThread, and `GMeterOverlay` is a frameless translucent top-level QWidget. Creating and
@@ -1448,10 +1450,10 @@ class OverlayPainter:
         # libx264 fallback path. The render path never wanted the widget: it only calls the free
         # `gmeter_overlay.paint_dial` with a `DialState` snapshot, which the filter provides.
         # tests/test_export_thread_safety.py holds this line to it.
+        # The dial no longer carries its axis provenance (it was a 6.5 px tag the export never
+        # burned in anyway; it is a sentence on the on-screen toggle's tooltip now — review §6.5),
+        # so there is nothing to seed here beyond the filtering itself.
         self._dial = gmeter_overlay.DialFilter()
-        _src = session.gmeter_source() if hasattr(session, "gmeter_source") else "accl"
-        _long = session.gmeter_long_source() if hasattr(session, "gmeter_long_source") else None
-        self._dial.set_source(_src, _long)
         # --- lap-scoped envelope bookkeeping (see feed_g / advance_and_snapshot) ---
         self._fed_before_line = False        # g was pushed while the lap was still pending
         self._crossed_line = False           # the start line has been reached

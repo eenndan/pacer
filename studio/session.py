@@ -711,6 +711,7 @@ class Session:
             best_lap_id=self.best_lap_id,
             valid_lap_ids=self.valid_lap_ids,
             active_baseline_total_distance=self.active_baseline_total_distance,
+            corner_alignment=lambda lap_id, total: self.corners.lap_alignment(lap_id, total),
             corner_basis=lambda: self.corners.basis(),
             lap_corner_stats=lambda lap_id: self.corners.lap_corner_stats(lap_id),
             lap_elevation=self.lap_elevation_channel,
@@ -1576,7 +1577,15 @@ class Session:
         return {lap_id for lap_id in self.valid_lap_ids() if self.lap_has_dropout(lap_id)}
 
     def lap_trace_xy(self, lap_id: int):
-        """Local-meter (xs, ys) of a single lap's trace, for highlighting on the map."""
+        """Local-meter (xs, ys) of a single lap's trace — the PUBLIC accessor for a lap's racing
+        line, and the one anything outside Session should call. Consumers: the default sector
+        suggestion (below), the cross-recording racing-line overlay fit (`load_reference` calls it
+        on the REFERENCE session), the offline exporter's map inset (`export_video._MapInset`), and
+        `dev/denoise_check`. The on-screen map does NOT come through here — it draws gap-aware
+        segments via `lap_trace_segments` / `LapRenderCache`, which take the private 3-tuple by
+        injection. That private form is also read directly by `dev/denoise_check._lap_fills`, which
+        needs the per-sample TIMES for `gapfill.reconstruct_lap`; it sits with `_donors_for` /
+        `_median_sample_dt` in the dev-tooling delegator group below."""
         xs, ys, _ = self._lap_trace_xyt(lap_id)
         return xs, ys
 
@@ -2075,6 +2084,23 @@ class Session:
         _bt, best_xs, best_ys, _bv, best_cum = self._lap_columns(best)
         best_traces = (best_xs, best_ys, best_cum, best_xs, best_ys, best_cum)
         best_total = self.best_lap_total_distance()
+        # Every lap's drift-gated warp is built from the WHOLE partition (corners.project_boundaries'
+        # `frame`), so a phase window is the same window the Corners table measured. The warps come
+        # from the corner service's MEMO (corner_model.lap_alignment), so this report shares them
+        # with lap_corner_stats / segment_bests / the driving channels instead of re-running each
+        # lap's spatial match for itself.
+        phase_frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+        best_align = (self.corners.lap_alignment(best, best_total)
+                      if corner_dist_total and best_total else None)
+        # The BEST lap's own three third-times per corner — the subtrahend of every phase triple
+        # below, and identical for all of them. Hoisted out of the lap loop: it was being
+        # re-integrated once per (lap, corner), which is half of this report's integration work
+        # done 37 times over on the D24 0060 pair (coaching.corner_best_thirds).
+        best_thirds = [coaching.corner_best_thirds(
+            best_dist, best_speed_kmh, float(c.enter), float(c.exit),
+            corner_dist_total=corner_dist_total, best_total=best_total,
+            best_traces=best_traces, frame=phase_frame, best_align=best_align)
+            for c in corner_list]
         triples_by_lap: list[list[tuple[float, float, float]]] = []
         for i in ids:
             if i == best:
@@ -2085,14 +2111,17 @@ class Session:
             _lt, lap_xs, lap_ys, _lv, lap_cum = self._lap_columns(i)
             lap_traces = (best_xs, best_ys, best_cum, lap_xs, lap_ys, lap_cum)
             lap_total = float(dist[-1])
+            lap_align = (self.corners.lap_alignment(i, lap_total)
+                         if corner_dist_total else None)
             row: list[tuple[float, float, float]] = []
-            for c in corner_list:
+            for c, thirds in zip(corner_list, best_thirds, strict=True):
                 ph = coaching.corner_phase_losses(
                     dist, speed_kmh, best_dist, best_speed_kmh,
                     float(c.enter), float(c.exit),
                     corner_dist_total=corner_dist_total, lap_total=lap_total,
                     best_total=best_total,
-                    lap_traces=lap_traces, best_traces=best_traces)
+                    lap_traces=lap_traces, best_traces=best_traces, frame=phase_frame,
+                    lap_align=lap_align, best_align=best_align, best_thirds=thirds)
                 row.append((ph.entry, ph.apex, ph.exit))
             triples_by_lap.append(row)
         if not triples_by_lap:
@@ -2158,7 +2187,10 @@ class Session:
                 continue
             _lt, lap_xs, lap_ys, _lv, lap_cum = self._lap_columns(i)
             traces = (best_xs, best_ys, best_cum, lap_xs, lap_ys, lap_cum)
-            seg = corners_alg.segment_times(corner_list, total_ref, dist, elapsed, traces)
+            # The corner service's memoized warp — the same one lap_corner_stats just used two
+            # lines up, so the straights and the corners partition ONE set of edges.
+            seg = corners_alg.segment_times(corner_list, total_ref, dist, elapsed, traces,
+                                            self.corners.lap_alignment(i, float(dist[-1])))
             times_by_lap.append([float(x) for x in seg[0::2]])  # the discarded even entries
             # Trap = the speed at each straight's END: the next corner's entry, and the
             # lap's own final-sample speed for the straight into the timing line.
@@ -2297,6 +2329,13 @@ class Session:
             best_elapsed=best_elapsed,
             median_traces=median_traces,
             best_traces=best_traces,
+            # The corner service's memoized warps for these two laps — the same objects the
+            # Corners table and the phase matrix read, so the coaching rows cannot drift into a
+            # separately-derived alignment (and the spatial match does not run a third time).
+            median_align=(self.corners.lap_alignment(med_id, median_lap_total)
+                          if med_id is not None and median_lap_total else None),
+            best_align=(self.corners.lap_alignment(best, best_lap_total)
+                        if best_lap_total else None),
         )
 
     def coaching_brake_points(self) -> dict:

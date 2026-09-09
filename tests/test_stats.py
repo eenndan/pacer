@@ -1390,19 +1390,30 @@ def test_stats_view_trend_sparkline_shows_and_hides():
 
 def test_stats_view_tiles_reflow_with_pane_width():
     """C6: the tile grids reflow — 4 columns wide, down to 2 in a narrow quadrant — so the
-    4th column (incl. the 'fix your top 3' digest) can never sit off-pane."""
+    4th column (incl. the 'fix your top 3' digest) can never sit off-pane.
+
+    700 px OF PANE AND NOT 1000, for the reason the friction-circle check above states: a tile
+    grid is measured against its own SECTION COLUMN now, and 1000 px is two columns of 476 — which
+    packs three tiles, exactly as the 445 px quadrant does. 700 px is a single column, so it is
+    still the pane class this test was written for. The composed case is asserted after it."""
     _app()
     from studio.stats_panel import TILES_PER_ROW, StatsView
     v = StatsView(_fake_view_session())
     v.show()
-    v.resize(1000, 800)
+    v.resize(700, 800)
     _pump()
     assert v._tile_cols == TILES_PER_ROW
+    # ...and a COMPOSED page reflows per column too: the tile rows used to run to
+    # TILES_PER_ROW_WIDE across the whole 1900 px pane, which is what made the maximized page one
+    # wide strip. Six tiles in a 609 px column would be 101 px each.
+    v.resize(1900, 800)
+    _pump()
+    assert v._tile_cols == TILES_PER_ROW, v._tile_cols
     v.resize(420, 800)
     _pump()
     assert v._tile_cols == 2, v._tile_cols
     # The digest tile sits within the first two columns now (row-major re-place).
-    g, tiles = v._tile_grids[1]                    # the PACE grid
+    g, tiles, _group = v._tile_grids[1]            # the PACE grid
     idx = tiles.index(v.t_digest)
     r, c = idx // 2, idx % 2
     assert g.itemAtPosition(r, c) is not None and g.itemAtPosition(r, c).widget() is v.t_digest
@@ -1470,9 +1481,18 @@ def test_tile_reflow_takes_each_tile_out_of_the_grid_before_re_adding_it():
 
 
 def test_stats_view_wide_pane_raises_the_tile_ceiling():
-    """L4-05: ⌘⇧S maximizes this page into the whole window, where a hard 4-column cap left every
-    tile row ending ~1000 px short of the right edge. Above WIDE_PANE_PX the reflow ceiling rises
-    and the friction circle grows with it — the quadrant behaviour (2..4) is untouched."""
+    """L4-05's OUTCOME, kept; L4-05's mechanism, superseded.
+
+    ⌘⇧S maximizes this page into the whole window, where a hard 4-column tile cap left every tile
+    row ending ~1000 px short of the right edge. L4-05 answered that by raising the CAP above
+    WIDE_PANE_PX — which widened the rows and could not do anything about the other ~1200 px of
+    empty canvas beside a page that was still one column. The page composes into section columns
+    now, so the width is spent on the PAGE and the tile grid keeps the 2..4 shape it has in a
+    quadrant; the ceiling still exists, for a single column that is dashboard-width on its own.
+
+    So the two assertions that moved are the tile cap and the circle's ceiling at a 1600 px pane,
+    and the three that did not are the ones this test was really for: the same ten PACE tiles take
+    strictly fewer rows, reach strictly further right, and go back when the pane does."""
     _app()
     from studio.stats_panel import (
         GG_HEIGHT,
@@ -1484,36 +1504,52 @@ def test_stats_view_wide_pane_raises_the_tile_ceiling():
     )
     v = StatsView(_fake_view_session())
     v.show()
-    v.resize(1000, 900)                       # a normal pane: the old cap still applies
+    # 503 and not 445, the OTHER shipped quadrant width, because 445 sits within 11 px of the
+    # 3-tile threshold and the answer there depends on whether the vertical scrollbar was showing
+    # at the instant the last resize arrived. That hysteresis is older than this test and is not
+    # what it is measuring; 503 is the same pane class with 58 px of margin.
+    v.resize(503, 900)                        # the quadrant this page is a quadrant in
     _pump()
-    assert v._tile_cols == TILES_PER_ROW
-    assert v.gg.height() == GG_HEIGHT
+    assert v._column_count() == 1
+    assert v._tile_cols < TILES_PER_ROW       # a quadrant's body: three tiles
+    assert v.gg.height() <= GG_HEIGHT         # ...and a circle no bigger than the normal ceiling
     narrow_rows, narrow_right = _pace_layout(v)
 
-    v.resize(WIDE_PANE_PX + 400, 900)         # a dashboard-width pane
+    v.resize(1900, 900)                       # the ⌘⇧S dashboard
     _pump()
-    assert v._tile_cols == TILES_PER_ROW_WIDE, v._tile_cols
+    assert v._column_count() == 3
+    assert v._tile_cols == TILES_PER_ROW, v._tile_cols
     assert v.gg.height() == GG_HEIGHT_WIDE
     # Measured on the real laid-out geometry, not on the column count: the same ten PACE tiles
-    # occupy strictly fewer rows and reach further right, which is the whole point — the page
-    # used to be a tall column down the left edge of a 1700 px pane.
+    # occupy strictly fewer rows and reach further right, which is the whole point.
     wide_rows, wide_right = _pace_layout(v)
     assert wide_rows < narrow_rows, (wide_rows, narrow_rows)
     assert wide_right > narrow_right, (wide_right, narrow_right)
 
-    v.resize(1000, 900)                        # …and it is reversible
+    # The tile ceiling is still REACHABLE — on a single column that is dashboard-width by itself,
+    # which is what WIDE_PANE_PX has always meant. Three of those is a 4K panel.
+    v.resize(3 * WIDE_PANE_PX + 200, 900)
     _pump()
-    assert v._tile_cols == TILES_PER_ROW and v.gg.height() == GG_HEIGHT
-    assert _pace_layout(v)[0] == narrow_rows
+    assert v._column_width() >= WIDE_PANE_PX, v._column_width()
+    assert v._tile_cols == TILES_PER_ROW_WIDE, v._tile_cols
+
+    v.resize(503, 900)                        # …and it is reversible
+    _pump()
+    assert v._tile_cols < TILES_PER_ROW and v.gg.height() <= GG_HEIGHT
+    assert _pace_layout(v) == (narrow_rows, narrow_right)
     v.hide()
     print("test_stats_view_wide_pane_raises_the_tile_ceiling OK")
 
 
 def _pace_layout(v):
-    """(rows, right edge) of the PACE tile grid, from the widgets' actual laid-out geometry."""
-    _g, tiles = v._tile_grids[1]
+    """(rows, right edge) of the PACE tile grid, from the widgets' actual laid-out geometry.
+
+    Mapped to the PAGE, not read off the tiles' own x: they sit inside a section column now, so a
+    local coordinate would measure the column and call a page twice as wide the same width."""
+    _g, tiles, _group = v._tile_grids[1]
     vis = [t for t in tiles if t.isVisible()]
-    return len({t.y() for t in vis}), max(t.x() + t.width() for t in vis)
+    return (len({t.mapTo(v, t.rect().topLeft()).y() for t in vis}),
+            max(t.mapTo(v, t.rect().topLeft()).x() + t.width() for t in vis))
 
 
 def test_friction_circle_names_its_axes_and_keys_its_rings():
@@ -1546,19 +1582,41 @@ def test_friction_circle_names_its_axes_and_keys_its_rings():
 def test_friction_circle_size_is_device_pixel_ratio_independent():
     """U8-01: pyqtgraph's sizeHint moves with the devicePixelRatio, so the plot laid out 440x220
     at DPR 1 and 300x220 at DPR 2 in the IDENTICAL logical window. Both axes are now pinned, so
-    the laid-out size is a property of the layout, not of the screen."""
+    the laid-out size is a property of the layout, not of the screen.
+
+    THE PANE IS 900 px AND NOT 1000, and the 100 px is the whole of what the column reflow moved.
+    The circle is sized from its own SECTION COLUMN now, not from the page, and 1000 px of pane is
+    two columns of 476 — so the ceiling that applies there is GG_HEIGHT_WIDE and the column
+    decides, which is a different assertion from this one. 900 px is a single column (the page
+    composes from two PAGE_COL_MIN_PX columns up), so it is still the pane class this test was
+    written for: wide enough that the CEILING decides and nothing about DPR can move it. The
+    dashboard's own sizing is asserted below instead of overwritten here."""
     _app()
     from studio.stats_panel import GG_ASPECT, GG_HEIGHT, StatsView
     v = StatsView(_fake_view_session())
     v.show()
-    v.resize(1000, 900)
+    v.resize(900, 900)
     _pump()
+    assert v._column_count() == 1, "setup: this check is about a single-column pane"
     expected = (int(GG_HEIGHT * GG_ASPECT), GG_HEIGHT)
     assert (v.gg.width(), v.gg.height()) == expected, (v.gg.width(), v.gg.height())
     # Pinned in both directions — a MAXIMUM width (what it used to carry) still lets the
     # DPR-dependent sizeHint choose the actual number below the cap.
     assert v.gg.minimumWidth() == v.gg.maximumWidth() == expected[0]
     assert v.gg.minimumHeight() == v.gg.maximumHeight() == expected[1]
+    v.hide()
+    # ...and the same pinning on a COMPOSED page, where the circle grows to its column instead:
+    # still exactly 2:1, still fixed in both axes, and never wider than the column carrying it.
+    v = StatsView(_fake_view_session())
+    v.show()
+    v.resize(1900, 900)
+    _pump()
+    assert v._column_count() >= 2, "setup: 1900px of pane must compose"
+    assert v.gg.width() == int(v.gg.height() * GG_ASPECT), (v.gg.width(), v.gg.height())
+    assert v.gg.minimumWidth() == v.gg.maximumWidth() == v.gg.width()
+    assert v.gg.minimumHeight() == v.gg.maximumHeight() == v.gg.height()
+    assert v.gg.width() <= v._column_width(), (v.gg.width(), v._column_width())
+    assert v.gg.height() > GG_HEIGHT, "a dashboard column has room for the bigger circle"
     v.hide()
     print("test_friction_circle_size_is_device_pixel_ratio_independent OK")
 
@@ -2042,13 +2100,6 @@ def test_stats_digest_tile_captions_its_base_and_paints_no_dead_link():
     print("test_stats_digest_tile_captions_its_base_and_paints_no_dead_link OK")
 
 
-if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    for t in tests:
-        t()
-    print(f"\nALL {len(tests)} STATS TESTS PASSED")
-
-
 # ------------------------------------------------------------- Phase 4: the page fits its pane
 #: The two widths this page's own quadrant has at the app's shipped window sizes, measured on the
 #: real CentralView (1440x900 -> 503 px of viewport, 1280x800 -> 445). The page is a QUADRANT
@@ -2175,3 +2226,377 @@ def test_the_friction_circles_axis_titles_fit_inside_the_chart():
         assert seen == 2
         v.hide()
     print("test_the_friction_circles_axis_titles_fit_inside_the_chart OK")
+
+
+# --------------------------------------------------- the ⌘⇧S dashboard composes at width
+#: The MAXIMIZED pane widths the app's shipped window sizes give this page, measured on the real
+#: CentralView (1280x800 -> 1260 px, 1440x900 -> 1420, 1920x1200 -> 1900). The quadrant widths
+#: above are the page's first duty; these are the surface ⌘⇧S opens onto.
+#:
+#: 1420 IS THE ONE THAT WAS MISSING, and its absence is what let a P1 ship green. It is the app's
+#: OWN DEFAULT window maximized, and it sat between the other two in exactly the band where a
+#: width-only packer produced its narrowest columns — three of 449 px, against report tables that
+#: want up to 718. A guard list that samples the extremes of a range is not sampling the range.
+DASHBOARD_WIDTHS = (1260, 1420, 1900)
+
+
+def test_the_dashboard_composes_into_columns_and_the_quadrant_does_not():
+    """The page is ONE column in a quadrant and 2-3 columns on the ⌘⇧S dashboard.
+
+    Measured before this guard: at 1920x1200 the maximized page laid 1900 px of pane out as a
+    single 700 px column of content — every table capped at its own width, ~70 % of the canvas
+    empty dark — and the scroll body stood 3135 px tall. The quadrant is NOT a small dashboard and
+    must not acquire a second column: 675 px (the 1920x1200 quadrant, the widest either shipped
+    window gives) is the negative control here, not an omission."""
+    for width in QUADRANT_WIDTHS + (675,):
+        v = _laid_out(width)
+        assert v._column_count() == 1, (
+            f"a {width}px QUADRANT composed into {v._column_count()} columns — the single-column "
+            f"scroll is what every quadrant renders")
+        v.hide()
+    for width in DASHBOARD_WIDTHS:
+        v = _laid_out(width)
+        cols = v._column_count()
+        assert 2 <= cols <= 3, f"a {width}px maximized page is still {cols} column(s)"
+        # ...and every column got AT LEAST the width it declared it needs. Not "the columns are
+        # equal", which is what this asserted first and is exactly the assumption the P1 was made
+        # of: equal thirds of 1420 px are 449 px each, and three of the five report tables want
+        # more than that. A column is as wide as its widest non-reflowing member, and the packer
+        # only composes an arrangement it can pay for.
+        planned = v._planned_widths(v._layout)
+        for gcol, groups in enumerate(v._layout):
+            need = v._grid_column_min(groups)
+            assert planned[gcol] >= need, (
+                f"at {width}px grid column {gcol} is planned at {planned[gcol]}px for content "
+                f"that needs {need}px")
+            for group in groups:
+                got = v._columns[group].width()
+                assert got >= need, (
+                    f"at {width}px the column holding group {group} was laid out at {got}px "
+                    f"against a {need}px minimum")
+        # The content has to actually REACH across the canvas: the old page's rightmost ink
+        # stopped at ~700 px whatever the pane.
+        right = max(c.x() + c.width() for c in v._columns)
+        assert right >= 0.9 * v._scroll.viewport().width(), (
+            f"at {width}px the composed columns still end at {right}px of "
+            f"{v._scroll.viewport().width()}px of canvas")
+        v.hide()
+    print(f"test_the_dashboard_composes_into_columns_and_the_quadrant_does_not OK "
+          f"({QUADRANT_WIDTHS + (675,)} -> 1 col, {DASHBOARD_WIDTHS} -> 2-3)")
+
+
+def test_the_composed_page_keeps_the_shipped_section_order():
+    """Stacked, the three columns concatenate back into the page that shipped.
+
+    The single-column page is not a fallback — it is what every quadrant renders — so the split
+    has to be into CONTIGUOUS groups. This reads the section headings in visual order (top to
+    bottom, then left to right) at one column and asserts the dashboard is a re-DEALING of that
+    order rather than a re-ordering of it: each column's own sections stay in sequence, and the
+    columns concatenate to the quadrant's sequence."""
+    from PySide6.QtWidgets import QLabel
+
+    def headings(view):
+        out = []
+        for holder in view._columns:
+            names = []
+            for lab in holder.findChildren(QLabel):
+                if lab.property("role") == "BarLabel" and lab.isVisible():
+                    names.append((lab.mapTo(holder, lab.rect().topLeft()).y(), lab.text()))
+            out.append([t for _y, t in sorted(names)])
+        return out
+
+    quadrant = _laid_out(445)
+    order = headings(quadrant)
+    quadrant.hide()
+    flat = [t for column in order for t in column]
+    assert flat, "no section headings found — the walk is broken, not the page"
+    for width in DASHBOARD_WIDTHS:
+        v = _laid_out(width)
+        assert headings(v) == order, (
+            f"at {width}px the dashboard re-ordered the page instead of re-dealing it:\n"
+            f"  {headings(v)}\n  != {order}")
+        v.hide()
+    print(f"test_the_composed_page_keeps_the_shipped_section_order OK ({len(flat)} sections)")
+
+
+def _hidden_columns(v):
+    """Every visible report table that is hiding a column behind its OWN horizontal scrollbar,
+    as [(first header, px of column hidden)].
+
+    Asked of the WIDGET (`_needs_bar`), not of a subtraction: `content_width()` includes the frame
+    and two spare pixels, so a raw content-minus-viewport reads +4 px on a table that fits
+    perfectly, and a guard written that way is either always red or tuned to a constant nobody
+    can explain."""
+    from studio.stats_panel import _ReportTable
+    out = []
+    for t in v.findChildren(_ReportTable):
+        if t.isHidden() or not t._needs_bar():
+            continue
+        head = t.horizontalHeaderItem(0)
+        columns_px = t.content_width() - 2 * t.frameWidth() - 2
+        out.append(((head.text() if head else "?"), columns_px - t.viewport().width()))
+    return out
+
+
+def test_no_composed_column_hides_a_report_table_column():
+    """THE ASSERTION WHOSE ABSENCE LET A P1 SHIP GREEN.
+
+    Composing the page into columns narrower than its report tables does not wrap them — the
+    tables are content-sized and scroll (see _ReportTable) — it HIDES their rightmost columns
+    behind an inner scrollbar. Measured on D24 before the packer learned to ask: at the app's own
+    default 1440x900 window, maximized, `Apex best · Apex med · Grip %` were gone from CORNERS,
+    `Trap med · Exit Δ` from STRAIGHTS, `Brake s · Coast s` from PER LAP and `m later` from
+    BRAKING — 266 / 159 / 90 / 81 px of hidden columns on a page whose single-column form showed
+    all of them.
+
+    The outer page-level check below is NOT this check, and believing it was is how the defect got
+    through: the page fit its pane perfectly the whole time. The scroll had moved INSIDE the
+    tables, which is the one place `_ReportTable` is designed to put it and the one place nothing
+    was looking."""
+    for width in DASHBOARD_WIDTHS:
+        v = _laid_out(width)
+        hidden = _hidden_columns(v)
+        assert not hidden, (
+            f"at a {width}px composed page these tables hide columns: "
+            + ", ".join(f"{name} by {px}px" for name, px in hidden))
+        v.hide()
+    print(f"test_no_composed_column_hides_a_report_table_column OK ({DASHBOARD_WIDTHS})")
+
+
+def test_composing_never_hides_a_column_the_single_column_page_showed():
+    """The comparison that names the regression: composing may not LOSE a reader anything.
+
+    A quadrant is allowed to scroll a table — that is the shipped contract, and at 445 px the
+    widest table is 273 px too wide for the pane whatever anyone does. What is not allowed is for
+    the page to hide a column at a width where it did not have to, so this pins the composed page
+    against the SAME page at the same pane width forced to a single column: whatever the one-column
+    layout can show, the composed one shows too."""
+    for width in DASHBOARD_WIDTHS:
+        v = _laid_out(width)
+        composed = dict(_hidden_columns(v))
+        # ...the same page, same width, dealt into one column (what main renders here).
+        from studio.stats_panel import PAGE_LAYOUTS
+        v._layout = PAGE_LAYOUTS[-1]
+        v._place_columns(PAGE_LAYOUTS[-1])
+        _settle(8)
+        single = dict(_hidden_columns(v))
+        lost = {k: composed[k] for k in composed if k not in single}
+        assert not lost, (
+            f"at {width}px composing hid columns the single-column page showed: {lost}")
+        v.hide()
+    print("test_composing_never_hides_a_column_the_single_column_page_showed OK")
+
+
+#: The two recordings this page's composition was measured on, as the numbers the packer actually
+#: reads: (group minimum widths, group content heights). The shared stub cannot produce either —
+#: it has two laps and no corners, so its CORNERS and STRAIGHTS tables are hidden and its columns
+#: sit at the prose floor — and a composition guard that only ever runs on it is asserting an
+#: invariant against numbers no user has. These are measured on the real app (see the PR body):
+#: D24 = 38 laps, 0062 = 65 laps, both on this machine's fixture disk.
+REAL_PAGES = {
+    #                   group min WIDTHS      group content HEIGHTS
+    "D24 (38 laps)":  ((440, 718, 610), (983, 907, 1338)),
+    "0062 (65 laps)": ((440, 718, 610), (929, 921, 2322)),
+}
+
+
+def test_the_packer_picks_the_documented_form_on_both_real_recordings():
+    """The composition table in stats_panel's PAGE_LAYOUTS prose, as an assertion.
+
+    `_choose_layout` is a pure decision over three inputs — the pane, each group's minimum WIDTH
+    and each group's content HEIGHT — so it can be asked the real recordings' numbers without
+    loading 32 GB of video. That is the point: the guards below run on the shared stub, whose
+    tables are narrower and shorter than any real session's, and the stub composes ((0,1),(2,))
+    at 1260 where the real recording composes ((0,),(1,2)). Both are right for their content;
+    only one of them is what a user sees.
+
+    The 65-lap row is the regression this pins. Group 2 holds PER LAP, one uncapped row per clean
+    lap, so it grows with the recording while groups 0 and 1 do not: at 38 laps it is 1338 px
+    against a 1894 px stack, at 65 laps it is 2322 px against the same stack — and the balanced
+    form then bands the column beside it by 230 px at the app's own default window."""
+    from studio.stats_panel import PAGE_LAYOUTS
+
+    three, balanced, narrow_left, single = PAGE_LAYOUTS
+    expected = {
+        "D24 (38 laps)":  {1260: narrow_left, 1420: balanced, 1900: three},
+        "0062 (65 laps)": {1260: narrow_left, 1420: narrow_left, 1900: three},
+    }
+    v = _laid_out(1900)
+    for name, (mins, heights) in REAL_PAGES.items():
+        v._group_min_width = lambda g, _m=mins: _m[g]
+        v._group_height = lambda g, _h=heights: _h[g]
+        for pane, want in expected[name].items():
+            v._pane_width = lambda _p=pane: _p
+            got = v._choose_layout()
+            assert got == want, f"{name} at {pane}px chose {got}, expected {want}"
+            # ...and what it chose is a form the SPAN check accepts, which is the half no width
+            # arithmetic can see.
+            assert v._span_fits(want), f"{name} at {pane}px: {want} bands"
+    assert single == PAGE_LAYOUTS[-1]
+    v.hide()
+    print(f"test_the_packer_picks_the_documented_form_on_both_real_recordings OK "
+          f"({len(REAL_PAGES)} recordings x 3 widths)")
+
+
+def test_a_long_session_never_bands_a_stacked_column():
+    """A COLUMN THAT SPANS THE BAND MAY NOT BE TALLER THAN THE ONE STACKING BESIDE IT.
+
+    `_place_columns` spans a lone grid column across both rows so every band holds exactly one
+    item and no gap can open between two sections. That shape has one failure mode, and the
+    docstring used to argue it away in prose from ONE recording's heights: if the spanning group
+    is taller than the two stacked beside it, Qt grows both of those rows to fit it and each
+    stacked holder pays the difference out as empty space under its last section — an empty band
+    in the middle of a column, next to a full one.
+
+    It is reachable from the fixture disk. PER LAP takes one row per clean lap and is uncapped
+    while groups 0 and 1 gain nothing per lap, so ~50 laps flips the inequality; the owner's own
+    0062 recording has 65 and opened a 230 px band in the LEFT column of the default 1440x900
+    window under ⌘⇧S. Reproduced here by inflating the lap table the way a session would —
+    `setRowCount` + `_fit_table`, which is what `_refresh_lap_table` does — at the three widths
+    the band covered.
+
+    THE BAND IS MEASURED INSIDE THE HOLDER, not between two of them: each column layout ends in
+    addStretch(1), so a holder grown past its content keeps its sections packed at the top and
+    puts the slack underneath. Reading the gap between two holders' geometries finds 4 px (the
+    grid's own spacing) and misses the defect entirely — which is how the first version of this
+    check passed against a page that was visibly banded."""
+    from studio import theme
+
+    for rows in (38, 65):
+        v = _laid_out(1420)
+        for width in (1420, 1600, 1800):
+            v.resize(width, 900)
+            _settle(4)
+            v.lap_table.setRowCount(rows)
+            v._fit_table(v.lap_table)
+            v._reflow_tiles()
+            _settle(8)
+            for groups in v._layout:
+                for group in groups[:-1]:     # the last one's slack is the page's own bottom
+                    holder = v._columns[group]
+                    band = holder.height() - holder.layout().sizeHint().height()
+                    assert band <= theme.SPACE_XS, (
+                        f"{rows} laps at {width}px: group {group} is laid out {band}px taller "
+                        f"than its content inside a stacked column — an empty band beside a full "
+                        f"column, because a spanning group made Qt grow the rows")
+        v.hide()
+    print("test_a_long_session_never_bands_a_stacked_column OK (38 and 65 laps x 3 widths)")
+
+
+def test_the_dashboard_never_scrolls_sideways_either():
+    """The quadrant's own rule (above), held at the widths ⌘⇧S opens onto.
+
+    A column reflow is only a fix if the content FITS the columns it is dealt into; a page that
+    composes and then scrolls sideways has moved the defect, not removed it."""
+    for width in DASHBOARD_WIDTHS:
+        v = _laid_out(width)
+        body, viewport = v._scroll.widget(), v._scroll.viewport()
+        assert body.width() <= viewport.width(), (
+            f"at {width}px the composed page lays out {body.width()}px in {viewport.width()}px")
+        assert not v._scroll.horizontalScrollBar().isVisible(), \
+            f"horizontal scrollbar on the composed page at {width}px"
+        v.hide()
+    print(f"test_the_dashboard_never_scrolls_sideways_either OK ({DASHBOARD_WIDTHS})")
+
+
+def test_the_trend_sparkline_is_capped_by_its_sample_count():
+    """The one widget on the page with no width of its own.
+
+    Every table caps itself at its content and the friction circle is pinned in both axes, so on
+    the maximized dashboard the sparkline was the only thing left to absorb the slack: 24 laps
+    stretched across 1850 px, a slope drawn at 77 px per lap. Its ceiling is now its samples'
+    (SPARK_AXIS_W + n x SPARK_PX_PER_LAP), and being a MAXIMUM it still yields to a narrow pane."""
+    from studio.stats_panel import SPARK_AXIS_W, SPARK_PX_PER_LAP, StatsView
+
+    # D24's own shape: 24 clean laps in a ~1.3 s band. `lap_time_trend` lives on the SESSION and
+    # the shared stub does not carry it (the sparkline hides with none), so it is added here.
+    times = [68.2 + 0.06 * i for i in range(24)]
+    sess = _fake_view_session()
+    sess.lap_time_trend = lambda: list(enumerate(times))
+    v = StatsView(sess)
+    v.resize(1900, 900)
+    v.show()
+    _settle(8)
+    n = len(times)
+    assert not v.spark.isHidden(), "setup: the stub must draw a sparkline at all"
+    cap = v.spark.maximumWidth()
+    assert cap <= SPARK_AXIS_W + n * SPARK_PX_PER_LAP, (cap, n)
+    assert v.spark.width() <= cap, (v.spark.width(), cap)
+    assert v.spark.width() < 0.6 * v._scroll.viewport().width(), (
+        f"{n} samples still stretched across {v.spark.width()}px of a "
+        f"{v._scroll.viewport().width()}px page")
+    v.hide()
+    print(f"test_the_trend_sparkline_is_capped_by_its_sample_count OK ({n} samples, cap {cap}px)")
+
+
+def test_the_sparkline_frame_survives_one_traffic_lap():
+    """A robust y ceiling, and BOTH y labels still real lap times.
+
+    On D24 one 1:17.136 lap against 23 in 1:08.2-1:09.5 spent 78 % of the band on the gap to a
+    single lap, leaving the session's whole story in a floor-hugging line. The frame is fenced at
+    Tukey's "far out" (q3 + 3 x IQR) and the ceiling is the slowest lap AT OR UNDER the fence — a
+    lap time, never the fence itself, because a y axis printing a percentile as if it were a lap
+    is a worse defect than a flat line. Self-limiting: a session with no outlier is unfenced."""
+    from studio.stats_panel import StatsView
+
+    clean = [68.2, 68.4, 68.6, 68.7, 68.9, 69.0, 69.2, 69.4, 69.6, 69.9]
+    hi, over = StatsView._spark_frame(clean)
+    assert (hi, over) == (69.9, []), "a session with no outlier must keep every lap in frame"
+    traffic = clean + [77.1]
+    hi, over = StatsView._spark_frame(traffic)
+    assert over == [77.1] and hi == 69.9, (hi, over)
+    assert hi in traffic, "the ceiling has to be a lap someone drove"
+    # A merely SLOW lap is not an outlier — it stays in the frame.
+    hi, over = StatsView._spark_frame(clean + [71.0])
+    assert over == [] and hi == 71.0, (hi, over)
+    # Too few laps for quartiles to describe anything, and a degenerate spread: no fence at all.
+    assert StatsView._spark_frame([68.2, 77.1]) == (77.1, [])
+    assert StatsView._spark_frame([70.0] * 9 + [99.0]) == (99.0, [])
+    print("test_the_sparkline_frame_survives_one_traffic_lap OK")
+
+
+def test_every_data_trust_row_fits_on_one_line_once_it_can():
+    """DATA TRUST row 3 wrapped at EVERY width, and the width was never the reason.
+
+    Its value is 421 px of ink. In the 445 px quadrant it genuinely needs two lines and does —
+    but it kept both of them on a 1900 px dashboard, painted vertically centred in a box twice its
+    text's height, because widgets.WrapLabel measured itself against its OWN previous minimum
+    (QLabel.heightForWidth is clamped by minimumSize, so the answer could only ratchet upwards).
+    Asserted here on the SHIPPED card at the shipped widths, not on a synthetic label."""
+    from PySide6.QtGui import QFontMetrics
+
+    v = _laid_out(1900)
+    rows = [(t, val) for t, val in v.trust_card._widgets if val.isVisible()]
+    assert len(rows) >= 3, "setup: the stub must produce a multi-row trust card"
+    for term, value in rows:
+        fm = QFontMetrics(value.font())
+        ink = fm.horizontalAdvance(value.text())
+        if ink > value.width():
+            continue                     # genuinely too long for its column: wrapping is correct
+        assert value.height() <= fm.height() + 1, (
+            f"DATA TRUST {term.text()!r}: {ink}px of ink in a {value.width()}px column, laid out "
+            f"{value.height()}px tall for a {fm.height()}px line")
+    v.hide()
+    print(f"test_every_data_trust_row_fits_on_one_line_once_it_can OK ({len(rows)} rows)")
+
+
+def test_the_cross_check_sample_count_is_grouped():
+    """"346713 samples" is read digit by digit; "346,713" is read at a glance."""
+    v = _laid_out(1900)
+    values = [val for _term, val, _caveat in v.trust_card.rows()]
+    line = next(t for t in values if "samples" in t)
+    assert "1,000 samples" in line, line
+    v.hide()
+    print("test_the_cross_check_sample_count_is_grouped OK")
+
+
+if __name__ == "__main__":
+    # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
+    # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it
+    # were DEFINED and never called: `python tests/test_stats.py` printed "ALL 62 STATS TESTS
+    # PASSED" and exited before reaching them, and ctest runs exactly that command. They had never
+    # run once. Anything appended from here on runs by construction.
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for t in tests:
+        t()
+    print(f"\nALL {len(tests)} STATS TESTS PASSED")

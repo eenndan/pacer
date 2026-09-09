@@ -119,16 +119,26 @@ axis is the **GPS speed-derivative**, because the IMU forward axis is vibration-
 `gmeter_overlay.source_label` composes the mixed string `"IMU lat · GPS long"` rather than printing
 one sensor's name.
 
-That string is stated on the **live on-screen dial** — the surface where a driver reads the numbers
-in order to act on them, and where the app's other trust chrome lives. It is **deliberately not
-burned into the exported video**: a nine-pixel line of sensor plumbing under a dial in a clip
-someone watches is not where provenance is read, and the reserved band it occupied is worth more
-as dial (dropping it grows the export dial's radius 10.1 % — 76.5 → 84.2 px at 1080p — and its face
-21 % in area, for free). `source_label` keeps its exact string, the exporter still sets it, and
-`DialState.source` still carries it; only `_paint_dial_export` stops drawing it.
+That string is stated on the **g-meter toggle's tooltip** — the control that turns the dial on —
+as one clause of `gmeter_overlay.source_sentence`, alongside the felt-force convention. It is not
+on the dial's face and not burned into the exported video.
 
-The divergence is pinned in both directions by
-`tests/test_gmeter_overlay.test_export_dial_paints_the_same_labels_as_the_live_dial`: exactly two
-strings may be live-only — the "G METER" title and this tag — and everything that says what the
-numbers MEAN (the four direction captions, the labelled `0.5 g` / `1.0 g` rings that carry the
-unit) must still appear in both.
+**Why it moved off the face.** It used to be printed at 6.5 px in the live dial's bottom-right
+corner, one of eleven text items in a 120×140 px card (critical review §6.5: "reads as a debug
+widget"). The export already declined to burn it — a line of sensor plumbing under a dial in a clip
+someone watches is not where a viewer reads provenance — so the fact was already only half-stated,
+and the half that survived was the one nobody could read. A tooltip states it in a sentence
+(*"Cornering g comes from the IMU; braking and acceleration from the GPS speed derivative, which
+the vibration-inflated IMU forward axis is not trustworthy enough to carry."*) on the surface a
+driver hovers when they want to know what the dial is. `source_label` keeps its exact string;
+`DialFilter` no longer carries it at all, because a field the painter never reads is a field two
+threads pass around for nothing.
+
+**What still guards it.** `tests/test_gmeter_overlay.py` pins both halves of the move:
+`test_the_dial_does_not_carry_its_provenance_any_more` (the dataclass really shed it — as against
+the four cardinal peaks, which are ALSO unpainted now and ARE still carried, because they clamp the
+hull and the exporter freezes them) and `test_the_provenance_moved_to_the_toggles_tooltip`, which
+drives the real `VideoView` and requires the convention *and* both axis sources in the tooltip
+text. And because there is no longer any string one mode paints and the other does not,
+`test_the_burn_and_the_screen_say_exactly_the_same_thing` asserts set EQUALITY between the live and
+exported faces — a stronger contract than the old "exactly two may differ".

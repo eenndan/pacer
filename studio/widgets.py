@@ -98,6 +98,24 @@ class WrapLabel(QLabel):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        # MEASURE FROM A CLEARED MINIMUM, and that is not tidiness — it is what stops the line
+        # above from becoming a one-way RATCHET.
+        #
+        # ``QLabel.heightForWidth`` is clamped by the widget's OWN minimum: QLabelPrivate::
+        # sizeForWidth ends in ``expandedTo(q->minimumSize())``. So asking for the height while
+        # the PREVIOUS answer is still installed can only ever return that answer or more — a
+        # label that once wrapped to two lines claims two lines at every later width, forever,
+        # however wide the pane becomes. Measured on the shipped widget: 1178 px wide -> 14 px,
+        # narrowed to 258 -> 28, widened back to 1178 -> still 28 (14 again the moment the
+        # minimum is cleared). That is the whole of the Stats DATA TRUST card's third row
+        # "always wrapping at any width" — 421 px of ink in 470 px of column, laid out two lines
+        # tall and painted vertically centred in it, because the page had once been 445 px wide.
+        #
+        # Same shape as the EmptyState measure that became a pane's minimum (tests/
+        # test_measure_floors.py): a number a widget computed about itself must not become the
+        # floor of the next computation.
+        if self.minimumHeight():
+            self.setMinimumHeight(0)
         need = self.heightForWidth(self.width())
         if need > 0 and need != self.minimumHeight():
             self.setMinimumHeight(need)

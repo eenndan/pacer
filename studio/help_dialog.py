@@ -282,11 +282,25 @@ def _fit_to_copy(dialog: QDialog, scroll: QScrollArea, column: QVBoxLayout) -> N
     body = scroll.widget()
     # Lay the copy out at the width it will really get (minus the scrollbar, so the estimate errs
     # tall) — that is what makes WrapLabel assert each paragraph's wrapped height, which
-    # totalMinimumSize then sums. widgetResizable re-sizes the body straight after.
+    # totalMinimumSize then sums.
+    #
+    # AND HOLD IT THERE FOR THE MEASUREMENT, which is the half this was missing. `widgetResizable`
+    # means the scroll area owns the body's width, so it takes it straight back: the labels were
+    # measured at the 412 px the viewport had rather than the 400 px asked for here, came out one
+    # wrapped line short, and the privacy card opened 16 px under its copy with a scrollbar it did
+    # not need. It went unnoticed because widgets.WrapLabel used to RATCHET — a paragraph that had
+    # once measured taller kept the height — so the missing line was supplied by a bug. With the
+    # ratchet gone (a label now reports what it needs at the width it has) the read has to be
+    # taken at the right width, and turning the scroll area's management off for the duration is
+    # what makes the width the one this line set. A second activate() cannot help: the value is
+    # correct for a width nobody will use.
+    resizable = scroll.widgetResizable()
+    scroll.setWidgetResizable(False)
     body.resize(max(1, dialog.minimumWidth() - scroll.verticalScrollBar().sizeHint().width()),
                 body.height())
     body.layout().activate()
     need = column.totalMinimumSize().height()
+    scroll.setWidgetResizable(resizable)
     screen = dialog.screen() or QGuiApplication.primaryScreen()
     room = int(screen.availableGeometry().height() * 0.85) if screen is not None else need
     height = min(need, max(240, room))

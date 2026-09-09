@@ -12,7 +12,6 @@ modes; only the decoder/audio stack is absent."""
 import os
 import shutil
 import sys
-import tempfile
 import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -25,13 +24,19 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from studio import library
 from studio.app import StudioWindow
+from studio.dev import _jail
 
 # F8: the load now upserts the recording into the session-library index (~/Library/Application
 # Support/pacer/library.json). The smoke run "must leave no artifacts" and must never touch the
 # user's real library, so divert the index to a throwaway temp dir BEFORE any window is built
 # (the upsert reads this seam at load time). We assert the entry appeared there, then drop it.
-_LIB_DIR = tempfile.mkdtemp(prefix="pacer-smoke-lib-")
-library._app_support_dir = lambda: _LIB_DIR
+#
+# It is every seam, not just the library: `prefs` decides the speed unit and which lap-panel tab
+# this window builds, and `track_db` decides whether the load adopts a stored start line instead
+# of fitting one — a smoke run that passes or fails depending on the operator's saved state is
+# not a smoke run. See studio/dev/_jail.py.
+_JAIL = _jail.divert_app_support("pacer-smoke-")
+_LIB_DIR = _JAIL.dir
 
 app = QApplication([a for a in sys.argv if a != "--no-video"])
 
@@ -117,6 +122,10 @@ _lib = library.load()
 assert len(s.valid_lap_ids()) == 0, "smoke fixture changed: DEFAULT_SAMPLE now has valid laps"
 assert len(_lib["entries"]) == 0, f"library: sample/0-lap open must be skipped, got {len(_lib['entries'])}"
 print("library entries:", len(_lib["entries"]), "(sample correctly not indexed)")
-shutil.rmtree(_LIB_DIR, ignore_errors=True)
+# Only ever remove a directory this run created. `divert_app_support` ADOPTS an outer jail
+# (the QA write-jail harness) when one is already installed, and deleting that would pull
+# the floor out from under the harness watching it — hence the ownership flag.
+if _JAIL.created:
+    shutil.rmtree(_LIB_DIR, ignore_errors=True)
 
 print("SMOKE OK" + (" (no-video)" if os.environ.get("PACER_NO_MEDIA") == "1" else ""))
