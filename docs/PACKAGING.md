@@ -114,6 +114,13 @@ Resolution order (`studio/demo.py`):
    (override the URL with `PACER_DEMO_URL`). If offline / the asset is missing, the app falls back
    to the empty welcome state — it still launches.
 
+**The welcome screen's "Open demo" button is gated on steps 1–2 only** (`demo.demo_available()`, an
+offline path lookup): the asset in step 3 has never been published, so without the env var or a
+cache that button could only ever end in an apology, and it is not shown at all. `--demo` on the
+command line still runs the full order, download included — an explicit request gets an explicit
+attempt. **Recording the demo video: set `PACER_DEMO_MP4`** and the button is back, pointing at your
+clip.
+
 To publish the demo recording, attach a small single-chapter lapping `.mp4`
 (`pacer-demo-lap.mp4`) to the GitHub `v0.1.0` release (or Git LFS); see `_DEMO_URL` in
 `studio/demo.py`. Keep it small (one clean lap is plenty) — do **not** commit it to git.

@@ -10,8 +10,19 @@ from __future__ import annotations
 import os
 import tempfile
 
-from PySide6.QtCore import QSize
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPalette
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QGuiApplication,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+    QPixmap,
+)
 
 from . import units
 
@@ -879,6 +890,75 @@ def icon(name: str, color: str | None = None) -> QIcon:
               "Install it via `pixi install` (the qtawesome pypi dependency).", flush=True)
         return QIcon()
     return qta.icon(name, color=color or C.text, color_active=color or C.accent)
+
+
+# ====================================================================== the brand mark
+# THE SPEED CHEVRON — the app's own mark, and the ONE piece of geometry the product draws that is
+# not a Phosphor glyph. Two right-pointing chevrons, a darker one behind for depth and a brighter
+# one in front, on a 1024 design grid: exactly what studio/dev/make_icon.py packs into
+# studio/assets/pacer.icns (the Dock/window icon) and what docs/index.html traces by hand.
+#
+# IT LIVES HERE BECAUSE IT IS NOW WORN IN TWO PLACES. The welcome screen's drop zone used to open
+# with `ph.download-simple` — a generic download-tray glyph, i.e. the app's one brand moment spent
+# on a stock icon that also says the wrong thing (nothing is downloading; a file is being dropped).
+# A second copy of these numbers in overlays.py would be a mark that drifts from the icon the
+# moment either is touched, so the icon generator reads them from here too and
+# tests/test_welcome_first_touch.py pins that they are the same numbers.
+BRAND_GRID = 1024.0                              # the design grid the coordinates below are on
+# (centre x, stroke width) per chevron, back to front.
+BRAND_CHEVRONS = ((452.0, 92.0), (596.0, 100.0))
+# One chevron's three points on that grid, relative to its centre x: in, out, in.
+BRAND_CHEVRON_POINTS = ((-96.0, 336.0), (128.0, 512.0), (-96.0, 688.0))
+
+
+def brand_chevron_path(cx: float) -> QPainterPath:
+    """One chevron of the mark as a QPainterPath on the BRAND_GRID, centred on `cx`."""
+    path = QPainterPath()
+    (x0, y0), (x1, y1), (x2, y2) = BRAND_CHEVRON_POINTS
+    path.moveTo(cx + x0, y0)
+    path.lineTo(cx + x1, y1)
+    path.lineTo(cx + x2, y2)
+    return path
+
+
+def brand_mark(px: int, front: str | None = None, back: str | None = None) -> QPixmap:
+    """The speed-chevron mark as a QPixmap `px` square, tile-free and transparent.
+
+    The .icns wears the mark on a rounded gradient TILE because a Dock icon needs a body; at
+    36 px on the welcome canvas that tile is a 36 px dark rectangle on a dark background — the
+    mark's own strokes are the only ink that survives, so the tile is dropped and only the
+    chevrons are drawn. Colours default to the icon's own pair (accent in front, accent_press
+    behind), and both are parameters so a surface that needs the mark muted can ask for it.
+
+    Device-pixel-ratio aware: the pixmap is rendered at the ratio Qt is compositing at and carries
+    it, so the strokes are crisp on a Retina panel instead of a 1x bitmap scaled up.
+    """
+    app = QGuiApplication.instance()
+    dpr = float(app.devicePixelRatio()) if app is not None else 1.0
+    pm = QPixmap(int(px * dpr), int(px * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.transparent)
+    # The mark's own bounding box on the grid (the strokes' half-widths included), so the pixmap is
+    # filled edge to edge rather than carrying the icon tile's margins as invisible padding.
+    half = max(w for _cx, w in BRAND_CHEVRONS) / 2.0
+    xs = [cx + x for cx, _w in BRAND_CHEVRONS for x, _y in BRAND_CHEVRON_POINTS]
+    ys = [y for _x, y in BRAND_CHEVRON_POINTS]
+    span = max(max(xs) - min(xs), max(ys) - min(ys)) + 2 * half
+    k = (px * dpr) / span
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.scale(k, k)
+    p.translate(-(min(xs) - half), -(min(ys) - half))
+    pairs = zip(BRAND_CHEVRONS, (back or C.accent_press, front or C.accent), strict=True)
+    for (cx, w), colour in pairs:
+        pen = QPen(QColor(colour))
+        pen.setWidthF(w)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.drawPath(brand_chevron_path(cx))
+    p.end()
+    return pm
 
 
 # THE GENERATED CHEVRON IS PROCESS SCRATCH, NOT A REPO ASSET — and it used to be both.

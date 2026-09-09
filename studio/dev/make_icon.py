@@ -38,21 +38,26 @@ from PySide6.QtGui import (
     QPen,
 )
 
-# Colours: pulled from studio.theme.C for single-source. If importing the theme is awkward
-# (it registers fonts / touches Qt on import), the literal hex fall-back below mirrors
-# studio.theme.C exactly (canvas / bg / accent / accent_press).
+# Colours AND the mark's geometry: pulled from studio.theme for single-source. The mark is worn in
+# two places now — this icon and the welcome screen's brand glyph (theme.brand_mark) — so the
+# chevrons' coordinates live with the design tokens rather than in whichever file drew them first.
+# If importing the theme is awkward (it registers fonts / touches Qt on import), the literal
+# fall-backs below mirror studio.theme exactly.
 try:
-    from studio.theme import C
+    from studio.theme import BRAND_CHEVRON_POINTS, BRAND_CHEVRONS, BRAND_GRID, C
 
     CANVAS = C.canvas
     BG = C.bg
     ACCENT = C.accent
     ACCENT_PRESS = C.accent_press
-except Exception:  # pragma: no cover - fall back to literals that mirror studio.theme.C
+except Exception:  # pragma: no cover - fall back to literals that mirror studio.theme
     CANVAS = "#15181E"        # mirrors studio.theme.C.canvas
     BG = "#1A1D23"            # mirrors studio.theme.C.bg
     ACCENT = "#F5A623"        # mirrors studio.theme.C.accent
     ACCENT_PRESS = "#D98E12"  # mirrors studio.theme.C.accent_press
+    BRAND_GRID = 1024.0                               # mirrors studio.theme.BRAND_GRID
+    BRAND_CHEVRONS = ((452.0, 92.0), (596.0, 100.0))  # mirrors studio.theme.BRAND_CHEVRONS
+    BRAND_CHEVRON_POINTS = ((-96.0, 336.0), (128.0, 512.0), (-96.0, 688.0))  # ditto, _POINTS
 
 # Where the packed icon lands (bundled by the spec via studio/assets).
 _ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
@@ -89,8 +94,8 @@ TYPE_MAP = [
 
 
 def render(px: int) -> QImage:
-    """Render the "Speed chevron" mark at px-square, scaled down from a 1024 design grid."""
-    k = px / 1024.0
+    """Render the "Speed chevron" mark at px-square, scaled down from the BRAND_GRID design grid."""
+    k = px / BRAND_GRID
     img = QImage(px, px, QImage.Format_ARGB32_Premultiplied)
     img.fill(Qt.transparent)
     p = QPainter(img)
@@ -99,7 +104,7 @@ def render(px: int) -> QImage:
 
     # Rounded tile with an amber-dark vertical gradient + a faint 1px inner light edge.
     margin = 100.0
-    tile = QRectF(margin, margin, 1024 - 2 * margin, 1024 - 2 * margin)
+    tile = QRectF(margin, margin, BRAND_GRID - 2 * margin, BRAND_GRID - 2 * margin)
     radius = 185.0
     tilepath = QPainterPath()
     tilepath.addRoundedRect(tile, radius, radius)
@@ -115,9 +120,10 @@ def render(px: int) -> QImage:
 
     def chevron(cx: float, color: str, w: float) -> None:
         path = QPainterPath()
-        path.moveTo(cx - 96, 336)
-        path.lineTo(cx + 128, 512)
-        path.lineTo(cx - 96, 688)
+        (x0, y0), (x1, y1), (x2, y2) = BRAND_CHEVRON_POINTS
+        path.moveTo(cx + x0, y0)
+        path.lineTo(cx + x1, y1)
+        path.lineTo(cx + x2, y2)
         pn = QPen(QColor(color))
         pn.setWidthF(w)
         pn.setCapStyle(Qt.RoundCap)
@@ -125,8 +131,10 @@ def render(px: int) -> QImage:
         p.setPen(pn)
         p.drawPath(path)
 
-    chevron(452, ACCENT_PRESS, 92)   # darker chevron behind (depth)
-    chevron(596, ACCENT, 100)        # brighter accent chevron in front
+    # Back to front, from the shared geometry: the darker chevron behind (depth), the brighter
+    # accent one in front.
+    for (cx, w), colour in zip(BRAND_CHEVRONS, (ACCENT_PRESS, ACCENT), strict=True):
+        chevron(cx, colour, w)
     p.end()
     return img
 

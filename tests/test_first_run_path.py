@@ -41,13 +41,52 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # (which upsert the library), reads the track DB and resolves sidecars. Same idiom as
 # tests/test_app_chrome.py. sidecar.sidecar_path is deliberately NOT redirected: the chapter-1-stem
 # rule is part of what is under test, and the recordings it resolves against live in a temp dir.
-from studio import library, prefs, track_db  # noqa: E402
+from studio import demo, library, prefs, track_db  # noqa: E402
 
 _SEAMS = tempfile.mkdtemp(prefix="pacer-test-first-run-")
-for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db")):
+# `demo` is in the list because the welcome column's SHAPE now depends on it: the second CTA exists
+# only when a demo clip resolves (env var or cache), so a developer who happens to have a cached
+# clip in their real ~/Library/Application Support/pacer would otherwise measure a different screen
+# than CI does. Diverted to an empty temp dir = the shipping default state, on every machine.
+for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db"),
+                    (demo, "demo")):
     _dir = os.path.join(_SEAMS, _name)
     os.makedirs(_dir, exist_ok=True)
     _mod._app_support_dir = (lambda d=_dir: d)
+os.environ.pop("PACER_DEMO_MP4", None)   # the other half of the same hermeticity
+
+# A real file for the env var to point at, so the "a demo IS available" frames are driven with the
+# production predicate (studio.demo.demo_available) rather than by patching it out. Nothing decodes
+# it — resolution is a path question.
+_DEMO_CLIP = os.path.join(_SEAMS, "pacer-demo-lap.mp4")
+with open(_DEMO_CLIP, "wb") as _f:
+    _f.write(b"\x00" * 16)
+
+
+class _nothing:
+    """The negative of `_demo_available` as a context manager, so a state sweep can write one
+    `with` instead of branching around it."""
+
+    def __enter__(self):
+        assert demo.demo_available() is False
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _demo_available:
+    """`with _demo_available():` — the welcome screen's two-button frame, hermetically."""
+
+    def __enter__(self):
+        os.environ["PACER_DEMO_MP4"] = _DEMO_CLIP
+        assert demo.demo_available() is True
+        return self
+
+    def __exit__(self, *exc):
+        os.environ.pop("PACER_DEMO_MP4", None)
+        assert demo.demo_available() is False
+        return False
 
 from _qtapp import themed_app  # noqa: E402
 
@@ -61,6 +100,7 @@ from test_central_view_realqt import _studiowindow_with_view  # noqa: E402
 
 from studio import chapters, sidecar  # noqa: E402
 from studio.app import (  # noqa: E402
+    DEMO_UNAVAILABLE_MESSAGE,
     SIDECAR_UNREADABLE_NOTICE,
     TRACKS_UNREADABLE_NOTICE,
     StudioWindow,
@@ -387,8 +427,7 @@ _FAILURE_MESSAGES = [
     "camera wrote.",
     "Couldn't read telemetry from this recording — it may be corrupt or unsupported. Try copying "
     "it off the SD card again.",
-    "Demo clip unavailable — check your connection and retry, or drop your own GoPro .mp4 to get "
-    "your laps.",
+    DEMO_UNAVAILABLE_MESSAGE,   # read from the app, not re-typed: it is one string now
 ]
 
 
@@ -466,27 +505,61 @@ def test_every_production_failure_message_fits_the_reserved_error_slot():
 def test_clicking_open_demo_does_not_move_the_primary_button():
     """D4-06: `_set_demo_busy` swaps the label to BUSY_DEMO_LABEL, which grew the button 98 -> 177 px
     in a centred row — so the PRIMARY "Open recording…" slid 39 px left in response to a click on
-    the OTHER button. The button is floored at its busy width, so nothing moves."""
-    win = StudioWindow([])
-    win.resize(1440, 900)
-    win.show()
-    _settle(8)
-    try:
-        view = win.centralWidget()
-        before = {a: _rect_in(getattr(view, a), win) for a in ("open_btn", "demo_btn", "drop_zone")}
-        win._set_demo_busy(True)
-        _settle()
-        assert view.demo_btn.text() == BUSY_DEMO_LABEL
-        after = {a: _rect_in(getattr(view, a), win) for a in ("open_btn", "demo_btn", "drop_zone")}
-        assert before == after, f"the busy label moved the row: {before} -> {after}"
-        win._set_demo_busy(False)
-        _settle()
-        assert {a: _rect_in(getattr(view, a), win)
-                for a in ("open_btn", "demo_btn", "drop_zone")} == before
-    finally:
-        win.close()
-        _settle()
+    the OTHER button. The button is floored at its busy width, so nothing moves.
+
+    Driven in the only state where the button exists at all (a resolvable demo clip)."""
+    with _demo_available():
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        _settle(8)
+        try:
+            view = win.centralWidget()
+            names = ("open_btn", "demo_btn", "drop_zone")
+            before = {a: _rect_in(getattr(view, a), win) for a in names}
+            win._set_demo_busy(True)
+            _settle()
+            assert view.demo_btn.text() == BUSY_DEMO_LABEL
+            after = {a: _rect_in(getattr(view, a), win) for a in names}
+            assert before == after, f"the busy label moved the row: {before} -> {after}"
+            win._set_demo_busy(False)
+            _settle()
+            assert {a: _rect_in(getattr(view, a), win) for a in names} == before
+        finally:
+            win.close()
+            _settle()
     print("test_clicking_open_demo_does_not_move_the_primary_button OK")
+
+
+def test_the_primary_cta_is_never_the_smaller_twin():
+    """§6.7(b): the amber PRIMARY measured 133 px beside a 178 px SECONDARY — the theme's own
+    hierarchy contradicted by size, so the eye's biggest target on the first screen was the
+    lower-commitment action. The floor is derived (`column_metrics.primary_w` is a max), so this
+    holds for whatever the two labels become."""
+    from studio.overlays import BUSY_DEMO_LABEL as BUSY
+    from studio.overlays import busy_button_width, column_metrics
+
+    with _demo_available():
+        v = WelcomeView(lambda: None, lambda: None)
+        v.resize(1440, 900)
+        v.show()
+        _settle()
+        try:
+            assert v.demo_btn is not None
+            assert v.open_btn.width() >= v.demo_btn.width(), (
+                f"the primary is the smaller twin: {v.open_btn.width()} px vs "
+                f"{v.demo_btn.width()} px")
+            # …and it stays that way through the one label swap the row can do.
+            wide = busy_button_width(v.demo_btn, BUSY)
+            assert v.open_btn.width() >= wide, (v.open_btn.width(), wide)
+            m = column_metrics(True)
+            assert m.primary_w >= m.secondary_w, m
+        finally:
+            v.close()
+            v.deleteLater()
+            _settle()
+    print(f"test_the_primary_cta_is_never_the_smaller_twin OK "
+          f"(primary {column_metrics(True).primary_w} ≥ secondary {column_metrics(True).secondary_w})")
 
 
 # ==================================================== D4-10 · the status bar that appeared late
@@ -593,36 +666,48 @@ def test_the_two_frames_of_one_wait_are_anchored_to_each_other():
 
     Both anchors must now coincide EXACTLY, and swept 1 px at a time rather than sampled at two
     sizes: the columns are vertically centred, so the failure mode is an odd/even parity in
-    `(window - column) / 2` that a two-size test walks straight past."""
+    `(window - column) / 2` that a two-size test walks straight past.
+
+    SWEPT IN BOTH DEMO STATES, because the welcome row is one button or two now: the loading card
+    reserves the second slot only when the frame it replaces had one (`column_metrics(demo)`), and
+    getting that wrong moves Cancel by half the secondary's width — the D4-06 offset again, in the
+    other direction. The one-button state (the shipping default) takes the full 1 px sweep; the
+    two-button state samples it, because the parity being hunted is a property of the column's
+    width, not of which state produced it."""
     win = StudioWindow([])
     win.show()
+    swept = 0
     try:
         worst = {"headline": (0, None), "button": (0, None)}
-        sizes = ([(1440, h) for h in range(700, 901)]
-                 + [(w, 900) for w in range(973, 1441)])
-        for size in sizes:
-            win._show_welcome()
-            win.resize(*size)
-            _settle(6)
-            w_head, w_btn, w_card = _frame_anchors(win)
-            win._show_loading_placeholder(["/nowhere/GX010062.MP4"], on_cancel=lambda: None)
-            _settle(4)
-            l_head, l_btn, l_card = _frame_anchors(win)
-            for name, a, b in (("headline", w_head, l_head), ("button", w_btn, l_btn)):
-                dx = b.center().x() - a.center().x()
-                dy = b.center().y() - a.center().y()
-                jump = (dx * dx + dy * dy) ** 0.5
-                if jump > worst[name][0]:
-                    worst[name] = (jump, (size, a, b))
-            assert w_card == l_card, (
-                f"{size}: the two frames' cards are {w_card} and {l_card}")
+        full = ([(1440, h) for h in range(700, 901)]
+                + [(w, 900) for w in range(973, 1441)])
+        for demo_on, sizes in ((False, full), (True, full[::8])):
+            with _demo_available() if demo_on else _nothing():
+                for size in sizes:
+                    swept += 1
+                    win._show_welcome()
+                    win.resize(*size)
+                    _settle(6)
+                    w_head, w_btn, w_card = _frame_anchors(win)
+                    win._show_loading_placeholder(["/nowhere/GX010062.MP4"],
+                                                  on_cancel=lambda: None)
+                    _settle(4)
+                    l_head, l_btn, l_card = _frame_anchors(win)
+                    for name, a, b in (("headline", w_head, l_head), ("button", w_btn, l_btn)):
+                        dx = b.center().x() - a.center().x()
+                        dy = b.center().y() - a.center().y()
+                        jump = (dx * dx + dy * dy) ** 0.5
+                        if jump > worst[name][0]:
+                            worst[name] = (jump, (size, demo_on, a, b))
+                    assert w_card == l_card, (
+                        f"{size} (demo={demo_on}): the two frames' cards are {w_card} and {l_card}")
         for name, (jump, where) in worst.items():
             assert jump == 0, f"the {name} moves {jump:.1f} px between the two frames at {where}"
     finally:
         win.close()
         _settle()
     print(f"test_the_two_frames_of_one_wait_are_anchored_to_each_other OK "
-          f"({len(sizes)} sizes swept at 1 px, headline and button both 0.0 px)")
+          f"({swept} sizes swept in both demo states, headline and button both 0.0 px)")
 
 
 def test_the_loading_cards_reserved_lines_are_the_welcome_columns_own():
@@ -632,30 +717,44 @@ def test_the_loading_cards_reserved_lines_are_the_welcome_columns_own():
       * `SECONDARY_LINES` is the number of lines the welcome tagline actually takes at the card's
         own measure. The loading card's one-line recording label reserves the same, which is what
         makes the two columns the same height under a centred layout.
-      * `column_metrics().primary_w` is what "Open recording…" asks for, and Cancel is floored at
-        it, so the one button on screen lands in the primary's slot rather than in the centred
-        pair's middle (D4-06 floored the demo button, which slid that pair 40 px left)."""
+      * `column_metrics(demo).primary_w` is what "Open recording…" is floored at, and Cancel is
+        floored at it, so the one button on screen lands in the primary's slot rather than in the
+        centred pair's middle (D4-06 floored the demo button, which slid that pair 40 px left).
+
+    Checked in BOTH demo states, because `column_metrics` now answers a different secondary_w for
+    each and the view has to have been built on the same answer."""
     from studio.overlays import SECONDARY_LINES, column_metrics
 
-    win = StudioWindow([])
-    win.resize(1440, 900)
-    win.show()
-    _settle(8)
-    try:
-        welcome = win.centralWidget()
-        subtitle = next(q for q in welcome.findChildren(QLabel)
-                        if q.property("role") == "WelcomeSubtitle")
-        m = column_metrics()
-        assert subtitle.height() == m.secondary_h, (
-            f"the tagline is {subtitle.height()} px but the loading card reserves "
-            f"{m.secondary_h} ({SECONDARY_LINES} lines)")
-        assert welcome.open_btn.width() == m.primary_w, (welcome.open_btn.width(), m.primary_w)
-        assert welcome.demo_btn.width() == m.secondary_w, (welcome.demo_btn.width(), m.secondary_w)
-        assert welcome.error_label.height() == m.error_h, (welcome.error_label.height(), m.error_h)
-        assert welcome.drop_icon.height() == m.glyph_h, (welcome.drop_icon.height(), m.glyph_h)
-    finally:
-        win.close()
-        _settle()
+    for demo_on in (False, True):
+        with _demo_available() if demo_on else _nothing():
+            win = StudioWindow([])
+            win.resize(1440, 900)
+            win.show()
+            _settle(8)
+            try:
+                welcome = win.centralWidget()
+                subtitle = next(q for q in welcome.findChildren(QLabel)
+                                if q.property("role") == "WelcomeSubtitle")
+                m = column_metrics(demo_on)
+                assert subtitle.height() == m.secondary_h, (
+                    f"the tagline is {subtitle.height()} px but the loading card reserves "
+                    f"{m.secondary_h} ({SECONDARY_LINES} lines)")
+                assert welcome.open_btn.width() == m.primary_w, (welcome.open_btn.width(),
+                                                                 m.primary_w)
+                if demo_on:
+                    assert welcome.demo_btn.width() == m.secondary_w, (welcome.demo_btn.width(),
+                                                                       m.secondary_w)
+                else:
+                    # No demo, no second slot — for the view AND for the card built on it.
+                    assert welcome.demo_btn is None
+                    assert m.secondary_w == 0, m
+                assert welcome.error_label.height() == m.error_h, (welcome.error_label.height(),
+                                                                   m.error_h)
+                assert welcome.drop_icon.height() == m.glyph_h, (welcome.drop_icon.height(),
+                                                                 m.glyph_h)
+            finally:
+                win.close()
+                _settle()
     print("test_the_loading_cards_reserved_lines_are_the_welcome_columns_own OK "
           f"(glyph {m.glyph_h} · error {m.error_h} · secondary {m.secondary_h} · "
           f"primary {m.primary_w} · secondary action {m.secondary_w})")
@@ -707,6 +806,7 @@ def _run_all():
     test_the_failure_frame_and_the_first_run_frame_are_the_same_screen()
     test_every_production_failure_message_fits_the_reserved_error_slot()
     test_clicking_open_demo_does_not_move_the_primary_button()
+    test_the_primary_cta_is_never_the_smaller_twin()
     test_the_status_bar_exists_before_the_first_message()
     test_the_loading_card_names_the_stage_that_is_about_to_block()
     test_the_loading_card_is_the_welcome_screens_second_frame()

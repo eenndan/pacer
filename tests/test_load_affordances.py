@@ -45,6 +45,21 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
+# THE DEMO BUTTON EXISTS ONLY WHEN A DEMO DOES (studio.demo.demo_available -> the welcome screen's
+# second CTA). This file drives that button, so it points PACER_DEMO_MP4 at a real file of its own
+# and diverts the demo CACHE, rather than depending on whatever is in the developer's
+# ~/Library/Application Support/pacer. Nothing decodes it — resolution is a path question, and the
+# resolve itself is monkeypatched per test.
+from studio import demo as demo_mod  # noqa: E402
+
+_DEMO_DIR = tempfile.mkdtemp(prefix="pacer-test-affordances-demo-")
+demo_mod._app_support_dir = (lambda d=_DEMO_DIR: d)
+_DEMO_CLIP = os.path.join(_DEMO_DIR, "pacer-demo-lap.mp4")
+with open(_DEMO_CLIP, "wb") as _f:
+    _f.write(b"\x00" * 16)
+os.environ["PACER_DEMO_MP4"] = _DEMO_CLIP
+assert demo_mod.demo_available() is True
+
 # The real two-lap synthetic StudioWindow fixture (StudioWindow.__new__ + the production _build_ui),
 # reused rather than re-derived — see tests/test_central_view_realqt.py.
 import test_central_view_realqt as _realqt  # noqa: E402

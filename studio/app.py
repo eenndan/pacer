@@ -64,7 +64,15 @@ from .central_view import CentralView, undo_summary
 from .coaching_panel import OpportunitiesDialog
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
-from .overlays import BUSY_DEMO_LABEL, PBToast, WelcomeView, column_metrics
+from .overlays import (
+    BUSY_DEMO_LABEL,
+    DEMO_FETCH_TITLE,
+    DEMO_LABEL,
+    PBToast,
+    WelcomeView,
+    column_metrics,
+    welcome_card_width,
+)
 from .session import DEFAULT_SAMPLE, fmt_time
 from .widgets import chip, set_tone
 from .workers import DemoResolveWorker, SessionLoadWorker, VideoExportWorker
@@ -123,6 +131,18 @@ TRACKS_UNREADABLE_NOTICE = ("your saved tracks couldn't be read — tracks.json 
 VIEW_BUILD_FAILURE_MESSAGE = (
     "This recording loaded, but Pacer couldn't build its session view — that's a bug in Pacer, "
     "not a problem with your file. Help ▸ Report a problem… with the details below.")
+# `--demo` was asked for and no demo recording could be resolved. ONE string, read by both sites
+# that can reach this state (the CLI flag at startup and a resolve that came back None), because
+# they are the same sentence and they had drifted into two copies of it.
+#
+# IT NO LONGER OFFERS A RETRY, and that is the point of the copy edit: it used to say "check your
+# connection and retry", which was true only of a download of an asset that was never published
+# (docs/FIRST_LAP.md). Retrying could not work, and the button to retry WITH is not on the welcome
+# screen any more (studio.demo.demo_available gates it), so the sentence would have named a control
+# that is not there. It states what is true — this build has no demo — and the one door that is.
+DEMO_UNAVAILABLE_MESSAGE = (
+    "No demo recording is available on this machine — Pacer doesn't ship one. Use Open recording… "
+    "below, or drop a GoPro .mp4 on this window, to get your laps.")
 
 
 def _show_error_report(exc_type, exc, tb):
@@ -290,11 +310,11 @@ class StudioWindow(QMainWindow):
         if paths:
             self._load(paths)
         elif demo_unavailable:
-            # `--demo` was requested but the demo couldn't be resolved (offline / download failed):
-            # show the welcome state with an honest message rather than silently launching the
-            # lapless bundled sample (which reads as a broken app).
-            self._show_welcome(error="Demo clip unavailable — check your connection and retry, "
-                                     "or drop your own GoPro .mp4 to get your laps.")
+            # `--demo` was requested but the demo couldn't be resolved (no env var, no cache, and
+            # the download — of an asset that was never published — failed): show the welcome state
+            # with an honest message rather than silently launching the lapless bundled sample
+            # (which reads as a broken app).
+            self._show_welcome(error=DEMO_UNAVAILABLE_MESSAGE)
         else:
             self._show_welcome()
 
@@ -450,10 +470,19 @@ class StudioWindow(QMainWindow):
         early-return, so this is advertising rather than a crash — except that a disabled QAction's
         SHORTCUT is inert too, which is the whole reason ⌘⇧S is gated on the action at all (L1-06).
         Both syncs derive from live state (`hasattr(self, "session")` / `self.view`), so calling them
-        from every welcome path can never over-disable anything."""
+        from every welcome path can never over-disable anything.
+
+        THE SECOND CTA IS OFFERED ONLY IF IT CAN LAND SOMEWHERE. `demo.demo_available()` is the
+        offline half of the resolver (env var or cache — no network), and passing None instead of
+        the handler is what leaves the demo button off the card entirely. The button used to be
+        unconditional, so on any machine without the env var or a cache — i.e. every machine, since
+        the release asset it would otherwise download was never published — the obvious
+        low-commitment click on a first run produced an apology (§6.7). Asked for at the CLI with
+        `--demo` it is still ATTEMPTED, download and all; this decides only what the UI offers."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle(APP_NAME)
-        self.setCentralWidget(WelcomeView(self._open_file, self._open_demo, error,
+        on_demo = self._open_demo if demo.demo_available() else None
+        self.setCentralWidget(WelcomeView(self._open_file, on_demo, error,
                                           error_path=error_path, parent=self))
         if getattr(self, "_full_action", None) is not None:
             self._full_action.setEnabled(False)
@@ -500,9 +529,10 @@ class StudioWindow(QMainWindow):
         if btn is None:
             return
         btn.setEnabled(not busy)
-        # The busy label is WelcomeView's constant, because that is where the button is sized to
-        # fit it — the row used to re-centre on the click and slide the primary CTA 39 px (D4-06).
-        btn.setText(BUSY_DEMO_LABEL if busy else "Open demo")
+        # BOTH labels are WelcomeView's constants, because that is where the button is sized to fit
+        # them — the row used to re-centre on the click and slide the primary CTA 39 px (D4-06),
+        # and the resting label was a second copy of a string the view already owns.
+        btn.setText(BUSY_DEMO_LABEL if busy else DEMO_LABEL)
 
     def _arm_demo_placeholder(self, token: int):
         """Install the loading card only if the demo fetch is still running LOAD_PLACEHOLDER_MS
@@ -525,7 +555,9 @@ class StudioWindow(QMainWindow):
             # as a file load — and it shipped without the one control that card has, so the ONLY
             # multi-second wait in the app you could not back out of was the one that reaches the
             # network on a first run (QA D2-13).
-            self._show_loading_placeholder([], title=BUSY_DEMO_LABEL,
+            # The CARD says the whole sentence; the BUTTON behind it says "Fetching…" because it is
+            # floored at the width of whatever it says (see overlays.BUSY_DEMO_LABEL).
+            self._show_loading_placeholder([], title=DEMO_FETCH_TITLE,
                                            on_cancel=lambda: self._cancel_demo(token))
 
     def _cancel_demo(self, token: int):
@@ -552,8 +584,10 @@ class StudioWindow(QMainWindow):
             return  # superseded: something else is loading, don't yank the window to the demo
         self._set_demo_busy(False)
         if path is None:
-            self._show_welcome(error="Demo clip unavailable — check your connection and retry, "
-                                     "or drop your own GoPro .mp4 to get your laps.")
+            # Reachable now only if the clip the button was offered FOR went away between the check
+            # and the click (the env var's file deleted, the cache cleared) — say the true thing and
+            # come back to a welcome screen that no longer offers it.
+            self._show_welcome(error=DEMO_UNAVAILABLE_MESSAGE)
             return
         self._load([path])
 
@@ -1078,8 +1112,14 @@ class StudioWindow(QMainWindow):
             secondary action's slot beside it. D4-06 floored `demo_btn` at its busy width so a
             click on it stops moving the row; that correctly slid the centred pair, which left
             "Open recording…" 97 px left of a centred Cancel. Reserving the same second slot here
-            puts Cancel in the primary's place instead of in the pair's centre."""
-        m = column_metrics()
+            puts Cancel in the primary's place instead of in the pair's centre.
+
+            THE SECOND SLOT IS RESERVED ONLY WHEN THE FRAME BEFORE IT HAD ONE. The welcome column
+            carries the demo button only when a demo resolves (see _show_welcome), so the same
+            predicate has to reach this card: reserving a slot for an action that was not there
+            would put Cancel 55 px left of the primary it is standing in for — the exact offset
+            this reservation exists to remove, in the other direction."""
+        m = column_metrics(demo.demo_available())
         label = chapters.recording_label(paths)
         headline = title or "Loading telemetry…"
         container = QWidget()
@@ -1111,6 +1151,16 @@ class StudioWindow(QMainWindow):
         v.setContentsMargins(theme.SPACE_3XL + theme.SPACE_XXS, theme.SPACE_2XL + theme.SPACE_XXS,
                              theme.SPACE_3XL + theme.SPACE_XXS, theme.SPACE_2XL + theme.SPACE_XXS)
         v.setSpacing(theme.SPACE_L)
+        # THE COLUMN'S OWN MEASURE, carried by the headline row below — the fifth read off the
+        # welcome frame, and the one that had been getting away with an accident. This card's
+        # widest row is its 220 px busy bar; the welcome card's is its WRAPPING TAGLINE (303 px),
+        # and the two matched only while the demo button, floored at a whole sentence, made the
+        # action row wider than both. With an honest button row the card narrowed 83 px between two
+        # frames two milliseconds apart, and the headline moved with it. Both layouts are centred
+        # and shrink-wrap to their content, so the measure has to be set on the CONTENT (the card's
+        # margins are the zone's plus its border, so the same measure gives the same card width).
+        content_w = welcome_card_width(demo.demo_available()) - 2 * (theme.SPACE_3XL
+                                                                     + theme.SPACE_XXS)
         outer.addWidget(card, 0, Qt.AlignCenter)
         bar = QProgressBar()
         bar.setObjectName("LoadingBar")
@@ -1130,7 +1180,14 @@ class StudioWindow(QMainWindow):
         title_label.setProperty("role", "Title")
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setWordWrap(True)
-        v.addWidget(title_label, 0, Qt.AlignCenter)
+        # ADDED WITHOUT AN ALIGNMENT FLAG, so the label FILLS the card's content width and its own
+        # AlignCenter centres the text inside it — exactly how the welcome column adds its "Pacer"
+        # headline. A widget centred by the LAYOUT is shrink-wrapped to its text and positioned at
+        # an integer offset, so the two headlines' centres differ by the parity of
+        # (content − text) / 2: measured at 1 px on the narrower card this PR gives it. Filling the
+        # row makes the two rects identical rather than nearly identical.
+        title_label.setMinimumWidth(content_w)
+        v.addWidget(title_label)
         subject = QLabel(label)
         subject.setProperty("role", "LoadingTitle")
         subject.setAlignment(Qt.AlignCenter)
@@ -1151,13 +1208,15 @@ class StudioWindow(QMainWindow):
             actions.setAlignment(Qt.AlignCenter)
             actions.setContentsMargins(0, 0, 0, 0)
             actions.addWidget(cancel)
-            # The welcome row's SECOND slot, kept open. A real (empty) widget for the same reason
-            # the error slot above is one — an `addSpacing` item suppresses the layout spacing
-            # beside it, which is 16 px of the offset this row exists to remove. It paints the
-            # canvas the blanket QWidget rule gives it, which is the colour already behind it.
-            reserved = QWidget()
-            reserved.setFixedWidth(m.secondary_w)
-            actions.addWidget(reserved)
+            if m.secondary_w:
+                # The welcome row's SECOND slot, kept open. A real (empty) widget for the same
+                # reason the error slot above is one — an `addSpacing` item suppresses the layout
+                # spacing beside it, which is 16 px of the offset this row exists to remove. It
+                # paints the canvas the blanket QWidget rule gives it, which is the colour already
+                # behind it.
+                reserved = QWidget()
+                reserved.setFixedWidth(m.secondary_w)
+                actions.addWidget(reserved)
             v.addLayout(actions)
         # Held so a long UI-thread stage can rename the headline on the card ALREADY ON SCREEN
         # (see _announce_stage) instead of leaving it asserting a stage that finished.
