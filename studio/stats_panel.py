@@ -259,6 +259,11 @@ ROW_HEIGHT = theme.GRID_ROW_DENSE_H
 # Speed units live in the PER-LAP section label (one place), keeping the columns narrow
 # enough that the whole table fits the quadrant with no clipped column.
 LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s", "Coast s"]
+# "Med loss", not "Med loss vs best corner": MEASURED, not chosen. The header section is 100 px
+# and the face needs 56 px for "Med loss", 104 px for "…vs best" and 148 px for "…vs best corner",
+# while the header already asks for 800 px inside a 636 px viewport — so both longer labels elide
+# to a "Med loss vs…" that names nothing. The baseline is named where there IS room: the caption
+# under the table (`CORNERS_NOTE`) and the table tooltip.
 CORNER_COLUMNS = ["Corner", "Best", "Median", "σ (s)", "Med loss", "Apex best", "Apex med",
                   "Grip %"]
 WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss cell marked
@@ -269,18 +274,29 @@ WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss c
 # directly under a plain +0.11 (C10), and a plain +0.10 (C7) beat the tinted +0.09. A reader with
 # no colour, or with the colour and no explanation, was given a contradiction either way.
 #
-# This mark is the app's attention glyph — the same ⚠ the lap grid hangs on a dropout lap and the
-# map key on the grip channel's limit — and it is a PREFIX, deliberately: this column is
+# THE MARK IS ▲, NOT ⚠, AND THAT IS THE WHOLE POINT. ⚠ is the app's DISTRUST glyph: the lap grid
+# hangs it on a GPS-dropout lap, the DATA TRUST card on a caveated term, and both mean "this
+# number may not be sound". These three cells mean the opposite — they are the corners with the
+# most time available, the three the driver should practise FIRST. Marking the app's best news
+# with its "don't trust this" glyph told a reader the loudest advertised gains were the flagged
+# ones. ▲ is upside, points at the number, and costs nothing to adopt: the reason the old mark
+# reused ⚠ was font coverage ("no new codepoint arrives"), and ▲ is in the same measured ledger
+# (tests/test_glyph_vocabulary.py's _IN_THE_FACE, asserted against the SHIPPED face).
+#
+# It is a PREFIX, deliberately: this column is
 # fixed-decimal and right-aligned, so right alignment IS decimal alignment (a property measured and
 # kept), and a trailing mark would push three of twelve numbers out of the decimal column. Prefixed,
 # it hangs to the left of an untouched right edge. The character stays TEXT rather than becoming a
 # theme.icon() pixmap because Inter draws it (tests/test_glyph_vocabulary.py measures exactly that)
 # and because a cell's icon slot paints at the cell's LEFT edge, a whole column away from the
 # right-aligned number it would be marking.
-WORST_LOSS_MARK = "⚠ "
+WORST_LOSS_MARK = "▲ "
 CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median / σ "
-                   "time-in-corner, the median loss vs best, apex speeds and median grip "
-                   f"utilization. The worst 3 loss cells are marked {WORST_LOSS_MARK.strip()} and "
+                   "time-in-corner, the median loss VS THE BEST ANYONE DID IN THAT CORNER "
+                   "(this column's own Best cell — not your best lap's corner, which is what the "
+                   "Coaching page measures against and why its numbers are smaller), apex speeds "
+                   "and median grip utilization. "
+                   f"The worst 3 loss cells are marked {WORST_LOSS_MARK.strip()} and "
                    "tinted — ranked by σ × median-loss (erratic AND slow), which is why the marked "
                    "cells are not simply this column's three largest numbers; hover one for its "
                    "own score. That's where practice pays first. Click a row to ring "
@@ -1074,6 +1090,17 @@ class StatsView(QWidget):
         # setSortingEnabled(True) would silently reverse the track.
         self.corners_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         col.addWidget(self.corners_table)
+        # THE RECONCILIATION LINE. This page and the Coaching tab both print a per-corner "loss"
+        # and they are 3.8x apart in total on the owner's own recording (D24 0060: 3.93 s here,
+        # 1.02 s there, and corner by corner from 1.3x to 2450x), because they answer different
+        # questions: this column is measured against each corner's own Best — the quickest anyone
+        # went through it, usually not your best lap — and Coaching is measured against your best
+        # lap. Both are correct; neither said which it was, one tab apart, under the same word.
+        # The header has no room to say it (see CORNER_COLUMNS), and a tooltip is not the face, so
+        # it is said here, with the numbers computed live rather than baked.
+        self.corners_note = WrapLabel()
+        self.corners_note.setProperty("role", "TableNote")
+        col.addWidget(self.corners_note)
 
         # ====================== COLUMN 3 — the three remaining report tables
         # BRAKING, STRAIGHTS and PER LAP are the page's tallest, narrowest content — three grids
@@ -1839,6 +1866,17 @@ class StatsView(QWidget):
             return
         saved = round(sum(round(r.time_lost, 2) for r in rows), 2)
         projected = pace.median - saved
+        # THE RANGE THAT USED TO BE TYPED HERE ("measured on the owner's recordings the ideal is
+        # 0.33 to 2.67 s the faster of the two") was right on the recordings it was measured on and
+        # silent about every other one — on the reviewed screen the two tiles were 5.0 s apart while
+        # this sentence promised at most 2.67. An empirical constant baked into honesty copy rots
+        # the moment the data moves; this reads the two numbers it is comparing.
+        ideal = getattr(session, "ideal_total", lambda: None)()
+        spread = ""
+        if ideal is not None:
+            d = projected - float(ideal)
+            spread = (f" — here the ideal is {abs(d):.2f} s "
+                      f"{'faster' if d > 0 else 'slower'} than this projection")
         self.t_digest.set(fmt_time(projected), f"median lap · top {len(rows)} fixed")
         self.t_digest.setToolTip(
             f"Projected from your MEDIAN lap ({fmt_time(pace.median)}) minus the top-"
@@ -1848,8 +1886,7 @@ class StatsView(QWidget):
             "best lap and still be the honest one. The Coaching tab lists the corners.\n\n"
             "It is not the IDEAL LAP below and cannot be compared with it directly: this one is "
             "a TYPICAL lap with three corners fixed, that one is your quickest time through "
-            "every segment stitched together. Different anchors, different questions — measured "
-            "on the owner's recordings the ideal is 0.33 to 2.67 s the faster of the two.")
+            f"every segment stitched together. Different anchors, different questions{spread}.")
 
     def _refresh_ideal(self, session):
         """The IDEAL LAP block: the theoretical best, what it says is on the table, and the
@@ -2180,19 +2217,67 @@ class StatsView(QWidget):
                 k, 3, self._num_item(f"{sig:.2f}" if sig is not None else DASH))
         self._fit_table(self.sector_table)
 
+    def _corners_note_text(self, session, report) -> str:
+        """The one line that connects this page's answers to each other, live.
+
+        Every number here is READ, never baked: the same fix as the digest tile's, for the same
+        reason — an empirical range typed into shipping copy is right on the recording it was
+        measured on and quietly wrong on the next one. The Coaching total costs one
+        `coaching_opportunities()` (~3-6 ms on the 38-lap D24 pair, on a refresh path that runs on
+        load / re-segment / undo, never per tick); the alternative is printing a number this page
+        cannot check, which is how two surfaces drift apart in the first place.
+        """
+        total = sum(r.median_loss_s for r in report if r.median_loss_s is not None)
+        parts = [f"Med loss is measured against each corner's own Best above — the quickest "
+                 f"anyone went through it, which is usually not your best lap's corner. "
+                 f"Summed, that is {total:.2f} s."]
+        opp_fn = getattr(session, "coaching_opportunities", None)
+        opp = opp_fn() if opp_fn is not None else None
+        rows = _shown_rows(opp) if getattr(opp, "enough", False) else []
+        if rows:
+            top = rows[:PANEL_TOP_N]
+            parts.append(
+                f"The Coaching tab measures the SAME corners against your best lap and totals "
+                f"{sum(r.time_lost for r in rows):.2f} s, "
+                f"{sum(round(r.time_lost, 2) for r in top):.2f} s of it in its top {len(top)}.")
+        gap = self._ideal_gap(session)
+        if gap is not None:
+            parts.append(f"Your ideal lap is {gap:.2f} s under your best.")
+        parts.append("Different baselines, different questions — not three estimates of one.")
+        return " ".join(parts)
+
+    @staticmethod
+    def _ideal_gap(session) -> float | None:
+        """best lap − ideal total, or None when either half is missing (the honesty rule: no
+        number rather than a 0.00 that reads as a measurement)."""
+        ideal_fn = getattr(session, "ideal_total", None)
+        best_fn = getattr(session, "best_lap_id", None)
+        time_fn = getattr(session, "lap_time", None)
+        if ideal_fn is None or best_fn is None or time_fn is None:
+            return None
+        ideal = ideal_fn()
+        best_id = best_fn()
+        if ideal is None or best_id is None:
+            return None
+        best = time_fn(best_id)
+        return None if best is None else float(best) - float(ideal)
+
     def _refresh_corners(self, session, unit, u_label):
         report = getattr(session, "corner_report", list)() or []
         has = bool(report)
         self._corners_section.setVisible(has)
         self.corners_table.setVisible(has)
+        self.corners_note.setVisible(has)
         phase = (getattr(session, "phase_report", lambda: None)() if has else None)
         phase_rows = (dict(zip(phase.cids, phase.rows, strict=True))
                       if phase is not None else {})
         self._refresh_phase_tiles(phase)
         if not has:
             self.corners_table.setRowCount(0)
+            self.corners_note.setText("")
             return
         self._corners_section.setText(f"CORNERS · speeds in {u_label}")
+        self.corners_note.setText(self._corners_note_text(session, report))
         # The worst corners by σ × median-loss get their loss cell MARKED and tinted in the
         # "behind" hue — erratic AND slow is where practice pays first. Capped at WORST_TINT_N and
         # at half the field: a tint that covers every row highlights nothing.

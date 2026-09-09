@@ -170,11 +170,17 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
             return None
         vals = -np.asarray(grip_util[:len(xs)], float)
         seg_buckets = _seg_buckets(times, vals, lo=-GRIP_UTIL_DISPLAY_MAX, hi=0.0)
-        # legend reads "⚠ on limit" (red, lo) → "unused" (green, hi). The ⚠ marks the AT-LIMIT
-        # extreme with a non-hue cue: the grip map is a red→green gradient with no shape/sign of its
-        # own, so the labelled endpoints + this warning glyph carry the "at limit vs grip left"
-        # meaning without relying on the red/green hue (colour blindness / greyscale).
-        return seg_buckets, "⚠ on limit", "unused (est.)"
+        # Legend reads "committed" (red, lo) → "unused" (green, hi). The words are the non-hue cue:
+        # the grip map is a red→green gradient with no shape or sign of its own, so the labelled
+        # endpoints have to carry "using the tyre vs grip left" without the hue (colour blindness /
+        # greyscale) — which they do, and did before, as words.
+        #
+        # THE WORD USED TO BE "⚠ on limit", AND THE ACCENT WAS BACKWARDS. ⚠ is this app's distrust
+        # glyph (a GPS-dropout lap, a caveated trust term): on the one channel where the low end is
+        # the driver doing it RIGHT — at the limit, using the grip he has — it read as a warning
+        # about his best cornering. "committed" says the same thing in the coach's voice, keeps the
+        # endpoint labelled, and leaves ⚠ meaning exactly one thing app-wide.
+        return seg_buckets, "committed", "unused (est.)"
     if mode == "elevation":
         # Altitude along the lap (metres, boxcar-smoothed at load). Informational — no good/bad
         # direction — so it rides this lap's own min→max range: low = low (red) bucket, high = green.

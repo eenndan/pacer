@@ -815,8 +815,17 @@ class OpportunitiesPanel(QWidget):
         total = sum(round(r.time_lost, 2) for r in rows)
         # P1: phrase the headline by COUNT — "in your worst corner" reads right for one, "across your
         # top N corners" for several, so it never says the ungrammatical "across the top 1".
+        # ...AND NAME THE BASELINE, on the face, not only in the column tooltip. One tab away the
+        # Stats CORNERS table prints a "Med loss" for the SAME corners measured against the best
+        # anyone did in each — a different question with a much bigger answer (on the D24 0060 pair
+        # the two columns sum to 1.02 s here and 3.93 s there, and corner by corner they run from
+        # 1.3x to 2450x apart). Two numbers that far apart, one tab apart, both called a loss, is
+        # not a rounding question the reader can resolve by looking harder. The modal dialog this
+        # panel shares its rows with has said "vs your best lap" in its title all along; the page
+        # a user actually lands on did not.
         gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
                  else f"{total:.2f} s across your top {len(rows)} corners")
+        gains += " vs your best lap"
         # IA-01: LEAD with the scope. The tab strip beside this page renames itself "Corners · L6"
         # on a selection, so a coaching headline that neither moves nor names its scope reads as the
         # selected lap's number — on D24 lap 6 that understated the lap's own +2.08 s as "0.21 s".

@@ -480,6 +480,9 @@ HOSTS = {
     # sites and `C.canvas` at a sixth.
     'QLabel[role="EmptyTitle"]': (C.canvas, C.surface),
     'QLabel[role="EmptyBody"]': (C.canvas, C.surface),
+    # The note under a stats table (the CORNERS reconciliation line) sits in the page column, which
+    # is the window canvas, and the same widget goes on a panel surface when the page is a quadrant.
+    'QLabel[role="TableNote"]': (C.canvas, C.surface),
     # The welcome / loading overlays fill the window, so their type is on the canvas.
     'QLabel[role="WelcomeSubtitle"]': (C.canvas,),
     'QLabel[role="WelcomeError"]': (C.canvas,),
