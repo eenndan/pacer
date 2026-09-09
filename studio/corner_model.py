@@ -447,6 +447,8 @@ class CornerModel:
         self._stats_cache: dict[int, list[corners.CornerStat]] = {}  # per-lap stats + the reference's own under reference_id
         self._bests_cache: object = _UNSET  # per-corner session-best time
         self._segment_bests_cache: object = _UNSET  # the ideal-lap segment composite
+        # Per-(lap, total_lap) monotone warp onto the reference odometer — see lap_alignment.
+        self._align_cache: dict[tuple[int, float], object] = {}
 
     def invalidate(self) -> None:
         """Drop EVERY corner cache — called from Session.set_timing_lines (the single
@@ -456,13 +458,22 @@ class CornerModel:
         self._stats_cache.clear()
         self._bests_cache = _UNSET
         self._segment_bests_cache = _UNSET
+        self._align_cache.clear()
 
     def invalidate_stats(self) -> None:
         """Drop ONLY the per-lap stats (not the corner detection) — called from
         Session.set_reference_session / clear_reference: the per-corner Δ baseline switched
         (best lap <-> reference lap), so every cached per-lap stat delta is stale, but the
-        corner windows themselves are unchanged. Recomputed lazily against the new baseline."""
+        corner windows themselves are unchanged. Recomputed lazily against the new baseline.
+
+        The warp memo goes with them. It does NOT depend on the Δ baseline (it is built from
+        `basis()` + the LOCAL best lap's trace, neither of which a reference load moves), so
+        keeping it here would be sound — but dropping it makes its lifetime a strict subset of
+        `_stats_cache`'s, which is the invariant this file already documents and tests. The win
+        is entirely WITHIN one refresh (one derivation instead of nine), so the extra clearing
+        costs nothing measurable and removes a whole class of staleness argument."""
         self._stats_cache.clear()
+        self._align_cache.clear()
 
     # ----------------------------------------------------------- drift-gate spatial traces
     def _best_trace(self) -> tuple | None:
@@ -489,6 +500,49 @@ class CornerModel:
         if len(cum) < 2 or float(cum[-1]) <= 0:
             return None
         return (*ref_trace, xs, ys, cum)
+
+    def lap_alignment(self, lap_id: int, total_lap: float) -> object | None:
+        """ONE lap's monotone warp onto the reference (best) lap's odometer — the thing every
+        corner-window projection in the app is a read of — MEMOIZED per (lap, total_lap).
+        None is a legal value: "this lap keeps the normalized projection" (below the drift gate,
+        or no spatial match survived). Pass the result as `alignment=` to
+        `corners.project_boundaries` / `segment_times` / `lap_corner_stats`.
+
+        WHY THIS EXISTS. The warp is built from the WHOLE corner partition, so it is the same
+        object for every window of a lap — but nine independent call paths each derived it for
+        themselves. Measured on the real D24 0060 pair (38 laps, exactly 16 of them past
+        `corners.NORMALIZED_DRIFT_MAX`), ONE `stats_view.refresh` ran `corners._spatial_matches`
+        **144 times** — 9x per lap that needs it — against the 16 the memo now costs. (Call counts
+        are deterministic and are the honest evidence here; the wall/CPU figures in the PR were
+        taken as min-of-9 CPU time because this box runs at load average 40-90 and one cProfile
+        pass attributed the same work 97.7 ms in one run and 220.4 ms in another.)
+
+        THE KEY IS THE WHOLE DEPENDENCY SET, which is why it is safe:
+          * `lap_id` → the comparison lap's trace (`_lap_columns`, itself invalidated on
+            re-segment) — and `total_lap` with it, keyed explicitly so a caller measuring the lap
+            through a different accessor can never silently read a warp built for another length;
+          * the reference half (`basis()`'s corner partition + total, `_best_trace()`) is NOT in
+            the key because it is not per-lap — it is covered by INVALIDATION instead: both of the
+            two events that can move it (`set_timing_lines` → `invalidate`, a reference change →
+            `invalidate_stats`) clear this cache. There is no third writer of `Session._best_cache`.
+        A stale warp after a start-line drag would be a far worse bug than the latency, so
+        `tests/test_corner_alignment_memo.py` drives the drag / sector edit / undo / reference
+        load and asserts the memoized answer equals a from-scratch recompute after each."""
+        key = (int(lap_id), float(total_lap))
+        got = self._align_cache.get(key, _UNSET)
+        if got is not _UNSET:
+            return got
+        basis = self.basis()
+        if basis is None or not basis[0]:
+            return None
+        corner_list, total_ref = basis
+        # The warp is fitted to the WHOLE partition (corners.project_boundaries' `frame`), so a
+        # caller asking about one corner gets the alignment the whole-partition callers use.
+        frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+        align = corners.lap_alignment(frame, total_ref, float(total_lap),
+                                      traces=self._lap_traces(lap_id, self._best_trace()))
+        self._align_cache[key] = align
+        return align
 
     # ------------------------------------------------------------------ basis + corners
     def basis(self) -> tuple[list[corners.Corner], float] | None:
@@ -576,7 +630,8 @@ class CornerModel:
         # pair is harmless; a degenerate trace → None → normalized projection (unchanged).
         traces = self._lap_traces(lap_id, self._best_trace())
         stats = corners.lap_corner_stats(corner_list, total_ref, dist, speed_kmh, elapsed,
-                                         ref=ref or None, traces=traces)
+                                         ref=ref or None, traces=traces,
+                                         alignment=self.lap_alignment(lap_id, float(dist[-1])))
         self._stats_cache[lap_id] = stats
         return stats
 
@@ -664,13 +719,16 @@ class CornerModel:
                 continue
             traces = self._lap_traces(lid, ref_trace)
             total_lap = float(dist[-1])
-            rows.append(corners.segment_times(corner_list, total_ref, dist, elapsed, traces))
+            align = self.lap_alignment(lid, total_lap)
+            rows.append(corners.segment_times(corner_list, total_ref, dist, elapsed, traces,
+                                              align))
             # The same edges segment_times interpolates at — the admission test's input, and the
             # donor's own odometer frame for the ideal curve. project_boundaries is the public
             # half of corners._window_edges; the two constant endpoints (0, total_lap) are never
-            # projected, so they cannot collapse.
+            # projected, so they cannot collapse. `ref_edges[1:-1]` IS the memo's frame, so the
+            # shared warp reads exactly the boundaries it was fitted to.
             interior = corners.project_boundaries(ref_edges[1:-1], total_ref, total_lap,
-                                                  traces=traces)
+                                                  traces=traces, alignment=align)
             lap_edges = np.concatenate(([0.0], interior, [total_lap]))
             edges.append(lap_edges)
             spans.append(np.diff(lap_edges))
@@ -783,8 +841,9 @@ class CornerModel:
         the corner's enter point onto this lap's odometer and reads elapsed->media there. None if
         unknown/degenerate. Absolute (lap start + elapsed).
 
-        Goes through the SAME drift-gated alignment as its siblings (`corners.project_boundaries`
-        with the whole partition as its frame, so the warp is the one `lap_corner_stats` built). On
+        Goes through the SAME drift-gated alignment as its siblings — since the memo it now reads
+        (`lap_alignment`) is shared, the warp is LITERALLY the one `lap_corner_stats` used, not
+        merely one built from the same frame. On
         a drifted lap the bare normalized fraction it used before landed the seek up to ~12 m from
         the corner entry the Corners table was pointing at; measured move on the D24 0060 pair,
         0.373 s.
@@ -808,8 +867,7 @@ class CornerModel:
         total_lap = float(dists[-1])
         if total_lap <= 0:
             return None
-        frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
         d_enter = float(corners.project_boundaries(
             [float(corner.enter)], total_ref, total_lap,
-            traces=self._lap_traces(lap_id, self._best_trace()), frame=frame)[0])
+            alignment=self.lap_alignment(lap_id, total_lap))[0])
         return float(np.interp(d_enter, dists, times))

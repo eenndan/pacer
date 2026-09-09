@@ -306,6 +306,18 @@ add_test(NAME test_corners
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corners.py)
 set_tests_properties(test_corners PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Corner-warp MEMO + its INVALIDATION (perf/stats-refresh-memo). Every corner-window projection is
+# a read of one per-lap monotone warp; nine call paths derived it separately (144 spatial matches
+# in ONE stats_view.refresh on the D24 0060 pair), so it is now memoized on the corner service.
+# The risk is not the speed-up, it is a warp surviving a start-line drag and silently re-framing
+# every corner Δ. Drives drag → sector edit → undo → reference load against a from-scratch oracle,
+# with an explicit assertion that the fixture crosses NORMALIZED_DRIFT_MAX (below the gate every
+# warp is None and the file would assert nothing). Bare Session via tests/_synthetic — no Qt
+# widgets, no telemetry file; imports pacer transitively through studio.session.
+add_test(NAME test_corner_alignment_memo
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_corner_alignment_memo.py)
+set_tests_properties(test_corner_alignment_memo PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Data-export writers (studio.export_data, F11): laps/channels CSV schema + the
 # float-repr round-trip exactness + the self-contained HTML report (XML-parsed, embedded
 # PNGs decoded), on bare Sessions seeded via tests/_synthetic with a FakeLaps duck-type.
@@ -710,7 +722,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_delta_engine test_controllers test_central_view_realqt
                         test_load_failure test_load_affordances test_load_lifecycle
                         test_validate_wallclock
-                        test_corners test_consistency test_gmeter test_gmeter_overlay
+                        test_corners test_corner_alignment_memo
+                        test_consistency test_gmeter test_gmeter_overlay
                         test_export_data test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card test_stats
                         test_lap_table_columns test_help_dialog test_grid_and_timing_guards
