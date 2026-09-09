@@ -17,6 +17,7 @@ timing-line save) into the constructor. The ~30 Hz tick TIMER stays on the windo
 from __future__ import annotations
 
 import contextlib
+import logging
 import math
 import os
 from typing import NamedTuple
@@ -199,6 +200,9 @@ _IDEAL_CLAMPED_NOTE = (
     "reads zero.")
 
 
+_log = logging.getLogger("studio.central_view")
+
+
 class UndoOutcome(NamedTuple):
     """What an Edit ▸ Undo actually restored: whether the START/FINISH line moved, and how the
     sector-line COUNT changed (+2 = two lines came back, -1 = an added line went away).
@@ -301,6 +305,10 @@ class CentralView(QWidget):
 
     # Emitted after any timing-line change (a user drag OR an Undo) so the window can refresh the
     # Edit ▸ Undo action's enabled state from the session's undo stack.
+    #: §7.5 — True when the last sidecar write FAILED, read by StudioWindow._session_notice so a
+    #: placement that could not be persisted says so instead of looking saved.
+    sidecar_write_failed = False
+
     timingEdited = Signal()
     # Emitted when the user switches the lap panel's tab (Laps/Corners/Stats/Coaching), so the
     # window can persist the choice across reloads.
@@ -1912,10 +1920,17 @@ class CentralView(QWidget):
         try:
             sidecar.save(path, self.session.track_name, start, sectors,
                          confirmed=self.session.timing_user_confirmed)
-        except OSError as exc:
-            print(f"studio: could not write timing-line sidecar {path}: {exc}", flush=True)
+        except OSError:
+            # §7.5: this used to be a print, and a print is not a surface. The drag stands on
+            # screen either way, so a failed write is INDISTINGUISHABLE from a good one until the
+            # user reopens the recording and finds their line gone. The flag is read by
+            # `StudioWindow._session_notice` (which is already re-decided on every `timingEdited`),
+            # so the fact stays on the status bar for as long as it is true.
+            self.sidecar_write_failed = True
+            _log.exception("could not write timing-line sidecar %s", path)
             return
-        print(f"studio: timing lines saved to {os.path.basename(path)}", flush=True)
+        self.sidecar_write_failed = False
+        _log.info("timing lines saved to %s", os.path.basename(path))
 
     def undo_timing_lines(self) -> UndoOutcome | None:
         """Undo the last timing-line edit (Edit ▸ Undo / Cmd+Z). Restores the prior lines through
