@@ -47,11 +47,35 @@ CARD_H = 1350
 # The honest label for the Δ-to-ideal: the ideal is `session.ideal_total` — the quickest time the
 # driver has done through each corner and each straight, stitched together — NOT a lap anyone
 # actually drove. Kept consistent with the plots' "SYNTHETIC theoretical ideal … Not a single
-# drivable lap" wording (D1/#53). The sublabel is drawn UNELIDED at 24 px from `pad`; it measures
-# 661 px against the card's 936 px content box (the string it replaces measured 632), so it fits
-# with 275 px to spare — pinned by tests/test_share_card.py.
+# drivable lap" wording (D1/#53). The sublabel is drawn UNELIDED at 24 px from `pad` against the
+# card's 936 px content box — pinned by tests/test_share_card.py.
 IDEAL_LABEL = "vs your ideal lap"
-IDEAL_SUBLABEL = "your best corners and straights — not a single drivable lap"
+
+
+def ideal_sublabel(laps: int | None) -> str:
+    """The honesty line under the Δ-to-ideal hero, CARRYING ITS SAMPLE SIZE.
+
+    §5.4: this card is the app's most public surface and the least hoverable — it lands in a group
+    chat with no tooltip and no page around it — and it was the one place the ideal was printed
+    with no lap count while every in-app surface carried `theoretical best · N laps`. The ideal is
+    an order statistic: `+0.90 s` over 5 laps and `+1.64 s` over 65 are the SAME DRIVING on the
+    owner's D24 recording (corner_model.IdealSample has the measured table). A shared image
+    claiming a gap without saying what it was minimised over invites exactly the comparison the
+    number cannot support.
+
+    `laps` is `session.ideal_sample().laps`. None (a session whose composite has no sample to
+    state) falls back to the un-counted line rather than printing "over None laps" — the same
+    None-not-zero rule the rest of the card follows.
+
+    WIDTH, MEASURED, not assumed: the line is drawn unelided at 24 px in a 936 px content box.
+    Measured on the real D24 export (Inter, the bundled face): the un-counted string is 661 px, the
+    counted one 808 px at D24's 24 laps and 823 px at a 3-digit count (a 999-lap recording) — so
+    the widest form it can print still clears the box by 113 px. Pinned by
+    tests/test_share_card.py, which measures the WIDEST form rather than the shipped one."""
+    if laps is None:
+        return "your best corners and straights — not a single drivable lap"
+    return (f"your best corners and straights over {laps} laps — "
+            "not a single drivable lap")
 
 
 def hero_delta_line(gap: float) -> str:
@@ -95,6 +119,10 @@ class CardData:
     best_time: str        # the best lap, m:ss.mmm (or "—")
     best_lap_id: int | None
     delta_to_ideal_s: float | None  # best_time − ideal_total > 0, or None (no ideal / one donor)
+    ideal_laps: int | None          # clean laps the ideal was minimised over (IdealSample.laps);
+    #                                 None when there is no gap to disclose. §5.4 — the card is the
+    #                                 least hoverable surface the number reaches, so the sample
+    #                                 travels WITH it rather than staying behind in a tooltip.
     unit: str             # the active speed unit id (km/h default) — for any speed reads
     top_opp: TopOpp | None          # the #1 opportunity, or None (< MIN_LAPS clean laps / none losing)
     blocked: bool         # True ⇒ do NOT render a card (provisional / no valid lap)
@@ -145,10 +173,19 @@ def card_data(session, *, unit: str | None = None) -> CardData:
     #     single usable lap. The house rule for a synthesized value that has collapsed onto a real
     #     one is to hide it (export_data.laps_summary, stats_panel's tile), not to dress it up.
     delta_ideal = None
+    ideal_laps = None
     ideal_total = session.ideal_total()
     if best_id is not None and ideal_total is not None and session.ideal_donor_lap_id() is None:
         gap = float(session.lap_time(best_id)) - float(ideal_total)
         delta_ideal = gap if gap > 0 else 0.0
+        # THE SAMPLE TRAVELS WITH THE GAP (§5.4), off the same accessor the Stats tile caption and
+        # the exported report read — `ideal_sample()`, not a count re-derived here. Read under the
+        # gap's own gate so the two can never appear apart: a card that showed the Δ without the
+        # count would be the exact surface this fixes. getattr-guarded like the card's other
+        # optional reads, so a Session double without the accessor degrades to the un-counted line
+        # rather than crashing the one artifact a user SENDS to someone.
+        sample = getattr(session, "ideal_sample", lambda: None)()
+        ideal_laps = getattr(sample, "laps", None)
 
     # HONESTY: an unverified (provisional) start line or no valid lap ⇒ no shareable card.
     provisional = not session.timing_verified
@@ -162,6 +199,7 @@ def card_data(session, *, unit: str | None = None) -> CardData:
         best_time=best_time,
         best_lap_id=best_id,
         delta_to_ideal_s=delta_ideal,
+        ideal_laps=ideal_laps,
         unit=unit,
         top_opp=_top_opportunity(session, unit),
         blocked=blocked,
@@ -311,7 +349,7 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
         colour = theme.behind_colour() if gap > theme.DELTA_EVEN_EPS_S else theme.ahead_colour()
         gap_txt = hero_delta_line(gap)
         _draw_text(p, pad, 424, gap_txt, _font(38, theme.W_SEMIBOLD), colour)
-        _draw_text(p, pad, 460, IDEAL_SUBLABEL, _font(24), theme.C.text_muted)
+        _draw_text(p, pad, 460, ideal_sublabel(data.ideal_laps), _font(24), theme.C.text_muted)
 
     # --- map thumbnail (speed-coloured): composited from the grabbed MapView PNG ---
     # L5: a wide landscape MapView grab fits the plate by WIDTH, so a fixed-tall (512 px) plate

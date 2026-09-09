@@ -22,6 +22,7 @@ from typing import NamedTuple
 import numpy as np
 
 from . import corners
+from ._signal import plural
 
 # "not yet computed" sentinel (None is a legal cached value); module-local to avoid importing
 # Session.
@@ -188,6 +189,35 @@ class IdealSample(NamedTuple):
     laps: int      # clean laps the minimum ran over (SegmentBests.lap_ids)
     corners: int   # corners in the partition
     segments: int  # 2N+1 pieces the lap was cut into
+
+    @property
+    def straights(self) -> int:
+        """The partition's straights: `segments - corners`. Named rather than re-derived at each
+        call site, because the arithmetic is only obvious once you know the partition is 2N+1."""
+        return self.segments - self.corners
+
+    def caption(self) -> str:
+        """The ideal's SAMPLE, as the tile caption states it: `theoretical best · 65 laps`.
+
+        The Stats tile, the laps.csv trailer and the exported HTML report all print this — it is
+        the disclosure §5.4 found the leaving-the-app surfaces skipping — so it is defined ONCE,
+        on the value object that carries the counts. A surface that composes its own string from
+        `.laps` is free to disagree about the wording the moment either is edited; this cannot."""
+        return f"theoretical best · {self.laps} laps"
+
+    def sentence(self) -> str:
+        """The full disclosure paragraph under the tiles: what the minimum ran over, and why BOTH
+        counts set it. Lives here for the same reason as `caption()` — the Stats page and the
+        Qt-free export writer print the identical sentence, and export_data cannot import a view.
+
+        Deliberately says nothing this class's own docstring cannot back: the measured per-doubling
+        table and the partition-sensitivity numbers are there, not baked into shipping copy (§5.5
+        is the standing lesson about empirical constants in honesty text)."""
+        return (f"Stitched from {self.donors} of your {self.laps} clean laps, across the "
+                f"{plural(self.corners, 'corner')} and {plural(self.straights, 'straight')} pacer "
+                "found here. Both counts set it: the ideal is the minimum over those laps of those "
+                "pieces, so more laps find a lower one and a different set of corners cuts it "
+                "differently.")
 
 
 @dataclass(frozen=True)

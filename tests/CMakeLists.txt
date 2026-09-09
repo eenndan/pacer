@@ -324,6 +324,21 @@ set_tests_properties(test_corner_alignment_memo PROPERTIES
 # Imports pacer transitively (the session chain), no Qt, no telemetry file.
 add_test(NAME test_export_data
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_data.py)
+# THE DISCLOSURE THAT LEAVES THE APP (critical review §5.4 + roadmap N13), and the ATOMICITY of the
+# three writers (§7.5, second half). The exported surfaces were the only ones exempt from the rule
+# every in-app surface follows: the share card printed "+4.56 s vs your ideal lap" with no lap
+# count and the laps.csv trailer printed "Theoretical best,62.869" bare, while the Stats tile the
+# number comes from is captioned `theoretical best · 24 laps` — and the ideal is an order statistic
+# that moves 67.957 -> 66.563 s between 5 and 65 laps of the SAME DRIVING. So this asserts the
+# exported TEXT against `theoretical_best()` / `ideal_sample()` directly (not "looks similar") on
+# the CSV, the HTML report, the clipboard summary and the card at once, plus every value
+# `stats_summary` publishes against the accessor the Stats page reads — "the report cannot drift
+# from the page" is a claim, and this is its test. The atomic half drives each writer twice, the
+# second time through a handle that dies MID-WRITE (the first draft poisoned the writer's data
+# source instead, which raises before the file is opened and let a deliberately non-atomic writer
+# pass). Bare Sessions via _synthetic; no Qt event loop, no telemetry file.
+add_test(NAME test_export_disclosures
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_disclosures.py)
 # Consistency stats (studio.consistency, F6): σ / median-loss / ranking exactness vs direct
 # numpy, the ⚠ dropout-lap exclusion on a bare Session, and the map corner-ring highlight
 # (offscreen Qt). The old ConsistencyPanel UI moved into the Stats page — see test_stats.
@@ -724,7 +739,8 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_validate_wallclock
                         test_corners test_corner_alignment_memo
                         test_consistency test_gmeter test_gmeter_overlay
-                        test_export_data test_driving test_coaching test_library test_export_video
+                        test_export_data test_export_disclosures
+                        test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card test_stats
                         test_lap_table_columns test_help_dialog test_grid_and_timing_guards
                         test_lap_table_empty_states test_charts_header_budget

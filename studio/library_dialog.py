@@ -78,6 +78,7 @@ from PySide6.QtWidgets import (
 from . import APP_NAME, prefs, theme
 from . import library as _library
 from ._signal import fmt_time
+from ._signal import plural as _plural_shared
 from .theme import C
 from .widgets import NUM_ROLE, EmptyState, WrapLabel
 from .widgets import NumItem as _NumItem
@@ -292,8 +293,12 @@ def _fit_to_screen(width: int, height: int, avail_w: int, avail_h: int) -> tuple
 
 
 def _plural(n: int, noun: str) -> str:
-    """"1 session" / "3 sessions" — the summary line's one pluralization helper."""
-    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+    """"1 session" / "3 sessions" — the summary line's one pluralization helper.
+
+    Delegates to `_signal.plural`, the shared definition (the ideal-lap disclosure is now built by
+    a Qt view AND by the Qt-free export writer, so the rule had to move somewhere both can reach).
+    Kept as a module-local name because this file calls it ten times."""
+    return _plural_shared(n, noun)
 
 
 def _backup_when(mtime: float | None) -> str:
