@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 
 from . import data_quality, theme, units
 from . import stats as stats_service
-from ._signal import fmt_hms, fmt_time
+from ._signal import fmt_hms, fmt_time, plural
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the digest tile
 # and the coaching headline can never state different totals for the same three corners — L5-02.
@@ -1800,7 +1800,7 @@ class StatsView(QWidget):
                                           (laps[-1], str(laps[-1]))]])
         tip = SPARK_TOOLTIP
         if over:
-            tip += SPARK_OUTLIER_TIP.format(n=_plural(len(over), "lap"),
+            tip += SPARK_OUTLIER_TIP.format(n=plural(len(over), "lap"),
                                             slowest=fmt_time(max(over)),
                                             kept=len(times) - len(over))
         self.spark.setToolTip(tip)
