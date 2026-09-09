@@ -364,6 +364,9 @@ def _run_export_to_completion(win, *, ok, message="", lap=2, click_cancel=False,
 
     def _box_exec(box, *_a, **_k):
         modals.append({"kind": "box", "title": box.windowTitle(), "body": box.text(),
+                       # what the box tucks behind "Show Details…" — where a raw encoder tail
+                       # belongs, and where a test has to be able to see it.
+                       "details": box.detailedText(),
                        "icon": box.icon(),
                        "buttons": {b.text(): box.buttonRole(b) for b in box.buttons()},
                        "default": box.defaultButton().text() if box.defaultButton() else None})
@@ -505,11 +508,19 @@ def test_a_failed_video_export_takes_the_modal_down_and_names_the_product():
     _mid, end, modals, _worker, spec = _run_export_to_completion(
         win, ok=False, message="ffmpeg exited with code 1")
     assert not end["dialog_up"], f"the failure box was raised over a live progress dialog: {end}"
-    assert len(modals) == 1 and modals[0]["kind"] == "warning", modals
-    body = modals[0]["body"]
+    assert len(modals) == 1 and modals[0]["kind"] == "box", modals
+    body, details = modals[0]["body"], modals[0]["details"]
     assert APP_NAME in body, f"the export failure never names {APP_NAME}: {body!r}"
-    assert "ffmpeg exited with code 1" in body, body
-    assert APP_NAME in modals[0]["title"], modals[0]["title"]
+    # THE RAW TAIL MOVED OUT OF THE BODY (§7.5). "ffmpeg exited with code 1" is a diagnostic, not
+    # an explanation: the body now names the case and a next action, and the encoder's own words
+    # live behind Details where a bug report can still reach them.
+    assert "ffmpeg exited with code 1" not in body, (
+        "the body is quoting the encoder at the user again", body)
+    assert "ffmpeg exited with code 1" in details, details
+    assert "encoder stopped partway" in body, body
+    # The title is NOT asserted: macOS drops a QMessageBox window title (windowTitle() is '' even
+    # when set), which is exactly why the product name has to be in the body — see the same note
+    # on the crash reporter in app._show_error_report.
     assert spec.source.cleanups == 1
     win.hide()
     print("test_a_failed_video_export_takes_the_modal_down_and_names_the_product OK")

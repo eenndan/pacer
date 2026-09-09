@@ -1562,6 +1562,23 @@ class NoFramesError(RuntimeError):
     source whose duration ffprobe couldn't read."""
 
 
+# ffmpeg reports a full disk through its own writer, so what arrives here is a stderr tail, not an
+# errno. These are the spellings that mean "there is no room", and they are matched case-folded
+# because the encoder, the muxer and the OS each phrase it differently.
+_NO_SPACE_MARKERS = ("no space left on device", "enospc", "disk full", "not enough space")
+
+
+def is_out_of_space(message: str) -> bool:
+    """True when an encode failure is a FULL DISK rather than an encoder problem.
+
+    This is the difference between one failed render and two. `run()` falls back from the hardware
+    encoder to libx264 whenever a VideoToolbox encode fails — which is right for a codec/session
+    problem and useless when the disk is full: the retry re-renders the WHOLE clip on the slower
+    software encoder and then fails for exactly the same reason, minutes later. The user's disk
+    does not get emptier while they wait."""
+    return any(m in (message or "").casefold() for m in _NO_SPACE_MARKERS)
+
+
 class _EncodeError(RuntimeError):
     """Internal: a non-zero ENCODE exit, carrying the encoder name + stderr tail. `run` catches it
     to decide whether to fall back from h264_videotoolbox to libx264; if it escapes (no fallback) it
@@ -1810,6 +1827,11 @@ class Renderer:
         except (_EncodeError, RenderTimeoutError) as exc:
             is_encode_fail = isinstance(exc, _EncodeError) and exc.encoder == VT_H264
             is_vt_wedge = isinstance(exc, RenderTimeoutError) and self._encoder == VT_H264
+            if is_out_of_space(str(exc)):
+                # NEVER fall back on a full disk: the software retry is a whole second render that
+                # cannot succeed. Surface it now, while the failure is still cheap.
+                self.cancel()
+                raise RuntimeError(str(exc)) from exc
             if not (self._fallback_allowed and (is_encode_fail or is_vt_wedge)):
                 # Not a VT-recoverable case → surface a clear error (never a hang).
                 raise RuntimeError(str(exc)) from exc

@@ -3251,6 +3251,32 @@ class StudioWindow(QMainWindow):
             return
         self.statusBar().showMessage("stats summary copied — paste it into a chat", STATUS_MS)
 
+    @staticmethod
+    def _export_failure_message(message: str, out_path: str) -> str:
+        """Map a video-export failure to a sentence that names the CASE and a next action.
+
+        The same job `_load_failure_message` does for the other end of the app, and for the same
+        reason: what arrives here is an ffmpeg stderr tail, which is a diagnostic, not an
+        explanation. It stays — behind Details, where a bug report can reach it.
+
+        Only cases that can be told apart RELIABLY get their own sentence; everything else falls
+        through to an honest generic. A wrong specific sentence is worse than a right vague one."""
+        low = (message or "").casefold()
+        if export_video.is_out_of_space(message or ""):
+            folder = os.path.dirname(out_path) or "that folder"
+            return (f"There's no room left on the disk holding {folder}. Free some space, or "
+                    f"choose somewhere else, and export again.")
+        if "permission denied" in low or "operation not permitted" in low:
+            return ("Pacer isn't allowed to write there. Choose a different folder — your Movies "
+                    "or Desktop folder will work.")
+        if "no such file or directory" in low and "ffmpeg" not in low:
+            return ("The folder you chose isn't there any more — it may have been moved, renamed "
+                    "or unmounted. Choose another one and export again.")
+        if "cancelled" in low or "canceled" in low:
+            return "The export stopped before it finished."
+        return ("The encoder stopped partway through. The details below are what it reported — "
+                "Help ▸ Report a problem… if it keeps happening.")
+
     def _run_export(self, write, path: str) -> bool:
         """Run a writer (`write()`) under an OSError guard; on failure show a warning dialog +
         statusbar note. Returns True on success."""
@@ -3799,9 +3825,16 @@ class StudioWindow(QMainWindow):
             elif message == "cancelled":
                 self.statusBar().showMessage("video export cancelled", STATUS_MS)
             else:
-                QMessageBox.warning(self, self._EXPORT_FAIL_TITLE,
-                                    f"{APP_NAME} couldn't finish the overlay video.\n\n"
-                                    f"The render failed:\n{message}")
+                # PLAIN LANGUAGE FIRST, the encoder's own words behind Details — the same shape as
+                # the load-failure table and the crash report. `message` is an ffmpeg stderr TAIL:
+                # pasting it as the body handed the user "[h264_videotoolbox @ 0x…] Error encoding
+                # frame: -12905" as the explanation of what to do next.
+                box = QMessageBox(QMessageBox.Warning, self._EXPORT_FAIL_TITLE,
+                                  f"{APP_NAME} couldn't finish the overlay video.\n\n"
+                                  f"{self._export_failure_message(message, spec.out_path)}")
+                box.setDetailedText(message)
+                box.addButton(QMessageBox.Close)
+                box.exec()
 
         worker.progress.connect(on_progress)
         worker.finished_export.connect(on_done)
