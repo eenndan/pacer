@@ -297,6 +297,25 @@
     "sector_boundary_distances": "__unsupported__"
    }
   },
+  "phase_report": {
+   "cids": [
+    1,
+    2
+   ],
+   "rows": [
+    [
+     -0.9899214520272182,
+     -1.0431671589901743,
+     -0.5625482502723251
+    ],
+    [
+     -0.9365265235594293,
+     -1.0171404459342668,
+     -0.6104970289644029
+    ]
+   ],
+   "share": null
+  },
   "point_count": "__unsupported__",
   "reference_label": null,
   "reference_lap_id": null,
@@ -613,6 +632,25 @@
     "sector_boundary_distances": "__unsupported__"
    }
   },
+  "phase_report": {
+   "cids": [
+    1,
+    2
+   ],
+   "rows": [
+    [
+     -0.9899214520272182,
+     -1.0431671589901743,
+     -0.5625482502723251
+    ],
+    [
+     -0.9365265235594293,
+     -1.0171404459342668,
+     -0.6104970289644029
+    ]
+   ],
+   "share": null
+  },
   "point_count": "__unsupported__",
   "reference_label": "ci-ref",
   "reference_lap_id": 0,
@@ -928,6 +966,25 @@
     "lap_window": "__unsupported__",
     "sector_boundary_distances": "__unsupported__"
    }
+  },
+  "phase_report": {
+   "cids": [
+    1,
+    2
+   ],
+   "rows": [
+    [
+     -0.9899214520272182,
+     -1.0431671589901743,
+     -0.5625482502723251
+    ],
+    [
+     -0.9365265235594293,
+     -1.0171404459342668,
+     -0.6104970289644029
+    ]
+   ],
+   "share": null
   },
   "point_count": "__unsupported__",
   "reference_label": null,

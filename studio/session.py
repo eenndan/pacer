@@ -2076,7 +2076,7 @@ class Session:
             return None
         basis = self.corners.basis()
         corner_dist_total = float(basis[1]) if basis is not None else None
-        best_dist, best_speed_kmh, _be = self._lap_arrays(best)
+        best_dist, _best_speed_kmh, best_elapsed = self._lap_arrays(best)
         if len(best_dist) < 2:
             return None
         # The corner windows live in the BEST lap's frame — its trace is the fixed reference
@@ -2097,7 +2097,7 @@ class Session:
         # re-integrated once per (lap, corner), which is half of this report's integration work
         # done 37 times over on the D24 0060 pair (coaching.corner_best_thirds).
         best_thirds = [coaching.corner_best_thirds(
-            best_dist, best_speed_kmh, float(c.enter), float(c.exit),
+            best_dist, best_elapsed, float(c.enter), float(c.exit),
             corner_dist_total=corner_dist_total, best_total=best_total,
             best_traces=best_traces, frame=phase_frame, best_align=best_align)
             for c in corner_list]
@@ -2105,7 +2105,7 @@ class Session:
         for i in ids:
             if i == best:
                 continue
-            dist, speed_kmh, _e = self._lap_arrays(i)
+            dist, _speed_kmh, lap_elapsed = self._lap_arrays(i)
             if len(dist) < 2:
                 continue
             _lt, lap_xs, lap_ys, _lv, lap_cum = self._lap_columns(i)
@@ -2116,7 +2116,7 @@ class Session:
             row: list[tuple[float, float, float]] = []
             for c, thirds in zip(corner_list, best_thirds, strict=True):
                 ph = coaching.corner_phase_losses(
-                    dist, speed_kmh, best_dist, best_speed_kmh,
+                    dist, lap_elapsed, best_dist, best_elapsed,
                     float(c.enter), float(c.exit),
                     corner_dist_total=corner_dist_total, lap_total=lap_total,
                     best_total=best_total,
@@ -2289,9 +2289,9 @@ class Session:
         # The matching `elapsed` (seconds-from-lap-start) arrays go with them: a BrakeEvent carries
         # no release odometer, so summarize needs each lap's own clock to integrate a brake event's
         # OVERLAP with a corner window instead of taking or dropping it whole by its onset.
-        med_dist, med_speed_kmh, med_elapsed = (
+        med_dist, _med_speed_kmh, med_elapsed = (
             self._lap_arrays(med_id) if med_id is not None else (None, None, None))
-        best_dist, best_speed_kmh, best_elapsed = self._lap_arrays(best)
+        best_dist, _best_speed_kmh, best_elapsed = self._lap_arrays(best)
 
         # Drift-gate spatial traces for the phase decomposition (the same alignment lap_corner_stats
         # uses): the corner windows live in the BEST lap's frame, so its (xs, ys, cum) is the fixed
@@ -2322,10 +2322,8 @@ class Session:
             median_lap_total=median_lap_total,
             best_lap_total=best_lap_total,
             median_dist=med_dist,
-            median_speed_kmh=med_speed_kmh,
             median_elapsed=med_elapsed,
             best_dist=best_dist,
-            best_speed_kmh=best_speed_kmh,
             best_elapsed=best_elapsed,
             median_traces=median_traces,
             best_traces=best_traces,

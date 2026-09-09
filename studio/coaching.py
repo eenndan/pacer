@@ -32,11 +32,6 @@ PHASE_APEX = "apex"
 PHASE_EXIT = "exit"
 PHASES = (PHASE_ENTRY, PHASE_APEX, PHASE_EXIT)
 
-# Samples per third on the shared fine distance grid the Δt integral runs on (3×PHASE_GRID_N
-# across the whole corner window). Fine enough that the thirds sum to the corner's measured loss
-# within interpolation tolerance, cheap to integrate (trapezoid over ~a few hundred samples).
-PHASE_GRID_N = 64
-
 # m prepended to a corner window when matching brake events — braking starts on the straight
 # before turn-in (~1 medium-kart brake zone), upstream of the model's cornering-start enter point.
 BRAKE_APPROACH_M = 30.0
@@ -232,25 +227,36 @@ def _coast_extra(med_spans, best_spans, med_win: tuple[float, float],
 # TYPICAL lap's net Δt-vs-best across the window (a WHERE-in-the-corner profile of one lap; NOT the
 # Opportunity's cross-lap-median time_lost, which is a different statistic and need not agree).
 
-_V_FLOOR_KMH = 1.0  # km/h; a defensive floor on v before 1/v — laps are MOVING in corners, but a
-                    # stray non-positive/near-zero sample would blow up the reciprocal. ~0.28 m/s.
+def _span_clock(dist: np.ndarray, elapsed: np.ndarray, d0: float, d1: float) -> float:
+    """Seconds between two odometer points on ONE lap, read off that lap's own elapsed clock by
+    edge interpolation — the same quantity, measured the same way, as `corners.segment_times`.
 
+    THIS USED TO BE `∫ds/v` on a 64-point-per-third grid of the SMOOTHED speed channel, and the
+    two do not agree. Measured on the best lap of the D24 0060 pair, where there is no drift and
+    no comparison — the corner's own time, both ways:
 
-def _span_time(dist: np.ndarray, speed_kmh: np.ndarray, d0: float, d1: float, n: int) -> float:
-    """∫ ds/v over [d0, d1] for one lap's speed-vs-distance trace, by trapezoid on a uniform
-    n-point distance sub-grid. v is interpolated onto the grid (km/h → m/s) and floored at
-    _V_FLOOR_KMH so 1/v can't diverge. Returns seconds; 0 for a degenerate (d1 ≤ d0) span."""
+        C7   clock 4.484 s   ∫ds/v 4.870 s   +0.385 s  (+8.6%)   apex 31.1 km/h
+        C11  clock 6.384 s   ∫ds/v 6.877 s   +0.493 s  (+7.7%)   apex 19.2 km/h
+        whole lap: clock 68.228 s (= lap_time) vs ∫ds/v 67.748 s
+
+    Every corner was off, r = -0.46 between apex speed and the signed error: 1/v amplifies any
+    speed error exactly where the kart is slowest, which is exactly where a corner's time is
+    largest. That error then landed in a user-facing number — the coaching row's phase bars sit
+    beside a true-clock "time lost", and on 4 of 11 D24 rows the bars netted FASTER than the loss
+    they were decomposing (C7: +0.096 s listed, bars netting -0.508 s).
+
+    The clock is the validated timing (GPS9 true clock, transponder-validated; `segment_times`
+    and every headline number already read it), so the decomposition reads it too. The thirds now
+    telescope EXACTLY to the corner's own `CornerStat.time`, by construction rather than by
+    approximation."""
     if not (d1 > d0):
         return 0.0
-    grid = np.linspace(d0, d1, max(int(n), 2))
-    v_kmh = np.interp(grid, dist, speed_kmh)
-    v_mps = np.maximum(v_kmh, _V_FLOOR_KMH) / 3.6  # guard v > 0 (clip non-positive samples)
-    return float(np.trapezoid(1.0 / v_mps, grid))
+    return float(np.interp(d1, dist, elapsed) - np.interp(d0, dist, elapsed))
 
 
 def corner_phase_losses(
-    lap_dist: np.ndarray, lap_speed_kmh: np.ndarray,
-    best_dist: np.ndarray, best_speed_kmh: np.ndarray,
+    lap_dist: np.ndarray, lap_elapsed: np.ndarray,
+    best_dist: np.ndarray, best_elapsed: np.ndarray,
     c_enter: float, c_exit: float,
     *,
     corner_dist_total: float | None = None,
@@ -262,7 +268,6 @@ def corner_phase_losses(
     lap_align=corners_mod.DERIVE_ALIGNMENT,
     best_align=corners_mod.DERIVE_ALIGNMENT,
     best_thirds: tuple[float, float, float] | None = None,
-    grid_n: int = PHASE_GRID_N,
 ) -> PhaseLoss:
     """Decompose ONE corner's Δt-vs-best into entry / apex(mid) / exit thirds (seconds).
 
@@ -271,10 +276,11 @@ def corner_phase_losses(
     distance d·lap_total/corner_dist_total within NORMALIZED_DRIFT_MAX, one monotone spatial warp
     for the whole lap above it, the SAME alignment lap_corner_stats uses), so the third boundaries
     land on the same TRACK positions on both laps. Each lap's window is split into three
-    equal-distance thirds; per third Δt = ∫ds/v_lap − ∫ds/v_best on a shared fine grid (so the
-    thirds telescope to THIS lap's net Δt-vs-best across the window — a where-in-the-corner profile
-    of one lap, NOT the cross-lap-median time_lost). Positive ⇒ the lap is slower than best over
-    that third.
+    equal-distance thirds; per third Δt = (this lap's clock over the third) − (best's), read off
+    each lap's own elapsed array by the same edge interpolation `segment_times` uses (see
+    `_span_clock` for why this is the clock and not ∫ds/v). The thirds telescope EXACTLY to this
+    lap's `CornerStat.time` − best's across the window — a where-in-the-corner profile of one lap,
+    NOT the cross-lap-median time_lost. Positive ⇒ the lap is slower than best over that third.
 
     `lap_traces`/`best_traces` (Session-fed (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum) for
     the typical / best lap respectively) enable the spatial alignment; omitted → normalized,
@@ -287,9 +293,9 @@ def corner_phase_losses(
     once hoisted).
     Returns a zero PhaseLoss when either trace is unusable or the window is degenerate."""
     lap_dist = np.asarray(lap_dist, float)
-    lap_speed_kmh = np.asarray(lap_speed_kmh, float)
+    lap_elapsed = np.asarray(lap_elapsed, float)
     best_dist = np.asarray(best_dist, float)
-    best_speed_kmh = np.asarray(best_speed_kmh, float)
+    best_elapsed = np.asarray(best_elapsed, float)
     if len(lap_dist) < 2 or len(best_dist) < 2 or not (c_exit > c_enter):
         return _NO_PHASES
 
@@ -309,18 +315,18 @@ def corner_phase_losses(
     lap_edges = np.linspace(lap0, lap1, 4)
     if best_thirds is None:
         best_thirds = corner_best_thirds(
-            best_dist, best_speed_kmh, c_enter, c_exit,
+            best_dist, best_elapsed, c_enter, c_exit,
             corner_dist_total=corner_dist_total, best_total=best_total,
-            best_traces=best_traces, frame=frame, best_align=best_align, grid_n=grid_n)
+            best_traces=best_traces, frame=frame, best_align=best_align)
     out = []
     for k in range(3):
-        dt_lap = _span_time(lap_dist, lap_speed_kmh, lap_edges[k], lap_edges[k + 1], grid_n)
+        dt_lap = _span_clock(lap_dist, lap_elapsed, lap_edges[k], lap_edges[k + 1])
         out.append(dt_lap - best_thirds[k])
     return PhaseLoss(entry=out[0], apex=out[1], exit=out[2])
 
 
 def corner_best_thirds(
-    best_dist: np.ndarray, best_speed_kmh: np.ndarray,
+    best_dist: np.ndarray, best_elapsed: np.ndarray,
     c_enter: float, c_exit: float,
     *,
     corner_dist_total: float | None = None,
@@ -328,16 +334,15 @@ def corner_best_thirds(
     best_traces: tuple | None = None,
     frame=None,
     best_align=corners_mod.DERIVE_ALIGNMENT,
-    grid_n: int = PHASE_GRID_N,
 ) -> tuple[float, float, float]:
-    """The BEST lap's ∫ds/v over the three thirds of one corner — the subtrahend half of
+    """The BEST lap's own clock over the three thirds of one corner — the subtrahend half of
     `corner_phase_losses` (which is `lap third − best third`, per third).
 
     It depends only on the corner and the best lap, so it is IDENTICAL for every comparison lap.
     `Session.phase_report` decomposes every consistency lap against the best, and was recomputing
     this inside each one: on the D24 0060 pair (37 comparison laps × 12 corners) that is 1,332 of
-    the 1,776 `_span_time` integrals doing work already done — 12x duplication of exactly half the
-    integration. Hoist it per corner and pass it as `best_thirds=`.
+    the 1,776 span reads doing work already done — 12x duplication of exactly half the work.
+    Hoist it per corner and pass it as `best_thirds=`.
 
     Same arithmetic in the same order, so the result is bit-identical to deriving it inline."""
     best0, best1 = c_enter, c_exit
@@ -347,7 +352,7 @@ def corner_best_thirds(
                                   traces=best_traces, frame=frame, alignment=best_align)
         best0, best1 = float(proj[0]), float(proj[1])
     best_edges = np.linspace(best0, best1, 4)
-    return tuple(_span_time(best_dist, best_speed_kmh, best_edges[k], best_edges[k + 1], grid_n)
+    return tuple(_span_clock(best_dist, best_elapsed, best_edges[k], best_edges[k + 1])
                  for k in range(3))
 
 
@@ -412,10 +417,8 @@ def summarize(
     median_lap_total: float | None = None,
     best_lap_total: float | None = None,
     median_dist: np.ndarray | None = None,
-    median_speed_kmh: np.ndarray | None = None,
     median_elapsed: np.ndarray | None = None,
     best_dist: np.ndarray | None = None,
-    best_speed_kmh: np.ndarray | None = None,
     best_elapsed: np.ndarray | None = None,
     median_traces: tuple | None = None,
     best_traces: tuple | None = None,
@@ -431,10 +434,12 @@ def summarize(
     laps + best lap. median_apex_deltas MUST use the SAME local-best baseline as the losses.
     corner_dist_total / median_lap_total / best_lap_total project each corner window onto each
     lap's own odometer before matching its brake/coast events; any None → identity projection.
-    median_dist/median_speed_kmh + best_dist/best_speed_kmh are the typical-lap and best-lap
-    speed-vs-distance traces; when both are present each row gets the D2 entry/apex/exit Δt-vs-best
-    decomposition (the typical lap vs best, same comparison the reasons use) — absent → zero phases.
-    median_elapsed/best_elapsed are the matching seconds-from-lap-start arrays; with them a brake
+    median_dist + best_dist are the typical-lap and best-lap odometers; with the matching elapsed
+    arrays each row gets the D2 entry/apex/exit Δt-vs-best decomposition (the typical lap vs best,
+    same comparison the reasons use) — absent → zero phases.
+    median_elapsed/best_elapsed are the seconds-from-lap-start arrays the decomposition READS ITS
+    TIMES FROM (see `_span_clock`: it used to integrate ds/v instead, which disagreed with the
+    corner's own time by up to 0.49 s at the slowest corner). With them a brake
     event's OVERLAP with the corner window is integrated on the lap's own clock instead of the event
     being taken or dropped whole by its onset (_window_brake_time) — absent → that degenerate rule.
     median_traces/best_traces are the matching local-frame xy traces ((ref_xs, ref_ys, ref_cum,
@@ -478,8 +483,8 @@ def summarize(
 
     # D2: the typical lap's speed-vs-distance trace + best lap's, for the entry/apex/exit Δt
     # decomposition. Both must be present (and usable) to attach phases; otherwise zero phases.
-    have_phases = (median_dist is not None and median_speed_kmh is not None
-                   and best_dist is not None and best_speed_kmh is not None)
+    have_phases = (median_dist is not None and median_elapsed is not None
+                   and best_dist is not None and best_elapsed is not None)
 
     # L5-01: each lap's (odometer, seconds-from-start) pair, so a brake event's overlap with the
     # corner window is integrated on that lap's own clock (a BrakeEvent carries no release
@@ -510,7 +515,7 @@ def summarize(
     for rank, i in enumerate(ranked_idx):
         c = corners[i]
         phases = (corner_phase_losses(
-            median_dist, median_speed_kmh, best_dist, best_speed_kmh,
+            median_dist, median_elapsed, best_dist, best_elapsed,
             float(c.enter), float(c.exit),
             corner_dist_total=corner_dist_total, lap_total=median_lap_total,
             best_total=best_lap_total,

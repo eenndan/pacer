@@ -154,6 +154,12 @@ def fingerprint(s, *, strict: bool = True) -> dict:
     put("sector_sigmas", lambda: _round(s.sector_sigmas()))
     put("corner_consistency", lambda: _round(s.corner_consistency()))
     put("coaching_opportunities", lambda: _round(s.coaching_opportunities()))
+    # The Stats page's phase matrix had NO golden coverage until the decomposition it reads moved
+    # from ∫ds/v to the lap's own clock and nothing in this dump noticed: the change showed up only
+    # through `coaching_opportunities.phases`, because the same numbers reach a second, wider
+    # surface through here. A user-facing number with no fingerprint is a number that can move in
+    # silence, so this one is fingerprinted too.
+    put("phase_report", lambda: _round(s.phase_report()))
 
     # Per-lap sweeps. Use a representative subset of valid laps (all of them — there are ~18).
     cids = [c.cid for c in guard(lambda: s.corners.corner_list(), default=[])]
