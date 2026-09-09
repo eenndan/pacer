@@ -887,3 +887,22 @@ add_test(NAME test_version
 # otherwise stdlib, so like test_version it needs neither the offscreen env nor the PYTHONPATH.
 add_test(NAME test_landing_page
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_landing_page.py)
+
+# AN AXIS TITLE IS TEXT, measured on painted pixels (fix/stats-dashboard-composition). The charts
+# panel's three axis titles shipped at 1.19:1 on the plot background — against 5.7:1 for the tick
+# labels beside them — because pyqtgraph lets THREE calls own one colour: `labelString` bakes
+# `labelStyle` into the label HTML, and both `setPen` (the axis LINE) and `setTextPen` (the tick
+# TEXT) end by writing `labelStyle['color']` from their own pen and re-rendering. The hairline pen
+# ran last, and re-ran on every device-pixel-ratio change, so passing a colour at `setLabel` is
+# only half the fix. Asserted on a RENDERED frame (a source check passes on the shipped build) at
+# both window sizes, through the unit / palette / DPR re-pen paths, on the Stats friction circle
+# whose titles went the same way via `_apply_pen_scale`, and with a NEGATIVE CONTROL that re-opens
+# the defect on a live widget (5.90:1 -> 1.59:1 -> 5.90:1). Also holds widgets.WrapLabel measuring
+# itself from a CLEARED minimum — QLabel.heightForWidth is clamped by the widget's own minimum, so
+# the old code ratcheted a two-line height into every later width (the DATA TRUST row-3 defect).
+# Real PlotsView + real StatsView + real pyqtgraph draws; needs the shipped theme, so run
+# offscreen. No telemetry file.
+add_test(NAME test_chart_axis_legibility
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_axis_legibility.py)
+set_tests_properties(test_chart_axis_legibility PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
