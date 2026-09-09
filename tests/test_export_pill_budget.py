@@ -89,8 +89,8 @@ class Stub:
     def gmeter_source(self):
         return "accl"
 
-    def _lap_trace_xyt(self, lap_id):
-        return (self.tx, self.ty, self.tt) if lap_id == self._lap else None
+    def lap_trace_xy(self, lap_id):
+        return (self.tx, self.ty) if lap_id == self._lap else None
 
 
 def _spec(session, out_h, *, lead_in=0.0, lead_out=0.0, is_best=False,

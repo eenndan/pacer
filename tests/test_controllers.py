@@ -28,8 +28,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Session imports Qt (via the view layer) even though the controllers are Qt-free; offscreen so
-# there's no display. The controllers themselves never construct a widget.
+# A QApplication is needed because THIS FILE imports `theme` and `compare_controller` (which pulls
+# theme + video_view.PaneSpec) — NOT because Session does: `import studio.session` loads no Qt at
+# all, which is the contract tests/test_layering.py pins. Offscreen so there's no display; neither
+# controller ever constructs a widget.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication  # noqa: E402
 

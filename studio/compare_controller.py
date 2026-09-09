@@ -4,8 +4,11 @@ Compare mode shows two side-by-side video panes (left drives ALL telemetry; righ
 playing "time into lap" from S/F, each with a per-pane "Δ vs other" badge. Owns the compare state
 (on/off + pinned (A,B)), the enter/exit orchestration, and the per-tick upkeep.
 
-Qt-free and pacer-free: talks only to Session's public API + injected view widgets + the shared
-PlaybackState (writes `followed_lap` to suspend auto-follow, reads `applied_t` to seed pane A).
+Pacer-free, and it paints nothing itself: talks only to Session's public API + injected view
+widgets + the shared PlaybackState (writes `followed_lap` to suspend auto-follow, reads `applied_t`
+to seed pane A). It is NOT Qt-free at import, though — `theme` (for `format_delta_run` /
+`delta_colour`, the app's single Δ formatter) and `video_view.PaneSpec` both pull PySide6 in, so
+`tests/test_layering.py` pins this module in `QT_REACHING` rather than `ALLOWED_QT`.
 """
 
 from __future__ import annotations

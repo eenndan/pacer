@@ -36,8 +36,10 @@ add_test(NAME test_import_ergonomics
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_import_ergonomics.py)
 set_tests_properties(test_import_ergonomics PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-# Layering contract (test/layering-contract): ONLY session/load/ingest/tracks may import the pacer
-# core — every view/controller/helper stays pacer-free. A pure `ast` walk of studio/*.py: no pacer,
+# Layering contract, BOTH directions (test/layering-contract, test/layering-qt-direction): ONLY
+# session/load/ingest/tracks may import the pacer core — every view/controller/helper stays
+# pacer-free; and only the view/Qt-infrastructure modules may import Qt (directly OR through a
+# studio import), so the data core stays headless. A pure `ast` walk of studio/*.py: no pacer,
 # no Qt, no telemetry file, so it needs neither the offscreen env nor the PYTHONPATH block below.
 add_test(NAME test_layering
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_layering.py)
@@ -174,7 +176,7 @@ add_test(NAME test_rainbow_map
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_rainbow_map.py)
 set_tests_properties(test_rainbow_map PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-# map_render (E2): the Qt-free pure-numpy track-map math extracted from map_view — bucketize /
+# map_render (E2): the pure-numpy track-map math extracted from map_view — bucketize /
 # bucket_polylines / resample_grid_to_points + the rainbow_channel per-channel value/bucket math
 # (speed/Δ/grip, the Δ+grip negation, the grip fixed scale, the GPS-dropout NaN-mask, the None
 # gates). Imports studio.theme -> Qt, so run offscreen; no telemetry file.
