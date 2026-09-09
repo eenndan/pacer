@@ -2385,6 +2385,102 @@ def test_composing_never_hides_a_column_the_single_column_page_showed():
     print("test_composing_never_hides_a_column_the_single_column_page_showed OK")
 
 
+#: The two recordings this page's composition was measured on, as the numbers the packer actually
+#: reads: (group minimum widths, group content heights). The shared stub cannot produce either —
+#: it has two laps and no corners, so its CORNERS and STRAIGHTS tables are hidden and its columns
+#: sit at the prose floor — and a composition guard that only ever runs on it is asserting an
+#: invariant against numbers no user has. These are measured on the real app (see the PR body):
+#: D24 = 38 laps, 0062 = 65 laps, both on this machine's fixture disk.
+REAL_PAGES = {
+    #                   group min WIDTHS      group content HEIGHTS
+    "D24 (38 laps)":  ((440, 718, 610), (983, 907, 1338)),
+    "0062 (65 laps)": ((440, 718, 610), (929, 921, 2322)),
+}
+
+
+def test_the_packer_picks_the_documented_form_on_both_real_recordings():
+    """The composition table in stats_panel's PAGE_LAYOUTS prose, as an assertion.
+
+    `_choose_layout` is a pure decision over three inputs — the pane, each group's minimum WIDTH
+    and each group's content HEIGHT — so it can be asked the real recordings' numbers without
+    loading 32 GB of video. That is the point: the guards below run on the shared stub, whose
+    tables are narrower and shorter than any real session's, and the stub composes ((0,1),(2,))
+    at 1260 where the real recording composes ((0,),(1,2)). Both are right for their content;
+    only one of them is what a user sees.
+
+    The 65-lap row is the regression this pins. Group 2 holds PER LAP, one uncapped row per clean
+    lap, so it grows with the recording while groups 0 and 1 do not: at 38 laps it is 1338 px
+    against a 1894 px stack, at 65 laps it is 2322 px against the same stack — and the balanced
+    form then bands the column beside it by 230 px at the app's own default window."""
+    from studio.stats_panel import PAGE_LAYOUTS
+
+    three, balanced, narrow_left, single = PAGE_LAYOUTS
+    expected = {
+        "D24 (38 laps)":  {1260: narrow_left, 1420: balanced, 1900: three},
+        "0062 (65 laps)": {1260: narrow_left, 1420: narrow_left, 1900: three},
+    }
+    v = _laid_out(1900)
+    for name, (mins, heights) in REAL_PAGES.items():
+        v._group_min_width = lambda g, _m=mins: _m[g]
+        v._group_height = lambda g, _h=heights: _h[g]
+        for pane, want in expected[name].items():
+            v._pane_width = lambda _p=pane: _p
+            got = v._choose_layout()
+            assert got == want, f"{name} at {pane}px chose {got}, expected {want}"
+            # ...and what it chose is a form the SPAN check accepts, which is the half no width
+            # arithmetic can see.
+            assert v._span_fits(want), f"{name} at {pane}px: {want} bands"
+    assert single == PAGE_LAYOUTS[-1]
+    v.hide()
+    print(f"test_the_packer_picks_the_documented_form_on_both_real_recordings OK "
+          f"({len(REAL_PAGES)} recordings x 3 widths)")
+
+
+def test_a_long_session_never_bands_a_stacked_column():
+    """A COLUMN THAT SPANS THE BAND MAY NOT BE TALLER THAN THE ONE STACKING BESIDE IT.
+
+    `_place_columns` spans a lone grid column across both rows so every band holds exactly one
+    item and no gap can open between two sections. That shape has one failure mode, and the
+    docstring used to argue it away in prose from ONE recording's heights: if the spanning group
+    is taller than the two stacked beside it, Qt grows both of those rows to fit it and each
+    stacked holder pays the difference out as empty space under its last section — an empty band
+    in the middle of a column, next to a full one.
+
+    It is reachable from the fixture disk. PER LAP takes one row per clean lap and is uncapped
+    while groups 0 and 1 gain nothing per lap, so ~50 laps flips the inequality; the owner's own
+    0062 recording has 65 and opened a 230 px band in the LEFT column of the default 1440x900
+    window under ⌘⇧S. Reproduced here by inflating the lap table the way a session would —
+    `setRowCount` + `_fit_table`, which is what `_refresh_lap_table` does — at the three widths
+    the band covered.
+
+    THE BAND IS MEASURED INSIDE THE HOLDER, not between two of them: each column layout ends in
+    addStretch(1), so a holder grown past its content keeps its sections packed at the top and
+    puts the slack underneath. Reading the gap between two holders' geometries finds 4 px (the
+    grid's own spacing) and misses the defect entirely — which is how the first version of this
+    check passed against a page that was visibly banded."""
+    from studio import theme
+
+    for rows in (38, 65):
+        v = _laid_out(1420)
+        for width in (1420, 1600, 1800):
+            v.resize(width, 900)
+            _settle(4)
+            v.lap_table.setRowCount(rows)
+            v._fit_table(v.lap_table)
+            v._reflow_tiles()
+            _settle(8)
+            for groups in v._layout:
+                for group in groups[:-1]:     # the last one's slack is the page's own bottom
+                    holder = v._columns[group]
+                    band = holder.height() - holder.layout().sizeHint().height()
+                    assert band <= theme.SPACE_XS, (
+                        f"{rows} laps at {width}px: group {group} is laid out {band}px taller "
+                        f"than its content inside a stacked column — an empty band beside a full "
+                        f"column, because a spanning group made Qt grow the rows")
+        v.hide()
+    print("test_a_long_session_never_bands_a_stacked_column OK (38 and 65 laps x 3 widths)")
+
+
 def test_the_dashboard_never_scrolls_sideways_either():
     """The quadrant's own rule (above), held at the widths ⌘⇧S opens onto.
 

@@ -163,6 +163,13 @@ PAGE_COL_GAP = theme.SPACE_XL   # between two section columns: the page's own la
 # on D24 at the 718/718/654 px columns 1440x900 gives, the three groups stand 983 / 907 / 1338 px
 # tall — group 3 is the TALLEST, not the middle one. So 1+2 beside 3 is 1914 | 1338 (1.43x) where
 # 1 beside 2+3 is 983 | 2269 (2.31x).
+#
+# ...and preferred is not the same as always chosen. Group 3 holds PER LAP, one row per clean lap
+# and uncapped, so its height is a function of the RECORDING: at 65 laps (the owner's 0062) it is
+# 2334 px against a 1894 px stack, and the form that spans it opens a 130 px band in the column
+# beside it. `_span_fits` measures that per session and falls through to form #3 — which stacks
+# both growing groups together and spans the one that does not grow, so it cannot band by
+# construction. Form order is a preference; the fit is a measurement.
 PAGE_LAYOUTS = (
     ((0,), (1,), (2,)),      # three columns
     ((0, 1), (2,)),          # two, the balanced pairing
@@ -1235,17 +1242,65 @@ class StatsView(QWidget):
         """What one GRID column must be given to carry `groups` stacked in it."""
         return max(self._group_min_width(g) for g in groups)
 
-    def _choose_layout(self):
-        """The widest composition every column of which can actually be given its minimum.
+    def _group_height(self, group: int) -> int:
+        """How tall one section group's own content is, independent of the band it is dealt into.
 
-        Falls through PAGE_LAYOUTS in preference order; the single column is the floor and is
-        always legal, which is what keeps every quadrant (and the app's 845x414 minimum) on
-        exactly the page it has always rendered."""
+        The holder's layout hint rather than the widget's height: a spanning holder has already
+        been stretched to its band, so its `height()` is the answer to the question this is asked
+        in order to decide."""
+        return self._columns[group].layout().sizeHint().height()
+
+    def _span_fits(self, layout) -> bool:
+        """Would the column that SPANS the band fit inside the column that stacks beside it?
+
+        This is the invariant _place_columns' shape depends on, and it used to be argued in prose
+        from one recording's numbers instead of being asked. A grid column holding one group spans
+        every row; if that group is TALLER than the two stacked beside it, Qt grows both of those
+        rows to fit it and the difference is paid out as an EMPTY BAND inside the stack — a gap
+        between two sections, next to a full column.
+
+        It is not hypothetical and it is not exotic. Group 2 holds PER LAP, which takes one row per
+        clean lap and is uncapped, while groups 0 and 1 gain nothing per lap: measured on D24 (38
+        laps) the three stand 983 / 907 / 1338 px, so the stack leads by 626 px — about 26 rows at
+        the 24 px grid row. The owner's own 0062 recording has 65 clean laps, which puts group 2 at
+        2334 px against a 1894 px stack and opens a 130 px band in the LEFT column of the default
+        1440x900 window under ⌘⇧S. The layout that was correct for one recording was wrong for the
+        next one on the same disk.
+
+        So the fit is measured, per session, at refresh: the widths decide which compositions the
+        pane can pay for, and this decides which of those the CONTENT can. Form #3 stacks the two
+        growing groups together and spans the group that does not grow, so it is safe by
+        construction and remains available underneath."""
+        rows = max(len(groups) for groups in layout)
+        if rows < 2:
+            return True                       # one row: nothing spans, nothing can band
+        for gcol, groups in enumerate(layout):
+            if len(groups) != 1:
+                continue
+            stack = [g for other, gs in enumerate(layout) if other != gcol for g in gs]
+            if not stack:
+                continue
+            room = (sum(self._group_height(g) for g in stack)
+                    + (len(stack) - 1) * theme.SPACE_XS)
+            if self._group_height(groups[0]) > room:
+                return False
+        return True
+
+    def _choose_layout(self):
+        """The widest composition this pane can pay for AND this session's content can fill.
+
+        Falls through PAGE_LAYOUTS in preference order, asking two questions of each: can every
+        column be given its widest non-reflowing member (_grid_column_min), and does the column
+        that spans the band fit beside the one that stacks (_span_fits). The single column is the
+        floor and is always legal, which is what keeps every quadrant (and the app's 845x414
+        minimum) on exactly the page it has always rendered."""
         room = self._pane_width() - 2 * theme.SPACE_M
         for layout in PAGE_LAYOUTS:
+            if len(layout) == 1:
+                return layout
             need = (sum(self._grid_column_min(gc) for gc in layout)
                     + (len(layout) - 1) * PAGE_COL_GAP)
-            if len(layout) == 1 or need <= room:
+            if need <= room and self._span_fits(layout):
                 return layout
         return PAGE_LAYOUTS[-1]
 
@@ -1266,10 +1321,14 @@ class StatsView(QWidget):
         in it, so a column with one section beside a column with two would band the page: the lone
         section's top would sit level with the first of the pair, and the gap under the shorter of
         them would be the difference. Spanning gives every band exactly one item, and there is no
-        gap anywhere. The spanning column is always the SHORTER side (measured 983/907/1338 px per
-        group, so 1338 spans beside 983+907 and 983 spans beside 907+1338) — a spanning item taller
-        than the rows it spans is the one way this shape could still open a gap, because Qt would
-        grow both rows to fit it.
+        gap anywhere.
+
+        A SPANNING ITEM TALLER THAN THE ROWS IT SPANS IS THE ONE WAY THIS SHAPE CAN STILL OPEN A
+        GAP, because Qt grows both rows to fit it. This used to be argued away in prose here, from
+        one recording's measured heights — and the recording on the next line of the same disk
+        broke it (65 clean laps, a 130 px band at the app's default window). It is `_span_fits`
+        now: a question the packer asks of every candidate, per session, rather than a claim this
+        docstring makes on their behalf.
 
         THE MINIMUMS ARE INSTALLED ONLY WHEN COMPOSED. Left to equal stretch alone Qt would hand
         three EQUAL columns of 609 px to groups needing 440/718/610, which is exactly the P1 this
