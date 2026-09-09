@@ -27,7 +27,8 @@ pacer/                         # repo root
 ├── CMakeLists.txt             # root CMake (C++23): adds 3rdparty, pacer, tests, bindings
 ├── pyproject.toml             # project + pixi manifest (deps, tasks, editable binding package)
 ├── pixi.lock                  # pinned deps (osx-arm64 ONLY; lockfile format v7)
-├── .github/                   # CI workflow (build + test + lint on macos-14/arm64)
+├── .github/                   # CI: `build + test + lint` on every push, plus
+│                           #   `package-smoke` (.app build-only, on a tag / manual run)
 │
 ├── pacer/                     # ── CORE C++ LIBRARY (one folder = one static lib pacer::<name>) ──
 │   ├── datatypes/             #   value types (GPSSample, IMUSample, QuatSample) + CRTP operator mixins
@@ -44,6 +45,8 @@ pacer/                         # repo root
 │   └── pacer/                 #   the `pacer` Python package (binds the core; used by studio)
 │
 ├── tests/                     # Catch2 C++ suites + pure-Python studio tests (see below)
+├── packaging/                 # the .app/.dmg build (pacer.spec, build_macos.sh) — see PACKAGING.md
+├── docs/                      # the public pages: ACCURACY.md, FIRST_LAP.md, index.html + media/
 └── 3rdparty/                  # git submodules (gpmf-parser, nanobind)
 ```
 
@@ -143,7 +146,7 @@ Pixi tasks (`[tool.pixi.tasks]` in [pyproject.toml](pyproject.toml)):
 |---|---|
 | `pixi run build` | configure + build everything (cmake + Ninja → `build/Release`) |
 | `pixi run test` | CTest: the C++ Catch2 suites **and** the registered Python studio tests (the pre-PR gate) |
-| `pixi run test-fast` | the fast inner loop: `test` minus the one slow test (`test_export_video`, ~110 s) — ~18 s |
+| `pixi run test-fast` | the fast inner loop: `test` minus the two slowest suites (`test_export_video`, `test_compare_lifecycle`) — **94 of 96 tests, ~223 s** (two runs, 222.8 s and 222.9 s, 2026-09-09; the ~18 s this row used to claim predates #220, which re-measured the list and found it had been excluding the wrong test) |
 | `pixi run golden` | run **only** the synthetic core-math equivalence gate (`test_golden_synthetic`) — sub-second |
 | `pixi run smoke` | the CI E2E gate: full `StudioWindow` offscreen on the bundled sample (`_smoke --no-video`) |
 | `pixi run studio [-- files]` | the studio app (PySide6) — depends on `build` |
@@ -195,7 +198,7 @@ pixi run python -m studio.dev.golden_compare /tmp/before.json /tmp/after.json   
 **Run one test:** `pixi run ctest --test-dir build/Release -R test_<name>` — CTest injects the
 `PYTHONPATH=bindings/pacer` + `QT_QPA_PLATFORM=offscreen` env each suite needs (a bare
 `pixi run python tests/test_<name>.py` can miss it on a fresh checkout / for the offscreen-Qt
-suites). For the whole suite minus the slow video-export test, use `pixi run test-fast`.
+suites). For the whole suite minus its two slowest members, use `pixi run test-fast` — it is a third off, not a different order of magnitude, and `pixi run test` is still the pre-PR gate.
 
 **Inputs:** the studio app takes file paths on the CLI (`pixi run studio -- a.MP4`).
 

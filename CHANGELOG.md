@@ -4,6 +4,79 @@ All notable changes to Pacer are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims to follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO critical review.
+
+### Added
+
+- **The Stats page says which baseline each "loss" is measured against, and reconciles the page.**
+  Two columns one tab apart were both called a loss and were 3.8× apart in total (3.93 s here,
+  1.02 s on Coaching, and 1.3× to 2450× apart corner by corner) because one is measured against
+  each corner's own best and the other against your best lap. A caption under the CORNERS table
+  now names both and connects the page's three answers, with every number read live; the Coaching
+  headline carries "vs your best lap" on its face.
+- **The surfaces that leave the app carry the sample disclosure the in-app ones always had.** The
+  share card, the laps CSV trailer and the new stats HTML report state what the ideal lap is a
+  minimum over ("your best corners and straights over 24 laps"), and "Copy stats summary" puts the
+  same numbers on the clipboard.
+- **A themed report for a crash that happens twice.** The unhandled-exception dialog is shown once
+  per distinct failure; repeats, and anything raised off the GUI thread, are logged instead.
+
+### Changed
+
+- **The g-meter overlay is a dot, a trail and one number.** Eleven text items became two, and the
+  dial radius at the minimum size grew 36.5 → 51.5 px. A recording with no accelerometer gets no
+  dial at all instead of a complete instrument reading 0.0.
+- **⚠ means "don't trust this", everywhere.** The corner report's three biggest available gains
+  wore the same glyph the lap grid hangs on a GPS-dropout lap; they wear ▲ now. The grip map's
+  low end — the driver using the tyre he has — reads "committed" rather than "⚠ on limit".
+- **The welcome screen offers one door that works.** "Open demo" is hidden rather than dead when no
+  demo clip can be resolved offline, the primary action is the larger of the two at every size, and
+  the drop zone wears the app's own chevron instead of a stock download glyph.
+- **Honesty copy reads its numbers instead of quoting a range someone measured once.** The digest
+  tooltip said "the ideal is 0.33 to 2.67 s the faster of the two" on a screen where the two tiles
+  were 5.0 s apart; it now states the gap in front of it.
+
+### Fixed
+
+- **The ideal lap's headline was ~44% projection artifact.** Corner boundaries were being projected
+  in a mix of frames; one alignment frame per lap fixed it.
+- **The coaching phase bars were an `∫ds/v` estimate sitting beside a true-clock loss.** Measured on
+  the best lap, where there is no drift and nothing to compare, the same corner's own time differed
+  by up to +0.493 s between the two (r = −0.46 against apex speed: 1/v amplifies error exactly where
+  the kart is slowest). Four of eleven coaching rows listed a loss whose own breakdown said the
+  driver was faster. The thirds are read off the lap's own clock now and telescope exactly to the
+  corner time the Corners table shows.
+- **A recording could be its own previous best**, and the personal-best toast only ever fired once
+  per window.
+- **A second File ▸ Open that succeeded could strand the window**, and the reference-load guards
+  described in the docstring did not exist.
+- **One bad byte plus any write silently wiped every preference.**
+- **A sibling file that isn't video no longer kills the whole recording.**
+- **The video export built a top-level QWidget on the worker thread** — undefined behaviour in Qt.
+- **A full disk cost a second complete render.** A VideoToolbox failure retries on libx264, which is
+  right for an encoder problem and useless when there is no room: the retry re-rendered the whole
+  clip and failed for the same reason minutes later. It surfaces immediately now, and the failure
+  dialog says what to do instead of pasting ffmpeg's stderr as the explanation.
+- **A library or timing-line write that failed said so to a console, and to nobody else.** On an
+  unwritable app-support directory every session silently never entered the Library or the PB
+  history; a failed start-line save was indistinguishable from a good one. Both now say so on the
+  status bar, for as long as it is true.
+- **The ⌘⇧S stats dashboard composes at width**, and chart axis titles are legible (they painted at
+  1.19:1 against 5.7:1 for the tick labels beside them).
+
+### Engineering
+
+- The visual-QA harnesses jail every app-support seam, not just the library: `ui_capture` read the
+  operator's preferences (all six shots differed operator to operator) and `media_capture` *wrote*
+  one. `studio/dev/_jail.py` is the single seam list, pinned by `test_golden_hermetic`.
+- The Qt-free data core is enforced in both directions (`test_layering`), the golden dump
+  fingerprints `phase_report`, and the compare-strip width sweeps settle to a fixed point instead
+  of betting on a turn count.
+- `stats_view.refresh` builds each lap's corner alignment once rather than nine times.
+- Qt's own C++ warnings go through `logging` instead of a stderr a frozen `.app` cannot print to.
+
 ## [0.2.0] — 2026-09-06
 
 Everything merged since v0.1.0 — 195 pull requests, 458 commits — grouped by theme.
