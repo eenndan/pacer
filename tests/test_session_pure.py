@@ -46,6 +46,7 @@ from _synthetic import (  # noqa: E402
 )
 
 import pacer  # noqa: E402
+from studio import corner_model  # noqa: E402
 from studio import corners as corners_mod  # noqa: E402
 from studio._signal import (  # noqa: E402
     LAP_BAND_HI,
@@ -1111,14 +1112,17 @@ def _distinct_total_ideal_session():
     return s, (0, 1, 2), {0: 1000.0, 1: 1004.0, 2: 1002.0}
 
 
-def test_ideal_donor_admission_refuses_a_collapsed_segment():
-    """A lap may only donate a segment it actually DROVE. `corners.project_boundaries` clamps a
-    crossed spatial match onto its neighbour (np.maximum.accumulate), which can collapse a real
-    segment to ZERO width on one lap while it is full width on the others. That lap's time went to
-    the NEIGHBOURING segment, so taking its free 0 invents time nobody drove — measured on the
-    Sandown recording at 1 cell in 885, worth 0.111 s of a claimed 1.252 s.
+def test_ideal_donor_admission_refuses_a_collapsed_segment_AND_its_inflated_neighbour():
+    """A lap may only donate a segment whose window is a COMPARABLE PIECE OF TRACK.
 
-    Injected here at the clamp's own seam: the same pure function both `segment_times` and the
+    A projected boundary that lands short does two things at once, and the second one is why the
+    admission rule is symmetric (`corner_model.MAX_DONOR_SPAN_DEV`): the segment it closes collapses
+    (free 0 s nobody drove) and the segment it opens INFLATES by exactly the same width (time from
+    the neighbouring piece of track banked as if it belonged here). The old one-sided
+    `MIN_DONOR_SPAN_FRAC` floor caught only the first; on the D24 0060 pair the inflated halves ran
+    to 1.24× the expected span and polluted the neighbouring corner's Δ.
+
+    Injected here at the projection's own seam: the same pure function both `segment_times` and the
     admission span read, so the collapsed lap's time really does move to its neighbour."""
     base_s, _ids, totals = _distinct_total_ideal_session()
     honest = base_s.ideal_segment_bests().total
@@ -1151,12 +1155,98 @@ def test_ideal_donor_admission_refuses_a_collapsed_segment():
         # Without the guard the free 0 would have been taken: the naive min IS strictly smaller.
         naive = float(got.times.min(axis=0).sum())
         assert naive < got.total - 1e-6, (naive, got.total)
-        # The victim still donates the segments it did drive — the refusal is per CELL, not
-        # per lap, so one bad projection does not throw away a whole lap's evidence.
-        assert got.admitted[row].sum() == got.times.shape[1] - 1
+        # …and the OTHER half of the same displacement: segment j+1 opened early, so it is wider
+        # than this lap's own expected span and is refused too. (This is the assertion that moved
+        # when the floor became symmetric — under MIN_DONOR_SPAN_FRAC the inflated cell donated.)
+        assert not got.admitted[row, j + 1], "the inflated neighbour must be refused as well"
+        assert got.donors[j + 1] != victim
+        # The victim still donates every segment it did drive — the refusal is per CELL, not per
+        # lap, so one bad projection does not throw away a whole lap's evidence.
+        assert got.admitted[row].sum() == got.times.shape[1] - 2
+        assert got.admitted[row].sum() >= got.times.shape[1] - 2 > 0
     finally:
         corners_mod.project_boundaries = real_project
-    print("test_ideal_donor_admission_refuses_a_collapsed_segment OK")
+    print("test_ideal_donor_admission_refuses_a_collapsed_segment_AND_its_inflated_neighbour OK")
+
+
+# The admission band this file asserts against, as a LITERAL. Reading
+# `corner_model.MAX_DONOR_SPAN_DEV` here would move the assertion with the very constant it exists
+# to hold: the first version of the guard below did exactly that and passed with the constant at
+# 0.50 AND at 0.0. Update this deliberately, and only with the measurement that justifies it.
+_ADMISSION_BAND = 0.05
+
+
+def test_a_shrunken_window_cannot_win_a_segment_however_fast_it_reads():
+    """THE ADMISSION HALF'S GUARD, in the flagship number's own failure shape.
+
+    The defect that shipped for a week was not a COLLAPSE — the test above covers that — but a
+    SHRINK: on the D24 0060 pair the winner of `C5 → C6` had been measured over 31 m of a 42.8 m
+    straight and won the segment on the missing 11 m. Neither the partition identity
+    (`segment_times`' assertion) nor the decomposition sum could see it; both still held exactly,
+    because the lost time had moved into the neighbouring segment. The only thing that can see it
+    is a check on the WINDOW.
+
+    Injected at the projection's seam: one lap's window for segment j is narrowed 20 %. The test
+    FIRST asserts that this makes its time there the fastest in the session — so the guard can
+    never be vacuously satisfied by a fixture where nothing is trying to win — and then asserts
+    that it does not win, is not admitted, and that the segment's actual winner was measured on a
+    window within `_ADMISSION_BAND` of ITS OWN expected span, read back from `donor_span` (the
+    field the ideal CURVE is drawn from, not the bool the admission wrote).
+
+    SCOPE: the admission half only. This test replaces the projection, so it cannot see a frame
+    regression; that is
+    tests/test_corners.py::test_projection_never_mixes_two_frames_within_one_lap's job. Between
+    them they cover the two halves, and neither covers the other's."""
+    shrink = 0.20
+    j = 2                       # the straight between C1 and C2 — real on every lap
+    victim = 1                  # the fast-early / slow-late lap
+    _base_s, _ids, totals = _distinct_total_ideal_session()
+    real_project = corners_mod.project_boundaries
+
+    def shrinking(d_ref, total_ref, total_lap, **kw):
+        out = np.asarray(real_project(d_ref, total_ref, total_lap, **kw), float)
+        # edges = [0, *out, total_lap], so segment j spans out[j-1]..out[j]. Pull the far edge in
+        # by 20 % of the segment: a real, non-degenerate window that is simply too short.
+        if abs(total_lap - totals[victim]) < 1e-6 and len(out) > j:
+            out = out.copy()
+            out[j] -= shrink * (out[j] - out[j - 1])
+        return out
+
+    corners_mod.project_boundaries = shrinking
+    try:
+        s2, _ids2, _t = _distinct_total_ideal_session()
+        got = s2.ideal_segment_bests()
+        assert got is not None
+        row = got.lap_ids.index(victim)
+        col = got.times[:, j]
+        # NON-VACUITY: the shrunken cell really is the fastest reading of that segment, so the
+        # only thing standing between it and the composite is the admission rule.
+        assert col[row] == col.min() and (col[row] < np.delete(col, row)).all(), (
+            "fixture must make the shrunken cell the fastest — otherwise this proves nothing")
+        assert not got.admitted[row, j], "a 20 %-short window must not be admitted"
+        assert got.donors[j] != victim, "…and must not win the segment"
+
+        total_ref = s2.corners.basis()[1]
+        ref_span = np.diff(np.asarray(got.s_edges, float) * total_ref)
+        worst, checked = 0.0, 0
+        for k, donor in enumerate(got.donors):
+            if donor is None or ref_span[k] <= corner_model.POINT_SPAN_M:
+                continue                 # a POINT segment admits everyone by design
+            lo, hi = got.donor_span[k]
+            dist, _sp, _el = s2._lap_arrays(donor)
+            expected = ref_span[k] * (float(dist[-1]) / total_ref)
+            dev = abs((hi - lo) - expected) / expected
+            worst = max(worst, dev)
+            checked += 1
+            assert dev <= _ADMISSION_BAND + 1e-9, (
+                f"segment {k} ({got.display_label(k)}) was won on a {hi - lo:.2f} m window where "
+                f"the donor's own expected span is {expected:.2f} m ({dev * 100:.1f} % off)")
+        assert checked, "fixture must have real segments to check"
+    finally:
+        corners_mod.project_boundaries = real_project
+    print(f"test_a_shrunken_window_cannot_win_a_segment_however_fast_it_reads OK "
+          f"(shrunken cell {col[row]:.3f}s beat every other lap and was still refused; "
+          f"{checked} winners within {_ADMISSION_BAND * 100:.0f} %, worst {worst * 100:.2f} %)")
 
 
 # --- the DECOMPOSITION: from taunt into plan (N8) -----------------------------------------

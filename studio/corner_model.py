@@ -34,17 +34,114 @@ _UNSET = object()
 # A point carries ~0 s on every lap, so every lap "wins" it with 0 and it contributes nothing to
 # the composite either way — it must NOT be mistaken for a lap that collapsed (below).
 POINT_SPAN_M = 0.5
-# A lap may donate a segment only if it actually DROVE it. `corners.project_boundaries` clamps a
-# crossed spatial match onto its neighbour (np.maximum.accumulate), which can collapse a real
-# segment to ZERO width on ONE lap while it is full width on all the others. That lap's time for
-# the segment went to the NEIGHBOURING segment, so a naive min would bank a free 0 that nobody
-# drove — measured at 0.111 s of a claimed 1.252 s on the Sandown recording.
+# A lap may donate a segment only if it drove a COMPARABLE PIECE OF TRACK there. Every lap's
+# segment times sum exactly to its lap time (corners.segment_times asserts it), so a segment whose
+# projected window is short on one lap has simply pushed that time into its neighbour — the pair
+# still sums, and a per-segment minimum over the laps then banks the short window's time without
+# ever paying for the long one. The minimum buys the measurement window, not the driving.
 #
-# Threshold evidence (four real recordings, 2,929 (lap, segment) cells): every cell that is not a
-# hard collapse carries ≥ 0.93 of the segment's reference span, and every collapsed one carries
-# ≤ 0.0001. Any threshold in (0.01, 0.9) selects exactly the same cells; 0.5 sits in the middle of
-# a gap four orders of magnitude wide, so this is a separator, not a tuned knob.
-MIN_DONOR_SPAN_FRAC = 0.5
+# The test is SYMMETRIC and against the lap's OWN expected span: a segment is comparable when its
+# projected width is within MAX_DONOR_SPAN_DEV of `ref_span × total_lap / total_ref` — the width
+# the reference segment has after this lap's uniform line-length scaling. Inflated windows are
+# refused for the same reason shrunken ones are: they are the other half of every shrink, and their
+# time pollutes the neighbouring corner's Δ.
+#
+# THIS REPLACES `MIN_DONOR_SPAN_FRAC = 0.5`, A ONE-SIDED FLOOR CALIBRATED ON A FIXTURE THAT COULD
+# NOT EXPRESS THE PROBLEM. Its note claimed "every cell that is not a hard collapse carries ≥ 0.93
+# of the segment's reference span, and every collapsed one ≤ 0.0001 … a separator, not a tuned
+# knob". That is true of the recording it was measured on (D24 0062: 1 cell in 1,625 below 0.93)
+# and false of the owner's other one: on the D24 0060 pair 58 of its 874 non-point cells sit
+# outside ±7 %, the per-segment WINNERS run down to 0.729 of the reference span, and 10 of 23
+# winners are below 0.93. The floor at 0.5 admitted every one of them. (Non-point cells only: a
+# POINT column has ref_span 0, so "deviation from expected" is 0/0 there and the ratio is not
+# defined — every all-950 count of this quantity is a category error.)
+#
+# ── WHAT THIS TEST IS: A BIAS TRIMMER, NOT A CLASSIFIER ───────────────────────────────────────
+# It measures deviation from UNIFORM line-length scaling, which is not the same quantity as
+# projection error, and the gap is measurable. Scoring every (lap, segment) cell against the
+# directly matched spatial position of BOTH its edges — ground truth to within
+# corners.SPATIAL_MATCH_MAX_M — on the three D24 fixtures:
+#
+#   fixture     cells w/ true span err >5 %   of those REFUSED    clean cells REFUSED (FPR)
+#   0060 pair              59                     0   (0 %)          39 / 399   (10 %)
+#   0060 ch 1              42                     0   (0 %)          28 / 286   (10 %)
+#   0062                   25                     0   (0 %)          10 / 1462  ( 1 %)
+#
+# Recall is 0 % STRUCTURALLY: every convictable cell sits on a lap below
+# corners.NORMALIZED_DRIFT_MAX, whose projection IS `ref_span × total_lap/total_ref`, so its
+# deviation from that is zero by construction and this test can never reject it however misaligned
+# the window is. And those laps are not clean: they carry a median 1.16 % / p90 9.02 % true span
+# error on the pair (1.03 / 9.42 on ch 1, 0.48 / 2.92 on 0062), 5 cells worse than −10 %.
+# Conversely, of the cells it DOES refuse, every one that can be scored at all was refused on
+# directly measured track: pair 39 scorable of 70 refusals, all 39 with both edges on matched
+# knots; ch 1 28 of 50, all 28; 0062 10 of 10. (The rest — 31 and 22 — have at least one
+# interpolated edge, so there is no ground truth to convict or acquit them with.) It removes a
+# downward bias from the minimum; it does not identify bad cells, and nothing here should be read
+# as if it did.
+#
+# ── CALIBRATION, AND HOW WIDE IT REALLY IS ────────────────────────────────────────────────────
+# The arbiter is each recording's own order statistic, fitted on its BELOW-gate laps (which every
+# candidate projects identically) and extrapolated to the full lap count. On the 0060 pair it reads
+# 0.623 s per doubling → 65.228 s at N = 38, and the candidates score:
+#
+#   admission         ideal      vs arbiter    winner span-fraction min
+#   0.5 floor (old)   62.869 s     −2.359 s           0.729
+#   ±10 %             64.321 s     −0.907 s           0.905
+#   ±7 %              64.854 s     −0.374 s           0.930
+#   ±5 % (shipped)    65.149 s     −0.079 s           0.950
+#   ±3 %              65.291 s     +0.063 s           0.970
+#
+# DO NOT READ −0.079 AS "THE BIAS". The same measurement is +0.252 on 0060 chapter 1 (same track,
+# same car, same session) and −0.255 on 0062: the cross-fixture spread is ±0.25 s, three times the
+# pair's residual, and that spread — not the pair's number — is this constant's honest width.
+# The arbiter is not artifact-free either; it is fitted on exactly the laps the paragraph above
+# shows this test cannot police. 0.05 is where the pair's bias is smallest while the other two
+# straddle zero; anything in [0.03, 0.07] is defensible on this evidence.
+#
+# ── WHAT IT IS WORTH, SPLIT HONESTLY ──────────────────────────────────────────────────────────
+# Against the pre-fix number, frame repair vs this constant: 0060 pair +0.981 / +1.299 s
+# (43 % / 57 %); 0060 ch 1 +0.824 / +1.607 (34 % / 66 %); 0062 +0.000 / +0.217 (0 % / 100 %).
+# THIS CONSTANT IS THE LARGER HALF ON ALL THREE. The frame repair is what makes it meaningful — it
+# is what stops one lap carrying two frames — but crediting the headline move to the projection
+# alone is wrong.
+#
+# ── DEFERRED ─────────────────────────────────────────────────────────────────────────────────
+# Because corners.NORMALIZED_DRIFT_MAX keeps below-drift laps on the normalized projection, this
+# test is inert on 22 of the pair's 38 laps. What the gate costs, measured LIKE FOR LIKE — gated
+# vs warp-every-lap at the SAME admission tolerance, so the two changes are not conflated:
+#
+#              pair      ch 1      0062
+#   at ±5 %   +0.316 s  +0.347 s  −0.071 s
+#   at ±3 %   +0.501 s  +0.670 s  +0.060 s
+#
+# (The ±5 % row is also the move against the SHIPPED number, since that is the shipped tolerance.
+# An earlier draft quoted +0.644/+0.712/+0.110 for the ±3 % row by differencing against the ±5 %
+# shipped value, which folds the tolerance change into the gate's residual — hence this note about
+# which two things are being differenced.) That residual is the price of the byte-identity the
+# drift gate buys, and it is the same follow-up corners.NORMALIZED_DRIFT_MAX's note names.
+MAX_DONOR_SPAN_DEV = 0.05
+# ── SUB-RESOLUTION SEGMENTS: A KNOWN LIMITATION, DELIBERATELY NOT "FIXED" ─────────────────────
+# On a 2.3 m sliver the ±5 % band is ±0.11 m, an order of magnitude under the
+# ±corners.SPATIAL_MATCH_MAX_M the boundary matches are guaranteed to — so admission there is
+# decided by noise, and segment 4 of the 0060 pair refuses 4 of its 38 laps arbitrarily. 16 of the
+# pair's 23 real segments have a band under that tolerance at all.
+#
+# Exempting them (as POINT segments are exempt) was implemented and MEASURED, then reverted:
+#
+#   exempt ref_span ≤ 3.0 m   pair 65.145 (−0.004)  ch1 66.102 (0.000)  0062 66.781 (0.000)
+#     …but the pair's WINNER span-fraction floor falls 0.944 → 0.850, because a 2.3 m segment is
+#     then won on a window 0.35 m off — noise, admitted into a MINIMUM.
+#   exempt band < 3.0 m       pair 64.164 (−0.984)  ch1 65.037 (−1.066)  0062 66.563 (−0.217)
+#     …which exempts the 42.8 m straight this whole repair is about (band ±2.14 m) and reverts
+#     most of the fix.
+#
+# The narrow version buys 0.004 s of principle and costs a downward bias; the wide version undoes
+# the repair. AN ADMISSION RULE FEEDING A MINIMUM MUST FAIL CLOSED: rejecting a lap arbitrarily
+# only removes a candidate (bounded here by one 0.15 s segment), while admitting one arbitrarily
+# lets noise win the segment — the same failure direction as the defect this constant exists for.
+# So the noise is real, its cost is bounded and upward, and it stays. Resolving it properly means
+# not cutting sub-sample segments in the first place (a partition-design change: it moves
+# `IdealSample.corners`/`segments`, which every ideal-lap disclosure prints).
 
 
 class IdealSample(NamedTuple):
@@ -142,7 +239,7 @@ class SegmentBests:
       lap_ids   — the laps that contributed a row, in session order (see CornerModel.segment_bests
                   for the set).
       times     — (len(lap_ids), 2N+1) float: each lap's own segment times.
-      admitted  — (len(lap_ids), 2N+1) bool: which cells may donate (see MIN_DONOR_SPAN_FRAC).
+      admitted  — (len(lap_ids), 2N+1) bool: which cells may donate (see MAX_DONOR_SPAN_DEV).
       bests     — 2N+1 minima over the admitted cells.
       donors    — 2N+1 lap ids, the argmin per segment; None for a POINT segment (best == 0),
                   where every lap ties at 0 and naming a winner would be arbitrary.
@@ -301,12 +398,12 @@ class SegmentBests:
         top-N slice that does not say so is a table contradicting the tile above it.
 
         One exception, and it is a correctness exception rather than a display one: a segment the
-        subject lap is not ADMITTED on is dropped. `corners.project_boundaries` can collapse a
-        segment to zero width on one lap and push its time into the neighbour, so that lap's
-        `gain` there is measured against a time it never drove (and its neighbour's is inflated
-        by the same amount). The pair still sums correctly — which is why the headline is safe —
-        but neither number is advice. Not observed on any of the owner's recordings; guarded
-        because the admission rule exists precisely because it does happen."""
+        subject lap is not ADMITTED on is dropped. A projected window that is materially narrower
+        or wider than the lap's own expected span has pushed time across the boundary into its
+        neighbour, so that lap's `gain` there is measured against a time it never drove (and its
+        neighbour's is inflated by the same amount). The pair still sums correctly — which is why
+        the headline is safe — but neither number is advice. Observed on 7.4 % of the D24 0060
+        pair's cells; see MAX_DONOR_SPAN_DEV."""
         gains = self.gains_vs(lap_id)
         beats = self.beat_counts(lap_id)
         if gains is None or beats is None:
@@ -523,8 +620,11 @@ class CornerModel:
         following the precedent at stats_panel/export_data.
 
         Each lap's times come from `corners.segment_times`, which asserts they sum exactly to
-        that lap's time — the guarantee that makes a cross-lap composite legitimate. A lap is
-        refused a segment whose projected span collapsed on it (MIN_DONOR_SPAN_FRAC).
+        that lap's time. That sum is NECESSARY for a cross-lap composite and not sufficient: it
+        holds just as well when a projected window is short and its time has moved into the
+        neighbour, which is exactly the defect `corners.project_boundaries` documents. A lap is
+        refused any segment whose projected span is not comparable to its own expected span
+        (MAX_DONOR_SPAN_DEV) — that is the sufficiency half.
 
         Cached; cleared on re-segment (`invalidate`)."""
         if self._segment_bests_cache is not _UNSET:
@@ -545,9 +645,10 @@ class CornerModel:
         ref_edges.append(float(total_ref))
         ref_span = np.diff(np.asarray(ref_edges, float))
         # A POINT segment (corner starts on the line, or two corners nearly touch) carries ~0 s on
-        # every lap; nobody can collapse it further, so every lap is admitted there.
+        # every lap; nobody can collapse it further, so every lap is admitted there. Sub-resolution
+        # segments are deliberately NOT exempt — see MAX_DONOR_SPAN_DEV's sub-resolution paragraph
+        # for the two exemptions that were implemented, measured and reverted.
         is_point = ref_span <= POINT_SPAN_M
-        floor = np.where(is_point, -1.0, MIN_DONOR_SPAN_FRAC * ref_span)
 
         labels = ["start"]
         for i, c in enumerate(corner_list):
@@ -556,7 +657,7 @@ class CornerModel:
             labels.append(f"{c.label}-{nxt}")
 
         ref_trace = self._best_trace()
-        rows, spans, edges, lap_ids = [], [], [], []
+        rows, spans, edges, lap_ids, expected = [], [], [], [], []
         for lid in self._composite_lap_ids():
             dist, _speed_kmh, elapsed = self._lap_arrays(lid)
             if len(dist) < 2 or float(dist[-1]) <= 0:
@@ -573,13 +674,19 @@ class CornerModel:
             lap_edges = np.concatenate(([0.0], interior, [total_lap]))
             edges.append(lap_edges)
             spans.append(np.diff(lap_edges))
+            # The width each reference segment has on THIS lap under its uniform line-length
+            # scaling — what the projected span is compared against (see MAX_DONOR_SPAN_DEV).
+            expected.append(ref_span * (total_lap / total_ref) if total_ref > 0 else ref_span)
             lap_ids.append(lid)
         if not rows:
             return None
 
         times = np.asarray(rows, float)
         edges = np.asarray(edges, float)
-        admitted = np.asarray(spans, float) >= floor[None, :]
+        expected = np.asarray(expected, float)
+        admitted = (is_point[None, :]
+                    | (np.abs(np.asarray(spans, float) - expected)
+                       <= MAX_DONOR_SPAN_DEV * expected))
         # A segment no lap is admitted on cannot happen while a point segment admits everyone,
         # but a min over an empty set would be inf — fall back to the whole column rather than
         # poison the total.
@@ -674,7 +781,19 @@ class CornerModel:
     def corner_entry_media_time(self, lap_id: int, cid: int) -> float | None:
         """Media-clock time (s) `lap_id` enters corner `cid` — the jump-to seek target. Projects
         the corner's enter point onto this lap's odometer and reads elapsed->media there. None if
-        unknown/degenerate. Absolute (lap start + elapsed)."""
+        unknown/degenerate. Absolute (lap start + elapsed).
+
+        Goes through the SAME drift-gated alignment as its siblings (`corners.project_boundaries`
+        with the whole partition as its frame, so the warp is the one `lap_corner_stats` built). On
+        a drifted lap the bare normalized fraction it used before landed the seek up to ~12 m from
+        the corner entry the Corners table was pointing at; measured move on the D24 0060 pair,
+        0.373 s.
+
+        IT IS NOT THE LAST UN-GATED PROJECTION IN THE APP. `coaching._win` still scales a corner
+        window by `lap_total / corner_dist_total` with no drift gate and no traces, and its output
+        feeds `Reason.brake_extra_s` / `coast_extra_s` — so a coaching row can carry a warp-derived
+        phase triple beside a normalized-frame reason. Pre-existing and untouched here; migrating
+        `_win` onto `lap_alignment` is the follow-up."""
         basis = self.basis()
         if basis is None or not basis[0]:
             return None
@@ -689,5 +808,8 @@ class CornerModel:
         total_lap = float(dists[-1])
         if total_lap <= 0:
             return None
-        d_enter = corner.enter / total_ref * total_lap  # project onto THIS lap's odometer
+        frame = [b for c in corner_list for b in (float(c.enter), float(c.exit))]
+        d_enter = float(corners.project_boundaries(
+            [float(corner.enter)], total_ref, total_lap,
+            traces=self._lap_traces(lap_id, self._best_trace()), frame=frame)[0])
         return float(np.interp(d_enter, dists, times))
