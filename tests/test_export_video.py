@@ -1635,6 +1635,82 @@ def monkeypatch_restore():
     return None
 
 
+def test_a_full_disk_does_not_trigger_a_second_doomed_render():
+    """§7.5: `run()` falls back from the hardware encoder to libx264 whenever a VideoToolbox encode
+    fails. That is right for a codec/session problem and useless when the DISK IS FULL — the retry
+    re-renders the whole clip on the slower software encoder and fails for the same reason minutes
+    later. The user's disk does not get emptier while they wait.
+
+    ffmpeg reports it as a stderr tail rather than an errno, so the discrimination is on the words
+    the encoder, the muxer and the OS actually use."""
+    from studio import export_video as EV
+
+    assert EV.is_out_of_space("av_interleaved_write_frame(): No space left on device")
+    assert EV.is_out_of_space("ENOSPC")
+    assert EV.is_out_of_space("Disk full")
+    assert not EV.is_out_of_space("Error encoding frame: -12905")
+    assert not EV.is_out_of_space("")
+    assert not EV.is_out_of_space(None)
+
+    # ...and the fallback is skipped: a VT encode error that says "no space" must raise instead of
+    # constructing a second Renderer.
+    built = []
+    real_init = EV.Renderer.__init__
+
+    def _spy(self, session, spec):
+        built.append(spec)
+        return real_init(self, session, spec)
+
+    class _Doomed(EV.Renderer):
+        def _run_chunked(self, progress, cancel, chunk):
+            raise EV._EncodeError(EV.VT_H264,
+                                  "av_interleaved_write_frame(): No space left on device")
+
+    r = object.__new__(_Doomed)
+    r._fallback_allowed = True
+    r._encoder = EV.VT_H264
+    r._session = None
+    r._spec = None
+    r.cancel = lambda: None
+    EV.Renderer.__init__ = _spy
+    try:
+        raised = None
+        try:
+            EV.Renderer.run(r)
+        except BaseException as exc:  # noqa: BLE001 — the TYPE is what is under test
+            raised = exc
+    finally:
+        EV.Renderer.__init__ = real_init
+    # Caught broadly on purpose: without the discrimination this falls through to the fallback and
+    # dies constructing the second Renderer, so a narrow `except RuntimeError` would report an
+    # unrelated AttributeError instead of the thing that actually broke.
+    assert isinstance(raised, RuntimeError), (
+        "a full disk must surface as a clean RuntimeError instead of falling through to the "
+        f"software retry (got {type(raised).__name__ if raised else None}: {raised})")
+    assert "No space left" in str(raised), raised
+    assert built == [], ("a second Renderer was constructed for a render that cannot succeed",
+                         built)
+    print("ok enospc: a full disk surfaces immediately instead of re-rendering")
+
+
+def test_the_export_failure_dialog_speaks_english_not_ffmpeg():
+    """The failure body used to be the raw stderr tail: "[h264_videotoolbox @ 0x…] Error encoding
+    frame: -12905" as the explanation of what to do next. Plain language first, the encoder's own
+    words behind Details — the shape the load-failure table and the crash report already use."""
+    from studio.app import StudioWindow as W
+
+    full = W._export_failure_message("av_interleaved_write_frame(): No space left on device",
+                                     "/Users/x/Movies/lap.mp4")
+    assert "no room left" in full.lower() and "/Users/x/Movies" in full, full
+    denied = W._export_failure_message("Permission denied", "/x/y.mp4")
+    assert "isn't allowed to write" in denied, denied
+    gone = W._export_failure_message("No such file or directory", "/x/y.mp4")
+    assert "isn't there any more" in gone, gone
+    generic = W._export_failure_message("Error encoding frame: -12905", "/x/y.mp4")
+    assert "encoder stopped partway" in generic and "-12905" not in generic, generic
+    print("ok export-copy: every case names an action, and none of them is an ffmpeg tail")
+
+
 if __name__ == "__main__":
     import inspect
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
