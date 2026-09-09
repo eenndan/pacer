@@ -531,7 +531,8 @@ LAP_ROLE = Qt.UserRole + 1  # the lap id (stable across sorts), stored on the La
 
 # The two stitched targets that used to sit in a SESSION-BESTS footer below this table
 # (theoretical best / best rolling) now live on the Stats page, each beside the data it is derived
-# from: `stats_panel.t_theoretical` inside SECTORS (whose bests it sums) and `t_rolling` in PACE.
+# from: `stats_panel.t_theoretical` in the IDEAL LAP block (beside `t_ideal_gap`) and
+# `t_rolling` in PACE. It sat inside SECTORS when this note was written; the note did not move.
 # The footer cost this grid 63px — two lap rows — on every recording, could not be collapsed or
 # hidden, and repeated numbers the Stats page was already the home for.
 

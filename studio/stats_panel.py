@@ -351,7 +351,8 @@ PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropou
                 "gives away to your demonstrated pace.")
 # The two stitched TARGETS (moved here from the Laps tab's SESSION-BESTS footer, which cost the
 # lap grid 63px — two lap rows — on every recording). Each now sits with the data it is derived
-# from: the rolling best beside the other lap-time paces, the theoretical best inside SECTORS,
+# from: the rolling best beside the other lap-time paces, the theoretical best in the IDEAL LAP
+# block beside the gap it explains (it was inside SECTORS when this line was written),
 # whose per-sector bests it literally sums.
 ROLLING_TOOLTIP = ("Best rolling — the fastest single complete loop regardless of where it "
                    "starts: the minimum time from passing any track position to passing it "

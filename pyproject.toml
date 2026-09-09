@@ -48,7 +48,9 @@ test = { cmd = "ctest --test-dir build/Release --output-on-failure --timeout 480
 # So the named exclusion had become the SIXTH slowest test (its real-ffmpeg cases were trimmed and
 # most now run on a 1.5 s synthetic lavfi clip), while the actual outlier was not excluded at all.
 #
-# Be honest about what this buys: excluding both leaves 84 tests in ~220 s. That is a third off, not
+# Be honest about what this buys: excluding both leaves 94 tests in ~223 s (re-measured
+# 2026-09-09 — the suite has grown by ten tests since the table above was taken, and the
+# saving has stayed proportionally the same). That is a third off, not
 # the ~18 s the old comment promised — the remaining time is spread thin across offscreen-Qt suites
 # that each build a real StudioWindow, and there is no single test left worth cutting. Do not add
 # exclusions to chase a number; re-measure and update this table instead.
