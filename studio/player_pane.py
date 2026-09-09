@@ -31,7 +31,12 @@ from .gmeter_overlay import GMeterOverlay
 # The g-meter overlay sits in the TOP-RIGHT corner of the video, sized as a FRACTION of the
 # video widget (not a fixed size) so it scales with the window and never dominates the frame.
 _OVERLAY_FRAC = 0.22        # target width = this fraction of the video width
-_OVERLAY_ASPECT = 1.12      # height / width (a touch taller than wide: title + dial + numbers)
+# height / width. A touch taller than wide because the card is the dial plus the band under it
+# that holds the |g| readout — the title strip and the ring of cardinal numbers this used to name
+# are both gone (see gmeter_overlay, review §6.5). The RATIO is unchanged: GMeterOverlay still
+# floors itself at 120x140, and the redesign spends the room it freed on a bigger dial rather than
+# on a differently-shaped card.
+_OVERLAY_ASPECT = 1.12
 _OVERLAY_MIN_W = 120        # don't shrink below something legible
 _OVERLAY_MAX_W = 240        # don't grow huge on a very wide window
 _OVERLAY_PAD = 12           # px inset from the video corner
@@ -366,8 +371,9 @@ class PlayerPane(QWidget):
             self._position_gmeter()
             self.gmeter.set_g(g)
 
-    def set_gmeter_source(self, source: str, long_source: str | None = None):
-        self.gmeter.set_source(source, long_source)
+    # (No `set_gmeter_source` here any more. The dial's axis provenance was a tag on its face; it
+    # is now one sentence on the g-meter toggle's tooltip, which VideoView owns — so the fact never
+    # needs to reach a pane. See video_view.set_gmeter_source and review §6.5.)
 
     def set_gmeter_lap(self, lap_id):
         """Tell the overlay which lap drives it so its max-G envelope resets at the lap boundary."""
