@@ -511,6 +511,40 @@ def _settle(n=8):
         _APP.processEvents()
 
 
+def _settle_strip(view, n=6, cap=80):
+    """Pump until the compare strip's geometry STOPS changing, instead of a fixed turn count.
+
+    The two width sweeps below used `_settle(6)`, a number measured once against an already-warm
+    tree. A fixed count is a bet on the machine, and in a full-suite run the bet loses: both sweeps
+    have failed at their FIRST swept width (301 / 303) reporting overhangs of 6 px and 185 px —
+    and 185 px is not a layout one pass behind, it is the 760 px construction geometry, i.e. the
+    resize had not been applied at all. Alone, or in a 36-test slice, the same code passes every
+    time; only the full 96-test run is slow enough to lose. So the failure was never about the
+    strip's budget, which is what these tests exist to check.
+
+    Pumping to a FIXED POINT is strictly stronger than pumping six times: the assertions are
+    unchanged and they now run against geometry that has provably stopped moving. `n` is kept as a
+    floor so a tree that settles instantly still gets the turns the original comment describes
+    (a `setMinimumWidth` inside a `resizeEvent` posts a LayoutRequest handled on a LATER turn), and
+    a layout that genuinely never converges fails loudly here rather than as a confusing overhang.
+    """
+    def snapshot():
+        return [tuple(w.geometry().getRect())
+                for cell in (view._cell_a, view._cell_b)
+                for w in (cell.caption, cell.picker, cell.badge)]
+
+    previous = None
+    for turn in range(cap):
+        _APP.processEvents()
+        current = snapshot()
+        if turn + 1 >= n and current == previous:
+            return
+        previous = current
+    raise AssertionError(
+        f"the compare strip's geometry never settled: still moving after {cap} event turns at "
+        f"view width {view.width()} px")
+
+
 # Views built by the tests below are kept alive to the end of the run: a garbage-collected
 # VideoView leaves its PlayerPane's event filter installed on a half-destroyed widget, which
 # prints a Qt override traceback from an unrelated later test.
@@ -559,10 +593,10 @@ def test_l8_01_compare_strip_never_overlaps_and_keeps_the_lap_time():
     view = _compare_view(760)
     for width in range(300, 761, 1):
         view.resize(width, 420)
-        # SIX turns, not two: setMinimumWidth inside a resizeEvent posts a LayoutRequest that is
-        # processed on a LATER turn, so a two-turn settle reads the PREVIOUS width's geometry and
-        # reports an overhang that never paints. (Measured: the tree converges in one layout pass.)
-        _settle(6)
+        # Pump to a FIXED POINT, not a fixed count: setMinimumWidth inside a resizeEvent posts a
+        # LayoutRequest processed on a LATER turn, so a short settle reads the PREVIOUS width's
+        # geometry and reports an overhang that never paints. See _settle_strip.
+        _settle_strip(view)
         for side, cell in ((0, view._cell_a), (1, view._cell_b)):
             assert _overlap(cell) == 0, (
                 f"side {side} at view width {width}: the strip's children overlap by "
@@ -670,10 +704,10 @@ def test_the_picker_is_capped_by_its_pane_not_by_a_constant():
     view = _compare_view(760, labels_b=(label,))
     for width in range(300, 761, 1):
         view.resize(width, 420)
-        # SIX turns, not two: setMinimumWidth inside a resizeEvent posts a LayoutRequest that is
-        # processed on a LATER turn, so a two-turn settle reads the PREVIOUS width's geometry and
-        # reports an overhang that never paints. (Measured: the tree converges in one layout pass.)
-        _settle(6)
+        # Pump to a FIXED POINT, not a fixed count: setMinimumWidth inside a resizeEvent posts a
+        # LayoutRequest processed on a LATER turn, so a short settle reads the PREVIOUS width's
+        # geometry and reports an overhang that never paints. See _settle_strip.
+        _settle_strip(view)
         cell = view._cell_b
         assert cell.picker.minimumWidth() <= cell.width(), (
             f"at view width {width} the picker's own floor ({cell.picker.minimumWidth()} px) "
