@@ -1069,7 +1069,7 @@ def test_the_ideal_falls_as_laps_are_added_which_is_why_the_sample_is_on_screen(
     seen = 0
     for keep in ([0, 1], [0, 2], [1, 2], [0], [1], [2]):
         sub, _ = make_ideal_session()
-        # The service's INJECTED valid-lap accessor — the seam `_composite_lap_ids` reads, i.e.
+        # The service's INJECTED valid-lap accessor — the seam `_clean_lap_ids` reads, i.e.
         # the same one a shorter recording moves. Re-seed the hand-built basis afterwards:
         # `invalidate()` (which seed_corner_basis calls) drops it along with everything else, and
         # a synthetic straight-line lap has no real curvature to re-detect.
@@ -1077,7 +1077,7 @@ def test_the_ideal_falls_as_laps_are_added_which_is_why_the_sample_is_on_screen(
         seed_corner_basis(sub, _IDEAL_CORNERS)
         got = sub.ideal_total()
         smp = sub.ideal_sample()
-        # `_composite_lap_ids` appends the best lap when the subset excluded it, so the count the
+        # `_clean_lap_ids` appends the best lap when the subset excluded it, so the count the
         # surface prints is the set actually minimised over — never the set that was asked for.
         assert smp.laps == len(set(keep) | {s.best_lap_id()}), (keep, smp)
         assert got >= full - 1e-12, (
@@ -1622,7 +1622,7 @@ def test_best_excludes_dropout_lap_then_falls_back():
     split0, split1 = s.lap_sector_splits(0)[0], s.lap_sector_splits(1)[0]
     assert split0 < split1, (split0, split1)        # the dropout lap really is faster ...
     assert s.session_best_splits() == [split1]      # ... yet the clean (slower) lap owns purple
-    # The ideal excludes the dropout lap by the SAME rule (CornerModel._composite_lap_ids); with
+    # The ideal excludes the dropout lap by the SAME rule (CornerModel._clean_lap_ids); with
     # no corner basis on this fixture there is no partition, so it reports None.
     assert s.theoretical_best() is None
 

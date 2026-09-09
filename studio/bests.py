@@ -122,7 +122,7 @@ class Bests:
         n_splits = self._sector_line_count() + 1
         # Dropout laps are excluded (see best_candidate_ids): a reconstructed-distance lap must
         # not own a purple session-best split. (The ideal lap excludes them by the same rule, in
-        # CornerModel._composite_lap_ids.)
+        # CornerModel._clean_lap_ids.)
         all_splits = [self._lap_sector_splits(lap_id) for lap_id in self.best_candidate_ids()]
         best: list[float | None] = []
         for i in range(n_splits):

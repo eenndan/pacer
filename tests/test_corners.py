@@ -412,6 +412,50 @@ def _bare_corner_session():
     return s
 
 
+def test_corner_session_bests_refuse_a_dropout_lap_like_every_other_best():
+    """§4.1: the purple per-corner bests ran on the raw VALID set while every sibling "best" in the
+    app — `session_best_splits`, `best_lap_id`, `best_rolling_lap`, the ideal composite — excluded
+    GPS-dropout laps, and this function's own docstring claimed parity with the per-sector bests.
+
+    A dropout lap's distance is speed-integral reconstructed, so its corner boundaries (and the
+    time between them) are exactly what must not win a corner. Latent on both fixtures — neither
+    has a dropout lap — which is why it survived: nothing on screen was wrong until a recording
+    with one arrived, and then only one column of it.
+
+    The fixture is the filed shape: the FASTER lap is the flagged one, so a service that still
+    reads the raw valid set cannot pass by accident."""
+    from _synthetic import reset_corner_caches  # noqa: PLC0415 — test-local, like the fixture's
+
+    s = _bare_corner_session()
+    fast = s.corners.lap_corner_stats(1)
+    slow = s.corners.lap_corner_stats(0)
+    assert all(f.time < sl.time for f, sl in zip(fast, slow, strict=True)), (
+        "fixture must have lap 1 faster in every corner", [f.time for f in fast],
+        [sl.time for sl in slow])
+
+    # Flag the fast lap as a GPS dropout. The service CAPTURES its accessors when it is built, so
+    # `reset_corner_caches` (which invalidates the caches on the existing one) is not enough —
+    # drop the service itself so the next access rebuilds it against the new flags.
+    s.lap_has_dropout = lambda lid: lid == 1
+    s.best_lap_id = lambda: 0
+    s._cornermodel = None
+    reset_corner_caches(s)
+    bests = s.corners.corner_session_bests()
+    assert bests == [sl.time for sl in slow], (
+        "a GPS-dropout lap won a corner that every other 'best' in the app would refuse it",
+        bests, [f.time for f in fast])
+
+    # ...and the degenerate session where EVERY valid lap is flagged still answers, on the best
+    # lap alone — the guarantee `_clean_lap_ids` makes by appending it.
+    s.lap_has_dropout = lambda lid: True
+    s._cornermodel = None
+    reset_corner_caches(s)
+    assert s.corners.corner_session_bests() == [sl.time for sl in slow], (
+        "an all-dropout session must fall back to the best lap, not return []")
+    print("ok corner-bests: a dropout lap cannot win a corner, and an all-dropout session still "
+          "answers")
+
+
 def test_session_accessors():
     s = _bare_corner_session()
     cs = s.corners.corner_list()

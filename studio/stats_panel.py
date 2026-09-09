@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, theme, units
+from . import data_quality, gmeter, theme, units
 from . import stats as stats_service
 from ._signal import fmt_hms, fmt_time, plural
 
@@ -328,7 +328,9 @@ SECTOR_COLUMNS = ["Sector", "Best", "Median", "σ (s)"]
 GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — lateral g across, "
               "longitudinal g up (accelerating) / down (braking). A driver using the tyre "
               "fills the rim of the circle; rings every 0.5 g. Longitudinal is the validated "
-              "GPS-derived signal (the IMU forward axis is vibration-inflated).")
+              "GPS-derived signal (the IMU forward axis is vibration-inflated), smoothed over "
+              f"{gmeter.LONG_SMOOTH_S:g} s — so the cloud's top and bottom are SUSTAINED "
+              "braking and acceleration, not the instantaneous spikes a raw derivative shows.")
 # The plot ships two kinds of ring and no way to tell them apart from the picture: the solid ones
 # are a fixed 0.5 g rule, the dashed one is a MEASURED result. Both axes now carry a name and a
 # unit too (they read "-2.0 / +0.0 / +2.0" and nothing else before).
@@ -970,10 +972,20 @@ class StatsView(QWidget):
             "Peak |lateral g| over the valid laps — IMU lateral, the GPS-cross-checked axis "
             "(see DATA TRUST).")
         self.t_peak_brake = Tile("peak braking g")
+        # §4.3: "smoothed" was in this string and the WINDOW was not, and a window is the whole
+        # story for a MAXIMUM. Measured on the D24 0060 pair (38 valid laps): the per-lap peak
+        # runs a median 0.862 g here against 1.081 g on the same signal unsmoothed, and the
+        # session max this tile prints reads 1.27 g where the instantaneous peak was 1.94 g.
+        # The smoothing is right — a raw d|v|/dt peak is a GPS spike, and the repo's rule is
+        # percentiles-not-raw-max — but a number that is 20-35% under the instantaneous one
+        # has to say which it is. The window is read from the constant, not typed, so it
+        # cannot drift from the signal it describes.
         self.t_peak_brake.setToolTip(
-            "Peak deceleration — from the smoothed GPS speed derivative (the validated "
-            "longitudinal; the raw IMU forward axis is vibration-inflated). 10 Hz GPS "
-            "quantizes brake onsets by ~1.5 m.")
+            f"Peak SUSTAINED deceleration — the GPS speed derivative (the validated "
+            f"longitudinal; the raw IMU forward axis is vibration-inflated), smoothed over "
+            f"{gmeter.LONG_SMOOTH_S:g} s. A {gmeter.LONG_SMOOTH_S:g} s window lowers a peak, "
+            f"so this reads under the instantaneous spike on purpose: the spike is GPS "
+            f"quantization noise, not grip. 10 Hz GPS also quantizes brake onsets by ~1.5 m.")
         col.addLayout(self._grid(self.t_vmax, self.t_vmin, self.t_peak_lat,
                                  self.t_peak_brake))
         # Without an accelerometer two of those four tiles can only ever be em-dashes — say why
