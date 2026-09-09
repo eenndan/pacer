@@ -3,10 +3,12 @@ load; the panel layout lives in CentralView."""
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import NamedTuple
@@ -14,7 +16,18 @@ from typing import NamedTuple
 # The Qt-object liveness probe (PySide6's own runtime): a Python wrapper outlives the C++ object a
 # deleteLater() has collected, and _clear_pb_toast has to tell those two apart.
 import shiboken6
-from PySide6.QtCore import QBuffer, QEvent, QIODevice, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QBuffer,
+    QEvent,
+    QIODevice,
+    QRect,
+    Qt,
+    QTimer,
+    QtMsgType,
+    QUrl,
+    Signal,
+    qInstallMessageHandler,
+)
 from PySide6.QtGui import (
     QActionGroup,
     QDesktopServices,
@@ -145,6 +158,9 @@ DEMO_UNAVAILABLE_MESSAGE = (
     "below, or drop a GoPro .mp4 on this window, to get your laps.")
 
 
+_log = logging.getLogger("studio.app")
+
+
 def _show_error_report(exc_type, exc, tb):
     """Show a themed "Something went wrong" dialog for an otherwise-unhandled exception, with the
     traceback tucked behind a collapsible Details and a button that opens the Report-a-problem page
@@ -179,6 +195,64 @@ def _show_error_report(exc_type, exc, tb):
     return box
 
 
+# THE LATCH AND THE THREAD RULE, both measured before they were written (§3.6).
+#
+#   five raising ticks   -> 5 dialogs built  (no latch: one per raise)
+#   threading.Thread     -> sys.excepthook saw NOTHING, 0 dialogs, threading.excepthook default
+#   hook on a QThread    -> the QMessageBox was constructed on "Dummy-1", not the GUI thread
+#
+# The first is the cascade: `_tick` runs at 30 Hz, so a slot that raises every tick asks for a
+# modal every 33 ms, each one blocking on exec() while the timer keeps firing. One dialog at a
+# time; every repeat while it is open is logged instead.
+#
+# The third is the #224 defect class — a top-level QWidget built off the GUI thread is undefined
+# behaviour in Qt, and the handler that exists to report a crash must not be the thing that causes
+# one. Off the main thread the report is LOG-ONLY.
+# A FLAG, NOT A LOCK. A `threading.Lock` here reads like the careful choice and is the dangerous
+# one: the dialog is only ever shown on the main thread, and `exec()` spins a nested event loop on
+# that same thread, so a re-entrant hook would try to re-acquire a lock it already holds and HANG.
+# (Proven while testing this: the injection that removes the guard below — leaving the acquire —
+# DEADLOCKED the suite rather than failing it.) The flag is only ever read and written on the GUI
+# thread, which is exactly where re-entrancy happens, so it needs no synchronisation at all.
+_REPORT_OPEN = False              # True for exactly as long as a report dialog is on screen
+_REPORTED: set[tuple] = set()     # signatures already shown once (see _report_signature)
+
+
+def _report_signature(exc_type, tb) -> tuple:
+    """What makes two failures THE SAME failure for reporting: the exception class and the
+    innermost frame it came from. Not the message — a per-tick error whose text carries a timestamp
+    or a lap id is the same bug, and would otherwise defeat the suppression it most needs."""
+    frame = ("", 0)
+    while tb is not None:
+        frame = (tb.tb_frame.f_code.co_filename, tb.tb_lineno)
+        tb = tb.tb_next
+    return (exc_type, frame)
+
+
+def _report_is_showable(exc_type=None, tb=None) -> str | None:
+    """None when a dialog may be shown, else the one-line reason it may not (for the log).
+
+    Three refusals, in the order they can occur:
+
+      * NOT THE GUI THREAD — a top-level QWidget built off it is undefined behaviour in Qt (the
+        #224 defect class). Measured before this existed: the hook fired on a QThread built its
+        QMessageBox on "Dummy-1".
+      * A REPORT IS ALREADY OPEN — `exec()` spins a nested event loop, so the 30 Hz `_tick` keeps
+        firing while the dialog is up; a slot raising on every tick re-enters this hook every
+        33 ms and stacks a modal each time, with the app unusable behind them.
+      * ALREADY REPORTED — the same class from the same line, after the user closed the first
+        dialog. The second one tells them nothing the first did not, and a persistently-raising
+        tick would otherwise put the user in an unclosable loop of identical dialogs. It is logged
+        every time; only the DIALOG is once."""
+    if threading.current_thread() is not threading.main_thread():
+        return f"off the GUI thread ({threading.current_thread().name})"
+    if _REPORT_OPEN:
+        return "a report dialog is already open"
+    if exc_type is not None and _report_signature(exc_type, tb) in _REPORTED:
+        return "this failure has already been reported once"
+    return None
+
+
 def _excepthook(exc_type, exc, tb):
     """Top-level sys.excepthook (installed by main() AFTER the QApplication exists): log the full
     traceback to stderr AND, if a QApplication is running, surface it in a themed Report-a-problem
@@ -201,7 +275,19 @@ def _excepthook(exc_type, exc, tb):
         app = QApplication.instance()
         if app is None:
             return  # pre-QApplication / headless: the stderr trace above is the correct behaviour
-        _show_error_report(exc_type, exc, tb)
+        refused = _report_is_showable(exc_type, tb)
+        if refused is not None:
+            # The trace is already on stderr (and through the logger); this line says why the user
+            # did not also get a dialog, so a silent second failure is never mistaken for none.
+            _log.warning("error report not shown (%s): %s: %s", refused, exc_type.__name__, exc)
+            return
+        global _REPORT_OPEN
+        _REPORTED.add(_report_signature(exc_type, tb))
+        _REPORT_OPEN = True
+        try:
+            _show_error_report(exc_type, exc, tb)
+        finally:
+            _REPORT_OPEN = False
     except Exception:  # noqa: BLE001 — a crashing excepthook is worse than none; degrade gracefully
         try:
             sys.__excepthook__(exc_type, exc, tb)
@@ -209,11 +295,59 @@ def _excepthook(exc_type, exc, tb):
             pass
 
 
+def _thread_excepthook(args):
+    """`threading.excepthook`: route a stdlib thread's unhandled exception to the SAME reporter.
+
+    Measured: without this, a raise inside a `threading.Thread` reaches `sys.excepthook` NOT AT ALL
+    — Python routes it here, and the default implementation prints to stderr and returns. The app
+    runs two such threads inside the video export (the frame pump and the watchdog), and the
+    watchdog dying silently takes the export TIMEOUT with it: the export then has no upper bound
+    and nothing anywhere says so.
+
+    `_excepthook` refuses to build a dialog off the GUI thread (see `_report_is_showable`), so what
+    this buys is the log line and one place to change the policy — not a modal from a worker."""
+    if args.exc_type is SystemExit:
+        return
+    _excepthook(args.exc_type, args.exc_value, args.exc_traceback)
+
+
+def _qt_message_handler(mode, context, message):
+    """Route Qt's own C++ warnings through `logging` instead of a stderr nobody reads.
+
+    Qt prints its diagnostics (a null pixmap, a layout complaint, "QObject::setParent: Cannot set
+    parent, new parent is in a different thread" — the signature of §3.1's defect) straight to
+    stderr. In a frozen .app there is no terminal attached to read, so those messages went nowhere
+    at all. They are now records like any other, at a level that matches Qt's own."""
+    level = {
+        QtMsgType.QtDebugMsg: logging.DEBUG,
+        QtMsgType.QtInfoMsg: logging.INFO,
+        QtMsgType.QtWarningMsg: logging.WARNING,
+        QtMsgType.QtCriticalMsg: logging.ERROR,
+        QtMsgType.QtFatalMsg: logging.CRITICAL,
+    }.get(mode, logging.WARNING)
+    where = f" ({context.file}:{context.line})" if context is not None and context.file else ""
+    _log.log(level, "Qt: %s%s", message, where)
+
+
 def install_excepthook():
-    """Install the top-level exception handler. Called from main() AFTER the QApplication exists so a
-    running app surfaces the themed dialog; a headless/CLI failure (no QApplication) still prints a
-    normal stderr traceback via the default hook."""
+    """Install the top-level exception handlers + the Qt message handler. Called from main() AFTER
+    the QApplication exists so a running app surfaces the themed dialog; a headless/CLI failure (no
+    QApplication) still prints a normal stderr traceback via the default hook.
+
+    THREE hooks, because an app has three ways to fail unheard: `sys.excepthook` (the main thread
+    and Qt slots), `threading.excepthook` (the export's plain threads — measured as reaching
+    nothing at all before this), and `qInstallMessageHandler` (Qt's own C++ warnings).
+
+    Logging is configured to stderr only, deliberately. A log FILE is the obvious next step for the
+    frozen .app and is NOT taken here: it would be a fifth app-support writer, and §7.5's own
+    finding is that an unwritable app-support dir already fails silently — a log file that cannot
+    be written would be one more of exactly that."""
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, stream=sys.stderr,
+                            format="%(levelname)s %(name)s: %(message)s")
     sys.excepthook = _excepthook
+    threading.excepthook = _thread_excepthook
+    qInstallMessageHandler(_qt_message_handler)
 
 
 class StudioWindow(QMainWindow):

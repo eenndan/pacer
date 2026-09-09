@@ -1973,6 +1973,164 @@ def test_install_excepthook_sets_handler_and_is_defensive_without_qapplication()
     print("test_install_excepthook_sets_handler_and_is_defensive_without_qapplication OK")
 
 
+def test_the_reporter_shows_once_and_never_off_the_gui_thread():
+    """§3.6, measured before it was written. The shipped hook had no latch, no thread check, and
+    `threading.excepthook` was never installed:
+
+        five raising ticks     -> 5 dialogs built (one per raise)
+        threading.Thread raise -> sys.excepthook saw NOTHING, 0 dialogs
+        the hook on a QThread  -> the QMessageBox was built on "Dummy-1", not the GUI thread
+
+    `_tick` runs at 30 Hz and `exec()` spins a NESTED event loop, so a slot that raises every tick
+    re-enters the hook every 33 ms while its own modal is up — a stack of dialogs over an app the
+    user cannot reach. And a QWidget constructed off the GUI thread is Qt undefined behaviour: the
+    handler that exists to report a crash must not be the thing that causes one (the #224 class).
+
+    Three refusals, each of which must LOG rather than go quiet."""
+    import logging
+    import threading as _threading
+
+    from PySide6.QtCore import QThread
+
+    from studio import app as studio_app
+
+    built: list[str] = []
+    reenter = [0]
+
+    def _fake_show(exc_type, exc, tb):
+        built.append(_threading.current_thread().name)
+        # model the nested event loop: two more ticks raise while this dialog is up
+        if reenter[0] < 2:
+            reenter[0] += 1
+            for _ in range(2):
+                try:
+                    raise ValueError("tick blew up")
+                except ValueError:
+                    studio_app._excepthook(*sys.exc_info())
+        return None
+
+    orig_show = studio_app._show_error_report
+    orig_reported = set(studio_app._REPORTED)
+    studio_app._show_error_report = _fake_show
+    logs: list[str] = []
+
+    class _Catch(logging.Handler):
+        def emit(self, record):
+            logs.append(record.getMessage())
+
+    handler = _Catch()
+    studio_app._log.addHandler(handler)
+    try:
+        studio_app._REPORTED.clear()
+        for _ in range(5):
+            try:
+                raise ValueError("tick blew up")
+            except ValueError:
+                studio_app._excepthook(*sys.exc_info())
+        assert len(built) == 1, (f"the cascade is back: {len(built)} dialogs for one repeating "
+                                 f"failure", built)
+        assert any("already open" in m for m in logs), logs
+        assert any("already been reported" in m for m in logs), logs
+
+        # A DIFFERENT failure still gets its own dialog — suppression is per signature, not a mute.
+        try:
+            raise KeyError("something else entirely")
+        except KeyError:
+            studio_app._excepthook(*sys.exc_info())
+        assert len(built) == 2, ("a distinct failure must still be reported", built)
+
+        # ...and nothing is ever built off the GUI thread.
+        built.clear()
+        logs.clear()
+
+        class _Boom(QThread):
+            def run(self):
+                try:
+                    raise RuntimeError("worker blew up")
+                except RuntimeError:
+                    studio_app._excepthook(*sys.exc_info())
+
+        b = _Boom()
+        b.start()
+        b.wait(5000)
+        assert built == [], ("a QWidget was built off the GUI thread", built)
+        assert any("off the GUI thread" in m for m in logs), logs
+    finally:
+        studio_app._show_error_report = orig_show
+        studio_app._log.removeHandler(handler)
+        studio_app._REPORTED.clear()
+        studio_app._REPORTED.update(orig_reported)
+    print("test_the_reporter_shows_once_and_never_off_the_gui_thread OK")
+
+
+def test_a_plain_thread_reaches_the_reporter_at_all():
+    """`threading.excepthook` is installed, and that is the whole point: a raise inside a stdlib
+    `threading.Thread` does NOT reach `sys.excepthook` — Python routes it here and the default
+    implementation prints to stderr and returns. The video export runs two such threads, and the
+    watchdog dying silently takes the export TIMEOUT with it."""
+    import logging
+    import threading as _threading
+
+    from studio import app as studio_app
+
+    orig_thread_hook = _threading.excepthook
+    orig_show = studio_app._show_error_report
+    built: list[str] = []
+    studio_app._show_error_report = lambda *a: built.append("dialog")
+    logs: list[str] = []
+
+    class _Catch(logging.Handler):
+        def emit(self, record):
+            logs.append(record.getMessage())
+
+    handler = _Catch()
+    studio_app._log.addHandler(handler)
+    try:
+        studio_app.install_excepthook()
+        assert _threading.excepthook is studio_app._thread_excepthook
+
+        def _die():
+            raise RuntimeError("watchdog died")
+
+        t = _threading.Thread(target=_die, name="export-watchdog")
+        t.start()
+        t.join(5)
+        assert built == [], "a worker thread must never build the dialog"
+        assert any("watchdog died" in m and "off the GUI thread" in m for m in logs), logs
+    finally:
+        _threading.excepthook = orig_thread_hook
+        studio_app._show_error_report = orig_show
+        studio_app._log.removeHandler(handler)
+    print("test_a_plain_thread_reaches_the_reporter_at_all OK")
+
+
+def test_qt_warnings_go_through_logging_not_an_unread_stderr():
+    """Qt's C++ diagnostics (including the "parent is in a different thread" line that IS §3.1's
+    signature) went straight to stderr — and in a frozen .app, to nowhere. They are records now."""
+    import logging
+
+    from PySide6.QtCore import QtMsgType
+
+    from studio import app as studio_app
+
+    logs: list[tuple[int, str]] = []
+
+    class _Catch(logging.Handler):
+        def emit(self, record):
+            logs.append((record.levelno, record.getMessage()))
+
+    handler = _Catch()
+    studio_app._log.addHandler(handler)
+    try:
+        studio_app._qt_message_handler(QtMsgType.QtWarningMsg, None, "QObject::setParent: nope")
+        studio_app._qt_message_handler(QtMsgType.QtCriticalMsg, None, "something worse")
+    finally:
+        studio_app._log.removeHandler(handler)
+    assert [lvl for lvl, _ in logs] == [logging.WARNING, logging.ERROR], logs
+    assert "QObject::setParent" in logs[0][1], logs
+    print("test_qt_warnings_go_through_logging_not_an_unread_stderr OK")
+
+
 def test_excepthook_never_propagates_even_if_dialog_throws():
     """A crashing excepthook is worse than none: if _show_error_report itself throws, the handler
     must swallow it and fall back to the default hook, never letting the failure propagate."""
