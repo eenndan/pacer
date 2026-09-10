@@ -125,7 +125,12 @@ def test_panespec_round_trips_onto_each_pane():
     # Captions surface as the cell-caption TOOLTIP, behind the FULL role word (the label itself
     # drops to "THIS"/"REF" when the strip is too narrow for the long form).
     assert view._cell_a.caption.toolTip() == "THIS LAP — cap A"
-    assert view._cell_b.caption.toolTip() == "REFERENCE — cap B"
+    # SAME-RECORDING compare (pane B has no source of its own) says "LAP B", not "REFERENCE" —
+    # §5.6: REFERENCE is the word every other surface reserves for ANOTHER RECORDING (the
+    # status-bar chip, the Δ guides, the trust card), so wearing it over a second lap of the
+    # recording already on screen reads as a load that did not happen.
+    assert view._cell_b.caption.toolTip() == "LAP B — cap B", view._cell_b.caption.toolTip()
+    assert view._cell_b.caption.text() == "LAP B", view._cell_b.caption.text()
     assert view._cell_a.caption.text() == "THIS LAP"  # role label unchanged by the spec caption
     # Pickers: each cell selected the spec's lap_id from the spec's choices/labels (no repoint emit).
     assert view._cell_a.picker.currentData() == 0 and view._cell_a.picker.count() == 2
@@ -631,15 +636,32 @@ def test_l8_01_narrow_strip_falls_back_to_the_short_role_word():
     """The width budget's last step, made explicit: when the full role word cannot share a row with
     the Δ badge it drops to its short form (never a mid-word clip), and the FULL word stays in the
     tooltip beside the app's rich lap text."""
+    # `_compare_view` builds a SAME-RECORDING pair (pane B has no source of its own), so pane B's
+    # role is "LAP B" / "B" — see §5.6 and set_role_cross_recording. The fallback under test is the
+    # long -> short drop, which is the same behaviour whichever pair of words the role is.
     wide = _compare_view(620)
-    assert wide._cell_b.caption.text() == "REFERENCE"
+    assert wide._cell_b.caption.text() == "LAP B", wide._cell_b.caption.text()
     _ALIVE.append(wide)
     narrow = _compare_view(240)
-    assert narrow._cell_b.caption.text() == "REF", narrow._cell_b.caption.text()
-    assert narrow._cell_b.caption.toolTip().startswith("REFERENCE — "), (
+    assert narrow._cell_b.caption.text() == "B", narrow._cell_b.caption.text()
+    assert narrow._cell_b.caption.toolTip().startswith("LAP B — "), (
         narrow._cell_b.caption.toolTip())
     assert _overlap(narrow._cell_b) == 0
     _ALIVE.append(narrow)
+
+    # ...and a REAL cross-recording compare still says REFERENCE, long and short: that word is not
+    # retired, it is reserved for the case it was always about.
+    cross = VideoView(_cmap("PRIMARY"))
+    cross.resize(620, 420)
+    cross.show()
+    cross.set_compare(_spec(0, (0.0, 10.0), "A", [0], choice_labels=["lap 0"]),
+                      _spec(0, (0.0, 10.0), "B", [0], choice_labels=["ref lap"],
+                            source=_cmap("REFERENCE")))
+    _settle(6)
+    assert cross._cell_b.caption.text() == "REFERENCE", cross._cell_b.caption.text()
+    assert cross._cell_b.caption.toolTip().startswith("REFERENCE — "), (
+        cross._cell_b.caption.toolTip())
+    _ALIVE.append(cross)
     print("test_l8_01_narrow_strip_falls_back_to_the_short_role_word OK")
 
 

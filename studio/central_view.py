@@ -1666,7 +1666,9 @@ class CentralView(QWidget):
         stitched = self._ideal_state == "stitched"
         if stitched and self.ideal_readout_btn.isChecked():
             text, sem_colour = theme.format_ideal_readout(d_ideal, sp, lap_id, self._speed_unit)
-            tip = (f"Δ to your best lap here: {theme.format_delta_run(d_best)}"
+            # `sigil=False`: this sentence already says "Δ", and the run used to add its own —
+            # "Δ to your best lap here: Δ +0.00 s" (§5.6).
+            tip = (f"Δ to your best lap here: {theme.format_delta_run(d_best, sigil=False)}"
                    + self._ideal_clamp_note(d_ideal))
         else:
             text, sem_colour = theme.format_delta_speed(d_best, sp, lap_id, self._speed_unit)

@@ -395,7 +395,13 @@ IDEAL_GAP_TOOLTIP = ("What the theoretical best says is still on the table: your
                      "the stitched ideal. It is time you have already demonstrated, one segment "
                      "at a time, on laps you drove — not a simulation and not a lap record."
                      + IDEAL_SAMPLE_TOOLTIP)
-IDEAL_COLUMNS = ["Segment", "Gain (s)", "Laps as fast", "Best on lap"]
+# "As fast as this lap", not "Laps as fast" (§5.6). The count is laps that drove the segment at
+# least as fast as THE SUBJECT LAP — the tooltip always said so, the header did not, and a reader
+# comparing "20" against a gain naturally reads it as "20 laps already matched the ideal, so why is
+# this a gain?". Measured before changing it: this table's columns are ResizeToContents, so the
+# longer header widens its own column (96 -> 131 px) and the table still fits its pane (367 px of
+# header in a 369 px viewport).
+IDEAL_COLUMNS = ["Segment", "Gain (s)", "As fast as this lap", "Best on lap"]
 # A row under this is not advice — it is a rounding difference between two laps of the same
 # corner, and a plan is not 25 rows long. The remainder is never hidden: the note under the table
 # states how many segments were left out and what they are worth, so the rows on screen and the
@@ -1676,13 +1682,22 @@ class StatsView(QWidget):
         self.t_laps.set(" · ".join(lap_bits) if valid else None)
         tot = st.totals() if st is not None else None
         if tot is not None and tot.duration_s > 0:
-            self.t_duration.set(fmt_hms(tot.duration_s))
-            self.t_moving.set(fmt_hms(tot.moving_s))
+            # COLLAPSE THE TWINS WHEN THEY AGREE (§5.6). "recorded 28:50" beside "moving 28:50"
+            # is two tiles asserting one fact and inviting the reader to hunt for the difference
+            # between them; the pair only says something when the kart actually stopped. Compared
+            # at the resolution the tiles PRINT (h:mm:ss), because two values that differ by 400 ms
+            # render identically and would leave a "difference" nobody can see.
+            recorded, moving = fmt_hms(tot.duration_s), fmt_hms(tot.moving_s)
+            same = recorded == moving
+            self.t_duration.set(recorded, "recorded · all moving" if same else "recorded")
+            self.t_moving.setVisible(not same)
+            self.t_moving.set(None if same else moving)
             self._set_distance(tot)
             clock = (f"{tot.start_clock}–{tot.end_clock}"
                      if tot.start_clock and tot.end_clock else None)
             self.t_clock.set(clock)
         else:
+            self.t_moving.setVisible(True)          # a later refresh may need the twin back
             for t in (self.t_duration, self.t_moving, self.t_distance, self.t_clock):
                 t.set(None)
 
@@ -2418,8 +2433,10 @@ class StatsView(QWidget):
         report = getattr(session, "straights_report", list)() or []
         # B8: a start line inside a corner section produces ~0-duration S/F stubs — noise
         # rows with no driving content (BRAKING already omits unmatched corners the same way).
+        full_n = len(report)
         report = [st for st in report
                   if max(st.best_s or 0.0, st.median_s or 0.0) >= 0.05]
+        stubs = full_n - len(report)
         has = bool(report)
         self._straights_section.setVisible(has)
         self.straights_table.setVisible(has)
@@ -2427,7 +2444,13 @@ class StatsView(QWidget):
             self.t_fix_first.setVisible(False)
             self.straights_table.setRowCount(0)
             return
-        self._straights_section.setText(f"STRAIGHTS · speeds in {u_label}")
+        # SAY HOW MANY ARE NOT LISTED (§5.6). The ideal-lap disclosure on this same page counts
+        # the PARTITION ("across the 12 corners and 13 straights pacer found here") while this
+        # table silently drops the ~0-duration S/F stubs a start line inside a corner section
+        # produces — so one page said 13 and showed 11, with nothing anywhere reconciling them.
+        # The count is derived from the same list, so the two can never drift apart again.
+        dropped = f" · {stubs} too short to list" if stubs else ""
+        self._straights_section.setText(f"STRAIGHTS · speeds in {u_label}{dropped}")
         # The FIX FIRST tile: the biggest exit-deficit × straight-spread product.
         top = max(report, key=lambda s: s.leverage)
         if top.leverage > 0:

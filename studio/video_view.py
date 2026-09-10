@@ -413,7 +413,9 @@ class _PaneCell(QWidget):
         self.side = side
         self._lap_ids: list[int] = []
         self._labels: list[str] = []   # last-applied picker item labels (guards the repopulate)
+        self._caption_text = ""        # last lap text, so a role change can re-render the tooltip
         self._role_full, self._role_short = self._ROLES[side]
+
 
         # The fixed role word. A BarLabel — the app's "a label inside a bar" role, transparent,
         # because the bar behind it now provides the surface. It was a `#PaneCaption`, whose rule
@@ -477,6 +479,26 @@ class _PaneCell(QWidget):
         video_row.setSpacing(0)
         lay.addLayout(video_row, 1)
         video_row.addWidget(self.pane)
+
+    def set_role_cross_recording(self, cross: bool) -> None:
+        """Name pane B for what it IS (§5.6). "REFERENCE" is the word every other surface in the
+        app reserves for ANOTHER RECORDING — the status-bar chip, the Δ guides, the trust card — so
+        wearing it over a second lap of the recording already on screen reads as a load that did not
+        happen. Same-recording compare says "LAP B"; a real cross-recording compare keeps REFERENCE.
+
+        Pane A is always "THIS LAP", so this is a no-op for it. The strip re-fits on the next layout
+        pass (`apply_strip_form` picks the full or short word against the width it has), which is
+        why `set_compare` calls this BEFORE `_fit_strips`: the budget has to measure the word it
+        will actually paint."""
+        if self.side == PRIMARY:
+            return
+        self._role_full, self._role_short = (("REFERENCE", "REF") if cross else ("LAP B", "B"))
+        self.caption.setText(self._role_full)
+        # Re-render the tooltip from the caption this cell is already showing: it is composed as
+        # "<role> — <lap text>", so changing the role must rewrite it, not replace it with the bare
+        # word and drop the lap identity behind it.
+        self.set_caption(self._caption_text)
+
 
     # ------------------------------------------------------------------ the strip's width budget
     @property
@@ -600,6 +622,7 @@ class _PaneCell(QWidget):
         the reference RECORDING); show it as the role label's TOOLTIP — the label stays the fixed
         role word, identity lives in the picker. The tooltip also carries the FULL role word, which
         the label itself drops at narrow widths."""
+        self._caption_text = text or ""
         self.caption.setToolTip(f"{self._role_full} — {text}" if text else self._role_full)
 
     def set_badge(self, text: str, colour: str | None):
@@ -1035,6 +1058,10 @@ class VideoView(QWidget):
         lap start. Re-calling in compare mode just re-seeds (after a repoint), no splitter rebuild."""
         # The secondary pane's media source: an explicit cross-recording source, else the primary's.
         sec_source = pane_b.source if pane_b.source is not None else self._source
+        # ...which is also what pane B's ROLE WORD depends on (§5.6): an explicit source means a
+        # genuine cross-recording REFERENCE; None means a second lap of the recording on screen,
+        # which is "LAP B".
+        cross_recording = pane_b.source is not None
         # If the live secondary opened on a DIFFERENT source (same-recording ↔ cross-recording, or
         # a primary reload), tear it (and its splitter cell) down so it is rebuilt on the new
         # footage below. `_teardown_secondary` only drops the pane; drop the stale _cell_b too.
@@ -1120,6 +1147,10 @@ class VideoView(QWidget):
         # Seed each pane's window + caption + picker from its spec (the app seeks the panes to their starts).
         self.pane.set_lap_window(*pane_a.window)
         self.secondary.set_lap_window(*pane_b.window)
+        # Pane B's role word depends on WHAT is in it (§5.6), and it is set BEFORE the captions
+        # because the caption tooltip is composed as "<role> — <lap text>" — and before
+        # `_fit_strips` below, so the strip budget measures the word it will actually paint.
+        self._cell_b.set_role_cross_recording(cross_recording)
         self._cell_a.set_caption(pane_a.caption)
         self._cell_b.set_caption(pane_b.caption)
         self._cell_a.set_lap_choices(pane_a.choices, pane_a.lap_id, pane_a.choice_labels)
