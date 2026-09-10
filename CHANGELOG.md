@@ -76,6 +76,8 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   of betting on a turn count.
 - `stats_view.refresh` builds each lap's corner alignment once rather than nine times.
 - Qt's own C++ warnings go through `logging` instead of a stderr a frozen `.app` cannot print to.
+- `StudioWindow`'s export cluster moved to its own `ExportController` (app.py 4,166 → 3,557 lines,
+  142 → 121 methods) — the same one-object-one-cluster shape as the scrub and compare controllers.
 
 ## [0.2.0] — 2026-09-06
 

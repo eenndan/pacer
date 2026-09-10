@@ -80,7 +80,8 @@ prefs._app_support_dir = lambda: _SANDBOX.name
 
 import test_central_view_realqt as _realqt  # noqa: E402
 
-from studio import app as app_mod  # noqa: E402
+from studio import app as app_mod
+from studio import export_controller  # noqa: E402
 from studio import sidecar as sidecar_mod  # noqa: E402
 from studio import workers as workers_mod  # noqa: E402
 from studio.overlays import WelcomeView  # noqa: E402
@@ -623,13 +624,13 @@ def test_closing_the_window_mid_export_cancels_and_joins_the_render_thread():
         out = os.path.join(d, "lap.mp4")
         spec = SimpleNamespace(out_path=out, source=SimpleNamespace(cleanup=lambda: None))
         orig_renderer = workers_mod.export_video.Renderer
-        orig_exec = app_mod.QProgressDialog.exec
+        orig_exec = export_controller.QProgressDialog.exec
         workers_mod.export_video.Renderer = _SlowRenderer
         # The real modal would spin a nested loop; return immediately so the render runs on with the
         # dialog up, which is exactly the state a ⌘Q lands in.
-        app_mod.QProgressDialog.exec = lambda self: 0
+        export_controller.QProgressDialog.exec = lambda self: 0
         try:
-            win._run_video_export(spec, lap=1)
+            win.exports._run_video_export(spec, lap=1)
             worker = win._video_worker
             assert worker is not None and worker.isRunning(), "the render worker never started"
             assert worker in win._load_workers, \
@@ -645,7 +646,7 @@ def test_closing_the_window_mid_export_cancels_and_joins_the_render_thread():
             assert not os.path.exists(out), "a cancelled render left its partial MP4 behind"
         finally:
             workers_mod.export_video.Renderer = orig_renderer
-            app_mod.QProgressDialog.exec = orig_exec
+            export_controller.QProgressDialog.exec = orig_exec
     _APP.processEvents()
     win.deleteLater()
     _APP.processEvents()

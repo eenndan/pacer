@@ -89,8 +89,15 @@ from PySide6.QtWidgets import (  # noqa: E402
 _APP = QApplication.instance() or QApplication([])
 
 from studio import app as studio_app  # noqa: E402
-from studio import coaching, data_quality, export_data, export_video  # noqa: E402
+from studio import (  # noqa: E402
+    coaching,
+    data_quality,
+    export_controller,  # noqa: E402
+    export_data,
+    export_video,
+)
 from studio.app import APP_NAME, StudioWindow  # noqa: E402
+from studio.export_controller import ExportController  # noqa: E402
 
 # The File ▸ Export data actions L1-03 is about, by the attribute the window keeps them on.
 # "Copy stats summary" (N13) joined them: it publishes the same numbers the HTML report does, so
@@ -180,18 +187,18 @@ def test_a_zero_lap_recording_disables_every_data_export_with_a_reason():
     """No complete laps ⇒ nothing to write. All four data exports (and both card actions) go off,
     and each one's tooltip states the REASON, not the feature. On main all four stayed enabled."""
     win = _window(FakeSession(laps=()))
-    win._sync_export_menu()
+    win.exports.sync_menu()
 
     for name in DATA_EXPORTS + CARD_EXPORTS:
         action = getattr(win, name)
         assert not action.isEnabled(), f"{name} ({action.text()!r}) is offered with no valid lap"
         tip = action.toolTip()
-        assert tip == StudioWindow._NO_LAPS_REASON, f"{name} tooltip is not the reason: {tip!r}"
+        assert tip == ExportController._NO_LAPS_REASON, f"{name} tooltip is not the reason: {tip!r}"
         assert "No complete laps" in tip and "start/finish line" in tip, tip
 
     # And the feature description comes BACK with the laps — the reason must not be sticky.
     win.session = FakeSession()
-    win._sync_export_menu()
+    win.exports.sync_menu()
     for name in DATA_EXPORTS + CARD_EXPORTS:
         action = getattr(win, name)
         assert action.isEnabled(), f"{name} stayed disabled on a session with laps"
@@ -210,8 +217,8 @@ def test_a_zero_lap_export_writes_nothing_and_says_why():
         orig = QFileDialog.getSaveFileName
         QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out, ""))
         try:
-            win._export_laps_csv()
-            win._export_report()
+            win.exports.export_laps_csv()
+            win.exports.export_report()
         finally:
             QFileDialog.getSaveFileName = orig
         assert not os.path.exists(out), "a 0-lap session still wrote an export file"
@@ -244,16 +251,16 @@ def _drive_video_export(win, warnings):
     stubbed, returning True iff the export got as far as asking for resolution/quality."""
     reached = []
     orig_warning, orig_available = QMessageBox.warning, export_video.ffmpeg_available
-    orig_ask = StudioWindow._ask_export_options
+    orig_ask = ExportController._ask_export_options
     QMessageBox.warning = staticmethod(warnings)
     export_video.ffmpeg_available = lambda: True
-    StudioWindow._ask_export_options = lambda _self, _lap: reached.append(1)
+    ExportController._ask_export_options = lambda _self, _lap: reached.append(1)
     try:
-        win._export_overlay_video()
+        win.exports.export_overlay_video()
     finally:
         QMessageBox.warning = orig_warning
         export_video.ffmpeg_available = orig_available
-        StudioWindow._ask_export_options = orig_ask
+        ExportController._ask_export_options = orig_ask
     return bool(reached)
 
 
@@ -265,7 +272,7 @@ def test_the_mp4_export_obeys_the_same_trust_verdict_as_the_lap_card():
         src = os.path.join(td, "GX010099.MP4")
         open(src, "wb").close()
         win = _window(FakeSession(verified=False), paths=(src,))
-        win._sync_export_menu()
+        win.exports.sync_menu()
         assert win._share_card_blocked(), "the fixture is not actually blocked"
         for name in CARD_EXPORTS:
             assert not getattr(win, name).isEnabled(), f"{name} is enabled on a blocked session"
@@ -357,7 +364,7 @@ def _run_export_to_completion(win, *, ok, message="", lap=2, click_cancel=False,
     in production. Returns (mid_render, at_the_end, modals, worker, spec)."""
     spec = _FakeSpec(out_path)
     made, modals, mid = [], [], {}
-    orig_worker, orig_exec = studio_app.VideoExportWorker, QDialog.exec
+    orig_worker, orig_exec = export_controller.VideoExportWorker, QDialog.exec
     orig_box_exec, orig_warning = QMessageBox.exec, QMessageBox.warning
     orig_openurl = QDesktopServices.openUrl
     end = {}
@@ -398,16 +405,16 @@ def _run_export_to_completion(win, *, ok, message="", lap=2, click_cancel=False,
         made.append(_FakeVideoWorker(session, sp))
         return made[-1]
 
-    studio_app.VideoExportWorker = _worker
+    export_controller.VideoExportWorker = _worker
     QDialog.exec = _exec
     QMessageBox.exec = _box_exec
     QMessageBox.warning = staticmethod(_warning)
     QDesktopServices.openUrl = staticmethod(lambda _url, a=openurl: a)
     try:
         win.statusBar().clearMessage()
-        win._run_video_export(spec, lap)
+        win.exports._run_video_export(spec, lap)
     finally:
-        studio_app.VideoExportWorker = orig_worker
+        export_controller.VideoExportWorker = orig_worker
         QDialog.exec = orig_exec
         QMessageBox.exec = orig_box_exec
         QMessageBox.warning = orig_warning
@@ -557,14 +564,14 @@ def test_the_real_modal_loop_unwinds_when_a_finished_export_opens_its_box():
         for d in win.findChildren(QProgressDialog):
             d.hide()
 
-    orig_worker, orig_box_exec = studio_app.VideoExportWorker, QMessageBox.exec
-    studio_app.VideoExportWorker = _TimerWorker
+    orig_worker, orig_box_exec = export_controller.VideoExportWorker, QMessageBox.exec
+    export_controller.VideoExportWorker = _TimerWorker
     QMessageBox.exec = lambda box, *_a, **_k: boxes.append(box.text()) or 0
     QTimer.singleShot(4000, _bark)
     try:
-        win._run_video_export(spec, 2)          # a REAL dlg.exec(), no stub
+        win.exports._run_video_export(spec, 2)          # a REAL dlg.exec(), no stub
     finally:
-        studio_app.VideoExportWorker = orig_worker
+        export_controller.VideoExportWorker = orig_worker
         QMessageBox.exec = orig_box_exec
 
     assert not watchdog["fired"], (
@@ -582,9 +589,9 @@ def _video_export_dialog_bodies(win, session, src):
     """Every message the overlay export can raise, driven through the REAL entry points."""
     seen = []
     orig_warning, orig_available = QMessageBox.warning, export_video.ffmpeg_available
-    orig_ask, orig_save = StudioWindow._ask_export_options, StudioWindow._export_save_path
+    orig_ask, orig_save = ExportController._ask_export_options, ExportController._export_save_path
     orig_build = export_video.build_lap_spec
-    orig_run = StudioWindow._run_video_export
+    orig_run = ExportController._run_video_export
     QMessageBox.warning = staticmethod(
         lambda _p, title, text, *a, **k: (seen.append((title, text)), QMessageBox.Cancel)[-1])
     try:
@@ -592,35 +599,35 @@ def _video_export_dialog_bodies(win, session, src):
         # 1. no ffmpeg on PATH
         export_video.ffmpeg_available = lambda: False
         win._paths = [src]
-        win._export_overlay_video()
+        win.exports.export_overlay_video()
         # 2. a session with no source video file to render onto
         export_video.ffmpeg_available = lambda: True
         win._paths = []
-        win._export_overlay_video()
+        win.exports.export_overlay_video()
         # 3. the provisional-timing confirm (a question, but the same titleless box)
         win._paths = [src]
         win.session = FakeSession(verified=False)
-        win._export_overlay_video()
+        win.exports.export_overlay_video()
         # 4. build_lap_spec refuses the window
         win.session = session
         # A real ExportChoice, not a bare sentinel: _export_overlay_video reads BOTH of its fields
         # (the config goes to build_lap_spec, the lead widens the window before the source is
         # resolved), so a stand-in that is not one would fail on the plumbing rather than on the
         # dialog this section is measuring.
-        StudioWindow._ask_export_options = lambda _s, _lap: studio_app.ExportChoice(
+        ExportController._ask_export_options = lambda _s, _lap: studio_app.ExportChoice(
             config=export_video.OverlayConfig(), lead=0.0)
-        StudioWindow._export_save_path = lambda _s, *a, **k: "/tmp/pacer-unwritten.mp4"
-        StudioWindow._run_video_export = lambda *a, **k: None
+        ExportController._export_save_path = lambda _s, *a, **k: "/tmp/pacer-unwritten.mp4"
+        ExportController._run_video_export = lambda *a, **k: None
         def _boom(*_a, **_k):
             raise ValueError("the lap window falls outside the footage")
         export_video.build_lap_spec = _boom
-        win._export_overlay_video()
+        win.exports.export_overlay_video()
     finally:
         QMessageBox.warning = orig_warning
         export_video.ffmpeg_available = orig_available
-        StudioWindow._ask_export_options = orig_ask
-        StudioWindow._export_save_path = orig_save
-        StudioWindow._run_video_export = orig_run
+        ExportController._ask_export_options = orig_ask
+        ExportController._export_save_path = orig_save
+        ExportController._run_video_export = orig_run
         export_video.build_lap_spec = orig_build
     return seen
 
@@ -667,8 +674,8 @@ def test_the_report_is_written_in_the_display_unit_and_the_csv_is_not():
         export_data.write_report_html = lambda *a, **k: seen.update(report=k)
         export_data.write_laps_csv = lambda *a, **k: seen.update(laps=(a[2:], k))
         try:
-            win._export_report()
-            win._export_laps_csv()
+            win.exports.export_report()
+            win.exports.export_laps_csv()
         finally:
             export_data.write_report_html = orig_report
             export_data.write_laps_csv = orig_laps
@@ -867,7 +874,7 @@ def test_the_report_export_states_a_layout_width_for_every_figure():
             lambda *a, **k: (os.path.join(td, "r.html"), ""))
         export_data.write_report_html = lambda *a, **k: seen.update(k)
         try:
-            win._export_report()
+            win.exports.export_report()
         finally:
             export_data.write_report_html = orig_report
             QFileDialog.getSaveFileName = orig_dialog
@@ -887,8 +894,8 @@ def test_the_options_hint_quantifies_the_size_and_the_work():
     """The dialog sold "larger file"/"smaller file" and stated no size. The hint now names a size,
     the frame count and the resolved encoder — and the presets differ by a real multiple."""
     win = _window(FakeSession())
-    high = win._export_size_hint(23.231, 1080, "high")
-    standard = win._export_size_hint(23.231, 720, "standard")
+    high = win.exports._export_size_hint(23.231, 1080, "high")
+    standard = win.exports._export_size_hint(23.231, 720, "standard")
     for text in (high, standard):
         assert "MB" in text and "frames to render" in text, text
         assert any(enc in text for enc in (export_video.VT_H264, export_video.SW_H264)), text
@@ -897,8 +904,8 @@ def test_the_options_hint_quantifies_the_size_and_the_work():
     # Frames are exact (ceil(duration x fps)), not an estimate.
     assert f"{int(23.231 * 30) + 1} frames" in high, high
     # Nothing honest to say without a pixel count or a duration: say nothing.
-    assert win._export_size_hint(23.231, 99999, "high") == ""
-    assert win._export_size_hint(0.0, 1080, "high") == ""
+    assert win.exports._export_size_hint(23.231, 99999, "high") == ""
+    assert win.exports._export_size_hint(0.0, 1080, "high") == ""
     win.hide()
     print("test_the_options_hint_quantifies_the_size_and_the_work OK")
 
@@ -910,8 +917,8 @@ def _clear_export_preset():
     every test in the process and by every run on a machine where the user has ever chosen one.
     A test that assumes an unstored state has to say so — and clear it."""
     data = prefs.load()
-    for key in (StudioWindow._PREF_EXPORT_RES, StudioWindow._PREF_EXPORT_QUALITY,
-                StudioWindow._PREF_EXPORT_LEAD):
+    for key in (ExportController._PREF_EXPORT_RES, ExportController._PREF_EXPORT_QUALITY,
+                ExportController._PREF_EXPORT_LEAD):
         data.pop(key, None)
     prefs.save(data)
 
@@ -921,7 +928,7 @@ def _run_options_dialog(win, on_dialog):
     orig = QDialog.exec
     QDialog.exec = on_dialog
     try:
-        return win._ask_export_options(0)
+        return win.exports._ask_export_options(0)
     finally:
         QDialog.exec = orig
 
@@ -1002,10 +1009,10 @@ def test_the_hint_never_promises_a_run_up_the_footage_cannot_give():
     goes through `export_video.lap_window_for_export`, the same funnel the render resolves its
     window with, so it reports 33.231 s and not 43.231."""
     win = _window(FakeSession())
-    assert win._export_clip_seconds(0, 0.0) == 23.231
-    assert win._export_clip_seconds(0, 10.0) == 33.231, win._export_clip_seconds(0, 10.0)
+    assert win.exports._export_clip_seconds(0, 0.0) == 23.231
+    assert win.exports._export_clip_seconds(0, 10.0) == 33.231, win.exports._export_clip_seconds(0, 10.0)
     # and the frame count in the size line follows it (ceil(duration x 30))
-    hint = win._export_size_hint(win._export_clip_seconds(0, 10.0), 1080, "high")
+    hint = win.exports._export_size_hint(win.exports._export_clip_seconds(0, 10.0), 1080, "high")
     assert f"{int(33.231 * 30) + 1} frames" in hint, hint
     # A lap the session cannot place has no honest duration, so the hint says nothing rather than
     # guessing — the same contract _export_size_hint already has for "Source" and for a NaN lap.
@@ -1014,8 +1021,8 @@ def test_the_hint_never_promises_a_run_up_the_footage_cannot_give():
             return None
 
     unplaceable = _window(_Unplaceable())
-    assert math.isnan(unplaceable._export_clip_seconds(0, 5.0))
-    assert unplaceable._export_size_hint(unplaceable._export_clip_seconds(0, 5.0), 1080, "high") \
+    assert math.isnan(unplaceable.exports._export_clip_seconds(0, 5.0))
+    assert unplaceable.exports._export_size_hint(unplaceable.exports._export_clip_seconds(0, 5.0), 1080, "high") \
         == ""
     unplaceable.hide()
     win.hide()
@@ -1039,9 +1046,9 @@ def test_the_export_preset_survives_a_new_window():
     # remember a preference the render never applies.
     assert choice.lead == 10.0, choice
     stored = json.load(open(prefs.prefs_path(), encoding="utf-8"))
-    assert stored.get(StudioWindow._PREF_EXPORT_RES) == 0, stored
-    assert stored.get(StudioWindow._PREF_EXPORT_QUALITY) == 1, stored
-    assert stored.get(StudioWindow._PREF_EXPORT_LEAD) == 2, stored
+    assert stored.get(ExportController._PREF_EXPORT_RES) == 0, stored
+    assert stored.get(ExportController._PREF_EXPORT_QUALITY) == 1, stored
+    assert stored.get(ExportController._PREF_EXPORT_LEAD) == 2, stored
 
     seen = {}
 
@@ -1063,9 +1070,9 @@ def test_a_garbage_stored_preset_falls_back_to_the_default():
     """Guarded accessor: an out-of-range index from an older build opens on the default rather than
     raising out of a dialog the user just asked for."""
     win = _window(FakeSession())
-    prefs.set(StudioWindow._PREF_EXPORT_RES, 99)
-    prefs.set(StudioWindow._PREF_EXPORT_QUALITY, "high")
-    prefs.set(StudioWindow._PREF_EXPORT_LEAD, -1)
+    prefs.set(ExportController._PREF_EXPORT_RES, 99)
+    prefs.set(ExportController._PREF_EXPORT_QUALITY, "high")
+    prefs.set(ExportController._PREF_EXPORT_LEAD, -1)
     seen = {}
 
     def on_dialog(dlg):
@@ -1076,9 +1083,9 @@ def test_a_garbage_stored_preset_falls_back_to_the_default():
 
     _run_options_dialog(win, on_dialog)
     assert seen["idx"] == (1, 0, 0), seen
-    prefs.set(StudioWindow._PREF_EXPORT_RES, 1)
-    prefs.set(StudioWindow._PREF_EXPORT_QUALITY, 0)
-    prefs.set(StudioWindow._PREF_EXPORT_LEAD, 0)
+    prefs.set(ExportController._PREF_EXPORT_RES, 1)
+    prefs.set(ExportController._PREF_EXPORT_QUALITY, 0)
+    prefs.set(ExportController._PREF_EXPORT_LEAD, 0)
     win.hide()
     print("test_a_garbage_stored_preset_falls_back_to_the_default OK")
 

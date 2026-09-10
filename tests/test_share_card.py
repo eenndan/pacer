@@ -595,6 +595,11 @@ def _bare_window(session):
     map_widget = QWidget()
     map_widget.resize(80, 60)
     w.view = SimpleNamespace(map=map_widget)
+    # The export cluster lives on its own controller (§7.1) and the real __init__ builds it; this
+    # fixture skips __init__, so it has to attach one explicitly.
+    from studio.app import STATUS_MS
+    from studio.export_controller import ExportController
+    w.exports = ExportController(w, STATUS_MS)
     return w
 
 
@@ -608,7 +613,7 @@ def test_export_share_card_saves_png_through_the_dialog():
         orig = QFileDialog.getSaveFileName
         QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out, "PNG images (*.png)"))
         try:
-            w._export_share_card()
+            w.exports.export_share_card()
         finally:
             QFileDialog.getSaveFileName = orig
         assert os.path.exists(out), "the lap card PNG was not written"
@@ -627,7 +632,7 @@ def test_export_share_card_cancel_writes_nothing():
     orig = QFileDialog.getSaveFileName
     QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: ("", ""))
     try:
-        w._export_share_card()
+        w.exports.export_share_card()
     finally:
         QFileDialog.getSaveFileName = orig
     assert written == [], "a cancelled save must write nothing"
