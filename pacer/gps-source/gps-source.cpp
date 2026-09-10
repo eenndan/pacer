@@ -330,6 +330,18 @@ void GPMFSource::ReadAccl(std::function<void(IMUSample)> on_sample) {
   });
 }
 
+// GYRO rides the exact same path as ACCL and declares the same element
+// orientation (see the header), so it needs no axis handling ACCL does not
+// already get. GPMF_ScaledData applies the stream's OWN SCAL, which differs by
+// camera (939 on a HERO8/Max/HERO13, 1878 on a HERO6/7, 3755 on a HERO5), so
+// the values reaching `on_sample` are radians per second on every model without
+// a per-model constant here.
+void GPMFSource::ReadGyro(std::function<void(IMUSample)> on_sample) {
+  ReadStream(STR2FOURCC("GYRO"), [&](const double *v, uint32_t, double t) {
+    on_sample(IMUSample{.x = v[0], .y = v[1], .z = v[2], .time = t});
+  });
+}
+
 void GPMFSource::ReadGrav(std::function<void(IMUSample)> on_sample) {
   ReadStream(STR2FOURCC("GRAV"), [&](const double *v, uint32_t, double t) {
     on_sample(IMUSample{.x = v[0], .y = v[1], .z = v[2], .time = t});
@@ -343,10 +355,59 @@ void GPMFSource::ReadCori(std::function<void(QuatSample)> on_sample) {
   });
 }
 
-// The three IMU readers just name the matching reader verb; the shifting logic
+std::string GPMFSource::DeviceName() const {
+  // DVNM is a per-PAYLOAD constant written inside every DEVC container, so the
+  // first payload that has one answers for the whole file. Bounding the scan
+  // matters for the negative case: without a cap, a container that carries no
+  // DVNM at all would walk every payload of an 11 GB recording to conclude
+  // "unknown". Eight is generous — a camera that writes DVNM writes it in
+  // payload 0; the slack only covers a leading empty/short payload.
+  constexpr uint32_t kMaxProbe = 8;
+  uint32_t payloads = GetNumberPayloads(mp4handle_);
+  uint32_t probe = payloads < kMaxProbe ? payloads : kMaxProbe;
+  for (uint32_t i = 0; i < probe; ++i) {
+    uint32_t psize = GetPayloadSize(mp4handle_, i);
+    payload_res_ = GetPayloadResource(mp4handle_, payload_res_, psize);
+    uint32_t *payload = GetPayload(mp4handle_, payload_res_, i);
+    if (payload == nullptr) {
+      continue;
+    }
+    GPMF_stream metadata_stream, *ms = &metadata_stream;
+    if (GPMF_Init(ms, payload, psize) != GPMF_OK) {
+      continue;
+    }
+    if (GPMF_OK !=
+        GPMF_FindNext(ms, STR2FOURCC("DVNM"),
+                      GPMF_LEVELS(GPMF_RECURSE_LEVELS | GPMF_TOLERANT))) {
+      continue;
+    }
+    const char *raw = static_cast<const char *>(GPMF_RawData(ms));
+    uint32_t nbytes = GPMF_RawDataSize(ms);
+    if (raw == nullptr || nbytes == 0) {
+      continue;
+    }
+    // The field is a fixed-width char run, so it is NUL- (and sometimes
+    // space-) padded to the struct width; trim rather than hand the padding
+    // back to the caller.
+    std::string name(raw, nbytes);
+    size_t end = name.find_last_not_of(std::string("\0 \t\r\n", 5));
+    if (end == std::string::npos) {
+      continue;
+    }
+    name.resize(end + 1);
+    return name;
+  }
+  return {};
+}
+
+// The four IMU readers just name the matching reader verb; the shifting logic
 // (offset the right chapter by the left's duration) lives in ReadShifted.
 void SequentialGPSSource::ReadAccl(std::function<void(IMUSample)> on_sample) {
   ReadShifted<IMUSample>(&RawGPSSource::ReadAccl, on_sample);
+}
+
+void SequentialGPSSource::ReadGyro(std::function<void(IMUSample)> on_sample) {
+  ReadShifted<IMUSample>(&RawGPSSource::ReadGyro, on_sample);
 }
 
 void SequentialGPSSource::ReadGrav(std::function<void(IMUSample)> on_sample) {
@@ -355,6 +416,11 @@ void SequentialGPSSource::ReadGrav(std::function<void(IMUSample)> on_sample) {
 
 void SequentialGPSSource::ReadCori(std::function<void(QuatSample)> on_sample) {
   ReadShifted<QuatSample>(&RawGPSSource::ReadCori, on_sample);
+}
+
+std::string SequentialGPSSource::DeviceName() const {
+  std::string name = left_->DeviceName();
+  return name.empty() ? right_->DeviceName() : name;
 }
 
 uint32_t SequentialGPSSource::ReadSamples(
@@ -412,15 +478,26 @@ uint32_t RawGPSSource::ReadSamples(
   return 0;
 }
 
-// The three bulk readers collect the SAME samples the per-sample callbacks
-// yield — they go through the virtual ReadAccl/ReadGrav/ReadCori so a subclass
-// override (GPMFSource, SequentialGPSSource, or a Python subclass) is reflected
-// — and pack them into parallel columns. The output is byte-for-byte identical
-// to draining those callbacks into per-column lists, just without the
+// The four bulk readers collect the SAME samples the per-sample callbacks
+// yield — they go through the virtual ReadAccl/ReadGyro/ReadGrav/ReadCori so a
+// subclass override (GPMFSource, SequentialGPSSource, or a Python subclass) is
+// reflected — and pack them into parallel columns. The output is byte-for-byte
+// identical to draining those callbacks into per-column lists, just without the
 // per-sample binding crossing.
 ImuArrays RawGPSSource::ReadAcclColumns() {
   ImuArrays cols;
   ReadAccl([&](IMUSample s) {
+    cols.times.push_back(s.time);
+    cols.xs.push_back(s.x);
+    cols.ys.push_back(s.y);
+    cols.zs.push_back(s.z);
+  });
+  return cols;
+}
+
+ImuArrays RawGPSSource::ReadGyroColumns() {
+  ImuArrays cols;
+  ReadGyro([&](IMUSample s) {
     cols.times.push_back(s.time);
     cols.xs.push_back(s.x);
     cols.ys.push_back(s.y);

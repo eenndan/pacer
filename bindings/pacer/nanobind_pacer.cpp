@@ -29,7 +29,7 @@ namespace pacer {
 class RawGPSSource_trampoline : public RawGPSSource
 {
 public:
-    NB_TRAMPOLINE(RawGPSSource, 12);
+    NB_TRAMPOLINE(RawGPSSource, 15);
 
     uint32_t ReadSamples(std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) override
     {
@@ -44,6 +44,14 @@ public:
         NB_OVERRIDE_NAME(
             "read_accl", // function name (python)
             ReadAccl, // function name (c++)
+            param_0 // params
+        );
+    }
+    void ReadGyro(std::function<void(IMUSample)> param_0) override
+    {
+        NB_OVERRIDE_NAME(
+            "read_gyro", // function name (python)
+            ReadGyro, // function name (c++)
             param_0 // params
         );
     }
@@ -70,6 +78,13 @@ public:
             ReadAcclColumns // function name (c++)
         );
     }
+    pacer::ImuArrays ReadGyroColumns() override
+    {
+        NB_OVERRIDE_NAME(
+            "read_gyro_columns", // function name (python)
+            ReadGyroColumns // function name (c++)
+        );
+    }
     pacer::ImuArrays ReadGravColumns() override
     {
         NB_OVERRIDE_NAME(
@@ -82,6 +97,13 @@ public:
         NB_OVERRIDE_NAME(
             "read_cori_columns", // function name (python)
             ReadCoriColumns // function name (c++)
+        );
+    }
+    std::string DeviceName() const override
+    {
+        NB_OVERRIDE_NAME(
+            "device_name", // function name (python)
+            DeviceName // function name (c++)
         );
     }
     uint32_t Seek(double target) override
@@ -452,7 +474,7 @@ void py_init_module_pacer(nb::module_ &m) {
   ////////////////////    <generated_from:gps-source.hpp>    ////////////////////
   auto pyClassImuArrays =
       nb::class_<pacer::ImuArrays>
-          (m, "ImuArrays", " One IMU stream (ACCL / GRAV / CORI) collected as parallel columns, so the\n studio layer crosses the binding ONCE per stream instead of once per sample\n (the old path ran a per-sample C++->Python trampoline callback — ~1.5M\n round-trips per load). The columns are the SAME samples the per-sample\n ReadAccl/ReadGrav/ReadCori callbacks yield, in the same order, so the bulk\n output is byte-for-byte identical to collecting those callbacks.\n\n `times`, `xs`, `ys`, `zs` are populated for all three streams; `ws` carries\n the quaternion scalar and is filled ONLY by ReadCoriColumns (ACCL/GRAV leave\n it empty). Every populated column has the same length (the sample count).")
+          (m, "ImuArrays", " One IMU stream (ACCL / GYRO / GRAV / CORI) collected as parallel columns, so\n the studio layer crosses the binding ONCE per stream instead of once per\n sample (the old path ran a per-sample C++->Python trampoline callback — ~1.5M\n round-trips per load). The columns are the SAME samples the per-sample\n ReadAccl/ReadGyro/ReadGrav/ReadCori callbacks yield, in the same order, so\n the bulk output is byte-for-byte identical to collecting those callbacks.\n\n `times`, `xs`, `ys`, `zs` are populated for all four streams; `ws` carries\n the quaternion scalar and is filled ONLY by ReadCoriColumns (ACCL/GYRO/GRAV\n leave it empty). Every populated column has the same length (the sample\n count).")
       .def("__init__", [](pacer::ImuArrays * self, std::vector<double> times = std::vector<double>(), std::vector<double> ws = std::vector<double>(), std::vector<double> xs = std::vector<double>(), std::vector<double> ys = std::vector<double>(), std::vector<double> zs = std::vector<double>())
       {
           new (self) pacer::ImuArrays();  // placement new
@@ -482,7 +504,11 @@ void py_init_module_pacer(nb::module_ &m) {
           nb::arg("on_sample"),
           " Decode the GPS payload the cursor currently sits on (Seek/Next move it),\n calling on_sample(sample, current_index, total_records) once per fix.\n Returns 0 on success or a nonzero code (e.g. no payload here).\n\n It is a std::function virtual — the same shape as\n ReadAccl/ReadGrav/ReadCori — so a Python subclass can override it through\n the binding trampoline and feed GPS into the engine (for instance as a\n child of a C++ SequentialGPSSource). The earlier raw-pointer +\n function-pointer `Samples` virtual could not be trampolined, so Python\n overrides silently produced nothing. The base implementation emits nothing\n and returns 0; GPMFSource and SequentialGPSSource override it.")
       .def("read_accl",
-          &pacer::RawGPSSource::ReadAccl, nb::arg("param_0"))
+          &pacer::RawGPSSource::ReadAccl,
+          nb::arg("param_0"),
+          " Read the timestamped IMU streams (accelerometer / gyroscope / gravity)\n across the WHOLE source. Each sample's `time` is on the MEDIA clock\n (seconds), spread across the payload span so it lines up with the GPS spans\n and the video; a multi-chapter source shifts later chapters by the\n cumulative duration (see SequentialGPSSource) onto one continuous global\n clock. The base is a no-op; GPMFSource / SequentialGPSSource override.\n\n ACCL is a 3-axis accelerometer in m/s^2 (native order Z,X,Y); GRAV is a\n unit gravity vector (native order, permuted vs ACCL — the studio layer\n resolves that).")
+      .def("read_gyro",
+          &pacer::RawGPSSource::ReadGyro, nb::arg("param_0"))
       .def("read_grav",
           &pacer::RawGPSSource::ReadGrav, nb::arg("param_0"))
       .def("read_cori",
@@ -491,10 +517,14 @@ void py_init_module_pacer(nb::module_ &m) {
           " CORI is the camera-orientation quaternion (w,x,y,z), ~60 Hz, media-clock\n time.")
       .def("read_accl_columns",
           &pacer::RawGPSSource::ReadAcclColumns)
+      .def("read_gyro_columns",
+          &pacer::RawGPSSource::ReadGyroColumns)
       .def("read_grav_columns",
           &pacer::RawGPSSource::ReadGravColumns)
       .def("read_cori_columns",
           &pacer::RawGPSSource::ReadCoriColumns)
+      .def("device_name",
+          &pacer::RawGPSSource::DeviceName, " The recording camera's own name for itself — the GPMF `DVNM` field, e.g.\n \"HERO13 Black\". Empty when the container carries none. It is the only\n in-file statement of WHICH camera produced the streams, and the camera\n model decides what the data can mean at all: a HERO12 has no GPS receiver,\n and HERO9/10 carry no per-sample GPS clock. Read once (it is a per-payload\n constant), never per sample. The base returns \"\".")
       .def("seek",
           &pacer::RawGPSSource::Seek,
           nb::arg("target"),
@@ -521,10 +551,14 @@ void py_init_module_pacer(nb::module_ &m) {
           "See RawGPSSource::ReadSamples for the callback contract.")
       .def("read_accl",
           &pacer::GPMFSource::ReadAccl, nb::arg("on_sample"))
+      .def("read_gyro",
+          &pacer::GPMFSource::ReadGyro, nb::arg("on_sample"))
       .def("read_grav",
           &pacer::GPMFSource::ReadGrav, nb::arg("on_sample"))
       .def("read_cori",
           &pacer::GPMFSource::ReadCori, nb::arg("on_sample"))
+      .def("device_name",
+          &pacer::GPMFSource::DeviceName)
       .def("seek",
           &pacer::GPMFSource::Seek, nb::arg("target"))
       .def("next",
@@ -552,10 +586,14 @@ void py_init_module_pacer(nb::module_ &m) {
           &pacer::SequentialGPSSource::ReadSamples, nb::arg("on_sample"))
       .def("read_accl",
           &pacer::SequentialGPSSource::ReadAccl, nb::arg("on_sample"))
+      .def("read_gyro",
+          &pacer::SequentialGPSSource::ReadGyro, nb::arg("on_sample"))
       .def("read_grav",
           &pacer::SequentialGPSSource::ReadGrav, nb::arg("on_sample"))
       .def("read_cori",
           &pacer::SequentialGPSSource::ReadCori, nb::arg("on_sample"))
+      .def("device_name",
+          &pacer::SequentialGPSSource::DeviceName, " The chain's camera: the LEFT subtree's name, falling back to the right when\n the left has none. Chapters of one recording come off one camera, so a\n chain has a single device name; the fallback only matters for a chain whose\n first chapter is a synthetic/nameless source.")
       .def("seek",
           &pacer::SequentialGPSSource::Seek, nb::arg("target"))
       .def("next",

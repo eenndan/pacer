@@ -317,11 +317,11 @@ def _build_lapping_slalom(dur=320.0, v0=22.0, yaw_amp_rad=0.6, period_s=12.0, la
     grav_dir_cam = _rot_by_quat(q_world_to_cam, up_w)
 
     # ACCL element order here is camera (Y, X, Z) — i.e. GRAV's (X,Y,Z) read through gmeter's own
-    # _PERM. The older builders declare (Z,X,Y), which leaves a little gravity un-removed and
+    # GRAV_PERM. The older builders declare (Z,X,Y), which leaves a little gravity un-removed and
     # inflates the recovered magnitude ~1.8x; harmless for the SHAPE (correlation) assertions
     # those tests make, fatal for a magnitude one. Measured: with this order the recovered
     # horizontal magnitude is 0.6086 g against a true 0.6089 g.
-    accl = np.column_stack([ta] + [meas_cam[:, _PERM_I] for _PERM_I in gmeter._PERM])
+    accl = np.column_stack([ta] + [meas_cam[:, _PERM_I] for _PERM_I in gmeter.GRAV_PERM])
     tg = np.linspace(0.0, dur, int(dur * 60))
     grav = np.column_stack([tg] + [np.full(len(tg), c) for c in grav_dir_cam])    # (x,y,z)
     cori = np.column_stack([tg] + [np.full(len(tg), q_world_to_cam[k]) for k in range(4)])
@@ -349,7 +349,7 @@ def _scale_accl_linear(accl, grav, k):
     out = np.asarray(accl, float).copy()
     ta = out[:, 0]
     gperm = np.column_stack(
-        [np.interp(ta, grav[:, 0], grav[:, 1 + gmeter._PERM[i]]) for i in range(3)])
+        [np.interp(ta, grav[:, 0], grav[:, 1 + gmeter.GRAV_PERM[i]]) for i in range(3)])
     gperm = gperm / np.maximum(np.linalg.norm(gperm, axis=1, keepdims=True), 1e-12)
     lin = out[:, 1:4] - G * gperm
     out[:, 1:4] = G * gperm + k * lin

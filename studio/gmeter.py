@@ -5,7 +5,7 @@ all on the media clock) plus an independent GPS-derived cross-check. Axis conven
 empirically (see studio/docs/gmeter-validation.md).
 
 The camera->kart transform:
-  1. Gravity-remove: GRAV permuted onto ACCL's axes via PERM=(1,0,2); linear = ACCL - 9.81*ĝ.
+  1. Gravity-remove: GRAV permuted onto ACCL's axes via GRAV_PERM=(1,0,2); linear = ACCL - 9.81*ĝ.
   2. Rotate camera->world via CORI's conjugate (CORI stores world->camera); the rotated gravity
      is constant over time, confirming the rotation.
   3. Project onto the horizontal plane (perpendicular to world-gravity). Magnitude is correct but
@@ -37,7 +37,14 @@ from ._signal import G, boxcar, speed_long_g
 
 # Empirically resolved GoPro stream-frame conventions (see module docstring + validation doc).
 # GRAV/CORI element order is a permutation of ACCL's native (Z,X,Y) element order.
-_PERM = (1, 0, 2)
+# PUBLIC because a second channel now needs the SAME permutation: `rotation.py` projects the GYRO
+# vector onto this gravity direction, and GYRO carries ACCL's element orientation (their GPMF
+# ORIN/ORIO fields are identical on every camera measured), so the two modules must agree on how
+# GRAV maps onto that frame or one of them is silently rotated. Read, never retyped — the wrong
+# permutation measures as a real signal, not as breakage: un-permuted, the rotation channel still
+# scored r=+0.65/+0.62 against the GPS path (permuted: +0.87/+0.85), which reads as a scale problem
+# rather than a wrong axis. Only rotation.py's closed-lap test catches it outright.
+GRAV_PERM = (1, 0, 2)
 # CORI stores world->camera; conjugate it to rotate camera->world.
 _CORI_CONJUGATE = True
 
@@ -402,11 +409,11 @@ def _horizontal_accel(accl, grav, cori, ta):
     (resolved per-chapter against GPS by the caller)."""
     A = accl[:, 1:4]
     # gravity unit vector in the ACCL frame (GRAV permuted onto ACCL's axes)
-    gperm = np.column_stack([np.interp(ta, grav[:, 0], grav[:, 1 + _PERM[i]]) for i in range(3)])
+    gperm = np.column_stack([np.interp(ta, grav[:, 0], grav[:, 1 + GRAV_PERM[i]]) for i in range(3)])
     gperm = _norm_rows(gperm)
     lin = A - G * gperm                                  # linear (gravity-removed) accel
-    lin_p = np.column_stack([lin[:, _PERM[i]] for i in range(3)])    # to CORI axis order
-    g_p = gperm[:, list(_PERM)]                                       # gravity in CORI axis order
+    lin_p = np.column_stack([lin[:, GRAV_PERM[i]] for i in range(3)])    # to CORI axis order
+    g_p = gperm[:, list(GRAV_PERM)]                                       # gravity in CORI axis order
 
     qw = np.interp(ta, cori[:, 0], cori[:, 1])
     qx = np.interp(ta, cori[:, 0], cori[:, 2])

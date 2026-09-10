@@ -380,6 +380,13 @@ set_tests_properties(test_export_video PROPERTIES
 # g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
 add_test(NAME test_gmeter
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter.py)
+# Measured yaw rate from the GoPro GYRO stream (studio.rotation): the gravity projection through
+# an arbitrary camera tilt, rejection of roll/pitch, and the CLOSED-LAP scale test — a lap is a
+# closed loop, so the integrated yaw is exactly 2*pi, which is the one statistic here with a
+# ground truth. It is what catches a halved channel; the correlation is bit-identical under a
+# x0.5 fault, and that is asserted. Two synthetic track shapes, no media file.
+add_test(NAME test_rotation
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_rotation.py)
 # g-meter OVERLAY display-layer tests (felt-force convention, shake filter, per-lap envelope).
 add_test(NAME test_gmeter_overlay
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter_overlay.py)
@@ -738,7 +745,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_load_failure test_load_affordances test_load_lifecycle
                         test_validate_wallclock
                         test_corners test_corner_alignment_memo
-                        test_consistency test_gmeter test_gmeter_overlay
+                        test_consistency test_gmeter test_gmeter_overlay test_rotation
                         test_export_data test_export_disclosures
                         test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card test_stats
