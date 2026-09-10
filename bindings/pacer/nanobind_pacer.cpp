@@ -29,7 +29,7 @@ namespace pacer {
 class RawGPSSource_trampoline : public RawGPSSource
 {
 public:
-    NB_TRAMPOLINE(RawGPSSource, 15);
+    NB_TRAMPOLINE(RawGPSSource, 16);
 
     uint32_t ReadSamples(std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) override
     {
@@ -140,6 +140,13 @@ public:
         NB_OVERRIDE_PURE_NAME(
             "get_total_duration", // function name (python)
             GetTotalDuration // function name (c++)
+        );
+    }
+    double GetVideoDuration() const override
+    {
+        NB_OVERRIDE_NAME(
+            "get_video_duration", // function name (python)
+            GetVideoDuration // function name (c++)
         );
     }
 };
@@ -536,7 +543,9 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("current_time_span",
           &pacer::RawGPSSource::CurrentTimeSpan, "Time span of the chunk under the cursor.")
       .def("get_total_duration",
-          &pacer::RawGPSSource::GetTotalDuration, "Total media duration.")
+          &pacer::RawGPSSource::GetTotalDuration, " Total duration of the stream this source READS — for a GPMF source that is\n the metadata track, which is what the payload cursor is bounded by.")
+      .def("get_video_duration",
+          &pacer::RawGPSSource::GetVideoDuration, " Duration of the VIDEO track: where the NEXT chapter's picture begins, and\n therefore the only correct amount to shift a following chapter by.\n\n It is a SEPARATE question from GetTotalDuration() because the two tracks\n are separate tracks. GoPro's own contract is that a chapter's metadata\n length matches its video length EXCEPT in the last chapter of a recording,\n where the GPMF track ends on its own payload grid — measured on the ten\n GoPro sample clips in 3rdparty/gpmf-parser/samples, that exception runs\n from -0.701 s (hero7) to +0.934 s (karma), i.e. up to a whole payload. A\n chain that shifts by the metadata length therefore rides ~1 s of phantom\n offset the moment a chapter exercises it, and the shift belongs to the\n picture regardless. The default answers with GetTotalDuration() so a source\n with no video track of its own (a test double, a Python subclass) behaves\n exactly as it did before this existed.")
       ;
 
 
@@ -569,17 +578,21 @@ void py_init_module_pacer(nb::module_ &m) {
           &pacer::GPMFSource::CurrentTimeSpan)
       .def("get_total_duration",
           &pacer::GPMFSource::GetTotalDuration)
+      .def("get_video_duration",
+          &pacer::GPMFSource::GetVideoDuration)
       ;
 
 
   auto pyClassSequentialGPSSource =
       nb::class_<pacer::SequentialGPSSource, pacer::RawGPSSource>
-          (m, "SequentialGPSSource", " Concatenates two sources end to end (chapter chaining): the right child's\n timeline is shifted by the left child's duration so the pair reads as one\n continuous recording. `left` may itself be a SequentialGPSSource, so chains\n of any length nest.")
+          (m, "SequentialGPSSource", " Concatenates two sources end to end (chapter chaining): the right child's\n timeline is shifted by the left child's VIDEO duration so the pair reads as\n one continuous recording. `left` may itself be a SequentialGPSSource, so\n chains of any length nest.\n\n THE SHIFT IS THE VIDEO'S, NOT THE METADATA TRACK'S. The right child's payload\n times are local to its own file and everything downstream (lap timing, the\n chapter offset table, the export's ffmpeg seek, the player's source switch)\n reads them as positions in the recording's PICTURE. Chapter k+1's picture\n starts at the end of chapter k's picture, so that is the offset; shifting by\n chapter k's GPMF length instead silently rides the difference between the two\n tracks, which on GoPro's own sample clips reaches 0.9 s.")
       .def(nb::init<pacer::RawGPSSource *, pacer::RawGPSSource *>(),
           nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(),
           nb::arg("left"), nb::arg("right"))
       .def("get_total_duration",
           &pacer::SequentialGPSSource::GetTotalDuration)
+      .def("get_video_duration",
+          &pacer::SequentialGPSSource::GetVideoDuration)
       .def("is_end",
           &pacer::SequentialGPSSource::IsEnd)
       .def("read_samples",

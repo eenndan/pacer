@@ -36,13 +36,23 @@ START_WIDEN = 3.0  # widen the auto start line so every lap pass crosses it
 
 
 # --- True-clock timing from the GPS9 per-sample timestamps -------------------------------
-# The media clock runs ~0.1% fast, which compresses every lap; the GPS9 stream carries the true
-# GPS fix time at a clean 10 Hz. We don't trust the GPS9 absolute epoch (it jumps at chapter
-# boundaries / is UTC), so we use only its per-sample SPACING, re-anchored per contiguous run to
-# that run's media (naive) start — the axis stays on the global media clock (video sync unchanged)
-# but the within-run spacing is the true 10 Hz GPS spacing.
+# A payload's fixes are laid out EVENLY across its span, and a 1.001 s GoPro payload holds 9, 10 or
+# 11 of them, so the media time of an individual fix jitters by up to ~±0.05 s around the true 10 Hz
+# grid. The GPS9 stream carries the true GPS fix time. We don't trust its absolute epoch (it is UTC),
+# so we use only its per-sample SPACING, re-anchored per contiguous run to that run's media (naive)
+# start.
+#
+# The re-anchoring is what is meant to keep the axis on the media clock, and MEASURE HOW OFTEN IT
+# HAPPENS BEFORE RELYING ON IT: on both D24 recordings there is not a single run break in the whole
+# session (0 in 28,237 samples over 2,925 s; 0 in 46,761 over 5,049 s — a chapter seam does not
+# break a run, its GPS9 delta is an ordinary 0.100 s), so the axis is anchored ONCE, at the first
+# sample, and thereafter follows the GPS clock alone. Measured drift against the media clock:
+# -0.150…+0.027 s on 0060 and -0.221…+0.017 s on 0062, i.e. the per-chapter media rate is 16-86 ppm
+# fast, not the ~0.1% this comment used to claim. That residual is the app's largest known
+# overlay-vs-picture error and it is NOT a seam effect — it accumulates smoothly and steps by only
+# -0.000127 s across a seam.
 GPS9_MIN_DT_S = 0.02    # an inter-sample GPS9 delta below this is a duplicate/garbage fix
-GPS9_MAX_DT_S = 0.40    # …above this, the run is broken (chapter break / dropout / rollover)
+GPS9_MAX_DT_S = 0.40    # …above this, the run is broken (dropout / rollover)
 
 
 def _gps9_times(samples, naive, rate_factor: float = 1.0):
@@ -260,9 +270,11 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
         return laps, empty, None, None, None, None, quality
 
     # Single-pass: one chain read for both GPS and IMU (see ingest.read_recording).
-    samples, spans, naive, durations, accl, grav, cori = read_recording(paths)
-    # The offset table for the video layer: each chapter's media duration on one global axis.
-    chapter_map = chapters.ChapterMap(list(paths), durations)
+    samples, spans, naive, durations, meta_durations, accl, grav, cori = read_recording(paths)
+    # The offset table for the video layer: each chapter's VIDEO duration on one global axis — the
+    # same number the C++ chain shifted this chapter's telemetry by. The GPMF durations ride along
+    # only so `ChapterMap.desynced_chapters` can state where the two tracks disagree.
+    chapter_map = chapters.ChapterMap(list(paths), durations, meta_durations)
     # The dropped-fix fraction is judged over the RETAINED MOVING trace (fixes with full_speed >
     # MIN_START_SPEED), NOT the raw fix count. The raw count includes the stationary GPS-acquisition
     # lead-in the pipeline trims, and low-quality fixes cluster in that warm-up — so raw/n_raw flags
