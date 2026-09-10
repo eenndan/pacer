@@ -954,3 +954,30 @@ add_test(NAME test_chart_axis_legibility
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_axis_legibility.py)
 set_tests_properties(test_chart_axis_legibility PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# PLAYBACK RATE (slow motion) + the telemetry lock it must not cost (feat/playback-rate). Two
+# halves: the rate itself — one ladder, one rate across the shell, both compare panes seeded and
+# fanned out, and the rate re-applied at a chapter seam (a new media source carries none) — and the
+# LOCK, which is the reason this needed a guard at all. The lock is asserted structurally (no
+# module in the sync path names a rate, swept by AST) and behaviourally (the same media positions
+# produce byte-identical marker / cursor / applied-time state at 0.25x, 1x and 2x, driven through
+# the production signal path on the real CentralView). PACER_NO_MEDIA=1: the real widget tree over
+# an inert media triplet; PYTHONPATH for the cmake-deployed bindings (the CentralView half reaches
+# studio.session).
+add_test(NAME test_playback_rate
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_playback_rate.py)
+set_tests_properties(test_playback_rate PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# COMMAND PALETTE (⌘K) — the anti-drift contract, in the spirit of test_help_dialog's "every live
+# binding has a card row": every menu action must be reachable from the palette, every `run` string
+# in help_dialog.COMMANDS must resolve on a real window, the ? card must be a VIEW of that same
+# registry, and each command's key must read the same on both surfaces. Plus the hazard this
+# feature nearly shipped: a QMenu built by addMenu is Python-owned in this binding and
+# QAction.menu() hands that ownership away, so the obvious menu-bar walk DELETES the menus it
+# descends into — the palette is opened three times and the whole bar re-read. Real offscreen
+# StudioWindow (no session); library + prefs diverted inside the test; PYTHONPATH for the bindings.
+add_test(NAME test_command_palette
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_command_palette.py)
+set_tests_properties(test_command_palette PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

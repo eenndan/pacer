@@ -6,20 +6,25 @@ discoverable surface, opened from the Help menu (and F1). (The draggable start/f
 exception: an unverified-timing recording now surfaces a persistent banner + an on-canvas "drag to
 set start/finish" cue, so that one IS discoverable on the recordings where it matters.)
 
-Single source of truth: SHORTCUT_GROUPS below is the ONE place the shortcut text lives. The keys
-listed here MUST stay in lockstep with the actual bindings, which are defined in
-``StudioWindow._build_shortcuts`` (Space / M / G / C / 1-4 / ?), ``StudioWindow.keyPressEvent``
-(the ←/→ ± stepping) and the menus (⌘O, ⌘Z, ⌃⌘F, ⇧⌘S, F1). Every accelerator row stores the
-``QKeySequence`` itself rather than hand-typed glyphs, so the card renders exactly what Qt paints
-in the menu bar (``⇧⌘S``, not ``⌘⇧S``) on whatever platform it runs — see ``_key_text``. The
-drag / double-click interactions have no key binding — they're handled in MapView (the draggable
-start/finish line), ScrubController (the chart cursor), CentralView (double-click a panel header
-or the maximize button to maximize that panel) and VideoView (double-click the video / the
-fullscreen transport button to fill the screen) — so they're documented here as the only place a
-user can learn them. Both of those buttons are documented with THEIR OWN glyph (see
-MAXIMIZE_GLYPH), not with a lookalike character.
-If you change a binding in app.py, change it HERE too — tests/test_help_dialog.py fails the build
-when a live binding has no row.
+Single source of truth: ``COMMANDS`` below is the ONE place the app's interaction model lives, and
+it is an ACTION registry — each row carries the name of the StudioWindow attribute that runs it, so
+the ⌘K command palette (``command_palette.py``) is generated from the same list this card renders
+and the two cannot drift. ``SHORTCUT_GROUPS`` is the card's view of it. The keys listed here MUST
+stay in lockstep with the actual bindings, which are defined in
+``StudioWindow._build_shortcuts`` (Space / M / G / C / 1-4 / [ / ] / ?), ``VideoView`` (F),
+``StudioWindow.keyPressEvent`` (the ←/→ ± stepping) and the menus (⌘O, ⌘Z, ⌃⌘F, ⇧⌘S, ⌘K, F1).
+Every accelerator row stores the ``QKeySequence`` itself rather than hand-typed glyphs, so the card
+renders exactly what Qt paints in the menu bar (``⇧⌘S``, not ``⌘⇧S``) on whatever platform it runs
+— see ``_key_text``. The drag / double-click interactions have no key binding — they're handled in
+MapView (the draggable start/finish line), ScrubController (the chart cursor), CentralView
+(double-click a panel header or the maximize button to maximize that panel) and VideoView
+(double-click the video / the fullscreen transport button to fill the screen) — so they're
+documented here as the only place a user can learn them. Both of those buttons are documented with
+THEIR OWN glyph (see MAXIMIZE_GLYPH), not with a lookalike character.
+If you change a binding ANYWHERE, change it HERE too — tests/test_help_dialog.py fails the build
+when a live binding has no row, and it no longer only looks at app.py: it AST-scans every
+`studio/*.py` for `QShortcut` constructions as well as harvesting the window's own accelerators, so
+a key bound in a view (which is how `F` went undocumented) is caught too.
 """
 
 from __future__ import annotations
@@ -79,7 +84,7 @@ class GlyphKey(NamedTuple):
 # (key, what it does). Grouped by the same mental model the app uses: File (getting footage in),
 # Playback (the transport), Navigation (moving through time + space), Analysis (the
 # comparison/overlay tools). Each entry's key column is rendered in the mono face so the glyphs
-# line up. See the module docstring for the cross-reference to the live bindings in app.py.
+# line up. See the module docstring for the cross-reference to where each key is actually bound.
 #
 # The key is either a literal str (a plain letter, or a drag / double-click gesture that has no
 # binding) or the QKeySequence the action is actually bound to — the latter is rendered through
@@ -87,47 +92,102 @@ class GlyphKey(NamedTuple):
 # StandardKey members stay unresolved here on purpose: resolving one needs the platform theme,
 # i.e. a live QGuiApplication, which does not exist at import time.
 Keys = str | QKeySequence | QKeySequence.StandardKey | GlyphKey
-SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = [
-    ("File", [
-        (QKeySequence.StandardKey.Open, "Open a recording"),
-    ]),
-    ("Playback", [
-        ("Space", "Play / pause the video"),
-        ("M", "Mute / unmute"),
-    ]),
-    ("Navigation", [
-        ("← / →", "Step the video back / forward 1 second"),
-        ("Shift + ← / →", "Step the video back / forward 5 seconds"),
-        ("Drag chart cursor", "Scrub through the current lap"),
-        ("Drag start/finish line", "Fix lap timing on the map (key for unknown tracks)"),
-    ]),
-    ("Analysis", [
-        ("G", "Toggle the g-meter overlay"),
-        ("C", "Toggle compare mode (two laps side by side)"),
-        ("1 · 2 · 3 · 4", "Lap-panel tabs: Laps · Corners · Stats · Coaching"),
-        # The DESCRIPTION named the maximize button by a character the button does not paint, in a
-        # sentence — where an icon cannot go. It names the button in words instead; the Layout
-        # group below is where the glyph itself is documented.
-        (QKeySequence("Ctrl+Shift+S"),
-         "Session statistics, full-window (again / the panel-maximize button to restore)"),
-    ]),
-    ("Editing", [
-        # "timing-line", matching the menu item it documents: ⌘Z takes back SECTOR-line edits too,
-        # and this card used to be one of the two surfaces (with the status bar) that said otherwise.
-        (QKeySequence.StandardKey.Undo, "Undo the last timing-line edit"),
-    ]),
-    ("Layout", [
-        (GlyphKey("Double-click header  ·", MAXIMIZE_GLYPH),
-         "Maximize a panel to fill the window (Esc / again to restore)"),
-        (QKeySequence.StandardKey.FullScreen, "Enter / exit full screen"),
-        (GlyphKey("Double-click video  ·", VIDEO_FULLSCREEN_GLYPH),
-         "Make the video fill the screen (Esc / again to restore)"),
-        ("Drag any splitter", "Resize the panels (the layout is remembered)"),
-    ]),
-    ("Help", [
-        ("F1  ·  ?", "Show this shortcut reference"),
-    ]),
+
+
+class Command(NamedTuple):
+    """ONE ROW OF THE REGISTRY — and the registry is now an ACTION registry, not a text one.
+
+    It was a list of `(key, description)` pairs, and its docstring already called itself the single
+    source of truth for the app's interaction model. That was true of the WORDS and could not
+    become true of anything else: the ⌘K command palette needs to *invoke* what the card documents,
+    and a pair of strings has nothing to invoke. Two lists would then have described the same
+    thirty commands, drifting the first time one of them gained a row.
+
+    So a row carries what it always carried plus, where the command has one, the NAME of the
+    StudioWindow attribute that runs it:
+
+      * `group` / `key` / `title` — exactly the card's group heading, key cell and description.
+      * `run` — a StudioWindow attribute: a `QAction` (triggered) or a zero-argument method
+        (called). `None` for a row that is a POINTER GESTURE with no command behind it (drag the
+        chart cursor, drag a splitter) or whose command is a menu item the palette already
+        harvests from the menu bar itself — see `command_palette.entries`, which is where the two
+        halves meet. A `run` that does not resolve on a real window fails
+        `tests/test_command_palette.py`, so the string cannot rot.
+      * `palette_key` — the key column the PALETTE shows, for the one row whose card cell
+        documents a pointer gesture in the same breath as its key (`F · double-click video`).
+        The card wants both; a palette row wants the keystroke.
+    """
+
+    group: str
+    key: Keys
+    title: str
+    run: str | None = None
+    palette_key: str | None = None
+
+
+COMMANDS: list[Command] = [
+    Command("File", QKeySequence.StandardKey.Open, "Open a recording"),
+    Command("Playback", "Space", "Play / pause the video", run="toggle_playback"),
+    Command("Playback", "M", "Mute / unmute", run="toggle_mute"),
+    # Slow motion, the most-asked-for thing this transport did not do: inputs happen faster than
+    # they can be read at 1x, and the whole point of watching your own footage is reading them.
+    Command("Playback", "[", "Play slower — 0.5× then 0.25× (slow motion)", run="slower_playback"),
+    Command("Playback", "]", "Play faster — back to 1× then 2×", run="faster_playback"),
+    Command("Navigation", "← / →", "Step the video back / forward 1 second"),
+    Command("Navigation", "Shift + ← / →", "Step the video back / forward 5 seconds"),
+    Command("Navigation", "Drag chart cursor", "Scrub through the current lap"),
+    Command("Navigation", "Drag start/finish line",
+            "Fix lap timing on the map (key for unknown tracks)"),
+    Command("Analysis", "G", "Toggle the g-meter overlay", run="toggle_gmeter"),
+    Command("Analysis", "C", "Toggle compare mode (two laps side by side)", run="toggle_compare"),
+    # The four lap-panel tabs were ONE row — "1 · 2 · 3 · 4 → Lap-panel tabs: Laps · Corners ·
+    # Stats · Coaching" — which is good card copy and a bad registry entry: one row cannot carry
+    # four targets, and a palette that cannot offer "Coaching" by name is not a palette. Four rows
+    # cost the card three lines it can afford (it scrolls and is screen-capped since W14-03) and
+    # buy each page its own searchable name.
+    Command("Analysis", "1", "Lap panel: Laps", run="show_laps_tab"),
+    Command("Analysis", "2", "Lap panel: Corners", run="show_corners_tab"),
+    Command("Analysis", "3", "Lap panel: Stats", run="show_stats_tab"),
+    Command("Analysis", "4", "Lap panel: Coaching", run="show_coaching_tab"),
+    # The DESCRIPTION named the maximize button by a character the button does not paint, in a
+    # sentence — where an icon cannot go. It names the button in words instead; the Layout
+    # group below is where the glyph itself is documented.
+    Command("Analysis", QKeySequence("Ctrl+Shift+S"),
+            "Session statistics, full-window (again / the panel-maximize button to restore)"),
+    # "timing-line", matching the menu item it documents: ⌘Z takes back SECTOR-line edits too,
+    # and this card used to be one of the two surfaces (with the status bar) that said otherwise.
+    Command("Editing", QKeySequence.StandardKey.Undo, "Undo the last timing-line edit"),
+    Command("Layout", GlyphKey("Double-click header  ·", MAXIMIZE_GLYPH),
+            "Maximize a panel to fill the window (Esc / again to restore)"),
+    Command("Layout", QKeySequence.StandardKey.FullScreen, "Enter / exit full screen"),
+    # THE KEY CELL LEADS WITH `F`, which is the whole of the L1-08 hole this wave closed: `F` is
+    # bound in video_view.py, not app.py, so the "every live binding has a row" guard — which
+    # harvested a bare StudioWindow — never saw it, and the card documented only the double-click.
+    Command("Layout", GlyphKey("F  ·  double-click video  ·", VIDEO_FULLSCREEN_GLYPH),
+            "Make the video fill the screen (Esc / again to restore)",
+            run="toggle_video_focus", palette_key="F"),
+    Command("Layout", "Drag any splitter", "Resize the panels (the layout is remembered)"),
+    Command("Help", QKeySequence("Ctrl+K"), "Find and run any command"),
+    # `run` stays None even though `?` is a live binding: Help ▸ Keyboard shortcuts is a menu item,
+    # so the palette already carries this command with the accelerator Qt paints for it. A `run`
+    # here would list the same dialog twice, once per surface that knows how to open it.
+    Command("Help", "F1  ·  ?", "Show this shortcut reference"),
 ]
+
+
+def shortcut_groups() -> list[tuple[str, list[tuple[Keys, str]]]]:
+    """`COMMANDS` in the shape the card renders: `[(group, [(key, description), …]), …]`, groups in
+    first-appearance order. The card is a VIEW of the registry now — it cannot list a command the
+    palette does not have, or miss one the palette does."""
+    groups: dict[str, list[tuple[Keys, str]]] = {}
+    for cmd in COMMANDS:
+        groups.setdefault(cmd.group, []).append((cmd.key, cmd.title))
+    return list(groups.items())
+
+
+#: The card's own data, unchanged in shape and in public name — every existing reader (the dialog
+#: below, tests/test_help_dialog.py, tests/test_glyph_vocabulary.py) keeps reading exactly this.
+SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = shortcut_groups()
 
 # Your-data & privacy disclosure (Help ▸ Your data & privacy). Honest + calm: everything is local
 # and offline. The card opens by framing the list as exhaustive, so it has to BE exhaustive: one
