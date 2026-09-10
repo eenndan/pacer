@@ -10,6 +10,16 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **Coaching tells "you have not done this yet" from "you did not do it that lap", and abstains
+  when the evidence is thin.** Every corner now says how many of your clean laps already matched
+  your best lap's time through it ("Yes · 9/38" / "Rarely · 2/65"), and the sentence changes with
+  it — repeat what you already drove, or find pace you have not established. A corner whose claim
+  is smaller than its own lap-to-lap spread is no longer ranked at all: it keeps its number, says
+  which test it failed, and drops out of every total (measured on the two D24 recordings, σ was
+  larger than the "time lost" on 17 of the 20 shown rows, up to 10.8× — and 6 of them now abstain,
+  including one that was third on its page). The page and the modal lead with one session theme
+  and at most two actions instead of twelve findings — and say "no single theme" when there
+  is not one.
 - **The Stats page says which baseline each "loss" is measured against, and reconciles the page.**
   Two columns one tab apart were both called a loss and were 3.8× apart in total (3.93 s here,
   1.02 s on Coaching, and 1.3× to 2450× apart corner by corner) because one is measured against
