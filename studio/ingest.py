@@ -1,7 +1,8 @@
 """Ingest: the pacer-touching GoPro/GPMF IO layer.
 
-Builds the `SequentialGPSSource` chain and reads raw GPS + IMU; no Laps/analysis (session.py
-does that). One of the few pacer-touching modules (see AGENTS.md).
+Builds the `SequentialGPSSource` chain and reads raw GPS + IMU (ACCL / GYRO / GRAV / CORI) plus
+the camera's own device name; no Laps/analysis (session.py does that). One of the few
+pacer-touching modules (see AGENTS.md).
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ def _read_gps_over(head):
 
 
 def _vec3_columns(cols):
-    """Pack an ACCL/GRAV `ImuArrays` (times/xs/ys/zs columns) into an (N,4) [t,x,y,z] array,
+    """Pack an ACCL/GYRO/GRAV `ImuArrays` (times/xs/ys/zs columns) into an (N,4) [t,x,y,z] array,
     byte-identical to the old per-sample `(s.time, s.x, s.y, s.z)` append + reshape(-1, 4)."""
     return np.array([cols.times, cols.xs, cols.ys, cols.zs], float).T.reshape(-1, 4)
 
@@ -89,3 +90,26 @@ def read_imu(paths):
     Prod load uses read_recording."""
     head, _owners, _durations = chain_sources(paths)
     return _read_imu_over(head)
+
+
+def read_gyro(paths):
+    """GYRO-only reader -> (N,4) [t,x,y,z] rad/s on the global media clock (empty when the camera
+    writes no GYRO — pre-HERO5).
+
+    Separate from `read_recording` on purpose: the rotation channel is not yet wired into the
+    Session pipeline, and folding a fifth array into that tuple would churn every caller of the
+    load path for a stream nothing there reads yet.
+
+    GYRO rides the same chain and the same media clock as ACCL, but NOT the same sample rate: it
+    runs 2x ACCL on a HERO5 and a Karma, 4x on a Max in 360 mode and 17x on a Fusion (measured on
+    the bundled gpmf-parser samples), and only happens to match row for row on the HERO13. Join
+    the two on `[:, 0]`, never by index."""
+    head, _owners, _durations = chain_sources(paths)
+    return _vec3_columns(head.read_gyro_columns())
+
+
+def read_device_name(paths):
+    """The recording camera's own name (GPMF `DVNM`, e.g. "HERO13 Black"), or "" when the
+    container carries none. Cheap — it reads the first payload, not the stream."""
+    head, _owners, _durations = chain_sources(paths)
+    return head.device_name()

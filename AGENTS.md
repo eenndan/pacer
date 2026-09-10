@@ -84,9 +84,14 @@ Key facts:
 - **Two coordinate spaces**: GPS lat/lon (degrees) vs **local meters** via `CoordinateSystem`
   ([geometry.hpp](pacer/geometry/geometry.hpp)). `sectors.start_line`/`sector_lines` are in *local*
   coords; `Update` converts them to global before intersecting. Mixing these up is the main hazard.
-- **IMU streams** (`ACCL`/`GRAV`/`CORI`, parsed in
+- **IMU streams** (`ACCL`/`GYRO`/`GRAV`/`CORI`, parsed in
   [gps-source.cpp](pacer/gps-source/gps-source.cpp)) ride the same media clock as GPS; bound as
-  `IMUSample`/`QuatSample` with `read_accl`/`read_grav`/`read_cori`. Used only by the studio g-meter.
+  `IMUSample`/`QuatSample` with `read_accl`/`read_gyro`/`read_grav`/`read_cori` (and the bulk
+  `read_*_columns`). ACCL/GRAV/CORI feed the studio g-meter; `GYRO` (rad/s) feeds `studio/rotation.py`,
+  the measured yaw-rate channel. GYRO declares the SAME axis orientation as ACCL on every camera
+  measured, but NOT the same sample rate — it runs 2–17x faster on a HERO5/Karma/Max/Fusion, so join
+  the two on time, never by row. `DeviceName()` exposes the camera's `DVNM` (e.g. "HERO13 Black"),
+  which is what says whether a recording *can* have GPS at all (a HERO12 has no receiver).
 
 ### 2. C++ → Python binding pipeline
 
@@ -112,9 +117,9 @@ C++ headers → `bindings/<pkg>/generate-bindings.py` runs **litgen** (srcML) �
   crude bi-radius ellipsoid), `Interpolate` (point/GPSSample lerp), and `Split<P>` (the core of lap
   detection). Depends on `datatypes` only — no plotting/display deps (it was decoupled from implot when
   the C++ GUI was removed).
-- **`gps-source`** — `RawGPSSource` (abstract), `GPMFSource` (MP4/GPMF: decodes GPS5+GPSU, GPS9, and
-  ACCL/GRAV/CORI), `SequentialGPSSource` (chains sources into one cumulative timeline — used for
-  chaptered recordings). Depends on `datatypes` + `gpmf::gpmf`.
+- **`gps-source`** — `RawGPSSource` (abstract), `GPMFSource` (MP4/GPMF: decodes GPS5+GPSU, GPS9,
+  ACCL/GYRO/GRAV/CORI and the `DVNM` device name), `SequentialGPSSource` (chains sources into one
+  cumulative timeline — used for chaptered recordings). Depends on `datatypes` + `gpmf::gpmf`.
 - **`laps`** — the data model: `Laps` (`AddPoint`, `Update`, `GetLap`, `LapTime`, `Sectors`), `Lap`
   (`points`, `cum_distances`, `FillDistances`). Lap **distance is gap-aware** (`SegmentDistance`
   uses the trapezoidal speed integral across GPS dropouts instead of the corner-cutting chord). Lap
@@ -213,7 +218,7 @@ suites). For the whole suite minus its two slowest members, use `pixi run test-f
   members. Bindings map `PascalCase`→`snake_case`.
 - **CRTP operator mixins** instead of a concrete vector class (any indexable type with size `N`).
 - **Callback/pull I/O:** GPS sources expose `std::function` reader virtuals
-  (`ReadSamples`/`ReadAccl`/`ReadGrav`/`ReadCori`) — trampolinable, so Python subclasses can override
+  (`ReadSamples`/`ReadAccl`/`ReadGyro`/`ReadGrav`/`ReadCori`) — trampolinable, so Python subclasses can override
   them and feed samples into the engine.
 - **Designated initializers** (`{.lat=…}`) used throughout the C++.
 - **Units:** angles in degrees; speeds in m/s (×3.6 → km/h only at display).
