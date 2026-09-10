@@ -604,17 +604,23 @@ def format_delta_value(d: float | None) -> str:
     return f"{0.0 if abs(d) <= DELTA_EVEN_EPS_S else d:+.2f}"
 
 
-def format_delta_run(d: float | None, *, units: bool = True, arrow: bool = True) -> str:
+def format_delta_run(d: float | None, *, units: bool = True, arrow: bool = True,
+                     sigil: bool = True) -> str:
     """Δ <v> with an optional trailing ' s' (units=True live box, False export) and an optional
     trailing direction arrow (▲ ahead / ▼ behind). The arrow is the NON-COLOUR redundancy so the
     ahead/behind meaning survives greyscale / colour blindness; the signed value (−/+) already
     agrees with it. `arrow=False` for plain-number contexts (tooltips that name the direction in
-    words)."""
+    words).
+
+    `sigil=False` DROPS THE LEADING Δ, for a caller whose own sentence already said it (§5.6). The
+    hero tooltip read "Δ to your best lap here: Δ +0.00 s" — the glyph twice in one line, once as
+    prose and once as notation."""
     v = format_delta_value(d)
     a = f" {delta_arrow(d)}" if (arrow and delta_arrow(d)) else ""
+    head = "Δ " if sigil else ""
     if d is None:
-        return f"Δ {v}"
-    return f"Δ {v} s{a}" if units else f"Δ {v}{a}"
+        return f"{head}{v}".strip()
+    return f"{head}{v} s{a}" if units else f"{head}{v}{a}"
 
 
 def format_speed_run(speed_kmh: float | None, lap: int | None,
