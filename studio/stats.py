@@ -13,7 +13,15 @@ PACER-FREE BY CONTRACT (numpy only, no Qt). Two layers, mirroring the establishe
 Everything here is a REDUCTION of channels the app already computes and trusts — lap arrays,
 the validated g-meter series, the brake/coast event lists — never a new estimate. Peak
 longitudinal g reads the GPS speed-derivative (long_g_gps) when present, the same validated
-signal the dial/brake channels use (the IMU forward axis is vibration-inflated)."""
+signal the dial/brake channels use (the IMU forward axis is vibration-inflated).
+
+The BAND DISTRIBUTIONS (speed_bands / lateral_g_bands, the Stats page's DISTRIBUTIONS charts) are
+reductions too, of the same two channels — but they are TIME-WEIGHTED, which is a contract rather
+than an implementation detail and is carried by the `Bands` type: a bar is seconds PER LAP, never a
+sample count, so the bands of one chart sum to a real lap time and two groups of different sizes
+can be laid over each other. The fastest/slowest comparison pools QUARTILES rather than pairing the
+best lap against the median lap, because the pair was measured and does not separate (SPLIT_DENOM
+carries the numbers)."""
 
 from __future__ import annotations
 
@@ -63,6 +71,56 @@ RACE_PACE_N = 3
 # driving channels' friction-circle envelope (driving.grip_envelope), so the dashed ring on
 # the g-g plot and the per-corner grip normalisation can never disagree in spirit.
 ENVELOPE_PCT = 98.0
+
+# --------------------------------------------------------------------- band distributions
+# THE BAND WIDTHS, and both are measured rather than picked.
+#
+# Speed: 5 km/h. On the two D24 recordings the clean laps span 13.6-90.4 and 25.3-88.2 km/h, so
+# that is 17 and 13 bands, of which 13 and 12 carry at least 0.5 % of a lap each. Halving it to
+# 2.5 km/h does not buy resolution, it buys noise: the median clean lap's distance from the
+# session's own average profile rises from 0.074 to 0.090 (0060) and 0.058 to 0.080 (0062) — the
+# extra bands fill with lap-to-lap scatter rather than with structure.
+SPEED_BAND = 5.0
+# ...and 2.5 mph on an mph page, WHICH IS NOT THE SAME NUMBER ON PURPOSE. A band is only worth
+# counting in if it is round in the unit on the axis, but the chart must not change RESOLUTION when
+# a reader flips View ▸ Units: 2.5 mph is 4.02 km/h — within a fifth of the km/h band, and 16-20
+# bands on these recordings — while a matching "5 mph" would be 8.05 km/h and collapse the 0062
+# session to EIGHT bars.
+SPEED_BAND_MPH = 2.5
+# Lateral g: 0.2 g, SIGNED and centred on zero.
+#
+# 0.2 g because that is where the bars stop being a comb: 20 bands of which 15 carry ≥0.5 % on both
+# recordings, against 0.1 g's 36-40 bands (29 carrying) and 0.25 g's 16 (12-13). The fast/slow
+# separation is unmoved by the choice (TVD 0.061/0.052 at 0.2 g against 0.066/0.054 at 0.1), so the
+# tie goes to the width a reader can actually count.
+#
+# SIGNED because the distribution is not one hump — it is three: a spike at zero (the straight-line
+# running, 18-19 % of the lap) and a corner hump either side. Those humps are the same HEIGHT in g
+# on both recordings (p98 +1.36 / −1.38 on 0060, +1.33 / −1.34 on 0062) and very different in TIME
+# (34.8 s per lap outside the centre band turning left against 21.5 turning right, and 35.2 against
+# 21.9) — the track's handedness, which an absolute-value axis folds away for nothing.
+LAT_G_BAND = 0.2
+# The fastest/slowest comparison: QUARTILES of the clean laps, floored at three laps a side.
+#
+# WHY A POOLED GROUP AND NOT THE BEST LAP AGAINST THE MEDIAN LAP. Because the pair does not
+# separate. Over the 38 and 65 clean laps of the two D24 recordings the best lap's speed profile
+# differs from the median lap's by a total-variation distance of 0.113 and 0.089 — against a median
+# of 0.105 and 0.087 over ALL pairs of clean laps. It sits at the 60th and 54th percentile of the
+# null: two laps picked at random differ by the same amount. Lateral g is the same story (0.100 and
+# 0.110, at the 40th and 64th percentile). A chart of one lap against one other lap is a chart of
+# lap-to-lap noise with two laps' names on it.
+#
+# Pooled quartiles do separate, and the separation survives a permutation test on both recordings:
+# fastest-quarter vs slowest-quarter TVD 0.073 and 0.061 against a shuffled-label p95 of 0.055 and
+# 0.034 (z = +3.7 and +6.5) for speed, 0.070 and 0.054 against 0.050 and 0.035 (z = +4.5 and +5.8)
+# for lateral g. Pooling is what buys it: the noise on a group of n laps falls as sqrt(n) while the
+# fast/slow difference does not.
+SPLIT_DENOM = 4           # quartiles — the fastest quarter against the slowest quarter
+SPLIT_MIN_SIDE = 3        # ...but never fewer than three laps a side
+# ...so a comparison needs this many clean laps. At 3 a side the split still clears the permutation
+# null on both recordings (0.150 vs a p95 of 0.099, and 0.110 vs 0.079), and below it the two
+# "groups" would be one or two laps each — the single-pair defect above, wearing a group's clothes.
+MIN_SPLIT_LAPS = 2 * SPLIT_MIN_SIDE + 2
 
 
 # --------------------------------------------------------------------- value objects
@@ -217,7 +275,152 @@ class PaceStats:
     #                       answer is "unknown", not the +0.00 s that reads as a measurement.
 
 
+@dataclass(frozen=True)
+class Bands:
+    """One channel's TIME-WEIGHTED distribution over a set of laps: SECONDS PER LAP in each band.
+
+    Seconds per lap and not raw seconds, and not a sample count — that is the whole weighting
+    contract of this type and the reason it is a type at all:
+
+      * TIME, because "how much of the lap is spent here" is the question a driver is asking.
+        A sample count would answer it only for a channel sampled at a constant rate; the GPS
+        speed trace is not (a dropout leaves a hole), and a count would silently weigh a
+        one-sample band the same as a one-second one.
+      * PER LAP, because these are compared across groups of different sizes — the fastest
+        quarter against the slowest quarter. Raw seconds would make the bigger group taller
+        everywhere and say nothing.
+
+    `seconds` sums to the mean of the laps' MEASURED time less any dropout gap inside them (see
+    sample_durations), so a band read off this chart is a real share of a real lap."""
+
+    edges: np.ndarray            # len n+1, the band boundaries in the channel's own unit
+    seconds: np.ndarray          # len n, mean seconds per lap in each band
+    laps: int                    # how many laps the mean is over
+    lap_ids: tuple[int, ...]     # ...and which — so a caption can name the sample
+    median_lap_s: float | None   # the group's median lap time; None with no lap
+
+    @property
+    def centres(self) -> np.ndarray:
+        return 0.5 * (self.edges[:-1] + self.edges[1:])
+
+    @property
+    def total_s(self) -> float:
+        """Seconds per lap over every band — the measured driving time one lap accounts for."""
+        return float(np.sum(self.seconds))
+
+    def carrying(self, floor_frac: float = 0.005) -> int:
+        """How many bands hold at least `floor_frac` of the lap — the honest "how many bars is
+        this chart really made of", as against how many were drawn."""
+        total = self.total_s
+        if total <= 0:
+            return 0
+        return int(np.sum(self.seconds / total >= floor_frac))
+
+
+@dataclass(frozen=True)
+class BandReport:
+    """One channel's distribution over the clean laps, plus the fastest/slowest comparison.
+
+    ONE SET OF EDGES for all three, which is why this is a report and not three calls: two
+    distributions binned differently are not a comparison, they are two pictures. `fast`/`slow`
+    are None together, below MIN_SPLIT_LAPS (see the constant for the measured reason)."""
+
+    all: Bands
+    fast: Bands | None
+    slow: Bands | None
+
+    @property
+    def edges(self) -> np.ndarray:
+        return self.all.edges
+
+    @property
+    def has_split(self) -> bool:
+        return self.fast is not None and self.slow is not None
+
+
 # --------------------------------------------------------------------- pure reducers
+def sample_durations(times, max_gap_s: float = MAX_SAMPLE_GAP_S) -> np.ndarray:
+    """Seconds each sample of a time series stands for — the weight a time-weighted histogram
+    gives it. Same length as `times`.
+
+    TRAPEZOIDAL (each sample takes half of the interval either side of it), NOT the leading-sample
+    attribution `moving_time_s` uses. The two answer different questions: `moving_time_s` thresholds
+    on the leading sample's own speed, so an interval belongs wholly to the sample whose speed
+    decided it, while a distribution has to RECONCILE — the bands of one lap must sum to that lap's
+    measured time, and leading attribution drops the final interval on the floor.
+
+    A step longer than `max_gap_s` is a GPS dropout or a chapter seam and contributes to neither of
+    its endpoints: nothing was measured across it, and the same conservative rule moving_time_s
+    applies (see MAX_SAMPLE_GAP_S). So the sum is the span LESS its gaps, never more."""
+    t = np.asarray(times, float)
+    n = len(t)
+    if n < 2:
+        return np.zeros(n)
+    dt = np.diff(t)
+    dt = np.where(np.isfinite(dt) & (dt > 0) & (dt <= max_gap_s), dt, 0.0)
+    w = np.zeros(n)
+    w[:-1] += dt / 2.0
+    w[1:] += dt / 2.0
+    return w
+
+
+def band_edges(values, width: float, *, centre_on_zero: bool = False) -> np.ndarray:
+    """Band boundaries of `width` covering every finite value, aligned to the width.
+
+    `centre_on_zero` puts a band ON zero (edges at ±width/2, ±3·width/2, …) instead of at it. That
+    is for a SIGNED channel, and it is not cosmetic: with zero on an edge the lateral-g chart's
+    straight-line time — a fifth of the lap — splits across two adjacent bars as a fake "slightly
+    left / slightly right" pair, and the left and right corner humps then sit at different offsets
+    from the middle and stop being comparable by eye.
+
+    An empty / all-NaN input gets one band, so a caller never has to special-case the shape."""
+    v = np.asarray(values, float)
+    v = v[np.isfinite(v)]
+    if len(v) == 0:
+        return np.array([0.0, width])
+    if centre_on_zero:
+        # `k` counts the bands OUTSIDE the centre one, each side, so the axis comes out symmetric:
+        # 2k+2 edges over 2k+1 bands, running ±(k + ½)·width. Offsetting a plain arange(-k, k+1)
+        # by half a band instead is the obvious spelling and is wrong — it shifts every edge the
+        # same way and the axis lands at −1.9 … +2.1, a whole band longer on the right.
+        k = max(0, int(np.ceil((float(np.max(np.abs(v))) - width / 2.0) / width)))
+        return (np.arange(-k - 1, k + 1, dtype=float) + 0.5) * width
+    lo = np.floor(float(np.min(v)) / width) * width
+    hi = np.ceil(float(np.max(v)) / width) * width
+    if hi <= lo:
+        hi = lo + width
+    return np.arange(lo, hi + width / 2.0, width)
+
+
+def band_seconds(values, durations, edges) -> np.ndarray:
+    """Seconds spent in each band: the time-weighted histogram of `values`. Values outside
+    `edges` are dropped (the edges are derived from the data, so this is the NaN case)."""
+    v = np.asarray(values, float)
+    w = np.asarray(durations, float)
+    n = min(len(v), len(w))
+    v, w = v[:n], w[:n]
+    keep = np.isfinite(v) & np.isfinite(w) & (w > 0)
+    if not np.any(keep):
+        return np.zeros(len(np.asarray(edges)) - 1)
+    return np.histogram(v[keep], bins=np.asarray(edges, float), weights=w[keep])[0]
+
+
+def pace_split(lap_ids, lap_times) -> tuple[list[int], list[int]] | None:
+    """(fastest laps, slowest laps) — the quartile split the band comparison pools over, or None
+    below MIN_SPLIT_LAPS finite laps (see the constant for why a single best-vs-median pair is not
+    a comparison at all).
+
+    Ties are broken by lap id, so the split is deterministic: two laps of identical time can never
+    swap sides between refreshes and move the chart."""
+    pairs = [(float(t), int(i)) for i, t in zip(lap_ids, lap_times, strict=True)
+             if np.isfinite(t)]
+    if len(pairs) < MIN_SPLIT_LAPS:
+        return None
+    pairs.sort()
+    q = max(SPLIT_MIN_SIDE, len(pairs) // SPLIT_DENOM)
+    return [i for _t, i in pairs[:q]], [i for _t, i in pairs[-q:]]
+
+
 def moving_time_s(times, speed_ms, threshold_ms: float = MOVING_MS) -> float:
     """Seconds spent at speed ≥ `threshold_ms`. Each inter-sample interval is attributed to
     its LEADING sample's speed; intervals longer than MAX_SAMPLE_GAP_S (dropouts / chapter
@@ -648,12 +851,16 @@ class SessionStats:
         # lap-level results are projected through the segmentation → dropped by invalidate().
         self._lap_stats_cache: list[LapStat] | None = None
         self._gg_cache: tuple[np.ndarray, np.ndarray] | None = None
+        # …and the band distributions, keyed by their arguments (the speed bands are binned in
+        # whatever unit the page displays, so there is one report per unit, not one per session).
+        self._bands_cache: dict[tuple, BandReport | None] = {}
 
     def invalidate(self) -> None:
         """Drop the segmentation-derived caches on re-segment (Session.set_timing_lines);
         the trace totals are unchanged by a timing-line edit and are kept."""
         self._lap_stats_cache = None
         self._gg_cache = None
+        self._bands_cache = {}
 
     # ------------------------------------------------------------------ trace level
     def totals(self) -> SessionTotals:
@@ -792,6 +999,105 @@ class SessionStats:
             if st.vmax_kmh is not None and (best is None or st.vmax_kmh > best[0]):
                 best = (st.vmax_kmh, st.idx)
         return best
+
+    # ------------------------------------------------------------------ band distributions
+    def _band_report(self, per_lap: Callable[[int], tuple | None], width: float, *,
+                     centre_on_zero: bool = False) -> BandReport | None:
+        """Bin one channel over the CLEAN laps and split the result fastest-vs-slowest.
+
+        `per_lap(lap_id)` returns that lap's (values, per-sample durations) or None. The edges are
+        derived ONCE from every clean lap's samples pooled, so the three distributions in the
+        report are the same chart drawn three times and can be read against each other.
+
+        The CLEAN laps (valid ∧ dropout-free), the set PACE and every σ statistic on this page run
+        over. A lap with a GPS dropout is exactly the lap whose time-weighting cannot be trusted —
+        the hole is not a band, it is an absence — so it is out of the distribution for the same
+        reason it is out of the σ."""
+        rows: dict[int, np.ndarray] = {}
+        values: dict[int, np.ndarray] = {}
+        for i in self._consistency_lap_ids():
+            got = per_lap(i)
+            if got is None:
+                continue
+            v, w = np.asarray(got[0], float), np.asarray(got[1], float)
+            if len(v) == 0 or not np.any(np.isfinite(v)) or float(np.sum(w)) <= 0:
+                continue
+            values[i] = v
+            rows[i] = w
+        if not values:
+            return None
+        edges = band_edges(np.concatenate(list(values.values())), width,
+                           centre_on_zero=centre_on_zero)
+        hist = {i: band_seconds(values[i], rows[i], edges) for i in values}
+
+        def group(ids: list[int]) -> Bands:
+            keep = [i for i in ids if i in hist]
+            times = [float(self._lap_time(i)) for i in keep]
+            return Bands(edges=edges,
+                         seconds=np.mean([hist[i] for i in keep], axis=0),
+                         laps=len(keep), lap_ids=tuple(keep),
+                         median_lap_s=float(np.median(times)) if times else None)
+
+        ids = sorted(hist)
+        split = pace_split(ids, [self._lap_time(i) for i in ids])
+        return BandReport(all=group(ids),
+                          fast=group(split[0]) if split else None,
+                          slow=group(split[1]) if split else None)
+
+    def speed_bands(self, *, scale: float = 1.0,
+                    width: float = SPEED_BAND) -> BandReport | None:
+        """Time at speed: how many seconds of a lap are spent in each speed band.
+
+        `scale` converts the stored km/h to the unit the page is displaying (units.convert_speed
+        of 1.0), and `width` is a band IN THAT UNIT — a reader counts in the number on the axis, so
+        the bands are round mph on an mph page rather than round km/h relabelled.
+
+        The 10 Hz GPS speed trace is the one channel on this page whose distribution needs no
+        caveat: every sample is a real 100 ms of driving, so a time-weighted histogram of it is
+        exactly what it claims to be (contrast the g bands, whose channel is filtered — see
+        lateral_g_bands). Cached per (scale, width) and dropped on re-segment."""
+        key = ("speed", float(scale), float(width))
+        if key not in self._bands_cache:
+            def per_lap(i):
+                _dist, speed_kmh, elapsed = self._lap_arrays(i)
+                n = min(len(speed_kmh), len(elapsed))
+                return np.asarray(speed_kmh[:n], float) * scale, sample_durations(elapsed[:n])
+            self._bands_cache[key] = self._band_report(per_lap, float(width))
+        return self._bands_cache[key]
+
+    def lateral_g_bands(self, *, width: float = LAT_G_BAND) -> BandReport | None:
+        """Time at lateral g: how many seconds of a lap are spent at each cornering load, SIGNED
+        (+ left / − right, the g-g plot's own convention) and centred on zero.
+
+        THE TRUSTED AXIS AND ONLY THE TRUSTED AXIS. This reads `lat_g` — the IMU-derived lateral,
+        which cross-checks against GPS at r ≈ +0.90 with 96.5 % sign agreement — and never the
+        forward axis, which is vibration-inflated (r ≈ +0.36, ~2x RMS: studio/docs/gmeter-
+        validation.md). There is deliberately no longitudinal companion to this method; the view
+        says why.
+
+        THE RATE IS NOT THE SENSOR'S. ACCL is sampled at 200 Hz, but gmeter.compute boxcars it over
+        gmeter.LAT_SMOOTH_S and resamples to gmeter.OUTPUT_HZ before anything downstream sees it, so
+        these bands are a distribution of a FILTERED 50 Hz series — still five times the GPS rate,
+        and still the reason a g distribution is worth drawing at all, but not 200 Hz and the view
+        must not say 200. None without an accelerometer. Cached per width; dropped on re-segment."""
+        key = ("lat_g", float(width))
+        if key not in self._bands_cache:
+            gm = self._gmeter()
+            if not getattr(gm, "has_data", False):
+                self._bands_cache[key] = None
+            else:
+                times = np.asarray(gm.times, float)
+                lat = np.asarray(gm.lat_g, float)
+
+                def per_lap(i):
+                    win = self._lap_window(i)
+                    if win is None:
+                        return None
+                    m = in_windows_mask(times, [win])
+                    return lat[m], sample_durations(times[m])
+                self._bands_cache[key] = self._band_report(per_lap, float(width),
+                                                           centre_on_zero=True)
+        return self._bands_cache[key]
 
     def gg_cloud(self, max_points: int = 4000) -> tuple[np.ndarray, np.ndarray] | None:
         """The friction-circle scatter: (lat_g, long_g) samples restricted to the VALID laps'

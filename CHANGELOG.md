@@ -10,6 +10,15 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **The Stats page has distributions: where a lap's time actually goes.** A DISTRIBUTIONS group
+  between the SPEED · G peaks and the friction circle draws time at speed and time at lateral g as
+  seconds *per lap*, time-weighted, with your fastest and slowest quartiles laid over the average
+  clean lap. It compares POOLED groups rather than your best lap against your median lap, because
+  the pair was measured and does not separate — on both D24 recordings those two laps differ by no
+  more than two laps picked at random do, while the quartile split clears a shuffled-label null on
+  each. The group states its weighting, each channel's rate and the g-meter's filter on its face;
+  there is no braking-g distribution because that channel separated fastest from slowest the most
+  weakly of the four measured and its shape is largely its own smoother's.
 - **The Stats page says which baseline each "loss" is measured against, and reconciles the page.**
   Two columns one tab apart were both called a loss and were 3.8× apart in total (3.93 s here,
   1.02 s on Coaching, and 1.3× to 2450× apart corner by corner) because one is measured against

@@ -41,8 +41,13 @@ _PERM = (1, 0, 2)
 # CORI stores world->camera; conjugate it to rotate camera->world.
 _CORI_CONJUGATE = True
 
-_OUTPUT_HZ = 50.0    # output rate; g is band-limited well below ACCL 200Hz
-_LOWPASS_S = 0.15    # pre-output low-pass (s): kills road buzz without lagging corners/brakes
+# The output rate and the pre-output low-pass. PUBLIC for the same reason LONG_SMOOTH_S below is:
+# a second module now has to SAY them. The Stats page's lateral-g DISTRIBUTION is a distribution of
+# this series, and a histogram of a filtered channel owes the reader its filter exactly the way a
+# peak owes its window — "the 200 Hz accelerometer" would be a claim about a sensor, not about the
+# numbers on the axis, which are a 0.15 s boxcar resampled to 50 Hz. Read there, never retyped.
+OUTPUT_HZ = 50.0     # output rate; g is band-limited well below ACCL 200Hz
+LAT_SMOOTH_S = 0.15  # pre-output low-pass (s): kills road buzz without lagging corners/brakes
 _MOVING_MS = 4.0     # m/s; heading is ill-defined at a standstill (used for fit + cross-check)
 # The live dial / export overlay read LONGITUDINAL g from the GPS speed derivative, not the IMU
 # forward axis: the latter is vibration-dominated (~1.5x inflated, weakly correlated with the
@@ -389,7 +394,7 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
     long_g_gps = None
     if len(gps_t) >= 4:
         spd_kmh = np.interp(times, gps_t, np.asarray(gps_speed, float) * 3.6)
-        w = max(int(round(LONG_SMOOTH_S * _OUTPUT_HZ)), 1)
+        w = max(int(round(LONG_SMOOTH_S * OUTPUT_HZ)), 1)
         long_g_gps = boxcar(speed_long_g(spd_kmh, times), w)
     return GMeter(times=times, lat_g=lat_g, long_g=long_g, cross=cross, source="accl",
                   long_g_gps=long_g_gps)
@@ -430,7 +435,7 @@ def _horizontal_accel(accl, grav, cori, ta):
     e1 = e1 / np.linalg.norm(e1)
     e2 = np.cross(gdir, e1)
     e2 = e2 / np.linalg.norm(e2)
-    lp_w = max(int(_LOWPASS_S * len(ta) / max(ta[-1] - ta[0], 1e-6)), 1)
+    lp_w = max(int(LAT_SMOOTH_S * len(ta) / max(ta[-1] - ta[0], 1e-6)), 1)
     return boxcar(horiz @ e1, lp_w), boxcar(horiz @ e2, lp_w)
 
 
@@ -603,7 +608,7 @@ def _resample(t, lat_g, long_g):
     t = np.asarray(t, float)
     if len(t) < 2:
         return t, np.asarray(lat_g, float), np.asarray(long_g, float)
-    out_t = np.arange(t[0], t[-1], 1.0 / _OUTPUT_HZ)
+    out_t = np.arange(t[0], t[-1], 1.0 / OUTPUT_HZ)
     return out_t, np.interp(out_t, t, lat_g), np.interp(out_t, t, long_g)
 
 
