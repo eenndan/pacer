@@ -494,6 +494,33 @@ def _reason_cell(opp: coaching.Opportunity, brake_points: dict,
     return item
 
 
+def _budget_action_column(table, col: int) -> None:
+    """Widen `col` until the BUTTON inside it fits, not merely its own size hint (§6.4).
+
+    `ResizeToContents` sizes a column from the cell widget's hint and knows nothing about the inset
+    the view then paints that widget INSIDE. Measured on the shipped default (920x380, D24's nine
+    opportunities): the column came out 89 px, the last cell's `visualRect` was x=791 w=88, and the
+    button was placed at x=799 keeping its 88 px minimum — so it ran to 887 against a viewport of
+    880. Every Jump button in the dialog was flat-cut on its right edge, the amber rounding sliced
+    off into the scrollbar gutter.
+
+    Rather than guess the inset from a style metric, ASK THE PAINTER: compare the widget's geometry
+    with the cell it was painted into and add the difference. Self-correcting across styles and DPRs,
+    and a no-op when the column already fits. (The same "the budget asks the painter" move the
+    export pill budget made for the same class of defect.)"""
+    if table.rowCount() < 1:
+        return
+    widget = table.cellWidget(0, col)
+    if widget is None:
+        return
+    cell = table.visualRect(table.model().index(0, col))
+    over = (widget.geometry().right() + 1) - (cell.right() + 1)
+    if over > 0:
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(col, QHeaderView.Fixed)
+        table.setColumnWidth(col, header.sectionSize(col) + over)
+
+
 class OpportunitiesDialog(QDialog):
     """Coaching ▸ Opportunities dialog over a freshly-computed ``coaching.Opportunities``.
     jump_to(cid, entry_dist) fires on a row's Jump button; None disables them (headless layout
@@ -602,6 +629,7 @@ class OpportunitiesDialog(QDialog):
         # measured at the width the delegate PAINTS into so no line is dropped, and re-fitted every
         # time the header re-stretches the column (L5-03).
         _wire_reason_fit(table, _COL_REASON)
+        _budget_action_column(table, _COL_GO)
         self.table = table  # exposed for the tests
         return table
 

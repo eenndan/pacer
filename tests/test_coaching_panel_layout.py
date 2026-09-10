@@ -325,5 +325,46 @@ def _run_all():
     print("ALL COACHING PANEL LAYOUT TESTS OK")
 
 
+def test_the_dialogs_jump_buttons_are_not_clipped_at_its_own_default_size():
+    """§6.4: at the size the dialog opens itself at (920x380), every amber Jump button was
+    flat-cut on its right edge — the rounding sliced off into the scrollbar gutter.
+
+    Measured on the real dialog with D24's nine opportunities: the GO column came out 89 px from
+    `ResizeToContents`, the last cell's visualRect was x=791 w=88, and the button was painted at
+    x=799 keeping its 88 px minimum — running to 887 against an 880 px viewport. `ResizeToContents`
+    sizes a column from the cell widget's HINT and knows nothing about the inset the view then
+    paints that widget inside.
+
+    `_budget_action_column` asks the painter instead of guessing a style metric: it compares the
+    widget's geometry with the cell it landed in and adds the difference. This test drives the real
+    dialog at the real default and asserts no button crosses its own cell."""
+    from studio.coaching_panel import OpportunitiesDialog
+
+    opps = coaching.Opportunities(enough=True, n_laps=8, median_lap_id=3, rows=_rows(9))
+    dlg = OpportunitiesDialog(opps, jump_to=lambda *a: None, brake_points={}, speed_unit="kmh")
+    dlg.show()
+    for _ in range(8):
+        _APP.processEvents()
+    try:
+        t = dlg.table
+        last = t.columnCount() - 1
+        vp = t.viewport().width()
+        worst = 0
+        for r in range(t.rowCount()):
+            btn = t.cellWidget(r, last)
+            if btn is None:
+                continue
+            cell = t.visualRect(t.model().index(r, last))
+            worst = max(worst, (btn.geometry().right() + 1) - (cell.right() + 1))
+            assert btn.geometry().right() + 1 <= vp, (
+                f"row {r}: the Jump button runs {btn.geometry().right() + 1 - vp} px past the "
+                f"viewport — it is being painted into the scrollbar gutter")
+        assert worst <= 0, (f"a Jump button overhangs its own cell by {worst} px", worst)
+    finally:
+        dlg.deleteLater()
+        _APP.processEvents()
+    print(f"ok jump-clip: no button crosses its cell at {dlg.width()}x{dlg.height()}")
+
+
 if __name__ == "__main__":
     _run_all()
