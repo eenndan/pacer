@@ -1164,16 +1164,55 @@ def test_dialog_all_junk_selects_nothing_and_shows_empty_state():
     dlg.deleteLater()
 
 
-def test_dialog_pb_empty_state_when_fewer_than_two_points():
-    """The PB chart shows an in-chart empty-state (NOT bare axes) for a track with <2 dated bests,
-    and HIDES it once there are >=2 points to chart."""
+def test_search_finds_a_row_by_the_name_the_dialog_shows_it_under():
+    """§6.3b: the search box matched TRACK and DATE only, while every row's tooltip and the
+    forget-confirmation name the recording by its filename — "GX010060.MP4". So typing the one
+    identifier the dialog had just shown the user HID the row it names.
+
+    Two same-day sessions on the same unknown track are indistinguishable by track+date, which is
+    exactly why the filename is the identifier those surfaces lead with."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("GX010060", track="MK", date="2024-05-01", best=70.0, paths=[]))
+    library.upsert(idx, _entry("GX010062", track="MK", date="2024-05-01", best=71.0, paths=[]))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    _APP.processEvents()
+
+    def _visible_rows():
+        return [r for r in range(dlg.table.rowCount()) if not dlg.table.isRowHidden(r)]
+
+    assert len(_visible_rows()) == 2, "fixture must start with both rows on screen"
+    dlg.search.setText("0060")
+    _APP.processEvents()
+    rows = _visible_rows()
+    assert len(rows) == 1, (
+        "searching the filename the dialog itself shows hid the row it names", rows)
+    # ...and the track/date search it always had still works.
+    dlg.search.setText("MK")
+    _APP.processEvents()
+    assert len(_visible_rows()) == 2, "the track search regressed"
+    dlg.deleteLater()
+    print("ok library-search: a filename finds its row, and track/date still do")
+
+
+def test_dialog_pb_empty_state_and_data_layer_are_mutually_exclusive():
+    """The PB chart shows an in-chart empty-state (NOT bare axes) when it has NOTHING to chart, and
+    never over something it has drawn.
+
+    §6.3a — found independently by three review lanes, and this test used to PIN the defect: with
+    exactly one dated best it asserted the lone amber marker was drawn AND that "Not enough
+    sessions on this track yet…" was visible, i.e. the sentence was painted through the datum it
+    was denying. One session is data. The count and the time live in the title
+    ("PB progression — MK  (1 session: 1:10.000)"), which states the same fact without overlapping
+    the mark."""
     idx = library.empty_index()
     library.upsert(idx, _entry("A", track="MK", date="2024-05-01", best=70.0, paths=[]))
     dlg = LibraryDialog(idx, _OpenSpy())
-    dlg._show_pb("MK")                       # exactly 1 dated best → empty-state visible
-    assert dlg._pb_empty.isVisible()
+    dlg._show_pb("MK")                       # exactly 1 dated best → the point, and NO sentence
     xs, _ = dlg._pb_curve.getData()
     assert len(xs) == 1                      # the lone marker IS drawn (framed), not cleared
+    assert not dlg._pb_empty.isVisible(), (
+        "the empty state is painted over a point that was just drawn")
+    assert "1 session" in dlg._pb_title.text(), dlg._pb_title.text()
     # A null track also shows the empty-state.
     dlg._show_pb(None)
     assert dlg._pb_empty.isVisible()
@@ -1192,14 +1231,20 @@ def test_dialog_pb_empty_state_label_stays_centred_in_the_plot_across_a_resize()
     sentence was never seen). It must also re-centre on resize (a one-shot position drifts 150 px)."""
     with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
         idx = library.empty_index()
-        library.upsert(idx, _entry("GX010060", track="MK", date="2024-05-01", best=68.0,
+        # NO DATE on the entry, so the track has ZERO dated best laps and the explanatory message
+        # is the only thing in the plot. It used to be a 1-session fixture, but a single session is
+        # DATA: §6.3a stopped that branch painting "Not enough sessions…" through the amber point
+        # it had just drawn, so the empty state and the data layer are now mutually exclusive and
+        # this test needs a case that is genuinely empty. What it is testing — that the label sits
+        # at the ViewBox's PIXEL centre and re-centres on resize — is unchanged.
+        library.upsert(idx, _entry("GX010060", track="MK", date=None, best=68.0,
                                    laps=8, paths=[real.name]))
         dlg = LibraryDialog(idx, _OpenSpy())
         dlg.resize(900, 700)
         dlg.show()
         _APP.processEvents()
-        dlg._show_pb("MK")                       # 1 dated best → the explanatory message shows
-        assert dlg._pb_empty.isVisible()
+        dlg._show_pb("MK")                       # 0 dated bests → the explanatory message shows
+        assert dlg._pb_empty.isVisible(), "the fixture must actually reach an empty state"
 
         def _assert_centred(where):
             """Assert the label sits at the ViewBox's pixel centre, fully inside the plot; returns

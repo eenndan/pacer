@@ -870,11 +870,19 @@ class LibraryDialog(QDialog):
             # MISSING_ROLE doubles as the "not openable / not auto-selectable" flag — set for a
             # file-missing OR a quarantined junk row, so _on_selection / _open_selected guard both.
             date_item.setData(MISSING_ROLE, disabled)
-            # The search haystack: lower-cased "track date" so the box matches either substring.
-            # An unknown-track row is keyed on the label it SHOWS, so typing what's on screen
-            # reaches it (its `track` is null — there is nothing else to match).
+            # The search haystack: lower-cased "track date FILENAME" so the box matches any of the
+            # three. An unknown-track row is keyed on the label it SHOWS, so typing what's on
+            # screen reaches it (its `track` is null — there is nothing else to match).
+            #
+            # THE FILENAME IS IN IT BECAUSE THE DIALOG LEADS WITH THE FILENAME (§6.3b). Every row's
+            # tooltip and the forget-confirmation name the recording by its first chapter's
+            # basename — "GX010060.MP4" — while the search box matched track and date only. So
+            # typing the one identifier the dialog had just shown the user HID the row it names.
+            # Searching what is on screen has to find what is on screen.
             date_item.setData(
-                FILTER_ROLE, f"{track or _UNKNOWN_LABEL} {date or ''}".strip().lower())
+                FILTER_ROLE,
+                " ".join(p for p in (track or _UNKNOWN_LABEL, date or "",
+                                     _entry_name(e)) if p).strip().lower())
 
             # A junk row says so; a present-but-missing-file row keeps its established label. An
             # UNTRUSTWORTHY-but-openable row gets a muted trust tag (provisional/estimated/dropout)
@@ -1009,9 +1017,16 @@ class LibraryDialog(QDialog):
             self.pb_plot.enableAutoRange()
             self.pb_plot.autoRange()
         elif len(ys) == 1:
+            # ONE SESSION IS DATA, so the empty state has no business here (§6.3a, found
+            # independently by three review lanes): this branch drew the amber point AND put
+            # "Not enough sessions on this track yet…" across the middle of the plot, so the
+            # sentence was painted THROUGH the datum it was denying. The title already carries the
+            # count and the time — "PB progression — <track>  (1 session: 1:08.201)" — which is the
+            # same fact stated where it does not overlap the mark. Empty state and data layer are
+            # mutually exclusive now, in both directions.
             self._pb_title.setText(f"PB progression — {track}  (1 session: {fmt_time(ys[0])})")
             self._frame_single_point(xs[0], ys[0])
-            self._set_pb_empty("Not enough sessions on this track yet to chart progression")
+            self._set_pb_empty(None)
         else:
             self._pb_title.setText(f"PB progression — {track}  (no dated best laps)")
             self._set_pb_empty("Not enough sessions on this track yet to chart progression")
