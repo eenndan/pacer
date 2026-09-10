@@ -988,6 +988,22 @@ def _stroke_polyline(p: QPainter, poly: QPolygonF, colour: str, width: float,
     p.drawPolyline(poly)
 
 
+def _inset_width(session, lap_id: int, height: float, max_width: float) -> float:
+    """How wide the map inset needs to be to hold `lap_id`'s trace at `height`, capped at
+    `max_width`. Falls back to the cap when the trace is missing or degenerate (§6.6d)."""
+    try:
+        xs, ys = session.lap_trace_xy(lap_id)
+    except Exception:  # noqa: BLE001 — an overlay must never fail an export
+        return max_width
+    if xs is None or ys is None or len(xs) < 2:
+        return max_width
+    w = float(np.ptp(np.asarray(xs, float)))
+    h = float(np.ptp(np.asarray(ys, float)))
+    if not (w > 0 and h > 0):
+        return max_width
+    return float(min(max_width, max(height * (w / h), height * 0.5)))
+
+
 class _MapInset:
     """Track-map inset for the export: the exported lap's racing line is projected once and baked
     into a cached RGBA layer (re-rasterizing it per frame dominated render cost); each frame blits
@@ -1423,8 +1439,20 @@ class OverlayPainter:
         # g-meter: square in the TOP-RIGHT.
         gside = cfg.gmeter_frac * out_h
         self._g_rect = QRectF(out_w - m - gside, m, gside, gside)
-        # map inset: BOTTOM-RIGHT.
-        mw, mh = cfg.map_w_frac * out_w, cfg.map_h_frac * out_h
+        # map inset: BOTTOM-RIGHT, and AS WIDE AS THE TRACK NEEDS rather than a fixed 16:9 box.
+        #
+        # `map_w_frac * out_w` by `map_h_frac * out_h` is 16:9 by construction — the fractions are
+        # equal and the frame is not square — while a kart circuit is roughly square. Measured on
+        # D24 (bbox 209 x 197 m, aspect 1.06): the box came out 422x238 at 1080p and the fitted
+        # track drew at 252x238, so **40% of the inset was empty at every resolution**, 170 px of
+        # reserved frame at 1080p burned over the footage for nothing.
+        #
+        # The height fraction still sets the size; the WIDTH is whatever that height needs at the
+        # track's own aspect, capped by the old width so a genuinely wide circuit cannot grow the
+        # inset beyond what the composition was designed for. A degenerate/absent trace falls back
+        # to the old box.
+        mh = cfg.map_h_frac * out_h
+        mw = _inset_width(session, spec.lap_id, mh, cfg.map_w_frac * out_w)
         self._map = _MapInset(session, QRectF(out_w - m - mw, out_h - m - mh, mw, mh),
                               spec.lap_id, scale_k=self._k)
         # Both pills are FITTED to the widest text this export WILL burn — enumerated once here by

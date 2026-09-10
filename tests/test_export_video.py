@@ -1711,6 +1711,41 @@ def test_the_export_failure_dialog_speaks_english_not_ffmpeg():
     print("ok export-copy: every case names an action, and none of them is an ffmpeg tail")
 
 
+def test_the_map_inset_is_as_wide_as_the_track_not_as_wide_as_the_frame():
+    """§6.6d: the inset box was `map_w_frac * out_w` by `map_h_frac * out_h` — 16:9 by construction,
+    because the fractions are equal and the frame is not square — while a kart circuit is roughly
+    square.
+
+    Measured on D24 (track bbox 209 x 197 m, aspect 1.06): the box came out 422x238 at 1080p and the
+    fitted track drew at 252x238, so 40% of the inset was empty at EVERY resolution — 170 px of
+    reserved frame at 1080p, burned over the footage for nothing.
+
+    The height fraction still sets the size; the width is what that height needs at the track's own
+    aspect, capped by the old width so a genuinely wide circuit cannot grow the inset past what the
+    composition was designed for."""
+    from studio.export_video import _inset_width
+
+    class _Sess:
+        def __init__(self, w, h):
+            self._w, self._h = w, h
+        def lap_trace_xy(self, _lap):
+            return (np.array([0.0, self._w]), np.array([0.0, self._h]))
+
+    # a square-ish track uses the height it is given and no more width than it needs
+    assert abs(_inset_width(_Sess(209.0, 197.0), 0, 238.0, 422.0) - 238.0 * (209.0 / 197.0)) < 0.5
+    # a WIDE track is capped at the old box rather than growing the inset
+    assert _inset_width(_Sess(1000.0, 100.0), 0, 238.0, 422.0) == 422.0
+    # a TALL track keeps a floor, so the plate never becomes a sliver
+    assert _inset_width(_Sess(50.0, 1000.0), 0, 238.0, 422.0) == 238.0 * 0.5
+    # degenerate / missing traces fall back to the cap — an overlay must never fail an export
+    class _Broken:
+        def lap_trace_xy(self, _lap):
+            raise RuntimeError("no trace")
+    assert _inset_width(_Broken(), 0, 238.0, 422.0) == 422.0
+    assert _inset_width(_Sess(0.0, 0.0), 0, 238.0, 422.0) == 422.0
+    print("ok inset-width: the box follows the track, is capped, floored, and fails soft")
+
+
 if __name__ == "__main__":
     import inspect
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QTransform
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen, QTransform
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -291,6 +291,10 @@ _LEGEND_ROW_H = 18        # px per key row
 _LEGEND_GLYPH_W = 22      # px column reserved for the glyph
 _LEGEND_PAD = 8           # px inner padding of the plate
 _LEGEND_GAP = 6           # px between the glyph column and its label
+# A floor for the plate, so a collapsed key (title + caret only) never shrinks to a stub
+# that reads as a rendering fault rather than a control. The EXPANDED width is measured
+# from the labels (see _MapLegend._relayout).
+_LEGEND_MIN_W = 140       # px
 # Inset of every plate floated over the plot (the map key, the Fit button, the action notice) from
 # the canvas edges. One name, because _reposition_key's clamp and the other two have to agree — as
 # a literal it was spelled three times, each with a comment pointing at the other two.
@@ -379,8 +383,20 @@ class _MapLegend(QWidget):
 
     def _relayout(self):
         rows = 0 if self.painted_collapsed() else len(self._ROWS)
-        # Fixed width sized to the widest label + glyph column.
-        self._w = 196
+        # MEASURED width, not a typed one. This was `self._w = 196` under a comment claiming it was
+        # "sized to the widest label + glyph column" — a claim nothing checked. It happens to hold
+        # today (measured in the shipped face at 1x and 2x: the widest row, "Drag = start / sector
+        # line", needs 126 px of the 152 the painter gives it, and the plate needs 170 of its 196),
+        # so this is not a live clip — but a typed width over a label column is one copy edit away
+        # from one, and the review filed it as already clipping on some build. Asking the font
+        # settles it permanently: a longer label, a different face or a weight change now widens the
+        # plate instead of running off it.
+        title_fm = QFontMetrics(self._title_font)
+        row_fm = QFontMetrics(self._font)
+        label_col = _LEGEND_PAD + _LEGEND_GLYPH_W + _LEGEND_GAP
+        widest = max([title_fm.horizontalAdvance("Map key")]
+                     + [row_fm.horizontalAdvance(label) for _kind, label in self._ROWS])
+        self._w = max(_LEGEND_MIN_W, label_col + widest + _LEGEND_PAD)
         self._h = _LEGEND_PAD * 2 + _LEGEND_ROW_H + rows * _LEGEND_ROW_H
         self.setFixedSize(self._w, self._h)
         # Cursor + tooltip are part of the layout state: whether the plate is a control at all

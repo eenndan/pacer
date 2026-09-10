@@ -347,6 +347,44 @@ def _run_all():
     print(f"\n{len(tests)} map-key tests passed")
 
 
+def test_the_map_key_plate_is_measured_from_its_labels_not_a_typed_width():
+    """§6.6b: the plate width was `self._w = 196`, under a comment claiming it was "sized to the
+    widest label + glyph column" — a claim nothing checked.
+
+    Measured in the shipped face at 1x and 2x, the widest row ("Drag = start / sector line") needs
+    126 px of the 152 the painter gives it, so it was not actually clipping — the review filed it as
+    already clipped, and that did not reproduce. But a typed width over a label column is one copy
+    edit away from clipping, and this is the check that was missing: every row must fit the plate
+    the layout chose, whatever the labels say."""
+    from PySide6.QtGui import QFontMetrics
+
+    import studio.map_view as MV
+
+    legend = MV._MapLegend(on_resize=lambda: None, on_toggle=lambda *_a: None, collapsed=False)
+    row_fm = QFontMetrics(legend._font)
+    label_col = MV._LEGEND_PAD + MV._LEGEND_GLYPH_W + MV._LEGEND_GAP
+    avail = legend.width() - label_col - MV._LEGEND_PAD
+    for _kind, label in legend._ROWS:
+        need = row_fm.horizontalAdvance(label)
+        assert need <= avail, (
+            f"the map key clips {label!r}: it needs {need} px and the plate gives it {avail}")
+
+    # ...and a longer label WIDENS the plate instead of running off it.
+    original = MV._MapLegend._ROWS
+    try:
+        MV._MapLegend._ROWS = original + (("start", "A deliberately much longer legend row here"),)
+        wide = MV._MapLegend(on_resize=lambda: None, on_toggle=lambda *_a: None, collapsed=False)
+        assert wide.width() > legend.width(), (
+            "a longer label did not widen the plate — the width is typed again", wide.width(),
+            legend.width())
+        wide_fm = QFontMetrics(wide._font)
+        avail_w = wide.width() - label_col - MV._LEGEND_PAD
+        assert wide_fm.horizontalAdvance(MV._MapLegend._ROWS[-1][1]) <= avail_w
+    finally:
+        MV._MapLegend._ROWS = original
+    print("ok map-key: every row fits, and a longer label widens the plate")
+
+
 if __name__ == "__main__":
     _run_all()
     _ = QApplication
