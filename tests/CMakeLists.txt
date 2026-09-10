@@ -954,3 +954,12 @@ add_test(NAME test_chart_axis_legibility
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_axis_legibility.py)
 set_tests_properties(test_chart_axis_legibility PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# THE CAMERA-SUPPORT GUARD: no public document may promise GPS9 true-clock timing to a camera
+# GoPro's own vendored metadata spec (3rdparty/gpmf-parser/README.md) says has no GPS9. Four
+# surfaces said "GPS9 camera (Hero 9 and newer)" when GPS9 means a Hero 11 or a Hero 13 — the
+# Hero 12 has no GPS receiver at all. Derives the truth table FROM the vendored spec when the
+# submodule is checked out (CI does; a bare worktree skips that one check and the pinned table
+# stands). Pure stdlib text reading — no Qt, no pacer, no telemetry file.
+add_test(NAME test_camera_support
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_camera_support.py)

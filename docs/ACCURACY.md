@@ -38,11 +38,16 @@ does. Both are unbiased to well under a hundredth of a second.
 
 ## How it's measured
 
-- **True-clock timing.** On a **GPS9 camera (Hero 9 and newer)**, every GPS sample carries its own
-  timestamp on the camera's clock. Pacer times laps on *that* clock — not the video/sample clock,
+- **True-clock timing.** On a **GPS9 camera — a Hero 11 or a Hero 13**, every GPS sample carries its
+  own timestamp on the camera's clock. Pacer times laps on *that* clock — not the video/sample clock,
   which drifts (~0.1% fast). A lap time is `(finish crossing instant) − (start crossing instant)`,
   where each instant is interpolated along the chord between the two real GPS samples straddling the
-  start/finish line.
+  start/finish line. GPS9 is narrower than it sounds: GoPro's metadata spec introduces it with the
+  Hero 11, records it *removed* on the Hero 12 ("No GPS receiver in HERO12" — that camera cannot be
+  lap-timed at all), and brings it back on the Hero 13. Hero 5 through Hero 10 and the Max emit GPS5
+  only, which carries no per-sample clock; those recordings fall back to the video clock and every
+  duration derived from it is muted and labelled estimated. The detection is per recording, off the
+  stream itself (`studio/load.py::_used_gps9_trueclock`), not off a model name.
 - **Default pipeline, nothing special.** These numbers come from the shipping configuration —
   GPS9 true-clock, clock rate = 1.0, boxcar smoothing w=13 — not a tuned-for-the-benchmark variant.
 - **Auto-locked to the transponder — and the lock is *unique*.** No lap is hand-matched. The app's
