@@ -409,8 +409,18 @@ class CentralView(QWidget):
             # Then twice, idempotently: once right after this event burst, once after the deferred
             # top-level layout passes (which re-split by stretch factor and would otherwise
             # override the restore of whichever splitter they touch last).
-            QTimer.singleShot(0, lambda: self._apply_grid_sizes(pending))
-            QTimer.singleShot(120, lambda: self._apply_grid_sizes(pending))
+            # OWNED TIMERS, never the static `QTimer.singleShot` (§3.9). The static form keeps the
+            # lambda — and the `self` it captures — alive with no connection to this widget's
+            # lifetime: a reload inside 120 ms destroys the view's C++ object and the timer then
+            # fires `_apply_grid_sizes` on it, which raises RuntimeError straight into the crash
+            # reporter. A `QTimer(self)` dies with its parent, so the same reload cancels it.
+            # Same pattern (and the same reason) as `overlays.py`'s auto-dismiss timer.
+            for delay in (0, 120):
+                t = QTimer(self)
+                t.setSingleShot(True)
+                t.timeout.connect(lambda p=pending: self._apply_grid_sizes(p))
+                t.start(delay)
+                self._grid_restore_timers.append(t)
 
     def _apply_grid_sizes(self, stored: list):
         """Apply persisted [main, left, right] splitter sizes. Each list is applied only if it
@@ -909,6 +919,10 @@ class CentralView(QWidget):
         self._pending_grid_sizes = (self._initial_grid_sizes
                                     if self._initial_grid_sizes
                                     and len(self._initial_grid_sizes) == 3 else None)
+        # The first-show restore's two deferred passes live here (see showEvent): OWNED timers, so
+        # a reload inside their window cancels them with this widget instead of firing into a
+        # deleted C++ object.
+        self._grid_restore_timers: list[QTimer] = []
         # Debounced persistence: splitterMoved fires continuously during a drag, so coalesce
         # into one gridSizesChanged after the drag goes quiet (the window writes prefs).
         self._grid_save_timer = QTimer(self)

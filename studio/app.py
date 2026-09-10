@@ -1367,7 +1367,12 @@ class StudioWindow(QMainWindow):
             cancel.setObjectName("LoadingCancel")
             cancel.setMinimumWidth(m.primary_w)
             cancel.clicked.connect(on_cancel)
+            # MOUNT, THEN FILL (§3.9): a free-standing layout has no widget, so `addWidget` on it
+            # can only HALF move a child — dropped from its old layout, unable to reparent. Safe
+            # here (both children are fresh), and the #200 SIGSEGV for the first caller who hands
+            # over a mounted one. `v.addLayout` first costs nothing and removes the shape.
             actions = QHBoxLayout()
+            v.addLayout(actions)
             actions.setAlignment(Qt.AlignCenter)
             actions.setContentsMargins(0, 0, 0, 0)
             actions.addWidget(cancel)
@@ -1380,7 +1385,6 @@ class StudioWindow(QMainWindow):
                 reserved = QWidget()
                 reserved.setFixedWidth(m.secondary_w)
                 actions.addWidget(reserved)
-            v.addLayout(actions)
         # Held so a long UI-thread stage can rename the headline on the card ALREADY ON SCREEN
         # (see _announce_stage) instead of leaving it asserting a stage that finished.
         self._loading_card = container

@@ -247,14 +247,54 @@ def test_the_persisted_layout_is_on_the_first_painted_frame():
                                "studio", "central_view.py"), encoding="utf-8").read()
     show = next(n for n in ast.walk(ast.parse(source))
                 if isinstance(n, ast.FunctionDef) and n.name == "showEvent")
-    delays = sorted(call.args[0].value for call in ast.walk(show)
-                    if isinstance(call, ast.Call)
-                    and getattr(call.func, "attr", "") == "singleShot"
-                    and isinstance(call.args[0], ast.Constant))
+    # Both spellings count. The delays used to be two static `QTimer.singleShot(ms, lambda)` calls
+    # and are OWNED `QTimer(self)` + `.start(ms)` now (§3.9: the static form outlives the widget, so
+    # a reload inside 120 ms fired the lambda into a deleted C++ object). What this guard is for is
+    # that BOTH passes exist — not which API schedules them — so it reads either, including the
+    # `for delay in (0, 120)` loop the owned version uses.
+    def _scheduled_delays(fn):
+        found = []
+        for call in ast.walk(fn):
+            if not isinstance(call, ast.Call):
+                continue
+            name = getattr(call.func, "attr", "")
+            if name in ("singleShot", "start") and call.args and isinstance(call.args[0],
+                                                                           ast.Constant):
+                found.append(call.args[0].value)
+        for node in ast.walk(fn):   # ...or the literal tuple a loop starts them from
+            if isinstance(node, ast.For) and isinstance(node.iter, (ast.Tuple, ast.List)):
+                if any(isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "start"
+                       for c in ast.walk(node)):
+                    found += [e.value for e in node.iter.elts if isinstance(e, ast.Constant)]
+        return sorted({d for d in found if isinstance(d, int)})
+
+    delays = _scheduled_delays(show)
     assert delays == [0, 120], (
         f"CentralView.showEvent schedules {delays} ms restores; the 0 ms pass cures min-size "
         f"clamping and the 120 ms one survives the deferred top-level layout passes (which is "
         f"the same 120 ms overlays.PBToast waits out). Both stay.")
+
+    # ...and the timers must be OWNED by the widget, not scheduled statically (§3.9). A static
+    # `QTimer.singleShot` keeps its lambda — and the `self` it captured — alive with no connection
+    # to the widget's lifetime: a reload inside 120 ms destroys the C++ object and the timer then
+    # calls `_apply_grid_sizes` on it, raising RuntimeError into the crash reporter. Structural,
+    # because the race needs a reload inside 120 ms of a first show to reproduce.
+    # AST, not text: `showEvent`'s own docstring discusses the old `singleShot(0)` behaviour, and a
+    # substring search cannot tell prose about a bug from the bug.
+    static_calls = [c for c in ast.walk(show)
+                    if isinstance(c, ast.Call)
+                    and getattr(c.func, "attr", "") == "singleShot"
+                    and getattr(getattr(c.func, "value", None), "id", "") == "QTimer"]
+    assert not static_calls, (
+        "showEvent schedules a STATIC QTimer.singleShot again — it outlives the widget whose "
+        "`self` it captured, so a reload inside 120 ms fires it into a deleted C++ object. Use an "
+        "owned QTimer(self), like overlays.py's auto-dismiss timer.")
+    owned = [c for c in ast.walk(show)
+             if isinstance(c, ast.Call) and getattr(c.func, "id", "") == "QTimer"
+             and any(getattr(a, "id", "") == "self" for a in c.args)]
+    assert owned, ("the deferred restores must run on timers parented to this widget, so "
+                   "destroying it cancels them")
+
     print("test_the_persisted_layout_is_on_the_first_painted_frame OK")
 
 
