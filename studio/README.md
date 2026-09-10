@@ -99,7 +99,7 @@ Session facade). Edit the algorithm; the service just caches + delegates.
 |------|------|
 | [session.py](session.py) | The loaded **session**: trace/lap/delta/sector accessors + timing-line write-back over `pacer.Laps`, with the per-lap caches the 30 Hz tick reads. `Session.load` is the public load entry point — it delegates the pipeline to `load.py` and wraps the result (one of the four modules that may name `pacer`). **`load_reference(paths)`** (F7) loads a SECOND session headless and adopts its best lap as the cross-recording reference baseline for the Δ charts / map overlay / sector guides / per-corner Δ (same-track guarded; see `cross_reference.py`); the delta seam falls back to the local best lap when none is loaded (dormant = byte-identical). |
 | [load.py](load.py) | The **load pipeline** behind `Session.load` (one of the four modules that may name `pacer`): single-pass read via `ingest.py`, GPS quality gate + trace cleaning (`_clean`), the **GPS9 true-clock time axis** (`_gps9_times`), load-time boxcar smoothing (`_smooth_track`), and segmentation + start-line placement (`_fit_start_line` on known tracks). Returns the segmented `pacer.Laps` + coordinate system + `ChapterMap` + the IMU streams for the g-meter. |
-| [ingest.py](ingest.py) | The GoPro/GPMF **data-loading layer** (one of the four modules that may name `pacer`): builds the `SequentialGPSSource` chain over one or more chapters and reads the raw GPS+IMU streams on the continuous global clock. The load path is **`read_recording`** — single-pass: one shared chain, so each chapter MP4 is opened/GPMF-parsed ONCE for both GPS and IMU (`read_gpmf`/`read_imu` remain for dev scripts). Returns raw samples + per-chapter durations; `load.py` cleans/smooths/segments on top. A data/control-layer module, not a view. |
+| [ingest.py](ingest.py) | The GoPro/GPMF **data-loading layer** (one of the four modules that may name `pacer`): builds the `SequentialGPSSource` chain over one or more chapters and reads the raw GPS+IMU streams on the continuous global clock. The load path is **`read_recording`** — single-pass: one shared chain, so each chapter MP4 is opened/GPMF-parsed ONCE for both GPS and IMU (`read_gpmf`/`read_imu` remain for dev scripts). Returns raw samples + per-chapter **video** durations (the offset table) **and** GPMF durations (the sync check, `ChapterMap.desynced_chapters`); `load.py` cleans/smooths/segments on top. A data/control-layer module, not a view. |
 | [_signal.py](_signal.py) | Pure-numpy **signal/clean helpers** shared by the session pipeline and the g-meter: the edge-corrected boxcar smoother, gap segmentation, the GPS quality gate, the real-lap band filter, and the `fmt_time` lap-time formatter the views use. Pacer-free by contract (no `pacer`, no Qt). |
 | [tracks.py](tracks.py) | **Detection adapter** over the track database: matches a trace centroid to a known track and turns its DB entry into the fixed start/finish (+ sector) line `pacer.Segment`s. One of the few modules that name `pacer` (geometry only). |
 | [track_db.py](track_db.py) | The persisted **track database** (pacer-free): a JSON store of named circuits — each with its start/finish (+ sector) lines in lat/lon and a detection centroid/bbox — in the app-support dir, plus the built-in Daytona MK seed. Auto-detect on load + File ▸ Save as track… write here. Mirrors `library.py` (atomic write, corrupt-file self-heal). |
@@ -360,13 +360,21 @@ not at a lap), so a lap can span a chapter boundary.
 - **Telemetry chaining (`ingest.py`).** The per-file `GPMFSource`s are folded into a chain of
   the C++ `SequentialGPSSource`, whose time spans are already **cumulative** — so the trace lands
   on **one continuous, monotonic global clock** with no per-chapter reset, and lap segmentation,
-  cum-distances, delta, sectors, smoothing and gap-fill all span boundaries automatically. (A
-  lap that crosses a seam is one correct lap; the ~1 s GPS gap at a seam is the same payload
-  granularity as in-chapter dropouts and is reconstructed by the existing gap-fill.)
-- **Chapter offset table (`chapters.ChapterMap`).** Per-chapter media durations (from the GPMF)
-  give each chapter a global `offset` (cumulative prior durations); chapter *i* covers global
+  cum-distances, delta, sectors, smoothing and gap-fill all span boundaries automatically. A lap
+  that crosses a seam is one correct lap. **There is no GPS gap at a seam** — measured on all
+  three real D24 seams, the GPS9 wall-clock step across a seam is one ordinary 0.100 s sample
+  period and the media clock agrees with it to **−0.000127 s**; the "~1 s gap" this line used to
+  claim was the export's own keyframe-granular `inpoint` seek (fixed in #202–#208), not the camera.
+  The shift the chain applies is the left chapter's **video** duration, not its GPMF duration —
+  see `RawGPSSource::GetVideoDuration`.
+- **Chapter offset table (`chapters.ChapterMap`).** Per-chapter **video-track** durations give each
+  chapter a global `offset` (cumulative prior durations); chapter *i* covers global
   `[offset_i, offset_i+dur_i)`. `to_local(global_t) → (i, local_t)` and `to_global(i, local_t)`
-  are the global↔chapter mapping the video layer drives source-switching with.
+  are the global↔chapter mapping the video layer drives source-switching with. The GPMF track's
+  own duration rides along on each `Chapter` for `desynced_chapters()` — GoPro's contract is that
+  the two match in every chapter but the last, and on the ten GoPro sample clips the last-chapter
+  exception runs from −0.701 s to +0.934 s, so building offsets from the GPMF length was ~1 s of
+  phantom offset waiting for a chaptered recording to exercise it.
 - **Video across files (`player_pane.py`).** `QMediaPlayer` plays one source, so the pane keeps
   the ordered chapter list + offsets and: the **emitted position (and the shell's slider) is
   global** (spans the whole session); a `seek(global_t)` maps to (chapter, local) and **switches source** if the

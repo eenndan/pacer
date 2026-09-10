@@ -209,6 +209,34 @@ def skipped_notice(skipped: list[str], *, where: str = "") -> str | None:
             "analysed the rest of the recording")
 
 
+def desync_notice(chapter_map, *, where: str = "") -> str | None:
+    """The one-line, user-visible fact that a chapter's telemetry does not cover its video, or
+    None when every chapter is in sync (`ChapterMap.desynced_chapters`).
+
+    NAMES the chapter and states the amount, like the skipped-file notice names its files: this
+    one says the numbers on screen stop describing the picture from that chapter onwards, and "some
+    telemetry may be out of sync" without saying where is worse than silence. `where` scopes the
+    sentence to a recording other than the one on screen, as it does for `skipped_notice`."""
+    # Duck-typed like every other clause of the session notice: `session.chapters` is a stand-in
+    # object in a dozen tests (and a bare string in one), and a session notice must never be the
+    # thing that raises.
+    ask = getattr(chapter_map, "desynced_chapters", None)
+    bad = ask() if callable(ask) else []
+    if not bad:
+        return None
+    scope = f" in {where}" if where else ""
+    if len(bad) == 1:
+        path, delta = bad[0]
+        return (f"{os.path.basename(path)}{scope} carries {abs(delta):.1f} s "
+                f"{'more' if delta > 0 else 'less'} telemetry than video — timing after that "
+                "chapter may not line up with the picture")
+    shown = ", ".join(os.path.basename(p) for p, _ in bad[:_MAX_NAMED_SKIPS])
+    if len(bad) > _MAX_NAMED_SKIPS:
+        shown += f", +{len(bad) - _MAX_NAMED_SKIPS} more"
+    return (f"{len(bad)} chapters{scope} carry more or less telemetry than video ({shown}) — "
+            "timing may not line up with the picture")
+
+
 def loaded_label(chapter_map, requested: list[str]) -> str:
     """`recording_label` for the chapters a load ACTUALLY PRODUCED (a `ChapterMap`), falling back
     to the `requested` paths when there is no map.
@@ -304,15 +332,30 @@ def format_chapter(index0: int, total: int) -> str:
     return f"chapter {index0 + 1} of {total}"
 
 
+# How far a chapter's GPMF track may end from its VIDEO track before the recording is reported as
+# desynced. One GPMF payload is one IDR interval — 1.001 s on the 59.94 fps GoPro footage this app
+# was built on, and the granularity the metadata track can end on at all, so nothing SMALLER than a
+# payload is evidence of anything. Measured on the three non-last D24 chapters the difference is
+# +0.000027 s (pure float rounding), and the real camera fault this exists to catch drops whole
+# seconds of telemetry (4-24 s in the reports), so the threshold has orders of magnitude of room
+# either side.
+CHAPTER_SYNC_TOLERANCE_S = 1.001
+
+
 @dataclass(frozen=True)
 class Chapter:
-    """One chapter on the global time axis: its file, its 0-based media duration, and its
-    global start offset (cumulative duration of all earlier chapters)."""
+    """One chapter on the global time axis: its file, its 0-based VIDEO duration, its global start
+    offset (cumulative duration of all earlier chapters), and — for the sync check — its GPMF
+    track's own duration."""
 
     path: str
-    duration: float   # seconds — the chapter's own (0-based) media duration
+    duration: float   # seconds — the chapter's own (0-based) VIDEO-track duration
     offset: float     # seconds — this chapter's global start = sum of prior durations
     index: int        # position in the ordered chapter list (0-based)
+    # The chapter's GPMF metadata-track duration, when the caller supplied one (else == duration).
+    # Kept beside `duration` rather than folded into it because they are two different tracks and
+    # the interesting quantity is their DIFFERENCE — see `desynced_chapters`.
+    meta_duration: float = 0.0
 
 
 class ChapterMap:
@@ -327,21 +370,51 @@ class ChapterMap:
       * ``to_local(global_t)``   -> (i, local_t) where local_t = global_t - offset_i.
       * ``to_global(i, local_t)``-> offset_i + local_t.
 
-    Built from the ordered sibling paths + each chapter's media duration (from the GPMF/media,
-    supplied by the caller — this module stays pacer-free)."""
+    Built from the ordered sibling paths + each chapter's VIDEO duration (from the media, supplied
+    by the caller — this module stays pacer-free). `meta_durations`, when given, is the same
+    chapters' GPMF-track durations and is used ONLY by `desynced_chapters`; it never moves an
+    offset."""
 
-    def __init__(self, paths: list[str], durations: list[float]):
+    def __init__(self, paths: list[str], durations: list[float],
+                 meta_durations: list[float] | None = None):
         if len(paths) != len(durations):
             raise ValueError("paths and durations must align")
         if not paths:
             raise ValueError("ChapterMap needs at least one chapter")
+        if meta_durations is not None and len(meta_durations) != len(paths):
+            raise ValueError("meta_durations must align with paths")
         self.chapters: list[Chapter] = []
         offset = 0.0
         for i, (p, d) in enumerate(zip(paths, durations, strict=True)):
             d = max(float(d), 0.0)
-            self.chapters.append(Chapter(path=p, duration=d, offset=offset, index=i))
+            meta = float(meta_durations[i]) if meta_durations is not None else d
+            self.chapters.append(Chapter(path=p, duration=d, offset=offset, index=i,
+                                         meta_duration=max(meta, 0.0)))
             offset += d
         self.total_duration = offset
+
+    def desynced_chapters(self) -> list[tuple[str, float]]:
+        """The chapters whose GPMF track does not match their video track, as
+        ``[(path, meta_duration - duration), ...]`` — the load-time check on GoPro's own
+        chapter-sync contract.
+
+        THE LAST CHAPTER IS EXEMPT, and that is the contract, not a loophole. GoPro's parser
+        maintainer states the metadata length matches the video length in every chapter *except*
+        the last, where the GPMF track simply ends on its own payload boundary; every one of the
+        ten GoPro sample clips shipped with the parser is a single-chapter recording and every one
+        of them exercises it, from -0.701 s (hero7) to +0.934 s (karma). Flagging that would fire
+        on every recording ever made. A NON-last chapter missing its video length by more than a
+        payload is the genuine camera fault — the one that drops whole seconds of telemetry — and
+        everything after it in the recording is telemetry the picture no longer matches.
+
+        Returns [] for a single-chapter recording, for a map built without metadata durations, and
+        (measured) for every chapter of both D24 recordings."""
+        out: list[tuple[str, float]] = []
+        for c in self.chapters[:-1]:          # the last chapter is exempt by GoPro's contract
+            delta = c.meta_duration - c.duration
+            if c.meta_duration > 0.0 and abs(delta) > CHAPTER_SYNC_TOLERANCE_S:
+                out.append((c.path, delta))
+        return out
 
     def __len__(self) -> int:
         return len(self.chapters)

@@ -954,3 +954,22 @@ add_test(NAME test_chart_axis_legibility
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_axis_legibility.py)
 set_tests_properties(test_chart_axis_legibility PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# THE CHAPTER TIME AXIS: the number the NEXT chapter is placed at (fix/chapter-seam-timeline).
+# `ChapterMap` offsets, the concat span's declared durations, the export's footage bound and the
+# C++ chain's own telemetry shift were all built from each chapter's **GPMF metadata track**
+# duration. That is a different track from the video: GoPro's contract is that the two match in
+# every chapter except the last, and every one of the ten GoPro clips committed in
+# 3rdparty/gpmf-parser/samples exercises that exception — from -0.701 s (hero7) to +0.934 s
+# (karma). test_export_seam cannot see it, because it hands its own ChapterMap the container
+# duration and then measures everything downstream against the same clock. Measured on real media
+# from ten camera generations: the loader's chapter duration is now the video track's, to the tick,
+# and chaining hero7 in front of karma puts the second chapter's telemetry where the first
+# chapter's PICTURE ends rather than 0.700700 s earlier. Plus the load-time sync check
+# (ChapterMap.desynced_chapters / chapters.desync_notice), which names a non-last chapter whose
+# telemetry does not cover its video and exempts the last one. Needs ffprobe as the independent
+# witness; no Qt, no telemetry file (~1 s).
+add_test(NAME test_chapter_timeline
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chapter_timeline.py)
+set_tests_properties(test_chapter_timeline PROPERTIES
+                     ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

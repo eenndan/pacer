@@ -40,6 +40,14 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **A chapter was placed at the end of the previous chapter's *telemetry*, not its picture.** Those
+  are two different tracks: on GoPro's own sample clips a chapter's GPMF track misses its video
+  length by anything from −0.70 s (hero7) to +0.93 s (karma), so every offset after such a chapter
+  — the video seek, the export's concat span, the footage bound — rode up to ~1 s of phantom
+  timeline. The chapter axis is now the video track's, to the tick, and a chapter whose telemetry
+  genuinely does not cover its video is named in the session notice instead of shifting everything
+  after it in silence. (The D24 recordings' non-last chapters were already exact to 27 µs, so their
+  numbers are unchanged — verified leaf-by-leaf.)
 - **The ideal lap's headline was ~44% projection artifact.** Corner boundaries were being projected
   in a mix of frames; one alignment frame per lap fixed it.
 - **The coaching phase bars were an `∫ds/v` estimate sitting beside a true-clock loss.** Measured on

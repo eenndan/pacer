@@ -87,6 +87,27 @@ std::pair<double, double> GPMFSource::CurrentTimeSpan() const {
 
 double GPMFSource::GetTotalDuration() const { return GetDuration(mp4handle_); }
 
+double GPMFSource::GetVideoDuration() const {
+  // Rebuilt from the video trak's own sample table rather than read off any
+  // header: GetVideoFrameRateAndCount reports the frame COUNT plus the exact
+  // rational frame duration (numerator = the trak timescale, denominator = the
+  // per-frame duration in those units), so frames * denominator / numerator is
+  // the track duration to the tick. On the D24 fixtures that reproduces the
+  // mdhd duration exactly (103680 * 1001 / 60000 = 1729.728000 s), where
+  // GetDuration()'s `float` return can only carry ~1e-4 s there.
+  //
+  // A source with no readable video trak (count 0) falls back to the metadata
+  // length, which is what every caller used before this existed.
+  uint32_t numerator = 0, denominator = 0;
+  uint32_t frames =
+      GetVideoFrameRateAndCount(mp4handle_, &numerator, &denominator);
+  if (frames == 0 || numerator == 0) {
+    return GetTotalDuration();
+  }
+  return static_cast<double>(frames) * static_cast<double>(denominator) /
+         static_cast<double>(numerator);
+}
+
 // The GPSU stream is a 16-byte ASCII timestamp "YYMMDDHHMMSS.mmm". This view
 // reads the digits in place and converts to milliseconds since the Unix epoch.
 union GPSUData {
@@ -370,8 +391,15 @@ double SequentialGPSSource::GetTotalDuration() const {
   return left_->GetTotalDuration() + right_->GetTotalDuration();
 }
 
+double SequentialGPSSource::GetVideoDuration() const {
+  return left_->GetVideoDuration() + right_->GetVideoDuration();
+}
+
 uint32_t SequentialGPSSource::Seek(double target) {
-  if (auto left_duration = left_->GetTotalDuration(); target < left_duration) {
+  // The split point is the left subtree's VIDEO duration — the same number the
+  // spans are shifted by, so a target either side of it addresses the chapter
+  // the picture is actually in.
+  if (auto left_duration = left_->GetVideoDuration(); target < left_duration) {
     if (current_ == right_)
       right_->Seek(0);
     return (current_ = left_)->Seek(target);
@@ -399,7 +427,7 @@ void SequentialGPSSource::Next() {
 auto SequentialGPSSource::CurrentTimeSpan() const -> std::pair<double, double> {
   auto [start, end] = current_->CurrentTimeSpan();
   if (current_ == right_) {
-    auto left_len = left_->GetTotalDuration();
+    auto left_len = left_->GetVideoDuration();
     return {start + left_len, end + left_len};
   }
   return {start, end};
