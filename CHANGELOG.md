@@ -10,6 +10,13 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **The track map can show where time is going RIGHT HERE, not only how far behind you already
+  were.** A new "Δ rate" line channel paints the Δ-vs-best curve's slope — seconds lost per second
+  of driving, smoothed over 0.4 s of travel — on a scale centred on zero, so amber means matching
+  the baseline, red is losing time in this corner and green is taking it back. The existing
+  cumulative "Δ to best" is unchanged and answers the other question: on a lap that is 8.9 s down
+  it paints the whole track red, while the rate channel narrows the loss to the one stretch it
+  happened in.
 - **The Stats page says which baseline each "loss" is measured against, and reconciles the page.**
   Two columns one tab apart were both called a loss and were 3.8× apart in total (3.93 s here,
   1.02 s on Coaching, and 1.3× to 2450× apart corner by corner) because one is measured against

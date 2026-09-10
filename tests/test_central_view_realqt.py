@@ -723,14 +723,15 @@ def test_delta_to_ideal_tooltips_are_honest_not_best_sector():
 
 # ============================================================ labelled grip-map control
 def test_grip_map_reachable_via_labelled_combo():
-    """The map's rainbow channel is now a LABELLED dropdown (Off · Speed · Δ · Grip · Elevation) —
-    every channel visible and one click, Grip no longer an undiscoverable blind-cycle step. Selecting
-    the Grip entry sets the grip mode (the same render path the old cycle hit); the cycle API works."""
+    """The map's rainbow channel is now a LABELLED dropdown (Off · Speed · Δ · Δ rate · Grip ·
+    Elevation) — every channel visible and one click, Grip no longer an undiscoverable blind-cycle
+    step. Selecting the Grip entry sets the grip mode (the same render path the old cycle hit); the
+    cycle API works."""
     view, _s, _t0, _t1 = _real_central_view()
     combo = view.map.rainbow_combo
     # Every channel is a labelled, visible entry (not hidden behind a cycle).
     modes = [combo.itemData(i) for i in range(combo.count())]
-    assert modes == ["off", "speed", "delta", "grip", "elevation"], modes
+    assert modes == ["off", "speed", "delta", "delta_rate", "grip", "elevation"], modes
     grip_idx = modes.index("grip")
     assert "grip" in combo.itemText(grip_idx).lower(), combo.itemText(grip_idx)
 

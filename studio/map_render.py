@@ -2,10 +2,11 @@
 
 What lives here (and ONLY here): the array math the rainbow line and the bucketed polyline
 rendering need — value→bucket quantization (`bucketize`), per-bucket draw-array grouping
-(`bucket_polylines`), grid→points Δ resampling (`resample_grid_to_points`), and the per-channel
-rainbow computation (`rainbow_channel`: the channel→value mapping, the Δ/grip NEGATION, the fixed
-grip scale, and the GPS-dropout NaN-masking of cross-gap segments). Each function takes plain numpy
-arrays and returns plain numpy arrays / scalars, and no function here touches Qt or pacer.
+(`bucket_polylines`), grid→points Δ resampling (`resample_grid_to_points`), the local gain/loss
+rate (`delta_rate`), and the per-channel rainbow computation (`rainbow_channel`: the channel→value
+mapping, the Δ/Δ-rate/grip NEGATION, the fixed grip scale, the Δ-rate SYMMETRIC scale, and the
+GPS-dropout NaN-masking of cross-gap segments). Each function takes plain numpy arrays and returns
+plain numpy arrays / scalars, and no function here touches Qt or pacer.
 
 The MODULE, however, is not Qt-free at import: `from .theme import MAP_RAINBOW_N` takes one int
 from the palette module, and `theme` imports PySide6 — so `import studio.map_render` really does
@@ -39,6 +40,71 @@ DELTA_FLAT_EPS_S = 0.005
 # Sentinel legend the widget maps to a "best lap — no delta" hint (lo text) + a blank hi text.
 DELTA_BEST_LAP_HINT = "this is your best lap — no delta"
 
+# ---- Δ RATE channel (the Δ channel's derivative) ----
+# The cumulative Δ answers "how far behind am I by this point"; on a map that is dominated by where
+# you ALREADY were behind — a corner you are actively gaining in still paints red while you carry a
+# 1.2 s deficit into it. The rate channel paints dΔ/dt instead: seconds gained or lost PER SECOND
+# of driving, right here. It is a DIVERGING quantity (gaining / neutral / losing), so unlike every
+# other channel its colour scale is SYMMETRIC about zero — see RATE_SCALE_PCTL.
+#
+# The smoothing window, in seconds of travel: a centred difference over `RATE_WINDOW_S`, which is
+# the Δ curve's derivative convolved with a boxcar of that width.
+#
+# THE EXPECTED PROBLEM — that differentiating a 10 Hz GPS-derived curve gives static that has to be
+# filtered back out — DID NOT SHOW UP. Measured over every non-best lap of both dev recordings (37
+# on 060, 65 on 062) at w ∈ {0.1 … 2.0} s, on the PAINTED buckets rather than on the raw signal:
+#   * a raw per-sample slope already paints runs of 4.3-4.9 samples (~0.45 s) of constant colour,
+#     changing colour 2.2-2.5x per second — a corner-scale signal, not per-sample static;
+#   * widening the window to 0.4 s moves that by ~7% (flicker 0.27 → 0.25 bucket steps per segment
+#     on 060, colour changes 2.47/s → 2.34/s) and to 2.0 s by ~40%. There is no knee anywhere in
+#     the range: the window trades flicker against end-fidelity monotonically and gently.
+#   * the split-half spatial correlation (mean rate(s) over the odd laps vs the even laps) is
+#     +0.93 on 060 and +0.95 on 062 and moves by 0.001 across 0.1 → 0.5 s. What this channel paints
+#     is repeatable track-position structure, and the window is not what makes it so.
+# The Δ curve is a CUMULATIVE quantity (an elapsed-time integral) resampled through the 400-point
+# distance grid, whose cells are 0.17 s on a 69 s lap — coarser than the 0.1 s samples. Both steps
+# are low-passes, so the derivative arrives already smoothed.
+#
+# 0.4 s is therefore a judgement inside a measured-flat band, not a threshold:
+#   * anything at or under 0.2 s is a literal NO-OP at 10 Hz — a ±0.1 s centred difference IS the
+#     per-sample slope, and reproduces it to three decimals;
+#   * ∫rate·dt has to come back to the lap's total Δ, and does — 0.2 ms of error at 0.4 s, rising
+#     to 1.8 ms at 1.2 s and 3.6 ms at 2.0 s as the boxcar smears the lap's two ends;
+#   * stating a window in SECONDS OF TRAVEL (rather than "one sample") is what keeps the channel
+#     honest if the sample rate ever changes: at 20 Hz the raw slope would be static, and this
+#     definition would not move.
+RATE_WINDOW_S = 0.4
+# Below this |rate| everywhere, the channel has nothing to paint: 0.005 s/s is the display floor of
+# the "0.01 s/s" the legend can print, the same reasoning DELTA_FLAT_EPS_S applies to the Δ itself.
+RATE_FLAT_EPS_SS = 0.005
+# The symmetric colour scale is the 98th percentile of |rate|, NOT the lap's max, and that is the
+# one choice here that measurably changes what the map says.
+#
+# On the 060 recording every one of the 37 non-best laps has its single largest |rate| in the SAME
+# 20 km/h hairpin, at s = 0.869-0.873 — a spread of four thousandths of a lap. That is not driving,
+# it is the normalized-distance alignment the Δ curve is built on: at the slowest corner on the
+# track a couple of metres of line difference is a few tenths of a second, and it comes straight
+# back out. Across that corner the fleet-mean NET Δ change is -0.005 s against a mean SWING of
+# 0.457 s — a phase dipole, not time won. (The 062 recording has no sub-30 km/h corner, its |rate|
+# extremes land at six different places on the track, and its max/p98 is 1.19.)
+#
+# Scaling to the max therefore lets one corner of one recording own the whole ramp. Measured, as
+# the median non-best lap's painted bucket histogram:
+#          scale     in the 2 middle buckets     clipped     buckets used     entropy
+#   060    max               67.1%                 0.6%          6 / 16         0.554
+#   060    p98               35.8%                 3.6%         13 / 16         0.818
+#   062    max               41.3%                 1.6%         12 / 16         0.752
+#   062    p98               33.8%                 4.0%         13 / 16         0.827
+# p98 lands the two recordings on nearly the same visual density (36% vs 34% neutral, 13 buckets
+# each) where `max` differs by 26 points — a robust scale costs almost nothing where there is no
+# outlier and saves the map where there is one. p95 was also tried: it is visually
+# indistinguishable at 8% clipped instead of 4%, so the more conservative of the two wins.
+RATE_SCALE_PCTL = 98.0
+# Sentinel legend for a lap whose Δ moves but whose RATE never clears the display floor. DERIVED
+# from the floor, not typed beside it: the smallest non-zero a 2-decimal legend can print is twice
+# the rounding floor, so the two move together or not at all.
+RATE_FLAT_HINT_VALUE = f"under {2 * RATE_FLAT_EPS_SS:.2f} s/s"
+
 # Elevation legend: the low end is labelled RELATIVELY ("lowest"), the high end as the RISE above
 # it ("+5 m"), never as two absolute altitudes. GPS altitude carries a slowly-drifting bias of
 # several metres, so the same physical corner reads 79.9 m on one lap and 83.0 m on another
@@ -66,6 +132,37 @@ def _fmt_delta(x: float) -> str:
     if abs(x) < DELTA_FLAT_EPS_S:
         return "0.00 s"
     return f"{x:+.2f} s"
+
+
+def _fmt_rate(x: float) -> str:
+    """Format a gain/loss RATE as a MAGNITUDE in s/s — `_fmt_delta`'s treatment for the derived
+    channel. Unsigned on purpose: the rate legend's two ends are ±the same number, so the direction
+    is carried by the words ("losing" / "gaining") rather than by a sign the eye has to hunt for —
+    the same non-hue cue the grip channel's endpoints use."""
+    return f"{abs(x):.2f} s/s"
+
+
+def delta_rate(times, delta_points, window_s: float = RATE_WINDOW_S):
+    """The LOCAL gain/loss rate dΔ/dt (seconds per second) of a per-point Δ-vs-best curve.
+
+    A centred difference over `window_s` seconds of TRAVEL — mathematically the Δ curve's
+    derivative convolved with a boxcar of that width, which is what makes the window a plain
+    statement of scale ("smoothed over 0.4 s") rather than a filter coefficient.
+
+    At the two ends the window is CLAMPED to the lap and the difference is divided by the span
+    actually used, not by `window_s`. Dividing by the nominal width instead would halve the first
+    and last samples' rate — a fake fade to neutral at the start/finish line, which is exactly
+    where a driver looks first. Pure numpy; `times` must be non-decreasing (a lap's are)."""
+    t = np.asarray(times, dtype=float)
+    d = np.asarray(delta_points, dtype=float)
+    half = 0.5 * float(window_s)
+    lo = np.clip(t - half, t[0], t[-1])
+    hi = np.clip(t + half, t[0], t[-1])
+    span = hi - lo
+    out = np.zeros_like(d)
+    ok = span > 0
+    out[ok] = (np.interp(hi[ok], t, d) - np.interp(lo[ok], t, d)) / span[ok]
+    return out
 
 
 def bucketize(values, n_buckets: int, lo: float | None = None, hi: float | None = None):
@@ -128,6 +225,38 @@ def _seg_buckets(times, vals, lo=None, hi=None):
     return bucketize(seg_vals, MAP_RAINBOW_N, lo=lo, hi=hi)
 
 
+def _delta_rate_channel(times, d_pts):
+    """The Δ-RATE channel: per-segment buckets + legend for dΔ/dt, on a scale SYMMETRIC about zero.
+
+    Called with the same per-point Δ curve the cumulative Δ channel paints, already gated on
+    "there is a best lap and this is not it" — so the only degenerate state left to it is a Δ that
+    moves, but so slowly that no point of the lap clears the printable 0.01 s/s.
+
+    THE SYMMETRY IS THE WHOLE POINT, and it is what makes this the app's first DIVERGING map
+    channel. Every other channel min/max-normalizes (or, for grip, clips to a physical range) and
+    reads left-to-right as "less → more"; here the meaningful landmark is in the MIDDLE, and the
+    reader has to be able to see zero. `rainbow_colors` is already a three-anchor
+    behind → mid → ahead ramp, so no new colours are needed — bucketing over [-scale, +scale] puts
+    a rate of exactly zero on the boundary between buckets 7 and 8 of 16, which is precisely where
+    `rainbow_colors` places its middle anchor (t = i/(n-1)*2 == 1 at i = 7.5). Neutral driving
+    therefore paints the ramp's own neutral colour, in either palette, for free.
+
+    Values beyond ±scale CLAMP into the end buckets (bucketize's documented behaviour), which is
+    what lets the scale be robust rather than max-driven — see RATE_SCALE_PCTL."""
+    rate = delta_rate(times, d_pts)
+    peak = float(np.max(np.abs(rate)))
+    if peak < RATE_FLAT_EPS_SS:
+        return None, _flat_hint("gain/loss rate", RATE_FLAT_HINT_VALUE), ""
+    # Never claim a finer scale than the legend can print: a "0.00 s/s" endpoint labels nothing.
+    scale = max(float(np.percentile(np.abs(rate), RATE_SCALE_PCTL)), RATE_FLAT_EPS_SS)
+    # Negated like the Δ channel, so GAINING (rate < 0) lands in the high (green) buckets.
+    seg_buckets = _seg_buckets(times, -rate, lo=-scale, hi=scale)
+    # The ends are ±the same number, so the words — not a sign — carry the direction, and the
+    # symmetry itself says the middle of the strip is "matching the baseline". The unit is on both
+    # ends because either end may be the one a reader looks at.
+    return seg_buckets, f"losing {_fmt_rate(scale)}", f"gaining {_fmt_rate(scale)}"
+
+
 def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
                     speed_unit=None, elevation=None):
     """Compute the per-segment bucket ids + legend texts for one rainbow channel. Pure numpy.
@@ -144,8 +273,9 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
     grip, missing best lap / zero odometer for Δ). A `(None, hint_text, "")` triple is the
     NO-GRADIENT case — the Δ best-lap hint, or a measured channel whose two ends label the same
     (`_flat_hint`) — and the widget then shows that one label with no colour ramp.
-    The Δ and grip channels are NEGATED so AHEAD /
-    UNUSED grip land in the HIGH (green) buckets; grip uses a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale.
+    The Δ, Δ-RATE and grip channels are NEGATED so AHEAD / GAINING /
+    UNUSED grip land in the HIGH (green) buckets; grip uses a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale
+    and Δ-rate a SYMMETRIC one about zero (see `_delta_rate_channel`).
     """
     if len(xs) < 2:
         return None
@@ -196,7 +326,9 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
         if hi_txt == "+0 m":  # a rise under half a metre is GPS noise, not relief (MAP-10)
             return None, _flat_hint("elevation", "flat"), ""
         return _seg_buckets(times, vals), ELEVATION_LO_LABEL, hi_txt
-    # Δ-vs-best, resampled from the 400-grid delta() onto this lap's point distances
+    # Δ-vs-best, resampled from the 400-grid delta() onto this lap's point distances. BOTH Δ
+    # channels start here — the cumulative one below and the RATE one, which differentiates it —
+    # so they can never disagree about the baseline, the alignment or the best-lap gate.
     if delta_grid is None or float(cum[-1]) <= 0:
         return None
     d_pts = resample_grid_to_points(cum, delta_grid)
@@ -206,8 +338,15 @@ def rainbow_channel(mode, times, xs, ys, speed_kmh, cum, grip_util, delta_grid,
     # L1: when the Δ span across the whole lap is ~0 the selected lap IS the best lap — painting a
     # flat mid-bucket line with a duplicate "+0.00 s → +0.00 s" legend says nothing. Report the
     # best-lap hint instead (the widget greys the strip / shows "no delta"), skipping the flat paint.
+    #
+    # The RATE channel takes the same gate FIRST and for a stronger reason: on the baseline lap the
+    # Δ curve is identically zero, so its derivative is identically zero too — and on a lap whose Δ
+    # merely wobbles below this floor, the derivative is that wobble divided by RATE_WINDOW_S, i.e.
+    # pure amplified noise dressed as a full-contrast rainbow. A flat Δ has no rate worth painting.
     if d_max - d_min < DELTA_FLAT_EPS_S:
         return None, DELTA_BEST_LAP_HINT, ""
+    if mode == "delta_rate":
+        return _delta_rate_channel(times, d_pts)
     # Legend shows the signed Δ at each end (red = most-behind, green = most-ahead); -0.00 normalized.
     lo_txt = _fmt_delta(d_max)   # low (red) bucket = most-behind = the max signed Δ
     hi_txt = _fmt_delta(d_min)   # high (green) bucket = most-ahead = the min signed Δ
