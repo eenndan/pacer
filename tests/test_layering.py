@@ -53,11 +53,16 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 #     rasterizer to burn overlays into an MP4 / a PNG; they construct no window and run off the UI
 #     thread. Qt is their drawing library, not their UI.
 #   * workers — QThread/QObject wrappers (QtCore only), the seam that carries loads off the UI thread.
+#   * export_controller — the export cluster lifted out of `app` (§7.1). It is VIEW code by every
+#     test this file applies: it opens the file dialogs, the options modal, the progress dialog and
+#     the failure/completion boxes, and it holds a back-reference to the window it belongs to. It is
+#     here for the same reason `app` is, and it made this set BIGGER by one only because a chunk of
+#     `app` moved out — nothing gained a Qt import that did not already have one.
 # `theme` and `widgets` are the shared Qt style/primitive layer every view sits on.
 ALLOWED_QT = {
-    "app", "central_view", "coaching_panel", "export_video", "gmeter_overlay", "help_dialog",
-    "lap_table", "library_dialog", "map_view", "overlays", "player_pane", "plots_view",
-    "share_card", "stats_panel", "theme", "video_view", "widgets", "workers",
+    "app", "central_view", "coaching_panel", "export_controller", "export_video", "gmeter_overlay",
+    "help_dialog", "lap_table", "library_dialog", "map_view", "overlays", "player_pane",
+    "plots_view", "share_card", "stats_panel", "theme", "video_view", "widgets", "workers",
 }
 
 # Every module from which Qt is REACHABLE through studio's own import graph = ALLOWED_QT plus the

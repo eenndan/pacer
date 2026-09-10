@@ -121,6 +121,11 @@ def _live_bindings():
     win._excluded_visible = True
     win._colorblind = False
     win._speed_unit = units.KMH
+    # ...and the export controller, because _build_menu wires the File ▸ Export actions straight to
+    # its methods (§7.1). The real __init__ builds it before the menu for exactly this reason.
+    from studio.app import STATUS_MS
+    from studio.export_controller import ExportController
+    win.exports = ExportController(win, STATUS_MS)
     with tempfile.TemporaryDirectory() as tmp:                      # never read the real library
         library._app_support_dir, real = (lambda: tmp), library._app_support_dir
         try:

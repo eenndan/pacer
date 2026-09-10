@@ -193,7 +193,18 @@ def test_extracted_worker_and_overlay_modules_import_without_cycle():
     for cls in (PBToast, WelcomeView):
         assert cls.__module__ == "studio.overlays", cls.__module__
     assert app_mod.SessionLoadWorker is SessionLoadWorker
-    assert app_mod.VideoExportWorker is VideoExportWorker
+    # VideoExportWorker moved to `export_controller` with the export cluster (§7.1). The point of
+    # this assertion is unchanged — the importer binds the leaf class rather than re-declaring a
+    # shadow of it — only which module does the binding.
+    import studio.export_controller as export_ctl
+    # By MODULE, not by identity: this test purges sys.modules to prove the leaves import without a
+    # cycle, so a freshly-imported controller can legitimately hold a different module OBJECT. What
+    # must hold — and what the loop above checks the same way — is that it binds the leaf class
+    # rather than re-declaring a shadow of it.
+    assert export_ctl.VideoExportWorker.__module__ == "studio.workers", (
+        export_ctl.VideoExportWorker.__module__)
+    assert not hasattr(app_mod, "VideoExportWorker"), (
+        "app.py should no longer name the video worker — the export flow owns it now")
     assert app_mod.PBToast is PBToast
     assert app_mod.WelcomeView is WelcomeView
     print("test_extracted_worker_and_overlay_modules_import_without_cycle OK")

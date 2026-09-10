@@ -1697,16 +1697,16 @@ def test_the_export_failure_dialog_speaks_english_not_ffmpeg():
     """The failure body used to be the raw stderr tail: "[h264_videotoolbox @ 0x…] Error encoding
     frame: -12905" as the explanation of what to do next. Plain language first, the encoder's own
     words behind Details — the shape the load-failure table and the crash report already use."""
-    from studio.app import StudioWindow as W
+    from studio.export_controller import ExportController
 
-    full = W._export_failure_message("av_interleaved_write_frame(): No space left on device",
+    full = ExportController._export_failure_message("av_interleaved_write_frame(): No space left on device",
                                      "/Users/x/Movies/lap.mp4")
     assert "no room left" in full.lower() and "/Users/x/Movies" in full, full
-    denied = W._export_failure_message("Permission denied", "/x/y.mp4")
+    denied = ExportController._export_failure_message("Permission denied", "/x/y.mp4")
     assert "isn't allowed to write" in denied, denied
-    gone = W._export_failure_message("No such file or directory", "/x/y.mp4")
+    gone = ExportController._export_failure_message("No such file or directory", "/x/y.mp4")
     assert "isn't there any more" in gone, gone
-    generic = W._export_failure_message("Error encoding frame: -12905", "/x/y.mp4")
+    generic = ExportController._export_failure_message("Error encoding frame: -12905", "/x/y.mp4")
     assert "encoder stopped partway" in generic and "-12905" not in generic, generic
     print("ok export-copy: every case names an action, and none of them is an ffmpeg tail")
 
