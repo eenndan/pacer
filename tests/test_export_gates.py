@@ -918,7 +918,9 @@ def _clear_export_preset():
     A test that assumes an unstored state has to say so — and clear it."""
     data = prefs.load()
     for key in (ExportController._PREF_EXPORT_RES, ExportController._PREF_EXPORT_QUALITY,
-                ExportController._PREF_EXPORT_LEAD):
+                ExportController._PREF_EXPORT_LEAD, ExportController._PREF_EXPORT_SCOPE,
+                ExportController._PREF_EXPORT_ASPECT, ExportController._PREF_EXPORT_FIT,
+                ExportController._PREF_EXPORT_CONTENT):
         data.pop(key, None)
     prefs.save(data)
 
@@ -1186,6 +1188,196 @@ def test_save_as_track_names_the_provisional_line_in_its_prompt():
     print("test_save_as_track_names_the_provisional_line_in_its_prompt OK")
 
 
+# ============================================ the picker's new rows (scope, shape, alpha contents)
+def test_every_picker_row_is_a_value_the_renderer_actually_handles():
+    """The dialog's combos are built from tables in the controller, and every entry has to be a
+    vocabulary word `export_video` knows — otherwise a row the user can choose is a render the
+    module cannot build. Asserted against the module's own constants rather than the strings, so
+    renaming one in a single place fails here instead of shipping."""
+    scopes = [v for _label, v in ExportController._EXPORT_SCOPE_OPTIONS]
+    assert scopes == [export_video.SCOPE_THIS_LAP, export_video.SCOPE_BEST_LAP,
+                      export_video.SCOPE_ALL_LAPS, export_video.SCOPE_SESSION], scopes
+    aspects = [v for _label, v in ExportController._EXPORT_ASPECT_OPTIONS]
+    assert aspects == [export_video.ASPECT_SOURCE, export_video.ASPECT_9_16,
+                       export_video.ASPECT_1_1], aspects
+    for aspect in aspects:
+        assert aspect in export_video.ASPECT_RATIOS, aspect
+    fits = [v for _label, v in ExportController._EXPORT_FIT_OPTIONS]
+    assert fits == [export_video.FIT_CROP, export_video.FIT_FIT], fits
+    contents = [v for _label, v in ExportController._EXPORT_CONTENT_OPTIONS]
+    assert contents == [ExportController._EXPORT_CONTENT_COMPOSITE, export_video.ALPHA_PRORES,
+                        export_video.ALPHA_PNG], contents
+    # The scope row leads, because it is the one that decides whether this takes 90 s or 30 min.
+    assert ExportController._EXPORT_SCOPE_OPTIONS[0][1] == export_video.SCOPE_THIS_LAP
+    # And every row reads as a choice rather than a code: a distinct, non-empty label per entry.
+    for table in (ExportController._EXPORT_SCOPE_OPTIONS, ExportController._EXPORT_ASPECT_OPTIONS,
+                  ExportController._EXPORT_FIT_OPTIONS, ExportController._EXPORT_CONTENT_OPTIONS):
+        labels = [label for label, _v in table]
+        assert all(len(label) > 3 for label in labels), labels
+        assert len(set(labels)) == len(labels), f"two rows read the same: {labels}"
+        assert not any(label in {v for _lab, v in table} for label in labels), \
+            f"a label is just its value spelled out: {labels}"
+    print("ok picker: every row is a value the renderer handles")
+
+
+def test_the_estimate_knows_a_vertical_frame_is_not_a_landscape_one():
+    """The size line used to assume 16:9 for the width. A 9:16 or 1:1 output has a different pixel
+    count for the same resolution row, and the estimate has to use it or it under-states a square
+    export by 44 %."""
+    ctl = ExportController.__new__(ExportController)
+    assert ctl._estimate_frame_size(1080, export_video.ASPECT_SOURCE) == (1920, 1080)
+    assert ctl._estimate_frame_size(1080, export_video.ASPECT_9_16) == (1080, 1920)
+    assert ctl._estimate_frame_size(1080, export_video.ASPECT_1_1) == (1080, 1080)
+    print("ok estimate: the frame size follows the chosen shape")
+
+
+def test_an_alpha_export_is_warned_about_in_gigabytes_before_it_starts():
+    """A user reported a 30-minute transparent ProRes export at 140 GB after six hours. The row is
+    worth offering; offering it without a number is the trap. Half an hour of 1080p ProRes 4444
+    must come out in GB and must be several times the H.264 estimate beside it."""
+    ctl = ExportController.__new__(ExportController)
+    half_hour = 30 * 60.0
+    h264 = ctl._export_size_hint(half_hour, 1080, "high", export_video.ASPECT_SOURCE,
+                                 ExportController._EXPORT_CONTENT_COMPOSITE)
+    prores = ctl._export_size_hint(half_hour, 1080, "high", export_video.ASPECT_SOURCE,
+                                   export_video.ALPHA_PRORES)
+    png = ctl._export_size_hint(half_hour, 1080, "high", export_video.ASPECT_SOURCE,
+                                export_video.ALPHA_PNG)
+    assert "GB" in prores, prores
+    assert "ProRes 4444" in prores and "PNG sequence" in png, (prores, png)
+
+    def gb(text):
+        n = float(text.split("About ")[1].split(" ")[0])
+        return n if "GB" in text.split("—")[0] else n / 1000.0
+    # ProRes against the PNG sequence is the MEASURED 0.876 / 0.311 = 2.8x, so the guard is
+    # 2x — tight enough to catch the two constants being swapped, loose enough not to pin
+    # a measurement to its third digit.
+    assert gb(prores) > gb(h264) and gb(prores) > 2 * gb(png), (h264, prores, png)
+
+    # AGAINST WHICH H.264, THOUGH? The composited estimate follows the encoder this MACHINE
+    # resolves, and the two answers are a world apart: VideoToolbox is bitrate-targeted at 0.10
+    # bits/px/frame, so ProRes is ~9x it, while the libx264 fallback is CRF-driven and measured at
+    # 0.68, which ProRes only beats by a third. The warning has to be worth reading on the machine
+    # that lands on the HARDWARE encoder, so that is the comparison pinned here — computed from
+    # the module's own bitrate function rather than from whichever encoder this test box has.
+    vt_bits = export_video.vt_target_bitrate(1920, 1080, 30.0,
+                                             export_video.quality_params("high")[0])
+    vt_gb = vt_bits * half_hour / 8 / 1e9
+    prores_gb = 1920 * 1080 * 30.0 * export_video.PRORES_4444_BPP * half_hour / 8 / 1e9
+    assert prores_gb > 5 * vt_gb, (
+        f"ProRes 4444 is {prores_gb:.1f} GB against {vt_gb:.1f} GB for a hardware-encoded H.264 "
+        "of the same window — if that ratio ever stops being large the warning stops earning "
+        "its place")
+    # An All-laps batch is estimated as the WHOLE batch — the number the user is deciding about.
+    one = ctl._export_size_hint(90.0, 1080, "high", export_video.ASPECT_SOURCE,
+                                ExportController._EXPORT_CONTENT_COMPOSITE, files=1)
+    many = ctl._export_size_hint(90.0, 1080, "high", export_video.ASPECT_SOURCE,
+                                 ExportController._EXPORT_CONTENT_COMPOSITE, files=20)
+    assert gb(many) > 15 * gb(one), (one, many)
+    print("ok estimate: an alpha export announces its gigabytes, a batch its total")
+
+
+# ================================================================ the batch renders behind ONE modal
+def test_an_all_laps_batch_renders_every_file_behind_one_dialog():
+    """One decision, one modal, N files. A dialog that came down and went back up per lap would be
+    N chances to lose the queue and no way to cancel the rest — so the queue drives the SAME
+    QProgressDialog from the first file to the last, and the completion card names the count and
+    the folder rather than listing forty file names."""
+    win = _window(FakeSession())
+    specs = [_FakeSpec(f"/tmp/ride_lap{i}.mp4") for i in (1, 2, 3)]
+    made, modals = [], []
+    orig_worker, orig_exec = export_controller.VideoExportWorker, QDialog.exec
+    orig_box_exec = QMessageBox.exec
+    seen_labels = []
+
+    def _exec(dlg):
+        if not isinstance(dlg, QProgressDialog):
+            return orig_exec(dlg)
+        # Drive every queued worker to a clean finish from inside the modal loop, exactly where
+        # the completion handler runs in production.
+        while made:
+            worker = made.pop(0)
+            worker.progress.emit(10, 100)
+            seen_labels.append(dlg.findChild(QLabel).text())
+            worker.finished_export.emit(True, "")
+        return QDialog.Accepted
+
+    export_controller.VideoExportWorker = lambda session, sp: (made.append(
+        _FakeVideoWorker(session, sp)) or made[-1])
+    QDialog.exec = _exec
+    QMessageBox.exec = lambda box, *_a, **_k: modals.append(box.text()) or 0
+    try:
+        win.statusBar().clearMessage()
+        win.exports._run_video_export(specs)
+    finally:
+        export_controller.VideoExportWorker = orig_worker
+        QDialog.exec = orig_exec
+        QMessageBox.exec = orig_box_exec
+
+    assert len(seen_labels) == 3, f"one worker per spec, in order: {seen_labels}"
+    assert all("3" in lab for lab in seen_labels), f"the label counts the batch: {seen_labels}"
+    assert all(sp.source.cleanups == 1 for sp in specs), "every spec's temp concat list is freed"
+    assert len(modals) == 1, f"ONE completion card for the batch, not three: {modals}"
+    assert "3 overlay videos" in modals[0], modals[0]
+    assert win.statusBar().currentMessage() == "exported 3 overlay videos", \
+        win.statusBar().currentMessage()
+    win.hide()
+    print("ok batch: N files, one modal, one completion card")
+
+
+def test_cancelling_a_batch_stops_the_queue_rather_than_the_current_file():
+    """A Cancel that let the queue carry on to lap 5 after the user pressed it on lap 4 would be a
+    cancel button that does not cancel."""
+    win = _window(FakeSession())
+    specs = [_FakeSpec(f"/tmp/ride_lap{i}.mp4") for i in (1, 2, 3)]
+    made, started = [], []
+    orig_worker, orig_exec = export_controller.VideoExportWorker, QDialog.exec
+    orig_box_exec = QMessageBox.exec
+
+    def _exec(dlg):
+        if not isinstance(dlg, QProgressDialog):
+            return orig_exec(dlg)
+        worker = made[0]
+        worker.progress.emit(10, 100)
+        dlg.canceled.emit()                 # exactly what pressing the button does
+        worker.finished_export.emit(True, "")   # the file in flight still finishes
+        return QDialog.Accepted
+
+    def _mk(session, sp):
+        made.append(_FakeVideoWorker(session, sp))
+        started.append(sp.out_path)
+        return made[-1]
+
+    export_controller.VideoExportWorker = _mk
+    QDialog.exec = _exec
+    QMessageBox.exec = lambda box, *_a, **_k: 0
+    try:
+        win.exports._run_video_export(specs)
+    finally:
+        export_controller.VideoExportWorker = orig_worker
+        QDialog.exec = orig_exec
+        QMessageBox.exec = orig_box_exec
+
+    assert started == ["/tmp/ride_lap1.mp4"], f"the queue kept going after Cancel: {started}"
+    assert all(sp.source.cleanups == 1 for sp in specs), "a cancelled batch still frees every spec"
+    win.hide()
+    print("ok batch: Cancel stops the queue, not just the file in flight")
+
+
+def test_a_png_sequence_is_asked_for_as_a_folder_and_a_mov_as_a_file():
+    """A PNG sequence's output is a DIRECTORY. Asking for it with a save-FILE prompt would hand
+    back a file name the renderer then has to reinterpret as a folder; one output, one prompt that
+    means it. The ProRes row keeps the file prompt, with a .mov suffix rather than .mp4."""
+    ctl = ExportController.__new__(ExportController)
+    composite = export_video.OverlayConfig()
+    prores = export_video.OverlayConfig(overlay_only=True,
+                                        alpha_codec=export_video.ALPHA_PRORES)
+    assert ctl._video_out_suffix(SimpleNamespace(config=composite))[0].endswith(".mp4")
+    suffix, filt = ctl._video_out_suffix(SimpleNamespace(config=prores))
+    assert suffix.endswith(".mov") and "alpha" in filt.lower(), (suffix, filt)
+    print("ok picker: a sequence asks for a folder, a .mov for a file")
+
+
 def _run_all():
     test_a_zero_lap_recording_disables_every_data_export_with_a_reason()
     test_a_zero_lap_export_writes_nothing_and_says_why()
@@ -1211,6 +1403,12 @@ def _run_all():
     test_reveal_in_finder_reports_both_outcomes()
     test_save_as_track_asks_before_it_replaces_a_different_circuit()
     test_save_as_track_names_the_provisional_line_in_its_prompt()
+    test_every_picker_row_is_a_value_the_renderer_actually_handles()
+    test_the_estimate_knows_a_vertical_frame_is_not_a_landscape_one()
+    test_an_alpha_export_is_warned_about_in_gigabytes_before_it_starts()
+    test_an_all_laps_batch_renders_every_file_behind_one_dialog()
+    test_cancelling_a_batch_stops_the_queue_rather_than_the_current_file()
+    test_a_png_sequence_is_asked_for_as_a_folder_and_a_mov_as_a_file()
     print("ALL OK")
 
 

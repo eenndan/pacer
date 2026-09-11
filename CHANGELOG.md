@@ -10,6 +10,22 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **The video export renders what you choose: this lap, the best lap, every lap as its own file, or
+  the whole session.** It used to be "the selected lap" and nothing else. Rendering ninety seconds
+  instead of half an hour is the single largest thing that can be done about export time, and the
+  run-up/run-off picker now says in words that padding puts the previous lap at the head of the
+  file and the next one at its tail. A full-session clip's overlay follows the laps — the strip
+  names the lap each frame is in and the ★ BEST mark moves with it.
+- **9:16 and 1:1 exports, with the overlay reflowing rather than being letterboxed.** The frame's
+  shape is a choice, and the source frame can either fill it (cropped) or fit inside it (with
+  bars). Every overlay dimension is now a fraction of the output's SHORT side, so the g-meter is
+  the same size on a vertical clip as on a landscape one instead of taking 46 % of the picture.
+  The 16:9 composition is unchanged to the pixel at 720p, 1080p and 1440p.
+- **Overlay-only export with a real alpha channel — ProRes 4444 or a PNG sequence.** The overlay on
+  a transparent background, no footage and no audio, for compositing over the original in Resolve
+  or Premiere. It renders no source at all, which makes it faster than the burned-in export
+  (measured over the same 20 s window at 1080p: 7.7 s for PNG and 16.3 s for ProRes against 20.8 s
+  composited), and the picker states the size before you start.
 - **The scrub bar says WHERE the GPS went bad, not just that it did.** A thin always-visible band
   under the seek bar grades every second of the recording — green where the receiver had a 3D lock
   and a DOP inside the GNSS good band, amber where it was degrading, red where the fixes were
