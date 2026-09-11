@@ -1146,6 +1146,10 @@ class StudioWindow(QMainWindow):
         ref_session = session.reference_session() if hasattr(session, "reference_session") else None
         ref_skipped_notice = chapters.skipped_notice(
             getattr(ref_session, "skipped_chapters", []) or [], where="the reference recording")
+        # A chapter whose GPMF track does not cover its video: everything after it is telemetry the
+        # picture no longer matches. Its own clause for the same reason the skipped-file one is —
+        # nothing else on screen can say it, and the numbers still look perfectly plausible.
+        desync_notice = chapters.desync_notice(getattr(session, "chapters", None))
         subset = self._chapter_subset()
         chapter_notice = (f"{subset[0]} of {subset[1]} chapters — File ▸ Load full recording to "
                           "analyse the whole recording") if subset else None
@@ -1160,7 +1164,7 @@ class StudioWindow(QMainWindow):
                                            False) else None)
         drop_notice = getattr(self, "_drop_notice", None)
         return " · ".join(p for p in (notice, sidecar_notice, skipped_notice, ref_skipped_notice,
-                                      chapter_notice, tracks_notice, library_notice,
+                                      desync_notice, chapter_notice, tracks_notice, library_notice,
                                       sidecar_write_notice, drop_notice) if p) or None
 
     def _apply_session_notice(self) -> str | None:

@@ -7,9 +7,13 @@ parts that the deep-research flagged as unproven:
   1. QMediaPlayer + QVideoSink actually deliver decoded frames to PYTHON
      (videoFrameChanged), and each frame carries a usable per-frame clock:
      QVideoFrame.startTime() (microseconds) and/or QMediaPlayer.position() (ms).
-  2. Qt's media clock (player.duration) aligns with pacer's GPMF time axis
-     (GPMFSource.get_total_duration) on the SAME .mp4 -> so "video time t -> which
-     telemetry sample" is a trivial, correct lookup.
+  2. Qt's media clock (player.duration) aligns with pacer's time axis on the SAME
+     .mp4 -> so "video time t -> which telemetry sample" is a trivial, correct
+     lookup. NOTE which pacer number that is: `get_video_duration`, not
+     `get_total_duration`. The latter is the GPMF METADATA track's length, and on
+     the ten GoPro clips in 3rdparty/gpmf-parser/samples it misses the video's by
+     -0.70 s (hero7) to +0.93 s (karma) — this spike printed it and the "aligns"
+     conclusion was drawn anyway. Both are reported below.
 
 If this passes, the bidirectional video<->plot-cursor sync is sound and the rest
 (pyqtgraph plots + draggable LineSegmentROI handles) is routine Qt.
@@ -34,9 +38,14 @@ VIDEO = sys.argv[1] if len(sys.argv) > 1 else "3rdparty/gpmf-parser/samples/hero
 
 
 def build_telemetry(path):
-    """Reproduce the old C++ ingest: per-sample (time, speed) on the MP4 clock."""
+    """Reproduce the old C++ ingest: per-sample (time, speed) on the MP4 clock.
+
+    Returns the VIDEO duration as the clip's length (what Qt's player.duration
+    reports and what the chapter axis is built on) plus the GPMF track's own, so
+    the report can show that the two are not the same number."""
     src = pacer.GPMFSource(path)
-    total = src.get_total_duration()
+    total = src.get_video_duration()
+    meta_total = src.get_total_duration()
     times, speeds = [], []
     src.seek(0)
     while not src.is_end():
@@ -47,7 +56,7 @@ def build_telemetry(path):
             times.append(start + (end - start) * (i / n if n else 0.0))
             speeds.append(s.full_speed)
         src.next()
-    return total, times, speeds
+    return total, meta_total, times, speeds
 
 
 def main():
@@ -58,7 +67,7 @@ def main():
 
     # --- pacer side ---
     try:
-        pacer_total, tel_t, tel_v = build_telemetry(path)
+        pacer_total, pacer_meta, tel_t, tel_v = build_telemetry(path)
     except Exception as e:  # noqa: BLE001
         print(f"FAIL building telemetry from pacer: {e!r}")
         return 2
@@ -99,7 +108,8 @@ def main():
     # --- report ---
     print(f"file: {path}")
     print("=== pacer telemetry ===")
-    print(f"  get_total_duration : {pacer_total:.3f} s")
+    print(f"  get_video_duration : {pacer_total:.3f} s   <- the clip's length")
+    print(f"  get_total_duration : {pacer_meta:.3f} s   (GPMF track, {pacer_meta - pacer_total:+.3f} s)")
     if tel_t:
         print(f"  samples            : {len(tel_t)}  (t {tel_t[0]:.3f}..{tel_t[-1]:.3f} s)")
 

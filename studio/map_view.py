@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, gapfill, prefs, theme, units
+from . import data_quality, gapfill, map_render, prefs, theme, units
 from .map_render import (
     bucket_polylines,
     bucketize,  # noqa: F401  (re-exported for tests importing from map_view)
@@ -173,18 +173,24 @@ def _inferred_pen(color, base_width):
 
 
 # --------------------------------------------------------------- rainbow map (F3)
-# F3 rainbow: pyqtgraph has no per-vertex pen, so the channel (speed / Δ-vs-best) is quantized
-# into MAP_RAINBOW_N buckets, one PlotCurveItem per bucket. Rebuilt only on lap/channel/segment change.
+# F3 rainbow: pyqtgraph has no per-vertex pen, so the channel (speed / Δ / Δ rate / grip /
+# elevation) is quantized into MAP_RAINBOW_N buckets, one PlotCurveItem per bucket. Rebuilt only on
+# lap/channel/segment change.
 RAINBOW_WIDTH = 3  # same width as the current-lap overlay, so the painted line reads identically
-# Cycle order for the channel control: off → speed → Δ → grip → off (kept for the cycle API the
-# tests drive; the labelled combo lists the SAME modes, so no channel is hidden behind a blind cycle).
-_RAINBOW_ORDER = ("off", "speed", "delta", "grip", "elevation")
+# Cycle order for the channel control: off → speed → Δ → Δ rate → grip → off (kept for the cycle API
+# the tests drive; the labelled combo lists the SAME modes, so no channel is hidden behind a blind
+# cycle). The two Δ channels sit next to each other because they are the same measurement asked two
+# different questions ("how far behind am I here" vs "am I losing it here"), and a reader who wants
+# one usually wants to flick to the other.
+_RAINBOW_ORDER = ("off", "speed", "delta", "delta_rate", "grip", "elevation")
 # Short, legible per-channel labels for the map-header dropdown (each channel visible + one click),
 # replacing the old blind-cycle button captions (where Grip was an undiscoverable 4th step).
 _RAINBOW_COMBO_LABELS = {"off": "Line: Off", "speed": "Line: Speed", "delta": "Line: Δ to best",
-                         "grip": theme.estimated_label("Line: Grip"), "elevation": "Line: Elevation"}
-# The per-channel rainbow value/bucket math (incl. the grip fixed scale + Δ/grip negation + the
-# GPS-dropout NaN-mask) lives in the pure-numpy studio/map_render.py (rainbow_channel + helpers).
+                         "delta_rate": "Line: Δ rate", "grip": theme.estimated_label("Line: Grip"),
+                         "elevation": "Line: Elevation"}
+# The per-channel rainbow value/bucket math (incl. the grip fixed scale, the Δ-rate SYMMETRIC
+# scale, the Δ/Δ-rate/grip negation and the GPS-dropout NaN-mask) lives in the pure-numpy
+# studio/map_render.py (rainbow_channel + helpers).
 
 
 class _RainbowOverlay:
@@ -1083,9 +1089,15 @@ class MapView(QWidget):
             self.rainbow_combo.addItem(_RAINBOW_COMBO_LABELS[mode], userData=mode)
         self.rainbow_combo.setToolTip(
             "Colour the current lap's line by a channel: Speed (red = slow, green = fast), "
-            "Δ to best (red = losing, green = gaining), Grip (ESTIMATED: red = on the session's "
+            "Δ to best (red = losing, green = gaining), Δ rate (where you are losing it RIGHT "
+            "HERE), Grip (ESTIMATED: red = on the session's "
             "grip limit, green = grip left unused), or Elevation (red = the lowest point of the "
-            "lap, green = the highest). Elevation is RELATIVE within the lap: GPS altitude drifts "
+            "lap, green = the highest). Δ to best is CUMULATIVE — it shows how far behind you "
+            "already were, so a corner you are gaining in still paints red while you carry a "
+            "deficit into it. Δ rate is its slope: seconds lost per second of driving, smoothed "
+            f"over {map_render.RATE_WINDOW_S:.1f} s of travel, on a scale centred on zero — amber "
+            "means matching the baseline, red is losing time here, green is taking it back. "
+            "Elevation is RELATIVE within the lap: GPS altitude drifts "
             "by several metres between laps of the same track, so only the shape is meaningful — "
             "the legend reads 'lowest' → the rise above it, never an altitude above sea level. "
             "Off leaves the plain racing line. The faint best-lap reference is unchanged.")
@@ -1709,7 +1721,7 @@ class MapView(QWidget):
         self._apply_rainbow()
 
     def _build_rainbow(self, lap_id: int, mode: str) -> str:
-        """Fill the bucket items for `lap_id`'s channel (speed / Δ-vs-best / grip). Returns a status:
+        """Fill the bucket items for `lap_id`'s channel (speed / Δ / Δ rate / grip). Returns a status:
           * "painted" — the rainbow was filled + the legend set;
           * "hint"    — nothing painted, but the legend carries a hint (Δ on the best lap: no delta
                         to paint — L1); the caller keeps the plain overlay and shows the legend;
@@ -1723,9 +1735,11 @@ class MapView(QWidget):
             ch["t_media_s"], ch["x_m"], ch["y_m"], ch["speed_kmh"], ch["dist_m"])
         grip_util = self.session.driving.lap_grip_utilization(lap_id) if mode == "grip" else None
         elevation = self.session.lap_elevation_channel(lap_id) if mode == "elevation" else None
-        # Δ-vs-best on the 400-grid (delta()'s y-series); None when no best lap / lap absent.
+        # Δ-vs-best on the 400-grid (delta()'s y-series); None when no best lap / lap absent. BOTH
+        # Δ channels are fed from this one call — the rate channel is that curve's slope, so it
+        # must never be computed against a different baseline than the cumulative one shows.
         delta_grid = None
-        if mode == "delta":
+        if mode in ("delta", "delta_rate"):
             got = self.session.delta([lap_id])
             if got is not None and lap_id in got[2]:
                 delta_grid = got[2][lap_id][1]

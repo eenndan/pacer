@@ -568,7 +568,27 @@ class RawGPSSource:
         pass
 
     def get_total_duration(self) -> float:  # overridable (pure virtual)
-        """Total media duration."""
+        """Total duration of the stream this source READS — for a GPMF source that is
+        the metadata track, which is what the payload cursor is bounded by.
+        """
+        pass
+
+    def get_video_duration(self) -> float:  # overridable
+        """Duration of the VIDEO track: where the NEXT chapter's picture begins, and
+        therefore the only correct amount to shift a following chapter by.
+
+        It is a SEPARATE question from GetTotalDuration() because the two tracks
+        are separate tracks. GoPro's own contract is that a chapter's metadata
+        length matches its video length EXCEPT in the last chapter of a recording,
+        where the GPMF track ends on its own payload grid — measured on the ten
+        GoPro sample clips in 3rdparty/gpmf-parser/samples, that exception runs
+        from -0.701 s (hero7) to +0.934 s (karma), i.e. up to a whole payload. A
+        chain that shifts by the metadata length therefore rides ~1 s of phantom
+        offset the moment a chapter exercises it, and the shift belongs to the
+        picture regardless. The default answers with GetTotalDuration() so a source
+        with no video track of its own (a test double, a Python subclass) behaves
+        exactly as it did before this existed.
+        """
         pass
 
 class GPMFSource(RawGPSSource):
@@ -617,17 +637,31 @@ class GPMFSource(RawGPSSource):
     def get_total_duration(self) -> float:
         pass
 
+    def get_video_duration(self) -> float:
+        pass
+
 class SequentialGPSSource(RawGPSSource):
     """Concatenates two sources end to end (chapter chaining): the right child's
-    timeline is shifted by the left child's duration so the pair reads as one
-    continuous recording. `left` may itself be a SequentialGPSSource, so chains
-    of any length nest.
+    timeline is shifted by the left child's VIDEO duration so the pair reads as
+    one continuous recording. `left` may itself be a SequentialGPSSource, so
+    chains of any length nest.
+
+    THE SHIFT IS THE VIDEO'S, NOT THE METADATA TRACK'S. The right child's payload
+    times are local to its own file and everything downstream (lap timing, the
+    chapter offset table, the export's ffmpeg seek, the player's source switch)
+    reads them as positions in the recording's PICTURE. Chapter k+1's picture
+    starts at the end of chapter k's picture, so that is the offset; shifting by
+    chapter k's GPMF length instead silently rides the difference between the two
+    tracks, which on GoPro's own sample clips reaches 0.9 s.
     """
 
     def __init__(self, left: RawGPSSource, right: RawGPSSource) -> None:
         pass
 
     def get_total_duration(self) -> float:
+        pass
+
+    def get_video_duration(self) -> float:
         pass
 
     def is_end(self) -> bool:
