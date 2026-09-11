@@ -20,9 +20,11 @@ all ten bundled gpmf-parser sample clips, across HERO5/6/7/8/13, Fusion, Max and
 SAY differs by model, and on several they say nothing at all) — so it inherits ACCL's frame and
 needs no handling of its own. And that frame is the RAW one the elements are written in, not the
 one ORIN names: `gmeter.GRAV_PERM`'s block records the measurement that settled it, and
-`gmeter.axis_check` is the per-recording guard that now stands behind it. Projecting on gravity
-is what makes the number a ROAD-plane yaw rate rather than a camera-axis one: it is independent
-of how the camera is tilted on its mount.
+`gmeter.axis_check` is the per-recording guard behind that constant — on the G-METER path, which
+is the only path it gates. It is NOT a guard on this one: nothing here calls it, and this module
+carries its own, narrower check that the gravity direction exists at all (`MIN_GRAV_NORM`).
+Projecting on gravity is what makes the number a ROAD-plane yaw rate rather than a camera-axis
+one: it is independent of how the camera is tilted on its mount.
 
   * The permutation is load-bearing and fails QUIETLY. Projecting on the UNPERMUTED GRAV still
     produces a corner-shaped signal — r=+0.65/+0.62 against the GPS path, gain 0.35/0.32 — which
@@ -113,6 +115,23 @@ LOWPASS_S = 0.30
 # corner correlation from 0.905 to 0.946 (0.913 to 0.959 on 0062). It removes ~30 % of the
 # samples and no signal — the closed-loop ratios, which use every sample, do not move.
 GUARD_S = 0.5
+
+# THE GRAVITY DIRECTION HAS TO EXIST BEFORE ANYTHING CAN BE PROJECTED ON IT. GRAV is a UNIT
+# vector on every camera that writes one — |GRAV| measures 1.0000 at the 5th, 50th AND 95th
+# percentile on both GoPro Max sample clips and on both D24 recordings (103,680 rows each) — so a
+# stream carrying no direction is unmistakable rather than a judgement call, and 0.5 sits halfway
+# between the only two values that occur.
+#
+# It is not hypothetical: the bundled `hero8.mp4` sample's GRAV is ALL ZEROS. Un-guarded that
+# neither raises nor reads as missing. `up` normalises (0,0,0) straight back to (0,0,0) (the
+# 1e-12 floor below keeps the divide finite), so the dot product is EXACTLY 0.0 at every sample
+# and the app reports a full-length, `has_data=True` channel reading "not turning" over a clip
+# whose own gyro has a median |omega| of 0.269 rad/s. That is the same silence `gmeter.axis_check`
+# exists to end, and it refuses hero8 on the G-METER path (the zero direction reads as a 90 deg
+# tilt) — but axis_check gates the g-meter only. Nothing stood in front of THIS path, and the
+# module doc above said otherwise. An absent direction is now an ABSENT CHANNEL, which is what
+# `compute` already does for a camera with no GYRO at all.
+MIN_GRAV_NORM = 0.5
 
 _MIN_LAP_SAMPLES = 16       # a lap trace shorter than this cannot carry a curvature profile
 _TWO_PI = 2.0 * np.pi
@@ -267,7 +286,12 @@ def yaw_rate_series(gyro, grav, lowpass_s: float = LOWPASS_S):
     t = gyro[:, 0]
     up = np.column_stack(
         [np.interp(t, grav[:, 0], grav[:, 1 + GRAV_PERM[i]]) for i in range(3)])
-    up /= np.maximum(np.linalg.norm(up, axis=1, keepdims=True), 1e-12)
+    norms = np.linalg.norm(up, axis=1, keepdims=True)
+    if float(np.median(norms)) < MIN_GRAV_NORM:
+        # No gravity direction to project on (see MIN_GRAV_NORM). Refuse the channel rather than
+        # returning the all-zero one a degenerate direction silently produces.
+        return np.empty(0), np.empty(0)
+    up /= np.maximum(norms, 1e-12)
     yaw = np.sum(gyro[:, 1:4] * up, axis=1)
     span = float(t[-1] - t[0])
     if lowpass_s > 0 and span > 0:
