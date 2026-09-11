@@ -158,6 +158,16 @@ than it is. So that is a rule with an owner in the code:
 - **the ideal lap discloses its sample**, because a sum of per-segment minima falls the longer you
   stay out. Same driving, same recording: 67.957 s over 5 laps, 66.563 s over 65.
 - **DATA TRUST** puts the accuracy story inside the product, not only on this page.
+- **a citable marker vocabulary on the way out.** In the app a caveat has hover, colour and weight
+  to carry it, so pacer keeps its own marks — `(est)`, the muted provisional demotion, ⚠, ⊘. An
+  exported table has none of those, so `laps.csv` and the HTML report use the **UK Government
+  Analysis Function's standard table symbols** instead — `[e]` estimated, `[p]` provisional, `[u]`
+  low reliability, `[b]` break in series — each one decoded by a key in the same file. The choice is
+  per marker and written down: `[x]`, `[z]`, `[r]`, `[f]` and `[c]` are refused with reasons in
+  [studio/data_quality.py](studio/data_quality.py), and ⊘ EXCLUDED is named as having no standard
+  equivalent at all — a lap that was measured, is shown, and is deliberately not counted is neither
+  "not available" nor "not applicable". Adopting four of nine and saying why the rest do not fit is
+  the point; a vocabulary forced onto the last two cases would be worse than the house style.
 
 ## Built with LLM coding agents
 

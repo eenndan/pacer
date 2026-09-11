@@ -425,3 +425,213 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
     cls[covered & (drop_arr >= n_arr)] = POOR
     return QualityTimeline(cell_s=cell, cls=cls, n=n_arr, dropped=drop_arr, dop=dop_arr,
                            reports_quality=True)
+
+
+# ======================================================== the QUALITY-MARKER VOCABULARY
+# Pacer has always marked a number it cannot fully stand behind. It did it in a HOUSE style, one
+# mark per surface, each defined where that surface lives: `theme.ESTIMATED_MARK` = "(est)", the
+# muted+italic provisional demotion (`theme.apply_provisional_style`), `lap_table.DROPOUT_MARK` =
+# "⚠", `lap_table.EXCLUDED_MARK` = "⊘". Every one of them is measured into the shipped face and
+# legended on the surface that paints it. Nothing below replaces any of them.
+#
+# What the house style could not do is travel. The UK Government Analysis Function publishes a
+# STANDARD set of shorthand symbols for exactly this job ("Symbols in tables"), designed to be
+# read by a screen reader and decoded from a key: [c] confidential · [e] estimated · [b] break in
+# series · [f] forecast · [p] provisional · [r] revised · [u] low reliability · [x] not available ·
+# [z] not applicable. Its guidance explicitly warns AGAINST `*`, `†`, `.` and `:`, which are hard
+# to see and which screen readers handle badly — pacer uses none of those four, so adopting the
+# standard costs it nothing it was relying on.
+#
+# ── WHERE THE STANDARD IS ADOPTED, AND WHERE IT IS NOT ────────────────────────────────────────
+# The decision is PER SURFACE FAMILY before it is per marker, because the standard is a convention
+# for a TABLE WITH A KEY UNDER IT, and pacer has two kinds of surface:
+#
+#   * LIVE, IN-APP. A cell has hover, colour, weight and a legend on the glyph itself. A one-letter
+#     code there is strictly worse than the mark it would replace: "(est)" is a word and decodes
+#     itself, "[e]" needs a key that a table cell has nowhere to put. The in-app marks STAY. This
+#     is not conservatism — #189/#237 and tests/test_glyph_vocabulary.py spent real measurement
+#     getting ⚠, ⊘ and ▲ into the app's own face at the right size; swapping them for letters
+#     would throw that away and buy nothing a tooltip does not already give.
+#   * LEAVING THE APP. laps.csv and the HTML report are tables with no hover, read by a person in
+#     a spreadsheet or by a script. They are the standard's own design target, and they are where
+#     pacer's disclosures have repeatedly been found thin (§5.4). The codes are adopted THERE.
+#
+# Per marker, then — including the ones that do not fit, because a vocabulary forced onto the last
+# two cases is worse than the house style:
+#
+#   [e] estimated       ADOPTED (exports). The media-clock fallback: an older GoPro without GPS9,
+#                       so the times are estimated from the video clock. In-app this stays
+#                       `theme.ESTIMATED_MARK`, which also covers the inferred CHANNELS (grip, the
+#                       brake/throttle band) that never reach a lap row.
+#   [p] provisional     ADOPTED (exports). The start/finish line was auto-fitted and not confirmed,
+#                       so every time is measured from an arbitrary point and a drag WILL revise
+#                       it — which is precisely what the standard means by provisional. laps.csv
+#                       carried no per-row marker for this at all before; the app's own word for
+#                       it is already "Provisional timing".
+#   [u] low reliability ADOPTED (exports). A GPS dropout inside the lap (the ⚠ rule), or a
+#                       recording whose quality gate rejected a concerning share of fixes. It is
+#                       deliberately NOT extended to a lap whose `QualityTimeline` class is merely
+#                       below GOOD, and that refusal is measured rather than cautious: on the D24
+#                       0060 pair 17 of the 38 clean laps contain a second outside the GNSS good
+#                       band, so that rule would mark 45 % of the rows of a recording the app
+#                       itself reports as clean (0 rejected fixes, no dropout, not degraded). The
+#                       card states that count as a fact and the strip shows where; no in-app
+#                       surface DEMOTES those laps, and an export must not invent a demotion the
+#                       app does not make. The codes follow the app's verdicts; they do not add to
+#                       them.
+#   [b] break in series ADOPTED (exports + the Stats DATA TRUST card) — and NEW. See
+#                       `break_in_series`: pacer has two genuine instances and had no name for
+#                       either.
+#   [x] not available   NOT ADOPTED. The app already prints `_signal.DASH` (an em-dash) for a value
+#                       it does not have, from one source, on every surface including the exports —
+#                       and the em-dash is not one of the four characters the guidance warns about.
+#                       A second spelling of a thing that already has one is drift, not a standard.
+#   [z] not applicable  NOT ADOPTED, same reason and one more: pacer's rule is None-not-zero, and a
+#                       statistic that does not apply is OMITTED (the row, the tile, the group), not
+#                       printed as a blank with a code. No surface needs to tell [x] from [z].
+#   [r] revised         NOT ADOPTED, and this is the closest call. Dragging the start/finish line
+#                       DOES revise every lap time and re-cut the corner partition. But [r] marks a
+#                       figure in a series a reader may hold an earlier copy of, and pacer publishes
+#                       no series — each export is a fresh document of the session as it stands. A
+#                       code that fired on every number after a drag the user just performed is
+#                       noise, and the honest disclosure for that case is [p], which is already on.
+#   [f] forecast        NOT APPLICABLE. Nothing here predicts a future value. The ideal lap is the
+#                       nearest thing and it is emphatically NOT a forecast — it is an order
+#                       statistic over laps already driven (corner_model.IdealSample), and marking
+#                       it [f] would be exactly the overclaim that class exists to prevent.
+#   [c] confidential    NOT APPLICABLE. A local single-user tool suppresses nothing for disclosure
+#                       control.
+#
+# ── THE ONE HOUSE MARK WITH NO STANDARD EQUIVALENT ───────────────────────────────────────────
+# ⊘ EXCLUDED — a substantial lap the median-distance band left OUT of the times, bests and
+# coaching. The two nearest codes are [x] (not available) and [z] (not applicable) and the lap is
+# NEITHER: it was measured, its time exists, the app shows it in the strip. It is simply not IN
+# the statistics. There is no standard symbol for "measured, shown, and deliberately not counted",
+# so ⊘ and its sentence stay, and the exports state the count in words (they never wrote an
+# excluded lap as a row in the first place). Naming this is the point of the table above: the
+# standard covers four of pacer's five quality conditions, and forcing the fifth would have made
+# the vocabulary less true, not more standard.
+#
+# ★ (session best) and ▲ (worst loss) are NOT quality markers and are deliberately absent here —
+# #237 separated the priority glyph from the trust glyph precisely so the two vocabularies could
+# not be read as one.
+MARK_ESTIMATED = "[e]"
+MARK_PROVISIONAL = "[p]"
+MARK_LOW_RELIABILITY = "[u]"
+MARK_BREAK_IN_SERIES = "[b]"
+
+#: Canonical order, worst-footing first, so a row's codes read the same way every time.
+MARK_ORDER = (MARK_PROVISIONAL, MARK_ESTIMATED, MARK_BREAK_IN_SERIES, MARK_LOW_RELIABILITY)
+
+#: What each adopted code means, in pacer's terms rather than the standard's generic gloss. This
+#: is what `mark_key` renders into the export's own legend, so a file that carries a code always
+#: carries its decode.
+#:
+#: PURE ASCII, AND THAT IS A CONSTRAINT RATHER THAN A STYLE. These strings reach laps.csv, which
+#: has been pure ASCII for its whole life and is pinned that way by
+#: tests/test_export_disclosures.py::test_csv_trailer_stays_ascii — the same reason the ideal's
+#: trailer row carries `sentence()` and not the middle-dotted `caption()`. So the clause separator
+#: is a colon, not the em-dash the app's prose uses. ONE string for both exports rather than a
+#: typographic twin that can drift from it.
+MARK_MEANING = {
+    MARK_PROVISIONAL: ("provisional: the start/finish line was auto-fitted and not confirmed, so "
+                       "this time is measured from an arbitrary point and will change if it moves"),
+    MARK_ESTIMATED: ("estimated: timing came from the video clock (an older camera with no GPS9), "
+                     "which runs slightly fast"),
+    MARK_BREAK_IN_SERIES: ("break in series: the recording is not continuous, so times either "
+                           "side of the break are not on the same footing"),
+    MARK_LOW_RELIABILITY: ("low reliability: a GPS dropout inside this lap, or a recording whose "
+                           "quality gate rejected a concerning share of fixes"),
+}
+
+
+def break_in_series(session) -> str | None:
+    """WHY this recording is not one continuous series, or None when it is — the [b] condition.
+
+    Pacer has two genuine instances, both already detected and neither previously NAMED as a break:
+
+      * a SKIPPED chapter (`Session.skipped_chapters`) — a file in the middle of a recording that
+        is not readable video is left out and the rest is analysed. The chapter map is then built
+        from the chapters that loaded, with cumulative offsets, so the global time axis closes
+        over the hole: laps after it are not continuous with laps before it.
+      * a DESYNCED chapter (`ChapterMap.desynced_chapters`) — a non-last chapter whose GPMF track
+        does not match its video track by more than a payload. The module that detects it says it
+        plainly: "everything after it in the recording is telemetry the picture no longer matches."
+
+    A plain chapter SEAM is deliberately NOT one, and that is a measured refusal rather than an
+    omission. load.py's own measurement: a seam does not break a GPS9 run (its delta is an ordinary
+    0.100 s) and the axis steps by −0.000127 s across one. Marking every chaptered recording [b]
+    would fire on both D24 recordings, on every multi-chapter session anyone records, and would
+    mean nothing — the exact failure the [x]/[z] rows above are rejected for.
+
+    Duck-typed and getattr-guarded throughout, like every other export-facing read: a Session
+    double that models neither field is a recording with no break, never a crash. The sentence is
+    ASCII for the same reason `MARK_MEANING` is: it reaches laps.csv."""
+    skipped = list(getattr(session, "skipped_chapters", None) or [])
+    chapter_map = getattr(session, "chapters", None)
+    ask = getattr(chapter_map, "desynced_chapters", None)
+    try:
+        desynced = list(ask()) if callable(ask) else []
+    except Exception:  # noqa: BLE001 — a stand-in chapter object must never fail an export
+        desynced = []
+    bits = []
+    if skipped:
+        n = len(skipped)
+        bits.append(f"{n} chapter{'' if n == 1 else 's'} could not be read and "
+                    f"{'was' if n == 1 else 'were'} left out, so the recording closes over the gap")
+    if desynced:
+        n = len(desynced)
+        bits.append(f"{n} chapter{'' if n == 1 else 's'} carr{'ies' if n == 1 else 'y'} more or "
+                    "less telemetry than video, so the timing after it stops matching the picture")
+    return "; ".join(bits) if bits else None
+
+
+def session_marks(session) -> list[str]:
+    """The quality codes that apply to EVERY row of an export of this session, in `MARK_ORDER`.
+
+    The split between this and `lap_marks` is the split the app already makes: `timing_verified`
+    and `timing_quality` are one verdict for the whole recording, a GPS dropout is a fact about
+    one lap. Keeping them apart is what lets an export state a session-wide caveat once, in its
+    key, and still mark the individual laps that carry something the others do not."""
+    out = []
+    if not getattr(session, "timing_verified", True):
+        out.append(MARK_PROVISIONAL)
+    quality = getattr(session, "timing_quality", None)
+    if quality is not None:
+        # The [e] / [u] split is the app's own, not a new one: TimingQuality.detail() already
+        # reserves the "estimated"/"video clock" wording for the media-clock fallback and gives a
+        # true-clock recording with rejected fixes the low-reliability wording instead.
+        if getattr(quality, "media_clock", False):
+            out.append(MARK_ESTIMATED)
+        if getattr(quality, "low_gps_quality", False):
+            out.append(MARK_LOW_RELIABILITY)
+    if break_in_series(session):
+        out.append(MARK_BREAK_IN_SERIES)
+    return [m for m in MARK_ORDER if m in out]
+
+
+def lap_marks(session, lap_id, dropout_ids=None) -> list[str]:
+    """Every quality code that applies to ONE lap row — the session-wide ones plus this lap's own.
+
+    `dropout_ids` lets a writer looping over hundreds of rows fetch `dropout_lap_ids()` once;
+    omitted, it is read per call. Returns [] for a lap with nothing to disclose, so the common
+    case writes an empty cell exactly as the `flag` column already does."""
+    ids = dropout_ids
+    if ids is None:
+        ask = getattr(session, "dropout_lap_ids", None)
+        ids = ask() if callable(ask) else ()
+    out = list(session_marks(session))
+    if lap_id in ids and MARK_LOW_RELIABILITY not in out:
+        out.append(MARK_LOW_RELIABILITY)
+    return [m for m in MARK_ORDER if m in out]
+
+
+def mark_key(codes) -> list[tuple[str, str]]:
+    """`(code, meaning)` for the codes given, in `MARK_ORDER` — an export's KEY.
+
+    A code with no key is the failure mode the standard exists to prevent, so every writer that
+    can emit a code renders this beside the table it emitted them into. Returns only the codes
+    actually present: a legend listing four marks on a file that carries none teaches the reader
+    that the marks are decoration."""
+    present = set(codes)
+    return [(m, MARK_MEANING[m]) for m in MARK_ORDER if m in present]

@@ -537,6 +537,14 @@ def apply_provisional_style(item, on: bool = True) -> None:
 # marks a value as estimated uses this (grip column, brake-point hints, the brake/throttle legend),
 # so the app never spells it four ways ("(est)"/"(EST)"/"ESTIMATED"/"(est.)"). Longer explanatory
 # tooltip PROSE may still say the full word "estimated"; only the short chips/suffixes unify here.
+#
+# IT IS THE IN-APP HALF OF A TWO-HALF VOCABULARY. `studio/data_quality.py` carries the other half
+# — the UK Government Analysis Function's standard table symbols ([e] estimated, [p] provisional,
+# [u] low reliability, [b] break in series) — and the per-marker decision about which of them
+# pacer adopts, which it refuses, and why. The split is by SURFACE: a live cell has hover, colour
+# and weight, so "(est)" (a word, no key needed) beats "[e]" there; an exported table has none of
+# those, so the codes win there. This constant stays the app's, and the codes stop at the app's
+# edge. Read that note before adding any new mark to either side.
 ESTIMATED_MARK = "(est)"      # the bare canonical inline marker
 ESTIMATED_SUFFIX = f" {ESTIMATED_MARK}"   # appended to a column/label title carrying an estimated value
 
