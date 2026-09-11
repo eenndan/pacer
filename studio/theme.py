@@ -321,6 +321,42 @@ CHART_SERIES = [
     "#9FD66B",   # lime-leaning green (distinct from the best-lap C.ahead green)
 ]
 
+# The MARK palette (studio/marks.py) — the hues a mark's stored colour NAME resolves to.
+#
+# A mark stores a name, never a hex: a frozen hex would opt every mark out of the colour-blind
+# palette the rest of the app switches with one menu item, and a hand-edited file is far easier to
+# read as "coral" than as "#E89B6B".
+#
+# The five IDENTITY names are CHART_SERIES slots 1-5 verbatim, because those already carry the
+# measured deuteranopia separation work above and there is no reason for the app to own a SECOND
+# categorical set. SLOT 0 (the amber accent) IS NOT OFFERED: `warn` below resolves to that same
+# accent in the standard palette, so offering both would be one colour wearing two labels — and the
+# scrub bar this palette is painted over already spends the accent on the current-lap bracket 10 px
+# below. `grey` is the NEUTRAL the default "note" type opens with, and `warn` / `bad` are the two
+# SEMANTIC hues reserved for the derived marks: a mark that says "the GPS dropped out here" must
+# wear the hue the surfaces reporting that already wear, or the marks band and the quality strip a
+# sub-step below it would disagree in colour about one fact.
+#
+# The two semantic names resolve through the palette ACCESSORS at call time — a module constant
+# would freeze the hue at import and never move again (see the note over _PALETTES, and
+# tests/test_contrast.py::test_no_module_constant_freezes_a_palette_hue).
+_MARK_SERIES = {"cyan": 1, "purple": 2, "blue": 3, "coral": 4, "lime": 5}
+
+
+def mark_colour(name: str) -> str:
+    """The hue for one mark colour NAME (studio/marks.py `COLOURS`). Unknown names fall back to the
+    neutral rather than raising — a garbage colour in a hand-edited store must cost the note its
+    hue, never its existence."""
+    slot = _MARK_SERIES.get(name)
+    if slot is not None:
+        return CHART_SERIES[slot]
+    if name == "warn":
+        return ramp_mid_colour()
+    if name == "bad":
+        return behind_colour()
+    return C.text_dim
+
+
 # A THIRD identity channel, for the layers that are filled GLYPHS rather than stroked lines. #156
 # gave the curves and the legend a per-slot dash pattern (plots_view.SERIES_DASH), but a brake
 # marker has no stroke to dash: it was one filled triangle in six hues, so on that layer hue was

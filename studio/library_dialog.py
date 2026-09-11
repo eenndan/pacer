@@ -249,13 +249,19 @@ PRIVACY_NOTE = (
     "conditions in a session record are typed by you, never looked up online. "
     "It stores your start/finish + sector lines in a small \"<name>.pacer.json\" file next to "
     "each video, and under ~/Library/Application Support/pacer it keeps this library index (file "
+    # THE THIRD STORE COSTS A CLAUSE, NOT A LINE. This note is a WrapLabel inside the dialog, so
+    # every extra wrapped line comes off the ROW BUDGET of the list below it: naming marks the long
+    # way took the re-opened dialog from 5.0 to 4.82 visible rows and failed
+    # tests/test_library.py::test_dialog_never_reopens_too_small_to_show_the_list. The two clauses
+    # that used to enumerate the stores by name ("that takes its session record with it", "the
+    # whole index and every session record with it") pay for it.
     "paths, track names and GPS dates), your session records (session_records.json — the setup "
-    "and conditions you write up) and your saved tracks (tracks.json — each circuit's name "
-    "and coordinates). Right-click a recording to forget it — that takes its session record with "
-    "it — or use \"Clear library\" to wipe the whole index and every session record with it. A "
-    "copy of each is kept beside it (library.json.bak, session_records.json.bak), so \"Restore…\" "
-    "can put both back. Your saved tracks are separate: \"Clear library\" leaves tracks.json "
-    "untouched, and \"Back up…\" does not copy it."
+    "and conditions you write up), your marks (marks.json — your own notes on a recording) and "
+    "your saved tracks (tracks.json — each circuit's name and coordinates). Right-click a "
+    "recording to forget it — its record and marks go too — or use \"Clear library\" to wipe all "
+    "three. A copy of each is kept beside it (library.json.bak, session_records.json.bak, "
+    "marks.json.bak), so \"Restore…\" puts them back. Your saved tracks are separate: "
+    "\"Clear library\" leaves tracks.json untouched, and \"Back up…\" does not copy it."
 )
 
 # A PlotDataItem pen/brush for the PB line + its markers (amber accent, the app's primary).
@@ -1413,6 +1419,12 @@ class LibraryDialog(QDialog):
                 " and the session record you wrote for it (a copy of your records is kept as "
                 "session_records.json.bak)"
                 if self._record_for(entry) is not None else "") +
+            # …and the MARKS, named UNCONDITIONALLY where the record is named only when there is
+            # one. "any marks" is true whether there are none or ten, and this dialog has no seam
+            # to count them through — where it has one for records (`_record_for`). Naming a
+            # possibility costs a clause; leaving the irreversible half of the gesture unmentioned
+            # because the count was inconvenient to obtain costs the user their notes.
+            ", along with any marks you wrote against it (kept as marks.json.bak)"
             ". Your video file is not touched.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ok != QMessageBox.Yes:
@@ -1482,9 +1494,11 @@ class LibraryDialog(QDialog):
         ok = QMessageBox.question(
             self, "Clear library",
             f"Forget all {_plural(len(self._entries), 'recording')} from the library?\n\n"
-            "This wipes the library index and every session record you have written — your video "
-            "files and their .pacer.json sidecars are left untouched.\n\n"
-            f"A copy of each is kept first (library.json.bak, session_records.json.bak). "
+            "This wipes the library index, every session record you have written and every mark "
+            "you have made — your video files and their .pacer.json sidecars are left "
+            "untouched.\n\n"
+            f"A copy of each is kept first (library.json.bak, session_records.json.bak, "
+            f"marks.json.bak). "
             f"{recovery}",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ok != QMessageBox.Yes:

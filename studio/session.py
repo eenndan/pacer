@@ -48,6 +48,9 @@ from . import (
     corners as corners_alg,  # the pure algorithm module; `self.corners` is the service
 )
 from . import (
+    marks as marks_model,
+)
+from . import (
     stats as stats_service,
 )
 from ._signal import (
@@ -3146,6 +3149,35 @@ class Session:
             return None
         w = self.lap_window(lap_id)
         return None if w is None else tl.worst_between(w[0], w[1])
+
+    # ------------------------------------------------- the derived half of the marks surface
+    def auto_marks(self) -> tuple[list[dict], int]:
+        """This recording's DERIVED marks (`studio/marks.py`) + how many degraded stretches were
+        too short to mark. The pacer-side extraction only; the model does the deriving, exactly as
+        `library_entry` builds a dict the pacer-free `library` module then owns.
+
+        THE HONESTY RULE IS STRUCTURAL HERE. Every input is the SAME call the surface that already
+        reports it makes — `gapfill.find_gaps` over `_lap_point_times` is verbatim what
+        `lap_has_dropout` runs, `excluded_lap_ids` is the list the lap panel's ⊘ strip renders, and
+        `quality_timeline` is the array the scrub bar's quality strip paints. So a lap carries a
+        dropout mark exactly when the lap table flags it, and the marks band and the quality strip
+        cannot disagree about a second of this recording: there is no second detector to drift.
+
+        Measured on the owner's recordings (both full chains, all five single chapters and the
+        bundled sample): ZERO dropout marks and ZERO excluded-lap marks anywhere, and one degraded
+        mark in total — the 49 s block at the head of recording 0062 where the receiver is
+        acquiring its lock. See `marks.MIN_DEGRADED_S` for the run-length census behind that."""
+        dropouts = []
+        for lap_id in self.valid_lap_ids():
+            times = self._lap_point_times(lap_id)
+            for gap in gapfill.find_gaps(times):
+                dropouts.append((lap_id, float(times[gap["i"]]), float(times[gap["j"]])))
+        excluded = []
+        for lap_id in self.excluded_lap_ids():
+            window = self.lap_window(lap_id)
+            if window is not None:
+                excluded.append((lap_id, float(window[0]), float(window[1])))
+        return marks_model.auto_marks(dropouts, excluded, self.quality_timeline)
 
     def delta_at_time(self, t: float) -> float | None:
         """Δ-to-best (seconds) at media-clock time `t`: how far ahead (−) / behind (+) the lap

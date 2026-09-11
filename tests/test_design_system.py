@@ -494,9 +494,9 @@ def test_all_four_panel_headers_are_one_height():
     contents, not a declaration: adding one taller widget to any header would have moved it again.
 
     So: every PanelHeader in the view stands at exactly PANEL_HDR_H and every PanelToolbar at
-    exactly TOOLBAR_H, at both shipped window sizes, and the count is pinned too — four headers
-    (one per quadrant) and exactly two toolbars, because a panel with no controls does not get an
-    empty control row.
+    exactly TOOLBAR_H, at both shipped window sizes, and WHICH surfaces carry a toolbar is pinned
+    too — four headers (one per quadrant) and one control row per surface that has controls,
+    because a surface with none does not get an empty one.
 
     Measured on the production view over the deterministic synthetic session, not on widgets built
     for the test: a header is only the right height when it holds the app's real contents."""
@@ -531,10 +531,17 @@ def test_all_four_panel_headers_are_one_height():
         # CHARTS when its transport became one: it is a row of five controls, and it was the only
         # control zone in the window that was not on a bar — three rows at 26/28/21 px on the
         # window canvas with a 0 px gutter, against six bars that agreed to the pixel.
+        #
+        # TABLE joined them with the MARKS page, and the distinction is worth stating rather than
+        # losing in a count: the lap PANEL still has no toolbar — its header is tabs and chips and
+        # its other four pages are bare grids — while ONE PAGE of its stack owns one, because the
+        # Marks list is the only page with verbs (add · edit · extend · delete) and a filter. The
+        # bar is a child of the page, so it appears with that page and takes the panel's chrome
+        # (`role="PanelHeader"`, TOOLBAR_H, SPACE_S gutters) exactly like the other three.
         owners = {name for name, panel in panels.items() if panel.findChildren(PanelToolbar)}
-        assert owners == {"MAP", "CHARTS", "VIDEO"}, (
-            f"only MAP, CHARTS and VIDEO have controls, so only they get a toolbar: "
-            f"{sorted(owners)}")
+        assert owners == {"MAP", "CHARTS", "VIDEO", "TABLE"}, (
+            f"MAP, CHARTS and VIDEO have panel-level controls and TABLE's Marks page has its own, "
+            f"so only those four carry a toolbar: {sorted(owners)}")
         toolbars = view.findChildren(PanelToolbar)
         assert len(toolbars) == len(owners), (
             f"a panel grew a SECOND toolbar: {len(toolbars)} rows across {sorted(owners)}")
@@ -546,7 +553,7 @@ def test_all_four_panel_headers_are_one_height():
                 assert c.height() == theme.CTRL_H, (
                     f"every control in a toolbar shares one height: {c!r} is {c.height()}")
     print(f"test_all_four_panel_headers_are_one_height OK "
-          f"(4 headers @ {theme.PANEL_HDR_H}, 3 toolbars @ {theme.TOOLBAR_H})")
+          f"(4 headers @ {theme.PANEL_HDR_H}, 4 toolbars @ {theme.TOOLBAR_H})")
 
 
 def _arrows(bar):

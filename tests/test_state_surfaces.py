@@ -245,6 +245,10 @@ def test_every_empty_state_in_the_app_is_the_one_object():
         ("lap_table.py", "CornerTable.__init__"),
         ("lap_table.py", "LapTable.__init__"),
         ("library_dialog.py", "LibraryDialog.__init__"),
+        # The Marks page. ONE construction serving BOTH of its senses — nothing marked yet, and
+        # nothing matching the filter — because `EmptyState.set_state` is what those two differ by,
+        # exactly as the Library dialog's empty-index and empty-filter senses share one object.
+        ("marks_panel.py", "MarksPanel.__init__"),
         ("map_view.py", "MapView.__init__"),
         ("plots_view.py", "PlotsView.__init__"),
     }

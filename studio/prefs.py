@@ -258,10 +258,15 @@ def set_colorblind_palette(on: bool, path: str | None = None) -> None:
 
 
 def lap_panel_tab(path: str | None = None) -> int:
-    """The lap panel's persisted active tab (Laps 0 · Corners 1 · Stats 2 · Coaching 3).
-    Anything non-int or out of range reads as 0 — a corrupt file never opens a blank page."""
+    """The lap panel's persisted active tab (Laps 0 · Corners 1 · Stats 2 · Coaching 3 · Marks 4).
+    Anything non-int or out of range reads as 0 — a corrupt file never opens a blank page.
+
+    THE UPPER BOUND MOVES WITH THE TAB BAR. It read `<= 3` when there were four pages, so the day a
+    fifth arrived the app would have refused to reopen on it and silently dropped the user back to
+    Laps — a preference that is written, read, and then ignored. `central_view.select_lap_tab`
+    clamps again against the LIVE tab count, which is the guard that does not need editing."""
     val = get(LAP_PANEL_TAB, 0, path)
-    return int(val) if isinstance(val, int) and 0 <= val <= 3 else 0
+    return int(val) if isinstance(val, int) and 0 <= val <= 4 else 0
 
 
 def set_lap_panel_tab(index: int, path: str | None = None) -> None:

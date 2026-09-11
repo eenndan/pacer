@@ -135,6 +135,16 @@ COMMANDS: list[Command] = [
     Command("Playback", "]", "Play faster — back to 1× then 2×", run="faster_playback"),
     Command("Navigation", "← / →", "Step the video back / forward 1 second"),
     Command("Navigation", "Shift + ← / →", "Step the video back / forward 5 seconds"),
+    # MARKS — the one cluster in this card that is not about reading a measurement. They sit in
+    # Navigation rather than Analysis because that is what they DO: B puts a landmark on the
+    # recording and , / . move between the landmarks, which is the same job as ← / → one step up.
+    # THE ROWS MUST STAY CONTIGUOUS WITH THEIR GROUP: `shortcut_groups` buckets by first
+    # appearance, and tests/test_command_palette.py flattens those buckets and compares them to
+    # this list in order — so a Navigation row parked after the Analysis block fails the build.
+    Command("Navigation", "B", "Mark this moment — write down what just happened",
+            run="add_mark_at_playhead"),
+    Command("Navigation", ",", "Jump to the previous mark", run="jump_to_previous_mark"),
+    Command("Navigation", ".", "Jump to the next mark", run="jump_to_next_mark"),
     Command("Navigation", "Drag chart cursor", "Scrub through the current lap"),
     Command("Navigation", "Drag start/finish line",
             "Fix lap timing on the map (key for unknown tracks)"),
@@ -157,6 +167,7 @@ COMMANDS: list[Command] = [
     Command("Analysis", "2", "Lap panel: Corners", run="show_corners_tab"),
     Command("Analysis", "3", "Lap panel: Stats", run="show_stats_tab"),
     Command("Analysis", "4", "Lap panel: Coaching", run="show_coaching_tab"),
+    Command("Analysis", "5", "Lap panel: Marks", run="show_marks_tab"),
     # The DESCRIPTION named the maximize button by a character the button does not paint, in a
     # sentence — where an icon cannot go. It names the button in words instead; the Layout
     # group below is where the glyph itself is documented.
@@ -216,12 +227,24 @@ PRIVACY_PARAGRAPHS = [
     "•  Preferences — \"~/Library/Application Support/pacer/prefs.json\" remembers your speed "
     "unit, palette and panel layout, plus the last folder you opened a recording from (a path "
     "into your filesystem).",
+    # ONE BULLET, AND A SHORT ONE. This card's opening line frames the list as exhaustive, so a new
+    # store has to appear here — but the card is capped at 85% of the screen and had exactly 73 px
+    # of slack (607 px of copy in a 680 px viewport on the 800 px display the test harness runs on,
+    # measured). A six-line bullet took it to 715 and opened the card with a scrollbar over copy
+    # that used to fit; a four-line one still overshot by 3. Three lines, stating what the file
+    # holds — which is the question this card answers, and every word of it is a thing the user
+    # typed.
+    "•  Marks — \"~/Library/Application Support/pacer/marks.json\" holds your marks: a moment in "
+    "a recording, a type and a colour, and your own note.",
     "•  Saved tracks — \"~/Library/Application Support/pacer/tracks.json\" holds each track you "
     "save: its name, its start/finish and sector lines, and the centre point and bounding box "
     "used to recognise the track next time. Those are GPS coordinates of where you drive.",
     "How to remove it:  open File ▸ Library…, right-click a recording and choose "
     "\"Forget this recording\" to drop it from the index and delete its sidecar, or click "
-    "\"Clear library\" to wipe the whole index. That covers the sidecars and the library only — "
+    # "the sidecars and the library only" was already false — forgetting has taken the session
+    # record with it since that store landed, and now the marks too. Said as what it DOES cover it
+    # costs no line and stops understating the gesture.
+    "\"Clear library\" to wipe the whole index. That covers a recording's own data only — "
     "to remove everything, including your preferences and saved tracks, quit pacer and delete the "
     "folder \"~/Library/Application Support/pacer\". Your video files are never touched.",
 ]

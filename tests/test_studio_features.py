@@ -1431,6 +1431,21 @@ class _FakeView:
         self.lapTabChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
         self.gridSizesChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
         self.videoFocusChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
+        # …and the Marks page's own five intents, which _build_ui also connects. `set_marks` is
+        # deliberately NOT here: _refresh_marks gates on `hasattr(view, "set_marks")`, so leaving
+        # it off keeps this fake out of the marks surface while still proving the wiring is made.
+        #
+        # A MISSING STUB HERE HANGS THE FILE rather than failing it, which is worth knowing: the
+        # AttributeError escapes _build_ui, the ~30 Hz tick timer this test starts then calls
+        # `tick()` on a fake that has none, and the excepthook's report dialog spins on it forever
+        # (measured: no further output for 10 minutes, the file's own 180 s faulthandler dump the
+        # only clue).
+        self.marks_panel = SimpleNamespace(
+            markActivated=SimpleNamespace(connect=lambda *_a, **_k: None),
+            addRequested=SimpleNamespace(connect=lambda *_a, **_k: None),
+            editRequested=SimpleNamespace(connect=lambda *_a, **_k: None),
+            deleteRequested=SimpleNamespace(connect=lambda *_a, **_k: None),
+            extendRequested=SimpleNamespace(connect=lambda *_a, **_k: None))
 
     def dispose(self):
         self.disposed = True
