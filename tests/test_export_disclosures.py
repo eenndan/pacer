@@ -233,7 +233,12 @@ def test_driving_group_states_the_coasting_instrument():
     assert sec.note == want, sec.note
     for token in ("0.50 s", "0.25 s", "0.03 g"):   # window, minimum duration, band floor
         assert token in sec.note, sec.note
-    assert want in _write_report(s), "the HTML report dropped the coasting instrument"
+    # Read the report as TEXT, not as markup. The note reaches the page through `esc()`, so the
+    # apostrophes in "session's" / "detector's" are written as &#x27; and a raw substring test
+    # against the document fails on a report that in fact carries the sentence in full. Parsing it
+    # back is the pattern the rest of this file already uses (see the sample-sentence test above).
+    report_text = "".join(ET.fromstring(_write_report(s)).itertext())
+    assert want in report_text, "the HTML report dropped the coasting instrument"
     assert want in export_data.stats_summary_text(s, None), "the clipboard summary dropped it"
     print("test_driving_group_states_the_coasting_instrument OK")
 
@@ -611,6 +616,7 @@ if __name__ == "__main__":
     test_every_exported_ideal_agrees_with_every_other()
     test_stats_summary_values_equal_the_session_accessors()
     test_absent_signals_are_groups_and_dashes_never_zeros()
+    test_driving_group_states_the_coasting_instrument()
     test_degenerate_ideal_is_withheld_from_every_surface_together()
     test_the_clipboard_summary_states_the_timing_too()
     test_pace_group_follows_the_pages_gate_not_the_pace_summarys()
