@@ -197,6 +197,18 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **A lap you stopped on could count as one of your clean laps.** A lap was judged real by its
+  total time — anything from half to 1.6x the session median — and by its distance. A stop defeats
+  both: it adds time without adding a metre, and on a ~69 s kart lap that band leaves **41 seconds
+  of room**, so a lap you spun on, crawled round or pulled up during could set your median, be
+  crowned your best, and feed the ideal lap, the coaching and every statistic with nothing to show
+  for it. Pacer now looks at the speed trace instead of the clock: a lap carrying a stationary
+  stretch of 3 seconds or more is left out, and appears in the ⊘ excluded strip with the rest, so
+  you can see it went. Tightening the time band was the other option and the recordings ruled it
+  out — the bound needed to catch a stop also throws away ordinary slow laps. **This changes
+  nothing on a clean session:** across the 103 clean laps of the two reference recordings the
+  longest stretch below the threshold is 0.000 s, and every lap time, best and derived number is
+  bit-for-bit what it was.
 - **Video seeks drifted further from the picture the longer the recording ran.** Pacer times laps
   on the camera's GPS clock and the video plays on the camera's media clock; those are two clocks,
   and the media one runs about 27 ppm fast. Every seek — jump to the best lap, drag the scrub, or

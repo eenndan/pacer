@@ -36,6 +36,41 @@ LAP_BAND_LO, LAP_BAND_HI = 0.5, 1.6  # "real lap" = lap_time within [lo, hi] x m
 # `_band_lap_ids`); the time band is unchanged.
 LAP_DIST_BAND_LO, LAP_DIST_BAND_HI = 0.90, 1.10
 
+# --- A LAP THAT STOPPED IS NOT A SLOW LAP -------------------------------------------------------
+# The time band above is wide on purpose (it has to fit any track length from one median), and
+# WIDE IS THE WHOLE PROBLEM at its top end: 1.6x a ~69 s kart lap is ~110 s, so a lap carrying a
+# stop of up to **41.5 s** (measured: 41.53 s on the D24 0060 pair, 41.73 s on 0062) reads "valid
+# and clean" and flows into the median, the best lap, the ideal lap, pace σ and every stint.
+#
+# TIGHTENING THE BAND IS NOT THE FIX, AND THE OWNER'S OWN RECORDINGS SAY SO. Sweeping LAP_BAND_HI
+# down over both fixtures: 1.15 and above keeps all 38 / 65 laps, and **1.10 drops laps 20 and 37
+# of 0060** — real laps at 1.110x and 1.114x the median, the ordinary slow laps of a session. (The
+# two recordings disagree about how much room is needed, which is the point: 0062's 65 laps all sit
+# under 1.047x and survive a bound of 1.05, so one fixture alone would have "proved" a tight band
+# safe.) To bound a stop at even ~7 s you would need HI ~= 1.10, i.e. you would pay real laps for
+# it. And the bound that costs nothing has no margin either: the slowest lap is 1.1144x, so 1.15
+# clears it by 3.1 % — nothing, on a rule that has to hold for tracks nobody here has driven.
+#
+# So the stop is tested DIRECTLY, off the speed trace, because that is what it actually is: a
+# stationary stretch, not a large total. A slow lap and a lap with a stop are different events and
+# the band conflated them. The two numbers, both measured rather than chosen:
+#
+#   * STOPPED_KMH — the SLOWEST single GPS fix on any valid lap is 13.644 km/h (0060) and
+#     25.344 km/h (0062); the median lap's own minimum is 27.1 and 31.5 km/h. 10 km/h sits 36 %
+#     below the slowest real fix on either recording. It is deliberately NOT driving.MOVING_KMH
+#     (14.4) — a real apex on 0060 dips under that for 0.101 s, so that constant means "not
+#     accelerating meaningfully", not "stopped".
+#   * MAX_STOPPED_S — the longest CONTIGUOUS stretch below 10 km/h anywhere in the 103 valid laps
+#     of both recordings is **0.000 s**. Below 20 km/h it is 0.6 s, below 25 km/h 3.7 s. So 3 s
+#     under 10 km/h cannot happen while racing (it is 8 m of travel), and on real data this rule
+#     excludes NOTHING: the valid set, the golden fingerprint and every derived statistic are
+#     unmoved. It is a guard against an absurdity, not a filter with an opinion.
+#
+# A lap it does reject is SUBSTANTIAL, so it surfaces in the ⊘ EXCLUDED strip via
+# `_banded_out_lap_ids` — shown and explained, never silently dropped.
+STOPPED_KMH = 10.0    # km/h; below this the kart is not running the lap, it is stopped/crawling
+MAX_STOPPED_S = 3.0   # s; a contiguous stretch this long inside a lap means the lap contains a STOP
+
 # --- longitudinal g from the speed trace (shared by driving channels + the g-meter dial) ---
 G = 9.80665  # m/s^2 (standard gravity)
 MAX_LONG_G = 2.0  # clip d|v|/dt spikes: a GPS glitch can't manufacture a real brake
@@ -138,7 +173,21 @@ def speed_long_g(speed_kmh, t) -> np.ndarray:
     ~1.5x inflated). Spikes are clipped to +/-MAX_LONG_G; a length mismatch between `speed_kmh`
     and `t` uses the common prefix; <3 samples -> zeros. Single source for studio.driving and
     studio.gmeter (the latter kept a private copy only to dodge a cross-import — this pacer-free
-    numpy module is the home both already depend on)."""
+    numpy module is the home both already depend on).
+
+    **UNSMOOTHED, AND THE GRID `t` IS PART OF THE ANSWER.** This returns the bare derivative; every
+    window in the app is applied by a CALLER, and they do not agree — so the same function name
+    reaches the user as three different series with three different peaks. `gmeter.compute` puts it
+    on the 50 Hz output grid and boxcars it over LONG_SMOOTH_S (0.35 s) into `long_g_gps`, which is
+    what the dial, the g-g cloud and the "peak braking g" tile read. `driving_channels` calls it
+    twice more WITHOUT a window: once on that same 50 Hz grid for `derive_thresholds`, and once per
+    lap on the lap's native ~10 Hz grid for the brake / coast / pedal-intensity detectors. Those two
+    are not the same signal either — interpolating a 10 Hz speed to 50 Hz and THEN differentiating
+    manufactures content the fixes cannot carry (measured on the D24 0060 pair: RMS 0.353 g vs
+    0.302 g for differentiate-at-10-Hz-then-interpolate, and the +/-MAX_LONG_G clip fires 81 times
+    against 1). The native 10 Hz derivative is the honest one: 99 % of its power sits below 3.7 Hz
+    (4.0 on 0062), inside the 5 Hz Nyquist of the fixes it is made of. See the THREE SERIES block in
+    studio/driving_channels.py for what each one is read as, and by whom."""
     v = np.asarray(speed_kmh, float) / 3.6
     t = np.asarray(t, float)
     n = min(len(v), len(t))
@@ -240,20 +289,49 @@ def _gate_quality(samples, spans, naive, moving_speed: float = 0.0):
             dropped, moving_dropped_fraction)
 
 
+def _longest_stopped_s(times, speed_mps, stopped_kmh: float = STOPPED_KMH) -> float:
+    """The longest CONTIGUOUS stretch (seconds) a trace spends below `stopped_kmh`.
+
+    CONTIGUOUS, not total: many brief dips are a tight circuit, one long dip is a stop, and only
+    the second one makes a lap's time meaningless. Measured the way `driving.coasting_spans`
+    measures a span — `times[end] - times[start]` over the run — so a stop that straddles a GPS
+    dropout still reports the wall-clock time the car was slow, not the sample count. Aligned to
+    the shorter of the two inputs; <2 samples, or nothing below the threshold, -> 0.0."""
+    t = np.asarray(times, float)
+    v = np.asarray(speed_mps, float) * 3.6
+    n = min(len(t), len(v))
+    if n < 2:
+        return 0.0
+    t, v = t[:n], v[:n]
+    slow = v < stopped_kmh
+    if not slow.any():
+        return 0.0
+    # Run boundaries from the edges of the boolean mask (no Python loop over the samples). The
+    # zero-padding is what makes a run touching either end of the lap a run like any other.
+    edges = np.diff(np.concatenate([[0], slow.astype(np.int8), [0]]))
+    starts = np.flatnonzero(edges == 1)
+    ends = np.flatnonzero(edges == -1) - 1  # inclusive last index of each run
+    return float(np.max(t[ends] - t[starts]))
+
+
 def _band_lap_ids(laps) -> list[int]:
     """The ids of laps that qualify as 'real laps': enough samples (>= MIN_LAP_SAMPLES) and a
     long-enough time (>= MIN_LAP_TIME), a lap time within [LAP_BAND_LO, LAP_BAND_HI] x the
-    MEDIAN lap time, AND a lap distance within [LAP_DIST_BAND_LO, LAP_DIST_BAND_HI] x the
-    median lap distance. A fixed threshold is too crude (short double-crossings of the start
-    line pass it and pollute the 'best' lap); the time band adapts to any track length, and the
-    tighter distance band catches a mis-segmented short/long lap that defeats the time band —
-    on a fixed circuit lap distance clusters far tighter than lap time (see the band consts).
+    MEDIAN lap time, a lap distance within [LAP_DIST_BAND_LO, LAP_DIST_BAND_HI] x the
+    median lap distance, AND no stationary stretch of MAX_STOPPED_S or more inside it. A fixed
+    threshold is too crude (short double-crossings of the start line pass it and pollute the
+    'best' lap); the time band adapts to any track length, the tighter distance band catches a
+    mis-segmented short/long lap that defeats the time band — on a fixed circuit lap distance
+    clusters far tighter than lap time — and the stop test catches the one thing NEITHER band can
+    see: a lap driven normally that happens to contain a stop (see the band consts; a stop adds
+    time without adding distance, so it passes the ±10 % distance band by construction).
 
     `laps` is the bound `pacer.Laps` object, but this function only calls its read accessors
-    (laps_count / lap_time / sample_count / get_lap_distance) — it imports no pacer itself, so
-    it stays pure. The distance accessor is guarded with getattr so the FAKE `laps` doubles in
-    the tests (which expose only the time surface) fall back to the unchanged time-only result.
-    The single source for Session.valid_lap_ids and session._band_lap_count."""
+    (laps_count / lap_time / sample_count / get_lap_distance / lap_columns) — it imports no pacer
+    itself, so it stays pure. The distance and speed accessors are both guarded with getattr so
+    the FAKE `laps` doubles in the tests (which expose only the time surface) fall back to the
+    unchanged earlier result. The single source for Session.valid_lap_ids and
+    session._band_lap_count."""
     basic = [(i, laps.lap_time(i)) for i in range(laps.laps_count())
              if laps.sample_count(i) >= MIN_LAP_SAMPLES and laps.lap_time(i) >= MIN_LAP_TIME]
     if not basic:
@@ -268,22 +346,41 @@ def _band_lap_ids(laps) -> list[int]:
     # gives no median to band against, so both fall back to the time-only result unchanged.
     get_dist = getattr(laps, "get_lap_distance", None)
     if get_dist is None or not timed:
-        return timed
-    dists = {i: float(get_dist(i)) for i in timed}
-    finite = [d for d in dists.values() if math.isfinite(d) and d > 0]
-    if not finite:
-        return timed
-    med_d = float(np.median(finite))
-    lo_d, hi_d = LAP_DIST_BAND_LO * med_d, LAP_DIST_BAND_HI * med_d
-    return [i for i in timed
-            if math.isfinite(dists[i]) and dists[i] > 0 and lo_d <= dists[i] <= hi_d]
+        banded = timed
+    else:
+        dists = {i: float(get_dist(i)) for i in timed}
+        finite = [d for d in dists.values() if math.isfinite(d) and d > 0]
+        if not finite:
+            banded = timed
+        else:
+            med_d = float(np.median(finite))
+            lo_d, hi_d = LAP_DIST_BAND_LO * med_d, LAP_DIST_BAND_HI * med_d
+            banded = [i for i in timed
+                      if math.isfinite(dists[i]) and dists[i] > 0 and lo_d <= dists[i] <= hi_d]
+
+    # Stop test: a lap that STOOD STILL is not a slow lap (see MAX_STOPPED_S). Runs last, over the
+    # already-banded laps only, so it costs one `lap_columns` crossing per surviving lap and never
+    # touches a lap the bands have settled — 3.8 ms for all 66 laps of the 0062 recording, against
+    # a load that takes seconds, and `load._fit_start_line` calls this filter up to five times per
+    # load. Same getattr discipline as the distance band — a `laps` double without the speed
+    # surface falls back to the banded result unchanged.
+    get_cols = getattr(laps, "lap_columns", None)
+    if get_cols is None or not banded:
+        return banded
+    kept = []
+    for i in banded:
+        cols = get_cols(i)
+        if _longest_stopped_s(cols.times, cols.full_speed) < MAX_STOPPED_S:
+            kept.append(i)
+    return kept
 
 
 def _banded_out_lap_ids(laps) -> list[int]:
     """The ids of SUBSTANTIAL laps the band filter REJECTED: laps that clear the coarse gate
     (>= MIN_LAP_SAMPLES samples and >= MIN_LAP_TIME seconds — so they look like a lap the driver
     actually ran, not a brief start/end sliver) but fell outside the median TIME or DISTANCE band
-    in `_band_lap_ids` — a mis-segmented short/long lap, an out-lap, or an in-lap.
+    in `_band_lap_ids`, or carried a stop of MAX_STOPPED_S or more — a mis-segmented short/long
+    lap, an out-lap, an in-lap, or a lap the driver stopped on.
 
     Returned so the UI can SHOW that a real-looking lap was left out of the times / bests instead
     of silently dropping it (the `_band_lap_ids` filter removes such a lap so it can't be crowned
