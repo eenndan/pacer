@@ -98,6 +98,22 @@ LONG_SMOOTH_S = 0.35
 # driving. Unsmoothed, the per-lap peak deceleration runs a median 1.58 and 1.17 g with the 2.0 g
 # MAX_LONG_G clip firing on both recordings. The window is what makes that axis a measurement.
 #
+# WHERE THAT ABOVE-NYQUIST POWER COMES FROM, because it is not the GPS. Those figures describe this
+# series on the 50 Hz OUTPUT grid, and the resampling is upstream of the differentiation: `spd_kmh`
+# is a linear interpolation of a 10 Hz speed, and `np.gradient` over its knots is what puts power
+# where the fixes have none. Differentiate at the NATIVE 10 Hz instead and the same trace is cleanly
+# band-limited — 90 % of its power below 2.13 Hz (2.49 on 0062), 99 % below 3.74 (4.01), all inside
+# the 5 Hz Nyquist — with an RMS of 0.302 against 0.353 g and the 2.0 g clip firing ONCE instead of
+# 81 times. So the 0.35 s window is doing two jobs here, and only one of them was named: rejecting
+# real GPS differentiation noise, and cleaning up after this module's own interpolation.
+#
+# THE THIRD SERIES. Neither constant above reaches the brake/coast/pedal channels at all:
+# driving_channels rebuilds the GPS derivative per lap on the lap's own ~10 Hz grid with NO window,
+# and detects on that. It is the right call for an onset and the wrong one for a coast, with the
+# numbers for both in the THREE LONGITUDINAL SERIES block at the top of studio/driving_channels.py.
+# Changing either constant here moves the dial, the cloud and the tiles — and moves no brake count,
+# no coast second and (BRAKE_G_FLOOR absorbing it) no threshold.
+#
 # What the asymmetry DOES shape is the cloud's height: on the lateral's window the p98 braking
 # extent is 9-13 % larger and the acceleration extent 22-26 % larger, with the width untouched. So
 # the circle is drawn as it is and the asymmetry is STATED where it is read — stats_panel's

@@ -1531,7 +1531,10 @@ class Session:
     def valid_lap_ids(self) -> list[int]:
         """Real laps only. A fixed threshold is too crude (short double-crossings of the
         start line pass it and pollute the 'best' lap), so accept laps whose time is within
-        a band around the MEDIAN lap time — this adapts to any track length.
+        a band around the MEDIAN lap time — this adapts to any track length — whose distance is
+        within a tighter band around the median distance, and which contain no stop (a lap the
+        kart stood still on passes BOTH bands: a stop adds time without adding distance, and the
+        time band's top end has ~41 s of headroom over a kart lap. See _signal.MAX_STOPPED_S).
 
         Memoized — the 30 Hz tick (lap_at_time, the highlights, delta) hits this many times per
         frame and the result only changes on re-segmentation (cleared in set_timing_lines). The
@@ -1593,13 +1596,13 @@ class Session:
         }
 
     def excluded_lap_ids(self) -> list[int]:
-        """Substantial laps LEFT OUT of `valid_lap_ids` by the median time/distance band — a
-        mis-segmented short/long lap, an out-lap, or an in-lap. They cleared the coarse
-        sample/time gate (so they look like laps the driver ran, not a brief sliver) but their
-        time/distance is off the session median, so they feed NO time / best / coaching / map
-        value. Surfaced by the lap panel so a dropped lap isn't invisible. Memoized like
-        `valid_lap_ids`, cleared on re-segmentation; single-sourced in
-        `_signal._banded_out_lap_ids`."""
+        """Substantial laps LEFT OUT of `valid_lap_ids` — a mis-segmented short/long lap, an
+        out-lap, an in-lap, or a lap the kart STOPPED on. They cleared the coarse sample/time gate
+        (so they look like laps the driver ran, not a brief sliver) but their time/distance is off
+        the session median, or they carry a stationary stretch of `_signal.MAX_STOPPED_S` or more,
+        so they feed NO time / best / coaching / map value. Surfaced by the lap panel so a dropped
+        lap isn't invisible. Memoized like `valid_lap_ids`, cleared on re-segmentation;
+        single-sourced in `_signal._banded_out_lap_ids`."""
         if self._excluded_cache is not None:
             return self._excluded_cache
         self._excluded_cache = _banded_out_lap_ids(self.laps)
