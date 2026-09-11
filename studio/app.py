@@ -2058,8 +2058,8 @@ class StudioWindow(QMainWindow):
             "and a per-lap table. Press again (or ⤢) to restore the grid.")
         self._stats_action.triggered.connect(self._show_session_statistics)
         view_menu.addSeparator()
-        # The lap panel's pages are REAL tabs now (Laps · Corners · Stats · Coaching, digits
-        # 1-4) — the old show/hide toggles for the coaching + consistency strips died with the
+        # The lap panel's pages are REAL tabs now (Laps · Corners · Stats · Coaching · Marks,
+        # digits 1-5) — the old show/hide toggles for the coaching + consistency strips died with the
         # strips themselves. Only the excluded strip (inside the Laps page) keeps a toggle.
         self._excluded_action = view_menu.addAction("Show excluded laps")
         self._excluded_action.setCheckable(True)
@@ -2369,7 +2369,7 @@ class StudioWindow(QMainWindow):
         CommandPalette(self).exec()
 
     def _select_lap_tab(self, index: int):
-        """Digit shortcut 1-4 → the lap panel's tab, resolved at call time; no-op before the
+        """Digit shortcut 1-5 → the lap panel's tab, resolved at call time; no-op before the
         first load (the persisted choice still seeds the next view)."""
         view = getattr(self, "view", None)
         if view is not None:
