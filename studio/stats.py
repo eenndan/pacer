@@ -39,6 +39,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ._signal import PRINT_DECIMALS, is_best_at_print
 from .consistency import sigma
 
 # "moving" threshold, m/s — the SAME cutoff the g-meter/thresholds use for their moving
@@ -208,9 +209,12 @@ MATRIX_SCALE_MIN_S = 0.30
 MATRIX_MIN_LAPS = 5
 MATRIX_SCALE_PCT = 90.0
 # The decimals a split is PRINTED to, and a contract rather than a formatting detail — see
-# SplitMatrix.is_behind. It lives here because the comparison that decides the mark has to be made
-# at the same resolution the view prints, and only one of the two can own that number.
-MATRIX_DECIMALS = 2
+# SplitMatrix.is_behind. The comparison that decides a mark has to be made at the same resolution
+# the view prints, and only ONE place can own that number: it is `_signal.PRINT_DECIMALS`, shared
+# with the Laps tab's split cells and the Corners page's corner times, which put the same ★ on the
+# same kind of quantity and used to decide it on the raw doubles instead. Aliased here (not
+# retyped) so this module's own name for it can never drift from theirs.
+MATRIX_DECIMALS = PRINT_DECIMALS
 
 
 # --------------------------------------------------------------------- value objects
@@ -446,12 +450,13 @@ class SplitMatrix:
 
     def is_best(self, row: int, col: int) -> bool:
         """Is this cell the sector's best — or timed level with it? `best_lap[col]` stays the one
-        lap that owns the minimum (it is what a tooltip names); this is what gets the ★."""
-        val = self.cells[row][col]
-        best = self.bests[col]
-        if val is None or best is None:
-            return False
-        return round(val, MATRIX_DECIMALS) <= round(best, MATRIX_DECIMALS)
+        lap that owns the minimum (it is what a tooltip names); this is what gets the ★.
+
+        The rule itself is `_signal.is_best_at_print`, shared with every other surface that marks
+        a session best — the Laps tab's split cells and the Corners page's corner times both wear
+        this same ★ and used to decide it on the raw doubles (see that helper for what the two
+        rules cost on the owner's own recordings)."""
+        return is_best_at_print(self.cells[row][col], self.bests[col], MATRIX_DECIMALS)
 
 
 @dataclass(frozen=True)

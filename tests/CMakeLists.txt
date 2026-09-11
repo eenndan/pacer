@@ -596,6 +596,17 @@ add_test(NAME test_lap_table_columns
 set_tests_properties(test_lap_table_columns PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# ONE "session best" rule, on every surface that marks one (fix/best-marks-agree): the Laps tab's
+# split ★, the Corners page's corner-time ★ and the Stats SPLITS grid's ★ are the same glyph on the
+# same kind of quantity, printed to the same two decimals — so they decide it with one predicate
+# (_signal.is_best_at_print) instead of two surfaces comparing raw doubles at 1e-9; and the ⊘
+# strip counts excluded laps out of the same total the DATA TRUST card does. Real LapTable /
+# CornerTable widgets -> Qt, so run offscreen.
+add_test(NAME test_best_marks_agree
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_best_marks_agree.py)
+set_tests_properties(test_best_marks_agree PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # LapTable / CornerTable EMPTY + BASELINE + EXCLUDED states (fix/qa-lap-table-empty-states, QA
 # sweep B11): the Corners page dashes the two Δ columns and names the lap when it is showing the Δ
 # BASELINE itself (the model's documented ref=None self-zeros, not measurements — and a loaded
@@ -799,7 +810,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_golden_hermetic test_design_system test_inline_styles
                         test_first_run_path test_map_key test_video_view_compare
                         test_export_typography test_unreadable_chapter
-                        test_pb_moment_lifecycle)
+                        test_pb_moment_lifecycle test_best_marks_agree)
     set_property(TEST ${pytest} APPEND PROPERTY ENVIRONMENT
                  "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endforeach()
