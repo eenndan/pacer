@@ -1,7 +1,7 @@
 """Binding-surface round-trip for pacer.RawGPSSource.
 
 The GPS/IMU/CORI readers are Python<->C++ TRAMPOLINE methods: a Python subclass overrides
-`read_samples` / `read_accl` / `read_grav` / `read_cori`, and the C++ side calls them back
+`read_samples` / `read_accl` / `read_gyro` / `read_grav` / `read_cori`, and the C++ side calls them back
 through the `std::function` interface (NB_OVERRIDE_NAME). The pure-virtual control methods
 (`seek` / `next` / `is_end` / `current_time_span` / `get_total_duration`) must also be
 overridden in Python. This suite drives a Python subclass both DIRECTLY and — the real
@@ -29,25 +29,35 @@ import pacer  # noqa: E402
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SAMPLES = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples")
 _HERO6 = os.path.join(_SAMPLES, "hero6.mp4")
-# A hero8-era clip carries all three IMU streams (ACCL + GRAV + CORI); the bulk-columns
+# A hero8-era clip carries all four IMU streams (ACCL + GYRO + GRAV + CORI); the bulk-columns
 # equivalence test below uses it to exercise GRAV + the CORI quaternion-w column.
 _HERO8 = os.path.join(_SAMPLES, "hero8.mp4")
+# A hero5-era clip is the counter-example that keeps the GYRO/DVNM tests honest: it names itself
+# "Camera" rather than a model, and its GYRO runs at TWICE the ACCL rate — so nothing here may
+# assume the two streams are row-aligned, or that a device name is a recognisable product name.
+_HERO5 = os.path.join(_SAMPLES, "hero5.mp4")
 
 
 class _PySource(pacer.RawGPSSource):
     """A minimal in-Python RawGPSSource backed by lists of synthetic samples."""
 
-    def __init__(self, accl=None, grav=None, cori=None, duration=0.0):
+    def __init__(self, accl=None, gyro=None, grav=None, cori=None, duration=0.0, device=""):
         super().__init__()
         self._accl = accl or []
+        self._gyro = gyro or []
         self._grav = grav or []
         self._cori = cori or []
         self._duration = duration
+        self._device = device
         self.seek_calls = []
 
     # --- trampoline IMU/CORI readers (NB_OVERRIDE) ---
     def read_accl(self, on_sample):
         for s in self._accl:
+            on_sample(s)
+
+    def read_gyro(self, on_sample):
+        for s in self._gyro:
             on_sample(s)
 
     def read_grav(self, on_sample):
@@ -57,6 +67,10 @@ class _PySource(pacer.RawGPSSource):
     def read_cori(self, on_sample):
         for s in self._cori:
             on_sample(s)
+
+    # Not a reader but the same trampoline shape: a Python source may name its camera.
+    def device_name(self):
+        return self._device
 
     # --- pure virtuals that MUST be overridden ---
     def seek(self, target):
@@ -266,11 +280,14 @@ def _columns_vec3(cols):
 
 def _assert_bulk_equals_per_sample(src, label):
     """The CORE equivalence pin for the C2 bulk readers: read_*_columns must return EXACTLY the
-    same samples (element for element) as draining the per-sample read_accl/read_grav/read_cori
-    callbacks. Both APIs exist on the source, so collect both and compare directly."""
-    # ACCL / GRAV: (time, x, y, z).
+    same samples (element for element) as draining the per-sample
+    read_accl/read_gyro/read_grav/read_cori callbacks. Both APIs exist on the source, so collect
+    both and compare directly."""
+    # ACCL / GYRO / GRAV: (time, x, y, z).
     assert _columns_vec3(src.read_accl_columns()) == _per_sample_vec3(src.read_accl), \
         f"{label}: ACCL bulk columns != per-sample callback"
+    assert _columns_vec3(src.read_gyro_columns()) == _per_sample_vec3(src.read_gyro), \
+        f"{label}: GYRO bulk columns != per-sample callback"
     assert _columns_vec3(src.read_grav_columns()) == _per_sample_vec3(src.read_grav), \
         f"{label}: GRAV bulk columns != per-sample callback"
     # CORI carries the quaternion w: (time, w, x, y, z).
@@ -283,11 +300,12 @@ def _assert_bulk_equals_per_sample(src, label):
 
 
 def test_bulk_imu_columns_equal_per_sample_callbacks_on_real_media():
-    """read_accl_columns / read_grav_columns / read_cori_columns return the SAME samples (every
-    element) as the old per-sample read_accl / read_grav / read_cori callbacks. hero6 (ACCL only,
-    no GRAV/CORI) and hero8 (ACCL + GRAV + CORI, exercising the quaternion-w column) together
-    cover all three streams. This is the equivalence the studio ingest bulk-read path relies on."""
-    seen_accl = seen_grav = seen_cori = False
+    """read_accl_columns / read_gyro_columns / read_grav_columns / read_cori_columns return the
+    SAME samples (every element) as the per-sample read_accl / read_gyro / read_grav / read_cori
+    callbacks. hero6 (ACCL + GYRO, no GRAV/CORI) and hero8 (all four, exercising the quaternion-w
+    column) together cover every stream. This is the equivalence the studio ingest bulk-read path
+    relies on."""
+    seen_accl = seen_gyro = seen_grav = seen_cori = False
     for name, path in (("hero6.mp4", _HERO6), ("hero8.mp4", _HERO8)):
         # COMMITTED in the gpmf-parser submodule (CI checks out `submodules: recursive`) — fail
         # loudly rather than skip if the checkout is broken.
@@ -300,23 +318,70 @@ def test_bulk_imu_columns_equal_per_sample_callbacks_on_real_media():
         assert _columns_vec3(src.read_accl_columns()) == accl_rows, f"{name}: ACCL differs"
         cori_rows = _assert_bulk_equals_per_sample(src, name)
         seen_accl = seen_accl or bool(accl_rows)
+        seen_gyro = seen_gyro or bool(_per_sample_vec3(src.read_gyro))
         seen_grav = seen_grav or bool(_per_sample_vec3(src.read_grav))
         seen_cori = seen_cori or bool(cori_rows)
     # The clips genuinely exercise every stream (so the equivalence is non-trivial, not 0==0).
-    assert seen_accl and seen_grav and seen_cori, (seen_accl, seen_grav, seen_cori)
+    assert seen_accl and seen_gyro and seen_grav and seen_cori, (
+        seen_accl, seen_gyro, seen_grav, seen_cori)
     print("test_bulk_imu_columns_equal_per_sample_callbacks_on_real_media OK")
+
+
+def test_gyro_is_read_in_radians_per_second_across_camera_generations():
+    """GYRO decodes on every generation the samples cover, with the stream's OWN SCAL applied.
+
+    The scale factor is per-model (939 on a HERO8, 1878 on a HERO6, 3755 on a HERO5), so a
+    hard-coded divisor would read one camera right and the rest 2x or 4x out — this asserts the
+    magnitudes land in a physically sane band on all three. It also pins the fact that GYRO and
+    ACCL are NOT row-aligned: hero5 writes twice as many gyro samples as accelerometer ones, so
+    any code that zipped the two by index would be wrong there and silently right on a HERO13."""
+    counts = {}
+    for name, path in (("hero5.mp4", _HERO5), ("hero6.mp4", _HERO6), ("hero8.mp4", _HERO8)):
+        assert os.path.exists(path), f"required gpmf-parser submodule sample missing at {path}"
+        src = pacer.GPMFSource(path)
+        gyro = _per_sample_vec3(src.read_gyro)
+        accl = _per_sample_vec3(src.read_accl)
+        assert gyro, f"{name}: no GYRO decoded"
+        peak = max(max(abs(v) for v in row[1:]) for row in gyro)
+        # rad/s, not raw counts: a hand-held/mounted camera peaks in single digits, and an
+        # unscaled int16 would land in the thousands.
+        assert 0.01 < peak < 40.0, f"{name}: peak |gyro| {peak} rad/s is not a scaled rate"
+        assert all(row[0] >= 0.0 for row in gyro), f"{name}: negative media time"
+        counts[name] = (len(gyro), len(accl))
+    assert counts["hero5.mp4"][0] > counts["hero5.mp4"][1], (
+        f"hero5 GYRO should out-sample ACCL: {counts['hero5.mp4']}")
+    print(f"test_gyro_is_read_in_radians_per_second_across_camera_generations OK {counts}")
+
+
+def test_device_name_reads_the_camera_model_and_a_chain_reports_one():
+    """DVNM — the only in-file statement of WHICH camera wrote the streams, which is what decides
+    what the data can mean (a HERO12 has no GPS receiver; HERO9/10 no per-sample GPS clock).
+
+    hero8 names a model; hero5 calls itself "Camera", which is why nothing may parse this into a
+    generation. A chapter chain reports one name, not two."""
+    assert pacer.GPMFSource(_HERO8).device_name() == "HERO8 Black"
+    assert pacer.GPMFSource(_HERO5).device_name() == "Camera"
+    # A chain takes the left chapter's name, and falls back to the right when the left has none.
+    named = _PySource(duration=1.0, device="HERO13 Black")
+    nameless = _PySource(duration=1.0)
+    assert pacer.SequentialGPSSource(named, nameless).device_name() == "HERO13 Black"
+    assert pacer.SequentialGPSSource(nameless, named).device_name() == "HERO13 Black"
+    assert _PySource(duration=1.0).device_name() == ""
+    print("test_device_name_reads_the_camera_model_and_a_chain_reports_one OK")
 
 
 def test_bulk_imu_columns_equal_per_sample_through_cpp_sequential_source():
     """Bulk-vs-per-sample equivalence ALSO holds through a C++ SequentialGPSSource chain (the
     chapter-offset path the studio uses for multi-clip recordings): the bulk readers go through
-    the same virtual ReadAccl/ReadGrav/ReadCori, so the per-chapter time shift applies identically.
-    Built from Python sources so the comparison is exact and file-independent."""
+    the same virtual ReadAccl/ReadGyro/ReadGrav/ReadCori, so the per-chapter time shift applies
+    identically. Built from Python sources so the comparison is exact and file-independent."""
     left = _PySource(accl=[pacer.IMUSample(x=1.0, y=2.0, z=3.0, time=0.5)],
+                     gyro=[pacer.IMUSample(x=0.1, y=-0.2, z=0.3, time=0.45)],
                      grav=[pacer.IMUSample(x=0.0, y=0.0, z=9.8, time=0.4)],
                      cori=[pacer.QuatSample(w=1.0, x=0.0, y=0.0, z=0.0, time=0.3)],
                      duration=10.0)
     right = _PySource(accl=[pacer.IMUSample(x=4.0, y=5.0, z=6.0, time=0.5)],
+                      gyro=[pacer.IMUSample(x=0.4, y=-0.5, z=0.6, time=0.45)],
                       grav=[pacer.IMUSample(x=0.1, y=0.2, z=9.7, time=0.4)],
                       cori=[pacer.QuatSample(w=0.0, x=1.0, y=0.0, z=0.0, time=0.3)],
                       duration=5.0)
@@ -324,6 +389,9 @@ def test_bulk_imu_columns_equal_per_sample_through_cpp_sequential_source():
     cori_rows = _assert_bulk_equals_per_sample(seq, "SequentialGPSSource")
     # Sanity: the right chapter's CORI time is shifted by the left duration (10.0) in BOTH paths.
     assert cori_rows[1][0] == 10.3, cori_rows
+    # ...and so is GYRO's, through the same ReadShifted template.
+    gyro_rows = _per_sample_vec3(seq.read_gyro)
+    assert [r[0] for r in gyro_rows] == [0.45, 10.45], gyro_rows
     print("test_bulk_imu_columns_equal_per_sample_through_cpp_sequential_source OK")
 
 

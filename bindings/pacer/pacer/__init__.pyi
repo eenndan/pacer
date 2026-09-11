@@ -416,16 +416,17 @@ class Laps:
 ####################    <generated_from:gps-source.hpp>    ####################
 
 class ImuArrays:
-    """One IMU stream (ACCL / GRAV / CORI) collected as parallel columns, so the
-    studio layer crosses the binding ONCE per stream instead of once per sample
-    (the old path ran a per-sample C++->Python trampoline callback — ~1.5M
+    """One IMU stream (ACCL / GYRO / GRAV / CORI) collected as parallel columns, so
+    the studio layer crosses the binding ONCE per stream instead of once per
+    sample (the old path ran a per-sample C++->Python trampoline callback — ~1.5M
     round-trips per load). The columns are the SAME samples the per-sample
-    ReadAccl/ReadGrav/ReadCori callbacks yield, in the same order, so the bulk
-    output is byte-for-byte identical to collecting those callbacks.
+    ReadAccl/ReadGyro/ReadGrav/ReadCori callbacks yield, in the same order, so
+    the bulk output is byte-for-byte identical to collecting those callbacks.
 
-    `times`, `xs`, `ys`, `zs` are populated for all three streams; `ws` carries
-    the quaternion scalar and is filled ONLY by ReadCoriColumns (ACCL/GRAV leave
-    it empty). Every populated column has the same length (the sample count).
+    `times`, `xs`, `ys`, `zs` are populated for all four streams; `ws` carries
+    the quaternion scalar and is filled ONLY by ReadCoriColumns (ACCL/GYRO/GRAV
+    leave it empty). Every populated column has the same length (the sample
+    count).
     """
 
     times: List[float]
@@ -476,17 +477,38 @@ class RawGPSSource:
         and returns 0; GPMFSource and SequentialGPSSource override it.
         """
         pass
-    # Read the timestamped IMU streams (accelerometer / gravity) across the WHOLE
-    # source. Each sample's `time` is on the MEDIA clock (seconds), spread across
-    # the payload span so it lines up with the GPS spans and the video; a
-    # multi-chapter source shifts later chapters by the cumulative duration (see
-    # SequentialGPSSource) onto one continuous global clock. The base is a no-op;
-    # GPMFSource / SequentialGPSSource override.
-    #
-    # ACCL is a 3-axis accelerometer in m/s^2 (native order Z,X,Y); GRAV is a
-    # unit gravity vector (native order, permuted vs ACCL — the studio layer
-    # resolves that).
+
     def read_accl(self, param_0: Callable[[IMUSample], None]) -> None:  # overridable
+        """Read the timestamped IMU streams (accelerometer / gyroscope / gravity)
+        across the WHOLE source. Each sample's `time` is on the MEDIA clock
+        (seconds), spread across the payload span so it lines up with the GPS spans
+        and the video; a multi-chapter source shifts later chapters by the
+        cumulative duration (see SequentialGPSSource) onto one continuous global
+        clock. The base is a no-op; GPMFSource / SequentialGPSSource override.
+
+        ACCL is a 3-axis accelerometer in m/s^2 (native order Z,X,Y); GRAV is a
+        unit gravity vector (native order, permuted vs ACCL — the studio layer
+        resolves that).
+        """
+        pass
+    # GYRO is the 3-axis rate gyroscope in rad/s on the SAME media clock.
+    #
+    # AXES: it declares the SAME element orientation as ACCL. Measured across
+    # every clip in 3rdparty/gpmf-parser/samples plus both D24 recordings, the
+    # GPMF ORIN/ORIO fields of ACCL and GYRO are identical on every camera —
+    # HERO6/7 "YxZ", HERO8 "zxY", Max "XzY", HERO13 "ZXY", and absent on both for
+    # HERO5/Fusion/Karma. So GYRO inherits whatever axis convention the studio
+    # layer already applies to ACCL, and adds no orientation risk of its own.
+    # (What it does NOT fix: that convention is a fitted constant, not a read of
+    # ORIN, so it is right for the camera it was fitted on. Pre-existing, and the
+    # same for both streams.)
+    #
+    # RATE: ~200 Hz on the HERO13 recordings, where GYRO and ACCL happen to carry
+    # identical per-payload sample counts — but that is a coincidence of that
+    # model, not a rule. Measured on the bundled samples, GYRO runs at 2x ACCL on
+    # HERO5 and Karma, 4x on a Max in 360 mode, and 17x on a Fusion. Never index
+    # one stream by the other's row; interpolate on time.
+    def read_gyro(self, param_0: Callable[[IMUSample], None]) -> None:  # overridable
         pass
 
     def read_grav(self, param_0: Callable[[IMUSample], None]) -> None:  # overridable
@@ -499,20 +521,34 @@ class RawGPSSource:
         pass
     # Bulk column readers: collect the WHOLE stream into parallel std::vector
     # columns in ONE call (see ImuArrays), avoiding the per-sample Python
-    # trampoline of the ReadAccl/ReadGrav/ReadCori callbacks. They emit the SAME
-    # samples in the SAME order as those callbacks (byte-for-byte), just packed
-    # as columns. The vec3 readers fill times/xs/ys/zs; the quaternion reader
-    # additionally fills ws. The base default reuses the per-sample reader, so a
-    # Python subclass that overrides only ReadAccl/ReadGrav/ReadCori is bulk-read
-    # correctly through it; GPMFSource/SequentialGPSSource inherit this default
-    # too (the collection cost is identical — the win is one binding crossing).
+    # trampoline of the ReadAccl/ReadGyro/ReadGrav/ReadCori callbacks. They emit
+    # the SAME samples in the SAME order as those callbacks (byte-for-byte), just
+    # packed as columns. The vec3 readers fill times/xs/ys/zs; the quaternion
+    # reader additionally fills ws. The base default reuses the per-sample
+    # reader, so a Python subclass that overrides only
+    # ReadAccl/ReadGyro/ReadGrav/ReadCori is bulk-read correctly through it;
+    # GPMFSource/SequentialGPSSource inherit this default too (the collection
+    # cost is identical — the win is one binding crossing).
     def read_accl_columns(self) -> ImuArrays:  # overridable
+        pass
+
+    def read_gyro_columns(self) -> ImuArrays:  # overridable
         pass
 
     def read_grav_columns(self) -> ImuArrays:  # overridable
         pass
 
     def read_cori_columns(self) -> ImuArrays:  # overridable
+        pass
+
+    def device_name(self) -> str:  # overridable
+        """The recording camera's own name for itself — the GPMF `DVNM` field, e.g.
+        "HERO13 Black". Empty when the container carries none. It is the only
+        in-file statement of WHICH camera produced the streams, and the camera
+        model decides what the data can mean at all: a HERO12 has no GPS receiver,
+        and HERO9/10 carry no per-sample GPS clock. Read once (it is a per-payload
+        constant), never per sample. The base returns "".
+        """
         pass
 
     def seek(self, target: float) -> int:  # overridable (pure virtual)
@@ -554,10 +590,16 @@ class GPMFSource(RawGPSSource):
     def read_accl(self, on_sample: Callable[[IMUSample], None]) -> None:
         pass
 
+    def read_gyro(self, on_sample: Callable[[IMUSample], None]) -> None:
+        pass
+
     def read_grav(self, on_sample: Callable[[IMUSample], None]) -> None:
         pass
 
     def read_cori(self, on_sample: Callable[[QuatSample], None]) -> None:
+        pass
+
+    def device_name(self) -> str:
         pass
 
     def seek(self, target: float) -> int:
@@ -597,10 +639,21 @@ class SequentialGPSSource(RawGPSSource):
     def read_accl(self, on_sample: Callable[[IMUSample], None]) -> None:
         pass
 
+    def read_gyro(self, on_sample: Callable[[IMUSample], None]) -> None:
+        pass
+
     def read_grav(self, on_sample: Callable[[IMUSample], None]) -> None:
         pass
 
     def read_cori(self, on_sample: Callable[[QuatSample], None]) -> None:
+        pass
+
+    def device_name(self) -> str:
+        """The chain's camera: the LEFT subtree's name, falling back to the right when
+        the left has none. Chapters of one recording come off one camera, so a
+        chain has a single device name; the fallback only matters for a chain whose
+        first chapter is a synthetic/nameless source.
+        """
         pass
 
     def seek(self, target: float) -> int:
