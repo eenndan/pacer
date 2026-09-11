@@ -716,9 +716,25 @@ def write_report_html(path: str, session, source_label: str = "",
     esc = html.escape
     headers, rows = laps_table(session, unit)
     best = session.best_lap_id()
+    # THE BEST-LAP CUE FOLLOWS THE APP'S OWN TRUST GATE. On PROVISIONAL timing — an auto-fitted
+    # start line nobody confirmed, the state every unrecognised circuit loads in — the app
+    # withholds the "best lap" AUTHORITY everywhere it appears: `lap_table._apply_highlights`
+    # drops the green row and the ★, `stats_panel._refresh_lap_table` drops the ★, and the share
+    # card refuses to render at all, because a best measured from an arbitrary point names a lap
+    # nothing distinguishes. This writer painted the green row anyway and named the lap in its
+    # meta table, under a comment claiming it read "like the app's table" — three surfaces
+    # withholding an assertion and a fourth, the one furthest from any of the app's caveats,
+    # making it.
+    #
+    # The TIME still prints: the Stats page's `best lap` tile prints it unmuted too, and a
+    # measurement is not what is in doubt. What goes is the cue and the lap attribution.
+    verified = bool(getattr(session, "timing_verified", True))
+    cue_lap = best if verified else None
     best_txt = DASH
     if best is not None:
-        best_txt = f"{fmt_time(session.lap_time(best))} (lap {lap_label(best)})"
+        best_txt = fmt_time(session.lap_time(best))
+        if verified:
+            best_txt = f"{best_txt} (lap {lap_label(best)})"
     meta = [
         ("Recording", source_label or DASH),
         ("Track", session.track_name or "unknown"),
@@ -752,8 +768,8 @@ def write_report_html(path: str, session, source_label: str = "",
         f"<h2>Laps ({len(rows)})</h2>",
         "<table><tr>" + "".join(f"<th>{esc(h)}</th>" for h in headers) + "</tr>",
     ]
-    for lap_id, cells in rows:  # the best lap reads green, like the app's table
-        cls = ' class="best"' if lap_id == best else ""
+    for lap_id, cells in rows:  # the best lap reads green, like the app's table — and, like the
+        cls = ' class="best"' if lap_id == cue_lap else ""  # app's table, not while provisional
         out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
     out.append("</table>")
     # The quality column's KEY, under the table it decodes — the Analysis Function convention, and

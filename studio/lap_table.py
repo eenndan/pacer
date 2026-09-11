@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import data_quality, provenance_panel, theme, units
-from ._signal import fmt_time, lap_label
+from ._signal import PRINT_DECIMALS, fmt_time, is_best_at_print, lap_label
 from .widgets import NUM_ROLE, EmptyState, NumItem, set_tone
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
@@ -924,7 +924,7 @@ class LapTable(QWidget):
     def _build_excluded_strip(self) -> QWidget:
         """A muted strip listing laps LEFT OUT of the times/bests by the median band (see
         EXCLUDED_ICON). COLLAPSED by default to a single muted one-liner (the prohibit mark, "N
-        excluded of M laps", a caret); a click on the header expands it to the full per-lap list and
+        excluded of M laps found", a caret); a click on the header expands it to the full per-lap list and
         back. Hidden entirely when there are none (the clean, common case), so it adds no chrome to
         a normal recording. Kept OUT of the sortable table on purpose — a short excluded lap
         injected as a row would sort to the top as the 'fastest' and re-create the very confusion
@@ -965,7 +965,7 @@ class LapTable(QWidget):
         # here to draw.
         box.setContentsMargins(GRID_TEXT_INSET, theme.SPACE_XS, GRID_TEXT_INSET, theme.SPACE_XS)
         box.setSpacing(theme.SPACE_XXS)
-        # The collapsed one-liner header: the ⊘ mark, "N excluded of M laps", and the disclosure
+        # The collapsed one-liner header: the ⊘ mark, "N excluded of M laps found", and the disclosure
         # caret saying which way a click goes — a ROW of three items rather than one string,
         # because two of the three are now theme.icon() pixmaps (see EXCLUDED_ICON / EXPAND_ICON
         # for the measurements that took them out of the text).
@@ -1055,15 +1055,32 @@ class LapTable(QWidget):
         lap_count = getattr(self.session, "lap_count", None)
         return max(0, lap_count() - banded) if callable(lap_count) else 0
 
-    def _excluded_headline(self, n: int, banded: int, warn: bool) -> str:
-        """The one-liner's WORDS: the count RECONCILED against the banded total (so "24 excluded" is
-        visibly 24 of 49, not 24 of the 25 rows above it), plus the share once the strip escalates.
+    def _excluded_headline(self, n: int, found: int, warn: bool) -> str:
+        """The one-liner's WORDS: the count RECONCILED against the laps the segmenter FOUND (so
+        "24 excluded" is visibly 24 of everything detected, not 24 of the 25 rows above it), plus
+        the share once the strip escalates.
+
+        `found`, NOT valid+excluded, because the Stats page's DATA TRUST card states this same
+        fact about this same segmentation and divides by `Session.lap_count()` — and a recording
+        also carries crossings too brief to reach the ⊘ band at all, so the two denominators are
+        not the same number. MEASURED by dragging the start/finish line round the D24 0060 pair
+        (the app's own advertised recovery action): at 15 % round the lap the card read "33 of the
+        81 laps found" while this strip read "36 excluded of 69 laps" — 81 against 69, one
+        recording, one instant, two pages. Every placement that produced an excluded lap
+        disagreed, on both recordings. The remainder is named by `_too_brief_note` below rather
+        than left as a gap between two totals.
+
+        The SHARE moves onto the same denominator for the same reason — a percentage of a number
+        the line does not print is unreadable. It does not change where the strip escalates on
+        either recording: the warn tier fired (or didn't) identically at all ten placements swept
+        on 0060, the closest call being 4 excluded at 12.1 % of 33 against 10.5 % of 38, both well
+        under EXCLUDED_WARN_RATIO.
 
         The ⊘ mark and the disclosure caret used to be in this string and are now the two
         _GlyphLabels either side of it (EXCLUDED_ICON / EXPAND_ICON) — so this returns the sentence
         a screen reader should read, and nothing a font has to be asked to draw."""
-        share = f" ({n / banded:.0%})" if warn else ""
-        return f"{n} excluded of {banded} laps{share}"
+        share = f" ({n / found:.0%})" if warn else ""
+        return f"{n} excluded of {found} laps found{share}"
 
     def _excluded_warning(self, kept: list, rows: list, unbanded: int) -> str:
         """The warning-tier note: the kept-vs-excluded DISTANCE comparison — the one measurement
@@ -1082,7 +1099,7 @@ class LapTable(QWidget):
     def _refresh_excluded(self, kept: list | None = None):
         """Populate / hide the excluded-laps strip from Session.excluded_lap_rows (getattr-guarded
         so the lighter test doubles, which don't expose it, simply show no strip). COLLAPSED (the
-        default) shows just the "N excluded of M laps" one-liner; EXPANDED adds one line per
+        default) shows just the "N excluded of M laps found" one-liner; EXPANDED adds one line per
         excluded lap ("Lap 47 — 0:59.091 · 921 m") in a scroll viewport EXCLUDED_MAX_SHOWN lines
         tall. Past the warning tier (EXCLUDED_WARN_MIN + EXCLUDED_WARN_RATIO) the header switches
         to the warning voice and the note below it becomes visible in BOTH states. The whole strip hides when there are none OR when the
@@ -1100,11 +1117,15 @@ class LapTable(QWidget):
         kept = self.session.lap_rows() if kept is None else kept
         banded = len(kept) + len(rows)
         unbanded = self._unbanded_count(banded)
+        # The laps the segmenter FOUND — the DATA TRUST card's denominator for the same fact (see
+        # _excluded_headline). Falls back to `banded` on a session double with no lap_count(),
+        # where _unbanded_count already returns 0.
+        found = banded + unbanded
         # TIER: the odd stray lap whispers; a session losing several laps AND more than
         # EXCLUDED_WARN_RATIO of them warns. The share is ALWAYS in the words as well as the colour,
         # so the escalation survives greyscale and colour blindness.
-        warn = len(rows) >= EXCLUDED_WARN_MIN and len(rows) / banded > EXCLUDED_WARN_RATIO
-        self._excluded_header.setText(self._excluded_headline(len(rows), banded, warn))
+        warn = len(rows) >= EXCLUDED_WARN_MIN and len(rows) / found > EXCLUDED_WARN_RATIO
+        self._excluded_header.setText(self._excluded_headline(len(rows), found, warn))
         # A STATE, so a dynamic property + a re-polish rather than a stylesheet swapped in and out:
         # see the theme's QLabel#LapExcludedHeader[tone="warn"] rule.
         set_tone(self._excluded_header, "warn" if warn else None)
@@ -1120,8 +1141,13 @@ class LapTable(QWidget):
         # The header carries the amber; the note stays PRIMARY text, following #ProvisionalBanner's
         # convention (the container signals, the sentence reads) — three amber lines would shout
         # over the map's actual call-to-action.
-        self._excluded_note.setText(self._excluded_warning(kept, rows, unbanded) if warn else "")
-        self._excluded_note.setVisible(warn)
+        # Below the warn tier the note is the ONE sentence that closes the gap the headline now
+        # opens: it divides by the laps found, so a session carrying brief crossings shows fewer
+        # rows than its own denominator, and the reader is told why instead of being left to
+        # subtract. The warning voice already contains that sentence, so it simply wins.
+        note = self._excluded_warning(kept, rows, unbanded) if warn else _too_brief_note(unbanded)
+        self._excluded_note.setText(note)
+        self._excluded_note.setVisible(bool(note))
         # The full list shows only when expanded; collapsed, the header (+ any warning) is all.
         # Every excluded lap is listed — the viewport height, not the list, is what is capped.
         self._excluded_scroll.setVisible(not self._excluded_collapsed)
@@ -1289,7 +1315,9 @@ class LapTable(QWidget):
             ]
             for i in range(n_splits):
                 if i < len(splits):
-                    cells.append((f"{splits[i]:.2f}", float(splits[i])))
+                    # PRINT_DECIMALS, not a literal: `_apply_highlights` decides this cell's ★ by
+                    # rounding to the same constant, so the text and the mark cannot drift apart.
+                    cells.append((f"{splits[i]:.{PRINT_DECIMALS}f}", float(splits[i])))
                 else:  # a partial lap may have fewer splits than columns — blank (NaN key),
                     cells.append(("", float("nan")))  # sorts LAST in both directions (_NumItem)
             for c, (text, key) in enumerate(cells):
@@ -1451,6 +1479,16 @@ class LapTable(QWidget):
         best_sector_color = QColor(theme.best_sector_colour())
 
         dropout_ids = self._dropout_ids
+        # A ⚠ lap is not eligible for the purple session-best split. `session_best_splits` is a
+        # minimum over the DROPOUT-FREE laps precisely so a reconstructed-distance lap cannot OWN
+        # a purple cell (bests.session_best_splits), and reading the mark at print resolution
+        # would otherwise let one wear it by TYING — a back door into the rule the exact compare
+        # closed by accident. Unlike the thousandth-of-a-second distinction this commit removes,
+        # this one is DISCLOSED: the row already carries the ⚠, whose tooltip says those laps are
+        # left out of the bests. Lifted only in the degenerate session where every lap is flagged
+        # — there `best_candidate_ids` falls back to the flagged set, so the splits really were
+        # computed over these laps and suppressing every mark would hide a real answer.
+        candidates_clean = any(self._lap_id(r) not in dropout_ids for r in range(rows))
         self.table.blockSignals(True)
         for r in range(rows):
             lap_id = self._lap_id(r)
@@ -1491,6 +1529,13 @@ class LapTable(QWidget):
             # verified timing; a "validated best" on an arbitrary start line would mislead. The ★ is
             # the NON-COLOUR redundancy (bold alone is weak); the split text is rebuilt from the
             # stored numeric key each pass so the mark toggles cleanly across sorts (no double-★).
+            #
+            # THE TIE RULE IS `_signal.is_best_at_print`, THE SAME ONE THE STATS GRID USES. These
+            # cells and the Stats page's SPLITS grid render the same laps x sectors numbers with
+            # the same glyph; this site compared the raw doubles at 1e-9 while the grid compared
+            # what it printed, so on the owner's 0062 recording with five sector lines the grid
+            # starred 18 cells and this table 13 — five of them printing text IDENTICAL to a
+            # starred neighbour's. See the helper for the measurement.
             for i in range(n_splits):
                 c = len(COLUMNS) + i
                 item = self.table.item(r, c)
@@ -1499,11 +1544,10 @@ class LapTable(QWidget):
                 key = item.data(NUM_ROLE)
                 target = best_split[i] if i < len(best_split) else None
                 font = item.font()
-                is_best_split = (verified and target is not None and key is not None
-                                 and math.isfinite(float(key))
-                                 and abs(float(key) - target) < 1e-9)
+                eligible = not (is_dropout and candidates_clean)
+                is_best_split = verified and eligible and is_best_at_print(key, target)
                 if key is not None and math.isfinite(float(key)):
-                    base = f"{float(key):.2f}"
+                    base = f"{float(key):.{PRINT_DECIMALS}f}"
                     item.setText(base + BEST_SECTOR_MARK if is_best_split else base)
                 if is_best_split:
                     item.setForeground(best_sector_color)
@@ -2172,7 +2216,9 @@ class CornerTable(QWidget):
             conv = units.convert_speed
             cells: list[tuple[str, str | None]] = [
                 (c.label, None),
-                (f"{st.time:.2f}", None),
+                # PRINT_DECIMALS: `is_best` below decides this cell's ★ at exactly this
+                # resolution, so the printed time and the mark cannot disagree.
+                (f"{st.time:.{PRINT_DECIMALS}f}", None),
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
                  (f"{st.delta:+.2f}", theme.delta_colour(st.delta))),
                 (f"{conv(st.apex_speed, u):.1f}", None),
@@ -2185,7 +2231,12 @@ class CornerTable(QWidget):
                 (f"{conv(st.exit_speed, u):.1f}", None),
                 (grip_pct, None),
             ]
-            is_best = bool(bests) and r < len(bests) and abs(st.time - bests[r]) < 1e-9
+            # Same tie rule as the split ★ and the Stats grid (`_signal.is_best_at_print`): this
+            # cell prints two decimals, so a corner time that READS as the session best wears the
+            # mark. It used to compare the raw doubles — on D24 0062, C1's best is 2.7478 and laps
+            # 34, 42 and 51 all print 2.75, and only lap 34 was starred. The Corners page shows one
+            # lap at a time, so that contradiction was served to the reader lap by lap.
+            is_best = bool(bests) and r < len(bests) and is_best_at_print(st.time, bests[r])
             for col, (text, colour) in enumerate(cells):
                 # session-best corner time also carries the ★ non-colour mark (matches the lap
                 # table's session-best split cells) so "this is the best" reads without the hue.
