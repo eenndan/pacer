@@ -467,6 +467,7 @@ def _run_all():
     test_reach_cell_never_states_a_count_without_its_denominator()
     test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner()
     test_reason_cell_drops_the_metres_and_names_the_target()
+    test_the_dialogs_jump_buttons_are_not_clipped_at_its_own_default_size()
     print("ALL COACHING PANEL LAYOUT TESTS OK")
 
 

@@ -102,9 +102,27 @@ GATE_NOTE = (f"Fixes with a known 2D-or-worse lock (fix < {MIN_FIX}) or a known 
              f"no quality at all (the GPS5-era stream) is kept and shows as unknown.")
 
 
+def _absent(v) -> bool:
+    """Is this cell's value ABSENT — in either of the two spellings that reach these tables?
+
+    `None` is how the row builders spell "this table has no such column" (`_fix_table` passes
+    `None` for `elapsed`/`dists` when a caller has neither). NaN is how NUMPY spells the same
+    fact one column at a time, and the fix tables are built straight off numpy arrays that use
+    it deliberately: `d (m)` is the lap's own odometer, which does not exist outside the lap, so
+    `Session._lap_fixes(bracket=True)` writes NaN into the two rows that BRACKET the start/finish
+    crossing and `_lap_time` reads `dists[i] != dists[i]` to mean exactly "outside the lap".
+
+    They are one fact and they get one rendering. Treating only `None` as absent is what printed
+    the literal word `nan` in the first visible row of every lap's inspection — measured on
+    ~/Desktop/D24 GX020060+GX030060: two cells per lap (the first and last row of the fix table),
+    on all 38 valid laps, and in the Copy-as-CSV output beside them."""
+    return v is None or (isinstance(v, float) and not math.isfinite(v))
+
+
 def _fmt(fmt: str, v) -> str:
-    """One cell, for DISPLAY. None renders as an em dash rather than as the word None."""
-    if v is None:
+    """One cell, for DISPLAY. A value the panel does not have renders as an em dash rather than
+    as the WORD for it — `None` or `nan`, see `_absent`."""
+    if _absent(v):
         return "—"
     try:
         return fmt.format(v)
@@ -114,8 +132,10 @@ def _fmt(fmt: str, v) -> str:
 
 def _csv_cell(v) -> str:
     """One cell, for COPY. Floats go out at full `repr` precision: the display rounds, and a CSV
-    that rounded too would be a picture of the data rather than the data."""
-    if v is None:
+    that rounded too would be a picture of the data rather than the data. An ABSENT value (see
+    `_absent`) goes out as an EMPTY field — `nan` in a numeric column is a value to a spreadsheet
+    and a missing one to a reader, and this panel's whole promise is that the two agree."""
+    if _absent(v):
         return ""
     if isinstance(v, float):
         return repr(v)

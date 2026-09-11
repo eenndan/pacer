@@ -338,6 +338,59 @@ def test_every_method_id_has_a_sentence_and_every_sentence_is_used():
           f"{len(emitted)} methods, both directions")
 
 
+# -------------------------------------------------------------- an absent number is never a word
+def test_a_cell_with_no_value_never_renders_as_the_word_nan():
+    """`_fmt` already refuses to print the word `None` for a missing value — and a missing value
+    reaches this panel spelled BOTH ways.
+
+    `d (m)` is the lap's own odometer, which is undefined outside the lap, and the builder says so
+    in NumPy's spelling: `_lap_fixes(bracket=True)` writes NaN there and
+    `provenance._lap_time` reads `dists[i] != dists[i]` to mean "outside the lap". The two rows
+    that bracket the start/finish crossing therefore carry a NaN odometer BY CONSTRUCTION, on
+    every lap of every recording — so the panel whose entire job is to show a number's evidence
+    printed the literal string `nan` in its first visible row, and the Copy-as-CSV button wrote
+    `nan` into the column beside it.
+
+    `None` and NaN are the same fact here (this row has no odometer), so they get the same
+    rendering: the panel's absent-value dash on screen, an empty field in the CSV. The `role`
+    column already says which rows those are."""
+    s = _session()
+    absent = provenance._fmt("{:.2f}", None)
+    d_col = provenance.FIX_COLUMNS.index("d (m)")
+
+    checked = bracketed = 0
+    for lap_id in s.valid_lap_ids()[:4]:
+        p = s.lap_time_provenance(lap_id)
+        assert p is not None, lap_id
+        for table in p.tables:
+            for r in range(len(table.rows)):
+                for c in range(len(table.columns)):
+                    raw, shown = table.rows[r][c], table.cell(r, c)
+                    checked += 1
+                    assert shown.strip().lower() not in ("nan", "-nan", "inf", "-inf", "none"), (
+                        f"lap {lap_id} {table.caption!r} row {r} column "
+                        f"{table.columns[c]!r} displays {shown!r} — a value the panel does not "
+                        f"have must render as {absent!r}, not as the word for it")
+                    if isinstance(raw, float) and not math.isfinite(raw):
+                        bracketed += 1
+                        assert shown == absent, (raw, shown)
+                        assert table.rows[r][-1] == provenance.BRACKET, (
+                            "only a row that brackets the boundary may lack an odometer")
+        # ...and the CSV the panel's copy button writes leaves the field EMPTY rather than
+        # exporting a NaN into somebody's spreadsheet.
+        body = p.tables[0].csv_lines()[2:]
+        for line in body:
+            cells = line.split(",")
+            assert cells[d_col].strip().lower() not in ("nan", "-nan", "inf", "-inf"), line[:120]
+
+    assert bracketed >= 2, (
+        f"expected the two crossing-bracket rows per lap to carry a NaN odometer; saw "
+        f"{bracketed} — if the builder stopped using NaN this test is no longer measuring "
+        f"anything and must be rewritten against whatever replaced it")
+    print(f"test_a_cell_with_no_value_never_renders_as_the_word_nan OK — {checked} cells, "
+          f"{bracketed} absent odometers rendered as {absent!r}")
+
+
 # ---------------------------------------------------------------------------------- the CSV
 def test_the_csv_carries_every_row_at_full_precision():
     """Copy as CSV is the escape hatch, so it has to be LOSSLESS where the display is not: the
