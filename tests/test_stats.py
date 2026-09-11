@@ -3489,6 +3489,73 @@ def test_stats_view_split_matrix_hides_under_the_decorative_floor():
     print("test_stats_view_split_matrix_hides_under_the_decorative_floor OK")
 
 
+def test_every_longitudinal_surface_names_which_filter_it_read():
+    """#271 found a THIRD longitudinal series and disclosed it at source; this is the half that
+    reaches a user.
+
+    THE CONTRADICTION, re-measured here rather than inherited. On the D24 0060 pair (38 valid
+    laps) a brake event's own peak deceleration EXCEEDS the "peak braking g" printed on the same
+    lap row on 37 of 38 laps, median ratio 1.258 (0.862 -> 1.081 g); on 0062 (65 laps) it is 65 of
+    65 at 1.244 (0.652 -> 0.811 g). The session maxima the tile prints are 1.266 g and 1.076 g
+    against largest event peaks of 1.943 g and 1.535 g. Both numbers are right for what they are —
+    a window can only lower a peak — and a page printing both while naming neither is the same
+    self-contradiction #237 fixed by splitting the priority glyph from the trust glyph.
+
+    So: the four DRIVING tiles (which shipped with NO tooltip at all, the only untooltipped tiles
+    on the page and the only ones built from the DETECTION series), their section heading, the
+    PER LAP grid where the two filters sit in adjacent columns, the peak-braking tile and the
+    BRAKING table's commit % each say which series they read.
+
+    AND THE INSTRUMENT IS COMPOSED, NEVER TYPED. The coast band, the minimum duration and the
+    commit denominator's percentile come from `driving`'s own constants, so the copy follows the
+    detector rather than describing a past version of it — the §5.5 lesson, and the reason this
+    text deliberately characterises no coast MAGNITUDE: the detection series' effect on `coast_s`
+    is a measured defect with a fix pending, and a sentence about today's number would be wrong
+    the day it lands."""
+    _app()
+    import pathlib
+
+    from studio import driving, gmeter
+    from studio.stats_panel import BRAKING_TOOLTIP, DRIVING_TOOLTIP, LAP_TABLE_TOOLTIP, StatsView
+    from studio.stats_panel import __file__ as SP_FILE
+
+    v = StatsView(_fake_view_session())
+    # The peak-braking tile points AT the other channel rather than only describing its own.
+    tip = v.t_peak_brake.toolTip()
+    assert "no window at all" in tip and "ABOVE this figure" in tip, tip
+    # The four event tiles + the heading carry the disclosure. `grip envelope · p98` keeps its own
+    # (it is the combined-g percentile, not an event count).
+    for tile in (v.t_brake, v.t_brake_n, v.t_coast, v.t_longest_coast):
+        assert tile.toolTip() == DRIVING_TOOLTIP, tile.caption.text()
+    assert v._driving_section.toolTip() == DRIVING_TOOLTIP
+    grip_tip = v.t_grip_ceiling.toolTip()
+    assert "98th percentile" in grip_tip and grip_tip != DRIVING_TOOLTIP, grip_tip
+    # The PER LAP grid is the one surface that prints both filters in adjacent columns.
+    assert "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS" in LAP_TABLE_TOOLTIP
+    assert f"{gmeter.LONG_SMOOTH_S:g} s" in LAP_TABLE_TOOLTIP
+    assert "no window at all" in LAP_TABLE_TOOLTIP
+    # Commit % is a ratio inside ONE channel, and says so against the tile it could be read as.
+    assert f"{driving.AMAX_PCT:g}th percentile" in BRAKING_TOOLTIP
+    assert "peak braking g" in BRAKING_TOOLTIP
+    # The coast instrument: the band and the minimum duration, from the constants.
+    assert f"{driving.COAST_DRAG_MIN:g} g" in DRIVING_TOOLTIP
+    assert f"{driving.MIN_COAST_S:g} s" in DRIVING_TOOLTIP
+    # ...and NOT typed. Checked on the source (a reload would rebind StatsView for every later
+    # test in this process), the way the LONG_SMOOTH_S check above it already is.
+    src = pathlib.Path(SP_FILE).read_text(encoding="utf-8")
+    for literal, const in ((f"{driving.COAST_DRAG_MIN:g} g", "COAST_DRAG_MIN"),
+                           (f"{driving.MIN_COAST_S:g} s", "MIN_COAST_S"),
+                           (f"{driving.AMAX_PCT:g}th percentile", "AMAX_PCT")):
+        for line in src.splitlines():
+            if literal in line and const not in line:
+                raise AssertionError(
+                    f"stats_panel types {literal!r} as a literal — it must read driving.{const}, "
+                    f"or the copy rots the moment the detector changes: {line.strip()!r}")
+    v.hide()
+    print("ok longitudinal disclosure: peak tile, DRIVING tiles, PER LAP and commit % each name "
+          "their series; the coast band + duration are read from driving's constants")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it

@@ -234,6 +234,20 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **Two numbers on the Stats page disagreed about how hard you braked, and neither said why.** A
+  lap row prints a "peak braking g" and a count of braking events, and they come off the same
+  physical axis through two different filters: the peak is smoothed, so it is the *sustained*
+  deceleration, while brake and coast are detected on the unsmoothed derivative, because a brake
+  onset is a step and a smoothing window smears exactly that. The consequence was visible in one
+  row and explained nowhere — measured on the two reference recordings, an individual brake event's
+  own peak deceleration exceeds the "peak braking g" printed beside it on **37 of 38 laps** and
+  **65 of 65**, by a median of about a quarter. Nothing changed about either number; every surface
+  that prints one now says which series it read. The **DRIVING** tiles — the four numbers on the
+  page built from the detection series, and the only tiles that had no hover text at all — now
+  carry the detector's own band and minimum duration; the peak-braking tile points at the channel
+  the brake counts come from; the **PER LAP** grid names both filters where its columns sit side by
+  side; and the **BRAKING** table's Commit % states that both halves of that ratio come from the
+  same unsmoothed channel, so it is not a percentage of the tile above it.
 - **A lap you stopped on could count as one of your clean laps.** A lap was judged real by its
   total time — anything from half to 1.6x the session median — and by its distance. A stop defeats
   both: it adds time without adding a metre, and on a ~69 s kart lap that band leaves **41 seconds
