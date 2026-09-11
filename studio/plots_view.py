@@ -7,6 +7,22 @@ y-axis + legend (see `_delta_series`). Distance mode x = normalized-distance ×
 best-lap distance; time mode x = time-into-lap. A draggable cursor on both plots scrubs the
 video; the delta plot also shows a hover dot riding the delta curve. Stays pacer-free — emits
 raw plot-x + axis mode; app.py owns session/video and all conversion.
+
+THE THREE INSTRUMENT GESTURES sit on top of that and share one readout strip under the charts:
+
+  * a DATUM (second) cursor — `D` — and the interval statistics between the two cursors, the
+    gesture every professional tool binds (MoTeC calls the second one a datum and puts it on the
+    spacebar; WinDarab has the same). Braking distance, corner duration, speed decay rate and
+    "how long did that take" become one keystroke instead of an export;
+  * WINDOW STATISTICS over whatever x-range is currently visible, per channel, switchable
+    current / min / max / mean / range / delta (Circuit Tools · i2 · WinDarab all ship this);
+  * the LOSS TOUR — `N` — which walks the biggest local rises in the Δ trace, worst first. This
+    is the one move every published analysis workflow makes ("look for the steepest slope in the
+    variance line, then zoom in there"); it is a NAVIGATION control, so it moves the cursor,
+    zooms the charts and lets the ScrubController fan the seek out to the map and video.
+
+The maths for all three lives in `chart_stats` (Qt-free, pacer-free) — including the measured
+1.0 s floor under which a slope over 10 Hz GPS is mostly noise and is refused rather than printed.
 """
 
 from __future__ import annotations
@@ -16,14 +32,17 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QComboBox,
+    QLabel,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from . import data_quality, theme, units
+from . import chart_stats, data_quality, theme, units
 from ._signal import fmt_time, lap_label
 from .session import REFERENCE_ID  # sentinel id of the cross-recording reference curve (F7)
 from .theme import C
@@ -210,6 +229,55 @@ EMPTY_TEXT = f"{EMPTY_HEADLINE}\n\n{data_quality.no_laps_body()}"
 # widened to whatever the rotated axis titles measure (see PlotsView._budget_axis_gutters).
 PLOT_INSET = theme.SPACE_XXS
 
+# ------------------------------------------------------------------ the datum (second) cursor
+# A SOLID, BRIGHT, NEUTRAL line, against the scrub cursor's thin dashed `text_dim`. The two are
+# different KINDS of thing and have to read that way: the scrub cursor is a value that moves with
+# the video, the datum is a mark you left. Neutral (C.text, not the accent) because the accent is
+# already what the scrub cursor turns when you hover it as "grabbable", and a mark is not a state.
+def datum_pen():
+    return pg.mkPen(C.text, width=theme.line_width(1))
+
+
+def datum_hover_pen():
+    return pg.mkPen(C.accent, width=theme.line_width(2))
+# The two ends are LABELLED on the chart, because the readout under it talks about "A" and "B" and
+# a reader has to be able to find them. A rides the datum; B rides the scrub cursor and exists only
+# while the datum is armed (with one cursor there is nothing to be the other end of).
+DATUM_LABEL_OPTS = {"color": C.text, "position": 0.06, "movable": False}
+# The readout strip's own inset. SPACE_XS on the sides matches the plot block's gutter budget;
+# SPACE_XXS top/bottom keeps the strip to the two text lines it carries.
+READOUT_MARGIN_H = theme.SPACE_XS
+READOUT_MARGIN_V = theme.SPACE_XXS
+# The short name of each Δ baseline for the READOUT, where the axis label's "(s)" is redundant (the
+# value is printed with its own unit two characters later) and the width is horizontal, not the
+# vertical slot DELTA_LABEL_REF had to survive. Keyed by the same DELTA_BASELINE_* kinds.
+DELTA_SHORT_LABELS = {
+    DELTA_BASELINE_BEST: "Δ to best",
+    DELTA_BASELINE_IDEAL: "Δ to ideal",
+    DELTA_BASELINE_REFERENCE: "Δ to ref",
+}
+# What the strip says when there is nothing to say yet — and, because this app's interaction model
+# is otherwise undiscoverable (see help_dialog's module docstring), the two keys that make it do
+# something. Kept SHORT: this line shares a row with the window statistics.
+READOUT_HINT = "D: datum cursor · N: next Δ loss"
+# The strip's hover, carrying what the one line has no room for.
+READOUT_TIP = (
+    "Chart readout. The left half is the statistic chosen beside it, over the x-range currently "
+    "VISIBLE — zoom or pan and it follows. Press D to drop a datum (second) cursor: the right "
+    "half then reports the interval between the two cursors — elapsed time, distance, the value "
+    "at each end, their difference, the mean, the min, the max and the rate of change. Press N to "
+    "walk the biggest Δ losses of the lap, worst first.\n\n" + chart_stats.SLOPE_FLOOR_NOTE)
+# The window-statistic selector's entries, in `chart_stats.WINDOW_STATS` order. The "stat:" prefix
+# mirrors the x-axis combo's "x:" — in a toolbar of four controls a bare "mean" says nothing about
+# what it is the mean OF.
+STAT_COMBO_TIP = (
+    "Which statistic the readout shows for each channel, over the x-range currently VISIBLE on "
+    "the charts:\n"
+    + "\n".join(f"  · {chart_stats.STAT_SHORT[s]} — {chart_stats.STAT_LABELS[s]}"
+                for s in chart_stats.WINDOW_STATS)
+    + "\nRange and delta are not the same number: through one corner, range is the whole "
+      "entry-to-apex drop and delta is only what you never got back.")
+
 
 def _axis_title_style() -> dict:
     """The CSS the axis TITLES are set in — the colour, spelled at every call site that writes one.
@@ -279,6 +347,14 @@ class PlotsView(QWidget):
         self._curves: list[tuple[object, object]] = []
         self._delta_curves: list[tuple] = []  # [(lid, xs, ys)] cached for the hover-dot snap
         self._speed_curves: dict = {}  # {lid: (sx, spd)} cached so F5 brake glyphs ride the curve
+        # THE OTHER MODE'S x FOR THE SAME 400 SAMPLES, per drawn lap: metres while the charts are in
+        # time mode, elapsed-into-lap seconds while they are in distance mode. `session.delta`
+        # builds both off ONE normalized-distance grid, so index i is the same piece of track in
+        # both — which makes `np.interp(x, sx, cx)` a fractional-index lookup and gives the datum
+        # readout the interval's TRUE elapsed time (from the GPS clock via `_lap_arrays`' elapsed
+        # column) and its distance, in either mode, with no second conversion API and no ∫ds/v
+        # reconstruction of a clock the recording already carries.
+        self._companion_x: dict = {}  # {lid: xs in the OTHER axis mode}
         self._time_mode = False  # shared x-axis: distance (default) vs time-into-lap (both plots)
         self._cursor_t: float | None = None  # last applied position; re-placed after refresh()
         self._user_dragging = False  # True between grab and release of either cursor
@@ -307,11 +383,38 @@ class PlotsView(QWidget):
         # a REASON, so the original comes back when the control does. Stashing the live value (rather
         # than a copy of the constructor's string) keeps a tooltip set by whoever mounts the control.
         self._saved_tips: dict = {}
+        # --- the instrument layer (see the module docstring) ---
+        self._datum_x: float | None = None       # the datum cursor's x, or None while disarmed
+        self._window_stat = chart_stats.STAT_CURRENT
+        # Cached window statistics, {lid: {"speed": v, "delta": v}}: the five REDUCTIONS do not
+        # change on the ~30 Hz tick (the visible range does not move), so they are recomputed only
+        # when the range or the curves do — see _recompute_window. `current` is the one that has to
+        # follow the playhead, and it is two np.interps.
+        self._window_values: dict = {}
+        self._window_range: tuple[float, float] | None = None
+        # The loss tour: the ranked spans and where in the walk we are. -1 is the resting state —
+        # the whole lap in view, no span targeted — and it is also the step AFTER the last span, so
+        # one key both walks the tour and gets you back out of it.
+        self._loss_spans: list = []
+        self._loss_index = -1
+        self._loss_dirty = True   # rebuild the ranking on the next press (set by every refresh)
+        # The x-range refresh() last FITTED, so leaving the tour can put the whole lap back without
+        # re-running a fit that would also move y (see _reset_x_range).
+        self._fit_x_range: tuple[float, float] | None = None
 
         # x-axis toggle (distance/time). Exposed but mounted by app.py in its consolidated bar.
         self.x_mode_combo = QComboBox()
         self.x_mode_combo.addItems(["x: distance", "x: time"])
         self.x_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+
+        # The window-statistic selector, same deal: built here (it drives this widget's readout),
+        # mounted by central_view next to the x-axis combo it is the sibling of — one says what the
+        # x-range MEANS, the other what to report over it.
+        self.stat_combo = QComboBox()
+        self.stat_combo.addItems([f"stat: {chart_stats.STAT_SHORT[s]}"
+                                  for s in chart_stats.WINDOW_STATS])
+        self.stat_combo.setToolTip(STAT_COMBO_TIP)
+        self.stat_combo.currentIndexChanged.connect(self._on_stat_changed)
 
         # D1 opt-in: overlay the synthetic IDEAL-lap baseline (lower envelope of the clean laps)
         # on the Δ plot. Default off so the standard Δ-to-best view stays uncluttered. Exposed;
@@ -433,6 +536,27 @@ class PlotsView(QWidget):
         self.cur_speed.sigPositionChangeFinished.connect(self._on_drag_finished)
         self.cur_delta.sigPositionChangeFinished.connect(self._on_drag_finished)
 
+        # The DATUM cursor (one line per plot, x-linked like the scrub pair). Movable, but its drag
+        # does NOT scrub: a datum is a mark, so dragging it re-measures the interval and seeks
+        # nothing — which is also why it needs no coalescing (no video work happens on its moves).
+        self.cur_speed_datum = pg.InfiniteLine(angle=90, movable=True, pen=datum_pen(),
+                                               hoverPen=datum_hover_pen(),
+                                               label="A", labelOpts=dict(DATUM_LABEL_OPTS))
+        self.cur_delta_datum = pg.InfiniteLine(angle=90, movable=True, pen=datum_pen(),
+                                               hoverPen=datum_hover_pen())
+        for ln in (self.cur_speed_datum, self.cur_delta_datum):
+            ln.setVisible(False)
+            ln.setZValue(10)          # over the curves, under the hover dot
+            ln.setCursor(Qt.SizeHorCursor)
+            ln.sigDragged.connect(self._on_datum_dragged)
+        self.p_speed.addItem(self.cur_speed_datum)
+        self.p_delta.addItem(self.cur_delta_datum)
+        # ...and the far end's label, which rides the SCRUB cursor and only exists while there is a
+        # datum for it to be the other end of. Built once (an InfLineLabel parents itself to its
+        # line and follows it) and shown/hidden with the datum.
+        self._b_label = pg.InfLineLabel(self.cur_speed, "B", **DATUM_LABEL_OPTS)
+        self._b_label.setVisible(False)
+
         # Hover dot: rides the delta curve under the mouse, showing the delta value (see _on_delta_hover).
         self.hover_dot = pg.ScatterPlotItem(size=9, brush=HOVER_DOT_BRUSH, pen=hover_dot_pen())
         self.hover_dot.setZValue(20)
@@ -452,19 +576,81 @@ class PlotsView(QWidget):
         # map's 57 in the same frame (QA D2-12).
         self._empty = EmptyState(EMPTY_HEADLINE, data_quality.no_laps_body())
 
+        # ---- the readout strip, under the charts ----------------------------------------------
+        # UNDER the charts, not on them. Every other numeric surface this panel has tried inside the
+        # plot rectangle (the legend plate, the pedal-band caption) hides trace, and L6-06 measured
+        # exactly what that costs; a two-line strip in its own space hides none. It also only pays
+        # for what it shows: the datum line is hidden until a datum exists, so the resting cost is
+        # one text line.
+        #
+        # `role="Note"` because these ARE the app's secondary text and the role exists for it — and
+        # it deliberately declares no font family, so the mono face set here survives it (a readout
+        # of columns of digits has to be tabular or the numbers dance as they change).
+        self.window_label = QLabel(READOUT_HINT)
+        self.datum_label = QLabel("")
+        for lb in (self.window_label, self.datum_label):
+            lb.setProperty("role", "Note")
+            lb.setFont(theme.mono_font(theme.CAPTION))
+            lb.setToolTip(READOUT_TIP)
+            lb.setTextInteractionFlags(Qt.TextSelectableByMouse)  # a number you can copy out
+            # THE READOUT MUST NEVER WIDEN THE PANEL. A non-wrapping QLabel's minimumSizeHint is
+            # its whole text, so left alone these two would push the charts panel's minimum width
+            # out by whatever the longest line happened to be — a readout deciding how small the
+            # window may get, which is the inversion `central_view` spent a whole ladder undoing.
+            # `Ignored` says "give me what is left"; `_fit` then composes to that width.
+            lb.setMinimumWidth(0)
+            lb.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.datum_label.setVisible(False)
+        self._readout = QWidget()
+        rl = QVBoxLayout(self._readout)
+        rl.setContentsMargins(READOUT_MARGIN_H, READOUT_MARGIN_V,
+                              READOUT_MARGIN_H, READOUT_MARGIN_V)
+        rl.setSpacing(theme.SPACE_XXS)
+        rl.addWidget(self.window_label)
+        rl.addWidget(self.datum_label)
+
+        # The charts page = the plots plus their readout. A plain QWidget (not a subclass) so the
+        # theme's base rule paints it, and no styling of its own.
+        page = QWidget()
+        pl = QVBoxLayout(page)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(0)
+        pl.addWidget(self.glw, 1)
+        pl.addWidget(self._readout, 0)
+
         # The view is now JUST the charts; the x-mode toggle lives in app.py's consolidated bar.
         self._stack = QStackedWidget()
-        self._stack.addWidget(self.glw)     # index 0: the charts
+        self._stack.addWidget(page)         # index 0: the charts + their readout
         self._stack.addWidget(self._empty)  # index 1: the empty-state placeholder
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._stack)
 
+        # LAST, on purpose: the visible x-range drives the window statistics, and `_on_x_range_changed`
+        # renders into the two labels above. Subscribing any earlier would let a range change raised
+        # by an `addItem` (pyqtgraph autoranges as items arrive) reach a handler whose labels do not
+        # exist yet. The two plots are permanently x-linked, so ONE subscription covers both.
+        self.p_speed.getViewBox().sigXRangeChanged.connect(self._on_x_range_changed)
+
     def _on_mode_changed(self, index):
+        # CARRY THE DATUM ACROSS THE AXIS FLIP. Its x is in the OLD mode's units — a datum at
+        # "620 m" would become "620 s" and land off the chart — but the companion array is exactly
+        # the same 400 track positions expressed in the new mode, so one interp moves the mark to
+        # where it already was. Done BEFORE the flip, while the old arrays are still the live ones.
+        if self._datum_x is not None:
+            moved = self._companion_at(self._lap_at_cursor(), self._datum_x)
+            self._datum_x = moved  # None (nothing drawn to convert against) disarms it honestly
         self._time_mode = index == 1
         self.refresh()
         # Sector positions are mode-dependent; ask app to re-push them for the new mode (F2).
         self.modeChanged.emit(self._axis_mode())
+
+    def _on_stat_changed(self, index):
+        """The window-statistic selector moved: re-reduce the visible range and re-render."""
+        stats = chart_stats.WINDOW_STATS
+        self._window_stat = stats[index] if 0 <= index < len(stats) else stats[0]
+        self._recompute_window()
+        self._update_readouts()
 
     def _apply_ideal_icon(self):
         """Re-apply the ideal-lap button's star for the CURRENT palette.
@@ -502,7 +688,7 @@ class PlotsView(QWidget):
         widget.setEnabled(enabled)
 
     def _sync_chart_controls(self, *, plotted: bool):
-        """The ONE owner of the three chart controls' enabled state (called from refresh(), both
+        """The ONE owner of the chart controls' enabled state (called from refresh(), both
         branches), so a control is live exactly when clicking it would change the chart.
 
         L6-07: with the empty-state placeholder up, all three stayed enabled and latched on over a
@@ -519,6 +705,9 @@ class PlotsView(QWidget):
         ideal-less names the reason the user can act on."""
         self._set_control_enabled(self.x_mode_combo, plotted, NO_DATA_TIP)
         self._set_control_enabled(self.brake_throttle_btn, plotted, NO_DATA_TIP)
+        # The window-statistic selector is the same shape of dead end as the x-axis combo: with the
+        # empty state up there is no visible range and no channel, so every entry reports "—".
+        self._set_control_enabled(self.stat_combo, plotted, NO_DATA_TIP)
         if not plotted:
             reason = NO_DATA_TIP
         elif self._delta_ideal_mode:
@@ -870,6 +1059,9 @@ class PlotsView(QWidget):
         super().resizeEvent(event)
         self._budget_axis_gutters()
         self._budget_min_height()
+        # The readout lines are composed to the width they actually have (see `_fit`), so a resize
+        # is exactly when the optional segments come back or go away.
+        self._update_readouts()
 
     def _apply_axis_pens(self):
         """Pen the axis lines, ticks and GRIDLINES at the current device-pixel ratio.
@@ -905,6 +1097,9 @@ class PlotsView(QWidget):
                 for ln in (self.cur_speed, self.cur_delta):
                     ln.setPen(cursor_pen())
                     ln.setHoverPen(cursor_hover_pen())
+                for ln in (self.cur_speed_datum, self.cur_delta_datum):
+                    ln.setPen(datum_pen())
+                    ln.setHoverPen(datum_hover_pen())
                 self.hover_dot.setPen(hover_dot_pen())
                 self.refresh()
         return super().event(ev)
@@ -919,6 +1114,13 @@ class PlotsView(QWidget):
         self._hide_hover()
         self._delta_curves = []  # [(lid, xs, ys)] for the hover-dot nearest-sample snap
         self._speed_curves = {}  # {lid: (sx, spd)} rebuilt below; F5 brake glyphs ride these
+        self._companion_x = {}   # {lid: the same samples' x in the OTHER mode} rebuilt below
+        # The selection / axis / baseline may all have changed, so the loss ranking is stale and the
+        # tour is back at its resting step. Re-ranked lazily on the next `N`, never here: refresh()
+        # runs on every lap-table click and the ranking is only ever read by that key.
+        self._loss_spans = []
+        self._loss_index = -1
+        self._loss_dirty = True
         # Clear sector lines + driving items up front: a stale item left in place would be caught
         # by the autoRange fit below (like the cursor) and stretch the frozen range; both are
         # redrawn at the end on the fitted axes.
@@ -931,9 +1133,12 @@ class PlotsView(QWidget):
         self.p_delta.setLabel("bottom", self._axis_label(), **_axis_title_style())
 
         # Hide the cursors before fitting: a visible InfiniteLine still holding the previous mode's
-        # x would contribute that stale value to autoRange. Re-placed after the fit.
+        # x would contribute that stale value to autoRange. Re-placed after the fit. The datum pair
+        # goes with them, and for the same reason.
         self.cur_speed.setVisible(False)
         self.cur_delta.setVisible(False)
+        self.cur_speed_datum.setVisible(False)
+        self.cur_delta_datum.setVisible(False)
 
         # Re-enable autorange so the new selection's curves are fit before we freeze it again.
         self.p_speed.enableAutoRange()
@@ -955,8 +1160,18 @@ class PlotsView(QWidget):
         if not result:
             self._stack.setCurrentIndex(1)  # E1: no laps -> empty-state placeholder
             self._sync_chart_controls(plotted=False)  # L6-07: nothing to toggle on a blank page
+            self._datum_x = None
+            self._sync_datum_items()
+            self._set_label(self.window_label, READOUT_HINT)
+            self._set_datum_text("")
             return
         self._stack.setCurrentIndex(0)
+        # The SAME 400 samples in the other axis mode, for the datum readout's elapsed/distance
+        # (see `_companion_x`). One extra `delta()` — an np.interp per lap — on the refresh path
+        # only, which runs on a selection or axis change and never on the ~30 Hz tick.
+        companion = self.session.delta(draw_ids,
+                                       x_mode="distance" if self._time_mode else "time")
+        companion_speed = companion[1] if companion else {}
         # Decided ONCE per plotted refresh, before anything reads it: both the baseline swap and
         # the overlay refuse a single-donor ideal, and the toggle's reason has to agree with them.
         self._ideal_is_one_lap = self.session.ideal_donor_lap_id() is not None
@@ -1015,6 +1230,9 @@ class PlotsView(QWidget):
                 c.setClipToView(True)
                 self._curves.append((self.p_speed, c))
                 self._speed_curves[lid] = (sx, spd)  # F5: brake glyphs ride this curve
+                other = companion_speed.get(lid)
+                if other is not None and len(other[0]) == len(sx):
+                    self._companion_x[lid] = other[0]
             if lid in delta:
                 dd, dl = delta[lid]
                 # Δ curves are normally unnamed (the speed legend already identifies every lap).
@@ -1059,10 +1277,18 @@ class PlotsView(QWidget):
         self._reserve_brake_throttle_space()
         self.p_speed.disableAutoRange()
         self.p_delta.disableAutoRange()
+        self._fit_x_range = self._visible_x_range()  # what the loss tour's exit restores
 
         # Re-place the cursors on the now-frozen axes (also covers the paused-toggle case).
         if self._cursor_t is not None:
             self.set_playhead_time(self._cursor_t)
+        # ...and the datum with them: it is a position on an axis whose fit has just been redone.
+        # Clamped rather than dropped, so an axis flip or a lap change keeps the mark the user set.
+        if self._datum_x is not None:
+            span = self._x_span()
+            if span is not None:
+                self._datum_x = float(min(max(self._datum_x, span[0]), span[1]))
+        self._sync_datum_items()
         # Redraw the cached sector lines + driving items on the freshly-fit axes. The
         # brake/throttle band is pinned to the now-frozen y-range, so it draws last.
         self._draw_sectors()
@@ -1071,6 +1297,9 @@ class PlotsView(QWidget):
         # The Δ axis's TITLE changes with the baseline (best / ideal / ref) and the speed axis's
         # with the unit, so the gutter is re-budgeted here as well as on resize.
         self._budget_axis_gutters()
+        # The curves and the range are both new, so the window reductions are stale.
+        self._recompute_window()
+        self._update_readouts()
 
     def _delta_series(self, draw_ids, baseline, delta, x_mode: str):
         """P7: the Δ series the lower chart draws + whether it is the IDEAL-referenced one.
@@ -1173,6 +1402,22 @@ class PlotsView(QWidget):
             return
         self._place(t)
 
+    def _lap_at_cursor(self) -> int | None:
+        """The SELECTED lap the playhead is currently inside, or None.
+
+        The same containment walk `_place` has always done, lifted out because the readouts and the
+        loss tour need the same answer: every number under the charts is about one lap, and it is
+        the lap the video is in — which is the lap the ScrubController scopes a drag to, so the
+        readout and a seek can never be talking about different laps."""
+        t = self._cursor_t
+        if t is None:
+            return None
+        for lid in self._lap_ids:
+            window = self.session.lap_window(lid)
+            if window and window[0] <= t <= window[1]:
+                return lid
+        return None
+
     def _place(self, t: float):
         """Place both cursors at media time t on the shared x-axis. Caches t for refresh()
         re-placement; _suppress prevents a re-emit."""
@@ -1182,11 +1427,9 @@ class PlotsView(QWidget):
         # Distance mode: scale by the active baseline total (same basis as delta()'s x-grid).
         # Time mode skips it.
         best_d = None if mode == "time" else self.session.active_baseline_total_distance()
-        for lid in self._lap_ids:
-            window = self.session.lap_window(lid)
-            if window and window[0] <= t <= window[1]:
-                x = self.session.plot_x_at_media_time(lid, t, mode, best_distance=best_d)
-                break
+        lid = self._lap_at_cursor()
+        if lid is not None:
+            x = self.session.plot_x_at_media_time(lid, t, mode, best_distance=best_d)
         self._suppress = True
         try:
             # One x for both — the plots are x-linked, so the same value lines the cursors up.
@@ -1197,6 +1440,430 @@ class PlotsView(QWidget):
                 self.cur_delta.setValue(x)
         finally:
             self._suppress = False
+        self._update_readouts()
+
+    # ==================================================================== the instrument layer
+    # ------------------------------------------------------------- the datum (second) cursor
+    def toggle_datum(self):
+        """`D`: drop a datum cursor at the playhead, or clear the one that is there.
+
+        Dropping it AT THE PLAYHEAD rather than at a fixed place is what makes it one keystroke:
+        you park the video where the interval starts, press D, then scrub away and the readout
+        measures as you go — which is the MoTeC datum gesture exactly."""
+        if self._datum_x is not None:
+            self.clear_datum()
+            return
+        if not self.cur_speed.isVisible():
+            # No live cursor means the playhead is not inside a drawn lap, so there is no position
+            # to mark. Say so rather than dropping a mark at x=0.
+            self._set_datum_text("no datum: the playhead is not inside one of the plotted laps")
+            return
+        self._set_datum(float(self.cur_speed.value()))
+
+    def clear_datum(self):
+        """Take the datum away and put the readout back to its window-statistics-only state."""
+        self._datum_x = None
+        self._sync_datum_items()
+        self._update_readouts()
+
+    def datum_x(self) -> float | None:
+        """Public read of the datum's position on the shared x-axis (None while disarmed)."""
+        return self._datum_x
+
+    def _set_datum(self, x: float):
+        self._datum_x = float(x)
+        self._sync_datum_items()
+        self._update_readouts()
+
+    def _sync_datum_items(self):
+        """Show/hide/place the two datum lines and the scrub cursor's "B" cap from `_datum_x`."""
+        on = self._datum_x is not None
+        for ln in (self.cur_speed_datum, self.cur_delta_datum):
+            ln.setVisible(on)
+            if on:
+                ln.setValue(self._datum_x)
+        self._b_label.setVisible(on)
+
+    def _on_datum_dragged(self, line):
+        """The datum was dragged: re-measure, seek nothing.
+
+        A datum is a mark, not a playhead — dragging it must not move the video (that is what the
+        OTHER cursor is for), so this deliberately does not go anywhere near the scrub signals. It
+        also mirrors the drag onto the sibling plot's line, since the two are separate items on
+        x-linked plots and only the dragged one moves itself."""
+        self._datum_x = float(line.value())
+        for ln in (self.cur_speed_datum, self.cur_delta_datum):
+            if ln is not line:
+                ln.setValue(self._datum_x)
+        self._update_readouts()
+
+    # ---------------------------------------------------- window statistics (the visible range)
+    def window_stat(self) -> str:
+        """Public read of the active window statistic (one of chart_stats.WINDOW_STATS)."""
+        return self._window_stat
+
+    def _visible_x_range(self) -> tuple[float, float]:
+        lo, hi = self.p_speed.getViewBox().viewRange()[0]
+        return float(lo), float(hi)
+
+    def _on_x_range_changed(self, *_):
+        """Pan/zoom moved the x-range: re-reduce the channels over the new window.
+
+        Cheap by construction — the reductions run over the CACHED curve arrays (`_speed_curves` /
+        `_delta_curves`, the very arrays that were plotted), never back through the session."""
+        self._recompute_window()
+        self._update_readouts()
+
+    def _readout_lap(self) -> int | None:
+        """The ONE lap the readout strip is about: the lap the playhead is in.
+
+        The same lap the hero Δ box, the scrub and the hover dot are all about — this app's readouts
+        have always been about the followed lap, and a strip that quietly picked a different one in a
+        six-lap overlay would be the only surface that did. Falls back to the first drawn selection
+        so the strip still says something with the playhead out in the lead-in."""
+        lid = self._lap_at_cursor()
+        if lid is not None and lid in self._speed_curves:
+            return lid
+        return next((i for i in self._lap_ids if i in self._speed_curves), None)
+
+    def _recompute_window(self):
+        """Reduce the readout lap's two channels over the visible x-range and cache the result.
+
+        Called on a range change, on refresh, and when the statistic changes — NOT on the ~30 Hz
+        tick, because none of min/max/mean/range/delta can move while the range and the curves
+        stand still. `current` is the exception and is read live in `_channel_values`.
+
+        MEASURED on the real window over D24, 400-point curves, for the WHOLE path (reduce, compose
+        both lines to their width, write them): 134 us with one lap drawn and 172 us at the app's
+        seven-curve ceiling — 1.0% of one 60 Hz frame. Reducing every drawn lap rather than the
+        readout lap cost 293 us there, for six laps of numbers the one-line strip has no room to
+        print; the residual growth with lap count is `_readout_lap`'s own containment walk."""
+        self._window_values = {}
+        self._window_range = self._visible_x_range()
+        if self._window_stat == chart_stats.STAT_CURRENT:
+            return  # read live off the playhead instead; nothing to cache
+        lid = self._readout_lap()
+        sx_spd = self._speed_curves.get(lid) if lid is not None else None
+        if sx_spd is None:
+            return
+        lo, hi = self._window_range
+        row = {"speed": chart_stats.window_stat(sx_spd[0], sx_spd[1], lo, hi, self._window_stat)}
+        for did, xs, ys in self._delta_curves:
+            if did == lid:
+                row["delta"] = chart_stats.window_stat(xs, ys, lo, hi, self._window_stat)
+                break
+        self._window_values[lid] = row
+
+    def _channel_values(self, lid: int) -> dict:
+        """The two channels' values for `lid` under the active statistic."""
+        if self._window_stat != chart_stats.STAT_CURRENT:
+            return self._window_values.get(lid, {})
+        at = float(self.cur_speed.value()) if self.cur_speed.isVisible() else None
+        if at is None:
+            return {}
+        out = {}
+        sx_spd = self._speed_curves.get(lid)
+        if sx_spd is not None:
+            out["speed"] = chart_stats.window_stat(*sx_spd, 0.0, 0.0,
+                                                   chart_stats.STAT_CURRENT, at=at)
+        for did, xs, ys in self._delta_curves:
+            if did == lid:
+                out["delta"] = chart_stats.window_stat(xs, ys, 0.0, 0.0,
+                                                       chart_stats.STAT_CURRENT, at=at)
+                break
+        return out
+
+    # ------------------------------------------------------------------- the Δ-loss tour (`N`)
+    def loss_spans(self) -> list:
+        """Public read of the ranked loss spans (rebuilt lazily; see `jump_to_next_loss`)."""
+        self._ensure_loss_spans()
+        return list(self._loss_spans)
+
+    def loss_index(self) -> int:
+        """Which step of the tour is showing: -1 = the whole lap, else the 0-based span."""
+        return self._loss_index
+
+    def _ensure_loss_spans(self):
+        """(Re)rank the losses from the CURRENTLY DRAWN Δ curves, once per refresh.
+
+        Preferring the lap the playhead is in, when that lap is drawn and lost time somewhere: the
+        gesture ends in a seek, and the ScrubController scopes a seek to that same lap, so touring
+        another lap's losses would move the video to the right PLACE in the wrong lap. With the
+        playhead outside every drawn lap (or on a lap that only gained), the ranking falls back to
+        every drawn curve so a multi-lap overlay still has a worst moment."""
+        if not self._loss_dirty:
+            return
+        self._loss_dirty = False
+        here = self._lap_at_cursor()
+        mine = [(lid, xs, ys) for lid, xs, ys in self._delta_curves if lid == here]
+        self._loss_spans = chart_stats.steepest_losses(mine) if mine else []
+        if not self._loss_spans:
+            self._loss_spans = chart_stats.steepest_losses(self._delta_curves)
+
+    def jump_to_next_loss(self):
+        """`N`: walk to the next-biggest local Δ loss — cursor, charts and the whole app.
+
+        The delta trace is a NAVIGATION control, not an answer: every published workflow reads it
+        the same way ("look for the steepest slope or the biggest jump in the variance line, then
+        zoom in on that area"), and this is that move as one key. Each press takes the next-worst
+        span; after the last one the walk returns to the whole lap, so the same key is also the way
+        out — six states for one binding, and the readout says which one you are in.
+
+        WHAT MOVES: the charts zoom to the span (x only — refitting y would fight the frozen range
+        the pedal band's reserved strip lives in), a datum is dropped at the span's END, and the
+        playhead is scrubbed to its START through the normal `scrubStarted/Moved/Ended` signals.
+        Going through the scrub signals rather than reaching into the map or video is the whole
+        point: ScrubController already converts, clamps, coalesces and fans a scrub out to both,
+        and in compare mode it distance-locks the second pane too."""
+        self._ensure_loss_spans()
+        if not self._loss_spans:
+            self._loss_index = -1
+            self._update_readouts()
+            return
+        self._loss_index += 1
+        if self._loss_index >= len(self._loss_spans):
+            self._loss_index = -1
+            self.clear_datum()
+            self._reset_x_range()
+            self._update_readouts()
+            return
+        span = self._loss_spans[self._loss_index]
+        # Zoom with the span's own width of context on each side, so the approach and the exit are
+        # both on screen: the answer to "where did I lose it" is rarely inside the loss itself.
+        pad = span.x1 - span.x0
+        self.p_speed.setXRange(span.x0 - pad, span.x1 + pad, padding=0)
+        self._set_datum(span.x1)
+        self._scrub_to(span.x0)
+        self._update_readouts()
+
+    def _reset_x_range(self):
+        """Put the whole lap back in view — refresh()'s own fitted x-range, replayed.
+
+        NOT `enableAutoRange(XAxis)` + `disableAutoRange()`: pyqtgraph SCHEDULES an auto-range and
+        the immediate disable cancels it before it runs, which left the tour's exit sitting on the
+        last span's zoom (measured: 45→201 m of a 1000 m lap). And not `autoRange()` either — that
+        refits Y as well, which would undo the empty strip `_reserve_brake_throttle_space` widened
+        the y-range to make. So refresh() remembers what it fitted and this replays exactly that."""
+        if self._fit_x_range is None:
+            return
+        self.p_speed.setXRange(*self._fit_x_range, padding=0)
+
+    def _scrub_to(self, x: float):
+        """Park the playhead at plot-x `x` by driving one whole scrub gesture.
+
+        Start/move/end rather than a bare move: `on_started` is what captures the lap the drag is
+        scoped to and pauses playback, and `on_ended` is what issues the final seek and resumes —
+        a lone `scrubMoved` would coalesce into a tick that never comes."""
+        mode = self._axis_mode()
+        self.scrubStarted.emit()
+        self.scrubMoved.emit(float(x), mode)
+        self.scrubEnded.emit()
+
+    # ----------------------------------------------------------------- the readout strip
+    def _companion_at(self, lid: int | None, x: float) -> float | None:
+        """`x` on lap `lid` expressed in the OTHER axis mode (see `_companion_x`).
+
+        Distance mode in -> elapsed seconds into the lap out; time mode in -> metres on the shared
+        distance axis out. Both arrays are the same 400 normalized-distance samples, so this is a
+        fractional-index lookup written as one interp. None when that lap is not drawn."""
+        if lid is None:
+            return None
+        sx_spd = self._speed_curves.get(lid)
+        cx = self._companion_x.get(lid)
+        if sx_spd is None or cx is None or len(cx) < 2 or len(sx_spd[0]) != len(cx):
+            return None
+        return float(np.interp(x, sx_spd[0], cx))
+
+    def _interval(self, lid: int | None, xa: float, xb: float):
+        """The datum interval's statistics for lap `lid`'s SPEED channel, with its true elapsed
+        time and distance. None when the lap is not drawn."""
+        sx_spd = self._speed_curves.get(lid) if lid is not None else None
+        if sx_spd is None:
+            return None
+        lo, hi = (xa, xb) if xa <= xb else (xb, xa)
+        if self._time_mode:
+            dt = hi - lo                                  # x IS elapsed-into-lap here
+            d0, d1 = self._companion_at(lid, lo), self._companion_at(lid, hi)
+            dd = None if d0 is None or d1 is None else d1 - d0
+        else:
+            dd = hi - lo                                  # x IS the shared distance axis
+            t0, t1 = self._companion_at(lid, lo), self._companion_at(lid, hi)
+            dt = None if t0 is None or t1 is None else t1 - t0
+        return chart_stats.interval_stats(sx_spd[0], sx_spd[1], lo, hi, dt=dt, dd=dd)
+
+    def _delta_between(self, lid: int | None, xa: float, xb: float) -> float | None:
+        """How much time lap `lid` gave away (or won) against the chart's baseline between the two
+        cursors — the one number a racing readout cannot leave out."""
+        for did, xs, ys in self._delta_curves:
+            if did == lid and len(xs) >= 2:
+                return float(np.interp(xb, xs, ys) - np.interp(xa, xs, ys))
+        return None
+
+    def _fmt_x(self, x: float) -> str:
+        """One x-axis position in the current mode's unit."""
+        return f"{x:.2f} s" if self._time_mode else f"{x:.0f} m"
+
+    @staticmethod
+    def _fmt_seconds(v: float | None) -> str:
+        """A signed seconds value for the readout — and NEVER "-0.000".
+
+        Measured in the app: with the best lap selected alone the Δ-to-ideal curve starts at
+        −4e-16, which `:+.3f` prints as `-0.000 s`. A minus sign in a readout whose whole job is
+        ahead-vs-behind is not a rounding artefact the reader can be asked to ignore, so anything
+        under half a millisecond — below what a 10 Hz clock can even resolve — prints as +0.000."""
+        if v is None:
+            return "—"
+        return f"{0.0 if abs(v) < 5e-4 else v:+.3f} s"
+
+    def _fit(self, label: QLabel, *segments: str) -> str:
+        """Join `segments` with a separator, dropping trailing ones that do not fit `label`.
+
+        A QLabel does not elide, it CLIPS — and a clipped number is a wrong number, not a shorter
+        one. Every line here is built most-important-first, so the honest degradation is to stop
+        early; the last resort (a single segment still too wide for the panel) is Qt's own ellipsis,
+        which at least shows that something was cut. Re-run on every resize (see resizeEvent)."""
+        fm = QFontMetrics(label.font())
+        avail = max(0, label.width())
+        text = segments[0] if segments else ""
+        for seg in segments[1:]:
+            candidate = f"{text}   ·   {seg}"
+            if fm.horizontalAdvance(candidate) > avail:
+                break
+            text = candidate
+        if avail and fm.horizontalAdvance(text) > avail:
+            text = fm.elidedText(text, Qt.ElideRight, avail)
+        return text
+
+    @staticmethod
+    def _set_label(label: QLabel, text: str):
+        """Write `text` only when it CHANGED.
+
+        `QLabel.setText` is not free even with identical text — it re-lays-out and schedules a
+        repaint — and these two labels are re-rendered on every ~30 Hz tick and every pan event, most
+        of which re-derive a string identical to the one already up (the window line only changes
+        when the range or the statistic does). The whole tick path with a datum armed measures
+        424-533 us against the 33 300 us a 30 Hz frame has."""
+        if label.text() != text:
+            label.setText(text)
+
+    def _set_datum_text(self, text: str):
+        self._set_label(self.datum_label, text)
+        self.datum_label.setVisible(bool(text))
+
+    def _sync_datum_caps(self):
+        """Cap the two cursors "A" and "B" BY POSITION, left to right.
+
+        Not by role. The readout always reports the interval in x order, so labelling the datum a
+        permanent "A" made the chart read B…A whenever the datum ended up on the right — which is
+        the loss tour's own default, since it parks the playhead at a loss's ENTRY (press Space and
+        you watch it happen) and drops the datum at its exit. Measured on the real app at 1440x900:
+        "B" at 900 m and "A" at 931.8 m under a readout line reading "A→B", i.e. the two halves of
+        one gesture disagreeing about which end was which."""
+        if self._datum_x is None:
+            return
+        datum_first = (not self.cur_speed.isVisible()
+                       or self._datum_x <= float(self.cur_speed.value()))
+        d_cap, c_cap = ("A", "B") if datum_first else ("B", "A")
+        for label, cap in ((getattr(self.cur_speed_datum, "label", None), d_cap),
+                           (self._b_label, c_cap)):
+            if label is not None and label.format != cap:
+                label.format = cap      # the template a line move re-renders from
+                label.setText(cap)      # ...and the text right now, visible or not
+
+    def _update_readouts(self):
+        """Re-render both readout lines. Cheap enough for the ~30 Hz tick — see `_recompute_window`
+        for the measurement and for what is cached rather than recomputed."""
+        self._sync_datum_caps()
+        self._render_window_line()
+        self._render_datum_line()
+
+    def _render_window_line(self):
+        lid = self._readout_lap()
+        if lid is None:
+            self._set_label(self.window_label, READOUT_HINT)
+            return
+        lo, hi = self._window_range or self._visible_x_range()
+        whole = self._x_span()
+        if whole is not None and hi - lo >= 0.999 * (whole[1] - whole[0]):
+            window = "window whole lap"
+        else:
+            window = f"window {self._fmt_x(lo)} → {self._fmt_x(hi)}"
+        vals = self._channel_values(lid)
+        stat = chart_stats.STAT_SHORT[self._window_stat]
+        unit = units.speed_label(self._speed_unit)
+        speed = vals.get("speed")
+        delta = vals.get("delta")
+        speed_txt = "—" if speed is None else f"{speed:,.1f} {unit}"
+        # A DELTA-OF-A-DELTA IS SIGNED AND THE OTHERS ARE NOT: "range" and "delta" of the Δ channel
+        # are differences, where a leading + or − is the meaning; min/max/mean/current are positions
+        # on a signed axis, where it is also the meaning. So the Δ column is always signed and the
+        # speed column never is — a speed cannot be negative and a leading + on one would read as a
+        # gain.
+        base = DELTA_SHORT_LABELS.get(self._delta_baseline_kind, "Δ")
+        # The KEY HINT IS THE LAST SEGMENT, so it is the first thing dropped when the panel narrows.
+        # Measured at the app's 1440x900 default the whole line wants 570 px in a 909 px label, and
+        # at the window's own minimum width the panel gives the label 570 px against a 596 px line —
+        # i.e. the hint is exactly what does not fit there, and the statistics are what must.
+        self._set_label(self.window_label, self._fit(
+            self.window_label,
+            f"lap {lap_label(lid)} · {window} · {stat}   speed {speed_txt}   "
+            f"{base} {self._fmt_seconds(delta)}",
+            READOUT_HINT))
+
+    def _x_span(self) -> tuple[float, float] | None:
+        """The full x extent of the drawn curves — what "the whole lap" means on this axis."""
+        spans = [(float(sx[0]), float(sx[-1])) for sx, _spd in self._speed_curves.values()
+                 if len(sx) >= 2]
+        if not spans:
+            return None
+        return min(s[0] for s in spans), max(s[1] for s in spans)
+
+    def _render_datum_line(self):
+        if self._datum_x is None:
+            self._set_datum_text("")
+            return
+        if not self.cur_speed.isVisible():
+            self._set_datum_text("A dropped — move the playhead into this lap to measure from it")
+            return
+        lid = self._lap_at_cursor()
+        if lid is None or lid not in self._speed_curves:
+            self._set_datum_text("A dropped — the playhead is not inside a plotted lap")
+            return
+        xb = float(self.cur_speed.value())
+        if xb == self._datum_x:
+            # The two cursors coincide — the state the datum is BORN in, since it is dropped at the
+            # playhead. Named, because "nothing to measure" is what an empty chart says and this is
+            # a chart with everything on it and an interval of zero.
+            self._set_datum_text(
+                f"A dropped at {self._fmt_x(self._datum_x)} — scrub the cursor away from it, or "
+                "drag A, to measure the interval")
+            return
+        iv = self._interval(lid, self._datum_x, xb)
+        if iv is None:
+            self._set_datum_text("A dropped — nothing plotted to measure")
+            return
+        unit = units.speed_label(self._speed_unit)
+        dt = "—" if iv.dt is None else f"{iv.dt:.2f} s"
+        dd = "—" if iv.dd is None else f"{iv.dd:,.1f} m"
+        base = DELTA_SHORT_LABELS.get(self._delta_baseline_kind, "Δ")
+        gained = self._fmt_seconds(self._delta_between(lid, iv.x0, iv.x1))
+        if iv.slope is None:
+            got = "" if iv.dt is None else f", got {iv.dt:.2f} s"
+            slope = f"slope — needs ≥ {chart_stats.SLOPE_MIN_INTERVAL_S:.1f} s{got}"
+        else:
+            slope = f"slope {iv.slope:+.2f} {unit}/s"
+        head = f"A→B   Δt {dt}   Δd {dd}   {base} over it {gained}"
+        if 0 <= self._loss_index < len(self._loss_spans):
+            span = self._loss_spans[self._loss_index]
+            head = (f"Δ loss {self._loss_index + 1} of {len(self._loss_spans)} · lap "
+                    f"{lap_label(span.lap_id)} · {span.loss:+.3f} s   {head}")
+        # SLOPE BEFORE MIN/MAX on the second line, because `_fit` drops from the right: the rate of
+        # change is the number the datum gesture exists for (and the one that carries the honesty
+        # note when it is refused), while min and max are context the chart itself already shows.
+        self._set_datum_text(self._fit(self.datum_label, head) + "\n" + self._fit(
+            self.datum_label,
+            f"speed   A {iv.y0:,.1f} → B {iv.y1:,.1f} {unit}   Δ {iv.diff:+,.1f}   {slope}",
+            f"mean {iv.mean:,.1f}   min {iv.minimum:,.1f}   max {iv.maximum:,.1f}"))
 
     # --------------------------------------------------------------- hover dot
     def _hide_hover(self):

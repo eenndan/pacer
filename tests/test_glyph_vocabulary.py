@@ -126,8 +126,10 @@ _EXEMPT = {
      "to read this now take the arrow from CORNER_DIR_ICON. Whether a painted card wants a painted "
      "arrow is share_card.py's decision, and share_card.py is not this PR's file."),
     ("lap_table", "<module>", "⟳", "see the ⟲ entry above — the same constant."),
-    ("coaching_panel", "OpportunitiesPanel.__init__", "▸",
-     "A MENU PATH inside a sentence ('Open Coaching ▸ Opportunities…'), not an affordance. The "
+    ("coaching_panel", "<module>", "▸",
+     "A MENU PATH inside a sentence ('Open Coaching ▸ Opportunities…'), not an affordance — now in "
+     "the module-level `_SCOPE_TOOLTIP` (the header strip's hover, which the live theme is "
+     "prepended to). The "
      "convention is app-wide — app.py alone spells it in ~40 strings — so the connector's face is "
      "one decision for the whole app and it belongs with app.py/theme.py, not with two of forty "
      "sites changed here. Filed as a hand-off (D1-01: UI_FAMILIES names three faces that do not "

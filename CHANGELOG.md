@@ -10,6 +10,54 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **A session record, so comparing two sessions means something.** Each recording can now carry
+  what pacer cannot know: the conditions and temperatures, the tyre set and its age in laps, cold
+  and hot pressures, chassis, gearing, axle, seat and notes — typed by you, never looked up online.
+  A new record opens pre-filled from your last session (the kart did not change overnight) with the
+  tyre laps already advanced, every field optional, and an empty form stored as no record at all.
+  The Library gains sortable **Conditions** and **Tyres** columns beside the lap times, a
+  conditions filter, and a line that says whether the row you are looking at and the row holding
+  the track's best lap were even the same kind of day; the lap panel carries the same in a chip
+  over the times it qualifies. File ▸ Session record….
+- **The charts are an instrument: a datum cursor, window statistics and a tour of your losses.**
+  `D` drops a second cursor and a readout under the charts reports the interval between the two —
+  elapsed time, distance, the speed at each end, their difference, the mean, min, max, the rate of
+  change and the Δ given away across it. A selector beside the x-axis reports each channel's
+  value / min / max / mean / range / delta over whatever x-range is currently visible, following
+  every zoom and pan. `N` jumps to the biggest local loss in the Δ trace, zooms to it and takes the
+  video and the map with it; press again to walk to the next-biggest, and once more to come back
+  out to the whole lap. **The slope is refused rather than guessed** under 1.0 s between the
+  cursors: the GPS is 10 Hz with ±0.62 km/h of speed noise, so a shorter interval reports mostly
+  that noise — 10% of the value at 1.0 s, 20% at 0.5 s, over half of it one sample apart — and the
+  readout says so instead of printing a confident number.
+- **Slow motion.** The video transport has a speed picker (0.25× / 0.5× / 1× / 2×) with `[` and `]`
+  to step it — inputs happen faster than they can be read at real time, which is most of what you
+  open your own footage to look at. The map marker, the chart cursors and the readout stay locked
+  to the frame at every rate (they are driven by the decoder's own reported position, not a clock),
+  and in compare mode both videos take the rate together.
+- **A command palette (⌘K).** Type a few letters and run any of the app's commands: every menu item
+  — with the shortcut it carries and greyed out when it is not available yet — plus the
+  keyboard-only ones the shortcut card documents. The card (`?` / F1) and the palette are now
+  generated from one registry, so they cannot disagree.
+- **Coaching tells "you have not done this yet" from "you did not do it that lap", and abstains
+  when the evidence is thin.** Every corner now says how many of your clean laps already matched
+  your best lap's time through it ("Yes · 9/38" / "Rarely · 2/65"), and the sentence changes with
+  it — repeat what you already drove, or find pace you have not established. A corner whose claim
+  is smaller than its own lap-to-lap spread is no longer ranked at all: it keeps its number, says
+  which test it failed, and drops out of every total (measured on the two D24 recordings, σ was
+  larger than the "time lost" on 17 of the 20 shown rows, up to 10.8× — and 6 of them now abstain,
+  including one that was third on its page). The page and the modal lead with one session theme
+  and at most two actions instead of twelve findings — and say "no single theme" when there
+  is not one.
+- **The Stats page has distributions: where a lap's time actually goes.** A DISTRIBUTIONS group
+  between the SPEED · G peaks and the friction circle draws time at speed and time at lateral g as
+  seconds *per lap*, time-weighted, with your fastest and slowest quartiles laid over the average
+  clean lap. It compares POOLED groups rather than your best lap against your median lap, because
+  the pair was measured and does not separate — on both D24 recordings those two laps differ by no
+  more than two laps picked at random do, while the quartile split clears a shuffled-label null on
+  each. The group states its weighting, each channel's rate and the g-meter's filter on its face;
+  there is no braking-g distribution because that channel separated fastest from slowest the most
+  weakly of the four measured and its shape is largely its own smoother's.
 - **The track map can show where time is going RIGHT HERE, not only how far behind you already
   were.** A new "Δ rate" line channel paints the Δ-vs-best curve's slope — seconds lost per second
   of driving, smoothed over 0.4 s of travel — on a scale centred on zero, so amber means matching

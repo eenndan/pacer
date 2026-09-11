@@ -7,7 +7,7 @@ correlation cannot do — FAILS a mis-scaled or mis-permuted channel.
 
 Why synthetic: the real cross-check runs on the D24 recordings and its measured numbers are in
 the studio/rotation.py module doc (closed-lap rotation 0.983/0.975 x 2*pi measured against
-1.102/1.065 x 2*pi for the app's inferred v*kappa). These tests pin the math itself — the
+1.001/1.001 x 2*pi for the app's inferred dtheta/dt). These tests pin the math itself — the
 gravity permutation, the projection, the closed-loop scale test and the verdict — without a
 12 GB file.
 
@@ -207,10 +207,15 @@ def test_closed_lap_rotation_is_exactly_one_turn():
         c = rotation.compute(gyro, grav, traces).cross
         assert c is not None and c.loop_n == len(traces)
         assert abs(c.loop_ratio_gyro - 1.0) < 0.01, (name, c.loop_ratio_gyro)
-        assert abs(c.loop_ratio_path - 1.0) < 0.05, (name, c.loop_ratio_path)
-        assert c.loop_error_pct < 1.0
+        # The path reference is held to the SAME exactness as the measurement. It used to be
+        # allowed 5x the slack, which is how it went to production 6.5-10 % long on the real
+        # recordings without a synthetic test noticing — the defect is a basis mismatch between
+        # the speed column and the odometer, and this fixture's two agree by construction, so
+        # the teeth for it live in tests/test_corners.py where the disagreement is injected.
+        assert abs(c.loop_ratio_path - 1.0) < 0.01, (name, c.loop_ratio_path)
+        assert c.loop_error_pct < 1.0 and c.path_loop_error_pct < 1.0
         print(f"ok closed lap ({name}): gyro {c.loop_ratio_gyro:.4f} x 2pi, "
-              f"path v*kappa {c.loop_ratio_path:.4f} x 2pi over {c.loop_n} laps")
+              f"path dtheta/dt {c.loop_ratio_path:.4f} x 2pi over {c.loop_n} laps")
 
 
 def test_the_verdict_catches_a_halved_channel_the_correlation_cannot_see():

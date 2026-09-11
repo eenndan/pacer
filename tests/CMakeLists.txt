@@ -962,6 +962,51 @@ add_test(NAME test_chart_axis_legibility
 set_tests_properties(test_chart_axis_legibility PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
+# THE SESSION RECORD (feat/session-record) — studio.session_record + its editor + the two surfaces
+# that read it. The store is the app's most IRREPLACEABLE data: a library row comes back the moment
+# the footage is re-opened, a hand-typed tyre pressure never does, so the persistence half is
+# asserted rather than assumed — corrupt bytes preserved verbatim in the .bak before the first
+# overwrite, a NEWER file's unknown per-record fields surviving a v1 round-trip (this store keeps
+# them where library.py drops them, and the test is why), an older/unstamped file migrated with
+# every record kept, one malformed record dropped and the rest kept, an atomic write leaving no
+# .tmp, and clear / forget / restore each taking their copy first. Then the fast-to-fill half
+# (prefill carries the KART forward and advances the tyre laps, and carries nothing about the day),
+# the comparability verdict, the real form's round-trip, and the record showing up where the
+# comparison happens: the Library's two columns + conditions filter + like-for-like line, and the
+# lap panel header chip — asserted MOUNTED on the real CentralView, not merely constructed. Imports
+# the dialogs -> Qt, so run offscreen; PYTHONPATH because the real-view test reaches studio.session.
+add_test(NAME test_session_record
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_session_record.py)
+set_tests_properties(test_session_record PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# PLAYBACK RATE (slow motion) + the telemetry lock it must not cost (feat/playback-rate). Two
+# halves: the rate itself — one ladder, one rate across the shell, both compare panes seeded and
+# fanned out, and the rate re-applied at a chapter seam (a new media source carries none) — and the
+# LOCK, which is the reason this needed a guard at all. The lock is asserted structurally (no
+# module in the sync path names a rate, swept by AST) and behaviourally (the same media positions
+# produce byte-identical marker / cursor / applied-time state at 0.25x, 1x and 2x, driven through
+# the production signal path on the real CentralView). PACER_NO_MEDIA=1: the real widget tree over
+# an inert media triplet; PYTHONPATH for the cmake-deployed bindings (the CentralView half reaches
+# studio.session).
+add_test(NAME test_playback_rate
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_playback_rate.py)
+set_tests_properties(test_playback_rate PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# COMMAND PALETTE (⌘K) — the anti-drift contract, in the spirit of test_help_dialog's "every live
+# binding has a card row": every menu action must be reachable from the palette, every `run` string
+# in help_dialog.COMMANDS must resolve on a real window, the ? card must be a VIEW of that same
+# registry, and each command's key must read the same on both surfaces. Plus the hazard this
+# feature nearly shipped: a QMenu built by addMenu is Python-owned in this binding and
+# QAction.menu() hands that ownership away, so the obvious menu-bar walk DELETES the menus it
+# descends into — the palette is opened three times and the whole bar re-read. Real offscreen
+# StudioWindow (no session); library + prefs diverted inside the test; PYTHONPATH for the bindings.
+add_test(NAME test_command_palette
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_command_palette.py)
+set_tests_properties(test_command_palette PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
 # THE CAMERA-SUPPORT GUARD: no public document may promise GPS9 true-clock timing to a camera
 # GoPro's own vendored metadata spec (3rdparty/gpmf-parser/README.md) says has no GPS9. Four
 # surfaces said "GPS9 camera (Hero 9 and newer)" when GPS9 means a Hero 11 or a Hero 13 — the
@@ -970,6 +1015,19 @@ set_tests_properties(test_chart_axis_legibility PROPERTIES
 # stands). Pure stdlib text reading — no Qt, no pacer, no telemetry file.
 add_test(NAME test_camera_support
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_camera_support.py)
+
+# THE CHARTS AS AN INSTRUMENT (feat/plots-datum-cursor-and-delta-nav): the datum (second) cursor and
+# its interval statistics, the window statistics tied to the current zoom, and the Δ-loss tour. Two
+# halves: Qt-free `studio/chart_stats.py` over hand-built arrays — including the SLOPE FLOOR
+# reproduced by injecting the D24-measured 0.62 km/h speed noise into synthetic 10 Hz data, where a
+# slope one GPS sample wide is more than half noise and the app refuses to print one — and a real
+# offscreen PlotsView driven through the same public methods the window's D / N shortcuts call,
+# with every readout line measured against the label it has to fit at three panel widths. No
+# telemetry file; needs the shipped theme, so run offscreen.
+add_test(NAME test_chart_instruments
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_instruments.py)
+set_tests_properties(test_chart_instruments PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1")
 
 # THE CHAPTER TIME AXIS: the number the NEXT chapter is placed at (fix/chapter-seam-timeline).
 # `ChapterMap` offsets, the concat span's declared durations, the export's footage bound and the

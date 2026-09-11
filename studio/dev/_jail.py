@@ -53,11 +53,11 @@ def divert_app_support(prefix: str) -> Jail:
     the seam resolve to *now*), not a `__name__ == "<lambda>"` sniff, so it holds for a jail
     installed with a `def`, a `partial` or a `monkeypatch`.
     """
-    from studio import demo, library, prefs, track_db
+    from studio import demo, library, prefs, session_record, track_db
 
     current = library._app_support_dir()
     already_diverted = os.path.abspath(current) != os.path.abspath(_REAL_DIR)
     target = current if already_diverted else tempfile.mkdtemp(prefix=prefix)
-    for _mod in (demo, library, prefs, track_db):
+    for _mod in (demo, library, prefs, session_record, track_db):
         _mod._app_support_dir = lambda t=target: t  # type: ignore[attr-defined]
     return Jail(target, not already_diverted)

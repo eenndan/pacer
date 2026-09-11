@@ -22,9 +22,9 @@ the number a ROAD-plane yaw rate rather than a camera-axis one: it is independen
 camera is tilted on its mount.
 
   * The permutation is load-bearing and fails QUIETLY. Projecting on the UNPERMUTED GRAV still
-    produces a corner-shaped signal — r=+0.65/+0.62 against the GPS path, gain 0.32/0.30 — which
+    produces a corner-shaped signal — r=+0.65/+0.62 against the GPS path, gain 0.35/0.32 — which
     reads as a working channel with a scale problem rather than a wrong axis. Permuted it is
-    r=+0.87/+0.85, gain 0.83/0.87. Only the closed-loop test below makes the difference
+    r=+0.87/+0.85, gain 0.89/0.92. Only the closed-loop test below makes the difference
     unmistakable: the un-permuted channel integrates to -0.48/-0.44 x 2*pi per lap.
   * The sign is empirical, not assumed: `+ = left` was resolved by measuring against the path's
     signed curvature (which is also + = left), not by asserting a handedness for the GoPro frame.
@@ -49,24 +49,35 @@ GPS/IMU clocks differ by ~0.4 s (below), which drops corner-magnitude samples in
 
 THE CROSS-CHECK, and why it has a headline number a correlation cannot give
 --------------------------------------------------------------------------
-The natural comparison is the path-derived rate `v * kappa`, and `RotationCheck` reports its
-correlation and its gain (the regression slope — Pearson r is scale-blind, and this repo has
-shipped a channel that tracked perfectly and read half). But BOTH of those describe a comparison
-between two estimates, neither of which is truth.
+The natural comparison is the path-derived rate, and `RotationCheck` reports its correlation and
+its gain (the regression slope — Pearson r is scale-blind, and this repo has shipped a channel
+that tracked perfectly and read half). But BOTH of those describe a comparison between two
+estimates, neither of which is truth.
 
 A lap does have a truth: it is a closed loop, so the total heading change over one lap is exactly
 2*pi, whatever the racing line and whatever the smoothing. `loop_ratio_gyro` is the median of
 (integral of yaw_rate dt) / 2*pi over the laps, and `loop_ratio_path` is the same integral of the
-app's own `v * kappa`. That turns "is this channel correctly scaled?" into a question with an
-exact answer. Measured on the two D24 recordings (38 and 65 clean laps):
+app's own path-derived rate. That turns "is this channel correctly scaled?" into a question with
+an exact answer. Measured on the two D24 recordings (38 and 65 clean laps):
 
-    integral of gyro dt   0.983 / 0.975 x 2*pi     <- the measured channel
-    path heading change   1.000 / 1.000 x 2*pi     <- the geometry, as a control
-    integral of v*kappa   1.102 / 1.065 x 2*pi     <- the app's existing inferred channel
+    integral of gyro dt            0.983 / 0.975 x 2*pi   <- the measured channel
+    path heading change            1.000 / 1.000 x 2*pi   <- the geometry, as a control
+    integral of dtheta/dt dt       1.001 / 1.001 x 2*pi   <- the inferred channel
 
-So the gyro is within 1.7-2.5 % of exact, and `v * kappa` OVER-READS total rotation by 6.5-10 %.
-That is most of the ~0.87 regression gain between them: the deficit is in the reference, not in
-the measurement. It is also the reason `ok` keys off the loop ratio and not off the gain.
+So the gyro is within 1.7-2.5 % of exact: the remaining ~0.89/0.92 regression gain between the
+two is the sensor's, not the reference's. It is also the reason `ok` keys off the loop ratio and
+not off the gain.
+
+WHAT THIS TEST CAUGHT FIRST. When this channel landed, the path reference here was `v * kappa`
+and it read 1.102 / 1.065 x 2*pi — a 6.5-10 % over-read that neither the correlation (+0.87) nor
+the control (1.000) could have located, and which was written up as a property of the inferred
+channel. It was a unit error. kappa is dtheta/ds against the lap's own odometer, and `v` is the
+GPS Doppler speed — a different measure of distance — so the product was the lap's rotation
+times the ratio between them. The reference is now `corners.lap_yaw_rate` (kappa on the trace's
+OWN ds/dt) and the whole excess goes away; that function carries the measured budget. What it
+cost to mistake the reference for the measurement: this module's first reading of the gyro's
+scale was 0.83/0.87 where the honest one is 0.89/0.92, and a defect in the app's own geometry
+was written down as a property of the sensor.
 
 Known and NOT corrected here: the GYRO series leads the GPS trace by ~0.35-0.40 s (a lag sweep
 peaks there on both recordings, lifting r from 0.836 to 0.877 and 0.808 to 0.837). Corner-scale
@@ -82,13 +93,13 @@ from dataclasses import dataclass
 import numpy as np
 
 from ._signal import boxcar
-from .corners import derive_threshold, lap_curvature
+from .corners import derive_threshold, lap_curvature, lap_yaw_rate
 from .gmeter import GRAV_PERM
 
 # Pre-output low-pass (s). The gyro is a 200 Hz sensor on a vibrating kart mount; the rotation a
 # driver can act on is corner-scale. Chosen by sweeping the window and watching BOTH statistics:
-# 0.15 -> 0.30 s lifts the correlation with the path from 0.836/0.808 to 0.867/0.847 while the
-# gain moves 0.833 -> 0.832 and 0.872 -> 0.871. That is the check that matters — smoothing which
+# 0.15 -> 0.30 s lifts the correlation with the path from 0.837/0.808 to 0.869/0.847 while the
+# gain moves 0.894 -> 0.893 and 0.922 -> 0.921. That is the check that matters — smoothing which
 # bought agreement by shrinking the signal would show up as a falling gain, and this does not.
 LOWPASS_S = 0.30
 
@@ -96,7 +107,7 @@ LOWPASS_S = 0.30
 # GPS and IMU clocks differ by ~0.35-0.40 s (module doc), so a mask taken from the GPS trace and
 # applied to the gyro leaks corner-magnitude samples into the straights: eroding by half a second
 # cuts the straights' gyro RMS from 0.313 to 0.237 rad/s on the D24 0060 pair and lifts the
-# corner correlation from 0.904 to 0.944 (0.913 to 0.959 on 0062). It removes ~30 % of the
+# corner correlation from 0.905 to 0.946 (0.913 to 0.959 on 0062). It removes ~30 % of the
 # samples and no signal — the closed-loop ratios, which use every sample, do not move.
 GUARD_S = 0.5
 
@@ -104,7 +115,7 @@ _MIN_LAP_SAMPLES = 16       # a lap trace shorter than this cannot carry a curva
 _TWO_PI = 2.0 * np.pi
 
 # --- the TRUST VERDICT ---------------------------------------------------------------------
-# Shape: the channel must track the path through the corners. Measured 0.944 / 0.959 on the
+# Shape: the channel must track the path through the corners. Measured 0.946 / 0.959 on the
 # guard-eroded corners of the two D24 recordings, so a floor of 0.6 is generous — but it is the
 # only thing standing between a helmet-cam's vibration-dominated stream and a "measured" label,
 # and a dead stream scores 0 outright.
@@ -113,22 +124,23 @@ _CORR_MIN = 0.6
 # measured medians are 0.983 and 0.975, with per-lap spreads of [0.945, 1.036] and [0.947, 0.997].
 # A +-10 % band on the MEDIAN clears both comfortably while a x0.5 mis-scale lands at 0.49 — and
 # THAT is the case the correlation cannot see: halving the gyro leaves the corner r bit-identical
-# at +0.944 (measured), so without this ratio the verdict would pass a channel reading half.
+# at +0.946 (measured), so without this ratio the verdict would pass a channel reading half.
 # A wrong gravity permutation lands at -0.48 / -0.44 on those recordings, failing on sign too.
 _LOOP_MIN, _LOOP_MAX = 0.90, 1.10
 
 
 @dataclass
 class RotationCheck:
-    """Measured gyro yaw rate vs the app's path-derived `v * kappa`, over the clean laps.
+    """Measured gyro yaw rate vs the app's path-derived rate (`corners.lap_yaw_rate`), over the
+    clean laps.
 
     `corr`/`gain` describe two estimates against each other; `loop_ratio_gyro` /
     `loop_ratio_path` compare each of them against a lap's exact 2*pi of heading change, which is
     the only number here with a ground truth. See the module doc."""
 
     n: int                       # samples compared
-    corr: float                  # Pearson r, gyro vs v*kappa
-    gain: float                  # regression slope: gyro = gain * (v*kappa)
+    corr: float                  # Pearson r, gyro vs the path rate
+    gain: float                  # regression slope: gyro = gain * path_rate
     corner_n: int
     corner_corr: float
     corner_gain: float
@@ -138,7 +150,7 @@ class RotationCheck:
     straight_mean_gyro: float    # rad/s — the closest thing to an observable yaw bias
     loop_n: int                  # laps whose closed-loop integral was measurable
     loop_ratio_gyro: float       # median (integral yaw_rate dt) / 2*pi over those laps; 1 = exact
-    loop_ratio_path: float       # the same for the app's v*kappa channel
+    loop_ratio_path: float       # the same for the app's path-derived dtheta/dt channel
     ok: bool
 
     @property
@@ -148,14 +160,16 @@ class RotationCheck:
 
     @property
     def path_loop_error_pct(self) -> float:
-        """The same for `v * kappa` — reported beside it because on both D24 recordings the
-        inferred channel is the one further from truth, which is the whole point of measuring."""
+        """The same for the inferred channel — reported beside it because it is the reference the
+        gain is measured against, and a reference that has drifted off its own exact target is
+        not one a scale verdict can be read from. It was 6.5-10 % off until the basis fix the
+        module doc describes; on both D24 recordings it is now 0.1 %."""
         return abs(self.loop_ratio_path - 1.0) * 100.0
 
     def summary(self) -> str:
         verdict = "AGREE" if self.ok else "DISAGREE"
         return (f"rotation cross-check [{verdict}] over {self.n} samples: "
-                f"r={self.corr:+.2f} vs path v*kappa (gain x{self.gain:.2f}); "
+                f"r={self.corr:+.2f} vs path dtheta/dt (gain x{self.gain:.2f}); "
                 f"corners r={self.corner_corr:+.2f} gain x{self.corner_gain:.2f}; "
                 f"straights rms {self.straight_rms_gyro:.2f} vs {self.straight_rms_path:.2f} "
                 f"rad/s; closed-lap rotation {self.loop_ratio_gyro:.3f}x2pi measured vs "
@@ -259,11 +273,16 @@ def yaw_rate_series(gyro, grav, lowpass_s: float = LOWPASS_S):
 
 
 def _path_reference(lap_traces):
-    """Per-lap path-derived rotation: -> (times, v*kappa, kappa, lap_slices).
+    """Per-lap path-derived rotation: -> (times, dtheta/dt, kappa, lap_slices).
 
     `lap_traces` is an iterable of `(times, xs, ys, speed_mps, cum_distances)` — exactly the tuple
     `Session._lap_columns` yields for one lap. Stationary duplicate odometer samples are dropped
     first because `lap_curvature` requires a strictly increasing arc length.
+
+    The rate is `corners.lap_yaw_rate` — kappa on the trace's OWN speed ds/dt. The speed_mps
+    column is deliberately NOT used: it is the GPS Doppler speed, a different measure of distance
+    from the odometer kappa is differentiated against, and mixing the two is what made this
+    reference over-read a lap's rotation by 6.5-10 % (see that function, and the module doc).
 
     The laps come back as index SLICES into the concatenated arrays, not as time bounds: a
     materialized lap ends on the interpolated finish-line crossing and the next begins on the same
@@ -272,18 +291,19 @@ def _path_reference(lap_traces):
     for cols in lap_traces:
         t, x, y, v, d = (np.asarray(c, float) for c in cols)
         n = min(len(t), len(x), len(y), len(v), len(d))
-        t, x, y, v, d = t[:n], x[:n], y[:n], v[:n], d[:n]
+        t, x, y, d = t[:n], x[:n], y[:n], d[:n]
         if n < _MIN_LAP_SAMPLES:
             continue
         keep = np.concatenate(([True], np.diff(d) > 1e-9))
-        t, x, y, v, d = t[keep], x[keep], y[keep], v[keep], d[keep]
+        t, x, y, d = t[keep], x[keep], y[keep], d[keep]
         if len(d) < _MIN_LAP_SAMPLES or d[-1] <= 0:
             continue
         k = lap_curvature(x, y, d)
-        if not np.all(np.isfinite(k)):
+        w = lap_yaw_rate(x, y, d, t, kappa=k)
+        if not (np.all(np.isfinite(k)) and np.all(np.isfinite(w))):
             continue
         ts.append(t)
-        ws.append(v * k)
+        ws.append(w)
         ks.append(k)
         lengths.append(len(t))
     if not ts:

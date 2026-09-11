@@ -59,10 +59,15 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 #     here for the same reason `app` is, and it made this set BIGGER by one only because a chunk of
 #     `app` moved out — nothing gained a Qt import that did not already have one.
 # `theme` and `widgets` are the shared Qt style/primitive layer every view sits on.
+#   * session_record_dialog — the session-record editor (the form for conditions / tyres / setup).
+#     A dialog like `library_dialog` and by the same test: it builds widgets and opens a confirm.
+#     Its STORE, `session_record`, is Qt-free persistence and is deliberately absent from this set.
 ALLOWED_QT = {
-    "app", "central_view", "coaching_panel", "export_controller", "export_video", "gmeter_overlay",
-    "help_dialog", "lap_table", "library_dialog", "map_view", "overlays", "player_pane",
-    "plots_view", "share_card", "stats_panel", "theme", "video_view", "widgets", "workers",
+    "app", "central_view", "coaching_panel", "command_palette", "export_controller",
+    "export_video", "gmeter_overlay", "help_dialog", "lap_table", "library_dialog", "map_view",
+    "overlays", "player_pane", "plots_view", "session_record_dialog", "share_card",
+    "stats_panel", "theme", "video_view",
+    "widgets", "workers",
 }
 
 # Every module from which Qt is REACHABLE through studio's own import graph = ALLOWED_QT plus the

@@ -655,6 +655,27 @@ def prior_best(index: dict, track: str) -> float | None:
     return min(bests) if bests else None
 
 
+def best_entry(index: dict, track: str) -> dict | None:
+    """The ENTRY holding `track`'s fastest trustworthy best lap, or None when it has none.
+
+    ``prior_best`` answers "what is the bar?" with a number; this answers "which session set it?"
+    with the row, and the row is what carries an identity. That identity is what a caller needs to
+    reach anything stored ALONGSIDE the index under the same fingerprint — the session record
+    (``studio/session_record.py``: conditions, tyres, setup) being the first such thing, so the
+    Library can say whether the row you are looking at and the row that holds the PB were even
+    comparable. Ties go to the EARLIEST date (then the first row), so the answer is stable across
+    re-renders rather than dependent on index order.
+
+    Uses the same trustworthy subset as ``prior_best`` / ``pb_series``: a provisional, degraded or
+    dropout "best" is not the track's best and must not be what another session is measured
+    against."""
+    candidates = [e for e in index.get("entries", [])
+                  if e.get("track") == track and e.get("best") is not None and is_trustworthy(e)]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda e: (float(e["best"]), e.get("date") or ""))
+
+
 def pb_series(index: dict, track: str) -> list[tuple[str, float]]:
     """The PB-progression series for one `track`: ``[(date, best), ...]`` over every TRUSTWORTHY
     entry of that track that has BOTH a date and a best lap, sorted ascending by date (then by best,
