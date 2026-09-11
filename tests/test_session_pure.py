@@ -754,7 +754,7 @@ def test_ideal_is_strictly_faster_than_the_best_lap():
     for lid, laptime in times.items():
         assert ideal < laptime - 1e-9, (lid, ideal, laptime)
     # And it is not a rounding-level difference: the crossing-pace fixture leaves real time on
-    # the table, exactly as the real recordings do (0.22 s … 1.64 s there).
+    # the table, exactly as the real recordings do (0.21 s … 1.42 s there).
     assert min(times.values()) - ideal > 1e-3, (ideal, times)
     print("test_ideal_is_strictly_faster_than_the_best_lap OK")
 
@@ -1160,10 +1160,10 @@ def test_the_ideal_falls_as_laps_are_added_which_is_why_the_sample_is_on_screen(
     one can only make it faster. A "theoretical best" is therefore partly a measure of how long
     the session was, and the number on its own is not comparable between sessions.
 
-    Measured on the owner's five recordings over random subsets of the clean laps (200 draws per
-    N), `ideal_total` falls 0.068 / 0.174 / 0.194 / 0.241 / 0.384 s per DOUBLING of lap count with
-    no plateau — on D24's three chapters the same driving reads a 0.90 s gap over 5 laps and a
-    1.64 s gap over 65. That table is in corner_model.IdealSample; this is the property it rests
+    Measured on the owner's five recordings over random subsets of the clean laps (20,000 draws
+    per N), `ideal_total` falls 0.074 / 0.248 / 0.268 / 0.324 / 0.334 s per DOUBLING of lap count
+    with no plateau — on D24's three chapters the same driving reads a 0.84 s gap over 5 laps and
+    a 1.42 s gap over 65. That table is in corner_model.IdealSample; this is the property it rests
     on, in a form that fails if the composite ever stops being a minimum.
 
     Every proper subset here is checked, not one sample: with three crossing-pace laps that is all

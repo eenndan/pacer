@@ -100,7 +100,7 @@ _HERO_PAD_PX = 20   # the QSS's `#DiffBox { padding: 2px 8px }` (16) + a roundin
 # flag is identically the best lap time, so the app's largest number was a structural null in the
 # state the app always opens in (D4-08). The ideal is now the corner/straight partition composite,
 # which is strictly faster than any single lap, so that note is gone: on the DEFAULT selection (the
-# session best) the hero sweeps 0.00 → +0.94 s on D24 one chapter, +1.64 s on three, +1.14 s on
+# session best) the hero sweeps 0.00 → +0.94 s on D24 one chapter, +1.42 s on three, +1.14 s on
 # Sandown — measured at 25 ms of media clock across the whole lap. There is nothing left to excuse.
 #
 # The OTHER reference still needs its note, and that one is not a defect: Δ-to-best on the best lap
@@ -130,8 +130,8 @@ _IDEAL_CHIP_TIP = (
 #
 # The hero is the app's largest text and the only ideal surface with no prose beside it, so a
 # reader who never opens Stats meets Δideal here and nowhere else. The number is an order
-# statistic: on D24's three chapters the same driving reads a 0.90 s gap over 5 laps and a 1.64 s
-# gap over 65 (random subsets, 200 draws per N), and the corner count it is partitioned by moves
+# statistic: on D24's three chapters the same driving reads a 0.84 s gap over 5 laps and a 1.42 s
+# gap over 65 (random subsets, 20,000 draws per N), and the corner count it is partitioned by moves
 # 11↔12 with the start/finish line. Stats says so under its tiles; here it goes on the chip's
 # hover, which is where the reference is chosen.
 #
@@ -141,7 +141,7 @@ _IDEAL_CHIP_TIP = (
 _IDEAL_CHIP_SAMPLE = (
     "\n\nOn this recording it is stitched from {donors} of your {laps} clean laps across "
     "{corners} corners. It is a minimum over those laps, so it falls as you record more of them "
-    "(0.07–0.38 s per doubling of lap count, measured) and moves when dragging the start/finish "
+    "(0.07–0.33 s per doubling of lap count, measured) and moves when dragging the start/finish "
     "line changes which corners pacer finds. The Stats page prints both counts under it.")
 
 # THE SIXTH SURFACE. #211 gave the Δ chart, the `Ideal lap` toggle, the Stats IDEAL LAP block, the

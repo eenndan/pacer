@@ -13,7 +13,7 @@ study: what it claims, how each claim was measured, and the gates that keep it t
 the only distribution** — no download, no `.dmg`, no signed build (see [Non-goals](#non-goals)).
 Building it is one command; reading it is the other intended use.
 
-<img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on a real kart session: synced GoPro video, the speed-coloured track map with brake points and named corners, the Δ-to-ideal charts, and the Laps · Corners · Stats · Coaching panel">
+<img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on a real kart session: synced GoPro video, the speed-coloured track map with brake points and named corners, the Δ-to-ideal charts, and the Laps · Corners · Stats · Coaching · Marks panel">
 
 ---
 
@@ -70,7 +70,7 @@ of your clean laps have already matched it, and which lap set the mark. The gain
 headline. It is an *order statistic*, so it falls as a session gets longer — the app says how many
 laps it was minimised over rather than letting you read it as a floor.
 
-<img src="docs/media/ideal-lap.png" width="610" alt="Stats ▸ IDEAL LAP: 1:06.563 theoretical best over 65 laps, −1.64 s on the table vs your best, stitched from 18 of your 65 clean laps across 12 corners and 13 straights, with a per-segment gain table whose ten rows hold 1.40 s of the 1.64 s">
+<img src="docs/media/ideal-lap.png" width="610" alt="Stats ▸ IDEAL LAP: 1:06.781 theoretical best over 65 laps, −1.42 s on the table vs your best, stitched from 18 of your 65 clean laps across 12 corners and 13 straights, with a per-segment gain table whose nine rows hold 1.16 s of the 1.42 s">
 
 **A racing line that is a data channel.** Colour it by speed, Δ to best, grip or elevation. Brake
 points, corner apexes and draggable start/sector lines sit on it, and every mark is named in the
@@ -156,7 +156,7 @@ than it is. So that is a rule with an owner in the code:
   the UI does; the card refuses on provisional timing and the video warns before it burns a number
   into a file someone else will see.
 - **the ideal lap discloses its sample**, because a sum of per-segment minima falls the longer you
-  stay out. Same driving, same recording: 67.957 s over 5 laps, 66.563 s over 65.
+  stay out. Same driving, same recording: 68.016 s over 5 laps, 66.781 s over 65.
 - **DATA TRUST** puts the accuracy story inside the product, not only on this page.
 - **a citable marker vocabulary on the way out.** In the app a caveat has hover, colour and weight
   to carry it, so pacer keeps its own marks — `(est)`, the muted provisional demotion, ⚠, ⊘. An

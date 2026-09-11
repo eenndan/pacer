@@ -2904,7 +2904,7 @@ class Session:
 
         IT IS A FUNCTION OF HOW MANY LAPS YOU RECORDED, and a surface that prints it without
         `ideal_sample()` is inviting the reader to compare two numbers that are not comparable.
-        Measured over random subsets of the clean laps it falls 0.07 … 0.38 s per DOUBLING of lap
+        Measured over random subsets of the clean laps it falls 0.07 … 0.33 s per DOUBLING of lap
         count on the owner's five recordings, with no plateau; the full table, the best-lap
         control and the partition sensitivity are in `corner_model.IdealSample`."""
         sb = self.ideal_segment_bests()
@@ -2937,7 +2937,7 @@ class Session:
         was one of the candidates). Between edges the ideal follows its DONOR's pace while the
         best lap follows its own, so dy can rise fractionally above 0 mid-segment where the best
         lap's line differs from the donor's through the same corner. Measured across the real
-        recordings the largest such excursion is +0.019 s, against end values of −0.22 … −1.64 s.
+        recordings the largest such excursion is +0.019 s, against end values of −0.21 … −1.42 s.
 
         This shares the existing best-lap delta's reference frame (best lap = the y=0 line), so the
         ideal reads as a secondary curve dipping below zero — "you could be THIS much faster, and

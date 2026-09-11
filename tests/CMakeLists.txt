@@ -336,7 +336,7 @@ add_test(NAME test_export_data
 # every in-app surface follows: the share card printed "+4.56 s vs your ideal lap" with no lap
 # count and the laps.csv trailer printed "Theoretical best,62.869" bare, while the Stats tile the
 # number comes from is captioned `theoretical best · 24 laps` — and the ideal is an order statistic
-# that moves 67.957 -> 66.563 s between 5 and 65 laps of the SAME DRIVING. So this asserts the
+# that moves 68.016 -> 66.781 s between 5 and 65 laps of the SAME DRIVING. So this asserts the
 # exported TEXT against `theoretical_best()` / `ideal_sample()` directly (not "looks similar") on
 # the CSV, the HTML report, the clipboard summary and the card at once, plus every value
 # `stats_summary` publishes against the accessor the Stats page reads — "the report cannot drift
@@ -1037,6 +1037,22 @@ set_tests_properties(test_command_palette PROPERTIES
 # stands). Pure stdlib text reading — no Qt, no pacer, no telemetry file.
 add_test(NAME test_camera_support
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_camera_support.py)
+
+# THE IDEAL-LAP SAMPLE TABLE, which is a published measurement and had nothing checking it. #228
+# moved the app's ideal on D24's three chapters by +0.218 s and the table in
+# corner_model.IdealSample — plus the README, both Stats tooltips, the hero chip, two Library
+# hovers, Session.ideal_total, the laps.csv writer and the landing page's screenshot — all went on
+# quoting the old value. Three checks: the table falls monotonically (the "no floor it settles on"
+# claim the shipping tooltips make), its rate column is recomputed from its own endpoint cells, and
+# every sentence in the tree saying "per doubling of lap count" — found BY SEARCH over git
+# ls-files, so the twelfth surface cannot be forgotten — quotes a rate this table publishes. A
+# fourth, opt-in, loads a real recording named by PACER_IDEAL_TABLE_MP4 (comma-separated chapters)
+# and asserts the row's `all` cell IS Session.ideal_total(); it prints SKIP without the footage,
+# which is why the first three read text and cost nothing. PYTHONPATH for that opt-in half.
+add_test(NAME test_ideal_sample_table
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ideal_sample_table.py)
+set_tests_properties(test_ideal_sample_table PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
 # THE CHARTS AS AN INSTRUMENT (feat/plots-datum-cursor-and-delta-nav): the datum (second) cursor and
 # its interval statistics, the window statistics tied to the current zoom, and the Δ-loss tour. Two

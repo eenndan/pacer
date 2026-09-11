@@ -290,6 +290,19 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Engineering
 
+- **The ideal lap's published sample table was re-measured, and a guard now holds it to the app.**
+  Fixing the boundary projection moved the ideal on D24's three chapters from 66.563 s to 66.781,
+  and the measured table in `corner_model.IdealSample` — plus the README, both Stats tooltips, the
+  hero chip, two Library hovers, the CSV writer and the landing page's screenshot — went on
+  quoting the old number. All five recordings were measured again (20,000 subsets per lap count,
+  the method now stated), the headline gap on that recording is −1.42 s rather than −1.64, and two
+  claims the table carried did not survive: the per-doubling decrement **shrinks** slowly with lap
+  count rather than growing, and the best lap is the less sample-dependent of the two columns on
+  all five recordings rather than the more on two of them. The screenshots on the README and the
+  landing page were regenerated from the recording they claim to show.
+  `tests/test_ideal_sample_table.py` recomputes the table's own arithmetic, checks every sentence
+  in the tree that quotes it (found by search, not by a list), and — when pointed at real footage
+  through `PACER_IDEAL_TABLE_MP4` — asserts the published number IS `Session.ideal_total()`.
 - The visual-QA harnesses jail every app-support seam, not just the library: `ui_capture` read the
   operator's preferences (all six shots differed operator to operator) and `media_capture` *wrote*
   one. `studio/dev/_jail.py` is the single seam list, pinned by `test_golden_hermetic`.

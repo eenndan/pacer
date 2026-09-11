@@ -68,7 +68,7 @@ class SummaryRow(NamedTuple):
     §5.4 — the trailer printed "Theoretical best,62.869" bare, while every in-app surface showing
     that same number captions it `theoretical best · N laps`. The ideal is a minimum over the
     session's clean laps, so the count is not decoration: on the owner's D24 three-chapter
-    recording the same driving reads 67.957 s over 5 laps and 66.563 s over 65
+    recording the same driving reads 68.016 s over 5 laps and 66.781 s over 65
     (`corner_model.IdealSample`). A CSV row stating the second without the "65" invites a
     comparison against the first that the number cannot support.
 
@@ -271,7 +271,7 @@ def laps_summary(session) -> list[SummaryRow]:
     degenerate condition: not None means ONE lap won every segment, so the "ideal" is that lap and
     printing it beside the lap rows is a bare duplicate. The old gate is not merely stale, it was
     inverted on the recordings that matter — D24 and Sandown both have ZERO sector lines, so the
-    export dropped the row on exactly the sessions where the ideal is now 0.94–1.64 s faster than
+    export dropped the row on exactly the sessions where the ideal is now 0.94–1.42 s faster than
     anything driven. (The Stats tile carries the twin of this gate.)"""
     degenerate = session.ideal_donor_lap_id() is not None
     sample = _ideal_sample(session)
