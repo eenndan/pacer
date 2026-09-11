@@ -843,7 +843,10 @@ def test_the_table_shows_the_sample_its_two_time_columns_are_minima_over():
     dlg = LibraryDialog(idx, _OpenSpy())
     t = dlg.table
     assert _HEADERS[_COL_LAPS] == "Laps", _HEADERS
-    assert t.columnCount() == len(_HEADERS) == 5
+    # 7 since the session record landed: the five time/identity columns plus Conditions and Tyres,
+    # which say whether two rows of the two time columns are comparable at all
+    # (tests/test_session_record.py owns those two; this file owns the five below them).
+    assert t.columnCount() == len(_HEADERS) == 7
 
     short = _row_with_date(dlg, "2026-05-09")
     long_ = _row_with_date(dlg, "2026-05-10")
@@ -2107,7 +2110,10 @@ def test_dialog_never_reopens_too_small_to_show_the_list():
         # clamp is _fit_to_screen's job and has its own test), so only assert where there is room.
         avail = QGuiApplication.primaryScreen().availableGeometry()
         room = _fit_to_screen(again.width(), 10_000, avail.width(), avail.height())[1]
-        if room >= 700:
+        # READ FROM THE CONSTANT, not from a literal beside it: this guard asks "did the screen
+        # grant the floor?", and a hard-coded 700 answered yes for a 710 px floor on a screen that
+        # had not — asserting the floor's guarantee where the floor was never applied.
+        if room >= _MIN_BROWSABLE_H:
             assert _rows_visible(again) >= 5, (
                 f"re-opened at {again.width()}x{again.height()} showing "
                 f"{_rows_visible(again):.2f} rows of the library — a size remembered from one "
@@ -2172,7 +2178,7 @@ def test_the_browsable_height_floor_still_gets_the_width_it_assumes():
         _settle()
         avail = QGuiApplication.primaryScreen().availableGeometry()
         room = _fit_to_screen(again.width(), 10_000, avail.width(), avail.height())[1]
-        if room >= 700:                              # a screen too small to grant it is its call
+        if room >= _MIN_BROWSABLE_H:                 # a screen too small to grant it is its call
             assert _rows_visible(again) >= 5, (
                 f"re-opened at {again.width()}x{again.height()} showing "
                 f"{_rows_visible(again):.2f} rows — the drag a user can actually perform still "

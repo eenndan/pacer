@@ -140,6 +140,14 @@ COMMANDS: list[Command] = [
             "Fix lap timing on the map (key for unknown tracks)"),
     Command("Analysis", "G", "Toggle the g-meter overlay", run="toggle_gmeter"),
     Command("Analysis", "C", "Toggle compare mode (two laps side by side)", run="toggle_compare"),
+    # The charts' two instrument gestures. Both are named commands rather than lambdas for the same
+    # reason every row here is: the palette has to be able to invoke what the key binds.
+    Command("Analysis", "D",
+            "Drop / clear the chart datum cursor (measures the interval between the cursors)",
+            run="toggle_datum"),
+    Command("Analysis", "N",
+            "Jump to the next-biggest Δ loss (again to walk on, then back to the whole lap)",
+            run="jump_to_next_loss"),
     # The four lap-panel tabs were ONE row — "1 · 2 · 3 · 4 → Lap-panel tabs: Laps · Corners ·
     # Stats · Coaching" — which is good card copy and a bad registry entry: one row cannot carry
     # four targets, and a palette that cannot offer "Coaching" by name is not a palette. Four rows

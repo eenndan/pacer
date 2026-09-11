@@ -55,6 +55,7 @@ from . import (
     demo,
     library,
     prefs,
+    session_record,
     share_card,
     sidecar,
     theme,
@@ -81,6 +82,7 @@ from .overlays import (
     welcome_card_width,
 )
 from .session import DEFAULT_SAMPLE, fmt_time
+from .session_record_dialog import SessionRecordDialog
 from .widgets import chip, set_tone
 from .workers import DemoResolveWorker, SessionLoadWorker
 
@@ -1668,6 +1670,10 @@ class StudioWindow(QMainWindow):
             self._ref_chip.setVisible(False)
             self._ref_chip_mounted = False
         self._update_reference_status()
+        # The lap panel's session-record chip: the conditions + tyres this recording was written
+        # up with, over the lap times they qualify. Every load, because the view is rebuilt per
+        # load and the chip belongs to the view.
+        self._update_record_chip()
 
     def _build_ui_guarded(self, stage: str) -> Exception | None:
         """_build_ui with the ONE guarantee the loading card needs: a raise cannot strand the window
@@ -1870,9 +1876,25 @@ class StudioWindow(QMainWindow):
         # label is a machine-readable contract (export_data.SUMMARY_ROWS), not a widget.
         # test_app_chrome reads library_dialog._HEADERS, so this string cannot drift again.
         self._library_action.setToolTip(
-            "Browse your analyzed recordings (date / track / laps / best lap / ideal lap), "
-            "re-open any of them, and see per-track PB progression")
+            "Browse your analyzed recordings (date / track / laps / best lap / ideal lap / "
+            "conditions / tyres), re-open any of them, and see per-track PB progression")
         self._library_action.triggered.connect(self._open_library)
+        # THE OTHER HALF OF THE LIBRARY: what the app cannot know about a session. The index holds
+        # the result (track, date, laps, best); this holds the conditions it was set in and the
+        # kart it was set on, typed by the driver — the thing that decides whether two rows of that
+        # index are comparable at all. Dormant until a session is loaded (there is nothing to write
+        # up before that), synced in _sync_export_menu with the other session-scoped items.
+        self._record_action = menu.addAction("Session record…")
+        self._record_action.setToolTip(
+            "Write up this session: conditions, tyres and kart setup. Two sessions' lap times are "
+            "only comparable if these were — and pacer never looks the weather up, so nothing "
+            "leaves this Mac")
+        self._record_action.triggered.connect(self._edit_current_record)
+        self._record_action.setEnabled(False)  # no session yet at construction time
+        # Gated as the menu opens, beside the export cluster's own sync. It is NOT part of that
+        # cluster (nothing here leaves the app), so it gets its own one-line sync rather than a
+        # clause inside ExportController.sync_menu.
+        menu.aboutToShow.connect(self._sync_record_action)
         # Data portability: reveal the app-support folder that holds library.json (so the durable
         # index is findable), and back it up to a chosen file — turning it from an unrecoverable
         # blob into something the user can copy/restore. (Also surfaced in the Library dialog.)
@@ -2169,12 +2191,12 @@ class StudioWindow(QMainWindow):
     # ----------------------------------------------------- keyboard shortcuts
     def _build_shortcuts(self):
         """Window-level playback shortcuts: Space (play/pause), M (mute), G (g-meter overlay),
-        C (compare mode), [ / ] (playback rate). Parented to the window so they survive every view
-        swap; every handler is one of the NAMED command methods below, which is what lets the ⌘K
-        palette and the ? card offer the same commands this binds (help_dialog.COMMANDS carries the
-        method name). G / C go through the button's click() so a disabled button makes its shortcut
-        a no-op. ←/→ stepping is handled in keyPressEvent, not here, so the lap table keeps its
-        arrow navigation."""
+        C (compare mode), [ / ] (playback rate), D (chart datum cursor), N (walk the Δ losses).
+        Parented to the window so they survive every view swap; every handler is one of the NAMED
+        command methods below, which is what lets the ⌘K palette and the ? card offer the same
+        commands this binds (help_dialog.COMMANDS carries the method name). G / C go through the
+        button's click() so a disabled button makes its shortcut a no-op. ←/→ stepping is handled
+        in keyPressEvent, not here, so the lap table keeps its arrow navigation."""
         def shortcut(key, handler):
             sc = QShortcut(QKeySequence(key), self)
             sc.setContext(Qt.WindowShortcut)
@@ -2188,6 +2210,11 @@ class StudioWindow(QMainWindow):
         # unclaimed here; the picker in the transport is the same control with a visible state.
         shortcut(Qt.Key_BracketLeft, self.slower_playback)
         shortcut(Qt.Key_BracketRight, self.faster_playback)
+        # D / N → the charts' two instrument gestures: drop-or-clear the datum (second) cursor, and
+        # walk the biggest Δ losses of the lap. Both live on the charts because that is what they
+        # measure; both are window-level because that is where every other gesture here is.
+        shortcut(Qt.Key_D, self.toggle_datum)
+        shortcut(Qt.Key_N, self.jump_to_next_loss)
         # 1-4 → the lap panel's tabs (Laps · Corners · Stats · Coaching); no-op before a load.
         for digit, handler in ((Qt.Key_1, self.show_laps_tab), (Qt.Key_2, self.show_corners_tab),
                                (Qt.Key_3, self.show_stats_tab),
@@ -2202,6 +2229,13 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             fn(view.video)
+
+    def _plots_do(self, fn):
+        """The charts' twin of `_video_do` — resolve the live PlotsView at call time (the view is
+        swapped per load) and run `fn` on it; no-op before the first load."""
+        view = getattr(self, "view", None)
+        if view is not None:
+            fn(view.plots)
 
     # ----------------------------------------------------- the named commands
     # ONE METHOD PER COMMAND, and they are public on purpose: `help_dialog.COMMANDS` names each of
@@ -2227,6 +2261,15 @@ class StudioWindow(QMainWindow):
         """Enter / leave two-lap compare mode (C) — through the button, which is disabled below
         two valid laps."""
         self._video_do(lambda v: v.compare_btn.click())
+
+    def toggle_datum(self):
+        """Drop or clear the charts' datum (second) cursor (D) — the interval between the two
+        cursors is what the readout under the charts measures."""
+        self._plots_do(lambda p: p.toggle_datum())
+
+    def jump_to_next_loss(self):
+        """Walk to the next-biggest Δ loss of the lap (N), then back out to the whole lap."""
+        self._plots_do(lambda p: p.jump_to_next_loss())
 
     def toggle_video_focus(self):
         """Make the video fill the screen, or restore (F) — through the ⤢ button, which compare
@@ -2487,6 +2530,118 @@ class StudioWindow(QMainWindow):
             return True
         return not self.session.valid_lap_ids()
 
+    # ------------------------------------------------- session records (setup + conditions)
+    _NO_RECORD_REASON = ("Open a recording with at least one valid lap — a session record is "
+                         "attached to a library row, and a recording with no laps has none")
+
+    def _sync_record_action(self) -> None:
+        """Gate File ▸ Session record… on the one thing it needs: a loaded recording the LIBRARY
+        will admit. The record is keyed on the library fingerprint and shown in the Library beside
+        that recording's row, so a session the index refuses (the bundled sample, a recording with
+        no valid lap) has nowhere to put one — and offering the form there would collect notes the
+        user could never find again."""
+        ok = hasattr(self, "session") and bool(self._paths) \
+            and not self._library_excludes(self._paths)
+        self._gate_action(self._record_action, ok, self._NO_RECORD_REASON)
+
+    def _current_library_entry(self) -> dict | None:
+        """The loaded recording's library entry — the identity a session record hangs off and the
+        context the form auto-stamps. None when there is no session, no path, or the library
+        excludes this recording. Guarded: building an entry walks the session's accessors, and a
+        menu item must never raise."""
+        if not hasattr(self, "session") or not self._paths:
+            return None
+        try:
+            if self._library_excludes(self._paths):
+                return None
+            return self.session.library_entry(self._paths)
+        except Exception:  # noqa: BLE001 — a record lookup must never raise into the UI
+            _log.exception("session record: could not build the library entry")
+            return None
+
+    def _edit_current_record(self) -> None:
+        """File ▸ Session record…: write up the CURRENTLY-LOADED recording. The same editor the
+        Library dialog opens for a selected row, pointed at this session — the difference is only
+        where the entry comes from."""
+        entry = self._current_library_entry()
+        if entry is None:
+            self.statusBar().showMessage("no session to write up", STATUS_MS)
+            return
+        self._edit_session_record(entry)
+
+    def _edit_session_record(self, entry: dict) -> dict:
+        """Open the session-record editor for one library `entry`, persist the result, and return
+        the fresh store. The Library dialog's injected `edit_record` callback AND the File-menu
+        item's implementation — one function, so the two entry points cannot drift.
+
+        The APP owns the write (the dialogs stay file-op-free, the rule the library controls
+        already follow), and every write is guarded end-to-end: an unwritable app-support dir must
+        never disrupt the app, and it is reported on the status bar rather than swallowed, because
+        the note the user just typed is the one thing here that cannot be reconstructed."""
+        store = self._load_records()
+        fp = entry.get("fingerprint") or ""
+        existing = session_record.get(store, fp)
+        # A NEW record opens pre-filled from the driver's last session (chassis, axle, seat,
+        # gearing, tyre set — and the tyre laps advanced by that session's own lap count). See
+        # session_record.prefill: it is the whole of "fast to fill in after a session".
+        record = existing if existing is not None else session_record.prefill(
+            store, exclude=fp, entry=entry)
+        paths = entry.get("paths") or []
+        name = os.path.basename(paths[0]) if paths else (entry.get("stem") or "")
+        dlg = SessionRecordDialog(record, entry=entry, name=name,
+                                  is_new=existing is None, parent=self)
+        if dlg.exec() != SessionRecordDialog.Accepted or not fp:
+            return store
+        try:
+            if dlg.deleted():
+                store = session_record.remove_and_save(fp)
+                self.statusBar().showMessage("session record deleted", STATUS_MS)
+            else:
+                result = dlg.result_record()
+                store = session_record.put_and_save(fp, result)
+                self.statusBar().showMessage(
+                    "session record saved" if not session_record.is_empty(result)
+                    else "session record cleared", STATUS_MS)
+        except OSError as exc:
+            print(f"studio: could not save the session record ({exc!r}).", flush=True)
+            _log.exception("session record not saved")
+            self.statusBar().showMessage(
+                "could not save the session record — check permissions on "
+                "~/Library/Application Support/pacer", STATUS_MS)
+            return self._load_records()
+        self._update_record_chip(store)
+        return store
+
+    @staticmethod
+    def _load_records() -> dict:
+        """The session-record store, guarded — a read that fails must leave the app usable, and
+        ``session_record.load`` already self-heals every corruption it can name."""
+        try:
+            return session_record.load()
+        except Exception:  # noqa: BLE001 — the guard must never raise out of a menu / dialog
+            _log.exception("session records not read")
+            return session_record.empty_store()
+
+    def _update_record_chip(self, store: dict | None = None) -> None:
+        """Push the loaded recording's session record onto the LAP PANEL's header chip — the
+        surface right above the lap times it qualifies.
+
+        This is the "show it where the comparison happens" half that is not the Library: a driver
+        reading a lap grid should be able to see, without leaving it, that these times were set on
+        a wet day on a 300-lap set of tyres. Shown only when there IS a record; a permanent "no
+        record" nag beside every lap grid would be a worse surface than none. Fully guarded — a
+        decorative chip must never disrupt a load."""
+        view = getattr(self, "view", None)
+        if view is None or not hasattr(view, "set_session_record"):
+            return
+        try:
+            entry = self._current_library_entry()
+            record = session_record.get(store if store is not None else self._load_records(),
+                                        (entry or {}).get("fingerprint") or "")
+            view.set_session_record(record)
+        except Exception as exc:  # noqa: BLE001 — never let the chip break a load
+            print(f"studio: session-record chip not updated ({exc!r}).", flush=True)
+
     def _refresh_library_entry(self):
         """Re-write the loaded recording's library entry from the session AS IT NOW STANDS.
 
@@ -2647,8 +2802,18 @@ class StudioWindow(QMainWindow):
                             # names. `backup_info` is what the confirm shows, so the user sees
                             # both sides of the swap before it happens.
                             restore_library=self._restore_library,
-                            backup_info=library.backup_summary)
+                            backup_info=library.backup_summary,
+                            # The session records, joined to the index on the fingerprint: DATA in
+                            # (the two comparability columns + the conditions filter read it), the
+                            # EDITOR as a callback (the app owns every write), and a re-read for
+                            # the three gestures that change the store behind the dialog's back
+                            # (forget / clear / restore).
+                            records=self._load_records(),
+                            edit_record=self._edit_session_record,
+                            reload_records=self._load_records)
         dlg.exec()
+        # The dialog may have written (or deleted) the OPEN recording's own record.
+        self._update_record_chip()
 
     def _restore_library(self) -> dict:
         """Put the automatic backup back as the live index and return the result, for the dialog to
@@ -2659,9 +2824,17 @@ class StudioWindow(QMainWindow):
         index unchanged — so a refusal here is silent by design, and the dialog only offers the
         button when `backup_summary` reports something restorable."""
         try:
-            return library.restore()
+            library.restore()
         except OSError as exc:
             print(f"studio: could not restore the library index ({exc!r}).", flush=True)
+        # The records' own backup is swapped back with it — the same gesture undid the same wipe,
+        # so it has to undo both halves or "Restore…" would put the rows back without the notes.
+        # session_record.restore refuses an empty/missing backup the same way library.restore does,
+        # so a library with records that were never backed up is left alone rather than emptied.
+        try:
+            session_record.restore()
+        except OSError as exc:
+            print(f"studio: could not restore the session records ({exc!r}).", flush=True)
         return library.load()
 
     def _forget_recording(self, entry: dict) -> dict:
@@ -2692,6 +2865,17 @@ class StudioWindow(QMainWindow):
                           flush=True)
             except OSError as exc:
                 print(f"studio: could not delete the sidecar ({exc!r}).", flush=True)
+        # …and the session record written for it. "Forget this recording" has to mean the whole
+        # recording: leaving the setup + conditions behind would keep a note about a session the
+        # user just asked to be rid of, in a file the Library no longer shows a row for.
+        # remove_and_save copies the store to its .bak FIRST — this is the one forgotten thing the
+        # footage cannot give back.
+        try:
+            session_record.remove_and_save(entry.get("fingerprint") or "")
+        except OSError as exc:
+            print(f"studio: could not forget the session record ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — forgetting a record must never break the forget
+            _log.exception("session record not forgotten")
         return library.load()
 
     def _disable_sidecar_if_open(self, forgotten_side: str) -> None:
@@ -2719,6 +2903,14 @@ class StudioWindow(QMainWindow):
             library.clear()
         except OSError as exc:
             print(f"studio: could not clear the library index ({exc!r}).", flush=True)
+        # The session records go with it: they ARE the personal history this control wipes, and a
+        # user clearing the library for privacy would not expect their setup notes to survive it.
+        # Backed up to session_records.json.bak first (session_record.clear), so Restore… below can
+        # put both halves back — the dialog's confirm names both files.
+        try:
+            session_record.clear()
+        except OSError as exc:
+            print(f"studio: could not clear the session records ({exc!r}).", flush=True)
         return library.load()
 
     def _reveal_in_finder(self, directory: str) -> bool:

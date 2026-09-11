@@ -962,6 +962,24 @@ add_test(NAME test_chart_axis_legibility
 set_tests_properties(test_chart_axis_legibility PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
+# THE SESSION RECORD (feat/session-record) — studio.session_record + its editor + the two surfaces
+# that read it. The store is the app's most IRREPLACEABLE data: a library row comes back the moment
+# the footage is re-opened, a hand-typed tyre pressure never does, so the persistence half is
+# asserted rather than assumed — corrupt bytes preserved verbatim in the .bak before the first
+# overwrite, a NEWER file's unknown per-record fields surviving a v1 round-trip (this store keeps
+# them where library.py drops them, and the test is why), an older/unstamped file migrated with
+# every record kept, one malformed record dropped and the rest kept, an atomic write leaving no
+# .tmp, and clear / forget / restore each taking their copy first. Then the fast-to-fill half
+# (prefill carries the KART forward and advances the tyre laps, and carries nothing about the day),
+# the comparability verdict, the real form's round-trip, and the record showing up where the
+# comparison happens: the Library's two columns + conditions filter + like-for-like line, and the
+# lap panel header chip — asserted MOUNTED on the real CentralView, not merely constructed. Imports
+# the dialogs -> Qt, so run offscreen; PYTHONPATH because the real-view test reaches studio.session.
+add_test(NAME test_session_record
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_session_record.py)
+set_tests_properties(test_session_record PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
 # PLAYBACK RATE (slow motion) + the telemetry lock it must not cost (feat/playback-rate). Two
 # halves: the rate itself — one ladder, one rate across the shell, both compare panes seeded and
 # fanned out, and the rate re-applied at a chapter seam (a new media source carries none) — and the
@@ -997,6 +1015,19 @@ set_tests_properties(test_command_palette PROPERTIES
 # stands). Pure stdlib text reading — no Qt, no pacer, no telemetry file.
 add_test(NAME test_camera_support
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_camera_support.py)
+
+# THE CHARTS AS AN INSTRUMENT (feat/plots-datum-cursor-and-delta-nav): the datum (second) cursor and
+# its interval statistics, the window statistics tied to the current zoom, and the Δ-loss tour. Two
+# halves: Qt-free `studio/chart_stats.py` over hand-built arrays — including the SLOPE FLOOR
+# reproduced by injecting the D24-measured 0.62 km/h speed noise into synthetic 10 Hz data, where a
+# slope one GPS sample wide is more than half noise and the app refuses to print one — and a real
+# offscreen PlotsView driven through the same public methods the window's D / N shortcuts call,
+# with every readout line measured against the label it has to fit at three panel widths. No
+# telemetry file; needs the shipped theme, so run offscreen.
+add_test(NAME test_chart_instruments
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_instruments.py)
+set_tests_properties(test_chart_instruments PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1")
 
 # THE CHAPTER TIME AXIS: the number the NEXT chapter is placed at (fix/chapter-seam-timeline).
 # `ChapterMap` offsets, the concat span's declared durations, the export's footage bound and the
