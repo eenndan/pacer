@@ -19,6 +19,22 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   conditions filter, and a line that says whether the row you are looking at and the row holding
   the track's best lap were even the same kind of day; the lap panel carries the same in a chip
   over the times it qualifies. File ▸ Session record….
+- **The Stats page has distributions: where a lap's time actually goes.** A DISTRIBUTIONS group
+  between the SPEED · G peaks and the friction circle draws time at speed and time at lateral g as
+  seconds *per lap*, time-weighted, with your fastest and slowest quartiles laid over the average
+  clean lap. It compares POOLED groups rather than your best lap against your median lap, because
+  the pair was measured and does not separate — on both D24 recordings those two laps differ by no
+  more than two laps picked at random do, while the quartile split clears a shuffled-label null on
+  each. The group states its weighting, each channel's rate and the g-meter's filter on its face;
+  there is no braking-g distribution because that channel separated fastest from slowest the most
+  weakly of the four measured and its shape is largely its own smoother's.
+- **The track map can show where time is going RIGHT HERE, not only how far behind you already
+  were.** A new "Δ rate" line channel paints the Δ-vs-best curve's slope — seconds lost per second
+  of driving, smoothed over 0.4 s of travel — on a scale centred on zero, so amber means matching
+  the baseline, red is losing time in this corner and green is taking it back. The existing
+  cumulative "Δ to best" is unchanged and answers the other question: on a lap that is 8.9 s down
+  it paints the whole track red, while the rate channel narrows the loss to the one stretch it
+  happened in.
 - **The Stats page says which baseline each "loss" is measured against, and reconciles the page.**
   Two columns one tab apart were both called a loss and were 3.8× apart in total (3.93 s here,
   1.02 s on Coaching, and 1.3× to 2450× apart corner by corner) because one is measured against
@@ -49,6 +65,14 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **A chapter was placed at the end of the previous chapter's *telemetry*, not its picture.** Those
+  are two different tracks: on GoPro's own sample clips a chapter's GPMF track misses its video
+  length by anything from −0.70 s (hero7) to +0.93 s (karma), so every offset after such a chapter
+  — the video seek, the export's concat span, the footage bound — rode up to ~1 s of phantom
+  timeline. The chapter axis is now the video track's, to the tick, and a chapter whose telemetry
+  genuinely does not cover its video is named in the session notice instead of shifting everything
+  after it in silence. (The D24 recordings' non-last chapters were already exact to 27 µs, so their
+  numbers are unchanged — verified leaf-by-leaf.)
 - **The ideal lap's headline was ~44% projection artifact.** Corner boundaries were being projected
   in a mix of frames; one alignment frame per lap fixed it.
 - **The coaching phase bars were an `∫ds/v` estimate sitting beside a true-clock loss.** Measured on

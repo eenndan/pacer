@@ -6,9 +6,10 @@ the existing Session accessors — SESSION totals, the DATA TRUST card (what the
 are worth: the start-line/track/exclusion caveats, the timing clock, the g provenance and the
 IMU↔GPS cross-check), PACE distribution, the IDEAL LAP and its decomposition (the theoretical
 best, what it says is on the table, and which segments that time lives in), SPEED & G peaks, the
-g-g friction circle, DRIVING (brake/coast reductions), per-SECTOR best/median/σ, and a per-lap
-statistics table. Compact in the quadrant; the panel-maximize button turns it into a full-window
-dashboard.
+DISTRIBUTIONS charts (time at speed and time at lateral g, per lap, with the fastest and slowest
+quartiles laid over them), the g-g friction circle, DRIVING (brake/coast reductions), per-SECTOR
+best/median/σ, and a per-lap statistics table. Compact in the quadrant; the panel-maximize button
+turns it into a full-window dashboard.
 (It paints ph.corners-out — "fill this window quadrant". The transport's ph.arrows-out button is
 a different action, "fill the SCREEN with the video", and this line used to name that one.)
 
@@ -179,6 +180,7 @@ PAGE_LAYOUTS = (
 )
 PAGE_COLS_MAX = max(len(layout) for layout in PAGE_LAYOUTS)
 GG_GROUP = 1              # the section group the friction circle lives in (it sizes from ITS column)
+BAND_GROUP = GG_GROUP     # …and the distribution charts, which sit in the same column, above it
 GG_HEIGHT = 220           # px; the friction-circle plot's height in a normal pane
 GG_HEIGHT_WIDE = 300      # …and in a dashboard-width one (it is the page's only chart)
 # The plot's width is set EXPLICITLY (2:1 around the aspect-locked circle, leaving the axis
@@ -248,6 +250,74 @@ SPARK_OUTLIER_TIP = ("\n\n{n} slower than the rest of the session and left out o
                      "slowest lap IN the frame, so the other {kept} keep the full height.")
 GG_DOT_ALPHA = 90         # scatter alpha (0-255): a cloud, not 4000 opaque dots
 GG_RING_STEP = 0.5        # g; concentric reference rings every half g
+# --------------------------------------------------------------- the DISTRIBUTIONS charts
+# Height: ONE SPACE_3XL more than the trend sparkline, and for the reason SPARK_HEIGHT spells out
+# at length — the strip is a data band plus a bottom axis plus the 4 px of border every
+# QGraphicsView in this app reserves for its focus ring. This one carries THREE series stacked in
+# the same band (the bars and two outlines) rather than a curve and its dots, and it is read for
+# the SHAPE of a profile rather than for a slope between two labelled ends, so it gets the step the
+# sparkline could not spend.
+BAND_HEIGHT = 3 * theme.SPACE_3XL
+BAND_AXIS_FONT = 10       # tabular tick font, the friction circle's and the sparkline's
+BAND_AXIS_W = 34          # left-axis width for a "NN s" label — the y axis prints two, 0 and the max
+BAND_FILL_ALPHA = 90      # the bars' fill (0-255): the friction cloud's alpha, same identity hue
+BAND_BAR_FRAC = 0.86      # bar width as a share of the band, so adjacent bars read as separate
+BAND_Y_PAD_FRAC = 0.12    # headroom over the fullest band (the sparkline's own pad)
+BAND_MAX_TICKS = 6        # x labels: a band per bar would be 20 labels in a 440 px column
+# A BAND'S SHARE OF THE PLOT, the sparkline's SPARK_PX_PER_LAP argument applied to a bar: with 13
+# bands a maximized 1728 px dashboard would otherwise set each bar 130 px wide, which stops being a
+# distribution and becomes a bar chart of thirteen things. SPACE_2XL is ~1.3x the widest tick label
+# this axis prints, so consecutive labels never touch at the cap.
+BAND_PX_PER_BAND = theme.SPACE_2XL
+BAND_SECTION = "DISTRIBUTIONS · s per lap"
+# THE WEIGHTING IS IN THE HEADING, not only in a tooltip: "s per lap" is what every bar on both
+# charts is, and it is the one fact that makes them comparable to each other and to the lap times
+# elsewhere on the page. The sibling headings already carry their unit the same way ("FRICTION
+# CIRCLE · g", "CORNERS · speeds in km/h").
+BAND_SPEED_LABEL = "speed ({unit})"
+BAND_LAT_LABEL = "lateral g<br>− right · + left"   # the friction circle's own axis wording
+# The group's disclosure, in THREE clauses assembled per refresh (see _refresh_bands) rather than
+# one paragraph. A recording with no accelerometer draws no lateral chart, and a paragraph that
+# went on describing the accelerometer's filter under a chart that is not on screen would be the
+# page telling a reader about a thing it had decided not to show them.
+#
+# It is stated in the GROUP and not only on hover, which is the same rule the peak-braking-g tile's
+# window follows: a histogram of a filtered channel owes the reader its filter exactly the way a
+# maximum owes its window. The rate and the window are READ from gmeter, never retyped, so the copy
+# cannot drift from the signal it describes.
+BAND_NOTE_BARS = (
+    "Bars are your average clean lap: the seconds it spends in each band, weighted by TIME and not "
+    "by sample count, so a chart's bands sum to that lap's measured time (a GPS dropout is an "
+    "absence rather than a band, and those laps are out of both charts).")
+BAND_NOTE_SPEED = (
+    "Speed comes from the 10 Hz GPS trace, where every sample is a real 100 ms of driving.")
+BAND_NOTE_LAT = (
+    f"Lateral g comes from the accelerometer, which the g-meter boxcars over "
+    f"{gmeter.LAT_SMOOTH_S:g} s and resamples to {gmeter.OUTPUT_HZ:g} Hz before anything reads it "
+    f"— five times the GPS rate, which is why the distribution is worth drawing at all, but a "
+    f"filtered series and not the sensor's raw 200 Hz.")
+# ...and the second half, filled per refresh because it names the sample (see _refresh_bands).
+BAND_SPLIT_NOTE = ("Outlines: your fastest {n} clean laps (median {fast}) against your slowest {n} "
+                   "(median {slow}) — solid is faster, dashed is slower.")
+BAND_NO_SPLIT_NOTE = ("Only {n} — a fastest-vs-slowest comparison needs {need}, so this is the "
+                      "session's own profile with nothing to compare it against yet.")
+# WHY POOLED GROUPS AND NOT THE BEST LAP AGAINST THE MEDIAN LAP, on the surface where a reader would
+# otherwise ask for exactly that. The numbers are stats.SPLIT_DENOM's, measured on the two D24
+# recordings; they are quoted here because the refutation is the interesting half of this chart.
+BAND_TOOLTIP = (
+    "Where a lap's time actually goes, band by band — the distribution the SPEED · G peaks above "
+    "are only the last bar of.\n\n"
+    "The comparison pools QUARTILES rather than showing your best lap against your median lap, "
+    "because a single pair does not separate: measured over the clean laps of two real recordings "
+    "the best lap's profile differs from the median lap's by no more than two laps picked at "
+    "random do (the 60th and 54th percentile of every clean pair, for speed). Pooling a quarter of "
+    "the session a side cuts the lap-to-lap noise without touching the fast/slow difference, and "
+    "the split then clears a shuffled-label null on both recordings.\n\n"
+    "There is deliberately no braking-g distribution beside these two. The braking axis is the "
+    f"GPS speed derivative smoothed over {gmeter.LONG_SMOOTH_S:g} s (the IMU forward axis is "
+    "vibration-inflated), so its shape is largely the smoother's; it also separated fastest from "
+    "slowest more weakly than either chart here. The friction circle below shows that axis "
+    "against this one.")
 # Every report table's row height. It was a bare 22, documented here as "the consistency-table
 # convention" — a convention inherited from the ConsistencyPanel, which PR #111 DELETED, so the
 # number outlived its only argument. Three of the five tables below are genuine row click targets
@@ -455,6 +525,58 @@ def _gg_envelope_pen():
     return pg.mkPen(C.accent, width=theme.line_width(1), style=Qt.DashLine)
 
 
+def _band_fast_pen():
+    """The fastest group's outline: the ahead hue, SOLID. Palette-aware at call time, like the
+    sparkline's best-lap baseline."""
+    return pg.mkPen(theme.best_lap_colour(), width=theme.line_width(1))
+
+
+def _band_slow_pen():
+    """…and the slowest group's: the behind hue, DASHED. The dash is the non-colour half of the
+    cue (see _BandChart) — the pair reads in greyscale and under the colour-blind palette."""
+    return pg.mkPen(theme.behind_colour(), width=theme.line_width(1), style=Qt.DashLine)
+
+
+def _band_ticks(edges, step: float) -> list[tuple[float, str]]:
+    """x labels at every multiple of `step` inside the chart's range — NOT one per band, and not
+    a stride over the band boundaries either.
+
+    A STRIDE OVER THE BOUNDARIES IS WHAT THIS REPLACED, and it was wrong on exactly one of the two
+    charts. The speed bands start at a multiple of their width, so their edges are round and every
+    third one is a number a reader recognises. The lateral bands are CENTRED on zero (see
+    stats.band_edges), so their edges are at ±0.1, ±0.3, ±0.5 … — the axis came out labelled
+    "-1.9 · -1.1 · -0.3 · +0.5 · +1.3 · +2.1", six numbers none of which is round and none of which
+    is ZERO, on the one chart whose whole shape is a spike at zero with a hump either side.
+
+    Labelling the round grid instead fixes both: the speed axis lands on 15/30/45…, the lateral
+    axis on 0 · ±0.5 · ±1.0 · ±1.5 — the friction circle's own ring step, so the two charts in this
+    column are read against the same rule."""
+    e = np.asarray(edges, float)
+    lo, hi = float(e[0]), float(e[-1])
+    k0, k1 = int(np.ceil(lo / step)), int(np.floor(hi / step))
+    values = [k * step for k in range(k0, k1 + 1)]
+    # DECIMALS FROM THE VALUES, not from the step. The mph chart bands at 2.5 (see
+    # stats.SPEED_BAND_MPH), so a stride of three bands is a step of 7.5 — a step >= 1, which the
+    # obvious rule formats with no decimals, and the axis then labelled the 22.5 mph gridline "22"
+    # and the 37.5 one "38". A tick that names a different number from the one it stands on is
+    # worse than no tick.
+    decimals = 0 if all(abs(v - round(v)) < 1e-9 for v in values) else 1
+    signed = lo < 0
+    return [(v, ("0" if abs(v) < 1e-9 else f"{v:+.{decimals}f}") if signed
+             else f"{v:.{decimals}f}") for v in values]
+
+
+def _band_tick_step(edges, preferred: float | None = None) -> float:
+    """The tick step for a band chart: `preferred` when it does not crowd the axis, else the
+    smallest multiple of the band width that fits BAND_MAX_TICKS labels across it."""
+    e = np.asarray(edges, float)
+    width = float(e[1] - e[0])
+    span = float(e[-1] - e[0])
+    if preferred is not None and span / preferred <= 2 * BAND_MAX_TICKS:
+        return preferred
+    return width * max(1, int(np.ceil((len(e) - 1) / BAND_MAX_TICKS)))
+
+
 def _repen(item, logical_px: float = 1.0):
     """Re-issue `item`'s pen at the CURRENT device-pixel ratio, keeping its colour and dash style.
 
@@ -567,6 +689,132 @@ class _TrustCard(QWidget):
             term_w.setVisible(True)
             value_w.setVisible(True)
         self.setAccessibleDescription(self.text())
+
+
+class _BandChart(pg.PlotWidget):
+    """ONE time-weighted distribution: bars for the average clean lap, two step outlines for the
+    fastest and slowest groups (see stats.BandReport).
+
+    THE BARS ARE THE ANSWER AND THE OUTLINES ARE THE ARGUMENT, which is why the two are drawn
+    differently rather than as three peer series. A reader wants "where does my lap go" first — a
+    filled histogram, in the page's neutral identity hue, the one on the friction circle beside it
+    — and "and what changes when I am quick" second, as two thin outlines over it.
+
+    THE OUTLINES DIFFER IN DASH AS WELL AS HUE. Fast/slow is the app's ahead/behind pair and
+    survives the colour-blind palette, but two curves separated by colour ALONE is still a
+    colour-only cue on a chart with no legend of its own; solid-vs-dashed is a second channel that
+    survives greyscale, and the key line under the chart names both.
+
+    The step curves are `stepMode="center"`, i.e. pyqtgraph is handed the BAND EDGES and the
+    per-band values — n+1 x against n y — so the outline's corners land on the bar boundaries
+    rather than at the bar centres, which is the difference between an outline of the histogram
+    and a polyline through it."""
+
+    def __init__(self, x_label: str, tick_step: float | None = None):
+        super().__init__()
+        self._tick_step = tick_step
+        plot = self.getPlotItem()
+        for side in ("left", "bottom"):
+            ax = plot.getAxis(side)
+            ax.setPen(_axis_pen())
+            ax.setTextPen(C.text_dim)
+            ax.setTickFont(theme.mono_font(BAND_AXIS_FONT))
+            ax.setStyle(maxTickLevel=0, tickLength=3)
+        plot.getAxis("left").setWidth(BAND_AXIS_W)
+        label_style = {"color": C.text_dim, "font-size": f"{theme.CAPTION}pt"}
+        plot.setLabel("bottom", x_label, **label_style)
+        plot.setMouseEnabled(x=False, y=False)
+        plot.setMenuEnabled(False)
+        plot.hideButtons()
+        self.setBackground(None)
+        self._bands = 1
+        self._bars = pg.BarGraphItem(x=[], height=[], width=0)
+        # Built ONCE and re-fed, like every other item on this page: a per-refresh addItem/
+        # removeItem cycle is what _place_tiles' comment is about, one widget down.
+        #
+        # stepMode is set PER setData and not here, because pyqtgraph validates the two arrays
+        # against each other the moment the mode is on — an empty curve is len(x) == len(y) == 0
+        # and a "center" step wants len(x) == len(y) + 1, so a stepped item cannot be constructed
+        # empty and cannot be emptied again without dropping back out of the mode first.
+        self._fast = pg.PlotCurveItem(pen=None)
+        self._slow = pg.PlotCurveItem(pen=None)
+        for item in (self._bars, self._slow, self._fast):
+            plot.addItem(item)
+
+    def set_bands(self, report) -> None:
+        """Draw one stats.BandReport. Colours resolve HERE and not at construction: the palette
+        accessors answer for the palette in force, and View ▸ Colour-blind-safe cues re-refreshes
+        the page rather than rebuilding it."""
+        bands = report.all
+        centres, seconds = bands.centres, bands.seconds
+        self._bands = max(1, len(seconds))
+        width = float(bands.edges[1] - bands.edges[0])
+        fill = pg.mkColor(theme.CHART_SERIES[0])
+        fill.setAlpha(BAND_FILL_ALPHA)
+        self._bars.setOpts(x=centres, height=seconds, width=width * BAND_BAR_FRAC,
+                           brush=pg.mkBrush(fill), pen=None)
+        top = float(np.max(seconds)) if len(seconds) else 0.0
+        if report.has_split:
+            self._fast.setPen(_band_fast_pen())
+            self._slow.setPen(_band_slow_pen())
+            self._fast.setData(bands.edges, report.fast.seconds, stepMode="center")
+            self._slow.setData(bands.edges, report.slow.seconds, stepMode="center")
+            top = max(top, float(np.max(report.fast.seconds)),
+                      float(np.max(report.slow.seconds)))
+        else:
+            # Pen None AND no data: an outline left over from a session that HAD a split would
+            # otherwise still be painted over the bars of one that does not.
+            self._fast.setPen(None)
+            self._slow.setPen(None)
+            self._fast.setData([], [], stepMode=None)
+            self._slow.setData([], [], stepMode=None)
+        plot = self.getPlotItem()
+        plot.setXRange(float(bands.edges[0]), float(bands.edges[-1]), padding=0.01)
+        plot.setYRange(0.0, top * (1.0 + BAND_Y_PAD_FRAC), padding=0)
+        plot.getAxis("bottom").setTicks(
+            [_band_ticks(bands.edges, _band_tick_step(bands.edges, self._tick_step))])
+        # Two y labels, the sparkline's convention: the floor and the fullest band. A seconds axis
+        # with six gridlines on a chart this short is more rule than reading.
+        plot.getAxis("left").setTicks([[(0.0, "0"), (top, f"{top:.0f} s")]])
+
+    def set_x_label(self, text: str) -> None:
+        self.getPlotItem().setLabel(
+            "bottom", text, **{"color": C.text_dim, "font-size": f"{theme.CAPTION}pt"})
+
+    def width_cap(self) -> int:
+        """What this chart's own band count is worth in pixels — the SPARK_PX_PER_LAP rule. The
+        page takes the widest cap over the visible charts and gives every one of them that same
+        width (see StatsView._reflow_tiles), so the pair does not stack ragged."""
+        return BAND_AXIS_W + self._bands * BAND_PX_PER_BAND
+
+    def set_width(self, width: int) -> None:
+        """Pin the width EXPLICITLY — `_set_gg_size`'s move, and for its reason: pyqtgraph's own
+        sizeHint is device-pixel-ratio dependent, so a chart left to it renders one width at DPR 1
+        and another at DPR 2.
+
+        Then activate the plot's graphics layout BEFORE measuring the axis-title gutter — a widget
+        resized a moment ago still reports its old viewport, and the gutter comes out of the
+        mixture (the mistake _set_gg_size documents at length)."""
+        width = max(1, int(width))
+        if width == self.width() and width == self.minimumWidth():
+            return
+        self.setFixedWidth(width)
+        self.resize(width, self.height())
+        plot = self.getPlotItem()
+        plot.layout.activate()
+        budget_plot_gutters(self, plot.layout, (plot,), inset=theme.SPACE_XXS)
+
+    def repen(self) -> None:
+        """Re-issue the pens at the current device-pixel ratio (see StatsView._apply_pen_scale).
+        The bar BRUSH is device-independent and is deliberately left alone."""
+        plot = self.getPlotItem()
+        for side in ("left", "bottom"):
+            ax = plot.getAxis(side)
+            ax.setPen(_axis_pen())
+            ax.setTextPen(C.text_dim)
+        if self._fast.opts.get("pen") is not None:
+            self._fast.setPen(_band_fast_pen())
+            self._slow.setPen(_band_slow_pen())
 
 
 class _ReportTable(QTableWidget):
@@ -1009,6 +1257,38 @@ class StatsView(QWidget):
         self.no_gmeter_note.setFont(theme.ui_font(theme.CAPTION))
         self.no_gmeter_note.setVisible(False)
         col.addWidget(self.no_gmeter_note)
+
+        # --- DISTRIBUTIONS: where the lap's time actually goes
+        #
+        # IT SITS BETWEEN THE PEAKS AND THE FRICTION CIRCLE, which is the argument for the whole
+        # group. The tiles above are MAXIMA — one sample of the lap each — and the friction circle
+        # below is the two g axes against each other with no time in it at all (an overplotted
+        # cloud says nothing about how long the kart spent anywhere in it). Between them is the
+        # question neither answers and the one every serious analysis tool ships a chart for: how
+        # much of the lap is spent at each speed, and at each cornering load. Read down, the column
+        # goes peak -> distribution -> the two axes together -> the per-lap reductions.
+        self._bands_section = self._section(BAND_SECTION)
+        self._bands_section.setToolTip(BAND_TOOLTIP)
+        col.addWidget(self._bands_section)
+        self.speed_bands = _BandChart(BAND_SPEED_LABEL)
+        self.speed_bands.setToolTip(BAND_TOOLTIP)
+        self.speed_bands.setFixedHeight(BAND_HEIGHT)
+        col.addWidget(self.speed_bands, 0, Qt.AlignLeft)
+        # …and the lateral chart takes the friction circle's OWN ring step for its x labels, so a
+        # reader crossing from one to the other in the same column is reading the same rule twice.
+        self.lat_bands = _BandChart(BAND_LAT_LABEL, GG_RING_STEP)
+        self.lat_bands.setToolTip(BAND_TOOLTIP)
+        self.lat_bands.setFixedHeight(BAND_HEIGHT)
+        col.addWidget(self.lat_bands, 0, Qt.AlignLeft)
+        # The group's disclosure + the sample the outlines are pooled over. A WrapLabel at the
+        # app's prose measure and un-aligned in the layout, the construction the ideal-lap notes
+        # document: a maximized 1728 px dashboard must not set this to 130 characters a line, and a
+        # setFixedWidth would pin the page's own minimum to the measure.
+        self.bands_note = WrapLabel("")
+        self.bands_note.setProperty("role", "Note")
+        self.bands_note.setFont(theme.ui_font(theme.CAPTION))
+        self.bands_note.setMaximumWidth(theme.EMPTY_MEASURE_PX)
+        col.addWidget(self.bands_note)
 
         # --- the g-g friction circle
         # Named unit in the header, the convention its peers already follow ("CORNERS · speeds
@@ -1530,6 +1810,8 @@ class StatsView(QWidget):
         self._spark_pb_dots.setPen(_glyph_outline_pen())
         for item in (self._spark_baseline, *self._gg_rings):
             _repen(item)
+        for chart in (self.speed_bands, self.lat_bands):
+            chart.repen()
 
     def _reflow_tiles(self):
         """Fit the page to the actual pane, in two steps.
@@ -1570,6 +1852,24 @@ class StatsView(QWidget):
         # is a function of its column's actual width (see _set_gg_size), so a resize INSIDE a
         # class still changes it. Cheap — setFixedHeight/Width on an unchanged value is a no-op.
         self._set_gg_size(GG_HEIGHT_WIDE if wide else GG_HEIGHT)
+        # …and the two distribution charts, from the SAME column: their band count is a function of
+        # the session (a recording whose speeds span 13-90 km/h has 17 bands, one spanning 25-88
+        # has 13) and their width of the pane, so both inputs move on exactly the paths that reach
+        # here. Cheap and idempotent — set_width early-returns on an unchanged width.
+        #
+        # ONE WIDTH FOR THE PAIR, taken from the chart with the MOST bands. Sized independently
+        # they stack ragged — on the owner's 0062 the speed chart wants 450 px against the lateral
+        # chart's 674, and two boxes in one group ending 224 px apart read as a layout bug rather
+        # than as a measurement. Widest rather than narrowest because the per-band cap exists to
+        # stop a chart being STRETCHED (the sparkline's 77 px per lap), and 52 px of bar is a wide
+        # bar, not a stretched trend line; the narrowest would squeeze the chart that has the most
+        # to say. Hidden charts are out of it: a recording with no accelerometer must not be laid
+        # out around a lateral chart it is not drawing.
+        charts = [c for c in (self.speed_bands, self.lat_bands) if not c.isHidden()]
+        if charts:
+            width = min(self._column_width(BAND_GROUP), max(c.width_cap() for c in charts))
+            for chart in charts:
+                chart.set_width(width)
         # The page's headline number stays what it has always been: the widest column's answer.
         self._tile_cols = max(cols_by_group.values())
         if cols_by_group == self._tile_cols_by_group:
@@ -1750,6 +2050,7 @@ class StatsView(QWidget):
         self.t_peak_lat.set(f"{max(lat_peaks):.2f} g" if lat_peaks else None)
         self.t_peak_brake.set(f"{max(brk_peaks):.2f} g" if brk_peaks else None)
 
+        self._refresh_bands(st, unit, u_label)
         self._refresh_gg(st)
         self._refresh_driving(st, rows)
         self._refresh_sectors(session)
@@ -2130,6 +2431,59 @@ class StatsView(QWidget):
                   self.t_sigma, self.t_spread, self.t_cov, self.t_within, self.t_trend,
                   self.t_vmax, self.t_vmin, self.t_peak_lat, self.t_peak_brake):
             t.setVisible(has_laps)
+
+    def _refresh_bands(self, st, unit, u_label):
+        """The DISTRIBUTIONS group: the two time-weighted profiles + the disclosure under them.
+
+        THE DEGRADED LADDER HAS THREE RUNGS AND EACH ONE HIDES ONLY WHAT IT HAS TO — the rule the
+        sibling groups follow (`_refresh_gg` hides the section, its plot and its key together;
+        `_refresh_driving` hides the section and its five tiles):
+
+          * no clean lap at all → the whole group goes, heading and note with it. Nothing here is
+            a whole-recording total; every bar is per-lap, so there is nothing to draw;
+          * no accelerometer → the LATERAL chart goes, the speed chart stays, and the note stops
+            describing the accelerometer's filter (the SPEED · G group's own no-g note, two
+            sections up, is what says why the g surfaces are missing — this one must not repeat it
+            in different words);
+          * too few clean laps for a quartile split → the bars stay and the two outlines go, and
+            the note says how many laps a comparison needs instead of leaving a reader to wonder
+            which of the three series they are looking at.
+
+        The speed bands are binned in the DISPLAYED unit at a width chosen for it (see
+        stats.SPEED_BAND_MPH): a band a reader counts in has to be round in the number on the axis,
+        and the two widths are within a fifth of each other in real terms so a View ▸ Units flip
+        does not silently change the chart's resolution."""
+        width = (stats_service.SPEED_BAND_MPH if units.normalize_unit(unit) == units.MPH
+                 else stats_service.SPEED_BAND)
+        speed = (st.speed_bands(scale=units.convert_speed(1.0, unit), width=width)
+                 if st is not None else None)
+        lat = st.lateral_g_bands() if st is not None else None
+        has = speed is not None or lat is not None
+        self._bands_section.setVisible(has)
+        self.bands_note.setVisible(has)
+        self.speed_bands.setVisible(speed is not None)
+        self.lat_bands.setVisible(lat is not None)
+        if not has:
+            self.bands_note.setText("")
+            return
+        parts = [BAND_NOTE_BARS]
+        if speed is not None:
+            self.speed_bands.set_x_label(BAND_SPEED_LABEL.format(unit=u_label))
+            self.speed_bands.set_bands(speed)
+            parts.append(BAND_NOTE_SPEED)
+        if lat is not None:
+            self.lat_bands.set_bands(lat)
+            parts.append(BAND_NOTE_LAT)
+        shown = speed if speed is not None else lat
+        if shown.has_split:
+            parts.append(BAND_SPLIT_NOTE.format(
+                n=shown.fast.laps, fast=fmt_time(shown.fast.median_lap_s),
+                slow=fmt_time(shown.slow.median_lap_s)))
+        else:
+            parts.append(BAND_NO_SPLIT_NOTE.format(
+                n=plural(shown.all.laps, "clean lap"),
+                need=plural(stats_service.MIN_SPLIT_LAPS, "lap")))
+        self.bands_note.setText(" ".join(parts))
 
     def _refresh_gg(self, st):
         cloud = st.gg_cloud() if st is not None else None

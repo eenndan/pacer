@@ -252,6 +252,36 @@ def test_no_charts_or_map_control_is_ever_centre_clipped():
     print("test_no_charts_or_map_control_is_ever_centre_clipped OK")
 
 
+def test_the_rainbow_legend_paints_its_widest_labels_whole():
+    """The rainbow legend is the one piece of map chrome whose text is written by the DATA, so a
+    new channel can widen it without anyone typing a wider string. Δ rate's endpoints are the
+    longest the legend can ever carry ("losing 0.67 s/s" / "gaining 0.67 s/s" — 195 px against the
+    76 px of the cumulative Δ's "+1.20 s" / "-0.30 s"), and the legend is a QHBoxLayout of two
+    QLabels that CLIP rather than elide.
+
+    So the check is the real one — set the real strings and ask Qt whether each label got the width
+    its own font metrics need — at both shipped sizes and at the narrowest the column can be
+    dragged. Nothing here is a pixel constant: the numbers above are what was measured, the
+    assertion asks the font."""
+    widest = ("losing 0.67 s/s", "gaining 0.67 s/s")
+    for size in ((1440, 900), (1280, 800)):
+        with _Themed(size) as view:
+            legend = view.map._legend
+            legend.setVisible(True)
+            legend.set_labels(*widest)
+            for px in (view._plots_panel.width(), _column_floor(view)):
+                _set_right_column(view, px)
+                _settle(4)
+                for lab in (legend.lo_label, legend.hi_label):
+                    need = lab.fontMetrics().horizontalAdvance(lab.text())
+                    assert lab.width() >= need, (
+                        f"{lab.text()!r} needs {need}px and was given {lab.width()}px at a "
+                        f"{px}px column — the legend clips instead of eliding")
+                assert legend.width() >= legend.minimumSizeHint().width(), (
+                    f"the legend row is squeezed below its own need at a {px}px column")
+    print("test_the_rainbow_legend_paints_its_widest_labels_whole OK")
+
+
 def test_map_sector_buttons_carry_their_labels_on_hover():
     """L2-04's other half — the DESTRUCTIVE button must never be an unhoverable non-word, whatever
     the layout does to it."""
@@ -616,6 +646,7 @@ def _run_all():
     test_charts_header_names_the_baseline_at_every_width_it_can_reach()
     test_the_header_names_a_cross_recording_reference_at_both_shipped_sizes()
     test_no_charts_or_map_control_is_ever_centre_clipped()
+    test_the_rainbow_legend_paints_its_widest_labels_whole()
     test_map_sector_buttons_carry_their_labels_on_hover()
     test_no_panel_chrome_children_ever_overlap_at_the_column_minimum()
     test_the_charts_column_floor_is_the_headers_own_honest_need()
