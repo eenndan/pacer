@@ -2963,14 +2963,15 @@ class StatsView(QWidget):
         # it is about and points at the bar for where.
         strip = getattr(session, "quality_timeline", None)
         if strip is not None and len(strip):
-            degraded = [lid for lid in valid
-                        if (q := session.lap_quality(lid)) is not None and q < data_quality.GOOD]
-            holed = [lid for lid in valid
-                     if (q := session.lap_quality(lid)) is not None and q <= data_quality.POOR]
-            note = ""
-            if degraded:
-                note = (f" · {len(degraded)} of {len(valid)} laps contain a second below good"
-                        if valid else "")
+            # One pass over the laps, not two: `lap_quality` resolves a lap window and folds its
+            # cells, and this runs on every refresh (a unit flip, a palette flip, a re-segment).
+            # UNREPORTED sorts ABOVE good on purpose, so an ungraded recording reports no degraded
+            # lap rather than every lap — "not measured" is not a finding.
+            lap_cls = [q for lid in valid if (q := session.lap_quality(lid)) is not None]
+            degraded = [q for q in lap_cls if q < data_quality.GOOD]
+            holed = [q for q in degraded if q <= data_quality.POOR]
+            note = (f" · {len(degraded)} of {len(valid)} laps contain a second below good"
+                    if degraded and valid else "")
             rows.append(("GPS quality over time",
                          f"{strip.summary()}{note} — the bar under the scrubber shows where",
                          bool(holed)))
