@@ -88,6 +88,12 @@ class _NullMediaPlayer(QObject):
         # enum access needs no backend
         return QMediaPlayer.PlaybackState.StoppedState
 
+    def setPlaybackRate(self, rate):
+        self._rate = float(rate)
+
+    def playbackRate(self):
+        return getattr(self, "_rate", 1.0)
+
 
 class _NullAudioOutput(QObject):
     """Inert QAudioOutput stand-in (PACER_NO_MEDIA=1): remembers the muted flag, no device. Starts
@@ -152,6 +158,11 @@ class PlayerPane(QWidget):
         # compare-mode lap window (start_global, end_global): the pane pauses+clamps at end instead
         # of the session end; None in normal mode. See _on_position.
         self._lap_window: tuple[float, float] | None = None
+        # Media playback rate (1.0 = real time). Remembered because a SOURCE SWITCH does not carry
+        # it: the rate is a property of the QMediaPlayer's current media on the FFmpeg backend, so
+        # a chapter seam would silently drop a slow-motion review back to 1x. Re-applied in
+        # _apply_pending, which is the one place a genuine load lands (seam + watchdog alike).
+        self._rate = 1.0
 
         # PACER_NO_MEDIA=1 builds the pane with the inert media triplet (see the _Null* stand-ins).
         no_media = os.environ.get("PACER_NO_MEDIA") == "1"
@@ -290,6 +301,27 @@ class PlayerPane(QWidget):
         if self._switching or self._pending is not None:
             self._user_paused_during_reopen = True
         self.player.pause()
+
+    # ------------------------------------------------------------- playback rate (slow motion)
+    def playback_rate(self) -> float:
+        """The pane's media playback rate (1.0 = real time)."""
+        return self._rate
+
+    def set_playback_rate(self, rate: float):
+        """Play at `rate` x real time (0.25 = quarter speed). Idempotent.
+
+        THE TELEMETRY LOCK IS UNAFFECTED, and that is a property of where the lock is taken rather
+        than of anything done here: the map marker / chart cursor / readout are driven off
+        `positionChanged` — the decoder's OWN reported media position — through PlaybackState, not
+        off a wall clock the app integrates. A rate change moves the same positions past the same
+        30 Hz tick more slowly; every consumer downstream still reads a media time and looks the
+        telemetry up at it. Nothing here converts between wall time and media time, so there is no
+        conversion to get wrong."""
+        rate = float(rate)
+        if rate <= 0:
+            return
+        self._rate = rate
+        self.player.setPlaybackRate(rate)
 
     # ------------------------------------------------------------- audio (mute)
     def is_muted(self) -> bool:
@@ -584,6 +616,10 @@ class PlayerPane(QWidget):
         self._switching = False
         self._seam_watchdog.stop()
         self.player.setPosition(int(local * 1000))
+        # Re-apply the rate onto the freshly-loaded media (see _rate): a cross-chapter seam is a
+        # new source, and a source carries no rate of its own. Unconditional rather than guarded on
+        # `!= 1.0` — the guard would be a second place that has to know the default.
+        self.player.setPlaybackRate(self._rate)
         # resume only if the original intent was to play AND the user did not pause mid-reopen.
         if resume and not self._user_paused_during_reopen:
             self.player.play()

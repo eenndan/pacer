@@ -137,9 +137,16 @@ def _top_opportunity(session, unit: str) -> TopOpp | None:
     try:
         from .lap_table import CORNER_DIR_GLYPH
         opps = session.coaching_opportunities()
-        if not (opps.enough and opps.rows):
+        if not opps.enough:
             return None
-        opp = opps.rows[0]  # rows are ranked biggest-loss first
+        # RANKED rows only: `rows` also carries the corners the per-corner evidence gate abstained
+        # on (biggest-loss first within each half), and a card is the one surface that leaves the
+        # app. Publishing "C1 +0.03 s" for a corner whose own middle-half of laps spans 0.20 s is
+        # exactly the overclaim the gate exists to stop, so the card shows no opportunity instead.
+        ranked = opps.ranked_rows()
+        if not ranked:
+            return None
+        opp = ranked[0]  # ranked biggest-loss first
         glyph = CORNER_DIR_GLYPH.get(opp.direction, "")
         label = f"C{opp.cid} {glyph}".strip()
         return TopOpp(corner_label=label, time_lost_s=float(opp.time_lost),

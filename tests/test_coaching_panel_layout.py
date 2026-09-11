@@ -15,7 +15,9 @@ Four findings, all on ``studio/coaching_panel.py``:
     cells, so "How to find it" sat 611 px from the sentence it labels.
   * L5-09 — the ±σ column printed a bare "±0.12" while `coaching.reason_sentence` spells the
     IDENTICAL statistic "σ 0.12 s" — and since the model batch dropped summarize()'s top_n gate,
-    both forms now meet on the shipped dialog (3 of 11 rows on the D24 three-chapter fixture).
+    both forms now meet on the shipped dialog (3 of 11 rows on the D24 three-chapter fixture). That
+    column is now "Done it?" (a count over its denominator); the RULE it established — a table cell
+    never states a number without the unit or sample that makes it checkable — is what is pinned.
   * L5-10 — the ESTIMATED brake-point hint is derived from `apex − d` under CONSTANT-DECEL,
     straight-line braking, which the friction circle only affords on the APPROACH. On D24's C10 the
     optimum lands at 870.6 m — 59 m inside an 811.6..891.1 m corner window, 19.4 m before the apex —
@@ -39,8 +41,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QRect, Qt  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QStyle,
+    QStyleOptionViewItem,
+)
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -48,13 +54,14 @@ from studio import coaching, theme  # noqa: E402
 from studio.coaching_panel import (  # noqa: E402
     _COL_CORNER,
     _COL_LOST,
+    _PANEL_COL_REACH,
     _PANEL_COL_REASON,
-    _PANEL_COL_SIGMA,
     BRAKE_HINT_MAX_PAST_TURN_IN_M,
     PANEL_TOP_N,
     REASON_MIN_PX,
     OpportunitiesPanel,
     _brake_point_hint,
+    _fit_reason_rows,
     _header_chrome_px,
 )
 
@@ -80,6 +87,17 @@ def _reason(kind=coaching.REASON_BRAKING, sigma=0.12):
                            brake_extra_s=0.36, coast_extra_s=0.0, sigma=sigma)
 
 
+def _evidence(i: int) -> coaching.Evidence:
+    """Real per-corner evidence, alternating the two reach states — the "Done it?" cell's width and
+    the reason sentence's extra clause both come from here, and both drive the row heights and
+    column budget this whole batch is measured in."""
+    reach_laps = 4 if i % 2 else 1
+    return coaching.Evidence(
+        n_laps=8, reach_laps=reach_laps,
+        reach=coaching.REACH_REPEAT if reach_laps > 1 else coaching.REACH_RARE,
+        iqr=0.02, abstain=coaching.ABSTAIN_NONE)
+
+
 def _rows(n: int) -> list[coaching.Opportunity]:
     """n ranked corners, descending loss, each with a genuinely long reason sentence (the wrapped
     cell is what drives the row height this whole batch is measured in)."""
@@ -87,14 +105,18 @@ def _rows(n: int) -> list[coaching.Opportunity]:
     return [coaching.Opportunity(
         cid=i + 1, direction=(1 if i % 2 else -1), time_lost=0.20 - 0.01 * i,
         entry_dist=100.0 * i, reason=_reason(kinds[i % 3], sigma=0.10 + 0.01 * i),
-        phases=coaching.PhaseLoss(entry=0.05, apex=0.03, exit=0.01)) for i in range(n)]
+        phases=coaching.PhaseLoss(entry=0.05, apex=0.03, exit=0.01),
+        evidence=_evidence(i)) for i in range(n)]
 
 
 class _Session:
     """The two accessors the panel reads, nothing else (it is a pacer-free view)."""
 
     def __init__(self, rows, brake_points=None):
-        self._opps = coaching.Opportunities(enough=True, n_laps=8, median_lap_id=3, rows=rows)
+        # The theme rides on the summary in production (summarize computes it once), so build it
+        # the same way here — a fixture with no theme never exercises the block above the table.
+        self._opps = coaching.Opportunities(enough=True, n_laps=8, median_lap_id=3, rows=rows,
+                                            theme=coaching.session_theme(rows))
         self._bps = brake_points or {}
 
     def coaching_opportunities(self):
@@ -121,20 +143,21 @@ def _panel(rows, size, brake_points=None) -> OpportunitiesPanel:
 
 
 # ------------------------------------------------------------------------------- L5-06
-def test_narrow_panel_spends_its_width_on_the_prose_not_on_sigma():
+def test_narrow_panel_spends_its_width_on_the_prose():
     """L5-06: at the app's own minimum the columns must fit the viewport — no horizontal scrollbar
-    — and the reason column must not be starved by ±σ.
+    — and the reason column must not be starved by the "Done it?" cell.
 
     On main: colw [64, 78, 56, 100] = 298 px inside a 270 px viewport, so BOTH scrollbars showed and
-    the prose column got 100 px. ±σ is a secondary signal (the "be consistent here (σ 0.12 s)"
-    reason spells it out in words), so it is the one that yields."""
+    the prose column got 100 px. "Done it?" is a glance cue whose content the reason sentence also
+    spells out in words ("You have already done this — 4 of 8 laps"), so it is the one that
+    yields."""
     p = _panel(_rows(6), MIN_PANEL)
     t = p.table
     widths = [t.columnWidth(c) for c in range(4)]
     viewport = t.viewport().width()
 
-    assert t.isColumnHidden(_PANEL_COL_SIGMA), (
-        "±σ must yield when the reason cannot reach REASON_MIN_PX", widths, viewport)
+    assert t.isColumnHidden(_PANEL_COL_REACH), (
+        "'Done it?' must yield when the reason cannot reach REASON_MIN_PX", widths, viewport)
     assert sum(widths) <= viewport, (
         "the columns must fit the viewport — a horizontal scrollbar hides the numeric columns the "
         "row is identified by", widths, viewport)
@@ -142,19 +165,20 @@ def test_narrow_panel_spends_its_width_on_the_prose_not_on_sigma():
     assert widths[_PANEL_COL_REASON] > 100, (
         "the prose column must beat the header-size-hint fallback it used to sit at", widths)
     assert widths[_PANEL_COL_REASON] == viewport - widths[_COL_CORNER] - widths[_COL_LOST], (
-        "the reason takes every pixel ±σ freed", widths, viewport)
-    print(f"test_narrow_panel_spends_its_width_on_the_prose_not_on_sigma OK "
-          f"(reason {widths[_PANEL_COL_REASON]}px in a {viewport}px viewport, ±σ dropped)")
+        "the reason takes every pixel 'Done it?' freed", widths, viewport)
+    print(f"test_narrow_panel_spends_its_width_on_the_prose OK "
+          f"(reason {widths[_PANEL_COL_REASON]}px in a {viewport}px viewport, 'Done it?' dropped)")
 
 
-def test_wide_panel_keeps_sigma():
-    """The ±σ drop is a BUDGET, not a deletion: once the reason clears REASON_MIN_PX the column is
-    back. (This is the guard against 'fixing' L5-06 by simply removing a column.)"""
+def test_wide_panel_keeps_the_reach_column():
+    """The "Done it?" drop is a BUDGET, not a deletion: once the reason clears REASON_MIN_PX the
+    column is back. (This is the guard against 'fixing' L5-06 by simply removing a column.)"""
     p = _panel(_rows(6), (900, 600))
     t = p.table
-    assert not t.isColumnHidden(_PANEL_COL_SIGMA), "±σ must return when there is room for it"
+    assert not t.isColumnHidden(_PANEL_COL_REACH), "'Done it?' must return when there is room"
     assert t.columnWidth(_PANEL_COL_REASON) >= REASON_MIN_PX, t.columnWidth(_PANEL_COL_REASON)
-    print(f"test_wide_panel_keeps_sigma OK (reason {t.columnWidth(_PANEL_COL_REASON)}px, ±σ shown)")
+    print("test_wide_panel_keeps_the_reach_column OK "
+          f"(reason {t.columnWidth(_PANEL_COL_REASON)}px, 'Done it?' shown)")
 
 
 def test_reason_header_never_paints_clipped():
@@ -225,6 +249,115 @@ def test_short_page_never_drops_below_the_shortlist():
     print(f"test_short_page_never_drops_below_the_shortlist OK ({p.table.rowCount()} rows)")
 
 
+# One real D24 0062 reason sentence, verbatim — it is the string that exposed the gap below, and
+# it straddles it only because it is exactly this long.
+_D24_REASON = ("brake later / shorter (~0.32 s longer on the brakes), and it carries to the apex."
+               " You have rarely done this — 2 of 24 laps.")
+
+
+def _painter_text_rect(t, col):
+    """The rect the DELEGATE really lays text out in for `col` — SE_ItemViewItemText, then the
+    further `PM_FocusFrameHMargin + 1` per side that QCommonStyle's viewItemDrawText applies."""
+    opt = QStyleOptionViewItem()
+    opt.initFrom(t)
+    opt.features = QStyleOptionViewItem.HasDisplay
+    opt.rect = QRect(0, 0, t.columnWidth(col) - (1 if t.showGrid() else 0), 100)
+    tr = t.style().subElementRect(QStyle.SE_ItemViewItemText, opt, t)
+    inset = 2 * (t.style().pixelMetric(QStyle.PM_FocusFrameHMargin, opt, t) + 1)
+    return tr.width() - inset, 100 - tr.height()
+
+
+def test_a_reason_row_is_tall_enough_for_where_the_glyphs_actually_land():
+    """L5-03, one layer further in — and this one cost a sentence its last word on the shipped page.
+
+    The row-height fit measured the wrap at ``SE_ItemViewItemText``'s width. QCommonStyle's own
+    ``viewItemDrawText`` then insets THAT rect by a further ``PM_FocusFrameHMargin + 1`` per side
+    before laying the text out — 6 px on this style. Six pixels is not a rounding difference at this
+    column's widths: measured on D24 0062, a reason cell 376 px by the old arithmetic is 370 px to
+    the painter, and the row's sentence wraps to two lines at 376 and three at 370. The row was
+    pinned two lines tall, painted its third line as "…", and the driver lost the end of the
+    sentence with no action of their own.
+
+    Asserted as the INVARIANT (every row clears the painter's own requirement) plus a proof that the
+    test has teeth (somewhere in the sweep the naive measurement really is a line short)."""
+    naive_would_fail, widths = 0, list(range(600, 921, 8))
+    for w in widths:
+        size = (w, 600)
+        p = _panel(_rows(3), size)
+        t = p.table
+        for r in range(t.rowCount()):
+            t.item(r, _PANEL_COL_REASON).setText(_D24_REASON)
+        _fit_reason_rows(t, _PANEL_COL_REASON)
+        avail, pad_v = _painter_text_rect(t, _PANEL_COL_REASON)
+        fm = t.fontMetrics()
+        need = fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap,
+                               _D24_REASON).height() + pad_v
+        opt = QStyleOptionViewItem()
+        opt.initFrom(t)
+        opt.features = QStyleOptionViewItem.HasDisplay
+        opt.rect = QRect(0, 0, t.columnWidth(_PANEL_COL_REASON), 100)
+        section = t.style().subElementRect(QStyle.SE_ItemViewItemText, opt, t).width()
+        naive = fm.boundingRect(QRect(0, 0, section, 0), Qt.TextWordWrap,
+                                _D24_REASON).height() + pad_v
+        if naive < need:
+            naive_would_fail += 1
+        for r in range(t.rowCount()):
+            assert t.rowHeight(r) >= need, (
+                "a reason row must fit the text where the PAINTER lays it out, not where the "
+                "section says it could", size, r, t.rowHeight(r), need,
+                t.columnWidth(_PANEL_COL_REASON))
+    assert naive_would_fail, (
+        "no sweep width straddles the measure/paint gap any more — this test proves nothing until "
+        "the fixture or the widths are re-chosen")
+    print(f"test_a_reason_row_is_tall_enough_for_where_the_glyphs_actually_land OK "
+          f"({naive_would_fail} of {len(widths)} widths would have dropped a line)")
+
+
+def test_the_theme_block_never_squeezes_out_the_ranking():
+    """The theme leads the page, and it YIELDS — the vertical twin of the ±σ/"Done it?" budget.
+
+    MEASURED before the budget existed: the three-line summary wanted 159 of the 196 px the app's
+    own minimum gives this page, so the layout handed the table a viewport 0 px TALL. A headline
+    about a ranked list, with the ranked list gone. It sheds its second action, then its first,
+    then itself, and whatever it sheds is on the header strip's tooltip, so the theme is demoted
+    and never deleted.
+
+    The block must also come BACK when the page grows: a fit that shows the full block only until
+    the first squeeze is a ratchet, which is the failure mode widgets.WrapLabel's own docstring is
+    about (measure from a cleared state, never from the last answer)."""
+    p = _panel(_rows(6), MIN_PANEL)
+    tb = p.theme_block
+    assert tb.full_text(), "this fixture must actually produce a theme"
+    assert tb.isHidden(), "the theme must yield rather than displace the ranking it is about"
+    assert p.table.viewport().height() > 0 and p.table.rowCount() >= 1, (
+        "the ranked list must survive the page's own minimum",
+        p.table.viewport().height(), p.table.rowCount())
+    assert tb.full_text() in p.summary_label.toolTip(), (
+        "a shed theme must stay reachable on the header strip", p.summary_label.toolTip())
+
+    # Roomy: the whole block, both actions, and it still leaves the table most of the page.
+    p.resize(900, 800)
+    for _ in range(6):
+        _APP.processEvents()
+    assert not p.theme_block.isHidden()
+    shown = [lb for lb in p.theme_block.actions if not lb.isHidden()]
+    assert len(shown) == 2, [lb.text() for lb in p.theme_block.actions]
+    assert p.theme_block.height() < 800 * 0.35, p.theme_block.height()
+
+    # ...and shrinking then re-growing gets every line back (no ratchet).
+    p.resize(*MIN_PANEL)
+    for _ in range(6):
+        _APP.processEvents()
+    assert p.theme_block.isHidden()
+    p.resize(900, 800)
+    for _ in range(6):
+        _APP.processEvents()
+    assert not p.theme_block.isHidden()
+    assert len([lb for lb in p.theme_block.actions if not lb.isHidden()]) == 2
+    print("test_the_theme_block_never_squeezes_out_the_ranking OK "
+          f"(minimum: block hidden, table {p.table.rowCount()} rows; roomy: 2 actions back)")
+
+
 def test_every_header_sits_over_its_own_column():
     """L5-08: `defaultAlignment` centres every header. At a maximized 1220 px reason column that put
     "How to find it" 611 px from the left-aligned sentence it labels. Each header must take its own
@@ -232,7 +365,7 @@ def test_every_header_sits_over_its_own_column():
     p = _panel(_rows(6), (1200, 800))
     t = p.table
     for col, want in ((_COL_CORNER, Qt.AlignLeft), (_COL_LOST, Qt.AlignRight),
-                      (_PANEL_COL_SIGMA, Qt.AlignRight), (_PANEL_COL_REASON, Qt.AlignLeft)):
+                      (_PANEL_COL_REACH, Qt.AlignRight), (_PANEL_COL_REASON, Qt.AlignLeft)):
         got = int(t.horizontalHeaderItem(col).textAlignment())
         assert got & int(want), (col, got, int(want))
         assert not got & int(Qt.AlignHCenter), ("a centred header floats off its data", col, got)
@@ -242,21 +375,30 @@ def test_every_header_sits_over_its_own_column():
 
 
 # ------------------------------------------------------------------------------- L5-09
-def test_sigma_cell_states_its_unit():
-    """L5-09: "±0.12" is seconds and must say so — the reason sentence in the SAME row renders the
-    identical statistic as "σ 0.12 s", and the Time lost cell beside it already prints "+0.13 s"."""
+def test_reach_cell_never_states_a_count_without_its_denominator():
+    """L5-09's rule, on the column that replaced ±σ: a bare number in a table cell is unreadable,
+    and this one is a COUNT, so its denominator is what the unit was. "Yes · 4/8" is checkable;
+    "Yes · 4" is a number the reader cannot place, and "Yes" alone is a claim with no evidence.
+
+    Both halves are asserted: the word (which is the glance cue that changes the instruction) and
+    the `k/n` (which is the honesty rule — never a count without the sample it came out of)."""
     p = _panel(_rows(6), (900, 600))
+    words = {"Yes", "Rarely", "Never"}
     for r in range(p.table.rowCount()):
-        text = p.table.item(r, _PANEL_COL_SIGMA).text()
-        assert text.endswith(" s"), ("the ±σ cell must carry its unit", r, text)
-    # The state where both forms meet on one row: a REASON_LINE row spells σ out in the sentence.
-    line = coaching.Opportunity(cid=9, direction=1, time_lost=0.07, entry_dist=800.0,
+        text = p.table.item(r, _PANEL_COL_REACH).text()
+        word, _, count = text.partition(" · ")
+        assert word in words, ("the reach cell must lead with its one-word answer", r, text)
+        num, _, den = count.partition("/")
+        assert num.isdigit() and den.isdigit() and int(den) > 0, (
+            "the reach cell must carry the count AND the sample it came out of", r, text)
+    # An UNMEASURED row (no per-lap times behind it) states nothing rather than inventing a count.
+    bare = coaching.Opportunity(cid=9, direction=1, time_lost=0.07, entry_dist=800.0,
                                 reason=_reason(coaching.REASON_LINE, sigma=0.24))
-    p2 = _panel([line] + _rows(3), (900, 600))
-    cell, sentence = p2.table.item(0, _PANEL_COL_SIGMA).text(), p2.table.item(0, 3).text()
-    assert "σ 0.24 s" in sentence, sentence
-    assert cell == "±0.24 s", (cell, sentence)
-    print(f"test_sigma_cell_states_its_unit OK ({cell!r} beside {sentence!r})")
+    p2 = _panel([bare], (900, 600))
+    assert p2.table.item(0, _PANEL_COL_REACH).text() == "—", \
+        p2.table.item(0, _PANEL_COL_REACH).text()
+    print("test_reach_cell_never_states_a_count_without_its_denominator OK "
+          f"({p.table.item(0, _PANEL_COL_REACH).text()!r}; unmeasured -> em-dash)")
 
 
 # ------------------------------------------------------------------------------- L5-10
@@ -312,14 +454,16 @@ def test_reason_cell_drops_the_metres_and_names_the_target():
 
 
 def _run_all():
-    test_narrow_panel_spends_its_width_on_the_prose_not_on_sigma()
-    test_wide_panel_keeps_sigma()
+    test_narrow_panel_spends_its_width_on_the_prose()
+    test_wide_panel_keeps_the_reach_column()
     test_reason_header_never_paints_clipped()
     test_every_header_carries_a_tooltip()
     test_page_fills_its_height_with_the_ranking()
     test_short_page_never_drops_below_the_shortlist()
+    test_a_reason_row_is_tall_enough_for_where_the_glyphs_actually_land()
+    test_the_theme_block_never_squeezes_out_the_ranking()
     test_every_header_sits_over_its_own_column()
-    test_sigma_cell_states_its_unit()
+    test_reach_cell_never_states_a_count_without_its_denominator()
     test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner()
     test_reason_cell_drops_the_metres_and_names_the_target()
     print("ALL COACHING PANEL LAYOUT TESTS OK")

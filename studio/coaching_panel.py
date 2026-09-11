@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -31,23 +31,23 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME, coaching, theme, units
-from ._signal import lap_label
+from ._signal import DASH, lap_label
 from .lap_table import set_corner_direction
 from .theme import C
-from .widgets import EmptyState, PanelHeader
+from .widgets import EmptyState, PanelHeader, WrapLabel
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
 
-# column indices — the modal dialog's six, then the panel's σ + reason columns (it drops the
+# column indices — the modal dialog's six, then the panel's reach + reason columns (it drops the
 # dialog's PhaseBar + Jump columns, so its "How to find it" sits at 3, not 4).
-_COL_CORNER, _COL_LOST, _COL_SIGMA, _COL_PHASES, _COL_REASON, _COL_GO = range(6)
-_PANEL_COL_SIGMA, _PANEL_COL_REASON = 2, 3
+_COL_CORNER, _COL_LOST, _COL_REACH, _COL_PHASES, _COL_REASON, _COL_GO = range(6)
+_PANEL_COL_REACH, _PANEL_COL_REASON = 2, 3
 # NB (M4): "Time lost" is the cross-lap MEDIAN per-corner delta; the Entry·Apex·Exit column is a
 # DIFFERENT statistic — the typical lap's Δt profile across the corner (where in the corner it wins
 # or loses), which does NOT sum to "Time lost" and can even net faster. Its header must not also
 # claim to be "time lost", or the two columns read as self-contradictory.
-_HEADERS = ["Corner", "Time lost", "±σ", "Entry · Apex · Exit Δt", "How to find it", ""]
+_HEADERS = ["Corner", "Time lost", "Done it?", "Entry · Apex · Exit Δt", "How to find it", ""]
 
 # L5-06/L5-08: how a header sits over its own column, and what it says on hover.
 #
@@ -58,14 +58,15 @@ _HEADERS = ["Corner", "Time lost", "±σ", "Entry · Apex · Exit Δt", "How to 
 # (at the app's own minimum "How to find it" paints as a hard-clipped "How to find") had nothing to
 # hover for the full label. Keyed by the header TEXT so the dialog's six and the panel's four share
 # one definition and can't drift.
-_HEADER_ALIGN = {"Time lost": Qt.AlignRight, "±σ": Qt.AlignRight}
+_HEADER_ALIGN = {"Time lost": Qt.AlignRight, "Done it?": Qt.AlignRight}
 _HEADER_TIPS = {
     "Corner": "The corner's number in track order, with an arrow for its direction — "
               "anticlockwise is a left-hander, clockwise a right.",
     "Time lost": "Median time lost through this corner versus your own best lap's same corner, "
                  "over your clean laps (seconds).",
-    "±σ": "Lap-to-lap consistency: the σ (standard deviation) of your time through this corner "
-          "over your clean laps, in seconds. Small = repeatable.",
+    "Done it?": "How many of your clean laps already matched or beat your best lap's time "
+                "through this corner. Many of them — repeat what you have already driven. Few — "
+                "this is pace you have not established yet, and it needs something new.",
     "Entry · Apex · Exit Δt": "Where in the corner your typical lap is faster/slower than your best "
                               "lap (Δt per third, seconds) — NOT the row's Time lost, which is a "
                               "cross-lap median.",
@@ -159,9 +160,129 @@ def empty_state_copy(opps: coaching.Opportunities) -> tuple[str, str]:
 
 def _shown_rows(opps: coaching.Opportunity) -> list[coaching.Opportunity]:
     """The opportunity rows worth SHOWING: those whose time_lost does not round to +0.00 s at the
-    2-dp display resolution (L2). Ranking/order is preserved; only sub-resolution rows are dropped.
-    Takes an ``Opportunities`` (typed loosely to avoid a runtime import cycle)."""
+    2-dp display resolution (L2). Ranking/order is preserved (summarize already sinks the abstained
+    rows below the ranked ones); only sub-resolution rows are dropped. Takes an ``Opportunities``
+    (typed loosely to avoid a runtime import cycle)."""
     return [r for r in opps.rows if r.time_lost >= DISPLAY_MIN_LOST_S]
+
+
+def _ranked_shown(opps: coaching.Opportunity) -> list[coaching.Opportunity]:
+    """The shown rows that carry a CLAIM — the shortlist the headline totals and the digest tile
+    mirrors. An abstained row is displayed (with its reason) but must never be summed into a
+    "time available" figure: that is the number the evidence gate exists to keep honest.
+
+    Reads the row's evidence through getattr because the Stats page hands this duck-typed rows from
+    a session stub; a row with no evidence at all is UNMEASURED, not gated out, so it counts (the
+    same rule `coaching._NO_EVIDENCE` encodes)."""
+    return [r for r in _shown_rows(opps)
+            if getattr(getattr(r, "evidence", None), "ranked", True)]
+
+
+# The share of the page the theme may take before it starts shedding lines (see ThemeBlock.fit_into).
+#
+# MEASURED, and this is why it is a budget and not a fixed block: a wrapping three-line summary is
+# 88 px at a 640-px-wide page and 159 px at the app's own 280x196 minimum, where it left the table a
+# viewport 0 px tall — the whole ranked list gone, under a headline about it. A page whose leading
+# summary displaces the thing it summarizes is worse than one with no summary.
+THEME_MAX_FRACTION = 0.35
+
+
+class ThemeBlock(QWidget):
+    """The session's ONE theme plus at most two actions, above the per-corner table.
+
+    WHY IT LEADS. Twelve ranked corners is a report, not coaching; the compression into one theme
+    and a short action list is the part a human coach does and the part every surveyed tool skips.
+    Everything here comes from ``coaching.session_theme`` — which clusters only over what this app
+    MEASURES (the reach axis and the four driving signals) and says "no single theme" rather than
+    inventing one. Empty (and hidden) when nothing is ranked.
+
+    AND IT YIELDS (``fit_into``), the vertical twin of the page's column budget: it sheds its second
+    action, then its first, then itself, rather than take more than ``THEME_MAX_FRACTION`` of the
+    page. Whatever it sheds stays reachable on the header strip's tooltip, so the theme is never
+    lost — only demoted.
+
+    Read-only, rebuilt on refresh; no analysis of its own."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._sentence = ""
+        self._lines: list[str] = []
+        lay = QVBoxLayout(self)
+        # The block sits between two hairline-bounded strips, so it takes the panel gutter
+        # horizontally and the section step vertically — the same inset a PanelHeader's text has.
+        lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
+        lay.setSpacing(theme.SPACE_XS)
+        # The theme sentence is the loudest line on the page and takes the DEFAULT label tone
+        # (primary text); the actions rank below it and take the app's secondary-prose role.
+        self.headline = WrapLabel("")
+        lay.addWidget(self.headline)
+        self.actions = [WrapLabel(""), WrapLabel("")]
+        for a in self.actions:
+            a.setProperty("role", "Note")
+            lay.addWidget(a)
+
+    def set_theme(self, opps: coaching.Opportunities) -> None:
+        """Fill from a summary; hide the whole block when there is no theme to state."""
+        theme_obj = getattr(opps, "theme", None) or coaching.Theme(
+            kind=coaching.THEME_NONE, share=0.0, execution_s=0.0, pace_s=0.0,
+            n_ranked=0, n_abstained=0, cause=coaching.REASON_NONE, cause_share=0.0)
+        self._sentence = coaching.theme_sentence(theme_obj)
+        self._lines = coaching.theme_actions(theme_obj, list(opps.rows))
+        self.headline.setText(self._sentence)
+        for label, text in zip(self.actions, self._lines + ["", ""], strict=False):
+            label.setText(text)
+        # The full block, which `fit_into` then trims to the page it actually has.
+        self._apply(len(self._lines), bool(self._sentence))
+
+    def full_text(self) -> str:
+        """The theme and every action as one string — what the header tooltip carries, so the
+        lines ``fit_into`` sheds are demoted rather than deleted."""
+        return "\n".join([self._sentence, *self._lines]).strip()
+
+    def _needed_px(self, width: int, n_actions: int) -> int:
+        """The height the theme sentence plus `n_actions` action lines would need at `width`.
+
+        Measured from the TEXT and the label fonts, never from the widgets' current state — for two
+        reasons. A wrapping label's ``minimumSizeHint`` is its ONE-LINE height (the trap
+        widgets.WrapLabel exists for) and its installed minimum ratchets, so neither answers "how
+        tall is this text here"; and measuring by SHOWING a line first would make the fit itself
+        churn the parent layout, which does not converge — the block was left painting at the size
+        it had while being measured (a 159 px block over a table with a 0 px viewport), because
+        every hide invalidated a layout that the next pass showed it again for."""
+        lay = self.layout()
+        m = lay.contentsMargins()
+        inner = max(width - m.left() - m.right(), 1)
+        fonts = [self.headline.font()] + [a.font() for a in self.actions[:n_actions]]
+        texts = [self._sentence] + self._lines[:n_actions]
+        need = m.top() + m.bottom() + lay.spacing() * max(len(texts) - 1, 0)
+        for font, text in zip(fonts, texts, strict=True):
+            need += QFontMetrics(font).boundingRect(
+                QRect(0, 0, inner, 0), Qt.TextWordWrap, text).height()
+        return need
+
+    def fit_into(self, width: int, budget_px: int) -> None:
+        """Show the theme plus as many action lines as fit `budget_px` at `width`; hide the block
+        entirely when even the theme sentence alone does not.
+
+        The count is chosen from the widest configuration DOWN, so widening the page brings shed
+        lines back (a shed line must never become the floor of the next measurement — the same rule
+        widgets.WrapLabel documents for its own minimum). Idempotent."""
+        if self._sentence:
+            for n in range(len(self._lines), -1, -1):
+                if self._needed_px(width, n) <= budget_px:
+                    self._apply(n, True)
+                    return
+        self._apply(0, False)
+
+    def _apply(self, n_actions: int, visible: bool) -> None:
+        """Set the block's visible configuration, touching a widget ONLY when it changes — an
+        unnecessary setVisible invalidates the parent layout and re-enters this whole pass."""
+        for i, label in enumerate(self.actions):
+            want = visible and i < n_actions and bool(self._lines[i:i + 1])
+            if label.isHidden() == want:
+                label.setVisible(want)
+        if self.isHidden() == visible:
+            self.setVisible(visible)
 
 
 # Human label per coaching.PHASE_* id, in track order (for the breakdown bar segments + tooltip).
@@ -342,9 +463,21 @@ def _fit_reason_rows(table: QTableWidget, col: int):
     opt = QStyleOptionViewItem()
     opt.initFrom(table)
     opt.features = QStyleOptionViewItem.HasDisplay
-    opt.rect = QRect(0, 0, table.columnWidth(col), 100)
+    # The painter's own cell width, not the section's: the grid line lives inside the section and
+    # is not paintable text (QTableView::visualRect is a pixel narrower than columnWidth for it).
+    cell_w = table.columnWidth(col) - (1 if table.showGrid() else 0)
+    opt.rect = QRect(0, 0, cell_w, 100)
     text_rect = table.style().subElementRect(QStyle.SE_ItemViewItemText, opt, table)
-    avail, pad_v = text_rect.width(), 100 - text_rect.height()
+    # ...and SE_ItemViewItemText is still NOT where the glyphs land. QCommonStyle's own
+    # viewItemDrawText insets that rect by a further `PM_FocusFrameHMargin + 1` on EACH side before
+    # laying the text out — 6 px here, which is not a rounding difference, it is a WHOLE LINE at the
+    # widths this column runs at. Measured on the shipped page: a reason cell 376 px by this
+    # function's old arithmetic is 370 px to the painter, and one of D24 0062's rows wraps to two
+    # lines at 376 and three at 370 — so the row was pinned two lines tall and painted its third
+    # line as "…", eating the sentence's last word with no user action at all. Same family as the
+    # QSS-padding error the block above this function documents, one layer further in.
+    inset = 2 * (table.style().pixelMetric(QStyle.PM_FocusFrameHMargin, opt, table) + 1)
+    avail, pad_v = text_rect.width() - inset, 100 - text_rect.height()
     if avail <= 0:  # a collapsed column: leave Qt's own heights alone rather than pin nonsense
         return
     fm = table.fontMetrics()
@@ -439,34 +572,54 @@ def _corner_cell(opp: coaching.Opportunity) -> QTableWidgetItem:
 
 
 def _lost_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
-    """The '+<t> s' time-lost cell (right-aligned, red = time given away)."""
+    """The '+<t> s' time-lost cell (right-aligned, red = time given away).
+
+    An ABSTAINED row prints the same number in the muted tone instead of the delta hue: the
+    measurement is still shown (never silently dropped), but it is no longer a claim, and a red
+    "time given away" beside a "Not ranked:" sentence would say two opposite things in one row."""
     item = QTableWidgetItem(f"+{opp.time_lost:.2f} s")
     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
     item.setFont(num_font)
-    item.setForeground(QColor(theme.delta_colour(opp.time_lost)))
+    item.setForeground(QColor(theme.delta_colour(opp.time_lost) if opp.evidence.ranked
+                              else C.text_dim))
     return item
 
 
-def _sigma_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
-    """The lap-to-lap consistency cell (±σ s): the σ of time-in-corner over the clean laps, folded
-    onto the CANONICAL coaching row so 'how much time' (the lost cell) and 'how repeatable' read
-    together — the Consistency panel's signal on the same rows, so the two surfaces can't disagree.
-    Small σ = repeatable; large = time left on the table inconsistently here.
+# The one-word answer in the "Done it?" cell, per coaching.REACH_* id — the glance cue that
+# separates "repeat what you already did" from "find something new" without reading a sentence.
+_REACH_WORD = {
+    coaching.REACH_REPEAT: "Yes",
+    coaching.REACH_RARE: "Rarely",
+    coaching.REACH_NEVER: "Never",
+}
 
-    L5-09: the value is SECONDS and says so, the same way the "Time lost" cell beside it prints
-    "+0.13 s" — it used to render a bare "±0.12" while the very sentence in its own row spelled the
-    identical statistic "σ 0.12 s" (a state the shipped dialog reaches whenever a corner's dominant
-    reason is REASON_LINE: 1 of 11 ranked rows on D24's single chapter, 3 of 11 across three)."""
-    item = QTableWidgetItem(f"±{opp.reason.sigma:.2f} s")
+
+def _reach_cell(opp: coaching.Opportunity, num_font) -> QTableWidgetItem:
+    """"Yes · 9/38" — how many clean laps already matched this corner's target, and the word for it.
+
+    THIS REPLACED THE ±σ COLUMN, deliberately. σ was the raw dispersion printed for the reader to
+    interpret, and on the real recordings interpreting it was the whole job: σ ≥ the row's own
+    "Time lost" on 17 of the 20 ranked rows across the two D24 pairs (worst 10.8x), so the column
+    that mattered most was the one asking for arithmetic. This states the conclusion instead —
+    and states it as a COUNT OVER ITS DENOMINATOR, so it stays checkable. σ itself is not lost: the
+    REASON_LINE sentence spells it, the Stats ▸ CORNERS table has a σ column, and the Consistency
+    panel ranks on it.
+
+    An unmeasured row (a legacy/synthetic Opportunity with no per-lap times) reads the em-dash
+    rather than inventing a count."""
+    ev = opp.evidence
+    word = _REACH_WORD.get(ev.reach)
+    item = QTableWidgetItem(f"{word} · {ev.reach_laps}/{ev.n_laps}" if word else DASH)
     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
     item.setFont(num_font)
     item.setForeground(QColor(C.text_dim))
     item.setToolTip(
-        "Lap-to-lap consistency through this corner: σ of time-in-corner over your clean laps. "
-        "Small = repeatable; large = you're inconsistently leaving time here (the Consistency "
-        "panel ranks corners by σ × median loss).")
+        f"{ev.reach_laps} of your {ev.n_laps} clean laps already matched or beat your best lap's "
+        "time through this corner.\nMany — you have the pace here and the work is repeating it. "
+        "Few — you have rarely been this quick, and repeating your usual lap will not find it."
+        if word else "Not measured for this row.")
     return item
 
 
@@ -474,8 +627,21 @@ def _reason_cell(opp: coaching.Opportunity, brake_points: dict,
                  speed_unit: str | None = None) -> QTableWidgetItem:
     """The 'How to find it' reason cell: the coaching sentence (apex deficit in `speed_unit`, km/h
     default) + (when a braking-point estimate is available for this corner) the ESTIMATED 'brake
-    ~N m' line, with the per-reason tooltip."""
+    ~N m' line, with the per-reason tooltip.
+
+    An ABSTAINED row shows `coaching.abstain_sentence` (which `reason_sentence` returns for it) and
+    NO brake-point hint: the estimated "brake ~17 m later" line is exactly the collapse-to-a-default
+    this gate exists to prevent, and appending it to a row that just declined to make a claim would
+    hand the reader advice the model does not stand behind."""
     sentence = coaching.reason_sentence(opp, speed_unit)
+    if not opp.evidence.ranked:
+        item = QTableWidgetItem(sentence)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        item.setForeground(QColor(C.text_dim))
+        item.setToolTip(
+            "Not ranked. Coaching abstains on this corner rather than offering a default: see the "
+            "sentence for which evidence test it failed. The measurement is still shown.")
+        return item
     bp = brake_points.get(opp.cid)
     # L5-10: the corner's own turn-in gates the hint — a "latest sustainable brake point" more than
     # one brake zone INSIDE the corner is not a brake point, and the metres are not shown for it.
@@ -567,6 +733,12 @@ class OpportunitiesDialog(QDialog):
         title.setWordWrap(True)
         root.addWidget(title)
 
+        # Part 3: the theme leads here too, so the modal and the page tell one story. It hides
+        # itself when nothing is ranked, so the empty states below are unaffected.
+        self.theme_block = ThemeBlock()
+        self.theme_block.set_theme(opportunities)
+        root.addWidget(self.theme_block)
+
         if not (opportunities.enough and shown):
             root.addWidget(self._empty_state(opportunities), 1)
         else:
@@ -606,7 +778,7 @@ class OpportunitiesDialog(QDialog):
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         hdr = table.horizontalHeader()
         hdr.setSectionResizeMode(_COL_REASON, QHeaderView.Stretch)
-        for col in (_COL_CORNER, _COL_LOST, _COL_SIGMA, _COL_GO):
+        for col in (_COL_CORNER, _COL_LOST, _COL_REACH, _COL_GO):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         # The D2 phase breakdown bar wants a stable width (the segments are proportional).
         hdr.setSectionResizeMode(_COL_PHASES, QHeaderView.Fixed)
@@ -620,7 +792,7 @@ class OpportunitiesDialog(QDialog):
         for r, opp in enumerate(rows):
             table.setItem(r, _COL_CORNER, _corner_cell(opp))
             table.setItem(r, _COL_LOST, _lost_cell(opp, num_font))
-            table.setItem(r, _COL_SIGMA, _sigma_cell(opp, num_font))  # lap-to-lap consistency σ
+            table.setItem(r, _COL_REACH, _reach_cell(opp, num_font))  # have you already done it?
             table.setCellWidget(r, _COL_PHASES, PhaseBar(opp.phases))  # D2 entry/apex/exit Δt
             table.setItem(r, _COL_REASON, _reason_cell(opp, self._brake_points, self._speed_unit))
             table.setCellWidget(r, _COL_GO, self._go_button(opp))
@@ -667,29 +839,48 @@ class OpportunitiesDialog(QDialog):
 # per-row jump-to still lives only in the modal dialog.
 PANEL_TOP_N = 3
 
-# L5-06: the width below which the page stops paying for the ±σ column.
+# L5-06: the width below which the page stops paying for the "Done it?" column.
 #
 # What the panel does when it cannot give every column its content width: the corner and its loss
 # are the row's identity and its headline number and always stay; the reason cell is the only column
-# carrying PROSE and is the one that must wrap; ±σ is a secondary signal (and the "be consistent
-# here (σ 0.12 s)" reason spells it out in words anyway), so it is the first to go. At the app's own
-# minimum the three numeric columns held 198 of the 270 px the panel has and the reason fell back to
-# its header's own 100-px size hint — overflowing the viewport into a horizontal scrollbar, over a
-# table that already could not show one whole row.
+# carrying PROSE and is the one that must wrap; "Done it?" is a glance cue whose content the reason
+# sentence ALSO states in words ("You have already done this — 9 of your 38 laps matched it"), so it
+# is the first to go and nothing is actually lost when it does. At the app's own minimum the three
+# numeric columns held 198 of the 270 px the panel has and the reason fell back to its header's own
+# 100-px size hint — overflowing the viewport into a horizontal scrollbar, over a table that already
+# could not show one whole row.
 REASON_MIN_PX = 180
+
+# What the headline strip's hover says about the page itself. Lives beside PANEL_TOP_N because it
+# quotes it; the live theme + actions are prepended to it (see _refresh_summary_label).
+_SCOPE_TOOLTIP = (
+    "The biggest realistic time gains vs your own best lap, across the WHOLE session "
+    "(the median over your clean, GPS-dropout-free laps) — these rows do NOT follow the "
+    "lap you select; the Corners tab is the per-lap view. The total is your top "
+    f"{PANEL_TOP_N} corners that cleared the evidence gate; corners that did not are listed "
+    "below with the reason. Open Coaching ▸ Opportunities… for the full ranking + jump-to.")
 
 
 class OpportunitiesPanel(QWidget):
-    """The Coaching page of the lap panel's tab stack: the ranked opportunities (corner · time
-    lost · ±σ · dominant reason) over a freshly computed ``coaching.Opportunities``, at the panel's
-    FULL height — the full reason sentences get room to breathe (this replaced the old capped
-    under-table strip whose whole drag range was 68 px). The modal ``OpportunitiesDialog``
-    stays available for the full ranking + jump-to.
+    """The Coaching page of the lap panel's tab stack: the session THEME, then the ranked
+    opportunities (corner · time lost · done-it? · dominant reason) over a freshly computed
+    ``coaching.Opportunities``, at the panel's FULL height — the full reason sentences get room to
+    breathe (this replaced the old capped under-table strip whose whole drag range was 68 px). The
+    modal ``OpportunitiesDialog`` stays available for the full ranking + jump-to.
+
+    THEME FIRST, ROWS AS THE DRILL-DOWN (Part 3). ``ThemeBlock`` states one clustered story and at
+    most two actions above the table; the per-corner list under it is the detail behind them.
+
+    ABSTAINED ROWS ARE SHOWN, NOT DROPPED. ``summarize`` sinks the corners that failed the evidence
+    gate below the ranked ones and they render muted, with the sentence saying which test they
+    failed and NO brake-point hint — the collapse-to-a-default ("brake 8 m later") is exactly what
+    the gate exists to prevent. Only the RANKED rows are summed into the headline total.
 
     RESPONSIVE, in both directions (L5-06/L5-08). The page shows ``PANEL_TOP_N`` rows as its floor
     and then as many further ranked corners as the viewport can hold — maximized it used to be 3
     rows in 808 px (78 % dead canvas re-measured after #B23 grew the rows; the sweep filed 83 %)
-    while the model had 11 corners ranked and the modal fitted all 11 in a third of the area. Narrow, the ±σ column drops out before the reason prose is squeezed
+    while the model had 11 corners ranked and the modal fitted all 11 in a third of the area.
+    Narrow, the "Done it?" column drops out before the reason prose is squeezed
     below ``REASON_MIN_PX`` and the reason header elides into the width the style paints into, so
     the app's own minimum window no longer raises a horizontal scrollbar over a clipped header. The
     HEADLINE still sums the ``PANEL_TOP_N`` shortlist and names that count ("across your top 3
@@ -714,7 +905,7 @@ class OpportunitiesPanel(QWidget):
     # Clicked corner cid (None on deselect) -> the map apex-ring highlight (wired in central_view).
     corner_clicked = Signal(object)
 
-    _COLUMNS = ["Corner", "Time lost", "±σ", "How to find it"]
+    _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it"]
 
     def __init__(self, session: Session):
         super().__init__()
@@ -728,7 +919,8 @@ class OpportunitiesPanel(QWidget):
         self._tuning = False           # re-entrancy guard: a re-render fires resizeEvent
         self._tuned_key: tuple | None = None   # the viewport the current row count was tuned for
         self._budgeting = False        # re-entrancy guard: hiding a column fires resizeEvent
-        self._sigma_px = 0             # last measured ±σ width, so the budget can cost it while hidden
+        self._theme_budgeting = False  # ditto: shedding a theme line re-lays the page out
+        self._reach_px = 0             # last "Done it?" width, so the budget can cost it while hidden
         # The headline (e.g. "0.60 s across your top 3 corners") — the page's one-line framing.
         self._headline = ""
         # Speed display unit (km/h default) for the reason sentence's apex deficit; pushed by the
@@ -739,12 +931,7 @@ class OpportunitiesPanel(QWidget):
         # summary sentence (no title, no chevron — a tab you leave costs nothing).
         self.summary_label = QLabel("")  # "Whole session · 0.42 s in 3 corners …" — set in refresh()
         self.summary_label.setProperty("role", "BarLabel")
-        self.summary_label.setToolTip(
-            "The biggest realistic time gains vs your own best lap, across the WHOLE session "
-            "(the median over your clean, GPS-dropout-free laps) — these rows do NOT follow the "
-            "lap you select; the Corners tab is the per-lap view. The total is your top "
-            f"{PANEL_TOP_N} corners; the table below lists as much of the full ranking as fits. "
-            "Open Coaching ▸ Opportunities… for the full ranking + jump-to.")
+        self.summary_label.setToolTip(_SCOPE_TOOLTIP)
         # The same PanelHeader the four quadrants use. This strip was a byte-identical copy of
         # CentralView._header_bar — same (8, 4, 8, 4) margins, same spacing — which is how the
         # Coaching page came to sit under a header of a DIFFERENT height from the tab bar directly
@@ -771,7 +958,7 @@ class OpportunitiesPanel(QWidget):
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         hdr = self.table.horizontalHeader()
         hdr.setStretchLastSection(True)  # the reason column takes the slack
-        for col in (0, 1, 2):  # corner · time-lost · σ size to content; reason (last) stretches
+        for col in (0, 1, 2):  # corner · time-lost · done-it? to content; reason (last) stretches
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         # L5-06/L5-08: headers over their own columns, with tooltips, and the padding budget the
         # reason header is elided against (measured now, while it still carries its full label).
@@ -799,10 +986,16 @@ class OpportunitiesPanel(QWidget):
         self.body.addWidget(self.table)        # index 0 — the top-3 rows
         self.body.addWidget(self.empty_state)  # index 1 — the friendly excluded state
 
+        # Part 3: the theme + at most two actions, ABOVE the table — the page leads with one story
+        # and the per-corner rows are its drill-down. It hides itself when nothing is ranked, so
+        # the "need more laps" state below is untouched.
+        self.theme_block = ThemeBlock()
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(header)
+        lay.addWidget(self.theme_block)
         lay.addWidget(self.body, 1)  # the rows take the page's full height
         self.refresh()
 
@@ -814,11 +1007,15 @@ class OpportunitiesPanel(QWidget):
         Clears any held row selection (a stale cid would mis-ring the map)."""
         opps = self.session.coaching_opportunities()
         brake_points = self.session.coaching_brake_points()
+        self.theme_block.set_theme(opps)
         # L2: only rows above the shown resolution count as opportunities (no "+0.00 s" rows).
         if opps.enough and _shown_rows(opps):
             self._fill_rows(opps, brake_points)
         else:
             self._show_excluded(opps)
+        # A new theme is new prose of a new length, so re-run its height budget against the page
+        # the panel currently has (the resize path re-runs it whenever that page changes).
+        self._apply_theme_budget()
 
     def set_speed_unit(self, unit: str):
         """Switch the reason sentence's apex-deficit unit live: re-fill the rows. No-op if
@@ -836,7 +1033,11 @@ class OpportunitiesPanel(QWidget):
         self._all_rows = _shown_rows(opps)
         self._brake_points = brake_points
         self._tuned_key = None       # a new ranking: re-tune the row count against the viewport
-        rows = self._all_rows[:PANEL_TOP_N]
+        # The headline shortlist is the top RANKED rows, not the top rows: an abstained corner is
+        # displayed but its number is not a claim, so summing it into "time available" would put
+        # back exactly the noise the evidence gate just took out. (summarize orders ranked-first, so
+        # this is normally `[:PANEL_TOP_N]` — the filter matters when fewer than N rows are ranked.)
+        rows = _ranked_shown(opps)[:PANEL_TOP_N]
         # B12: sum the 2-dp DISPLAYED values, not the raw floats — the headline ("0.56 s")
         # and the visible rows (+0.26 +0.20 +0.11 = 0.57) must never disagree by a rounding
         # penny; the header is an aggregate of what the user can check by eye.
@@ -851,9 +1052,15 @@ class OpportunitiesPanel(QWidget):
         # not a rounding question the reader can resolve by looking harder. The modal dialog this
         # panel shares its rows with has said "vs your best lap" in its title all along; the page
         # a user actually lands on did not.
-        gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
-                 else f"{total:.2f} s across your top {len(rows)} corners")
-        gains += " vs your best lap"
+        # ...and the ZERO case is real now: every shown corner can fail the evidence gate, in which
+        # case there is no time to claim and the honest headline says so rather than totalling 0.00 s
+        # "across your top 0 corners". The table below still lists those corners with their reasons.
+        if not rows:
+            gains = "no corner clears its own lap-to-lap spread"
+        else:
+            gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
+                     else f"{total:.2f} s across your top {len(rows)} corners")
+            gains += " vs your best lap"
         # IA-01: LEAD with the scope. The tab strip beside this page renames itself "Corners · L6"
         # on a selection, so a coaching headline that neither moves nor names its scope reads as the
         # selected lap's number — on D24 lap 6 that understated the lap's own +2.08 s as "0.21 s".
@@ -862,8 +1069,11 @@ class OpportunitiesPanel(QWidget):
         self._headline = f"{_SCOPE_PREFIX} · {gains} ({_clean_laps_phrase(opps.n_laps)})"
         self._refresh_summary_label()
 
-        # A refresh is new data / a new unit / a new palette, so every cell is rebuilt.
-        self._render_rows(len(rows), keep_selection=False, rebuild=True)
+        # A refresh is new data / a new unit / a new palette, so every cell is rebuilt. The row
+        # COUNT is the page's floor (the tune loop below grows it to the viewport); it is NOT the
+        # headline shortlist's length, which counts only ranked rows.
+        self._render_rows(min(PANEL_TOP_N, len(self._all_rows)),
+                          keep_selection=False, rebuild=True)
         self._apply_column_budget()
         self._tune_rows()
 
@@ -891,7 +1101,7 @@ class OpportunitiesPanel(QWidget):
                 opp = rows[r]
                 self.table.setItem(r, 0, _corner_cell(opp))
                 self.table.setItem(r, 1, _lost_cell(opp, self._num_font))
-                self.table.setItem(r, 2, _sigma_cell(opp, self._num_font))  # consistency σ
+                self.table.setItem(r, 2, _reach_cell(opp, self._num_font))  # have you done it?
                 self.table.setItem(r, 3, _reason_cell(opp, self._brake_points, self._speed_unit))
             if held is not None and held in self._cids:
                 self.table.selectRow(self._cids.index(held))
@@ -915,24 +1125,26 @@ class OpportunitiesPanel(QWidget):
     def _apply_column_budget(self):
         """Spend the panel's width on the column that carries the prose (L5-06).
 
-        Drops ±σ before the reason cell falls below ``REASON_MIN_PX``, then elides the reason header
-        into the width the style really paints into. At the app's own minimum this takes the reason
-        column from its header's 100-px fallback to the 128 px actually left over, retires the
-        horizontal scrollbar the overflow raised, and stops "How to find it" painting as a clipped
-        "How to find"."""
+        Drops "Done it?" before the reason cell falls below ``REASON_MIN_PX``, then elides the
+        reason header into the width the style really paints into. At the app's own minimum this
+        takes the reason column from its header's 100-px fallback to the 128 px actually left over,
+        retires the horizontal scrollbar the overflow raised, and stops "How to find it" painting as
+        a clipped "How to find". Nothing is lost when the column goes: the reason sentence in the
+        column it pays for spells the same fact out ("You have already done this — 9 of your 38
+        laps matched it")."""
         if self._budgeting:
             return
         t = self.table
         self._budgeting = True
         try:
-            if not t.isColumnHidden(_PANEL_COL_SIGMA):
-                # Remember what ±σ costs, so the budget can price it while it is hidden.
-                self._sigma_px = t.columnWidth(_PANEL_COL_SIGMA) or self._sigma_px
+            if not t.isColumnHidden(_PANEL_COL_REACH):
+                # Remember what "Done it?" costs, so the budget can price it while it is hidden.
+                self._reach_px = t.columnWidth(_PANEL_COL_REACH) or self._reach_px
             room = (t.viewport().width() - t.columnWidth(_COL_CORNER)
-                    - t.columnWidth(_COL_LOST) - self._sigma_px)
+                    - t.columnWidth(_COL_LOST) - self._reach_px)
             hide = room < REASON_MIN_PX
-            if hide != t.isColumnHidden(_PANEL_COL_SIGMA):
-                t.setColumnHidden(_PANEL_COL_SIGMA, hide)
+            if hide != t.isColumnHidden(_PANEL_COL_REACH):
+                t.setColumnHidden(_PANEL_COL_REACH, hide)
             _elide_header(t, _PANEL_COL_REASON, self._COLUMNS[_PANEL_COL_REASON],
                           self._reason_chrome)
         finally:
@@ -954,7 +1166,7 @@ class OpportunitiesPanel(QWidget):
         if self._tuning or self.body.currentIndex() != 0 or not self._all_rows:
             return
         key = (self.table.viewport().width(), self.table.viewport().height(),
-               len(self._all_rows), self.table.isColumnHidden(_PANEL_COL_SIGMA))
+               len(self._all_rows), self.table.isColumnHidden(_PANEL_COL_REACH))
         if key == self._tuned_key:
             return
         n_all = len(self._all_rows)
@@ -1018,12 +1230,31 @@ class OpportunitiesPanel(QWidget):
         return super().eventFilter(obj, event)
 
     def _relayout(self):
-        """Budget the columns, re-fit the wrapped rows, then tune the row count — in that order:
+        """Budget the theme block's height, then the columns, then re-fit the wrapped rows, then
+        tune the row count — in that order: the theme block decides how much height the table has,
         the column widths decide the wrap, the wrap decides the row heights, and the row heights
         decide how many rows fit."""
+        self._apply_theme_budget()
         self._apply_column_budget()
         _fit_reason_rows(self.table, _PANEL_COL_REASON)
         self._tune_rows()
+
+    def _apply_theme_budget(self):
+        """Let the theme lead, but never displace the ranking it is about (THEME_MAX_FRACTION).
+
+        Measured: at the app's own 280x196 minimum the three-line summary wanted 159 of the page's
+        196 px and left the table a viewport 0 px TALL — a headline about a list, with the list
+        gone. The block sheds its second action, then its first, then itself; what it sheds moves
+        onto the header strip's tooltip, so the theme is demoted and never deleted."""
+        if self._theme_budgeting:
+            return
+        self._theme_budgeting = True
+        try:
+            self.theme_block.fit_into(self.width(),
+                                      int(self.height() * THEME_MAX_FRACTION))
+            self._refresh_summary_label()
+        finally:
+            self._theme_budgeting = False
 
     # ------------------------------------------------------------- interaction
     def _on_row_selected(self):
@@ -1034,5 +1265,11 @@ class OpportunitiesPanel(QWidget):
 
     def _refresh_summary_label(self):
         """Set the headline-strip text from the stashed headline ("0.60 s across your top 3
-        corners"). Empty headline (the friendly no-opportunity state) → no summary."""
+        corners"). Empty headline (the friendly no-opportunity state) → no summary.
+
+        The strip's TOOLTIP also carries the full theme + both actions, so a page too short to
+        show the theme block (see `_apply_theme_budget`) still has the story one hover away — the
+        block sheds lines, it never deletes them."""
         self.summary_label.setText(self._headline)
+        story = self.theme_block.full_text()
+        self.summary_label.setToolTip(f"{story}\n\n{_SCOPE_TOOLTIP}" if story else _SCOPE_TOOLTIP)

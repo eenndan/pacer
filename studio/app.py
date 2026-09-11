@@ -64,6 +64,7 @@ from . import (
 from ._signal import lap_label
 from .central_view import CentralView, undo_summary
 from .coaching_panel import OpportunitiesDialog
+from .command_palette import CommandPalette
 
 # ExportChoice is RE-EXPORTED, not used here: it moved to the controller with the picker that
 # returns it, and `studio.app.ExportChoice` is the name the export tests already reach for.
@@ -1963,6 +1964,16 @@ class StudioWindow(QMainWindow):
         # ships collapsed, excluded ships as its own one-liner.
         view_menu = self.menuBar().addMenu("&View")
         view_menu.aboutToShow.connect(self._sync_view_menu)
+        # ⌘K over everything the app can do. FIRST in the View menu because it is the way to find
+        # the other thirty items rather than one of them; it is on the persistent window, so it
+        # works on the welcome screen too (where most of what it lists is greyed, honestly).
+        self._palette_action = view_menu.addAction("Command palette…")
+        self._palette_action.setShortcut(QKeySequence("Ctrl+K"))  # ⌘K on macOS
+        self._palette_action.setToolTip(
+            "Find and run any command by typing its name (⌘K) — every menu item plus the "
+            "keyboard-only toggles, with the key that runs it")
+        self._palette_action.triggered.connect(self.show_command_palette)
+        view_menu.addSeparator()
         # Whole-window full screen (the native macOS ⌘⌃F): a checkable toggle whose text flips
         # Enter/Exit. The macOS green traffic-light already gives native fullscreen for a QMainWindow;
         # this is the menu item + keyboard shortcut on top of it, kept in sync via changeEvent. Esc
@@ -2158,23 +2169,31 @@ class StudioWindow(QMainWindow):
     # ----------------------------------------------------- keyboard shortcuts
     def _build_shortcuts(self):
         """Window-level playback shortcuts: Space (play/pause), M (mute), G (g-meter overlay),
-        C (compare mode). Parented to the window so they survive every view swap; handlers resolve
-        the current video dynamically (via _video_do). G / C go through the button's click() so a
-        disabled button makes its shortcut a no-op. ←/→ stepping is handled in keyPressEvent, not
-        here, so the lap table keeps its arrow navigation."""
+        C (compare mode), [ / ] (playback rate). Parented to the window so they survive every view
+        swap; every handler is one of the NAMED command methods below, which is what lets the ⌘K
+        palette and the ? card offer the same commands this binds (help_dialog.COMMANDS carries the
+        method name). G / C go through the button's click() so a disabled button makes its shortcut
+        a no-op. ←/→ stepping is handled in keyPressEvent, not here, so the lap table keeps its
+        arrow navigation."""
         def shortcut(key, handler):
             sc = QShortcut(QKeySequence(key), self)
             sc.setContext(Qt.WindowShortcut)
             sc.activated.connect(handler)
 
-        shortcut(Qt.Key_Space, lambda: self._video_do(lambda v: v.toggle()))
-        shortcut(Qt.Key_M, lambda: self._video_do(lambda v: v.toggle_mute()))
-        shortcut(Qt.Key_G, lambda: self._video_do(lambda v: v.gmeter_btn.click()))
-        shortcut(Qt.Key_C, lambda: self._video_do(lambda v: v.compare_btn.click()))
+        shortcut(Qt.Key_Space, self.toggle_playback)
+        shortcut(Qt.Key_M, self.toggle_mute)
+        shortcut(Qt.Key_G, self.toggle_gmeter)
+        shortcut(Qt.Key_C, self.toggle_compare)
+        # [ / ] → one rung down / up the playback-rate ladder. VLC's keys, and the two brackets are
+        # unclaimed here; the picker in the transport is the same control with a visible state.
+        shortcut(Qt.Key_BracketLeft, self.slower_playback)
+        shortcut(Qt.Key_BracketRight, self.faster_playback)
         # 1-4 → the lap panel's tabs (Laps · Corners · Stats · Coaching); no-op before a load.
-        for digit, tab in ((Qt.Key_1, 0), (Qt.Key_2, 1), (Qt.Key_3, 2), (Qt.Key_4, 3)):
-            shortcut(digit, lambda t=tab: self._select_lap_tab(t))
-        # ? → shortcut reference (keep in sync with help_dialog.SHORTCUT_GROUPS).
+        for digit, handler in ((Qt.Key_1, self.show_laps_tab), (Qt.Key_2, self.show_corners_tab),
+                               (Qt.Key_3, self.show_stats_tab),
+                               (Qt.Key_4, self.show_coaching_tab)):
+            shortcut(digit, handler)
+        # ? → shortcut reference (keep in sync with help_dialog.COMMANDS).
         shortcut(Qt.Key_Question, self._show_shortcuts)
 
     def _video_do(self, fn):
@@ -2183,6 +2202,67 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             fn(view.video)
+
+    # ----------------------------------------------------- the named commands
+    # ONE METHOD PER COMMAND, and they are public on purpose: `help_dialog.COMMANDS` names each of
+    # them as the `run` of its row, so the ⌘K palette invokes exactly what the key binds and the ?
+    # card documents. They were lambdas inside _build_shortcuts, which is a perfectly good way to
+    # bind a key and no way at all to offer the same action from a second surface.
+    # Every one is a no-op before a recording is loaded (via _video_do / the view guard), which is
+    # what the keys already did.
+    def toggle_playback(self):
+        """Play / pause the video (Space)."""
+        self._video_do(lambda v: v.toggle())
+
+    def toggle_mute(self):
+        """Mute / unmute the clip audio (M)."""
+        self._video_do(lambda v: v.toggle_mute())
+
+    def toggle_gmeter(self):
+        """Show / hide the g-meter overlay (G) — through the button, so a recording with no
+        accelerometer (a disabled toggle) makes the key a no-op instead of a silent failure."""
+        self._video_do(lambda v: v.gmeter_btn.click())
+
+    def toggle_compare(self):
+        """Enter / leave two-lap compare mode (C) — through the button, which is disabled below
+        two valid laps."""
+        self._video_do(lambda v: v.compare_btn.click())
+
+    def toggle_video_focus(self):
+        """Make the video fill the screen, or restore (F) — through the ⤢ button, which compare
+        mode disables."""
+        self._video_do(lambda v: v.request_video_focus())
+
+    def slower_playback(self):
+        """One rung SLOWER on the playback-rate ladder ([) — 1× → 0.5× → 0.25×, clamped."""
+        self._video_do(lambda v: v.step_playback_rate(-1))
+
+    def faster_playback(self):
+        """One rung FASTER on the playback-rate ladder (]) — clamped at 2×."""
+        self._video_do(lambda v: v.step_playback_rate(+1))
+
+    def show_laps_tab(self):
+        """Lap panel ▸ Laps (1)."""
+        self._select_lap_tab(0)
+
+    def show_corners_tab(self):
+        """Lap panel ▸ Corners (2)."""
+        self._select_lap_tab(1)
+
+    def show_stats_tab(self):
+        """Lap panel ▸ Stats (3). Not the same as View ▸ Session statistics, which also MAXIMIZES
+        the panel — this just flips the page."""
+        self._select_lap_tab(2)
+
+    def show_coaching_tab(self):
+        """Lap panel ▸ Coaching (4)."""
+        self._select_lap_tab(3)
+
+    def show_command_palette(self):
+        """View ▸ Command palette… (⌘K): the type-to-run list over every menu action plus the
+        keyboard-only commands (studio/command_palette.py). Built fresh per open, and the palette
+        primes each menu's own `aboutToShow` on the way in, so what it lists is live."""
+        CommandPalette(self).exec()
 
     def _select_lap_tab(self, index: int):
         """Digit shortcut 1-4 → the lap panel's tab, resolved at call time; no-op before the

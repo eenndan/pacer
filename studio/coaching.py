@@ -10,6 +10,12 @@ dominant reason (apex / braking / coasting / line) is picked from four signals, 
 comparable strength; the strongest wins (ties → a fixed reason priority), REASON_NONE when none
 fires. summarize returns enough=False under MIN_LAPS consistency laps. Pure + deterministic
 (corners in cid order, candidate laps ascending).
+
+Each row also carries `Evidence` — how many of your laps have ALREADY matched that corner's
+target and how wide the corner's own interquartile spread is — which decides two things a bare
+`time_lost` cannot: whether the corner is execution work or pace work (`REACH_*`), and whether
+the row carries a claim at all (`ABSTAIN_*`). The session's rows then cluster into one `Theme`.
+See the "spread, reach and the evidence gate" block below for the measured numbers.
 """
 
 from __future__ import annotations
@@ -95,6 +101,141 @@ class PhaseLoss:
 _NO_PHASES = PhaseLoss(entry=0.0, apex=0.0, exit=0.0)
 
 
+# ------------------------------------------------ spread, reach and the per-corner evidence gate
+#
+# WHY THIS EXISTS. `time_lost` is median-minus-your-best-lap, and on its own it cannot tell two
+# very different drivers apart. A driver who has hit the target here on 9 of 38 laps and one who
+# has hit it twice in 65 get the identical row and the identical sentence — yet the first needs
+# "do again what you already did" and the second needs "find something new". Worse, a median-minus-
+# best gap can be smaller than the corner's own lap-to-lap scatter, in which case the row is not an
+# opportunity at all, it is sampling noise wearing a number.
+#
+# MEASURED, on the two real D24 recordings (0060: 38 clean laps, 12 corners, 9 rows above the
+# panel's display resolution; 0062: 65 clean laps, 12 corners, 11 rows) —
+#
+#   * σ ≥ time_lost on 17 of those 20 rows. The worst: 0060 C1 lost 0.034 s against σ 0.372 s
+#     (10.8x), 0060 C10 lost 0.071 s against σ 0.592 s (8.4x). Those rows shipped a live Jump
+#     button beside a number smaller than a tenth of the corner's own scatter.
+#   * σ is NOT the right spread statistic: on 0062 C1 it reads 0.226 s while the interquartile
+#     range is 0.115 s — 4x apart, because a handful of slow laps drag the second moment and a
+#     quartile does not. The gate below reads the IQR.
+#   * the reach rate (how many clean laps already matched the corner's target) runs 3 %..34 % and
+#     splits cleanly at 1 lap in 10 — 15 of the 20 rows are corners the driver reaches routinely,
+#     5 are corners reached about once a session.
+#
+# WHAT THE BRIEFED PREMISE GOT WRONG, and it is worth writing down: the target the ranking uses is
+# the BEST LAP's time through the corner, and that is never a lone outlier. `z > 1.5` against the
+# rest of the distribution fired on 0 of 20 rows, and every one of the 20 had at least two OTHER
+# laps strictly beating it (2..21 of them). Nor is it "your optimal line": on both recordings the
+# best lap's corner time was slower than that corner's own best instance at all 12 of 12 corners
+# (by 0.07..0.55 s). So ABSTAIN_ONE_OFF below is a real guard that has never fired on real data —
+# it is kept because a 3-lap session can trivially produce it, not because it is common.
+
+# A corner needs at least this many clean instances before ANY per-corner claim is made about it.
+# (The session-level MIN_LAPS gate above is a different question — it asks whether the median is
+# defined at all; this one asks whether THIS corner was actually driven enough times to talk about.)
+MIN_CORNER_LAPS = 3
+
+# "You have already done this" needs more than one lap saying so. The BEST LAP's own instance is
+# always in the candidate set, so a reach count of 1 means nothing but the baseline itself ever got
+# there — a target with no second witness is not a target.
+MIN_REACH_LAPS = 2
+
+# ...and it needs to be more than a rounding-level rate: fewer than 1 lap in 10 at the target is a
+# corner you have visited, not a pace you have established. Measured, the 20 real rows' reach rates
+# sort as 4.6 4.6 4.6 7.7 7.9 | 13.2 13.8 16.9 18.4 18.4 18.5 23.7 24.6 26.3 26.3 28.9 29.2 30.8
+# 31.6 33.8 % — the widest gap in the whole set sits exactly on 10 %.
+REACH_REPEAT_FRAC = 0.10
+
+# A claim must clear half the corner's own INTERQUARTILE spread to be aimable. Not a significance
+# test — with 38-65 laps the standard error of a median is ~0.03 s and almost nothing would abstain
+# — but an ACTIONABILITY test: a driver cannot aim at 0.03 s inside a band whose middle half is
+# 0.20 s wide, however real the 0.03 s is. Measured: 6 of the 20 real rows abstain here, including
+# 0062's THIRD-ranked corner (C12, 0.078 s on offer against a 0.236 s interquartile band).
+SPREAD_MARGIN = 0.5
+
+# How a corner's target relates to what the driver has actually produced — the "can't vs didn't"
+# axis, and the one thing that changes the instruction rather than only the number.
+REACH_REPEAT = "repeat"    # reached routinely (>= REACH_REPEAT_FRAC of laps): EXECUTION work
+REACH_RARE = "rare"        # reached, but seldom: PACE work — new ground, not a repeat
+REACH_NEVER = "never"      # no clean lap has ever matched the target
+REACH_UNKNOWN = "unknown"  # not measured (a row built without the per-lap times) — no claim either way
+
+# Why a corner carries no ranked claim. "" is the ranked case; the rest are shown, never dropped —
+# a row that says why it is not ranked is worth more than a row that silently disappears.
+ABSTAIN_NONE = ""
+ABSTAIN_FEW_LAPS = "few_laps"   # too few clean instances of this corner to say anything
+ABSTAIN_ONE_OFF = "one_off"     # nothing but the baseline itself ever reached the target
+ABSTAIN_SPREAD = "spread"       # the claim is inside the corner's own lap-to-lap scatter
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """What is actually known about ONE corner: how repeatable its target is, how wide its own
+    spread is, and whether that is enough to make a claim."""
+
+    n_laps: int          # clean laps with a finite time through this corner
+    reach_laps: int      # how many of them matched or beat the target (the best lap's own time)
+    reach: str           # REACH_* — the can't/didn't axis
+    iqr: float           # interquartile range of time-in-corner (s); robust where sigma is not
+    abstain: str         # ABSTAIN_* — "" when the row carries a ranked claim
+
+    @property
+    def ranked(self) -> bool:
+        """True when this corner's row is a real opportunity (nothing gated it out)."""
+        return not self.abstain
+
+    @property
+    def reach_frac(self) -> float:
+        """Fraction of clean laps that already matched the target (0.0 when nothing measured)."""
+        return self.reach_laps / self.n_laps if self.n_laps else 0.0
+
+
+# The "not measured" evidence: a row built without per-lap times (a synthetic/legacy construction).
+# It deliberately does NOT abstain and carries no reach claim — an unmeasured row must behave
+# exactly as rows did before the gate existed, rather than being silently gated out.
+_NO_EVIDENCE = Evidence(n_laps=0, reach_laps=0, reach=REACH_UNKNOWN, iqr=0.0,
+                        abstain=ABSTAIN_NONE)
+
+
+def corner_evidence(times, target: float, time_lost: float) -> Evidence:
+    """One corner's Evidence from its per-lap times and the target the loss is measured against.
+
+    `times` are that corner's time-in-corner over the candidate laps (non-finite entries dropped);
+    `target` is the BEST LAP's time through the same corner — the baseline `time_lost` is measured
+    from, so "reached" means literally "drove this corner at least as fast as your best lap did".
+
+    The three abstain tests are applied in a FIXED priority so the reported reason is deterministic
+    and the most fundamental objection wins: not enough instances beats no-second-witness beats
+    inside-the-scatter."""
+    t = np.asarray(list(times), float)
+    t = t[np.isfinite(t)]
+    n = int(len(t))
+    if n == 0:
+        return Evidence(n_laps=0, reach_laps=0, reach=REACH_NEVER, iqr=0.0,
+                        abstain=ABSTAIN_FEW_LAPS)
+    # "Matched or beat" — the best lap's own instance sits exactly on the target, so the epsilon is
+    # float slack on an identical computation, not a tolerance band.
+    reach_laps = int(np.count_nonzero(t <= float(target) + 1e-9))
+    q25, q75 = (np.percentile(t, [25, 75]) if n >= 2 else (t[0], t[0]))
+    iqr = float(q75 - q25)
+    if reach_laps == 0:
+        reach = REACH_NEVER
+    elif reach_laps >= MIN_REACH_LAPS and reach_laps >= REACH_REPEAT_FRAC * n:
+        reach = REACH_REPEAT
+    else:
+        reach = REACH_RARE
+    if n < MIN_CORNER_LAPS:
+        abstain = ABSTAIN_FEW_LAPS
+    elif reach_laps < MIN_REACH_LAPS:
+        abstain = ABSTAIN_ONE_OFF
+    elif float(time_lost) < SPREAD_MARGIN * iqr:
+        abstain = ABSTAIN_SPREAD
+    else:
+        abstain = ABSTAIN_NONE
+    return Evidence(n_laps=n, reach_laps=reach_laps, reach=reach, iqr=iqr, abstain=abstain)
+
+
 @dataclass(frozen=True)
 class Opportunity:
     """One corner's coaching row: how much time is realistically available and why."""
@@ -107,6 +248,96 @@ class Opportunity:
     # D2: typical-lap entry/apex/exit Δt-vs-best thirds (s) — a WHERE-in-the-corner profile, a
     # DIFFERENT statistic from time_lost (their sum is the typical lap's net, not the median loss).
     phases: PhaseLoss = _NO_PHASES
+    # Whether this corner is execution work or pace work, and whether it carries a claim at all.
+    evidence: Evidence = _NO_EVIDENCE
+
+
+# ------------------------------------------------------------------------- the session theme
+#
+# Twelve findings is not coaching; one theme plus at most two actions is. The clustering runs over
+# what this app can MEASURE — the reach axis above and the four driving signals — and over SHARE OF
+# RANKED TIME rather than a row count, because the ranking's own unit is seconds and a count lets
+# six trivial corners outvote the one that matters.
+#
+# MEASURED, on the two real recordings, over the ranked (non-abstained) rows: 0060 splits 73 %
+# execution / 27 % pace and 0062 splits 35 % / 65 % — SAME driver, SAME track, weeks apart, and
+# the theme comes out opposite. That is the finding that justifies the feature. The cause axis is
+# weaker: braking holds 61 % of 0060's ranked time (a theme) but only 44 % of 0062's (not one), so
+# the cause line is conditional and will often read "no single cause dominates".
+#
+# AND THE HONEST CAVEAT, also measured: the theme is a property of the LAP SET, and it moves with
+# it. Loading only chapter 2 of each recording (24 laps instead of 38 and 65) flips BOTH verdicts —
+# 0060 reads 86 % pace and 0062 reads 72 % execution. Corners cluster near the 1-in-10 reach line,
+# so a different lap set moves several of them across it at once. The sentence therefore always
+# states its own share, and THEME_SPLIT exists so a balanced session is not forced to pick a side.
+THEME_EXECUTION = "execution"  # most of the ranked time is in corners already driven at this pace
+THEME_PACE = "pace"            # most of it is in corners the driver has rarely reached
+THEME_SPLIT = "split"          # neither side holds a clear majority — say so, don't invent one
+THEME_NONE = "none"            # nothing ranked (every row abstained, or there are no rows)
+
+# The share one side must hold before it is called the session's theme. 0.60 is a clear majority
+# with room to spare; measured, 0060 lands at 0.73 and 0062 at 0.65, and 0060 would fall to a SPLIT
+# if its C4 (reached on 5 of 38 laps, just over the 1-in-10 line) tipped the other way.
+THEME_SHARE = 0.60
+
+
+@dataclass(frozen=True)
+class Theme:
+    """The one-line story the session's ranked rows add up to, plus the numbers behind it."""
+
+    kind: str                        # THEME_*
+    share: float                     # the winning side's share of ranked time (0..1)
+    execution_s: float               # ranked seconds in REACH_REPEAT corners
+    pace_s: float                    # ranked seconds in REACH_RARE / REACH_NEVER corners
+    n_ranked: int                    # rows carrying a claim
+    n_abstained: int                 # rows shown but not ranked (the evidence gate)
+    cause: str                       # the REASON_* holding the most ranked time (REASON_NONE if none)
+    cause_share: float               # its share of ranked time (0..1)
+    cause_cids: tuple[int, ...] = ()  # the corners that cause covers, in ranked order
+    lead_cid: int | None = None      # the biggest single ranked corner — the "start here"
+
+
+_NO_THEME = Theme(kind=THEME_NONE, share=0.0, execution_s=0.0, pace_s=0.0, n_ranked=0,
+                  n_abstained=0, cause=REASON_NONE, cause_share=0.0)
+
+
+def session_theme(rows: list[Opportunity]) -> Theme:
+    """Cluster the rows into ONE theme. Pure, deterministic, and it only ever reads the reach axis
+    and the four measured reasons — this app cannot see vision or reference points and must not
+    name a cause it cannot measure.
+
+    Only RANKED rows vote: an abstained row has no claim, so letting it weigh on the theme would
+    reintroduce through the back door exactly the noise the gate removed."""
+    ranked = [r for r in rows if r.evidence.ranked]
+    abstained = len(rows) - len(ranked)
+    total = sum(r.time_lost for r in ranked)
+    if not ranked or total <= 0:
+        return Theme(kind=THEME_NONE, share=0.0, execution_s=0.0, pace_s=0.0, n_ranked=0,
+                     n_abstained=abstained, cause=REASON_NONE, cause_share=0.0)
+    execution_s = sum(r.time_lost for r in ranked if r.evidence.reach == REACH_REPEAT)
+    pace_s = sum(r.time_lost for r in ranked
+                 if r.evidence.reach in (REACH_RARE, REACH_NEVER))
+    # REACH_UNKNOWN rows (built without per-lap times) count towards neither side, so an unmeasured
+    # session reports a SPLIT rather than a theme it has no evidence for.
+    if execution_s >= THEME_SHARE * total:
+        kind, share = THEME_EXECUTION, execution_s / total
+    elif pace_s >= THEME_SHARE * total:
+        kind, share = THEME_PACE, pace_s / total
+    else:
+        kind, share = THEME_SPLIT, max(execution_s, pace_s) / total
+    # The cause axis, on the same share-of-time basis and the same threshold. Ties resolve by
+    # _REASON_PRIORITY so the winner is deterministic.
+    by_cause = {k: sum(r.time_lost for r in ranked if r.reason.kind == k)
+                for k in _REASON_PRIORITY}
+    cause = max(_REASON_PRIORITY, key=lambda k: (by_cause[k], -_REASON_PRIORITY.index(k)))
+    cause_share = by_cause[cause] / total
+    if cause == REASON_NONE or cause_share < THEME_SHARE:
+        cause, cause_share, cids = REASON_NONE, 0.0, ()
+    else:
+        cids = tuple(r.cid for r in ranked if r.reason.kind == cause)
+    return Theme(kind=kind, share=share, execution_s=execution_s, pace_s=pace_s,
+                 n_ranked=len(ranked), n_abstained=abstained, cause=cause,
+                 cause_share=cause_share, cause_cids=cids, lead_cid=ranked[0].cid)
 
 
 @dataclass(frozen=True)
@@ -118,6 +349,14 @@ class Opportunities:
     n_laps: int                              # consistency laps the summary ran over
     median_lap_id: int | None                # the representative lap the reasons read off
     rows: list[Opportunity] = field(default_factory=list)
+    # The clustered one-line story over `rows` (THEME_NONE when nothing is ranked). Computed once
+    # by summarize() so the panel, the modal and any export state the SAME theme.
+    theme: Theme = _NO_THEME
+
+    def ranked_rows(self) -> list[Opportunity]:
+        """The rows carrying a claim — `rows` minus everything the evidence gate abstained on.
+        `rows` is ordered ranked-first, so this is a prefix."""
+        return [r for r in self.rows if r.evidence.ranked]
 
 
 # ----------------------------------------------------------------- median-lap selection
@@ -454,6 +693,9 @@ def summarize(
     top_n caps how many ranked rows get a dominant reason attached; None (the default) analyses
     EVERY ranked row, so a REASON_NONE row means "measured, nothing fired" rather than "not looked
     at" — the rows below any cap are shown too (the Opportunities dialog lists all of them).
+    Every row also gets its `Evidence` (from the same corner_times_by_lap column and the same
+    best_corner_times baseline — no new inputs) and the rows are ordered ranked-first,
+    abstained-last; the clustered `Theme` over the ranked rows rides on the result.
     Returns Opportunities; enough=False (empty rows) when < min_laps candidate laps."""
     n_laps = len(candidate_lap_ids)
     med_id = median_lap_id(candidate_lap_ids, lap_times)
@@ -547,8 +789,20 @@ def summarize(
         rows.append(Opportunity(
             cid=c.cid, direction=c.direction, time_lost=float(losses[i]),
             entry_dist=float(c.enter), reason=reason, phases=phases,
+            # The per-corner evidence reads the SAME time matrix the loss came from and the SAME
+            # baseline (the best lap's own time through the corner), so a row's "you have matched
+            # this on 9 of 38 laps" is literally a count of the column the median above summarized.
+            evidence=corner_evidence(times[:, i], float(best[i]), float(losses[i])),
         ))
-    return Opportunities(enough=True, n_laps=n_laps, median_lap_id=med_id, rows=rows)
+    # Abstained rows sink BELOW the ranked ones (each half keeps the loss ranking, which the
+    # stable sort preserves). They are never dropped — the panel shows them with the reason they
+    # are not ranked — but a row with no claim must not sit above rows that have one, and
+    # everything downstream that reads `rows[0]` or `rows[:3]` (the share card's headline
+    # opportunity, the panel's top-N total, the Stats digest) then gets a row that survived the
+    # gate instead of the biggest number.
+    rows.sort(key=lambda r: not r.evidence.ranked)
+    return Opportunities(enough=True, n_laps=n_laps, median_lap_id=med_id, rows=rows,
+                         theme=session_theme(rows))
 
 
 # Names for the dominant phase in the coaching sentence (PHASE_* → human words).
@@ -596,14 +850,62 @@ def dominant_phase_clause(opp: Opportunity) -> str:
 
 
 # ------------------------------------------------------------------ UI sentence helper
+def reach_clause(opp: Opportunity) -> str:
+    """The second sentence: whether this corner is something the driver has already done, or
+    something they have not.
+
+    THE POINT OF THE WHOLE FEATURE. The lever sentence ("brake later / shorter") is identical for
+    a driver who has hit this corner's target on 9 of 38 laps and one who has hit it twice in 65 —
+    and the two need opposite instructions. This says which one they are, with the count and its
+    denominator so the claim can be checked. "" when nothing was measured (REACH_UNKNOWN)."""
+    ev = opp.evidence
+    # Terse on purpose: the clause rides on the end of an already-long lever sentence in a wrapping
+    # table cell, and the count is ALSO in the row's own "Done it?" column. What cannot be dropped
+    # is the VOICE (already / rarely / never — that is the instruction changing) and the
+    # denominator (the honesty rule: never a count without the sample it came out of).
+    if ev.reach == REACH_REPEAT:
+        return f" You have already done this — {ev.reach_laps} of {ev.n_laps} laps."
+    if ev.reach == REACH_RARE:
+        return f" You have rarely done this — {ev.reach_laps} of {ev.n_laps} laps."
+    if ev.reach == REACH_NEVER:
+        return f" No lap has matched this yet — new ground over {ev.n_laps} laps."
+    return ""
+
+
+def abstain_sentence(opp: Opportunity) -> str:
+    """Why this corner is NOT ranked, in the driver's terms — the visible, honest abstain.
+
+    The category's recurring failure is collapsing to a default ("brake 8 m later") when there is
+    nothing specific to say. A row that states its own objection is worth more than a row silently
+    dropped, and more than a confident sentence with no evidence under it. "" for a ranked row."""
+    ev = opp.evidence
+    if ev.abstain == ABSTAIN_FEW_LAPS:
+        laps = f"{ev.n_laps} clean lap" + ("" if ev.n_laps == 1 else "s")
+        return f"Not ranked: only {laps} through this corner — too few to call."
+    if ev.abstain == ABSTAIN_ONE_OFF:
+        return ("Not ranked: no second lap has matched your best here, so there is no repeatable "
+                "target to aim at.")
+    if ev.abstain == ABSTAIN_SPREAD:
+        return (f"Not ranked: the {opp.time_lost:.2f} s on offer is inside your own lap-to-lap "
+                f"spread here — the middle half of your laps span {ev.iqr:.2f} s.")
+    return ""
+
+
 def reason_sentence(opp: Opportunity, unit: str | None = None) -> str:
     """The human, numbers-only coaching sentence for one opportunity's dominant reason. Kept
     here (next to the model) so the panel and any export read ONE phrasing and can't drift. When
     a clear dominant phase exists (D2) a reason-aware clause is appended (a fix-location "… — most
     of it on the apex" when the phase matches the lever, else a consequence "… and it carries to
-    exit"). Raw driving-channel numbers (brake/coast) are phrased as a CAUSE ("~X s longer on the
-    brakes"), never as recoverable time. `unit` (km/h default) converts the apex-speed deficit at
-    the DISPLAY boundary — the deficit stays km/h."""
+    exit"), then the `reach_clause` says whether this is a repeat or new ground. Raw driving-channel
+    numbers (brake/coast) are phrased as a CAUSE ("~X s longer on the brakes"), never as recoverable
+    time. `unit` (km/h default) converts the apex-speed deficit at the DISPLAY boundary — the
+    deficit stays km/h.
+
+    An ABSTAINED row returns its `abstain_sentence` instead: the lever is not stated for a corner
+    whose claim did not survive the evidence gate, on any surface, so no consumer can accidentally
+    print advice this module just declined to give."""
+    if not opp.evidence.ranked:
+        return abstain_sentence(opp)
     r = opp.reason
     if r.kind == REASON_APEX:
         deficit = units.convert_speed(r.apex_speed_deficit, unit)
@@ -621,4 +923,74 @@ def reason_sentence(opp: Opportunity, unit: str | None = None) -> str:
         base = f"be consistent here (σ {r.sigma:.2f} s)"
     else:
         base = "find time here"
-    return base + dominant_phase_clause(opp)
+    lever = base + dominant_phase_clause(opp)
+    reach = reach_clause(opp)
+    # The lever has never carried a terminator — it is a fragment read under a "How to find it"
+    # header. The reach clause is a second SENTENCE, so it needs one in front of it, and only when
+    # there is one: an unmeasured row (REACH_UNKNOWN) still prints byte-identically to before.
+    return f"{lever}.{reach}" if reach else lever
+
+
+# ------------------------------------------------------- the session theme, in words
+# The cause words, as a THEME headline says them (the per-row sentences keep their own imperative
+# phrasing — "brake later / shorter" is an instruction, "Braking" is a category).
+_CAUSE_WORD = {
+    REASON_APEX: "Apex speed",
+    REASON_BRAKING: "Braking",
+    REASON_COASTING: "Coasting",
+    REASON_LINE: "Consistency",
+}
+
+
+def theme_sentence(theme: Theme) -> str:
+    """The session's ONE line — what the twelve findings add up to. "" when nothing is ranked.
+
+    Percentages are shares of the RANKED time on offer, which is the same total the panel's
+    headline sums, so the two numbers on the page are two readings of one quantity."""
+    if theme.kind == THEME_NONE:
+        return ""
+    # "the time on offer", not "your time": the shares are over the RANKED rows only, and on a
+    # short session most of the measured loss can sit in abstained corners (0062's single chapter:
+    # 0.135 s ranked against 0.198 s abstained). The same words the abstain sentence uses for the
+    # same quantity, so the page has one name for it.
+    if theme.kind == THEME_EXECUTION:
+        return (f"Most of the time on offer is execution, not pace — {theme.share:.0%} of it is "
+                "in corners you have already driven at this pace.")
+    if theme.kind == THEME_PACE:
+        return (f"Most of the time on offer is pace, not execution — {theme.share:.0%} of it is "
+                "in corners you have rarely been quick through.")
+    # SPLIT: state both halves rather than crowning the larger one — this is the honest answer
+    # when no side clears THEME_SHARE, and it is a real state (0060 lands here if one corner tips).
+    total = theme.execution_s + theme.pace_s
+    exec_pct = theme.execution_s / total if total > 0 else 0.0
+    return (f"No single theme: {exec_pct:.0%} of the time on offer is in corners you have already "
+            f"driven at this pace, {1 - exec_pct:.0%} in corners you have rarely reached.")
+
+
+def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
+    """AT MOST TWO actions under the theme — the compression that makes a summary coaching.
+
+    One is the common cause across the ranked corners (or an explicit "no single cause", because
+    manufacturing one is precisely the failure this feature exists to avoid); the other names the
+    single corner to start with and how often the driver has already been there. Never more than
+    two, whatever the session looks like."""
+    if theme.kind == THEME_NONE:
+        return []
+    out: list[str] = []
+    if theme.cause != REASON_NONE and theme.cause_cids:
+        corners_txt = ", ".join(f"C{c}" for c in theme.cause_cids)
+        out.append(f"{_CAUSE_WORD[theme.cause]} is the common thread — {theme.cause_share:.0%} "
+                   f"of that time is in {corners_txt}.")
+    else:
+        out.append("No single cause dominates these corners — work them one at a time.")
+    lead = next((r for r in rows if r.cid == theme.lead_cid and r.evidence.ranked), None)
+    if lead is not None:
+        ev = lead.evidence
+        had = (f"you have matched it on {ev.reach_laps} of {ev.n_laps} laps"
+               if ev.reach == REACH_REPEAT else
+               f"only {ev.reach_laps} of {ev.n_laps} laps have matched it"
+               if ev.reach == REACH_RARE else
+               "no lap has matched it yet" if ev.reach == REACH_NEVER else "")
+        out.append(f"Start with C{lead.cid}: +{lead.time_lost:.2f} s"
+                   + (f", and {had}." if had else "."))
+    return out[:2]
