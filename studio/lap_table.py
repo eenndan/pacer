@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QScrollArea,
     QStackedWidget,
     QStyle,
@@ -38,7 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, theme, units
+from . import data_quality, provenance_panel, theme, units
 from ._signal import fmt_time, lap_label
 from .widgets import NUM_ROLE, EmptyState, NumItem, set_tone
 
@@ -891,6 +892,11 @@ class LapTable(QWidget):
         hdr.setSortIndicator(self._sort_col, self._sort_order)
         hdr.sortIndicatorChanged.connect(self._on_sorted)
         self.table.itemSelectionChanged.connect(self._on_selection)
+        # Right-click a Time or S-split cell → "Inspect this number…" (provenance_panel). Wired on
+        # the table rather than on a cell, because the cell items are rebuilt on every refresh and
+        # the menu has to survive that; `_on_context_menu` resolves what was clicked at click time.
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_context_menu)
         self.table.viewport().installEventFilter(self)   # re-fit on every real width change
 
         # Empty state: zero valid laps would show a blank grid, so stack a placeholder and flip to
@@ -1335,6 +1341,39 @@ class LapTable(QWidget):
         # re-segments the laps (which shifts both the valid and the excluded sets). The valid rows
         # are handed over rather than re-read: they are the excluded SHARE's denominator.
         self._refresh_excluded(rows)
+
+    # --------------------------------------------------- "inspect this number" (provenance)
+    # TWO of the app's three inspectable numbers live in this one grid — the lap Time cell and the
+    # S-split cells — which is exactly the pair `_clock_cols` already names as "the DURATIONS".
+    # Reusing that set rather than re-listing the columns is what keeps the menu from appearing on
+    # a column the inspector has nothing to say about, on a table whose column COUNT changes every
+    # time a sector line is added or removed.
+
+    def _provenance_at(self, r: int, c: int):
+        """The `Provenance` for the number in cell (r, c), or None when that cell is not one of
+        the inspectable numbers (or the lap behind it is too degenerate to explain)."""
+        session = self.session
+        if session is None or r < 0 or c not in self._clock_cols():
+            return None
+        lap_id = self._lap_id(r)
+        if c == 1:
+            return session.lap_time_provenance(lap_id)
+        return session.sector_split_provenance(lap_id, c - len(COLUMNS))
+
+    def _on_context_menu(self, pos) -> None:
+        """Right-click → inspect. The menu is built only when there IS something to inspect: an
+        empty context menu on a Dist cell would advertise a capability the panel cannot serve."""
+        item = self.table.itemAt(pos)
+        if item is None:
+            return
+        prov = self._provenance_at(item.row(), item.column())
+        if prov is None:
+            return
+        menu = QMenu(self)
+        act = menu.addAction(provenance_panel.MENU_LABEL)
+        act.setToolTip("Show the raw GPS fixes, the method and the window this number came from")
+        if menu.exec(self.table.viewport().mapToGlobal(pos)) is act:
+            provenance_panel.open_for(prov, self.window())
 
     # ------------------------------------------------------------- highlights
     def _lap_id(self, r: int) -> int:

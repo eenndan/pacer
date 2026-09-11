@@ -10,6 +10,17 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **Any of three numbers can now show its work.** Right-click a lap time or a sector split in
+  the lap table, or a corner's Best in the Stats page's CORNERS table, and *Inspect this number…*
+  opens the evidence: every raw GPS fix that produced it, the method in one sentence, N and the
+  exact window in seconds or metres, the fix-quality distribution over that window — 3D locks,
+  DOP, fix spacing, dropouts, and which clock the times were built on — the arithmetic with its
+  numbers substituted, and the value **re-derived from those rows alone**, next to the one on
+  screen. Copy as CSV takes the lot at full precision. A sector split and a corner best re-derive
+  bit for bit; a lap time re-derives to the last digit shown and the panel states the residual in
+  units of the last bit rather than rounding the disagreement away. Read-only: pacer shows you
+  where a number came from, it does not offer to compute you a different one.
+
 - **A session record, so comparing two sessions means something.** Each recording can now carry
   what pacer cannot know: the conditions and temperatures, the tyre set and its age in laps, cold
   and hot pressures, chassis, gearing, axle, seat and notes — typed by you, never looked up online.

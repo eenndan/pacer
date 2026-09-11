@@ -229,7 +229,19 @@ def _clean(samples, spans, naive):
 def _smooth_track(samples, times, w: int = SMOOTH_WINDOW):
     """Return NEW GPSSamples with lat/lon/altitude boxcar-smoothed (speeds untouched) so all
     C++ geometry uses the same track. Smoothed per gap-free run (never bridges a time gap).
-    O(n), run once at load."""
+    O(n), run once at load.
+
+    IT CARRIES `dop`/`fix` ACROSS. This rebuilds each sample field by field, and the two GPS9
+    QUALITY fields were the two it did not name — so every point that reached `pacer.Laps` had
+    the -1 sentinels, and the app's own record of how good each fix was ended here, one step
+    after the gate that read it (`_gate_quality`). Nothing computed cared: `dop`/`fix` feed no
+    geometry, no timing and no distance, which is exactly why the loss was invisible for as long
+    as nothing asked. `studio/provenance.py` asks — a number's fix-quality distribution is a
+    per-fix fact or it is nothing — and this restores the two fields to the trace without
+    touching a value the core derives from it (held by the golden gate at eps 0).
+
+    Smoothing them would be wrong, note: these are per-fix attributes of a measurement, not a
+    position to be denoised. Each keeps its own fix's value."""
     if w < 2 or len(samples) < w:
         return samples
     segs = _gap_segments(times)
@@ -241,6 +253,7 @@ def _smooth_track(samples, times, w: int = SMOOTH_WINDOW):
         out.append(pacer.GPSSample(
             lat=float(lat[i]), lon=float(lon[i]), altitude=float(alt[i]),
             full_speed=s.full_speed, ground_speed=s.ground_speed, timestamp_ms=s.timestamp_ms,
+            dop=getattr(s, "dop", -1.0), fix=getattr(s, "fix", -1),
         ))
     return out
 
