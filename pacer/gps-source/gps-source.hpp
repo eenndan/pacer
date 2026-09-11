@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -10,16 +11,17 @@
 
 namespace pacer {
 
-// One IMU stream (ACCL / GRAV / CORI) collected as parallel columns, so the
-// studio layer crosses the binding ONCE per stream instead of once per sample
-// (the old path ran a per-sample C++->Python trampoline callback — ~1.5M
+// One IMU stream (ACCL / GYRO / GRAV / CORI) collected as parallel columns, so
+// the studio layer crosses the binding ONCE per stream instead of once per
+// sample (the old path ran a per-sample C++->Python trampoline callback — ~1.5M
 // round-trips per load). The columns are the SAME samples the per-sample
-// ReadAccl/ReadGrav/ReadCori callbacks yield, in the same order, so the bulk
-// output is byte-for-byte identical to collecting those callbacks.
+// ReadAccl/ReadGyro/ReadGrav/ReadCori callbacks yield, in the same order, so
+// the bulk output is byte-for-byte identical to collecting those callbacks.
 //
-// `times`, `xs`, `ys`, `zs` are populated for all three streams; `ws` carries
-// the quaternion scalar and is filled ONLY by ReadCoriColumns (ACCL/GRAV leave
-// it empty). Every populated column has the same length (the sample count).
+// `times`, `xs`, `ys`, `zs` are populated for all four streams; `ws` carries
+// the quaternion scalar and is filled ONLY by ReadCoriColumns (ACCL/GYRO/GRAV
+// leave it empty). Every populated column has the same length (the sample
+// count).
 struct ImuArrays {
   std::vector<double> times;
   std::vector<double> ws;
@@ -57,17 +59,35 @@ public:
   virtual uint32_t
   ReadSamples(std::function<void(GPSSample, uint32_t, uint32_t)> on_sample);
 
-  // Read the timestamped IMU streams (accelerometer / gravity) across the WHOLE
-  // source. Each sample's `time` is on the MEDIA clock (seconds), spread across
-  // the payload span so it lines up with the GPS spans and the video; a
-  // multi-chapter source shifts later chapters by the cumulative duration (see
-  // SequentialGPSSource) onto one continuous global clock. The base is a no-op;
-  // GPMFSource / SequentialGPSSource override.
+  // Read the timestamped IMU streams (accelerometer / gyroscope / gravity)
+  // across the WHOLE source. Each sample's `time` is on the MEDIA clock
+  // (seconds), spread across the payload span so it lines up with the GPS spans
+  // and the video; a multi-chapter source shifts later chapters by the
+  // cumulative duration (see SequentialGPSSource) onto one continuous global
+  // clock. The base is a no-op; GPMFSource / SequentialGPSSource override.
   //
   // ACCL is a 3-axis accelerometer in m/s^2 (native order Z,X,Y); GRAV is a
   // unit gravity vector (native order, permuted vs ACCL — the studio layer
   // resolves that).
   virtual void ReadAccl(std::function<void(IMUSample)> /*on_sample*/) {}
+  // GYRO is the 3-axis rate gyroscope in rad/s on the SAME media clock.
+  //
+  // AXES: it declares the SAME element orientation as ACCL. Measured across
+  // every clip in 3rdparty/gpmf-parser/samples plus both D24 recordings, the
+  // GPMF ORIN/ORIO fields of ACCL and GYRO are identical on every camera —
+  // HERO6/7 "YxZ", HERO8 "zxY", Max "XzY", HERO13 "ZXY", and absent on both for
+  // HERO5/Fusion/Karma. So GYRO inherits whatever axis convention the studio
+  // layer already applies to ACCL, and adds no orientation risk of its own.
+  // (What it does NOT fix: that convention is a fitted constant, not a read of
+  // ORIN, so it is right for the camera it was fitted on. Pre-existing, and the
+  // same for both streams.)
+  //
+  // RATE: ~200 Hz on the HERO13 recordings, where GYRO and ACCL happen to carry
+  // identical per-payload sample counts — but that is a coincidence of that
+  // model, not a rule. Measured on the bundled samples, GYRO runs at 2x ACCL on
+  // HERO5 and Karma, 4x on a Max in 360 mode, and 17x on a Fusion. Never index
+  // one stream by the other's row; interpolate on time.
+  virtual void ReadGyro(std::function<void(IMUSample)> /*on_sample*/) {}
   virtual void ReadGrav(std::function<void(IMUSample)> /*on_sample*/) {}
   // CORI is the camera-orientation quaternion (w,x,y,z), ~60 Hz, media-clock
   // time.
@@ -75,16 +95,26 @@ public:
 
   // Bulk column readers: collect the WHOLE stream into parallel std::vector
   // columns in ONE call (see ImuArrays), avoiding the per-sample Python
-  // trampoline of the ReadAccl/ReadGrav/ReadCori callbacks. They emit the SAME
-  // samples in the SAME order as those callbacks (byte-for-byte), just packed
-  // as columns. The vec3 readers fill times/xs/ys/zs; the quaternion reader
-  // additionally fills ws. The base default reuses the per-sample reader, so a
-  // Python subclass that overrides only ReadAccl/ReadGrav/ReadCori is bulk-read
-  // correctly through it; GPMFSource/SequentialGPSSource inherit this default
-  // too (the collection cost is identical — the win is one binding crossing).
+  // trampoline of the ReadAccl/ReadGyro/ReadGrav/ReadCori callbacks. They emit
+  // the SAME samples in the SAME order as those callbacks (byte-for-byte), just
+  // packed as columns. The vec3 readers fill times/xs/ys/zs; the quaternion
+  // reader additionally fills ws. The base default reuses the per-sample
+  // reader, so a Python subclass that overrides only
+  // ReadAccl/ReadGyro/ReadGrav/ReadCori is bulk-read correctly through it;
+  // GPMFSource/SequentialGPSSource inherit this default too (the collection
+  // cost is identical — the win is one binding crossing).
   virtual ImuArrays ReadAcclColumns();
+  virtual ImuArrays ReadGyroColumns();
   virtual ImuArrays ReadGravColumns();
   virtual ImuArrays ReadCoriColumns();
+
+  // The recording camera's own name for itself — the GPMF `DVNM` field, e.g.
+  // "HERO13 Black". Empty when the container carries none. It is the only
+  // in-file statement of WHICH camera produced the streams, and the camera
+  // model decides what the data can mean at all: a HERO12 has no GPS receiver,
+  // and HERO9/10 carry no per-sample GPS clock. Read once (it is a per-payload
+  // constant), never per sample. The base returns "".
+  virtual std::string DeviceName() const { return {}; }
 
   // Move the cursor to the chunk covering `target`.
   virtual uint32_t Seek(double target) = 0;
@@ -98,8 +128,25 @@ public:
   // Time span of the chunk under the cursor.
   virtual auto CurrentTimeSpan() const -> std::pair<double, double> = 0;
 
-  // Total media duration.
+  // Total duration of the stream this source READS — for a GPMF source that is
+  // the metadata track, which is what the payload cursor is bounded by.
   virtual double GetTotalDuration() const = 0;
+
+  // Duration of the VIDEO track: where the NEXT chapter's picture begins, and
+  // therefore the only correct amount to shift a following chapter by.
+  //
+  // It is a SEPARATE question from GetTotalDuration() because the two tracks
+  // are separate tracks. GoPro's own contract is that a chapter's metadata
+  // length matches its video length EXCEPT in the last chapter of a recording,
+  // where the GPMF track ends on its own payload grid — measured on the ten
+  // GoPro sample clips in 3rdparty/gpmf-parser/samples, that exception runs
+  // from -0.701 s (hero7) to +0.934 s (karma), i.e. up to a whole payload. A
+  // chain that shifts by the metadata length therefore rides ~1 s of phantom
+  // offset the moment a chapter exercises it, and the shift belongs to the
+  // picture regardless. The default answers with GetTotalDuration() so a source
+  // with no video track of its own (a test double, a Python subclass) behaves
+  // exactly as it did before this existed.
+  virtual double GetVideoDuration() const { return GetTotalDuration(); }
 };
 
 // A RawGPSSource backed by the GPMF metadata track of an MP4 container: opens
@@ -119,14 +166,18 @@ public:
       std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) override;
 
   void ReadAccl(std::function<void(IMUSample)> on_sample) override;
+  void ReadGyro(std::function<void(IMUSample)> on_sample) override;
   void ReadGrav(std::function<void(IMUSample)> on_sample) override;
   void ReadCori(std::function<void(QuatSample)> on_sample) override;
+
+  std::string DeviceName() const override;
 
   uint32_t Seek(double target) override;
   void Next() override;
   bool IsEnd() override;
   std::pair<double, double> CurrentTimeSpan() const override;
   double GetTotalDuration() const override;
+  double GetVideoDuration() const override;
 
 private:
   // Walk one fixed-width GPMF stream (<= 4 elements per sample) over every
@@ -146,9 +197,17 @@ private:
 };
 
 // Concatenates two sources end to end (chapter chaining): the right child's
-// timeline is shifted by the left child's duration so the pair reads as one
-// continuous recording. `left` may itself be a SequentialGPSSource, so chains
-// of any length nest.
+// timeline is shifted by the left child's VIDEO duration so the pair reads as
+// one continuous recording. `left` may itself be a SequentialGPSSource, so
+// chains of any length nest.
+//
+// THE SHIFT IS THE VIDEO'S, NOT THE METADATA TRACK'S. The right child's payload
+// times are local to its own file and everything downstream (lap timing, the
+// chapter offset table, the export's ffmpeg seek, the player's source switch)
+// reads them as positions in the recording's PICTURE. Chapter k+1's picture
+// starts at the end of chapter k's picture, so that is the offset; shifting by
+// chapter k's GPMF length instead silently rides the difference between the two
+// tracks, which on GoPro's own sample clips reaches 0.9 s.
 class SequentialGPSSource : public RawGPSSource {
 public:
   SequentialGPSSource(RawGPSSource *left, RawGPSSource *right)
@@ -157,14 +216,22 @@ public:
   virtual ~SequentialGPSSource() override = default;
 
   double GetTotalDuration() const override;
+  double GetVideoDuration() const override;
   bool IsEnd() override;
 
   uint32_t ReadSamples(
       std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) override;
 
   void ReadAccl(std::function<void(IMUSample)> on_sample) override;
+  void ReadGyro(std::function<void(IMUSample)> on_sample) override;
   void ReadGrav(std::function<void(IMUSample)> on_sample) override;
   void ReadCori(std::function<void(QuatSample)> on_sample) override;
+
+  // The chain's camera: the LEFT subtree's name, falling back to the right when
+  // the left has none. Chapters of one recording come off one camera, so a
+  // chain has a single device name; the fallback only matters for a chain whose
+  // first chapter is a synthetic/nameless source.
+  std::string DeviceName() const override;
 
   uint32_t Seek(double target) override;
   void Next() override;
@@ -172,14 +239,15 @@ public:
 
 private:
   // Read one IMU stream from both children, offsetting the right child's
-  // samples by the left subtree's duration so they share one global media
-  // clock. `read` is the member reader to invoke (ReadAccl/ReadGrav/ReadCori)
-  // and `S` the sample type, which must have a `.time`. Going through `read`
+  // samples by the left subtree's VIDEO duration so they share one global
+  // media clock. `read` is the member reader to invoke
+  // (ReadAccl/ReadGyro/ReadGrav/ReadCori) and `S` the sample type, which must
+  // have a `.time`. Going through `read`
   // lets a nested SequentialGPSSource on the left recurse correctly.
   template <class S, class Read>
   void ReadShifted(Read read, const std::function<void(S)> &on_sample) {
     (left_->*read)(on_sample);
-    double off = left_->GetTotalDuration();
+    double off = left_->GetVideoDuration();
     (right_->*read)([&](S s) {
       s.time += off;
       on_sample(s);

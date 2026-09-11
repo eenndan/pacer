@@ -2283,9 +2283,10 @@ class Session:
         med_td = self._lap_time_dist(med_id) if med_id is not None else None
         median_lap_total = float(med_td[1][-1]) if med_td is not None else None
 
-        # D2: the typical lap's + best lap's speed-vs-distance traces so summarize can decompose
-        # each corner's Δt-vs-best into entry/apex/exit thirds (∫ds/v over each, the typical lap
-        # vs best — the SAME comparison the loss/reasons use). Same projection as lap_corner_stats.
+        # D2: the typical lap's + best lap's distance/elapsed traces so summarize can decompose
+        # each corner's Δt-vs-best into entry/apex/exit thirds (each third's time read off the
+        # lap's OWN clock at the odometer edges, the typical lap vs best — the SAME comparison the
+        # loss/reasons use). Same projection as lap_corner_stats.
         # The matching `elapsed` (seconds-from-lap-start) arrays go with them: a BrakeEvent carries
         # no release odometer, so summarize needs each lap's own clock to integrate a brake event's
         # OVERLAP with a corner window instead of taking or dropping it whole by its onset.

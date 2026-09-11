@@ -41,14 +41,28 @@ session. Where the remaining error comes from, and the sensor fusion, Kalman/RTS
 Doppler-aided positioning and map-matching that were tried and **rejected on evidence**, are in
 **[docs/ACCURACY.md](docs/ACCURACY.md)**.
 
+That clock is also what lets a **delta** be measured rather than estimated. Without a per-sample
+clock, the only way to price a stretch of track is to integrate `∫ds/v` along it — and `1/v`
+amplifies any speed error exactly where the car is slowest, which is exactly where a corner's time
+is largest. Pacer's own corner phase bars were still doing that, and auditing them against the
+clock found them wrong on **every one of the 12 corners** of the D24 best lap, by up to
+**+0.493 s** on the slowest (`studio/coaching.py::_span_clock`). Every delta the app shows — the Δ
+trace, sector and corner splits, the ideal lap, the coaching breakdown, the exports — is a
+difference of two clock readings, and a test fails if an estimator comes back.
+
 ---
 
 ## What it does
 
-**Lap and sector timing you can audit.** True-clock timing on a GPS9 camera (Hero 9 and newer).
-Older GPS5 cameras (Hero 5–7) carry no per-sample clock, so Pacer falls back to the video clock and
-marks every time `(est)`. On an unknown track it fits a start/finish line for you, calls the timing
-*provisional*, and demotes what depends on it until you drag the line into place — `⌘Z` undoes.
+**Lap and sector timing you can audit.** True-clock timing needs the GPS9 stream, and by GoPro's
+own metadata spec that means a **Hero 11 or a Hero 13**: GPS9 arrived with the Hero 11, the Hero 12
+has no GPS receiver at all and cannot be lap-timed, and GPS returned with the Hero 13. Every earlier
+GPS-equipped model — Hero 5 through Hero 10, and the Max — carries GPS5 only, which has no
+per-sample clock, so Pacer times those recordings on the video clock, mutes every duration it
+derives and labels it estimated. Nothing is keyed off the model name: the loader looks for the
+stream and reports which clock it actually built. On an unknown track it fits a start/finish line
+for you, calls the timing *provisional*, and demotes what depends on it until you drag the line into
+place — `⌘Z` undoes.
 
 **An ideal lap that states its own sample.** The target is a composite of your own fastest corners
 and straights, and the Stats page shows the decomposition: what each segment gives away, how many

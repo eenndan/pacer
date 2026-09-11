@@ -43,6 +43,7 @@ from _synthetic import bare_session  # noqa: E402
 
 from studio import theme  # noqa: E402
 from studio.map_view import (  # noqa: E402
+    _RAINBOW_ORDER,
     RAINBOW_WIDTH,
     TRACE_WIDTH,
     MapView,
@@ -236,7 +237,10 @@ def test_toggle_off_restores_exact_items_and_pens():
 
     mv._cycle_rainbow()  # speed → delta
     assert mv._rainbow_mode == "delta"
-    mv._cycle_rainbow()  # delta → grip
+    mv._cycle_rainbow()  # delta → delta rate
+    assert mv._rainbow_mode == "delta_rate"
+    assert sum(it.xData.size for it in mv._rainbow._items) > 0, "Δ-rate rainbow must hold data"
+    mv._cycle_rainbow()  # delta rate → grip
     assert mv._rainbow_mode == "grip"
     assert sum(it.xData.size for it in mv._rainbow._items) > 0, "grip rainbow must hold data"
     mv._cycle_rainbow()  # grip → elevation
@@ -356,8 +360,9 @@ def test_speed_extremes_land_in_extreme_buckets():
 def test_default_channel_is_speed_and_combo_reads_speed():
     """A freshly-built MapView leads with the SPEED gradient (the signature visual): the mode is
     'speed', the labelled combo already shows 'Line: Speed', and once the current lap is set the
-    speed rainbow paints without any user action. Cycling still walks off → speed → Δ → grip → off
-    and the combo stays in sync at every step."""
+    speed rainbow paints without any user action. Cycling still walks the WHOLE channel list in
+    order — off → speed → Δ → Δ rate → grip → elevation → off, the two Δ channels adjacent — and
+    the combo stays in sync at every step."""
     s = _stub_session()
     mv = MapView(s)
     assert mv._rainbow_mode == "speed", "the map must open speed-coloured"
@@ -369,11 +374,11 @@ def test_default_channel_is_speed_and_combo_reads_speed():
     assert mv._legend.isVisibleTo(mv), "the speed legend shows on load"
     # Cycling still visits every channel in order, combo mirroring the mode each step.
     seen = [mv._rainbow_mode]
-    for _ in range(5):
+    for _ in range(6):
         mv._cycle_rainbow()
         assert mv.rainbow_combo.currentData() == mv._rainbow_mode, "combo must stay in sync"
         seen.append(mv._rainbow_mode)
-    assert seen == ["speed", "delta", "grip", "elevation", "off", "speed"], seen
+    assert seen == ["speed", "delta", "delta_rate", "grip", "elevation", "off", "speed"], seen
     print("test_default_channel_is_speed_and_combo_reads_speed OK")
 
 
@@ -386,7 +391,10 @@ def test_grip_channel_paints_and_on_limit_is_red():
     mv = MapView(s)
     mv.set_rainbow_mode("off")  # normalise the start point (default is now speed)
     mv.set_current_lap(1)
-    for _ in range(3):  # off → speed → delta → grip
+    # Cycle all the way to grip. The step COUNT is read from the channel list rather than typed:
+    # it was a literal 3, and adding a sixth channel ahead of grip walked this test onto a
+    # different channel than the one it is named for, silently.
+    for _ in range(_RAINBOW_ORDER.index("grip")):
         mv._cycle_rainbow()
     assert mv._rainbow_mode == "grip"
     items = mv._rainbow._items
@@ -413,7 +421,10 @@ def test_grip_channel_degrades_when_no_g():
     mv = MapView(s)
     mv.set_rainbow_mode("off")  # normalise the start point (default is now speed)
     mv.set_current_lap(1)
-    for _ in range(3):  # off → speed → delta → grip
+    # Cycle all the way to grip. The step COUNT is read from the channel list rather than typed:
+    # it was a literal 3, and adding a sixth channel ahead of grip walked this test onto a
+    # different channel than the one it is named for, silently.
+    for _ in range(_RAINBOW_ORDER.index("grip")):
         mv._cycle_rainbow()
     assert mv._rainbow_mode == "grip"
     assert all(it.xData is None or it.xData.size == 0 for it in mv._rainbow._items), "must not paint"
