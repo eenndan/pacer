@@ -10,6 +10,18 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **Marks — write down what you concluded, where it happened.** Every other surface in pacer
+  measures; nothing could hold the sentence you say out loud watching your own footage. Press **B**
+  and a mark lands at the playhead with a type, a colour and your own note ("baulked out of 4",
+  "kerb", "that was the one"); **,** and **.** jump between them, and a new **Marks** page (**5**)
+  lists, searches and filters them beside the recording. Marks are drawn as pins above the scrub
+  bar, opposite the GPS-quality strip. pacer adds its own, for the things it already detects — GPS
+  dropouts, laps it left out of your times, and stretches where the GPS went bad — and each one
+  agrees exactly with the surface that reports it, because it is derived from the same detector
+  every time you open the recording rather than saved. Your marks are saved, in
+  `marks.json`, against the *recording* rather than the file: a mark made with the whole
+  recording open is in the same place when you open one chapter of it on its own.
+
 - **Any of three numbers can now show its work.** Right-click a lap time or a sector split in
   the lap table, or a corner's Best in the Stats page's CORNERS table, and *Inspect this number…*
   opens the evidence: every raw GPS fix that produced it, the method in one sentence, N and the

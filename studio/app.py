@@ -35,6 +35,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -62,7 +63,10 @@ from . import (
     track_db,
     units,
 )
-from ._signal import lap_label
+from . import (
+    marks as marks_model,
+)
+from ._signal import fmt_hms, lap_label
 from .central_view import CentralView, undo_summary
 from .coaching_panel import OpportunitiesDialog
 from .command_palette import CommandPalette
@@ -72,6 +76,7 @@ from .command_palette import CommandPalette
 from .export_controller import ExportChoice, ExportController  # noqa: F401
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
 from .library_dialog import LibraryDialog
+from .marks_panel import MarkDialog
 from .overlays import (
     BUSY_DEMO_LABEL,
     DEMO_FETCH_TITLE,
@@ -422,6 +427,10 @@ class StudioWindow(QMainWindow):
         self._lap_panel_tab = prefs.lap_panel_tab()
         self._grid_sizes = prefs.grid_sizes()
         self._excluded_visible = prefs.excluded_visible()
+        # The loaded recording's marks (derived + hand-authored, merged) — rebuilt per load by
+        # _refresh_marks and read by the jump keys and the row actions. Empty before the first load
+        # so the keys are no-ops rather than AttributeErrors on the welcome screen.
+        self._marks: list[dict] = []
         # Speed display unit (km/h default), loaded from the persisted prefs so the choice survives
         # a relaunch; passed into each fresh CentralView + the video/coaching exports.
         self._speed_unit = prefs.speed_unit()
@@ -1674,6 +1683,20 @@ class StudioWindow(QMainWindow):
         # up with, over the lap times they qualify. Every load, because the view is rebuilt per
         # load and the chip belongs to the view.
         self._update_record_chip()
+        # MARKS: the page emits intents, the window owns the store. Wired here (not in the view)
+        # for the reason every other app-support store is — a view that reached into
+        # ~/Library/Application Support would be a view that can lose a driver's notes.
+        self.view.marks_panel.markActivated.connect(self._on_mark_activated)
+        self.view.marks_panel.addRequested.connect(self.add_mark_at_playhead)
+        self.view.marks_panel.editRequested.connect(self._on_mark_edit)
+        self.view.marks_panel.extendRequested.connect(self._on_mark_extend)
+        self.view.marks_panel.deleteRequested.connect(self._on_mark_delete)
+        # A start-line drag re-cuts every lap, which moves which lap a mark SITS IN and which laps
+        # are excluded — both of them things the marks surface reports. Re-derive from the same
+        # seam the library entry and the session notice already hang off, so the Marks page can
+        # never be showing the lap numbering of a segmentation two edits ago.
+        self.view.timingEdited.connect(self._refresh_marks)
+        self._refresh_marks()
 
     def _build_ui_guarded(self, stage: str) -> Exception | None:
         """_build_ui with the ONE guarantee the loading card needs: a raise cannot strand the window
@@ -2215,10 +2238,17 @@ class StudioWindow(QMainWindow):
         # measure; both are window-level because that is where every other gesture here is.
         shortcut(Qt.Key_D, self.toggle_datum)
         shortcut(Qt.Key_N, self.jump_to_next_loss)
-        # 1-4 → the lap panel's tabs (Laps · Corners · Stats · Coaching); no-op before a load.
+        # B / , / . → the marks cluster: drop one at the playhead, then walk them. `,` and `.` are
+        # the media-player convention for step-by-step navigation and were both unbound; `B` is for
+        # bookmark (`M` is mute and has been since the first transport).
+        shortcut(Qt.Key_B, self.add_mark_at_playhead)
+        shortcut(Qt.Key_Comma, self.jump_to_previous_mark)
+        shortcut(Qt.Key_Period, self.jump_to_next_mark)
+        # 1-5 → the lap panel's tabs (Laps · Corners · Stats · Coaching · Marks); no-op before a load.
         for digit, handler in ((Qt.Key_1, self.show_laps_tab), (Qt.Key_2, self.show_corners_tab),
                                (Qt.Key_3, self.show_stats_tab),
-                               (Qt.Key_4, self.show_coaching_tab)):
+                               (Qt.Key_4, self.show_coaching_tab),
+                               (Qt.Key_5, self.show_marks_tab)):
             shortcut(digit, handler)
         # ? → shortcut reference (keep in sync with help_dialog.COMMANDS).
         shortcut(Qt.Key_Question, self._show_shortcuts)
@@ -2300,6 +2330,18 @@ class StudioWindow(QMainWindow):
     def show_coaching_tab(self):
         """Lap panel ▸ Coaching (4)."""
         self._select_lap_tab(3)
+
+    def show_marks_tab(self):
+        """Lap panel ▸ Marks (5)."""
+        self._select_lap_tab(4)
+
+    def jump_to_next_mark(self):
+        """Seek to the next mark after the playhead (.)."""
+        self._jump_to_mark(+1)
+
+    def jump_to_previous_mark(self):
+        """Seek to the previous mark before the playhead (,)."""
+        self._jump_to_mark(-1)
 
     def show_command_palette(self):
         """View ▸ Command palette… (⌘K): the type-to-run list over every menu action plus the
@@ -2642,6 +2684,215 @@ class StudioWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001 — never let the chip break a load
             print(f"studio: session-record chip not updated ({exc!r}).", flush=True)
 
+    # ------------------------------------------------- marks (what the driver concluded)
+    _NO_MARK_REASON = "Open a recording first — a mark is a moment in one"
+
+    def _marks_key(self) -> str:
+        """This recording's key in the marks store: the LIBRARY fingerprint, derived exactly as
+        ``Session.library_entry`` derives it (the first sibling chapter's stem, chapter index
+        stripped) so a mark follows the RECORDING and not the file.
+
+        Deliberately NOT routed through ``_current_library_entry``, which the library excludes the
+        bundled sample and every zero-lap recording from. A session record is a note about lap
+        times and has nowhere to live without a library row; a mark is a note about the FOOTAGE,
+        and "the GPS never locked here" is exactly the thing worth writing on a recording that
+        produced no laps. "" when there is nothing open."""
+        if not getattr(self, "_paths", None):
+            return ""
+        first = chapters.discover_siblings(self._paths[0])[0]
+        return library.fingerprint(os.path.splitext(os.path.basename(first))[0])
+
+    @staticmethod
+    def _load_marks() -> dict:
+        """The marks store, guarded — a read that fails must leave the app usable, and
+        ``marks.load`` already self-heals every corruption it can name."""
+        try:
+            return marks_model.load()
+        except Exception:  # noqa: BLE001 — the guard must never raise out of a menu / shortcut
+            _log.exception("marks not read")
+            return marks_model.empty_store()
+
+    def _refresh_marks(self, store: dict | None = None) -> None:
+        """Rebuild this recording's mark list and push it to BOTH surfaces (the scrub band and the
+        Marks page) through the view's single `set_marks`.
+
+        The DERIVED half is recomputed here, every time, from the live session — never read back
+        from the file — so an auto mark cannot outlive or contradict the detector behind it. The
+        HAND-AUTHORED half is read from the store and resolved against THIS open's chapter map, so
+        a mark whose chapter is not loaded is listed rather than relocated. Fully guarded: a
+        notebook must never be the reason a load fails."""
+        view = getattr(self, "view", None)
+        if view is None or not hasattr(view, "set_marks"):
+            return
+        try:
+            auto, suppressed = self.session.auto_marks()
+            stored = marks_model.get(store if store is not None else self._load_marks(),
+                                     self._marks_key())
+            manual = marks_model.resolve(stored, self.session.chapters)
+            merged = marks_model.merge(auto, manual)
+            # The LAP a mark sits in is DERIVED at read time, never stored: a start-line drag
+            # re-cuts every lap, and a persisted lap number would be a note claiming to be about a
+            # lap that no longer exists at that second.
+            for mark in merged:
+                if mark.get("placed") and mark.get("lap") is None:
+                    mark["lap"] = self.session.lap_at_time(mark["t"])
+            self._marks = merged
+            view.set_marks(merged, suppressed)
+        except Exception as exc:  # noqa: BLE001 — never let the marks surface break a load
+            print(f"studio: marks not refreshed ({exc!r}).", flush=True)
+            _log.exception("marks not refreshed")
+
+    def _playhead_time(self) -> float | None:
+        """Where the playhead is, in GLOBAL media-clock seconds — the one clock a mark is AUTHORED
+        in. None before a load."""
+        view = getattr(self, "view", None)
+        if view is None:
+            return None
+        playback = getattr(view, "_playback", None)
+        return None if playback is None else float(playback.applied_t or 0.0)
+
+    def add_mark_at_playhead(self):
+        """Drop a mark where the video is (B), then ask what it says.
+
+        The video PAUSES first. Authoring is a mode — you stop, you say what happened, you go back
+        to watching — and a modal over a still-playing clip would collect a note about a moment
+        that has already gone past.
+
+        The mark is anchored to the chapter it lands in (`marks.anchor_from_global`), never to the
+        global second: see the marks module for why that distinction is load-bearing."""
+        view = getattr(self, "view", None)
+        t = self._playhead_time()
+        if view is None or t is None:
+            self.statusBar().showMessage(self._NO_MARK_REASON.lower(), STATUS_MS)
+            return
+        anchor = marks_model.anchor_from_global(self.session.chapters, t)
+        if anchor is None:
+            self.statusBar().showMessage("this recording has no chapter map to anchor a mark to",
+                                         STATUS_MS)
+            return
+        view.video.pause()
+        mark = marks_model.new_mark(anchor[0], anchor[1])
+        # The dialog needs to SHOW where it is, and the stored anchor is chapter-relative — hand it
+        # the resolved global time for display only; `result_mark` never touches the anchor.
+        shown = {**mark, "t": t, "t_end": None, "placed": True}
+        dlg = MarkDialog(shown, self, title="Add a mark")
+        if dlg.exec() != QDialog.Accepted:
+            return
+        edited = dlg.result_mark()
+        saved = {**mark, "type": edited["type"], "colour": edited["colour"],
+                 "note": edited["note"]}
+        self._save_mark(saved, "mark added")
+
+    def _save_mark(self, mark: dict, ok_message: str) -> None:
+        """Persist one mark and refresh both surfaces. The single write seam, so every gesture that
+        changes a mark reports a failure the same way — and reports it, rather than leaving the user
+        believing a note was kept."""
+        try:
+            store = marks_model.put_and_save(self._marks_key(), mark)
+        except OSError as exc:
+            print(f"studio: could not save the mark ({exc!r}).", flush=True)
+            _log.exception("mark not saved")
+            self.statusBar().showMessage(
+                "could not save the mark — check permissions on "
+                "~/Library/Application Support/pacer", STATUS_MS)
+            return
+        self._refresh_marks(store)
+        self.statusBar().showMessage(ok_message, STATUS_MS)
+
+    def _mark_by_id(self, mark_id: str) -> dict | None:
+        return next((m for m in getattr(self, "_marks", []) if m["id"] == mark_id), None)
+
+    def _on_mark_activated(self, mark_id: str) -> None:
+        """A Marks row was clicked: seek there. Only a PLACED mark can be reached — the row for one
+        this open cannot show says so in its own Time cell, and clicking it does nothing rather
+        than seeking to an invented second."""
+        mark = self._mark_by_id(mark_id)
+        view = getattr(self, "view", None)
+        if mark is None or view is None or not mark.get("placed"):
+            return
+        view.video.seek(float(mark["t"]))
+        view._playback.followed_lap = self.session.lap_at_time(float(mark["t"]))
+
+    def _on_mark_edit(self, mark_id: str) -> None:
+        mark = self._mark_by_id(mark_id)
+        if mark is None or mark["kind"] != marks_model.KIND_MANUAL:
+            return
+        dlg = MarkDialog(mark, self, title="Edit mark")
+        if dlg.exec() != QDialog.Accepted:
+            return
+        edited = dlg.result_mark()
+        # Write back the ANCHOR, not the resolved global time the row was showing.
+        self._save_mark({**{k: v for k, v in mark.items()
+                            if k in ("id", "kind", "chapter", "created")},
+                         "t": mark["anchor_t"], "t_end": mark["anchor_end"],
+                         "type": edited["type"], "colour": edited["colour"],
+                         "note": edited["note"]}, "mark saved")
+
+    def _on_mark_extend(self, mark_id: str) -> None:
+        """Turn a moment into a RANGE ending at the playhead.
+
+        REFUSES across a chapter seam, out loud. A mark's anchor is chapter-relative, so an end in
+        a different chapter is not a longer mark — it is a second anchored to a different file, and
+        storing its raw seconds would silently shorten or invert the range. Saying so is the honest
+        answer; the driver can mark the second chapter separately."""
+        mark = self._mark_by_id(mark_id)
+        t = self._playhead_time()
+        if mark is None or t is None or mark["kind"] != marks_model.KIND_MANUAL:
+            return
+        anchor = marks_model.anchor_from_global(self.session.chapters, t)
+        if anchor is None or anchor[0] != mark["chapter"]:
+            self.statusBar().showMessage(
+                "the playhead is in a different chapter — a mark's range stays inside the chapter "
+                "it starts in", STATUS_MS)
+            return
+        if anchor[1] <= mark["anchor_t"]:
+            self.statusBar().showMessage("move the playhead PAST the mark, then extend it",
+                                         STATUS_MS)
+            return
+        self._save_mark({**{k: v for k, v in mark.items()
+                            if k in ("id", "kind", "chapter", "type", "colour", "note",
+                                     "created")},
+                         "t": mark["anchor_t"], "t_end": anchor[1]},
+                        f"mark extended to {anchor[1] - mark['anchor_t']:.1f} s")
+
+    def _on_mark_delete(self, mark_id: str) -> None:
+        mark = self._mark_by_id(mark_id)
+        if mark is None or mark["kind"] != marks_model.KIND_MANUAL:
+            return
+        try:
+            store = marks_model.remove_and_save(self._marks_key(), mark_id)
+        except OSError as exc:
+            print(f"studio: could not delete the mark ({exc!r}).", flush=True)
+            self.statusBar().showMessage("could not delete the mark — check permissions on "
+                                         "~/Library/Application Support/pacer", STATUS_MS)
+            return
+        self._refresh_marks(store)
+        self.statusBar().showMessage("mark deleted — the marks file was backed up first", STATUS_MS)
+
+    def _jump_to_mark(self, direction: int) -> None:
+        """Seek to the next (+1) / previous (-1) PLACED mark, and say which one it is.
+
+        Naming the destination is the difference between a key that moves the video and a key that
+        navigates: the bar's pins are 3 px wide, so without the status line a jump is a seek to an
+        unexplained second."""
+        view = getattr(self, "view", None)
+        t = self._playhead_time()
+        if view is None or t is None:
+            return
+        target = marks_model.neighbour(getattr(self, "_marks", []), t, direction)
+        if target is None:
+            self.statusBar().showMessage(
+                "no more marks ahead" if direction >= 0 else "no marks before here", STATUS_MS)
+            return
+        view.video.seek(float(target["t"]))
+        view._playback.followed_lap = self.session.lap_at_time(float(target["t"]))
+        panel = getattr(view, "marks_panel", None)
+        if panel is not None:
+            panel.select_mark(target["id"])
+        self.statusBar().showMessage(
+            f"{fmt_hms(target['t'])} · {marks_model.TYPE_LABEL.get(target['type'], 'Mark')} — "
+            f"{marks_model.summary(target)}", STATUS_MS)
+
     def _refresh_library_entry(self):
         """Re-write the loaded recording's library entry from the session AS IT NOW STANDS.
 
@@ -2835,6 +3086,15 @@ class StudioWindow(QMainWindow):
             session_record.restore()
         except OSError as exc:
             print(f"studio: could not restore the session records ({exc!r}).", flush=True)
+        # The marks' backup comes back with them — one gesture, one undo. `marks.restore` refuses an
+        # empty/missing backup the same way the other two do, so a library whose marks were never
+        # backed up is left alone rather than emptied.
+        try:
+            marks_model.restore()
+        except OSError as exc:
+            print(f"studio: could not restore the marks ({exc!r}).", flush=True)
+        if getattr(self, "view", None) is not None:
+            self._refresh_marks()
         return library.load()
 
     def _forget_recording(self, entry: dict) -> dict:
@@ -2876,6 +3136,18 @@ class StudioWindow(QMainWindow):
             print(f"studio: could not forget the session record ({exc!r}).", flush=True)
         except Exception:  # noqa: BLE001 — forgetting a record must never break the forget
             _log.exception("session record not forgotten")
+        # …and the MARKS written against it, for exactly the same reason and with the same .bak
+        # copy first. A driver who forgets a recording and leaves "baulked out of 4, again" behind
+        # in a file no row points at has been told the recording is gone and has not been told the
+        # truth. The derived marks need no forgetting: they were never written.
+        try:
+            marks_model.forget_and_save(entry.get("fingerprint") or "")
+        except OSError as exc:
+            print(f"studio: could not forget the marks ({exc!r}).", flush=True)
+        except Exception:  # noqa: BLE001 — forgetting marks must never break the forget
+            _log.exception("marks not forgotten")
+        if getattr(self, "view", None) is not None:
+            self._refresh_marks()
         return library.load()
 
     def _disable_sidecar_if_open(self, forgotten_side: str) -> None:
@@ -2911,6 +3183,14 @@ class StudioWindow(QMainWindow):
             session_record.clear()
         except OSError as exc:
             print(f"studio: could not clear the session records ({exc!r}).", flush=True)
+        # …and the marks, on the same argument and with the same marks.json.bak copy first. The
+        # dialog's confirm names all three files and the Restore… beside it puts all three back.
+        try:
+            marks_model.clear()
+        except OSError as exc:
+            print(f"studio: could not clear the marks ({exc!r}).", flush=True)
+        if getattr(self, "view", None) is not None:
+            self._refresh_marks()
         return library.load()
 
     def _reveal_in_finder(self, directory: str) -> bool:

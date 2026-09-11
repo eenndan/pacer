@@ -163,9 +163,23 @@ class _RaisingView:
         raise ValueError("central-view-blew-up")
 
 
+class _StubMarksPanel(QWidget):
+    """The Marks page's stand-in: the five intents `_build_ui` connects, and nothing else. The page
+    itself owns no store (the window does), so a stub really is just its signals."""
+
+    markActivated = Signal(str)
+    addRequested = Signal()
+    editRequested = Signal(str)
+    deleteRequested = Signal(str)
+    extendRequested = Signal(str)
+
+
 class _StubView(QWidget):
     """A CentralView stand-in that BUILDS: a real QWidget (so `setCentralWidget` is the production
-    one) carrying the four signals `_build_ui` connects."""
+    one) carrying the four signals `_build_ui` connects — and the Marks page whose five it connects
+    too. `set_marks` is deliberately ABSENT: `_refresh_marks` gates on `hasattr(view, "set_marks")`,
+    so leaving it off keeps this stub out of the marks surface entirely while still proving the
+    wiring does not raise."""
 
     timingEdited = Signal()
     lapTabChanged = Signal(int)
@@ -178,6 +192,7 @@ class _StubView(QWidget):
         self._sidecar_path = sidecar_path
         self.paths = list(paths)
         self.disposed = False
+        self.marks_panel = _StubMarksPanel(self)
 
     def dispose(self):
         self.disposed = True

@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import chapters, data_quality, gmeter_overlay, theme
+from . import marks as marks_model
 from ._signal import fmt_hms
 from .player_pane import PlayerPane
 from .widgets import PanelToolbar, ToggleButton, icon_button
@@ -522,6 +523,185 @@ class _QualityStrip(QWidget):
             colour = self.class_colour(cls)
             if colour is not None:
                 painter.fillRect(x, 0, w, self.INK_H, QColor(colour))
+        painter.end()
+
+
+class _MarksBand(QWidget):
+    """The driver's own annotations, drawn ABOVE the scrub groove — the mirror of the quality strip.
+
+    THE SCRUB ROW IS NOW THREE BANDS, and the groove is in the middle on purpose: what the DATA says
+    about a second of recording is graded under it (`_QualityStrip`), and what the DRIVER concluded
+    about that second is pinned over it. Foxglove's Events, the reference implementation, puts its
+    bookmarks above the playback bar for the same reason — a mark is an annotation ON the timeline,
+    not a property of it.
+
+    WHAT IT COST, MEASURED — and the guess was wrong, which is why it was measured. The scrub row
+    was `TOOLBAR_H + SPACE_XXS + _QualityStrip.INK_H` = 38 px, laid out as an 8 px groove with 9 px
+    of EMPTY band above and below it inside the 26 px slider. Drawing into that empty band would
+    have put pins under the 24 px handle and through the ruler's own 18 px lap bracket, so the band
+    is its own widget and the row grows by `SPACE_XXS + INK_H` = 10 px, to 48.
+
+    That was expected to cost the window's minimum HEIGHT 10 px (588 -> 598). It costs ZERO: the
+    minimum is 588 before and after, because the video column is not what sets it — the charts and
+    the lap panel are taller floors than the video panel plus its two bars. And the minimum WIDTH is
+    untouched, which is the budget this wave has already moved twice.
+
+    IT SHARES THE SLIDER'S TRAVEL, not its own width — every x comes from `_LapRulerSlider._travel()`,
+    the same groove rect and handle geometry the ruler ticks, the playhead and the quality strip are
+    placed with, so a pin sits under the instant it annotates. It follows the slider's RANGE too, so
+    entering compare (which re-ranges the bar to one lap) re-scales the band for free.
+
+    HOW MANY PINS CAN LAND HERE — counted before the presentation was chosen, because a picket fence
+    would make this worse than nothing. Over the owner's two recordings opened every way the app
+    allows (both full chains, all five single chapters), the derived marks come to at most ONE, and
+    the raw candidate count before the length cut is 23 (see `marks.MIN_DEGRADED_S`). Hand-authored
+    marks are by definition few. So there is no clustering machinery here and none is warranted:
+    each mark is its own pin, and at the app's default width one pixel is ~6 s of a 2,900 s
+    recording — two marks closer together than that overlap into one pin, which reads as exactly
+    what it is.
+
+    A RANGE IS DRAWN AS ITS SPAN, a moment as a pin of `_PIN_W`. A one-second range would otherwise
+    paint sub-pixel and vanish, so a span is floored at the pin width: a mark may never be invisible
+    because it was short.
+
+    Not a click target, for the reason the quality strip gives: the seek bar one sub-step below is,
+    and a second interactive band inside the same gesture zone would fight it. This one is read, and
+    hovered; the Marks page is where a mark is selected, edited and jumped to."""
+
+    #: The band's own height, and the widget's. One step up from the quality strip's `SPACE_XS`
+    #: because the two bands carry different SHAPES: the strip is continuous, so 4 px of ink is a
+    #: solid ribbon at any length, while a mark is a single ~3 px column and 12 px² of ink is dust.
+    #: `SPACE_S` is the next step on the scale, not a nudge.
+    INK_H = theme.SPACE_S
+
+    #: A moment's pin width. Odd, so it centres exactly on its own x rather than straddling.
+    _PIN_W = 3
+
+    def __init__(self, slider: _LapRulerSlider, parent=None):
+        super().__init__(parent)
+        self._slider = slider
+        self._marks: list[dict] = []
+        self.setFixedHeight(self.INK_H)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMouseTracking(True)   # the hover readout is how a pin says what it is
+        # Same reason as the quality strip: the slider's RANGE moves under this widget (a chapter's
+        # duration arrives as it loads, compare re-ranges the bar to one lap) and neither sends a
+        # paint event here. A BOUND METHOD, not a lambda — Qt drops the connection when this widget
+        # dies, where a lambda would keep calling `update()` on a deleted C++ object.
+        slider.rangeChanged.connect(self._on_slider_range_changed)
+        self._refresh_tooltip()
+
+    def _on_slider_range_changed(self, *_args) -> None:
+        self.update()
+
+    def set_marks(self, marks: list[dict] | None) -> None:
+        """Adopt the merged mark list (`marks.merge`) — None / empty clears the band. Unplaceable
+        marks (a chapter this open does not hold) are filtered out HERE rather than at the source,
+        because the LIST still shows them: a note is not lost just because it cannot be drawn."""
+        self._marks = [m for m in (marks or []) if m.get("placed") and m.get("t") is not None]
+        self._refresh_tooltip()
+        self.update()
+
+    @property
+    def marks(self) -> list[dict]:
+        return self._marks
+
+    def has_data(self) -> bool:
+        return bool(self._marks)
+
+    # ------------------------------------------------------------------ geometry (the slider's)
+    def _span_s(self) -> tuple[float, float]:
+        """The (t0, t1) seconds the bar above currently spans — the slider's own ms range, so
+        compare mode's one-lap confinement re-scales this band with it."""
+        return self._slider.minimum() / 1000.0, self._slider.maximum() / 1000.0
+
+    def runs(self) -> list[tuple[int, int, dict]]:
+        """What `paintEvent` will draw, as `(x, width, mark)` in THIS widget's coordinates — the
+        single source for the painting, the hover and the regression test.
+
+        A mark entirely outside the shown span is omitted (compare mode shows one lap); a RANGE
+        that overlaps the span is clipped to it, so a lap-long excluded mark still shows its part
+        of a one-lap bar instead of disappearing or overrunning the groove."""
+        t0, t1 = self._span_s()
+        x0, span, _handle = self._slider._travel()
+        if span <= 0 or t1 <= t0 or not self._marks:
+            return []
+
+        def px(t: float) -> float:
+            return (float(t) - t0) / (t1 - t0) * span
+
+        out: list[tuple[int, int, dict]] = []
+        for m in self._marks:
+            a, b = float(m["t"]), float(m["t_end"] if m.get("t_end") is not None else m["t"])
+            if b < t0 or a > t1:
+                continue
+            xa, xb = px(max(a, t0)), px(min(b, t1))
+            left = int(round(xa)) - (self._PIN_W // 2 if b <= a else 0)
+            width = max(int(round(xb - xa)), self._PIN_W)
+            left = min(max(left, 0), max(span - width, 0))
+            out.append((int(x0 + left), width, m))
+        return out
+
+    # ------------------------------------------------------------------------ hover + tooltip
+    def describe_at(self, x: int) -> str:
+        """The hover line for a pixel: every mark whose ink covers it, timecode first then its own
+        words. Plural because two marks CAN share a pixel column on a long recording, and a tooltip
+        that silently picked one of them would be the surface claiming there is only one."""
+        hits = [m for left, width, m in self.runs() if left <= int(x) < left + width]
+        if not hits:
+            return ""
+        lines = []
+        for m in hits:
+            when = fmt_hms(m["t"])
+            if m.get("t_end") is not None:
+                when = f"{when}–{fmt_hms(m['t_end'])}"
+            lines.append(f"{when} · {marks_model.TYPE_LABEL.get(m['type'], 'Mark')} — "
+                         f"{marks_model.summary(m)}")
+        return "\n".join(lines)
+
+    def _refresh_tooltip(self) -> None:
+        """The resting tooltip — what the band IS, plus this recording's own count. The per-pin
+        text replaces it on hover and it comes back on leave."""
+        if not self._marks:
+            self.setToolTip("")
+            self.setAccessibleDescription("")
+            return
+        n = len(self._marks)
+        auto = sum(1 for m in self._marks if m["kind"] == marks_model.KIND_AUTO)
+        detail = (f"{n} mark{'' if n == 1 else 's'} on this recording"
+                  + (f" ({auto} found by pacer)" if auto else ""))
+        self.setToolTip(f"Marks — hover one for what it says. {detail}. "
+                        "B adds one at the playhead; , and . jump between them.")
+        self.setAccessibleDescription(detail)
+
+    def mouseMoveEvent(self, ev):
+        text = self.describe_at(int(ev.position().x()))
+        if text and text != self.toolTip():
+            self.setToolTip(text)
+        elif not text:
+            self._refresh_tooltip()
+        super().mouseMoveEvent(ev)
+
+    def leaveEvent(self, ev):
+        self._refresh_tooltip()
+        super().leaveEvent(ev)
+
+    def paintEvent(self, ev):
+        runs = self.runs()
+        if not runs:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setPen(Qt.NoPen)
+        # Derived marks paint UNDER hand-authored ones: where a note and a detector land on the same
+        # pixel the driver's own colour is the one that survives, which is the same precedence
+        # `marks.merge` gives the list.
+        for want_auto in (True, False):
+            for x, width, m in runs:
+                if (m["kind"] == marks_model.KIND_AUTO) != want_auto:
+                    continue
+                painter.fillRect(x, 0, width, self.INK_H,
+                                 QColor(theme.mark_colour(m["colour"])))
         painter.end()
 
 
@@ -1056,19 +1236,27 @@ class VideoView(QWidget):
         # and set anyway, because the day this becomes a subclass it silently stops painting and
         # nothing says so. That is how four panel headers and both toolbars went flat in #185.
         self.scrub_row.setAttribute(Qt.WA_StyledBackground, True)
-        # …and it is a two-band row now: the groove, then the GPS-quality strip under it. The strip
-        # belongs INSIDE this bar rather than beside it — it grades the very axis the groove seeks
-        # along, and a band of its own would put a hairline between a thing and its own annotation.
-        # SPACE_XXS between them is the scale's WITHIN-one-element step (theme.py: "a bar and its
-        # own segments"); the row pays for exactly that plus the strip's own ink.
-        self.scrub_row.setFixedHeight(theme.TOOLBAR_H + theme.SPACE_XXS + _QualityStrip.INK_H)
+        # …and it is a THREE-band row now: the driver's marks, the groove, the GPS-quality strip.
+        # Both bands belong INSIDE this bar rather than beside it — each annotates the very axis the
+        # groove seeks along, and a band of its own would put a hairline between a thing and its own
+        # annotation. The groove sits BETWEEN them because they annotate it from opposite directions:
+        # what the data says about a second is graded below, what the driver concluded about it is
+        # pinned above (see _MarksBand). SPACE_XXS between bands is the scale's WITHIN-one-element
+        # step (theme.py: "a bar and its own segments"); the row pays for exactly that plus each
+        # band's own ink — 38 px before the marks band, 48 with it, which is +10 px on the window's
+        # 588 px minimum height and nothing at all on its minimum WIDTH.
+        self.scrub_row.setFixedHeight(theme.TOOLBAR_H + 2 * theme.SPACE_XXS
+                                      + _MarksBand.INK_H + _QualityStrip.INK_H)
         scrub_lay = QVBoxLayout(self.scrub_row)
         scrub_lay.setContentsMargins(theme.SPACE_S, theme.SPACE_XXS,
                                      theme.SPACE_S, theme.SPACE_XXS)
         scrub_lay.setSpacing(theme.SPACE_XXS)
+        # Both bands are built WITH the slider, not fed one: every x they paint comes from that
+        # slider's own travel geometry, so the three can never disagree about where a second of
+        # recording is.
+        self.marks_band = _MarksBand(self.slider)
+        scrub_lay.addWidget(self.marks_band)
         scrub_lay.addWidget(self.slider)
-        # Built with the slider, not fed one: every x it paints comes from that slider's own travel
-        # geometry, so the two can never disagree about where a second of recording is.
         self.quality_strip = _QualityStrip(self.slider)
         scrub_lay.addWidget(self.quality_strip)
 
@@ -1215,6 +1403,10 @@ class VideoView(QWidget):
     def set_quality_timeline(self, timeline) -> None:
         """Feed the scrub bar's GPS-quality strip (`data_quality.QualityTimeline`, or None)."""
         self.quality_strip.set_timeline(timeline)
+
+    def set_marks(self, marks: list[dict] | None) -> None:
+        """Feed the scrub bar's marks band the merged mark list (`marks.merge`, or None)."""
+        self.marks_band.set_marks(marks)
 
     def _apply_lap_ticks(self) -> None:
         """(Re)push the stored lap boundaries onto the slider as ms ticks — but only in single-video

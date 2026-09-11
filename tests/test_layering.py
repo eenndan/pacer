@@ -68,11 +68,16 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 #     from this set, while this module only renders one of those values into labels and grids. A
 #     provenance panel that reached for the data itself would be reverse-engineering where a number
 #     came from, which is exactly what the feature exists to replace.
+#   * marks_panel — the Marks page + the mark editor. The SAME split again, and the one where it
+#     matters most: `marks` is the Qt-free half (the store, the schema, the chapter-relative anchor
+#     arithmetic and the derived marks) and is deliberately absent from this set, while this module
+#     renders a list and emits intents — it owns no store and writes no file. A view that reached
+#     into ~/Library/Application Support would be a view that can lose a driver's notes.
 ALLOWED_QT = {
     "app", "central_view", "coaching_panel", "command_palette", "export_controller",
     "export_video", "gmeter_overlay", "help_dialog", "lap_table", "library_dialog", "map_view",
-    "overlays", "player_pane", "plots_view", "provenance_panel", "session_record_dialog",
-    "share_card", "stats_panel", "theme", "video_view",
+    "marks_panel", "overlays", "player_pane", "plots_view", "provenance_panel",
+    "session_record_dialog", "share_card", "stats_panel", "theme", "video_view",
     "widgets", "workers",
 }
 

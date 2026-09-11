@@ -40,6 +40,7 @@ from .coaching_panel import OpportunitiesPanel
 from .compare_controller import CompareController
 from .lap_table import CornerTable, LapTable
 from .map_view import MapView
+from .marks_panel import MarksPanel
 from .playback_state import PlaybackState
 from .plots_view import PlotsView
 from .scrub_controller import ScrubController
@@ -658,6 +659,13 @@ class CentralView(QWidget):
                          "most time vs your own best lap, taken as the median over your clean "
                          "laps, with the measured reason for each. Does NOT follow your lap "
                          "selection — the Corners tab is the per-lap view. Press 4."),
+            # The FIFTH tab, and the only one that is not a view of a measurement: everything left
+            # of it is what the app computed, this one is what you concluded. Measured, the page
+            # costs the window's minimum width 955 → 984 px (26 of it this tab) and its minimum
+            # height nothing at all — see marks_panel for the whole budget.
+            ("Marks", "What you wrote down against this recording, plus what pacer detected — GPS "
+                      "dropouts, laps left out of your times, and stretches of degraded GPS. "
+                      "B drops a mark at the playhead; , and . jump between them. Press 5."),
         ):
             idx = self.tab_bar.addTab(name)
             self.tab_bar.setTabToolTip(idx, tip)
@@ -697,10 +705,15 @@ class CentralView(QWidget):
         # the grid first — a ring on a zero-width collapsed map helps no one (the N10 rule).
         self.stats_view.corner_clicked.connect(self._on_stats_corner_clicked)
         self.table_stack = QStackedWidget()
+        # The Marks page: the driver's own annotations + the derived ones (studio/marks.py). It owns
+        # no store and no session — the window feeds it the merged list and acts on its signals, the
+        # same split the coaching page uses.
+        self.marks_panel = MarksPanel()
         self.table_stack.addWidget(self.table)          # index 0 — Laps (default)
         self.table_stack.addWidget(self.corner_table)   # index 1 — Corners
         self.table_stack.addWidget(self.stats_view)     # index 2 — Stats
         self.table_stack.addWidget(self.opportunities)  # index 3 — Coaching
+        self.table_stack.addWidget(self.marks_panel)    # index 4 — Marks
         rows_h = self.table.table.verticalHeader().defaultSectionSize()
         self.table_stack.setMinimumHeight(rows_h * 5 + 56)  # ~5-row floor so a drag can't zero it
         self._table_max_btn = self._maximize_button()
@@ -709,7 +722,11 @@ class CentralView(QWidget):
         # status slot beside the tabs rather than in a toolbar. Putting it in a toolbar would have
         # given this panel a 32 px control row to hold one non-interactive chip that is hidden on
         # every clean GPS9 recording; keeping it beside the tabs also keeps the warning adjacent to
-        # the lap times it qualifies. This panel gets no toolbar at all.
+        # the lap times it qualifies. This PANEL gets no toolbar at all — though one of its PAGES
+        # does: the Marks list carries its own (add · edit · extend · delete, plus a filter and a
+        # search), because it is the one page with verbs. A page-level bar appears with its page
+        # and leaves the other four bare, where a panel-level one would put a control row over four
+        # grids that have nothing to put in it.
         self._table_header = PanelHeader(self.tab_bar,
                                          status=(self.quality_badge, self.record_chip),
                                          trailing=self._table_max_btn)
@@ -1904,6 +1921,18 @@ class CentralView(QWidget):
             return
         badge.setText("ESTIMATED" if quality.media_clock else "GPS LOW")
         badge.setToolTip(quality.detail())
+
+    def set_marks(self, marks: list[dict] | None, suppressed: int = 0) -> None:
+        """Push the merged mark list (`marks.merge`) to BOTH of its surfaces at once — the scrub
+        bar's band and the Marks page.
+
+        ONE CALL, on purpose. The band and the list are two renderings of one list, and a feature
+        whose two surfaces are fed separately is a feature with two chances to disagree about what
+        is marked; that is the defect class this whole surface is held to. `suppressed` is how many
+        degraded stretches were too short to mark — the list states it, since the list is where a
+        count could otherwise be read as complete."""
+        self.video.set_marks(marks)
+        self.marks_panel.set_marks(marks, suppressed)
 
     def set_session_record(self, record: dict | None) -> None:
         """Show (or hide) the lap panel's session-record chip for `record` — the app's push of what

@@ -1090,3 +1090,24 @@ add_test(NAME test_quality_strip
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_quality_strip.py)
 set_tests_properties(test_quality_strip PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# MARKS (feat/marks) — the app's one surface that records a CONCLUSION rather than a measurement.
+# Four halves. THE STORE: a mark is the most irreplaceable thing pacer holds (a library row comes
+# back on the next open; "I was baulked there" existed only in the driver's head), so every
+# corruption, version and destructive path is asserted — corrupt bytes preserved verbatim in the
+# .bak before the first overwrite, a NEWER file's unknown fields surviving a v1 round-trip, an
+# older/unstamped file migrated with every mark kept, one malformed mark dropped and the rest kept,
+# the atomic write leaving no .tmp, and delete/forget/clear each copying first with restore
+# swapping back. THE ANCHOR: a mark stores a CHAPTER-RELATIVE time, so one instant has one anchor
+# whether a single chapter or the whole chaptered recording is open — the store is keyed by the
+# chapter-invariant library fingerprint, so those two opens share one key while their global clocks
+# differ by whole chapters. THE HONESTY RULE: a lap carries a dropout mark iff
+# Session.lap_has_dropout is True for it, the excluded marks ARE excluded_lap_ids, no degraded mark
+# covers a second the quality strip grades GOOD, and the short stretches that are suppressed are
+# COUNTED rather than silently dropped. THE SURFACES: the scrub band placing its ink off the
+# slider's own travel geometry (and re-scaling with the range, so compare mode is free), and the
+# Marks page's filter / search / empty states / verb gating. Offscreen Qt; no telemetry file.
+add_test(NAME test_marks
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_marks.py)
+set_tests_properties(test_marks PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

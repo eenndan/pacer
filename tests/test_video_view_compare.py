@@ -41,7 +41,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 
 from studio import chapters, theme  # noqa: E402
 from studio.player_pane import PlayerPane  # noqa: E402
-from studio.video_view import PaneSpec, VideoView, _QualityStrip  # noqa: E402
+from studio.video_view import PaneSpec, VideoView, _MarksBand, _QualityStrip  # noqa: E402
 
 
 def _spec(lap_id, window, caption, choices, *, source=None, choice_labels=None):
@@ -774,14 +774,22 @@ def test_the_transport_is_on_the_bar_system():
 
     assert isinstance(view.transport, PanelToolbar), type(view.transport).__name__
     assert view.transport.height() == theme.TOOLBAR_H, view.transport.height()
-    # The scrub row is TWO BANDS since the GPS-quality strip joined it: the system's bar, plus the
-    # strip's own ink and the sub-step above it (SPACE_XXS is the scale's WITHIN-one-element gap —
-    # "a bar and its own segments" — which is exactly what the groove and its annotation are).
-    # Still a DERIVATION of the tokens and the strip's own declared height rather than a number
-    # typed here, so the claim stays "it agrees with the system" and a nudge still fails.
+    # The scrub row is THREE BANDS now: the driver's MARKS above the groove, the system's bar, and
+    # the GPS-quality strip below it — each annotation a band's own ink plus the sub-step beside it
+    # (SPACE_XXS is the scale's WITHIN-one-element gap, "a bar and its own segments", which is
+    # exactly what the groove and its two annotations are). Still a DERIVATION of the tokens and
+    # each band's own declared height rather than a number typed here, so the claim stays "it
+    # agrees with the system" and a nudge still fails.
     assert view.scrub_row.height() == (
-        theme.TOOLBAR_H + theme.SPACE_XXS + _QualityStrip.INK_H), view.scrub_row.height()
+        theme.TOOLBAR_H + 2 * theme.SPACE_XXS + _MarksBand.INK_H
+        + _QualityStrip.INK_H), view.scrub_row.height()
     assert view.quality_strip.height() == _QualityStrip.INK_H, view.quality_strip.height()
+    assert view.marks_band.height() == _MarksBand.INK_H, view.marks_band.height()
+    # …and the ORDER: marks over the groove, quality under it. The two annotate the same axis from
+    # opposite directions — what the driver concluded above, what the data says below — so a swap
+    # would put a mark's pin under a class it has nothing to do with.
+    assert view.marks_band.y() < view.slider.y() < view.quality_strip.y(), (
+        view.marks_band.y(), view.slider.y(), view.quality_strip.y())
     for name, bar in (("scrub_row", view.scrub_row), ("transport", view.transport)):
         assert bar.property("role") == "PanelHeader", name
         assert bar.testAttribute(Qt.WA_StyledBackground), (
@@ -791,14 +799,14 @@ def test_the_transport_is_on_the_bar_system():
             theme.SPACE_S, theme.SPACE_XXS, theme.SPACE_S, theme.SPACE_XXS), (name, m)
     # THE GUTTER: the first control on each bar starts where the panel's own identity does.
     for name, w in (("play", view.play_btn), ("slider", view.slider),
-                    ("quality strip", view.quality_strip)):
+                    ("marks band", view.marks_band), ("quality strip", view.quality_strip)):
         assert w.mapTo(view, w.rect().topLeft()).x() == theme.SPACE_S, (
             f"{name} starts at x={w.mapTo(view, w.rect().topLeft()).x()}, not SPACE_S")
-    # …and the strip is exactly as wide as the groove it annotates. It maps its cells through the
-    # SLIDER's travel geometry, so a strip laid out to a different width would silently draw every
-    # second of the recording at an offset from the instant it grades.
-    assert view.quality_strip.width() == view.slider.width(), (
-        view.quality_strip.width(), view.slider.width())
+    # …and both annotations are exactly as wide as the groove they annotate. Each maps its content
+    # through the SLIDER's own travel geometry, so a band laid out to a different width would
+    # silently draw every second of the recording at an offset from the instant it describes.
+    for name, w in (("quality strip", view.quality_strip), ("marks band", view.marks_band)):
+        assert w.width() == view.slider.width(), (name, w.width(), view.slider.width())
     # GROUPING: SPACE_XS inside a group, SPACE_S between the groups
     # (▶ 🔇 speed | timecode  ‹ › ⌾ Compare ⤢). The playback group is THREE controls since the
     # speed picker joined it, so the within-group gap is asserted across every adjacent pair and

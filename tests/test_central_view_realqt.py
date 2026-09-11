@@ -1047,13 +1047,19 @@ def _run_all():
 
 
 def test_tab_bar_switches_pages_and_names_the_corners_lap():
-    """The lap panel's QTabBar is the ONE page switcher: tab index == stack index for all four
+    """The lap panel's QTabBar is the ONE page switcher: tab index == stack index for all five
     pages, and the Corners tab text always names the lap its rows describe (1-BASED, the
-    app-wide display rule — the old mode label leaked the 0-based id)."""
+    app-wide display rule — the old mode label leaked the 0-based id).
+
+    FIVE since Marks joined them — and the tab bar and the stack are asserted to agree on the
+    count, not just on a number typed here: the two are wired index-for-index, so a page added to
+    one and not the other would otherwise show up as a blank panel rather than as a failure."""
     view, _s, _t0, _t1 = _real_central_view()
-    assert view.tab_bar.count() == 4
-    assert [view.tab_bar.tabText(i) for i in (0, 2, 3)] == ["Laps", "Stats", "Coaching"]
-    for idx in (1, 2, 3, 0):
+    assert view.tab_bar.count() == 5 == view.table_stack.count(), (
+        view.tab_bar.count(), view.table_stack.count())
+    assert [view.tab_bar.tabText(i) for i in (0, 2, 3, 4)] == [
+        "Laps", "Stats", "Coaching", "Marks"]
+    for idx in (1, 2, 3, 4, 0):
         view.select_lap_tab(idx)
         _APP.processEvents()
         assert view.table_stack.currentIndex() == idx, f"tab {idx} must show page {idx}"
