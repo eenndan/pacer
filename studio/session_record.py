@@ -396,13 +396,20 @@ def _backup_unsafe(path: str) -> None:
     if not os.path.exists(path):
         return
     ok, data = _is_loadable_dict(path)
-    unsafe = (not ok) or (
-        isinstance(data, dict)
-        and isinstance(data.get("version"), int)
-        and not isinstance(data.get("version"), bool)
-        and data["version"] > VERSION
-    )
-    if unsafe:
+    if not ok:
+        _copy_to_backup(path, "an unreadable session-record store")
+        return
+    # ENUMERATE AGAINST `load`'s OWN FALL-BACKS, not a shorter list. `load` returns `empty_store()`
+    # for a non-int/bool `version` and for a non-object `records` — and BOTH of those parse as
+    # perfectly good JSON objects, so `_is_loadable_dict` says yes and the old guard said "safe".
+    # The file then got overwritten with no backup at all, silently losing a notebook that cannot
+    # be rebuilt from the footage. The docstring on `load` already promised this backup; only the
+    # predicate was short.
+    version = data.get("version")
+    bad_version = isinstance(version, bool) or not isinstance(version, int)
+    newer = (not bad_version) and version > VERSION
+    bad_records = not isinstance(data.get("records"), dict)
+    if bad_version or newer or bad_records:
         _copy_to_backup(path, "an unreadable/newer session-record store")
 
 
