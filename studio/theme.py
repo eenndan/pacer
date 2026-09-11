@@ -1670,7 +1670,7 @@ QWidget[role="PanelHeader"] {{
     background-color: {C.surface};
     border-bottom: {BORDER_PX}px solid {C.border};
 }}
-/* the lap panel's tab bar (Laps · Corners · Stats · Coaching) — lives INSIDE a PanelHeader
+/* the lap panel's tab bar (Laps · Corners · Stats · Coaching · Marks) — lives INSIDE a PanelHeader
    bar, so no base/bg of its own; tabs use the header type scale with the selected tab lifted
    to full text + an accent underline (the app's one selected-state cue). Functional styling:
    Qt's default tab chrome is illegible on the dark palette. */
@@ -1700,9 +1700,9 @@ QTabBar::tab:selected {{
     color: {C.text};
     border-bottom: {SPACE_XXS}px solid {C.accent};
 }}
-/* THE SCROLL ARROWS, when four tabs do not fit. They should never be reachable — the lap panel's
+/* THE SCROLL ARROWS, when the tabs do not fit. They should never be reachable — the lap panel's
    own minimum width is now derived from this bar rather than replaced by a smaller number (see
-   CentralView._layout_panels) — but "never" here is a property of four English tab names in
+   CentralView._layout_panels) — but "never" here is a property of five English tab names in
    whichever face of this app's font STACK a machine resolves, which is exactly the kind of
    constant budget_plot_gutters exists because you cannot pick. So the fallback is declared rather
    than left to the style.

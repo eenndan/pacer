@@ -234,6 +234,37 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **The exported overlay video said nothing about timing it could not stand behind — the app's own
+  warning even said so.** The burned-in clip is the most public thing Pacer makes and the one least
+  able to explain itself: it lands in a group chat, watched by people who have never seen the app,
+  with a lap time painted across it. On a recording whose start/finish line was auto-fitted and
+  never confirmed, that number is measured from an arbitrary point, and the frame carried no hint
+  of it — the dialog that warns before such an export literally read "with nothing in the frame to
+  say so". Now the frame says it: a line under the lap strip, in the app's own words —
+  **PROVISIONAL**, **ESTIMATED** or **GPS LOW**, the same vocabulary the lap panel's quality chip
+  uses — for as long as the clip runs, including a single frame grabbed out of it.
+  - **No `[e]`/`[p]`/`[u]`/`[b]` codes.** Those belong to `laps.csv` and the HTML report, which can
+    print a key under the table; a letter in the corner of a video is one the viewer cannot decode
+    and the file cannot explain. A break in series and a single lap's GPS dropout are deliberately
+    left off the frame too, with reasons written down beside the rest of the vocabulary.
+  - **It still exports.** Unlike the shareable lap card, which refuses to render at all on
+    provisional timing, a clip of your own driving is useful whether or not the line is confirmed —
+    so the warning stays a warning, and now names the mark the clip will carry. A clean recording
+    burns nothing at all: no badge, no empty box, no reserved space.
+- **Two numbers on the Stats page disagreed about how hard you braked, and neither said why.** A
+  lap row prints a "peak braking g" and a count of braking events, and they come off the same
+  physical axis through two different filters: the peak is smoothed, so it is the *sustained*
+  deceleration, while brake and coast are detected on the unsmoothed derivative, because a brake
+  onset is a step and a smoothing window smears exactly that. The consequence was visible in one
+  row and explained nowhere — measured on the two reference recordings, an individual brake event's
+  own peak deceleration exceeds the "peak braking g" printed beside it on **37 of 38 laps** and
+  **65 of 65**, by a median of about a quarter. Nothing changed about either number; every surface
+  that prints one now says which series it read. The **DRIVING** tiles — the four numbers on the
+  page built from the detection series, and the only tiles that had no hover text at all — now
+  carry the detector's own band and minimum duration; the peak-braking tile points at the channel
+  the brake counts come from; the **PER LAP** grid names both filters where its columns sit side by
+  side; and the **BRAKING** table's Commit % states that both halves of that ratio come from the
+  same unsmoothed channel, so it is not a percentage of the tile above it.
 - **A lap you stopped on could count as one of your clean laps.** A lap was judged real by its
   total time — anything from half to 1.6x the session median — and by its distance. A stop defeats
   both: it adds time without adding a metre, and on a ~69 s kart lap that band leaves **41 seconds

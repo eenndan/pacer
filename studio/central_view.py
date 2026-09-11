@@ -1,8 +1,8 @@
 """CentralView: the session-scoped central widget for ONE loaded recording.
 
-Owns the panels — video / map / plots / the TABBED lap panel (Laps · Corners · Stats · Coaching,
-one QTabBar over one QStackedWidget; every page full-height) / diff_box / chapter banner — the
-compare + scrub controllers, the shared PlaybackState and the per-frame ``tick()`` — all built
+Owns the panels — video / map / plots / the TABBED lap panel (Laps · Corners · Stats · Coaching ·
+Marks, one QTabBar over one QStackedWidget; every page full-height) / diff_box / chapter banner
+— the compare + scrub controllers, the shared PlaybackState and the per-frame ``tick()`` — all built
 atomically in ``__init__``. StudioWindow holds one ``self.view`` and ``setCentralWidget()``s a
 fresh CentralView per load (the old one disposed + dropped as a unit), so a window reference into
 the view can never go stale mid-rebuild. The persistent chrome reaches session-scoped widgets
@@ -611,12 +611,12 @@ class CentralView(QWidget):
                                          trailing=self._video_max_btn)
         video_panel = self._headered(self._video_header, (self.video, 1))
 
-        # LAP panel: ONE native tab bar (Laps · Corners · Stats · Coaching) over a QStackedWidget
+        # LAP panel: ONE native tab bar (Laps · Corners · Stats · Coaching · Marks) over a QStackedWidget
         # — the page switcher IS the tab bar, and every page gets the panel's FULL height. This
         # replaced the checkable-button pseudo-tabs + the two min/max-capped under-table strips
         # (coaching + consistency), whose aggregate minimum could exceed the panel's allocation
         # (over-constrained: nothing was resizable and everything starved). Tab index == stack
-        # index, 1:1. Digits 1-4 select tabs (window-level shortcuts).
+        # index, 1:1. Digits 1-5 select tabs (window-level shortcuts).
         self.tab_bar = QTabBar()
         self.tab_bar.setDocumentMode(True)
         self.tab_bar.setExpanding(False)
@@ -624,20 +624,22 @@ class CentralView(QWidget):
         # B2: on a narrow window the bar offers SCROLL BUTTONS rather than sliding a tab under the
         # ⛶ button. Elide must stay OFF: the QSS gives every tab `padding: 6px 10px`, which Qt
         # deducts a SECOND time when it derives SE_TabBarTabText from the tab rect, so the text rect
-        # comes out a few px NARROWER than the label's own advance and ElideRight then elides all
-        # four names unconditionally, at ANY width ("La…", "Corners ·…", "St…", "Coac…"). Scroll
+        # comes out a few px NARROWER than the label's own advance and ElideRight then elides every
+        # name unconditionally, at ANY width ("La…", "Corners ·…", "St…", "Coac…"). Scroll
         # buttons also drop minimumSizeHint to ~half the sizeHint (133 against 240), so pin a
-        # Minimum h-policy: a layout may grow the bar but never squeeze it below the width its four
+        # Minimum h-policy: a layout may grow the bar but never squeeze it below the width its own
         # names need.
         #
         # THE ARROWS ARE THE FALLBACK, NOT THE ANSWER. That h-policy makes the header's own minimum
-        # 292 px, and the honest way for four tabs to fit is for the panel to be at least that wide
-        # — which it now always is, because the left column no longer overrides its derived floor
-        # with a smaller literal (see _layout_panels). Kept switched on because "240 px fits" is a
-        # font-stack metric, not a fact: a fifth tab, a translation or a differently-resolved face
-        # moves it, and a clipped tab name with no way to reach it is worse than a scroll arrow. The
-        # arrows themselves are sized by theme's QTabBar::scroller rule (they shipped 21 px wide and
-        # overlapping by 11).
+        # follow the bar, and the honest way for the tabs to fit is for the panel to be at least
+        # that wide — which it now always is, because the left column no longer overrides its
+        # derived floor with a smaller literal (see _layout_panels). Kept switched on because
+        # "240 px fits" is a font-stack metric, not a fact: a translation or a differently-resolved
+        # face moves it, and a clipped tab name with no way to reach it is worse than a scroll
+        # arrow. THE 133/240 PAIR IS FOUR TABS' — #269's Marks page made it five, so read those two
+        # numbers as the floor they were measured at rather than as today's figure; the mechanism
+        # is derived at runtime and is what tests/test_design_system.py holds. The arrows themselves
+        # are sized by theme's QTabBar::scroller rule (they shipped 21 px wide and overlapping by 11).
         self.tab_bar.setUsesScrollButtons(True)
         self.tab_bar.setElideMode(Qt.ElideNone)
         self.tab_bar.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
@@ -920,10 +922,12 @@ class CentralView(QWidget):
         # the glyphs exactly as the paragraph above predicts — the tab bar was handed 228 px for a
         # 240 px identity, so Qt raised its two scroll arrows and hid part of "Coaching" behind
         # them. Four tabs at ElideNone in a 280 px panel is not a constraint the app had; it is a
-        # constraint the number invented. The derived floor is 292 and costs the window 12 px of
-        # minimum width, which is the price of the lap panel always being able to say what page you
-        # are on. (theme.py's QTabBar::scroller rule fixes the arrows themselves, for the sizes a
-        # different font stack or a fifth tab could still reach.)
+        # constraint the number invented. The derived floor was 292 then and costs the window 12 px
+        # of minimum width, which is the price of the lap panel always being able to say what page
+        # you are on. It is DERIVED, so #269's fifth tab (Marks) moved it without an edit here —
+        # 240/292 are the four-tab measurement this defect was found at, not a current budget.
+        # (theme.py's QTabBar::scroller rule fixes the arrows themselves, for the sizes a
+        # different font stack can still reach.)
 
         main = QSplitter(Qt.Horizontal)
         main.addWidget(left)

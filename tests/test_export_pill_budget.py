@@ -392,9 +392,106 @@ def test_the_mux_never_lets_the_audio_decide_the_clip_length():
           "(-af apad -shortest, both encoders)")
 
 
+# ------------------------------------------------- the honesty stamp: the one run with no pill
+def _ink_in(arr, rect):
+    """How many pixels inside `rect` differ from the flat background — "is there ink here"."""
+    x0, y0 = max(0, int(rect.x())), max(0, int(rect.y()))
+    crop = arr[y0:int(rect.bottom()) + 1, x0:int(rect.right()) + 1]
+    if not crop.size:
+        return 0
+    return int(np.count_nonzero(np.any(crop != np.array(BG, dtype=np.uint8), axis=2)))
+
+
+def _stamped(out_h, *, provisional=True, media=False, low_gps=False, aspect=None):
+    """(session, spec, painter, out_w) for a session carrying the given timing conditions."""
+    from studio import data_quality as dq
+    tt = np.round(np.arange(0.0, 200.001, 0.1), 6)
+    s = Stub(tt, np.full(len(tt), 88.0), 0.0, 64.238, lambda t: -0.31, has_g=True)
+    s.track_name = None
+    s.timing_verified = not provisional
+    s.timing_quality = dq.TimingQuality(
+        clock=dq.MEDIA_CLOCK_FALLBACK if media else dq.GPS9_TRUECLOCK,
+        dropped_fraction=0.12 if low_gps else 0.0)
+    out_w = int(out_h * 16 / 9) if aspect is None else int(out_h * aspect)
+    cfg = ev.OverlayConfig(out_height=out_h, palette=theme.PALETTE_STANDARD)
+    t0, t1 = ev.lap_window_for_export(s, s._lap, 0.0, 0.0)
+    spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=s._lap, t0=t0, t1=t1,
+                         config=cfg)
+    return s, spec, ev.OverlayPainter(s, spec, out_w, out_h, FPS), out_w
+
+
+def test_a_clean_recording_burns_no_stamp_at_all():
+    """The clean case must be byte-identical to every export before this — no empty pill, no
+    "verified" badge, no reserved space. Same rule the exports' quality key follows: a legend on a
+    file that carries no codes teaches the reader that the marks are decoration."""
+    for out_h in (480, 1080):
+        out_w = int(out_h * 16 / 9)
+        tt = np.round(np.arange(0.0, 200.001, 0.1), 6)
+        s = Stub(tt, np.full(len(tt), 88.0), 0.0, 64.238, lambda t: 0.0)
+        spec = _spec(s, out_h)
+        painter = ev.OverlayPainter(s, spec, out_w, out_h, FPS)
+        assert painter._stamp_lines == [], painter._stamp_lines
+        assert painter._stamp_rect.isEmpty()
+        arr = _composite(painter, out_w, out_h, _frames(s, spec)[1])
+        # Nothing where a stamp WOULD have gone — asked of the geometry helper itself, with the
+        # widest three lines this family can burn, rather than of a hand-picked band under the
+        # pill (the pill's own antialiased stroke legitimately bleeds ~1.5 px past its rect, which
+        # is what a naive "anything below the pill" band picks up).
+        from studio import data_quality as dq
+        would_be = ev.stamp_block(painter._strip_rect,
+                                  [dq.STAMP_PROVISIONAL, dq.STAMP_ESTIMATED,
+                                   dq.STAMP_LOW_GPS.format(pct=12)])
+        assert _ink_in(arr, would_be) == 0, (out_h, _ink_in(arr, would_be))
+    print("test_a_clean_recording_burns_no_stamp_at_all OK (2 heights)")
+
+
+def test_a_provisional_recording_says_so_on_every_frame():
+    """The gap #272 named and app.py's own warning dialog described in as many words — "that
+    estimate gets burned into the video, with nothing in the frame to say so".
+
+    Asserted on COMPOSITED PIXELS, at both ends of the resolution range, on the FIRST frame (a
+    lead-in, where the strip's clock is still pending) and the last (the frozen run-off) as well as
+    mid-lap: the caveat is about the recording, not a moment in it, so a single-frame grab from
+    anywhere in the clip has to carry it."""
+    for out_h in (480, 1080, 2160):
+        s, spec, painter, out_w = _stamped(out_h)
+        assert len(painter._stamp_lines) == 1, painter._stamp_lines
+        assert painter._stamp_lines[0].startswith("PROVISIONAL")
+        assert painter._stamp_rect.right() < out_w, (out_h, painter._stamp_rect)
+        for vals in _frames(s, spec):
+            arr = _composite(painter, out_w, out_h, vals)
+            assert _ink_in(arr, painter._stamp_rect) > 0, (out_h, vals.t)
+    print("test_a_provisional_recording_says_so_on_every_frame OK (3 heights x 3 frames)")
+
+
+def test_the_stamp_never_collides_with_another_overlay_element():
+    """The overlay is four corner-anchored elements and the stamp is a FIFTH thing hanging off one
+    of them — so the union of the strip pill and the stamp is what the g-meter has to clear, not
+    the pill alone. Passing the pill would drop the dial by exactly the pill's height on a narrow
+    frame and land it on the disclosure, which is worse than no disclosure because it looks
+    deliberate.
+
+    Swept over the shapes the picker offers, with all three conditions live (the tallest stamp this
+    family can produce) — 9:16 is the case that forces the unstack."""
+    for aspect in (16 / 9, 1.0, 9 / 16):
+        for out_h in (720, 1080):
+            s, spec, painter, out_w = _stamped(out_h, media=True, low_gps=True, aspect=aspect)
+            assert len(painter._stamp_lines) == 3, painter._stamp_lines
+            stamp = painter._stamp_rect
+            assert stamp.right() < out_w and stamp.bottom() < painter._h, (aspect, out_h, stamp)
+            for name, rect in (("g-meter", painter._g_rect),
+                               ("readout", painter._readout_rect),
+                               ("map", painter._map._box)):
+                assert not stamp.intersects(rect), (aspect, out_h, name, stamp, rect)
+    print("test_the_stamp_never_collides_with_another_overlay_element OK (3 shapes x 2 heights)")
+
+
 if __name__ == "__main__":
     test_the_readout_budget_reads_the_sample_the_render_reads()
     test_the_strip_budget_asks_about_the_instant_the_lead_out_freezes_on()
     test_no_run_paints_outside_its_pill()
     test_the_mux_never_lets_the_audio_decide_the_clip_length()
+    test_a_clean_recording_burns_no_stamp_at_all()
+    test_a_provisional_recording_says_so_on_every_frame()
+    test_the_stamp_never_collides_with_another_overlay_element()
     print("ALL EXPORT PILL-BUDGET TESTS OK")

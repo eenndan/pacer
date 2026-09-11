@@ -101,7 +101,7 @@ as an image, and the telemetry burned onto the footage as an MP4 (via ffmpeg).
 <img src="docs/media/overlay.png" width="880" alt="A frame of a real exported overlay video: the lap number, elapsed time and live delta burned into the top-left of the GoPro footage, with a g-meter and track map in the corners">
 
 **And the window is yours.** Four resizable panels with a tabbed lap panel (Laps · Corners · Stats ·
-Coaching, digits `1`–`4`), a maximize button on every panel header, `⌘⌃F` for full screen,
+Coaching · Marks, digits `1`–`5`), a maximize button on every panel header, `⌘⌃F` for full screen,
 km/h ↔ mph, colour-blind-safe cues, a local session library, and privacy controls under
 `Help ▸ Your data & privacy`.
 

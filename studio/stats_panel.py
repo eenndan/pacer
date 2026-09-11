@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, gmeter, provenance_panel, theme, units
+from . import data_quality, driving, gmeter, provenance_panel, theme, units
 from . import stats as stats_service
 from ._signal import fmt_hms, fmt_time, plural
 
@@ -396,7 +396,14 @@ BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the c
                    "ESTIMATED median metres you could brake later (the D4 brake-point "
                    "model). Corners with no matched brake event are omitted. Honesty floor: "
                    "10 Hz GPS quantizes the onset by ~1.5 m — a σ at or below that is "
-                   "measurement, not driving. Click a row to ring the corner on the map.")
+                   "measurement, not driving. Click a row to ring the corner on the map.\n\n"
+                   "COMMIT % IS A RATIO INSIDE ONE CHANNEL. Both halves of it — the event's peak "
+                   "and the \"demonstrated maximum\" it is divided by, the "
+                   f"{driving.AMAX_PCT:g}th percentile of every event peak in the session — are "
+                   "measured on the UNWINDOWED detection series. That is NOT the smoothed "
+                   "\"peak braking g\" tile in SPEED · G, which is a different filter of the same "
+                   "axis and reads lower; dividing by that one instead would inflate every "
+                   "number in this column.")
 # The pace-trend verdict band moved to `stats.TREND_STEADY_BAND`, beside the statistic it
 # qualifies: the exported report and the clipboard summary print the same verdict off the same
 # slope, and export_data is Qt-free by contract so it cannot reach into this module.
@@ -487,10 +494,59 @@ GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — l
 GG_AXIS_X = "lateral g<br>− right · + left"
 GG_AXIS_Y = "longitudinal g<br>− braking<br>+ accelerating"
 GG_KEY_RINGS = "solid rings: 0.5 g steps"
+# ================================ ONE AXIS, TWO FILTERS, AND A LAP ROW PRINTS BOTH OF THEM
+# `driving_channels`'s THREE LONGITUDINAL SERIES block is the source-level version of this, and
+# #271 left the user-facing half undone because it lives here. The short form: the same physical
+# quantity — deceleration along the kart — reaches this page through two different filters.
+#
+#   * the DISPLAY series (gmeter.long_g_gps): the GPS speed derivative boxcarred over
+#     LONG_SMOOTH_S and resampled to the g-meter's own rate. It is what "peak braking g", the
+#     `Brk g` column, the friction circle and its p98 envelope are made of.
+#   * the DETECTION series (_signal.speed_long_g, called by driving_channels): the SAME derivative
+#     with NO window, rebuilt per lap on that lap's own ~10 Hz fixes. It is what every brake event
+#     and every coast span — `Brake s`, `Coast s`, the DRIVING tiles, the BRAKING table's commit %,
+#     the map's brake glyphs and the coaching rows — is made of.
+#
+# MEASURED, and it is visible in one row. On the D24 0060 pair (38 valid laps) a brake event's own
+# peak deceleration exceeds the "peak braking g" printed on the SAME lap row on 37 of 38 laps, at a
+# median ratio of 1.258 (0.862 -> 1.081 g); on 0062 (65 laps) it is 65 of 65 at 1.244 (0.652 ->
+# 0.811 g). The session maxima the SPEED · G tile prints are 1.266 g and 1.076 g against largest
+# event peaks of 1.943 g and 1.535 g. Neither number is wrong — a window can only lower a peak, and
+# a sustained maximum is the honest thing for a tile to print — but a page that shows both and
+# names neither is a page contradicting itself, which is the same defect #237 fixed by separating
+# the priority glyph from the trust glyph.
+#
+# THE COPY NAMES THE INSTRUMENT, NOT THE MEASUREMENT. Windows, bands and minimum durations are
+# COMPOSED from `gmeter` / `driving` constants and never typed (the §5.5 lesson: a constant typed
+# into honesty copy rots), and the coast text deliberately characterises no magnitude at all — the
+# detection series' effect on `coast_s` is a known, measured defect with its own fix pending
+# (see driving_channels), and a sentence describing today's number would be wrong the day it lands.
+# The BAND, the MINIMUM DURATION and the threshold are what a coast IS, and they stay true either
+# way. The measured ratios above live in this comment, where they cannot reach the user and rot.
+DRIVING_TOOLTIP = (
+    "Brake and Coast are DETECTED EVENTS, and they run on their own copy of the longitudinal g: "
+    "the GPS speed derivative on each lap's own ~10 Hz fixes, with NO smoothing window — the "
+    f"opposite choice from the {gmeter.LONG_SMOOTH_S:g} s one the peak-braking tile and the "
+    "friction circle above are drawn on. That is deliberate: a brake onset is a step, and a "
+    "centred window smears exactly the thing being detected.\n\n"
+    "A BRAKE EVENT is a run below the session's OWN brake threshold — derived from this "
+    "recording's braking-decel distribution rather than fixed — released on hysteresis, with the "
+    "fragments of one braking manoeuvre re-fused into one event. A COAST is the narrower test: "
+    f"off-power deceleration inside a band from {driving.COAST_DRAG_MIN:g} g up to that same "
+    f"threshold, held for at least {driving.MIN_COAST_S:g} s. The band and the minimum duration "
+    "are the whole instrument — this is time that passed both tests, not every moment the driver "
+    "was off the throttle.")
 LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
-                     "speed; peak g from the g-meter (lateral IMU, longitudinal GPS-derived); "
-                     "Brake/Coast are the summed detected events — the same events the map "
-                     "glyphs and coaching read. ★ marks the session-best lap.")
+                     "speed. ★ marks the session-best lap.\n\n"
+                     "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS. Lat g is the "
+                     "accelerometer. Brk g is the GPS speed derivative as the g-meter filters it "
+                     f"— boxcarred over {gmeter.LONG_SMOOTH_S:g} s, so it is a SUSTAINED peak. "
+                     "Brake s and Coast s count events detected on that same derivative with no "
+                     "window at all, on this lap's own ~10 Hz fixes (the same events the map "
+                     "glyphs and coaching read). A window can only lower a peak, so a brake "
+                     "event's own peak deceleration normally runs ABOVE the Brk g printed beside "
+                     "it — measured on both reference recordings, on almost every lap. They are a "
+                     "sustained maximum and a detector, not two readings of one number.")
 PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropout — the same "
                 "set every σ statistic uses). Spread = median − best: what the typical lap "
                 "gives away to your demonstrated pace.")
@@ -1367,7 +1423,12 @@ class StatsView(QWidget):
             f"longitudinal; the raw IMU forward axis is vibration-inflated), smoothed over "
             f"{gmeter.LONG_SMOOTH_S:g} s. A {gmeter.LONG_SMOOTH_S:g} s window lowers a peak, "
             f"so this reads under the instantaneous spike on purpose: the spike is GPS "
-            f"quantization noise, not grip. 10 Hz GPS also quantizes brake onsets by ~1.5 m.")
+            f"quantization noise, not grip. 10 Hz GPS also quantizes brake onsets by ~1.5 m.\n\n"
+            f"IT IS NOT THE NUMBER THE BRAKE COUNTS COME FROM. Every brake event on this page — "
+            f"the DRIVING tiles, the Brake s column, the BRAKING table, the map's glyphs — is "
+            f"detected on the SAME axis with no window at all, so an individual event's peak "
+            f"deceleration normally runs ABOVE this figure rather than under it. One axis, two "
+            f"filters, for two different jobs.")
         col.addLayout(self._grid(self.t_vmax, self.t_vmin, self.t_peak_lat,
                                  self.t_peak_brake))
         # Without an accelerometer two of those four tiles can only ever be em-dashes — say why
@@ -1455,12 +1516,23 @@ class StatsView(QWidget):
         col.addWidget(self.gg_key)
 
         # --- DRIVING reductions (hidden without a g signal)
+        #
+        # THE FOUR EVENT TILES SHIPPED WITH NO TOOLTIP AT ALL, on a page where every neighbouring
+        # tile carries one — so the only four numbers on the page built from the DETECTION series
+        # were also the only four that said nothing about where they came from. `DRIVING_TOOLTIP`
+        # goes on the section heading AND on each tile: the heading is the surface a reader hovers
+        # to ask "what is this group", a tile is what they hover to ask about a number, and the
+        # answer is the same sentence either way. (`grip envelope · p98` keeps its own — it is the
+        # one tile here that is NOT an event count; it is the combined-g percentile.)
         self._driving_section = self._section("DRIVING")
+        self._driving_section.setToolTip(DRIVING_TOOLTIP)
         col.addWidget(self._driving_section)
         self.t_brake = Tile("braking / lap · median")
         self.t_brake_n = Tile("brake events / lap")
         self.t_coast = Tile("coasting / lap · median")
         self.t_longest_coast = Tile("longest coast")
+        for _t in (self.t_brake, self.t_brake_n, self.t_coast, self.t_longest_coast):
+            _t.setToolTip(DRIVING_TOOLTIP)
         self.t_grip_ceiling = Tile("grip envelope · p98")
         self.t_grip_ceiling.setToolTip(
             "The session's demonstrated combined-g ceiling: the 98th percentile of "

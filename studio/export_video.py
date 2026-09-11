@@ -18,6 +18,12 @@ Pipeline (raw-video pipe, the simplest path needing no extra Python codec dep):
 Decode/mux fps are PINNED to one output fps for A/V sync (frame N out == frame N in). Scope: ONE
 selected lap. `overlay_values_at` mirrors app._apply_readout, so a frame grab at t shows what the
 app shows at t.
+
+HONESTY: this is the most public artifact the app produces and the one least able to explain
+itself, so a recording whose timing is provisional / estimated / GPS-degraded burns the app's own
+WORDS for that under the lap strip (`_paint_stamp`). It carries no `[e]`/`[p]`/`[u]`/`[b]` code —
+a frame has no key to decode one — and it does NOT block the export the way the share card does;
+`data_quality`'s burned-frame block owns both decisions and their reasons.
 """
 
 from __future__ import annotations
@@ -43,7 +49,7 @@ from PySide6.QtGui import (
     QRadialGradient,
 )
 
-from . import gmeter_overlay, theme, units
+from . import data_quality, gmeter_overlay, theme, units
 from ._signal import fmt_time, lap_label
 from .export_palette import EXPORT
 
@@ -1574,6 +1580,69 @@ _RUN_GAP_K = 16.0             # the gap between two separate RUNS (elapsed time 
 # export's own QPainterPath.addText path, not by asking the font.
 _BEST_MARK = "★ BEST"
 
+# ------------------------------------------------------------------ the honesty stamp
+# THE MOST PUBLIC ARTIFACT THIS APP PRODUCES, AND THE LEAST ABLE TO CAVEAT ITSELF. #272 gave the
+# tables that leave the app a citable quality vocabulary ([e]/[p]/[u]/[b] + a key) and named this
+# module as the one genuine leaving-the-app surface still carrying nothing. Its decision was PER
+# SURFACE FAMILY before per marker, and a burned frame is its own family: no key, no hover, no
+# margin for a legend, watched by people who have never seen pacer. So it takes NO CODES — a `[p]`
+# in the corner of a video is a letter the viewer cannot decode and the file cannot explain — and
+# instead burns the app's own WORDS, under the lap strip, for the conditions that qualify something
+# the frame actually shows. `data_quality.burned_timing_stamp` owns the whole decision (which
+# conditions, in which order, in which words, and which two are refused and why); this file owns
+# only where the ink lands.
+#
+# A frame with nothing to disclose burns nothing — no empty pill, no "verified" badge. The clean
+# case is byte-identical to every export before this, which is the same rule the exports' quality
+# key follows (a legend on a file that carries no codes teaches the reader the codes are decoration).
+_STAMP_H_FRAC = 0.40      # stamp line height as a fraction of the STRIP pill's height
+_STAMP_GAP_FRAC = 0.34    # gap below the strip pill before the first stamp line, ditto
+_STAMP_LINE_K = 1.18      # line pitch as a multiple of the stamp font's own height
+
+
+def stamp_block(strip: QRectF, lines) -> QRectF:
+    """The rect the stamp's `lines` occupy under the `strip` pill (empty QRectF for no lines).
+
+    PURE GEOMETRY, and it exists as its own function for the reason `strip_pill_width` does: the
+    painter draws here and `OverlayPainter.__init__` has to know the same box to keep the corner
+    composition honest. The top-left element is a strip pill PLUS whatever hangs under it, and it is
+    their UNION the g-meter has to clear on a narrow frame — measuring that in two places is how a
+    dropped dial ends up sitting on a disclosure."""
+    if not lines:
+        return QRectF(strip.x(), strip.bottom(), 0.0, 0.0)
+    font = _font(strip.height() * _STAMP_H_FRAC, bold=True)
+    fm = QFontMetricsF(font)
+    pitch = fm.height() * _STAMP_LINE_K
+    top = strip.bottom() + strip.height() * _STAMP_GAP_FRAC
+    width = max(fm.horizontalAdvance(t) for t in lines)
+    return QRectF(strip.x() + strip.height() * _STRIP_PAD_L_FRAC, top, width,
+                  pitch * len(lines))
+
+
+def _paint_stamp(p: QPainter, strip: QRectF, box: QRectF, lines) -> None:
+    """Burn the honesty lines under the lap strip: the app's amber caution hue, haloed, no pill.
+
+    NO BACKING PILL, unlike the two runs above it, and that is this module's own rule rather than a
+    saving: legibility here comes from the dark halo under every glyph (see `_draw_text`), which is
+    exactly what lets the g-meter and the map inset drop their grey backdrops. A third box in the
+    top-left corner would make the overlay read as boxed again, which is the thing the fitted pills
+    were measured into existence to undo.
+
+    AMBER because that is the hue the app warns in and the hue this palette already reserves for
+    it: the lap panel's data-quality chip is `tone="warn"`, and `EXPORT.accent` is that amber made
+    opaque for bright footage. It is deliberately the same accent the progress fill uses — the
+    stamp qualifies the clock that fill is running under."""
+    if not lines:
+        return
+    font = _font(strip.height() * _STAMP_H_FRAC, bold=True)
+    fm = QFontMetricsF(font)
+    pitch = fm.height() * _STAMP_LINE_K
+    k = strip.height() / 44.0
+    for i, text in enumerate(lines):
+        y = box.y() + i * pitch + fm.ascent()
+        _draw_text(p, QPointF(box.x(), y), text, font, EXPORT.accent, halo=1.8 * k)
+
+
 # What the strip's clock reads before the START LINE, on an export with a lead-in. Rendered through
 # `fmt_time` on a non-finite time rather than typed out, because the em dash for "no value yet" is
 # already this codebase's convention (`fmt_time`, `theme.speed_number`, `format_delta_value`) and a
@@ -1884,12 +1953,23 @@ class OverlayPainter:
         # lap strip: TOP-LEFT.
         sh = max(cfg.strip_h_frac * self._u, _MIN_STRIP_H_PX)
         self._strip_rect = QRectF(m, m, strip_pill_width(sh, labels, tails), sh)
+        # ...and, under it, the honesty stamp — resolved ONCE here for the same reason the pills
+        # are: it is session-scoped, so a per-frame lookup could only reproduce the same answer
+        # while giving it a chance to differ. [] on a clean recording, and then nothing is drawn.
+        self._stamp_lines = data_quality.burned_timing_stamp(session)
+        self._stamp_rect = stamp_block(self._strip_rect, self._stamp_lines)
         # AND THEN THE ROWS ARE CHECKED AGAINST THE FRAME THEY LANDED IN. Every rect above is
         # anchored to a corner, which is only a composition while the two elements sharing an edge
         # still fit side by side — and how wide they are is a MEASUREMENT (a pill fitted to its
         # own text, an inset fitted to the track), not something this file can predict. A narrow
         # frame is where that runs out, so the overlap is tested rather than assumed.
-        self._g_rect = _unstack_row(self._strip_rect, self._g_rect, out_w, m, downward=True)
+        #
+        # THE TOP-LEFT ELEMENT IS THE PILL *PLUS* THE STAMP, and the g-meter has to clear their
+        # UNION. Passing the pill alone would drop the dial by exactly the pill's height on a
+        # narrow frame and land it on the disclosure — a caveat with a g-dial painted over it is
+        # worse than no caveat, because it looks deliberate.
+        self._g_rect = _unstack_row(self._strip_rect.united(self._stamp_rect), self._g_rect,
+                                    out_w, m, downward=True)
         map_rect = _unstack_row(self._readout_rect, map_rect, out_w, m, downward=False)
         # The inset projects its track into ABSOLUTE frame coordinates and bakes the line once, so
         # it is built after its rect is final rather than moved afterwards.
@@ -1988,6 +2068,10 @@ class OverlayPainter:
         # every start line; for a single-lap export it is the spec's one verdict, as before.
         _paint_strip(p, self._strip_rect, self._session, vals, self._spec.lap_t0,
                      self._spec.config.palette, self._spec.is_best_at(vals.lap_id))
+        # ...and the honesty stamp under it, on EVERY frame including the lead-in and the run-off:
+        # what it qualifies is the recording, not a moment in it, and a caveat that came and went
+        # would be a caveat a single-frame grab or a re-cut could drop.
+        _paint_stamp(p, self._strip_rect, self._stamp_rect, self._stamp_lines)
         p.end()
 
 
