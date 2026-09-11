@@ -326,6 +326,58 @@ def lap_curvature(xs, ys, dists) -> np.ndarray:
     return _smooth(kappa, w)
 
 
+def lap_yaw_rate(xs, ys, dists, times, kappa=None) -> np.ndarray:
+    """Path-derived body yaw rate dtheta/dt (rad/s, + = left): `lap_curvature`'s kappa carried
+    along the trace at the trace's OWN speed, ds/dt. The rotation-rate form of the curvature
+    channel, and the thing a measured gyro must be compared against.
+
+    THE BASIS IS THE WHOLE POINT. kappa is dtheta/ds against `dists` — this lap's gap-aware
+    odometer — so the only speed that turns it back into a rate is that same odometer's
+    derivative. Then, over one closed lap,
+
+        int kappa (ds/dt) dt  ==  int kappa ds  ==  the lap's heading change  ==  exactly 2*pi
+
+    which is an exact, fixture-independent target (tests/test_corners.py asserts it). Reaching
+    for the GPS Doppler speed instead multiplies that by the ratio of Doppler distance to
+    odometer distance — and that ratio is neither 1 nor constant. Measured per segment on the
+    D24 recordings it climbs with |kappa|: 0.99 on the straights, 1.03 through a mid-speed
+    corner, 1.07-1.08 in the tightest, because the GPS POSITION trace rounds corners off (the
+    13-sample load-time boxcar, and the receiver's own filtering under it) while the Doppler
+    speed does not. Weighted by kappa that inflated a lap's rotation by +10.1 % / +6.4 %, of
+    which only +1.9 % / +2.1 % was the uniform odometer deficit and the rest was
+    corner-concentrated. This form reads 1.0007 x 2*pi on the same laps — 20x closer to exact
+    than the measured gyro itself (0.983 / 0.975).
+
+    `xs`, `ys`, `dists` are `lap_curvature`'s inputs (strictly increasing `dists`); `times` is
+    the media clock, same length. `kappa` is that lap's curvature profile already computed —
+    pass it when you need BOTH (rotation._path_reference does) rather than paying for the
+    profile twice, which is 21.7 ms over the 65 laps of the D24 0062 recording."""
+    dists = np.asarray(dists, float)
+    times = np.asarray(times, float)
+    if kappa is None:
+        kappa = lap_curvature(xs, ys, dists)
+    elif len(kappa) != len(dists):
+        # A profile from a DIFFERENT lap would otherwise multiply through silently; the lengths
+        # are the cheap half of that check and the only half a caller can get wrong by accident.
+        raise ValueError(f"kappa has {len(kappa)} samples, the lap has {len(dists)}")
+    return np.asarray(kappa, float) * np.gradient(dists, _monotonic(times))
+
+
+def _monotonic(t: np.ndarray) -> np.ndarray:
+    """`t` with every non-positive gap replaced by the median positive one. A chapter seam
+    clamps the time axis monotonic (load._gps9_times -> maximum.accumulate), leaving a
+    duplicated instant that np.gradient would divide by; the sibling guard in
+    `_signal.speed_long_g` repairs the same axis the same way. A no-op on clean input."""
+    if len(t) < 2:
+        return t
+    dt = np.diff(t)
+    if not (dt <= 0).any():
+        return t
+    pos = dt[dt > 0]
+    med = float(np.median(pos)) if pos.size else 1.0
+    return np.concatenate([t[:1], t[:1] + np.cumsum(np.where(dt <= 0, med, dt))])
+
+
 def pooled_curvature(traces, total_ref: float):
     """The track's curvature profile on the reference lap's odometer grid: the MEDIAN of
     the per-lap kappa profiles, aligned by normalized distance (same fraction = same track
