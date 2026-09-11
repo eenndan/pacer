@@ -998,6 +998,19 @@ set_tests_properties(test_command_palette PROPERTIES
 add_test(NAME test_camera_support
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_camera_support.py)
 
+# THE CHARTS AS AN INSTRUMENT (feat/plots-datum-cursor-and-delta-nav): the datum (second) cursor and
+# its interval statistics, the window statistics tied to the current zoom, and the Δ-loss tour. Two
+# halves: Qt-free `studio/chart_stats.py` over hand-built arrays — including the SLOPE FLOOR
+# reproduced by injecting the D24-measured 0.62 km/h speed noise into synthetic 10 Hz data, where a
+# slope one GPS sample wide is more than half noise and the app refuses to print one — and a real
+# offscreen PlotsView driven through the same public methods the window's D / N shortcuts call,
+# with every readout line measured against the label it has to fit at three panel widths. No
+# telemetry file; needs the shipped theme, so run offscreen.
+add_test(NAME test_chart_instruments
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_instruments.py)
+set_tests_properties(test_chart_instruments PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1")
+
 # THE CHAPTER TIME AXIS: the number the NEXT chapter is placed at (fix/chapter-seam-timeline).
 # `ChapterMap` offsets, the concat span's declared durations, the export's footage bound and the
 # C++ chain's own telemetry shift were all built from each chapter's **GPMF metadata track**
