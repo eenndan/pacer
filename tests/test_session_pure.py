@@ -53,10 +53,13 @@ from studio._signal import (  # noqa: E402
     LAP_BAND_LO,
     LAP_DIST_BAND_HI,
     LAP_DIST_BAND_LO,
+    MAX_STOPPED_S,
     MIN_LAP_SAMPLES,
     MIN_LAP_TIME,
+    STOPPED_KMH,
     _band_lap_ids,
     _banded_out_lap_ids,
+    _longest_stopped_s,
 )
 from studio.corner_model import SegmentBests  # noqa: E402
 from studio.load import (  # noqa: E402
@@ -72,18 +75,22 @@ from studio.session import Session  # noqa: E402
 
 class _FakeBandLaps:
     """The pacer.Laps READ surface `_band_lap_ids` touches — laps_count / lap_time /
-    sample_count, and OPTIONALLY get_lap_distance (the distance band).
+    sample_count, and OPTIONALLY get_lap_distance (the distance band) + lap_columns (the stop
+    test).
 
     Distances are passed as ``dists``; when omitted the double does NOT expose
     get_lap_distance at all (via __getattr__ raising AttributeError), so `_band_lap_ids`'
     getattr guard falls back to the unchanged time-only path — the way the real fake test
-    doubles (and any pre-distance-band caller) drive it."""
+    doubles (and any pre-distance-band caller) drive it. ``stops`` does the same for speed:
+    ``stops[i]`` is how many seconds lap i stands still for (0 = never), and when it is omitted
+    the double hides lap_columns so the stop test's own getattr guard falls back."""
 
-    def __init__(self, times, samples=None, dists=None):
+    def __init__(self, times, samples=None, dists=None, stops=None):
         self._times = list(times)
         # Sample-rich by default so the time band is what's under test.
         self._samples = list(samples) if samples is not None else [1000] * len(self._times)
         self._dists = list(dists) if dists is not None else None
+        self._stops = list(stops) if stops is not None else None
 
     def laps_count(self):
         return len(self._times)
@@ -94,11 +101,24 @@ class _FakeBandLaps:
     def sample_count(self, i):
         return self._samples[i]
 
+    def _columns(self, i):
+        """A 10 Hz lap trace at racing speed with `self._stops[i]` seconds parked in the middle."""
+        n = max(int(round(self._times[i] / 0.1)), 2)
+        t = np.arange(n) * 0.1
+        v = np.full(n, 30.0)              # m/s — unambiguously moving
+        stop_n = int(round(float(self._stops[i]) / 0.1))
+        if stop_n > 0:
+            lo = max((n - stop_n) // 2, 0)
+            v[lo:lo + stop_n] = 0.0
+        return SimpleNamespace(times=t, full_speed=v)
+
     def __getattr__(self, name):
-        # Only surface get_lap_distance when distances were supplied — otherwise it must be
-        # absent so the getattr(laps, "get_lap_distance", None) guard hits its fallback.
+        # Only surface an accessor when its data was supplied — otherwise it must be absent so
+        # the getattr(laps, ..., None) guard in `_band_lap_ids` hits its fallback.
         if name == "get_lap_distance" and self.__dict__.get("_dists") is not None:
             return lambda i: self._dists[i]
+        if name == "lap_columns" and self.__dict__.get("_stops") is not None:
+            return self._columns
         raise AttributeError(name)
 
 
@@ -195,6 +215,91 @@ def test_band_lap_ids_falls_back_when_no_distance_accessor():
     assert hasattr(bad, "get_lap_distance")
     assert _band_lap_ids(bad) == [0, 1, 2]
     print("test_band_lap_ids_falls_back_when_no_distance_accessor OK")
+
+
+def test_longest_stopped_s_measures_the_longest_contiguous_stretch():
+    """CONTIGUOUS, not total: three 1 s dips are a tight circuit, one 4 s dip is a stop, and only
+    the second makes a lap time meaningless. Also: a run that straddles a GPS dropout reports the
+    WALL-CLOCK time the kart was slow, not the sample count — which is the whole point of measuring
+    it off `times` rather than counting samples."""
+    t = np.arange(0, 10.0, 0.1)
+    fast = np.full(len(t), 30.0)                       # m/s
+    assert _longest_stopped_s(t, fast) == 0.0
+    three_dips = fast.copy()
+    for lo in (10, 40, 70):
+        three_dips[lo:lo + 10] = 0.0                   # 3 separate ~1 s dips
+    assert _longest_stopped_s(t, three_dips) < 1.5
+    one_stop = fast.copy()
+    one_stop[20:60] = 0.0                              # one 4 s stop
+    assert 3.5 < _longest_stopped_s(t, one_stop) < 4.1
+    # A run at the very start and at the very end are both real runs (mask-edge handling).
+    lead = fast.copy()
+    lead[:50] = 0.0
+    tail = fast.copy()
+    tail[-50:] = 0.0
+    assert _longest_stopped_s(t, lead) > 4.0
+    assert _longest_stopped_s(t, tail) > 4.0
+    # Two slow fixes 41 s apart across a dropout: 41 s stopped, on 2 samples.
+    assert _longest_stopped_s([0.0, 41.0, 41.1], [0.0, 0.0, 30.0]) == 41.0
+    # Degenerate inputs never raise.
+    assert _longest_stopped_s([], []) == 0.0
+    assert _longest_stopped_s([1.0], [0.0]) == 0.0
+    # The threshold is a SPEED, not "not accelerating": a slow apex above it isn't a stop.
+    apex = fast.copy()
+    apex[20:60] = (STOPPED_KMH + 4.0) / 3.6
+    assert _longest_stopped_s(t, apex) == 0.0
+    print("test_longest_stopped_s_measures_the_longest_contiguous_stretch OK")
+
+
+def test_band_lap_ids_drops_a_lap_that_stopped_but_both_bands_admit():
+    """THE hole the two bands cannot see. A lap the kart stood still on for 41 s passes BOTH:
+    a stop adds time without adding DISTANCE (so the ±10 % distance band admits it by
+    construction), and 1.6x a ~68 s kart lap is ~109 s (so the TIME band has ~41 s of headroom —
+    exactly the stop). Only the speed trace can tell a stopped lap from a slow one."""
+    times = [68.0, 68.5, 67.5, 109.0, 68.2]            # lap 3 = a normal lap + a 41 s stop
+    dists = [1060.0, 1058.0, 1062.0, 1059.0, 1059.0]   # ... at the SAME distance as the others
+    med_t, med_d = float(np.median(times)), float(np.median(dists))
+    # Both bands admit it — this is the premise, asserted rather than assumed.
+    assert LAP_BAND_LO * med_t <= times[3] <= LAP_BAND_HI * med_t
+    assert LAP_DIST_BAND_LO * med_d <= dists[3] <= LAP_DIST_BAND_HI * med_d
+    assert _band_lap_ids(_FakeBandLaps(times, dists=dists)) == [0, 1, 2, 3, 4]  # ... without speed
+    # With the speed surface exposed, the stop is what excludes it — and it is EXCLUDED, i.e.
+    # shown in the ⊘ strip, not silently dropped.
+    stops = [0.0, 0.0, 0.0, 41.0, 0.0]
+    laps = _FakeBandLaps(times, dists=dists, stops=stops)
+    assert _band_lap_ids(laps) == [0, 1, 2, 4]
+    assert _banded_out_lap_ids(_FakeBandLaps(times, dists=dists, stops=stops)) == [3]
+    print("test_band_lap_ids_drops_a_lap_that_stopped_but_both_bands_admit OK")
+
+
+def test_band_lap_ids_stop_test_is_a_noop_on_racing_laps():
+    """No-op guarantee, and it is the measured one: across the 103 valid laps of the two real D24
+    recordings the longest contiguous stretch below STOPPED_KMH is 0.000 s (the slowest single fix
+    on either is 13.6 km/h). So a session of real laps keeps every lap, and a brief sub-threshold
+    dip shorter than MAX_STOPPED_S keeps its lap too — the rule fires on a STOP, not on a slow
+    corner."""
+    times = [67.0, 69.0, 68.0, 70.0, 66.5]
+    dists = [1055.0, 1062.0, 1058.0, 1049.0, 1067.0]
+    clean = [0.0] * 5
+    assert _band_lap_ids(_FakeBandLaps(times, dists=dists, stops=clean)) == [0, 1, 2, 3, 4]
+    assert _banded_out_lap_ids(_FakeBandLaps(times, dists=dists, stops=clean)) == []
+    # A dip just UNDER the limit is kept; one just over it is not.
+    brief = [0.0, 0.0, MAX_STOPPED_S - 0.5, 0.0, 0.0]
+    assert _band_lap_ids(_FakeBandLaps(times, dists=dists, stops=brief)) == [0, 1, 2, 3, 4]
+    over = [0.0, 0.0, MAX_STOPPED_S + 0.5, 0.0, 0.0]
+    assert _band_lap_ids(_FakeBandLaps(times, dists=dists, stops=over)) == [0, 1, 3, 4]
+    print("test_band_lap_ids_stop_test_is_a_noop_on_racing_laps OK")
+
+
+def test_band_lap_ids_falls_back_when_no_speed_accessor():
+    """Back-compat twin of the distance-band fallback: a `laps` double with NO lap_columns (every
+    fake in this suite that predates the stop test) falls back to the unchanged band-only result,
+    so the stop test can never refuse a lap on missing data."""
+    times = [68.0, 68.5, 67.5, 109.0, 68.2]
+    dists = [1060.0, 1058.0, 1062.0, 1059.0, 1059.0]
+    assert not hasattr(_FakeBandLaps(times, dists=dists), "lap_columns")
+    assert _band_lap_ids(_FakeBandLaps(times, dists=dists)) == [0, 1, 2, 3, 4]
+    print("test_band_lap_ids_falls_back_when_no_speed_accessor OK")
 
 
 def test_banded_out_lap_ids_reports_the_short_mis_segmented_lap():

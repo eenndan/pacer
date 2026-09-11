@@ -72,11 +72,12 @@ BEST_LAP_TIP = "★ Session best — the fastest complete lap in this recording.
 BEST_SPLIT_TIP = "★ Session best — no lap crossed this sector quicker."
 BEST_CORNER_TIP = "★ Session best — no lap took this corner quicker."
 DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
-# EXCLUDED laps: substantial laps the median band left OUT of the times / bests (a mis-segmented
-# short/long lap, an out-lap, or an in-lap). They're shown in a muted strip BELOW the table rather
-# than injected as rows — a short excluded lap would otherwise sort to the top as the "fastest" row
-# and re-create the exact confusion the band filter removes. "left out" (distinct from the ⚠
-# dropout flag, which marks a lap that IS still counted).
+# EXCLUDED laps: substantial laps the validity rule left OUT of the times / bests (a mis-segmented
+# short/long lap, an out-lap, an in-lap, or a lap the kart STOPPED on — the median band cannot see
+# that last one, so _signal tests it off the speed trace; see MAX_STOPPED_S). They're shown in a
+# muted strip BELOW the table rather than injected as rows — a short excluded lap would otherwise
+# sort to the top as the "fastest" row and re-create the exact confusion the band filter removes.
+# "left out" (distinct from the ⚠ dropout flag, which marks a lap that IS still counted).
 #
 # TWO SPELLINGS OF ONE MEANING, and the split is deliberate:
 #   * EXCLUDED_ICON is what the STRIP paints — a Phosphor pixmap, drawn by the same theme.icon()
@@ -103,9 +104,10 @@ EXCLUDED_MARK = "⊘"
 EXPAND_ICON = "ph.caret-right"     # collapsed: a click opens the list
 COLLAPSE_ICON = "ph.caret-down"    # expanded: a click closes it
 EXCLUDED_TOOLTIP = (
-    "These laps were left out of your times, bests and coaching. Their distance is off this "
-    "session's median lap — usually a mis-segmented start/finish crossing, an out-lap, or an "
-    "in-lap. If a real lap was dropped, drag the start/finish line on the map.")
+    "These laps were left out of your times, bests and coaching. Either their distance is off "
+    "this session's median lap — usually a mis-segmented start/finish crossing, an out-lap, or "
+    "an in-lap — or the kart stopped during them. If a real lap was dropped, drag the "
+    "start/finish line on the map.")
 # How many excluded laps the expanded list shows AT ONCE. It is a VIEWPORT height, not a cap: the
 # list scrolls to the rest (QA L3-09 — the old hard cap listed 6 of 24 and spent its 7th line on a
 # dead "+18 more" naming rows no surface in the app would ever show, while the expansion still cost

@@ -433,6 +433,109 @@ def test_writers_are_atomic_and_leave_no_partial_file():
     print("test_writers_are_atomic_and_leave_no_partial_file OK (all three writers)")
 
 
+# ============================================ the QUALITY-MARKER VOCABULARY on the exports
+# `studio/data_quality.py` carries the per-marker decision (which Analysis Function codes pacer
+# adopts, which it refuses, and why the letters stop at the app's edge). These pin the half that
+# reaches a file: the column, the key that decodes it, and the disclosure that was MISSING.
+def _csv_rows(session):
+    """(header, lap rows, trailer rows) of a written laps.csv."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "laps.csv")
+        export_data.write_laps_csv(path, session)
+        with open(path, newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+    blank = rows.index([])
+    return rows[0], rows[1:blank], rows[blank + 2:]
+
+
+def test_csv_gained_a_quality_column_and_flag_is_byte_identical():
+    """`quality` is APPENDED; `flag` keeps its old vocabulary exactly.
+
+    A consumer testing `flag == DROPOUT_FLAG` is the reader this ordering protects, and the column
+    goes last because everything past index 4 is already variable in number (splits, corner pairs)
+    — so anything reading that far reads by header name and appending breaks nothing."""
+    s = make_session()
+    header, laps, _trail = _csv_rows(s)
+    assert header[:5] == ["lap", "time_s", "dist_m", "entry_kmh", "flag"], header[:5]
+    assert header[-1] == "quality", header
+    flag_i, qual_i = header.index("flag"), header.index("quality")
+    flags = {r[flag_i] for r in laps}
+    assert flags <= {"", export_data.DROPOUT_FLAG}, f"flag's vocabulary changed: {flags}"
+    # lap 2 is the dropout lap in make_session: it is the one [u] row, and flag still says so.
+    marked = [r for r in laps if r[qual_i]]
+    assert len(marked) == 1 and marked[0][qual_i] == "[u]", [r[qual_i] for r in laps]
+    assert marked[0][flag_i] == export_data.DROPOUT_FLAG
+    print(f"test_csv_gained_a_quality_column_and_flag_is_byte_identical OK "
+          f"({len(header)} columns, 1 marked row)")
+
+
+def test_a_provisional_session_is_marked_on_every_csv_row():
+    """THE GAP THIS VOCABULARY EXISTS FOR. laps.csv's only marker was the GPS dropout, so a file
+    exported from a session whose start/finish line was auto-fitted and never confirmed — every
+    time measured from an arbitrary point — carried a blank flag on every row and said nothing
+    about it anywhere. The app greys the share card out entirely on that same flag."""
+    s = make_session()
+    assert s.timing_verified, "fixture must start verified (it carries a track name)"
+    s.track_name = None   # the REAL condition, not a patched flag (timing_verified is a property)
+    assert not s.timing_verified
+    header, laps, trailer = _csv_rows(s)
+    qual_i = header.index("quality")
+    assert all("[p]" in r[qual_i] for r in laps), [r[qual_i] for r in laps]
+    assert laps[2][qual_i] == "[p] [u]", laps[2][qual_i]   # the dropout lap carries both
+    # …and the key decodes it, in the same file.
+    key = {r[0]: r[3] for r in trailer if r[0].startswith("summary: quality ")}
+    assert "summary: quality [p]" in key, sorted(key)
+    assert "auto-fitted and not confirmed" in key["summary: quality [p]"]
+    print("test_a_provisional_session_is_marked_on_every_csv_row OK")
+
+
+def test_every_code_a_file_emits_is_decoded_by_its_key_in_both_writers():
+    """A code with no key is the failure the convention exists to prevent. Asserted as a SET
+    equality in both directions and on both writers: no code without a key, no key without a code."""
+    from studio import data_quality
+    s = make_session()
+    s.track_name = None                      # provisional; lap 2 already carries the dropout
+    header, laps, trailer = _csv_rows(s)
+    qual_i = header.index("quality")
+    emitted = {m for r in laps for m in r[qual_i].split()}
+    keyed = {r[0].removeprefix("summary: quality ")
+             for r in trailer if r[0].startswith("summary: quality ")}
+    assert emitted == keyed, f"csv: emitted {sorted(emitted)} vs keyed {sorted(keyed)}"
+
+    doc = _write_report(s)
+    text = "".join(ET.fromstring(doc).itertext())
+    for code in emitted:
+        assert data_quality.MARK_MEANING[code] in text, f"report key lost {code}"
+    print(f"test_every_code_a_file_emits_is_decoded_by_its_key_in_both_writers OK "
+          f"({sorted(emitted)})")
+
+
+def test_a_clean_session_gains_no_key_to_read_past():
+    """No codes ⇒ no column content, no key, no break line. A legend on a spotless recording
+    teaches the reader that the marks are decoration."""
+    s = make_stitched_session()
+    header, laps, trailer = _csv_rows(s)
+    assert all(r[header.index("quality")] == "" for r in laps)
+    assert not [r for r in trailer if r[0].startswith("summary: quality ")], trailer
+    doc = _write_report(s)
+    assert "Analysis Function" not in doc and "Break in series" not in doc
+    print("test_a_clean_session_gains_no_key_to_read_past OK")
+
+
+def test_a_break_in_series_is_named_not_just_coded_on_both_writers():
+    """[b] says only THAT the recording is not continuous. Both files also say WHICH break — a
+    skipped chapter here — because the code without the reason is not actionable."""
+    s = make_session()
+    s.skipped_chapters = ["GX020060.MP4"]
+    header, laps, trailer = _csv_rows(s)
+    assert all("[b]" in r[header.index("quality")] for r in laps)
+    named = [r[3] for r in trailer if r[0] == "summary: break in series"]
+    assert len(named) == 1 and "could not be read" in named[0], trailer
+    text = "".join(ET.fromstring(_write_report(s)).itertext())
+    assert "Break in series:" in text and "could not be read" in text
+    print("test_a_break_in_series_is_named_not_just_coded_on_both_writers OK")
+
+
 if __name__ == "__main__":
     test_csv_trailer_states_the_ideals_sample()
     test_csv_trailer_stays_ascii()
@@ -448,4 +551,9 @@ if __name__ == "__main__":
     test_clipboard_text_is_plain_and_complete()
     test_writers_are_atomic_and_leave_no_partial_file()
     test_a_users_own_tmp_file_beside_the_target_survives()
+    test_csv_gained_a_quality_column_and_flag_is_byte_identical()
+    test_a_provisional_session_is_marked_on_every_csv_row()
+    test_every_code_a_file_emits_is_decoded_by_its_key_in_both_writers()
+    test_a_clean_session_gains_no_key_to_read_past()
+    test_a_break_in_series_is_named_not_just_coded_on_both_writers()
     print("\nALL EXPORT-DISCLOSURE TESTS PASSED")

@@ -3290,6 +3290,17 @@ class StatsView(QWidget):
             rows.append(("GPS dropout",
                          f"inside {len(dropouts)} of {len(valid)} laps — "
                          f"flagged {DROPOUT_MARK} and left out of bests, σ and pace", True))
+        # BREAK IN SERIES — the fourth trust-breaking fact, and the one the card had no name for.
+        # A skipped chapter or a chapter whose telemetry stops covering its video means the times
+        # either side are not on the same footing; both were already detected and both were only
+        # ever mentioned in the transient load notice, which is gone by the time anyone reads this
+        # page. Stated here in the card's own prose voice, NOT as the exported `[b]` code: a code
+        # needs a key and this card is a list of sentences (studio/data_quality.py's vocabulary
+        # note says why the letters stop at the app's edge).
+        broke = data_quality.break_in_series(session)
+        if broke:
+            rows.append(("Break in series",
+                         f"{broke} — compare times across it with that in mind", True))
         quality = getattr(session, "timing_quality", None)  # a Session @property
         if quality is not None:
             clock = ("video clock (estimated)" if quality.media_clock

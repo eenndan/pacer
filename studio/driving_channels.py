@@ -18,6 +18,58 @@ import numpy as np
 from . import corners, driving
 from ._signal import G, speed_long_g
 
+# --- THREE LONGITUDINAL SERIES, AND A LAP ROW PRINTS TWO OF THEM SIDE BY SIDE -------------------
+# `gmeter` documents ONE MAGNITUDE, TWO WINDOWS — the 0.15 s lateral against the 0.35 s
+# longitudinal. That block is complete about the g-meter and silent about this module, which
+# builds a THIRD longitudinal series that NEITHER constant governs. All three are the same
+# physical quantity:
+#
+#   1. gm.long_g       IMU forward axis, boxcar LAT_SMOOTH_S (0.15 s), 50 Hz. Vibration-inflated;
+#                      a FALLBACK only (r~0.4 vs GPS truth, ~2x RMS — see gmeter-validation.md).
+#   2. gm.long_g_gps   GPS d|v|/dt, boxcar LONG_SMOOTH_S (0.35 s), 50 Hz. The DISPLAY series: the
+#                      dial, the export overlay, the g-g cloud, the p98 grip envelope, and the
+#                      Stats page's "peak braking g" tile/column. Read here by `_lap_g_arrays`
+#                      and `_grip_envelope`.
+#   3. speed_long_g()  GPS d|v|/dt, NO window. The DETECTION series: `thresholds` builds it on the
+#                      50 Hz g clock, and `lap_brake_events` / `lap_coasting_spans` /
+#                      `lap_brake_throttle` build it again per lap on that lap's native ~10 Hz grid.
+#
+# IT IS UNSMOOTHED BY ARITHMETIC, NOT BY DESIGN. `driving.SMOOTH_S = 0.10` is documented as "boxcar
+# on the longitudinal g before thresholding" and `driving._win` turns it into round(0.10/dt) samples
+# — on the 10 Hz GPS9 lap grid this module hands it, that is **1 sample, and `boxcar` returns w<2
+# untouched**. The declared pre-threshold filter is a no-op on both D24 recordings and on any 10 Hz
+# stream; it would take fixes faster than 15 Hz (round(0.10/dt) >= 2) before it smoothed anything at
+# all, which no recording here has. (`MERGE_GATE_S` = 0.30 does survive the same arithmetic, at
+# 3 samples, and `derive_thresholds` applies no window at all.)
+#
+# MEASURED, on the D24 0060 (38 valid laps) and 0062 (65) recordings, moving samples only:
+#
+#  * THE DETECTION SERIES IS THE RIGHT ONE FOR AN ONSET, AND THAT IS NOT A STYLE PREFERENCE. A
+#    brake onset is a STEP and a centred boxcar smears exactly that. Re-run the detector on the
+#    same laps over a 0.35 s-smoothed copy and the event total goes 470 -> 432 and 739 -> 617. Of
+#    the 470 and 739 the unsmoothed detector finds, **83 (18 %) and 170 (23 %) have no smoothed
+#    counterpart within 5 m**, and those peak at a median 0.586 and 0.377 g — against a theta_b of
+#    0.163 and 0.160, i.e. 2.4-3.6x the threshold and up to 1.11 g. That is a brake application,
+#    not threshold ripple. What the window gives back is 45 and 48 events of its own somewhere
+#    else, and no precision on the ones both agree about: median onset shift 0.0 m, with 198/470
+#    and 343/739 landing within 0.5 m. Series 3 stays.
+#  * AND IT IS THE WRONG ONE FOR A COAST, WHICH IS THE OPPOSITE SHAPE OF TEST. `coasting_spans`
+#    asks for SUSTAINED membership of a narrow band (0.03 g < decel < theta_b) for MIN_COAST_S —
+#    4 consecutive samples at 10 Hz. Per-sample, the two series agree almost exactly on how much
+#    time is in that band (10.85 % vs 11.33 % of moving samples on 0060; 10.93 % vs 10.50 % on
+#    0062 — the unsmoothed one is HIGHER there). The RUNS are what collapse: its band runs have a
+#    p90 of 2 samples, so only 51 and 62 of them ever reach 4, against 175 and 313 smoothed. The
+#    reported coast is therefore 16.9 s of the 288.1 s actually spent in the band (5.9 %) and
+#    22.3 s of 496.6 s (4.5 %) — and the filter choice alone moves it 4.6x and 6.4x. The coast
+#    numbers on the Stats page are measuring run length against a noise floor, not coasting.
+#    LEFT AS IS HERE ON PURPOSE: fixing it moves `coast_s` / `coast_frac` on every lap and is a
+#    behaviour change that owes its own PR and its own golden re-cut, not a footnote to a
+#    disclosure. This comment is the loud version of "we know".
+#  * THE SIDE-BY-SIDE IS ALREADY VISIBLE TO A USER. One Stats lap row prints "peak braking g" off
+#    series 2 and "brakes" off series 3. On 37 of 38 laps (and 65 of 65) some brake event's own
+#    peak decel EXCEEDS the peak-braking-g the same row reports — median ratio 1.26 and 1.24
+#    (0.862 -> 1.081 g, 0.652 -> 0.811 g). Two channels, one axis, no label saying so.
+
 # "cache not yet computed" sentinel (None is a legal cached value); module-local to avoid
 # importing Session.
 _UNSET = object()
@@ -148,7 +200,10 @@ class DrivingChannels:
         axis is vibration-inflated (see gmeter/driving), so the dial, the map grip colour, the
         per-corner grip AND the friction-circle envelope (_grip_envelope) all read this same
         validated longitudinal. Falls back to the IMU long_g for a GPS-only/synthetic meter. LATERAL
-        is always the IMU lateral (which it gets right, r~0.9)."""
+        is always the IMU lateral (which it gets right, r~0.9).
+
+        SERIES 2 of the three (see the module block): 0.35 s smoothed, so this is NOT the series the
+        brake/coast detectors below run on, and its peak reads ~20 % lower than theirs."""
         gm = self._gmeter()
         if not gm.has_data:
             return None, None
@@ -163,7 +218,15 @@ class DrivingChannels:
 
     def thresholds(self):
         """Session-wide brake threshold (None when no g signal); cached. Derived from the CLEAN
-        speed-derived longitudinal g, not the vibration-dominated IMU forward axis (see driving)."""
+        speed-derived longitudinal g, not the vibration-dominated IMU forward axis (see driving).
+
+        SERIES 3 of the three (see the module block), on the 50 Hz g clock and UNSMOOTHED — and
+        this is the one place the grid shows: resampling a 10 Hz speed to 50 Hz and differentiating
+        THAT manufactures content the fixes cannot carry (RMS 0.353 vs 0.302 g on 0060; the
+        ±MAX_LONG_G clip fires 81 times against 1 for differentiate-then-resample). It changes
+        nothing today only because `theta_b` is pinned near BRAKE_G_FLOOR: 0.1632 g on 0060 and
+        0.1600 on 0062, against 0.1644 / 0.1607 off the honest derivative and 0.1600 / 0.1600 off
+        the 0.35 s display series. The floor is absorbing the artifact, not the arithmetic."""
         if self._thresholds_cache is not _UNSET:
             return self._thresholds_cache
         gm = self._gmeter()
@@ -180,7 +243,14 @@ class DrivingChannels:
     # ------------------------------------------------------------------ per-lap channels
     def lap_brake_events(self, lap_id: int) -> list[driving.BrakeEvent]:
         """Brake events on one lap (onset odometer/time, peak decel, duration), in track order.
-        [] when no g signal or a degenerate lap."""
+        [] when no g signal or a degenerate lap.
+
+        SERIES 3 of the three (see the module block), rebuilt here on the lap's own ~10 Hz grid and
+        UNSMOOTHED — a different signal from the 0.35 s `long_g_gps` the "peak braking g" tile
+        reports for the same lap, and deliberately so: a boxcar smears an onset, and 18 % / 23 % of
+        the events found here have no smoothed counterpart within 5 m, including ones peaking above
+        1.0 g. `e.peak_decel` is therefore read off THIS series and runs ~25 % above that tile on
+        essentially every lap."""
         got = self._brake_events_cache.get(lap_id)
         if got is not None:
             return got
@@ -224,7 +294,15 @@ class DrivingChannels:
                 for i in range(len(corner_list))]
 
     def lap_coasting_spans(self, lap_id: int) -> list[driving.CoastSpan]:
-        """Coasting spans on one lap, in track order. [] when no g signal or a degenerate lap."""
+        """Coasting spans on one lap, in track order. [] when no g signal or a degenerate lap.
+
+        SERIES 3, unsmoothed on the ~10 Hz lap grid — and this accessor is the one place in the
+        module where that is measurably the WRONG choice. A coast is sustained membership of a
+        narrow band, not a step, so the noise the brake onsets tolerate is exactly what breaks it:
+        the runs have a p90 of 2 samples where MIN_COAST_S needs 4, and what comes back is 5.9 %
+        and 4.5 % of the time the car actually spends in the coast band. See the module block —
+        it is stated rather than changed here because the fix moves `coast_s`/`coast_frac` on
+        every lap and owes its own PR."""
         got = self._coasting_spans_cache.get(lap_id)
         if got is not None:
             return got
@@ -245,7 +323,11 @@ class DrivingChannels:
         `intensity` is per-sample ESTIMATED pedal intensity in [-1, 1] (negative braking, positive
         throttle), derived from the SAME clean speed-derived longitudinal g + session brake
         threshold the brake detector uses (see driving.brake_throttle_intensity). (None, None,
-        None) when there's no g signal or a degenerate lap. Cached per lap."""
+        None) when there's no g signal or a degenerate lap. Cached per lap.
+
+        SERIES 3, unsmoothed on the ~10 Hz lap grid — the same signal the brake glyphs sit on, so
+        the band and the glyphs agree with each other and (by ~25 % at the peak) not with the
+        g-meter dial drawn beside them."""
         got = self._brake_throttle_cache.get(lap_id)
         if got is not None:
             return got

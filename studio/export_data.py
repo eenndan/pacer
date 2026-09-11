@@ -41,7 +41,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
-from . import APP_NAME, units
+from . import APP_NAME, data_quality, units
 from . import stats as stats_service
 from ._signal import DASH, fmt_hms, fmt_time, lap_label
 
@@ -164,6 +164,23 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
       C1_time_s, C1_apex_kmh, … per corner      time-in-corner + apex (min) speed from
                                                 `session.lap_corner_stats` (the F2 corner
                                                 model); blank when a lap has no stats
+      quality                                   the row's QUALITY MARKERS, space-separated
+                                                Analysis Function codes (`data_quality.lap_marks`)
+                                                — "" for a row with nothing to disclose
+
+    THE `quality` COLUMN IS APPENDED, AND `flag` IS UNTOUCHED. `flag` is the file's oldest
+    machine contract and a consumer testing `flag == DROPOUT_FLAG` keeps working; widening it
+    into a code set would have broken exactly that reader. The new column goes LAST rather than
+    beside `flag` because everything past index 4 is already variable in number (the splits and
+    the corner pairs), so any consumer that reads that far must read by header name — which makes
+    appending the one position that breaks nothing. The redundancy with `flag` is deliberate and
+    is the same trade `SummaryRow` made: keep the contract, append the disclosure.
+
+    WHY THE COLUMN EXISTS AT ALL. `flag` could only ever say "GPS dropout". A file exported from a
+    PROVISIONAL session — every time measured from an auto-fitted start line the user never
+    confirmed — carried a blank flag on every row and said nothing about it anywhere, while the app
+    greys the share card out entirely on that same flag and the HTML report leads with it. That is
+    §5.4's finding one surface further out, and `data_quality.lap_marks` is what closes it.
 
     `unit` selects the SPEED columns' unit and header suffix (see `_speed_column`): None — the
     default and the ONLY thing the CSV writer passes — keeps the canonical SI km/h; "mph"/"kmh"
@@ -181,6 +198,7 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
     headers += [f"S{i + 1}_s" for i in range(n_splits)]
     for c in corner_list:
         headers += [f"{c.label}_time_s", f"{c.label}_apex_{sfx}"]
+    headers.append("quality")
 
     rows: list[tuple[int, list[str]]] = []
     for r in rows_meta:
@@ -196,8 +214,28 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
         for c in corner_list:
             s = stats.get(c.cid)
             cells += [_f3(s.time), _f3(speed(s.apex_speed))] if s is not None else ["", ""]
+        # `dropout_ids` is passed in so the per-lap read does not re-fetch the set per row.
+        cells.append(" ".join(data_quality.lap_marks(session, lap_id, dropout_ids)))
         rows.append((lap_id, cells))
     return headers, rows
+
+
+def quality_key(headers, rows) -> list[tuple[str, str]]:
+    """The KEY decoding every quality code `rows` actually carries — `(code, meaning)` pairs.
+
+    A code with no key beside it is the failure the Analysis Function convention exists to
+    prevent, so both writers render this under the table they wrote. It is derived from the ROWS
+    rather than from the session, so the key can never list a mark the file does not contain (and
+    can never omit one it does) — the two halves of a legend that would otherwise drift.
+
+    The column is located BY NAME rather than as `cells[-1]`: `laps_table` appends it last today,
+    and a future column appended after it would silently make this read corner apex speeds."""
+    try:
+        col = list(headers).index("quality")
+    except ValueError:
+        return []
+    present = {m for _lap_id, cells in rows if len(cells) > col for m in cells[col].split()}
+    return data_quality.mark_key(present)
 
 
 def _ideal_sample(session):
@@ -275,9 +313,20 @@ def write_laps_csv(path: str, session) -> None:
     ALWAYS SI (km/h / m / s), never the app's display unit: this file is the machine-readable
     contract, so `laps_table` is called with no `unit` and every column stays self-describing
     (`entry_kmh`). The display unit belongs to surfaces a HUMAN reads — the app and the HTML
-    report."""
+    report.
+
+    THE TRAILER ALSO CARRIES THE QUALITY KEY. The `quality` column emits Analysis Function codes
+    and a code with no key is the failure that convention exists to prevent, so every code the
+    file actually contains gets a `quality [x]` trailer row decoding it — and a break in series
+    gets one more naming WHICH break, because the code alone says only that there is one. They are
+    extra LABELLED ROWS inside the existing 4-wide trailer rather than a second blank-separated
+    section, so "split on the blank row" still yields exactly two parts and the file stays
+    rectangular. Nothing is emitted for a clean session: a key listing four marks on a file that
+    carries none teaches the reader that the marks are decoration."""
     headers, rows = laps_table(session)
     summary = laps_summary(session)
+    key = quality_key(headers, rows)
+    broke = data_quality.break_in_series(session)
 
     def body(f):
         w = csv.writer(f)
@@ -287,6 +336,10 @@ def write_laps_csv(path: str, session) -> None:
         w.writerow([SUMMARY_MARKER, "time_s", "over_laps", "note"])
         for row in summary:
             w.writerow([f"{SUMMARY_MARKER}: {row.label}", row.value, row.over_laps, row.note])
+        for code, meaning in key:
+            w.writerow([f"{SUMMARY_MARKER}: quality {code}", "", "", meaning])
+        if broke:
+            w.writerow([f"{SUMMARY_MARKER}: break in series", "", "", broke])
 
     _atomic_write(path, body, newline="")
 
@@ -696,6 +749,18 @@ def write_report_html(path: str, session, source_label: str = "",
         cls = ' class="best"' if lap_id == best else ""
         out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
     out.append("</table>")
+    # The quality column's KEY, under the table it decodes — the Analysis Function convention, and
+    # the reason those codes are usable on a page with no hover. Suppressed entirely on a clean
+    # session (see `quality_key`), so a spotless recording's report gains nothing to read past.
+    key = quality_key(headers, rows)
+    if key:
+        out.append('<p class="note">Quality markers in the <code>quality</code> column '
+                   "(UK Government Analysis Function symbols): "
+                   + "; ".join(f"<b>{esc(code)}</b> {esc(meaning)}" for code, meaning in key)
+                   + ".</p>")
+    broke = data_quality.break_in_series(session)
+    if broke:  # WHICH break — the [b] code alone says only that there is one
+        out.append(f'<p class="note">Break in series: {esc(broke)}.</p>')
     for item in images:
         title, png = item[0], item[1]
         width = item[2] if len(item) > 2 else None

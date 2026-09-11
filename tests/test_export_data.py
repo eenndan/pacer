@@ -186,8 +186,11 @@ def make_session(*, with_sectors=True, with_corners=True, with_g=True):
 def test_laps_table_schema_and_values():
     s = make_session()
     headers, rows = export_data.laps_table(s)
+    # `quality` is APPENDED last (data_quality's Analysis Function codes); every column before
+    # it is unchanged, which is the point of appending rather than inserting beside `flag`.
     assert headers == ["lap", "time_s", "dist_m", "entry_kmh", "flag", "S1_s", "S2_s",
-                       "C1_time_s", "C1_apex_kmh", "C2_time_s", "C2_apex_kmh"], headers
+                       "C1_time_s", "C1_apex_kmh", "C2_time_s", "C2_apex_kmh",
+                       "quality"], headers
     assert [lap_id for lap_id, _ in rows] == [0, 1, 2]  # internal 0-based lap ids (row keys)
     by_id = dict(rows)
     for r in s.lap_rows():
@@ -215,8 +218,11 @@ def test_laps_table_degenerate_schema():
     """No sectors + no corners -> just the base columns (mirrors the app's table)."""
     s = make_session(with_sectors=False, with_corners=False)
     headers, rows = export_data.laps_table(s)
-    assert headers == ["lap", "time_s", "dist_m", "entry_kmh", "flag"]
-    assert len(rows) == 3 and all(len(cells) == 5 for _i, cells in rows)
+    assert headers == ["lap", "time_s", "dist_m", "entry_kmh", "flag", "quality"]
+    assert len(rows) == 3 and all(len(cells) == 6 for _i, cells in rows)
+    # …and the appended column still reports the fixture's one dropout lap ([u]), because the
+    # marks follow the SESSION's verdicts and not the presence of sector/corner columns.
+    assert dict(rows)[2][5] == "[u]" and dict(rows)[0][5] == "" and dict(rows)[1][5] == ""
 
 
 def test_write_laps_csv_matches_table():
@@ -240,7 +246,13 @@ def test_write_laps_csv_matches_table():
     # The mini-header grew two columns for §5.4's disclosure (over_laps / note); columns 0 and 1
     # are byte-identical to what they always were — see SummaryRow on why the label is pinned.
     assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s", "over_laps", "note"]
-    trailer = got[3 + n_data:]
+    # The trailer holds the summary VALUES and, after them, the quality KEY decoding whatever
+    # codes the lap rows carry (this fixture's lap 2 has a GPS dropout, so [u] is in it). Split
+    # the two: the key is not a summary row and must not be zipped against one.
+    rest = got[3 + n_data:]
+    key_rows = [r for r in rest if r[0].startswith(f"{export_data.SUMMARY_MARKER}: quality ")]
+    trailer = [r for r in rest if r not in key_rows]
+    assert [r[0] for r in key_rows] == [f"{export_data.SUMMARY_MARKER}: quality [u]"], key_rows
     summary = export_data.laps_summary(s)
     assert [r.label for r in summary] == ["Best rolling"], (
         "this fixture's lap 1 is quickest in every segment, so its ideal is that lap and the "
@@ -297,7 +309,10 @@ def test_laps_summary_gate_is_the_ideal_not_the_sector_count():
                 got = list(csv.reader(f))
         n_data = len(session.valid_lap_ids())
         assert got[2 + n_data] == [export_data.SUMMARY_MARKER, "time_s", "over_laps", "note"]
-        trailer = got[3 + n_data:]
+        # The quality KEY also lives in the trailer; it is not a summary row (see
+        # test_write_laps_csv_matches_table), so this gate counts only the summary ones.
+        trailer = [r for r in got[3 + n_data:]
+                   if not r[0].startswith(f"{export_data.SUMMARY_MARKER}: quality ")]
         assert len(trailer) == want, (want, trailer)
         assert trailer[-1][0] == f"{export_data.SUMMARY_MARKER}: Best rolling"
 
