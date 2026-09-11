@@ -1072,6 +1072,7 @@ set_tests_properties(test_provenance PROPERTIES
 add_test(NAME test_provenance_panel
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_provenance_panel.py)
 set_tests_properties(test_provenance_panel PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
 # THE TWO DATA-TRUST SURFACES (feat/data-trust-surfaces): the per-second GPS quality STRIP under
 # the scrub bar, and the ROTATION cross-check row in the Stats DATA TRUST card. The strip's whole
