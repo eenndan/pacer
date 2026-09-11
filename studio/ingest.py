@@ -13,20 +13,32 @@ import pacer
 
 
 def chain_sources(paths):
-    """Build the `SequentialGPSSource` chain over the GoPro chapters -> (head, owners, durations).
+    """Build the `SequentialGPSSource` chain over the GoPro chapters ->
+    (head, owners, durations, meta_durations).
     Chapters are folded onto ONE global clock (C++ shifts later chapters by cumulative duration).
-    `owners` keeps intermediate sources alive while the caller iterates `head`. `durations` =
-    each chapter's 0-based media duration, in `paths` order (the video layer's offset table)."""
+    `owners` keeps intermediate sources alive while the caller iterates `head`.
+
+    `durations` = each chapter's VIDEO-track duration, in `paths` order — the offset table the
+    video layer seeks with, and the same number the C++ chain shifts the following chapter's
+    telemetry by, so the two axes cannot drift apart.
+
+    `meta_durations` = the same chapters' GPMF-track durations. NOT interchangeable with the
+    above, which is the whole reason both are returned: a GoPro chapter's metadata track ends on
+    its own payload grid, and on GoPro's own sample clips it misses the video length by anything
+    from -0.701 s (hero7) to +0.934 s (karma). Their DIFFERENCE is what `ChapterMap` reports as a
+    desynced chapter."""
     owners = [pacer.GPMFSource(paths[0])]
-    durations = [owners[0].get_total_duration()]
+    durations = [owners[0].get_video_duration()]
+    meta_durations = [owners[0].get_total_duration()]
     head = owners[0]
     for p in paths[1:]:
         nxt = pacer.GPMFSource(p)
         owners.append(nxt)
-        durations.append(nxt.get_total_duration())
+        durations.append(nxt.get_video_duration())
+        meta_durations.append(nxt.get_total_duration())
         head = pacer.SequentialGPSSource(head, nxt)
         owners.append(head)  # keep the chain alive while we iterate
-    return head, owners, durations
+    return head, owners, durations, meta_durations
 
 
 def _read_gps_over(head):
@@ -68,18 +80,19 @@ def _read_imu_over(head):
 
 def read_recording(paths):
     """Single-pass ingest: build the chain once, run GPS then IMU over the SAME sources ->
-    (samples, spans, naive, durations, accl, grav, cori). Avoids opening/parsing each chapter
-    twice; byte-identical to read_gpmf + read_imu (the IMU pass is cursor-independent)."""
-    head, _owners, durations = chain_sources(paths)
+    (samples, spans, naive, durations, meta_durations, accl, grav, cori). Avoids opening/parsing
+    each chapter twice; byte-identical to read_gpmf + read_imu (the IMU pass is
+    cursor-independent). See `chain_sources` for why the two duration lists are both returned."""
+    head, _owners, durations, meta_durations = chain_sources(paths)
     samples, spans, naive = _read_gps_over(head)
     accl, grav, cori = _read_imu_over(head)
-    return samples, spans, naive, durations, accl, grav, cori
+    return samples, spans, naive, durations, meta_durations, accl, grav, cori
 
 
 def read_gpmf(paths):
     """GPS-only reader for dev scripts -> (samples, spans, naive, durations). Thin wrapper over
     chain_sources + _read_gps_over; prod load uses read_recording."""
-    head, _owners, durations = chain_sources(paths)
+    head, _owners, durations, _meta = chain_sources(paths)
     samples, spans, naive = _read_gps_over(head)
     return samples, spans, naive, durations
 
@@ -88,7 +101,7 @@ def read_imu(paths):
     """IMU-only reader for dev scripts -> (accl, grav, cori) on the global media clock.
     accl/grav (N,4) [t,x,y,z]; cori (N,5) [t,w,x,y,z]; empty arrays when a camera lacks a stream.
     Prod load uses read_recording."""
-    head, _owners, _durations = chain_sources(paths)
+    head, _owners, _durations, _meta = chain_sources(paths)
     return _read_imu_over(head)
 
 
