@@ -170,6 +170,16 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **Two different answers to "how much later can I brake here?"** The coaching row's "Brake ~N m
+  later" read your BEST lap's single brake application; the Stats ▸ BRAKING table's "m later"
+  column read the median over all your clean laps — and neither said which. On the D24 recordings
+  the pair disagreed by up to 9.3 m, and at one corner the two gave opposite advice: the best lap
+  happened to brake within 3 m of its own optimum, so coaching shrugged with "~3 m" while the
+  habit over 62 laps was 12.2 m early. Both surfaces now read one number, the median over the
+  clean laps, because a coaching instruction is about your habit and not about one lap — the same
+  basis as the row's "Time lost" and "Done it?" beside it. A corner your best lap never braked
+  into now gets the hint its other 44 laps earned, and the hint's tooltip names the sample, your
+  observed middle-half spread and the table showing the same figure.
 - **A chapter was placed at the end of the previous chapter's *telemetry*, not its picture.** Those
   are two different tracks: on GoPro's own sample clips a chapter's GPMF track misses its video
   length by anything from −0.70 s (hero7) to +0.93 s (karma), so every offset after such a chapter

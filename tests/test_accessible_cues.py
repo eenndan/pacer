@@ -668,15 +668,15 @@ def test_estimated_short_label_is_one_canonical_form():
     """The inline "estimated" marker is spelled ONE way everywhere: theme.ESTIMATED_MARK == "(est)",
     and estimated_label appends exactly that. The brake-point coaching hint (was a stray "(EST)") and
     the grip column both read it, so the app no longer spells estimated four ways."""
-    from types import SimpleNamespace
-
     from studio import theme as th
     from studio.coaching_panel import _brake_point_hint
     assert th.ESTIMATED_MARK == "(est)"
     assert th.ESTIMATED_SUFFIX == " (est)"
     assert th.estimated_label("Grip") == "Grip (est)"
     # The brake-point hint uses the canonical mark (no more "(EST)").
-    bp = SimpleNamespace(cid=3, metres_later=6.4)
+    from studio import coaching
+    bp = coaching.BrakeHabit(cid=3, n_laps=20, metres_later=6.4, optimal_brake_dist=84.4,
+                             actual_brake_dist=78.0, q25_m=3.1, q75_m=9.8)
     hint = _brake_point_hint(bp)
     assert hint == "Brake ~6 m later into C3 (est)", hint
     assert "(EST)" not in hint and "(est.)" not in hint
