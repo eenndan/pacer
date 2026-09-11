@@ -933,6 +933,18 @@ def test_no_table_header_floats_off_its_data():
         stats_service.BrakeConsistency(cid=cid, n=2, median_dist_m=90.0 + cid, sigma_m=1.4,
                                        span_m=2.0, commit_pct=82.0, metres_later_med=-1.2)
         for cid in (1, 2)]
+    # Stats ▸ SPLITS is the second such grid, and it is unfillable from the session for two
+    # reasons at once: no sector lines (nor has any recording the owner has) and two laps against
+    # stats.MATRIX_MIN_LAPS. So the MATRIX is seeded rather than the accessors under it — widening
+    # `consistency_lap_ids` to five ids is not a seam, it is a lie the whole Session then acts on
+    # (coaching walks those ids straight into `laps.lap_columns` and the stub `_Laps` has no such
+    # lap). `lap_time` still delegates for every id that really exists.
+    real_lap_time = session.lap_time
+    session.lap_time = lambda i: (real_lap_time(i) if i < 2 else 69.0)
+    view.stats_view._split_matrix = lambda _s, _n=stats_service.MATRIX_MIN_LAPS: (
+        stats_service.split_matrix(
+            list(range(_n)), [[20.0 + 0.1 * i, 25.0 - 0.1 * i, 24.0] for i in range(_n)],
+            columns=3))
     view.stats_view.refresh()
     for _ in range(4):
         _APP.processEvents()
@@ -950,7 +962,12 @@ def test_no_table_header_floats_off_its_data():
               "STATS/IDEAL LAP": stats.ideal_table,
               "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
               "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
-              "STATS/PER LAP": stats.lap_table}
+              "STATS/PER LAP": stats.lap_table,
+              # The two grids the STINTS / SPLITS PR added. SPLITS is here for completeness and
+              # is empty on this fixture (it needs sector lines AND stats.MATRIX_MIN_LAPS laps);
+              # STINTS fills whenever the synthetic session's laps do not tile the clock, and a
+              # column of it is exactly as capable of floating off its data as the nine above.
+              "STATS/STINTS": stats.stints_table, "STATS/SPLITS": stats.splits_table}
     # ...and the dict really is every table the view ships: anything with cells that is not in it
     # would be a tenth surface nobody brought to the rule.
     missed = [f"{type(t).__name__} under {type(t.parentWidget()).__name__}"
@@ -1060,7 +1077,8 @@ def test_every_grid_row_is_one_of_the_two_declared_heights():
     named = {"LAPS": view.table.table, "CORNERS": view.corner_table.table,
              "STATS/SECTORS": stats.sector_table, "STATS/CORNERS": stats.corners_table,
              "STATS/BRAKING": stats.braking_table, "STATS/STRAIGHTS": stats.straights_table,
-             "STATS/PER LAP": stats.lap_table, "COACHING": coach.table, "LIBRARY": dlg.table}
+             "STATS/PER LAP": stats.lap_table, "COACHING": coach.table, "LIBRARY": dlg.table,
+             "STATS/STINTS": stats.stints_table, "STATS/SPLITS": stats.splits_table}
     by_widget = {id(t): n for n, t in named.items()}
     # Every table in the real view PLUS the coaching + library fixtures, named where we know it and
     # labelled structurally where we do not — a new grid is measured whether or not anyone updated
