@@ -84,16 +84,23 @@ def _build_synthetic(circle=True, accel_g=0.0, lateral_g=0.0, n=4000, dur=40.0):
     meas_cam = _rot_by_quat(q_world_to_cam, meas_w)
     grav_dir_cam = _rot_by_quat(q_world_to_cam, up_w)  # gravity DIRECTION (unit, +up reaction)
 
-    # ACCL native element order is (Z, X, Y) of the camera frame; GRAV/CORI use (X, Y, Z).
-    # gmeter maps GRAV[PERM[i]] onto ACCL[i] with PERM=(1,0,2); to be consistent, ACCL element
-    # order = camera (Z,X,Y) and GRAV element order = camera (X,Y,Z).
+    # ACCL native element order is (Z, X, Y) of the camera frame — what a HERO13 declares as
+    # ORIN "ZXY" — and gmeter reads GRAV through GRAV_PERM=(1,0,2), i.e. gperm[i] = GRAV[PERM[i]].
+    # For those two to describe the SAME direction, GRAV's element order must be camera (X,Z,Y):
+    # PERM then lifts it to (Z,X,Y). This is what the real cameras do (`gmeter.axis_check`
+    # measures 1.4-9.4 deg of agreement on six real recordings across two camera models); the
+    # comment here used to claim (X,Y,Z), which is a DIFFERENT direction — 88 deg away — and left
+    # gravity essentially un-removed in every test built on this fixture.
     def to_accl_order(v):  # camera xyz -> ACCL (z,x,y)
         return np.array([v[2], v[0], v[1]])
+
+    def to_grav_order(v):  # camera xyz -> GRAV (x,z,y); GRAV_PERM lifts this onto ACCL's order
+        return np.array([v[0], v[2], v[1]])
 
     ta = np.linspace(0, dur, n)
     accl = np.column_stack([ta] + [np.full(n, c) for c in to_accl_order(meas_cam)])
     tg = np.linspace(0, dur, int(dur * 60))
-    grav = np.column_stack([tg] + [np.full(len(tg), c) for c in grav_dir_cam])  # X,Y,Z order
+    grav = np.column_stack([tg] + [np.full(len(tg), c) for c in to_grav_order(grav_dir_cam)])
     cori = np.column_stack([tg] + [np.full(len(tg), q_world_to_cam[k]) for k in range(4)])
 
     # GPS trajectory: integrate the world motion. v(t) = v0 + a*t along fwd; plus a curving path
@@ -245,7 +252,10 @@ def _build_weave(dur=320.0, lat_amp_g=0.6, period_s=20.0):
 
     accl = np.column_stack([ta, meas_cam[:, 2], meas_cam[:, 0], meas_cam[:, 1]])  # (z,x,y)
     tg = np.linspace(0.0, dur, int(dur * 60))
-    grav = np.column_stack([tg] + [np.full(len(tg), c) for c in grav_dir_cam])    # (x,y,z)
+    # (x,z,y) — the order GRAV_PERM lifts onto ACCL's (z,x,y). See _build_synthetic.
+    grav = np.column_stack([tg, np.full(len(tg), grav_dir_cam[0]),
+                            np.full(len(tg), grav_dir_cam[2]),
+                            np.full(len(tg), grav_dir_cam[1])])
     cori = np.column_stack([tg] + [np.full(len(tg), q_world_to_cam[k]) for k in range(4)])
 
     # GPS: integrate the same world motion at 10 Hz. vx stays v0; vy is the lateral integral.
@@ -317,10 +327,18 @@ def _build_lapping_slalom(dur=320.0, v0=22.0, yaw_amp_rad=0.6, period_s=12.0, la
     grav_dir_cam = _rot_by_quat(q_world_to_cam, up_w)
 
     # ACCL element order here is camera (Y, X, Z) — i.e. GRAV's (X,Y,Z) read through gmeter's own
-    # GRAV_PERM. The older builders declare (Z,X,Y), which leaves a little gravity un-removed and
-    # inflates the recovered magnitude ~1.8x; harmless for the SHAPE (correlation) assertions
-    # those tests make, fatal for a magnitude one. Measured: with this order the recovered
+    # GRAV_PERM. That is self-consistent but NOT what a camera writes: the real pair is ACCL in
+    # camera (Z,X,Y) with GRAV in (X,Z,Y), which the other two builders now use. Both frames are
+    # equally valid for a synthetic (the transform only needs the pair to agree), and this one is
+    # left as it is because its magnitude assertion is calibrated on it: measured, the recovered
     # horizontal magnitude is 0.6086 g against a true 0.6089 g.
+    #
+    # It was written this way because the OTHER builders' pair did NOT agree — they declared ACCL
+    # (Z,X,Y) against GRAV (X,Y,Z), 88 deg apart, leaving gravity essentially un-removed and
+    # inflating the recovered magnitude ~1.8x; harmless for their SHAPE assertions, fatal for a
+    # magnitude one. That is fixed at the source now (and `gmeter.axis_check` would refuse such a
+    # recording outright), so this builder is no longer the only consistent one — just the only
+    # one on this particular consistent frame.
     accl = np.column_stack([ta] + [meas_cam[:, _PERM_I] for _PERM_I in gmeter.GRAV_PERM])
     tg = np.linspace(0.0, dur, int(dur * 60))
     grav = np.column_stack([tg] + [np.full(len(tg), c) for c in grav_dir_cam])    # (x,y,z)
@@ -493,6 +511,137 @@ def test_yaw_drift_correction_declines_gracefully_without_enough_windows():
     assert gm.has_data and len(gm) > 0
     assert np.isfinite(gm.lat_g).all()
     print("ok short recording: single-fit fallback, still a valid meter")
+
+
+# --- THE AXIS GUARD ------------------------------------------------------------------------------
+# `gmeter.GRAV_PERM` is a FITTED constant, not a read of the camera's own ORIN field, and the
+# measurement in that block says it must stay one: GRAV/CORI carry no orientation field on any
+# camera and ride the RAW element frame, so canonicalising ACCL/GYRO by ORIN would break every
+# camera whose ORIN is not the canonical "ZXY". What replaces the read is `axis_check`, which
+# measures the invariant the transform actually needs — the recording's own GRAV must point where
+# its own unloaded ACCL points — and refuses the IMU path when it does not. These tests pin that
+# guard's two halves: it must not fire on a correct recording, and it must fire (and reroute) on
+# every way the frame can be wrong.
+
+
+def _axis_pair(n=2000, dur=20.0, g_dir=(0.10, 0.42, 0.90)):
+    """A camera at rest on a GENERIC tilt: GRAV in its own element order, ACCL = G * the same
+    direction read through GRAV_PERM — the alignment `axis_check` exists to verify.
+
+    The tilt is deliberately generic. The mount the other fixtures use is a pitch about one axis,
+    which leaves a component at zero and makes some element permutations nearly indistinguishable
+    from the right one — fine for those tests, useless for a sweep that has to tell all six
+    apart. Here the smallest separation between the correct order and a wrong one is 26 deg."""
+    t = np.linspace(0.0, dur, n)
+    gdir = np.asarray(g_dir, float)
+    gdir = gdir / np.linalg.norm(gdir)
+    a_dir = gdir[list(gmeter.GRAV_PERM)]
+    accl = np.column_stack([t] + [np.full(n, G * c) for c in a_dir])
+    grav = np.column_stack([t] + [np.full(n, c) for c in gdir])
+    return accl, grav
+
+
+def test_axis_check_passes_the_correct_frame():
+    """The aligned pair — ACCL = GRAV read through GRAV_PERM, which is what a real HERO13 and a
+    real GoPro Max both do — must measure ~0 deg of tilt and be accepted."""
+    accl, grav = _axis_pair()
+    ax = gmeter.axis_check(accl, grav)
+    assert ax is not None and ax.measurable and ax.ok
+    assert ax.tilt_deg < 1e-6, ax.tilt_deg
+    assert ax.n == len(accl)
+    assert "ALIGNED" in ax.summary()
+    print(f"ok axis check: aligned frame measures {ax.tilt_deg:.2e} deg, accepted")
+
+
+def test_axis_check_rejects_every_frame_that_moves_the_gravity_axis():
+    """Each of the five WRONG element orders of GRAV must be refused. This is the failure the app
+    had no defence against: `ACCL - G*ghat` with a mis-framed ghat ADDS gravity instead of
+    removing it, leaving up to 2 g of camera-fixed error that no downstream fit removes and that
+    the cross-check's correlation — scale- and offset-blind — cannot see."""
+    accl, grav = _axis_pair()
+    caught = 0
+    for perm in [(0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]:
+        bad = grav.copy()
+        bad[:, 1:4] = grav[:, [1 + p for p in perm]]
+        ax = gmeter.axis_check(accl, bad)
+        assert ax is not None and ax.measurable
+        assert not ax.ok, f"permutation {perm} passed at {ax.tilt_deg:.1f} deg"
+        assert ax.tilt_deg > gmeter.AXIS_MAX_TILT_DEG
+        caught += 1
+    assert caught == 5
+    print("ok axis check: all 5 wrong GRAV element orders refused")
+
+
+def test_axis_check_rejects_an_all_zero_grav_stream():
+    """A GRAV stream of zeros is not hypothetical: the bundled `hero8.mp4` sample carries one.
+    Un-guarded it reaches the transform as a zero gravity direction — gravity never removed —
+    rather than as an error. The guard reads it as a 90 deg tilt and refuses."""
+    accl, grav = _axis_pair()
+    zero = grav.copy()
+    zero[:, 1:4] = 0.0
+    ax = gmeter.axis_check(accl, zero)
+    assert ax is not None and ax.measurable and not ax.ok
+    assert abs(ax.tilt_deg - 90.0) < 1e-6, ax.tilt_deg
+    print("ok axis check: an all-zero GRAV stream is refused (90 deg), not silently used")
+
+
+def test_axis_check_does_not_gate_when_it_cannot_measure():
+    """A recording that is never unloaded gives the accelerometer no chance to read as gravity.
+    Report it, do NOT condemn the mount — the same call the cross-check's gain makes when there
+    is too little cornering to weigh a magnitude against."""
+    accl, grav, _cori, *_ = _build_synthetic(lateral_g=1.0, dur=40.0)
+    ax = gmeter.axis_check(accl, grav)
+    assert ax is not None and not ax.measurable and ax.ok
+    assert ax.n < gmeter._AXIS_MIN_QUIET
+    assert "not measurable" in ax.summary()
+    print(f"ok axis check: {ax.n} unloaded samples -> reported, not gated")
+
+
+def test_axis_check_needs_both_streams():
+    """No usable pair of streams at all -> None (nothing measured), never a false verdict."""
+    accl, grav = _axis_pair()
+    assert gmeter.axis_check(None, grav) is None
+    assert gmeter.axis_check(accl, None) is None
+    assert gmeter.axis_check(accl[:5], grav) is None
+    print("ok axis check: missing/short streams measure nothing rather than guessing")
+
+
+def test_compute_refuses_the_imu_path_on_a_misaligned_frame():
+    """END TO END, and the point of the whole guard: a mis-framed GRAV must not reach the display.
+    `compute` falls back to the GPS-derived g, says so in `source`, and keeps the failed
+    measurement on the meter so the reason survives the fallback."""
+    accl, grav, cori, gt, gx, gy, gs = _build_weave()
+    ok_meter = gmeter.compute(accl, grav, cori, gt, gx, gy, gs)
+    assert ok_meter.source == "accl", ok_meter.source
+    assert ok_meter.axis is not None and ok_meter.axis.ok
+
+    bad = grav.copy()
+    bad[:, 1:4] = grav[:, [3, 1, 2]]          # rotate the elements: the gravity axis moves
+    bad_meter = gmeter.compute(accl, bad, cori, gt, gx, gy, gs)
+    assert bad_meter.axis is not None and not bad_meter.axis.ok
+    assert bad_meter.source == "gps", bad_meter.source
+    assert bad_meter.has_data and np.isfinite(bad_meter.lat_g).all()
+    assert "MISALIGNED" in bad_meter.axis.summary()
+    print(f"ok compute(): misaligned GRAV -> GPS g, {bad_meter.axis.summary()}")
+
+
+def test_the_legacy_fixtures_are_themselves_axis_consistent():
+    """A guard that its own fixtures fail is a guard nobody will trust. It is also how this one
+    found a real defect: `_build_synthetic` and `_build_weave` USED to emit GRAV in camera
+    (X,Y,Z) while their ACCL was camera (Z,X,Y) — 88 deg apart, gravity essentially un-removed in
+    every test built on them. Both now emit (X,Z,Y). Pin it so it cannot drift back."""
+    # The bounds differ because the fixtures do: a resting one reads gravity exactly, while a
+    # fixture under continuous lateral load leaves a few degrees of real tilt in its unloaded
+    # samples — the same few degrees the six real recordings show (1.4-9.4 deg).
+    for name, built, limit in [("_build_synthetic", _build_synthetic(dur=60.0), 1e-6),
+                               ("_build_weave", _build_weave(), 10.0),
+                               ("_build_lapping_slalom", _build_lapping_slalom(), 10.0)]:
+        accl, grav = built[0], built[1]
+        ax = gmeter.axis_check(accl, grav)
+        assert ax is not None and ax.measurable, f"{name}: {ax}"
+        assert ax.ok, f"{name} measures {ax.tilt_deg:.1f} deg"
+        assert ax.tilt_deg < limit, f"{name} measures {ax.tilt_deg:.2f} deg (limit {limit})"
+    print("ok all three synthetic builders emit a self-consistent ACCL/GRAV frame")
 
 
 if __name__ == "__main__":

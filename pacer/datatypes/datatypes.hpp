@@ -35,8 +35,13 @@ template <class P> struct PointInTime {
 // direction). `time` is on the MEDIA clock (seconds), the same basis as the GPS
 // payload spans, so it lines up with the video; the SequentialGPSSource chain
 // applies the per-chapter offset exactly as it does for GPS. Axes are stored in
-// the GoPro stream's native order (ACCL: Z,X,Y); the studio layer applies the
-// camera->kart frame transform on top.
+// the GoPro stream's native RAW order, exactly as written — which DIFFERS BY
+// CAMERA (a HERO13 declares Z,X,Y; a HERO8 -Z,-X,Y; a Max X,-Z,Y; see
+// RawGPSSource::ReadImuOrientation) and is deliberately not normalised here.
+// GRAV and CORI share that raw frame, up to a fixed permutation, on every
+// camera measured, so the studio layer's ONE camera->kart transform is correct
+// across models; it verifies that per recording rather than assuming it
+// (studio.gmeter.axis_check).
 struct IMUSample {
   double x = 0, y = 0, z = 0;
   double time = 0;

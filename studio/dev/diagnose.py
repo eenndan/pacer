@@ -104,6 +104,18 @@ def main():
     paths = [a for a in args if not a.startswith("-")] or [DEFAULT_SAMPLE]
     print("file:", paths)
 
+    # The camera, and what it DECLARES about its IMU element order. The declaration is reported,
+    # never applied: the studio transform rides the raw element frame that GRAV/CORI are written
+    # in (they carry no orientation field on any camera), and `gmeter.axis_check` measures that
+    # per recording. Printed here because the first question about a suspect g trace is which
+    # camera wrote it and what it said about its axes. See studio/docs/gmeter-validation.md.
+    src = pacer.GPMFSource(paths[0])
+    orient = src.read_imu_orientation()
+    print(f"camera: DVNM={src.device_name()!r}  "
+          f"ACCL ORIN={orient.accl_in or '(absent)'} ORIO={orient.accl_out or '(absent)'}  "
+          f"GYRO ORIN={orient.gyro_in or '(absent)'} ORIO={orient.gyro_out or '(absent)'}")
+    del src
+
     t0 = time.time()
     samples, spans, naive, _durations = _read_gpmf(paths)
     print(f"GPMF parse: {time.time() - t0:.1f}s, {len(samples)} raw samples")

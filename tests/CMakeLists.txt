@@ -76,6 +76,13 @@ add_test(NAME test_reference
 # SequentialGPSSource chapter-offset chaining. Imports pacer only (no Qt).
 add_test(NAME test_gps_source_bindings
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gps_source_bindings.py)
+# The IMU AXIS DECLARATION (GPMF ORIN/ORIO) each bundled camera generation carries, pinned. The
+# studio transform reads the field and deliberately does NOT reorder by it — the measurement that
+# settled that is in studio/docs/gmeter-validation.md — so this guard keeps the declarations
+# themselves honest: a new camera that declares something new fails here instead of quietly
+# widening an assumption. Skips when the gpmf-parser submodule is absent.
+add_test(NAME test_imu_orientation
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_imu_orientation.py)
 # Laps bound-accessor bounds checks (P1.2): a bad index raises IndexError in Python
 # (std::out_of_range translated by nanobind); the get_lap/sample_count/lap_columns
 # empty-return trio is unchanged. Imports pacer only (no Qt, no telemetry file).
@@ -770,6 +777,7 @@ set_tests_properties(test_glyph_vocabulary PROPERTIES
 foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_media_clock
                         test_gapfill
                         test_import_ergonomics test_reference test_gps_source_bindings
+                        test_imu_orientation
                         test_laps_bindings test_ingest_equivalence test_sidecar test_track_db
                         test_session_pure test_sector_integrity test_load_internals
                         test_load_pipeline test_fit_start_line test_session_services
