@@ -2632,7 +2632,10 @@ def test_the_peak_braking_tile_says_it_is_a_smoothed_peak():
 
     Measured on the D24 0060 pair (38 valid laps): the per-lap peak runs a median 0.862 g as the
     service reports it against 1.081 g on the same signal unsmoothed, and the session max the tile
-    prints reads 1.27 g where the instantaneous peak was 1.94 g. The smoothing is the right choice
+    prints reads 1.27 g where the instantaneous peak was 1.94 g. (Those unsmoothed figures are
+    taken on the 10 Hz GPS grid; on the 50 Hz grid the g-meter actually serves, the same
+    unsmoothed per-lap peak is 1.58 g with the 2.0 g MAX_LONG_G clip firing — so the window
+    removes MORE than this pairing suggests, not less.) The smoothing is the right choice
     — a raw d|v|/dt peak is GPS quantization noise, and this repo's rule is percentiles over raw
     maxima — but a number 20-35% under the instantaneous one has to say which it is.
 
@@ -3029,6 +3032,52 @@ def test_stats_view_distribution_charts_fit_their_column_at_every_pane():
             assert chart.width() <= v.width(), (w, chart.width(), v.width())
             assert chart.width() > 0
     print("ok distributions: both charts inside the pane from 845x414 up")
+
+
+def test_the_friction_circle_states_that_its_two_axes_are_not_on_one_window():
+    """The g-g cloud is the one surface where the g-meter's TWO smoothing windows meet inside a
+    single quantity, so it is the one that owes the reader both.
+
+    `gmeter.LAT_SMOOTH_S` (0.15 s) sets the lateral bandwidth and `LONG_SMOOTH_S` (0.35 s) the
+    GPS-derived longitudinal, so hypot(lat, long) — the cloud, its dashed p98 envelope ring, the
+    "grip ceiling" tile — has no single window. The tooltip named ONLY the longitudinal one, which
+    reads as though the whole picture were on 0.35 s.
+
+    Measured on both D24 pairs (38 and 65 valid laps): the asymmetry is worth ~1 % on the numbers
+    (matching both axes at 0.15 s moves the p98 envelope 1.425 -> 1.447 g and 1.368 -> 1.378 g, and
+    the CORNERS Grip % column by at most one point) but 9-26 % on the SHAPE — the p98 braking extent
+    grows 9-13 % and the acceleration extent 22-26 % while the width does not move at all. A reader
+    measuring the circle's aspect ratio is partly measuring the filter chain, so the picture has to
+    say so. Both windows are COMPOSED from the constants for the same reason the peak-braking tile's
+    is: a window typed into honesty copy rots the moment the signal changes (§5.5)."""
+    _APP  # noqa: B018
+    import pathlib
+
+    from studio import gmeter
+    from studio.stats_panel import GG_TOOLTIP, StatsView
+    from studio.stats_panel import __file__ as SP_FILE
+
+    lat_w = f"{gmeter.LAT_SMOOTH_S:g} s"
+    long_w = f"{gmeter.LONG_SMOOTH_S:g} s"
+    assert lat_w in GG_TOOLTIP, ("the friction circle never states its LATERAL window", GG_TOOLTIP)
+    assert long_w in GG_TOOLTIP, GG_TOOLTIP
+    assert "not on one window" in GG_TOOLTIP, (
+        "naming two windows is not the same as saying they differ", GG_TOOLTIP)
+    # ...and it must be the tooltip the reader actually gets, not a constant nothing hangs on.
+    view = StatsView(_fake_view_session())
+    assert view.gg.toolTip() == GG_TOOLTIP
+
+    # INTERPOLATED, NOT TYPED — on the source, for the reason the peak-braking test gives (a module
+    # reload would rebind StatsView under every later test in this process). NEITHER window may
+    # appear in this file except through its constant.
+    src = pathlib.Path(SP_FILE).read_text(encoding="utf-8")
+    for literal, const in ((lat_w, "LAT_SMOOTH_S"), (long_w, "LONG_SMOOTH_S")):
+        for line in src.splitlines():
+            if literal in line and const not in line:
+                raise AssertionError(
+                    f"stats_panel types the {const} window as a literal — it must read the "
+                    f"constant, or the copy rots the moment the signal changes: {line.strip()!r}")
+    print("ok friction circle: both smoothing windows stated, composed from the constants")
 
 
 if __name__ == "__main__":
