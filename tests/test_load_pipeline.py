@@ -23,7 +23,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
-from studio import load  # noqa: E402
+from studio import data_quality, load  # noqa: E402
 from studio.dev.golden_compare import EPS, walk  # noqa: E402
 from studio.dev.golden_session_dump import fingerprint  # noqa: E402
 from studio.session import Session  # noqa: E402
@@ -69,13 +69,24 @@ def test_load_pipeline_media_clock_invariants():
     track. Drives load_recording directly for the timing_quality the Session wraps."""
     if not _have_fixture():
         return
-    laps, cs, video_path, chapter_map, imu, track_name, tq = load.load_recording([FIXTURE])
+    laps, cs, video_path, chapter_map, imu, track_name, tq, strip = load.load_recording([FIXTURE])
     assert laps.point_count() > 0, "cleaning dropped the whole trace"
     assert track_name is None, f"a bundled test clip is not a known track: {track_name}"
     assert tq.clock == "media_clock_fallback", f"GPS5-era clip must fall back to the media clock: {tq.clock}"
     assert float(tq.dropped_fraction) == 0.0, tq.dropped_fraction
     assert os.path.basename(video_path) == "hero6.mp4", video_path
-    print(f"ok invariants: point_count={laps.point_count()}, clock={tq.clock}, track=None")
+    # THE HONEST DEGRADED STATE, on the one real GPS5-era recording this repo ships. The clip that
+    # falls back to the media clock is also the clip that carries no per-sample fix type and no
+    # DOP, so there is nothing to grade — and the quality strip must say so rather than paint a
+    # confident green over it. Every covered cell is UNREPORTED and NOT ONE is GOOD.
+    assert len(strip), "the strip must cover the recording even with nothing to grade"
+    assert not strip.reports_quality, "a GPS5 clip reports no per-sample quality"
+    counts = strip.counts()
+    assert counts.get(data_quality.GOOD, 0) == 0, f"GPS5 must never grade as good: {counts}"
+    assert counts.get(data_quality.UNREPORTED, 0) > 0, counts
+    assert "no per-sample GPS quality" in strip.summary(), strip.summary()
+    print(f"ok invariants: point_count={laps.point_count()}, clock={tq.clock}, track=None, "
+          f"strip={ {data_quality.QUALITY_LABEL[k]: v for k, v in counts.items()} }")
 
 
 def test_load_pipeline_matches_baseline():
