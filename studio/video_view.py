@@ -366,11 +366,16 @@ class _QualityStrip(QWidget):
         self.setFixedHeight(self.INK_H)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMouseTracking(True)   # the hover readout is the exact-numbers half of the surface
-        # The strip is a function of the slider's RANGE and of its width — both move under it (a
-        # chapter's duration arrives as it loads, entering compare re-ranges the bar to one lap,
-        # the panel is dragged) and neither sends this widget a paint event of its own.
-        slider.rangeChanged.connect(lambda *_: self.update())
+        # The strip is a function of the slider's RANGE as much as of its own width, and the range
+        # moves under it: a chapter's real duration arrives as it loads, and entering compare
+        # re-ranges the bar from the session to one lap. Neither sends this widget a paint event.
+        # A BOUND METHOD, not a lambda: Qt tracks a QObject receiver and drops the connection when
+        # this widget dies, where a lambda would keep calling `update()` on a deleted C++ object.
+        slider.rangeChanged.connect(self._on_slider_range_changed)
         self._refresh_tooltip()
+
+    def _on_slider_range_changed(self, *_args) -> None:
+        self.update()
 
     def set_timeline(self, timeline) -> None:
         """Adopt a `data_quality.QualityTimeline` (None / empty clears the band)."""
