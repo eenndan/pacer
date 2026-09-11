@@ -2978,6 +2978,31 @@ class StatsView(QWidget):
                         "×1 means the g you read is scaled right. The correlation beside it "
                         "cannot tell you that — Pearson r is unchanged by a scale error, so a "
                         "channel reading half would still correlate perfectly.")
+        # The THIRD cross-check row, and the strongest of the three: the two above compare one
+        # estimate against another, so their r and gain describe agreement. A lap is a closed loop,
+        # so the yaw integrated over one is EXACTLY 2π whatever the racing line — an exact target,
+        # which is what lets this row say how far from CORRECT the channel is. What it does NOT say
+        # is anything about the path-derived channel it is regressed against: that number is a live
+        # measurement of a thing being worked on, and a sentence about it here would be copy.
+        rot = session.rotation_cross() if hasattr(session, "rotation_cross") else None
+        if rot is not None:
+            verdict = "agrees" if rot.ok else "DISAGREES"
+            rows.append(("Rotation cross-check",
+                         f"{verdict} · the gyroscope's measured yaw closes a lap at "
+                         f"{rot.loop_ratio_gyro:.3f}×2π — {rot.loop_error_pct:.1f}% off the exact "
+                         f"turn a closed lap must make, over {rot.loop_n} laps · "
+                         f"r={rot.corner_corr:+.2f} against the path through the corners",
+                         not rot.ok))
+            tips.append("A lap is a closed loop, so the heading change over one is exactly 2π — "
+                        "the only quantity on this card with a ground truth rather than a second "
+                        "estimate to agree with. That is why the headline here is the closed-lap "
+                        "ratio and not the correlation: halving the channel leaves r bit-identical "
+                        "and moves this ratio to 0.5, and a gyroscope read through the wrong axis "
+                        "lands negative.")
+            tips.append(f"Measured from the {session.rotation_device() or 'camera'}'s gyroscope "
+                        f"(GPMF GYRO, ~200 Hz), projected onto gravity so it reads a road-plane "
+                        f"yaw rate however the camera is tilted on its mount. Checked over "
+                        f"{rot.n:,} samples.")
         self.trust_card.set_rows(rows or [(DASH, DASH, False)])
         # Set unconditionally (both ways): a stale cross-check summary must not survive a
         # re-render onto a session that has none.

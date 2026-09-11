@@ -13,10 +13,18 @@ SECOND, orthogonal quality axis to the timing-TRUST surface (Session.timing_veri
 
 The load pipeline (studio/load.py + studio/_signal.py) computes the raw signals; this module just
 classifies them into UI-facing concerns. The views render them through the shared banner/theme infra.
+
+`QualityTimeline` at the foot of the file is the same fact made LOCATABLE — one cell per second of
+recording instead of one verdict for the whole of it. See its own doc for why the two are not the
+same surface.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+import numpy as np
+
+from ._signal import MAX_DOP
 
 # Timing-clock provenance — which per-sample time axis the load path actually built.
 GPS9_TRUECLOCK = "gps9_trueclock"        # GPS9 per-sample fix spacing (the validated headline path)
@@ -160,3 +168,260 @@ class TimingQuality:
                     "rejected, so the positions (and the times derived from them) may be less "
                     "accurate. See the note over the map.")
         return ""
+
+
+# ============================================================ the LOCATABLE half of the verdict
+# `TimingQuality` above is ONE verdict for a WHOLE recording, and that is the shape of the thing it
+# cannot say. Measured on the owner's own recordings: the D24 0062 trio rejects 482 of 50,492 fixes
+# — 0.96 %, which rounds to "1 % of fixes rejected" on the card and tells you nothing. WHERE they
+# are is the entire fact: ALL 482 land in the first 48.2 seconds, before the kart has moved (the
+# first fix above 3 m/s is at t=167.6 s), because that is the receiver acquiring a lock. The same
+# 0.96 % scattered through the middle of the session would be a broken receiver, and the card
+# prints the same sentence for both.
+#
+# That distinction is also a bug this repo already shipped: the dropped-fix fraction was taken over
+# the RAW fix count INCLUDING that stationary lead-in, so opening one chapter read 0.12 and the
+# same footage as three read 0.04 — a clean recording called degraded purely by how it was opened
+# (load.py's `moving_speed` gate is the fix). A strip that draws the lead-in as its own block at
+# the head of the bar makes that a glance instead of an inference.
+#
+# THE CLASSES ARE THE GNSS CONVENTION, not a scale invented here: the standard DOP rating table is
+# ideal (<1) / excellent (1-2) / good (2-5) / moderate (5-10) / fair (10-20) / poor (>20), and a
+# non-expert acts on the WORD, not on the number. Collapsed to what this app can act on: at or
+# under 5 is GOOD (ideal through good); 5 to `MAX_DOP` is MODERATE — still used, but one step from
+# being thrown away; above `MAX_DOP`, or without a 3D lock, is POOR, which is exactly the set the
+# loader's quality gate rejects. The boundaries are `_signal`'s own `MIN_FIX` / `MAX_DOP` so the
+# strip and the gate can never disagree about what was thrown away.
+
+#: The GNSS "good or better" DOP bound (the ideal/excellent/good band of the standard rating
+#: table). Above it a fix is still USED — `MAX_DOP` is where the loader rejects — but it is worth
+#: drawing differently, because it is the band a degrading receiver passes through on its way out.
+DOP_GOOD_MAX = 5.0
+
+#: One cell = one second of recording. A second is the unit a driver locates by ("the first minute
+#: was rubbish"), it is ~10 GPS fixes at the GoPro's rate, and it is finer than any pixel the strip
+#: will ever have — the widget folds cells into pixel columns WORST-FIRST, so one bad second can
+#: never be averaged out of existence by the thousands of good ones around it.
+CELL_S = 1.0
+#: …but not without bound: past this the cell grows, so no input can allocate arbitrarily. 7,200
+#: one-second cells is a two-hour recording; the longest D24 recording is 5,050 s.
+MAX_CELLS = 7200
+
+# The cell classes, ORDERED so that `min()` means "the worst of these" — which is how a pixel
+# column folds its cells and how a lap inherits a class from the cells under it.
+NO_FIX = 0        # not one GPS fix landed in this span
+POOR = 1          # every fix here was rejected: no 3D lock, or DOP above MAX_DOP
+MODERATE = 2      # kept but degrading: worst DOP in (DOP_GOOD_MAX, MAX_DOP], or some fixes dropped
+GOOD = 3          # a 3D lock throughout, DOP inside the GNSS good band, nothing rejected
+UNREPORTED = 4    # fixes arrived, and this camera writes no per-sample quality at all (GPS5)
+
+#: The WORD for each class — the half a non-expert acts on (see the GNSS note above).
+QUALITY_LABEL = {NO_FIX: "No fix", POOR: "Poor", MODERATE: "Moderate", GOOD: "Good",
+                 UNREPORTED: "Not reported"}
+
+#: …and what it means. The label alone is a word; this is the sentence behind it.
+QUALITY_MEANING = {
+    NO_FIX: "no GPS fix arrived here at all",
+    POOR: f"every fix here was rejected — no 3D lock, or DOP above {MAX_DOP:g}",
+    MODERATE: f"usable but degrading — DOP above {DOP_GOOD_MAX:g}, or some fixes here rejected",
+    GOOD: f"3D lock, DOP inside the GNSS good band (at or under {DOP_GOOD_MAX:g})",
+    UNREPORTED: ("this camera writes no per-sample GPS quality — the GPS5-era stream carries "
+                 "neither a fix type nor a DOP, so there is nothing to grade"),
+}
+
+#: The classes worth LOOKING for on the bar — what `concern_seconds` counts.
+CONCERN_CLASSES = (NO_FIX, POOR, MODERATE)
+
+
+@dataclass(frozen=True)
+class QualityTimeline:
+    """Per-second GPS quality over one recording, on the media clock the scrubber uses.
+
+    Built from the RAW fixes — before the loader's quality gate drops the bad ones and before
+    `_clean` trims the stationary lead-in — because the dropped and the trimmed are precisely what
+    this surface exists to show. One entry per cell in each parallel array:
+
+      * `cls`     — the cell's class (NO_FIX … UNREPORTED), `min()`-ordered worst-first;
+      * `n`       — raw fixes that landed in the cell;
+      * `dropped` — how many of those the quality gate rejected;
+      * `dop`     — the WORST (largest) DOP among the fixes the gate KEPT; NaN when it kept none.
+
+    `span_s` is the recording's own length (the video duration), NOT the last fix's timestamp: the
+    strip has to cover exactly what the scrubber covers, so a receiver that stops reporting for the
+    last four minutes leaves four minutes of empty bar instead of quietly rescaling.
+
+    Frozen, like `TimingQuality`; its arrays are never written after construction."""
+
+    cell_s: float
+    cls: np.ndarray
+    n: np.ndarray
+    dropped: np.ndarray
+    dop: np.ndarray
+    reports_quality: bool
+
+    def __len__(self) -> int:
+        return int(len(self.cls))
+
+    @property
+    def span_s(self) -> float:
+        """The recording length this timeline covers, in seconds."""
+        return float(len(self.cls) * self.cell_s)
+
+    def _bounds(self, t0: float, t1: float) -> tuple[int, int]:
+        """The half-open cell range [i0, i1) covering [t0, t1] seconds, clamped into the timeline.
+
+        A zero-width query — a hover at one instant, a lap window that collapsed — still names ONE
+        cell rather than none: a caller asking "what is the quality HERE" must get an answer."""
+        n = len(self.cls)
+        if n == 0:
+            return 0, 0
+        if t1 < t0:
+            t0, t1 = t1, t0
+        i0 = min(max(int(t0 // self.cell_s), 0), n - 1)
+        i1 = min(max(int(-(-t1 // self.cell_s)), i0 + 1), n)
+        return i0, i1
+
+    def worst_between(self, t0: float, t1: float) -> int | None:
+        """The WORST class over [t0, t1] seconds; None when there is no timeline.
+
+        Worst, never average. It is what makes a lap inherit the one bad second inside it, and what
+        stops a pixel column three cells wide from painting the mean of a dropout and two clean
+        seconds as "fine"."""
+        i0, i1 = self._bounds(t0, t1)
+        if i1 <= i0:
+            return None
+        return int(self.cls[i0:i1].min())
+
+    def stats_between(self, t0: float, t1: float) -> dict | None:
+        """The exact numbers behind `worst_between` — what the hover prints.
+
+        `dop` is the worst DOP among the KEPT fixes of the span (NaN if it kept none), so a span
+        whose only readable fixes were thrown away reports no DOP rather than the DOP of a fix the
+        app refused to use."""
+        i0, i1 = self._bounds(t0, t1)
+        if i1 <= i0:
+            return None
+        dop = self.dop[i0:i1]
+        finite = dop[np.isfinite(dop)]
+        return {
+            "cls": int(self.cls[i0:i1].min()),
+            "t0": float(i0 * self.cell_s),
+            "t1": float(i1 * self.cell_s),
+            "n": int(self.n[i0:i1].sum()),
+            "dropped": int(self.dropped[i0:i1].sum()),
+            "dop": float(finite.max()) if len(finite) else float("nan"),
+            "cells": int(i1 - i0),
+        }
+
+    def counts(self) -> dict[int, int]:
+        """How many cells of each class — `{class: cells}`, only the classes actually present."""
+        if not len(self.cls):
+            return {}
+        vals, cnt = np.unique(self.cls, return_counts=True)
+        return {int(v): int(c) for v, c in zip(vals.tolist(), cnt.tolist(), strict=True)}
+
+    @property
+    def worst(self) -> int | None:
+        """The worst class anywhere in the recording; None when there is no timeline."""
+        return int(self.cls.min()) if len(self.cls) else None
+
+    def concern_seconds(self) -> float:
+        """Seconds of recording that are anything but GOOD (or UNREPORTED) — the one number that
+        says whether this strip is worth looking at on THIS recording."""
+        if not len(self.cls):
+            return 0.0
+        return float(np.isin(self.cls, CONCERN_CLASSES).sum() * self.cell_s)
+
+    def summary(self) -> str:
+        """One line: how much of the recording is in each concerning class, worst first.
+
+        Deliberately in SECONDS rather than percent — "1 % of fixes rejected" is what the
+        whole-recording verdict already says, and it is the phrasing that hides the lead-in."""
+        if not len(self.cls):
+            return ""
+        if not self.reports_quality:
+            return (f"GPS quality not graded over {self.span_s:.0f} s — "
+                    f"{QUALITY_MEANING[UNREPORTED]}")
+        counts = self.counts()
+        parts = [f"{counts[c] * self.cell_s:.0f} s {QUALITY_LABEL[c].lower()}"
+                 for c in CONCERN_CLASSES if counts.get(c)]
+        if not parts:
+            return f"GPS quality good over all {self.span_s:.0f} s of the recording"
+        return (f"GPS quality over {self.span_s:.0f} s of recording: " + ", ".join(parts)
+                + ", the rest good")
+
+
+def empty_timeline() -> QualityTimeline:
+    """A timeline covering nothing — what a Session with no recording (and the no-__init__ test
+    path) reads. Every accessor on it answers None / 0 rather than raising."""
+    return QualityTimeline(cell_s=CELL_S, cls=np.empty(0, np.int8), n=np.empty(0, np.int32),
+                           dropped=np.empty(0, np.int32), dop=np.empty(0), reports_quality=False)
+
+
+def build_quality_timeline(times, rejected, dop, span_s: float,
+                           cell_s: float = CELL_S) -> QualityTimeline:
+    """Grade every second of a recording → `QualityTimeline`.
+
+      * `times`    — media-clock seconds of each RAW fix (pre-gate, pre-trim);
+      * `rejected` — the per-fix verdict from `_signal._quality_ok` ITSELF, so the strip can never
+                     disagree with the gate about what was thrown away. Passed in rather than
+                     re-derived here for exactly that reason;
+      * `dop`      — per-fix GPS9 DOP; sentinels (non-finite, or <= 0) allowed;
+      * `span_s`   — the recording's own length on that clock (the VIDEO duration; see the class
+                     doc for why not the last fix's time).
+
+    A recording whose camera reports no per-sample quality at all (GPS5: every `dop` a sentinel)
+    comes back UNREPORTED wherever fixes landed — never GOOD. Painting a confident green over a
+    stream carrying nothing to be confident about is the one failure mode this surface must not
+    have."""
+    t = np.asarray(times, float)
+    span = float(span_s) if np.isfinite(span_s) and span_s > 0 else (
+        float(t[-1]) if len(t) else 0.0)
+    if span <= 0:
+        return empty_timeline()
+    cell = max(float(cell_s), span / MAX_CELLS)
+    ncell = max(int(np.ceil(span / cell)), 1)
+    n_arr = np.zeros(ncell, np.int32)
+    drop_arr = np.zeros(ncell, np.int32)
+    dop_arr = np.full(ncell, np.nan)
+    cls = np.full(ncell, NO_FIX, np.int8)
+    if not len(t):
+        return QualityTimeline(cell_s=cell, cls=cls, n=n_arr, dropped=drop_arr, dop=dop_arr,
+                               reports_quality=False)
+
+    rej = np.asarray(rejected, bool)
+    d = np.asarray(dop, float)
+    m = min(len(t), len(rej), len(d))
+    t, rej, d = t[:m], rej[:m], d[:m]
+    # A fix a hair outside the declared span still belongs to the recording (the GPMF track can run
+    # past the video track — measured at up to +0.934 s on GoPro's own sample clips), so clamp it
+    # into the end cell instead of dropping it out of the counts.
+    idx = np.clip((t / cell).astype(np.int64), 0, ncell - 1)
+    n_arr += np.bincount(idx, minlength=ncell).astype(np.int32)
+    drop_arr += np.bincount(idx, weights=rej.astype(float), minlength=ncell).astype(np.int32)
+
+    known = np.isfinite(d) & (d > 0)
+    reports = bool(known.any())
+    keep = ~rej & known
+    if keep.any():
+        # The worst DOP among the KEPT fixes of each cell: `np.maximum.at` over a -inf seed, then
+        # back to NaN where no kept fix landed. Seeding with NaN instead PROPAGATES — NaN wins every
+        # `maximum`, so the whole array comes back NaN, and it does it silently (measured: the first
+        # cut of this measurement reported "0 cells above DOP 2" on a recording where 61.6 % of the
+        # fixes are).
+        seeded = np.full(ncell, -np.inf)
+        np.maximum.at(seeded, idx[keep], d[keep])
+        dop_arr = np.where(np.isfinite(seeded), seeded, np.nan)
+
+    covered = n_arr > 0
+    if not reports:
+        cls[covered] = UNREPORTED
+        return QualityTimeline(cell_s=cell, cls=cls, n=n_arr, dropped=drop_arr, dop=dop_arr,
+                               reports_quality=False)
+    cls[covered] = GOOD
+    # Worst-wins, applied in worsening order so the later rule overwrites the earlier one.
+    cls[covered & (dop_arr > DOP_GOOD_MAX)] = MODERATE
+    cls[covered & (drop_arr > 0) & (drop_arr < n_arr)] = MODERATE
+    cls[covered & (drop_arr >= n_arr)] = POOR
+    return QualityTimeline(cell_s=cell, cls=cls, n=n_arr, dropped=drop_arr, dop=dop_arr,
+                           reports_quality=True)
