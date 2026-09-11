@@ -2154,10 +2154,11 @@ class StudioWindow(QMainWindow):
     # ----------------------------------------------------- keyboard shortcuts
     def _build_shortcuts(self):
         """Window-level playback shortcuts: Space (play/pause), M (mute), G (g-meter overlay),
-        C (compare mode). Parented to the window so they survive every view swap; handlers resolve
-        the current video dynamically (via _video_do). G / C go through the button's click() so a
-        disabled button makes its shortcut a no-op. ←/→ stepping is handled in keyPressEvent, not
-        here, so the lap table keeps its arrow navigation."""
+        C (compare mode), D (chart datum cursor), N (walk the Δ losses). Parented to the window so
+        they survive every view swap; handlers resolve the current video / charts dynamically (via
+        _video_do / _plots_do). G / C go through the button's click() so a disabled button makes its
+        shortcut a no-op. ←/→ stepping is handled in keyPressEvent, not here, so the lap table keeps
+        its arrow navigation."""
         def shortcut(key, handler):
             sc = QShortcut(QKeySequence(key), self)
             sc.setContext(Qt.WindowShortcut)
@@ -2167,6 +2168,11 @@ class StudioWindow(QMainWindow):
         shortcut(Qt.Key_M, lambda: self._video_do(lambda v: v.toggle_mute()))
         shortcut(Qt.Key_G, lambda: self._video_do(lambda v: v.gmeter_btn.click()))
         shortcut(Qt.Key_C, lambda: self._video_do(lambda v: v.compare_btn.click()))
+        # D / N → the charts' two instrument gestures: drop-or-clear the datum (second) cursor, and
+        # walk the biggest Δ losses of the lap. Both live on the charts because that is what they
+        # measure; both are window-level because that is where every other gesture here is.
+        shortcut(Qt.Key_D, lambda: self._plots_do(lambda p: p.toggle_datum()))
+        shortcut(Qt.Key_N, lambda: self._plots_do(lambda p: p.jump_to_next_loss()))
         # 1-4 → the lap panel's tabs (Laps · Corners · Stats · Coaching); no-op before a load.
         for digit, tab in ((Qt.Key_1, 0), (Qt.Key_2, 1), (Qt.Key_3, 2), (Qt.Key_4, 3)):
             shortcut(digit, lambda t=tab: self._select_lap_tab(t))
@@ -2179,6 +2185,13 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             fn(view.video)
+
+    def _plots_do(self, fn):
+        """The charts' twin of `_video_do` — resolve the live PlotsView at call time (the view is
+        swapped per load) and run `fn` on it; no-op before the first load."""
+        view = getattr(self, "view", None)
+        if view is not None:
+            fn(view.plots)
 
     def _select_lap_tab(self, index: int):
         """Digit shortcut 1-4 → the lap panel's tab, resolved at call time; no-op before the

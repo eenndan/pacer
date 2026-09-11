@@ -10,6 +10,17 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **The charts are an instrument: a datum cursor, window statistics and a tour of your losses.**
+  `D` drops a second cursor and a readout under the charts reports the interval between the two —
+  elapsed time, distance, the speed at each end, their difference, the mean, min, max, the rate of
+  change and the Δ given away across it. A selector beside the x-axis reports each channel's
+  value / min / max / mean / range / delta over whatever x-range is currently visible, following
+  every zoom and pan. `N` jumps to the biggest local loss in the Δ trace, zooms to it and takes the
+  video and the map with it; press again to walk to the next-biggest, and once more to come back
+  out to the whole lap. **The slope is refused rather than guessed** under 1.0 s between the
+  cursors: the GPS is 10 Hz with ±0.62 km/h of speed noise, so a shorter interval reports mostly
+  that noise — 10% of the value at 1.0 s, 20% at 0.5 s, over half of it one sample apart — and the
+  readout says so instead of printing a confident number.
 - **The Stats page says which baseline each "loss" is measured against, and reconciles the page.**
   Two columns one tab apart were both called a loss and were 3.8× apart in total (3.93 s here,
   1.02 s on Coaching, and 1.3× to 2450× apart corner by corner) because one is measured against

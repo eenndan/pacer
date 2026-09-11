@@ -104,6 +104,8 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = [
     ("Analysis", [
         ("G", "Toggle the g-meter overlay"),
         ("C", "Toggle compare mode (two laps side by side)"),
+        ("D", "Drop / clear the chart datum cursor (measures the interval between the cursors)"),
+        ("N", "Jump to the next-biggest Δ loss (again to walk on, then back to the whole lap)"),
         ("1 · 2 · 3 · 4", "Lap-panel tabs: Laps · Corners · Stats · Coaching"),
         # The DESCRIPTION named the maximize button by a character the button does not paint, in a
         # sentence — where an icon cannot go. It names the button in words instead; the Layout

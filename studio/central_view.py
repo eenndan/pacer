@@ -812,9 +812,12 @@ class CentralView(QWidget):
                                          trailing=self._plots_max_btn)
         # ideal_readout_btn leads the toolbar: it is the control that decides which reference the
         # hero readout above it leads with, so it sits directly under the number it governs.
+        # The two combos are ONE IDEA — what the x-range is, and what to report over it — so they
+        # go in as a tuple (PanelToolbar draws a group at SPACE_XS while the bar is SPACE_S), which
+        # is what stops the row reading as four unrelated controls.
         self._plots_toolbar = PanelToolbar(self.ideal_readout_btn,
                                            self.plots.brake_throttle_btn, self.plots.ideal_btn,
-                                           self.plots.x_mode_combo)
+                                           (self.plots.x_mode_combo, self.plots.stat_combo))
         plots_panel = self._headered(self._plots_header, (self.plots, 1),
                                      toolbar=self._plots_toolbar)
 
