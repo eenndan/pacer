@@ -226,14 +226,76 @@ def resolve_hwaccel_decode(choice: str | bool, encoder: str) -> bool:
     return encoder == VT_H264 and videotoolbox_decode_available()
 
 
+# --------------------------------------------------------------------------- output shape + scope
+# THE FOUR VOCABULARIES THE PICKER SPEAKS, declared here rather than in the dialog, because every
+# one of them changes what the RENDERER does and the dialog is only where they are chosen. The
+# controller builds its combo rows from these tuples, so a row that exists is a value this module
+# handles, by construction.
+
+# The output's SHAPE. "source" keeps the footage's own aspect (height-controlled) and is what
+# every export before this produced; the other two are the two shapes social video actually asks
+# for. There is no 4:5 or 4:3 here yet — `frame_geometry` takes a ratio, so adding one is a row.
+ASPECT_SOURCE = "source"
+ASPECT_9_16 = "9:16"
+ASPECT_1_1 = "1:1"
+# name -> width/height. "source" has no fixed ratio (it reads the footage), hence the None.
+ASPECT_RATIOS = {ASPECT_SOURCE: None, ASPECT_9_16: 9 / 16, ASPECT_1_1: 1.0}
+
+# How the source frame meets a shape it does not have. CROP fills the output and throws away the
+# sides; FIT keeps the whole picture and pads. Both are wanted: a cropped 9:16 is what a phone
+# feed wants, a fitted one is what you use when the thing that matters is at the edge of frame.
+FIT_CROP = "crop"
+FIT_FIT = "fit"
+
+# Overlay-only (alpha) output formats.
+ALPHA_PRORES = "prores"    # ProRes 4444 in a .mov, yuva444p10le — the NLE-native choice
+ALPHA_PNG = "png"          # a DIRECTORY of RGBA PNG frames — the universal one
+
+# WHAT gets rendered. The first three are all per-lap renders and share every code path (BEST is
+# THIS_LAP with the lap resolved from `session.best_lap_id()`, ALL is one of those per valid lap);
+# only SESSION renders a window that is not a lap, and it is the one scope whose overlay has to
+# FOLLOW the laps rather than name one (`ExportSpec.follow_laps`).
+SCOPE_THIS_LAP = "lap"
+SCOPE_BEST_LAP = "best"
+SCOPE_ALL_LAPS = "all"
+SCOPE_SESSION = "session"
+
+
 # --------------------------------------------------------------------------- configuration
-# 1080p default; width follows the source aspect at render time (height is the controlling dim).
+# 1080p default; the frame's shape comes from `aspect` + `frame_fit` (see `frame_geometry`).
+#
+# EVERY OVERLAY DIMENSION IS A FRACTION OF THE OUTPUT'S SHORT SIDE, and that denominator is the
+# whole reason this export can be 9:16 at all. It used to be the output HEIGHT — a choice that is
+# invisible while every export is 16:9 landscape (there, short side == height, so nothing below
+# changes by a pixel) and falls over the moment the frame is taller than it is wide: on a
+# 1080x1920 vertical clip a height-fractioned g-meter is 0.26*1920 = 499 px across a frame only
+# 1080 px wide, i.e. 46 % of the picture, and the map inset's `map_w_frac * out_w` by
+# `map_h_frac * out_h` box comes out 238x422 — a portrait slot for a roughly-square kart circuit.
+#
+# The short side is also what makes a FUTURE source shape work without a second decision: 4:3 and
+# 5.3K land on the same rule, and a 1:1 export is the case where width and height agree.
+OVERLAY_REF_SHORT_SIDE = 1080.0   # the reference: scale k == 1.0 on any export whose short side is 1080
+
+
+def overlay_unit(out_w: int, out_h: int) -> float:
+    """The overlay's LENGTH UNIT for an out_w x out_h frame: the short side. Every overlay size
+    below is a fraction of this, and every stroke width scales with `it / OVERLAY_REF_SHORT_SIDE`.
+
+    Short side rather than height, area or diagonal because the overlay is a set of corner
+    elements whose legibility budget is how much of the NARROW axis they eat: a dial sized off the
+    long side of a 9:16 frame swallows the picture, and one sized off the long side of an
+    ultra-wide frame vanishes. For every 16:9-or-wider landscape export — which is every export
+    this app has ever produced — this returns the height, unchanged."""
+    return float(min(max(int(out_w), 1), max(int(out_h), 1)))
+
+
 @dataclass(frozen=True)
 class OverlayConfig:
-    """Layout + output knobs for the export. All overlay placements are FRACTIONS of the frame so
-    the composition scales with `out_height`. The defaults reproduce the app's corner placements
-    (g-meter top-right, readout bottom-left, map inset bottom-right, lap strip top-left)."""
-    out_height: int = 1080            # controlling output dimension (width follows source aspect)
+    """Layout + output knobs for the export. All overlay placements are FRACTIONS of the output's
+    SHORT SIDE (`overlay_unit`) so the composition holds at any frame shape. The defaults
+    reproduce the app's corner placements (g-meter top-right, readout bottom-left, map inset
+    bottom-right, lap strip top-left)."""
+    out_height: int = 1080            # target SHORT side of the output (never upscaled past source)
     quality: str = "high"             # "high"/"standard"; resolved to encoder numbers by quality_params
     fps: float | None = None          # explicit output fps; None = source fps, then fps_cap applies
     # Cap the output fps: a telemetry overlay reads identically at 30 as at 59.94 but 30 ~halves
@@ -241,18 +303,37 @@ class OverlayConfig:
     fps_cap: float | None = 30.0
     encoder: str = "auto"             # "auto"/"libx264"/"videotoolbox" (see resolve_encoder)
     hwaccel_decode: str | bool = "auto"  # "auto" pairs the hw decode with the hw encoder (see resolve_hwaccel_decode)
+    # Output SHAPE: "source" (the source's own aspect, height-controlled — the historic behaviour),
+    # "9:16" (vertical) or "1:1" (square). See `frame_geometry` / ASPECT_CHOICES.
+    aspect: str = ASPECT_SOURCE
+    # How the SOURCE FRAME meets a non-source aspect: "crop" fills the frame and takes the centre
+    # out of the footage; "fit" keeps the whole picture and pads the rest. Ignored for "source".
+    frame_fit: str = FIT_CROP
+    # OVERLAY-ONLY: composite onto a TRANSPARENT canvas and skip the source decode entirely, for
+    # finishing in Resolve/Premiere. `alpha_codec` picks ProRes 4444 (a .mov) or a PNG sequence
+    # (a directory of frames). Ignored unless `overlay_only`.
+    overlay_only: bool = False
+    alpha_codec: str = ALPHA_PRORES   # "prores" | "png"
     # No-op (kept for back-compat); the renderer is single-threaded.
     workers: int | None = None
     # No-progress WATCHDOG (seconds): if the frame counter doesn't advance for this long the render
     # is presumed WEDGED (hung VT session / stuck pipe), aborted cleanly, then retried ONCE on
     # libx264 — what makes an infinite hang impossible. Generous so a merely-slow machine never trips.
     watchdog_timeout: float = 30.0
-    # g-meter dial: a square pinned to the TOP-RIGHT, side = this fraction of frame height.
+    # g-meter dial: a square pinned to the TOP-RIGHT, side = this fraction of the SHORT SIDE.
     gmeter_frac: float = 0.26
     margin_frac: float = 0.022        # uniform inset from the frame edge for all elements
-    # track-map inset: bottom-right box, this fraction of frame width / height.
-    map_w_frac: float = 0.22
+    # track-map inset: bottom-right box, `map_h_frac` of the SHORT SIDE tall and as wide as the
+    # track needs (`_inset_width`), capped at `map_max_aspect` times its own height.
+    #
+    # THE CAP USED TO BE `map_w_frac * out_w` AND WAS ALREADY THIS NUMBER IN DISGUISE. With
+    # map_w_frac == map_h_frac, `map_w_frac * out_w` is exactly the box height times the FRAME's
+    # aspect — 16:9 by construction on a 16:9 export, which the old comment said out loud. Naming
+    # it as the box's own aspect cap reproduces the shipped 1080p cap to the pixel (0.22 * 1080 *
+    # 16/9 == 0.22 * 1920) and stops a vertical frame from handing a square circuit a slot 238 px
+    # wide and 422 tall.
     map_h_frac: float = 0.22
+    map_max_aspect: float = 16 / 9
     # readout box (Δ / speed): bottom-left; sized to its text, this is the font height fraction.
     readout_h_frac: float = 0.040
     # lap/sector strip: a slim bar across the TOP-LEFT.
@@ -439,6 +520,15 @@ class ExportSpec:
     is_best: bool = False
     lead_in: float = 0.0
     lead_out: float = 0.0
+    # FULL-SESSION scope: the overlay FOLLOWS the laps instead of naming one. Every other scope
+    # renders a single lap and `lap_id` is the lap it is OF — a fact each frame repeats, which is
+    # what a padded export needs (a lead-in sits inside lap N-1 and must still say lap N). A whole
+    # recording has no such lap, so here `lap_at_time` answers per frame, exactly as the live
+    # readout does, and `lap_id` is only a hint for the map inset (None = draw the whole session).
+    follow_laps: bool = False
+    # The session's best lap, resolved once. `is_best` answers "is THIS export's lap the best one"
+    # and cannot: in follow mode the answer changes 40 times in one file.
+    best_lap_id: int | None = None
 
     def __post_init__(self):
         # Back-compat: a caller that passed only `src_path` (the legacy single-file API + the
@@ -481,6 +571,22 @@ class ExportSpec:
         """The file-LOCAL seek time (what ffmpeg `-ss` gets): the global t0 shifted into the
         resolved source's own clock. For a single-file/offset-0 source this equals `t0`."""
         return self.t0 - self.source.time_offset
+
+    def is_best_at(self, lap_id: int | None) -> bool:
+        """Whether the lap a FRAME is showing is the session's best — the `★ BEST` mark's
+        condition. For a single-lap export this is the spec's own verdict and never varies; in
+        follow mode it is re-asked per frame against the lap that frame is in."""
+        if not self.follow_laps:
+            return self.is_best
+        return (self.best_lap_id is not None and lap_id is not None
+                and int(self.best_lap_id) == int(lap_id))
+
+    @property
+    def is_png_sequence(self) -> bool:
+        """True when `out_path` names a DIRECTORY of frames rather than a file — the one output
+        of this module that is not a single artifact, so every path that creates, cleans up or
+        reports on the output has to ask."""
+        return bool(self.config.overlay_only and self.config.alpha_codec == ALPHA_PNG)
 
 
 # --------------------------------------------------------------------------- trim math
@@ -622,8 +728,13 @@ def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> Over
     The lap CLOCK is clamped into the lap, so a lead-out freezes the Δ at the gap the lap actually
     finished on rather than extrapolating past the flag. Speed, marker and g are read at the real
     `t` — `index_at_time` and `gmeter.at_time` both clamp and never return None, so they are valid
-    outside the lap and are the reason the padding shows live footage with live numbers."""
-    if spec is None:
+    outside the lap and are the reason the padding shows live footage with live numbers.
+
+    A FOLLOW-LAPS spec (the full-session scope) takes the no-spec branch deliberately. There the
+    clip is not OF a lap, so pinning one would be the wrong lie in the other direction: every
+    frame names the lap it is actually in, out-laps and pit time read as "no lap", and the clock
+    restarts at each line — which is what the live readout does over the same footage."""
+    if spec is None or spec.follow_laps:
         lap_id = session.lap_at_time(t)
         started, finished, clock_t = lap_id is not None, False, t
     else:
@@ -640,37 +751,143 @@ def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> Over
 
 
 # --------------------------------------------------------------------------- ffmpeg commands
+def _even(n: float) -> int:
+    """Round UP to an even integer >= 2. Every encoder this module can reach refuses odd
+    dimensions in a chroma-subsampled pixel format, and the 4:2:0 ones refuse them outright."""
+    n = max(2, int(round(n)))
+    return n + (n & 1)
+
+
+def _even_down(n: float) -> int:
+    """Round DOWN to an even integer >= 2 — for a rectangle that must stay INSIDE something else.
+    A crop is the case: it is bounded by the source frame, and rounding a full-width crop up by a
+    pixel on an odd-width source asks ffmpeg for a rectangle larger than the picture it is cut
+    from, which is an error rather than a clamp."""
+    n = max(2, int(n))
+    return n - (n & 1)
+
+
+@dataclass(frozen=True)
+class FrameGeometry:
+    """The output frame this export writes, and the filter chain that makes the source fill it.
+
+    `out_w`/`out_h` are the final, EVEN pixel dimensions. `scale_filter` is the `-vf` chain
+    (without the trailing `fps=`) that turns a decoded source frame into one output frame:
+    a plain `scale` for the source's own aspect, a cover-then-crop for CROP, a
+    contain-then-pad for FIT."""
+    out_w: int
+    out_h: int
+    scale_filter: str
+
+
+def frame_geometry(src_w: int, src_h: int, cfg: OverlayConfig) -> FrameGeometry:
+    """Resolve the output frame for a `src_w x src_h` source under `cfg.aspect` / `cfg.frame_fit`.
+
+    `cfg.out_height` is the target SHORT SIDE. On the historic source-aspect path the short side
+    of a landscape frame IS its height, so that spelling changes nothing there and the function
+    returns exactly what `output_size` always did. For a 9:16 or 1:1 output it is what makes
+    "1080p" mean the 1080 the user pictures — a 1080x1920 vertical clip, not a 608x1080 one.
+
+    NEVER UPSCALING IS A PER-MODE QUESTION, not one rule, because the two modes use different
+    source pixels:
+
+      * CROP takes the largest `aspect`-shaped rectangle out of the source, so what bounds the
+        output is that RECTANGLE's short side. A 9:16 crop of a 1920x1080 frame is 608x1080 of
+        real pixels, so 1080p-vertical is refused on 1080p footage and lands at 608x1080 — while
+        the same request on 4K footage crops 1215x2160 and downscales to a clean 1080x1920. That
+        is the honest answer: a phone-shaped clip out of a landscape camera has one eighth the
+        pixels of the frame it came from, and pretending otherwise just ships a blurry file.
+      * FIT keeps the whole picture, so what bounds the output is the axis the picture SPANS —
+        the width when the source is the wider shape (letterbox), the height when it is taller
+        (pillarbox).
+
+    The bars are painted BLACK. The one documented manual pipeline for this rendered telemetry
+    onto a solid blue and chroma-keyed it in Premiere to get it rescaled for 9:16; the point of
+    doing the reflow in the renderer is that there is nothing left to key."""
+    src_w, src_h = int(src_w), int(src_h)
+    want = max(2, int(cfg.out_height))
+    ratio = ASPECT_RATIOS.get(cfg.aspect)
+    if ratio is None or not (src_w > 0 and src_h > 0):
+        # SOURCE ASPECT — the historic path, byte-for-byte: height controls, width follows.
+        h = min(want, src_h) if src_h else want
+        w = int(round(src_w * (h / src_h))) if src_h else h * 16 // 9
+        w, h = _even(w), _even(h)
+        return FrameGeometry(w, h, f"scale={w}:{h}")
+    src_aspect = src_w / src_h
+    if cfg.frame_fit == FIT_FIT:
+        # The picture spans the WIDTH when it is the wider shape, else the HEIGHT.
+        if src_aspect >= ratio:
+            w = _even(min(want if ratio <= 1 else want * ratio, src_w))
+            h = _even(w / ratio)
+        else:
+            h = _even(min(want if ratio >= 1 else want / ratio, src_h))
+            w = _even(h * ratio)
+        # Contain, then pad the remainder. `force_divisible_by=2` rounds the contained picture
+        # DOWN to even under `decrease`, so it can never come out a pixel LARGER than the frame it
+        # is being padded into — a `pad` smaller than its input is a hard ffmpeg error, not a crop.
+        return FrameGeometry(w, h, f"scale={w}:{h}:force_original_aspect_ratio=decrease:"
+                                   f"force_divisible_by=2,"
+                                   f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black")
+    # CROP: the largest `ratio`-shaped rectangle inside the source bounds the output.
+    crop_w, crop_h = (src_h * ratio, float(src_h)) if src_aspect > ratio else (float(src_w), src_w / ratio)
+    short = min(want, int(min(crop_w, crop_h)))
+    w, h = (_even(short), _even(short / ratio)) if ratio <= 1 else (_even(short * ratio), _even(short))
+    # CROP FIRST, THEN SCALE, and the order is worth three times the render.
+    #
+    # The obvious chain is ffmpeg's own idiom — `scale=W:H:force_original_aspect_ratio=increase`
+    # to cover the frame, then `crop=W:H` to take the centre. It is also a trap on a source larger
+    # than the output: covering a 1080x1920 frame from 4K footage means scaling the WHOLE
+    # 3840x2160 picture UP to 3413x1920 and then throwing 68 % of it away. Measured over the same
+    # 20 s D24 window at 1080p, VideoToolbox available: 57.3 s that way against 12-21 s for every
+    # other shape in the same run. Cropping in SOURCE pixels first hands the scaler a 1215x2160
+    # picture instead of a 3413x1920 one, and the crop itself is close to free.
+    #
+    # `crop` is centred by default, and the rectangle is even on both axes so the scale that
+    # follows has no half-pixel to resolve.
+    return FrameGeometry(w, h, f"crop={_even_down(crop_w)}:{_even_down(crop_h)},scale={w}:{h}")
+
+
 def output_size(src_w: int, src_h: int, cfg: OverlayConfig) -> tuple[int, int]:
-    """Output (W, H): height is `cfg.out_height`; width follows the source aspect, rounded to an
-    EVEN number (libx264/yuv420p requires even dimensions). Never upscales past the source."""
-    h = min(int(cfg.out_height), int(src_h)) if src_h else int(cfg.out_height)
-    if src_h:
-        w = int(round(src_w * (h / src_h)))
-    else:
-        w = h * 16 // 9
-    w += w & 1
-    h += h & 1
-    return max(w, 2), max(h, 2)
+    """Output (W, H) — `frame_geometry`'s dimensions, kept as its own name because the size is
+    what most callers (the renderer, the size estimate, the tests) actually want."""
+    geo = frame_geometry(src_w, src_h, cfg)
+    return geo.out_w, geo.out_h
 
 
 def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
-                     hwaccel: bool = False) -> list[str]:
-    """DECODE argv: -ss spec.local_t0 before the input + -t duration, scale to out_w x out_h, force
-    the constant `fps`, emit rgb24 rawvideo to stdout; -an/-sn/-dn drop non-video. Input is
-    spec.source.input_args() (chapter file or concat span); the source-LOCAL seek is what makes a
-    chaptered export read the right footage. `hwaccel` adds `-hwaccel videotoolbox` to offload the
-    decode (a big CPU relief on a core-starved machine).
+                     hwaccel: bool = False, scale_filter: str | None = None) -> list[str]:
+    """DECODE argv: -ss spec.local_t0 before the input + -t duration, fit the source into
+    out_w x out_h (`scale_filter`, from `frame_geometry` — a plain scale, a cover-and-crop or a
+    contain-and-pad), force the constant `fps`, emit rgb24 rawvideo to stdout; -an/-sn/-dn drop
+    non-video. Input is spec.source.input_args() (chapter file or concat span); the source-LOCAL
+    seek is what makes a chaptered export read the right footage. `hwaccel` adds
+    `-hwaccel videotoolbox` to offload the decode (a big CPU relief on a core-starved machine).
 
     That `-ss` is ffmpeg's ACCURATE input seek: it lands on the keyframe at or before the target and
     then decodes forward and discards up to it, so the first frame out is the frame at t0 rather
     than the keyframe's. Which is the whole reason the seam branch stopped positioning itself with a
-    concat `inpoint` — `inpoint` has no such second half, and left the picture a GOP ahead."""
+    concat `inpoint` — `inpoint` has no such second half, and left the picture a GOP ahead.
+
+    THE FULL-RANGE TRAP CANNOT REACH THE ENCODER FROM HERE, AND THAT IS ARCHITECTURE RATHER THAN
+    LUCK. A hardware encoder refuses full-range `yuvj420p` input, and the D24 fixture IS exactly
+    that — `pix_fmt=yuvj420p, color_range=pc`, measured with ffprobe — so every render this module
+    has been verified against was fed a full-range source. It never gets that far: this command's
+    `-pix_fmt rgb24` converts at the DECODE boundary, the encoder's input is our rgb24 pipe, and
+    `_video_codec_args` names its own output `-pix_fmt yuv420p` (+ `-color_range tv` on
+    VideoToolbox). The four shapes rendered off that fixture all came back `yuv420p`. What would
+    reawaken the trap is a single-process `-i src -c:v h264_videotoolbox` chain, which is the shape
+    this pipeline deliberately is not; `tests/test_export_video.py` pins the two ends of it.
+
+    Adding `format=yuv420p` to this chain would not harden anything and would cost something real:
+    it would subsample chroma on the way to rgb24, throwing away half the colour resolution the
+    overlay is then composited against, to protect a boundary that no longer exists."""
     hw = ["-hwaccel", "videotoolbox"] if hwaccel else []
+    scale = scale_filter or f"scale={out_w}:{out_h}"
     return [
         FFMPEG, "-nostdin", "-loglevel", "error",
         *hw,
         "-ss", f"{spec.local_t0:.6f}", *spec.source.input_args(), "-t", f"{spec.duration:.6f}",
-        "-vf", f"scale={out_w}:{out_h},fps={fps:.6f}",
+        "-vf", f"{scale},fps={fps:.6f}",
         "-an", "-sn", "-dn",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]
@@ -688,7 +905,18 @@ def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float,
         live stream). `-color_range tv` silences the "range not set" note and pins MPEG/limited.
       * libx264 — the software fallback: veryfast + the quality level's CRF (20 high / 23 standard).
 
-    Both end yuv420p + faststart so the MP4 is broadly playable and streams (moov atom up front)."""
+    Both end yuv420p + faststart so the MP4 is broadly playable and streams (moov atom up front).
+
+    NEITHER PATH MAY EVER CARRY `-qp`, AND THAT IS NOT STYLE. Measured on this machine's
+    ffmpeg 7.1.1 (sandbox off, so a real VideoToolbox session opens): the same 2 s source encoded
+    with `-qp 12` and `-qp 32` produced files of 136,189 bytes EACH — the identical size, at both
+    ends of a scale meant to span most of the quality range, i.e. h264_videotoolbox accepts the
+    option, reports nothing, and ignores it. (Two runs at the SAME `-qp` differ in their stream
+    hash — VT is not bit-deterministic run to run — so size, not md5, is what shows this.) The
+    encoder does have a working constant-quality knob, `-q:v` on an inverse 1-100 scale: 20 / 50 /
+    80 gave 42,768 / 75,774 / 187,394 bytes. This module is bitrate-targeted (`-b:v` + `-maxrate`
+    + `-bufsize`) and so was never exposed to the trap; `tests/test_export_video.py` pins that no
+    `-qp` creeps in later. See `alpha_codec_args` for the one path that has no bitrate at all."""
     bpp, crf = quality_params(quality)
     if encoder == VT_H264:
         br = vt_target_bitrate(out_w, out_h, fps, bpp)
@@ -701,6 +929,90 @@ def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float,
     return [
         "-c:v", SW_H264, "-preset", "veryfast", "-crf", str(crf),
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+    ]
+
+
+# --------------------------------------------------------------------- overlay-only (alpha) output
+# ProRes 4444 carries an alpha plane; nothing else an NLE reliably imports does, short of a PNG
+# sequence. `prores_ks` is the encoder that offers `yuva444p10le`: VideoToolbox's ProRes encoder
+# exists on this machine and DOES do 4444, but its alpha-capable pixel formats are `bgra` /
+# `ayuv64le`, not the 10-bit planar format the brief (and Resolve) names — so this path is
+# deliberately the software one.
+_PRORES_ENCODER = "prores_ks"
+# What we ASK the encoder for. What comes back out reads as `yuva444p12le`, and that is not a
+# mismatch to chase: the ProRes 4444 bitstream stores 12 bits, so ffmpeg's decoder advertises the
+# 12-bit format for every 4444 stream whatever it was encoded from. The `yuva` prefix — the part
+# that matters — is there either way, and a decoded frame measures 97.7 % fully transparent with
+# an alpha range of 0..255, i.e. a real, straight (non-premultiplied) alpha plane.
+ALPHA_PIX_FMT = "yuva444p10le"
+_PRORES_ALPHA_BITS = 16            # a full 16-bit alpha plane; the encoder's own default
+_PNG_PATTERN = "overlay_%06d.png"  # frame files inside the chosen directory
+# Bits per pixel per frame for the two alpha outputs, MEASURED on the frames this renderer
+# actually produces — a 10 s window of a real D24 lap, rendered three times at three sizes:
+#
+#     short side      720        1080       1440
+#     ProRes 4444   1.118      0.876      0.745   bits/px/frame
+#     PNG sequence  0.401      0.311      0.263
+#
+# The 1080p column is what these carry, because 1080p is the default and the spread across the
+# whole range is 1.5x — an estimate the dialog already prefixes with "About".
+#
+# APPLE'S OWN NUMBER WOULD HAVE BEEN SIX TIMES TOO BIG. ProRes 4444 is specified at 330 Mbit/s for
+# 1080p29.97, i.e. 5.30 bits/px/frame, and that is the figure behind the user report of a
+# 30-minute transparent export at 140 GB. It does not describe THIS frame: an overlay-only frame
+# measured 97.7 % fully transparent, and ProRes codes that nearly for free. Estimating a
+# 30-minute 1080p overlay from the spec sheet says 74 GB; from the measurement, 12 GB. Still
+# worth a warning — it is roughly nine times the H.264 export beside it — but a warning that is
+# six times over-stated is one users learn to ignore.
+PRORES_4444_BPP = 0.876
+PNG_SEQUENCE_BPP = 0.311
+
+
+def alpha_codec_args(alpha_codec: str) -> list[str]:
+    """The `-c:v ...` portion for an OVERLAY-ONLY render — the one output path with no bitrate and
+    no CRF, so there is no quality level to resolve and nothing for the `-qp` trap documented in
+    `_video_codec_args` to be silently swallowed by.
+
+    ProRes 4444 is intra-only and quantiser-driven by profile alone; the PNG sequence is
+    lossless. Both keep every pixel's alpha, which is the entire point: this is a track to lay
+    over the original footage in Resolve or Premiere, not a picture of one."""
+    if alpha_codec == ALPHA_PNG:
+        return ["-c:v", "png", "-pix_fmt", "rgba"]
+    return [
+        "-c:v", _PRORES_ENCODER, "-profile:v", "4444",
+        "-pix_fmt", ALPHA_PIX_FMT, "-alpha_bits", str(_PRORES_ALPHA_BITS),
+        "-vendor", "apl0",          # what Resolve/Premiere look at to call it a real ProRes
+    ]
+
+
+def png_sequence_pattern(out_dir: str) -> str:
+    """The ffmpeg output pattern for a PNG-sequence export into `out_dir`. A sequence's "output"
+    is a DIRECTORY rather than a file, and this is the one place that turns one into the other."""
+    return os.path.join(out_dir, _PNG_PATTERN)
+
+
+def build_overlay_only_encode_cmd(spec: ExportSpec, out_w: int, out_h: int,
+                                  fps: float) -> list[str]:
+    """ENCODE argv for an overlay-only render: input 0 = our RGBA rawvideo on stdin, and THAT IS
+    THE ONLY INPUT. There is no source decode and no audio.
+
+    NO AUDIO IS A DECISION, not an omission. The artifact is an overlay TRACK: the editor already
+    has the footage this was rendered against, and it carries the audio. A second copy of the same
+    audio riding on the overlay is a track to mute in every project it lands in — and a PNG
+    sequence could not carry one at all, so including it for ProRes alone would make the two alpha
+    formats mean different things.
+
+    It is also why this path is CHEAPER than the composited one rather than more expensive despite
+    ProRes's data rate: nothing is decoded, scaled or muxed against a source. The only work is the
+    QPainter composite that both paths do anyway, plus the encode."""
+    out = png_sequence_pattern(spec.out_path) if spec.config.alpha_codec == ALPHA_PNG else spec.out_path
+    return [
+        FFMPEG, "-nostdin", "-loglevel", "error", "-y",
+        "-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{out_w}x{out_h}", "-r", f"{fps:.6f}",
+        "-i", "pipe:0",
+        "-map", "0:v:0",
+        *alpha_codec_args(spec.config.alpha_codec),
+        out,
     ]
 
 
@@ -727,7 +1039,12 @@ def build_encode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     run forever, `-shortest` alone truncates to whichever input ran out first. Measured after:
     480/480 frames, 16.000000 s, on the same windows; an interior window is unchanged (720/720,
     24.000000 s) and a source with NO audio stream is unaffected (the `-map 1:a:0?` is optional and
-    the filter has nothing to run on)."""
+    the filter has nothing to run on).
+
+    An OVERLAY-ONLY spec hands straight over to `build_overlay_only_encode_cmd`, which has neither
+    a source input nor an audio map — the dispatch lives here so the renderer asks one question."""
+    if spec.config.overlay_only:
+        return build_overlay_only_encode_cmd(spec, out_w, out_h, fps)
     return [
         FFMPEG, "-nostdin", "-loglevel", "error", "-y",
         # input 0: raw composited video from our pipe
@@ -988,11 +1305,17 @@ def _stroke_polyline(p: QPainter, poly: QPolygonF, colour: str, width: float,
     p.drawPolyline(poly)
 
 
-def _inset_width(session, lap_id: int, height: float, max_width: float) -> float:
+def _inset_width(session, lap_id: int | None, height: float, max_width: float) -> float:
     """How wide the map inset needs to be to hold `lap_id`'s trace at `height`, capped at
-    `max_width`. Falls back to the cap when the trace is missing or degenerate (§6.6d)."""
+    `max_width`. Falls back to the cap when the trace is missing or degenerate (§6.6d).
+
+    `lap_id=None` measures the WHOLE SESSION's trace — the full-session scope, whose inset draws
+    the recording rather than a lap. Same question, one line up the same arrays."""
     try:
-        xs, ys = session.lap_trace_xy(lap_id)
+        if lap_id is None:
+            xs, ys = session.tx, session.ty
+        else:
+            xs, ys = session.lap_trace_xy(lap_id)
     except Exception:  # noqa: BLE001 — an overlay must never fail an export
         return max_width
     if xs is None or ys is None or len(xs) < 2:
@@ -1010,7 +1333,7 @@ class _MapInset:
     the layer + draws a glowing marker with a short comet tail. A degenerate lap trace falls back to
     the full-session trace line so the inset is never empty."""
 
-    def __init__(self, session, box: QRectF, lap_id: int, scale_k: float = 1.0):
+    def __init__(self, session, box: QRectF, lap_id: int | None, scale_k: float = 1.0):
         self._box = box
         self._k = max(0.5, float(scale_k))   # size scale (1.0 at 1080p; see OverlayPainter)
         xs = np.asarray(session.tx, dtype=float)
@@ -1025,7 +1348,10 @@ class _MapInset:
         # `_lap_trace_xyt` this once reached into: the old hasattr guard was vestigial — `session.tx`
         # is read unguarded four lines up. The None / <2-point fallbacks are the degenerate-lap path.
         lx = ly = None
-        got = session.lap_trace_xy(lap_id)
+        # `lap_id is None` is the full-session scope: there is no single racing line to highlight,
+        # so the fallback below — the whole trace — IS the line, which is the right picture for a
+        # clip that runs over every lap.
+        got = session.lap_trace_xy(lap_id) if lap_id is not None else None
         if got is not None:
             glx, gly = got
             if len(glx) >= 2:
@@ -1161,6 +1487,42 @@ class _MapInset:
 # budget measures IS the set the compositor will draw. Two functions sampling the same series with
 # two different conventions is what this replaced, and it had cost a pixel overflow twice over —
 # see `_burned_runs`.
+# The pills' LEGIBILITY FLOORS in pixels. Everything else about the overlay is a fraction, and
+# these deliberately are not: below about this height the tabular digits stop resolving whatever
+# the frame is, so it is an absolute of the medium rather than a proportion of the composition.
+# They bind only on outputs far smaller than the smallest this app offers (0.040 * 550 px of short
+# side), which in practice means the test renders — the two values differ because the two pills
+# have always carried these, and unifying them would move pixels for no reason anyone asked for.
+_MIN_READOUT_H_PX = 22.0
+_MIN_STRIP_H_PX = 20.0
+
+# The gap kept between two elements sharing a row once they have to be checked against each other,
+# in units of the margin — the same inset the frame edge uses, so a stacked layout reads as the
+# same composition rather than a different one.
+_ROW_GAP_MARGINS = 1.0
+
+
+def _unstack_row(left: QRectF, right: QRectF, out_w: float, margin: float,
+                 downward: bool) -> QRectF:
+    """Return `right`, moved off `left` if the two cannot share their row at `out_w` wide.
+
+    The overlay is four corner-anchored elements, which is a composition exactly as long as the
+    two that share an edge still fit beside each other. Three of the four widths are MEASUREMENTS
+    — the pills are fitted to the widest string this export will burn, the map inset to the
+    track's own bounding box — so whether they fit is not something a fraction can promise, and on
+    a narrow frame (the 9:16 case, and any future one) it is where a corner layout stops being
+    one. Hence a test rather than a constant, and hence no comment here claiming a size "fits".
+
+    `downward` says which way the right-hand element escapes: the TOP row's g-meter drops below
+    the strip, the BOTTOM row's map inset rises above the readout. Either way it stays pinned to
+    its own edge, so the composition keeps its corners."""
+    gap = _ROW_GAP_MARGINS * margin
+    if left.right() + gap <= right.left():
+        return right
+    dy = (left.height() + gap) if downward else -(right.height() + gap)
+    return QRectF(right.x(), right.y() + dy, right.width(), right.height())
+
+
 _READOUT_PAD_FRAC = 0.26      # readout: left/right inner padding, as a fraction of the pill HEIGHT
 _READOUT_GAP_K = 4.0          # readout: hero number -> unit label, in k units (k = height / 44)
 _STRIP_PAD_L_FRAC = 0.42      # strip: the ink starts further in — the amber progress fill runs
@@ -1316,7 +1678,8 @@ def _burned_runs(session, spec: ExportSpec, fps: float) -> tuple[list[str], list
     for t in times:
         vals = overlay_values_at(session, float(t), spec)
         speeds.append(_readout_runs(vals, spec.config.speed_unit)[0])
-        runs = _strip_runs(session, vals, spec.lap_t0, spec.is_best, spec.config.palette)
+        runs = _strip_runs(session, vals, spec.lap_t0, spec.is_best_at(vals.lap_id),
+                           spec.config.palette)
         if runs is not None:
             labels.append(runs[0])
             tails.append(runs[1])
@@ -1430,44 +1793,61 @@ class OverlayPainter:
         # strings this export will burn by walking this export's frame times, so a painter built at
         # one fps and pumped at another would be fitted to a different set of frames than it draws.
         self._fps = float(fps)
-        # Global size scale for the export overlays: 1.0 at 1080p, growing/shrinking with the output
-        # height so line widths, the g-dot, the map marker + glyph outlines all look right at 720p
-        # through 4K (the brief's "sizes that scale with out_height"). The g-dial + map-inset paint
-        # take this `k`; the readout/strip self-scale from their box height.
-        self._k = out_h / 1080.0
-        m = cfg.margin_frac * out_h
+        # THE OVERLAY'S LENGTH UNIT IS THE FRAME'S SHORT SIDE (`overlay_unit`), and every size
+        # below is a fraction of it. On any 16:9-or-wider landscape export the short side IS the
+        # height, so this reproduces the shipped composition to the pixel; on a 9:16 or 1:1 frame
+        # it is what stops a height-fractioned dial from eating half the picture.
+        self._u = overlay_unit(out_w, out_h)
+        # Global size scale for the export overlays: 1.0 whenever the short side is 1080, growing
+        # and shrinking with it so line widths, the g-dot, the map marker + glyph outlines all look
+        # right from 720p through 4K. The g-dial + map-inset paint take this `k`; the readout/strip
+        # self-scale from their own box height.
+        self._k = self._u / OVERLAY_REF_SHORT_SIDE
+        m = cfg.margin_frac * self._u
         # g-meter: square in the TOP-RIGHT.
-        gside = cfg.gmeter_frac * out_h
+        gside = cfg.gmeter_frac * self._u
         self._g_rect = QRectF(out_w - m - gside, m, gside, gside)
         # map inset: BOTTOM-RIGHT, and AS WIDE AS THE TRACK NEEDS rather than a fixed 16:9 box.
         #
-        # `map_w_frac * out_w` by `map_h_frac * out_h` is 16:9 by construction — the fractions are
-        # equal and the frame is not square — while a kart circuit is roughly square. Measured on
-        # D24 (bbox 209 x 197 m, aspect 1.06): the box came out 422x238 at 1080p and the fitted
-        # track drew at 252x238, so **40% of the inset was empty at every resolution**, 170 px of
-        # reserved frame at 1080p burned over the footage for nothing.
+        # The box used to be `map_w_frac * out_w` by `map_h_frac * out_h` — 16:9 by construction,
+        # the fractions being equal and the frame not square — while a kart circuit is roughly
+        # square. Measured on D24 (bbox 209 x 197 m, aspect 1.06): the box came out 422x238 at
+        # 1080p and the fitted track drew at 252x238, so **40% of the inset was empty at every
+        # resolution**, 170 px of reserved frame at 1080p burned over the footage for nothing.
         #
         # The height fraction still sets the size; the WIDTH is whatever that height needs at the
-        # track's own aspect, capped by the old width so a genuinely wide circuit cannot grow the
-        # inset beyond what the composition was designed for. A degenerate/absent trace falls back
-        # to the old box.
-        mh = cfg.map_h_frac * out_h
-        mw = _inset_width(session, spec.lap_id, mh, cfg.map_w_frac * out_w)
-        self._map = _MapInset(session, QRectF(out_w - m - mw, out_h - m - mh, mw, mh),
-                              spec.lap_id, scale_k=self._k)
+        # track's own aspect, capped at `map_max_aspect` so a genuinely wide circuit cannot grow
+        # the inset past what the composition was designed for. That cap is the OLD cap said
+        # plainly: `map_w_frac * out_w` with equal fractions is the box height times the frame's
+        # aspect, which on the only shape this used to render was 16:9. A degenerate/absent trace
+        # falls back to the capped box.
+        map_lap = None if spec.follow_laps else spec.lap_id
+        mh = cfg.map_h_frac * self._u
+        mw = _inset_width(session, map_lap, mh, mh * cfg.map_max_aspect)
+        map_rect = QRectF(out_w - m - mw, out_h - m - mh, mw, mh)
         # Both pills are FITTED to the widest text this export WILL burn — enumerated once here by
         # replaying the render's own per-frame lookup over its own frame times, never re-derived
         # and never per frame (a pill that breathed as the speed gained a digit would be worse than
         # one that is too wide). See `_burned_runs` and the HUD pill geometry block.
         speeds, labels, tails = _burned_runs(session, spec, self._fps)
         # readout: BOTTOM-LEFT.
-        rh = max(cfg.readout_h_frac * out_h, 22.0)
+        rh = max(cfg.readout_h_frac * self._u, _MIN_READOUT_H_PX)
         self._readout_rect = QRectF(
             m, out_h - m - rh,
             readout_pill_width(rh, speeds, units.speed_label(cfg.speed_unit)), rh)
         # lap strip: TOP-LEFT.
-        sh = max(cfg.strip_h_frac * out_h, 20.0)
+        sh = max(cfg.strip_h_frac * self._u, _MIN_STRIP_H_PX)
         self._strip_rect = QRectF(m, m, strip_pill_width(sh, labels, tails), sh)
+        # AND THEN THE ROWS ARE CHECKED AGAINST THE FRAME THEY LANDED IN. Every rect above is
+        # anchored to a corner, which is only a composition while the two elements sharing an edge
+        # still fit side by side — and how wide they are is a MEASUREMENT (a pill fitted to its
+        # own text, an inset fitted to the track), not something this file can predict. A narrow
+        # frame is where that runs out, so the overlap is tested rather than assumed.
+        self._g_rect = _unstack_row(self._strip_rect, self._g_rect, out_w, m, downward=True)
+        map_rect = _unstack_row(self._readout_rect, map_rect, out_w, m, downward=False)
+        # The inset projects its track into ABSOLUTE frame coordinates and bakes the line once, so
+        # it is built after its rect is final rather than moved afterwards.
+        self._map = _MapInset(session, map_rect, map_lap, scale_k=self._k)
         # The g-meter dial's FILTERING STATE, driven exactly like the live overlay so the burned
         # dial matches the screen.
         #
@@ -1545,17 +1925,23 @@ class OverlayPainter:
         # headless dial's filtering state (identical to the on-screen widget).
         p.save()
         p.translate(self._g_rect.topLeft())
-        # export=True -> the vivid, no-box, big-number dial; scale_k from the dial's own size (1.0
-        # at the ~280 px 1080p dial) so its strokes/glyphs track the output resolution.
-        gmeter_overlay.paint_dial(p, self._g_rect.width(), self._g_rect.height(), dial_state,
-                                  export=True, scale_k=self._g_rect.width() / 280.0)
+        # export=True -> the vivid, no-box, big-number dial; scale_k is the dial's size against the
+        # dial it was designed at, DERIVED from the same fraction that sized it rather than typed
+        # as the ~280 px that fraction happens to come to at 1080p. A comment claiming a pixel
+        # count "is" a fraction of something is exactly the kind that rots the first time the
+        # fraction moves; this one cannot disagree with `_g_rect` because it is made of it.
+        gmeter_overlay.paint_dial(
+            p, self._g_rect.width(), self._g_rect.height(), dial_state, export=True,
+            scale_k=self._g_rect.width() / (self._spec.config.gmeter_frac * OVERLAY_REF_SHORT_SIDE))
         p.restore()
         self._map.paint(p, vals.marker_index)
         _paint_readout(p, self._readout_rect, vals, self._spec.config.speed_unit)
         # The strip's fallback elapsed origin is the LAP's start, not the clip's — with a lead-in
         # those differ, and a session with no lap window would otherwise count the run-up.
+        # `is_best_at` is asked per frame because in the full-session scope the answer changes at
+        # every start line; for a single-lap export it is the spec's one verdict, as before.
         _paint_strip(p, self._strip_rect, self._session, vals, self._spec.lap_t0,
-                     self._spec.config.palette, self._spec.is_best)
+                     self._spec.config.palette, self._spec.is_best_at(vals.lap_id))
         p.end()
 
 
@@ -1572,6 +1958,29 @@ def _paint_packed_frame(painter: OverlayPainter, out_w: int, out_h: int, raw: by
         return bytes(buf)                            # already packed — no padding to strip
     arr = np.frombuffer(img.constBits(), dtype=np.uint8, count=bpl * out_h).reshape(out_h, bpl)
     return arr[:, : 3 * out_w].tobytes()
+
+
+def _paint_alpha_frame(painter: OverlayPainter, out_w: int, out_h: int,
+                       vals: OverlayValues, dial) -> bytes:
+    """Composite ONE overlay-only frame onto a fully transparent canvas and return RGBA bytes
+    packed at out_w*4 — the overlay with nothing under it, which is what an NLE wants to lay over
+    the original footage.
+
+    `Format_RGBA8888` rather than Qt's native `Format_ARGB32`: ffmpeg's `rgba` rawvideo is
+    byte-ordered R,G,B,A, while ARGB32 is a host-endian 32-bit word, i.e. B,G,R,A on a
+    little-endian machine. Getting that wrong swaps red and blue in every exported frame and
+    nothing about the file says so. NON-premultiplied, likewise deliberately: premultiplied is
+    what Qt composites in, but a half-transparent white halo stored premultiplied and READ as
+    straight is a grey halo.
+
+    There is no `raw` parameter because there is no decode; this is the whole saving the
+    overlay-only path claims."""
+    img = QImage(out_w, out_h, QImage.Format_RGBA8888)
+    img.fill(Qt.transparent)
+    painter.paint_frame_with_state(img, vals, dial)
+    bpl = img.bytesPerLine()
+    arr = np.frombuffer(img.constBits(), dtype=np.uint8, count=bpl * out_h).reshape(out_h, bpl)
+    return arr[:, : 4 * out_w].tobytes()
 
 
 # --------------------------------------------------------------------------- the renderer
@@ -1674,7 +2083,12 @@ class Renderer:
         # with a clear message beats launching a render that can only produce nothing.
         src_w, src_h, src_fps = probe_video_size(spec.source.probe_path)
         guard_validate_window(spec)
-        self._out_w, self._out_h = output_size(src_w, src_h, spec.config)
+        # OVERLAY-ONLY renders no footage, but it still SIZES itself from the footage: the frame it
+        # produces is meant to be laid back over that footage in an NLE, so it has to be the same
+        # shape and the same rate. The probe above is the only thing the source is asked for.
+        self._overlay_only = bool(spec.config.overlay_only)
+        geo = frame_geometry(src_w, src_h, spec.config)
+        self._out_w, self._out_h, self._scale_filter = geo.out_w, geo.out_h, geo.scale_filter
         self._fps = resolve_fps(spec.config, src_fps)
         self._times = frame_times(spec.t0, spec.t1, self._fps)
         # The painter is handed the SAME fps, because its pill budget replays these very frame
@@ -1683,7 +2097,11 @@ class Renderer:
         # Resolve the encoder ONCE (probes VideoToolbox). `_encoder` is the concrete ffmpeg -c:v
         # name actually used; `_fallback_allowed` lets a failed VT encode retry on libx264.
         self._encoder = resolve_encoder(spec.config.encoder)
-        self._fallback_allowed = self._encoder == VT_H264
+        # The VT -> libx264 retry only means something for the H.264 paths. An overlay-only render
+        # encodes ProRes 4444 or PNG, neither of which is VideoToolbox and neither of which
+        # libx264 could stand in for — retrying one on a software H.264 would turn a failed alpha
+        # export into a successful opaque one, which is worse than the failure.
+        self._fallback_allowed = self._encoder == VT_H264 and not self._overlay_only
         self._hwaccel = resolve_hwaccel_decode(spec.config.hwaccel_decode, self._encoder)
         self._dec: subprocess.Popen | None = None
         self._enc: subprocess.Popen | None = None
@@ -1709,9 +2127,16 @@ class Renderer:
         return self._fps
 
     def _start(self) -> None:
-        self._dec = subprocess.Popen(
-            build_decode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._hwaccel),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # No decoder at all on the overlay-only path — that IS the path. A PNG sequence also needs
+        # its directory to exist before ffmpeg writes the first frame into it.
+        if self._overlay_only:
+            if self._spec.is_png_sequence:
+                os.makedirs(self._spec.out_path, exist_ok=True)
+        else:
+            self._dec = subprocess.Popen(
+                build_decode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._hwaccel,
+                                 self._scale_filter),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self._enc = subprocess.Popen(
             build_encode_cmd(self._spec, self._out_w, self._out_h, self._fps, self._encoder),
             stdin=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1740,16 +2165,17 @@ class Renderer:
             return True
         if not self._started:
             self._start()
-        assert self._dec is not None and self._enc is not None
-        stdout = self._dec.stdout
+        assert self._enc is not None
         stdin = self._enc.stdin
-        assert stdout is not None and stdin is not None
+        assert stdin is not None
+        stdout = self._dec.stdout if self._dec is not None else None
+        assert stdout is not None or self._overlay_only
         for _ in range(n):
             if self._i >= len(self._times):
                 self._finish()
                 return True
-            raw = stdout.read(self._frame_bytes)
-            if not raw or len(raw) < self._frame_bytes:
+            raw = b"" if self._overlay_only else stdout.read(self._frame_bytes)
+            if not self._overlay_only and (not raw or len(raw) < self._frame_bytes):
                 # A short read means ONE of three things:
                 #   * the supervisor killed the decoder on a stall/cancel -> abort loudly;
                 #   * the decoder reached the ceil-estimate tail AFTER emitting frames -> finish
@@ -1757,6 +2183,9 @@ class Renderer:
                 #   * the decoder emitted ZERO frames (an empty/past-EOF seek) -> that's not a
                 #     success, it's the chaptered-export failure: surface NoFramesError so the user
                 #     gets a clear message instead of an empty clip + a dialog that never moved.
+                #
+                # An overlay-only render has no decoder and therefore no short read: its frame
+                # count is `frame_times` and nothing else, so the loop simply runs to it.
                 self._raise_if_aborted()
                 produced = self._i
                 self._finish()
@@ -1792,7 +2221,12 @@ class Renderer:
 
     def _paint_packed(self, raw: bytes, vals: OverlayValues, dial) -> bytes:
         """Paint the overlays for one decoded rgb24 frame (`raw`, PACKED at out_w*3) from a
-        precomputed dial snapshot, and return the painted bytes PACKED at out_w*3 for the encoder."""
+        precomputed dial snapshot, and return the painted bytes PACKED at out_w*3 for the encoder.
+
+        On the overlay-only path there is no `raw` and the frame goes out as RGBA over
+        transparency instead — same painter, same per-frame values, four bytes a pixel."""
+        if self._overlay_only:
+            return _paint_alpha_frame(self._painter, self._out_w, self._out_h, vals, dial)
         return _paint_packed_frame(self._painter, self._out_w, self._out_h, raw, vals, dial)
 
     def _start_supervisor(self, cancel) -> None:
@@ -2006,12 +2440,137 @@ def build_lap_spec(session, out_path: str, lap_id: int,
         if not path:
             raise ValueError("session has no video source to export")
         source = single_file_source(path)
-    best = getattr(session, "best_lap_id", None)
-    best_id = best() if callable(best) else None
+    best_id = _best_lap_id(session)
     return ExportSpec(out_path=out_path, lap_id=lap_id, t0=t0, t1=t1,
                       source=source, config=config or OverlayConfig(),
                       is_best=best_id is not None and int(best_id) == int(lap_id),
+                      best_lap_id=best_id,
                       lead_in=lap_t0 - t0, lead_out=t1 - lap_t1)
+
+
+def _best_lap_id(session) -> int | None:
+    """The session's best lap, or None when the session cannot say (the duck-typed sessions the
+    tests build). One accessor, guarded once, because three spec builders now want it."""
+    best = getattr(session, "best_lap_id", None)
+    try:
+        return best() if callable(best) else None
+    except Exception:  # noqa: BLE001 — a missing best lap must never fail an export
+        return None
+
+
+def _video_source_for(session, t0: float, t1: float, src_path: str | None):
+    """Resolve the GLOBAL window to a VideoSource the way every scope needs it: through the
+    session's ChapterMap when it has one, else the plain single file. Lifted out of
+    `build_lap_spec` when the session scope needed exactly the same three lines."""
+    chapter_map = getattr(session, "chapters", None)
+    if chapter_map is not None and getattr(chapter_map, "chapters", None):
+        return resolve_video_source(chapter_map, t0, t1)
+    path = src_path or getattr(session, "video_path", None)
+    if not path:
+        raise ValueError("session has no video source to export")
+    return single_file_source(path)
+
+
+# --------------------------------------------------------------------------- export scope
+def build_session_spec(session, out_path: str,
+                       config: OverlayConfig | None = None,
+                       src_path: str | None = None) -> ExportSpec:
+    """Build the `ExportSpec` for the WHOLE RECORDING — every lap, the out-lap, the pit time and
+    the cool-down, as one file whose overlay follows the laps (`follow_laps`).
+
+    The window is the FOOTAGE's, not the telemetry's: `footage_duration` reads the chapter table's
+    own cumulative duration, while `session.tt[-1]` has had `load._clean` take the stationary
+    lead-in and the cool-down off it. Bounding a full-session export by the trace would silently
+    drop real footage off both ends of a clip whose entire promise is that it is the whole thing.
+
+    There is no padding argument, and that is not an omission: padding exists to give a LAP room
+    at the timing line, and this window already runs from the first frame to the last.
+
+    Raises ValueError when the session cannot state a footage duration (a duck-typed or
+    single-file session with no ChapterMap) — a full-session render needs an end, and guessing one
+    from the telemetry is the mistake above."""
+    total = footage_duration(session)
+    if total is None:
+        raise ValueError("this recording cannot state its full length (no chapter table), so a "
+                         "full-session export has no end to render to")
+    source = _video_source_for(session, 0.0, total, src_path)
+    best_id = _best_lap_id(session)
+    # `lap_id` is a HINT here and only the map inset reads it: None means "draw the whole
+    # session's trace", which is the right picture for a clip that runs over every lap.
+    return ExportSpec(out_path=out_path, lap_id=-1, t0=0.0, t1=float(total),
+                      source=source, config=config or OverlayConfig(),
+                      follow_laps=True, best_lap_id=best_id)
+
+
+def scope_lap_ids(session, scope: str, lap_id: int | None) -> list[int]:
+    """Which laps `scope` renders: the selected one, the best one, or every VALID lap. Empty for
+    the full-session scope, which renders no lap in particular, and empty when the scope asks for
+    a lap the session cannot supply.
+
+    "Every valid lap" is `session.valid_lap_ids()` where the session offers it — the SAME set the
+    lap table and every analytic use, so an All-laps batch cannot include the mis-segmented short
+    lap the rest of the app excludes. A session without the accessor falls back to every lap that
+    has a usable window."""
+    if scope == SCOPE_SESSION:
+        return []
+    if scope == SCOPE_BEST_LAP:
+        best = _best_lap_id(session)
+        return [int(best)] if best is not None else []
+    if scope == SCOPE_ALL_LAPS:
+        valid = getattr(session, "valid_lap_ids", None)
+        if callable(valid):
+            try:
+                return [int(i) for i in valid()]
+            except Exception:  # noqa: BLE001 — fall through to the window scan
+                pass
+        count = getattr(session, "lap_count", None)
+        try:
+            n = int(count() if callable(count) else (count or 0))
+        except Exception:  # noqa: BLE001 — no lap count -> no laps to batch
+            return []
+        return [i for i in range(n) if lap_window_for_export(session, i) is not None]
+    return [int(lap_id)] if lap_id is not None else []
+
+
+def lap_output_path(out_path: str, lap_id: int) -> str:
+    """The per-lap file name an All-laps batch writes for `lap_id`, from the single path the user
+    chose: `ride.mp4` + lap 7 -> `ride_lap7.mp4`. A PNG-sequence export has no extension to keep
+    (its "file" is a directory), so the suffix simply lands on the end.
+
+    One file per lap is the whole point of the scope, and the alternative — asking for N save
+    locations — is N dialogs to dismiss. `lap_label` is the app's own lap numbering, so the file
+    name matches what the lap table calls the lap."""
+    stem, ext = os.path.splitext(out_path)
+    return f"{stem}_lap{lap_label(lap_id)}{ext}"
+
+
+def build_scope_specs(session, out_path: str, scope: str, lap_id: int | None = None,
+                      config: OverlayConfig | None = None, src_path: str | None = None,
+                      lead: float = 0.0) -> list[ExportSpec]:
+    """Every `ExportSpec` a scope renders, in order — one for the three lap scopes, one PER LAP for
+    All laps, one for the whole session. The caller owns each spec's `source` and must
+    `cleanup()` it.
+
+    This is where the export stopped being "the selected lap". Rendering 90 seconds instead of
+    thirty minutes is the single largest thing that can be done about export time, and it needed
+    no encoder work at all — just the ability to say which 90 seconds.
+
+    `lead` is the run-up/run-off applied to EACH lap render and is ignored for the session scope
+    (see `build_session_spec`). On an All-laps batch it is applied per file, which means a
+    non-zero lead really does put the end of lap N-1 at the head of lap N's file and the start of
+    lap N+1 at its tail — footage from a neighbouring lap, in a file named for this one. That is
+    the artefact a competitor's per-lap export ships silently; here the picker says it in words
+    before the render starts, the overlay marks the run-up as pending rather than running, and
+    the default is no padding at all."""
+    if scope == SCOPE_SESSION:
+        return [build_session_spec(session, out_path, config=config, src_path=src_path)]
+    ids = scope_lap_ids(session, scope, lap_id)
+    if not ids:
+        raise ValueError("this recording has no lap to export for that scope")
+    multi = len(ids) > 1
+    return [build_lap_spec(session, lap_output_path(out_path, i) if multi else out_path, i,
+                           config=config, src_path=src_path, lead_in=lead, lead_out=lead)
+            for i in ids]
 
 
 def render_lap(session, src_path: str, out_path: str, lap_id: int,

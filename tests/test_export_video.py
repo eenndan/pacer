@@ -1746,6 +1746,352 @@ def test_the_map_inset_is_as_wide_as_the_track_not_as_wide_as_the_frame():
     print("ok inset-width: the box follows the track, is capped, floored, and fails soft")
 
 
+# ===================================================================== output SHAPE (aspect + fit)
+def test_frame_geometry_leaves_the_source_aspect_path_exactly_where_it_was():
+    """The historic path is byte-for-byte: height controls, width follows the source aspect, both
+    even, never upscaled. `output_size` is now a thin wrapper over `frame_geometry`, so this is
+    also what says the wrapper did not change its answer."""
+    cfg = ev.OverlayConfig(out_height=1080)
+    geo = ev.frame_geometry(3840, 2160, cfg)
+    assert (geo.out_w, geo.out_h) == (1920, 1080)
+    assert geo.scale_filter == "scale=1920:1080", geo.scale_filter
+    assert ev.output_size(3840, 2160, cfg) == (1920, 1080)
+    # never upscales, and an odd source still lands on even output
+    assert ev.output_size(1280, 720, cfg) == (1280, 720)
+    w, h = ev.output_size(1921, 1081, ev.OverlayConfig(out_height=540))
+    assert w % 2 == 0 and h % 2 == 0
+    print("ok frame_geometry: the source-aspect path is unchanged")
+
+
+def test_a_vertical_or_square_output_is_sized_from_the_pixels_it_can_actually_use():
+    """`out_height` is the target SHORT side, and the never-upscale bound is the source pixels the
+    chosen mode can reach — which is a different question per mode.
+
+    CROP takes the largest aspect-shaped rectangle out of the source, so a 9:16 crop of 1080p
+    footage has only 608x1080 real pixels and 1080p-vertical is honestly refused. The same request
+    against 4K crops 1215x2160 and lands on a clean 1080x1920."""
+    vertical = ev.OverlayConfig(out_height=1080, aspect=ev.ASPECT_9_16, frame_fit=ev.FIT_CROP)
+    assert ev.output_size(3840, 2160, vertical) == (1080, 1920), "4K has the pixels for 1080x1920"
+    assert ev.output_size(1920, 1080, vertical) == (608, 1080), \
+        "a 9:16 crop of 1080p footage is 608x1080 of real pixels — it must not be upscaled"
+    square = ev.OverlayConfig(out_height=1080, aspect=ev.ASPECT_1_1)
+    assert ev.output_size(3840, 2160, square) == (1080, 1080)
+    assert ev.output_size(1920, 1080, square) == (1080, 1080), "a 1:1 crop is bounded by the height"
+    # FIT keeps the whole picture, so the bound is the axis the picture spans (here the width).
+    fit = ev.OverlayConfig(out_height=1080, aspect=ev.ASPECT_9_16, frame_fit=ev.FIT_FIT)
+    assert ev.output_size(1920, 1080, fit) == (1080, 1920), \
+        "fitting 1080p into 9:16 scales the picture DOWN into a 1080-wide frame — no upscale"
+    for cfg in (vertical, square, fit):
+        w, h = ev.output_size(3840, 2160, cfg)
+        assert w % 2 == 0 and h % 2 == 0, (cfg.aspect, cfg.frame_fit, w, h)
+    print("ok frame_geometry: vertical/square sized from the pixels each mode can reach")
+
+
+def test_crop_cuts_before_it_scales_and_fit_pads_without_a_rounding_edge():
+    """The two filter chains, and what each is careful about.
+
+    CROP cuts in SOURCE pixels and scales afterwards — the cheap order. FIT uses
+    `force_divisible_by=2` under `decrease`, so the contained picture can never come out a pixel
+    LARGER than the frame it is padded into (a `pad` smaller than its input is a hard ffmpeg
+    error, not a crop)."""
+    crop = ev.frame_geometry(3840, 2160,
+                             ev.OverlayConfig(out_height=1080, aspect=ev.ASPECT_9_16,
+                                              frame_fit=ev.FIT_CROP)).scale_filter
+    # CROP FIRST, in SOURCE pixels, THEN scale — never ffmpeg's cover-then-crop idiom, which on a
+    # source larger than the output scales the whole picture UP before discarding most of it
+    # (measured: 57.3 s against 12.1 s for the same window).
+    assert crop == "crop=1214:2160,scale=1080:1920", crop
+    assert crop.index("crop=") < crop.index("scale="), f"the crop must come first: {crop}"
+    fit = ev.frame_geometry(3840, 2160,
+                            ev.OverlayConfig(out_height=1080, aspect=ev.ASPECT_9_16,
+                                             frame_fit=ev.FIT_FIT)).scale_filter
+    assert "force_original_aspect_ratio=decrease" in fit and "pad=1080:1920" in fit, fit
+    assert "force_divisible_by=2" in fit and "color=black" in fit, fit
+    # and the decode argv carries whichever chain it was handed, with the fps pinned after it
+    spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.mp4", lap_id=1, t0=10.0, t1=20.0)
+    argv = ev.build_decode_cmd(spec, 1080, 1920, 30.0, scale_filter=crop)
+    assert f"{crop},fps=30.000000" in argv, argv
+    print("ok frame_geometry: crop cuts before it scales; fit pads")
+
+
+# ===================================================== the overlay's unit is the frame's SHORT side
+def _painter(w, h, session=None, spec=None):
+    s = session or StubSession()
+    sp = spec or ev.ExportSpec(src_path="/x.MP4", out_path="/o.MP4", lap_id=2, t0=100.0, t1=160.0)
+    return ev.OverlayPainter(s, sp, w, h, 30.0)
+
+
+def test_the_overlay_scales_off_the_short_side_so_16_9_does_not_move():
+    """Every overlay dimension is a fraction of `overlay_unit` — the frame's SHORT side.
+
+    On a landscape export that IS the height, so the shipped composition is reproduced exactly:
+    the four rects at 720p / 1080p / 1440p are identical to what the height-fractioned code
+    produced, which is checked here by deriving them from the config the same way it did."""
+    cfg = ev.OverlayConfig()
+    for w, h in ((1280, 720), (1920, 1080), (2560, 1440)):
+        p = _painter(w, h)
+        assert ev.overlay_unit(w, h) == h, "on a landscape frame the short side is the height"
+        m = cfg.margin_frac * h
+        gside = cfg.gmeter_frac * h
+        assert abs(p._g_rect.width() - gside) < 1e-9 and abs(p._g_rect.x() - (w - m - gside)) < 1e-9
+        assert abs(p._strip_rect.x() - m) < 1e-9 and abs(p._strip_rect.y() - m) < 1e-9
+        assert abs(p._strip_rect.height() - max(cfg.strip_h_frac * h, 20.0)) < 1e-9
+        assert abs(p._readout_rect.height() - max(cfg.readout_h_frac * h, 22.0)) < 1e-9
+        assert abs(p._k - h / 1080.0) < 1e-9
+    print("ok overlay unit: the 16:9 composition is unchanged at 720/1080/1440")
+
+
+def test_a_vertical_frame_does_not_get_a_dial_sized_off_its_long_side():
+    """THE REASON the unit changed. `gmeter_frac * out_h` on a 1080x1920 frame is 499 px across a
+    picture 1080 px wide — 46 % of it. Off the short side it is the same 281 px dial it is at
+    1080p landscape, i.e. 26 % of the narrow axis either way, and the map inset stays the shape a
+    roughly-square circuit needs instead of a 238x422 portrait slot."""
+    tall = _painter(1080, 1920)
+    wide = _painter(1920, 1080)
+    assert ev.overlay_unit(1080, 1920) == 1080
+    assert abs(tall._g_rect.width() - wide._g_rect.width()) < 1e-9, \
+        "the dial is the same size on both frames — it is a fraction of the short side"
+    assert tall._g_rect.width() / 1080 < 0.30, "the dial must not eat a third of a vertical frame"
+    old_height_fractioned = ev.OverlayConfig().gmeter_frac * 1920
+    assert tall._g_rect.width() < 0.60 * old_height_fractioned, (
+        f"a height-fractioned dial would be {old_height_fractioned:.0f} px wide on a 1080-wide "
+        f"frame; this one is {tall._g_rect.width():.0f}")
+    # the inset is as wide as the TRACK needs, capped at its own aspect — never the frame's
+    cap = ev.OverlayConfig().map_h_frac * 1080 * ev.OverlayConfig().map_max_aspect
+    assert tall._map._box.width() <= cap + 1e-9 and tall._map._box.height() <= 1080 * 0.22 + 1e-9
+    # every element still lands inside the frame
+    for rect in (tall._g_rect, tall._strip_rect, tall._readout_rect, tall._map._box):
+        assert rect.left() >= 0 and rect.top() >= 0, rect
+        assert rect.right() <= 1080 + 1e-6 and rect.bottom() <= 1920 + 1e-6, rect
+    print("ok overlay unit: a 9:16 frame reflows instead of being swamped")
+
+
+def test_a_row_too_narrow_for_both_its_elements_stacks_them():
+    """The corner layout is a composition only while the two elements sharing a row still fit
+    beside each other, and three of the four widths are MEASUREMENTS (pills fitted to their text,
+    the inset fitted to the track). So the overlap is tested, not assumed — and when it fails the
+    right-hand element moves off the row rather than overlapping."""
+    from PySide6.QtCore import QRectF
+    left = QRectF(10, 10, 100, 20)
+    right = QRectF(150, 10, 60, 60)
+    assert ev._unstack_row(left, right, 220, 10, downward=True) == right, \
+        "elements that already fit are left exactly where they are"
+    tight = QRectF(100, 10, 60, 60)            # starts inside left.right() + gap
+    moved = ev._unstack_row(left, tight, 170, 10, downward=True)
+    assert moved.y() > tight.y() and moved.x() == tight.x(), moved
+    assert moved.top() >= left.bottom(), "the moved element clears the one it collided with"
+    up = ev._unstack_row(left, tight, 170, 10, downward=False)
+    assert up.y() < tight.y(), "the bottom row escapes upward"
+    print("ok layout: a row that cannot hold both elements stacks them")
+
+
+# ============================================================== overlay-only output (ProRes / PNG)
+def test_no_encoder_argv_ever_carries_the_qp_that_videotoolbox_ignores():
+    """MEASURED on this machine (ffmpeg 7.1.1, sandbox off so a real VT session opens): the same
+    2 s clip encoded with `-qp 12` and `-qp 32` produced files of 136,189 bytes EACH. The option
+    is accepted, nothing is logged, and it changes nothing. (Two runs at the same `-qp` differ in
+    stream hash — VT is not bit-deterministic — so equal SIZE is what shows it.) The working knob
+    is `-q:v` on an inverse 1-100 scale: 20 / 50 / 80 gave 42,768 / 75,774 / 187,394 bytes.
+
+    This module is bitrate-targeted and so was never exposed to it. This is the guard that keeps
+    it that way, over every encoder path including the two alpha ones."""
+    for args in (ev._video_codec_args(ev.VT_H264, 1920, 1080, 30.0),
+                 ev._video_codec_args(ev.SW_H264, 1920, 1080, 30.0),
+                 ev.alpha_codec_args(ev.ALPHA_PRORES),
+                 ev.alpha_codec_args(ev.ALPHA_PNG)):
+        assert "-qp" not in args, f"-qp is silently ignored by h264_videotoolbox: {args}"
+    vt = ev._video_codec_args(ev.VT_H264, 1920, 1080, 30.0)
+    assert "-b:v" in vt and "-maxrate" in vt, f"the VT path must stay bitrate-driven: {vt}"
+    print("ok encoders: no path passes the -qp VideoToolbox swallows")
+
+
+def test_alpha_codec_args_ask_for_a_real_alpha_plane():
+    """ProRes 4444 through `prores_ks` (the encoder that offers yuva444p10le; VideoToolbox's
+    ProRes does 4444 but only in bgra/ayuv64le), and RGBA PNG for the sequence."""
+    pro = ev.alpha_codec_args(ev.ALPHA_PRORES)
+    assert pro[:2] == ["-c:v", "prores_ks"], pro
+    assert "-profile:v" in pro and pro[pro.index("-profile:v") + 1] == "4444", pro
+    assert pro[pro.index("-pix_fmt") + 1] == "yuva444p10le", pro
+    png = ev.alpha_codec_args(ev.ALPHA_PNG)
+    assert png == ["-c:v", "png", "-pix_fmt", "rgba"], png
+    print("ok alpha: both formats ask for a real alpha plane")
+
+
+def test_an_overlay_only_encode_has_no_source_input_and_no_audio():
+    """The overlay-only argv is ONE input — our RGBA pipe. No `-i <source>`, no `-map 1:a`, no
+    `-c:a`: the artifact is a track to lay over the footage the editor already has, and a PNG
+    sequence could not carry audio anyway. It is also why this path does no source decode."""
+    cfg = ev.OverlayConfig(overlay_only=True, alpha_codec=ev.ALPHA_PRORES)
+    spec = ev.ExportSpec(src_path="/v/GX010001.MP4", out_path="/out/overlay.mov", lap_id=1,
+                         t0=10.0, t1=20.0, config=cfg)
+    argv = ev.build_encode_cmd(spec, 1280, 720, 30.0, ev.VT_H264)
+    assert argv.count("-i") == 1 and argv[argv.index("-i") + 1] == "pipe:0", argv
+    assert "/v/GX010001.MP4" not in argv, f"the source must not be opened at all: {argv}"
+    assert "-c:a" not in argv and not any(a.startswith("1:a") for a in argv), argv
+    assert argv[argv.index("-pix_fmt") + 1] == "rgba", "the pipe carries straight RGBA"
+    assert argv[-1] == "/out/overlay.mov"
+    # a PNG sequence writes a numbered pattern INSIDE the chosen directory
+    png_cfg = ev.OverlayConfig(overlay_only=True, alpha_codec=ev.ALPHA_PNG)
+    png_spec = ev.ExportSpec(src_path="/v/GX010001.MP4", out_path="/out/frames", lap_id=1,
+                             t0=10.0, t1=20.0, config=png_cfg)
+    assert png_spec.is_png_sequence and not spec.is_png_sequence
+    assert ev.build_encode_cmd(png_spec, 1280, 720, 30.0)[-1] == "/out/frames/overlay_%06d.png"
+    print("ok overlay-only: one input, no audio, no source decode")
+
+
+# ======================================================================== export SCOPE
+class _ScopeSession(StubSession):
+    """StubSession with the accessors the SCOPE machinery needs: several laps on one clock, a
+    chapter table so a full-session window has an end, and a best lap."""
+
+    def __init__(self, n_laps=4, lap_dur=30.0, total=200.0):
+        super().__init__(lap_id=0, t0=0.0, dur=total, n=400)
+        self._n, self._dur = n_laps, lap_dur
+        self.chapters = chapters.ChapterMap(["/v/GX010001.MP4"], [total])
+
+    def lap_count(self):
+        return self._n
+
+    def valid_lap_ids(self):
+        return list(range(self._n))
+
+    def best_lap_id(self):
+        return 2
+
+    def lap_window(self, lap_id):
+        if lap_id is None or not (0 <= lap_id < self._n):
+            return None
+        return (10.0 + lap_id * self._dur, 10.0 + (lap_id + 1) * self._dur)
+
+    def lap_at_time(self, t):
+        i = int((t - 10.0) // self._dur)
+        return i if 0 <= i < self._n and t >= 10.0 else None
+
+    def delta_at_lap(self, lap_id, t):
+        return 0.25 if lap_id is not None else None
+
+    def lap_trace_xy(self, lap_id):
+        return (self.tx, self.ty) if lap_id is not None and 0 <= lap_id < self._n else None
+
+
+def test_each_scope_resolves_to_the_laps_it_names():
+    s = _ScopeSession()
+    assert ev.scope_lap_ids(s, ev.SCOPE_THIS_LAP, 1) == [1]
+    assert ev.scope_lap_ids(s, ev.SCOPE_BEST_LAP, 1) == [2], "best lap ignores the selected one"
+    assert ev.scope_lap_ids(s, ev.SCOPE_ALL_LAPS, 1) == [0, 1, 2, 3]
+    assert ev.scope_lap_ids(s, ev.SCOPE_SESSION, 1) == [], "the session scope renders no one lap"
+    # All laps goes through valid_lap_ids where it exists — the SAME set the lap table shows, so a
+    # batch cannot include the mis-segmented short lap the rest of the app excludes.
+    s.valid_lap_ids = lambda: [0, 3]
+    assert ev.scope_lap_ids(s, ev.SCOPE_ALL_LAPS, 1) == [0, 3]
+    print("ok scope: each scope names its laps")
+
+
+def test_an_all_laps_batch_writes_one_file_per_lap():
+    """One save prompt, N files, named for the lap the lap table calls it. A single-lap scope keeps
+    the exact path the user chose — no suffix appears where there is nothing to disambiguate."""
+    assert ev.lap_output_path("/out/ride.mp4", 6) == "/out/ride_lap7.mp4"
+    assert ev.lap_output_path("/out/frames", 0) == "/out/frames_lap1.mp4".replace(".mp4", "")
+    s = _ScopeSession()
+    specs = ev.build_scope_specs(s, "/out/ride.mp4", ev.SCOPE_ALL_LAPS, lap_id=1, lead=0.0)
+    assert [sp.lap_id for sp in specs] == [0, 1, 2, 3]
+    assert [os.path.basename(sp.out_path) for sp in specs] == [
+        "ride_lap1.mp4", "ride_lap2.mp4", "ride_lap3.mp4", "ride_lap4.mp4"]
+    assert [sp.is_best for sp in specs] == [False, False, True, False], \
+        "each file knows whether IT is the best lap — the ★ BEST mark is per file"
+    one = ev.build_scope_specs(s, "/out/ride.mp4", ev.SCOPE_THIS_LAP, lap_id=1, lead=0.0)
+    assert len(one) == 1 and one[0].out_path == "/out/ride.mp4"
+    print("ok scope: an all-laps batch writes one named file per lap")
+
+
+def test_padding_puts_the_neighbouring_laps_in_the_file_and_the_spec_says_so():
+    """THE ARTEFACT A COMPETITOR SHIPS SILENTLY: a padded per-lap export holds the tail of the
+    previous lap and the head of the next. We do not forbid it — run-up is the point — but the
+    window is widened by exactly the amount asked for and the spec reports what was APPLIED, which
+    is what lets the picker say it in words and the overlay mark the run-up as pending."""
+    s = _ScopeSession()
+    specs = ev.build_scope_specs(s, "/out/ride.mp4", ev.SCOPE_ALL_LAPS, lap_id=1, lead=5.0)
+    lap1 = specs[1]
+    assert lap1.lead_in == 5.0 and lap1.lead_out == 5.0
+    assert (lap1.t0, lap1.t1) == (35.0, 75.0) and (lap1.lap_t0, lap1.lap_t1) == (40.0, 70.0)
+    # the head of the file really is the PREVIOUS lap's footage...
+    assert s.lap_at_time(lap1.t0) == 0, "the premise: the run-up is inside lap 0"
+    assert s.lap_at_time(lap1.t1 - 1e-6) == 2, "the premise: the run-off is inside lap 2"
+    # ...and the overlay still names the EXPORTED lap through all of it, marked not-started
+    head = ev.overlay_values_at(s, lap1.t0, lap1)
+    assert head.lap_id == 1 and not head.lap_started, head
+    print("ok scope: padding is applied exactly, and the overlay still names the exported lap")
+
+
+def test_a_full_session_export_spans_the_footage_and_follows_the_laps():
+    """The whole recording, as one file whose overlay follows the laps.
+
+    The window comes from the FOOTAGE (the chapter table), not `tt[-1]`: `load._clean` trims the
+    stationary lead-in and the cool-down out of the telemetry, so a trace-bounded window would
+    silently drop real footage off both ends of a clip whose whole promise is that it is
+    everything."""
+    s = _ScopeSession(total=200.0)
+    spec = ev.build_session_spec(s, "/out/whole.mp4")
+    assert (spec.t0, spec.t1) == (0.0, 200.0) and spec.follow_laps
+    assert spec.best_lap_id == 2
+    # every frame names the lap IT is in — not one pinned lap
+    assert ev.overlay_values_at(s, 15.0, spec).lap_id == 0
+    assert ev.overlay_values_at(s, 45.0, spec).lap_id == 1
+    assert ev.overlay_values_at(s, 75.0, spec).lap_id == 2
+    assert ev.overlay_values_at(s, 5.0, spec).lap_id is None, "before the first line: no lap"
+    # ...and the ★ BEST mark follows with it, instead of being one verdict for the file
+    assert not spec.is_best_at(1) and spec.is_best_at(2)
+    lap_spec = ev.build_scope_specs(s, "/out/x.mp4", ev.SCOPE_BEST_LAP, lap_id=1)[0]
+    assert lap_spec.is_best and lap_spec.is_best_at(0) and lap_spec.is_best_at(2), \
+        "a single-lap export's verdict is about the FILE and never varies frame to frame"
+    # a session that cannot state its own length is refused rather than guessed at
+    bare = StubSession()
+    try:
+        ev.build_session_spec(bare, "/out/whole.mp4", src_path="/v/a.MP4")
+    except ValueError as exc:
+        assert "full length" in str(exc) or "end" in str(exc), exc
+    else:
+        raise AssertionError("a session with no chapter table has no end to render to")
+    print("ok scope: a full-session export spans the footage and follows the laps")
+
+
+def test_the_full_session_inset_draws_the_whole_trace_not_one_lap():
+    """The map inset is built for the lap the clip is OF. A full-session clip is of no one lap, so
+    it gets the session's own trace — `lap_id=None` through the same two functions."""
+    s = _ScopeSession()
+    cap = 200.0
+    assert ev._inset_width(s, None, 100.0, cap) > 0, "a None lap measures the session trace"
+    spec = ev.build_session_spec(s, "/out/whole.mp4")
+    p = ev.OverlayPainter(s, spec, 640, 360, 30.0)
+    assert p._map._ok, "the full-session inset still draws a line"
+    print("ok scope: the full-session inset draws the whole trace")
+
+
+def test_a_full_range_source_can_never_reach_the_encoder():
+    """The other verified trap: hardware encoders REFUSE full-range `yuvj420p`, and the D24 fixture
+    is exactly that (`pix_fmt=yuvj420p, color_range=pc`, by ffprobe). It cannot bite here because
+    the pipeline is split at an rgb24 pipe — the decode converts on ITS output, and the encode
+    declares its own. This pins both ends of that boundary, which is the thing that makes the trap
+    unreachable; a future single-process `-i src -c:v <hw>` chain would reintroduce it."""
+    spec = ev.ExportSpec(src_path="/v/GX010001.MP4", out_path="/o.mp4", lap_id=1, t0=1.0, t1=4.0)
+    dec = ev.build_decode_cmd(spec, 1920, 1080, 30.0)
+    assert dec[dec.index("-pix_fmt") + 1] == "rgb24", dec
+    assert dec[-1] == "pipe:1" and "-f" in dec and dec[dec.index("-f") + 1] == "rawvideo", dec
+    enc = ev.build_encode_cmd(spec, 1920, 1080, 30.0, ev.VT_H264)
+    assert enc[enc.index("-pix_fmt") + 1] == "rgb24", "input 0 is our rgb24 pipe"
+    assert "yuv420p" in enc, "the encoder names its own OUTPUT format, never the source's"
+    assert enc[enc.index("-color_range") + 1] == "tv", "and pins limited range on the hw encoder"
+    # Both output dimensions are even on every shape, which is the other half of the same rule.
+    for cfg in (ev.OverlayConfig(out_height=1080),
+                ev.OverlayConfig(out_height=1080, aspect=ev.ASPECT_9_16),
+                ev.OverlayConfig(out_height=1080, aspect=ev.ASPECT_9_16, frame_fit=ev.FIT_FIT),
+                ev.OverlayConfig(out_height=1080, aspect=ev.ASPECT_1_1)):
+        for src in ((3840, 2160), (1920, 1080), (2704, 1520), (1921, 1081)):
+            w, h = ev.output_size(*src, cfg)
+            assert w % 2 == 0 and h % 2 == 0, (cfg.aspect, cfg.frame_fit, src, w, h)
+    print("ok pipeline: a full-range source converts at the rgb24 boundary, never at the encoder")
+
+
 if __name__ == "__main__":
     import inspect
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

@@ -48,15 +48,18 @@ from .workers import VideoExportWorker
 
 
 class ExportChoice(NamedTuple):
-    """What the overlay-video options picker returns (None on cancel): the overlay `config` and
-    `lead`, the seconds of run-up/run-off to add at each end of the lap.
+    """What the overlay-video options picker returns (None on cancel): the overlay `config`, the
+    `lead` seconds of run-up/run-off to add at each end of a lap, and the `scope` — which laps
+    (or the whole session) get rendered.
 
-    `lead` is deliberately NOT folded into `config`. An `OverlayConfig` carries layout and output
-    knobs — resolution, quality, unit, palette — while the padding decides the export's WINDOW,
-    which `export_video.build_lap_spec` has to widen before it can even resolve which chapter
-    file(s) the clip comes from. Two different jobs, two different values."""
+    NEITHER `lead` NOR `scope` IS FOLDED INTO `config`, for the same reason. An `OverlayConfig`
+    carries layout and output knobs — resolution, shape, quality, unit, palette — things that
+    describe a FRAME. These two decide the export's WINDOW, which `export_video.build_scope_specs`
+    has to resolve before it can even tell which chapter file(s) a clip comes from, and how many
+    files there are. Different jobs, different values."""
     config: object
     lead: float
+    scope: str = export_video.SCOPE_THIS_LAP
 
 
 class ExportController:
@@ -289,11 +292,44 @@ class ExportController:
     # ------------------------------------------------- video-overlay export (F9)
     # File ▸ Export overlay video Qt side (renderer is event-loop-free in export_video.py).
 
-    # Resolution maps to OverlayConfig.out_height (never upscales past source; "Source" is a huge
-    # sentinel clamped back to source height); quality maps to OverlayConfig.quality.
+    # Resolution maps to OverlayConfig.out_height — the target SHORT side, which on the landscape
+    # shapes this export used to be limited to is the height, and on a 9:16 clip is the width, so
+    # "1080p" means the 1080 the user pictures either way. Never upscales past source; "Source" is
+    # a huge sentinel clamped back. Quality maps to OverlayConfig.quality.
     # "1080p" resolution + "High" quality is the default.
     _EXPORT_RES_OPTIONS = [
         ("720p", 720), ("1080p", 1080), ("1440p", 1440), ("Source (no downscale)", 99999),
+    ]
+    # WHAT gets rendered. This is the row that decides whether the export takes ninety seconds or
+    # half an hour, which makes it the first one in the dialog: the loudest complaint about any
+    # overlay exporter is render time, and the cheapest answer to it is to render one lap.
+    _EXPORT_SCOPE_OPTIONS = [
+        ("This lap", export_video.SCOPE_THIS_LAP),
+        ("Best lap", export_video.SCOPE_BEST_LAP),
+        ("All laps — one file per lap", export_video.SCOPE_ALL_LAPS),
+        ("Full session — the whole recording", export_video.SCOPE_SESSION),
+    ]
+    # The frame's SHAPE, and how the footage meets it. Vertical and square are here because the
+    # documented way to get them today is to render 16:9, take it into another tool and rescale
+    # the telemetry by hand — one published recipe renders the overlay onto a solid blue and
+    # chroma-keys it in Premiere purely to move it. Doing the reflow in the renderer is what makes
+    # that unnecessary.
+    _EXPORT_ASPECT_OPTIONS = [
+        ("Source — as filmed", export_video.ASPECT_SOURCE),
+        ("9:16 — vertical", export_video.ASPECT_9_16),
+        ("1:1 — square", export_video.ASPECT_1_1),
+    ]
+    _EXPORT_FIT_OPTIONS = [
+        ("Crop to fill the frame", export_video.FIT_CROP),
+        ("Fit the whole picture (bars)", export_video.FIT_FIT),
+    ]
+    # Footage + overlay, or the overlay ALONE over transparency for finishing in Resolve/Premiere.
+    # The two alpha rows are the two formats an NLE actually takes an alpha track in.
+    _EXPORT_CONTENT_COMPOSITE = "composite"
+    _EXPORT_CONTENT_OPTIONS = [
+        ("Footage with the overlay burned in", _EXPORT_CONTENT_COMPOSITE),
+        ("Overlay only — ProRes 4444 (alpha)", export_video.ALPHA_PRORES),
+        ("Overlay only — PNG sequence (alpha)", export_video.ALPHA_PNG),
     ]
     _EXPORT_QUALITY_OPTIONS = [
         ("High — larger file", "high"), ("Standard — smaller file", "standard"),
@@ -312,6 +348,10 @@ class ExportController:
     _PREF_EXPORT_RES = "export_res_idx"
     _PREF_EXPORT_QUALITY = "export_quality_idx"
     _PREF_EXPORT_LEAD = "export_lead_idx"
+    _PREF_EXPORT_SCOPE = "export_scope_idx"
+    _PREF_EXPORT_ASPECT = "export_aspect_idx"
+    _PREF_EXPORT_FIT = "export_fit_idx"
+    _PREF_EXPORT_CONTENT = "export_content_idx"
     # SIZE ESTIMATE. The dialog sells a file-size trade-off ("larger file" / "smaller file"), so it
     # has to put a number on it — the two presets really are ~3x apart. The estimate is derived per
     # encoder, never a stored megabyte figure, because the encoder choice is a property of the
@@ -324,7 +364,10 @@ class ExportController:
     #     this is an order of magnitude, and the dialog says "about".
     _X264_BPP = {20: 0.68, 23: 0.51}
     _X264_BPP_FALLBACK = 0.60         # an unknown CRF sits between the two measured points
-    _EXPORT_ASPECT = 16 / 9           # assumed for the width; GoPro's landscape modes are 16:9
+    # Assumed for the SOURCE shape's width; GoPro's landscape modes are 16:9. The two fixed
+    # shapes state their own ratio, so this is only the fallback the estimate needs when it is not
+    # allowed to run an ffprobe to ask the footage.
+    _SOURCE_ASPECT_GUESS = 16 / 9
     def _export_pref_index(self, key: str, default: int, count: int) -> int:
         """One persisted combo index, clamped into `[0, count)` — the guarded-accessor shape the
         rest of prefs uses, so a stale value from an older build (a resolution that no longer
@@ -334,13 +377,14 @@ class ExportController:
         except Exception:  # noqa: BLE001 — an unreadable pref never blocks an export
             return default
         return value if isinstance(value, int) and 0 <= value < count else default
-    def _remember_export_prefs(self, res_idx: int, quality_idx: int, lead_idx: int) -> None:
-        """Persist the picker's three choices. Fully guarded, like set_last_dir: remembering a
-        preference must never disrupt an export the user has already confirmed."""
+    def _remember_export_prefs(self, indices: dict) -> None:
+        """Persist the picker's choices, `{pref key: combo index}`. Fully guarded, like
+        set_last_dir: remembering a preference must never disrupt an export the user has already
+        confirmed. It takes a mapping rather than a positional list because the picker grew from
+        three rows to seven, and a seven-argument call site is a bug waiting for the eighth."""
         try:
-            prefs.set(self._PREF_EXPORT_RES, int(res_idx))
-            prefs.set(self._PREF_EXPORT_QUALITY, int(quality_idx))
-            prefs.set(self._PREF_EXPORT_LEAD, int(lead_idx))
+            for key, index in indices.items():
+                prefs.set(key, int(index))
         except OSError as exc:
             print(f"studio: export preset not remembered ({exc!r}).", flush=True)
     def _export_clip_seconds(self, lap: int, lead: float) -> float:
@@ -361,49 +405,118 @@ class ExportController:
         except Exception:  # noqa: BLE001 — a hint must never take down the dialog it annotates
             return float("nan")
         return (win[1] - win[0]) if win is not None else float("nan")
-    def _export_size_hint(self, dur: float, out_height: int, quality: str) -> str:
+    def _estimate_frame_size(self, out_height: int, aspect: str) -> tuple[int, int]:
+        """The (W, H) the size estimate reasons about, from the resolution row's SHORT side and
+        the chosen shape. Not `export_video.frame_geometry`, because that needs the source's real
+        dimensions and this dialog deliberately runs no ffprobe — the never-upscale clamp is the
+        one thing the estimate cannot know, so it is the one thing the copy does not claim."""
+        ratio = export_video.ASPECT_RATIOS.get(aspect) or self._SOURCE_ASPECT_GUESS
+        if ratio <= 1:                       # portrait or square: the short side is the WIDTH
+            return int(out_height), int(round(out_height / ratio))
+        return int(round(out_height * ratio)), int(out_height)
+    def _export_size_hint(self, dur: float, out_height: int, quality: str,
+                          aspect: str = export_video.ASPECT_SOURCE,
+                          content: str = _EXPORT_CONTENT_COMPOSITE, files: int = 1) -> str:
         """The second line of the picker's hint: about how big this export lands, how many frames
         it has to render, and WHICH encoder will do it. Derived (see _X264_BPP) — never a stored
         megabyte figure, because the encoder is a property of the machine. "" when there is nothing
         honest to say: an unknown lap duration, or "Source", whose pixel count we can't know without
-        an ffprobe this dialog deliberately does not run."""
+        an ffprobe this dialog deliberately does not run.
+
+        `dur` is the length of ONE file and `files` how many of them an All-laps batch writes, so
+        the frame count and the megabytes are both the batch's total — the number that decides
+        whether this is worth starting.
+
+        AN ALPHA EXPORT IS A DIFFERENT ORDER OF MAGNITUDE AND HAS TO SAY SO. ProRes 4444 is
+        intra-only at roughly 330 Mbit/s for 1080p30 (Apple's own figure, which is where
+        `PRORES_4444_BPP` comes from) — about twenty-five times the H.264 this dialog otherwise
+        estimates. A user who pointed that at a thirty-minute recording reported 140 GB and six
+        hours. The row is worth offering; offering it without the number is the trap."""
         fps = export_video.OverlayConfig.fps_cap or 30.0
         if not (dur > 0) or out_height >= 99999:
             return ""
-        frames = int(math.ceil(dur * fps))
-        out_w = int(round(out_height * self._EXPORT_ASPECT))
-        bpp, crf = export_video.quality_params(quality)
-        encoder = export_video.resolve_encoder("auto")
-        if encoder == export_video.VT_H264:
-            bits_per_s = export_video.vt_target_bitrate(out_w, out_height, fps, bpp)
-        else:  # libx264 is CRF-driven: no target bitrate exists, so use the measured bpp
-            bits_per_s = out_w * out_height * fps * self._X264_BPP.get(crf, self._X264_BPP_FALLBACK)
-        megabytes = bits_per_s * dur / 8 / 1e6
-        return (f"About {megabytes:.0f} MB — {frames} frames to render at {fps:g} fps "
+        files = max(1, int(files))
+        frames = int(math.ceil(dur * fps)) * files
+        out_w, out_h = self._estimate_frame_size(out_height, aspect)
+        if content == export_video.ALPHA_PRORES:
+            bits_per_s = out_w * out_h * fps * export_video.PRORES_4444_BPP
+            encoder = "ProRes 4444"
+        elif content == export_video.ALPHA_PNG:
+            bits_per_s = out_w * out_h * fps * export_video.PNG_SEQUENCE_BPP
+            encoder = "a PNG sequence"
+        else:
+            bpp, crf = export_video.quality_params(quality)
+            encoder = export_video.resolve_encoder("auto")
+            if encoder == export_video.VT_H264:
+                bits_per_s = export_video.vt_target_bitrate(out_w, out_h, fps, bpp)
+            else:  # libx264 is CRF-driven: no target bitrate exists, so use the measured bpp
+                bits_per_s = out_w * out_h * fps * self._X264_BPP.get(crf, self._X264_BPP_FALLBACK)
+        megabytes = bits_per_s * dur * files / 8 / 1e6
+        size = (f"{megabytes / 1000:.1f} GB" if megabytes >= 1000 else f"{megabytes:.0f} MB")
+        return (f"About {size} — {frames} frames to render at {fps:g} fps "
                 f"with {encoder}. Real size follows how much the footage moves.")
+    def _export_session_seconds(self) -> float:
+        """How long a FULL-SESSION export runs: the footage's own length, through the same
+        accessor the renderer builds its window from, so the estimate and the render cannot
+        describe different clips. NaN when the recording cannot state one (no chapter table),
+        which is also exactly when the scope is refused."""
+        session = getattr(self.win, "session", None)
+        if session is None:
+            return float("nan")
+        try:
+            total = export_video.footage_duration(session)
+        except Exception:  # noqa: BLE001 — a hint must never take down the dialog it annotates
+            return float("nan")
+        return float(total) if total else float("nan")
+    def _scope_plan(self, scope: str, lap: int, lead: float) -> tuple[float, int, str]:
+        """(seconds per file, number of files, what the scope renders) for the hint — resolved
+        through `export_video`'s own scope machinery rather than re-counted here, so a row the
+        dialog offers is a render the module can actually build."""
+        session = getattr(self.win, "session", None)
+        if scope == export_video.SCOPE_SESSION:
+            return self._export_session_seconds(), 1, "the whole recording"
+        if session is None:
+            return float("nan"), 1, "this lap"
+        try:
+            ids = export_video.scope_lap_ids(session, scope, lap)
+        except Exception:  # noqa: BLE001 — a hint must never take down the dialog it annotates
+            ids = [lap]
+        if not ids:
+            return float("nan"), 1, "nothing — this recording has no lap for that choice"
+        if len(ids) == 1:
+            return self._export_clip_seconds(ids[0], lead), 1, f"lap {lap_label(ids[0])}"
+        # An All-laps batch renders each lap separately; the AVERAGE length is what makes the
+        # total honest, and the total is what the user is deciding about.
+        spans = [self._export_clip_seconds(i, lead) for i in ids]
+        good = [s for s in spans if math.isfinite(s) and s > 0]
+        mean = (sum(good) / len(good)) if good else float("nan")
+        return mean, len(ids), f"{len(ids)} laps, one file each"
     def _ask_export_options(self, lap: int):
-        """Modal resolution + quality + run-up/run-off picker returning an `ExportChoice`, or None
-        on cancel. All three choices persist across relaunches (prefs), like the unit and the
-        palette."""
+        """Modal scope + shape + output picker returning an `ExportChoice`, or None on cancel.
+        Every choice persists across relaunches (prefs), like the unit and the palette.
+
+        THE ROWS ARE ORDERED BY WHAT THEY COST. Scope first, because it is the difference between
+        ninety seconds of render and half an hour of it and every other row is a detail next to
+        that; then the run-up, which changes the same number; then the frame's shape; then what
+        the frame contains and how big it lands. The hint underneath re-reads every one of them,
+        so the consequences of a choice are visible before it is confirmed rather than after."""
         dlg = QDialog(self.win)
-        dlg.setWindowTitle(f"Export overlay video — lap {lap_label(lap)}")
-        dlg.setMinimumWidth(400)
+        dlg.setWindowTitle("Export overlay video")
+        dlg.setMinimumWidth(460)
 
         root = QVBoxLayout(dlg)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        header = QLabel(f"Export overlay video — lap {lap_label(lap)}")
+        header = QLabel("Export overlay video")
         header.setProperty("role", "PanelHeader")
         root.addWidget(header)
 
         body = QWidget(dlg)
         col = QVBoxLayout(body)
-        # A CONTROL surface, not a prose one: two combos, a form and a button row, with two note
-        # lines about them. So it takes the panel gutter (SPACE_M) rather than the Help cards'
-        # SPACE_XL reading inset — this dialog is operated, not read. It shipped 16/14/16/14 with a
-        # 10 px block gap, under the same exemption that called the Help cards "off the scale and
-        # off it CONSISTENTLY"; they were three different insets for the same job.
+        # A CONTROL surface, not a prose one: combos, a form and a button row, with two note lines
+        # about them. So it takes the panel gutter (SPACE_M) rather than the Help cards' SPACE_XL
+        # reading inset — this dialog is operated, not read.
         col.setContentsMargins(theme.SPACE_M, theme.SPACE_M, theme.SPACE_M, theme.SPACE_M)
         col.setSpacing(theme.SPACE_M)
         root.addWidget(body)
@@ -416,7 +529,7 @@ class ExportController:
 
         # lap_time is a cheap pacer-free accessor (no ffprobe).
         dur = self.win.session.lap_time(lap) if hasattr(self.win, "session") else float("nan")
-        lap_line = QLabel(f"Lap {lap_label(lap)}  ·  {fmt_time(dur)}")
+        lap_line = QLabel(f"Selected lap {lap_label(lap)}  ·  {fmt_time(dur)}")
         lap_line.setProperty("role", "Note")
         col.addWidget(lap_line)
 
@@ -424,89 +537,142 @@ class ExportController:
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(theme.SPACE_M)
         form.setVerticalSpacing(theme.SPACE_S)
-        res_combo = QComboBox(dlg)
-        for label, _h in self._EXPORT_RES_OPTIONS:
-            res_combo.addItem(label)
-        res_combo.setCurrentIndex(                                        # default 1080p
-            self._export_pref_index(self._PREF_EXPORT_RES, 1, len(self._EXPORT_RES_OPTIONS)))
-        q_combo = QComboBox(dlg)
-        for label, _q in self._EXPORT_QUALITY_OPTIONS:
-            q_combo.addItem(label)
-        q_combo.setCurrentIndex(                                          # default High
-            self._export_pref_index(self._PREF_EXPORT_QUALITY, 0, len(self._EXPORT_QUALITY_OPTIONS)))
-        lead_combo = QComboBox(dlg)
-        for label, _s in self._EXPORT_LEAD_OPTIONS:
-            lead_combo.addItem(label)
-        lead_combo.setCurrentIndex(                                       # default None
-            self._export_pref_index(self._PREF_EXPORT_LEAD, 0, len(self._EXPORT_LEAD_OPTIONS)))
+
+        def _combo(options, pref_key, default):
+            box = QComboBox(dlg)
+            for label, _value in options:
+                box.addItem(label)
+            box.setCurrentIndex(self._export_pref_index(pref_key, default, len(options)))
+            return box
+
+        scope_combo = _combo(self._EXPORT_SCOPE_OPTIONS, self._PREF_EXPORT_SCOPE, 0)
+        lead_combo = _combo(self._EXPORT_LEAD_OPTIONS, self._PREF_EXPORT_LEAD, 0)
+        aspect_combo = _combo(self._EXPORT_ASPECT_OPTIONS, self._PREF_EXPORT_ASPECT, 0)
+        fit_combo = _combo(self._EXPORT_FIT_OPTIONS, self._PREF_EXPORT_FIT, 0)
+        content_combo = _combo(self._EXPORT_CONTENT_OPTIONS, self._PREF_EXPORT_CONTENT, 0)
+        res_combo = _combo(self._EXPORT_RES_OPTIONS, self._PREF_EXPORT_RES, 1)      # 1080p
+        q_combo = _combo(self._EXPORT_QUALITY_OPTIONS, self._PREF_EXPORT_QUALITY, 0)  # High
+        form.addRow("Export", scope_combo)
+        form.addRow("Run-up / run-off", lead_combo)
+        form.addRow("Shape", aspect_combo)
+        form.addRow("Source frame", fit_combo)
+        form.addRow("Contents", content_combo)
         form.addRow("Resolution", res_combo)
         form.addRow("Quality", q_combo)
-        form.addRow("Run-up / run-off", lead_combo)
         col.addLayout(form)
 
-        # States the target height + never-upscale rule (no ffprobe here; matches output_size()),
-        # THEN what the two combos actually cost. "Larger file"/"smaller file" named no size at all,
-        # on a choice that spans ~3x — and the default is the expensive end of it.
+        # States the target short side + never-upscale rule (no ffprobe here; matches
+        # frame_geometry()), THEN what the choices actually cost.
         hint = QLabel("")
         hint.setWordWrap(True)
-        # [role="Hint"] ranks BELOW the description above it by SIZE, not by a dimmer colour: this
-        # label read C.text_muted, which is 3.17:1 and reserved by contract for disabled chrome —
-        # enabled prose in an enabled dialog had quietly borrowed the disabled token.
+        # [role="Hint"] ranks BELOW the description above it by SIZE, not by a dimmer colour.
         hint.setProperty("role", "Hint")
         col.addWidget(hint)
 
-        def _update_hint():
-            h = self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1]
-            quality = self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1]
-            lead = self._EXPORT_LEAD_OPTIONS[lead_combo.currentIndex()][1]
-            if h >= 99999:
-                lines = ["Output: source resolution (never upscaled) — size follows your footage."]
-            else:
-                lines = [f"Output: up to {h}p tall, source aspect — never upscaled past source."]
-            # The clip's REAL length, through the exporter's own funnel, so the megabytes and the
-            # frame count below are the ones this export will actually render — and so the run-up
-            # a recording cannot give (the first lap, the last lap) is reported as what remains
-            # rather than as what was asked for.
-            clip = self._export_clip_seconds(lap, lead)
-            if lead and clip > 0 and math.isfinite(dur):
-                lines.append(f"Clip: {fmt_time(clip)} — the lap plus {clip - dur:.1f} s of "
-                             "footage around it.")
-            size = self._export_size_hint(clip, h, quality)
-            if size:
-                lines.append(size)
-            hint.setText("  ".join(lines))
-        # ALL THREE combos: the quality choice is the one the copy sells hardest, and the run-up
-        # changes both numbers in the size line by changing how long the clip is.
-        res_combo.currentIndexChanged.connect(_update_hint)
-        q_combo.currentIndexChanged.connect(_update_hint)
-        lead_combo.currentIndexChanged.connect(_update_hint)
-        _update_hint()
-
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dlg)
-        buttons.button(QDialogButtonBox.Ok).setText("Export")
+        ok_button = buttons.button(QDialogButtonBox.Ok)
+        ok_button.setText("Export")
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
         col.addWidget(buttons)
+
+        def _update_hint():
+            scope = self._EXPORT_SCOPE_OPTIONS[scope_combo.currentIndex()][1]
+            lead = self._EXPORT_LEAD_OPTIONS[lead_combo.currentIndex()][1]
+            aspect = self._EXPORT_ASPECT_OPTIONS[aspect_combo.currentIndex()][1]
+            content = self._EXPORT_CONTENT_OPTIONS[content_combo.currentIndex()][1]
+            h = self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1]
+            quality = self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1]
+            overlay_only = content != self._EXPORT_CONTENT_COMPOSITE
+            # A row that cannot change anything is disabled rather than quietly ignored: the
+            # padding is a LAP's run-up and the session scope has no lap edges to pad; the
+            # crop/fit choice only exists where the output's shape differs from the footage's;
+            # the H.264 quality preset is not a knob ProRes or PNG have.
+            session_scope = scope == export_video.SCOPE_SESSION
+            lead_combo.setEnabled(not session_scope)
+            fit_combo.setEnabled(aspect != export_video.ASPECT_SOURCE)
+            q_combo.setEnabled(not overlay_only)
+            lead = 0.0 if session_scope else lead
+
+            clip, files, what = self._scope_plan(scope, lap, lead)
+            lines = [f"Renders {what}."]
+            if h >= 99999:
+                lines.append("Output: source resolution (never upscaled).")
+            elif aspect == export_video.ASPECT_SOURCE:
+                lines.append(f"Output: up to {h}p tall, source aspect — never upscaled past source.")
+            else:
+                ow, oh = self._estimate_frame_size(h, aspect)
+                fit = self._EXPORT_FIT_OPTIONS[fit_combo.currentIndex()][1]
+                how = ("the sides cropped off" if fit == export_video.FIT_CROP
+                       else "the whole picture, with bars")
+                lines.append(f"Output: up to {ow}x{oh}, {how} — never upscaled past source.")
+            # THE PADDING IS NAMED FOR WHAT IT ACTUALLY CONTAINS. Seconds either side of the
+            # timing line are seconds of the PREVIOUS and NEXT lap: a per-lap batch that pads is a
+            # set of files each holding a piece of its neighbours. That is a real artefact other
+            # exporters ship without a word; the fix is not to forbid it, it is to say it.
+            if lead and clip > 0 and math.isfinite(clip):
+                each = " each" if files > 1 else ""
+                lines.append(f"Clip: {fmt_time(clip)}{each} — the lap plus {lead:g} s of the "
+                             "previous lap at the head and the next lap at the tail.")
+            if overlay_only:
+                where = ("a folder of numbered PNG frames" if content == export_video.ALPHA_PNG
+                         else "a ProRes 4444 .mov")
+                lines.append(f"Overlay only: {where} on a transparent background, no footage and "
+                             "no audio — for compositing over the original in Resolve or Premiere.")
+            size = self._export_size_hint(clip, h, quality, aspect, content, files)
+            if size:
+                lines.append(size)
+            hint.setText("  ".join(lines))
+            # A scope with nothing to render cannot be confirmed. `_scope_plan` already says why.
+            ok_button.setEnabled(math.isfinite(clip) and clip > 0)
+        # EVERY combo: each one moves at least one number in the lines above.
+        for combo in (scope_combo, lead_combo, aspect_combo, fit_combo, content_combo,
+                      res_combo, q_combo):
+            combo.currentIndexChanged.connect(_update_hint)
+        _update_hint()
+
         if dlg.exec() != QDialog.Accepted:
             return None
-        ri, qi = res_combo.currentIndex(), q_combo.currentIndex()
-        li = lead_combo.currentIndex()
-        self._remember_export_prefs(ri, qi, li)   # survives this window, and the relaunch
-        out_height = self._EXPORT_RES_OPTIONS[ri][1]
-        quality = self._EXPORT_QUALITY_OPTIONS[qi][1]
+        indices = {
+            self._PREF_EXPORT_SCOPE: scope_combo.currentIndex(),
+            self._PREF_EXPORT_LEAD: lead_combo.currentIndex(),
+            self._PREF_EXPORT_ASPECT: aspect_combo.currentIndex(),
+            self._PREF_EXPORT_FIT: fit_combo.currentIndex(),
+            self._PREF_EXPORT_CONTENT: content_combo.currentIndex(),
+            self._PREF_EXPORT_RES: res_combo.currentIndex(),
+            self._PREF_EXPORT_QUALITY: q_combo.currentIndex(),
+        }
+        self._remember_export_prefs(indices)   # survives this window, and the relaunch
+        scope = self._EXPORT_SCOPE_OPTIONS[scope_combo.currentIndex()][1]
+        content = self._EXPORT_CONTENT_OPTIONS[content_combo.currentIndex()][1]
+        overlay_only = content != self._EXPORT_CONTENT_COMPOSITE
         # Burn the current display unit + semantic palette into the overlay so the export matches the
         # on-screen readout (incl. the colour-blind Δ hue axis — the exported clip is the shared
         # artifact, so it must follow the user's colour-blind choice, not stay red/green).
-        return ExportChoice(
-            config=export_video.OverlayConfig(out_height=out_height, quality=quality,
-                                              speed_unit=self.win._speed_unit,
-                                              palette=theme.active_palette()),
-            lead=self._EXPORT_LEAD_OPTIONS[li][1])
+        config = export_video.OverlayConfig(
+            out_height=self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1],
+            quality=self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1],
+            aspect=self._EXPORT_ASPECT_OPTIONS[aspect_combo.currentIndex()][1],
+            frame_fit=self._EXPORT_FIT_OPTIONS[fit_combo.currentIndex()][1],
+            overlay_only=overlay_only,
+            alpha_codec=content if overlay_only else export_video.ALPHA_PRORES,
+            speed_unit=self.win._speed_unit,
+            palette=theme.active_palette())
+        lead = (0.0 if scope == export_video.SCOPE_SESSION
+                else self._EXPORT_LEAD_OPTIONS[lead_combo.currentIndex()][1])
+        return ExportChoice(config=config, lead=lead, scope=scope)
     # Every failure this export can raise says the product's name IN THE BODY. macOS drops a
     # QMessageBox's window title (documented at _show_error_report and _load_failure_dialog, pinned
     # by test_app_chrome), so "The render failed: …" used to arrive as an unattributed sentence in a
     # titleless box — the load path was fixed for exactly this and the export never was.
     _EXPORT_FAIL_TITLE = f"{APP_NAME} — could not export video"
+    def _video_out_suffix(self, choice) -> tuple[str, str]:
+        """(default file suffix, file dialog filter) for the chosen output format. A PNG sequence
+        has neither — its output is a DIRECTORY — and `export_overlay_video` asks for one instead
+        of calling this."""
+        if choice.config.overlay_only:
+            return "_overlay.mov", "ProRes 4444 with alpha (*.mov)"
+        return "_overlay.mp4", "MP4 video (*.mp4)"
     def export_overlay_video(self):
         if self._no_laps_to_export():
             return
@@ -533,31 +699,61 @@ class ExportController:
         if self.win._share_card_blocked() and not self.win._confirm_provisional_video():
             self.win.statusBar().showMessage("video export cancelled", self._status_ms)
             return
-        # Pick resolution + quality + run-up FIRST (so a cancel here writes nothing), then the
-        # save path.
+        # Pick scope + shape + output FIRST (so a cancel here writes nothing), then the save path.
         choice = self._ask_export_options(lap)
         if choice is None:
             return
-        out = self._export_save_path(f"Export overlay video — lap {lap_label(lap)}",
-                                     f"_lap{lap_label(lap)}_overlay.mp4", "MP4 video (*.mp4)")
-        if not out:
-            return
-        # Resolve the (run-up widened) lap window to its chapter file(s) + local seek; refuses a bad
-        # window with a ValueError rather than launching a doomed ffmpeg. The padding goes through
-        # build_lap_spec rather than being applied here, because the window has to be widened
-        # BEFORE the video source is resolved — a lead-in can reach back over a chapter seam.
+        # A PNG SEQUENCE IS A FOLDER, and asking for it with a save-file prompt would hand back a
+        # file name the renderer then has to reinterpret as a directory. One output, one prompt
+        # that means it.
+        if choice.config.overlay_only and choice.config.alpha_codec == export_video.ALPHA_PNG:
+            out = QFileDialog.getExistingDirectory(
+                self.win, "Choose a folder for the PNG frames",
+                os.path.dirname(self._export_default("")))
+            if not out:
+                return
+        else:
+            suffix, filt = self._video_out_suffix(choice)
+            out = self._export_save_path("Export overlay video", suffix, filt)
+            if not out:
+                return
+        # Resolve the scope to one spec per output file. The padding goes through the spec
+        # builders rather than being applied here, because a window has to be widened BEFORE the
+        # video source is resolved — a lead-in can reach back over a chapter seam.
         try:
-            spec = export_video.build_lap_spec(self.win.session, out, lap, config=choice.config,
-                                               lead_in=choice.lead, lead_out=choice.lead)
+            specs = export_video.build_scope_specs(
+                self.win.session, out, choice.scope, lap_id=lap, config=choice.config,
+                src_path=src, lead=choice.lead)
         except ValueError as exc:
             QMessageBox.warning(self.win, self._EXPORT_FAIL_TITLE,
-                                f"{APP_NAME} can't export this lap:\n{exc}")
+                                f"{APP_NAME} can't export this:\n{exc}")
             return
-        self._run_video_export(spec, lap)
-    def _run_video_export(self, spec, lap: int):
-        """Run the render on a worker QThread behind a cancellable modal dialog. Starts indeterminate
-        ("Preparing…"), flips to a determinate bar on the first frame's progress, and ALWAYS reaches
-        a terminal state: the modal comes down the moment the render stops, whatever the outcome.
+        self._run_video_export(specs)
+    @staticmethod
+    def _describe_spec(spec, lap: int | None = None) -> str:
+        """What one queued render is OF, for the progress dialog and the completion card. The
+        full-session scope has no lap to name, so it says so rather than naming lap -1.
+
+        Read off the spec with `getattr`, falling back to `lap`, because the duck-typed specs the
+        Qt-side tests build carry only the two fields the dialog plumbing touches — and a
+        describing helper that can only describe the real class would make those tests assert
+        against a different code path than production runs."""
+        if getattr(spec, "follow_laps", False):
+            return "the full session"
+        lap_id = getattr(spec, "lap_id", None)
+        lap_id = lap if lap_id is None else lap_id
+        return f"lap {lap_label(lap_id)}" if lap_id is not None else "an overlay video"
+    def _run_video_export(self, specs, lap: int | None = None):
+        """Run `specs` on a worker QThread behind ONE cancellable modal dialog, in order. Starts
+        indeterminate ("Preparing…"), flips to a determinate bar on the first frame's progress, and
+        ALWAYS reaches a terminal state: the modal comes down the moment the render stops, whatever
+        the outcome.
+
+        ONE DIALOG FOR THE WHOLE BATCH, not one per lap. An All-laps export is a single decision
+        the user made once, so a modal that came down and went back up forty times would be forty
+        chances to lose the queue — and no way to cancel the rest. The bar restarts per file and
+        the label counts them, so the batch's shape is visible without pretending forty renders are
+        one progress bar.
 
         THE MODAL USED TO OUTLIVE THE RENDER. `setAutoClose(False)` is deliberate — Qt closes a
         QProgressDialog by itself when value reaches maximum, which here is the last FRAME, several
@@ -572,8 +768,25 @@ class ExportController:
         So: hide() rather than reset() (hiding a QDialog exits its exec() loop; close() would go
         through QProgressDialog::closeEvent, which EMITS canceled()), the cancel connection is
         dropped first so the button can no longer mean "cancel" on a finished worker, and success
-        hands off to _video_export_finished."""
-        dlg = QProgressDialog(f"Preparing lap {lap_label(lap)} overlay video…", "Cancel", 0, 0, self.win)
+        hands off to _video_export_finished.
+
+        A BARE SPEC IS STILL ACCEPTED, and `lap` with it. Both are what this method took before it
+        learned to render more than one file, and several callers and tests still say it that way;
+        a queue of one is exactly what they meant. Every spec carries the lap it is of, so the
+        `lap` argument is no longer read."""
+        specs = list(specs) if isinstance(specs, (list, tuple)) else [specs]
+        if not specs:
+            return
+        total_files = len(specs)
+        done_paths: list[str] = []
+        state = {"index": 0, "worker": None, "cancelled": False}
+
+        def _title(i: int) -> str:
+            of = f" ({i + 1} of {total_files})" if total_files > 1 else ""
+            return f"{self._describe_spec(specs[i], lap).capitalize()}{of}"
+
+        dlg = QProgressDialog(f"Preparing {self._describe_spec(specs[0], lap)}…", "Cancel", 0, 0,
+                              self.win)
         dlg.setWindowTitle("Export overlay video")
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
@@ -581,41 +794,60 @@ class ExportController:
         dlg.setAutoReset(False)
         dlg.setValue(0)  # with max=0 too, Qt renders an indeterminate "busy" bar
 
-        worker = VideoExportWorker(self.win.session, spec)
-        self.win._video_worker = worker  # keep a ref so the thread isn't GC'd mid-render
-        # AND put it in the DRAINED set. It was held on that attribute and nowhere else, so
-        # closeEvent's drain — which exists precisely so no QThread is destroyed mid-run — walked
-        # straight past the one worker that can still be running MINUTES after it started, and
-        # quitting mid-render destroyed a live QThread. closeEvent cancels it before draining (the
-        # renderer checks the flag once per frame), so joining it costs about one frame.
-        self.win._load_workers.add(worker)
-        started = {"first": False}
+        def _cleanup_all():
+            for spec in specs:
+                spec.source.cleanup()  # free any temp concat-list file the chapter resolution wrote
 
-        def on_progress(done: int, total: int):
-            if total > 0:
-                if not started["first"]:
-                    # First real frame: switch from the busy "Preparing…" bar to a determinate one.
-                    started["first"] = True
-                    dlg.setLabelText(f"Rendering lap {lap_label(lap)} overlay video…")
-                dlg.setMaximum(total)
-                dlg.setValue(done)
+        def _start(i: int):
+            spec = specs[i]
+            started = {"first": False}
+            worker = VideoExportWorker(self.win.session, spec)
+            state["worker"] = worker
+            self.win._video_worker = worker  # keep a ref so the thread isn't GC'd mid-render
+            # AND put it in the DRAINED set. It was held on that attribute and nowhere else, so
+            # closeEvent's drain — which exists precisely so no QThread is destroyed mid-run —
+            # walked straight past the one worker that can still be running MINUTES after it
+            # started, and quitting mid-render destroyed a live QThread. closeEvent cancels it
+            # before draining (the renderer checks the flag once per frame), so joining it costs
+            # about one frame.
+            self.win._load_workers.add(worker)
+            dlg.setLabelText(f"Preparing {self._describe_spec(spec, lap)}…")
+            dlg.setMaximum(0)
+            dlg.setValue(0)
 
-        def on_done(ok: bool, message: str):
-            # The render is over, so the button can no longer mean "cancel": drop the connection
-            # BEFORE the dialog goes, then hide it. (On the cancel path the dialog is already
-            # hidden — QProgressDialog::cancel() force-hides regardless of autoClose — and this is
-            # simply a no-op.)
-            dlg.canceled.disconnect(worker.cancel)
-            dlg.hide()
-            worker.wait()
-            self.win._load_workers.discard(worker)
-            self.win._video_worker = None
-            spec.source.cleanup()  # free any temp concat-list file the chapter resolution wrote
-            if ok:
-                self._video_export_finished(spec.out_path, lap)
-            elif message == "cancelled":
-                self.win.statusBar().showMessage("video export cancelled", self._status_ms)
-            else:
+            def on_progress(done: int, count: int):
+                if count > 0:
+                    if not started["first"]:
+                        # First real frame: switch from the busy "Preparing…" bar to a determinate
+                        # one.
+                        started["first"] = True
+                        dlg.setLabelText(f"Rendering {_title(i)}…")
+                    dlg.setMaximum(count)
+                    dlg.setValue(done)
+
+            def on_done(ok: bool, message: str):
+                # The render is over, so the button can no longer mean "cancel" for THIS worker:
+                # drop the connection before anything else. (On the cancel path the dialog is
+                # already hidden — QProgressDialog::cancel() force-hides regardless of autoClose.)
+                dlg.canceled.disconnect(worker.cancel)
+                worker.wait()
+                self.win._load_workers.discard(worker)
+                self.win._video_worker = None
+                state["worker"] = None
+                if ok:
+                    done_paths.append(spec.out_path)
+                    if i + 1 < total_files and not state["cancelled"]:
+                        _start(i + 1)     # next file, same dialog
+                        return
+                    dlg.hide()
+                    _cleanup_all()
+                    self._video_export_finished(done_paths, specs[0], lap)
+                    return
+                dlg.hide()
+                _cleanup_all()
+                if message == "cancelled":
+                    self.win.statusBar().showMessage("video export cancelled", self._status_ms)
+                    return
                 # PLAIN LANGUAGE FIRST, the encoder's own words behind Details — the same shape as
                 # the load-failure table and the crash report. `message` is an ffmpeg stderr TAIL:
                 # pasting it as the body handed the user "[h264_videotoolbox @ 0x…] Error encoding
@@ -627,12 +859,21 @@ class ExportController:
                 box.addButton(QMessageBox.Close)
                 box.exec()
 
-        worker.progress.connect(on_progress)
-        worker.finished_export.connect(on_done)
-        dlg.canceled.connect(worker.cancel)
-        worker.start()
+            worker.progress.connect(on_progress)
+            worker.finished_export.connect(on_done)
+            dlg.canceled.connect(worker.cancel)
+            worker.start()
+
+        def on_cancel():
+            # Cancelling stops the BATCH, not just the file being written: a queue that carried on
+            # to lap 5 after the user pressed Cancel on lap 4 would be a cancel button that does
+            # not cancel.
+            state["cancelled"] = True
+
+        dlg.canceled.connect(on_cancel)
+        _start(0)
         dlg.exec()
-    def _video_export_finished(self, out_path: str, lap: int) -> None:
+    def _video_export_finished(self, out_paths, spec=None, lap: int | None = None) -> None:
         """The one thing a finished export owes the user: a plain sentence saying it finished, and
         the file it made.
 
@@ -649,17 +890,29 @@ class ExportController:
         lower-case "exported <basename>" every other export writes.
 
         Reveal opens the CONTAINING FOLDER (see _reveal_in_finder) and reports both outcomes, so its
-        message lands on top of the "exported" one — the more recent, more specific fact."""
-        name = os.path.basename(out_path)
-        folder = os.path.dirname(os.path.abspath(out_path))
+        message lands on top of the "exported" one — the more recent, more specific fact.
+
+        A BATCH NAMES ITS COUNT AND ITS FOLDER rather than listing forty file names: the folder is
+        what Reveal opens and what the user goes to, and forty rows in a message box is a wall."""
+        paths = [out_paths] if isinstance(out_paths, str) else list(out_paths)
+        if not paths:
+            return
+        folder = os.path.dirname(os.path.abspath(paths[0]))
+        what = self._describe_spec(spec, lap) if spec is not None else "an overlay video"
+        if len(paths) > 1:
+            body = f"{APP_NAME} exported {len(paths)} overlay videos.\n\n{folder}"
+            status = f"exported {len(paths)} overlay videos"
+        else:
+            name = os.path.basename(paths[0])
+            body = f"{APP_NAME} exported {what} as an overlay video.\n\n{name}\n{folder}"
+            status = f"exported {name}"
         # The body carries the product name: macOS drops the window title (see _EXPORT_FAIL_TITLE).
-        box = QMessageBox(QMessageBox.Information, f"{APP_NAME} — export finished",
-                          f"{APP_NAME} exported lap {lap_label(lap)} as an overlay video.\n\n"
-                          f"{name}\n{folder}", parent=self.win)
+        box = QMessageBox(QMessageBox.Information, f"{APP_NAME} — export finished", body,
+                          parent=self.win)
         reveal_btn = box.addButton("Reveal in Finder", QMessageBox.ActionRole)
         done_btn = box.addButton("Done", QMessageBox.AcceptRole)
         box.setDefaultButton(done_btn)
         box.exec()
-        self.win.statusBar().showMessage(f"exported {name}", self._status_ms)
+        self.win.statusBar().showMessage(status, self._status_ms)
         if box.clickedButton() is reveal_btn:
             self.win._reveal_in_finder(folder)
