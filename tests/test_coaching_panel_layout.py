@@ -33,7 +33,6 @@ Run: QT_QPA_PLATFORM=offscreen python tests/test_coaching_panel_layout.py
 """
 import os
 import sys
-from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -76,8 +75,8 @@ theme.apply_theme(_APP)
 # widening it to match would be loosening a pin for no gain.
 MIN_PANEL = (280, 196)
 
-# The D24 C10 geometry the finding rests on (best lap 19, single chapter). All metres are the best
-# lap's own odometer, which is the frame BOTH Opportunity.entry_dist and BrakePoint carry.
+# The D24 C10 geometry the finding rests on (best lap 19, single chapter). All metres are the
+# REFERENCE (best-lap) odometer, the frame BOTH Opportunity.entry_dist and BrakeHabit carry.
 C10_ENTER, C10_EXIT, C10_APEX = 811.6, 891.1, 890.0
 C10_ACTUAL, C10_OPTIMAL = 820.2, 870.6
 
@@ -402,9 +401,11 @@ def test_reach_cell_never_states_a_count_without_its_denominator():
 
 
 # ------------------------------------------------------------------------------- L5-10
-def _bp(cid=10, actual=C10_ACTUAL, optimal=C10_OPTIMAL):
-    return SimpleNamespace(cid=cid, actual_brake_dist=actual, optimal_brake_dist=optimal,
-                           metres_later=optimal - actual, a_max_g=0.77, peak_decel_g=0.8)
+def _bp(cid=10, actual=C10_ACTUAL, optimal=C10_OPTIMAL, n_laps=38):
+    """The corner's braking HABIT over the clean laps (the cross-lap medians the hint reads)."""
+    return coaching.BrakeHabit(cid=cid, n_laps=n_laps, metres_later=optimal - actual,
+                               optimal_brake_dist=optimal, actual_brake_dist=actual,
+                               q25_m=optimal - actual - 4.0, q75_m=optimal - actual + 4.0)
 
 
 def test_brake_hint_is_suppressed_when_its_target_is_inside_the_corner():
