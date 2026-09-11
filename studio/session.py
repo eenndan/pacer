@@ -35,6 +35,7 @@ from . import (
     gmeter,
     library,
     render_cache,
+    rotation,
     sidecar,
     timeline,
     track_match,
@@ -202,9 +203,19 @@ class Session:
         # Session.load from the load pipeline; a from-scratch Session() defaults to high quality
         # (no degradation), so the no-__init__ test path reads clean. See studio/data_quality.py.
         self._timing_quality = data_quality.TimingQuality()
+        # The SAME quality fact per SECOND of recording (the scrub bar's strip) — one verdict for
+        # the whole recording cannot say WHERE it went bad, and on both D24 recordings "where" is
+        # the whole answer. Set by Session.load; empty otherwise, and every accessor on an empty
+        # one answers None rather than raising. See data_quality.QualityTimeline.
+        self._quality_timeline = data_quality.empty_timeline()
         # Vehicle-frame g from the GoPro ACCL+GRAV+CORI, cross-checked vs GPS-derived g. Built in
         # load(); empty until then, so a from-scratch Session() just has no g signal.
         self._gmeter: gmeter.GMeter = gmeter._empty()
+        # Measured body yaw rate from the GoPro GYRO (studio/rotation.py) — the app's first
+        # MEASURED rotation channel, and the only cross-check it has with an EXACT target (a lap is
+        # a closed loop, so the integrated yaw over it is 2*pi). Built in load() alongside the
+        # g-meter, off the same chain read; empty until then.
+        self._rotation: rotation.Rotation = rotation._empty()
         # Corner-model service (detection + per-lap stats + session bests, all derived from the
         # segmentation). invalidate() on re-segment; invalidate_stats() when only the Δ baseline moved.
         self._cornermodel = self._build_corner_model()
@@ -285,17 +296,22 @@ class Session:
                 "none of these files is a readable video: "
                 + ", ".join(os.path.basename(p) for p in skipped))
         (laps, cs, video_path, chapter_map, imu, track_name,
-         timing_quality) = load_recording(paths, smooth_window)
+         timing_quality, quality_strip) = load_recording(paths, smooth_window)
         session = cls(laps, cs, video_path, chapter_map)
         session.skipped_chapters = skipped
         session.track_name = track_name
         session._timing_quality = timing_quality
+        session._quality_timeline = quality_strip
         # Record the loader's own placement NOW, before app.py restores any sidecar over it: it is
         # both the standing way back from a bad edit (revert_timing_to_fitted) and — on a detected
         # track — the geometry `track_name` vouches for (timing_verified).
         session._record_fitted_lines()
         if imu is not None:
-            session._build_gmeter(*imu)
+            accl, grav, cori, gyro, device = imu
+            session._build_gmeter(accl, grav, cori)
+            # AFTER the g-meter, because the cross-check needs the SEGMENTED laps this Session
+            # already has — and it is the reason the channel exists, not a by-product of it.
+            session._build_rotation(gyro, grav, device)
         return session
 
     def _build_gmeter(self, accl, grav, cori) -> None:
@@ -333,6 +349,33 @@ class Session:
                 print(f"studio: {th.describe()}", flush=True)
         except Exception as e:  # noqa: BLE001 — additive diagnostics only
             print(f"studio: driving-channel thresholds unavailable ({e!r}).", flush=True)
+
+    def _build_rotation(self, gyro, grav, device: str) -> None:
+        """Precompute the MEASURED body yaw rate from the GoPro gyroscope + its cross-check.
+
+        The cross-check is the point, and it needs this Session's own clean laps: a lap is a closed
+        loop, so the integrated yaw over one is exactly 2*pi — the only statistic in the app with a
+        ground truth rather than a second estimate to be compared against. `rotation.compute` takes
+        the lap traces as the same `(times, xs, ys, speed_mps, cum_distances)` tuples
+        `_lap_columns` already caches, so no geometry is recomputed for it.
+
+        Additive, exactly like the g-meter: a camera with no GYRO (pre-HERO5) or a failure in the
+        projection leaves an empty channel and no cross-check row, never a broken load."""
+        try:
+            traces = [self._lap_columns(i) for i in self.valid_lap_ids()]
+            self._rotation = rotation.compute(gyro, grav, traces or None, device=device)
+        except Exception as e:  # noqa: BLE001 — the rotation channel is additive; never break a load
+            print(f"studio: rotation channel build failed ({e!r}); rotation disabled.", flush=True)
+            return
+        rot = self._rotation
+        if rot.cross is not None:
+            print(f"studio: {rot.cross.summary()}", flush=True)
+        elif rot.has_data:
+            print(f"studio: rotation channel from GYRO ({len(rot)} samples, no cross-check).",
+                  flush=True)
+        else:
+            print(f"studio: no GYRO stream in this recording ({device or 'unknown camera'}); "
+                  "no measured rotation channel.", flush=True)
 
     # ----------------------------------------- cross-recording reference lap (F7)
     # A lap from another recording that replaces the local best as the Δ baseline everywhere a
@@ -2751,6 +2794,57 @@ class Session:
         the bare-Session (no-__init__) test path — see _ref."""
         gm = getattr(self, "_gmeter", None)
         return None if gm is None else gm.cross
+
+    def rotation_cross(self):
+        """The measured-rotation cross-check computed at load (`rotation.RotationCheck`), or None
+        (no GYRO stream, or no clean lap to close a loop over).
+
+        Its headline is `loop_ratio_gyro`: the integrated yaw over one lap as a multiple of 2*pi.
+        Unlike the IMU↔GPS row beside it in DATA TRUST — which compares two ESTIMATES, so its
+        correlation and gain describe agreement rather than truth — a closed lap has an EXACT
+        target, which is what lets the card say how far from correct the channel is instead of how
+        far from something else. getattr-guarded for the bare-Session (no-__init__) test path."""
+        rot = getattr(self, "_rotation", None)
+        return None if rot is None else rot.cross
+
+    def rotation_device(self) -> str:
+        """The camera that recorded the rotation channel (GPMF `DVNM`), or "" — the answer to "why
+        is this channel missing?" is almost always the camera model."""
+        rot = getattr(self, "_rotation", None)
+        return "" if rot is None else rot.device
+
+    @property
+    def has_rotation(self) -> bool:
+        """True if a measured yaw-rate channel was built (a camera with a GYRO stream)."""
+        rot = getattr(self, "_rotation", None)
+        return bool(rot is not None and rot.has_data)
+
+    def yaw_rate_at_time(self, t: float) -> float | None:
+        """Measured body yaw rate (rad/s, + = turning LEFT) at media-clock time `t`, or None with
+        no channel. O(log n), the same shape as `g_at_time`."""
+        rot = getattr(self, "_rotation", None)
+        return None if rot is None else rot.at_time(t)
+
+    # ------------------------------------------------- the per-second GPS quality strip
+    @property
+    def quality_timeline(self):
+        """`data_quality.QualityTimeline` — GPS quality per SECOND of recording, on the media clock
+        the scrubber runs on. Empty (never None) on a Session built without a load."""
+        return getattr(self, "_quality_timeline", None) or data_quality.empty_timeline()
+
+    def lap_quality(self, lap_id: int) -> int | None:
+        """The quality class a lap INHERITS: the worst cell over its window, or None with no
+        timeline / no window.
+
+        Worst, not average — a lap with one second of rejected fixes in it is a lap with a hole in
+        it, and averaging that against the sixty good seconds around it is how a surface ends up
+        vouching for a lap it should be flagging. The same rule the strip's own pixel columns
+        use."""
+        tl = self.quality_timeline
+        if not len(tl):
+            return None
+        w = self.lap_window(lap_id)
+        return None if w is None else tl.worst_between(w[0], w[1])
 
     def delta_at_time(self, t: float) -> float | None:
         """Δ-to-best (seconds) at media-clock time `t`: how far ahead (−) / behind (+) the lap
