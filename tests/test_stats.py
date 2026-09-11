@@ -50,9 +50,16 @@ from _synthetic import bare_session, seed_cols  # noqa: E402
 _APP = themed_app()
 
 from studio.stats import (  # noqa: E402
+    LAT_G_BAND,
     MIN_KEPT_FRAC,
+    MIN_SPLIT_LAPS,
     MOVING_MS,
+    SPEED_BAND,
+    BandReport,
+    Bands,
     SessionStats,
+    band_edges,
+    band_seconds,
     best_consecutive_mean,
     brake_consistency,
     clock_hhmm,
@@ -61,11 +68,13 @@ from studio.stats import (  # noqa: E402
     envelope_g,
     in_windows_mask,
     moving_time_s,
+    pace_split,
     pace_stats,
     path_distance,
     path_distance_m,
     peak_g,
     phase_matrix,
+    sample_durations,
     sector_medians,
     straights_report,
     theil_sen_slope,
@@ -585,7 +594,11 @@ def _fake_stats_service(*, has_g=True, laps=True):
             gg_cloud=lambda max_points=4000: None, pace_trend=lambda: None,
             race_pace=lambda: None, pace_cov=lambda: None,
             laps_within_pct=lambda pct=1.0: (0, 0),
-            longest_coast_s=lambda: None, gg_envelope=lambda: None)
+            longest_coast_s=lambda: None, gg_envelope=lambda: None,
+            # Nothing to distribute with no lap: the DISTRIBUTIONS group hides itself on the
+            # same None the friction circle hides on.
+            speed_bands=lambda scale=1.0, width=SPEED_BAND: None,
+            lateral_g_bands=lambda width=LAT_G_BAND: None)
     rows = [
         LapStat(idx=0, time=70.0, vmax_kmh=95.0, avg_kmh=54.0, vmin_kmh=48.0,
                 peak_lat_g=1.4 if has_g else None, peak_brake_g=1.1 if has_g else None,
@@ -611,7 +624,30 @@ def _fake_stats_service(*, has_g=True, laps=True):
         laps_within_pct=lambda pct=1.0: (2, 2),
         longest_coast_s=lambda: (1.4 if has_g else None),
         gg_envelope=lambda: (1.55 if has_g else None),
+        # The DISTRIBUTIONS charts. `split` on, so the view has outlines to draw; the lateral
+        # report is None without an accelerometer, which is what hides that chart alone.
+        speed_bands=lambda scale=1.0, width=SPEED_BAND, split=True: _fake_bands(
+            np.arange(40.0, 65.1, width * scale), split=split),
+        lateral_g_bands=lambda width=LAT_G_BAND: (
+            _fake_bands(np.arange(-1.1, 1.11, width), split=True) if has_g else None),
     )
+
+
+def _fake_bands(edges, *, split=True, laps=9):
+    """A stats.BandReport over made-up edges — a triangular profile, and a fast group that
+    spends more of the lap at the top end (the shape the real fastest quartile has)."""
+    n = len(edges) - 1
+    base = np.linspace(1.0, 3.0, n)
+
+    def band(seconds, laps_n, median):
+        return Bands(edges=np.asarray(edges, float), seconds=np.asarray(seconds, float),
+                     laps=laps_n, lap_ids=tuple(range(laps_n)), median_lap_s=median)
+
+    if not split:
+        return BandReport(all=band(base, laps, 69.1), fast=None, slow=None)
+    return BandReport(all=band(base, laps, 69.1),
+                      fast=band(base * np.linspace(0.8, 1.2, n), 3, 68.2),
+                      slow=band(base * np.linspace(1.2, 0.8, n), 3, 70.4))
 
 
 def _fake_segment_bests(single_donor=False):
@@ -2735,6 +2771,264 @@ def test_digest_tooltip_reads_the_ideal_delta_instead_of_a_baked_range():
     assert "0.33" not in tip and "2.67" not in tip, ("a baked empirical range came back", tip)
     assert "here the ideal is" in tip, tip
     print("ok digest-tooltip: the ideal delta is read, not baked")
+
+
+# ------------------------------------------------------- the band distributions (histograms)
+def test_sample_durations_reconcile_with_the_span_and_skip_gaps():
+    """The weighting contract: a lap's per-sample durations must SUM to that lap's measured time,
+    less any dropout gap. That is why this is trapezoidal and moving_time_s is not — leading
+    attribution drops the last interval on the floor, which a threshold does not care about and a
+    distribution does (its bands would sum to 0.1 s under the lap on every recording)."""
+    t = np.array([0.0, 0.1, 0.2, 0.3])
+    w = sample_durations(t)
+    assert abs(w.sum() - 0.3) < 1e-12, w                 # the span, exactly
+    assert abs(w[0] - 0.05) < 1e-12 and abs(w[-1] - 0.05) < 1e-12   # ends take half a step
+    assert abs(w[1] - 0.1) < 1e-12                                  # interior takes a whole one
+    # A dropout gap belongs to NEITHER endpoint: nothing was measured across it.
+    gap = np.array([0.0, 0.1, 5.1, 5.2])
+    wg = sample_durations(gap)
+    assert abs(wg.sum() - 0.2) < 1e-12, wg               # 0.1 + 0.1, the 5 s step contributing 0
+    assert abs(wg[1] - 0.05) < 1e-12 and abs(wg[2] - 0.05) < 1e-12
+    # Degenerate inputs are shaped, not special-cased by callers.
+    assert list(sample_durations([1.0])) == [0.0]
+    assert len(sample_durations([])) == 0
+    print("ok sample_durations: sums to the span, gaps contribute to neither side")
+
+
+def test_band_edges_align_to_the_width_and_can_centre_on_zero():
+    e = band_edges([13.6, 90.4], 5.0)
+    assert e[0] == 10.0 and e[-1] >= 90.4                # aligned to the width, covering the data
+    assert all(abs(v % 5.0) < 1e-9 for v in e), e
+    # SIGNED: zero must be a band CENTRE, not a boundary — otherwise the fifth of the lap spent
+    # near zero splits into a fake "slightly left / slightly right" pair.
+    z = band_edges([-1.7, 1.86], 0.2, centre_on_zero=True)
+    centres = 0.5 * (z[:-1] + z[1:])
+    assert min(abs(centres)) < 1e-9, centres             # a band sits ON zero
+    assert abs(z[0] + z[-1]) < 1e-9, z                   # ...and the axis is symmetric about it
+    assert z[0] <= -1.7 and z[-1] >= 1.86
+    # An empty / all-NaN channel still returns a usable shape.
+    assert len(band_edges([], 5.0)) == 2
+    assert len(band_edges([np.nan, np.nan], 0.2, centre_on_zero=True)) == 2
+    print("ok band_edges: aligned, covering, and zero-centred when signed")
+
+
+def test_band_seconds_weighs_time_and_not_sample_count():
+    """THE discriminating test for the whole feature. Two speeds, one sample each — but one of
+    them stands for ten times as long. A sample-count histogram calls them equal; the honest
+    answer is 10:1, and it is the answer a driver is asking for."""
+    edges = np.array([0.0, 10.0, 20.0])
+    got = band_seconds([5.0, 15.0], [1.0, 10.0], edges)
+    assert list(got) == [1.0, 10.0], got
+    # Zero-weight and non-finite samples are dropped rather than counted as a band's worth of 0.
+    assert list(band_seconds([5.0, 15.0], [1.0, 0.0], edges)) == [1.0, 0.0]
+    assert list(band_seconds([np.nan, 15.0], [1.0, 2.0], edges)) == [0.0, 2.0]
+    assert list(band_seconds([], [], edges)) == [0.0, 0.0]
+    print("ok band_seconds: time-weighted, never a count")
+
+
+def test_pace_split_takes_quartiles_and_refuses_a_session_too_short_to_have_them():
+    ids = list(range(20))
+    times = [70.0 - 0.1 * i for i in ids]         # lap 19 fastest, lap 0 slowest
+    fast, slow = pace_split(ids, times)
+    assert len(fast) == len(slow) == 5, (fast, slow)          # 20 // 4
+    assert set(fast) == {15, 16, 17, 18, 19} and set(slow) == {0, 1, 2, 3, 4}
+    # The floor: never fewer than three a side, however few laps there are…
+    f8, s8 = pace_split(list(range(8)), [70.0 - i for i in range(8)])
+    assert len(f8) == len(s8) == 3
+    # …and below MIN_SPLIT_LAPS there is no comparison at all, rather than a two-lap "group"
+    # which is the single-pair defect the whole split exists to avoid.
+    assert pace_split(list(range(MIN_SPLIT_LAPS - 1)),
+                      [70.0 - i for i in range(MIN_SPLIT_LAPS - 1)]) is None
+    # Non-finite lap times are out of the count entirely, not sorted to one end.
+    assert pace_split(list(range(9)), [70.0] * 8 + [float("nan")]) is not None
+    assert pace_split(list(range(8)), [70.0] * 7 + [float("nan")]) is None
+    # Deterministic under ties: identical times break by lap id, so a refresh cannot swap sides.
+    tied = pace_split(list(range(12)), [70.0] * 12)
+    assert tied[0] == [0, 1, 2] and tied[1] == [9, 10, 11]
+    print("ok pace_split: quartiles, a three-lap floor, and a hard gate under it")
+
+
+def _band_service(*, laps=12, with_g=True):
+    """A SessionStats whose laps are synthetic but whose SHAPE is the real one: a 10 Hz speed
+    trace per lap and a 50 Hz g series on the media clock, faster laps spending more of the lap at
+    the top of both channels."""
+    n = 100                                   # ~10 Hz over ~10 s
+    lap_times, arrays, windows = {}, {}, {}
+    g_t, g_lat = [], []
+    for i in range(laps):
+        # lap 0 is the quickest and holds the highest speeds; each later lap is 0.1 s slower.
+        fast = 1.0 - i * 0.02
+        speed = 40.0 + 40.0 * fast * np.abs(np.sin(np.linspace(0, np.pi, n)))
+        lap_times[i] = 10.0 + 0.1 * i
+        # `elapsed` spans the LAP TIME, as a real lap's does (the materialized lap runs from the
+        # interpolated start crossing to the interpolated finish) — which is what makes the
+        # reconciliation assertion below a statement about the reducer and not about the fixture.
+        elapsed = np.linspace(0.0, lap_times[i], n)
+        arrays[i] = (np.cumsum(speed) / 36.0, speed, elapsed)
+        windows[i] = (i * 20.0, i * 20.0 + lap_times[i])
+        gt = np.arange(windows[i][0], windows[i][1], 0.02)
+        g_t.append(gt)
+        g_lat.append(1.2 * fast * np.sin(np.linspace(0, 4 * np.pi, len(gt))))
+    times = np.concatenate(g_t)
+    gm = (_fake_gmeter(times, np.concatenate(g_lat), np.zeros(len(times)))
+          if with_g else _fake_gmeter([], [], []))
+    return _service(gm=gm, valid=list(range(laps)), lap_times=lap_times,
+                    arrays=arrays, windows=windows)
+
+
+def test_speed_bands_are_seconds_per_lap_and_reconcile_with_the_lap():
+    st = _band_service()
+    rep = st.speed_bands()
+    assert rep is not None and rep.has_split
+    # THE RECONCILIATION: the bands of the average clean lap sum to the average clean LAP TIME,
+    # not to a sample count and not to a window.
+    mean_lap = float(np.mean([10.0 + 0.1 * i for i in range(12)]))
+    assert abs(rep.all.total_s - mean_lap) < 1e-9, (rep.all.total_s, mean_lap)
+    assert rep.all.laps == 12 and rep.fast.laps == 3 and rep.slow.laps == 3
+    assert rep.fast.median_lap_s < rep.slow.median_lap_s
+    # The fast group really is the fast one: it spends MORE of the lap in the top band.
+    assert rep.fast.seconds[-1] > rep.slow.seconds[-1]
+    # One set of edges across all three, or the outlines would not be over the bars.
+    assert rep.edges is rep.all.edges
+    assert np.array_equal(rep.fast.edges, rep.all.edges)
+    # The display unit is the binning unit: an mph page bins in mph, it does not relabel km/h.
+    mph = st.speed_bands(scale=0.621371, width=2.5)
+    assert mph.all.edges[-1] < rep.all.edges[-1]
+    assert abs(mph.all.total_s - rep.all.total_s) < 1e-9   # same driving, same seconds
+    assert rep.all.carrying() >= 5
+    print("ok speed_bands: s per lap, reconciled, split, and binned in the displayed unit")
+
+
+def test_lateral_g_bands_read_the_trusted_axis_and_vanish_without_one():
+    st = _band_service()
+    rep = st.lateral_g_bands()
+    assert rep is not None
+    centres = rep.all.centres
+    assert min(abs(centres)) < 1e-9, centres          # zero-centred (see band_edges)
+    # Reconciles with the lap to within ONE g sample (the 50 Hz grid does not land exactly on the
+    # lap's two ends), which is the same contract the speed chart holds to exactly.
+    mean_lap = float(np.mean([10.0 + 0.1 * i for i in range(12)]))
+    assert abs(rep.all.total_s - mean_lap) < 0.02, (rep.all.total_s, mean_lap)
+    # The g grid is uniform, so the bands still have to be TIME and not a count — same numbers
+    # here, but the type says which, and a resampled grid is exactly where the two diverge.
+    assert rep.all.seconds.sum() > 0
+    # No accelerometer -> no chart. Not a row of zeroes, not an empty report: None.
+    assert _band_service(with_g=False).lateral_g_bands() is None
+    print("ok lateral_g_bands: signed, zero-centred, None without an accelerometer")
+
+
+def test_band_reports_cache_per_argument_and_drop_on_re_segment():
+    st = _band_service()
+    a = st.speed_bands()
+    assert st.speed_bands() is a                       # cached
+    assert st.speed_bands(width=10.0) is not a         # …per argument, not per session
+    lat = st.lateral_g_bands()
+    st.invalidate()
+    assert st.speed_bands() is not a and st.lateral_g_bands() is not lat
+    print("ok band caches: keyed by argument, dropped by invalidate()")
+
+
+def test_a_band_chart_never_labels_a_tick_with_a_number_it_does_not_stand_on():
+    """The mph regression, pinned. The mph page bands at 2.5, so a three-band stride is a step of
+    7.5 — a step >= 1, which the first rule formatted with no decimals: the axis labelled the
+    22.5 mph gridline "22" and the 37.5 one "38"."""
+    _APP  # noqa: B018
+    from studio.stats_panel import _band_tick_step, _band_ticks
+
+    edges = np.arange(15.0, 55.1, 2.5)
+    ticks = _band_ticks(edges, _band_tick_step(edges))
+    for value, label in ticks:
+        assert abs(float(label) - value) < 1e-9, (value, label)
+    # …and the signed axis labels ZERO, which the edge-stride rule never did: the lateral bands'
+    # edges are at ±0.1, ±0.3, ±0.5 …, so no boundary of them is a round number or a zero.
+    lat = band_edges([-1.7, 1.86], LAT_G_BAND, centre_on_zero=True)
+    labels = [lab for _v, lab in _band_ticks(lat, _band_tick_step(lat, 0.5))]
+    assert "0" in labels, labels
+    assert "+1.0" in labels and "-1.0" in labels, labels
+    assert all(lab == "0" or lab[0] in "+-" for lab in labels), labels
+    print("ok band ticks: honest labels, and zero named on the signed axis")
+
+
+def test_stats_view_distribution_charts_render_and_disclose_their_channels():
+    _APP  # noqa: B018
+    from studio.stats_panel import StatsView
+
+    v = StatsView(_fake_view_session())
+    assert not v._bands_section.isHidden()
+    assert not v.speed_bands.isHidden() and not v.lat_bands.isHidden()
+    for chart in (v.speed_bands, v.lat_bands):
+        assert len(chart._bars.opts["height"]) > 0
+        assert chart._fast.opts["pen"] is not None and chart._slow.opts["pen"] is not None
+        # The outline is an OUTLINE of the histogram: pyqtgraph's centred step mode wants the
+        # band edges against the per-band values, n+1 against n.
+        assert len(chart._fast.xData) == len(chart._fast.yData) + 1
+    # The weighting is in the heading, where a reader takes the numbers off.
+    assert "s per lap" in v._bands_section.text()
+    note = v.bands_note.text()
+    assert "TIME" in note and "sample count" in note                    # the weighting, in words
+    assert "10 Hz" in note                                              # the speed channel's rate
+    assert "0.15 s" in note and "50 Hz" in note                         # …and the g channel's
+    assert "200 Hz" in note, "the sensor rate has to be named to be disowned"
+    assert "fastest 3" in note and "slowest 3" in note                  # the sample, named
+    assert "1:08.200" in note and "1:10.400" in note                    # …with its lap times
+    # The refutation belongs on the surface a reader would otherwise ask best-vs-median of.
+    assert "best lap" in v._bands_section.toolTip()
+    assert "median lap" in v._bands_section.toolTip()
+    print("ok distributions: bars + outlines drawn, weighting/rate/window/sample all stated")
+
+
+def test_stats_view_distributions_degrade_one_rung_at_a_time():
+    _APP  # noqa: B018
+    from studio.stats_panel import StatsView
+
+    # 1. No accelerometer: the lateral chart goes, the speed chart stays, and the note stops
+    #    describing a filter belonging to a chart that is not on screen.
+    no_g = StatsView(_fake_view_session(has_g=False))
+    assert not no_g._bands_section.isHidden() and not no_g.speed_bands.isHidden()
+    assert no_g.lat_bands.isHidden()
+    assert "10 Hz" in no_g.bands_note.text()
+    assert "accelerometer" not in no_g.bands_note.text(), no_g.bands_note.text()
+
+    # 2. Too few clean laps for a quartile split: the bars stay, both outlines are CLEARED (a
+    #    stale outline over a session that has no comparison is worse than none), and the note
+    #    says how many laps a comparison needs.
+    sess = _fake_view_session()
+    sess.stats.speed_bands = lambda scale=1.0, width=SPEED_BAND: _fake_bands(
+        np.arange(40.0, 65.1, 5.0), split=False, laps=5)
+    sess.stats.lateral_g_bands = lambda width=LAT_G_BAND: _fake_bands(
+        np.arange(-1.1, 1.11, LAT_G_BAND), split=False, laps=5)
+    short = StatsView(sess)
+    assert not short.speed_bands.isHidden()
+    for chart in (short.speed_bands, short.lat_bands):
+        assert chart._fast.opts["pen"] is None
+        assert chart._fast.xData is None or chart._fast.xData.size == 0
+    assert "5 clean laps" in short.bands_note.text()
+    assert f"{MIN_SPLIT_LAPS} laps" in short.bands_note.text(), short.bands_note.text()
+
+    # 3. No lap at all: the whole group goes, heading and note with it — nothing here is a
+    #    whole-recording total, so there is nothing left to draw.
+    empty = StatsView(_fake_view_session(laps=False))
+    assert empty._bands_section.isHidden()
+    assert empty.speed_bands.isHidden() and empty.lat_bands.isHidden()
+    assert not empty.bands_note.isVisible() and empty.bands_note.text() == ""
+    print("ok distributions degrade: no g -> one chart, few laps -> no outlines, no laps -> none")
+
+
+def test_stats_view_distribution_charts_fit_their_column_at_every_pane():
+    """Same contract as the friction circle's: a chart that pins itself wider than its column is
+    the one thing on this page a horizontal scroll cannot help you read."""
+    _APP  # noqa: B018
+    from studio.stats_panel import StatsView
+
+    v = StatsView(_fake_view_session())
+    for w, h in ((503, 700), (845, 414), (1440, 900), (1900, 1200)):
+        v.resize(w, h)
+        v.show()
+        _APP.processEvents()
+        for chart in (v.speed_bands, v.lat_bands):
+            assert chart.width() <= v.width(), (w, chart.width(), v.width())
+            assert chart.width() > 0
+    print("ok distributions: both charts inside the pane from 845x414 up")
 
 
 if __name__ == "__main__":
