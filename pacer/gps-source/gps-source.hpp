@@ -128,8 +128,25 @@ public:
   // Time span of the chunk under the cursor.
   virtual auto CurrentTimeSpan() const -> std::pair<double, double> = 0;
 
-  // Total media duration.
+  // Total duration of the stream this source READS — for a GPMF source that is
+  // the metadata track, which is what the payload cursor is bounded by.
   virtual double GetTotalDuration() const = 0;
+
+  // Duration of the VIDEO track: where the NEXT chapter's picture begins, and
+  // therefore the only correct amount to shift a following chapter by.
+  //
+  // It is a SEPARATE question from GetTotalDuration() because the two tracks
+  // are separate tracks. GoPro's own contract is that a chapter's metadata
+  // length matches its video length EXCEPT in the last chapter of a recording,
+  // where the GPMF track ends on its own payload grid — measured on the ten
+  // GoPro sample clips in 3rdparty/gpmf-parser/samples, that exception runs
+  // from -0.701 s (hero7) to +0.934 s (karma), i.e. up to a whole payload. A
+  // chain that shifts by the metadata length therefore rides ~1 s of phantom
+  // offset the moment a chapter exercises it, and the shift belongs to the
+  // picture regardless. The default answers with GetTotalDuration() so a source
+  // with no video track of its own (a test double, a Python subclass) behaves
+  // exactly as it did before this existed.
+  virtual double GetVideoDuration() const { return GetTotalDuration(); }
 };
 
 // A RawGPSSource backed by the GPMF metadata track of an MP4 container: opens
@@ -160,6 +177,7 @@ public:
   bool IsEnd() override;
   std::pair<double, double> CurrentTimeSpan() const override;
   double GetTotalDuration() const override;
+  double GetVideoDuration() const override;
 
 private:
   // Walk one fixed-width GPMF stream (<= 4 elements per sample) over every
@@ -179,9 +197,17 @@ private:
 };
 
 // Concatenates two sources end to end (chapter chaining): the right child's
-// timeline is shifted by the left child's duration so the pair reads as one
-// continuous recording. `left` may itself be a SequentialGPSSource, so chains
-// of any length nest.
+// timeline is shifted by the left child's VIDEO duration so the pair reads as
+// one continuous recording. `left` may itself be a SequentialGPSSource, so
+// chains of any length nest.
+//
+// THE SHIFT IS THE VIDEO'S, NOT THE METADATA TRACK'S. The right child's payload
+// times are local to its own file and everything downstream (lap timing, the
+// chapter offset table, the export's ffmpeg seek, the player's source switch)
+// reads them as positions in the recording's PICTURE. Chapter k+1's picture
+// starts at the end of chapter k's picture, so that is the offset; shifting by
+// chapter k's GPMF length instead silently rides the difference between the two
+// tracks, which on GoPro's own sample clips reaches 0.9 s.
 class SequentialGPSSource : public RawGPSSource {
 public:
   SequentialGPSSource(RawGPSSource *left, RawGPSSource *right)
@@ -190,6 +216,7 @@ public:
   virtual ~SequentialGPSSource() override = default;
 
   double GetTotalDuration() const override;
+  double GetVideoDuration() const override;
   bool IsEnd() override;
 
   uint32_t ReadSamples(
@@ -212,15 +239,15 @@ public:
 
 private:
   // Read one IMU stream from both children, offsetting the right child's
-  // samples by the left subtree's duration so they share one global media
-  // clock. `read` is the member reader to invoke
+  // samples by the left subtree's VIDEO duration so they share one global
+  // media clock. `read` is the member reader to invoke
   // (ReadAccl/ReadGyro/ReadGrav/ReadCori) and `S` the sample type, which must
   // have a `.time`. Going through `read`
   // lets a nested SequentialGPSSource on the left recurse correctly.
   template <class S, class Read>
   void ReadShifted(Read read, const std::function<void(S)> &on_sample) {
     (left_->*read)(on_sample);
-    double off = left_->GetTotalDuration();
+    double off = left_->GetVideoDuration();
     (right_->*read)([&](S s) {
       s.time += off;
       on_sample(s);
