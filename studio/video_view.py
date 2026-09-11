@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
@@ -58,7 +59,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chapters, gmeter_overlay, theme
+from . import chapters, data_quality, gmeter_overlay, theme
+from ._signal import fmt_hms
 from .player_pane import PlayerPane
 from .widgets import PanelToolbar, ToggleButton, icon_button
 
@@ -313,6 +315,201 @@ class _LapRulerSlider(QSlider):
         bars(plan["major"], self._MAJOR_H, theme.C.text_dim, 0.85)
         if plan["current"] is not None:
             bars(plan["current"], self._BRACKET_H, theme.C.accent, 1.0, width=2)
+        painter.end()
+
+
+class _QualityStrip(QWidget):
+    """A continuous band of GPS quality under the scrub bar — the app's first LOCATABLE data-trust
+    surface.
+
+    WHAT IT ADDS TO A CARD THAT ALREADY SAYS THIS. The Stats page's DATA TRUST card gives one
+    verdict for a whole recording ("1 % of moving fixes rejected"), and one verdict cannot answer
+    the question a driver actually asks, which is WHERE. Measured on the owner's own 0062 trio: all
+    482 rejected fixes fall inside the first 48.2 seconds, before the kart has moved — a receiver
+    acquiring a lock, not a receiver failing. The same percentage scattered through the session
+    would be a different fact and the card would print the same sentence for it. Here they are
+    different pictures: a red block at the head of the bar against red flecks through the middle of
+    it.
+
+    IT SHARES THE SLIDER'S TRAVEL, not its own width. Every x here comes from
+    `_LapRulerSlider._travel()` — the same groove rect and handle geometry the ruler ticks and the
+    playhead are placed with — so a cell sits under the instant it grades, rather than under an
+    approximation of it that drifts by half a handle at the ends. It follows the slider's RANGE
+    too, so entering compare (which re-ranges the bar from the session to one lap) re-scales the
+    strip to that lap for free.
+
+    WORST-WINS, EVERYWHERE. A pixel column covers ~6 seconds on a 2,900 s recording at the app's
+    default width, and it paints the worst of them. Averaging would let the one bad second vanish
+    into the five good ones either side — which is the whole defect, since a strip that can lose a
+    dropout is a strip that vouches for one. `Session.lap_quality` folds a lap's cells the same
+    way, so "a lap inherits its worst cell" is one rule with one implementation.
+
+    THE HONEST DEGRADED STATE. A GPS5-era camera writes no per-sample fix type and no DOP at all
+    (`data_quality.UNREPORTED`), and the one thing this surface must never do is paint a confident
+    green over a stream that carries nothing to be confident about. Such a recording gets a
+    NEUTRAL band and a tooltip saying the camera does not report it — visibly a different state
+    from "good", not a quieter version of it.
+
+    Not a click target: the seek bar one sub-step above is, and a second interactive band inside
+    the same gesture zone would fight it. This one is read, and hovered."""
+
+    #: The painted band's own height, and the widget's. `SPACE_XS` is the scale's floor for a
+    #: thing that has to read as separate; the SPACE_XXS gap above it is the sub-step for a gap
+    #: WITHIN one element ("a bar and its own segments" — theme.py's own words), which is what the
+    #: strip and the groove are.
+    INK_H = theme.SPACE_XS
+
+    def __init__(self, slider: _LapRulerSlider, parent=None):
+        super().__init__(parent)
+        self._slider = slider
+        self._timeline = data_quality.empty_timeline()
+        self.setFixedHeight(self.INK_H)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMouseTracking(True)   # the hover readout is the exact-numbers half of the surface
+        # The strip is a function of the slider's RANGE and of its width — both move under it (a
+        # chapter's duration arrives as it loads, entering compare re-ranges the bar to one lap,
+        # the panel is dragged) and neither sends this widget a paint event of its own.
+        slider.rangeChanged.connect(lambda *_: self.update())
+        self._refresh_tooltip()
+
+    def set_timeline(self, timeline) -> None:
+        """Adopt a `data_quality.QualityTimeline` (None / empty clears the band)."""
+        self._timeline = timeline if timeline is not None else data_quality.empty_timeline()
+        self._refresh_tooltip()
+        self.update()
+
+    @property
+    def timeline(self):
+        return self._timeline
+
+    def has_data(self) -> bool:
+        return bool(len(self._timeline))
+
+    # ------------------------------------------------------------------ geometry (the slider's)
+    def _span_s(self) -> tuple[float, float]:
+        """The (t0, t1) seconds the bar above currently spans — the slider's own ms range, so
+        compare mode's one-lap confinement re-scales this strip with it."""
+        return self._slider.minimum() / 1000.0, self._slider.maximum() / 1000.0
+
+    def runs(self) -> list[tuple[int, int, int]]:
+        """What `paintEvent` will draw, as `(x, width, class)` runs in THIS widget's coordinates —
+        the single source for the painting, the hover and the regression test.
+
+        One column per pixel of slider travel, each folded WORST-FIRST over the cells it covers,
+        then equal neighbours merged into runs (a 500 px bar over 2,925 one-second cells is 500
+        `drawRect`s at most, and usually a handful). Columns outside the timeline are omitted
+        entirely rather than painted a colour, so a recording shorter than the video leaves the
+        bar empty there instead of extending its last class over the gap."""
+        tl = self._timeline
+        n = len(tl)
+        t0, t1 = self._span_s()
+        x0, span, _handle = self._slider._travel()
+        if n == 0 or span <= 0 or t1 <= t0:
+            return []
+        starts = t0 + (t1 - t0) * np.arange(span, dtype=float) / span
+        # `minimum.reduceat` over the per-column START cell: segment i runs [lo[i], lo[i+1]), and
+        # where two columns land in the SAME cell (a bar spanning one lap is ~7 px per second)
+        # numpy's documented degenerate case returns that one cell — exactly the value wanted.
+        lo = np.clip((starts / tl.cell_s).astype(np.int64), 0, n - 1)
+        worst = np.minimum.reduceat(tl.cls, lo).astype(np.int64)
+        worst[(starts < 0.0) | (starts >= tl.span_s)] = -1     # no timeline here: paint nothing
+        out: list[tuple[int, int, int]] = []
+        edges = np.flatnonzero(np.diff(worst)) + 1
+        for a, b in zip(np.r_[0, edges], np.r_[edges, span], strict=True):
+            cls = int(worst[a])
+            if cls >= 0:
+                out.append((int(x0 + a), int(b - a), cls))
+        return out
+
+    @staticmethod
+    def class_colour(cls: int) -> str | None:
+        """The band colour for one class, or None for NO_FIX — which is drawn as a HOLE in the bar
+        rather than a colour of its own. A gap reads as "nothing was recorded here" on sight, and
+        it is the one state where that is exactly right; giving it a hue would make it compete with
+        the two states that are verdicts.
+
+        Every hue is an ACCESSOR call, resolved at paint: the strip follows the colour-blind
+        palette like every other semantic surface. Measured separation between the three verdict
+        colours under a severity-1.0 deuteranopia simulation is CIE76 dE 20.3 at worst (standard
+        palette) and 62.5 at worst (colour-blind) against a ~2.3 JND — see
+        tests/test_quality_strip.py."""
+        if cls == data_quality.GOOD:
+            return theme.ahead_colour()
+        if cls == data_quality.MODERATE:
+            return theme.ramp_mid_colour()
+        if cls == data_quality.POOR:
+            return theme.behind_colour()
+        if cls == data_quality.UNREPORTED:
+            return theme.C.text_dim      # a NEUTRAL, deliberately not a verdict hue
+        return None
+
+    # ------------------------------------------------------------------------ hover + tooltip
+    def describe_at(self, x: int) -> str:
+        """The hover line for a pixel: the class WORD first, then the numbers behind it.
+
+        The word leads because the GNSS convention is that a non-expert acts on the class and an
+        expert checks the DOP — printing "DOP 8.2" alone tells most drivers nothing, and printing
+        "Moderate" alone tells the one who knows what DOP is less than they need."""
+        tl = self._timeline
+        if not len(tl):
+            return ""
+        t0, t1 = self._span_s()
+        x0, span, _handle = self._slider._travel()
+        if span <= 0 or t1 <= t0:
+            return ""
+        px = min(max(int(x) - x0, 0), span - 1)
+        a = t0 + (t1 - t0) * px / span
+        b = t0 + (t1 - t0) * (px + 1) / span
+        if a < 0 or a >= tl.span_s:
+            return ""
+        st = tl.stats_between(a, min(b, tl.span_s))
+        if st is None:
+            return ""
+        cls = st["cls"]
+        head = (f"{fmt_hms(st['t0'])}–{fmt_hms(st['t1'])} · {data_quality.QUALITY_LABEL[cls]}"
+                f" — {data_quality.QUALITY_MEANING[cls]}")
+        if cls == data_quality.NO_FIX:
+            return head
+        if cls == data_quality.UNREPORTED:
+            return f"{head} ({st['n']} fixes)"
+        bits = [f"{st['n']} fixes"]
+        if np.isfinite(st["dop"]):
+            bits.append(f"worst DOP {st['dop']:.1f}")
+        bits.append(f"{st['dropped']} rejected" if st["dropped"] else "none rejected")
+        return f"{head} · " + " · ".join(bits)
+
+    def _refresh_tooltip(self) -> None:
+        """The resting tooltip — what the band IS, plus this recording's own one-line verdict. The
+        per-pixel numbers replace it on hover and it comes back on leave."""
+        tl = self._timeline
+        if not len(tl):
+            self.setToolTip("")
+            return
+        self.setToolTip("GPS quality, one cell per second of recording — hover for the numbers.\n"
+                        + tl.summary())
+        self.setAccessibleDescription(tl.summary())
+
+    def mouseMoveEvent(self, ev):
+        text = self.describe_at(int(ev.position().x()))
+        if text and text != self.toolTip():
+            self.setToolTip(text)
+        super().mouseMoveEvent(ev)
+
+    def leaveEvent(self, ev):
+        self._refresh_tooltip()
+        super().leaveEvent(ev)
+
+    def paintEvent(self, ev):
+        runs = self.runs()
+        if not runs:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setPen(Qt.NoPen)
+        for x, w, cls in runs:
+            colour = self.class_colour(cls)
+            if colour is not None:
+                painter.fillRect(x, 0, w, self.INK_H, QColor(colour))
         painter.end()
 
 
@@ -847,12 +1044,21 @@ class VideoView(QWidget):
         # and set anyway, because the day this becomes a subclass it silently stops painting and
         # nothing says so. That is how four panel headers and both toolbars went flat in #185.
         self.scrub_row.setAttribute(Qt.WA_StyledBackground, True)
-        self.scrub_row.setFixedHeight(theme.TOOLBAR_H)
-        scrub_lay = QHBoxLayout(self.scrub_row)
+        # …and it is a two-band row now: the groove, then the GPS-quality strip under it. The strip
+        # belongs INSIDE this bar rather than beside it — it grades the very axis the groove seeks
+        # along, and a band of its own would put a hairline between a thing and its own annotation.
+        # SPACE_XXS between them is the scale's WITHIN-one-element step (theme.py: "a bar and its
+        # own segments"); the row pays for exactly that plus the strip's own ink.
+        self.scrub_row.setFixedHeight(theme.TOOLBAR_H + theme.SPACE_XXS + _QualityStrip.INK_H)
+        scrub_lay = QVBoxLayout(self.scrub_row)
         scrub_lay.setContentsMargins(theme.SPACE_S, theme.SPACE_XXS,
                                      theme.SPACE_S, theme.SPACE_XXS)
-        scrub_lay.setSpacing(0)
-        scrub_lay.addWidget(self.slider, 1, Qt.AlignVCenter)
+        scrub_lay.setSpacing(theme.SPACE_XXS)
+        scrub_lay.addWidget(self.slider)
+        # Built with the slider, not fed one: every x it paints comes from that slider's own travel
+        # geometry, so the two can never disagree about where a second of recording is.
+        self.quality_strip = _QualityStrip(self.slider)
+        scrub_lay.addWidget(self.quality_strip)
 
         # The transport, as ONE PanelToolbar with TWO GROUPS around its stretch. Shipped, the five
         # buttons sat at a uniform SPACE_XS in a bare layout at x=0 on the window canvas, so two
@@ -993,6 +1199,10 @@ class VideoView(QWidget):
         range changes. Shown only in single-video mode (cleared in compare; see _apply_lap_ticks)."""
         self._lap_boundaries_s = list(boundaries_s)
         self._apply_lap_ticks()
+
+    def set_quality_timeline(self, timeline) -> None:
+        """Feed the scrub bar's GPS-quality strip (`data_quality.QualityTimeline`, or None)."""
+        self.quality_strip.set_timeline(timeline)
 
     def _apply_lap_ticks(self) -> None:
         """(Re)push the stored lap boundaries onto the slider as ms ticks — but only in single-video
