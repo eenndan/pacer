@@ -335,7 +335,7 @@ LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s",
 # and the face needs 56 px for "Med loss", 104 px for "…vs best" and 148 px for "…vs best corner",
 # while the header already asks for 800 px inside a 636 px viewport — so both longer labels elide
 # to a "Med loss vs…" that names nothing. The baseline is named where there IS room: the caption
-# under the table (`CORNERS_NOTE`) and the table tooltip.
+# under the table (built by `_corners_note_text`) and the table tooltip.
 #: The Best column's index — the one cell in this table the provenance inspector can explain
 #: (see StatsView._on_corner_context_menu). Derived from the list below rather than typed, so a
 #: column inserted before it moves the menu with it.

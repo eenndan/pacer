@@ -11,7 +11,7 @@ overlay-video flow — the options picker, the size estimate, the worker, the pr
 failure table and the completion card.
 
 WHAT IT DOES NOT OWN: the writers themselves (`export_data.py` is Qt-free by contract), the
-renderer (`export_video.py`), and the window's own chrome. `_grab_png` lives here because the two
+renderer (`export_video.py`), and the window's own chrome. `grab_png` lives here because the two
 map-grab helpers that use it are export-only callers.
 
 TWO DELIBERATE SHAPES, both to keep the import one-way (app -> controller, never back):
