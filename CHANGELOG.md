@@ -148,6 +148,15 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **Video seeks drifted further from the picture the longer the recording ran.** Pacer times laps
+  on the camera's GPS clock and the video plays on the camera's media clock; those are two clocks,
+  and the media one runs about 27 ppm fast. Every seek — jump to the best lap, drag the scrub, or
+  export a lap — handed the video a GPS time as though it were a media time, so the picture arrived
+  progressively early: measured on the two D24 recordings, ~0.03 s at the first lap and up to
+  0.17 s at the last, which is five frames at the export's default 30 fps and ten at the GoPro's
+  59.94. The two clocks are now converted between at the seek, so a lap starts on the frame it
+  starts on wherever it sits in the recording. **Lap times themselves are untouched** — they are
+  still measured on the GPS clock the transponder validated, bit for bit.
 - **A chapter was placed at the end of the previous chapter's *telemetry*, not its picture.** Those
   are two different tracks: on GoPro's own sample clips a chapter's GPMF track misses its video
   length by anything from −0.70 s (hero7) to +0.93 s (karma), so every offset after such a chapter
