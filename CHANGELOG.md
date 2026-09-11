@@ -32,6 +32,21 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   count is zero on every recording the owner has, and the Stats page used to answer that by hiding
   the whole SECTORS group — so two surfaces existed and were never once seen or named. The heading
   now stands with one line saying what sector lines unlock and which control places them.
+- **A focus list that carries across sessions — and refuses to grade itself when it cannot.** Pick
+  up to three corners off the coaching page and pacer keeps them per track; next time you load a
+  session at that track it measures the same stretch of tarmac again and says whether it moved:
+  *"C4 — 0.30 s faster than 23 May (4.54 s on 23 May over 38 laps, 4.24 s today over 65)."* The
+  corner it re-measures is a stored stretch of the lap, not a corner number, because the corner
+  detector redraws its windows every session — on the two recordings this was built against, one
+  corner's window grew 11 m between them and would have reported half a second of slowness nobody
+  drove. And the verdict is gated on the same evidence the rest of the app uses: a change smaller
+  than the corner's own lap-to-lap spread reads *"no change you can act on"*, and if either session
+  has no session record — or the two records say the days were not alike — you get the reason
+  instead of a number, because a coach will put up to four seconds a lap on conditions alone. On
+  the only two real sessions available (the same driver, the same track, a day apart) the honest
+  answer for all three corners is that there is not enough evidence to say, and that is what it
+  says.
+
 - **Any of three numbers can now show its work.** Right-click a lap time or a sector split in
   the lap table, or a corner's Best in the Stats page's CORNERS table, and *Inspect this number…*
   opens the evidence: every raw GPS fix that produced it, the method in one sentence, N and the

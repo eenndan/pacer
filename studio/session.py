@@ -31,6 +31,7 @@ from . import (
     cross_reference,
     data_quality,
     driving_channels,
+    focus,
     gapfill,
     gmeter,
     library,
@@ -2577,6 +2578,87 @@ class Session:
             return {}
         return coaching.brake_habits([c.cid for c in corner_list], rows)
 
+    # ------------------------------------------------------- the focus list (the training loop)
+    def focus_samples(self, windows) -> list[focus.CornerSample | None]:
+        """Per (enter_frac, exit_frac) window, this session's median / IQR / lap count over the
+        CLEAN laps — the one measurement both halves of a cross-session comparison go through.
+
+        The window is a FRACTION of the lap odometer, not metres and not a corner id, because the
+        corner partition is re-derived per session: between the two D24 recordings C8's own window
+        grew 45.0 m → 56.3 m and with it its own-window median time by +0.550 s, none of which the
+        driver did (studio/focus.py). Measured over one stored window instead, the same corner is
+        +0.042 s. Each lap projects the fractions onto its own total, exactly as `lap_corner_stats`
+        projects a corner window, and the seconds come off that lap's own elapsed clock."""
+        laps = []
+        for lid in self.consistency_lap_ids():
+            dist, _speed_kmh, elapsed = self._lap_arrays(lid)
+            if dist is not None and elapsed is not None:
+                laps.append((dist, elapsed))
+        return [focus.sample_window(t) for t in focus.window_times(windows, laps)]
+
+    def focus_items(self, cids: list[int], entry: dict) -> list[focus.FocusItem]:
+        """Promote `cids` (corner ids of THIS session) into persistable focus items.
+
+        `entry` is this recording's library entry (`library_entry`) — the identity + trust facts
+        come from there so the focus store, the library row and the session record all key off one
+        definition of "which recording is this". The baseline numbers are measured HERE, by
+        `focus_samples`, so the stored median is the same statistic the next session will produce
+        for the same window rather than the corner service's differently-projected one (the two
+        run 0.01–0.07 s apart on the D24 laps, which is the size of the thing being compared).
+
+        Corners with no usable window, or no clean lap through it, are dropped rather than stored
+        with a fabricated baseline — the whole point of the item is the number it carries."""
+        by_cid = {c.cid: c for c in self.corners.corner_list()}
+        basis = self.corners.basis()
+        total = float(basis[1]) if basis is not None else 0.0
+        rows = {r.cid: r for r in self.coaching_opportunities().rows}
+        chosen = [by_cid[cid] for cid in cids if cid in by_cid]
+        if not chosen or total <= 0:
+            return []
+        windows = [(c.enter / total, c.exit / total) for c in chosen]
+        samples = self.focus_samples(windows)
+        items: list[focus.FocusItem] = []
+        for c, (f0, f1), sample in zip(chosen, windows, samples, strict=False):
+            if sample is None:
+                continue
+            row = rows.get(c.cid)
+            items.append(focus.FocusItem(
+                cid=int(c.cid), direction=int(c.direction), enter_frac=float(f0),
+                exit_frac=float(f1), median_s=sample.median, iqr_s=sample.iqr,
+                n_laps=sample.n_laps,
+                time_lost=float(row.time_lost) if row is not None else 0.0,
+                reason=row.reason.kind if row is not None else coaching.REASON_NONE,
+                reach=row.evidence.reach if row is not None else coaching.REACH_UNKNOWN,
+                fingerprint=str(entry.get("fingerprint") or ""), date=entry.get("date"),
+                lap_total=total, verified=bool(entry.get("verified", False)),
+                degraded=bool(entry.get("degraded", False))))
+        return items[:focus.MAX_ITEMS]
+
+    def focus_report(self, items: list[focus.FocusItem], entry: dict,
+                     records: dict | None = None,
+                     list_track: str | None = None) -> focus.Report:
+        """Re-measure every stored focus item on THIS session and hand back the gated verdict.
+
+        `records` is the loaded session-record store (`session_record.load()`), which is what the
+        like-for-like gate reads: PR #258's rule is that a comparison with no record on either side
+        is not known to be like-for-like, and this feature says so instead of staying silent. The
+        gating itself is `focus.verdict` — pure, so the refusals are unit-testable without a
+        recording."""
+        if not items:
+            return focus.Report(track=list_track or entry.get("track"))
+        samples = self.focus_samples([(i.enter_frac, i.exit_frac) for i in items])
+        store = records if records is not None else {}
+        now_fp = str(entry.get("fingerprint") or "")
+        now_ctx = {
+            "list_track": list_track or entry.get("track"),
+            "track": entry.get("track"),
+            "fingerprint": now_fp,
+            "date": entry.get("date"),
+            "lap_total": float(self.corners.basis()[1]) if self.corners.basis() else 0.0,
+            "verified": bool(entry.get("verified", False)),
+            "degraded": bool(entry.get("degraded", False)),
+        }
+        return focus.verdict(items, now_ctx, samples, store)
 
     # Driving channels (brake/coast/grip + thresholds, F5/D3/D4/D5) are the `session.driving`
     # service (studio/driving_channels.py); per-lap caches clear on re-segment, the thresholds

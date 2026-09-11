@@ -53,6 +53,7 @@ from . import (
     chapters,
     data_quality,
     demo,
+    focus,
     library,
     prefs,
     session_record,
@@ -1674,6 +1675,14 @@ class StudioWindow(QMainWindow):
         # up with, over the lap times they qualify. Every load, because the view is rebuilt per
         # load and the chip belongs to the view.
         self._update_record_chip()
+        # The focus list (the training loop): the corners the driver promoted at this track, and
+        # what THIS session is allowed to say about them. The panel asks, the window writes — it
+        # owns the app-support stores.
+        panel = getattr(self.view, "opportunities", None)
+        if panel is not None:
+            panel.focus_add_requested.connect(self._focus_add)
+            panel.focus_remove_requested.connect(self._focus_remove)
+        self._update_focus_list()
 
     def _build_ui_guarded(self, stage: str) -> Exception | None:
         """_build_ui with the ONE guarantee the loading card needs: a raise cannot strand the window
@@ -2642,6 +2651,100 @@ class StudioWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001 — never let the chip break a load
             print(f"studio: session-record chip not updated ({exc!r}).", flush=True)
 
+    # ------------------------------------------------------ the focus list (the training loop)
+    @staticmethod
+    def _load_focus() -> dict:
+        """The focus store, guarded — ``focus.load`` already self-heals every corruption it can
+        name, and a read that still fails must leave the app usable."""
+        try:
+            return focus.load()
+        except Exception:  # noqa: BLE001 — a store read must never raise into the UI
+            _log.exception("focus list not read")
+            return focus.empty_store()
+
+    def _update_focus_list(self) -> None:
+        """Push the focus list + THIS session's verdict on it onto the Coaching page.
+
+        The whole point of the feature is the gate, so the report is built even when it can say
+        nothing: ``focus.verdict`` returns the refusals ("no session record for 23 May, so nothing
+        says the two days were comparable") and the page states them. An empty report is the
+        invitation state. Fully guarded — a training-loop read must never disrupt a load."""
+        panel = getattr(getattr(self, "view", None), "opportunities", None)
+        if panel is None or not hasattr(panel, "set_focus_report"):
+            return
+        try:
+            entry = self._current_library_entry() or {}
+            track = entry.get("track")
+            if not track:
+                # No detected track: there is nowhere to keep a per-track list, so the block stays
+                # dormant rather than inviting the driver into an offer the app cannot honour.
+                panel.set_focus_report(None)
+                return
+            items = focus.for_track(self._load_focus(), track)
+            panel.set_focus_report(
+                self.session.focus_report(items, entry, self._load_records(), track))
+        except Exception as exc:  # noqa: BLE001 — never let the focus block break a load
+            print(f"studio: focus list not updated ({exc!r}).", flush=True)
+
+    def _focus_add(self, cid: int) -> None:
+        """Promote corner `cid` of the loaded recording onto this track's focus list.
+
+        The baseline is measured HERE, now, over this session's clean laps (``Session.focus_items``)
+        and stored as a lap-FRACTION window: the corner partition is re-derived per session, so a
+        corner id alone would have compared two different stretches of track next time (measured:
+        C8's window grew 11.2 m between the two D24 recordings, worth +0.550 s of imaginary
+        slowness). An untracked session cannot hold a list at all — the list is per track."""
+        entry = self._current_library_entry() or {}
+        track = entry.get("track")
+        if not track:
+            self._focus_failed("this recording has no detected track, so there is nowhere to keep "
+                               "a focus list (File ▸ Save as track… names it)")
+            return
+        try:
+            store = self._load_focus()
+            items = focus.for_track(store, track)
+            if any(i.cid == int(cid) for i in items) or len(items) >= focus.MAX_ITEMS:
+                return
+            added = self.session.focus_items([int(cid)], entry)
+            if not added:
+                self._focus_failed(f"C{cid} could not be measured on this session's clean laps")
+                return
+            focus.save_for_track(track, items + added)
+        except OSError as exc:
+            self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})")
+            return
+        except Exception as exc:  # noqa: BLE001 — a promotion must never raise into the UI
+            _log.exception("focus list not updated")
+            self._focus_failed(f"the focus list could not be updated ({exc!r})")
+            return
+        self._update_focus_list()
+
+    def _focus_remove(self, cid: int) -> None:
+        """Drop corner `cid` from this track's focus list (and the row entirely when it empties)."""
+        entry = self._current_library_entry() or {}
+        track = entry.get("track")
+        if not track:
+            return
+        try:
+            items = [i for i in focus.for_track(self._load_focus(), track) if i.cid != int(cid)]
+            focus.save_for_track(track, items)
+        except OSError as exc:
+            self._focus_failed(f"the focus list could not be saved ({exc.strerror or exc})")
+            return
+        except Exception as exc:  # noqa: BLE001
+            _log.exception("focus list not updated")
+            self._focus_failed(f"the focus list could not be updated ({exc!r})")
+            return
+        self._update_focus_list()
+
+    def _focus_failed(self, why: str) -> None:
+        """Say why a focus-list gesture did nothing, on the status bar the app already uses for its
+        untimed notices — a button that silently does nothing is the worst of the three outcomes."""
+        print(f"studio: focus list — {why}.", flush=True)
+        bar = self.statusBar()
+        if bar is not None:
+            bar.showMessage(f"Focus list: {why}.", STATUS_MS)
+
     def _refresh_library_entry(self):
         """Re-write the loaded recording's library entry from the session AS IT NOW STANDS.
 
@@ -2679,6 +2782,9 @@ class StudioWindow(QMainWindow):
             self._apply_session_notice()   # this path runs on a drag, long after the load notice
         except Exception:  # noqa: BLE001 — the index is additive; never break the session
             _log.exception("session library entry not refreshed (not a write failure)")
+        # A drag re-times every lap, so every focus measurement taken over this session is stale —
+        # and it can also CONFIRM the start line, which is one of the gates the verdict reads.
+        self._update_focus_list()
 
     def _show_pb_moment(self, moment: dict):
         """Show the transient "new personal best!" toast for a ``library.pb_moment`` result. Fully

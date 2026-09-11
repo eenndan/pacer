@@ -374,6 +374,20 @@ add_test(NAME test_coaching
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_coaching.py)
 set_tests_properties(test_coaching PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The FOCUS LIST (studio.focus) — the cross-session training loop and, mostly, the gate that
+# decides whether it may say anything: the lap-FRACTION window (so two sessions whose corner
+# partitions differ still compare the same stretch of track — the D24 pair's C8 window grew 11.2 m
+# and with it 0.550 s of imaginary slowness), the refusals (no session record on either side,
+# records that disagree, a provisional start line, ESTIMATED timing, mismatched lap lengths, too
+# few clean laps) each carrying delta=None so no surface can print an unsupported number, the
+# spread test reusing coaching.SPREAD_MARGIN and its IQR, the store's persistence discipline
+# (cap, self-heal, .bak, the _app_support_dir seam), and the panel block (dormant until the app
+# hands it a report, the naming Add button, both gestures as signals, and the height budget it
+# shares with the theme block). Builds real widgets under the real theme -> run offscreen.
+add_test(NAME test_focus_list
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_focus_list.py)
+set_tests_properties(test_focus_list PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Video-overlay export PURE LOGIC (studio.export_video, F9): the lap-window trim math, the
 # per-frame overlay-value lookup against a synthetic Session (same accessors the live readout
 # reads), the ffmpeg decode/encode command construction, and the Renderer pump + cancel with the
@@ -755,7 +769,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_corners test_corner_alignment_memo
                         test_consistency test_gmeter test_gmeter_overlay test_rotation
                         test_export_data test_export_disclosures
-                        test_driving test_coaching test_library test_export_video
+                        test_driving test_coaching test_focus_list test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card test_stats
                         test_lap_table_columns test_help_dialog test_grid_and_timing_guards
                         test_lap_table_empty_states test_charts_header_budget

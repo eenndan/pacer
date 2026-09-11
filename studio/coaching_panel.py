@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME, coaching, theme, units
+from . import APP_NAME, coaching, focus, theme, units
 from ._signal import DASH, lap_label
 from .lap_table import set_corner_direction
 from .theme import C
@@ -281,6 +281,184 @@ class ThemeBlock(QWidget):
             want = visible and i < n_actions and bool(self._lines[i:i + 1])
             if label.isHidden() == want:
                 label.setVisible(want)
+        if self.isHidden() == visible:
+            self.setVisible(visible)
+
+
+# The share of the page the focus block may take before it starts shedding lines. Budgeted like
+# the theme (and for the same measured reason), but FIRST: the theme is a fresh reading of today,
+# while the focus block is the answer to a question the driver asked by making the list.
+FOCUS_MAX_FRACTION = 0.30
+
+# ...and the ceiling on the two leading blocks TOGETHER. Each yields on its own, but nothing made
+# them yield to each other: two blocks each entitled to a third of the page leave the ranked list
+# the last third of a page that is ABOUT the ranked list. The theme takes what is left under this
+# after the focus block, so the table keeps at least 45 % of the page whatever the two want.
+BLOCKS_MAX_FRACTION = 0.55
+
+
+class FocusBlock(QWidget):
+    """The training loop's face: the corners the driver put on their focus list, and what THIS
+    session is allowed to say about them.
+
+    THE GATE IS THE FEATURE (studio/focus.py). "Did C4 improve?" is a cross-session comparison, and
+    a comparison across two days can move up to 4 seconds a lap on conditions alone; PR #258 added
+    the session record precisely so the app stops assuming like-for-like. So a line here either
+    states a measured change or states why it cannot, and the refusal is structural rather than
+    editorial — ``Outcome.delta`` is None whenever the verdict was blocked, so there is no number
+    for this widget to print even by accident.
+
+    It yields vertically exactly as ``ThemeBlock`` does (shed the last line, then the one above it,
+    then the whole block), and the lines it sheds stay on the header strip's tooltip.
+
+    Read-only over a ``focus.Report`` plus a selection: the promote / drop gestures are SIGNALS the
+    app acts on (it owns the app-support stores — the same split ``set_session_record`` uses)."""
+
+    # The corner the driver wants added to / dropped from the focus list (a corner cid).
+    add_requested = Signal(int)
+    remove_requested = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lines: list[str] = []
+        self._headline = ""
+        self._cids: list[int] = []      # cids currently on the list, in list order
+        self._selected: int | None = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
+        lay.setSpacing(theme.SPACE_XS)
+        self.headline = QLabel("")
+        self.headline.setProperty("role", "BarLabel")
+        lay.addWidget(self.headline)
+        self.lines = [WrapLabel("") for _ in range(focus.MAX_ITEMS)]
+        for label in self.lines:
+            label.setProperty("role", "Note")
+            lay.addWidget(label)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(theme.SPACE_S)
+        self.add_button = QPushButton("Add to focus list")
+        self.add_button.setAutoDefault(False)
+        self.add_button.setDefault(False)
+        self.add_button.clicked.connect(self._emit_add)
+        self.drop_button = QPushButton("Remove from focus list")
+        self.drop_button.setAutoDefault(False)
+        self.drop_button.setDefault(False)
+        self.drop_button.clicked.connect(self._emit_remove)
+        row.addWidget(self.add_button)
+        row.addWidget(self.drop_button)
+        row.addStretch(1)
+        self._buttons = QWidget()
+        self._buttons.setLayout(row)
+        lay.addWidget(self._buttons)
+        self.setVisible(False)
+
+    # ------------------------------------------------------------------ fill
+    def set_report(self, report: focus.Report | None) -> None:
+        """Fill from a ``focus.Report``. Three states, and the difference between the last two
+        matters: **None** is DORMANT (this recording has no detected track, so there is nowhere to
+        keep a list and inviting one would be an offer the app cannot honour); an **empty** report
+        is the invitation (one quiet line and a button — not a nag); a report with outcomes is the
+        loop itself."""
+        outcomes = list(report.outcomes) if report is not None else []
+        self._cids = [o.item.cid for o in outcomes]
+        # `report_lines`, not one sentence per outcome: when every corner is blocked for the SAME
+        # reason — the common case, and the one the real recordings land in — three copies of the
+        # same 200-character explanation bury the one thing the driver can act on.
+        self._lines = focus.report_lines(report) if report is not None else []
+        self._headline = focus.report_headline(report) if report is not None else ""
+        if report is not None and not report.active:
+            self._headline = "Focus list · empty"
+            self._lines = [f"Pick up to {focus.MAX_ITEMS} corners to work on. Next time you're at "
+                           "this track, pacer measures the same corners again and says whether "
+                           "they moved — or why it can't tell."]
+        self.headline.setText(self._headline)
+        for label, text in zip(self.lines, self._lines + [""] * focus.MAX_ITEMS, strict=False):
+            label.setText(text)
+        self._sync_buttons()
+        self._apply(len(self._lines), bool(self._headline))
+
+    def set_selected_corner(self, cid: int | None) -> None:
+        """The table's selected corner — what the Add button would promote."""
+        self._selected = cid if isinstance(cid, int) else None
+        self._sync_buttons()
+
+    def full_text(self) -> str:
+        """The whole block as one string — what the header tooltip carries, so a line the height
+        budget sheds is demoted rather than deleted."""
+        return "\n".join([self._headline, *self._lines]).strip()
+
+    def _sync_buttons(self):
+        """Label + enablement from the selection and the list. The button SAYS which corner it
+        would add, because "Add to focus list" beside a table with a selection elsewhere is an
+        instruction with no object."""
+        cid, full = self._selected, len(self._cids) >= focus.MAX_ITEMS
+        on_list = cid is not None and cid in self._cids
+        self.add_button.setText(f"Add C{cid} to focus list" if cid is not None and not on_list
+                                else "Add to focus list")
+        self.add_button.setEnabled(cid is not None and not on_list and not full)
+        self.add_button.setToolTip(
+            f"You already have {focus.MAX_ITEMS} corners on the list — remove one first"
+            if full and not on_list else
+            "Select a corner in the table below to put it on your focus list" if cid is None else
+            f"C{cid} is already on your focus list" if on_list else
+            f"Work on C{cid}: pacer will measure this exact stretch of track again next time "
+            "you're here")
+        self.drop_button.setText(f"Remove C{cid}" if on_list else "Remove from focus list")
+        self.drop_button.setEnabled(on_list)
+        self.drop_button.setToolTip(
+            f"Take C{cid} off your focus list" if on_list
+            else "Select a corner that is on your focus list")
+
+    def _emit_add(self):
+        if self._selected is not None:
+            self.add_requested.emit(int(self._selected))
+
+    def _emit_remove(self):
+        if self._selected is not None and self._selected in self._cids:
+            self.remove_requested.emit(int(self._selected))
+
+    # --------------------------------------------------------------- the fit
+    def _needed_px(self, width: int, n_lines: int) -> int:
+        """The height the headline plus `n_lines` outcome lines plus the button row would need at
+        `width` — measured from the TEXT and the fonts, never from the widgets' current state (see
+        ``ThemeBlock._needed_px``: a wrapping label's minimumSizeHint is its one-line height, and
+        measuring by showing does not converge)."""
+        lay = self.layout()
+        m = lay.contentsMargins()
+        inner = max(width - m.left() - m.right(), 1)
+        texts = [self._headline] + self._lines[:n_lines]
+        fonts = [self.headline.font()] + [lb.font() for lb in self.lines[:n_lines]]
+        need = m.top() + m.bottom() + lay.spacing() * max(len(texts), 1)
+        need += self.add_button.sizeHint().height()
+        for font, text in zip(fonts, texts, strict=True):
+            need += QFontMetrics(font).boundingRect(
+                QRect(0, 0, inner, 0), Qt.TextWordWrap, text).height()
+        return need
+
+    def fit_into(self, width: int, budget_px: int) -> int:
+        """Show the headline plus as many outcome lines as fit `budget_px`; hide the block entirely
+        when even the headline and the buttons do not. Returns the height it settled for (0 when
+        hidden) so the caller can budget what is left. Chosen from the widest configuration DOWN,
+        so widening the page brings shed lines back. Idempotent."""
+        if self._headline:
+            for n in range(len(self._lines), -1, -1):
+                need = self._needed_px(width, n)
+                if need <= budget_px:
+                    self._apply(n, True)
+                    return need
+        self._apply(0, False)
+        return 0
+
+    def _apply(self, n_lines: int, visible: bool) -> None:
+        """Set the visible configuration, touching a widget ONLY when it changes (an unnecessary
+        setVisible invalidates the parent layout and re-enters the whole pass)."""
+        for i, label in enumerate(self.lines):
+            want = visible and i < n_lines and bool(self._lines[i:i + 1])
+            if label.isHidden() == want:
+                label.setVisible(want)
+        if self._buttons.isHidden() == visible:
+            self._buttons.setVisible(visible)
         if self.isHidden() == visible:
             self.setVisible(visible)
 
@@ -925,6 +1103,10 @@ class OpportunitiesPanel(QWidget):
 
     # Clicked corner cid (None on deselect) -> the map apex-ring highlight (wired in central_view).
     corner_clicked = Signal(object)
+    # The focus list's two gestures, forwarded from the block: the app owns the store, so this page
+    # asks rather than writes (the same split `CentralView.set_session_record` uses).
+    focus_add_requested = Signal(int)
+    focus_remove_requested = Signal(int)
 
     _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it"]
 
@@ -1012,13 +1194,31 @@ class OpportunitiesPanel(QWidget):
         # the "need more laps" state below is untouched.
         self.theme_block = ThemeBlock()
 
+        # The training loop, above the theme: what the driver put on their focus list last time and
+        # whether it moved. DORMANT until the app hands it a report (`set_focus_report`) — a panel
+        # built without one is byte-for-byte the page it was before, which is what keeps the
+        # app-support stores out of this widget and out of its tests.
+        self.focus_block = FocusBlock()
+        self.focus_block.add_requested.connect(self.focus_add_requested)
+        self.focus_block.remove_requested.connect(self.focus_remove_requested)
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(header)
+        lay.addWidget(self.focus_block)
         lay.addWidget(self.theme_block)
         lay.addWidget(self.body, 1)  # the rows take the page's full height
         self.refresh()
+
+    def set_focus_report(self, report: focus.Report | None) -> None:
+        """Show the focus list and this session's verdict on it (the app builds the report from the
+        store + ``Session.focus_report``). Passing an empty report shows the one-line invitation;
+        never calling this at all leaves the page exactly as it was before the feature."""
+        self.focus_block.set_report(report)
+        self.focus_block.set_selected_corner(self._selected_cid())
+        self._relayout()
+        self._refresh_summary_label()
 
     # ------------------------------------------------------------------ build
     def refresh(self):
@@ -1251,8 +1451,8 @@ class OpportunitiesPanel(QWidget):
         return super().eventFilter(obj, event)
 
     def _relayout(self):
-        """Budget the theme block's height, then the columns, then re-fit the wrapped rows, then
-        tune the row count — in that order: the theme block decides how much height the table has,
+        """Budget the two leading blocks' height, then the columns, then re-fit the wrapped rows,
+        then tune the row count — in that order: the blocks decide how much height the table has,
         the column widths decide the wrap, the wrap decides the row heights, and the row heights
         decide how many rows fit."""
         self._apply_theme_budget()
@@ -1261,18 +1461,27 @@ class OpportunitiesPanel(QWidget):
         self._tune_rows()
 
     def _apply_theme_budget(self):
-        """Let the theme lead, but never displace the ranking it is about (THEME_MAX_FRACTION).
+        """Let the focus list and the theme lead, but never displace the ranking they are about.
 
-        Measured: at the app's own 280x196 minimum the three-line summary wanted 159 of the page's
-        196 px and left the table a viewport 0 px TALL — a headline about a list, with the list
-        gone. The block sheds its second action, then its first, then itself; what it sheds moves
-        onto the header strip's tooltip, so the theme is demoted and never deleted."""
+        Measured: at the app's own 280x196 minimum the three-line theme summary wanted 159 of the
+        page's 196 px and left the table a viewport 0 px TALL — a headline about a list, with the
+        list gone. Each block sheds its last line, then the one above it, then itself; what they
+        shed moves onto the header strip's tooltip, so nothing is deleted, only demoted.
+
+        The FOCUS block is budgeted first and the theme takes what is left under
+        ``BLOCKS_MAX_FRACTION``: two blocks that each yield only against the PAGE still add up to
+        two thirds of it, and the answer to the driver's own focus list outranks a fresh reading of
+        today. A page with no focus report is unchanged — the block returns 0 px."""
         if self._theme_budgeting:
             return
         self._theme_budgeting = True
         try:
-            self.theme_block.fit_into(self.width(),
-                                      int(self.height() * THEME_MAX_FRACTION))
+            height = self.height()
+            used = self.focus_block.fit_into(self.width(), int(height * FOCUS_MAX_FRACTION))
+            self.theme_block.fit_into(
+                self.width(),
+                min(int(height * THEME_MAX_FRACTION),
+                    max(int(height * BLOCKS_MAX_FRACTION) - used, 0)))
             self._refresh_summary_label()
         finally:
             self._theme_budgeting = False
@@ -1281,8 +1490,11 @@ class OpportunitiesPanel(QWidget):
     def _on_row_selected(self):
         """Emit the clicked row's corner cid (None on deselect). The map apex-ring is the only
         consumer — read-only panel, no seek/lap-selection side effects (the Jump-to-corner detail
-        action lives in the modal dialog)."""
-        self.corner_clicked.emit(self._selected_cid())
+        action lives in the modal dialog). The focus block also follows the selection, because its
+        Add button names the corner it would promote."""
+        cid = self._selected_cid()
+        self.focus_block.set_selected_corner(cid)
+        self.corner_clicked.emit(cid)
 
     def _refresh_summary_label(self):
         """Set the headline-strip text from the stashed headline ("0.60 s across your top 3
@@ -1292,5 +1504,6 @@ class OpportunitiesPanel(QWidget):
         show the theme block (see `_apply_theme_budget`) still has the story one hover away — the
         block sheds lines, it never deletes them."""
         self.summary_label.setText(self._headline)
-        story = self.theme_block.full_text()
+        story = "\n\n".join(t for t in (self.focus_block.full_text(),
+                                        self.theme_block.full_text()) if t)
         self.summary_label.setToolTip(f"{story}\n\n{_SCOPE_TOOLTIP}" if story else _SCOPE_TOOLTIP)
