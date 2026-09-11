@@ -142,3 +142,62 @@ drives the real `VideoView` and requires the convention *and* both axis sources 
 text. And because there is no longer any string one mode paints and the other does not,
 `test_the_burn_and_the_screen_say_exactly_the_same_thing` asserts set EQUALITY between the live and
 exported faces — a stronger contract than the old "exactly two may differ".
+
+## The friction circle's two axes are not on one window (measured; kept, and stated)
+
+`LAT_SMOOTH_S` = 0.15 s sets the lateral bandwidth; `LONG_SMOOTH_S` = 0.35 s boxcars the
+GPS-derived longitudinal. So every quantity built on `hypot(lat, long)` — the g-g cloud, its p98
+grip envelope, the dial's `|g|` readout, every grip-utilization number — combines two axes whose
+smoothing spans differ by **2.3x**. Measured on both D24 pairs (38 and 65 valid laps) before being
+kept:
+
+| shipped surface | shipped (0.15 / 0.35) | both 0.15 s | both 0.35 s |
+|---|---:|---:|---:|
+| p98 grip envelope — the dashed ring + "grip ceiling" tile (0060) | 1.425 g | 1.447 (+1.5 %) | 1.350 (−5.2 %) |
+| …(0062) | 1.368 g | 1.378 (+0.7 %) | 1.309 (−4.4 %) |
+| `driving.grip_envelope`, the divisor under every grip number (0060 / 0062) | 1.424 / 1.370 g | +1.7 % / +1.1 % | −4.9 % / −4.7 % |
+| peak lateral g tile (0060 / 0062) | 1.717 / 1.858 g | unchanged | 1.503 / 1.495 (−12 % / −20 %) |
+| CORNERS "Grip %" column | 54–78 % | ≤1 point; 0 and 1 of 66 corner pairs reorder | +4 to +6 points; 4 of 66 reorder |
+| per-lap envelope utilization, rank vs shipped | — | ρ +0.970 / +0.974 | ρ +0.965 / +0.925 |
+| cross-check lateral **gain** | 1.092 / 1.108 | unchanged | 1.075 / 1.091 |
+| cross-check lateral r | 0.956 / 0.959 | unchanged | 0.967 / 0.969 |
+
+**The numbers barely move, because p98 |a| is very nearly a lateral statistic**: 1.375 of the
+1.425 g (and 1.334 of the 1.368) is the lateral axis on its own. Matching at 0.15 s shifts the
+headline envelope by one last digit of a tile that prints two.
+
+**Matching at 0.35 s is not free**, and the way it fails is the familiar one: the lateral
+correlation *improves* (0.956 → 0.967) while the **gain drifts** (1.092 → 1.075) — a channel
+tracking better and reading smaller, which is exactly the shape of the CORI yaw-drift defect the
+gain check exists to catch.
+
+**Matching the magnitude alone breaks the picture it would fix.** Give `|a|` one bandwidth and
+leave each display channel as it is, and the dashed ring is computed off a series the cloud beneath
+it is not drawn from: at 0.35 s it sits at 1.344 / 1.297 g with **4.85 % and 4.58 %** of that
+cloud's own points outside a ring the key line calls "p98 of combined g" (shipped: 2.00 % and
+2.01 %, exactly the p98 it claims). A ring and the cloud it bounds have to come off one series.
+
+**And the wider longitudinal window is a measurement, not a preference.** Its input is a 10 Hz GPS
+speed differentiated. Welch PSDs on the g-meter's own 50 Hz grid, over the valid laps:
+
+| series | f50 | f90 | f95 | f99 | RMS |
+|---|---:|---:|---:|---:|---:|
+| `lat_g` (0060 / 0062) | 0.08 / 0.08 Hz | 0.29 / 0.29 | 0.55 / 0.53 | 2.89 / 2.58 | 0.78 / 0.78 g |
+| `long_g_gps` shipped | 0.16 / 0.11 Hz | 0.84 / 0.59 | 1.20 / 1.11 | 2.06 / 3.61 | 0.28 / 0.24 g |
+| GPS longitudinal **before** the boxcar | 0.48 / 0.46 Hz | **4.45 / 4.97** | 5.75 / 5.85 | **12.6 / 8.07** | 0.35 / 0.32 g |
+| IMU forward axis (`long_g`) | 0.13 / 0.15 Hz | 3.46 / 3.94 | 4.27 / 4.49 | 5.63 / 5.64 | 0.26 / 0.26 g |
+
+Ten percent of the pre-boxcar longitudinal's power sits above 4.45 Hz and one percent above
+12.6 Hz — **above the 5 Hz Nyquist of the fixes it is made of**, so it cannot be driving.
+Unsmoothed, the per-lap peak deceleration runs a median **1.58 / 1.17 g** on the 50 Hz g grid with
+the 2.0 g `MAX_LONG_G` clip firing on both recordings. (On the native 10 Hz grid the same
+unsmoothed peak is 1.081 g with a max of 1.94 g — the figures the peak-braking tile's own evidence
+quotes; they differ only in which grid the maximum is taken on.)
+
+**What the asymmetry does shape is the cloud's HEIGHT.** Putting both axes on the lateral's window
+leaves the p98 width untouched (1.375 / 1.334 g) and grows the p98 braking extent 9–13 %
+(0.625 → 0.681, 0.524 → 0.593 g) and the p98 acceleration extent 22–26 % (0.436 → 0.530,
+0.315 → 0.398 g). Per 30° sector the envelope moves by up to 0.280 g (0060) and 0.310 g (0062).
+
+So the windows stay as they are and the asymmetry is **stated where it is read**: `stats_panel`'s
+`GG_TOOLTIP` composes BOTH constants and says the cloud is smoothed more in height than in width.

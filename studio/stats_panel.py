@@ -400,7 +400,22 @@ GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — l
               "fills the rim of the circle; rings every 0.5 g. Longitudinal is the validated "
               "GPS-derived signal (the IMU forward axis is vibration-inflated), smoothed over "
               f"{gmeter.LONG_SMOOTH_S:g} s — so the cloud's top and bottom are SUSTAINED "
-              "braking and acceleration, not the instantaneous spikes a raw derivative shows.")
+              "braking and acceleration, not the instantaneous spikes a raw derivative shows.\n\n"
+              # The ONE surface where the two windows meet in a single quantity, so the one that
+              # owes the reader both. The dashed ring says "p98 of combined g" and combined g is
+              # the hypot of a 200 Hz accelerometer and a 10 Hz GPS derivative, filtered over
+              # different spans: the height of this cloud is a more heavily smoothed measurement
+              # than its width, and the percentages are the measured size of that (see
+              # gmeter's ONE MAGNITUDE, TWO WINDOWS block). Both windows are COMPOSED from the
+              # constants, never typed, for the reason the peak-braking tile's window is.
+              "The two axes are not on one window. Lateral is the accelerometer boxcarred over "
+              f"{gmeter.LAT_SMOOTH_S:g} s; longitudinal is the GPS derivative over "
+              f"{gmeter.LONG_SMOOTH_S:g} s — so combined g, including the dashed envelope ring, "
+              "has no single window: this cloud is smoothed more in height than in width. "
+              "Measured on two recordings, putting both axes on the lateral's window leaves the "
+              "width untouched and grows the braking extent 9-13 % and the acceleration extent "
+              "22-26 %. Read the circle for WHERE you load the tyre, not for an exact aspect "
+              "ratio.")
 # The plot ships two kinds of ring and no way to tell them apart from the picture: the solid ones
 # are a fixed 0.5 g rule, the dashed one is a MEASURED result. Both axes now carry a name and a
 # unit too (they read "-2.0 / +0.0 / +2.0" and nothing else before).

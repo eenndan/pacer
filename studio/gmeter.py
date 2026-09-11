@@ -64,8 +64,44 @@ _MOVING_MS = 4.0     # m/s; heading is ill-defined at a standstill (used for fit
 # PUBLIC because a second module now has to SAY it: the Stats page's "peak braking g" tile and
 # the g-g cloud both describe a signal smoothed over this window, and a window is the whole
 # story for a maximum (§4.3 — the per-lap peak runs a median 0.862 g smoothed against 1.081 g
-# raw on the D24 0060 pair). Read, never retyped, so the copy cannot drift from the signal.
+# raw on the D24 0060 pair). Those two are on DIFFERENT GRIDS, which understates the window: the
+# 1.081 is the maximum of the unsmoothed derivative on the 10 Hz GPS trace, while on the 50 Hz
+# grid this series actually lives on it is 1.58 g, with the 2.0 g MAX_LONG_G clip firing on both
+# D24 pairs. Read, never retyped, so the copy cannot drift from the signal.
 LONG_SMOOTH_S = 0.35
+
+# --- ONE MAGNITUDE, TWO WINDOWS -----------------------------------------------------------------
+# The two constants above are UNEQUAL BY 2.3x, so everything built on hypot(lat, long) — the g-g
+# cloud, its p98 grip envelope, the dial's |g| readout, every grip-utilization number — combines a
+# 0.15 s axis with a 0.35 s one. That reads as an oversight. It was measured on both D24 pairs (38
+# and 65 valid laps) before being kept, and the measurement is why it stays:
+#
+#  * MATCHING THEM AT THE LATERAL'S 0.15 s BARELY MOVES A NUMBER. The p98 envelope (the dashed ring
+#    and the "grip ceiling" tile) goes 1.425 -> 1.447 g and 1.368 -> 1.378 g — +1.5 % and +0.7 %,
+#    one last digit of a tile that prints two — and the CORNERS "Grip %" column moves at most one
+#    point, reordering 0 and 1 of its 66 corner pairs. p98|a| is very nearly a LATERAL statistic:
+#    1.375 of that 1.425 g, and 1.334 of the 1.368, is the lateral axis on its own.
+#  * MATCHING THEM AT 0.35 s COSTS THE ONE AXIS THIS APP MEASURES WELL. Peak lateral g falls
+#    1.717 -> 1.503 and 1.858 -> 1.495 g (-12 % and -20 %), every corner's Grip % shifts +4 to +6
+#    points, 4 of 66 corner pairs reorder, and the cross-check's lateral GAIN moves 1.092 -> 1.075
+#    and 1.108 -> 1.091. Its correlation IMPROVES (0.956 -> 0.967) while the scale drifts — the
+#    exact shape of the CORI yaw-drift defect the gain exists to catch.
+#  * MATCHING THE MAGNITUDE ALONE BREAKS THE PICTURE IT WOULD FIX. Give |a| one bandwidth and leave
+#    each display channel as it is, and the dashed ring — labelled "p98 of combined g" — is
+#    computed off a series the cloud under it is not drawn from: at 0.35 s it sits at 1.344 and
+#    1.297 g with 4.85 % and 4.58 % of that cloud's own points outside it, i.e. a p95 wearing a p98's
+#    label. A ring and the cloud it bounds must come off one series.
+#
+# And the wider longitudinal window is not generic noise rejection: its input is a 10 Hz GPS speed
+# differentiated, and BEFORE the boxcar 10 % of that series' power sits above 4.45 Hz (4.97 on
+# 0062) and 1 % above 12.6 Hz — above the 5 Hz Nyquist of the fixes it is made of, so it cannot be
+# driving. Unsmoothed, the per-lap peak deceleration runs a median 1.58 and 1.17 g with the 2.0 g
+# MAX_LONG_G clip firing on both recordings. The window is what makes that axis a measurement.
+#
+# What the asymmetry DOES shape is the cloud's height: on the lateral's window the p98 braking
+# extent is 9-13 % larger and the acceleration extent 22-26 % larger, with the width untouched. So
+# the circle is drawn as it is and the asymmetry is STATED where it is read — stats_panel's
+# GG_TOOLTIP composes both constants rather than naming one. See studio/docs/gmeter-validation.md.
 
 # --- CORI yaw DRIFT ---------------------------------------------------------------------------
 # The GoPro derives CORI's world frame by integrating its gyro, with no magnetometer to hold it, so

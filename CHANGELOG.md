@@ -92,6 +92,13 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 - **Honesty copy reads its numbers instead of quoting a range someone measured once.** The digest
   tooltip said "the ideal is 0.33 to 2.67 s the faster of the two" on a screen where the two tiles
   were 5.0 s apart; it now states the gap in front of it.
+- **The friction circle says that its two axes are not on one window.** Lateral g is the
+  accelerometer smoothed over 0.15 s and longitudinal the GPS derivative over 0.35 s, so the cloud
+  is smoothed more in height than in width — measured on two recordings, matching the windows
+  leaves the width untouched and grows the braking extent 9–13 % and the acceleration extent
+  22–26 %. The tooltip named only the longitudinal window, which read as though the whole picture
+  were on it. The windows themselves are unchanged: matching them moves the grip-envelope ring by
+  about 1 % and costs 12–20 % of the peak lateral g the app measures best.
 
 ### Fixed
 
