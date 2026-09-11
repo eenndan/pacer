@@ -257,6 +257,82 @@ def test_coast_rejects_steady_pull():
     print("ok coast: a steady mild pull (accelerating) is not coasting")
 
 
+def test_coast_window_is_wider_than_the_brake_window_at_10hz():
+    """The two pre-threshold windows are deliberately different sizes, and on the 10 Hz GPS9 lap
+    grid the app actually runs on, ONE of them must survive `_win`'s rounding.
+
+    This is the anti-regression for a whole class of bug this module has already shipped once:
+    SMOOTH_S is declared as a boxcar and rounds to a single sample at 10 Hz, so `boxcar` returns
+    the array untouched — a filter that is documented, imported and inert. That is the RIGHT
+    answer for a brake onset (a step, which a centred boxcar smears) and the wrong one for the
+    coast band (sustained membership of a corridor narrower than the signal's own noise), so the
+    coast test asserts a real multi-sample window while the brake test pins the no-op."""
+    _, elapsed = _lap_trace(n=700, dur=69.9)      # a ~70 s kart lap at the real 10 Hz fix rate
+    assert abs(float(np.median(np.diff(elapsed))) - 0.1) < 1e-6
+    assert D._coast_window(elapsed) >= 2, "the coast band must be smoothed on a 10 Hz lap grid"
+    assert D._smooth_window(elapsed) == 1, "the brake onset must NOT be smoothed on that grid"
+    print(f"ok windows: coast {D._coast_window(elapsed)} samples vs brake "
+          f"{D._smooth_window(elapsed)} at 10 Hz")
+
+
+def test_coast_survives_gps_speed_noise():
+    """A REAL coast, sampled at 10 Hz with the GPS Doppler noise the fixes actually carry, must
+    still be reported — and the unfiltered series is what fails that.
+
+    The defect this pins is entirely a noise phenomenon, which is why no noise-free fixture can
+    see it: the band is only theta_b - COAST_DRAG_MIN wide (0.13 g, asserted below) and the speed
+    noise measured on the D24 recordings (sigma_v ~ 0.14-0.17 m/s) turns into ~0.10-0.12 g on the
+    10 Hz derivative, so a sample sitting dead centre in the band leaves it on noise alone about
+    half the time. The truth here is a 4 s off-power coast at a drag-like 0.10 g; the assertion is
+    that the shipped detector recovers most of it and that the same detector on the bare series
+    does not."""
+    rng = np.random.default_rng(11)
+    n, dur = 700, 69.9                            # 10 Hz, a lap-length trace
+    dist, elapsed = _lap_trace(n=n, dur=dur, total_dist=1000.0)
+    speed = np.full(n, 70.0)                      # km/h, on the throttle at a steady speed
+    coast = slice(300, 341)                       # 4.0 s off power
+    # 0.10 g of drag decel integrated onto the speed trace, then held at the lower speed.
+    dv = 0.10 * G * 3.6 * np.arange(coast.stop - coast.start) * (dur / (n - 1))
+    speed[coast] -= dv
+    speed[coast.stop:] -= dv[-1]
+    clean = speed.copy()
+    speed = speed + rng.normal(0.0, 0.16 * 3.6, n)   # sigma_v = 0.16 m/s, the measured GPS noise
+    th = D.derive_thresholds(speed_long_g(clean, elapsed), clean)
+    truth = float(elapsed[coast.stop - 1] - elapsed[coast.start])
+    assert abs((th.theta_b - D.COAST_DRAG_MIN) - 0.13) < 5e-3, "the band width the docstring cites"
+
+    spans = D.coasting_spans(dist, elapsed, speed, speed_long_g(speed, elapsed), th.theta_b)
+    found = sum(s.duration for s in spans)
+    assert found >= 0.6 * truth, f"the {truth:.1f} s coast came back as {found:.1f} s: {spans}"
+
+    # The same detector with the window rounded away (the pre-fix arithmetic) loses most of it.
+    saved = D.COAST_SMOOTH_S
+    try:
+        D.COAST_SMOOTH_S = 0.10                   # -> 1 sample at 10 Hz -> boxcar is a no-op
+        bare = D.coasting_spans(dist, elapsed, speed, speed_long_g(speed, elapsed), th.theta_b)
+    finally:
+        D.COAST_SMOOTH_S = saved
+    bare_s = sum(s.duration for s in bare)
+    assert bare_s < 0.5 * found, ("the unfiltered series is supposed to shatter this coast; it "
+                                  f"returned {bare_s:.1f} s against {found:.1f} s")
+    print(f"ok coast noise: {truth:.1f} s of coast -> {found:.1f} s smoothed, "
+          f"{bare_s:.1f} s unfiltered")
+
+
+def test_coast_instrument_states_window_minimum_and_band():
+    """Every coasting number leaves the app with the three settings that produced it. They move
+    the answer by more than 6x on one recording, so a bare "2.8 s" is not a disclosed number."""
+    sentence = D.coast_instrument(0.163)
+    for token in (f"{D.COAST_SMOOTH_S:.2f}", f"{D.MIN_COAST_S:.2f}", f"{D.COAST_DRAG_MIN:.2f}",
+                  "0.163"):
+        assert token in sentence, f"{token!r} missing from: {sentence}"
+    # It is also the second half of the load-time threshold line, so one print discloses both
+    # instruments this module builds off the one series.
+    th = D.derive_thresholds(np.full(50, -0.3), np.full(50, 60.0))
+    assert D.coast_instrument(th.theta_b) in th.describe()
+    print(f"ok disclosure: {sentence}")
+
+
 def test_brake_throttle_intensity_band():
     """D3: the synthetic brake/throttle band maps the SAME speed-derived long-g to a bounded
     [-1,1] pedal intensity — hard brake -> strongly negative, on-power -> positive, cruise/

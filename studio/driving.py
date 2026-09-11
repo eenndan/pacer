@@ -7,7 +7,9 @@ PACER-FREE (numpy only). Labels three things on a lap:
   * COASTING SPANS — off-power transitions: the car is DECELERATING from drag/engine braking
     (decel above COAST_DRAG_MIN) but NOT braking (below theta_b), while moving. This is the
     throttle-off-to-brake gap, which decelerates — unlike the old "speed stays flat" test that
-    rejected real coasts.
+    rejected real coasts. Measured on a COAST_SMOOTH_S window, which is NOT the brake detector's
+    window: a brake onset is a step and must not be smeared, a coast is sustained membership of a
+    band narrower than the raw signal's own noise. Same g, two instruments — see COAST_SMOOTH_S.
   * PER-CORNER GRIP UTILIZATION — median(|g|)/envelope_max inside each corner window.
 
 Brake and coast run on the LONGITUDINAL g derived from the GPS SPEED TRACE (d|v|/dt), not the
@@ -29,7 +31,16 @@ import numpy as np
 from ._signal import G, boxcar
 
 # --- model constants -------------------------------------------------------------------
-SMOOTH_S = 0.10           # boxcar on the longitudinal g before thresholding
+SMOOTH_S = 0.10           # s; boxcar on the longitudinal g before the BRAKE threshold (and the D3
+#                           pedal band that must track it). A NO-OP on every recording here, and
+#                           that is the right answer rather than an accident to repair: `_win`
+#                           rounds it to round(0.10/dt) = 1 sample on the 10 Hz GPS9 lap grid and
+#                           `boxcar` returns w<2 untouched, so the brake detector sees the bare
+#                           derivative — which #271 measured to be correct, because an onset is a
+#                           STEP and a centred boxcar smears exactly that (at 0.35 s, 18 % and
+#                           23 % of the detected events lose any counterpart within 5 m, and those
+#                           peak at 2.4-3.6x theta_b — real applications, not ripple). Left at
+#                           0.10 rather than 0.0 so a >15 Hz stream still gets a token window.
 BRAKE_G_FLOOR = 0.16      # g; a genuine brake application (above lift/engine-braking ~0.05-0.12 g)
 BRAKE_G_CEIL = 0.30       # g; clamp the session-adaptive raise to a sane karting range
 BRAKE_ADAPT_PCT = 25.0    # adapt theta_b up to this low percentile of the session's braking decel
@@ -38,7 +49,44 @@ RELEASE_RATIO = 0.35      # Schmitt release at theta_b*this; low so one zone wit
 #                           trailing light decel stays a single event (less fragmentation)
 MIN_BRAKE_S = 0.25        # drop brake runs shorter than the shortest real brake application
 COAST_DRAG_MIN = 0.03     # g; below this |decel| is steady-state cruise, not coasting
-MIN_COAST_S = 0.25        # drop coast blips between brake-release and throttle-pickup
+# THE COAST BAND IS NARROWER THAN THE NOISE ON THE SIGNAL IT WAS TESTED AGAINST, WHICH IS WHY THIS
+# WINDOW IS FIVE TIMES THE BRAKE DETECTOR'S. `coasting_spans` asks for SUSTAINED membership of
+# (COAST_DRAG_MIN, theta_b) — a corridor 0.133 g wide on the D24 0060 recording, 0.130 g on 0062,
+# so 0.067 / 0.065 g of half-width. Measure what the estimator itself carries into that corridor:
+# the GPS Doppler speed's high-frequency noise is sigma_v = 0.139 and 0.168 m/s (a local-quadratic
+# residual over the valid laps), and `speed_long_g`'s central difference at 10 Hz turns that into
+# sigma_g = 0.099 and 0.121 g — **1.49x and 1.86x the band's HALF-width**. A sample sitting dead
+# centre in the band is thrown out of it by noise alone with probability 0.50 and 0.59, so the
+# expected band run is 2.0 and 1.7 samples. The measured runs are p50 = 1, p90 = 2. The run
+# requirement was never the defect; it was being asked to hold on a signal that cannot hold it.
+#
+# 0.50 s IS BOUNDED FROM BOTH SIDES BY MEASUREMENT, not picked for the size of the answer:
+#   * FROM BELOW, by that noise. Propagating the same sigma_v through the same chain: a 0.20 s
+#     window still leaves sigma_g at 1.06x / 1.31x the half-width (P(exit) 34 % / 45 %), and 0.30 s
+#     at 0.71x / 0.87x (16 % / 25 %). Only at 0.50 s (0.47x / 0.53x, P(exit) 3.3 % / 5.7 %) does a
+#     genuine half-second coast survive on BOTH recordings. Turning the declared-but-inert SMOOTH_S
+#     on would not have fixed this: at its own value the coast only goes 16.9 -> 35.4 s / 22.3 ->
+#     59.6 s, still ~12 % of the time spent in the band.
+#   * FROM ABOVE, by what a wider window invents. A boxcar this wide smears a throttle->brake ramp
+#     ACROSS the band, and a ramp is not a coast. At 1.00 s, 55 % / 57 % of the band runs are
+#     strictly monotone and they sweep a median 0.63 / 0.66 of the band width end to end — they are
+#     transits wearing a coast's clothes. At 0.50 s that is 28 % / 32 % monotone and 0.30 / 0.39 of
+#     the width, i.e. spans that DWELL. 0.70 s and 1.00 s are already past the turn.
+# AND THE BIGGER NUMBER IS A RE-SELECTION OF BAND TIME, NOT MANUFACTURED BAND TIME. A boxcar does
+# smear a span's edges outward, so the obvious worry is that 16.9 -> 106.9 s is mostly smear. It
+# is bounded by the per-sample membership, which barely moves: total time in the band goes 287.5 ->
+# 309.5 s on 0060 (+7.7 %) and 495.1 -> 483.5 s on 0062 (-2.4 %, it FALLS). The window rearranges
+# 1-2 sample fragments into runs; it does not invent the band.
+# The two recordings, which disagreed by 26 % on coast-per-lap under the raw series (0.44 vs
+# 0.34 s), agree to 0.9 % under this one (2.81 vs 2.79 s) — the same driver on the same track.
+COAST_SMOOTH_S = 0.50     # s; boxcar on the longitudinal g before the COAST BAND test
+MIN_COAST_S = 0.25        # s; drop coast blips between brake-release and throttle-pickup. UNCHANGED
+#                           by the window fix, deliberately: the sweep above exonerates it. Relaxing
+#                           it on the raw series instead (0.10 s) yields 8.7 and 7.3 spans per lap
+#                           of which 68 % and 65 % are monotone band transits — noise and ramps, not
+#                           coasts. It is also about the shortest lift a driver could act on, and
+#                           with the window in place only 9 % / 12 % of the spans it admits are
+#                           transits.
 MOVING_KMH = 14.4         # 4.0 m/s; below this a sample is "stopped"
 # D3: the synthetic brake/throttle band. A SECONDARY VISUALISATION of the SAME speed-derived
 # longitudinal g the brake detector runs on (NOT a new detector) — it just maps that g to a
@@ -89,10 +137,13 @@ class Thresholds:
     brake_max: float
 
     def describe(self) -> str:
+        # Two sentences because the module ships two instruments off one series: the brake
+        # threshold this dataclass carries, and the coast band that threshold caps — whose window
+        # and minimum duration are not this dataclass's, yet move the coast number by over 6x.
         return (f"driving channels: brake threshold theta_b={self.theta_b:.3f} g "
                 f"(speed-derived longitudinal); over {self.n_moving} moving samples the braking "
                 f"decel ran p75={self.brake_p75:.3f}, p90={self.brake_p90:.3f}, "
-                f"max={self.brake_max:.3f} g.")
+                f"max={self.brake_max:.3f} g. {coast_instrument(self.theta_b)}")
 
 
 @dataclass(frozen=True)
@@ -182,8 +233,14 @@ def _win(t: np.ndarray, seconds: float) -> int:
 
 
 def _smooth_window(t: np.ndarray) -> int:
-    """Samples spanning SMOOTH_S (the detector's pre-threshold boxcar)."""
+    """Samples spanning SMOOTH_S (the BRAKE detector's pre-threshold boxcar)."""
     return _win(t, SMOOTH_S)
+
+
+def _coast_window(t: np.ndarray) -> int:
+    """Samples spanning COAST_SMOOTH_S (the COAST band's pre-threshold boxcar). A separate window
+    from `_smooth_window` because the two tests have opposite shapes — see COAST_SMOOTH_S."""
+    return _win(t, COAST_SMOOTH_S)
 
 
 def derive_thresholds(long_g, speed_kmh) -> Thresholds:
@@ -319,10 +376,33 @@ def merge_brake_maneuvers(raw, elapsed, g_gate, corner_windows=None) -> list[Bra
     return out
 
 
+def coast_instrument(theta_b: float) -> str:
+    """The one sentence that says what a coasting number was measured with — the window, the
+    minimum duration and the band, in the units they are set in. The three together move the
+    answer by more than 6x on one recording, so a bare "2.8 s" discloses none of what produced
+    it; same house pattern as `Thresholds.describe()` for the brake threshold.
+
+    It reaches the user through the load-time threshold line (`describe`, which appends it) and
+    the exported session report's DRIVING note. The Stats page's two coasting TILES still carry no
+    tooltip of their own — `DrivingChannels.coast_instrument` is the accessor that wiring reads,
+    left for the owner of that file rather than reached into from here."""
+    return (f"Coasting: off-power spans of at least {MIN_COAST_S:.2f} s where the GPS "
+            f"longitudinal g — smoothed over {COAST_SMOOTH_S:.2f} s — decelerates between "
+            f"{COAST_DRAG_MIN:.2f} g and this session's own brake threshold {theta_b:.3f} g. "
+            f"That window is wider than the brake detector's on purpose: a coast is sustained "
+            f"membership of a band, a brake onset is a step.")
+
+
 def coasting_spans(dist, elapsed, speed_kmh, long_g, theta_b: float) -> list[CoastSpan]:
     """Detect coasting spans on one lap: off power, decelerating from drag/engine braking
     (COAST_DRAG_MIN < decel < theta_b) while moving. `long_g` is the clean speed-derived
-    longitudinal. Aligned arrays, same lap; spans in track order."""
+    longitudinal. Aligned arrays, same lap; spans in track order.
+
+    SMOOTHED OVER COAST_SMOOTH_S, NOT the brake detector's SMOOTH_S, and that is the whole
+    difference between this reading a coast and reading its own noise floor: the band is 0.133 g
+    wide and the raw 10 Hz derivative carries 0.099-0.121 g of noise into it, so on the bare series
+    a band run lasts the 2 samples MIN_COAST_S needs 4 of. See COAST_SMOOTH_S for the sweep that
+    bounds the window from both sides; `coast_instrument` is the sentence the UI prints."""
     dist = np.asarray(dist, float)
     elapsed = np.asarray(elapsed, float)
     speed_kmh = np.asarray(speed_kmh, float)
@@ -331,7 +411,7 @@ def coasting_spans(dist, elapsed, speed_kmh, long_g, theta_b: float) -> list[Coa
     if n < 2:
         return []
     dist, elapsed, speed_kmh, g = dist[:n], elapsed[:n], speed_kmh[:n], g[:n]
-    g = boxcar(g, _smooth_window(elapsed))
+    g = boxcar(g, _coast_window(elapsed))
     # Decelerating but below the brake threshold, and moving: the throttle-off-to-brake coast.
     coast = (g < -COAST_DRAG_MIN) & (g > -theta_b) & (speed_kmh > MOVING_KMH)
     out: list[CoastSpan] = []

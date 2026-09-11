@@ -594,6 +594,13 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         counts = [r.brake_n for r in lap_rows if r.brake_n is not None]
         coast = [r.coast_s for r in lap_rows if r.coast_s is not None]
         if brake or counts or coast:
+            # Two of these five rows are coasting figures, and a coasting figure is only as
+            # meaningful as the window / minimum duration / band behind it — those three settings
+            # move it by more than 6x on the same recording. So the group carries the instrument
+            # as its note, the way IDEAL LAP carries its sample sentence. getattr-guarded: a
+            # Session double without the driving service still exports the numbers, noteless.
+            drv = getattr(session, "driving", None)
+            note = (getattr(drv, "coast_instrument", lambda: None)() or "") if drv else ""
             out.append(SummarySection("DRIVING", [
                 ("braking / lap · median",
                  _sec(float(np.median(brake)) if brake else None, "{:.1f} s")),
@@ -603,7 +610,7 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
                  _sec(float(np.median(coast)) if coast else None, "{:.1f} s")),
                 ("longest coast", _sec(st.longest_coast_s(), "{:.1f} s")),
                 ("grip envelope · p98", _sec(st.gg_envelope(), "{:.2f} g")),
-            ]))
+            ], note=note))
     return out
 
 
