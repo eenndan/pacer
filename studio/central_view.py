@@ -754,11 +754,12 @@ class CentralView(QWidget):
         self.quality_banner.setWordWrap(False)
         self.quality_banner.setVisible(False)
         self.quality_banner.setToolTip(
-            "Timing accuracy is degraded for this recording. On an older GoPro without GPS9 "
-            "(Hero 5/6/7) the lap times come from the video clock, which runs ~0.1% fast and "
-            "compresses every lap; and when many GPS fixes are rejected the positions are less "
-            "accurate. The lap times are still shown (and de-emphasized), but treat them as "
-            "estimates — they are most reliable on a GPS9 camera (Hero 9 and newer).")
+            "Timing accuracy is degraded for this recording. On a GoPro without GPS9 "
+            "(Hero 5 through Hero 10, and the Max) the lap times come from the video clock, which "
+            "runs ~0.1% fast and compresses every lap; and when many GPS fixes are rejected the "
+            "positions are less accurate. The lap times are still shown (and de-emphasized), but "
+            "treat them as estimates — they are most reliable on a GPS9 camera, which means a "
+            "Hero 11 or a Hero 13.")
         # Both tiers live in ONE strip container (a single bottom hairline; the two lines stack
         # tight), so the map sees a compact strip whether one or both concerns apply.
         self._trust_strip = QWidget()
