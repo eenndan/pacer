@@ -1897,6 +1897,16 @@ class StudioWindow(QMainWindow):
             "map inset, lap strip) to a shareable MP4")
         self._export_video_action.triggered.connect(self.exports.export_overlay_video)
         self._export_video_action.setEnabled(False)
+        # The two-lap COMPARISON export (export_compare.py). Its own item rather than a scope row in
+        # the overlay picker, because it is a different kind of clip: it is OF a pair, it has no
+        # run-up, no shape choice and no alpha mode, and it exists only while the app is actually
+        # comparing something — which is what gates it.
+        self._export_compare_action = menu.addAction("Export comparison video…")
+        self._export_compare_action.setToolTip(
+            "Render the two laps you are comparing side by side, locked to the same point on "
+            "TRACK rather than the same time on the clock, to a shareable MP4")
+        self._export_compare_action.triggered.connect(self.exports.export_compare_video)
+        self._export_compare_action.setEnabled(False)
         # File ▸ Library: the full browse + per-track PB chart over the session-library index.
         menu.addSeparator()
         self._library_action = menu.addAction("Library…")

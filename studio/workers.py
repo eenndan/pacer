@@ -20,10 +20,20 @@ class VideoExportWorker(QThread):
     progress = Signal(int, int)              # (frames_done, frames_total)
     finished_export = Signal(bool, str)      # (ok, message)  message="cancelled" / an error text
 
-    def __init__(self, session, spec):
+    def __init__(self, session, spec, make_renderer=None):
+        """`make_renderer(session, spec)` builds the renderer this worker drives; the default is the
+        single-lap `export_video.Renderer`.
+
+        It is injected rather than branched on the spec's type because the CALLER is the only thing
+        that knows what a render needs: a distance-locked compare export takes a SECOND session
+        (pane B's, which for a cross-recording compare is a different recording entirely), and that
+        is not on the spec and has no business being — a spec describes windows and files, not the
+        objects a render reads them through. Everything else about running a render off the UI
+        thread is identical, which is why this is one argument and not a second worker."""
         super().__init__()
         self._session = session
         self._spec = spec
+        self._make_renderer = make_renderer or export_video.Renderer
         self._cancelled = False
 
     def cancel(self):
@@ -31,7 +41,7 @@ class VideoExportWorker(QThread):
 
     def run(self):
         try:
-            renderer = export_video.Renderer(self._session, self._spec)
+            renderer = self._make_renderer(self._session, self._spec)
             renderer.run(progress=lambda d, t: self.progress.emit(d, t),
                          cancel=lambda: self._cancelled)
             self.finished_export.emit(True, "")

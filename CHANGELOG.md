@@ -10,6 +10,17 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **Export the two-lap comparison — locked to the same point on TRACK, not the same time on the
+  clock.** Compare mode has always been on screen only; **File ▸ Export comparison video…** now
+  renders the pair you are comparing into one MP4, stacked or side by side. Both panes are held at
+  the same track position, so as the faster lap pulls ahead the two frames stay at the same corner
+  and the visible gap between the two running clocks *is* the delta — the pane B stream is
+  resampled onto pane A's frames, not offset by a constant. Measured on a real session (best lap
+  vs a lap 1.64 s slower, 5.5 m longer round): the two panes' normalized track positions agree to
+  2e-15, and the karts stay a mean 3.4 m apart along the track for the whole lap, where starting
+  both clips together drifts to 22.8 m by the finish. It works across recordings too (each pane
+  converts on its own camera clock), and the clip carries the first lap's audio alone — the second
+  pane is time-warped, so its sound would be too.
 - **A documented quality-marker vocabulary, and the exports now use it.** Pacer has always marked a
   number it cannot fully stand behind, in a house style: `(est)`, the muted-italic provisional
   demotion, ⚠ for a GPS dropout, ⊘ for a lap left out. Those stay exactly where they are in the app,

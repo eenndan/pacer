@@ -352,7 +352,10 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
     EXEMPT: set[tuple[str, str]] = {
         # --- extents, not gaps: a dialog's own measure (see the paragraph above). Not this lane's.
         # moved out of app.py with the rest of the export cluster (§7.1)
-        ("export_controller.py", "ExportController._ask_export_options"),  # 400 px dialog measure
+        # ONE entry for BOTH export pickers now: the overlay one and the distance-locked comparison
+        # one are built in the same `_export_dialog` shell at the same 460 px measure, instead of
+        # two copies of the same fourteen lines drifting apart.
+        ("export_controller.py", "ExportController._export_dialog"),  # 460 px dialog measure
         ("coaching_panel.py", "OpportunitiesDialog.__init__"),  # 720 px dialog measure
         ("coaching_panel.py", "OpportunitiesDialog._go_button"),  # 88 px button floor
         ("help_dialog.py", "ShortcutsDialog.__init__"),        # 560 px reading measure
