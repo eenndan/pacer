@@ -25,7 +25,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from . import chapters
+from . import chapters, media_clock
 from .gmeter_overlay import GMeterOverlay
 
 # The g-meter overlay sits in the TOP-RIGHT corner of the video, sized as a FRACTION of the
@@ -330,14 +330,28 @@ class PlayerPane(QWidget):
     def set_muted(self, muted: bool):
         self.audio.setMuted(bool(muted))
 
+    def _clock(self):
+        """This pane's telemetry->media conversion — the recording's own, off the ChapterMap it was
+        opened with (so a cross-recording pane B converts with the REFERENCE recording's clock, not
+        the primary's). IDENTITY when there is no map or no fitted clock."""
+        return media_clock.clock_of(self._chapters)
+
     def seek(self, seconds: float):
-        """Seek to a GLOBAL session time. Maps to (chapter, local); if that's the current source
-        seek directly, else switch source and apply the local seek once the new media has loaded
-        (preserving the current play/pause state)."""
+        """Seek to a GLOBAL session time ON THE TELEMETRY CLOCK. Maps to (chapter, local); if that's
+        the current source seek directly, else switch source and apply the local seek once the new
+        media has loaded (preserving the current play/pause state).
+
+        THIS PANE IS THE APP'S SEAM BETWEEN THE TWO CLOCKS, and it is the only one: every caller —
+        the lap-seek, the scrub drag, the slider, the compare fan-out — speaks the telemetry clock
+        the rest of the app speaks, and the conversion to media time happens HERE, once, on the way
+        into the media player (and back again in `_on_position`). Before this, a lap start was
+        handed to the player as if it were a media time, which by the end of a long recording put
+        the picture ~0.2 s away from the moment asked for — and, within that distance of a chapter
+        boundary, could resolve to the wrong chapter file. See studio/media_clock.py."""
         if self._chapters is None:
             self.player.setPosition(int(seconds * 1000))
             return
-        index, local = self._chapters.to_local(seconds)
+        index, local = self._chapters.to_local(self._clock().to_media(seconds))
         if index == self._current_chapter:
             if self._switching or self._pending is not None:
                 # switch to THIS chapter still in flight: fold the new target into the deferred seek
@@ -563,11 +577,12 @@ class PlayerPane(QWidget):
 
     # ------------------------------------------------------------- player events
     def _on_position(self, ms: int):
-        """Local media position -> global session time (so all telemetry sync sees one clock).
-        Compare mode: at the window end (within tolerance) pause and clamp the emitted position to
-        the end so the pane parks on the lap's last frame; cross-chapter auto-advance is untouched
-        (it carries a seam-straddling lap up to that end)."""
-        global_s = self._offset() + ms / 1000.0
+        """Local media position -> global session time ON THE TELEMETRY CLOCK (so all telemetry
+        sync sees one clock — the same one `seek` accepts, and the one every Session series is
+        indexed by). Compare mode: at the window end (within tolerance) pause and clamp the emitted
+        position to the end so the pane parks on the lap's last frame; cross-chapter auto-advance is
+        untouched (it carries a seam-straddling lap up to that end)."""
+        global_s = self._clock().to_telemetry(self._offset() + ms / 1000.0)
         win = self._lap_window
         if win is not None and global_s >= win[1] - _WINDOW_STOP_TOL_S:
             # reached the lap end: pause and report the clamped end (idempotent).

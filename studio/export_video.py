@@ -589,6 +589,26 @@ class ExportSpec:
         return bool(self.config.overlay_only and self.config.alpha_codec == ALPHA_PNG)
 
 
+# --------------------------------------------------------------------------- clock conversion
+# EVERY TIME IN THIS MODULE IS A MEDIA TIME — ffmpeg seeks with it, `ChapterMap` resolves the source
+# file from it, and `frame_times` stamps the frames with it. Everything a Session states is a
+# TELEMETRY (GPS9 true-clock) time. The two drift apart by up to 0.22 s over a long recording (see
+# studio/media_clock.py), so the module converts at exactly two places: `lap_window_for_export`
+# takes the lap window INTO media time, and the per-frame lookups take a frame's time BACK before
+# they index the session. Both go through these two helpers, which duck-type the conversion so the
+# dozens of stand-in sessions in the tests (and any session with no clock) mean "no conversion".
+def _media_time(session, t: float) -> float:
+    """A Session telemetry time -> the media time to seek the picture to."""
+    fn = getattr(session, "media_time", None)
+    return float(fn(t)) if callable(fn) else float(t)
+
+
+def _telemetry_time(session, t: float) -> float:
+    """A frame's media time -> the telemetry time to ask this session about."""
+    fn = getattr(session, "telemetry_time", None)
+    return float(fn(t)) if callable(fn) else float(t)
+
+
 # --------------------------------------------------------------------------- trim math
 def footage_duration(session) -> float | None:
     """The FOOTAGE's total length on the global media clock, or None when the session cannot state
@@ -610,9 +630,16 @@ def footage_duration(session) -> float | None:
 def lap_window_for_export(session, lap_id: int, lead_in: float = 0.0,
                           lead_out: float = 0.0) -> tuple[float, float] | None:
     """The MEDIA-clock (t0, t1) window to RENDER for `lap_id`: the lap's own window
-    (== Session.lap_window: start, start+lap_time) widened by `lead_in` seconds of run-up and
-    `lead_out` of run-off, clamped to the footage. None if the lap window itself is unusable.
-    Unpadded (the default) this is exactly `Session.lap_window`, unchanged.
+    (`Session.lap_window`, CONVERTED onto the media clock) widened by `lead_in` seconds of run-up
+    and `lead_out` of run-off, clamped to the footage. None if the lap window itself is unusable.
+
+    THE CONVERSION IS THE POINT OF THIS BEING A FUNNEL. `Session.lap_window` answers on the GPS9
+    true clock — the clock lap times are validated on — and this module seeks the picture, which
+    runs on the media clock. Handing the one to the other is what made the last lap of an
+    84-minute recording start ~5 frames early at the default 30 fps (~10 at 59.94), growing with
+    position through the recording; see studio/media_clock.py. The padding and the footage clamp
+    then happen in media time, which is also the clock `footage_duration` speaks — before this,
+    `t1` was compared against the chapter table's total in the wrong units.
 
     THE PADDING HAPPENS IN THIS FUNNEL, and it happens BEFORE `resolve_video_source` ever sees the
     window. Source resolution is what picks the chapter file and the concat span, so a lead-in that
@@ -640,7 +667,8 @@ def lap_window_for_export(session, lap_id: int, lead_in: float = 0.0,
     win = session.lap_window(lap_id)
     if win is None:
         return None
-    lap_t0, lap_t1 = float(win[0]), float(win[1])
+    lap_t0 = _media_time(session, float(win[0]))
+    lap_t1 = _media_time(session, float(win[1]))
     if not (lap_t1 > lap_t0):
         return None
     t0 = min(lap_t0, max(0.0, lap_t0 - max(0.0, float(lead_in))))
@@ -707,13 +735,20 @@ class OverlayValues:
 
 
 def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> OverlayValues:
-    """Resolve the overlay values at media time `t` the SAME way app._apply_readout does:
+    """Resolve the overlay values for the frame at MEDIA time `t`, the SAME way app._apply_readout
+    does — with `tt = session.telemetry_time(t)`, the instant that frame is a picture OF:
 
-      * lap        = session.lap_at_time(t)
-      * marker idx = session.index_at_time(t)        (nearest trace sample)
+      * lap        = session.lap_at_time(tt)
+      * marker idx = session.index_at_time(tt)       (nearest trace sample)
       * speed km/h = session.tv[idx]                 (the per-sample km/h array)
-      * Δ-to-best  = session.delta_at_lap(lap, t)    (normalized-distance vs the best/ref lap)
-      * g          = session.g_at_time(t)            (kart-frame lat/long/total in g)
+      * Δ-to-best  = session.delta_at_lap(lap, tt)   (normalized-distance vs the best/ref lap)
+      * g          = session.g_at_time(tt)           (kart-frame lat/long/total in g)
+
+    THE CONVERSION IS THE SECOND HALF OF THE FIX `lap_window_for_export` starts. Once the window is
+    on the media clock, `frame_times` stamps every frame with a media time — and a session's series
+    are all indexed on the telemetry clock, so asking them with a frame time directly would put the
+    error straight back, now spread over the numbers instead of the seek. Sessions with no clock
+    (the stand-ins here, a GPS5 camera) convert by identity, so nothing about them changes.
 
     Single-sourcing these here keeps the burned-in numbers identical to the app's, and makes the
     per-frame lookup unit-testable against a synthetic Session (no Qt, no ffmpeg).
@@ -734,18 +769,23 @@ def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> Over
     clip is not OF a lap, so pinning one would be the wrong lie in the other direction: every
     frame names the lap it is actually in, out-laps and pit time read as "no lap", and the clock
     restarts at each line — which is what the live readout does over the same footage."""
+    # The frame's own instant on the clock every session series is indexed by. The window
+    # comparisons below stay in MEDIA time (spec.lap_t0/lap_t1 are media, like `t`); only the
+    # lookups cross over.
+    tt = _telemetry_time(session, t)
     if spec is None or spec.follow_laps:
-        lap_id = session.lap_at_time(t)
-        started, finished, clock_t = lap_id is not None, False, t
+        lap_id = session.lap_at_time(tt)
+        started, finished, clock_t = lap_id is not None, False, tt
     else:
         lap_id = spec.lap_id
         started = t >= spec.lap_t0 - 1e-9
         finished = t >= spec.lap_t1
-        clock_t = min(max(t, spec.lap_t0), max(spec.lap_t0, spec.lap_t1 - _LAP_CLOCK_EPS))
-    i = session.index_at_time(t)
+        clock_t = _telemetry_time(
+            session, min(max(t, spec.lap_t0), max(spec.lap_t0, spec.lap_t1 - _LAP_CLOCK_EPS)))
+    i = session.index_at_time(tt)
     speed = float(session.tv[i]) if i is not None and len(session.tv) else None
     delta = session.delta_at_lap(lap_id, clock_t) if (lap_id is not None and started) else None
-    g = session.g_at_time(t) if getattr(session, "has_gmeter", False) else None
+    g = session.g_at_time(tt) if getattr(session, "has_gmeter", False) else None
     return OverlayValues(t=t, lap_id=lap_id, speed_kmh=speed, delta_s=delta, g=g, marker_index=i,
                          lap_started=started, lap_finished=finished)
 
@@ -1621,14 +1661,20 @@ def _strip_runs(session, vals: OverlayValues, lap_t0: float, is_best: bool,
     is clamped into [0, span] at BOTH ends — identical to the unclamped form for every frame
     between the lines, and the difference is exactly what stops a lead-out's clock overrunning the
     lap. `lap_t0` is the LAP's start, used only when the session cannot supply a lap window (with a
-    lead-in the clip's own t0 would count the run-up)."""
+    lead-in the clip's own t0 would count the run-up).
+
+    THE ELAPSED TIME IS MEASURED ON THE TELEMETRY CLOCK. `vals.t` is a frame's media time and
+    `session.lap_window` answers on the true clock, so the subtraction has to happen in one of them
+    — and it has to be the one the lap was TIMED on, or the burned-in clock would not reach the lap
+    time at the flag. The no-window branch below keeps both terms in media time instead."""
     if vals.lap_id is None:
         return None
     win = session.lap_window(vals.lap_id)
     if win is not None:
         ls, le = win
         span = le - ls
-        elapsed = 0.0 if span <= 0 else min(max(vals.t - ls, 0.0), span)
+        tt = _telemetry_time(session, vals.t)
+        elapsed = 0.0 if span <= 0 else min(max(tt - ls, 0.0), span)
         frac = 0.0 if span <= 0 else elapsed / span
     else:
         frac = 0.0
