@@ -1020,6 +1020,10 @@ class CentralView(QWidget):
             if w is not None:
                 bounds.extend(w)
         self.video.set_lap_ticks(bounds)
+        # …and the same bar's GPS-quality strip, from the SAME session. It is pushed here, beside
+        # the lap ticks, because both annotate the scrub axis and both are session facts the view
+        # is handed rather than derives.
+        self.video.set_quality_timeline(self.session.quality_timeline)
         # The slider + ←/→ seek pane A; in compare distance-lock the same move to pane B (the hook
         # no-ops outside compare, so wiring it once here is safe).
         self.video.set_compare_seek_fanout(self.compare.fanout_seek_b)
