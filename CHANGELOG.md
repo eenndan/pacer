@@ -10,6 +10,15 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **A session record, so comparing two sessions means something.** Each recording can now carry
+  what pacer cannot know: the conditions and temperatures, the tyre set and its age in laps, cold
+  and hot pressures, chassis, gearing, axle, seat and notes — typed by you, never looked up online.
+  A new record opens pre-filled from your last session (the kart did not change overnight) with the
+  tyre laps already advanced, every field optional, and an empty form stored as no record at all.
+  The Library gains sortable **Conditions** and **Tyres** columns beside the lap times, a
+  conditions filter, and a line that says whether the row you are looking at and the row holding
+  the track's best lap were even the same kind of day; the lap panel carries the same in a chip
+  over the times it qualifies. File ▸ Session record….
 - **The charts are an instrument: a datum cursor, window statistics and a tour of your losses.**
   `D` drops a second cursor and a readout under the charts reports the interval between the two —
   elapsed time, distance, the speed at each end, their difference, the mean, min, max, the rate of
