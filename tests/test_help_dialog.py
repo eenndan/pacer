@@ -21,6 +21,7 @@ Real offscreen Qt widgets; no pacer, no telemetry file. The binding half builds 
 __new__ + QMainWindow.__init__ (the seam the other offscreen app tests use), so no session loads.
 Run: QT_QPA_PLATFORM=offscreen python tests/test_help_dialog.py
 """
+import ast
 import os
 import sys
 import tempfile
@@ -29,7 +30,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
+_STUDIO = os.path.join(_REPO, "studio")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QKeySequence, QShortcut  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -146,20 +149,115 @@ def _live_bindings():
     return win, keys
 
 
+def _documented() -> set[str]:
+    """Every key text the card documents, with the multi-key cells split out ("1 · 2 · 3 · 4",
+    "F1  ·  ?", and the Layout row whose cell reads "F  ·  double-click video  ·")."""
+    card = {help_dialog._key_text(key) for _group, rows in SHORTCUT_GROUPS for key, _d in rows}
+    out = set(card)
+    for row in card:
+        out.update(part.strip() for part in row.split("·"))
+    return out
+
+
 def test_every_live_binding_is_on_the_card():
     """The guard for the whole L1-08 class: a binding added in app.py with no row here fails the
     build. Matching is on Qt's own NativeText, so it is platform-correct by construction."""
     win, live = _live_bindings()
-    card = {help_dialog._key_text(key) for _group, rows in SHORTCUT_GROUPS for key, _d in rows}
-    # The multi-key rows document several bindings in one cell ("1 · 2 · 3 · 4", "F1  ·  ?").
-    documented = set(card)
-    for row in card:
-        documented.update(part.strip() for part in row.split("·"))
+    documented = _documented()
     missing = {k: v for k, v in live.items() if k not in documented}
-    assert not missing, f"bound but undocumented: {missing}\ncard rows: {sorted(card)}"
-    assert "⌘O" in documented or "Ctrl+O" in documented, sorted(card)
+    assert not missing, f"bound but undocumented: {missing}\ncard rows: {sorted(documented)}"
+    assert "⌘O" in documented or "Ctrl+O" in documented, sorted(documented)
     win.deleteLater()   # never shown; close() would run closeEvent's session teardown
     print(f"test_every_live_binding_is_on_the_card OK ({len(live)} bindings)")
+
+
+# ---------------------------------------------------- the L1-08 hole: a QShortcut built in a VIEW
+def _dotted(node) -> str | None:
+    """`Qt.Key_F` / `QKeySequence.StandardKey.Open` as a dotted string, or None for anything that
+    is not a plain attribute chain."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def _static_key(node) -> str | None:
+    """The NativeText of the key a `QShortcut(...)` first argument names, or None when the argument
+    is not resolvable from source (a local variable — see `_LIVE_HARVESTED`)."""
+    if isinstance(node, ast.Call):
+        name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        if name != "QKeySequence" or not node.args:
+            return None
+        node = node.args[0]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return QKeySequence(node.value).toString(QKeySequence.NativeText)
+    dotted = _dotted(node)
+    if dotted is None:
+        return None
+    root, *rest = dotted.split(".")
+    obj = {"Qt": Qt, "QKeySequence": QKeySequence}.get(root)
+    for attr in rest:
+        obj = getattr(obj, attr, None)
+    return None if obj is None else QKeySequence(obj).toString(QKeySequence.NativeText)
+
+
+# The modules whose QShortcuts the LIVE half above genuinely covers. It builds a StudioWindow and
+# reads `win.findChildren(QShortcut)`, so it sees exactly the window's own — `app`. A QShortcut
+# built anywhere else escapes it, which is how `F` (video_view, the ⤢ video-focus key) was live and
+# undocumented while a test called itself the guard for undocumented bindings. Adding a module here
+# is a claim that something instantiates it and harvests its shortcuts; the default is to make the
+# key STATICALLY resolvable instead, which costs nothing and needs no harness.
+_LIVE_HARVESTED = {"app"}
+
+
+def test_every_qshortcut_in_the_source_is_on_the_card():
+    """L1-08's OTHER HALF, and the hole the original guard shipped with.
+
+    `_live_bindings` builds a bare StudioWindow — no session, so no CentralView, so no VideoView —
+    and harvests the QShortcuts parented to the WINDOW. `video_view.py` binds `F` on the view
+    itself, so it never appeared, and neither would any future key a panel binds. This closes it
+    without needing to instantiate every view: an AST sweep over the whole package for `QShortcut(`
+    constructions, each key resolved from source and looked up on the card.
+
+    A site whose key comes from a local variable cannot be resolved statically (app.py's
+    `_build_shortcuts` helper is one call site for eleven keys). Those are allowed ONLY in modules
+    the live harvest above genuinely covers — `_LIVE_HARVESTED` — so a new view binding a key from
+    a variable fails here instead of quietly escaping both halves."""
+    documented = _documented()
+    sites, undocumented, unresolvable = 0, {}, []
+    for fn in sorted(os.listdir(_STUDIO)):
+        if not fn.endswith(".py"):
+            continue
+        module = fn[:-3]
+        tree = ast.parse(open(os.path.join(_STUDIO, fn), encoding="utf-8").read(), fn)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and node.args
+                    and (getattr(node.func, "id", None) == "QShortcut"
+                         or getattr(node.func, "attr", None) == "QShortcut")):
+                continue
+            sites += 1
+            key = _static_key(node.args[0])
+            if key is None:
+                if module not in _LIVE_HARVESTED:
+                    unresolvable.append(f"{fn}:{node.lineno}")
+            elif key not in documented:
+                undocumented[f"{fn}:{node.lineno}"] = key
+    assert not undocumented, (
+        f"QShortcut(s) bound in the source with no row on the card: {undocumented}\n"
+        f"card rows: {sorted(documented)}")
+    assert not unresolvable, (
+        f"{unresolvable} build a QShortcut from a value this sweep cannot read, in a module the "
+        f"live-window harvest does not cover ({sorted(_LIVE_HARVESTED)}) — so the key would be "
+        f"bound and documented by nobody. Name the key inline, or extend _LIVE_HARVESTED and the "
+        f"harness that justifies it.")
+    # ...and the sweep must actually be finding things, or "none undocumented" is free.
+    assert sites >= 2, f"the QShortcut sweep found only {sites} construction sites"
+    print(f"test_every_qshortcut_in_the_source_is_on_the_card OK "
+          f"({sites} construction sites across studio/)")
 
 
 def test_card_glyphs_match_the_live_bindings():
