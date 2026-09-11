@@ -50,7 +50,7 @@ from ._signal import fmt_hms, fmt_time, plural
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the digest tile
 # and the coaching headline can never state different totals for the same three corners — L5-02.
-from .coaching_panel import PANEL_TOP_N, _shown_rows
+from .coaching_panel import PANEL_TOP_N, _ranked_shown
 from .consistency import pb_mask
 from .lap_table import (
     BEST_LAP_MARK,
@@ -2185,7 +2185,8 @@ class StatsView(QWidget):
         no coaching data.
 
         L5-02 — the saving is the Coaching panel's ARITHMETIC, not a parallel one: its rows
-        (`_shown_rows`, sub-resolution losses dropped), its count (`PANEL_TOP_N`) and its
+        (`_ranked_shown`: sub-resolution losses dropped, abstained corners excluded), its count
+        (`PANEL_TOP_N`) and its
         rounding (the 2-dp cells the user can add up by eye, summed and re-rounded). Summing the
         raw floats instead made the two surfaces disagree by a rounding penny for the same three
         corners — 0.31 s here against 0.32 s on the Coaching page — and made this tile disagree
@@ -2193,7 +2194,10 @@ class StatsView(QWidget):
         opp_fn = getattr(session, "coaching_opportunities", None)
         opp = opp_fn() if opp_fn is not None else None
         has_rows = getattr(opp, "enough", False) and getattr(opp, "rows", None)
-        rows = _shown_rows(opp)[:PANEL_TOP_N] if has_rows else []
+        # RANKED rows, the same shortlist the Coaching headline totals — the per-corner evidence
+        # gate sinks the corners whose claim is inside their own lap-to-lap spread, and a tile that
+        # summed those would state a saving the page beside it refuses to.
+        rows = _ranked_shown(opp)[:PANEL_TOP_N] if has_rows else []
         if pace is None or not rows:
             self.t_digest.set(None)
             self.t_digest.setToolTip("")
@@ -2620,7 +2624,10 @@ class StatsView(QWidget):
                  f"Summed, that is {total:.2f} s."]
         opp_fn = getattr(session, "coaching_opportunities", None)
         opp = opp_fn() if opp_fn is not None else None
-        rows = _shown_rows(opp) if getattr(opp, "enough", False) else []
+        # The Coaching tab's own totals are over its RANKED rows (the corners that survived its
+        # per-corner evidence gate), so this reconciliation quotes the same set — a "totals X s"
+        # here that included abstained corners would not reconcile with the page it names.
+        rows = _ranked_shown(opp) if getattr(opp, "enough", False) else []
         if rows:
             top = rows[:PANEL_TOP_N]
             parts.append(

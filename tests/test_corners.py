@@ -65,6 +65,98 @@ def speed_profile(cum, phase: float):
     return 12.0 + 8.0 * np.sin(2 * np.pi * cum / cum[-1] + phase) ** 2
 
 
+def closed_stadium(ds: float = 1.5, mirror: bool = False):
+    """`stadium` with the loop actually CLOSED — one final sample repeating the start point at
+    s = TOTAL, the way a materialized lap ends on its interpolated finish-line crossing. Only a
+    closed lap has a total heading change of exactly one turn, which is what the invariant below
+    asserts; `stadium` alone stops a sample short of the line."""
+    xs, ys, cum = stadium(ds, mirror)
+    return np.append(xs, xs[0]), np.append(ys, ys[0]), np.append(cum, TOTAL)
+
+
+# -------------------------------------------------------------- the closed-loop invariant
+# A lap is a closed circuit, so its total heading change is exactly one turn. That is the only
+# EXACT target anywhere near this module — it holds whatever the racing line, the track shape,
+# the sample spacing or the smoothing, and unlike a correlation or a regression slope it cannot
+# be satisfied by a channel that is merely well-shaped. Everything downstream of kappa inherits
+# it, so it is asserted here rather than left to the one recording someone happens to load.
+def test_curvature_integrates_to_exactly_one_turn_per_lap():
+    """int kappa ds = 2*pi over a closed lap, for either handedness and at any sample spacing."""
+    for mirror, turns in ((False, +1.0), (True, -1.0)):
+        for ds in (0.75, 1.5, 3.0):
+            xs, ys, cum = closed_stadium(ds, mirror)
+            loop = float(np.trapezoid(C.lap_curvature(xs, ys, cum), cum)) / (2 * np.pi)
+            assert abs(loop - turns) < 0.01, (mirror, ds, loop)
+            print(f"ok   closed loop ds={ds}m mirror={mirror}: "
+                  f"int kappa ds = {loop:+.5f} x 2pi (exact {turns:+.1f})")
+
+
+def test_yaw_rate_integrates_to_one_turn_on_any_speed_profile():
+    """The rate form of the same invariant: int (dtheta/dt) dt = int kappa ds = 2*pi, whatever
+    the driver did with the throttle. The lap is driven three times over the same geometry at
+    three different (varying) speed profiles, and the rotation must not notice."""
+    xs, ys, cum = closed_stadium()
+    for phase in (0.0, 1.0, 2.0):
+        t = elapsed_for(cum, speed_profile(cum, phase))
+        loop = float(np.trapezoid(C.lap_yaw_rate(xs, ys, cum, t), t)) / (2 * np.pi)
+        assert abs(loop - 1.0) < 0.01, (phase, loop)
+        print(f"ok   yaw rate over a {t[-1]:.1f} s lap: {loop:+.5f} x 2pi")
+
+
+def test_the_speed_column_cannot_move_a_lap_s_rotation():
+    """The defect `lap_yaw_rate` exists to prevent, injected deliberately.
+
+    On a real trace the GPS Doppler speed and the odometer are two DIFFERENT measures of how far
+    the kart went, and they disagree by MORE in a corner than on a straight, because the position
+    trace rounds corners off and the Doppler speed does not (measured on D24: (v dt)/ds is 0.99
+    on the straights and 1.07-1.08 in the tightest corner). `v * kappa` multiplies one by the
+    derivative of the other, so it inflated a lap's rotation by 6.5-10 % — an error no
+    correlation could see. Here the same curvature-proportional disagreement is injected into a
+    speed column: the shipped form must over-read, and `lap_yaw_rate`, which never touches that
+    column, must not move."""
+    xs, ys, cum = closed_stadium()
+    t = elapsed_for(cum, speed_profile(cum, 0.0))
+    kappa = C.lap_curvature(xs, ys, cum)
+    # A Doppler column that reads 8 % long exactly where the trace curves — the D24 signature.
+    doppler = np.gradient(cum, t) * (1.0 + 0.08 * np.abs(kappa) / np.max(np.abs(kappa)))
+    inferred = float(np.trapezoid(doppler * kappa, t)) / (2 * np.pi)
+    fixed = float(np.trapezoid(C.lap_yaw_rate(xs, ys, cum, t), t)) / (2 * np.pi)
+    assert inferred > 1.05, f"the fixture must reproduce the defect, got {inferred:.4f}"
+    assert abs(fixed - 1.0) < 0.01, fixed
+    print(f"ok   a corner-biased speed column: v*kappa reads {inferred:.4f} x 2pi, "
+          f"lap_yaw_rate {fixed:.4f} x 2pi")
+
+
+def test_yaw_rate_accepts_a_precomputed_kappa_and_rejects_a_foreign_one():
+    """The `kappa=` fast path must be the SAME number, and a profile from another lap — the one
+    way a caller can get it wrong — must raise rather than multiply through silently."""
+    xs, ys, cum = closed_stadium()
+    t = elapsed_for(cum, speed_profile(cum, 0.0))
+    k = C.lap_curvature(xs, ys, cum)
+    assert np.array_equal(C.lap_yaw_rate(xs, ys, cum, t, kappa=k),
+                          C.lap_yaw_rate(xs, ys, cum, t))
+    try:
+        C.lap_yaw_rate(xs, ys, cum, t, kappa=k[:-3])
+    except ValueError as e:
+        print(f"ok   a foreign kappa raises: {e}")
+    else:
+        raise AssertionError("a kappa of the wrong length was accepted")
+
+
+def test_yaw_rate_survives_a_repeated_timestamp():
+    """A chapter seam clamps the time axis monotonic and leaves a duplicated instant. A rate is
+    a division by dt, so that sample would poison the whole lap with a NaN/inf — the same trap
+    `_signal.speed_long_g` guards. The lap's rotation must survive it intact."""
+    xs, ys, cum = closed_stadium()
+    t = elapsed_for(cum, speed_profile(cum, 0.0))
+    seam = len(t) // 2
+    t[seam] = t[seam - 1]                       # np.maximum.accumulate's fingerprint
+    w = C.lap_yaw_rate(xs, ys, cum, t)
+    assert np.all(np.isfinite(w)), "a duplicated instant poisoned the yaw rate"
+    assert abs(float(np.trapezoid(w, t)) / (2 * np.pi) - 1.0) < 0.02
+    print("ok   a duplicated timestamp leaves the yaw rate finite and the lap a full turn")
+
+
 # ------------------------------------------------------------------ detection geometry
 def test_stadium_detection_matches_construction():
     xs, ys, cum = stadium()
