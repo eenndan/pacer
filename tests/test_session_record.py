@@ -737,6 +737,43 @@ def test_the_chip_is_actually_mounted_in_the_real_lap_panel_header():
     print("test_the_chip_is_actually_mounted_in_the_real_lap_panel_header OK")
 
 
+def test_a_valid_json_store_that_load_cannot_read_is_still_backed_up():
+    """`load` falls back to `empty_store()` for a NON-INT version and for a NON-OBJECT `records` —
+    and both of those are perfectly good JSON objects, so `_is_loadable_dict` says yes. The backup
+    guard used to enumerate a SHORTER list than `load` did (unreadable, or a newer int version), so
+    these two shapes were overwritten with NO backup, silently losing a notebook that cannot be
+    rebuilt from the footage. `load`'s own docstring already promised the backup.
+
+    Each payload is written, then a healthy store is saved over it; the `.bak` must hold the
+    ORIGINAL bytes verbatim."""
+    payloads = [
+        ('{"version": "1", "records": {}}', "string version"),
+        ('{"version": 1.5, "records": {}}', "float version"),
+        ('{"version": true, "records": {}}', "bool version"),
+        ('{"records": {}}', "missing version"),
+        ('{"version": 1, "records": []}', "records is a list"),
+        ('{"version": 1, "records": "nope"}', "records is a string"),
+    ]
+    for raw, why in payloads:
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "session_records.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(raw)
+
+            # load must indeed refuse it — otherwise this test is asserting the wrong premise.
+            assert sr.load(path) == sr.empty_store(), why
+
+            sr.save(sr.empty_store(), path)
+
+            bak = path + ".bak"
+            assert os.path.exists(bak), f"no backup taken for {why}"
+            with open(bak, encoding="utf-8") as f:
+                assert f.read() == raw, f"backup is not the original bytes for {why}"
+            # and the healthy store really did land
+            with open(path, encoding="utf-8") as f:
+                assert json.load(f)["version"] == sr.VERSION, why
+
+
 def _run_all():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
