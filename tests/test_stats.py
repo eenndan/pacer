@@ -51,13 +51,20 @@ _APP = themed_app()
 
 from studio.stats import (  # noqa: E402
     LAT_G_BAND,
+    MATRIX_MIN_LAPS,
+    MATRIX_SCALE_MIN_S,
     MIN_KEPT_FRAC,
     MIN_SPLIT_LAPS,
     MOVING_MS,
     SPEED_BAND,
+    STINT_GAP_LAPS,
+    STINT_GAP_MIN_S,
+    TREND_MIN_LAPS,
+    VMIN_STEADY_BAND,
     BandReport,
     Bands,
     SessionStats,
+    Stint,
     band_edges,
     band_seconds,
     best_consecutive_mean,
@@ -76,6 +83,10 @@ from studio.stats import (  # noqa: E402
     phase_matrix,
     sample_durations,
     sector_medians,
+    split_matrix,
+    split_stints,
+    stint_gap_s,
+    stint_rows,
     straights_report,
     theil_sen_slope,
     within_pct_of_best,
@@ -581,7 +592,14 @@ def _settle(n=6):
         _APP.processEvents()
 
 
-def _fake_stats_service(*, has_g=True, laps=True):
+def _fake_stint(index, n, best, median, *, sigma=0.4, trend=-0.03, vmin=48.0, vmin_trend=0.02,
+                start=0.0, gap_before=None):
+    return Stint(index=index, lap_ids=list(range(n)), start_s=start, end_s=start + n * median,
+                 gap_before_s=gap_before, best=best, median=median, sigma=sigma, trend=trend,
+                 vmin_median=vmin, vmin_trend=vmin_trend)
+
+
+def _fake_stats_service(*, has_g=True, laps=True, stints=None):
     from studio.stats import LapStat, PaceStats, SessionTotals
     if not laps:
         # The 0-lap recording: the trace (and so the SESSION totals) is real, every lap-derived
@@ -598,7 +616,10 @@ def _fake_stats_service(*, has_g=True, laps=True):
             # Nothing to distribute with no lap: the DISTRIBUTIONS group hides itself on the
             # same None the friction circle hides on.
             speed_bands=lambda scale=1.0, width=SPEED_BAND: None,
-            lateral_g_bands=lambda width=LAT_G_BAND: None)
+            lateral_g_bands=lambda width=LAT_G_BAND: None,
+            # …and no lap means no RUN. The tile dashes rather than printing a 0 a reader would
+            # take for "the camera never left the pits".
+            stints=list, stint_count=lambda: 0, stint_break_s=lambda: STINT_GAP_MIN_S)
     rows = [
         LapStat(idx=0, time=70.0, vmax_kmh=95.0, avg_kmh=54.0, vmin_kmh=48.0,
                 peak_lat_g=1.4 if has_g else None, peak_brake_g=1.1 if has_g else None,
@@ -630,6 +651,11 @@ def _fake_stats_service(*, has_g=True, laps=True):
             np.arange(40.0, 65.1, width * scale), split=split),
         lateral_g_bands=lambda width=LAT_G_BAND: (
             _fake_bands(np.arange(-1.1, 1.11, width), split=True) if has_g else None),
+        # ONE run by default — what both of the owner's recordings measure at every threshold
+        # from 15 s to 600 s, and the state the STINTS table stays hidden on.
+        stints=lambda: (stints if stints is not None else [_fake_stint(1, 2, 68.2, 69.1)]),
+        stint_count=lambda: len(stints if stints is not None else [1]),
+        stint_break_s=lambda: 207.6,
     )
 
 
@@ -697,7 +723,8 @@ def _fake_segment_bests(single_donor=False):
 
 
 def _fake_view_session(*, has_g=True, sectors=True, laps=True, track_name="Test Circuit",
-                       excluded=(5,), ideal=True, single_donor=False, verified=True):
+                       excluded=(5,), ideal=True, single_donor=False, verified=True,
+                       stints=None, splits=None):
     """The duck-typed read surface StatsView touches — a stub session, no Session machinery.
 
     `laps=False` is the 0-lap recording, `track_name=None` the unregistered track, `excluded=()`
@@ -711,9 +738,18 @@ def _fake_view_session(*, has_g=True, sectors=True, laps=True, track_name="Test 
     cross = CrossCheck(n=1000, lat_corr=0.9, long_corr=0.4, lat_rms_accl=0.5, lat_rms_gps=0.5,
                        long_rms_accl=0.3, long_rms_gps=0.3, align_yaw_deg=10.0,
                        align_reflect=False, ok=True)
+    # The SPLITS grid's own read surface — Session's, not SessionStats' (the splits are a
+    # projection the segmentation owns). `splits` is {lap_id: [split, …]}; absent means a session
+    # with no sector lines, which is every recording the owner has.
+    split_rows = splits or {}
     return SimpleNamespace(
-        stats=_fake_stats_service(has_g=has_g, laps=laps),
+        stats=_fake_stats_service(has_g=has_g, laps=laps, stints=stints),
         valid_lap_ids=lambda: ([0, 1] if laps else []),
+        consistency_lap_ids=lambda: sorted(split_rows),
+        lap_sector_splits=lambda i: list(split_rows.get(i, [])),
+        effective_sector_count=lambda: (
+            max((len(r) for r in split_rows.values()), default=1) - 1),
+        lap_time=lambda i: float(sum(split_rows.get(i, [0.0]))),
         track_name=track_name,
         lap_count=lambda: (2 + len(excluded) if laps else 1),
         # The stitched TARGETS. `best_rolling` renders in PACE; the theoretical best and its
@@ -807,7 +843,15 @@ def test_stats_view_hides_signal_absent_sections():
     from studio.stats_panel import StatsView
     v = StatsView(_fake_view_session(has_g=False, sectors=False))
     assert v._driving_section.isHidden() and v.gg.isHidden()     # no g -> no g sections
-    assert v._sector_section.isHidden() and v.sector_table.isHidden()
+    # NO SECTOR LINES: the TABLES go and the HEADING stays, carrying the one line that says what
+    # is missing and which control supplies it. This assertion used to read
+    # `v._sector_section.isHidden()`, and that was the defect rather than the contract:
+    # `sector_count()` is 0 on all five of the owner's recordings, so hiding the group outright
+    # meant the per-sector table and the split grid existed and were never once seen or named.
+    assert v.sector_table.isHidden() and v.splits_table.isHidden()
+    assert v._splits_section.isHidden()
+    assert not v._sector_section.isHidden() and not v.sectors_empty.isHidden()
+    assert "Add sector" in v.sectors_empty.text()
     # THE THEORETICAL BEST NO LONGER HIDES WITH SECTORS, and this assertion is the gate fix.
     # It used to inherit this section's 0-sector hide, which was right while it was a sum of best
     # SECTOR splits (one sector = one lap = the best lap time). It is a corner/straight composite
@@ -3078,6 +3122,325 @@ def test_the_friction_circle_states_that_its_two_axes_are_not_on_one_window():
                     f"stats_panel types the {const} window as a literal — it must read the "
                     f"constant, or the copy rots the moment the signal changes: {line.strip()!r}")
     print("ok friction circle: both smoothing windows stated, composed from the constants")
+
+
+# ------------------------------------------------------------------- stints
+def test_stint_break_threshold_is_in_the_tracks_own_units():
+    """An absolute "120 s" is five missed laps at a 25 s kart circuit and half a missed lap at a
+    4-minute one, so the threshold is STINT_GAP_LAPS median laps — floored, because three laps of
+    a very short circuit is a spin-and-recover rather than a run change."""
+    assert abs(stint_gap_s([69.2] * 9) - STINT_GAP_LAPS * 69.2) < 1e-9   # D24: ~208 s
+    assert stint_gap_s([20.0] * 9) == STINT_GAP_MIN_S                    # floored
+    assert stint_gap_s([]) == STINT_GAP_MIN_S                            # no laps -> the floor
+    assert stint_gap_s([math.nan, 0.0, 70.0, 70.0]) == STINT_GAP_LAPS * 70.0
+    print("test_stint_break_threshold_is_in_the_tracks_own_units OK")
+
+
+def test_split_stints_breaks_only_where_time_went_unanalysed():
+    """A break is measured in SECONDS OF RECORDING, not in missing lap numbers — which is the
+    one thing a lap-id gap cannot tell you. One dropped lap and six dropped laps are the same
+    "gap in the ids" and completely different events."""
+    # Adjacent laps: pacer cuts at crossings, so lap k+1 starts where lap k ends — gap 0.0.
+    ids, starts, ends = [0, 1, 2], [0.0, 70.0, 140.0], [70.0, 140.0, 210.0]
+    assert split_stints(ids, starts, ends, 200.0) == [[0, 1, 2]]
+    # One lap dropped (70 s hole) — an id gap, but nowhere near a run change.
+    ids, starts, ends = [0, 1, 3], [0.0, 70.0, 210.0], [70.0, 140.0, 280.0]
+    assert split_stints(ids, starts, ends, 200.0) == [[0, 1, 3]]
+    # Five dropped (350 s) — the pit stop.
+    ids, starts, ends = [0, 1, 7], [0.0, 70.0, 490.0], [70.0, 140.0, 560.0]
+    assert split_stints(ids, starts, ends, 200.0) == [[0, 1], [7]]
+    assert split_stints([], [], [], 200.0) == []
+    print("test_split_stints_breaks_only_where_time_went_unanalysed OK")
+
+
+def test_stint_rows_carry_both_trends_and_suppress_them_when_short():
+    """Per run: lap count, best, median, σ and TWO trends — the lap time and the slowest-corner
+    speed, the pair that separates grip going off from the driver going off. Every one of them
+    keeps the gate its session-wide twin carries."""
+    n = TREND_MIN_LAPS + 2
+    ids = list(range(n))
+    times = [70.0 - 0.1 * k for k in range(n)]                      # improving
+    starts = [70.0 * k for k in range(n)]
+    ends = [s + 70.0 for s in starts]
+    vmins = [48.0 - 0.5 * k for k in range(n)]                      # …and grip going with it
+    rows = stint_rows(ids, times, starts, ends, vmins=vmins)
+    assert len(rows) == 1 and rows[0].index == 1 and rows[0].n == n
+    assert rows[0].lap_ids == ids and rows[0].gap_before_s is None
+    assert abs(rows[0].best - min(times)) < 1e-12
+    assert rows[0].trend is not None and rows[0].trend < 0            # lap time falling
+    assert rows[0].vmin_trend is not None and rows[0].vmin_trend < -VMIN_STEADY_BAND
+    assert abs(rows[0].duration_s - (ends[-1] - starts[0])) < 1e-12
+
+    # A two-lap out/in run reports its two times and refuses to describe their "trend".
+    short = stint_rows([0, 1], [70.0, 71.0], [0.0, 70.0], [70.0, 140.0], vmins=[48.0, 47.0])
+    assert len(short) == 1 and short[0].n == 2
+    assert short[0].trend is None and short[0].vmin_trend is None
+    assert short[0].sigma is not None                                 # σ's own floor is 2 laps
+    assert stint_rows([0], [70.0], [0.0], [70.0])[0].sigma is None
+
+    # No speed channel -> both minimum-speed fields are None, never a 0.
+    no_v = stint_rows(ids, times, starts, ends)[0]
+    assert no_v.vmin_median is None and no_v.vmin_trend is None
+
+    # Two runs: the second carries the unanalysed span ahead of it, and both are numbered.
+    ids2 = [0, 1, 8, 9]
+    two = stint_rows(ids2, [70.0] * 4, [0.0, 70.0, 560.0, 630.0], [70.0, 140.0, 630.0, 700.0])
+    assert [s.index for s in two] == [1, 2]
+    assert two[0].gap_before_s is None and abs(two[1].gap_before_s - 420.0) < 1e-9
+    print("test_stint_rows_carry_both_trends_and_suppress_them_when_short OK")
+
+
+def test_stint_boundaries_are_a_subset_of_the_lap_id_gaps_race_pace_already_breaks_on():
+    """THE ONE THING THE STINT VIEW MUST NOT DO: replace the race-pace window.
+
+    §4.2 was fixed by windowing race pace inside runs of consecutive lap IDS, and a stint
+    partition looks like the stronger rule. It is the weaker one. Laps tile the trace, so a gap
+    in the CLOCK can only appear where laps are missing — every stint boundary is an id gap, and
+    an id gap that is merely a dropped lap is not a stint boundary. Windowing on stints would
+    therefore let a 3-lap "sustained run" bridge a lap nobody timed.
+
+    Measured on the real recordings, both ways round: on D24 0060/0062 every adjacency between
+    analysed laps is 0.000 s, so both partitions are one run and race pace is identical
+    (68.6758 / 68.7920 s); with five laps punched out it stays identical again, because the id
+    partition had already broken there."""
+    from studio.stats import consecutive_runs
+
+    ids = [0, 1, 2, 4, 5, 6, 7, 8, 9, 10]          # lap 3 dropped: one 70 s hole
+    starts = [70.0 * i for i in ids]
+    ends = [s + 70.0 for s in starts]
+    stints = split_stints(ids, starts, ends, stint_gap_s([70.0] * len(ids)))
+    runs = consecutive_runs(ids)
+    assert stints == [ids], stints                  # one run: 70 s is not a pit stop
+    assert runs == [[0, 1, 2], [4, 5, 6, 7, 8, 9, 10]], runs
+    # Every stint boundary is also an id boundary — never the other way round.
+    stint_edges = {run[0] for run in stints[1:]}
+    id_edges = {run[0] for run in runs[1:]}
+    assert stint_edges <= id_edges, (stint_edges, id_edges)
+    # …and the window that matters refuses to bridge the hole the stint partition ignores.
+    times = [70.0, 70.0, 70.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
+    assert abs(best_consecutive_mean(times, n=3, ids=ids) - 60.0) < 1e-9
+    print("test_stint_boundaries_are_a_subset_of_the_lap_id_gaps_race_pace_already_breaks_on OK")
+
+
+def test_session_stats_stints_run_over_the_clean_laps_and_clear_on_resegment():
+    arrays = {i: (np.array([0.0, 1000.0]), np.array([40.0, 90.0]), np.array([0.0, 70.0]))
+              for i in range(12)}
+    windows = {i: (70.0 * i, 70.0 * i + 70.0) for i in range(12)}
+    st = _service(valid=list(range(12)), cons=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+                  lap_times={i: 70.0 for i in range(12)}, arrays=arrays, windows=windows)
+    assert st.stint_count() == 1
+    first = st.stints()
+    assert st.stints() is first                        # cached per segmentation
+    assert first[0].n == 12 and first[0].vmin_median == 40.0   # the lap arrays' own minimum
+    st.invalidate()
+    assert st.stints() is not first                    # …and dropped by a re-segment
+    assert abs(st.stint_break_s() - STINT_GAP_LAPS * 70.0) < 1e-9
+
+    # A pit stop: laps 5-8 never analysed, so 280 s of the recording sits between two runs.
+    holed = _service(valid=list(range(12)), cons=[0, 1, 2, 3, 4, 9, 10, 11],
+                     lap_times={i: 70.0 for i in range(12)}, arrays=arrays, windows=windows)
+    assert holed.stint_count() == 2
+    assert [s.n for s in holed.stints()] == [5, 3]
+    assert abs(holed.stints()[1].gap_before_s - 280.0) < 1e-9
+    print("test_session_stats_stints_run_over_the_clean_laps_and_clear_on_resegment OK")
+
+
+# ------------------------------------------------------------------- the split matrix
+def test_split_matrix_refuses_to_decorate_a_thin_session():
+    rows = [[20.0, 25.0, 24.0]] * MATRIX_MIN_LAPS
+    assert split_matrix(list(range(MATRIX_MIN_LAPS - 1)), rows[:-1], columns=3) is None
+    assert split_matrix(list(range(MATRIX_MIN_LAPS)), rows, columns=3) is not None
+    # One column is the lap time, which this page already prints in four other places.
+    assert split_matrix(list(range(MATRIX_MIN_LAPS)), [[69.0]] * MATRIX_MIN_LAPS,
+                        columns=1) is None
+    print("test_split_matrix_refuses_to_decorate_a_thin_session OK")
+
+
+def test_split_matrix_columns_bests_and_the_robust_tint_scale():
+    ids = [0, 1, 2, 3, 4, 5]
+    rows = [[20.0, 25.0], [20.5, 24.5], [21.0, 24.0], [20.2, 26.0], [23.0, 25.5], [20.1, 24.2]]
+    m = split_matrix(ids, rows, columns=2)
+    assert m.columns == 2 and m.lap_ids == ids
+    assert m.bests == [20.0, 24.0]
+    assert m.best_lap == [0, 2]                         # the lap that OWNS each column's best
+    assert abs(m.medians[0] - 20.35) < 1e-9
+    # A p90 of each column's OWN deviations ABOVE ITS MEDIAN, floored — so a lone 3.0 s outlier in
+    # column 0 does not set the threshold column 1 is read against, and vice versa.
+    assert len(m.scales) == 2 and all(s >= MATRIX_SCALE_MIN_S for s in m.scales)
+    assert m.scales[0] < 3.0 and m.scales[1] < 2.0, m.scales
+    # A hyper-consistent session cannot drive the scale below the measurement's own resolution —
+    # this is what stops a percentile from being a rank (10 % of anything is always the worst
+    # 10 %), so a session where nothing is off gets nothing marked.
+    flat = split_matrix(ids, [[20.0, 24.0]] * 6, columns=2)
+    assert flat.scales == [MATRIX_SCALE_MIN_S, MATRIX_SCALE_MIN_S]
+
+    # THE DEFECT THE MEDIAN ANCHOR EXISTS FOR, as the shape that produced it: a TIGHT column
+    # behind a freak best (one lap 1.5 s clear of a column that is otherwise flat), beside a
+    # column with a genuinely wide spread. Anchored on the best, every cell of the tight column is
+    # the same distance behind, so the column's own p90 IS that distance and the whole column
+    # marks. Anchored on the median the freak is one cell below it and moves nothing.
+    n = 12
+    wide = [17.0 + 0.35 * (k % 6) for k in range(n)]            # spread ~1.8 s
+    freak = [16.7] * (n - 1) + [15.2]                            # one lap 1.5 s clear
+    poisoned = split_matrix(list(range(n)), [list(p) for p in zip(wide, freak, strict=True)],
+                            columns=2)
+    over = [sum(1 for r in range(n)
+                if poisoned.cells[r][c] - poisoned.medians[c] >= poisoned.scales[c])
+            for c in range(2)]
+    assert over[1] == 0, ("a freak best must not paint its own flat column as behind",
+                          over, poisoned.scales)
+    assert over[0] <= max(2, n // 5), ("and the wide column still marks only its tail",
+                                       over, poisoned.scales)
+    # …which the best anchor could not do: it puts the whole flat column at the same distance.
+    by_best = sum(1 for r in range(n)
+                  if poisoned.cells[r][1] - poisoned.bests[1] >= 1.5)
+    assert by_best == n - 1, by_best
+
+    # A lap whose projection produced a different column count is BLANKED, never dropped: the
+    # grid is indexed by lap and a missing row would silently renumber every row under it.
+    ragged = split_matrix(ids, rows[:-1] + [[20.0]], columns=2)
+    assert ragged.lap_ids == ids and ragged.cells[-1] == [None, None]
+    print("test_split_matrix_columns_bests_and_the_robust_tint_scale OK")
+
+
+def test_split_matrix_marks_never_split_a_tie_the_display_cannot_show():
+    """Both defects this rule exists for, as the exact shapes that produced them on D24.
+
+    Interior splits are differences of two GPS sample times, so they sit on a ~0.0998 s grid —
+    which is where BOTH marks went wrong. A threshold derived from those values lands on one of
+    its own steps (0060, three lines: S2's came out at 17.1000 with cells at 17.099 and 17.100, so
+    two cells printing the identical `17.10` came out one marked and one plain), and a column
+    minimum is routinely tied at print (0062, five lines: SIX cells read 11.30 in S3, one of them
+    0.001 s quicker than the rest)."""
+    quantum = 0.0998
+    # Seven laps around a median, two of which straddle the threshold by a thousandth.
+    col = [16.40, 16.50, 16.70, 16.70, 16.80, 17.099, 17.100]
+    m = split_matrix(list(range(len(col))), [[v, 20.0] for v in col], columns=2)
+    printed = [round(v, 2) for v in col]
+    assert printed[-1] == printed[-2], printed          # they print identically…
+    assert m.is_behind(len(col) - 1, 0) == m.is_behind(len(col) - 2, 0), (
+        "two cells printing the same value came out one marked and one plain",
+        m.medians[0], m.scales[0])
+
+    # …and every cell level with the best at print carries the ★, not just the float minimum.
+    tied = [11.30, 11.30, 11.299, 11.30, 11.40, 11.50 + quantum]
+    t = split_matrix(list(range(len(tied))), [[v, 20.0] for v in tied], columns=2)
+    assert t.bests[0] == 11.299 and t.best_lap[0] == 2   # the minimum, for the tooltip to name
+    starred = [r for r in range(len(tied)) if t.is_best(r, 0)]
+    assert starred == [0, 1, 2, 3], starred              # every 11.30, not only the 11.299
+    print("test_split_matrix_marks_never_split_a_tie_the_display_cannot_show OK")
+
+
+# ------------------------------------------------------------------- the two new page surfaces
+def _splits_fixture(n=8):
+    """n laps × 3 sub-sectors. Lap 0 owns S1, lap 1 owns S2 and S3; lap 2 is 1.5 s off in S1 —
+    comfortably past the tint scale — and every other lap sits in between."""
+    rows = {i: [20.0 + 0.1 * i, 25.0 + 0.1 * i, 24.0 + 0.1 * i] for i in range(n)}
+    rows[1] = [20.4, 24.5, 23.5]
+    rows[2] = [21.5, 25.4, 24.4]
+    return rows
+
+
+def test_stats_view_runs_tile_and_the_stint_table_that_stays_hidden_on_one_run():
+    _app()
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session())
+    # ONE run is both of the owner's recordings at every threshold from 15 s to 600 s. The tile
+    # carries it; the table would be the PACE tiles above it repeated inside a grid, so it hides.
+    assert v.t_runs.value.text() == "1"
+    assert "one continuous" in v.t_runs.caption.text()
+    assert v._stints_section.isHidden() and v.stints_table.isHidden()
+    assert v.stints_note.isHidden()
+    # No laps at all -> a dash, never the 0 that reads as "the camera never left the pits".
+    lapless = StatsView(_fake_view_session(laps=False))   # held: an inline view is collected
+    assert lapless.t_runs.value.text() == "—"             # under it and Qt deletes the label
+    print("test_stats_view_runs_tile_and_the_stint_table_that_stays_hidden_on_one_run OK")
+
+
+def test_stats_view_stint_table_appears_with_two_runs_and_states_its_sample():
+    _app()
+    from studio.stats_panel import StatsView
+    two = [_fake_stint(1, 20, 68.2, 69.3, sigma=0.81, trend=0.024, vmin=26.3, vmin_trend=0.045),
+           _fake_stint(2, 13, 68.4, 68.9, sigma=2.22, trend=None, vmin=30.4, vmin_trend=0.31,
+                       start=1800.0, gap_before=354.6)]
+    v = StatsView(_fake_view_session(stints=two))
+    assert v.t_runs.value.text() == "2" and "one continuous" not in v.t_runs.caption.text()
+    assert not v._stints_section.isHidden() and v.stints_table.rowCount() == 2
+    assert "km/h" in v._stints_section.text()
+    assert v.stints_table.item(0, 0).text() == "R1"
+    assert v.stints_table.item(0, 1).text() == "20"
+    assert v.stints_table.item(0, 2).text() == "1:08.200"
+    assert v.stints_table.item(0, 4).text() == "0.81"
+    assert v.stints_table.item(0, 5).text() == "+0.02 s/lap"
+    assert v.stints_table.item(0, 6).text() == "26.3"
+    # Inside the shuffled-label band -> prints flat, unsigned. Past it -> signed.
+    assert v.stints_table.item(0, 7).text() == "0.00"
+    assert v.stints_table.item(1, 7).text() == "+0.31"
+    assert v.stints_table.item(1, 5).text() == "—"          # trend suppressed -> em-dash
+    # The break that produced the second row is on the row, and the threshold under the table.
+    assert "not analysed" in v.stints_table.item(1, 0).toolTip() or \
+           "no lap was analysed" in v.stints_table.item(1, 0).toolTip()
+    assert "R1 20 laps" in v.stints_note.text() and "R2 13 laps" in v.stints_note.text()
+    assert "3:28" in v.stints_note.text(), v.stints_note.text()   # 207.6 s, the D24 threshold
+    # mph flips the speed columns AND the heading, like every other speed on this page.
+    v.set_speed_unit("mph")
+    assert "mph" in v._stints_section.text()
+    assert v.stints_table.item(0, 6).text() == "16.3"
+    print("test_stats_view_stint_table_appears_with_two_runs_and_states_its_sample OK")
+
+
+def test_stats_view_split_matrix_marks_the_best_and_the_behind_cells():
+    _app()
+    from PySide6.QtGui import QColor
+
+    from studio import theme
+    from studio.lap_table import BEST_SECTOR_MARK
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session(splits=_splits_fixture()))
+    assert not v._splits_section.isHidden() and v.splits_table.rowCount() == 8
+    header = [v.splits_table.horizontalHeaderItem(c).text()
+              for c in range(v.splits_table.columnCount())]
+    assert header == ["Lap", "S1", "S2", "S3", "Lap time"], header
+    # Lap numbers are 1-based on screen, app-wide.
+    assert v.splits_table.item(0, 1).text().startswith("20.00")
+    assert v.splits_table.item(0, 0).text() == "1"
+    # THE BEST CELL IN EACH COLUMN carries the ★ and the purple — a tint picking ONE cell out of
+    # a column of comparable ones, which is exactly where this app's rule says the mark belongs
+    # (the SECTORS table above deliberately has none: its whole column is bests).
+    assert v.splits_table.item(0, 1).text().endswith(BEST_SECTOR_MARK)
+    assert v.splits_table.item(0, 1).foreground().color() == QColor(theme.best_sector_colour())
+    assert v.splits_table.item(1, 2).text().endswith(BEST_SECTOR_MARK)   # lap 1 owns S2
+    # …and a cell past its sector's own scale carries the behind hue AND the ▼ that survives
+    # greyscale, with BOTH anchors on hover — the typical lap the mark is measured against and
+    # the best the ★ is.
+    slow = v.splits_table.item(2, 1)
+    assert slow.text().startswith(theme.DELTA_BEHIND_ARROW), slow.text()
+    assert slow.foreground().color() == QColor(theme.behind_colour())
+    assert "+1.05 s against your typical S1 (20.45 s)" in slow.toolTip(), slow.toolTip()
+    assert "+1.50 s against the sector best (20.00 s, lap 1)" in slow.toolTip(), slow.toolTip()
+    # A middling cell is plain, and still says both numbers — including the laps that are QUICKER
+    # than typical and still 0.40 s off the best, which is the pair no single anchor can give.
+    mid = v.splits_table.item(1, 1)
+    assert "-0.05 s against your typical S1" in mid.toolTip(), mid.toolTip()
+    assert "+0.40 s against the sector best" in mid.toolTip(), mid.toolTip()
+    # The note states the SAMPLE and the two things a reader cannot see: what the ▼ is measured
+    # against, and the 10 Hz floor the interior columns are quantized to.
+    assert "8 clean laps × 3 sectors" in v.splits_note.text()
+    assert "typical lap" in v.splits_note.text()
+    assert "10 Hz" in v.splits_note.text()
+    print("test_stats_view_split_matrix_marks_the_best_and_the_behind_cells OK")
+
+
+def test_stats_view_split_matrix_hides_under_the_decorative_floor():
+    """"A heat grid over three laps is decoration" — the page must hold that line, not just the
+    reducer. The SECTORS summary above it still stands: three laps have a best and a median."""
+    _app()
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session(splits=_splits_fixture(MATRIX_MIN_LAPS - 1)))
+    assert v._splits_section.isHidden() and v.splits_table.isHidden()
+    assert v.splits_note.isHidden()
+    assert not v._sector_section.isHidden()
+    print("test_stats_view_split_matrix_hides_under_the_decorative_floor OK")
 
 
 if __name__ == "__main__":

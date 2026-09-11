@@ -21,7 +21,15 @@ than an implementation detail and is carried by the `Bands` type: a bar is secon
 sample count, so the bands of one chart sum to a real lap time and two groups of different sizes
 can be laid over each other. The fastest/slowest comparison pools QUARTILES rather than pairing the
 best lap against the median lap, because the pair was measured and does not separate (SPLIT_DENOM
-carries the numbers)."""
+carries the numbers).
+
+STINTS (`stints()` -> `Stint`) are the one reduction here that is not of a channel but of the
+SEGMENTATION: a run on track is what is left between the stretches of recording no lap was
+analysed over. The STINTS block below sets out why that is the only thing this app can see of a
+pit stop, why the threshold is in the track's own units, and why the absolute GPS epoch is not
+consulted. SPLITS (`split_matrix()` -> `SplitMatrix`) is pure presentation over
+`Session.lap_sector_splits`, and its constants exist to keep a heat grid from tinting the 10 Hz
+sample grid its interior columns are quantized to."""
 
 from __future__ import annotations
 
@@ -121,6 +129,88 @@ SPLIT_MIN_SIDE = 3        # ...but never fewer than three laps a side
 # null on both recordings (0.150 vs a p95 of 0.099, and 0.110 vs 0.079), and below it the two
 # "groups" would be one or two laps each — the single-pair defect above, wearing a group's clothes.
 MIN_SPLIT_LAPS = 2 * SPLIT_MIN_SIDE + 2
+
+# --------------------------------------------------------------------- stints
+# A STINT IS A RUN ON TRACK, and the only thing this app can see of one is TIME THAT IS NOT
+# ANALYSED. Laps tile the trace — pacer cuts at start-line crossings, so lap k+1 begins at the
+# instant lap k ends and the media gap between two ADJACENT laps is exactly 0.000 s (measured:
+# every one of the 37 and 64 adjacencies on the two D24 recordings). A break can therefore only
+# show up as laps MISSING from the analysed set: the long lap that contains a pit stop falls
+# outside the ±band and is excluded, a dropout lap is flagged ⚠ and dropped from the clean set,
+# and what is left is a hole whose WIDTH is the seconds the driver spent not being measured.
+#
+# THAT WIDTH IS THE SIGNAL, and it is the one thing a lap-id gap alone cannot give: one missing
+# lap (a dropout, ~69 s here) and six missing laps (a pit stop, ~7 min) are the same "gap of 1 in
+# the id sequence" reading and completely different events.
+#
+# NOT THE ABSOLUTE EPOCH. studio/load.py's header says the GPS9 UTC epoch is not trusted across
+# chapters — only its per-sample SPACING is, re-anchored per contiguous run — so a stint boundary
+# read off `timestamp_ms` would be reading a number the timing pipeline deliberately does not use.
+# It costs nothing here: measured on both recordings the epoch and the analysis clock agree to
+# 0.000 s end to end (0 deltas over 1 s in 28,237 and 46,761 samples, 0 negative), so the analysis
+# clock IS the wall clock wherever there is one, and it stays right where there is not.
+#
+# THE THRESHOLD IS IN THE TRACK'S OWN UNITS. An absolute "120 s" means five missed laps at a 25 s
+# kart circuit and half a missed lap at a 4-minute one. Three median laps' worth of unmeasured
+# time is the break: one or two laps lost to a dropout is not a run change, and at D24's 69.2 s
+# median that puts the threshold at 208 s against the 69 s a single dropped lap costs.
+STINT_GAP_LAPS = 3.0
+# ...with a floor, because the scaling has to survive a very short lap: the quickest kart laps run
+# 20-30 s, where three of them is a spin-and-recover rather than a new run.
+STINT_GAP_MIN_S = 90.0
+# The min-corner-speed trend's "steady" band (km/h per lap) — the tyre channel's TREND_STEADY_BAND.
+# MEASURED as a shuffled-label null: re-order the same per-lap minimum speeds at random and the
+# Theil-Sen slope still lands inside ±0.133 km/h/lap on the 38-lap recording and ±0.029 on the
+# 65-lap one (400 permutations each). 0.15 clears the wider of the two, so "grip is fading" is
+# never printed for a slope that shuffling the laps would have produced anyway. Both recordings
+# read INSIDE the band on their own (+0.142 and -0.026), i.e. grip held on both.
+VMIN_STEADY_BAND = 0.15
+
+# --------------------------------------------------------------------- the split-time matrix
+# The laps x sectors grid. Two numbers it needs and only measurement can give.
+#
+# THE 10 Hz FLOOR IS NOT UNIFORM ACROSS THE ROW. A split is read by projecting the sector line's
+# midpoint onto the lap and taking the elapsed time at the NEAREST TRACE POINT (see
+# Session.lap_sector_splits), so every interior boundary lands on a GPS sample while the lap's own
+# start and finish are interpolated along the chord. The first and last sub-sector are therefore
+# continuous and the ones between them step in whole samples: with three sector lines the two
+# interior columns take 17-18 distinct values across 38 and 65 laps, stepping ~0.05-0.10 s over a
+# total spread of 1.2-3.6 s, while the two end columns take a different value on every single lap.
+# A grid that tinted those middle columns finely would be painting the sample grid.
+#
+# So the tint saturates no finer than this, ~3 sample steps — the smallest difference the
+# measurement can actually resolve in its coarsest column.
+MATRIX_SCALE_MIN_S = 0.30
+# TWO ANCHORS, AND THEY ARE DIFFERENT ON PURPOSE. The ★ marks each column's BEST — a fact, the
+# quickest anyone went through that sector, and the target. The behind mark is measured against
+# that column's MEDIAN — how the sector normally goes for this driver — because the question a
+# heat grid answers is "which lap lost time HERE", and a minimum cannot answer it.
+#
+# RENDERED, NOT REASONED. The first cut measured the mark against the column best on one pooled
+# scale and the grid came out wrong on the owner's own recording: D24 0060 with three sector lines
+# has an S2 best of 15.40 s against a column median of 16.70 and a σ of 0.38 — one lap 0.8 s clear
+# of every other — so 14 of that column's 38 cells were flagged for being ordinary. Scaling per
+# column fixed the pooling half and not the freak half: where a column is TIGHT behind a freak
+# best, every gap-to-best is nearly the same number, so its own 90th percentile is that number and
+# the mark lands on almost the whole column again. Against the median both failure modes go: the
+# freak is one cell below its own median and moves nothing, and each sector is scaled by its own
+# spread (the same three lines give per-column σ of 1.34 / 0.38 / 0.56 / 0.83 s — one scale over
+# all four is too coarse for the tight ones and too fine for the loose one, whichever it takes).
+#
+# So: `scales[c]` is the 90th percentile of column c's own deviations above its median, floored.
+# The FLOOR is what keeps a percentile from being a rank — on a session where every lap is within
+# a tenth, the p90 deviation falls under MATRIX_SCALE_MIN_S, the floor wins and nothing is marked,
+# rather than 10 % of the grid being marked because 10 % of anything is always the worst 10 %.
+#
+# And a percentile needs values to be a percentile of rather than a maximum, which is what sets the
+# lap floor: five laps over the thinnest useful grid (one sector line, two columns) is ten cells,
+# and below that the "p90" is simply the worst cell. A heat grid over three laps is decoration.
+MATRIX_MIN_LAPS = 5
+MATRIX_SCALE_PCT = 90.0
+# The decimals a split is PRINTED to, and a contract rather than a formatting detail — see
+# SplitMatrix.is_behind. It lives here because the comparison that decides the mark has to be made
+# at the same resolution the view prints, and only one of the two can own that number.
+MATRIX_DECIMALS = 2
 
 
 # --------------------------------------------------------------------- value objects
@@ -273,6 +363,95 @@ class PaceStats:
     spread: float | None  # median − best: what the TYPICAL lap gives away (s, ≥ 0). None below
     #                       MIN_DIST_LAPS — with one lap the median IS the best and the honest
     #                       answer is "unknown", not the +0.00 s that reads as a measurement.
+
+
+@dataclass(frozen=True)
+class Stint:
+    """One run on track: the clean laps between two breaks, and its own pace (see the STINTS
+    block above for what a break is and why it is measured on the analysis clock).
+
+    TWO TRENDS AND NO VERDICT. `trend` is the lap time fading or improving; `vmin_trend` is the
+    same fit over the slowest corner speed of each lap. Read together they are the answer to "is
+    it me or the tyres?" — lap time fading WITH the minimum corner speed falling away is grip
+    going off; lap time fading with corner speed holding (and σ widening) is the driver. The pair
+    is reported, the conclusion is not: the app has never measured a stint with a real fade in it
+    (both D24 recordings read steady on BOTH channels against their own shuffled-label nulls), so
+    a rule that named the cause would be an untested inference printed with a measurement's
+    authority. Both slopes carry the same TREND_MIN_LAPS gate as the session trend tile."""
+
+    index: int                   # 1-based, session order
+    lap_ids: list[int]           # the clean laps in it, ascending
+    start_s: float               # media time the first lap started
+    end_s: float                 # ...and the last one finished
+    gap_before_s: float | None   # unanalysed seconds since the previous stint; None on the first
+    best: float                  # quickest lap in the stint (s)
+    median: float                # typical lap (s)
+    sigma: float | None          # sample σ (ddof=1); None below MIN_DIST_LAPS
+    trend: float | None          # lap-time slope, s per lap (Theil–Sen); None below TREND_MIN_LAPS
+    vmin_median: float | None    # typical slowest-corner speed (km/h); None with no speed channel
+    vmin_trend: float | None     # ...and its slope, km/h per lap; None below TREND_MIN_LAPS
+
+    @property
+    def n(self) -> int:
+        return len(self.lap_ids)
+
+    @property
+    def duration_s(self) -> float:
+        """First green flag to last chequer — the stint's own span, gaps inside it included."""
+        return self.end_s - self.start_s
+
+
+@dataclass(frozen=True)
+class SplitMatrix:
+    """The laps × sectors grid behind the Stats page's SPLITS heat table.
+
+    `cells[r][c]` is lap `lap_ids[r]`'s split through sub-sector c, or None where that lap's
+    projection produced no comparable row (never 0 — a missing split is missing). `bests` /
+    `medians` / `scales` are per COLUMN, and `best_lap[c]` is the lap that owns column c's best.
+    `scales[c]` is how far ABOVE THAT COLUMN'S MEDIAN a cell has to be to read as behind — a
+    robust percentile of the column's own upper spread, floored at what the 10 Hz projection can
+    resolve. See MATRIX_SCALE_MIN_S for why the mark is anchored on the median while the ★ is
+    anchored on the best, and why neither is one number for the whole grid."""
+
+    lap_ids: list[int]
+    columns: int
+    cells: list[list[float | None]]
+    bests: list[float | None]
+    medians: list[float | None]
+    best_lap: list[int | None]
+    scales: list[float]
+
+    # A MARK MUST NOT SPLIT A TIE THE DISPLAY CANNOT SHOW, which is why both predicates live here
+    # instead of being re-derived by the view from `cells` and `bests`: each compares the value the
+    # READER IS SHOWN, rounded to MATRIX_DECIMALS, and never the float behind it.
+    #
+    # It is not a theoretical nicety, and both halves were caught on the owner's own recordings by
+    # rendering the grid. Interior splits are differences of two GPS sample times, so they live on
+    # a ~0.0998 s grid:
+    #
+    #   * a threshold derived from those same values lands exactly ON one of its steps — D24 0060
+    #     with three lines put S2's at 17.1000 with cells at both 17.099 and 17.100, so two cells
+    #     printing the identical `17.10` came out one marked and one plain;
+    #   * and a column's minimum is routinely tied at print: 0062 with five lines has SIX cells
+    #     reading 11.30 in S3, of which one happened to be 0.001 s quicker. A ★ on that one is a
+    #     distinction the measurement does not support and the page cannot show.
+    def is_behind(self, row: int, col: int) -> bool:
+        """Does this cell read as notably slower than its sector's typical lap?"""
+        val = self.cells[row][col]
+        med = self.medians[col]
+        if val is None or med is None:
+            return False
+        return round(round(val, MATRIX_DECIMALS) - med, MATRIX_DECIMALS) >= round(
+            self.scales[col], MATRIX_DECIMALS)
+
+    def is_best(self, row: int, col: int) -> bool:
+        """Is this cell the sector's best — or timed level with it? `best_lap[col]` stays the one
+        lap that owns the minimum (it is what a tooltip names); this is what gets the ★."""
+        val = self.cells[row][col]
+        best = self.bests[col]
+        if val is None or best is None:
+            return False
+        return round(val, MATRIX_DECIMALS) <= round(best, MATRIX_DECIMALS)
 
 
 @dataclass(frozen=True)
@@ -744,7 +923,15 @@ def best_consecutive_mean(values, n: int = RACE_PACE_N, ids=None) -> float | Non
     are 1,2,3,10,11,12 would otherwise report a three-lap "sustained run" spanning laps 3→10, i.e.
     across whatever removed 4-9 — a pit stop, a spin, three laps a GPS dropout flagged. With the
     lap ids the window is taken within each run of consecutively-numbered laps and never across a
-    gap. Omitted → the old index behaviour, for callers with no ids to give."""
+    gap. Omitted → the old index behaviour, for callers with no ids to give.
+
+    AND THE ID RUN IS THE RIGHT PARTITION, not the stint one — a distinction worth writing down
+    because the stint view sitting beside this looks like the stronger rule and is the weaker one.
+    Laps TILE the trace (lap k+1 begins where lap k ends, measured 0.000 s on all 101 adjacencies
+    of the two D24 recordings), so a break can only appear where laps are missing, which means
+    every stint boundary is also an id gap — but not every id gap is a stint boundary. One lap
+    dropped for a GPS dropout leaves a ~69 s hole that is far too short to be a run change, and a
+    window bridging it would still be averaging two laps that are not next to each other."""
     a = np.asarray(list(values), float)
     if len(a) < n:
         return None
@@ -763,6 +950,120 @@ def best_consecutive_mean(values, n: int = RACE_PACE_N, ids=None) -> float | Non
             m = float(np.nanmin(means))
             best = m if best is None else min(best, m)
     return best
+
+
+def stint_gap_s(lap_times) -> float:
+    """The break threshold for THIS track, in seconds (see the STINTS block): STINT_GAP_LAPS
+    median laps' worth of unanalysed time, never below STINT_GAP_MIN_S. Falls back to the floor
+    on an empty/degenerate series, which is also the only value a session with no laps can use."""
+    a = np.asarray(list(lap_times), float)
+    a = a[np.isfinite(a) & (a > 0)]
+    if len(a) == 0:
+        return STINT_GAP_MIN_S
+    return max(STINT_GAP_MIN_S, STINT_GAP_LAPS * float(np.median(a)))
+
+
+def split_stints(lap_ids, starts, ends, gap_s: float) -> list[list[int]]:
+    """Split analysed laps into RUNS ON TRACK: a break wherever `gap_s` or more seconds of the
+    recording between two of them was not analysed as a lap.
+
+    `starts[k]` / `ends[k]` are lap `lap_ids[k]`'s media-clock window (Session.lap_window). The
+    gap measured is `starts[k] - ends[k-1]`, so what it counts is precisely the time the excluded
+    and dropout laps between them took — the pit stop, the spin, the dropout — and nothing else.
+    Adjacent laps give exactly 0.0 and never break."""
+    ids = list(lap_ids)
+    s = list(starts)
+    e = list(ends)
+    runs: list[list[int]] = []
+    for k, i in enumerate(ids):
+        gap = None if k == 0 else float(s[k]) - float(e[k - 1])
+        if runs and (gap is None or gap < gap_s):
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    return runs
+
+
+def stint_rows(lap_ids, lap_times, starts, ends, vmins=None,
+               gap_s: float | None = None) -> list[Stint]:
+    """One Stint per run on track (see Stint / split_stints). `vmins` is the per-lap slowest
+    corner speed in km/h (LapStat.vmin_kmh), aligned to `lap_ids`; None or an all-absent series
+    leaves both minimum-speed fields None rather than inventing a zero.
+
+    Every derived statistic carries the gate its session-wide twin carries — σ below
+    MIN_DIST_LAPS and both slopes below TREND_MIN_LAPS are None, so a two-lap out/in run reports
+    its two lap times and refuses to describe their "trend"."""
+    ids = list(lap_ids)
+    times = [float(t) for t in lap_times]
+    s = [float(x) for x in starts]
+    e = [float(x) for x in ends]
+    vs = [None] * len(ids) if vmins is None else list(vmins)
+    if not ids:
+        return []
+    gap = stint_gap_s(times) if gap_s is None else float(gap_s)
+    pos = {i: k for k, i in enumerate(ids)}
+    out: list[Stint] = []
+    prev_end: float | None = None
+    for n, run in enumerate(split_stints(ids, s, e, gap), start=1):
+        ks = [pos[i] for i in run]
+        t = np.asarray([times[k] for k in ks], float)
+        v = np.asarray([np.nan if vs[k] is None else float(vs[k]) for k in ks], float)
+        has_v = bool(np.any(np.isfinite(v)))
+        long_enough = len(run) >= TREND_MIN_LAPS
+        out.append(Stint(
+            index=n,
+            lap_ids=list(run),
+            start_s=s[ks[0]],
+            end_s=e[ks[-1]],
+            gap_before_s=None if prev_end is None else s[ks[0]] - prev_end,
+            best=float(np.min(t)),
+            median=float(np.median(t)),
+            sigma=sigma(t),
+            trend=theil_sen_slope(t, run) if long_enough else None,
+            vmin_median=float(np.nanmedian(v)) if has_v else None,
+            vmin_trend=(theil_sen_slope(v, run) if (has_v and long_enough) else None),
+        ))
+        prev_end = e[ks[-1]]
+    return out
+
+
+def split_matrix(lap_ids, splits_by_lap, columns: int | None = None) -> SplitMatrix | None:
+    """The laps × sectors grid (see SplitMatrix). `splits_by_lap[k]` is lap `lap_ids[k]`'s split
+    list; rows whose length disagrees with the session's column count are kept but blanked, so a
+    lap can never be silently dropped OUT of a table that is indexed by lap.
+
+    None below MATRIX_MIN_LAPS or with fewer than two columns — one column is the lap time, which
+    the page prints in four other places."""
+    ids = list(lap_ids)
+    rows = [list(r) for r in splits_by_lap]
+    n_cols = columns if columns is not None else max((len(r) for r in rows), default=0)
+    if len(ids) < MATRIX_MIN_LAPS or n_cols < 2:
+        return None
+    cells: list[list[float | None]] = []
+    for r in rows:
+        ok = len(r) == n_cols and all(np.isfinite(x) and x > 0 for x in r)
+        cells.append([float(x) for x in r] if ok else [None] * n_cols)
+    bests: list[float | None] = []
+    medians: list[float | None] = []
+    best_lap: list[int | None] = []
+    scales: list[float] = []
+    for c in range(n_cols):
+        col = [(k, row[c]) for k, row in enumerate(cells) if row[c] is not None]
+        if not col:
+            bests.append(None)
+            medians.append(None)
+            best_lap.append(None)
+            scales.append(MATRIX_SCALE_MIN_S)
+            continue
+        k_best = min(col, key=lambda kv: kv[1])[0]
+        med = float(np.median([v for _, v in col]))
+        bests.append(cells[k_best][c])
+        medians.append(med)
+        best_lap.append(ids[k_best])
+        scales.append(max(MATRIX_SCALE_MIN_S,
+                          float(np.percentile([v - med for _, v in col], MATRIX_SCALE_PCT))))
+    return SplitMatrix(lap_ids=ids, columns=n_cols, cells=cells, bests=bests,
+                       medians=medians, best_lap=best_lap, scales=scales)
 
 
 def within_pct_of_best(values, pct: float) -> int | None:
@@ -854,6 +1155,9 @@ class SessionStats:
         # …and the band distributions, keyed by their arguments (the speed bands are binned in
         # whatever unit the page displays, so there is one report per unit, not one per session).
         self._bands_cache: dict[tuple, BandReport | None] = {}
+        # …and the stint partition, which is a function of WHICH laps survive the bands and where
+        # they sit on the clock — both of which a timing-line drag re-decides.
+        self._stints_cache: list[Stint] | None = None
 
     def invalidate(self) -> None:
         """Drop the segmentation-derived caches on re-segment (Session.set_timing_lines);
@@ -861,6 +1165,7 @@ class SessionStats:
         self._lap_stats_cache = None
         self._gg_cache = None
         self._bands_cache = {}
+        self._stints_cache = None
 
     # ------------------------------------------------------------------ trace level
     def totals(self) -> SessionTotals:
@@ -956,6 +1261,43 @@ class SessionStats:
         taken over that list can span whatever was removed — a pit stop, a spin, laps a GPS dropout
         flagged. The lap ids go with the times, and the window never crosses a gap."""
         return best_consecutive_mean(self._clean_times(), ids=self._consistency_lap_ids())
+
+    def stints(self) -> list[Stint]:
+        """The session's runs on track, in order; cached per segmentation.
+
+        Over the CLEAN laps, the same set every pace statistic above runs over — a run's "best"
+        and the PACE group's "best lap" have to be able to be the same lap. The slowest-corner
+        speed comes from `lap_stats()`, so the tyre channel is the identical `vmin_kmh` the
+        SPEED · G group's "slowest corner" tile reduces, never a second estimate of it."""
+        if self._stints_cache is not None:
+            return self._stints_cache
+        ids = self._consistency_lap_ids()
+        windows = [self._lap_window(i) for i in ids]
+        # A lap with no window cannot be placed on the clock — drop the pair together rather than
+        # substituting a zero, which would read as a break of the whole session's length.
+        keep = [k for k, w in enumerate(windows) if w is not None]
+        ids = [ids[k] for k in keep]
+        windows = [windows[k] for k in keep]
+        vmin_by_lap = {st.idx: st.vmin_kmh for st in self.lap_stats()}
+        self._stints_cache = stint_rows(
+            ids,
+            [float(self._lap_time(i)) for i in ids],
+            [w[0] for w in windows],
+            [w[1] for w in windows],
+            vmins=[vmin_by_lap.get(i) for i in ids],
+        )
+        return self._stints_cache
+
+    def stint_break_s(self) -> float:
+        """The unanalysed span this session calls a run change (stint_gap_s over the clean lap
+        times) — the number the STINTS note prints, read from the same place the split used it
+        rather than re-derived from the rows it produced."""
+        return stint_gap_s(self._clean_times())
+
+    def stint_count(self) -> int:
+        """How many runs on track the session holds — the SESSION group's "runs" tile. 0 with no
+        clean laps; 1 is the ordinary answer for a recording the camera rolled straight through."""
+        return len(self.stints())
 
     def pace_cov(self) -> float | None:
         """The consistency rating: coefficient of variation (σ/median %) of the clean lap

@@ -10,6 +10,28 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **The Stats page counts your runs on track, and breaks the pace down per run when there is more
+  than one.** A run ends where the recording holds time no lap was analysed over — a pit stop, a
+  spin, laps a GPS dropout flagged — thresholded at three median laps' worth of it, so it means the
+  same thing on a 25 s kart circuit as on a 4-minute one. Each run gets its lap count, best,
+  median, σ and two trends side by side: how the LAP TIME is going, and how the SLOWEST CORNER
+  SPEED is going. Read together those are the answer to "is it me or the tyres?" — and the pair is
+  reported with no verdict attached, because neither of the owner's own recordings has a fade in it
+  to check a verdict against. Both recordings measure as ONE continuous run at every threshold from
+  15 s to 600 s, so the new SESSION "runs" tile says `1 · one continuous` and the table stays
+  hidden rather than repeating the PACE tiles inside a one-row grid.
+- **The split-time matrix — every clean lap down the page, every sector across it.** The paddock
+  view, over splits pacer already computed: ★ and the session-best purple on each sector's quickest
+  cell, the behind hue and a ▼ where a lap gave away more than this session's own 90th-percentile
+  gap, and the exact deficit plus the lap that owns the best on hover. It states what it is over
+  and how fine it really is: a sector boundary is read at the nearest GPS fix, so the interior
+  sectors step in whole 10 Hz samples (measured: 17–18 distinct values across 38 and 65 laps) while
+  the first and last run continuously. Hidden under five laps — a heat grid over three laps is
+  decoration.
+- **A recording with no sector lines is now told so, where the sector tables would be.** Sector
+  count is zero on every recording the owner has, and the Stats page used to answer that by hiding
+  the whole SECTORS group — so two surfaces existed and were never once seen or named. The heading
+  now stands with one line saying what sector lines unlock and which control places them.
 - **Any of three numbers can now show its work.** Right-click a lap time or a sector split in
   the lap table, or a corner's Best in the Stats page's CORNERS table, and *Inspect this number…*
   opens the evidence: every raw GPS fix that produced it, the method in one sentence, N and the

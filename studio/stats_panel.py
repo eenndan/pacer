@@ -55,6 +55,7 @@ from .coaching_panel import PANEL_TOP_N, _ranked_shown
 from .consistency import pb_mask
 from .lap_table import (
     BEST_LAP_MARK,
+    BEST_SECTOR_MARK,
     DROPOUT_MARK,
     DROPOUT_SUFFIX,
     DROPOUT_TOOLTIP,
@@ -400,6 +401,57 @@ BRAKING_TOOLTIP = ("Braking repeatability per corner, over the clean laps: the c
 # qualifies: the exported report and the clipboard summary print the same verdict off the same
 # slope, and export_data is Qt-free by contract so it cannot reach into this module.
 SECTOR_COLUMNS = ["Sector", "Best", "Median", "σ (s)"]
+# What a session with no sector lines sees WHERE the per-sector tables would be. The page used to
+# hide the whole SECTORS group on `sector_count() == 0`, which is the state of every recording the
+# owner has (D24 1ch and 3ch, Sandown 1ch and 3ch, SD_30_08) — so the two surfaces that depend on
+# sector lines were invisible on 100 % of the data, and nothing anywhere said they existed or how
+# to unlock them. The table still hides (it has no rows to show); the HEADING stays, with the one
+# line that turns a blank into an action. Named after the control the reader has to press, which
+# lives in the map's own header.
+SECTORS_EMPTY = ("No sector lines on this track yet. Press “Add sector” above the map to split "
+                 "the lap — every lap is then timed through each sector, and this page gains the "
+                 "per-sector best/median/σ table and the lap × sector split grid below it.")
+STINT_COLUMNS = ["Run", "Laps", "Best", "Median", "σ (s)", "Pace/lap", "Min", "Min/lap"]
+STINTS_TOOLTIP = (
+    "Each RUN on track and how it went. A run ends where the recording holds time that was not "
+    "analysed as a lap — a pit stop, a spin, laps a GPS dropout flagged — and the threshold is "
+    f"{stats_service.STINT_GAP_LAPS:g} median laps' worth of it (never under "
+    f"{stats_service.STINT_GAP_MIN_S:g} s), so it means the same thing on a 25 s kart circuit as "
+    "on a 4-minute one.\n\n"
+    "IS IT YOU OR THE TYRES? The last two columns are the answer, side by side and with no "
+    "verdict attached. Pace/lap is how the LAP TIME is trending through the run; Min/lap is the "
+    "same fit over the slowest corner speed of each lap. Lap time fading while corner speed falls "
+    "away with it is grip going off. Lap time fading while corner speed holds — and σ widening — "
+    "is the driver. Both are suppressed under "
+    f"{stats_service.TREND_MIN_LAPS} laps, and a slope inside "
+    f"±{stats_service.TREND_STEADY_BAND:g} s / ±{stats_service.VMIN_STEADY_BAND:g} prints as flat "
+    "because that is what shuffling the laps of the owner's own recordings produces.")
+#: Columns either side of the per-sector ones in the SPLITS grid: the lap id, then the lap time.
+SPLIT_LEAD_COLUMNS = ["Lap"]
+SPLIT_TAIL_COLUMNS = ["Lap time"]
+SPLITS_TOOLTIP = (
+    "The paddock view: every clean lap down the page, every sector across it. A cell is that "
+    "lap's time through that sector — ★ and the session-best purple on the quickest, the behind "
+    "hue and ▼ where a lap gave away notably more than your TYPICAL lap through the same "
+    "sector.\n\n"
+    "TWO ANCHORS, ON PURPOSE. The ★ is the target: the quickest anyone went. The behind mark is "
+    "measured against that sector's MEDIAN, scaled by that sector's own spread (its 90th "
+    f"percentile above the median, floored at {stats_service.MATRIX_SCALE_MIN_S:g} s), because a "
+    "minimum cannot answer 'which lap lost time here'. Measured with three lines on D24: S2's "
+    "best is 15.40 s against a 16.70 s median — one lap 0.8 s clear of every other — and marking "
+    "against it flagged 14 of that column's 38 cells for being ordinary. The floor stops the "
+    "percentile becoming a rank: where every lap is within a tenth, nothing is marked. Hover any "
+    "cell for both numbers.\n\n"
+    "HOW FINE THE MIDDLE COLUMNS REALLY ARE. A sector boundary is read at the nearest GPS fix, "
+    "so at 10 Hz every INTERIOR sector's time steps in whole samples while the first and last "
+    "are interpolated at the start line and run continuously. Measured with three sector lines "
+    "on the two D24 recordings, the interior columns take 17-18 distinct values across 38 and 65 "
+    "laps; the end columns take a different value on every lap. Differences of a tenth in a "
+    "middle column are one sample, not one tenth of driving.")
+#: The line under the SPLITS grid — the sample it is over, stated where the grid is read.
+SPLITS_NOTE = ("{n} clean laps × {c} sectors. ★ is the sector's best; ▼ is {scale} or more "
+               "slower than that sector's own typical lap, each sector scaled by its own spread. "
+               "Interior sectors are timed to the 10 Hz fix grid (±0.1 s).")
 
 GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — lateral g across, "
               "longitudinal g up (accelerating) / down (braking). A driver using the tyre "
@@ -910,6 +962,22 @@ class _ReportTable(QTableWidget):
         self.setMaximumWidth(self._content_w)
         self._apply_height()
 
+    def set_columns(self, columns: list[str]) -> None:
+        """Re-label the header for a table whose COLUMN COUNT is a property of the session.
+
+        Only the SPLITS grid needs it (one column per sub-sector, and the user adds and removes
+        sector lines live). A no-op when the labels already match, so the ordinary refresh of a
+        fixed-column table costs nothing; `align_headers_over_their_columns` is re-applied because
+        Qt builds fresh header items and they arrive centred."""
+        current = [self.horizontalHeaderItem(c).text() if self.horizontalHeaderItem(c) else ""
+                   for c in range(self.columnCount())]
+        if current == columns:
+            return
+        self.setRowCount(0)
+        self.setColumnCount(len(columns))
+        self.setHorizontalHeaderLabels(columns)
+        align_headers_over_their_columns(self, NUMERIC_COL_START)
+
     def content_width(self) -> int:
         """The width at which this table shows every column — what it would LIKE to be.
 
@@ -1075,8 +1143,19 @@ class StatsView(QWidget):
         self.t_moving = Tile("moving")
         self.t_distance = Tile("distance")
         self.t_clock = Tile("on track")
+        # The tile the SESSION block has been missing since it shipped ("Number of runs waits on
+        # NEXT-tier stints — ship without it"). Its caption says which answer it is giving: on a
+        # recording the camera rolled straight through — which is BOTH of the owner's D24
+        # recordings and every threshold from 15 s to 600 s — "1" is the honest whole story and
+        # the STINTS table below stays hidden rather than printing it again as a one-row grid.
+        self.t_runs = Tile("runs")
+        self.t_runs.setToolTip(
+            "How many separate runs on track this recording holds. A run ends where the "
+            "recording holds time that was not analysed as a lap — a pit stop, a spin, laps a "
+            "GPS dropout flagged — measured on the app's own timing clock, never on the GPS "
+            "UTC epoch (which studio/load.py does not trust across a chapter seam).")
         col.addLayout(self._grid(self.t_laps, self.t_duration, self.t_moving,
-                                 self.t_distance, self.t_clock))
+                                 self.t_distance, self.t_clock, self.t_runs))
 
         # --- DATA TRUST (the start-line/track/exclusion caveats + the timing-quality,
         # g-provenance and IMU↔GPS cross-check card). It sits SECOND, right under the session
@@ -1155,6 +1234,28 @@ class StatsView(QWidget):
         spark_plot.addItem(self._spark_pb_dots)
         spark_plot.addItem(self._spark_over_dots)
         col.addWidget(self.spark)
+
+        # --- the per-RUN breakdown, and the one condition it appears under
+        #
+        # HIDDEN AT ONE STINT, WHICH IS EVERY RECORDING THE OWNER HAS. Measured on both D24 pairs
+        # at thresholds from 15 s to 600 s: one run, 38 and 65 laps, every gap between adjacent
+        # analysed laps exactly 0.000 s. A one-row table here would repeat the PACE tiles directly
+        # above it — same best, same median, same σ, same trend — inside a grid, which is the
+        # duplicate-surface defect this page has been pulled back from twice. So the SESSION
+        # "runs" tile carries the count always, and the breakdown appears only when there is a
+        # breakdown: two runs or more.
+        #
+        # It sits under the sparkline because that is the other surface on this page with a time
+        # axis: the spark shows every clean lap in order, and this says where the order was
+        # interrupted and how the pace differed either side of it.
+        self._stints_section = self._section("STINTS")
+        col.addWidget(self._stints_section)
+        self.stints_table = self._make_table(STINT_COLUMNS)
+        self.stints_table.setToolTip(STINTS_TOOLTIP)
+        col.addWidget(self.stints_table)
+        self.stints_note = WrapLabel()
+        self.stints_note.setProperty("role", "TableNote")
+        col.addWidget(self.stints_note)
 
         # --- the IDEAL LAP, and where it lives
         #
@@ -1376,8 +1477,39 @@ class StatsView(QWidget):
         # (The "theoretical best" tile used to live here, summing this section's best splits and
         # inheriting its 0-sector hide. It is neither of those things now — see the IDEAL LAP
         # block above for where it went and why.)
+        #
+        # THE HEADING NOW SURVIVES A SESSION WITH NO SECTOR LINES, and that is the feature rather
+        # than a fallback: sector_count() is 0 on all five of the owner's recordings, so hiding
+        # the group outright meant two whole surfaces existed and were never once seen or
+        # mentioned. The TABLE still hides — it has nothing to put in a row — and this one line
+        # takes its place, naming the control that fills it (see SECTORS_EMPTY).
+        self.sectors_empty = WrapLabel(SECTORS_EMPTY)
+        self.sectors_empty.setProperty("role", "EmptyBody")
+        self.sectors_empty.setMaximumWidth(theme.EMPTY_MEASURE_PX)
+        col.addWidget(self.sectors_empty)
         self.sector_table = self._make_table(SECTOR_COLUMNS)
         col.addWidget(self.sector_table)
+
+        # --- the SPLIT-TIME MATRIX: laps down, sectors across (hidden with the section)
+        #
+        # HERE, DIRECTLY UNDER THE PER-SECTOR SUMMARY, because it is the same three numbers
+        # unrolled: the table above gives each sector one best / median / σ, and this gives the
+        # laps those were taken over. Reading them apart would mean scrolling a column away to
+        # find out which lap owns a best.
+        #
+        # …and in THIS section column rather than the tall one beside it, which is a layout
+        # decision and was checked against `_span_fits`: group 2 already grows one row per lap
+        # (PER LAP), so a second lap-length grid there makes the balanced 2-column form band and
+        # fall through. Placed in group 1 the two 2-column forms stay balanced, and form #3 —
+        # which stacks 1 and 2 together — is unaffected either way.
+        self._splits_section = self._section("SPLITS")
+        col.addWidget(self._splits_section)
+        self.splits_table = self._make_table(SPLIT_LEAD_COLUMNS + SPLIT_TAIL_COLUMNS)
+        self.splits_table.setToolTip(SPLITS_TOOLTIP)
+        col.addWidget(self.splits_table)
+        self.splits_note = WrapLabel()
+        self.splits_note.setProperty("role", "TableNote")
+        col.addWidget(self.splits_note)
 
         # --- the corner-by-corner session report (hidden without detected corners)
         self._corners_section = self._section("CORNERS")
@@ -2055,6 +2187,14 @@ class StatsView(QWidget):
         self._set_target_tile(self.t_rolling, rolling, ROLLING_TOOLTIP)
         self._set_digest(session, pace)
         self._refresh_spark(session)
+        # The runs count is a SESSION total and set here, with the pace group it is derived from
+        # (the clean laps), rather than up with the other four: it needs `st`, and a recording with
+        # no clean lap has no runs to count — which is a dash, not a 0 the reader would read as
+        # "the camera never left the pits".
+        runs = st.stint_count() if st is not None else 0
+        self.t_runs.set(str(runs) if runs else None,
+                        "runs" if runs != 1 else "runs · one continuous")
+        self._refresh_stints(st, unit, u_label)
         self._refresh_ideal(session)
 
         # SPEED · G — session peaks over the per-lap stats
@@ -2076,7 +2216,8 @@ class StatsView(QWidget):
         self._refresh_bands(st, unit, u_label)
         self._refresh_gg(st)
         self._refresh_driving(st, rows)
-        self._refresh_sectors(session)
+        self._refresh_sectors(session, bool(valid))
+        self._refresh_splits(session, self._split_matrix(session))
         self._refresh_corners(session, unit, u_label)
         self._refresh_braking(session)
         self._refresh_straights(session, unit, u_label)
@@ -2585,10 +2726,16 @@ class StatsView(QWidget):
         env = st.gg_envelope() if st is not None else None
         self.t_grip_ceiling.set(f"{env:.2f} g" if env is not None else None)
 
-    def _refresh_sectors(self, session):
+    def _refresh_sectors(self, session, has_laps: bool):
         sigmas = session.sector_sigmas() if hasattr(session, "sector_sigmas") else []
         has = bool(sigmas)
-        self._sector_section.setVisible(has)
+        # The heading now stands on a session with laps but no sector lines, carrying the one line
+        # that says what is missing and which control supplies it (SECTORS_EMPTY). It still goes
+        # with a LAPLESS recording: the page's own empty-state block already owns that story, and
+        # a second "add sector lines" instruction under it would be advice about a recording that
+        # has no laps to time.
+        self._sector_section.setVisible(has or has_laps)
+        self.sectors_empty.setVisible(has_laps and not has)
         self.sector_table.setVisible(has)
         if not has:
             self.sector_table.setRowCount(0)
@@ -2630,6 +2777,164 @@ class StatsView(QWidget):
             self.sector_table.setItem(
                 k, 3, self._num_item(f"{sig:.2f}" if sig is not None else DASH))
         self._fit_table(self.sector_table)
+
+    def _refresh_stints(self, st, unit, u_label):
+        """The per-run breakdown — shown only where there IS more than one run (see the block
+        that builds it). Every derived number keeps the gate its data layer put on it: σ, the
+        pace trend and the corner-speed trend all dash rather than describe a two-lap run."""
+        rows = st.stints() if st is not None else []
+        has = len(rows) > 1
+        self._stints_section.setVisible(has)
+        self.stints_table.setVisible(has)
+        self.stints_note.setVisible(has)
+        if not has:
+            self.stints_table.setRowCount(0)
+            self.stints_note.setText("")
+            return
+        self._stints_section.setText(f"STINTS · speeds in {u_label}")
+        mono = theme.mono_font(theme.TABLE)
+
+        def cell(text: str) -> QTableWidgetItem:
+            item = QTableWidgetItem(text)
+            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            item.setFont(mono)
+            return item
+
+        t = self.stints_table
+        t.setRowCount(len(rows))
+        for r, stint in enumerate(rows):
+            label = QTableWidgetItem(f"R{stint.index}")
+            label.setToolTip(
+                f"Laps {stint.lap_ids[0] + 1}–{stint.lap_ids[-1] + 1} · "
+                f"{fmt_hms(stint.duration_s)} on track"
+                + ("" if stint.gap_before_s is None else
+                   f" · {fmt_hms(stint.gap_before_s)} of recording ahead of it that no lap was "
+                   "analysed over"))
+            t.setItem(r, 0, label)
+            t.setItem(r, 1, cell(str(stint.n)))
+            t.setItem(r, 2, cell(fmt_time(stint.best)))
+            t.setItem(r, 3, cell(fmt_time(stint.median)))
+            t.setItem(r, 4, cell(f"{stint.sigma:.2f}" if stint.sigma is not None else DASH))
+            t.setItem(r, 5, cell(stats_service.fmt_trend(stint.trend) or DASH))
+            # The tyre channel. Converted at the LAST moment, like every other speed on this page,
+            # and the slope with it: km/h per lap and mph per lap are the same measurement in two
+            # units, so the band it is compared against is applied to the km/h value.
+            vmin = (units.convert_speed(stint.vmin_median, unit)
+                    if stint.vmin_median is not None else None)
+            t.setItem(r, 6, cell(f"{vmin:.1f}" if vmin is not None else DASH))
+            slope = stint.vmin_trend
+            if slope is None:
+                t.setItem(r, 7, cell(DASH))
+            else:
+                # Flat prints as an unsigned 0.00 for the reason fmt_trend prints one beside it:
+                # a "±0.00" reads as a glitch, and a signed near-zero invites a reader to take a
+                # direction off a number the shuffled-label null already covers.
+                flat = abs(slope) < stats_service.VMIN_STEADY_BAND
+                shown = units.convert_speed(slope, unit)
+                t.setItem(r, 7, cell("0.00" if flat else f"{shown:+.2f}"))
+        self._fit_table(t)
+        # THE SAMPLE, under the grid that is read off it. Two runs of 4 and 40 laps are not two
+        # comparable paces, and the row count is the only thing on screen that says so.
+        self.stints_note.setText(
+            "Over the clean laps only — "
+            + " · ".join(f"R{s.index} {plural(s.n, 'lap')}" for s in rows)
+            + f". A run breaks at {fmt_hms(st.stint_break_s())} of unanalysed recording; the "
+              f"trends are suppressed under {stats_service.TREND_MIN_LAPS} laps.")
+
+    @staticmethod
+    def _split_matrix(session):
+        """This session's laps × sectors grid, or None when there is nothing to grid.
+
+        The reads are Session's own (`consistency_lap_ids` / `lap_sector_splits` /
+        `effective_sector_count`) rather than SessionStats', for the same reason `_refresh_sectors`
+        reads them there: the splits are a projection the SEGMENTATION owns, and SessionStats is
+        not given a splits accessor. EFFECTIVE and not placed: a sector line that collapsed onto
+        another one emits no boundary, so the column count has to be the one every lap's split
+        list is actually cut into or the whole grid blanks (see Session.effective_sector_count)."""
+        if not hasattr(session, "lap_sector_splits"):
+            return None
+        n_cols = getattr(session, "effective_sector_count", lambda: 0)() + 1
+        if n_cols < 2:
+            return None
+        ids = session.consistency_lap_ids()
+        return stats_service.split_matrix(
+            ids, [session.lap_sector_splits(i) for i in ids], columns=n_cols)
+
+    def _refresh_splits(self, session, matrix):
+        """The laps × sectors grid. `matrix` is the stats layer's SplitMatrix, or None when the
+        session has no sector lines / too few laps to tint anything (stats.MATRIX_MIN_LAPS)."""
+        has = matrix is not None
+        self._splits_section.setVisible(has)
+        self.splits_table.setVisible(has)
+        self.splits_note.setVisible(has)
+        if not has:
+            self.splits_table.setRowCount(0)
+            self.splits_note.setText("")
+            return
+        n_cols = matrix.columns
+        self.splits_table.set_columns(
+            SPLIT_LEAD_COLUMNS + [f"S{c + 1}" for c in range(n_cols)] + SPLIT_TAIL_COLUMNS)
+        best_colour = QColor(theme.best_sector_colour())
+        behind = QColor(theme.behind_colour())
+        mono = theme.mono_font(theme.TABLE)
+        lap_time = getattr(session, "lap_time", None)
+        # Every number in this grid — cell and tooltip alike — is printed to the resolution the
+        # MARKS are decided at, read from the data layer rather than typed here. A tooltip a digit
+        # finer than the comparison is how "these two cells are identical but one is marked" comes
+        # back (see SplitMatrix.is_behind).
+        d = stats_service.MATRIX_DECIMALS
+        t = self.splits_table
+        t.setRowCount(len(matrix.lap_ids))
+        for r, lap_id in enumerate(matrix.lap_ids):
+            t.setItem(r, 0, QTableWidgetItem(str(lap_id + 1)))
+            complete = True
+            for c in range(n_cols):
+                val = matrix.cells[r][c]
+                col_best = matrix.bests[c]
+                if val is None:
+                    complete = False
+                    item = QTableWidgetItem(DASH)
+                else:
+                    item = QTableWidgetItem(f"{val:.{d}f}")
+                    med = matrix.medians[c]
+                    gap = None if col_best is None else val - col_best
+                    if matrix.is_best(r, c):
+                        # The quickest this sector was driven — a tint picking a cell out of a
+                        # column of comparable ones, which is exactly where this app's rule says
+                        # the mark earns its place (the SECTORS table above deliberately carries
+                        # no ★ because its whole column is bests). Both predicates come from the
+                        # matrix, which compares what is PRINTED — see SplitMatrix.is_behind.
+                        item.setForeground(best_colour)
+                        item.setText(item.text() + BEST_SECTOR_MARK)
+                        item.setToolTip(f"Session-best S{c + 1} — no clean lap is timed quicker "
+                                        "through this sector.")
+                    elif matrix.is_behind(r, c):
+                        item.setForeground(behind)
+                        item.setText(theme.DELTA_BEHIND_ARROW + " " + item.text())
+                    if gap is not None and med is not None and not item.toolTip():
+                        # BOTH anchors in one sentence, because the cell carries both: the mark is
+                        # measured against the typical lap through this sector, the ★ against the
+                        # quickest. Two marks reading off two baselines and saying so beats one
+                        # baseline that answers only half the question (see MATRIX_SCALE_MIN_S).
+                        item.setToolTip(
+                            f"{val - med:+.{d}f} s against your typical S{c + 1} "
+                            f"({med:.{d}f} s); {gap:+.{d}f} s against the sector best "
+                            f"({col_best:.{d}f} s, lap {matrix.best_lap[c] + 1}).")
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                item.setFont(mono)
+                t.setItem(r, c + 1, item)
+            # The row's own total, from the LAP, never from the row: splits are read at the
+            # nearest fix and summing them back would print a lap time this app does not use.
+            lt = lap_time(lap_id) if (complete and lap_time is not None) else None
+            tail = QTableWidgetItem(fmt_time(lt) if lt is not None else DASH)
+            tail.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            tail.setFont(mono)
+            t.setItem(r, n_cols + 1, tail)
+        self._fit_table(t)
+        lo, hi = min(matrix.scales), max(matrix.scales)
+        self.splits_note.setText(SPLITS_NOTE.format(
+            n=len(matrix.lap_ids), c=n_cols,
+            scale=f"{lo:.2f} s" if lo == hi else f"{lo:.2f}–{hi:.2f} s"))
 
     def _corners_note_text(self, session, report) -> str:
         """The one line that connects this page's answers to each other, live.
