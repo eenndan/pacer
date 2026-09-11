@@ -20,6 +20,15 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   including one that was third on its page). The page and the modal lead with one session theme
   and at most two actions instead of twelve findings — and say "no single theme" when there
   is not one.
+- **The Stats page has distributions: where a lap's time actually goes.** A DISTRIBUTIONS group
+  between the SPEED · G peaks and the friction circle draws time at speed and time at lateral g as
+  seconds *per lap*, time-weighted, with your fastest and slowest quartiles laid over the average
+  clean lap. It compares POOLED groups rather than your best lap against your median lap, because
+  the pair was measured and does not separate — on both D24 recordings those two laps differ by no
+  more than two laps picked at random do, while the quartile split clears a shuffled-label null on
+  each. The group states its weighting, each channel's rate and the g-meter's filter on its face;
+  there is no braking-g distribution because that channel separated fastest from slowest the most
+  weakly of the four measured and its shape is largely its own smoother's.
 - **The track map can show where time is going RIGHT HERE, not only how far behind you already
   were.** A new "Δ rate" line channel paints the Δ-vs-best curve's slope — seconds lost per second
   of driving, smoothed over 0.4 s of travel — on a scale centred on zero, so amber means matching
