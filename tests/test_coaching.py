@@ -89,12 +89,34 @@ def test_ranking_is_by_median_time_lost_biggest_first():
 
 
 # --------------------------------------------------------------- reason selection
+def _plan_times(best, plan, at_best=2, slow=3):
+    """Per-lap per-corner times whose MEDIAN loses `plan[j]` s at corner j, shaped the way a real
+    session is: `at_best` laps sitting on the baseline (the best lap is always one of the
+    consistency laps) and `slow` laps `plan` slower. Returns (times, lap_times).
+
+    Fixtures that make EVERY lap slower than the baseline describe a session that cannot exist, and
+    the per-corner evidence gate reads exactly the relation they get wrong — it abstains on a corner
+    no second lap ever reached, so such a fixture silently turns any test into an abstain test."""
+    slow_row = [best[j] + plan[j] for j in range(len(best))]
+    times = [list(best) for _ in range(at_best)] + [list(slow_row) for _ in range(slow)]
+    return times, [sum(r) for r in times]
+
+
 def _one_corner_lossy(loss=0.5):
-    """A single-corner setup losing `loss` s on every candidate lap, with NO apex/brake/coast
-    signal by default — the per-test planting flips exactly one signal on so it must dominate."""
+    """A single-corner setup whose TYPICAL lap loses `loss` s, with NO apex/brake/coast signal by
+    default — the per-test planting flips exactly one signal on so it must dominate.
+
+    THE BEST LAP IS IN THE CANDIDATE SET, and twice over. That is not decoration: in production the
+    best lap is always one of the consistency laps, so `min(corner times) <= best_corner_time` holds
+    by construction, and the per-corner evidence gate reads exactly that relation. The fixture used
+    to be four laps ALL slower than the baseline — a distribution no real session can produce — and
+    under the gate every one of those corners correctly abstains as "no second lap ever matched
+    your best here", which would have turned every reason test into an abstain test. Five laps: two
+    on the baseline, three `loss` slower, so the median loses `loss` and the corner reads as
+    reachable (2 of 5) with an interquartile spread of `loss` that the claim clears."""
     corners = _corners(1)
     best = [5.0]
-    times = [[5.0 + loss] for _ in range(4)]
+    times = [[5.0], [5.0]] + [[5.0 + loss] for _ in range(3)]
     lap_times = [r[0] for r in times]
     return corners, best, times, lap_times
 
@@ -102,7 +124,7 @@ def _one_corner_lossy(loss=0.5):
 def test_apex_deficit_picks_apex_reason():
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     # the median lap is 5 km/h DOWN at the apex vs best — a clear apex-speed deficit
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
                       median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[-5.0])
     r = opp.rows[0]
@@ -116,7 +138,7 @@ def test_coasting_picks_coasting_reason():
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     # a coast INSIDE the corner window [50,90] the best lap does NOT have, and NO apex deficit
     med_coast = [_coast(60.0, 80.0, duration=0.6)]
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
                       median_coast_spans=med_coast, best_coast_spans=[], median_apex_deltas=[0.0])
     r = opp.rows[0]
@@ -136,7 +158,7 @@ def test_braking_picks_braking_reason():
     # no apex deficit, no coast
     med_brakes = [_brake(onset_dist=30.0, duration=0.9)]   # within [20, 90]
     best_brakes = [_brake(onset_dist=40.0, duration=0.3)]
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
                       best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
                       median_apex_deltas=[0.0])
@@ -189,7 +211,7 @@ def test_braking_extra_measures_only_the_in_window_part():
     med_brakes = [_brake(onset_dist=50.0, onset_time=2.5, duration=1.4)]   # wholly inside [20,90]
     best_brakes = [_brake(onset_dist=10.0, onset_time=0.5, duration=1.5)]  # onset upstream of 20
     assert K._window_brake_time(best_brakes, 50.0, 90.0) == 0.0, "the pre-fix rule saw nothing"
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
                       best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
                       median_apex_deltas=[0.0],
@@ -212,12 +234,12 @@ def test_every_ranked_row_is_analysed_not_only_the_first_three():
     kw = dict(sigmas_by_cid={c.cid: 0.20 for c in corners},
               median_brake_events=[], best_brake_events=[], median_coast_spans=[],
               best_coast_spans=[], median_apex_deltas=[0.0] * 5)
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best, **kw)
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, **kw)
     assert len(opp.rows) == 5
     kinds = [r.reason.kind for r in opp.rows]
     assert kinds == [K.REASON_LINE] * 5, kinds
     assert all("find time here" not in K.reason_sentence(r) for r in opp.rows)
-    capped = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best, top_n=3, **kw)
+    capped = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, top_n=3, **kw)
     assert [r.reason.kind for r in capped.rows] == [K.REASON_LINE] * 3 + [K.REASON_NONE] * 2
     print(f"ok all rows analysed: {kinds} (top_n=3 still caps at 3)")
 
@@ -225,7 +247,7 @@ def test_every_ranked_row_is_analysed_not_only_the_first_three():
 def test_line_sigma_is_the_fallback_reason():
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     # no apex/brake/coast signal at all, but real cross-lap spread -> LINE
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.20}, median_brake_events=[], best_brake_events=[],
                       median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[0.0])
     r = opp.rows[0]
@@ -240,13 +262,13 @@ def test_dominant_reason_is_the_largest_contribution():
     contribution wins — here a big coast (0.6 s) beats a tiny apex deficit (0.3 km/h)."""
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     med_coast = [_coast(60.0, 80.0, duration=0.6)]
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
                       median_coast_spans=med_coast, best_coast_spans=[], median_apex_deltas=[-0.3])
     assert opp.rows[0].reason.kind == K.REASON_COASTING, opp.rows[0].reason
     # and a big apex deficit beats a tiny coast
     med_coast_small = [_coast(60.0, 62.0, duration=0.05)]
-    opp2 = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp2 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                        sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
                        median_coast_spans=med_coast_small, best_coast_spans=[],
                        median_apex_deltas=[-8.0])
@@ -411,7 +433,7 @@ def test_summarize_attaches_phase_decomposition():
     # one corner enter=50, exit=90 (see _corners). Best fast, typical slower over the window.
     best_dist, best_t = _flat_trace(0.0, 200.0, 80.0)
     med_dist, med_t = _flat_trace(0.0, 200.0, 70.0)
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
                       median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[-3.0],
                       median_dist=med_dist, median_elapsed=med_t,
@@ -421,7 +443,7 @@ def test_summarize_attaches_phase_decomposition():
     assert abs(pl.total - sum(pl.as_tuple())) < 1e-9
     assert pl.total > 0, ("typical lap slower than best ⇒ positive Δt", pl)
     # absent traces ⇒ zero phases (back-compat path)
-    opp0 = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp0 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                        sigmas_by_cid={1: 0.03}, median_brake_events=[], best_brake_events=[],
                        median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[-3.0])
     assert opp0.rows[0].phases.as_tuple() == (0.0, 0.0, 0.0)
@@ -492,13 +514,13 @@ def test_brake_approach_window_and_coast_only_when_best_lacks_it():
     corners, best, times, lap_times = _one_corner_lossy(0.5)
     # identical brake on both laps -> brake contribution 0 (falls back to line)
     same_brake = [_brake(onset_dist=35.0, duration=0.7)]
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best, sigmas_by_cid={1: 0.10},
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, sigmas_by_cid={1: 0.10},
                       median_brake_events=same_brake, best_brake_events=same_brake,
                       median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[0.0])
     assert opp.rows[0].reason.kind == K.REASON_LINE, opp.rows[0].reason
     # a brake far before the approach window (outside [enter-30, exit]) is ignored
     far_brake = [_brake(onset_dist=-100.0, duration=2.0)]
-    opp2 = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best, sigmas_by_cid={1: 0.10},
+    opp2 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, sigmas_by_cid={1: 0.10},
                        median_brake_events=far_brake, best_brake_events=[],
                        median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[0.0])
     assert opp2.rows[0].reason.kind == K.REASON_LINE, opp2.rows[0].reason
@@ -562,7 +584,7 @@ def test_brake_window_projected_onto_each_laps_own_odometer():
     corners, best, times, lap_times = _one_corner_lossy(0.5)  # one corner: enter 50, exit 90
     med_brakes = [_brake(onset_dist=96.0, duration=0.9)]   # in projected [25, 99], not raw [20, 90]
     best_brakes = [_brake(onset_dist=40.0, duration=0.3)]  # best frame == reference frame here
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
                       best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
                       median_apex_deltas=[0.0],
@@ -572,7 +594,7 @@ def test_brake_window_projected_onto_each_laps_own_odometer():
     assert abs(r.reason.brake_extra_s - 0.6) < 1e-9  # 0.9 - 0.3
     # control: the SAME inputs WITHOUT the totals (identity projection) leave the brake outside the
     # un-projected window -> it does NOT count -> the row falls back to LINE.
-    opp0 = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    opp0 = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                        sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes,
                        best_brake_events=best_brakes, median_coast_spans=[], best_coast_spans=[],
                        median_apex_deltas=[0.0])
@@ -759,9 +781,13 @@ def _settle(n=6):
 def _populated_opps():
     corners = _corners(4)
     best = [5.0, 6.0, 7.0, 4.0]
-    times = [[best[j] + (0.6 if j == 0 else 0.05) for j in range(4)] for _ in range(4)]
+    # Two laps ON the baseline + three slower — the shape a real session has (the best lap is one
+    # of the candidate laps), so the corners are REACHED and survive the per-corner evidence gate.
+    # C1 loses 0.6 s, the rest 0.05 s.
+    slow = [best[j] + (0.6 if j == 0 else 0.05) for j in range(4)]
+    times = [list(best), list(best)] + [list(slow) for _ in range(3)]
     lap_times = [sum(r) for r in times]
-    return K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    return K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                        sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02, 4: 0.02},
                        median_brake_events=[], best_brake_events=[], median_coast_spans=[],
                        best_coast_spans=[], median_apex_deltas=[-5.0, 0.0, 0.0, 0.0])
@@ -782,13 +808,15 @@ def test_dialog_populates_and_go_calls_jump_to():
     assert opp.median_lap_id is not None
     assert f"typical lap {opp.median_lap_id + 1}" in title.text(), title.text()
     assert f"median of {opp.n_laps} clean laps" in title.text(), title.text()
-    # columns: 0 Corner, 1 Time-lost, 2 ±σ, 3 Phases (D2 cell widget), 4 Reason, 5 Go.
+    # columns: 0 Corner, 1 Time-lost, 2 Done-it?, 3 Phases (D2 cell widget), 4 Reason, 5 Go.
     # row 0: the biggest-loss corner (C1), with the apex sentence + the time-lost format
     assert dlg.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
     assert dlg.table.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
-    # column 2 is the lap-to-lap consistency σ folded onto the canonical row (Consistency signal),
-    # carrying its unit (L5-09 — it used to render a bare "±0.05" beside "σ 0.05 s" in the same row)
-    assert dlg.table.item(0, 2).text() == f"±{opp.rows[0].reason.sigma:.2f} s", dlg.table.item(0, 2).text()
+    # column 2 answers "have you already done this?" as a word AND the count over its denominator
+    # (the L5-09 rule the ±σ cell it replaced established: never a bare number with no unit/sample).
+    ev = opp.rows[0].evidence
+    assert dlg.table.item(0, 2).text() == f"Yes · {ev.reach_laps}/{ev.n_laps}", \
+        dlg.table.item(0, 2).text()
     # column 3 is the D2 entry/apex/exit breakdown widget (no text item there)
     from studio.coaching_panel import PhaseBar
     assert isinstance(dlg.table.cellWidget(0, 3), PhaseBar)
@@ -945,9 +973,8 @@ def test_l2_zero_rounding_rows_are_not_shown_opportunities():
     # Two REAL losers (C1 ~0.30 s, C3 ~0.10 s) and two sub-resolution "losers" (C2 0.0043 s,
     # C4 0.0026 s) that summarize still ranks (> 1e-9) but that round to +0.00 s on screen.
     plan = [0.30, 0.0043, 0.10, 0.0026]
-    times = [[best[j] + plan[j] for j in range(4)] for _ in range(4)]
-    lap_times = [sum(r) for r in times]
-    opp = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+    times, lap_times = _plan_times(best, plan)
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                       sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02, 4: 0.02},
                       median_brake_events=[], best_brake_events=[], median_coast_spans=[],
                       best_coast_spans=[], median_apex_deltas=[-5.0, 0.0, 0.0, 0.0])
@@ -992,9 +1019,8 @@ def test_p1_summary_grammar_by_count():
     best = [5.0, 6.0, 7.0]
 
     def _panel_for(plan):
-        times = [[best[j] + plan[j] for j in range(3)] for _ in range(4)]
-        lap_times = [sum(r) for r in times]
-        o = K.summarize(corners, [0, 1, 2, 3], lap_times, times, best,
+        times, lap_times = _plan_times(best, plan)
+        o = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
                         sigmas_by_cid={1: 0.05, 2: 0.02, 3: 0.02},
                         median_brake_events=[], best_brake_events=[], median_coast_spans=[],
                         best_coast_spans=[], median_apex_deltas=[0.0, 0.0, 0.0])
@@ -1031,7 +1057,7 @@ def test_dialog_excluded_state_has_no_table():
 # ------------------------------------------- the PERSISTENT top-3 panel (the coaching front-door)
 def test_panel_renders_top3_off_a_session():
     """The always-on OpportunitiesPanel reads the session's coaching_opportunities() directly and
-    renders the ranked rows (corner · time lost · ±σ · reason), the SAME data the modal dialog
+    renders the ranked rows (corner · time lost · done-it? · reason), the SAME data the modal dialog
     shows. On the stadium session (4 clean laps, the far corner losing time) it shows the ranked
     rows, leads with the slow corner, and the body is on the table page (not the excluded state).
 
@@ -1049,9 +1075,11 @@ def test_panel_renders_top3_off_a_session():
     # Row 0 is the top-ranked corner (the far corner, cid 2), with the +time-lost format.
     assert panel.table.item(0, 0).text().startswith(f"C{opp.rows[0].cid}")
     assert panel.table.item(0, 1).text() == f"+{opp.rows[0].time_lost:.2f} s"
-    # col 2: the lap-to-lap consistency σ folded onto the canonical row (the same as the dialog),
-    # with its unit (L5-09).
-    assert panel.table.item(0, 2).text() == f"±{opp.rows[0].reason.sigma:.2f} s", panel.table.item(0, 2).text()
+    # col 2: "have you already done this?", one word plus the count over its denominator — the same
+    # cell the dialog builds, from the same shared builder.
+    ev = opp.rows[0].evidence
+    assert panel.table.item(0, 2).text().endswith(f"· {ev.reach_laps}/{ev.n_laps}"), \
+        panel.table.item(0, 2).text()
     assert coaching_module_reason(panel, opp), "the reason cell must carry the coaching sentence"
     # A row click emits the corner cid (the map-ring consumer); selecting row 0 -> rows[0].cid.
     got = []
@@ -1290,6 +1318,279 @@ def _gate_session():
     s.laps = SimpleNamespace(lap_time=lambda i: lt[i],
                              sectors=SimpleNamespace(sector_lines=[]), laps_count=lambda: 2)
     return s
+
+
+# =============================================== spread, reach and the per-corner evidence gate
+# The two questions `time_lost` alone cannot answer: is this corner something the driver has ALREADY
+# DONE (execution) or has never done (pace), and does the row carry a claim at all.
+
+def _evidence_for(times, target, loss=None):
+    """corner_evidence over one corner's per-lap times (loss defaults to median − target)."""
+    med = float(np.median(times))
+    return K.corner_evidence(times, target, med - target if loss is None else loss)
+
+
+def test_reach_tells_a_repeated_target_from_a_rare_one():
+    """The FEATURE, in one assertion: two corners with the SAME time_lost and the SAME dominant
+    reason get DIFFERENT instructions, because one is a pace the driver produces routinely and the
+    other is one they have hit twice in twenty.
+
+    A ranking built on median-minus-best cannot distinguish them — that is the whole complaint the
+    reviewer of a rival product was making — so the distinction has to come from the distribution
+    the median was taken over, which is the only place it exists."""
+    target, loss, n = 5.0, 0.20, 25
+    # REPEAT: 6 of 25 laps at the target, the rest 0.20 s slower.
+    repeat = [target] * 6 + [target + loss] * (n - 6)
+    # RARE: 2 of 25 at the target — the same median, the same loss, under 1 lap in 10.
+    rare = [target] * 2 + [target + loss] * (n - 2)
+    ev_r, ev_n = _evidence_for(repeat, target, loss), _evidence_for(rare, target, loss)
+    assert ev_r.reach == K.REACH_REPEAT and ev_r.reach_laps == 6, ev_r
+    assert ev_n.reach == K.REACH_RARE and ev_n.reach_laps == 2, ev_n
+    # ...and the SENTENCE changes with it, which is the point — same lever, opposite instruction.
+    def _sentence(ev):
+        return K.reason_sentence(K.Opportunity(
+            cid=1, direction=1, time_lost=loss, entry_dist=0.0,
+            reason=K.Reason(kind=K.REASON_APEX, contribution=0.1, apex_speed_deficit=3.0,
+                            brake_extra_s=0.0, coast_extra_s=0.0, sigma=0.1), evidence=ev))
+    s_r, s_n = _sentence(ev_r), _sentence(ev_n)
+    assert "already done this" in s_r and "6 of 25 laps" in s_r, s_r
+    assert "rarely done this" in s_n and "2 of 25 laps" in s_n, s_n
+    assert s_r != s_n
+    print(f"ok reach: repeat => {s_r!r}\n           rare   => {s_n!r}")
+
+
+def test_a_claim_inside_the_corners_own_spread_abstains():
+    """The gate that fires on real data. A corner whose middle half of laps spans 0.40 s cannot be
+    aimed at with a 0.05 s median claim, however real that 0.05 s is — and the row says so instead
+    of printing a lever.
+
+    Measured on the two D24 pairs: sigma >= time_lost on 17 of the 20 shown rows (worst 10.8x), and
+    this test's shape is the smallest reproduction of it."""
+    target = 5.0
+    times = [target, target, target, target + 0.4, target + 0.4, target + 0.4]
+    ev = _evidence_for(times, target, 0.05)
+    assert ev.abstain == K.ABSTAIN_SPREAD, ev
+    assert not ev.ranked and ev.iqr > 0.2, ev
+    opp = K.Opportunity(cid=4, direction=1, time_lost=0.05, entry_dist=0.0,
+                        reason=K.Reason(kind=K.REASON_BRAKING, contribution=0.05,
+                                        apex_speed_deficit=0.0, brake_extra_s=0.4,
+                                        coast_extra_s=0.0, sigma=0.2), evidence=ev)
+    sentence = K.reason_sentence(opp)
+    assert sentence.startswith("Not ranked:"), sentence
+    assert "brake" not in sentence.lower(), ("an abstained row must not print a lever — the "
+                                             "collapse-to-a-default is what the gate prevents",
+                                             sentence)
+    assert "0.05 s" in sentence and "spread" in sentence, sentence
+    # ...and a claim that DOES clear the spread keeps its lever.
+    ok = K.corner_evidence(times, target, 0.30)
+    assert ok.ranked and ok.abstain == K.ABSTAIN_NONE, ok
+    print(f"ok abstain-spread: {sentence!r}; a 0.30 s claim on the same corner stays ranked")
+
+
+def test_an_unreplicated_target_and_a_thin_corner_both_abstain():
+    """The other two evidence tests, and the honest note about one of them.
+
+    ONE_OFF — nothing but the baseline itself ever reached the target — is the test the brief was
+    built around, and it fired on 0 of 20 rows across both real D24 pairs: the ranking's baseline is
+    the BEST LAP's time through the corner, and on both recordings at least two OTHER laps beat it
+    at every single corner (2..21 of them). It is kept because a short session can trivially produce
+    it, not because it is common. FEW_LAPS guards the ragged case the session-level MIN_LAPS gate
+    cannot see (a corner only some laps project onto)."""
+    one_off = K.corner_evidence([5.0, 5.4, 5.5, 5.6, 5.7], 5.0, 0.5)
+    assert one_off.abstain == K.ABSTAIN_ONE_OFF and one_off.reach_laps == 1, one_off
+    assert "no second lap" in K.abstain_sentence(
+        K.Opportunity(cid=1, direction=1, time_lost=0.5, entry_dist=0.0,
+                      reason=K.Reason(K.REASON_APEX, 0.1, 3.0, 0.0, 0.0, 0.1),
+                      evidence=one_off))
+    thin = K.corner_evidence([5.0, 5.4], 5.0, 0.2)
+    assert thin.abstain == K.ABSTAIN_FEW_LAPS, thin
+    empty = K.corner_evidence([], 5.0, 0.2)
+    assert empty.abstain == K.ABSTAIN_FEW_LAPS and empty.n_laps == 0, empty
+    # An Opportunity built with no per-lap times at all is UNMEASURED, not gated out — every
+    # pre-existing caller and fixture must behave exactly as it did before the gate existed.
+    bare = K.Opportunity(cid=1, direction=1, time_lost=0.5, entry_dist=0.0,
+                         reason=K.Reason(K.REASON_APEX, 0.1, 3.0, 0.0, 0.0, 0.1))
+    assert bare.evidence.ranked and bare.evidence.reach == K.REACH_UNKNOWN
+    assert K.reach_clause(bare) == "" and "apex speed" in K.reason_sentence(bare)
+    print("ok abstain: one-off / too-few-laps gate; an unmeasured row is untouched")
+
+
+def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
+    """Order + arithmetic. An abstained corner is SHOWN (never silently dropped — a row that says
+    why it is not ranked is worth more than a missing row), but it sits below every row that
+    carries a claim, and nothing sums it into a "time available" figure."""
+    _qapp()
+    from studio.coaching_panel import OpportunitiesPanel, _ranked_shown, _shown_rows
+    corners = _corners(2)
+    best = [5.0, 6.0]
+    # C1: a 0.50 s claim over a 0.375 s interquartile spread — aimable. C2: a 0.025 s claim over a
+    # 0.31 s spread — real, and inside the driver's own scatter, so there is nothing to aim at.
+    times = [[5.0, 6.0], [5.0, 6.0], [5.5, 6.0], [5.5, 6.05], [5.5, 6.4], [5.5, 6.4]]
+    lap_times = [sum(r) for r in times]
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                      sigmas_by_cid={1: 0.25, 2: 0.20}, median_brake_events=[],
+                      best_brake_events=[], median_coast_spans=[], best_coast_spans=[],
+                      median_apex_deltas=[-4.0, 0.0])
+    kinds = {r.cid: r.evidence.abstain for r in opp.rows}
+    assert kinds.get(1) == K.ABSTAIN_NONE and kinds.get(2) == K.ABSTAIN_SPREAD, kinds
+    assert [r.cid for r in opp.rows] == [1, 2], "the ranked row leads, the abstained one follows"
+    assert [r.cid for r in opp.ranked_rows()] == [1]
+    assert [r.cid for r in _ranked_shown(opp)] == [1]
+    assert [r.cid for r in _shown_rows(opp)] == [1, 2], "the abstained row is still SHOWN"
+
+    class _S:
+        def coaching_opportunities(self):
+            return opp
+
+        def coaching_brake_points(self):
+            return {2: SimpleNamespace(cid=2, actual_brake_dist=100.0, optimal_brake_dist=140.0,
+                                       metres_later=40.0, a_max_g=0.8, peak_decel_g=0.7)}
+
+    panel = OpportunitiesPanel(_S())
+    assert panel.table.rowCount() == 2
+    # the headline totals ONLY the ranked row
+    assert f"{opp.rows[0].time_lost:.2f} s" in panel.summary_label.text(), \
+        panel.summary_label.text()
+    assert f"{opp.rows[1].time_lost:.2f}" not in panel.summary_label.text()
+    # the abstained row: muted number, "Not ranked" sentence, and NO estimated brake-point line
+    from PySide6.QtGui import QColor
+
+    from studio.theme import C
+    assert (panel.table.item(1, 1).foreground().color().name().upper()
+            == QColor(C.text_dim).name().upper()), "an abstained loss must not read as a claim"
+    reason = panel.table.item(1, 3).text()
+    assert reason.startswith("Not ranked:") and "Brake ~" not in reason, reason
+    print(f"ok abstain rows: shown but demoted; headline totals {panel.summary_label.text()!r}")
+
+
+def _themed(plan_reach, kinds=None, losses=None):
+    """Opportunities whose rows carry the given reach states (and optional reasons/losses)."""
+    kinds = kinds or [K.REASON_BRAKING] * len(plan_reach)
+    losses = losses or [1.0] * len(plan_reach)
+    rows = [K.Opportunity(
+        cid=i + 1, direction=1, time_lost=losses[i], entry_dist=0.0,
+        reason=K.Reason(kinds[i], 0.1, 3.0, 0.3, 0.0, 0.1),
+        evidence=K.Evidence(n_laps=20, reach_laps=(6 if r == K.REACH_REPEAT else 2),
+                            reach=r, iqr=0.01, abstain=K.ABSTAIN_NONE))
+        for i, r in enumerate(plan_reach)]
+    return rows
+
+
+def test_the_session_theme_is_one_line_and_refuses_to_invent_one():
+    """Part 3: cluster to ONE theme, on SHARE OF RANKED TIME (the ranking's own unit), and say
+    "no single theme" rather than crowning a plurality.
+
+    Measured on the real recordings the two D24 pairs come out OPPOSITE — 0060 is 73 % execution and
+    0062 is 65 % pace — which is what makes the axis worth stating at all."""
+    execution = K.session_theme(_themed([K.REACH_REPEAT] * 3 + [K.REACH_RARE]))
+    assert execution.kind == K.THEME_EXECUTION and execution.share == 0.75, execution
+    assert "execution, not pace" in K.theme_sentence(execution)
+    pace = K.session_theme(_themed([K.REACH_RARE] * 3 + [K.REACH_REPEAT]))
+    assert pace.kind == K.THEME_PACE, pace
+    assert "pace, not execution" in K.theme_sentence(pace)
+    # 50/50 clears neither side's THEME_SHARE -> say so, with both halves.
+    split = K.session_theme(_themed([K.REACH_REPEAT, K.REACH_RARE]))
+    assert split.kind == K.THEME_SPLIT, split
+    assert "No single theme" in K.theme_sentence(split), K.theme_sentence(split)
+    # ...and it is SHARE OF TIME, not a row count: three trivial corners must not outvote the one
+    # that holds the seconds.
+    by_time = K.session_theme(_themed([K.REACH_REPEAT] * 3 + [K.REACH_RARE],
+                                      losses=[0.02, 0.02, 0.02, 1.00]))
+    assert by_time.kind == K.THEME_PACE, by_time
+    # Nothing ranked -> no theme, no sentence (the empty states own that case).
+    none = K.session_theme([])
+    assert none.kind == K.THEME_NONE and K.theme_sentence(none) == ""
+    assert K.theme_actions(none, []) == []
+    print(f"ok theme: {K.theme_sentence(execution)!r} / split => {K.theme_sentence(split)!r}")
+
+
+def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
+    """Compression is the point: one theme, then AT MOST two actions — and when no cause holds a
+    majority the action says exactly that instead of naming one.
+
+    Measured, the cause axis does NOT generalize: braking holds 61 % of 0060's ranked time (a
+    theme) and 44 % of 0062's (not one), so the "no single cause" branch is the common case on
+    real recordings and is asserted here as a first-class output, not as a fallback."""
+    one_cause = K.session_theme(_themed([K.REACH_REPEAT] * 4))
+    acts = K.theme_actions(one_cause, _themed([K.REACH_REPEAT] * 4))
+    assert len(acts) == 2, acts
+    assert acts[0].startswith("Braking is the common thread"), acts[0]
+    assert acts[1].startswith("Start with C1:"), acts[1]
+    mixed_rows = _themed([K.REACH_REPEAT] * 4,
+                         kinds=[K.REASON_BRAKING, K.REASON_APEX, K.REASON_LINE,
+                                K.REASON_COASTING])
+    mixed = K.session_theme(mixed_rows)
+    mixed_acts = K.theme_actions(mixed, mixed_rows)
+    assert mixed.cause == K.REASON_NONE and mixed.cause_cids == ()
+    assert len(mixed_acts) == 2 and mixed_acts[0].startswith("No single cause dominates"), \
+        mixed_acts
+    print(f"ok theme actions: {acts}")
+
+
+def test_both_coaching_surfaces_lead_with_the_same_theme():
+    """The theme block is the first thing on the page AND on the modal, and it is the same
+    sentence on both — one story, stated once, in one place in the model.
+
+    It also has to DISAPPEAR when there is nothing to state, or the "not enough clean laps" empty
+    state would sit under a headline claiming a theme."""
+    _qapp()
+    from studio.coaching_panel import OpportunitiesDialog, OpportunitiesPanel
+    rows = _themed([K.REACH_RARE] * 3 + [K.REACH_REPEAT])
+    opp = K.Opportunities(enough=True, n_laps=20, median_lap_id=4, rows=rows,
+                          theme=K.session_theme(rows))
+    sentence = K.theme_sentence(opp.theme)
+    assert sentence and "pace, not execution" in sentence
+
+    class _S:
+        def coaching_opportunities(self):
+            return opp
+
+        def coaching_brake_points(self):
+            return {}
+
+    panel = OpportunitiesPanel(_S())
+    dlg = OpportunitiesDialog(opp, jump_to=None)
+    assert panel.theme_block.headline.text() == sentence, panel.theme_block.headline.text()
+    assert dlg.theme_block.headline.text() == sentence, dlg.theme_block.headline.text()
+    shown = [lb.text() for lb in panel.theme_block.actions if lb.text()]
+    assert 1 <= len(shown) <= 2, shown
+    # nothing ranked -> no theme block at all (the empty state owns the page)
+    empty = K.Opportunities(enough=False, n_laps=1, median_lap_id=None, rows=[])
+
+    class _E:
+        def coaching_opportunities(self):
+            return empty
+
+        def coaching_brake_points(self):
+            return {}
+
+    p2 = OpportunitiesPanel(_E())
+    assert p2.theme_block.headline.text() == ""
+    assert p2.body.currentIndex() == 1, "the friendly excluded state still owns the body"
+    print(f"ok theme block: panel + modal both lead with {sentence!r}")
+
+
+def test_the_share_card_never_publishes_an_abstained_opportunity():
+    """A card is the one coaching surface that LEAVES the app. If every corner failed the evidence
+    gate it shows no opportunity at all, rather than publishing the biggest un-aimable number."""
+    from studio import share_card
+    ev = K.Evidence(n_laps=20, reach_laps=8, reach=K.REACH_REPEAT, iqr=0.40,
+                    abstain=K.ABSTAIN_SPREAD)
+    row = K.Opportunity(cid=3, direction=1, time_lost=0.05, entry_dist=10.0,
+                        reason=K.Reason(K.REASON_APEX, 0.02, 2.0, 0.0, 0.0, 0.2), evidence=ev)
+    opps = K.Opportunities(enough=True, n_laps=20, median_lap_id=4, rows=[row])
+    sess = SimpleNamespace(coaching_opportunities=lambda: opps)
+    assert share_card._top_opportunity(sess, "km/h") is None
+    # the same row, ranked, IS published
+    ranked = K.Opportunity(**{**row.__dict__,
+                              "evidence": K.Evidence(n_laps=20, reach_laps=8,
+                                                     reach=K.REACH_REPEAT, iqr=0.02,
+                                                     abstain=K.ABSTAIN_NONE)})
+    ok = SimpleNamespace(coaching_opportunities=lambda: K.Opportunities(
+        enough=True, n_laps=20, median_lap_id=4, rows=[ranked]))
+    top = share_card._top_opportunity(ok, "km/h")
+    assert top is not None and top.corner_label.startswith("C3"), top
+    print("ok share card: abstained top row publishes nothing; a ranked one publishes")
 
 
 if __name__ == "__main__":
