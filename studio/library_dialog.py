@@ -11,16 +11,18 @@ Layout::
 
     ┌───────────────────────────────────────────────┐
     │  N analyzed recordings  (M of N when filtered) │  ← header count, of what is ON SCREEN
-    │  [search…]                    [track filter ▾] │  ← live filter row (track/date substring + a
-    ├───────────────────────────────────────────────┤     per-track combo, plus an Unknown-track
-    │  Date │ Track │ Laps │ Best │ Ideal lap        │     bucket) so it scales to 50–200
-    │  …      …       …      …      …                 │  ← sortable table (one row / recording);
-    │  “No recordings match …” when the filter empties│     missing-file rows greyed + disabled; an
-    ├───────────────────────────────────────────────┤     UNTRUSTWORTHY row carries a muted trust tag
-    │  <selected track> · 12 sessions · best … · …    │  ← light cross-session progress summary line
-    │  PB progression — <track>   [best-vs-date plot] │  ← pyqtgraph mini-chart for the selected
-    ├───────────────────────────────────────────────┤     row's track (best lap vs recording date)
-    │                              [Open]   [Close]   │
+    │  [search…]        [track ▾]  [conditions ▾]    │  ← live filter row (track/date/file/record
+    ├───────────────────────────────────────────────┤     substring + a per-track combo with an
+    │ Date│Track│Laps│Best│Ideal│Conditions│Tyres    │     Unknown-track bucket + a conditions combo
+    │  …      …    …    …    …      …         …       │     with a No-record bucket)
+    │  “No recordings match …” when the filter empties│  ← sortable table (one row / recording);
+    ├───────────────────────────────────────────────┤     missing-file rows greyed + disabled; an
+    │  <selected track> · 12 sessions · best … · …    │     UNTRUSTWORTHY row carries a trust tag
+    │  Dry · air 24° · MG Yellow #3, 42 laps · 11/82  │  ← the selected row's SESSION RECORD…
+    │  Not like-for-like vs your best here: Dry vs Wet│  ← …and whether it and the row holding the
+    │  PB progression — <track>   [best-vs-date plot] │     track's best lap were the same kind of day
+    ├───────────────────────────────────────────────┤
+    │                [Session record…] [Open] [Close] │
     └───────────────────────────────────────────────┘
 
 SIZE: the TABLE is the reason this dialog exists, so it takes the pixels — the PB chart is held to a
@@ -49,6 +51,16 @@ start line / estimated timing / GPS dropout — see ``library.trust_label``) get
 EXCLUDED from the PB chart + progress summary, which read only ``library.pb_series`` /
 ``library.track_summary`` (the trustworthy subset). The dialog stays pacer-free — it consumes the
 plain flags on the entry dicts and those pure helpers.
+
+COMPARABILITY (``studio/session_record.py``): the table has always ranked best laps across a
+season, and a ranking of best laps is only a ranking of DRIVING if the sessions were alike. So a
+second data source is joined in on the row's fingerprint — the session record, the driver's own
+note of the conditions, the tyres and the setup — and it appears in three places: two sortable
+columns (``Conditions``, ``Tyres``, the two facts that move a lap time most and take seconds to
+record), a conditions filter beside the track one, and the two lines under the table that read the
+selected row's whole record and say whether it and the track's best-lap session were even the same
+kind of day. Records are DATA here like the index is: the store is handed in, the editor is an
+injected callback, and this dialog still writes nothing.
 """
 
 from __future__ import annotations
@@ -77,6 +89,7 @@ from PySide6.QtWidgets import (
 
 from . import APP_NAME, prefs, theme
 from . import library as _library
+from . import session_record as _records
 from ._signal import fmt_time
 from ._signal import plural as _plural_shared
 from .theme import C
@@ -114,8 +127,23 @@ from .widgets import NumItem as _NumItem
 #
 # It costs no schema change: `lap_count` has been stored on every entry since v1 (it is what
 # `_entry_junk` reads to quarantine a no-laps row) and was simply never shown.
-_COL_DATE, _COL_TRACK, _COL_LAPS, _COL_BEST, _COL_THEO = range(5)
-_HEADERS = ["Date", "Track", "Laps", "Best lap", "Ideal lap"]
+# THE SIXTH AND SEVENTH COLUMNS ARE WHETHER THE FIVE BESIDE THEM ARE COMPARABLE AT ALL, and they
+# are here because this table's whole purpose is cross-session comparison. Ranking best laps
+# across a season silently assumes like-for-like, and a kart coach's answer to a driver who could
+# not see 18 months of improvement is that it never is: "I can go to my local track tonight and
+# again a month from now and find a difference anything up to 4 seconds purely because of
+# different temperature and humidity conditions." Conditions and tyre age are the two the driver
+# can record in seconds and the two that move a lap time most, so they get the columns; everything
+# else a session record holds (pressures, gearing, chassis, notes) is one selection away on the
+# line under the table. Both read `studio/session_record.py`, keyed by the row's own fingerprint.
+#
+# They sit AFTER the two time columns rather than before them: the times are what the user came
+# for, and these qualify them. Tyres sorts NUMERICALLY on the laps-on-the-set count — the age, not
+# the name — because "sort by tyre age" is the gesture that answers "am I comparing a fresh set
+# against a worn one?" in one click. A session with no record shows an em dash in both, never a
+# fabricated value.
+_COL_DATE, _COL_TRACK, _COL_LAPS, _COL_BEST, _COL_THEO, _COL_COND, _COL_TYRES = range(7)
+_HEADERS = ["Date", "Track", "Laps", "Best lap", "Ideal lap", "Conditions", "Tyres"]
 
 # The two time columns' header hovers — the MECHANISM behind the Laps column beside them. On the
 # headers rather than the cells because it is a property of the column, and because the cells'
@@ -136,6 +164,15 @@ _THEO_HEADER_TIP = (
     "longer: 0.07–0.38 s per doubling of lap count on the owner's recordings, with no plateau. "
     "Two rows are comparable on this number only if their Laps are comparable — Sandown chapter 1 "
     "(23 laps) and Sandown chapters 1–3 (59 laps) are 0.56 s apart on the same driving.")
+_COND_HEADER_TIP = (
+    "Conditions — what you recorded about the day, in File ▸ Session record….\n"
+    "pacer never looks the weather up: nothing leaves this Mac. A dry-day best and a wet-day best "
+    "are not the same measurement, so filter to one tag before reading the times beside it as a "
+    "ranking of pace.")
+_TYRES_HEADER_TIP = (
+    "Tyre age — laps on the set when the session started, from its session record.\n"
+    "Sorts by that count, not by the set's name. A worn set and a fresh one are worth seconds a "
+    "lap, so two rows are comparable on Best lap only if they are comparable here.")
 
 # What the Ideal-lap cell hovers with when it has no number to show, appended to the row's own file
 # identity. Two causes, one em dash, and the user is told which:
@@ -177,6 +214,8 @@ TRACK_ROLE = Qt.UserRole + 2    # the entry's track name, raw (on the Date cell)
 MISSING_ROLE = Qt.UserRole + 3  # True if the recording's file(s) are missing (on the Date cell)
 FP_ROLE = Qt.UserRole + 4       # the entry's fingerprint key (on the Date cell), for forget/remove
 FILTER_ROLE = Qt.UserRole + 5   # lower-cased "track date" haystack for the search box (on Date)
+COND_ROLE = Qt.UserRole + 6     # the row's session-record conditions tag, "" if untagged (on Date)
+HAS_RECORD_ROLE = Qt.UserRole + 7  # True when the row HAS a session record at all (on Date)
 
 # The track-filter combo's two sentinels (a real track name never equals either): "all tracks" at
 # index 0, and an UNKNOWN-TRACK bucket appended when some recording's circuit isn't in the track
@@ -184,6 +223,14 @@ FILTER_ROLE = Qt.UserRole + 5   # lower-cased "track date" haystack for the sear
 # the bucket the combo simply cannot reach them (2 of 3 on the QA index).
 _ALL_TRACKS = "All tracks"
 _UNKNOWN_TRACK = "Unknown track"
+
+# The conditions filter's two sentinels, beside the four real tags. Unlike the track combo this
+# vocabulary is CLOSED (session_record.CONDITIONS), so it is built once and never rebuilt — but
+# "No record" is not a fifth condition, it is the absence of one, and it needs to be reachable:
+# on a library that has just gained this feature it is every row, and it is the exact filter for
+# "which of my sessions have I not written up yet?".
+_ALL_CONDITIONS = "All conditions"
+_NO_RECORD = "No record"
 
 # The mark over the FIRST-RUN library state — a Phosphor name for theme.icon(), never a literal
 # Unicode character (tests/test_glyph_vocabulary.py). It is the one icon in the app's empty states:
@@ -198,14 +245,17 @@ _UNKNOWN_LABEL = "unknown track"
 # Library dialog (this is where a user browsing their recorded history would look) and by
 # Help ▸ Your data & privacy. Everything is on-disk and offline; nothing is uploaded — say so.
 PRIVACY_NOTE = (
-    "Everything pacer analyzes stays on this Mac — nothing is uploaded or shared. "
+    "Everything pacer analyzes stays on this Mac — nothing is uploaded or shared, and the "
+    "conditions in a session record are typed by you, never looked up online. "
     "It stores your start/finish + sector lines in a small \"<name>.pacer.json\" file next to "
     "each video, and under ~/Library/Application Support/pacer it keeps this library index (file "
-    "paths, track names and GPS dates) and your saved tracks (tracks.json — each circuit's name "
-    "and coordinates). Right-click a recording to forget it, or use \"Clear library\" to wipe the "
-    "whole index — a copy of the index is kept beside it as library.json.bak, so a wipe can be "
-    "undone. Your saved tracks are separate: \"Clear library\" leaves tracks.json untouched, and "
-    "\"Back up…\" does not copy it."
+    "paths, track names and GPS dates), your session records (session_records.json — the setup "
+    "and conditions you write up) and your saved tracks (tracks.json — each circuit's name "
+    "and coordinates). Right-click a recording to forget it — that takes its session record with "
+    "it — or use \"Clear library\" to wipe the whole index and every session record with it. A "
+    "copy of each is kept beside it (library.json.bak, session_records.json.bak), so \"Restore…\" "
+    "can put both back. Your saved tracks are separate: \"Clear library\" leaves tracks.json "
+    "untouched, and \"Back up…\" does not copy it."
 )
 
 # A PlotDataItem pen/brush for the PB line + its markers (amber accent, the app's primary).
@@ -253,15 +303,20 @@ _PB_PLOT_MAX_H = 200
 # The FLOOR under the height the dialog OPENS at. A remembered size is stored verbatim, and Qt lets
 # the user drag the dialog all the way to the layout's own minimum — where the table's viewport is
 # 29 px, 0.97 of ONE row of a 201-recording library, and (since the size is remembered) every future
-# open comes back that way. 680 px is the measured height at which the table shows 5 rows at the
+# open comes back that way. 710 px is the measured height at which the table shows 5 rows at the
 # dialog's NARROWEST width, 581 px, where the privacy note wraps tallest and so leaves the list
-# least; a wider dialog gets more (6.2 rows at 880). It is deliberately far below the 860 px default
+# least; a wider dialog gets more (6.4 rows at 719, the width the shipping dialog's button row now
+# imposes). It was 680 until the session-record lines landed: the two lines under the table
+# (the selected row's record + its like-for-like verdict) cost the list 1.4 rows at that width —
+# 5.0 became 4.25, measured — so the floor moved with them rather than the guarantee quietly
+# lapsing. That is the rule this constant is for: anything added between the table and the buttons
+# re-measures this number in the same PR. It is deliberately far below the 860 px default
 # — a user is allowed to want a small window — and exists only to rule out the sizes at which a list
 # dialog stops showing a list. 5 rows is the bound this dialog already argued for when it rejected a
 # 4.6-row default as too little: the library should never OPEN showing less list than the size that
 # was called broken. The screen still overrules it (_fit_to_screen runs after), and it is applied to
 # the size being OPENED, never to the size being stored — see _apply_geometry.
-_MIN_BROWSABLE_H = 680
+_MIN_BROWSABLE_H = 710
 # The width _MIN_BROWSABLE_H was measured at — and therefore the premise the height floor RESTS on:
 # height alone cannot buy rows at a width where the privacy note (a WrapLabel, so its wrapped height
 # is part of the layout minimum) and the PB plot's 150 px floor eat everything the floor adds.
@@ -361,6 +416,31 @@ def _entry_tooltip(entry: dict) -> str:
     return "\n".join(lines)
 
 
+# What a row with NO session record says, in the two places it has to be said. Neither is a dash:
+# nothing is missing from the data, there is simply a note nobody has written, and the difference
+# between those two matters on a screen whose whole subject is what was and was not recorded.
+_NO_RECORD_TIP = (
+    "No session record for this recording.\n"
+    "Select it and use “Session record…” to write down the conditions, the tyres and the setup — "
+    "it is what makes this row comparable with the others.")
+_NO_RECORD_LINE = (
+    "No session record — nothing written down about the conditions, the tyres or the kart.")
+
+
+def _record_cell_tip(record: dict | None) -> str:
+    """The hover for the Conditions / Tyres cells: the WHOLE record, one clause per line, or the
+    invitation when there is none. The two cells show one value each and the record holds seven
+    more; a hover that repeated the cell would be the column saying its own name twice."""
+    if not record:
+        return _NO_RECORD_TIP
+    lines = [line for line in (_records.conditions_text(record), _records.tyre_text(record),
+                               _records.pressure_text(record), _records.kart_text(record)) if line]
+    notes = (record.get("notes") or "").strip()
+    if notes:
+        lines.append(notes)
+    return "\n".join(lines) if lines else _NO_RECORD_TIP
+
+
 def _ideal_cell(entry: dict) -> tuple[float | None, str | None]:
     """(value, why-there-is-none) for the Ideal-lap cell.
 
@@ -430,11 +510,25 @@ class LibraryDialog(QDialog):
                  reveal_library: Callable[[], None] | None = None,
                  backup_library: Callable[[], None] | None = None,
                  restore_library: Callable[[], dict] | None = None,
-                 backup_info: Callable[[], dict | None] | None = None):
+                 backup_info: Callable[[], dict | None] | None = None,
+                 records: dict | None = None,
+                 edit_record: Callable[[dict], dict] | None = None,
+                 reload_records: Callable[[], dict] | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — session library")
         self._index = index
         self._open_recording = open_recording
+        # SESSION RECORDS — the same data + action split as `index` + `open_recording`, one level
+        # out: `records` is a loaded ``studio.session_record`` store (DATA, read here and never
+        # written), `edit_record` opens the editor for one library entry and returns the fresh
+        # store (the ACTION, owned by the app so this dialog stays file-op-free and hermetic), and
+        # `reload_records` re-reads the store after a mutation this dialog did not make — a clear,
+        # a restore or a forget, all three of which touch the records as well as the index. Absent
+        # callbacks degrade cleanly: the columns still render from whatever `records` holds, and
+        # the controls that would write simply aren't built.
+        self._records = records if isinstance(records, dict) else _records.empty_store()
+        self._edit_record = edit_record
+        self._reload_records = reload_records
         # Privacy controls (optional — the dialog degrades to browse-only when not injected, e.g. in
         # a bare test). Each callback OWNS the destructive act (index write + sidecar delete / index
         # wipe, all guarded in the app) and RETURNS the fresh index so the dialog re-renders from it.
@@ -479,6 +573,20 @@ class LibraryDialog(QDialog):
             self.track_filter.addItem(name)
         self.track_filter.currentIndexChanged.connect(self._apply_filter)
         filter_row.addWidget(self.track_filter)
+        # …and the CONDITIONS filter beside it, which is the one this whole feature exists for:
+        # "was I comparing like for like?" is answered by narrowing the table to one kind of day
+        # and reading the times that survive. A closed vocabulary, so unlike the track combo it is
+        # built once (see _ALL_CONDITIONS / _NO_RECORD).
+        self.condition_filter = QComboBox()
+        self.condition_filter.addItem(_ALL_CONDITIONS, "")
+        for tag in _records.CONDITIONS:
+            self.condition_filter.addItem(_records.CONDITION_LABELS[tag], tag)
+        self.condition_filter.addItem(_NO_RECORD, _NO_RECORD)
+        self.condition_filter.setToolTip(
+            "Show only sessions you recorded as this kind of day — or the ones with no session "
+            "record yet. Conditions are typed in File ▸ Session record…; pacer never fetches them.")
+        self.condition_filter.currentIndexChanged.connect(self._apply_filter)
+        filter_row.addWidget(self.condition_filter)
         root.addLayout(filter_row)
 
         # ----- the sortable recordings table
@@ -499,11 +607,12 @@ class LibraryDialog(QDialog):
         self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(_COL_TRACK, QHeaderView.Stretch)
-        for col in (_COL_DATE, _COL_LAPS, _COL_BEST, _COL_THEO):
+        for col in (_COL_DATE, _COL_LAPS, _COL_BEST, _COL_THEO, _COL_COND, _COL_TYRES):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         # The sample's mechanism, on the columns it is about (see the header-tip constants).
         for col, tip in ((_COL_LAPS, _LAPS_HEADER_TIP), (_COL_BEST, _BEST_HEADER_TIP),
-                         (_COL_THEO, _THEO_HEADER_TIP)):
+                         (_COL_THEO, _THEO_HEADER_TIP), (_COL_COND, _COND_HEADER_TIP),
+                         (_COL_TYRES, _TYRES_HEADER_TIP)):
             self.table.horizontalHeaderItem(col).setToolTip(tip)
         self._fill_rows()
         self.table.setSortingEnabled(True)
@@ -545,6 +654,30 @@ class LibraryDialog(QDialog):
         self._summary.setFont(theme.mono_font(11))
         self._summary.setProperty("role", "Note")
         root.addWidget(self._summary)
+
+        # ----- the selected row's SESSION RECORD, in two lines, because they answer two different
+        # questions and only the second one is the reason this feature exists.
+        #
+        #   * `_record_line` — WHAT was recorded (conditions, tyres, pressures, kart), or the one
+        #     sentence saying nothing was. A row that has no record must read as an invitation, not
+        #     as a grid of dashes: dashes look like missing DATA, and there is no data missing —
+        #     there is a note nobody has written yet.
+        #   * `_compare_line` — WHETHER this row and the row holding the track's best lap were the
+        #     same kind of day on the same kind of kart (``session_record.comparable``). The table
+        #     above ranks best laps across a season; this is the only thing on screen that says
+        #     whether that ranking is a ranking of driving. It is silent when there is nothing to
+        #     compare (one of the two has no record) rather than claiming either answer, and silent
+        #     when the selected row IS the track's best — a session cannot be unlike itself.
+        self._record_line = QLabel("")
+        self._record_line.setWordWrap(True)
+        self._record_line.setFont(theme.mono_font(11))
+        self._record_line.setProperty("role", "Note")
+        root.addWidget(self._record_line)
+        self._compare_line = QLabel("")
+        self._compare_line.setWordWrap(True)
+        self._compare_line.setFont(theme.mono_font(11))
+        self._compare_line.setProperty("role", "Hint")
+        root.addWidget(self._compare_line)
 
         # ----- per-track PB-progression mini-chart (best lap vs recording date)
         self._pb_title = QLabel("PB progression")
@@ -641,6 +774,18 @@ class LibraryDialog(QDialog):
             self.backup_btn.clicked.connect(lambda: self._backup_library())
             buttons.addWidget(self.backup_btn)
         buttons.addStretch(1)
+        # Write up the selected session: conditions + tyres + setup. An everyday action ON THE
+        # SELECTED ROW, so it sits with Open rather than with the destructive controls on the left.
+        # Also on the row's right-click menu, since that is where "do something to THIS recording"
+        # already lives.
+        if self._edit_record is not None:
+            self.record_btn = QPushButton("Session record…")
+            self.record_btn.setToolTip(
+                "Write up this session: conditions, tyres and kart setup. It is what makes two "
+                "sessions comparable — and it is typed by you, never fetched.")
+            self.record_btn.setEnabled(False)
+            self.record_btn.clicked.connect(self._edit_selected_record)
+            buttons.addWidget(self.record_btn)
         self.open_btn = QPushButton("Open")
         self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self._open_selected)
@@ -762,6 +907,8 @@ class LibraryDialog(QDialog):
         PB chart + summary track the visible set."""
         query = self.search.text().strip().lower() if hasattr(self, "search") else ""
         chosen = self.track_filter.currentText() if hasattr(self, "track_filter") else _ALL_TRACKS
+        cond = (self.condition_filter.currentData()
+                if hasattr(self, "condition_filter") else "") or ""
         visible = 0
         for r in range(self.table.rowCount()):
             date_item = self.table.item(r, _COL_DATE)
@@ -775,14 +922,31 @@ class LibraryDialog(QDialog):
                 track_ok = not track          # the bucket stands for every unnamed circuit
             else:
                 track_ok = track == chosen
-            hidden = (bool(query) and query not in hay) or not track_ok
+            # The conditions bucket: a real tag matches rows carrying it; "No record" matches rows
+            # with no session record at all (which is NOT the same as a record left untagged — a
+            # driver who wrote down his pressures but not the weather has a record, and hiding it
+            # under "No record" would tell him he never wrote one).
+            if not cond:
+                cond_ok = True
+            elif cond == _NO_RECORD:
+                cond_ok = not bool(date_item.data(HAS_RECORD_ROLE))
+            else:
+                cond_ok = (date_item.data(COND_ROLE) or "") == cond
+            hidden = (bool(query) and query not in hay) or not track_ok or not cond_ok
             self.table.setRowHidden(r, hidden)
             visible += not hidden
         # The header and the empty-state describe what's ON SCREEN: a header still claiming "3
         # analyzed recordings" over a table filtered down to nothing is the dialog contradicting
         # itself, and blank space is not a "no matches" message.
         self._update_title(visible)
-        self._show_empty_note(visible, query, chosen)
+        # The empty-state names the term the user typed, or — when the search box is empty — the
+        # combo that emptied the table. Conditions is checked first only because it is the newer
+        # and narrower of the two; either way the sentence names something on screen.
+        if cond:
+            self._show_empty_note(visible, query, self.condition_filter.currentText(),
+                                  _ALL_CONDITIONS)
+        else:
+            self._show_empty_note(visible, query, chosen)
         # Keep a sensible selection: if the selected row got hidden (or none is selected), land on
         # the first VISIBLE usable row so the chart/summary reflect what's on screen.
         self._reselect_visible()
@@ -795,7 +959,8 @@ class LibraryDialog(QDialog):
         self._title.setText(whole if visible is None or visible == total
                             else f"{visible} of {whole}")
 
-    def _show_empty_note(self, visible: int, query: str, chosen: str):
+    def _show_empty_note(self, visible: int, query: str, chosen: str,
+                         reset: str = _ALL_TRACKS):
         """The "this table has nothing in it" state, in its two DIFFERENT senses — and each gets its
         own sentence, because the way out of them is different:
 
@@ -813,13 +978,15 @@ class LibraryDialog(QDialog):
                 "best lap.")
             show = True
         else:
-            filtering = bool(query) or chosen != _ALL_TRACKS
+            # `chosen`/`reset` are whichever FILTER COMBO is narrowing the table (track, or
+            # conditions), so the way back the sentence names is the one that will actually work.
+            filtering = bool(query) or chosen != reset
             show = filtering and not visible
             if show:
                 term = self.search.text().strip() or chosen
                 self._empty_note.set_state(
                     f"No recordings match “{term}”.",
-                    f"Clear the search or pick “{_ALL_TRACKS}” to see all "
+                    f"Clear the search or pick “{reset}” to see all "
                     f"{_plural(len(self._entries), 'recording')}.")
         # The mark belongs to the EMPTY-INDEX sense only: it is the app's first-run answer, about
         # the library itself. A filter that matched nothing is about the filter, and a folder glyph
@@ -879,10 +1046,19 @@ class LibraryDialog(QDialog):
             # basename — "GX010060.MP4" — while the search box matched track and date only. So
             # typing the one identifier the dialog had just shown the user HID the row it names.
             # Searching what is on screen has to find what is on screen.
+            # ...and the session record's own words are in the haystack too, so typing "wet" or
+            # "MG Yellow" reaches the rows that say so. Same rule as the filename: what the row
+            # SHOWS has to be findable by typing it, and the two new columns show these.
+            record = self._record_for(e)
             date_item.setData(
                 FILTER_ROLE,
-                " ".join(p for p in (track or _UNKNOWN_LABEL, date or "",
-                                     _entry_name(e)) if p).strip().lower())
+                " ".join(p for p in (track or _UNKNOWN_LABEL, date or "", _entry_name(e),
+                                     _records.conditions_text(record),
+                                     _records.tyre_text(record)) if p).strip().lower())
+            # The conditions TAG the filter combo matches on — "" for a row with no record, which
+            # is what the "No record" bucket selects.
+            date_item.setData(COND_ROLE, (record or {}).get("conditions") or "")
+            date_item.setData(HAS_RECORD_ROLE, record is not None)
 
             # A junk row says so; a present-but-missing-file row keeps its established label. An
             # UNTRUSTWORTHY-but-openable row gets a muted trust tag (provisional/estimated/dropout)
@@ -907,8 +1083,19 @@ class LibraryDialog(QDialog):
             theo_item = _NumItem(fmt_time(theo) if theo is not None else "—")
             theo_item.setData(NUM_ROLE, theo)
 
-            items = (date_item, track_item, laps_item, best_item, theo_item)
+            # The two comparability columns. Conditions prints the TAG only (the temperatures are
+            # in the cell's hover and on the line under the table) so the column stays one word
+            # wide; Tyres prints the AGE and sorts on it, with the set's name in the hover — the
+            # name is what tells two sets apart, the age is what moves a lap time.
+            cond = (record or {}).get("conditions") or ""
+            cond_item = QTableWidgetItem(_records.CONDITION_LABELS.get(cond, "—"))
+            tyre_laps = (record or {}).get("tyre_laps")
+            tyres_item = _NumItem(str(tyre_laps) if tyre_laps is not None else "—")
+            tyres_item.setData(NUM_ROLE, None if tyre_laps is None else float(tyre_laps))
+
+            items = (date_item, track_item, laps_item, best_item, theo_item, cond_item, tyres_item)
             tooltip = _entry_tooltip(e)
+            record_tip = _record_cell_tip(record)
             for col, it in enumerate(items):
                 # Every cell hovers to the recording's file identity — the columns show only track +
                 # date, so hovering anywhere on the row is what tells two same-day sessions apart.
@@ -922,6 +1109,11 @@ class LibraryDialog(QDialog):
                     it.setToolTip(f"{track_text}\n\n{tooltip}")
                 elif col == _COL_THEO and theo_reason:
                     it.setToolTip(f"{theo_reason}\n\n{tooltip}")
+                elif col in (_COL_COND, _COL_TYRES):
+                    # The two comparability cells hover with the WHOLE record, not just their own
+                    # value: a one-word "Dry" is the summary of four numbers the driver typed, and
+                    # the hover is where the rest of them live (see _record_cell_tip).
+                    it.setToolTip(f"{record_tip}\n\n{tooltip}")
                 else:
                     it.setToolTip(tooltip)
                 if disabled:
@@ -948,14 +1140,108 @@ class LibraryDialog(QDialog):
         item = self._selected_date_item()
         if item is None:
             self.open_btn.setEnabled(False)
+            self._sync_record_btn(None)
             self._show_pb(None)
             self._show_summary(None)
+            self._show_record(None)
             return
         missing = bool(item.data(MISSING_ROLE))
         self.open_btn.setEnabled(not missing)
+        entry = self._selected_entry()
+        self._sync_record_btn(entry)
         track = item.data(TRACK_ROLE)
         self._show_pb(track)
         self._show_summary(track)
+        self._show_record(entry)
+
+    # ------------------------------------------------------------------ session record
+    def _record_for(self, entry: dict | None) -> dict | None:
+        """The session record for a library `entry`, or None when it has none. The two are joined
+        on the library FINGERPRINT — the chapter-invariant recording identity — so one chapter and
+        the full chaptered open of the same outing share one record, exactly as they share one
+        library row."""
+        fp = (entry or {}).get("fingerprint")
+        return _records.get(self._records, fp) if fp else None
+
+    def _selected_entry(self) -> dict | None:
+        """The full library entry behind the current selection, matched by fingerprint. The table
+        carries only what it displays; everything else about a row comes from here."""
+        item = self._selected_date_item()
+        fp = item.data(FP_ROLE) if item is not None else None
+        if not fp:
+            return None
+        return next((e for e in self._entries if e.get("fingerprint") == fp), None)
+
+    def _sync_record_btn(self, entry: dict | None) -> None:
+        """Enable "Session record…" only for a row that HAS an entry to write up, and say which of
+        the two things the click will do — starting one, or editing the one that exists."""
+        btn = getattr(self, "record_btn", None)
+        if btn is None:
+            return
+        btn.setEnabled(entry is not None)
+        if entry is not None and self._record_for(entry) is not None:
+            btn.setText("Session record…")
+            btn.setToolTip("Edit what you recorded about this session — conditions, tyres, setup")
+        else:
+            btn.setText("Session record…")
+            btn.setToolTip(
+                "Write up this session: conditions, tyres and kart setup. It is what makes two "
+                "sessions comparable — and it is typed by you, never fetched.")
+
+    def _show_record(self, entry: dict | None) -> None:
+        """Set the selected row's two record lines (see where they are built for what each is for).
+        Both blank when nothing is selected; the first becomes the invitation when the selected row
+        has no record."""
+        if entry is None:
+            self._record_line.setText("")
+            self._compare_line.setText("")
+            return
+        record = self._record_for(entry)
+        self._record_line.setText(_records.summary_line(record) or _NO_RECORD_LINE)
+        self._compare_line.setText(self._comparability_text(entry, record))
+
+    def _comparability_text(self, entry: dict, record: dict | None) -> str:
+        """"Not like-for-like vs your best here (2026-06-14): Dry vs Wet · track 38° vs 22°" — or
+        the reassuring converse, or "" when the question cannot be answered.
+
+        THIS IS THE SENTENCE THE WHOLE FEATURE EXISTS FOR. The table above ranks best laps across a
+        season and, without this, every such ranking silently assumes the sessions were comparable.
+        It stays SILENT rather than guessing in the three cases where it has no answer: the
+        selected row has no record, the track's best-lap session has no record, or the selected row
+        IS that session (nothing is unlike itself). Reporting "comparable" from two blank records
+        would be the worst of the four outcomes — a reassurance backed by nothing."""
+        track = entry.get("track")
+        if not track or record is None:
+            return ""
+        best = _library.best_entry(self._index, track)
+        if not best or best.get("fingerprint") == entry.get("fingerprint"):
+            return ""
+        other = self._record_for(best)
+        if other is None:
+            return ""
+        when = f" ({best['date']})" if best.get("date") else ""
+        diffs = _records.comparable(record, other)
+        if diffs:
+            return f"Not like-for-like vs your best here{when}:  " + "  ·  ".join(diffs)
+        return f"Comparable with your best here{when} on everything you recorded."
+
+    def _edit_selected_record(self) -> None:
+        """Open the session-record editor for the selected row through the injected callback, then
+        re-read the store and re-render. The dialog never writes: the app owns the editor and the
+        file op, which is what keeps this one hermetic (see the constructor)."""
+        entry = self._selected_entry()
+        if entry is None or self._edit_record is None:
+            return
+        try:
+            store = self._edit_record(entry)
+        except Exception as exc:  # noqa: BLE001 — a record write must never break the library
+            print(f"studio: session record not saved ({exc!r}).", flush=True)
+            store = None
+        if isinstance(store, dict):
+            self._records = store
+        elif self._reload_records is not None:
+            self._reload_records_guarded()
+        self._rerender()
 
     def _show_summary(self, track: str | None):
         """Set the light cross-session progress line for `track` from ``library.track_summary``
@@ -1083,13 +1369,24 @@ class LibraryDialog(QDialog):
         if date_item is None:
             return
         menu = QMenu(self)
+        record_act = None
+        if self._edit_record is not None:
+            # "Do something to THIS recording" already lives on this menu, and writing up its
+            # session is now one of the two things there are to do to a row.
+            record_act = menu.addAction("Session record…")
+            record_act.setToolTip(
+                "Write up (or edit) this session's conditions, tyres and kart setup")
+            menu.addSeparator()
         act = menu.addAction("Forget this recording…")
         act.setToolTip(
             "Remove this recording from the library index and delete its .pacer.json timing-line "
-            "sidecar. Your video file is not touched.")
+            "sidecar and its session record. Your video file is not touched.")
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen is act:
             self._forget_row(date_item)
+        elif record_act is not None and chosen is record_act:
+            self.table.selectRow(date_item.row())
+            self._edit_selected_record()
 
     def _forget_row(self, date_item: QTableWidgetItem):
         """Confirm, then forget the row: the injected callback removes the index entry + deletes its
@@ -1108,12 +1405,36 @@ class LibraryDialog(QDialog):
             self, "Forget this recording",
             f"Forget “{_entry_name(entry)}” — {track} ({date})?\n\n"
             "This removes it from the library and deletes its .pacer.json timing-line "
-            "sidecar. Your video file is not touched.",
+            "sidecar" + (
+                # NAME THE RECORD when there is one to lose. Its sidecar and its library row come
+                # back the moment the recording is re-opened; a hand-typed record does not — the
+                # footage does not know what tyres were on the kart — so a confirm that did not
+                # mention it would be hiding the only irreversible half of this gesture.
+                " and the session record you wrote for it (a copy of your records is kept as "
+                "session_records.json.bak)"
+                if self._record_for(entry) is not None else "") +
+            ". Your video file is not touched.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ok != QMessageBox.Yes:
             return
         self._index = self._forget_recording(entry)
+        self._reload_records_guarded()
         self._rerender()
+
+    def _reload_records_guarded(self) -> None:
+        """Re-read the session-record store after a mutation this dialog did not make (a clear, a
+        restore, a forget — all three touch the records as well as the index). Guarded: a failing
+        read leaves the store as it was rather than emptying the two columns, because an empty
+        column here reads as "you never wrote these up"."""
+        if self._reload_records is None:
+            return
+        try:
+            store = self._reload_records()
+        except Exception as exc:  # noqa: BLE001 — a record read must never break the library
+            print(f"studio: session records not re-read ({exc!r}).", flush=True)
+            return
+        if isinstance(store, dict):
+            self._records = store
 
     def _read_backup_info(self) -> dict | None:
         """What the automatic backup holds (a ``library.backup_summary`` dict) via the injected
@@ -1161,14 +1482,16 @@ class LibraryDialog(QDialog):
         ok = QMessageBox.question(
             self, "Clear library",
             f"Forget all {_plural(len(self._entries), 'recording')} from the library?\n\n"
-            "This wipes the library index only — your video files and their .pacer.json "
-            "sidecars are left untouched.\n\n"
-            f"A copy of the index is kept as library.json.bak first. {recovery}",
+            "This wipes the library index and every session record you have written — your video "
+            "files and their .pacer.json sidecars are left untouched.\n\n"
+            f"A copy of each is kept first (library.json.bak, session_records.json.bak). "
+            f"{recovery}",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ok != QMessageBox.Yes:
             return
         self._index = self._clear_library()
         self._backup = self._read_backup_info()   # the wipe just created one
+        self._reload_records_guarded()            # …and it wiped the session records too
         self._rerender()
 
     def _on_restore_library(self):
@@ -1184,13 +1507,15 @@ class LibraryDialog(QDialog):
             f"Replace this library ({_plural(len(self._entries), 'recording')}) with the backup"
             f"{_backup_when(info.get('mtime'))} "
             f"({_plural(int(info['entries']), 'recording')})?\n\n"
-            "The library you have now is kept as the backup, so you can swap back. Your video "
-            "files and their .pacer.json sidecars are not touched either way.",
+            "Your session records are put back with it. The library you have now is kept as the "
+            "backup, so you can swap back; your video files and their .pacer.json sidecars are "
+            "not touched either way.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ok != QMessageBox.Yes:
             return
         self._index = self._restore_library()
         self._backup = self._read_backup_info()   # the swap replaced it with what we just left
+        self._reload_records_guarded()            # …and the records were swapped back with it
         self._rerender()
 
     def _rerender(self):

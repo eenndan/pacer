@@ -954,3 +954,21 @@ add_test(NAME test_chart_axis_legibility
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_axis_legibility.py)
 set_tests_properties(test_chart_axis_legibility PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# THE SESSION RECORD (feat/session-record) — studio.session_record + its editor + the two surfaces
+# that read it. The store is the app's most IRREPLACEABLE data: a library row comes back the moment
+# the footage is re-opened, a hand-typed tyre pressure never does, so the persistence half is
+# asserted rather than assumed — corrupt bytes preserved verbatim in the .bak before the first
+# overwrite, a NEWER file's unknown per-record fields surviving a v1 round-trip (this store keeps
+# them where library.py drops them, and the test is why), an older/unstamped file migrated with
+# every record kept, one malformed record dropped and the rest kept, an atomic write leaving no
+# .tmp, and clear / forget / restore each taking their copy first. Then the fast-to-fill half
+# (prefill carries the KART forward and advances the tyre laps, and carries nothing about the day),
+# the comparability verdict, the real form's round-trip, and the record showing up where the
+# comparison happens: the Library's two columns + conditions filter + like-for-like line, and the
+# lap panel header chip — asserted MOUNTED on the real CentralView, not merely constructed. Imports
+# the dialogs -> Qt, so run offscreen; PYTHONPATH because the real-view test reaches studio.session.
+add_test(NAME test_session_record
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_session_record.py)
+set_tests_properties(test_session_record PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

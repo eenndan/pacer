@@ -674,6 +674,20 @@ class CentralView(QWidget):
         # It shed its #QualityBadge objectName with the one-off rule that name existed to carry.
         self.quality_badge = chip("ESTIMATED", tone="warn")
         self.quality_badge.setVisible(False)
+        # …and beside it, the SESSION RECORD chip: the conditions and tyre age the driver wrote
+        # down for this recording (studio/session_record.py). Same argument as the quality badge,
+        # one step further out — that chip says how far to trust these lap times, this one says
+        # what they were set in, and both belong where the times are READ rather than three
+        # dialogs away. "Dry · MG Yellow #3, 42 laps" over a lap grid is the difference between a
+        # column of numbers and a session.
+        #
+        # SHOWN ONLY WHEN THERE IS A RECORD. The empty state of this chip is its absence: a
+        # permanent "no session record" pill over every lap grid would nag on every surface, on
+        # every load, about a form the File menu already offers. Fed by the app
+        # (StudioWindow._update_record_chip) rather than read here, so this view keeps its one job
+        # — the app owns the app-support stores.
+        self.record_chip = chip("")
+        self.record_chip.setVisible(False)
         # The coaching page: the top opportunities (corner · time lost · reason), full height —
         # no strip, no collapse, no height cap. A corner-row click ring-highlights its apex on
         # the map (the Jump-to-corner detail action stays in the modal dialog).
@@ -696,7 +710,8 @@ class CentralView(QWidget):
         # given this panel a 32 px control row to hold one non-interactive chip that is hidden on
         # every clean GPS9 recording; keeping it beside the tabs also keeps the warning adjacent to
         # the lap times it qualifies. This panel gets no toolbar at all.
-        self._table_header = PanelHeader(self.tab_bar, status=(self.quality_badge,),
+        self._table_header = PanelHeader(self.tab_bar,
+                                         status=(self.quality_badge, self.record_chip),
                                          trailing=self._table_max_btn)
         table_panel = self._headered(self._table_header, (self.table_stack, 1))
 
@@ -1881,6 +1896,39 @@ class CentralView(QWidget):
             return
         badge.setText("ESTIMATED" if quality.media_clock else "GPS LOW")
         badge.setToolTip(quality.detail())
+
+    def set_session_record(self, record: dict | None) -> None:
+        """Show (or hide) the lap panel's session-record chip for `record` — the app's push of what
+        the driver wrote down about this session (``studio.session_record``).
+
+        The CHIP is one clause: the conditions tag and the tyre age, which are the two that decide
+        whether these lap times are comparable with another day's. Everything else in the record —
+        pressures, gearing, chassis, notes — is in the hover, because a header chip is read at a
+        glance and a five-clause pill is not. None (or an empty record) hides it entirely; see
+        where the chip is built for why its empty state is its absence.
+
+        Takes a plain dict, so this view stays out of the app-support stores and the whole surface
+        is testable by handing it a record."""
+        chip_w = getattr(self, "record_chip", None)
+        if chip_w is None:
+            return
+        # Imported here rather than at module scope: this view has no other business with the
+        # persistence layer, and the chip is a display of what it is handed.
+        from . import session_record
+        headline = "  ·  ".join(c for c in (session_record.conditions_text(record),
+                                            session_record.tyre_text(record)) if c)
+        full = session_record.summary_line(record)
+        if not full:
+            chip_w.setVisible(False)
+            return
+        # A record can hold ONLY a setup (no conditions, no tyres) — then the headline above is
+        # empty and the kart clause carries the chip, so it never shows a blank pill over a record
+        # that says something.
+        chip_w.setText(headline or full)
+        notes = ((record or {}).get("notes") or "").strip()
+        chip_w.setToolTip(f"Session record — {full}" + (f"\n\n{notes}" if notes else "")
+                          + "\n\nFile ▸ Session record… to edit")
+        chip_w.setVisible(True)
 
     # ------------------------------------------------------------- timing-line edits
     def _on_lines(self, start, sectors):
