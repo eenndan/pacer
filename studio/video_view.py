@@ -25,10 +25,13 @@ window via the primary pane's clamp.
 Transport layout: TWO BARS under the video, both on the app's bar system (`PanelHeader`'s surface
 + hairline, `SPACE_S` gutters, `TOOLBAR_H`) — the scrub bar has a row to itself (a media-player
 transport, not a control squeezed in beside five buttons) and the transport is a `PanelToolbar`
-holding two GROUPS around its stretch: playback (▶ 🔇) and the timecode on the left, the view
-toggles (g-meter · Compare · ⤢) on the right. Before this, the video panel was the only control
-zone in the window that was not on a bar: three rows at 26/28/21 px painted on the window canvas
-with a 0 px gutter, against six other bars that agreed to the pixel.
+holding two GROUPS around its stretch: playback (▶ 🔇 + the SPEED picker) and the timecode on the
+left, the view toggles (g-meter · Compare · ⤢) on the right. The speed picker is the shell's, not a
+pane's: it fans one rate out to every live pane (`set_playback_rate`) and seeds a lazily-created
+compare secondary with it, so two side-by-side laps can never run at different speeds. Before this,
+the video panel was the only control zone in the window that was not on a bar: three rows at
+26/28/21 px painted on the window canvas with a 0 px gutter, against six other bars that agreed to
+the pixel.
 
 Every piece of chrome here is width-budgeted rather than assumed to fit — see
 `_LapRulerSlider.tick_plan` (the ruler decimates to the pixels it has) and `_PaneStrip` (the
@@ -74,6 +77,24 @@ _GMETER_TOOLTIP = "Show/hide the g-meter overlay (G)"
 # 0 = primary (left, drives telemetry); 1 = secondary (right, video-only). Used by the lap-picker
 # repoint signal so app knows which side to repoint.
 PRIMARY, SECONDARY = 0, 1
+
+# ---------------------------------------------------------------- playback rate (slow motion)
+# The offered rates, slowest first, and the labels the picker paints. A LADDER rather than a free
+# number: the point of the control is "quarter speed to read the inputs", and a spin box over a
+# continuum would make every value equally reachable and none of them one click away. 1.0 must be
+# a member (it is the resting state the ladder steps back to) and `×` is deliberate — Inter carries
+# it, while `¼` / `½` fall out of the app's own face (tests/test_glyph_vocabulary.py).
+PLAYBACK_RATES: tuple[float, ...] = (0.25, 0.5, 1.0, 2.0)
+_RATE_LABELS = ("0.25×", "0.5×", "1×", "2×")
+_RATE_INDEX = PLAYBACK_RATES.index(1.0)
+_RATE_TOOLTIP = ("Playback speed — slow motion for reading inputs ([ slower · ] faster).\n"
+                 "Both videos take the rate together while comparing.")
+
+
+def nearest_rate(rate: float) -> float:
+    """The declared rate closest to `rate` — so a caller (a restored preference, a rounding) can
+    never put the picker into a state that is not one of its own items."""
+    return min(PLAYBACK_RATES, key=lambda r: abs(r - float(rate)))
 
 # The scrub bar is the video panel's primary hit target and the lap ruler's canvas: it gets its own
 # full-width row under the video, a HIT_MIN handle and a widget one sub-step taller (the 24px hit
@@ -695,6 +716,11 @@ class VideoView(QWidget):
         # dial's axis PROVENANCE is not pane state any more — it is one sentence on the toggle's
         # tooltip; see set_gmeter_source.)
         self._gmeter_visible = False
+        # The shell owns the playback rate for the SAME reason it owns mute and the g-meter flag:
+        # a lazily-created secondary pane has to be born at it. A rate held per pane would enter
+        # compare at 1x on the right while the left ran at 0.25x — two videos playing the same lap
+        # at different speeds, side by side, which is the one thing compare mode must not do.
+        self._rate = 1.0
         self.secondary: PlayerPane | None = None
         # the source the live secondary opened on (normally self._source; the reference ChapterMap
         # for cross-recording compare); a source change rebuilds the secondary.
@@ -718,6 +744,21 @@ class VideoView(QWidget):
         self.mute_btn = icon_button("ph.speaker-simple-x",
                                     tooltip="Audio muted — click to unmute (M)")
         self.mute_btn.clicked.connect(self.toggle_mute)
+
+        # Playback-speed picker, in the PLAYBACK group beside ▶ and 🔇 rather than with the view
+        # toggles: it changes what the transport does, not what the panel shows. A QComboBox and
+        # not a menu button — it is the same control the compare panes use to pick a lap, it is
+        # themed by the app's own QComboBox rule, and its current item IS the readout ("am I still
+        # in slow motion?"), which a glyph-only button could only answer by being opened.
+        # AdjustToContents pins its width to the WIDEST label, so stepping the rate cannot resize
+        # the transport under the pointer.
+        self.rate_combo = QComboBox()
+        self.rate_combo.setToolTip(_RATE_TOOLTIP)
+        self.rate_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        for rate, label in zip(PLAYBACK_RATES, _RATE_LABELS, strict=True):
+            self.rate_combo.addItem(label, rate)
+        self.rate_combo.setCurrentIndex(_RATE_INDEX)
+        self.rate_combo.currentIndexChanged.connect(self._on_rate_picked)
 
         # g-meter show/hide toggle. Checkable: QSS :checked tints the button; the glyph also goes accent.
         # Its tooltip is also where the DIAL'S OWN two sentences live now — the felt-force
@@ -783,8 +824,8 @@ class VideoView(QWidget):
 
         # The transport controls must never take keyboard focus, or they'd swallow Space/arrows and
         # break the window-level shortcuts (mouse interaction needs no focus).
-        for w in (self.play_btn, self.mute_btn, self.gmeter_btn, self.compare_btn,
-                  self.fullscreen_btn, self.slider):
+        for w in (self.play_btn, self.mute_btn, self.rate_combo, self.gmeter_btn,
+                  self.compare_btn, self.fullscreen_btn, self.slider):
             w.setFocusPolicy(Qt.NoFocus)
 
         self.readout = QLabel("")  # the media TIMECODE, driven by the app
@@ -821,7 +862,7 @@ class VideoView(QWidget):
         # SPACE_XS within a group, the bar's own SPACE_S between them.
         self.transport = PanelToolbar(
             (self.gmeter_btn, self.compare_btn, self.fullscreen_btn),
-            leading=((self.play_btn, self.mute_btn), self.readout))
+            leading=((self.play_btn, self.mute_btn, self.rate_combo), self.readout))
 
         # The STAGE holds the video surface(s): one pane normally, a 2-pane splitter in compare
         # mode. Its layout is rebuilt on enter/exit compare; everything else (the two bars) is
@@ -1028,10 +1069,18 @@ class VideoView(QWidget):
             self.fullscreen_btn.refresh_glyph()   # blockSignals suppressed the button's own repaint
         self._sync_fullscreen_tooltip()
 
-    def _on_focus_shortcut(self):
-        """F → the ⤢ button's own click (so the disabled state gates the key too)."""
+    def request_video_focus(self):
+        """Ask for the "make the video fill the screen" toggle, THROUGH the ⤢ button — so a
+        refused gesture (compare mode disables the button) is a no-op rather than a silently
+        ignored state change. Public because the request has three doors now: the button, a
+        double-click on the video, and the window's F key / command palette, and the last two must
+        not reach past the button's enabled state to get in."""
         if self.fullscreen_btn.isEnabled():
             self.fullscreen_btn.click()
+
+    def _on_focus_shortcut(self):
+        """F → the ⤢ button's own click (so the disabled state gates the key too)."""
+        self.request_video_focus()
 
     def _on_video_double_clicked(self):
         """Double-click on the video = the same intent as ⤢, and available exactly when it is."""
@@ -1083,6 +1132,11 @@ class VideoView(QWidget):
             # earlier set_gmeter_visible). The axis provenance no longer needs seeding — the dial
             # does not carry it; it is on the shared toggle's tooltip (see set_gmeter_source).
             self.secondary.set_gmeter_visible(self._gmeter_visible)
+            # ...and with the ACTIVE playback rate, for the same reason and with a sharper failure:
+            # entering compare while reviewing at 0.25x would otherwise put lap B on screen at 1x,
+            # so the two videos would drift apart by a factor of four with nothing on screen
+            # saying so (the picker shows one number for both panes).
+            self.secondary.set_playback_rate(self._rate)
             # Wire the secondary's playback state so the transport glyph reflects BOTH panes (they
             # auto-pause at different lap ends; the glyph must not lie — see _on_state).
             self.secondary.playbackStateChanged.connect(self._on_state)
@@ -1357,6 +1411,43 @@ class VideoView(QWidget):
         for pane in self._panes():
             pane.sync_gmeter()
         self._fit_strips()
+
+    # ------------------------------------------------------------- playback rate (slow motion)
+    def playback_rate(self) -> float:
+        """The rate BOTH panes are playing at (1.0 = real time)."""
+        return self._rate
+
+    def set_playback_rate(self, rate: float):
+        """Set the playback rate on every live pane and reflect it on the picker.
+
+        FANS OUT, unconditionally, over `_panes()` — the same shape play/pause take. In compare
+        mode the two panes are two decoders playing two laps against each other; a rate applied to
+        one of them turns the comparison into a lie that still looks like a comparison, and the
+        `_reset_pair_to_start` realign would not correct it (both panes would still be at their
+        own lap starts, just running at different speeds from there). `_rate` is what a lazily
+        created secondary is born at — see set_compare."""
+        rate = nearest_rate(rate)
+        self._rate = rate
+        for pane in self._panes():
+            pane.set_playback_rate(rate)
+        index = PLAYBACK_RATES.index(rate)
+        if self.rate_combo.currentIndex() != index:
+            # reflection, not a user pick: blocked so it cannot re-enter _on_rate_picked
+            self.rate_combo.blockSignals(True)
+            self.rate_combo.setCurrentIndex(index)
+            self.rate_combo.blockSignals(False)
+
+    def step_playback_rate(self, direction: int):
+        """Move ONE rung down (-1, slower) or up (+1, faster) the declared ladder, clamped at both
+        ends — the [ / ] keys' path, and the palette's. Clamped rather than wrapping: a key held at
+        the bottom of the ladder must not jump the video to 2x."""
+        i = PLAYBACK_RATES.index(self._rate) + int(direction)
+        self.set_playback_rate(PLAYBACK_RATES[min(max(i, 0), len(PLAYBACK_RATES) - 1)])
+
+    def _on_rate_picked(self, index: int):
+        """The picker was used (a genuine user pick) — apply that rung to the panes."""
+        if 0 <= index < len(PLAYBACK_RATES):
+            self.set_playback_rate(PLAYBACK_RATES[index])
 
     # ------------------------------------------------------------- audio (mute)
     def toggle_mute(self):

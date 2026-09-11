@@ -10,6 +10,15 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **Slow motion.** The video transport has a speed picker (0.25× / 0.5× / 1× / 2×) with `[` and `]`
+  to step it — inputs happen faster than they can be read at real time, which is most of what you
+  open your own footage to look at. The map marker, the chart cursors and the readout stay locked
+  to the frame at every rate (they are driven by the decoder's own reported position, not a clock),
+  and in compare mode both videos take the rate together.
+- **A command palette (⌘K).** Type a few letters and run any of the app's commands: every menu item
+  — with the shortcut it carries and greyed out when it is not available yet — plus the
+  keyboard-only ones the shortcut card documents. The card (`?` / F1) and the palette are now
+  generated from one registry, so they cannot disagree.
 - **Coaching tells "you have not done this yet" from "you did not do it that lap", and abstains
   when the evidence is thin.** Every corner now says how many of your clean laps already matched
   your best lap's time through it ("Yes · 9/38" / "Rarely · 2/65"), and the sentence changes with

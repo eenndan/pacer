@@ -312,6 +312,14 @@ class _GatePlayer:
     def setPosition(self, ms):
         self.positions.append(ms)
 
+    # Part of the surface PlayerPane drives: `_apply_pending` re-applies the playback rate on every
+    # genuine load, because a source switch does not carry it (feat/playback-rate).
+    def setPlaybackRate(self, rate):
+        self.rate = float(rate)
+
+    def playbackRate(self):
+        return getattr(self, "rate", 1.0)
+
     def setSource(self, url):
         self._source = url
 
@@ -778,10 +786,17 @@ def test_the_transport_is_on_the_bar_system():
     for name, w in (("play", view.play_btn), ("slider", view.slider)):
         assert w.mapTo(view, w.rect().topLeft()).x() == theme.SPACE_S, (
             f"{name} starts at x={w.mapTo(view, w.rect().topLeft()).x()}, not SPACE_S")
-    # GROUPING: SPACE_XS inside a group, SPACE_S between the groups (▶🔇 timecode ‹ › ⌾ Compare ⤢).
-    gap = view.mute_btn.x() - (view.play_btn.x() + view.play_btn.width())
-    assert gap == theme.SPACE_XS, f"within the playback group the gap is {gap}, not SPACE_XS"
-    across = view.readout.x() - (view.mute_btn.x() + view.mute_btn.width())
+    # GROUPING: SPACE_XS inside a group, SPACE_S between the groups
+    # (▶ 🔇 speed | timecode  ‹ › ⌾ Compare ⤢). The playback group is THREE controls since the
+    # speed picker joined it, so the within-group gap is asserted across every adjacent pair and
+    # the between-group gap is measured from the group's LAST member, not from 🔇.
+    playback = (view.play_btn, view.mute_btn, view.rate_combo)
+    for left, right in zip(playback, playback[1:], strict=False):
+        gap = right.x() - (left.x() + left.width())
+        assert gap == theme.SPACE_XS, (
+            f"within the playback group the gap is {gap}, not SPACE_XS")
+    last = playback[-1]
+    across = view.readout.x() - (last.x() + last.width())
     assert across == theme.SPACE_S, f"between groups the gap is {across}, not SPACE_S"
     # THE TIMECODE IS INLINE, beside the ▶ it describes — not a band of its own under the buttons.
     assert view.readout.parentWidget() is view.transport, view.readout.parentWidget()

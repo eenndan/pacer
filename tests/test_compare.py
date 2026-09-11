@@ -140,6 +140,15 @@ class _FakePlayer:
         self.playing = True
         self.play_calls += 1
 
+    # The rate is part of the QMediaPlayer surface PlayerPane drives: `_apply_pending` re-applies
+    # it on every genuine load, because a source switch does not carry it (feat/playback-rate).
+    # A double that does not model it turns that line into an AttributeError at a chapter seam.
+    def setPlaybackRate(self, rate):
+        self.rate = float(rate)
+
+    def playbackRate(self):
+        return getattr(self, "rate", 1.0)
+
     def pause(self):
         self.playing = False
         self.pause_calls += 1
