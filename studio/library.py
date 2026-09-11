@@ -59,7 +59,8 @@ DEGRADED clock (``degraded``) references its lap number to something arbitrary/e
 must never set or beat a personal best; a GPS-``dropout`` best is less reliable, so it is kept but
 also excluded from the PB set (a dropout lap's time can't be trusted to set a PB either). The
 library TABLE still shows every session (with a trust indicator); only the PB CHART + PB logic use
-the trustworthy subset (``trustworthy_entries``). See ``_TRUST_UNKNOWN`` for the v1→v2 back-compat
+the trustworthy subset (each entry filtered by ``is_trustworthy``). See ``_TRUST_UNKNOWN`` for the
+v1→v2 back-compat
 default that keeps a pre-existing (flag-less) PB history included.
 
 Load self-heals WITHOUT destroying durable history:

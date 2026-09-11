@@ -336,6 +336,47 @@ def test_summary_names_both_scale_statistics():
     print(f"ok summary: {s}")
 
 
+def test_an_all_zero_grav_stream_is_no_channel_not_a_channel_of_zeros():
+    """GRAV is a UNIT vector on every camera that writes one: |GRAV| measures 1.0000 at the 5th,
+    50th and 95th percentile on both GoPro Max sample clips and on both D24 recordings (103,680
+    rows each). A stream of zeros therefore carries no direction at all — and it is not
+    hypothetical, the bundled `hero8.mp4` sample's GRAV is ALL ZEROS.
+
+    Un-guarded that neither raises nor reads as missing. `up` normalises (0,0,0) back to (0,0,0),
+    so every projection is EXACTLY 0.0 rad/s and the app reports a full-length, `has_data=True`
+    rotation channel saying "not turning" for a recording that plainly is — hero8's own gyro has a
+    median |omega| of 0.269 rad/s over the same samples. `gmeter.axis_check` refuses this
+    recording on the G-METER path (it reads the zero direction as a 90 deg tilt), but nothing
+    stood in front of THIS path, even though rotation.py's module doc says that guard does."""
+    gyro, grav, traces = _build(grav_elements=[0.0, 0.0, 0.0])
+    assert np.all(grav[:, 1:] == 0.0)
+    # ...while the gyro itself is a real, turning signal: the channel has something to report.
+    assert float(np.median(np.linalg.norm(gyro[:, 1:], axis=1))) > 0.05
+
+    t, yaw = rotation.yaw_rate_series(gyro, grav)
+    assert len(t) == 0 and len(yaw) == 0, (
+        f"a zero GRAV direction still produced {len(t)} yaw-rate samples, "
+        f"all-zero={bool(np.all(yaw == 0.0))}")
+
+    rot = rotation.compute(gyro, grav, traces, device="HERO8 Black")
+    assert not rot.has_data, (
+        f"a zero GRAV direction produced a has_data channel of {len(rot)} samples reading "
+        f"{rot.at_time(float(gyro[0, 0]))} rad/s throughout")
+    assert rot.cross is None
+    print("ok an all-zero GRAV stream yields NO channel, not a channel of zeros")
+
+
+def test_a_unit_grav_stream_is_untouched_by_the_zero_guard():
+    """The guard must cost a real recording nothing: a genuine unit-length GRAV still builds the
+    channel and its cross-check. Pins the separation the threshold rests on (1.0000 vs 0.0000)."""
+    gyro, grav, traces = _build()
+    assert abs(float(np.median(np.linalg.norm(grav[:, 1:], axis=1))) - 1.0) < 1e-9
+    rot = rotation.compute(gyro, grav, traces)
+    assert rot.has_data and rot.cross is not None
+    assert float(np.std(rot.yaw_rate)) > 0.0
+    print(f"ok a unit GRAV stream still builds {len(rot)} samples + a cross-check")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

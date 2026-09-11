@@ -279,9 +279,77 @@ def test_the_import_scanner_sees_every_studio_spelling():
     print(f"test_the_import_scanner_sees_every_studio_spelling OK — {len(cases)} spellings, one edge")
 
 
+_TESTS_DIR = os.path.join(_REPO, "tests")
+
+# A runner that enumerates its tests from the module namespace rather than by name — any of these
+# spellings — cannot strand one, so those files are exempt from the reachability rule below.
+_AUTO_DISCOVERY = ("globals()", "vars()", "dir()", "getmembers")
+
+
+def _stranded_tests(path) -> list[str]:
+    """Top-level `def test_*` in `path` that NOTHING outside the test bodies ever names.
+
+    Every test file in this repo is a plain script run as `python tests/<file>.py` — nothing runs
+    under pytest, so a test is executed only if its own file's runner CALLS it. A name is counted
+    as referenced if it appears as a `Name` load or as a string literal (a table-driven runner may
+    list its tests as strings) anywhere in the module EXCEPT inside a `test_*` body — a test that
+    only calls itself is still stranded."""
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    defs = [n.name for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name.startswith("test_")]
+    if not defs:
+        return []
+    referenced = set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+            continue
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name):
+                referenced.add(sub.id)
+            elif isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                referenced.add(sub.value)
+    return [d for d in defs if d not in referenced]
+
+
+def test_every_declared_test_is_actually_reachable_from_its_runner():
+    """A TEST NOBODY CALLS IS NOT A PASSING TEST, AND THE SUITE CANNOT TELL THE DIFFERENCE.
+
+    `tests/CMakeLists.txt` runs each file as `python tests/<file>.py`. Its `foreach(pytest IN
+    ITEMS …)` loop is named `pytest` but only sets PYTHONPATH — NOTHING here runs under pytest, so
+    collection-by-convention does not happen and a `def test_…` that the file's own `_run_all()`
+    never calls simply never executes. It costs nothing, breaks nothing, and reports nothing; the
+    suite still says 110/110.
+
+    WHAT THIS CAUGHT, all four written as the regression test for a specific fix and none of them
+    ever run: `test_ia01_corners_and_coaching_tabs_declare_different_scopes`,
+    `test_the_dialogs_jump_buttons_are_not_clipped_at_its_own_default_size`,
+    `test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum` and
+    `test_driving_group_states_the_coasting_instrument`. The last one did not even pass: wired up,
+    it failed, because it substring-tested a raw sentence against an HTML document that escapes
+    apostrophes. Three of the four guard a fix that is still correct — but nothing was checking."""
+    stranded = {}
+    scanned = 0
+    for name in sorted(os.listdir(_TESTS_DIR)):
+        if not (name.startswith("test_") and name.endswith(".py")):
+            continue
+        path = os.path.join(_TESTS_DIR, name)
+        if any(tok in open(path, encoding="utf-8").read() for tok in _AUTO_DISCOVERY):
+            continue          # runner enumerates the namespace; it cannot strand a test
+        scanned += 1
+        missing = _stranded_tests(path)
+        if missing:
+            stranded[name] = missing
+    assert not stranded, (
+        "test functions defined but never called by their file's runner — they never run:\n"
+        + "\n".join(f"  {f}: {', '.join(v)}" for f, v in sorted(stranded.items())))
+    print(f"test_every_declared_test_is_actually_reachable_from_its_runner OK — "
+          f"{scanned} explicit-runner files, 0 stranded")
+
+
 if __name__ == "__main__":
     test_only_the_data_layer_imports_pacer()
     test_only_the_view_layer_imports_qt()
     test_the_data_core_does_not_reach_qt_through_a_studio_import()
     test_the_import_scanner_sees_every_studio_spelling()
-    print("\n4 layering tests passed")
+    test_every_declared_test_is_actually_reachable_from_its_runner()
+    print("\n5 layering tests passed")

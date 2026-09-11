@@ -106,7 +106,7 @@ from .widgets import NumItem as _NumItem
 # the quickest time through each corner and each straight stitched together — so it is named for
 # what it holds and for what the rest of the app calls that number (the hero's "Δideal", the chart's
 # "Ideal lap" toggle). Two states still refuse to print a number rather than print a duplicate; see
-# `_ideal_cell_value`.
+# `_ideal_cell`.
 #
 # THE FIFTH COLUMN IS THE SAMPLE, and it is here because the two time columns beside it are both
 # MINIMA over the session's laps. A minimum over more laps is never larger, so ranking either one

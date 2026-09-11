@@ -385,8 +385,13 @@ class Session:
             print(f"studio: rotation channel from GYRO ({len(rot)} samples, no cross-check).",
                   flush=True)
         else:
-            print(f"studio: no GYRO stream in this recording ({device or 'unknown camera'}); "
-                  "no measured rotation channel.", flush=True)
+            # BOTH causes are named because both occur and the camera model does not tell them
+            # apart: a pre-HERO5 camera writes no GYRO, while hero8-era clips exist whose GRAV is
+            # all zeros — a stream that is present but carries no direction to project on
+            # (`rotation.MIN_GRAV_NORM`). Naming only the first would be a false reason.
+            print(f"studio: no measured rotation channel for this recording "
+                  f"({device or 'unknown camera'}): it carries no GYRO stream, or no usable "
+                  "GRAV direction to project one on.", flush=True)
 
     # ----------------------------------------- cross-recording reference lap (F7)
     # A lap from another recording that replaces the local best as the Δ baseline everywhere a

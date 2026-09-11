@@ -1035,6 +1035,7 @@ def _run_all():
     test_transport_fullscreen_button_and_video_dblclick_trigger_focus()
     test_video_focus_disabled_while_comparing()
     test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_state()
+    test_ia01_corners_and_coaching_tabs_declare_different_scopes()
     test_tab_bar_switches_pages_and_names_the_corners_lap()
     test_the_chapter_is_named_once_in_the_panel()
     test_corner_row_click_rings_the_map()

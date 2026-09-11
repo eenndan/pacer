@@ -1181,6 +1181,7 @@ def _run_all():
     test_ia_06_compare_button_carries_a_visible_label()
     test_u9_04_f_key_reaches_the_video_focus_gesture()
     test_real_media_pane_b_is_reference_at_lap_start()
+    test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum()
     print("ALL VIDEO-VIEW COMPARE TESTS PASSED")
 
 
