@@ -10,6 +10,32 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **A documented quality-marker vocabulary, and the exports now use it.** Pacer has always marked a
+  number it cannot fully stand behind, in a house style: `(est)`, the muted-italic provisional
+  demotion, ⚠ for a GPS dropout, ⊘ for a lap left out. Those stay exactly where they are in the app,
+  where a cell has hover, colour and weight to carry the meaning. What leaves the app is a table
+  with none of that, so **laps.csv and the HTML report now carry the UK Government Analysis
+  Function's standard table symbols** — `[e]` estimated, `[p]` provisional, `[u]` low reliability,
+  `[b]` break in series — in a new `quality` column, each one decoded by a key written into the same
+  file. The decision is **per marker and written down** in `studio/data_quality.py`: `[x]`, `[z]`,
+  `[r]`, `[f]` and `[c]` are refused with reasons (the app already prints one em-dash for a value it
+  does not have, and omits a statistic that does not apply rather than coding it), and ⊘ EXCLUDED is
+  named as having **no** standard equivalent — a lap that was measured, is shown, and is
+  deliberately not counted is neither "not available" nor "not applicable".
+  - This closes a real hole rather than relabelling one: `laps.csv`'s only marker was the GPS
+    dropout, so a file exported from a session whose start/finish line was auto-fitted and never
+    confirmed — every time in it measured from an arbitrary point — carried a blank flag on every
+    row and said so nowhere, while the app greys the share card out entirely on that same flag.
+  - The old `flag` column is **byte-identical**; `quality` is appended last, where nothing that
+    reads the file by header name can be disturbed.
+- **`[b]` break in series — a condition pacer detected and had no name for.** A chapter that could
+  not be read and was left out, or a chapter whose telemetry stops covering its video: either way
+  the recording closes over a gap and times on the two sides are not on the same footing. It now
+  gets a row in the Stats **DATA TRUST** card and a named reason in both exports. A plain chapter
+  seam is deliberately **not** one — measured, a seam does not break a GPS9 run and steps the axis
+  by 0.000127 s, so marking every chaptered recording would fire on both reference recordings and
+  mean nothing.
+
 - **Marks — write down what you concluded, where it happened.** Every other surface in pacer
   measures; nothing could hold the sentence you say out loud watching your own footage. Press **B**
   and a mark lands at the playhead with a type, a colour and your own note ("baulked out of 4",

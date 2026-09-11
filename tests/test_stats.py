@@ -1963,6 +1963,52 @@ def test_stats_view_trust_card_names_the_sessions_own_problems():
     print("test_stats_view_trust_card_names_the_sessions_own_problems OK")
 
 
+def test_stats_view_trust_card_names_a_break_in_series():
+    """The card's fourth trust-breaking fact, and the one it had no name for.
+
+    A skipped chapter, or a chapter whose telemetry stops covering its video, means the recording
+    closes over a gap and times on the two sides are not on the same footing. Both were already
+    DETECTED — they were only ever mentioned in the transient load notice, which is long gone by
+    the time anyone opens this page.
+
+    The NEGATIVE is asserted with it: a plain multi-chapter recording is not a break. load.py's own
+    measurement says a seam does not break a GPS9 run and steps the axis by 0.000127 s, so a rule
+    that fired on every chaptered session would fire on both reference recordings and mean nothing.
+
+    Stated in the card's own prose, NOT as the exported `[b]` code — a code needs a key and this
+    card is a list of sentences (studio/data_quality.py's vocabulary note says why)."""
+    _app()
+    from studio.stats_panel import StatsView
+
+    class _Map:
+        def __init__(self, desynced=()):
+            self._d = list(desynced)
+
+        def desynced_chapters(self):
+            return list(self._d)
+
+    plain = _fake_view_session()
+    plain.chapters = _Map()                       # chaptered, in sync
+    assert "break in series" not in StatsView(plain).trust_card.text().lower()
+
+    sess = _fake_view_session()
+    sess.skipped_chapters = ["GX010060.MP4"]
+    v = StatsView(sess)
+    text = v.trust_card.text().lower()
+    assert "break in series" in text, text
+    assert "could not be read" in text and "closes over the gap" in text, text
+    # It is a CAVEAT row, so it sorts with the other trust-breaking facts and above provenance.
+    caveats = [t for t, _val, c in v.trust_card.rows() if c]
+    assert "Break in series" in caveats, v.trust_card.rows()
+    marks = [c for _t, _val, c in v.trust_card.rows()]
+    assert marks == sorted(marks, reverse=True), f"caveats must lead the card: {marks}"
+
+    desync = _fake_view_session()
+    desync.chapters = _Map([("GX020060.MP4", 4.2)])
+    assert "telemetry than video" in StatsView(desync).trust_card.text().lower()
+    print("test_stats_view_trust_card_names_a_break_in_series OK")
+
+
 def test_stats_view_trust_card_names_the_moving_fix_population():
     """"0% of fixes rejected" claimed something the number never measured: the fraction is
     judged over the RETAINED MOVING trace (load.py:266-272 — deliberate, it is what stopped a
