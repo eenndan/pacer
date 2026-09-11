@@ -17,8 +17,8 @@ the `SequentialGPSSource` chain):
 
 | stream | rate | content | datatype |
 |--------|------|---------|----------|
-| `ACCL` | 200 Hz | 3-axis accelerometer, m/s² (native element order Z,X,Y) | `IMUSample` (t,x,y,z) |
-| `GRAV` | 60 Hz | gravity **unit** vector (native order X,Y,Z) | `IMUSample` |
+| `ACCL` | 200 Hz | 3-axis accelerometer, m/s² (native element order Z,X,Y on this camera) | `IMUSample` (t,x,y,z) |
+| `GRAV` | 60 Hz | gravity **unit** vector (native order X,Z,Y — see §Axis conventions) | `IMUSample` |
 | `CORI` | 60 Hz | camera-orientation quaternion (w,x,y,z) | `QuatSample` (t,w,x,y,z) |
 
 Read-back on the real file: ACCL 346,728 samples @ 200.5 Hz (|a|≈13 m/s² driving), GRAV
@@ -31,7 +31,12 @@ The three streams use *different* element conventions; these were pinned against
 1. **GRAV → ACCL axis permutation.** At rest, ACCL ≈ 9.81·ĝ. Brute-forcing permutation+sign to
    match `accl/9.81` to GRAV gives `PERM=(1,0,2)`, all positive, residual 0.012 — i.e.
    `ACCL[i]` aligns with `GRAV[PERM[i]]`. So GRAV (permuted) is the gravity vector in the ACCL
-   frame, and **linear accel = ACCL − 9.81·ĝ** removes the static 1 g.
+   frame, and **linear accel = ACCL − 9.81·ĝ** removes the static 1 g. (With ACCL's elements in
+   camera Z,X,Y, that makes GRAV's own order camera **X,Z,Y**. This doc said X,Y,Z for eight
+   releases; so did the C++ header, and so did two of the three synthetic test fixtures, which
+   consequently ran with gravity essentially *un-removed* — 88° of frame error — and only their
+   shape assertions survived it. Fixed and now pinned by
+   `test_gmeter.test_the_legacy_fixtures_are_themselves_axis_consistent`.)
 
 2. **CORI is world→camera (use the conjugate).** Rotating gravity into the world frame with the
    *conjugate* CORI quaternion makes world-gravity **constant** (std ≈0.035 over the session) —
@@ -97,6 +102,93 @@ session's median-filtered, smoothed trajectory; glitch spikes clipped.
   This is why ACCL is usable. A **helmet cam** would be head-motion-dominated and would fail this
   test; the loader's trust heuristic (`lat_corr ≥ 0.4`) would then auto-fall-back to the
   GPS-derived g (`source="gps"`) rather than ship a garbage meter — see the next section.
+
+## The axis convention is a fitted constant, and measurement says it must stay one
+
+`GRAV_PERM` was fitted on a HERO13. GoPro physically moved the IMU between models, so the raw
+element order really does differ by camera — and the container says so, in GPMF's `ORIN` (the raw
+element orientation, lowercase = negated) and `ORIO` (the orientation the camera intends a
+consumer to present). That looks like an obvious defect: *read the field instead of assuming.*
+It was measured, and the obvious fix is wrong.
+
+**What the fields actually contain** (`RawGPSSource::ReadImuOrientation`, pinned by
+`tests/test_imu_orientation.py`; ACCL and GYRO are identical on every camera, and no other stream
+carries either field on any camera):
+
+| clip / recording | `DVNM` | ACCL `ORIN` | ACCL `ORIO` | has GRAV/CORI |
+|---|---|---|---|---|
+| `hero5.mp4` | Camera | *(absent)* | *(absent)* | no |
+| `karma.mp4` | Camera | *(absent)* | *(absent)* | no |
+| `Fusion.mp4` | Fusion | *(absent)* | *(absent)* | no |
+| `hero6.mp4` | Hero6 Black | *(absent)* | *(absent)* | no |
+| `hero6a.mp4`, `hero6+ble.mp4` | Hero6 Black | `YxZ` | `ZXY` | no |
+| `hero7.mp4` | Hero7 Black | `YxZ` | `ZXY` | no |
+| `hero8.mp4` | HERO8 Black | `zxY` | `ZXY` | yes (GRAV is **all zero**) |
+| `max-heromode.mp4`, `max-360mode.mp4` | GoPro Max | `XzY` | `ZXY` | yes |
+| `GX0*0060.MP4`, `GX0*0062.MP4` | HERO13 Black | `ZXY` | ***(absent)*** | yes |
+
+Two things fall out of that table before any analysis. `ORIN` where present agrees exactly with
+the per-model "Data order" rows in the vendored `3rdparty/gpmf-parser/README.md` (HERO6 `YxZ` =
+"Y,-X,Z"), so it is trustworthy. And **the same camera model can differ by firmware** —
+`hero6.mp4` carries no declaration where `hero6a.mp4` does — while the *newest* camera here
+carries `ORIN` with **no `ORIO` at all**. Any reader of these fields must survive both.
+
+**Would honouring them change anything?** On the HERO13 — the only camera with full-length,
+GPS-validated recordings here — `ORIN` is `ZXY`, which is precisely what every camera that names a
+presented orientation names as its `ORIO`.
+The conversion is the **identity**. So on every recording this app has ever been measured on,
+honouring the field changes *nothing*: not a g value, not a golden leaf.
+
+**And on the other cameras it would make things worse.** `GRAV`, `CORI` and `IORI` carry no
+orientation field on any camera that has them, so half of `ACCL − 9.81·ĝ`, rotated by `CORI`, has
+nothing to canonicalise by. Which frame are they in? Differentiate `CORI` into a body angular rate
+and ask which of the 48 signed element permutations maps raw `GYRO` onto it:
+
+| recording | ACCL/GYRO `ORIN` | best map | 2nd | the ORIN-honouring map |
+|---|---|---|---|---|
+| `hero8.mp4` | `zxY` | **(+g1,+g0,+g2)** 21.2° | 53.3° | rank **36**/48, 105.0° |
+| `max-heromode.mp4` | `XzY` | **(+g1,+g0,+g2)** 12.1° | 43.4° | rank **17**/48, 84.0° |
+| `max-360mode.mp4` | `XzY` | **(+g1,+g0,+g2)** 15.2° | 50.8° | rank **15**/48, 80.8° |
+| `GX020060.MP4` | `ZXY` | **(+g1,+g0,+g2)** 10.0° | 39.8° | *(identity — same map)* |
+| `GX010062.MP4` | `ZXY` | **(+g1,+g0,+g2)** 9.5° | 38.4° | *(identity — same map)* |
+
+`(+g1,+g0,+g2)` **is** `GRAV_PERM`. One constant, rank 1 of 48 on three camera models declaring
+three *different* raw orders. So `GRAV`/`CORI` ride the **raw** element frame, not the presented
+one, and canonicalising `ACCL`/`GYRO` by `ORIN` while they stay raw would break an alignment that
+currently holds on every camera anyone can test. **The fitted constant is not a stand-in for the
+field; it is the correct answer, and the field is a different question.**
+
+So: the field is **read and reported** (`read_imu_orientation`, printed by `studio.dev.diagnose`)
+and never applied, and the assumption it was standing in for is now **measured per recording**.
+
+### The guard: `gmeter.axis_check`
+
+A wrong element frame is silent — `ACCL − 9.81·ĝ` with a mis-framed `ĝ` *adds* gravity instead of
+removing it, and Pearson r is blind to the constant it leaves behind. So the invariant is measured
+directly and needs no camera model: while the kart is unloaded (|low-passed ACCL| within 2 % of g)
+the accelerometer **is** gravity, so `GRAV_PERM(GRAV)` must point where the ACCL points. Over the
+threshold, `compute` refuses the IMU path and falls back to GPS-derived g, exactly as a failed
+cross-check does.
+
+| recording | measured tilt | nearest wrong element order (any) | nearest that moves the dominant gravity element |
+|---|---|---|---|
+| `max-heromode.mp4` | **1.46°** | 9.71° | 75.58° |
+| `max-360mode.mp4` | **1.90°** | 15.06° | 81.81° |
+| `GX030060.MP4` | **4.30°** | 31.93° | 31.93° |
+| `GX010062.MP4` | **5.06°** | 31.01° | 36.85° |
+| `GX020062.MP4` | **9.33°** | 26.51° | 45.50° |
+| `GX020060.MP4` | **9.38°** | 29.36° | 41.04° |
+
+`AXIS_MAX_TILT_DEG = 20` sits 2.1× above the worst true value and 1.6× below the nearest *damaging*
+one. The middle column is why the guard is deliberately not tighter: on a mount whose gravity has a
+near-zero element (the Max clips) some wrong relabellings sit under 20° — and those are exactly the
+ones that leave ~0.17 g of residual instead of 1–2 g. Gating on them would be gating on noise.
+
+It also catches something that was already live: `hero8.mp4`'s `GRAV` stream is **all zeros**,
+which today reaches the transform as a zero gravity direction rather than as an error.
+
+Neither D24 recording moved: lateral r **+0.9564 → +0.9564**, gain **1.0916 → 1.0916** (0060) and
+r **+0.9587 → +0.9587**, gain **1.1079 → 1.1079** (0062), with `source="accl"` on both.
 
 ## Honesty / fallback
 

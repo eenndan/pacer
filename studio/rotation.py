@@ -16,10 +16,13 @@ The channel:
 `omega` is the raw GYRO vector; `ghat` is `GRAV` permuted onto the gyro's element order by
 `gmeter.GRAV_PERM` and normalised. GYRO declares ACCL's element orientation — the GPMF ORIN and
 ORIO fields of the two streams are identical on every camera measured (both D24 recordings and
-all eleven bundled gpmf-parser sample clips, across HERO5/6/7/8/13, Fusion, Max and Karma) — so
-it inherits ACCL's frame and needs no handling of its own. Projecting on gravity is what makes
-the number a ROAD-plane yaw rate rather than a camera-axis one: it is independent of how the
-camera is tilted on its mount.
+all ten bundled gpmf-parser sample clips, across HERO5/6/7/8/13, Fusion, Max and Karma; what they
+SAY differs by model, and on several they say nothing at all) — so it inherits ACCL's frame and
+needs no handling of its own. And that frame is the RAW one the elements are written in, not the
+one ORIN names: `gmeter.GRAV_PERM`'s block records the measurement that settled it, and
+`gmeter.axis_check` is the per-recording guard that now stands behind it. Projecting on gravity
+is what makes the number a ROAD-plane yaw rate rather than a camera-axis one: it is independent
+of how the camera is tilted on its mount.
 
   * The permutation is load-bearing and fails QUIETLY. Projecting on the UNPERMUTED GRAV still
     produces a corner-shaped signal — r=+0.65/+0.62 against the GPS path, gain 0.35/0.32 — which

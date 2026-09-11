@@ -5,6 +5,10 @@ all on the media clock) plus an independent GPS-derived cross-check. Axis conven
 empirically (see studio/docs/gmeter-validation.md).
 
 The camera->kart transform:
+  0. Axis-check: GRAV_PERM'd GRAV must point the same way as the recording's own unloaded ACCL,
+     or the IMU path is REFUSED and the meter falls back to GPS (`axis_check`). This is the one
+     assumption nothing downstream can absorb: the yaw and handedness are fitted per chapter, but
+     a wrong element frame leaves up to 2 g of un-removed gravity that the correlation cannot see.
   1. Gravity-remove: GRAV permuted onto ACCL's axes via GRAV_PERM=(1,0,2); linear = ACCL - 9.81*ĝ.
   2. Rotate camera->world via CORI's conjugate (CORI stores world->camera); the rotated gravity
      is constant over time, confirming the rotation.
@@ -36,7 +40,7 @@ import numpy as np
 from ._signal import G, boxcar, speed_long_g
 
 # Empirically resolved GoPro stream-frame conventions (see module docstring + validation doc).
-# GRAV/CORI element order is a permutation of ACCL's native (Z,X,Y) element order.
+# GRAV/CORI element order is a permutation of ACCL's native (Z,X,Y on a HERO13) element order.
 # PUBLIC because a second channel now needs the SAME permutation: `rotation.py` projects the GYRO
 # vector onto this gravity direction, and GYRO carries ACCL's element orientation (their GPMF
 # ORIN/ORIO fields are identical on every camera measured), so the two modules must agree on how
@@ -44,6 +48,30 @@ from ._signal import G, boxcar, speed_long_g
 # permutation measures as a real signal, not as breakage: un-permuted, the rotation channel still
 # scored r=+0.65/+0.62 against the GPS path (permuted: +0.87/+0.85), which reads as a scale problem
 # rather than a wrong axis. Only rotation.py's closed-lap test catches it outright.
+#
+# --- WHY THIS IS A FITTED CONSTANT AND NOT A READ OF `ORIN` -------------------------------------
+# GoPro moved the IMU between models, so the RAW element order differs by camera, and the container
+# says so: GPMF's ORIN field (now readable as `pacer.RawGPSSource.read_imu_orientation`) reads
+# "ZXY" on a HERO13, "zxY" on a HERO8, "XzY" on a Max, "YxZ" on a HERO6/7, and is absent entirely
+# on a HERO5 / Karma / Fusion (and on older HERO6 firmware). The obvious-looking fix — canonicalise
+# ACCL/GYRO through ORIN->ORIO before any of this runs — was MEASURED AND REJECTED, because it is
+# wrong:
+#
+#   * ORIN/ORIO are written ONLY on ACCL and GYRO. GRAV, CORI and IORI carry no orientation field
+#     on ANY camera that has them (checked on hero8, both Max modes and both D24 recordings). So
+#     there is nothing to canonicalise the other half of this transform by.
+#   * And they must not be canonicalised, because GRAV/CORI ride the camera's RAW element frame,
+#     not the presented one. Differentiating CORI into a body angular rate and asking which signed
+#     permutation maps raw GYRO onto it picks the SAME map — this constant, (+g1,+g0,+g2) — on a
+#     HERO8 (ORIN "zxY"), a GoPro Max ("XzY") and a HERO13 ("ZXY"), three DIFFERENT declarations,
+#     at rank 1 of 48 every time (9-21 deg median, next candidate 38-53 deg). The ORIN-honouring
+#     alternative ranks 36/48, 17/48 and 15/48 on those same clips (81-105 deg).
+#
+# So honouring ORIN would change NOTHING on a HERO13 (where it is the identity) and would BREAK
+# every other camera. What it was standing in for — "is this recording's GRAV actually in the frame
+# this constant assumes?" — is now MEASURED per recording by `axis_check` below, which is the
+# honest version of the guarantee: the constant stays, and a recording it does not fit is refused
+# out loud instead of being silently mis-oriented.
 GRAV_PERM = (1, 0, 2)
 # CORI stores world->camera; conjugate it to rotate camera->world.
 _CORI_CONJUGATE = True
@@ -184,6 +212,87 @@ def _verdict(lat_corr: float, lat_rms_accl: float, lat_rms_gps: float) -> bool:
     return bool(_GAIN_MIN <= _lat_gain(lat_rms_accl, lat_rms_gps) <= _GAIN_MAX)
 
 
+# --- THE AXIS GUARD: is GRAV actually in the frame GRAV_PERM assumes? ---------------------------
+# Everything downstream starts with `ACCL - G*GRAV_PERM(GRAV)`, so if those two streams are not in
+# the same element frame the subtraction ADDS gravity instead of removing it — up to 2 g of
+# camera-fixed error that the display cannot distinguish from cornering. The invariant that makes
+# the subtraction legal is directly measurable and needs no camera model: while the kart is not
+# loaded, the accelerometer IS gravity, so the permuted GRAV direction must point the same way as
+# the low-passed ACCL direction.
+#
+# THE THRESHOLD IS THE MEASURED GAP, not a guess. On the six real recordings with a usable GRAV
+# stream (four HERO13 chapters across both D24 pairs, both GoPro Max sample clips) the correct
+# constant measures 1.46 / 1.90 / 4.30 / 5.06 / 9.33 / 9.38 deg. The nearest WRONG element order
+# that moves the DOMINANT gravity element — the class of error that actually corrupts the meter —
+# measures 31.93 / 36.85 / 41.04 / 45.50 / 75.58 / 81.81 deg on those same recordings. 20 deg sits
+# 2.1x above the worst true value and 1.6x below the nearest damaging one.
+#
+# The maps in between are deliberately NOT caught, and on a mount whose gravity has a near-zero
+# element they come close: the nearest wrong order of ANY kind reaches 9.71 deg on the Max clips.
+# That is the point — such a relabelling only moves an element that carries almost no gravity, so
+# it leaves ~0.17 g of residual rather than 1-2 g. Gating on it would be gating on noise, and the
+# mount that makes it possible is the same mount that makes it harmless.
+AXIS_MAX_TILT_DEG = 20.0
+_AXIS_SMOOTH_S = 1.0     # low-pass applied to ACCL before it is read as a gravity direction
+_AXIS_QUIET_TOL = 0.02   # |low-passed ACCL| must sit within this fraction of g to count as unloaded
+_AXIS_MIN_QUIET = 200    # below this many unloaded samples the angle is not a measurement
+
+
+@dataclass
+class AxisCheck:
+    """Does this recording's GRAV point the same way as its own ACCL, once GRAV_PERM is applied?
+
+    The one assumption in the camera->kart transform that no fit downstream can absorb: a mount
+    yaw is fitted per chapter, a handedness flip is fitted, but a wrong ELEMENT FRAME leaves
+    un-removed gravity in the signal and every later statistic inherits it."""
+    n: int             # unloaded samples the angle was measured over
+    tilt_deg: float    # median angle between GRAV_PERM(GRAV) and the low-passed ACCL direction
+    measurable: bool   # False when the recording held too few unloaded samples to judge
+    ok: bool           # verdict: False means the IMU path is refused (see AXIS_MAX_TILT_DEG)
+
+    def summary(self) -> str:
+        if not self.measurable:
+            return (f"g-meter axis check: not measurable ({self.n} unloaded samples, "
+                    f"need {_AXIS_MIN_QUIET}) — the ACCL/GRAV frame is assumed, not verified.")
+        verdict = "ALIGNED" if self.ok else "MISALIGNED"
+        return (f"g-meter axis check [{verdict}]: GRAV sits {self.tilt_deg:.1f} deg off this "
+                f"recording's own ACCL over {self.n} unloaded samples "
+                f"(limit {AXIS_MAX_TILT_DEG:.0f} deg).")
+
+
+def axis_check(accl, grav) -> AxisCheck | None:
+    """Measure the ACCL<->GRAV element-frame agreement for one recording.
+
+    Returns None when there is no usable pair of streams at all. Note what it does NOT consult:
+    the camera's own ORIN declaration. That field says which PHYSICAL axis each raw element is,
+    which is not the same question and is measurably not the invariant this transform needs — see
+    the GRAV_PERM block."""
+    if accl is None or grav is None or len(accl) < 10 or len(grav) < 4:
+        return None
+    accl = np.asarray(accl, float)
+    grav = np.asarray(grav, float)
+    ta = accl[:, 0]
+    span = float(ta[-1] - ta[0])
+    if span <= 0:
+        return None
+    w = max(int(round(_AXIS_SMOOTH_S * len(ta) / span)), 1)
+    a_lp = np.column_stack([boxcar(accl[:, 1 + i], w) for i in range(3)])
+    g_p = np.column_stack(
+        [np.interp(ta, grav[:, 0], grav[:, 1 + GRAV_PERM[i]]) for i in range(3)])
+    mag = np.linalg.norm(a_lp, axis=1)
+    quiet = np.abs(mag - G) < _AXIS_QUIET_TOL * G
+    n = int(np.count_nonzero(quiet))
+    if n < _AXIS_MIN_QUIET:
+        # Not enough unloaded time to read a gravity direction off the accelerometer. Report it
+        # and do NOT gate — the same call the cross-check's gain makes when there is too little
+        # cornering to weigh a magnitude against.
+        return AxisCheck(n=n, tilt_deg=float("nan"), measurable=False, ok=True)
+    dots = np.sum(_norm_rows(a_lp[quiet]) * _norm_rows(g_p[quiet]), axis=1)
+    tilt = float(np.degrees(np.median(np.arccos(np.clip(dots, -1.0, 1.0)))))
+    return AxisCheck(n=n, tilt_deg=tilt, measurable=True,
+                     ok=bool(np.isfinite(tilt) and tilt <= AXIS_MAX_TILT_DEG))
+
+
 def _norm_rows(a):
     return a / np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-12)
 
@@ -263,6 +372,9 @@ class GMeter:
     # The dial/overlay longitudinal series (GPS speed derivative, smoothed) on the same `times`
     # grid; None for a synthetic/GPS-only meter, in which case at_time falls back to long_g.
     long_g_gps: np.ndarray | None = None
+    # The ACCL<->GRAV element-frame measurement (see AxisCheck). None when there was no IMU to
+    # check. A failing one is WHY `source` is "gps" on a recording that had an IMU.
+    axis: AxisCheck | None = None
 
     def __len__(self) -> int:
         return len(self.times)
@@ -351,8 +463,9 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
         resets each chapter, so the CORI-plane->ENU alignment MUST be fit independently per
         chapter; None = a single global fit.
 
-    Returns a GMeter. If the IMU is missing or the cross-check shows the ACCL is unusable, the
-    GPS-derived g is used instead (source/cross say so) — we never ship a garbage meter.
+    Returns a GMeter. If the IMU is missing, its axes do not line up (`axis_check`), or the
+    cross-check shows the ACCL is unusable, the GPS-derived g is used instead (source/axis/cross
+    say so) — we never ship a garbage meter.
     """
     gps_t = np.asarray(gps_t, float)
     if len(gps_t) >= 4:
@@ -376,6 +489,21 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
     grav = np.asarray(grav, float)
     cori = np.asarray(cori, float)
     ta = accl[:, 0]
+
+    # THE AXIS GATE, BEFORE ANY OF THE TRANSFORM RUNS. A wrong element frame is the one error the
+    # per-chapter yaw/handedness fit downstream cannot absorb and the correlation cannot see, so it
+    # is measured on the two raw streams and refused here rather than fitted around.
+    axis = axis_check(accl, grav)
+    if axis is not None and not axis.ok:
+        print(f"studio: {axis.summary()} IMU g refused; "
+              f"{'using GPS-derived g' if long_gps is not None else 'no g-meter'}.", flush=True)
+        if long_gps is None:
+            gm = _empty()
+            gm.axis = axis
+            return gm
+        gm = _resample_gps_only(gps_t, long_gps, lat_gps)
+        gm.axis = axis
+        return gm
 
     h1, h2 = _horizontal_accel(accl, grav, cori, ta)
 
@@ -447,6 +575,7 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
         gm = _resample_gps_only(gps_t, long_gps, lat_gps)
         gm.cross = cross
         gm.source = "gps"
+        gm.axis = axis
         return gm
     # The dial/overlay longitudinal: the GPS speed derivative on the output grid, smoothed (the IMU
     # forward axis is vibration-inflated). Lateral keeps the IMU. None if there's no GPS trajectory.
@@ -456,7 +585,7 @@ def compute(accl, grav, cori, gps_t, gps_x, gps_y, gps_speed, segment_bounds=Non
         w = max(int(round(LONG_SMOOTH_S * OUTPUT_HZ)), 1)
         long_g_gps = boxcar(speed_long_g(spd_kmh, times), w)
     return GMeter(times=times, lat_g=lat_g, long_g=long_g, cross=cross, source="accl",
-                  long_g_gps=long_g_gps)
+                  long_g_gps=long_g_gps, axis=axis)
 
 
 def _horizontal_accel(accl, grav, cori, ta):
