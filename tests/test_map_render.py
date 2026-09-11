@@ -213,6 +213,178 @@ def test_rainbow_channel_delta_best_lap_hint_and_no_negative_zero():
     print("test_rainbow_channel_delta_best_lap_hint_and_no_negative_zero OK")
 
 
+# --------------------------------------------------------- Δ RATE (the Δ channel's derivative)
+def _rate_lap(n=600, dt=0.1):
+    """A synthetic lap at 10 Hz with a uniform odometer, so a Δ curve on the 400-grid resamples
+    onto the points linearly and a known grid slope is a known per-point rate."""
+    t = np.arange(n) * dt
+    xs = np.cos(np.linspace(0, 2 * math.pi, n)) * 50.0
+    ys = np.sin(np.linspace(0, 2 * math.pi, n)) * 30.0
+    speed = np.full(n, 45.0)
+    cum = np.linspace(0.0, 600.0, n)   # uniform: distance fraction == time fraction
+    return t, xs, ys, speed, cum
+
+
+def test_delta_rate_is_the_delta_curves_slope_in_seconds_per_second():
+    """The rate is dΔ/dt in s/s, nothing more: on a Δ curve that climbs a known number of seconds
+    over a known number of seconds, every interior sample reports exactly that slope."""
+    from studio.map_render import RATE_WINDOW_S, delta_rate
+    t = np.arange(600) * 0.1                     # 60 s
+    d = 0.25 * t                                 # losing a quarter-second per second, all lap
+    got = delta_rate(t, d, RATE_WINDOW_S)
+    assert np.allclose(got, 0.25), (got.min(), got.max())
+    # Sign convention: a FALLING Δ (taking time back) is a negative rate.
+    assert np.allclose(delta_rate(t, -0.25 * t, RATE_WINDOW_S), -0.25)
+    # And it integrates back to the Δ it came from — the property that makes it the same
+    # measurement as the cumulative channel rather than a different one.
+    wander = np.cumsum(np.sin(t) * 0.01)
+    r = delta_rate(t, wander, RATE_WINDOW_S)
+    assert abs(np.trapezoid(r, t) - (wander[-1] - wander[0])) < 5e-3
+    print("test_delta_rate_is_the_delta_curves_slope_in_seconds_per_second OK")
+
+
+def test_delta_rate_ends_are_divided_by_the_span_actually_used():
+    """At the two ends the centred window is clamped to the lap, so the difference must be divided
+    by the span ACTUALLY used, not by the nominal width. Dividing by the width instead halves the
+    first and last samples — a fake fade to neutral at the start/finish line, which is the first
+    place a driver looks. On a constant-slope Δ the rate is constant edge to edge."""
+    from studio.map_render import delta_rate
+    t = np.arange(200) * 0.1
+    got = delta_rate(t, 0.3 * t, 0.4)
+    assert abs(got[0] - 0.3) < 1e-12 and abs(got[-1] - 0.3) < 1e-12, (got[0], got[-1])
+    # A window wider than the whole lap degrades to the lap's average slope, not to zero.
+    assert abs(delta_rate(t, 0.3 * t, 99.0)[0] - 0.3) < 1e-12
+    print("test_delta_rate_ends_are_divided_by_the_span_actually_used OK")
+
+
+def test_rainbow_channel_delta_rate_paints_losing_red_and_gaining_green():
+    """The channel's whole point: where the driver is LOSING time right now the line is red, where
+    he is TAKING IT BACK it is green — regardless of how far behind he already is. The Δ curve here
+    climbs steeply through the first third (losing), falls through the middle (gaining) and is flat
+    at the end, all while staying far above zero: the CUMULATIVE channel would paint the whole lap
+    red-to-amber on the way up, and it is the RATE that separates the three stretches."""
+    t, xs, ys, speed, cum = _rate_lap()
+    g = np.linspace(0.0, 1.0, 400)
+    grid = np.piecewise(g, [g < 1 / 3, (g >= 1 / 3) & (g < 2 / 3), g >= 2 / 3],
+                        [lambda u: 2.0 + 3.0 * u,          # climbing: losing
+                         lambda u: 3.0 - 3.0 * (u - 1 / 3),  # falling: gaining
+                         lambda u: 2.0])                     # flat: matching
+    seg, lo, hi = rainbow_channel("delta_rate", t, xs, ys, speed, cum, None, grid)
+    assert len(seg) == len(xs) - 1
+    n = len(seg)
+    losing, gaining, flat = seg[n // 12:n // 4], seg[5 * n // 12:7 * n // 12], seg[9 * n // 12:]
+    assert losing.max() < 4, f"a climbing Δ must paint in the red buckets, got {losing.tolist()}"
+    assert gaining.min() > 11, f"a falling Δ must paint green, got {gaining.tolist()}"
+    assert set(flat.tolist()) <= {7, 8}, f"a flat Δ must paint the ramp's neutral, got {flat[:8]}"
+    # The legend states the unit and carries the direction in WORDS (the non-hue cue), and the two
+    # ends are ±the same number because the scale is symmetric about zero.
+    assert lo.startswith("losing ") and hi.startswith("gaining "), (lo, hi)
+    assert lo.endswith(" s/s") and hi.endswith(" s/s"), (lo, hi)
+    assert lo.split()[1] == hi.split()[1], f"a diverging scale must be symmetric: {lo} / {hi}"
+    print("test_rainbow_channel_delta_rate_paints_losing_red_and_gaining_green OK")
+
+
+def test_delta_rate_zero_lands_on_the_ramps_middle_anchor():
+    """The one structural difference from every other channel: this scale is SYMMETRIC, so that a
+    rate of exactly zero paints the ramp's own neutral colour. With MAP_RAINBOW_N=16 that means the
+    boundary between buckets 7 and 8, which is where `rainbow_colors` puts its middle anchor
+    (t = i/(n-1)*2 == 1 at i = 7.5) — the mid colour therefore means "matching the baseline" in
+    BOTH palettes, with no new colours invented for it."""
+    from studio.map_render import RATE_SCALE_PCTL
+    assert bucketize([0.0], MAP_RAINBOW_N, lo=-1.0, hi=1.0)[0] == MAP_RAINBOW_N // 2
+    assert bucketize([-1e-9], MAP_RAINBOW_N, lo=-1.0, hi=1.0)[0] == MAP_RAINBOW_N // 2 - 1
+    # An ASYMMETRIC lap (it loses far harder than it gains) must still be centred on zero, not
+    # stretched over its own min..max the way the speed/elevation channels are: the stretch it
+    # merely matches the baseline in has to keep reading neutral.
+    t, xs, ys, speed, cum = _rate_lap()
+    g = np.linspace(0.0, 1.0, 400)
+    grid = np.where(g < 0.25, 4.0 * g, np.where(g < 0.5, 1.0 - 0.4 * (g - 0.25), 0.9))
+    seg, lo, hi = rainbow_channel("delta_rate", t, xs, ys, speed, cum, None, grid)
+    assert set(seg[int(0.6 * len(seg)):].tolist()) <= {7, 8}, "the matched stretch must read neutral"
+    assert seg[:int(0.2 * len(seg))].max() <= 1, "the hard-losing stretch must saturate red"
+    assert lo.split()[1] == hi.split()[1]
+    assert RATE_SCALE_PCTL == 98.0
+    print("test_delta_rate_zero_lands_on_the_ramps_middle_anchor OK")
+
+
+def test_delta_rate_one_outlier_corner_does_not_own_the_colour_scale():
+    """MEASURED on the dev recordings: every non-best lap of one of them peaks in the same 20 km/h
+    hairpin, where the Δ curve's normalized-distance alignment turns a couple of metres of line
+    difference into a few tenths that come straight back out. Scaling the ramp to the lap's MAX
+    hands that one corner the whole gradient — 67% of the lap collapsed into the two middle buckets
+    and only 6 of 16 colours used. The robust (p98) scale keeps the rest of the lap legible; the
+    spike still saturates the end bucket, which is honest."""
+    t, xs, ys, speed, cum = _rate_lap()
+    g = np.linspace(0.0, 1.0, 400)
+    gentle = 0.10 * np.sin(2 * math.pi * 6 * g)   # ±0.06 s/s of ordinary corner-scale structure
+    spike = -0.5 * np.exp(-((g - 0.8) ** 2) / (2 * 0.0015**2))  # one violent, LOCAL excursion
+    seg, _lo, _hi = rainbow_channel("delta_rate", t, xs, ys, speed, cum, None, gentle + spike)
+    painted = seg[seg >= 0]
+    assert len(set(painted.tolist())) >= 10, (
+        f"the ordinary structure must still use most of the ramp, got "
+        f"{sorted(set(painted.tolist()))}")
+    mid = np.count_nonzero((painted == 7) | (painted == 8)) / len(painted)
+    assert mid < 0.5, f"{mid:.0%} of the lap collapsed to neutral — the outlier owns the scale"
+    assert painted.min() == 0 and painted.max() == MAP_RAINBOW_N - 1, "both ends must be reached"
+    print("test_delta_rate_one_outlier_corner_does_not_own_the_colour_scale OK")
+
+
+def test_rainbow_channel_delta_rate_degenerate_states():
+    """The two informationless states, handled explicitly rather than painted as a rainbow:
+
+      * the BASELINE lap — its Δ is identically zero, so its rate is identically zero. Same gate,
+        same hint as the cumulative channel (there is no delta, so there is no slope either).
+      * a Δ that WOBBLES below the display floor — the rate is that wobble divided by the window,
+        i.e. amplified noise, and it would otherwise paint at full contrast because the scale is
+        per-lap. The Δ-span gate catches it before the derivative is ever taken.
+      * a Δ that moves REAL seconds but so slowly no point clears the printable 0.01 s/s.
+    And the shared gates: no best lap, a zero-length odometer, a degenerate lap."""
+    from studio.map_render import (
+        DELTA_BEST_LAP_HINT,
+        DELTA_FLAT_EPS_S,
+        RATE_FLAT_EPS_SS,
+        RATE_FLAT_HINT_VALUE,
+    )
+    t, xs, ys, speed, cum = _rate_lap()
+    args = (t, xs, ys, speed, cum, None)
+    seg, lo, hi = rainbow_channel("delta_rate", *args, np.zeros(400))
+    assert seg is None and lo == DELTA_BEST_LAP_HINT and hi == ""
+    # A sub-5 ms wobble: a rate of ±0.006 s/s if differentiated, painted at FULL contrast by a
+    # per-lap scale. Gated on the Δ span, before the derivative.
+    wobble = 0.002 * np.sin(np.linspace(0, 40 * math.pi, 400))
+    seg, lo, hi = rainbow_channel("delta_rate", *args, wobble)
+    assert seg is None and lo == DELTA_BEST_LAP_HINT and hi == "", (lo, hi)
+    # A real, monotone 0.06 s taken over a 60 s lap: the Δ span clears its gate, but the rate is
+    # 0.001 s/s and every legend end would read "0.00 s/s".
+    creep = np.linspace(0.0, 0.06, 400)
+    seg, lo, hi = rainbow_channel("delta_rate", *args, creep)
+    assert seg is None and hi == "", (lo, hi)
+    assert RATE_FLAT_HINT_VALUE in lo and "gain/loss rate" in lo, lo
+    assert 0.06 / 60.0 < RATE_FLAT_EPS_SS, "this fixture is meant to sit under the display floor"
+    assert DELTA_FLAT_EPS_S < 0.06, "…while clearing the Δ-span gate"
+    # Shared gates: no baseline at all, a zero-length odometer, and a lap with no segment.
+    assert rainbow_channel("delta_rate", *args, None) is None
+    assert rainbow_channel("delta_rate", t, xs, ys, speed, np.zeros_like(cum), None,
+                           np.linspace(0, 1, 400)) is None
+    one = np.array([0.0])
+    assert rainbow_channel("delta_rate", one, one, one, one, one, None,
+                           np.linspace(0, 1, 400)) is None
+    print("test_rainbow_channel_delta_rate_degenerate_states OK")
+
+
+def test_delta_rate_never_draws_across_a_gps_dropout():
+    """The rate channel goes through the same per-segment NaN-mask as every other channel, so a
+    segment spanning a dropout is skipped rather than painted from an interpolation across a hole."""
+    t, xs, ys, speed, cum = _rate_lap(n=40)
+    t = t.copy()
+    t[20:] += 6.0
+    seg, _lo, _hi = rainbow_channel("delta_rate", t, xs, ys, speed, cum, None,
+                                    np.linspace(0.0, 1.5, 400))
+    assert seg[19] == -1, "the cross-dropout segment must be skipped"
+    assert (seg[np.arange(len(seg)) != 19] >= 0).all()
+    print("test_delta_rate_never_draws_across_a_gps_dropout OK")
+
+
 def test_rainbow_channel_grip_fixed_scale_and_negation():
     """Grip is NEGATED on a FIXED [0, GRIP_UTIL_DISPLAY_MAX] scale (not the lap's own max): a
     rising util ramp paints monotonically redder (more grip used = redder), the unused end is
