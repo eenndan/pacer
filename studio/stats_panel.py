@@ -494,18 +494,23 @@ GG_TOOLTIP = ("The friction circle: every g-meter sample on the valid laps — l
 GG_AXIS_X = "lateral g<br>− right · + left"
 GG_AXIS_Y = "longitudinal g<br>− braking<br>+ accelerating"
 GG_KEY_RINGS = "solid rings: 0.5 g steps"
-# ================================ ONE AXIS, TWO FILTERS, AND A LAP ROW PRINTS BOTH OF THEM
-# `driving_channels`'s THREE LONGITUDINAL SERIES block is the source-level version of this, and
+# ================================ ONE AXIS, THREE FILTERS, AND A LAP ROW PRINTS TWO OF THEM
+# `driving_channels`'s FOUR LONGITUDINAL SERIES block is the source-level version of this, and
 # #271 left the user-facing half undone because it lives here. The short form: the same physical
-# quantity — deceleration along the kart — reaches this page through two different filters.
+# quantity — deceleration along the kart — reaches this page through three different filters.
 #
 #   * the DISPLAY series (gmeter.long_g_gps): the GPS speed derivative boxcarred over
 #     LONG_SMOOTH_S and resampled to the g-meter's own rate. It is what "peak braking g", the
 #     `Brk g` column, the friction circle and its p98 envelope are made of.
-#   * the DETECTION series (_signal.speed_long_g, called by driving_channels): the SAME derivative
+#   * the ONSET series (_signal.speed_long_g, called by driving_channels): the SAME derivative
 #     with NO window, rebuilt per lap on that lap's own ~10 Hz fixes. It is what every brake event
-#     and every coast span — `Brake s`, `Coast s`, the DRIVING tiles, the BRAKING table's commit %,
-#     the map's brake glyphs and the coaching rows — is made of.
+#     — `Brake s`, the two braking DRIVING tiles, the BRAKING table's commit %, the map's brake
+#     glyphs and the coaching rows' braking cause — is made of.
+#   * the BAND series (that same derivative boxcarred over driving.COAST_SMOOTH_S, #275): what
+#     every COAST span — `Coast s` and the two coasting DRIVING tiles — is made of. It exists
+#     because the coast band is narrower than the onset series' own noise, so on that series a
+#     band run lasted 2 samples where MIN_COAST_S needs 4 and the reported coast was 5.9 % / 4.5 %
+#     of the real band time. THE THIRD FILTER IS WHY THE COPY BELOW SPLITS BRAKE FROM COAST.
 #
 # MEASURED, and it is visible in one row. On the D24 0060 pair (38 valid laps) a brake event's own
 # peak deceleration exceeds the "peak braking g" printed on the SAME lap row on 37 of 38 laps, at a
@@ -518,32 +523,50 @@ GG_KEY_RINGS = "solid rings: 0.5 g steps"
 #
 # THE COPY NAMES THE INSTRUMENT, NOT THE MEASUREMENT. Windows, bands and minimum durations are
 # COMPOSED from `gmeter` / `driving` constants and never typed (the §5.5 lesson: a constant typed
-# into honesty copy rots), and the coast text deliberately characterises no magnitude at all — the
-# detection series' effect on `coast_s` is a known, measured defect with its own fix pending
-# (see driving_channels), and a sentence describing today's number would be wrong the day it lands.
-# The BAND, the MINIMUM DURATION and the threshold are what a coast IS, and they stay true either
-# way. The measured ratios above live in this comment, where they cannot reach the user and rot.
+# into honesty copy rots), and the coast text deliberately characterises no coast MAGNITUDE — the
+# band, the minimum duration and the window are what a coast IS, and a sentence about today's
+# number would rot the next time the detector moves. The measured ratios above live in this
+# comment, where they cannot reach the user and rot.
+#
+# ...AND THE INSTRUMENT ITSELF ROTTED ANYWAY, ONE PR LATER, WHICH IS THE REASON THE COAST NOW GETS
+# ITS OWN CLAUSE RATHER THAN SHARING THE BRAKE'S. This block shipped in #276 saying brake and coast
+# both run on the derivative "with NO smoothing window"; #275 landed the very next merge and gave
+# the coast band a pre-threshold boxcar of its own (`driving.COAST_SMOOTH_S`, 0.50 s) because the
+# band is narrower than that derivative's own noise. Both PRs were green — the suite ASSERTED the
+# sentence — and the page then told the reader the `coasting / lap · median` tile carried no
+# window while the exported DRIVING note beside it (`driving.coast_instrument`, which #275 did
+# update) stated a 0.50 s one. Measured on ~/Desktop/D24 GX020060+GX030060: the tile reads 2.6 s,
+# and the window it denied is WIDER than the LONG_SMOOTH_S one the same sentence contrasted itself
+# against. Brake and coast are two instruments off one series; the copy now splits where they do.
 DRIVING_TOOLTIP = (
-    "Brake and Coast are DETECTED EVENTS, and they run on their own copy of the longitudinal g: "
-    "the GPS speed derivative on each lap's own ~10 Hz fixes, with NO smoothing window — the "
-    f"opposite choice from the {gmeter.LONG_SMOOTH_S:g} s one the peak-braking tile and the "
-    "friction circle above are drawn on. That is deliberate: a brake onset is a step, and a "
-    "centred window smears exactly the thing being detected.\n\n"
+    "Brake and Coast are DETECTED EVENTS, not readings of the tiles above: they run on their own "
+    "copy of the longitudinal g — the GPS speed derivative on each lap's own ~10 Hz fixes — and "
+    "the two read it through DIFFERENT windows, because the two tests have opposite shapes.\n\n"
     "A BRAKE EVENT is a run below the session's OWN brake threshold — derived from this "
     "recording's braking-decel distribution rather than fixed — released on hysteresis, with the "
-    "fragments of one braking manoeuvre re-fused into one event. A COAST is the narrower test: "
-    f"off-power deceleration inside a band from {driving.COAST_DRAG_MIN:g} g up to that same "
-    f"threshold, held for at least {driving.MIN_COAST_S:g} s. The band and the minimum duration "
-    "are the whole instrument — this is time that passed both tests, not every moment the driver "
-    "was off the throttle.")
+    "fragments of one braking manoeuvre re-fused into one event. It is detected with NO smoothing "
+    f"window at all, the opposite choice from the {gmeter.LONG_SMOOTH_S:g} s one the peak-braking "
+    "tile and the friction circle above are drawn on: an onset is a step, and a centred window "
+    "smears exactly the thing being detected.\n\n"
+    "A COAST is the narrower test — off-power deceleration inside a band from "
+    f"{driving.COAST_DRAG_MIN:g} g up to that same threshold, held for at least "
+    f"{driving.MIN_COAST_S:g} s. Sustained membership of a band is the opposite shape from an "
+    "onset, and that band is narrower than the bare derivative's own noise, so this one figure is "
+    f"measured on a {driving.COAST_SMOOTH_S:g} s window. The band, the minimum duration and that "
+    "window are the whole instrument — this is time that passed all three tests, not every moment "
+    "the driver was off the throttle.")
 LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
                      "speed. ★ marks the session-best lap.\n\n"
                      "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS. Lat g is the "
                      "accelerometer. Brk g is the GPS speed derivative as the g-meter filters it "
                      f"— boxcarred over {gmeter.LONG_SMOOTH_S:g} s, so it is a SUSTAINED peak. "
-                     "Brake s and Coast s count events detected on that same derivative with no "
-                     "window at all, on this lap's own ~10 Hz fixes (the same events the map "
-                     "glyphs and coaching read). A window can only lower a peak, so a brake "
+                     "Brake s and Coast s count events detected on that same derivative, on this "
+                     "lap's own ~10 Hz fixes (the same events the map glyphs and coaching read). "
+                     "A brake onset is a step, so Brake s is detected with no window at all. "
+                     "A coast is sustained membership of a band narrower than that derivative's "
+                     f"own noise, so Coast s alone carries a {driving.COAST_SMOOTH_S:g} s "
+                     "window. "
+                     "A window can only lower a peak, so a brake "
                      "event's own peak deceleration normally runs ABOVE the Brk g printed beside "
                      "it — measured on both reference recordings, on almost every lap. They are a "
                      "sustained maximum and a detector, not two readings of one number.")
@@ -1425,10 +1448,11 @@ class StatsView(QWidget):
             f"so this reads under the instantaneous spike on purpose: the spike is GPS "
             f"quantization noise, not grip. 10 Hz GPS also quantizes brake onsets by ~1.5 m.\n\n"
             f"IT IS NOT THE NUMBER THE BRAKE COUNTS COME FROM. Every brake event on this page — "
-            f"the DRIVING tiles, the Brake s column, the BRAKING table, the map's glyphs — is "
-            f"detected on the SAME axis with no window at all, so an individual event's peak "
-            f"deceleration normally runs ABOVE this figure rather than under it. One axis, two "
-            f"filters, for two different jobs.")
+            f"the two braking DRIVING tiles, the Brake s column, the BRAKING table, the map's "
+            f"glyphs — is detected on the SAME axis with no window at all, so an individual "
+            f"event's peak deceleration normally runs ABOVE this figure rather than under it. "
+            f"(The two COASTING tiles beside them are the third filter on that axis, and carry a "
+            f"window of their own — see DRIVING.) One axis, three filters, for three jobs.")
         col.addLayout(self._grid(self.t_vmax, self.t_vmin, self.t_peak_lat,
                                  self.t_peak_brake))
         # Without an accelerometer two of those four tiles can only ever be em-dashes — say why

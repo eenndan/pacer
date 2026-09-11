@@ -3506,12 +3506,13 @@ def test_every_longitudinal_surface_names_which_filter_it_read():
     PER LAP grid where the two filters sit in adjacent columns, the peak-braking tile and the
     BRAKING table's commit % each say which series they read.
 
-    AND THE INSTRUMENT IS COMPOSED, NEVER TYPED. The coast band, the minimum duration and the
-    commit denominator's percentile come from `driving`'s own constants, so the copy follows the
-    detector rather than describing a past version of it — the §5.5 lesson, and the reason this
-    text deliberately characterises no coast MAGNITUDE: the detection series' effect on `coast_s`
-    is a measured defect with a fix pending, and a sentence about today's number would be wrong
-    the day it lands."""
+    AND THE INSTRUMENT IS COMPOSED, NEVER TYPED. The coast band, the minimum duration, the coast
+    WINDOW and the commit denominator's percentile come from `driving`'s own constants, so the
+    copy follows the detector rather than describing a past version of it — the §5.5 lesson. The
+    text still characterises no coast MAGNITUDE, which is a different guarantee from naming the
+    instrument and the only one that survived #275: that PR gave the coast its own window one
+    merge after this copy was written, and the "no smoothing window" claim went stale on a green
+    suite. `test_the_coast_copy_states_the_window_the_coast_was_measured_on` is the guard."""
     _app()
     import pathlib
 
@@ -3554,6 +3555,64 @@ def test_every_longitudinal_surface_names_which_filter_it_read():
     v.hide()
     print("ok longitudinal disclosure: peak tile, DRIVING tiles, PER LAP and commit % each name "
           "their series; the coast band + duration are read from driving's constants")
+
+
+def test_the_coast_copy_states_the_window_the_coast_was_measured_on():
+    """A coast is no longer detected on the bare derivative, and the copy beside it has to say so.
+
+    #275 gave the coast band its own pre-threshold boxcar (`driving.COAST_SMOOTH_S`) because the
+    band is narrower than the raw 10 Hz derivative's own noise — the reported coasting was 5.9 %
+    and 4.5 % of the real band time on the two reference recordings, and the fix moved the Stats
+    page's `coasting / lap · median` tile from 0.4 s to 2.6 s on D24 0060.
+
+    It landed ONE PR AFTER the tooltip that explains that tile (#276), which had been written on
+    the then-true claim that brake and coast both run on the derivative "with NO smoothing
+    window". That sentence is now false for the coast, and it is false in the direction that
+    matters: the window it denies (0.50 s) is WIDER than the 0.35 s one the same sentence
+    contrasts itself against. Measured on ~/Desktop/D24 GX020060+GX030060 — the tile reads
+    "2.6 s", its tooltip says the number carries no window, and the exported DRIVING note beside
+    it (`driving.coast_instrument`, which #275 did update) says it carries a 0.50 s one. Two
+    sentences about one number, in one app.
+
+    So both surfaces that print a coast number state the coast's own window, COMPOSED from the
+    constant like the band and the minimum duration already are, and no sentence that mentions a
+    coast may claim it is unwindowed."""
+    _app()
+    import pathlib
+    import re
+
+    from studio import driving
+    from studio.stats_panel import DRIVING_TOOLTIP, LAP_TABLE_TOOLTIP
+    from studio.stats_panel import __file__ as SP_FILE
+
+    window = f"{driving.COAST_SMOOTH_S:g} s"
+    surfaces = (("DRIVING_TOOLTIP", DRIVING_TOOLTIP), ("LAP_TABLE_TOOLTIP", LAP_TABLE_TOOLTIP))
+    for name, tip in surfaces:
+        assert window in tip, (
+            f"{name} prints a coasting number but never says it was measured over {window} "
+            f"(driving.COAST_SMOOTH_S) — the instrument the exported DRIVING note already states")
+        # ...and no sentence that names a coast may also deny it a window. Split on a period
+        # FOLLOWED BY SPACE so the constants ("0.5 s", "0.03 g") stay intact.
+        for sentence in re.split(r"(?<=\.)\s+", tip):
+            if "coast" not in sentence.lower():
+                continue
+            for denial in ("no window", "no smoothing window"):
+                assert denial not in sentence.lower(), (
+                    f"{name} tells the reader a coast carries {denial!r}, but "
+                    f"driving.coasting_spans boxcars over COAST_SMOOTH_S={window} before the "
+                    f"band test: {sentence.strip()!r}")
+
+    # The window is READ from the constant, never typed — the same rot guard the band and the
+    # minimum duration already carry, checked on the source for the same reason.
+    src = pathlib.Path(SP_FILE).read_text(encoding="utf-8")
+    for line in src.splitlines():
+        if window in line and "COAST_SMOOTH_S" not in line and "LONG_SMOOTH_S" not in line:
+            raise AssertionError(
+                f"stats_panel types {window!r} as a literal — it must read "
+                f"driving.COAST_SMOOTH_S, or the copy rots the moment the window moves: "
+                f"{line.strip()!r}")
+    print(f"ok coast disclosure: both surfaces state the {window} coast window, composed from "
+          f"driving.COAST_SMOOTH_S, and neither denies it")
 
 
 if __name__ == "__main__":
