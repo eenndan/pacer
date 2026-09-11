@@ -234,6 +234,23 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **The exported overlay video said nothing about timing it could not stand behind — the app's own
+  warning even said so.** The burned-in clip is the most public thing Pacer makes and the one least
+  able to explain itself: it lands in a group chat, watched by people who have never seen the app,
+  with a lap time painted across it. On a recording whose start/finish line was auto-fitted and
+  never confirmed, that number is measured from an arbitrary point, and the frame carried no hint
+  of it — the dialog that warns before such an export literally read "with nothing in the frame to
+  say so". Now the frame says it: a line under the lap strip, in the app's own words —
+  **PROVISIONAL**, **ESTIMATED** or **GPS LOW**, the same vocabulary the lap panel's quality chip
+  uses — for as long as the clip runs, including a single frame grabbed out of it.
+  - **No `[e]`/`[p]`/`[u]`/`[b]` codes.** Those belong to `laps.csv` and the HTML report, which can
+    print a key under the table; a letter in the corner of a video is one the viewer cannot decode
+    and the file cannot explain. A break in series and a single lap's GPS dropout are deliberately
+    left off the frame too, with reasons written down beside the rest of the vocabulary.
+  - **It still exports.** Unlike the shareable lap card, which refuses to render at all on
+    provisional timing, a clip of your own driving is useful whether or not the line is confirmed —
+    so the warning stays a warning, and now names the mark the clip will carry. A clean recording
+    burns nothing at all: no badge, no empty box, no reserved space.
 - **Two numbers on the Stats page disagreed about how hard you braked, and neither said why.** A
   lap row prints a "peak braking g" and a count of braking events, and they come off the same
   physical axis through two different filters: the peak is smoothed, so it is the *sustained*
