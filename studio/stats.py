@@ -575,8 +575,11 @@ def brake_consistency(cids, rows_by_lap) -> list[BrakeConsistency]:
     """Aggregate per-lap braking rows into per-corner repeatability + commitment stats.
 
     `rows_by_lap`: one dict per included lap, cid → (onset_ref_m, commit_frac | None,
-    metres_later | None) — a corner absent from a lap's dict simply had no matched brake
-    event there (an unbraked or undetected pass; it lowers n, it does not fake a 0)."""
+    metres_later | None, …) — a corner absent from a lap's dict simply had no matched brake
+    event there (an unbraked or undetected pass; it lowers n, it does not fake a 0). Only the
+    first three entries are read here; `Session._brake_rows` carries a fourth (the projected
+    optimal brake point) that `coaching.brake_habits` medians off the SAME rows, which is what
+    keeps this column and the coaching hint's metres the same number."""
     out: list[BrakeConsistency] = []
     for cid in cids:
         vals = [r[cid] for r in rows_by_lap if cid in r]

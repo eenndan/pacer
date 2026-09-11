@@ -525,8 +525,9 @@ BRAKE_HINT_MAX_PAST_TURN_IN_M = coaching.BRAKE_APPROACH_M
 
 def _past_turn_in_m(bp, entry_dist: float) -> float:
     """How far past the corner's turn-in the ESTIMATED optimum sits (m; negative = still on the
-    approach). Both are the best lap's odometer — ``Opportunity.entry_dist`` is that corner's enter
-    boundary and ``BrakePoint.optimal_brake_dist`` is apex − braking distance on the same lap."""
+    approach). Both are the REFERENCE (best-lap) odometer — ``Opportunity.entry_dist`` is that
+    corner's enter boundary and ``BrakeHabit.optimal_brake_dist`` is the median apex − braking
+    distance, projected into the same frame by ``Session._brake_rows``."""
     return float(bp.optimal_brake_dist) - float(entry_dist)
 
 
@@ -540,13 +541,22 @@ def _turn_in_phrase(m: float) -> str:
 
 
 def _brake_point_hint(bp, entry_dist: float | None = None) -> str | None:
-    """A short, ESTIMATED braking-point coaching line for a corner's driving.BrakePoint, or None.
+    """A short, ESTIMATED braking-point coaching line for a corner's ``coaching.BrakeHabit``, or
+    None.
+
+    The metres are the driver's HABIT — the median over the clean laps, and literally the number
+    the Stats ▸ BRAKING table's "m later" column shows for the same corner. It used to be the BEST
+    lap's single application, so the two surfaces answered "how much later can I brake here?" with
+    different metres and named neither (``coaching.BrakeHabit`` records what that measured).
 
     Positive metres_later => "brake later"; negative => "brake earlier". Labelled ESTIMATED
-    (constant-decel assumption at the session's demonstrated peak braking). None when the metres are
+    (constant-decel assumption at the session's demonstrated peak braking). None when too few laps
+    braked into the corner to call it a habit (< coaching.MIN_BRAKE_LAPS), when the metres are
     negligible (< BRAKE_HINT_MIN_M — within the estimate's noise) or, given the corner's turn-in
     odometer `entry_dist`, when the recommended point falls more than
     BRAKE_HINT_MAX_PAST_TURN_IN_M past it (L5-10). `entry_dist=None` skips that geometry gate."""
+    if int(bp.n_laps) < coaching.MIN_BRAKE_LAPS:
+        return None
     m = float(bp.metres_later)
     if abs(m) < BRAKE_HINT_MIN_M:
         return None
@@ -652,10 +662,21 @@ def _reason_cell(opp: coaching.Opportunity, brake_points: dict,
     if hint is not None:
         # L5-10: state the TARGET, not two bare odometer marks — both points are named against the
         # corner's turn-in, the landmark the driver is actually looking at.
-        tip = (f"{tip}\n\n{hint}: the apex-speed-matched latest sustainable brake point is "
-               f"{_turn_in_phrase(_past_turn_in_m(bp, opp.entry_dist))}; you brake "
+        #
+        # And state WHAT THE METRES ARE MEASURED OVER. "Brake later than what?" is the category's
+        # loudest complaint, and this app used to have two unlabelled answers to it (see
+        # coaching.BrakeHabit). The scope, the sample it came out of, the OBSERVED middle half of
+        # that sample — never a modelled margin — and the other surface showing the same number all
+        # live here rather than in the cell, because the cell has no vertical room to spare.
+        tip = (f"{tip}\n\n{hint}: over the {bp.n_laps} clean laps you braked into this corner, the "
+               "apex-speed-matched latest sustainable brake point sits "
+               f"{_turn_in_phrase(_past_turn_in_m(bp, opp.entry_dist))}; you typically brake "
                f"{_turn_in_phrase(float(bp.actual_brake_dist) - float(opp.entry_dist))}. "
-               "ESTIMATED (constant decel at this session's demonstrated peak braking).")
+               f"The middle half of those laps read {bp.q25_m:+.0f} to {bp.q75_m:+.0f} m "
+               "(+ = could have braked later) — your observed spread, not a modelled margin.\n"
+               "This is the median, the same number the BRAKING table on the Stats page reports "
+               "in its \"m later\" column. ESTIMATED (constant decel at this session's "
+               "demonstrated peak braking).")
     item.setToolTip(tip)
     return item
 
@@ -690,8 +711,8 @@ def _budget_action_column(table, col: int) -> None:
 class OpportunitiesDialog(QDialog):
     """Coaching ▸ Opportunities dialog over a freshly-computed ``coaching.Opportunities``.
     jump_to(cid, entry_dist) fires on a row's Jump button; None disables them (headless layout
-    tests). `brake_points` (optional, cid -> driving.BrakePoint for the best lap) appends a light
-    ESTIMATED "brake ~N m later" line to a row's reason (D4)."""
+    tests). `brake_points` (optional, cid -> coaching.BrakeHabit over the clean laps) appends a
+    light ESTIMATED "brake ~N m later" line to a row's reason (D4)."""
 
     def __init__(self, opportunities: coaching.Opportunities,
                  jump_to: Callable[[int, float], None] | None = None,

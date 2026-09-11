@@ -236,6 +236,87 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
     return Evidence(n_laps=n, reach_laps=reach_laps, reach=reach, iqr=iqr, abstain=abstain)
 
 
+# ------------------------------------------- the braking habit: ONE answer to "how much later?"
+#
+# WHY THIS EXISTS. The app answered the driver's plainest question — "how much later can I brake
+# into this corner?" — with TWO different numbers on two surfaces, and named neither. The coaching
+# row's hint read the BEST lap's single brake application (`driving.BrakePoint.metres_later` on
+# `best_lap_id()`); Stats ▸ BRAKING's "m later" column read the MEDIAN of that same quantity over
+# the clean laps. Nothing cross-referenced them, so the disagreement was invisible and unresolvable.
+#
+# MEASURED, on the two real D24 recordings, over the corners whose hint the coaching panel actually
+# showed (best-lap value vs BRAKING's median, metres):
+#
+#   0060 (38 laps)  C2 29.0 / 22.9   C5 24.1 / 16.6   C9 22.7 / 17.3   C12 9.6 / 14.9
+#                   C7 13.7 / 14.6   C4 16.5 / 16.6            — median gap 5.3 m, worst 7.5 m
+#   0062 (65 laps)  C1  2.9 / 12.2   C5 13.4 / 15.9   C7 10.7 / 13.1  — median gap 2.5 m, worst 9.3
+#
+# 0062's C1 is the one that shows what the split cost: the best lap happened to brake within 3 m of
+# its own optimum, so coaching printed "~3 m later" — barely over the BRAKE_HINT_MIN_M noise floor,
+# i.e. a shrug — while the driver's HABIT over 62 laps was 12.2 m early. Opposite advice from one
+# lap of sampling noise. The reverse case is just as bad: on 0062 the best lap had no matched brake
+# event at all into C3 or C9, so coaching said nothing about corners 44 and 39 laps DID brake into.
+#
+# THE RULE, therefore: a coaching instruction is about the driver's HABIT, so it is a cross-lap
+# statistic over the same clean laps every other number on the row already uses (`time_lost` is a
+# cross-lap median; "Done it?" is a count over those laps). The best lap's own application is one
+# sample of a scattered distribution — the BRAKING table's σ and span columns exist precisely
+# because that scatter is large — and it was the only number on the row that was not.
+
+# A braking habit needs at least this many matched applications before it is a habit. (Measured, a
+# real recording is nowhere near it: the corners above matched on 32..38 of 38 and 39..65 of 65
+# laps. This guards a 3-lap session, not a normal one.)
+MIN_BRAKE_LAPS = 3
+
+
+@dataclass(frozen=True)
+class BrakeHabit:
+    """One corner's braking habit over the clean laps — the app's SINGLE answer to "how much later
+    could I brake here", and the same number the Stats ▸ BRAKING table's "m later" column shows
+    (both are the median of the same per-lap `driving.BrakePoint.metres_later` list).
+
+    Distances are the REFERENCE (best-lap) odometer, the frame `Opportunity.entry_dist` and the
+    corner windows live in, so a brake point can be named against the corner's own turn-in."""
+
+    cid: int                    # the Corner.cid this habit belongs to
+    n_laps: int                 # clean laps with a matched brake application into this corner
+    metres_later: float         # MEDIAN optimal − actual (+ = you could brake later)
+    optimal_brake_dist: float   # median apex-speed-matched latest sustainable brake point (m)
+    actual_brake_dist: float    # median onset where the driver actually brakes (m)
+    # The OBSERVED middle half of `metres_later` across those laps — the spread the recommendation
+    # is drawn from, never a modelled confidence interval. It is what makes the median checkable:
+    # "~23 m later, and the middle half of your laps wanted 19–26 m" is a claim a driver can test.
+    q25_m: float
+    q75_m: float
+
+
+def brake_habits(cids, rows_by_lap) -> dict[int, BrakeHabit]:
+    """Per-corner braking habits from the SAME per-lap rows `stats.brake_consistency` aggregates.
+
+    `rows_by_lap`: one dict per clean lap, cid → (onset_ref_m, commit_frac | None,
+    metres_later | None, optimal_ref_m | None) — a corner missing from a lap's dict simply had no
+    matched brake application on it. Corners with no matched application anywhere, or with an
+    unusable optimum, are absent from the result rather than present with a fabricated zero.
+
+    The headline `metres_later` is `median` over exactly the list `brake_consistency` medians for
+    its own column, so the two surfaces cannot report different numbers for the same corner."""
+    out: dict[int, BrakeHabit] = {}
+    for cid in cids:
+        vals = [r[cid] for r in rows_by_lap if cid in r]
+        laters = np.asarray([v[2] for v in vals if v[2] is not None], float)
+        optima = np.asarray([v[3] for v in vals if len(v) > 3 and v[3] is not None], float)
+        onsets = np.asarray([v[0] for v in vals if v[0] is not None], float)
+        if len(laters) == 0 or len(optima) == 0 or len(onsets) == 0:
+            continue
+        q25, q75 = np.percentile(laters, [25, 75]) if len(laters) >= 2 else (laters[0], laters[0])
+        out[int(cid)] = BrakeHabit(
+            cid=int(cid), n_laps=len(laters), metres_later=float(np.median(laters)),
+            optimal_brake_dist=float(np.median(optima)),
+            actual_brake_dist=float(np.median(onsets)),
+            q25_m=float(q25), q75_m=float(q75))
+    return out
+
+
 @dataclass(frozen=True)
 class Opportunity:
     """One corner's coaching row: how much time is realistically available and why."""

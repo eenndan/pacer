@@ -832,24 +832,65 @@ def test_dialog_populates_and_go_calls_jump_to():
     print(f"ok dialog: {dlg.table.rowCount()} rows, Go -> jump_to{calls[0]} + dialog closed")
 
 
+def _habit(cid, metres_later, *, n_laps=12, actual=78.0, optimal=None, q25=None, q75=None):
+    """A coaching.BrakeHabit with the two distances consistent with `metres_later` by default."""
+    optimal = actual + metres_later if optimal is None else optimal
+    return K.BrakeHabit(cid=cid, n_laps=n_laps, metres_later=metres_later,
+                        optimal_brake_dist=optimal, actual_brake_dist=actual,
+                        q25_m=metres_later - 3.0 if q25 is None else q25,
+                        q75_m=metres_later + 3.0 if q75 is None else q75)
+
+
 def test_brake_point_hint_text():
-    """D4: the brake-point hint helper reads metres_later -> a labelled ESTIMATED line; a negligible
-    delta (< BRAKE_HINT_MIN_M) -> None (within the estimate's noise)."""
+    """D4: the brake-point hint helper reads a BrakeHabit's median metres_later -> a labelled
+    ESTIMATED line; a negligible delta (< BRAKE_HINT_MIN_M) -> None (within the estimate's noise),
+    and too few matched applications to be a habit -> None."""
     from studio import theme
     from studio.coaching_panel import BRAKE_HINT_MIN_M, _brake_point_hint
     # The hint carries the shared canonical "(est)" marker (theme.ESTIMATED_MARK) — was a stray
     # "(EST)"; the whole app now spells "estimated" one way for inline chips.
     assert theme.ESTIMATED_MARK == "(est)"
-    later = SimpleNamespace(cid=3, metres_later=6.4, actual_brake_dist=78.0,
-                            optimal_brake_dist=84.4, a_max_g=0.9)
-    assert _brake_point_hint(later) == "Brake ~6 m later into C3 (est)"
-    earlier = SimpleNamespace(cid=2, metres_later=-5.0, actual_brake_dist=90.0,
-                              optimal_brake_dist=85.0, a_max_g=0.9)
-    assert _brake_point_hint(earlier) == "Brake ~5 m earlier into C2 (est)"
-    tiny = SimpleNamespace(cid=1, metres_later=0.5, actual_brake_dist=80.0,
-                           optimal_brake_dist=80.5, a_max_g=0.9)
-    assert abs(0.5) < BRAKE_HINT_MIN_M and _brake_point_hint(tiny) is None
-    print("ok D4 hint: 'brake ~N m later/earlier (est)'; negligible -> None")
+    assert _brake_point_hint(_habit(3, 6.4)) == "Brake ~6 m later into C3 (est)"
+    assert _brake_point_hint(_habit(2, -5.0)) == "Brake ~5 m earlier into C2 (est)"
+    assert abs(0.5) < BRAKE_HINT_MIN_M and _brake_point_hint(_habit(1, 0.5)) is None
+    # A "habit" measured on one or two applications is not a habit, whatever the metres say.
+    assert K.MIN_BRAKE_LAPS >= 2
+    assert _brake_point_hint(_habit(4, 12.0, n_laps=K.MIN_BRAKE_LAPS - 1)) is None
+    assert _brake_point_hint(_habit(4, 12.0, n_laps=K.MIN_BRAKE_LAPS)) is not None
+    print("ok D4 hint: 'brake ~N m later/earlier (est)'; negligible / too-few-laps -> None")
+
+
+def test_brake_habit_is_the_same_number_the_braking_table_shows():
+    """THE TWO-NUMBERS REGRESSION. The coaching row's "Brake ~N m later" and the Stats ▸ BRAKING
+    table's "m later" column answer ONE question, so they must be ONE number.
+
+    They were not: coaching read the BEST lap's single application and BRAKING the median over the
+    clean laps. Measured on the real recordings the pair disagreed by up to 9.3 m, and at 0062's C1
+    the best lap braked within 3 m of its own optimum while the driver's habit over 62 laps was
+    12.2 m early — so the surfaces gave opposite advice. Both now medianize ONE per-lap list; this
+    pins that they still do, over rows where the best lap is deliberately unrepresentative."""
+    from studio import stats as stats_service
+    # Five laps into two corners. C1: the best (first) lap brakes 30 m late, the other four 10 m —
+    # exactly the "one unrepresentative lap" shape. C2: the best lap has NO matched application.
+    rows = [
+        {1: (100.0, 0.8, 30.0, 130.0)},
+        {1: (100.0, 0.8, 10.0, 110.0), 2: (300.0, 0.7, 6.0, 306.0)},
+        {1: (100.0, 0.8, 10.0, 110.0), 2: (300.0, 0.7, 4.0, 304.0)},
+        {1: (100.0, 0.8, 10.0, 110.0), 2: (300.0, 0.7, 8.0, 308.0)},
+        {1: (100.0, 0.8, 10.0, 110.0), 2: (300.0, 0.7, 6.0, 306.0)},
+    ]
+    habits = K.brake_habits([1, 2], rows)
+    table = {b.cid: b for b in stats_service.brake_consistency([1, 2], rows)}
+    for cid in (1, 2):
+        assert habits[cid].metres_later == table[cid].metres_later_med, (
+            f"C{cid}: coaching {habits[cid].metres_later} vs BRAKING {table[cid].metres_later_med}")
+        assert habits[cid].n_laps == table[cid].n
+    assert habits[1].metres_later == 10.0, "the outlying best lap must not set the recommendation"
+    assert habits[2].n_laps == 4, "a corner the best lap never braked into is still a habit"
+    # The interval is the OBSERVED middle half of those same laps, not a modelled margin.
+    assert (habits[2].q25_m, habits[2].q75_m) == (5.5, 6.5), habits[2]
+    print(f"ok one number: C1 {habits[1].metres_later:.1f} m over {habits[1].n_laps} laps "
+          f"(best lap said 30.0), C2 measured on {habits[2].n_laps} laps the best lap missed")
 
 
 def test_dialog_shows_brake_point_hint():
@@ -861,8 +902,7 @@ def test_dialog_shows_brake_point_hint():
     top_cid = opp.rows[0].cid
     # _corners() puts this corner's turn-in at 50 m, so an optimum at 56 m is 6 m past it — inside
     # the estimate's domain (L5-10 suppresses one that lands a whole brake zone into the corner).
-    brake_points = {top_cid: SimpleNamespace(cid=top_cid, metres_later=6.0, actual_brake_dist=50.0,
-                                             optimal_brake_dist=56.0, a_max_g=0.9)}
+    brake_points = {top_cid: _habit(top_cid, 6.0, actual=50.0, optimal=56.0)}
     dlg = OpportunitiesDialog(opp, jump_to=None, brake_points=brake_points)
     reason_text = dlg.table.item(0, 4).text()
     assert "Brake ~6 m later" in reason_text and "(est)" in reason_text, reason_text
@@ -1443,8 +1483,9 @@ def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
             return opp
 
         def coaching_brake_points(self):
-            return {2: SimpleNamespace(cid=2, actual_brake_dist=100.0, optimal_brake_dist=140.0,
-                                       metres_later=40.0, a_max_g=0.8, peak_decel_g=0.7)}
+            return {2: K.BrakeHabit(cid=2, n_laps=6, metres_later=40.0,
+                                    optimal_brake_dist=140.0, actual_brake_dist=100.0,
+                                    q25_m=35.0, q75_m=45.0)}
 
     panel = OpportunitiesPanel(_S())
     assert panel.table.rowCount() == 2
