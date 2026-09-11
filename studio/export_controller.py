@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME, export_data, export_video, prefs, theme
+from . import APP_NAME, export_compare, export_data, export_video, prefs, theme
 from ._signal import lap_label
 from .session import fmt_time
 from .workers import VideoExportWorker
@@ -85,6 +85,8 @@ class ExportController:
                         "to promote into a reusable track.")
     _NO_LIBRARY_REASON = ("No recordings analysed yet — open a GoPro recording and it is remembered "
                           "here, with its track, date and best lap.")
+    _NO_COMPARE_REASON = ("Nothing is being compared — press C (or the ⧉ Compare button over the "
+                          "video) and pick the two laps, then export the pair.")
     def sync_menu(self):
         """Gate every export action on what IT needs. Connected to the File menu's aboutToShow
         (synced as the menu opens), so neither _load nor the failed-load path needs to reach into
@@ -101,7 +103,12 @@ class ExportController:
 
         The video export sits between the last two: it needs a lap, and on provisional timing it
         WARNS instead of refusing (see _export_overlay_video) — a provisional clip is still useful
-        to the driver reviewing their own footage, an unverified brag card never is."""
+        to the driver reviewing their own footage, an unverified brag card never is.
+
+        The COMPARISON export has a FOURTH predicate, and it is not about the recording at all: it
+        needs two panes actually pinned right now. It is the one export whose subject is a piece of
+        live UI state rather than the session, so a menu item enabled with nothing being compared
+        would be an item that can only fail."""
         has = hasattr(self.win, "session")
         self.win._export_menu.setEnabled(has)
         has_laps = has and self.win._has_valid_laps()
@@ -109,6 +116,10 @@ class ExportController:
                        self.win._export_report_action, self.win._copy_stats_action,
                        self.win._export_video_action):
             self.win._gate_action(action, has_laps, self._NO_LAPS_REASON)
+        compare_action = getattr(self.win, "_export_compare_action", None)
+        if compare_action is not None:
+            self.win._gate_action(compare_action, has_laps and self.compare_pair() is not None,
+                                  self._NO_LAPS_REASON if not has_laps else self._NO_COMPARE_REASON)
         # The lap card also needs the timing to be TRUSTED. With a lap in hand the only thing
         # card_data can still be blocked on is the provisional start line, so the reason is exact.
         card_ok = has_laps and not self.win._share_card_blocked()
@@ -352,6 +363,18 @@ class ExportController:
     _PREF_EXPORT_ASPECT = "export_aspect_idx"
     _PREF_EXPORT_FIT = "export_fit_idx"
     _PREF_EXPORT_CONTENT = "export_content_idx"
+    # The compare export's own two rows. LAYOUT first because it decides the shape of the file:
+    # stacked panes make a roughly 8:9 frame a phone shows nearly full-screen, side-by-side an
+    # ultrawide one. There is no scope row (a compare is OF a pair, so the pair IS the scope), no
+    # run-up row (padding is footage outside the lap, where there is no track position to lock to)
+    # and no shape/contents row (both panes must be the same shape, and an overlay-only compare has
+    # no second picture to lock to) — every row the single-lap picker has that this one lacks is a
+    # choice the feature does not offer rather than one it forgot.
+    _COMPARE_LAYOUT_OPTIONS = [
+        ("Stacked — one above the other", export_compare.LAYOUT_STACK),
+        ("Side by side", export_compare.LAYOUT_SIDE),
+    ]
+    _PREF_COMPARE_LAYOUT = "export_compare_layout_idx"
     # SIZE ESTIMATE. The dialog sells a file-size trade-off ("larger file" / "smaller file"), so it
     # has to put a number on it — the two presets really are ~3x apart. The estimate is derived per
     # encoder, never a stored megabyte figure, because the encoder choice is a property of the
@@ -491,6 +514,37 @@ class ExportController:
         good = [s for s in spans if math.isfinite(s) and s > 0]
         mean = (sum(good) / len(good)) if good else float("nan")
         return mean, len(ids), f"{len(ids)} laps, one file each"
+    def _export_dialog(self, title: str) -> tuple[QDialog, QVBoxLayout]:
+        """The shell both export pickers are built in: a titled modal at ONE measure, a panel
+        header, and a body column laid out on the panel gutter. Returns the dialog and the column
+        to fill.
+
+        ONE MEASURE, because they are one kind of surface. The two pickers had grown byte-identical
+        fourteen-line preambles, which is how a second dialog ends up 40 px narrower than the first
+        for no reason anyone chose. 460 px is an EXTENT — a dialog's own measure, the width at
+        which a "Run-up / run-off" label and its combo sit on one line — and the SPACE scale has
+        nothing to say about extents (see tests/test_design_system.py, which exempts this ONE
+        surface by name rather than the two that used to spell it out separately).
+
+        A CONTROL surface, not a prose one: combos, a form and a button row. So the body takes the
+        panel gutter (SPACE_M) rather than the Help cards' SPACE_XL reading inset — these dialogs
+        are operated, not read."""
+        dlg = QDialog(self.win)
+        dlg.setWindowTitle(title)
+        dlg.setMinimumWidth(460)
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        header = QLabel(title)
+        header.setProperty("role", "PanelHeader")
+        root.addWidget(header)
+        body = QWidget(dlg)
+        col = QVBoxLayout(body)
+        col.setContentsMargins(theme.SPACE_M, theme.SPACE_M, theme.SPACE_M, theme.SPACE_M)
+        col.setSpacing(theme.SPACE_M)
+        root.addWidget(body)
+        return dlg, col
+
     def _ask_export_options(self, lap: int):
         """Modal scope + shape + output picker returning an `ExportChoice`, or None on cancel.
         Every choice persists across relaunches (prefs), like the unit and the palette.
@@ -500,26 +554,7 @@ class ExportController:
         that; then the run-up, which changes the same number; then the frame's shape; then what
         the frame contains and how big it lands. The hint underneath re-reads every one of them,
         so the consequences of a choice are visible before it is confirmed rather than after."""
-        dlg = QDialog(self.win)
-        dlg.setWindowTitle("Export overlay video")
-        dlg.setMinimumWidth(460)
-
-        root = QVBoxLayout(dlg)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-
-        header = QLabel("Export overlay video")
-        header.setProperty("role", "PanelHeader")
-        root.addWidget(header)
-
-        body = QWidget(dlg)
-        col = QVBoxLayout(body)
-        # A CONTROL surface, not a prose one: combos, a form and a button row, with two note lines
-        # about them. So it takes the panel gutter (SPACE_M) rather than the Help cards' SPACE_XL
-        # reading inset — this dialog is operated, not read.
-        col.setContentsMargins(theme.SPACE_M, theme.SPACE_M, theme.SPACE_M, theme.SPACE_M)
-        col.setSpacing(theme.SPACE_M)
-        root.addWidget(body)
+        dlg, col = self._export_dialog("Export overlay video")
 
         desc = QLabel("Burns the overlays into your footage: g-meter, Δ / speed, map inset and the "
                       "lap strip.")
@@ -729,6 +764,125 @@ class ExportController:
                                 f"{APP_NAME} can't export this:\n{exc}")
             return
         self._run_video_export(specs)
+    # ------------------------------------------------------------------ compare export
+    _COMPARE_FAIL_TITLE = f"{APP_NAME} — could not export the comparison"
+
+    def compare_pair(self):
+        """The live compare pane pair as `(lap_a, lap_b, session_b, cross)`, or None when the app is
+        not comparing anything. The compare controller lives on the CENTRAL VIEW, which is None
+        between views (a reload's loading card is up), so it is asked for rather than assumed —
+        the same guard `app._enter_cross_compare` uses."""
+        view = getattr(self.win, "view", None)
+        compare = getattr(view, "compare", None) if view is not None else None
+        if compare is None or not compare.active:
+            return None
+        a, b = compare.lap_a, compare.lap_b
+        if a is None or b is None:
+            return None
+        return a, b, compare.session_b, bool(compare.cross)
+
+    def _ask_compare_options(self):
+        """Layout + resolution + quality for a compare export, or None on cancel. Every row
+        persists, like the single-lap picker's."""
+        dlg, col = self._export_dialog("Export comparison video")
+        desc = QLabel("Both laps play locked to the same point on TRACK, not the same time on the "
+                      "clock — so as one pulls ahead the two frames stay at the same corner and "
+                      "the gap between the clocks is the delta.")
+        desc.setWordWrap(True)
+        desc.setProperty("role", "Note")
+        col.addWidget(desc)
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(theme.SPACE_M)
+        form.setVerticalSpacing(theme.SPACE_S)
+
+        def _combo(options, pref_key, default):
+            box = QComboBox(dlg)
+            for label, _value in options:
+                box.addItem(label)
+            box.setCurrentIndex(self._export_pref_index(pref_key, default, len(options)))
+            return box
+
+        layout_combo = _combo(self._COMPARE_LAYOUT_OPTIONS, self._PREF_COMPARE_LAYOUT, 0)
+        res_combo = _combo(self._EXPORT_RES_OPTIONS, self._PREF_EXPORT_RES, 1)       # 1080p
+        q_combo = _combo(self._EXPORT_QUALITY_OPTIONS, self._PREF_EXPORT_QUALITY, 0)  # High
+        form.addRow("Layout", layout_combo)
+        form.addRow("Resolution (each pane)", res_combo)
+        form.addRow("Quality", q_combo)
+        col.addLayout(form)
+        hint = QLabel("The clip is as long as the first lap, and carries that lap's audio — the "
+                      "second pane is time-warped by the lock, so its sound would be too.")
+        hint.setWordWrap(True)
+        hint.setProperty("role", "Hint")
+        col.addWidget(hint)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dlg)
+        buttons.button(QDialogButtonBox.Ok).setText("Export")
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        col.addWidget(buttons)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        self._remember_export_prefs({
+            self._PREF_COMPARE_LAYOUT: layout_combo.currentIndex(),
+            self._PREF_EXPORT_RES: res_combo.currentIndex(),
+            self._PREF_EXPORT_QUALITY: q_combo.currentIndex(),
+        })
+        return export_compare.CompareConfig(
+            out_height=self._EXPORT_RES_OPTIONS[res_combo.currentIndex()][1],
+            quality=self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1],
+            layout=self._COMPARE_LAYOUT_OPTIONS[layout_combo.currentIndex()][1],
+            speed_unit=self.win._speed_unit, palette=theme.active_palette())
+
+    def export_compare_video(self):
+        """File ▸ "Export comparison video…": render the two laps currently pinned in compare mode
+        into ONE distance-locked clip.
+
+        THE PAIR IS READ OFF THE LIVE COMPARE, never asked for again. The user has already chosen
+        it — with two pane pickers, against the lap table, possibly against a whole second
+        recording — and a dialog that asked "which two laps?" a second time would be a dialog that
+        can disagree with what is on screen. The action is disabled when nothing is being compared,
+        which is the honest way to say the same thing."""
+        pair = self.compare_pair()
+        if pair is None:
+            self.win.statusBar().showMessage(
+                "turn on compare (C) and pick the two laps first", self._status_ms)
+            return
+        lap_a, lap_b, session_b, cross = pair
+        if not export_video.ffmpeg_available():
+            QMessageBox.warning(self.win, self._COMPARE_FAIL_TITLE,
+                                f"{APP_NAME} can't render a comparison video on this machine: "
+                                "ffmpeg was not found. The video export needs ffmpeg/ffprobe on "
+                                "PATH (they ship with the pixi environment).")
+            return
+        # The same trust verdict as every other shareable output; asked after the mechanical guards
+        # so a machine with no ffmpeg hears about ffmpeg first.
+        if self.win._share_card_blocked() and not self.win._confirm_provisional_video():
+            self.win.statusBar().showMessage("video export cancelled", self._status_ms)
+            return
+        config = self._ask_compare_options()
+        if config is None:
+            return
+        out = self._export_save_path("Export comparison video", "_compare.mp4",
+                                     "MP4 video (*.mp4)")
+        if not out:
+            return
+        src = self.win._paths[0] if getattr(self.win, "_paths", None) else None
+        try:
+            spec = export_compare.build_compare_spec(
+                self.win.session, out, lap_a, lap_b, session_b=session_b, config=config,
+                src_path_a=src,
+                label_a=f"LAP {lap_label(lap_a)}",
+                label_b=f"REF LAP {lap_label(lap_b)}" if cross else f"LAP {lap_label(lap_b)}")
+        except ValueError as exc:
+            QMessageBox.warning(self.win, self._COMPARE_FAIL_TITLE,
+                                f"{APP_NAME} can't export this comparison:\n{exc}")
+            return
+
+        def make_renderer(session, spec):
+            return export_compare.CompareRenderer(session, spec, session_b)
+
+        self._run_video_export([spec], make_renderer=make_renderer)
+
     @staticmethod
     def _describe_spec(spec, lap: int | None = None) -> str:
         """What one queued render is OF, for the progress dialog and the completion card. The
@@ -742,8 +896,11 @@ class ExportController:
             return "the full session"
         lap_id = getattr(spec, "lap_id", None)
         lap_id = lap if lap_id is None else lap_id
+        lap_b = getattr(spec, "lap_b", None)
+        if lap_id is not None and lap_b is not None:
+            return f"lap {lap_label(lap_id)} against lap {lap_label(lap_b)}"
         return f"lap {lap_label(lap_id)}" if lap_id is not None else "an overlay video"
-    def _run_video_export(self, specs, lap: int | None = None):
+    def _run_video_export(self, specs, lap: int | None = None, make_renderer=None):
         """Run `specs` on a worker QThread behind ONE cancellable modal dialog, in order. Starts
         indeterminate ("Preparing…"), flips to a determinate bar on the first frame's progress, and
         ALWAYS reaches a terminal state: the modal comes down the moment the render stops, whatever
@@ -773,7 +930,11 @@ class ExportController:
         A BARE SPEC IS STILL ACCEPTED, and `lap` with it. Both are what this method took before it
         learned to render more than one file, and several callers and tests still say it that way;
         a queue of one is exactly what they meant. Every spec carries the lap it is of, so the
-        `lap` argument is no longer read."""
+        `lap` argument is no longer read.
+
+        `make_renderer` is handed straight to the worker and is how the distance-locked COMPARE
+        export reuses this whole apparatus — one modal, one cancel, one failure dialog, one
+        completion card — instead of growing a second copy of it."""
         specs = list(specs) if isinstance(specs, (list, tuple)) else [specs]
         if not specs:
             return
@@ -795,13 +956,20 @@ class ExportController:
         dlg.setValue(0)  # with max=0 too, Qt renders an indeterminate "busy" bar
 
         def _cleanup_all():
+            # Free any temp concat-list file the chapter resolution wrote. A spec that owns MORE
+            # than one source (the compare export's two panes) says so with its own `cleanup`;
+            # reaching for `spec.source` alone would leak pane B's list file on every compare.
             for spec in specs:
-                spec.source.cleanup()  # free any temp concat-list file the chapter resolution wrote
+                own = getattr(spec, "cleanup", None)
+                if callable(own):
+                    own()
+                else:
+                    spec.source.cleanup()
 
         def _start(i: int):
             spec = specs[i]
             started = {"first": False}
-            worker = VideoExportWorker(self.win.session, spec)
+            worker = VideoExportWorker(self.win.session, spec, make_renderer)
             state["worker"] = worker
             self.win._video_worker = worker  # keep a ref so the thread isn't GC'd mid-render
             # AND put it in the DRAINED set. It was held on that attribute and nowhere else, so

@@ -2133,13 +2133,13 @@ class Renderer:
         # produces is meant to be laid back over that footage in an NLE, so it has to be the same
         # shape and the same rate. The probe above is the only thing the source is asked for.
         self._overlay_only = bool(spec.config.overlay_only)
-        geo = frame_geometry(src_w, src_h, spec.config)
+        geo = self._resolve_geometry(src_w, src_h)
         self._out_w, self._out_h, self._scale_filter = geo.out_w, geo.out_h, geo.scale_filter
         self._fps = resolve_fps(spec.config, src_fps)
         self._times = frame_times(spec.t0, spec.t1, self._fps)
         # The painter is handed the SAME fps, because its pill budget replays these very frame
         # times to learn what it will draw (see `_burned_runs`).
-        self._painter = OverlayPainter(session, spec, self._out_w, self._out_h, self._fps)
+        self._painter = self._make_painter()
         # Resolve the encoder ONCE (probes VideoToolbox). `_encoder` is the concrete ffmpeg -c:v
         # name actually used; `_fallback_allowed` lets a failed VT encode retry on libx264.
         self._encoder = resolve_encoder(spec.config.encoder)
@@ -2163,6 +2163,56 @@ class Renderer:
         self._aborted: str | None = None       # set by the supervisor: "cancel" | "timeout"
         self._supervisor: threading.Thread | None = None
         self._supervisor_stop = threading.Event()
+
+    # ----------------------------------------------------------------- extension seams
+    # The six hooks below exist for ONE subclass: `export_compare.CompareRenderer`, which renders
+    # two distance-locked laps into one frame. Everything that makes this class hard to get right
+    # — the stall watchdog, the cooperative cancel, the teardown order that stops a decoder from
+    # blocking on a closed pipe, the VideoToolbox->libx264 retry, the out-of-space refusal — is
+    # identical for one pane or two, and a second renderer that copied it would be a second place
+    # for all of those to rot. What genuinely differs is five things: the frame's SHAPE, WHO paints
+    # it, WHERE its pixels come from, HOW a frame is assembled, and WHICH processes the render owns
+    # (plus which class a retry must respawn as). So those are the hooks and the rest is shared.
+    # Each default here reproduces the single-lap behaviour exactly.
+
+    def _resolve_geometry(self, src_w: int, src_h: int) -> FrameGeometry:
+        """The OUTPUT frame + the `-vf` chain the decode is asked for. For a single-lap export the
+        chain produces exactly that frame; a compare render returns the whole two-pane frame but a
+        filter that produces ONE PANE, because each of its decoders fills half the picture."""
+        return frame_geometry(src_w, src_h, self._spec.config)
+
+    def _make_painter(self):
+        """The object that paints the overlays onto each composited frame."""
+        return OverlayPainter(self._session, self._spec, self._out_w, self._out_h, self._fps)
+
+    def _read_source_frame(self) -> bytes | None:
+        """The pixels under frame `self._i`, PACKED at `out_w*3`, or None at end-of-stream.
+
+        None is the short-read signal `run_chunk` turns into either a clean finish or
+        `NoFramesError`; the overlay-only path has no decoder and returns empty bytes forever,
+        because there its frame count is `frame_times` and nothing else."""
+        if self._overlay_only:
+            return b""
+        raw = self._dec.stdout.read(self._frame_bytes)
+        return raw if raw and len(raw) == self._frame_bytes else None
+
+    def _compose_frame(self, raw: bytes) -> bytes:
+        """Frame `self._i` ready for the encoder: look its telemetry up, advance the dial, paint."""
+        vals = overlay_values_at(self._session, float(self._times[self._i]), self._spec)
+        dial = self._painter.advance_and_snapshot(vals)
+        return self._paint_packed(raw, vals, dial)
+
+    def _extra_procs(self) -> tuple:
+        """Subprocesses this render owns BEYOND the encoder and the single decoder. The watchdog's
+        kill, `cancel()` and the teardown all sweep these too, so a subclass's extra decoder can
+        never outlive the render or wedge it."""
+        return ()
+
+    def _respawn(self, spec: ExportSpec) -> Renderer:
+        """A fresh renderer of THIS class for the libx264 retry — `type(self)` rather than
+        `Renderer` so a compare render that trips a VideoToolbox failure retries as a compare
+        render instead of silently becoming a single-pane one."""
+        return type(self)(self._session, spec)
 
     @property
     def total_frames(self) -> int:
@@ -2214,14 +2264,13 @@ class Renderer:
         assert self._enc is not None
         stdin = self._enc.stdin
         assert stdin is not None
-        stdout = self._dec.stdout if self._dec is not None else None
-        assert stdout is not None or self._overlay_only
+        assert self._dec is not None or self._overlay_only
         for _ in range(n):
             if self._i >= len(self._times):
                 self._finish()
                 return True
-            raw = b"" if self._overlay_only else stdout.read(self._frame_bytes)
-            if not self._overlay_only and (not raw or len(raw) < self._frame_bytes):
+            raw = self._read_source_frame()
+            if raw is None:
                 # A short read means ONE of three things:
                 #   * the supervisor killed the decoder on a stall/cancel -> abort loudly;
                 #   * the decoder reached the ceil-estimate tail AFTER emitting frames -> finish
@@ -2240,10 +2289,8 @@ class Renderer:
                         "the video export produced no frames — the source/lap window may be "
                         "invalid (it does not map onto any footage). Nothing was written.")
                 return True
-            vals = overlay_values_at(self._session, float(self._times[self._i]), self._spec)
-            dial = self._painter.advance_and_snapshot(vals)
             try:
-                stdin.write(self._paint_packed(raw, vals, dial))
+                stdin.write(self._compose_frame(raw))
             except (BrokenPipeError, OSError):
                 # The encoder stopped accepting input. Distinguish a watchdog/cancel kill (the
                 # supervisor broke the pipe to escape a wedge) from a genuine encoder failure.
@@ -2311,7 +2358,7 @@ class Renderer:
         read/write in the render loop returns at once. Called only from the supervisor."""
         if self._aborted is None:
             self._aborted = reason
-        for proc in (self._enc, self._dec):
+        for proc in (self._enc, self._dec, *self._extra_procs()):
             if proc is None:
                 continue
             try:
@@ -2347,7 +2394,7 @@ class Renderer:
             self.cancel()
             sw_cfg = replace(self._spec.config, encoder="libx264")
             sw_spec = replace(self._spec, config=sw_cfg)
-            return Renderer(self._session, sw_spec)._run_chunked(progress, cancel, chunk)
+            return self._respawn(sw_spec)._run_chunked(progress, cancel, chunk)
 
     def _run_chunked(self, progress, cancel, chunk: int) -> RenderResult:
         """Pump `run_chunk` to completion under the supervisor (watchdog + cancel). Single-threaded:
@@ -2385,13 +2432,16 @@ class Renderer:
         if self._done:
             return
         self._done = True
-        enc, dec = self._enc, self._dec
-        # Stop reading the decoder so it unblocks and exits (it may still be mid-stream at our tail).
-        if dec is not None and dec.stdout is not None:
-            try:
-                dec.stdout.close()
-            except OSError:
-                pass
+        enc = self._enc
+        decs = [p for p in (self._dec, *self._extra_procs()) if p is not None]
+        # Stop reading the decoders so they unblock and exit (one may still be mid-stream at our
+        # tail — a compare render's two panes almost never run out on the same frame).
+        for dec in decs:
+            if dec.stdout is not None:
+                try:
+                    dec.stdout.close()
+                except OSError:
+                    pass
         # Close the encoder's stdin → EOF → it finishes muxing and exits. (Flush first so the last
         # frame isn't stranded in Python's buffer.)
         if enc is not None and enc.stdin is not None:
@@ -2409,7 +2459,7 @@ class Renderer:
             except Exception:
                 enc.kill()
                 enc.wait()
-        if dec is not None:
+        for dec in decs:
             try:
                 dec.wait(timeout=10)
             except Exception:
@@ -2432,7 +2482,7 @@ class Renderer:
         so they wind down on their own."""
         self._done = True
         self._stop_supervisor()
-        for proc in (self._enc, self._dec):
+        for proc in (self._enc, self._dec, *self._extra_procs()):
             if proc is None:
                 continue
             try:

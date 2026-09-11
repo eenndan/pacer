@@ -398,6 +398,18 @@ add_test(NAME test_export_video
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_video.py)
 set_tests_properties(test_export_video PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The DISTANCE-LOCKED two-lap compare export (studio.export_compare): the lock's math against the
+# app's own `Session.delta_between` on a real (synthetic-data) Session, the proof that it is a
+# RESAMPLE and not an offset, the per-recording media-clock crossing, the audio decision, the pill
+# budget, and the drive loop with the subprocess mocked. Plus the end-to-end check that matters:
+# two tiny synthetic clips whose frames carry their own index as a bar POSITION are really rendered
+# through ffmpeg, decoded back, and each pane's source frame read off the picture and compared with
+# an independently recomputed lock — so "both panes are at the same track position" is an integer
+# comparison rather than a claim. No 11 GB media file; ~4 s.
+add_test(NAME test_export_compare
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_export_compare.py)
+set_tests_properties(test_export_compare PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
 add_test(NAME test_gmeter
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter.py)
@@ -770,6 +782,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_consistency test_gmeter test_gmeter_overlay test_rotation
                         test_export_data test_export_disclosures
                         test_driving test_coaching test_focus_list test_library test_export_video
+                        test_export_compare
                         test_data_safety test_units test_accessible_cues test_share_card test_stats
                         test_lap_table_columns test_help_dialog test_grid_and_timing_guards
                         test_lap_table_empty_states test_charts_header_budget

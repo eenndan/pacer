@@ -49,9 +49,11 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 # The ONLY top-level studio/*.py modules permitted to import Qt DIRECTLY — the view layer plus the
 # three Qt-infrastructure modules. Everything absent from this set is data/analysis/persistence and
 # must stay Qt-free. Three members are not windows and are here on purpose:
-#   * export_video / share_card — offline, event-loop-free RENDERERS. They use QPainter/QImage as a
-#     rasterizer to burn overlays into an MP4 / a PNG; they construct no window and run off the UI
-#     thread. Qt is their drawing library, not their UI.
+#   * export_video / export_compare / share_card — offline, event-loop-free RENDERERS. They use
+#     QPainter/QImage as a rasterizer to burn overlays into an MP4 / a PNG; they construct no
+#     window and run off the UI thread. Qt is their drawing library, not their UI.
+#     `export_compare` is `export_video`'s two-pane subclass and is here for exactly the reason
+#     that one is: it paints a frame, and it is the module `export_video` would have grown into.
 #   * workers — QThread/QObject wrappers (QtCore only), the seam that carries loads off the UI thread.
 #   * export_controller — the export cluster lifted out of `app` (§7.1). It is VIEW code by every
 #     test this file applies: it opens the file dialogs, the options modal, the progress dialog and
@@ -74,7 +76,8 @@ QT_ROOTS = {"PySide6", "shiboken6", "pyqtgraph", "qtawesome", "PyQt5", "PyQt6", 
 #     renders a list and emits intents — it owns no store and writes no file. A view that reached
 #     into ~/Library/Application Support would be a view that can lose a driver's notes.
 ALLOWED_QT = {
-    "app", "central_view", "coaching_panel", "command_palette", "export_controller",
+    "app", "central_view", "coaching_panel", "command_palette", "export_compare",
+    "export_controller",
     "export_video", "gmeter_overlay", "help_dialog", "lap_table", "library_dialog", "map_view",
     "marks_panel", "overlays", "player_pane", "plots_view", "provenance_panel",
     "session_record_dialog", "share_card", "stats_panel", "theme", "video_view",
