@@ -1048,6 +1048,32 @@ add_test(NAME test_chapter_timeline
 set_tests_properties(test_chapter_timeline PROPERTIES
                      ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 
+# PROVENANCE — "inspect this number" (feat/provenance-inspector). The contract is that every
+# inspectable number RE-DERIVES from the rows its own panel shows, so the test is written as that
+# claim over a REAL pacer.Laps: a sector split and a corner best come back BIT FOR BIT (both are
+# np.interp on a lap's (odometer, elapsed) curve, and the shown rows bracket both boundaries),
+# while a lap time comes back within ONE ULP PER CROSSING — the core evaluates `t0*(1-f) + f*t1`
+# and the compiler may fuse that multiply-add where the Python transcription cannot. The ulp bound
+# is asserted, not tolerated: a transcription that drifted further would make the panel's own
+# sentence false. Also pins that load._smooth_track carries `dop`/`fix` across (it rebuilt samples
+# field by field and named neither, so per-fix quality died one step after the gate that read it),
+# and that METHODS is exact in both directions. No Qt, no telemetry file.
+add_test(NAME test_provenance
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_provenance.py)
+set_tests_properties(test_provenance PROPERTIES
+                     ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# ...and its PANEL. Two halves matching the feature's own split: the renderer over a hand-built
+# Provenance with no Session and no pacer (if that half needed a recording, the panel would be
+# reaching for data it has no business knowing), and the MENUS on the real widgets — the lap
+# table offers inspection on exactly the Time and S-split columns and the CORNERS table on exactly
+# the Best cell, because "three numbers, honestly" is either true in the context menu or a slogan.
+# Offscreen Qt; PYTHONPATH because the menu half builds the real tables over a real Session.
+add_test(NAME test_provenance_panel
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_provenance_panel.py)
+set_tests_properties(test_provenance_panel PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
 # THE TWO DATA-TRUST SURFACES (feat/data-trust-surfaces): the per-second GPS quality STRIP under
 # the scrub bar, and the ROTATION cross-check row in the Stats DATA TRUST card. The strip's whole
 # claim is that a bad stretch is LOCATABLE, and the way that claim dies is a ~500 px bar averaging

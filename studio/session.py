@@ -34,6 +34,7 @@ from . import (
     gapfill,
     gmeter,
     library,
+    provenance,
     render_cache,
     rotation,
     sidecar,
@@ -167,6 +168,11 @@ class Session:
         # (times, dists, elapsed); elapsed precomputed once so per-tick delta math doesn't re-subtract.
         self._dist_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         self._xyt_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}  # (xs, ys, times) local m
+        # The RAW track's media times (see _track_times), for numbering provenance rows by their
+        # position in the recording. Deliberately NOT in the re-segment clear below: moving a
+        # timing line re-cuts the laps, it does not move a fix, so a raw row number is stable for
+        # the life of the Session.
+        self._track_times_cache: np.ndarray | None = None
         self._valid_cache: list[int] | None = None  # memoized "real lap" set
         self._excluded_cache: list[int] | None = None  # memoized banded-out substantial laps
         self._best_cache: object = _UNSET   # sentinel: None is a legal "no best lap" result
@@ -1866,6 +1872,163 @@ class Session:
             return []
         dists, _tol = projected
         return sorted(d for k, d in enumerate(dists) if k not in dropped)
+
+    # ------------------------------------------- provenance: what produced a displayed number
+    # THE DATA HALF of the "inspect this number" panel (studio/provenance.py builds the value
+    # objects, studio/provenance_panel.py renders them). Three accessors, one per number that can
+    # be inspected today — lap time, sector split, corner best.
+    #
+    # THE RULE THESE FOLLOW, and the reason they live on Session rather than in the panel: a
+    # statistic NAMES ITS OWN INPUTS. Each accessor reads the same arrays and the same cached
+    # intermediates the displayed number was computed from and hands them over; none of them
+    # recomputes the number. A panel that reverse-engineered where a value came from would agree
+    # with the app right up until the day the app changed, and would then be confidently wrong —
+    # which is the exact failure the honesty rule exists to prevent.
+    #
+    # Nothing here is on a hot path: every one of them runs on a right-click, once.
+
+    def _track_times(self) -> np.ndarray:
+        """The whole trace's media-clock times, in ONE bulk crossing — the index the provenance
+        rows are numbered by. Memoized beside the other per-segmentation caches because a raw
+        track row number does not change when the timing lines move."""
+        if self._track_times_cache is None:
+            self._track_times_cache = np.asarray(self.laps.track_columns().times, float)
+        return self._track_times_cache
+
+    def _lap_fixes(self, lap_id: int, *, bracket: bool = False):
+        """One lap's GPS fixes as `provenance.LapFixes`, or None for a degenerate lap.
+
+        Taken from `laps.get_lap` — the MATERIALISED lap: the interpolated start crossing, the
+        interior fixes, the interpolated finish crossing — which is the same object `lap_columns`
+        projects, so `times` and `dists` here are the very doubles every downstream statistic
+        interpolated on (`LapColumns` moves `GetLap`'s `cum_distances` rather than rebuilding
+        them). `elapsed` is `times - times[0]`, computed over the WHOLE lap exactly as
+        `_lap_time_dist_elapsed` computes it, because a differently-ordered subtraction can land
+        a bit away and this carrier's job is to be re-derivable.
+
+        `bracket=True` also carries the one raw fix on each side of the lap. Only the lap-time
+        path wants them, and it MUST have them: each of the lap's two boundaries is interpolated
+        along a chord that straddles the timing line, so a table holding only the lap's own fixes
+        could not re-derive the lap's own time. Their odometer is NaN — they are not on this
+        lap's ruler — and their `elapsed` stays relative to the lap start (so the leading one
+        reads negative), which is what makes them legible as context rather than as data.
+        """
+        lap = self.laps.get_lap(lap_id)
+        pts = list(lap.points)
+        cum = np.asarray(lap.cum_distances, float)
+        n = min(len(pts), len(cum))
+        if n < 4:  # start crossing + >=2 interior fixes + finish crossing
+            return None
+        pts, cum = pts[:n], cum[:n]
+        times = np.array([p.time for p in pts], float)
+        # The lap's first interior fix is a raw track row; find which one, so every row in the
+        # table can be numbered by its position in the recording rather than within the lap.
+        start_index = int(np.searchsorted(self._track_times(), times[0]))
+        index = np.array([-1, *range(start_index, start_index + n - 2), -1], float)
+        lats = np.array([p.point.lat for p in pts], float)
+        lons = np.array([p.point.lon for p in pts], float)
+        speeds = np.array([p.point.full_speed for p in pts], float)
+        # The interpolated crossings carry the -1 sentinels (pacer::Interpolate does not blend the
+        # quality fields), which is right: a derived point HAS no fix quality, and the panel says
+        # "unknown" rather than inventing one.
+        fix = np.array([p.point.fix for p in pts], float)
+        dop = np.array([p.point.dop for p in pts], float)
+        elapsed = times - times[0]
+        if bracket:
+            lo, hi = start_index - 1, start_index + n - 2
+            if lo < 0 or hi >= len(self._track_times()):
+                return None
+            a, b = self.laps.get_point(lo), self.laps.get_point(hi)
+            index = np.array([lo, *index, hi], float)
+            times = np.array([a.time, *times, b.time], float)
+            elapsed = np.array([a.time - times[1], *elapsed, b.time - times[1]], float)
+            cum = np.array([np.nan, *cum, np.nan], float)
+            lats = np.array([a.point.lat, *lats, b.point.lat], float)
+            lons = np.array([a.point.lon, *lons, b.point.lon], float)
+            speeds = np.array([a.point.full_speed, *speeds, b.point.full_speed], float)
+            fix = np.array([a.point.fix, *fix, b.point.fix], float)
+            dop = np.array([a.point.dop, *dop, b.point.dop], float)
+        return provenance.LapFixes(index=index, times=times, dists=cum, lats=lats, lons=lons,
+                                   speeds=speeds, fix=fix, dop=dop, elapsed=elapsed)
+
+    def _start_line_lonlat(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """The start/finish line as (lon, lat) endpoint pairs — the space `Laps::Update` runs its
+        crossing test in (it maps the local-metre segment through `cs.Global` at z=0 exactly as
+        `timing_lines_latlon` does, so these are the same two points the core tested against)."""
+        (a, b), _sectors = self.timing_lines_latlon()
+        return ((a[1], a[0]), (b[1], b[0]))
+
+    def lap_time_provenance(self, lap_id: int):
+        """What produced this lap's time: the fixes, the two crossing chords, the arithmetic."""
+        fixes = self._lap_fixes(lap_id, bracket=True)
+        if fixes is None:
+            return None
+        rows = len(fixes.times)
+        # `fmt_time` is the lap table's own formatter, passed in rather than applied here, so the
+        # panel's "re-derived" line is rounded by the SAME function that rounded the cell it was
+        # opened from — otherwise "does it match on screen" would be a question about this module.
+        return provenance.lap_time(
+            lap_id=lap_id, value=float(self.lap_time(lap_id)), fmt=fmt_time,
+            fixes=fixes, start_chord=(0, 2), finish_chord=(rows - 3, rows - 1),
+            line=self._start_line_lonlat(), clock=self.timing_quality.clock)
+
+    def sector_split_provenance(self, lap_id: int, sector: int):
+        """What produced one sub-sector split of one lap. `sector` is 0-based (the S1 column is
+        0), matching `lap_sector_splits`' own ordering."""
+        splits = self.lap_sector_splits(lap_id)
+        fixes = self._lap_fixes(lap_id)
+        if fixes is None or not (0 <= sector < len(splits)):
+            return None
+        # The same edge list lap_sector_splits measures on: lap start, the deduped boundaries, lap
+        # finish. Read from the ONE accessor that owns them, so a split and its window can never
+        # be measured against different boundaries.
+        edges = [0.0, *self.sector_boundary_distances(lap_id), float(fixes.dists[-1])]
+        return provenance.sector_split(
+            lap_id=lap_id, sector=sector, of=len(splits), value=float(splits[sector]),
+            fmt="{:.2f}".format, fixes=fixes,          # the S-column's own 2 dp
+            d0=float(edges[sector]), d1=float(edges[sector + 1]),
+            clock=self.timing_quality.clock)
+
+    def corner_best_provenance(self, cid: int):
+        """What produced one corner's session-best time.
+
+        Re-walks the SAME per-lap corner times `corner_report` reduces (all of them already
+        cached on the corner model) to find which lap actually set the best, then reads that
+        lap's corner window out of the memoized alignment. The minimum is not recomputed as a
+        number — `np.min` of a float column IS one of its inputs, so the winning lap's own time
+        is the displayed value, bit for bit."""
+        corner_list = self.corners.corner_list()
+        basis = self.corners.basis()
+        index = next((k for k, c in enumerate(corner_list) if c.cid == cid), None)
+        if basis is None or index is None:
+            return None
+        n = len(corner_list)
+        per_lap: list[tuple[int, float]] = []
+        for i in self.consistency_lap_ids():
+            st = self.corners.lap_corner_stats(i)
+            if len(st) == n and math.isfinite(st[index].time):  # the corner_report row filter
+                per_lap.append((i, float(st[index].time)))
+        if not per_lap:
+            return None
+        donor, value = min(per_lap, key=lambda lt: lt[1])
+        fixes = self._lap_fixes(donor)
+        if fixes is None:
+            return None
+        # The corner's enter/exit are REFERENCE-lap distances; project them onto the donor lap
+        # through the same memoized warp lap_corner_stats used, so the window the panel states is
+        # the window the time was measured over rather than a second opinion about it.
+        corner_list_, total_ref = basis
+        interior = [b for c in corner_list_ for b in (c.enter, c.exit)]
+        total_lap = float(fixes.dists[-1])
+        proj = corners_alg.project_boundaries(
+            interior, total_ref, total_lap,
+            alignment=self.corners.lap_alignment(donor, total_lap))
+        return provenance.corner_best(
+            cid=cid, label=corner_list[index].label, value=value,
+            fmt="{:.2f}".format,                       # the CORNERS table's Best cell, 2 dp
+            donor_lap=donor, fixes=fixes,
+            d0=float(proj[2 * index]), d1=float(proj[2 * index + 1]),
+            per_lap=tuple(per_lap), clock=self.timing_quality.clock)
 
     # ------------------------------------- session summaries: theoretical + rolling best (F1)
     # The "best" cluster (candidate set / headline best / session-best splits / theoretical /

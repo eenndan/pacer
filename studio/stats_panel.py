@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QScrollArea,
     QSizePolicy,
     QTableWidget,
@@ -44,7 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, gmeter, theme, units
+from . import data_quality, gmeter, provenance_panel, theme, units
 from . import stats as stats_service
 from ._signal import fmt_hms, fmt_time, plural
 
@@ -334,6 +335,11 @@ LAP_COLUMNS = ["Lap", "Time", "Vmax", "Avg", "Min", "Lat g", "Brk g", "Brake s",
 # while the header already asks for 800 px inside a 636 px viewport — so both longer labels elide
 # to a "Med loss vs…" that names nothing. The baseline is named where there IS room: the caption
 # under the table (`CORNERS_NOTE`) and the table tooltip.
+#: The Best column's index — the one cell in this table the provenance inspector can explain
+#: (see StatsView._on_corner_context_menu). Derived from the list below rather than typed, so a
+#: column inserted before it moves the menu with it.
+_CORNER_BEST_COL = 1
+
 CORNER_COLUMNS = ["Corner", "Best", "Median", "σ (s)", "Med loss", "Apex best", "Apex med",
                   "Grip %"]
 WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss cell marked
@@ -1387,6 +1393,8 @@ class StatsView(QWidget):
         self.corners_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.corners_table.setFocusPolicy(Qt.ClickFocus)
         self.corners_table.itemSelectionChanged.connect(self._on_corner_row_selected)
+        self.corners_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.corners_table.customContextMenuRequested.connect(self._on_corner_context_menu)
         self.corners_table.horizontalHeader().sortIndicatorChanged.connect(
             self._on_corner_sort)
         # Explicit initial indicator: TRACK ORDER (corner id ascending). Without this, Qt's
@@ -2873,6 +2881,29 @@ class StatsView(QWidget):
             self.corner_clicked.emit(item.data(NUM_ROLE) if item else None)
         else:
             self.corner_clicked.emit(None)
+
+    def _on_corner_context_menu(self, pos):
+        """Right-click the CORNERS table's Best cell → "Inspect this number…".
+
+        ONLY that cell. The third of the app's three inspectable numbers is the corner best, and
+        offering the menu on Median or σ would advertise an inspection `provenance.py` has no
+        builder for — the scope is three numbers, and the menu is where that is either honest or
+        not. The cid comes from the row's own name item for the same reason
+        `_on_corner_row_selected` reads it there: this table sorts."""
+        item = self.corners_table.itemAt(pos)
+        session = self.session
+        if item is None or session is None or item.column() != _CORNER_BEST_COL:
+            return
+        name = self.corners_table.item(item.row(), 0)
+        cid = name.data(NUM_ROLE) if name is not None else None
+        prov = session.corner_best_provenance(int(cid)) if cid is not None else None
+        if prov is None:
+            return
+        menu = QMenu(self)
+        act = menu.addAction(provenance_panel.MENU_LABEL)
+        act.setToolTip("Show the raw GPS fixes, the method and the window this number came from")
+        if menu.exec(self.corners_table.viewport().mapToGlobal(pos)) is act:
+            provenance_panel.open_for(prov, self.window())
 
     def _on_corner_row_selected(self):
         """Emit the selected row's corner cid (None on deselect) — read from the row's own

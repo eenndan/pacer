@@ -10,6 +10,17 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Added
 
+- **Any of three numbers can now show its work.** Right-click a lap time or a sector split in
+  the lap table, or a corner's Best in the Stats page's CORNERS table, and *Inspect this number…*
+  opens the evidence: every raw GPS fix that produced it, the method in one sentence, N and the
+  exact window in seconds or metres, the fix-quality distribution over that window — 3D locks,
+  DOP, fix spacing, dropouts, and which clock the times were built on — the arithmetic with its
+  numbers substituted, and the value **re-derived from those rows alone**, next to the one on
+  screen. Copy as CSV takes the lot at full precision. A sector split and a corner best re-derive
+  bit for bit; a lap time re-derives to the last digit shown and the panel states the residual in
+  units of the last bit rather than rounding the disagreement away. Read-only: pacer shows you
+  where a number came from, it does not offer to compute you a different one.
+
 - **The video export renders what you choose: this lap, the best lap, every lap as its own file, or
   the whole session.** It used to be "the selected lap" and nothing else. Rendering ninety seconds
   instead of half an hour is the single largest thing that can be done about export time, and the
