@@ -2954,6 +2954,31 @@ class StatsView(QWidget):
                         "The stationary lead-in before you drive off is trimmed by the loader "
                         "and left out of the verdict, so opening one chapter or all of them "
                         "gives the same answer.")
+        # …and the SAME fact per second, which is a different verdict often enough to be worth its
+        # own row. Measured on the owner's two recordings, the two rows come out INVERTED: 0060
+        # rejects not one fix (the row above reads 0 %) and yet 17 of its 38 clean laps contain a
+        # second whose DOP left the GNSS good band, while 0062 rejects 1 % and every one of those
+        # rejections is in the 48 seconds before the kart moves, so not a single lap inherits
+        # anything but good. A percentage cannot say that; a bar can, and this row says which laps
+        # it is about and points at the bar for where.
+        strip = getattr(session, "quality_timeline", None)
+        if strip is not None and len(strip):
+            degraded = [lid for lid in valid
+                        if (q := session.lap_quality(lid)) is not None and q < data_quality.GOOD]
+            holed = [lid for lid in valid
+                     if (q := session.lap_quality(lid)) is not None and q <= data_quality.POOR]
+            note = ""
+            if degraded:
+                note = (f" · {len(degraded)} of {len(valid)} laps contain a second below good"
+                        if valid else "")
+            rows.append(("GPS quality over time",
+                         f"{strip.summary()}{note} — the bar under the scrubber shows where",
+                         bool(holed)))
+            tips.append("The strip under the scrub bar grades every second of the recording, and "
+                        "a lap inherits the WORST second inside it. That is the distinction this "
+                        "page's percentage cannot draw: a receiver acquiring a lock before you "
+                        "drive off and a receiver failing mid-session are the same percentage and "
+                        "completely different recordings.")
         if getattr(session, "has_gmeter", False):
             src = {"accl": "IMU", "gps": "GPS"}
             lat_src = src.get(session.gmeter_source(), session.gmeter_source())

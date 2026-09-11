@@ -410,8 +410,15 @@ class _QualityStrip(QWidget):
         # `minimum.reduceat` over the per-column START cell: segment i runs [lo[i], lo[i+1]), and
         # where two columns land in the SAME cell (a bar spanning one lap is ~7 px per second)
         # numpy's documented degenerate case returns that one cell — exactly the value wanted.
+        #
+        # THE SLICE IS LOAD-BEARING. `reduceat`'s LAST segment runs to the end of the array, not to
+        # the end of the visible span, so a bar confined to the first minute of a two-minute
+        # recording folded the whole second minute into its rightmost pixel — the compare-mode bar
+        # painted one red column that belonged to a lap it was not showing. Cutting the array at
+        # the span's own end cell is what makes the last column mean what the other 499 mean.
         lo = np.clip((starts / tl.cell_s).astype(np.int64), 0, n - 1)
-        worst = np.minimum.reduceat(tl.cls, lo).astype(np.int64)
+        hi = min(max(int(np.ceil(t1 / tl.cell_s)), int(lo[-1]) + 1), n)
+        worst = np.minimum.reduceat(tl.cls[:hi], lo).astype(np.int64)
         worst[(starts < 0.0) | (starts >= tl.span_s)] = -1     # no timeline here: paint nothing
         out: list[tuple[int, int, int]] = []
         edges = np.flatnonzero(np.diff(worst)) + 1

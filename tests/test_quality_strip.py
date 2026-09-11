@@ -55,15 +55,20 @@ class _Fix:
 
 
 def _trace(specs, rate_hz=10.0):
-    """(times, rejected, dop) for a list of `(seconds, _Fix)` spans at `rate_hz`."""
-    times, rejected, dops, t = [], [], [], 0.0
+    """(times, rejected, dop) for a list of `(seconds, _Fix)` spans at `rate_hz`.
+
+    The time of sample k is `k / rate_hz`, computed from the RUNNING INDEX rather than by adding
+    a step each turn. Accumulating 1/10 a hundred times lands at 9.999999999999998, so the fix
+    meant to open second 10 falls in cell 9 instead and the span boundaries in these fixtures
+    land one sample early — which looks exactly like a classifier bug and is not one."""
+    times, rejected, dops, k = [], [], [], 0
     for secs, proto in specs:
         for _ in range(int(round(secs * rate_hz))):
             s = _Fix(proto.fix, proto.dop, proto.full_speed)
-            times.append(t)
+            times.append(k / rate_hz)
             rejected.append(not _quality_ok(s))
             dops.append(s.dop)
-            t += 1.0 / rate_hz
+            k += 1
     return times, rejected, dops
 
 
@@ -306,7 +311,7 @@ class _Check:
         return abs(self.loop_ratio_gyro - 1.0) * 100.0
 
 
-def _trust_rows(cross, device="HERO13 Black"):
+def _trust_rows(cross, device="HERO13 Black", timeline=None, lap_cls=None):
     from studio.stats_panel import StatsView
 
     class _S:
@@ -323,6 +328,10 @@ def _trust_rows(cross, device="HERO13 Black"):
         track_name = "Test Circuit"
         timing_quality = data_quality.TimingQuality()
         has_gmeter = False
+        quality_timeline = timeline if timeline is not None else data_quality.empty_timeline()
+
+        def lap_quality(self, lap_id):
+            return None if lap_cls is None else lap_cls.get(lap_id)
 
         def gmeter_cross(self):
             return None
@@ -387,6 +396,50 @@ def test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_
     print("test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_so OK")
 
 
+def test_the_card_and_the_bar_are_the_same_fact_and_the_card_says_which_laps():
+    """The strip row exists because the percentage row above it comes out INVERTED on the owner's
+    own two recordings, and both were measured through this code:
+
+      * 0060 rejects NOT ONE fix — the percentage row reads 0 % — and yet 17 of its 38 clean laps
+        contain a second whose DOP left the GNSS good band;
+      * 0062 rejects 1 %, and every one of those rejections is inside the 48 seconds before the
+        kart moves, so NOT ONE of its 65 laps inherits anything but good.
+
+    So the row names the laps, and it is a CAVEAT only when a lap has a real hole in it (POOR or
+    no fix at all). A merely degrading second is stated, not alarmed about — it is still a second
+    the loader kept."""
+    times, rejected, dop = _trace([(30, _Fix(dop=data_quality.DOP_GOOD_MAX + 1.0)),
+                                   (30, _Fix())])
+    tl = data_quality.build_quality_timeline(times, rejected, dop, span_s=60.0)
+
+    # 0060's shape: a degraded second inside a lap, nothing rejected. Stated, not flagged.
+    rows, tip = _trust_rows(None, timeline=tl,
+                            lap_cls={0: data_quality.MODERATE, 1: data_quality.GOOD})
+    row = next(r for r in rows if r[0] == "GPS quality over time")
+    assert "30 s moderate" in row[1], row[1]
+    assert "1 of 2 laps" in row[1], row[1]
+    assert "scrubber" in row[1], row[1]
+    assert row[2] is False, "a degrading second the loader KEPT is not a caveat"
+    assert "worst second" in tip.lower(), tip
+
+    # A real hole in a lap IS a caveat, which is what floats it to the top of the card.
+    rows2, _ = _trust_rows(None, timeline=tl,
+                           lap_cls={0: data_quality.POOR, 1: data_quality.GOOD})
+    assert next(r for r in rows2 if r[0] == "GPS quality over time")[2] is True, rows2
+
+    # 0062's shape: everything bad is outside every lap. Reported, and no lap clause at all.
+    rows3, _ = _trust_rows(None, timeline=tl,
+                           lap_cls={0: data_quality.GOOD, 1: data_quality.GOOD})
+    row3 = next(r for r in rows3 if r[0] == "GPS quality over time")
+    assert "laps contain" not in row3[1], row3[1]
+    assert row3[2] is False, row3
+
+    # No recording loaded: no row (an empty timeline is not a verdict of "clean").
+    rows4, _ = _trust_rows(None)
+    assert not [r for r in rows4 if r[0] == "GPS quality over time"], rows4
+    print("test_the_card_and_the_bar_are_the_same_fact_and_the_card_says_which_laps OK")
+
+
 def _main():
     test_a_cell_is_poor_exactly_when_the_loader_would_throw_its_fixes_away()
     test_a_second_with_some_fixes_rejected_is_not_reported_as_clean()
@@ -399,6 +452,7 @@ def _main():
     test_the_strip_follows_the_colourblind_palette()
     test_the_rotation_row_reads_the_closed_lap_ratios_through_the_accessors()
     test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_so()
+    test_the_card_and_the_bar_are_the_same_fact_and_the_card_says_which_laps()
     print("ALL OK")
 
 
