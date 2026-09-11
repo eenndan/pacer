@@ -2058,8 +2058,8 @@ class StudioWindow(QMainWindow):
             "and a per-lap table. Press again (or ⤢) to restore the grid.")
         self._stats_action.triggered.connect(self._show_session_statistics)
         view_menu.addSeparator()
-        # The lap panel's pages are REAL tabs now (Laps · Corners · Stats · Coaching, digits
-        # 1-4) — the old show/hide toggles for the coaching + consistency strips died with the
+        # The lap panel's pages are REAL tabs now (Laps · Corners · Stats · Coaching · Marks,
+        # digits 1-5) — the old show/hide toggles for the coaching + consistency strips died with the
         # strips themselves. Only the excluded strip (inside the Laps page) keeps a toggle.
         self._excluded_action = view_menu.addAction("Show excluded laps")
         self._excluded_action.setCheckable(True)
@@ -2369,7 +2369,7 @@ class StudioWindow(QMainWindow):
         CommandPalette(self).exec()
 
     def _select_lap_tab(self, index: int):
-        """Digit shortcut 1-4 → the lap panel's tab, resolved at call time; no-op before the
+        """Digit shortcut 1-5 → the lap panel's tab, resolved at call time; no-op before the
         first load (the persisted choice still seeds the next view)."""
         view = getattr(self, "view", None)
         if view is not None:
@@ -3922,6 +3922,13 @@ class StudioWindow(QMainWindow):
         useful — reviewing your own footage doesn't need a verified start line. What it must not be
         is silent. Default is Cancel, and the way out (save the track) is named.
 
+        THE SECOND PARAGRAPH USED TO SAY "with nothing in the frame to say so", AND THAT IS NO
+        LONGER TRUE. The frame burns the word now (export_video._paint_stamp, decided in
+        data_quality's burned-frame block), so the dialog states what the clip will carry instead
+        of describing a silence that has since been fixed. The dialog stays: a burned mark is a
+        disclosure, not a substitute for the line being right, and the mark is permanent in a way
+        a dismissed dialog is not — which is exactly what is worth knowing BEFORE a render.
+
         The BODY names the product, for the reason _load_failure_dialog states at length: macOS
         drops a QMessageBox's window title, so the title argument below is a no-op there and the
         first sentence is the only naming this dialog gets (QA D2-10, never applied to the export)."""
@@ -3930,9 +3937,10 @@ class StudioWindow(QMainWindow):
             f"{APP_NAME} can export this lap, but the recording's timing is provisional: the "
             "start/finish line was auto-fitted, not confirmed by you, so the lap time is an "
             "estimate.\n\n"
-            "That estimate gets burned into the video, with nothing in the frame to say so — which "
-            "is why the shareable lap card is switched off for this session. Save it as a track "
-            "(File ▸ Save as track…) to confirm the line first.\n\n"
+            "That estimate gets burned into the video, so the clip will carry a PROVISIONAL mark "
+            "under the lap time for its whole length — in every copy of it, permanently. It is the "
+            "same flag that switches the shareable lap card off for this session. Save it as a "
+            "track (File ▸ Save as track…) to confirm the line first and the mark goes away.\n\n"
             "Export anyway?",
             QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel) == QMessageBox.Yes
 

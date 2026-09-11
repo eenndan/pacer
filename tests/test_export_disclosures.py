@@ -557,6 +557,52 @@ def test_a_break_in_series_is_named_not_just_coded_on_both_writers():
     print("test_a_break_in_series_is_named_not_just_coded_on_both_writers OK")
 
 
+def test_a_burned_frame_gets_words_and_never_a_code():
+    """THE THIRD SURFACE FAMILY. #272 adopted `[e]`/`[p]`/`[u]`/`[b]` for the tables that leave the
+    app, and named the burned-in overlay export as the one leaving-the-app surface still carrying
+    nothing. Its own rule is PER SURFACE FAMILY before per marker, and a frame of video is its own
+    family: no key, no hover, no margin for a legend, watched by people who have never seen pacer.
+
+    So the frame gets WORDS, never codes — a `[p]` in the corner of a video is a letter the viewer
+    cannot decode and the file cannot explain. The words are the app's own: "ESTIMATED" and
+    "GPS LOW" are literally the lap panel's data-quality chip, and "PROVISIONAL" is what the map
+    banner, the export dialog and `[p]`'s own meaning already call it.
+
+    Two conditions are REFUSED and that is asserted too, because a vocabulary that quietly grows is
+    the failure this decision table exists to prevent: `[b]` (a clip is one window, not a series a
+    reader can compare across) and the per-lap GPS-dropout ⚠ (it changes per lap, and the SESSION
+    scope would have to raise and drop a mark mid-clip)."""
+    from studio import data_quality
+    s = make_session()
+    assert data_quality.burned_timing_stamp(s) == [], "a clean session burns nothing"
+
+    s.track_name = None                       # the real provisional condition
+    lines = data_quality.burned_timing_stamp(s)
+    assert lines == [data_quality.STAMP_PROVISIONAL], lines
+    assert lines[0].startswith("PROVISIONAL"), lines
+
+    # A break in series marks the CSV and the report, and never the frame.
+    s.skipped_chapters = ["GX020060.MP4"]
+    assert data_quality.break_in_series(s), "fixture must now carry the [b] condition"
+    assert data_quality.MARK_BREAK_IN_SERIES in data_quality.session_marks(s)
+    assert data_quality.burned_timing_stamp(s) == [data_quality.STAMP_PROVISIONAL]
+
+    # ...and the dropout lap the CSV marks [u] adds nothing to the frame either: the stamp is
+    # session-scoped, like session_marks and unlike lap_marks.
+    dropouts = set(s.dropout_lap_ids())
+    assert dropouts, "fixture must carry a dropout lap"
+    assert data_quality.MARK_LOW_RELIABILITY in data_quality.lap_marks(s, next(iter(dropouts)))
+    assert data_quality.burned_timing_stamp(s) == [data_quality.STAMP_PROVISIONAL]
+
+    # No code, in any string this family can burn.
+    burnable = (data_quality.STAMP_PROVISIONAL, data_quality.STAMP_ESTIMATED,
+                data_quality.STAMP_LOW_GPS)
+    for text in burnable:
+        for code in data_quality.MARK_ORDER:
+            assert code not in text, (code, text)
+    print("test_a_burned_frame_gets_words_and_never_a_code OK")
+
+
 if __name__ == "__main__":
     test_csv_trailer_states_the_ideals_sample()
     test_csv_trailer_stays_ascii()
@@ -577,4 +623,5 @@ if __name__ == "__main__":
     test_every_code_a_file_emits_is_decoded_by_its_key_in_both_writers()
     test_a_clean_session_gains_no_key_to_read_past()
     test_a_break_in_series_is_named_not_just_coded_on_both_writers()
+    test_a_burned_frame_gets_words_and_never_a_code()
     print("\nALL EXPORT-DISCLOSURE TESTS PASSED")

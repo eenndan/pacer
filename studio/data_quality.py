@@ -455,6 +455,9 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
 #   * LEAVING THE APP. laps.csv and the HTML report are tables with no hover, read by a person in
 #     a spreadsheet or by a script. They are the standard's own design target, and they are where
 #     pacer's disclosures have repeatedly been found thin (§5.4). The codes are adopted THERE.
+#   * BURNED INTO A PICTURE. The overlay export (studio/export_video.py) is a THIRD family and it
+#     was named as the one genuine leaving-the-app surface the paragraph above does not cover. It
+#     takes NO codes at all — see the block below for the whole argument.
 #
 # Per marker, then — including the ones that do not fit, because a vocabulary forced onto the last
 # two cases is worse than the house style:
@@ -515,6 +518,78 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
 # ★ (session best) and ▲ (worst loss) are NOT quality markers and are deliberately absent here —
 # #237 separated the priority glyph from the trust glyph precisely so the two vocabularies could
 # not be read as one.
+# ── THE THIRD FAMILY: A FRAME OF VIDEO, WHICH TAKES NO CODES ─────────────────────────────────
+# The burned-in overlay export is the most public artifact pacer produces and the least able to
+# caveat itself: it lands in a group chat and on a feed, it is watched by people who have never
+# seen the app, and unlike a CSV or a report it has NO KEY, no hover, and no margin to put one in.
+# Every argument for adopting the standard above runs the other way here. `[p]` in the corner of a
+# video is a letter in a box that the viewer cannot decode and the file cannot explain — strictly
+# worse than the plain word, which decodes itself and costs the same ink. So: NO CODES ON A FRAME.
+# The four letters stay where a key can follow them.
+#
+# WHAT DOES GO ON THE FRAME IS THE SHARE CARD'S RULE, because the card is this family's nearest
+# sibling — a public, keyless, hover-less image. `share_card.card_data` refuses to render at all on
+# PROVISIONAL timing and burns the word "estimated timing" when the clock is degraded. The overlay
+# already inherits half of that (app.py warns before a provisional render) and burned NOTHING; the
+# warning dialog even named the gap in as many words — "that estimate gets burned into the video,
+# with nothing in the frame to say so".
+#
+# IT STILL DOES NOT BLOCK, and that asymmetry is a decision the app already made and wrote down
+# (export_controller.sync_menu): "a provisional clip is still useful to the driver reviewing their
+# own footage, an unverified brag card never is". The card's ENTIRE content is a lap time offered
+# as an achievement; the clip's content is the driving, with a clock laid over it. Blocking the
+# export would withhold a person's own footage over a caveat about one element of the overlay, and
+# it would take the overlay-only (alpha) render — which exists to be re-cut in an NLE — with it.
+# What the frame must not be is SILENT, which is what this fixes.
+#
+# PER CONDITION, and only the ones that qualify something the frame actually shows:
+#   PROVISIONAL   the clock and the Δ are measured from a line nobody confirmed. On the frame.
+#   ESTIMATED     the clock came from the video clock (an older camera, no GPS9). On the frame.
+#   GPS LOW       the fixes the speed number, the map dot and the times are made of were rejected
+#                 in a concerning share. On the frame.
+#   [b] break in series   REFUSED. A break is a fact about a SERIES — times either side of a gap
+#                 not being on the same footing — and one clip is one window of one recording, not
+#                 a series a viewer can compare across. The exports that ARE series keep it.
+#   the per-lap GPS-dropout ⚠  REFUSED, and this is the closer call: it is genuinely a fact about
+#                 the exported lap. But it changes per lap, and the SESSION scope renders many laps
+#                 in one clip — so it would have to raise and drop a mark mid-clip, which reads as
+#                 a rendering fault rather than a disclosure. The stamp is session-scoped, exactly
+#                 like `session_marks` and like the pill budget that is resolved once per export.
+#                 ⚠ stays where a reader can see which lap it belongs to.
+#
+# THE WORDS ARE THE APP'S OWN. "ESTIMATED" and "GPS LOW" are literally the lap panel's data-quality
+# chip (central_view._refresh_quality_badge), and "provisional" is what the map banner, the export
+# dialog and `[p]`'s own meaning already call it — so a driver who has seen the app reads the same
+# vocabulary on the clip, and a viewer who has not gets a whole word. These strings are NOT
+# ASCII-bound the way `MARK_MEANING` is (nothing here reaches laps.csv); the em dash is the app's
+# own clause separator and the export already burns one (`export_video._PENDING_TIME`).
+STAMP_PROVISIONAL = "PROVISIONAL — lap timing from a start/finish line that was never confirmed"
+STAMP_ESTIMATED = "ESTIMATED — lap timing from the video clock, not GPS"
+STAMP_LOW_GPS = "GPS LOW — {pct}% of fixes rejected; speed and position less accurate"
+
+
+def burned_timing_stamp(session) -> list[str]:
+    """The honesty lines a burned-in overlay carries, worst-footing first; [] for a clean session.
+
+    LINES, not one string, because the frame's constraint is WIDTH and a video is re-cropped by
+    every feed it passes through. Stacked under the lap strip each line stays inside the top-left
+    corner the composition already owns; joined into one they would run across the picture and be
+    the first thing a 9:16 crop cut in half.
+
+    Session-scoped and duck-typed like `session_marks`, whose conditions these are minus the break
+    in series (see the block above for why a clip is not a series)."""
+    quality = getattr(session, "timing_quality", None)
+    out: list[str] = []
+    if not getattr(session, "timing_verified", True):
+        out.append(STAMP_PROVISIONAL)
+    if quality is not None:
+        if getattr(quality, "media_clock", False):
+            out.append(STAMP_ESTIMATED)
+        if getattr(quality, "low_gps_quality", False):
+            out.append(STAMP_LOW_GPS.format(pct=quality.dropped_pct()))
+    return out
+
+
 MARK_ESTIMATED = "[e]"
 MARK_PROVISIONAL = "[p]"
 MARK_LOW_RELIABILITY = "[u]"

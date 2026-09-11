@@ -30,6 +30,36 @@ struct ImuArrays {
   std::vector<double> zs;
 };
 
+// The container's OWN statement of how an IMU stream's three elements map onto
+// the camera's physical axes: GPMF's `ORIN` (the orientation of the RAW
+// elements as written, one letter per element, lowercase meaning negated) and
+// `ORIO` (the orientation the camera intends a consumer to present). Either can
+// be empty, and both often are: of the ten bundled sample clips four carry
+// neither, and the NEWEST camera measured (HERO13) carries ORIN with no ORIO.
+//
+// READ IT, BUT DO NOT REORDER BY IT. Measured on the ten bundled sample clips
+// and both D24 recordings, these fields are written ONLY on ACCL and GYRO;
+// GRAV, CORI and IORI carry no orientation field on any camera that has them.
+// And the studio g-meter's whole chain (ACCL minus GRAV, rotated by CORI) rides
+// ONE element frame shared by all four streams — which measurement says is the
+// RAW frame, not the presented one: the same fixed permutation maps raw GYRO
+// onto the CORI-derived body rate on a HERO8 (ORIN "zxY"), a GoPro Max
+// ("XzY") and a HERO13 ("ZXY"), three DIFFERENT declarations. Canonicalising
+// ACCL/GYRO by ORIN while GRAV/CORI stay raw would therefore break an alignment
+// that currently holds. See studio/docs/gmeter-validation.md.
+//
+// So this is a DIAGNOSTIC: it lets the app SAY which convention a recording
+// declares instead of assuming one (studio.dev.diagnose prints it), and it is
+// what tests/test_imu_orientation.py pins per camera generation so a camera
+// that declares something new fails visibly. The runtime guard on the frame is
+// a separate, measured one: studio.gmeter.axis_check.
+struct ImuOrientation {
+  std::string accl_in;  // ACCL `ORIN`, e.g. "ZXY" / "zxY" / "" when absent
+  std::string accl_out; // ACCL `ORIO`, e.g. "ZXY" / "" when absent
+  std::string gyro_in;  // GYRO `ORIN`
+  std::string gyro_out; // GYRO `ORIO`
+};
+
 // Abstract source of raw GPS / IMU samples — "raw" meaning it hands back fixes
 // without imposing a meaningful global timeline of its own.
 //
@@ -66,21 +96,29 @@ public:
   // cumulative duration (see SequentialGPSSource) onto one continuous global
   // clock. The base is a no-op; GPMFSource / SequentialGPSSource override.
   //
-  // ACCL is a 3-axis accelerometer in m/s^2 (native order Z,X,Y); GRAV is a
-  // unit gravity vector (native order, permuted vs ACCL — the studio layer
-  // resolves that).
+  // ACCL is a 3-axis accelerometer in m/s^2, elements in the camera's own RAW
+  // order (ZXY on a HERO13 — see ReadImuOrientation for what the container
+  // declares and why it is not applied); GRAV is a unit gravity vector in the
+  // same raw frame, permuted vs ACCL by a fixed swap the studio layer resolves.
   virtual void ReadAccl(std::function<void(IMUSample)> /*on_sample*/) {}
   // GYRO is the 3-axis rate gyroscope in rad/s on the SAME media clock.
   //
   // AXES: it declares the SAME element orientation as ACCL. Measured across
   // every clip in 3rdparty/gpmf-parser/samples plus both D24 recordings, the
-  // GPMF ORIN/ORIO fields of ACCL and GYRO are identical on every camera —
-  // HERO6/7 "YxZ", HERO8 "zxY", Max "XzY", HERO13 "ZXY", and absent on both for
-  // HERO5/Fusion/Karma. So GYRO inherits whatever axis convention the studio
-  // layer already applies to ACCL, and adds no orientation risk of its own.
-  // (What it does NOT fix: that convention is a fitted constant, not a read of
-  // ORIN, so it is right for the camera it was fitted on. Pre-existing, and the
-  // same for both streams.)
+  // GPMF ORIN/ORIO fields of ACCL and GYRO are identical on every camera,
+  // whatever they say: HERO6/7 "YxZ"/"ZXY", HERO8 "zxY"/"ZXY", Max "XzY"/"ZXY",
+  // HERO13 "ZXY" with NO ORIO at all, and BOTH fields absent on
+  // HERO5/Fusion/Karma (and on older HERO6 firmware — hero6.mp4 carries none
+  // where hero6a.mp4 does). So GYRO inherits whatever axis convention the
+  // studio layer applies to ACCL, and adds no orientation risk of its own.
+  //
+  // The convention the studio layer applies is a FITTED constant rather than a
+  // read of ORIN, and measurement says that is correct rather than merely
+  // convenient: GRAV/CORI carry no ORIN on any camera and ride the RAW element
+  // frame, so canonicalising ACCL/GYRO by ORIN alone would break them. The
+  // field is read and reported (ReadImuOrientation) and the alignment it used
+  // to stand in for is now MEASURED per recording by the studio g-meter's axis
+  // check, which refuses the IMU path rather than mis-orienting it silently.
   //
   // RATE: ~200 Hz on the HERO13 recordings, where GYRO and ACCL happen to carry
   // identical per-payload sample counts — but that is a coincidence of that
@@ -115,6 +153,13 @@ public:
   // and HERO9/10 carry no per-sample GPS clock. Read once (it is a per-payload
   // constant), never per sample. The base returns "".
   virtual std::string DeviceName() const { return {}; }
+
+  // The ACCL/GYRO axis declaration this container carries (see ImuOrientation
+  // for what it means and why it is a diagnostic, not a transform). Like
+  // DeviceName it is a per-payload constant, so it is read once off the first
+  // payloads that have it; every field is "" on a camera that writes none. The
+  // base returns all-empty.
+  virtual ImuOrientation ReadImuOrientation() const { return {}; }
 
   // Move the cursor to the chunk covering `target`.
   virtual uint32_t Seek(double target) = 0;
@@ -171,6 +216,7 @@ public:
   void ReadCori(std::function<void(QuatSample)> on_sample) override;
 
   std::string DeviceName() const override;
+  ImuOrientation ReadImuOrientation() const override;
 
   uint32_t Seek(double target) override;
   void Next() override;
@@ -232,6 +278,10 @@ public:
   // chain has a single device name; the fallback only matters for a chain whose
   // first chapter is a synthetic/nameless source.
   std::string DeviceName() const override;
+
+  // The chain's axis declaration, resolved the same way and for the same
+  // reason: chapters of one recording come off one camera.
+  ImuOrientation ReadImuOrientation() const override;
 
   uint32_t Seek(double target) override;
   void Next() override;

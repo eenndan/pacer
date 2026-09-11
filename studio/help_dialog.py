@@ -11,7 +11,7 @@ it is an ACTION registry — each row carries the name of the StudioWindow attri
 the ⌘K command palette (``command_palette.py``) is generated from the same list this card renders
 and the two cannot drift. ``SHORTCUT_GROUPS`` is the card's view of it. The keys listed here MUST
 stay in lockstep with the actual bindings, which are defined in
-``StudioWindow._build_shortcuts`` (Space / M / G / C / 1-4 / [ / ] / ?), ``VideoView`` (F),
+``StudioWindow._build_shortcuts`` (Space / M / G / C / 1-5 / [ / ] / ?), ``VideoView`` (F),
 ``StudioWindow.keyPressEvent`` (the ←/→ ± stepping) and the menus (⌘O, ⌘Z, ⌃⌘F, ⇧⌘S, ⌘K, F1).
 Every accelerator row stores the ``QKeySequence`` itself rather than hand-typed glyphs, so the card
 renders exactly what Qt paints in the menu bar (``⇧⌘S``, not ``⌘⇧S``) on whatever platform it runs
@@ -158,11 +158,12 @@ COMMANDS: list[Command] = [
     Command("Analysis", "N",
             "Jump to the next-biggest Δ loss (again to walk on, then back to the whole lap)",
             run="jump_to_next_loss"),
-    # The four lap-panel tabs were ONE row — "1 · 2 · 3 · 4 → Lap-panel tabs: Laps · Corners ·
+    # The lap-panel tabs were ONE row — "1 · 2 · 3 · 4 → Lap-panel tabs: Laps · Corners ·
     # Stats · Coaching" — which is good card copy and a bad registry entry: one row cannot carry
-    # four targets, and a palette that cannot offer "Coaching" by name is not a palette. Four rows
-    # cost the card three lines it can afford (it scrolls and is screen-capped since W14-03) and
-    # buy each page its own searchable name.
+    # four targets, and a palette that cannot offer "Coaching" by name is not a palette. A row per
+    # page costs the card the lines it can afford (it scrolls and is screen-capped since W14-03)
+    # and buys each page its own searchable name — which is also why #269's Marks page joined as a
+    # fifth row rather than as a word appended to a shared one.
     Command("Analysis", "1", "Lap panel: Laps", run="show_laps_tab"),
     Command("Analysis", "2", "Lap panel: Corners", run="show_corners_tab"),
     Command("Analysis", "3", "Lap panel: Stats", run="show_stats_tab"),

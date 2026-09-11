@@ -54,7 +54,7 @@ divider between them drags.
   ideal* — the best you've driven at each point on track, stitched together (not a single drivable
   lap) — right where you are on track. Two toggles add a **Brake/Throttle** band under the speed
   curve and overlay the **ideal lap** itself.
-- **The tabbed panel**, four full-height pages on the digits **1–4**:
+- **The tabbed panel**, five full-height pages on the digits **1–5**:
   - **Laps** — every lap and its sector splits, sortable, session best starred (★). The **Entry**
     column is the corner-entry speed; toggle **View ▸ Units** for mph.
   - **Corners** — the same corners, for the *one* lap you have selected: time-in-corner, that
@@ -63,6 +63,10 @@ divider between them drags.
     straights reports, the **IDEAL LAP** block and the **DATA TRUST** card. **⌘⇧S** opens it
     full-window.
   - **Coaching** — see below.
+  - **Marks** — the one page that holds a *conclusion* rather than a measurement: what you wrote
+    down against this recording, plus what Pacer detected for you (GPS dropouts, laps left out of
+    your times, stretches of degraded GPS). **B** drops a mark at the playhead; **,** and **.**
+    jump between them.
 
 ## 4 · See where the time goes (the coaching)
 

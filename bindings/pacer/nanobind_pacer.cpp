@@ -29,7 +29,7 @@ namespace pacer {
 class RawGPSSource_trampoline : public RawGPSSource
 {
 public:
-    NB_TRAMPOLINE(RawGPSSource, 16);
+    NB_TRAMPOLINE(RawGPSSource, 17);
 
     uint32_t ReadSamples(std::function<void(GPSSample, uint32_t, uint32_t)> on_sample) override
     {
@@ -104,6 +104,13 @@ public:
         NB_OVERRIDE_NAME(
             "device_name", // function name (python)
             DeviceName // function name (c++)
+        );
+    }
+    pacer::ImuOrientation ReadImuOrientation() const override
+    {
+        NB_OVERRIDE_NAME(
+            "read_imu_orientation", // function name (python)
+            ReadImuOrientation // function name (c++)
         );
     }
     uint32_t Seek(double target) override
@@ -208,7 +215,7 @@ void py_init_module_pacer(nb::module_ &m) {
 
   auto pyClassIMUSample =
       nb::class_<pacer::IMUSample>
-          (m, "IMUSample", " One 3-axis IMU reading — ACCL (accelerometer, m/s^2) or GRAV (a unit gravity\n direction). `time` is on the MEDIA clock (seconds), the same basis as the GPS\n payload spans, so it lines up with the video; the SequentialGPSSource chain\n applies the per-chapter offset exactly as it does for GPS. Axes are stored in\n the GoPro stream's native order (ACCL: Z,X,Y); the studio layer applies the\n camera->kart frame transform on top.")
+          (m, "IMUSample", " One 3-axis IMU reading — ACCL (accelerometer, m/s^2) or GRAV (a unit gravity\n direction). `time` is on the MEDIA clock (seconds), the same basis as the GPS\n payload spans, so it lines up with the video; the SequentialGPSSource chain\n applies the per-chapter offset exactly as it does for GPS. Axes are stored in\n the GoPro stream's native RAW order, exactly as written — which DIFFERS BY\n CAMERA (a HERO13 declares Z,X,Y; a HERO8 -Z,-X,Y; a Max X,-Z,Y; see\n RawGPSSource::ReadImuOrientation) and is deliberately not normalised here.\n GRAV and CORI share that raw frame, up to a fixed permutation, on every\n camera measured, so the studio layer's ONE camera->kart transform is correct\n across models; it verifies that per recording rather than assuming it\n (studio.gmeter.axis_check).")
       .def("__init__", [](pacer::IMUSample * self, double x = 0, double y = 0, double z = 0, double time = 0)
       {
           new (self) pacer::IMUSample();  // placement new
@@ -502,6 +509,27 @@ void py_init_module_pacer(nb::module_ &m) {
       ;
 
 
+  auto pyClassImuOrientation =
+      nb::class_<pacer::ImuOrientation>
+          (m, "ImuOrientation", " The container's OWN statement of how an IMU stream's three elements map onto\n the camera's physical axes: GPMF's `ORIN` (the orientation of the RAW\n elements as written, one letter per element, lowercase meaning negated) and\n `ORIO` (the orientation the camera intends a consumer to present). Either can\n be empty, and both often are: of the ten bundled sample clips four carry\n neither, and the NEWEST camera measured (HERO13) carries ORIN with no ORIO.\n\n READ IT, BUT DO NOT REORDER BY IT. Measured on the ten bundled sample clips\n and both D24 recordings, these fields are written ONLY on ACCL and GYRO;\n GRAV, CORI and IORI carry no orientation field on any camera that has them.\n And the studio g-meter's whole chain (ACCL minus GRAV, rotated by CORI) rides\n ONE element frame shared by all four streams — which measurement says is the\n RAW frame, not the presented one: the same fixed permutation maps raw GYRO\n onto the CORI-derived body rate on a HERO8 (ORIN \"zxY\"), a GoPro Max\n (\"XzY\") and a HERO13 (\"ZXY\"), three DIFFERENT declarations. Canonicalising\n ACCL/GYRO by ORIN while GRAV/CORI stay raw would therefore break an alignment\n that currently holds. See studio/docs/gmeter-validation.md.\n\n So this is a DIAGNOSTIC: it lets the app SAY which convention a recording\n declares instead of assuming one (studio.dev.diagnose prints it), and it is\n what tests/test_imu_orientation.py pins per camera generation so a camera\n that declares something new fails visibly. The runtime guard on the frame is\n a separate, measured one: studio.gmeter.axis_check.")
+      .def("__init__", [](pacer::ImuOrientation * self, std::string accl_in = std::string(), std::string accl_out = std::string(), std::string gyro_in = std::string(), std::string gyro_out = std::string())
+      {
+          new (self) pacer::ImuOrientation();  // placement new
+          auto r_ctor_ = self;
+          r_ctor_->accl_in = accl_in;
+          r_ctor_->accl_out = accl_out;
+          r_ctor_->gyro_in = gyro_in;
+          r_ctor_->gyro_out = gyro_out;
+      },
+      nb::arg("accl_in") = std::string(), nb::arg("accl_out") = std::string(), nb::arg("gyro_in") = std::string(), nb::arg("gyro_out") = std::string()
+      )
+      .def_rw("accl_in", &pacer::ImuOrientation::accl_in, "ACCL `ORIN`, e.g. \"ZXY\" / \"zxY\" / \"\" when absent")
+      .def_rw("accl_out", &pacer::ImuOrientation::accl_out, "ACCL `ORIO`, e.g. \"ZXY\" / \"\" when absent")
+      .def_rw("gyro_in", &pacer::ImuOrientation::gyro_in, "GYRO `ORIN`")
+      .def_rw("gyro_out", &pacer::ImuOrientation::gyro_out, "GYRO `ORIO`")
+      ;
+
+
   auto pyClassRawGPSSource =
       nb::class_<pacer::RawGPSSource, pacer::RawGPSSource_trampoline>
           (m, "RawGPSSource", " Abstract source of raw GPS / IMU samples — \"raw\" meaning it hands back fixes\n without imposing a meaningful global timeline of its own.\n\n Return-code convention: the uint32_t-returning methods (ReadSamples, Seek)\n follow the GoPro GPMF parser's codes — 0 (GPMF_OK) is success and any nonzero\n value is some GPMF_ERROR_* diagnostic (GPMFSource::ReadSamples returns\n GPMF_ERROR_MEMORY == 1 when the cursor sits on an empty index). No caller\n ever branches on a particular nonzero code — only zero vs nonzero — so a\n source written outside the parser (a test, a Python subclass) may return 0\n for success and any nonzero value for \"nothing here\".")
@@ -513,7 +541,7 @@ void py_init_module_pacer(nb::module_ &m) {
       .def("read_accl",
           &pacer::RawGPSSource::ReadAccl,
           nb::arg("param_0"),
-          " Read the timestamped IMU streams (accelerometer / gyroscope / gravity)\n across the WHOLE source. Each sample's `time` is on the MEDIA clock\n (seconds), spread across the payload span so it lines up with the GPS spans\n and the video; a multi-chapter source shifts later chapters by the\n cumulative duration (see SequentialGPSSource) onto one continuous global\n clock. The base is a no-op; GPMFSource / SequentialGPSSource override.\n\n ACCL is a 3-axis accelerometer in m/s^2 (native order Z,X,Y); GRAV is a\n unit gravity vector (native order, permuted vs ACCL — the studio layer\n resolves that).")
+          " Read the timestamped IMU streams (accelerometer / gyroscope / gravity)\n across the WHOLE source. Each sample's `time` is on the MEDIA clock\n (seconds), spread across the payload span so it lines up with the GPS spans\n and the video; a multi-chapter source shifts later chapters by the\n cumulative duration (see SequentialGPSSource) onto one continuous global\n clock. The base is a no-op; GPMFSource / SequentialGPSSource override.\n\n ACCL is a 3-axis accelerometer in m/s^2, elements in the camera's own RAW\n order (ZXY on a HERO13 — see ReadImuOrientation for what the container\n declares and why it is not applied); GRAV is a unit gravity vector in the\n same raw frame, permuted vs ACCL by a fixed swap the studio layer resolves.")
       .def("read_gyro",
           &pacer::RawGPSSource::ReadGyro, nb::arg("param_0"))
       .def("read_grav",
@@ -532,6 +560,8 @@ void py_init_module_pacer(nb::module_ &m) {
           &pacer::RawGPSSource::ReadCoriColumns)
       .def("device_name",
           &pacer::RawGPSSource::DeviceName, " The recording camera's own name for itself — the GPMF `DVNM` field, e.g.\n \"HERO13 Black\". Empty when the container carries none. It is the only\n in-file statement of WHICH camera produced the streams, and the camera\n model decides what the data can mean at all: a HERO12 has no GPS receiver,\n and HERO9/10 carry no per-sample GPS clock. Read once (it is a per-payload\n constant), never per sample. The base returns \"\".")
+      .def("read_imu_orientation",
+          &pacer::RawGPSSource::ReadImuOrientation, " The ACCL/GYRO axis declaration this container carries (see ImuOrientation\n for what it means and why it is a diagnostic, not a transform). Like\n DeviceName it is a per-payload constant, so it is read once off the first\n payloads that have it; every field is \"\" on a camera that writes none. The\n base returns all-empty.")
       .def("seek",
           &pacer::RawGPSSource::Seek,
           nb::arg("target"),
@@ -568,6 +598,8 @@ void py_init_module_pacer(nb::module_ &m) {
           &pacer::GPMFSource::ReadCori, nb::arg("on_sample"))
       .def("device_name",
           &pacer::GPMFSource::DeviceName)
+      .def("read_imu_orientation",
+          &pacer::GPMFSource::ReadImuOrientation)
       .def("seek",
           &pacer::GPMFSource::Seek, nb::arg("target"))
       .def("next",
@@ -607,6 +639,8 @@ void py_init_module_pacer(nb::module_ &m) {
           &pacer::SequentialGPSSource::ReadCori, nb::arg("on_sample"))
       .def("device_name",
           &pacer::SequentialGPSSource::DeviceName, " The chain's camera: the LEFT subtree's name, falling back to the right when\n the left has none. Chapters of one recording come off one camera, so a\n chain has a single device name; the fallback only matters for a chain whose\n first chapter is a synthetic/nameless source.")
+      .def("read_imu_orientation",
+          &pacer::SequentialGPSSource::ReadImuOrientation, " The chain's axis declaration, resolved the same way and for the same\n reason: chapters of one recording come off one camera.")
       .def("seek",
           &pacer::SequentialGPSSource::Seek, nb::arg("target"))
       .def("next",

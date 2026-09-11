@@ -421,6 +421,104 @@ std::string GPMFSource::DeviceName() const {
   return {};
 }
 
+namespace {
+
+// Read one fixed-width GPMF char field (ORIN / ORIO / STNM …) that sits BEFORE
+// the data KLV inside the stream `sm` currently sits on, stripping the NUL /
+// space padding the field is written with. Returns "" when the stream carries
+// no such field — which for ORIN/ORIO is the common case.
+//
+// FindPrev at the CURRENT level is the right search: measured on every bundled
+// clip, GoPro writes ORIN/ORIO inside the STRM immediately before SIUN/SCAL and
+// the samples, i.e. always behind a cursor already seeked to the samples.
+std::string ReadStreamCharField(const GPMF_stream &sm, uint32_t fourcc) {
+  GPMF_stream cp;
+  GPMF_CopyState(const_cast<GPMF_stream *>(&sm), &cp);
+  if (GPMF_OK !=
+      GPMF_FindPrev(&cp, fourcc,
+                    GPMF_LEVELS(GPMF_CURRENT_LEVEL | GPMF_TOLERANT))) {
+    return {};
+  }
+  const char *raw = static_cast<const char *>(GPMF_RawData(&cp));
+  uint32_t nbytes = GPMF_RawDataSize(&cp);
+  if (raw == nullptr || nbytes == 0) {
+    return {};
+  }
+  std::string out(raw, nbytes);
+  size_t end = out.find_last_not_of(std::string("\0 \t\r\n", 5));
+  if (end == std::string::npos) {
+    return {};
+  }
+  out.resize(end + 1);
+  return out;
+}
+
+} // namespace
+
+ImuOrientation GPMFSource::ReadImuOrientation() const {
+  // Per-payload constants, like DVNM, so the first payloads that carry them
+  // answer for the whole file. The same eight-payload cap DeviceName uses: a
+  // camera that writes ORIN writes it in payload 0, and the slack only covers a
+  // leading empty/short payload — without a cap the (common) negative case
+  // would walk every payload of an 11 GB recording to conclude "absent".
+  constexpr uint32_t kMaxProbe = 8;
+  ImuOrientation out;
+  uint32_t payloads = GetNumberPayloads(mp4handle_);
+  uint32_t probe = payloads < kMaxProbe ? payloads : kMaxProbe;
+  for (uint32_t i = 0; i < probe; ++i) {
+    uint32_t psize = GetPayloadSize(mp4handle_, i);
+    payload_res_ = GetPayloadResource(mp4handle_, payload_res_, psize);
+    uint32_t *payload = GetPayload(mp4handle_, payload_res_, i);
+    if (payload == nullptr) {
+      continue;
+    }
+    GPMF_stream metadata_stream, *ms = &metadata_stream;
+    if (GPMF_Init(ms, payload, psize) != GPMF_OK) {
+      continue;
+    }
+    while (GPMF_OK ==
+           GPMF_FindNext(ms, STR2FOURCC("STRM"),
+                         GPMF_LEVELS(GPMF_RECURSE_LEVELS | GPMF_TOLERANT))) {
+      GPMF_stream sm;
+      GPMF_CopyState(ms, &sm);
+      if (GPMF_SeekToSamples(&sm) != GPMF_OK) {
+        continue;
+      }
+      uint32_t key = GPMF_Key(&sm);
+      std::string *in = nullptr;
+      std::string *presented = nullptr;
+      if (key == STR2FOURCC("ACCL")) {
+        in = &out.accl_in;
+        presented = &out.accl_out;
+      } else if (key == STR2FOURCC("GYRO")) {
+        in = &out.gyro_in;
+        presented = &out.gyro_out;
+      } else {
+        continue;
+      }
+      if (in->empty()) {
+        *in = ReadStreamCharField(sm, STR2FOURCC("ORIN"));
+      }
+      if (presented->empty()) {
+        *presented = ReadStreamCharField(sm, STR2FOURCC("ORIO"));
+      }
+    }
+    if (!out.accl_in.empty() && !out.gyro_in.empty()) {
+      break; // both streams answered; later payloads repeat the same constants
+    }
+  }
+  return out;
+}
+
+ImuOrientation SequentialGPSSource::ReadImuOrientation() const {
+  ImuOrientation left = left_->ReadImuOrientation();
+  if (!left.accl_in.empty() || !left.accl_out.empty() ||
+      !left.gyro_in.empty() || !left.gyro_out.empty()) {
+    return left;
+  }
+  return right_->ReadImuOrientation();
+}
+
 // The four IMU readers just name the matching reader verb; the shifting logic
 // (offset the right chapter by the left's duration) lives in ReadShifted.
 void SequentialGPSSource::ReadAccl(std::function<void(IMUSample)> on_sample) {

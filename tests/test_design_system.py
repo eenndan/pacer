@@ -590,9 +590,11 @@ def test_the_lap_panels_identity_is_never_squeezed_and_its_fallback_clears_the_h
 
       * THE MECHANISM. At every size the app can be driven to — including its own minimumSizeHint,
         and under a splitter drag that asks for a 1 px lap panel — the tab bar gets at least its
-        sizeHint, every tab rect is inside it, and NO arrow is visible. Four tabs at ElideNone in a
+        sizeHint, every tab rect is inside it, and NO arrow is visible. Five tabs at ElideNone in a
         narrow panel is a real constraint; a panel narrower than its own contents was not one.
-      * THE FALLBACK. Forced narrow anyway (a fifth tab, a translation, a font stack that resolves
+        (Four when this was written — #269's Marks page is the fifth, and the assertion did not
+        need editing because it reads the LIVE bar rather than a count.)
+      * THE FALLBACK. Forced narrow anyway (a sixth tab, a translation, a font stack that resolves
         wider — the same reason widgets.budget_plot_gutters measures instead of choosing), each
         arrow clears HIT_MIN and the two overlap by no more than Qt's own declared
         PM_TabBar_ScrollButtonOverlap, which is the single pixel two adjacent buttons share. That is
