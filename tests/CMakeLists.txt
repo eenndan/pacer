@@ -27,6 +27,13 @@ add_test(NAME test_lap_timing
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_lap_timing.py)
 add_test(NAME test_chapters
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chapters.py)
+# The telemetry->media clock conversion (fix/telemetry-media-clock): the affine fit + its guards,
+# and the two consumer seams that apply it (the export window / per-frame lookups, and PlayerPane's
+# seek + position). Builds real panes -> run offscreen with the inert media triplet.
+add_test(NAME test_media_clock
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_media_clock.py)
+set_tests_properties(test_media_clock PROPERTIES
+                     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1")
 # Import ergonomics (fix/import-ergonomics): the last-opened-folder pref round-trip (prefs.LAST_DIR)
 # + File ▸ Open starting there and recording the picked folder, and the multi-recording drop guard
 # (chapters.group_into_recordings groups distinct recordings; _open_recordings loads only the FIRST
@@ -734,7 +741,8 @@ set_tests_properties(test_glyph_vocabulary PROPERTIES
 # package (the tests sys.path.insert the repo root to reach `studio`), failing with
 # AttributeError. PYTHONPATH makes the deployed package win deterministically in every
 # install state; APPEND keeps the per-test QT_QPA_PLATFORM settings above intact.
-foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_gapfill
+foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test_media_clock
+                        test_gapfill
                         test_import_ergonomics test_reference test_gps_source_bindings
                         test_laps_bindings test_ingest_equivalence test_sidecar test_track_db
                         test_session_pure test_sector_integrity test_load_internals

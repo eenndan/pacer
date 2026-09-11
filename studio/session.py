@@ -34,6 +34,7 @@ from . import (
     gapfill,
     gmeter,
     library,
+    media_clock,
     provenance,
     render_cache,
     rotation,
@@ -2940,16 +2941,48 @@ class Session:
         return out or None
 
     # ------------------------------------------------------------ video sync
+    @property
+    def media_clock(self) -> media_clock.MediaClock:
+        """This recording's telemetry->media conversion (studio/media_clock.py), IDENTITY when the
+        session has no chapter map or the fit was refused. It lives on the ChapterMap, which is the
+        object the video layer receives; this is the read-through for everything that has a Session
+        instead."""
+        return media_clock.clock_of(self.chapters)
+
+    def media_time(self, t: float) -> float:
+        """The MEDIA time of telemetry (true-clock) instant `t` — what to seek the picture to.
+
+        EVERY public time on Session is a TELEMETRY time (`lap_window`, `lap_at_time`, `tt`, …),
+        because that is the clock laps are timed on and the clock a transponder validated. The video
+        runs on its own, and the two drift apart by up to 0.22 s over a long recording. So a
+        consumer that hands a time to ffmpeg or to the media player converts here first, and
+        converts back with `telemetry_time` before asking this Session anything about the frame it
+        got.
+
+        A NAMING HAZARD, STATED SO IT CANNOT BITE TWICE: the older accessors that say "media time"
+        in their names — `media_time_at_plot_x`, `plot_x_at_media_time`, `corner_entry_media_time`
+        — all speak the TELEMETRY clock. They were named when the app believed there was only one
+        clock, and they are not renamed here because the golden fingerprint keys off those names.
+        `media_time` / `telemetry_time` are the only two functions in the app that cross over."""
+        return float(self.media_clock.to_media(float(t)))
+
+    def telemetry_time(self, t: float) -> float:
+        """The TELEMETRY (true-clock) instant shown by the picture at media time `t` — the exact
+        inverse of `media_time`, and what a video position must pass through before it indexes any
+        of this Session's per-sample series."""
+        return float(self.media_clock.to_telemetry(float(t)))
+
     def index_at_time(self, t: float) -> int | None:
         return self.timeline.index_at_time(t)
 
     def lap_at_time(self, t: float) -> int | None:
-        """The valid lap whose [start, start+lap_time) window contains media-clock time `t`, else
-        None — the readout + current-lap highlight. Delegates to session.timeline."""
+        """The valid lap whose [start, start+lap_time) window contains TELEMETRY-clock time `t`,
+        else None — the readout + current-lap highlight. Delegates to session.timeline. (A video
+        position reaches here already converted; see `telemetry_time`.)"""
         return self.timeline.lap_at_time(t)
 
     def g_at_time(self, t: float) -> tuple[float, float, float] | None:
-        """Vehicle-frame g at media-clock time `t`: (lateral_g, longitudinal_g, total_g), or
+        """Vehicle-frame g at TELEMETRY-clock time `t`: (lateral_g, longitudinal_g, total_g), or
         None if no g signal is available. Signs: +lateral = turning left, +longitudinal =
         accelerating (−longitudinal = braking). O(log n) lookup into the precomputed series —
         cheap enough for the 30 Hz overlay tick. LATERAL is from the GoPro accelerometer

@@ -13,7 +13,7 @@ import numpy as np
 
 import pacer
 
-from . import chapters, data_quality, tracks
+from . import chapters, data_quality, media_clock, tracks
 
 # numpy-only signal/clean helpers live in studio/_signal.py (shared with gmeter).
 from ._signal import (
@@ -48,10 +48,15 @@ START_WIDEN = 3.0  # widen the auto start line so every lap pass crosses it
 # session (0 in 28,237 samples over 2,925 s; 0 in 46,761 over 5,049 s — a chapter seam does not
 # break a run, its GPS9 delta is an ordinary 0.100 s), so the axis is anchored ONCE, at the first
 # sample, and thereafter follows the GPS clock alone. Measured drift against the media clock:
-# -0.150…+0.027 s on 0060 and -0.221…+0.017 s on 0062, i.e. the per-chapter media rate is 16-86 ppm
-# fast, not the ~0.1% this comment used to claim. That residual is the app's largest known
-# overlay-vs-picture error and it is NOT a seam effect — it accumulates smoothly and steps by only
-# -0.000127 s across a seam.
+# -0.150…+0.027 s on 0060 and -0.221…+0.017 s on 0062, i.e. the media rate is ~27 ppm fast, not the
+# ~0.1% this comment used to claim. It is NOT a seam effect — it accumulates smoothly and steps by
+# only -0.000127 s across a seam.
+#
+# THE AXIS STAYS ON THE GPS CLOCK — that is what the transponder validated (docs/ACCURACY.md) — and
+# the drift is undone at the SEEK instead: `media_clock.fit` below reduces the two axes to one
+# affine map per recording, and the exporter and the player convert through it before they ask the
+# picture for a moment. That closed the app's largest known overlay-vs-picture error (~5 frames at
+# the default 30 fps export by the end of the 84-minute recording, ~10 at the GoPro's 59.94).
 GPS9_MIN_DT_S = 0.02    # an inter-sample GPS9 delta below this is a duplicate/garbage fix
 GPS9_MAX_DT_S = 0.40    # …above this, the run is broken (dropout / rollover)
 
@@ -330,6 +335,15 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
 
     # GPS9 true-clock spacing (re-anchored to the media clock); naive otherwise.
     times = _gps9_times(samples, naive)
+
+    # …and the conversion BACK, for the consumers that have to seek the picture (the exporter and
+    # the player). This is the residual the comment at the head of this module measures: the axis
+    # anchors once and then follows the GPS clock, so a telemetry time and the media time of the
+    # same instant drift apart by up to 0.22 s over a long recording. `media_clock.fit` reduces the
+    # two axes to one affine map per recording, and it rides on the ChapterMap because that is the
+    # object the video layer receives. NOTHING upstream of here sees it: laps are still timed on
+    # `times`, to the bit.
+    chapter_map.media_clock = media_clock.fit(times, naive)
 
     # Smooth the GPS positions once, here — over the cleaned, time-ordered trace, guarded
     # against averaging across chapter/dropout gaps. All downstream geometry follows.

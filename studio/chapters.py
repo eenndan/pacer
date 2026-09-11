@@ -28,6 +28,8 @@ import os
 import re
 from dataclasses import dataclass
 
+from . import media_clock as media_clock_mod
+
 # GX/GH/GP + 2-digit chapter + 4-digit recording + .MP4 (case-insensitive on prefix/ext).
 # Anchored to the whole basename so an unrelated file (e.g. "GX0100600.MP4") never matches.
 _GOPRO_RE = re.compile(r"^(G[XHLP])(\d{2})(\d{4})\.MP4$", re.IGNORECASE)
@@ -373,16 +375,27 @@ class ChapterMap:
     Built from the ordered sibling paths + each chapter's VIDEO duration (from the media, supplied
     by the caller — this module stays pacer-free). `meta_durations`, when given, is the same
     chapters' GPMF-track durations and is used ONLY by `desynced_chapters`; it never moves an
-    offset."""
+    offset.
+
+    IT ALSO CARRIES THE RECORDING'S `media_clock` (studio/media_clock.py) — the telemetry->media
+    conversion every seek into this footage owes. It rides here because this object IS what the
+    video layer receives per recording: `central_view` hands the session's map to `VideoView`, and
+    a cross-recording compare hands the REFERENCE session's map to pane B, so the clock reaches
+    both panes already pointed at the right footage with no second thing to keep in sync. It
+    defaults to IDENTITY and is assigned by `load.load_recording` once the true-clock axis exists
+    (the map is built before that, for the path where the trace cleans away to nothing)."""
 
     def __init__(self, paths: list[str], durations: list[float],
-                 meta_durations: list[float] | None = None):
+                 meta_durations: list[float] | None = None,
+                 media_clock: media_clock_mod.MediaClock | None = None):
         if len(paths) != len(durations):
             raise ValueError("paths and durations must align")
         if not paths:
             raise ValueError("ChapterMap needs at least one chapter")
         if meta_durations is not None and len(meta_durations) != len(paths):
             raise ValueError("meta_durations must align with paths")
+        # The telemetry->media conversion for THIS recording's footage (see the class docstring).
+        self.media_clock = media_clock or media_clock_mod.IDENTITY
         self.chapters: list[Chapter] = []
         offset = 0.0
         for i, (p, d) in enumerate(zip(paths, durations, strict=True)):

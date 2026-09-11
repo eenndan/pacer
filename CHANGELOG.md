@@ -22,6 +22,28 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   `marks.json`, against the *recording* rather than the file: a mark made with the whole
   recording open is in the same place when you open one chapter of it on its own.
 
+- **The Stats page counts your runs on track, and breaks the pace down per run when there is more
+  than one.** A run ends where the recording holds time no lap was analysed over — a pit stop, a
+  spin, laps a GPS dropout flagged — thresholded at three median laps' worth of it, so it means the
+  same thing on a 25 s kart circuit as on a 4-minute one. Each run gets its lap count, best,
+  median, σ and two trends side by side: how the LAP TIME is going, and how the SLOWEST CORNER
+  SPEED is going. Read together those are the answer to "is it me or the tyres?" — and the pair is
+  reported with no verdict attached, because neither of the owner's own recordings has a fade in it
+  to check a verdict against. Both recordings measure as ONE continuous run at every threshold from
+  15 s to 600 s, so the new SESSION "runs" tile says `1 · one continuous` and the table stays
+  hidden rather than repeating the PACE tiles inside a one-row grid.
+- **The split-time matrix — every clean lap down the page, every sector across it.** The paddock
+  view, over splits pacer already computed: ★ and the session-best purple on each sector's quickest
+  cell, the behind hue and a ▼ where a lap gave away more than this session's own 90th-percentile
+  gap, and the exact deficit plus the lap that owns the best on hover. It states what it is over
+  and how fine it really is: a sector boundary is read at the nearest GPS fix, so the interior
+  sectors step in whole 10 Hz samples (measured: 17–18 distinct values across 38 and 65 laps) while
+  the first and last run continuously. Hidden under five laps — a heat grid over three laps is
+  decoration.
+- **A recording with no sector lines is now told so, where the sector tables would be.** Sector
+  count is zero on every recording the owner has, and the Stats page used to answer that by hiding
+  the whole SECTORS group — so two surfaces existed and were never once seen or named. The heading
+  now stands with one line saying what sector lines unlock and which control places them.
 - **Any of three numbers can now show its work.** Right-click a lap time or a sector split in
   the lap table, or a corner's Best in the Stats page's CORNERS table, and *Inspect this number…*
   opens the evidence: every raw GPS fix that produced it, the method in one sentence, N and the
@@ -160,6 +182,15 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **Video seeks drifted further from the picture the longer the recording ran.** Pacer times laps
+  on the camera's GPS clock and the video plays on the camera's media clock; those are two clocks,
+  and the media one runs about 27 ppm fast. Every seek — jump to the best lap, drag the scrub, or
+  export a lap — handed the video a GPS time as though it were a media time, so the picture arrived
+  progressively early: measured on the two D24 recordings, ~0.03 s at the first lap and up to
+  0.17 s at the last, which is five frames at the export's default 30 fps and ten at the GoPro's
+  59.94. The two clocks are now converted between at the seek, so a lap starts on the frame it
+  starts on wherever it sits in the recording. **Lap times themselves are untouched** — they are
+  still measured on the GPS clock the transponder validated, bit for bit.
 - **Two different answers to "how much later can I brake here?"** The coaching row's "Brake ~N m
   later" read your BEST lap's single brake application; the Stats ▸ BRAKING table's "m later"
   column read the median over all your clean laps — and neither said which. On the D24 recordings
