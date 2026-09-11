@@ -2191,12 +2191,12 @@ class StudioWindow(QMainWindow):
     # ----------------------------------------------------- keyboard shortcuts
     def _build_shortcuts(self):
         """Window-level playback shortcuts: Space (play/pause), M (mute), G (g-meter overlay),
-        C (compare mode), [ / ] (playback rate). Parented to the window so they survive every view
-        swap; every handler is one of the NAMED command methods below, which is what lets the ⌘K
-        palette and the ? card offer the same commands this binds (help_dialog.COMMANDS carries the
-        method name). G / C go through the button's click() so a disabled button makes its shortcut
-        a no-op. ←/→ stepping is handled in keyPressEvent, not here, so the lap table keeps its
-        arrow navigation."""
+        C (compare mode), [ / ] (playback rate), D (chart datum cursor), N (walk the Δ losses).
+        Parented to the window so they survive every view swap; every handler is one of the NAMED
+        command methods below, which is what lets the ⌘K palette and the ? card offer the same
+        commands this binds (help_dialog.COMMANDS carries the method name). G / C go through the
+        button's click() so a disabled button makes its shortcut a no-op. ←/→ stepping is handled
+        in keyPressEvent, not here, so the lap table keeps its arrow navigation."""
         def shortcut(key, handler):
             sc = QShortcut(QKeySequence(key), self)
             sc.setContext(Qt.WindowShortcut)
@@ -2210,6 +2210,11 @@ class StudioWindow(QMainWindow):
         # unclaimed here; the picker in the transport is the same control with a visible state.
         shortcut(Qt.Key_BracketLeft, self.slower_playback)
         shortcut(Qt.Key_BracketRight, self.faster_playback)
+        # D / N → the charts' two instrument gestures: drop-or-clear the datum (second) cursor, and
+        # walk the biggest Δ losses of the lap. Both live on the charts because that is what they
+        # measure; both are window-level because that is where every other gesture here is.
+        shortcut(Qt.Key_D, self.toggle_datum)
+        shortcut(Qt.Key_N, self.jump_to_next_loss)
         # 1-4 → the lap panel's tabs (Laps · Corners · Stats · Coaching); no-op before a load.
         for digit, handler in ((Qt.Key_1, self.show_laps_tab), (Qt.Key_2, self.show_corners_tab),
                                (Qt.Key_3, self.show_stats_tab),
@@ -2224,6 +2229,13 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             fn(view.video)
+
+    def _plots_do(self, fn):
+        """The charts' twin of `_video_do` — resolve the live PlotsView at call time (the view is
+        swapped per load) and run `fn` on it; no-op before the first load."""
+        view = getattr(self, "view", None)
+        if view is not None:
+            fn(view.plots)
 
     # ----------------------------------------------------- the named commands
     # ONE METHOD PER COMMAND, and they are public on purpose: `help_dialog.COMMANDS` names each of
@@ -2249,6 +2261,15 @@ class StudioWindow(QMainWindow):
         """Enter / leave two-lap compare mode (C) — through the button, which is disabled below
         two valid laps."""
         self._video_do(lambda v: v.compare_btn.click())
+
+    def toggle_datum(self):
+        """Drop or clear the charts' datum (second) cursor (D) — the interval between the two
+        cursors is what the readout under the charts measures."""
+        self._plots_do(lambda p: p.toggle_datum())
+
+    def jump_to_next_loss(self):
+        """Walk to the next-biggest Δ loss of the lap (N), then back out to the whole lap."""
+        self._plots_do(lambda p: p.jump_to_next_loss())
 
     def toggle_video_focus(self):
         """Make the video fill the screen, or restore (F) — through the ⤢ button, which compare
