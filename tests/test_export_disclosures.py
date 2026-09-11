@@ -217,6 +217,27 @@ def test_absent_signals_are_groups_and_dashes_never_zeros():
     print("test_absent_signals_are_groups_and_dashes_never_zeros OK")
 
 
+def test_driving_group_states_the_coasting_instrument():
+    """A coasting figure that leaves the app carries the three settings that produced it.
+
+    Two of the DRIVING group's five rows are coasting numbers, and the window, the minimum
+    duration and the band behind them move the answer by more than 6x on one recording — the
+    reason this channel had to be re-measured at all. So the group's note is
+    `driving.coast_instrument`, verbatim, and it reaches both renderers (an exported table has no
+    tooltip to hide the caveat in). Compared against the accessor, not spelled out here, so a
+    change to the instrument cannot leave the disclosure behind."""
+    s = make_session()
+    want = s.driving.coast_instrument()
+    assert want, "the fixture must have a g signal (the DRIVING group is hidden without one)"
+    sec = next(x for x in export_data.stats_summary(s) if x.title == "DRIVING")
+    assert sec.note == want, sec.note
+    for token in ("0.50 s", "0.25 s", "0.03 g"):   # window, minimum duration, band floor
+        assert token in sec.note, sec.note
+    assert want in _write_report(s), "the HTML report dropped the coasting instrument"
+    assert want in export_data.stats_summary_text(s, None), "the clipboard summary dropped it"
+    print("test_driving_group_states_the_coasting_instrument OK")
+
+
 def test_degenerate_ideal_is_withheld_from_every_surface_together():
     """One lap winning every segment makes the "ideal" that lap. The CSV already withheld the row;
     the report group, the clipboard block and the card's gap withhold with it — a surface that

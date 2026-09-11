@@ -234,6 +234,26 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **Your coasting time was measuring the GPS noise floor, and it was out by about six times.**
+  Pacer calls it coasting when the kart is off both pedals — slowing from drag, not from the brake
+  — and it looks for that in a narrow band of deceleration held for at least a quarter of a second.
+  The band is about 0.13 g wide. The raw 10 Hz speed derivative it was being tested against carries
+  about 0.11 g of noise, so a moment genuinely *in* the band was thrown back out of it by noise
+  alone about half the time: the runs lasted two samples where the test needs four, and what
+  reached the Stats page was **5.9 % and 4.5 % of the time actually spent coasting** on the two
+  reference recordings. The band test now runs on the same signal smoothed over half a second,
+  which is wide enough for the measurement to mean something and narrow enough not to turn a
+  brake-to-throttle transition into a coast — both bounds measured, not chosen. Coasting now reads
+  **2.8 seconds per lap on both recordings**, where the old number disagreed with itself by 26 %
+  between them (0.44 s and 0.34 s) for the same driver on the same track. Every coasting figure
+  that leaves the app now states the window, the minimum duration and the band that produced it.
+  - **Braking is untouched, on purpose.** It runs on the same longitudinal g with no window at all,
+    because a brake application is a step and smoothing a step moves it — measured, and left
+    alone.
+  - **One thing you may notice:** at one corner in eleven, the coaching row's reason changes from
+    "line" or "apex" to "back to throttle sooner". The corners it ranks, their order and the time
+    it says they cost are all identical; the *cause* it names is now allowed to be coasting,
+    because the coasting signal finally has something in it.
 - **A lap you stopped on could count as one of your clean laps.** A lap was judged real by its
   total time — anything from half to 1.6x the session median — and by its distance. A stop defeats
   both: it adds time without adding a metre, and on a ~69 s kart lap that band leaves **41 seconds
