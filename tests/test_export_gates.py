@@ -312,7 +312,10 @@ class _FakeVideoWorker(QThread):
     progress = Signal(int, int)
     finished_export = Signal(bool, str)
 
-    def __init__(self, _session, _spec):
+    def __init__(self, _session, _spec, _make_renderer=None):
+        # `_make_renderer` mirrors the real worker's renderer-factory argument (the seam the
+        # distance-locked COMPARE export reaches this same dialog through). It is accepted and
+        # ignored: this double never builds a renderer at all.
         super().__init__()
         self.cancels = 0
 
@@ -401,8 +404,8 @@ def _run_export_to_completion(win, *, ok, message="", lap=2, click_cancel=False,
         end.update(_visible_state(win, dlg))
         return QDialog.Accepted
 
-    def _worker(session, sp):
-        made.append(_FakeVideoWorker(session, sp))
+    def _worker(session, sp, make_renderer=None):
+        made.append(_FakeVideoWorker(session, sp, make_renderer))
         return made[-1]
 
     export_controller.VideoExportWorker = _worker
@@ -1302,8 +1305,8 @@ def test_an_all_laps_batch_renders_every_file_behind_one_dialog():
             worker.finished_export.emit(True, "")
         return QDialog.Accepted
 
-    export_controller.VideoExportWorker = lambda session, sp: (made.append(
-        _FakeVideoWorker(session, sp)) or made[-1])
+    export_controller.VideoExportWorker = lambda session, sp, mk=None: (made.append(
+        _FakeVideoWorker(session, sp, mk)) or made[-1])
     QDialog.exec = _exec
     QMessageBox.exec = lambda box, *_a, **_k: modals.append(box.text()) or 0
     try:
@@ -1343,8 +1346,8 @@ def test_cancelling_a_batch_stops_the_queue_rather_than_the_current_file():
         worker.finished_export.emit(True, "")   # the file in flight still finishes
         return QDialog.Accepted
 
-    def _mk(session, sp):
-        made.append(_FakeVideoWorker(session, sp))
+    def _mk(session, sp, make_renderer=None):
+        made.append(_FakeVideoWorker(session, sp, make_renderer))
         started.append(sp.out_path)
         return made[-1]
 
