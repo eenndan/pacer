@@ -70,8 +70,8 @@ class PhaseLoss:
     """D2: the entry / apex(mid) / exit Δt-vs-best decomposition of ONE corner on the TYPICAL
     (median) lap (s). This is a WHERE-IN-THE-CORNER profile of the typical lap vs best — it is NOT
     the Opportunity's ``time_lost`` and does NOT sum to it. ``time_lost`` is the cross-lap MEDIAN
-    per-corner delta over the consistency laps; these thirds are a single-lap ∫ds/v integral of the
-    typical lap alone, so the two are different statistics and can disagree in sign (a typical lap
+    per-corner delta over the consistency laps; these thirds are a single-lap clock difference over
+    the typical lap alone, so the two are different statistics and can disagree in sign (a typical lap
     can be net faster over the window than the corner's median loss). Each third is positive when
     the typical lap is slower than best over that third, negative when faster."""
 
@@ -459,12 +459,16 @@ def _coast_extra(med_spans, best_spans, med_win: tuple[float, float],
 
 
 # ---------------------------------------------------------- D2: entry/apex/exit Δt decomposition
-# Time over a distance span = ∫ ds/v(s); the time LOST vs best over a span is therefore
-# Δt = ∫ (1/v_lap(s) − 1/v_best(s)) ds  (positive ⇒ slower than best, negative ⇒ faster). A
-# corner window [enter, exit] is split into three equal-distance thirds (entry, apex/mid, exit)
-# and Δt is integrated over each on a shared fine distance grid, so the three telescope to the
-# TYPICAL lap's net Δt-vs-best across the window (a WHERE-in-the-corner profile of one lap; NOT the
-# Opportunity's cross-lap-median time_lost, which is a different statistic and need not agree).
+# A corner window [enter, exit] is split into three equal-distance thirds (entry, apex/mid, exit).
+# The time each lap spends in a third is READ OFF THAT LAP'S OWN CLOCK at the two odometer edges,
+# and the loss is the difference of two such readings (positive ⇒ slower than best, negative ⇒
+# faster), so the three telescope EXACTLY to the typical lap's net Δt-vs-best across the window (a
+# WHERE-in-the-corner profile of one lap; NOT the Opportunity's cross-lap-median time_lost, which
+# is a different statistic and need not agree).
+#
+# It used to compute the span time as ∫ds/v over the smoothed speed channel. That is the only
+# option WITHOUT a per-sample clock, and `_span_clock` below records what it cost when measured
+# against one.
 
 def _span_clock(dist: np.ndarray, elapsed: np.ndarray, d0: float, d1: float) -> float:
     """Seconds between two odometer points on ONE lap, read off that lap's own elapsed clock by
@@ -723,8 +727,9 @@ def summarize(
             return float(c.enter) * scale, float(c.exit) * scale
         return float(c.enter), float(c.exit)
 
-    # D2: the typical lap's speed-vs-distance trace + best lap's, for the entry/apex/exit Δt
-    # decomposition. Both must be present (and usable) to attach phases; otherwise zero phases.
+    # D2: the typical lap's (odometer, elapsed) trace + best lap's, for the entry/apex/exit Δt
+    # decomposition — the CLOCK, not the speed channel (`_span_clock`). Both must be present (and
+    # usable) to attach phases; otherwise zero phases.
     have_phases = (median_dist is not None and median_elapsed is not None
                    and best_dist is not None and best_elapsed is not None)
 

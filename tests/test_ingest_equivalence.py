@@ -51,10 +51,11 @@ def _two_pass_reference(path):
     single-chapter file. The first is drained for GPS exactly as `read_gpmf`'s inline pass did
     (seek(0), walk the payload cursor to the end, naive = span-interpolated sample time); the
     second — a SECOND `OpenMP4Source` + GPMF parse of the same container, the cost #40 removed —
-    is read for ACCL/GRAV/CORI exactly as `read_imu` did. Returns the same 7-tuple shape as
+    is read for ACCL/GRAV/CORI exactly as `read_imu` did. Returns the same 8-tuple shape as
     `read_recording`."""
     gps_src = pacer.GPMFSource(path)
-    durations = [gps_src.get_total_duration()]
+    durations = [gps_src.get_video_duration()]
+    meta_durations = [gps_src.get_total_duration()]
     samples, spans, naive = [], [], []
     gps_src.seek(0)
     while not gps_src.is_end():
@@ -75,7 +76,7 @@ def _two_pass_reference(path):
     a = np.asarray(accl, float).reshape(-1, 4)
     g = np.asarray(grav, float).reshape(-1, 4)
     c = np.asarray(cori, float).reshape(-1, 5)
-    return samples, spans, naive, durations, a, g, c
+    return samples, spans, naive, durations, meta_durations, a, g, c
 
 
 def test_read_recording_equals_two_fresh_chains_on_real_media():
@@ -93,10 +94,10 @@ def test_read_recording_equals_two_fresh_chains_on_real_media():
         assert os.path.exists(path), (
             f"{name}: required gpmf-parser submodule sample missing at {path} — "
             "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
-        got_samples, got_spans, got_naive, got_durations, got_a, got_g, got_c = (
-            ingest.read_recording([path]))
-        ref_samples, ref_spans, ref_naive, ref_durations, ref_a, ref_g, ref_c = (
-            _two_pass_reference(path))
+        (got_samples, got_spans, got_naive, got_durations, got_meta,
+         got_a, got_g, got_c) = ingest.read_recording([path])
+        (ref_samples, ref_spans, ref_naive, ref_durations, ref_meta,
+         ref_a, ref_g, ref_c) = _two_pass_reference(path)
 
         # The sample clips genuinely exercise the readers: GPS and ACCL are non-empty on both.
         assert got_samples, f"{name}: expected GPS samples"
@@ -108,7 +109,8 @@ def test_read_recording_equals_two_fresh_chains_on_real_media():
         assert _gps_rows(got_samples) == _gps_rows(ref_samples), f"{name}: GPS samples differ"
         assert got_spans == ref_spans, f"{name}: payload spans differ"
         assert got_naive == ref_naive, f"{name}: naive times differ"
-        assert got_durations == ref_durations, f"{name}: durations differ"
+        assert got_durations == ref_durations, f"{name}: video durations differ"
+        assert got_meta == ref_meta, f"{name}: GPMF durations differ"
 
         # IMU pass: all three streams exactly equal (shape and every element).
         for label, got, ref in (("ACCL", got_a, ref_a), ("GRAV", got_g, ref_g),

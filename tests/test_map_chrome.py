@@ -197,6 +197,103 @@ def test_a_flat_lap_reports_no_elevation_gradient():
     print("test_a_flat_lap_reports_no_elevation_gradient OK")
 
 
+# ------------------------------------------------- Δ RATE: where the time is going RIGHT HERE
+def _delta_session(grid, n=240):
+    """`_session` with a real Δ-vs-best curve on the 400-grid, so the two Δ channels can paint."""
+    s = _session(n=n)
+    g = np.asarray(grid, float)
+    x = np.linspace(0.0, 1.0, len(g))
+    s.delta = lambda ids, x_mode="distance": (1, {}, {i: (x, g) for i in ids})
+    return s
+
+
+def test_the_map_can_paint_where_time_is_going_not_only_how_far_behind_you_are():
+    """The cumulative Δ channel answers "how far behind am I by this point", which on a map is
+    dominated by where you ALREADY were behind: this fixture is 2 s down for the whole lap and
+    only its middle third is actually slow, and Δ paints the last two thirds identically red.
+
+    The Δ RATE channel is that curve's slope. Same baseline, same alignment, same widget seam — it
+    just paints the derivative, so the stretch where the driver is at pace reads neutral and the
+    stretch where he is losing reads red, whatever the running total says."""
+    g = np.linspace(0.0, 1.0, 400)
+    # flat at +2 s -> loses 1.5 s across the middle third -> flat again at +3.5 s.
+    grid = np.clip((g - 1 / 3) / (1 / 3), 0.0, 1.0) * 1.5 + 2.0
+    mv = _sized_map(_delta_session(grid))
+    mv.set_current_lap(0)
+
+    mv.set_rainbow_mode("delta")
+    _APP.processEvents()
+    cum_lo, cum_hi = mv._legend.lo_label.text(), mv._legend.hi_label.text()
+    assert cum_lo == "+3.50 s" and cum_hi == "+2.00 s", (cum_lo, cum_hi)
+
+    mv.set_rainbow_mode("delta_rate")
+    _APP.processEvents()
+    lg = mv._legend
+    assert lg.isVisibleTo(mv) and lg._strip.isVisibleTo(lg), "a painted rate needs its ramp"
+    lo, hi = lg.lo_label.text(), lg.hi_label.text()
+    # The unit is on the legend, in the s/s the channel is actually computed in, and the direction
+    # is in words (the non-hue cue) rather than in a sign.
+    assert "s/s" in lo and "s/s" in hi, (lo, hi)
+    assert lo.startswith("losing") and hi.startswith("gaining"), (lo, hi)
+    # The two Δ channels disagree about this lap, which is the entire reason both exist.
+    assert (lo, hi) != (cum_lo, cum_hi)
+    print("test_the_map_can_paint_where_time_is_going_not_only_how_far_behind_you_are OK")
+
+
+def test_the_rate_channel_is_offered_next_to_the_cumulative_one_and_fits_its_control():
+    """The channel is reachable (a labelled entry next to "Δ to best", not a blind cycle step),
+    its dropdown documents what it means and states the smoothing window in the same breath — and
+    its label FITS. The map header is width-budgeted (tests/test_charts_header_budget.py), and a
+    combo whose new entry is wider than the box paints a centre-clipped fragment, so the entry is
+    measured against the control's own font rather than assumed to fit."""
+    from studio import map_render
+    from studio.map_view import _RAINBOW_COMBO_LABELS, _RAINBOW_ORDER
+
+    mv = _sized_map(_session())
+    combo = mv.rainbow_combo
+    modes = [combo.itemData(i) for i in range(combo.count())]
+    assert modes == list(_RAINBOW_ORDER), modes
+    assert modes.index("delta_rate") == modes.index("delta") + 1, modes
+    # The new entry may not be the one that widens the control: measured, not eyeballed.
+    fm = combo.fontMetrics()
+    widest_before = max(fm.horizontalAdvance(_RAINBOW_COMBO_LABELS[m])
+                        for m in _RAINBOW_ORDER if m != "delta_rate")
+    need = fm.horizontalAdvance(_RAINBOW_COMBO_LABELS["delta_rate"])
+    assert need <= widest_before, (
+        f"'{_RAINBOW_COMBO_LABELS['delta_rate']}' needs {need}px, more than the {widest_before}px "
+        "the widest existing channel label needs — it would widen the budgeted map header")
+    tip = combo.toolTip()
+    assert "Δ rate" in tip, "the new channel is undocumented in its own control"
+    assert "CUMULATIVE" in tip, "the tooltip has to say what the OTHER Δ channel does differently"
+    assert f"{map_render.RATE_WINDOW_S:.1f} s" in tip, (
+        "the smoothing window is a property of the number on screen — state it")
+    assert "s/s" not in tip or "per second" in tip, tip
+    print("test_the_rate_channel_is_offered_next_to_the_cumulative_one_and_fits_its_control OK")
+
+
+def test_the_rate_channel_says_nothing_rather_than_painting_noise():
+    """The two informationless states reach the WIDGET as the hint shape (one label, no ramp), the
+    same treatment the cumulative Δ gets on the best lap — not as a full-contrast rainbow of a
+    per-lap scale applied to a flat channel."""
+    mv = _sized_map(_delta_session(np.zeros(400)))
+    mv.set_current_lap(0)
+    before = mv._rainbow.rebuilds        # the map opens on the Speed channel, which does paint
+    mv.set_rainbow_mode("delta_rate")
+    _APP.processEvents()
+    lg = mv._legend
+    assert lg.isVisibleTo(mv) and not lg._strip.isVisibleTo(lg), "the best lap has no rate to paint"
+    assert "best lap" in lg.lo_label.text() and lg.hi_label.text() == ""
+    assert mv._rainbow.rebuilds == before, "a flat channel must fill no bucket items"
+    # A Δ that creeps 0.06 s across the whole lap: real, but under the printable 0.01 s/s.
+    mv2 = _sized_map(_delta_session(np.linspace(0.0, 0.06, 400)))
+    mv2.set_current_lap(0)
+    mv2.set_rainbow_mode("delta_rate")
+    _APP.processEvents()
+    assert not mv2._legend._strip.isVisibleTo(mv2._legend)
+    assert "no gradient" in mv2._legend.lo_label.text(), mv2._legend.lo_label.text()
+    print("test_the_rate_channel_says_nothing_rather_than_painting_noise OK")
+
+
 def test_the_channel_dropdown_documents_elevation():
     """The dropdown's tooltip described Speed, Δ and Grip and said nothing at all about the fifth
     channel — including that its altitudes are only meaningful relative to the lap."""

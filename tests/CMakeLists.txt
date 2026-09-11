@@ -380,6 +380,13 @@ set_tests_properties(test_export_video PROPERTIES
 # g-meter frame-transform unit tests (synthetic IMU + GPS, no media file).
 add_test(NAME test_gmeter
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter.py)
+# Measured yaw rate from the GoPro GYRO stream (studio.rotation): the gravity projection through
+# an arbitrary camera tilt, rejection of roll/pitch, and the CLOSED-LAP scale test — a lap is a
+# closed loop, so the integrated yaw is exactly 2*pi, which is the one statistic here with a
+# ground truth. It is what catches a halved channel; the correlation is bit-identical under a
+# x0.5 fault, and that is asserted. Two synthetic track shapes, no media file.
+add_test(NAME test_rotation
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_rotation.py)
 # g-meter OVERLAY display-layer tests (felt-force convention, shake filter, per-lap envelope).
 add_test(NAME test_gmeter_overlay
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_gmeter_overlay.py)
@@ -738,7 +745,7 @@ foreach(pytest IN ITEMS test_scrub_conversion test_lap_timing test_chapters test
                         test_load_failure test_load_affordances test_load_lifecycle
                         test_validate_wallclock
                         test_corners test_corner_alignment_memo
-                        test_consistency test_gmeter test_gmeter_overlay
+                        test_consistency test_gmeter test_gmeter_overlay test_rotation
                         test_export_data test_export_disclosures
                         test_driving test_coaching test_library test_export_video
                         test_data_safety test_units test_accessible_cues test_share_card test_stats
@@ -954,3 +961,31 @@ add_test(NAME test_chart_axis_legibility
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chart_axis_legibility.py)
 set_tests_properties(test_chart_axis_legibility PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
+
+# THE CAMERA-SUPPORT GUARD: no public document may promise GPS9 true-clock timing to a camera
+# GoPro's own vendored metadata spec (3rdparty/gpmf-parser/README.md) says has no GPS9. Four
+# surfaces said "GPS9 camera (Hero 9 and newer)" when GPS9 means a Hero 11 or a Hero 13 — the
+# Hero 12 has no GPS receiver at all. Derives the truth table FROM the vendored spec when the
+# submodule is checked out (CI does; a bare worktree skips that one check and the pinned table
+# stands). Pure stdlib text reading — no Qt, no pacer, no telemetry file.
+add_test(NAME test_camera_support
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_camera_support.py)
+
+# THE CHAPTER TIME AXIS: the number the NEXT chapter is placed at (fix/chapter-seam-timeline).
+# `ChapterMap` offsets, the concat span's declared durations, the export's footage bound and the
+# C++ chain's own telemetry shift were all built from each chapter's **GPMF metadata track**
+# duration. That is a different track from the video: GoPro's contract is that the two match in
+# every chapter except the last, and every one of the ten GoPro clips committed in
+# 3rdparty/gpmf-parser/samples exercises that exception — from -0.701 s (hero7) to +0.934 s
+# (karma). test_export_seam cannot see it, because it hands its own ChapterMap the container
+# duration and then measures everything downstream against the same clock. Measured on real media
+# from ten camera generations: the loader's chapter duration is now the video track's, to the tick,
+# and chaining hero7 in front of karma puts the second chapter's telemetry where the first
+# chapter's PICTURE ends rather than 0.700700 s earlier. Plus the load-time sync check
+# (ChapterMap.desynced_chapters / chapters.desync_notice), which names a non-last chapter whose
+# telemetry does not cover its video and exempts the last one. Needs ffprobe as the independent
+# witness; no Qt, no telemetry file (~1 s).
+add_test(NAME test_chapter_timeline
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_chapter_timeline.py)
+set_tests_properties(test_chapter_timeline PROPERTIES
+                     ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
