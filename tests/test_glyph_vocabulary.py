@@ -298,7 +298,9 @@ def test_the_excluded_strip_draws_its_two_marks_with_theme_icon():
     table._toggle_excluded_collapsed()
     assert caret.glyph_name() == lap_table.COLLAPSE_ICON
     assert caret.accessibleName() == "collapse", caret.accessibleName()
-    # 24 of 49 is past EXCLUDED_WARN_RATIO, so both glyphs wear the amber the words wear.
+    # 24 of the 50 laps found is past EXCLUDED_WARN_RATIO, so both glyphs wear the amber the
+    # words wear. (The denominator is lap_count(), the one the Stats DATA TRUST card divides by —
+    # see lap_table._excluded_headline.)
     assert table._excluded_header.property("tone") == "warn"
     assert mark._colour == theme.C.accent and caret._colour == theme.C.accent
     # ...and a calm strip drops back to the BarLabel dim, in step with the label.
@@ -306,7 +308,7 @@ def test_the_excluded_strip_draws_its_two_marks_with_theme_icon():
     assert calm._excluded_header.property("tone") in (None, "")
     assert calm._excluded_mark._colour == theme.C.text_dim
     # The words keep the whole sentence: nothing that used to be a glyph carried a number.
-    assert "24 excluded of 49 laps" in table._excluded_header.text()
+    assert "24 excluded of 50 laps found" in table._excluded_header.text()
     print("test_the_excluded_strip_draws_its_two_marks_with_theme_icon OK")
 
 

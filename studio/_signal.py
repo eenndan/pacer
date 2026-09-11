@@ -82,6 +82,41 @@ MAX_LONG_G = 2.0  # clip d|v|/dt spikes: a GPS glitch can't manufacture a real b
 #: accessor. `fmt_time` below already returns it for a non-finite input.
 DASH = "—"
 
+#: The decimals a sector split / corner time is PRINTED to, wherever one is marked as a session
+#: best. A contract, not a formatting detail — see `is_best_at_print`, which compares at exactly
+#: this resolution, so the number the reader sees and the number the mark is decided on are one.
+PRINT_DECIMALS = 2
+
+
+def is_best_at_print(value, best, decimals: int = PRINT_DECIMALS) -> bool:
+    """Does `value` read as the session best — at the resolution it is PRINTED to?
+
+    THE ONE TIE RULE FOR THE ★, and it has to be one rule because three surfaces put the same
+    mark on the same quantity. `stats.SplitMatrix.is_best` reasoned it out first: an interior
+    sector split is the difference of two GPS sample times on a ~0.0998 s grid, so a column's
+    minimum is routinely TIED at two decimals, and a mark that singles out the copy whose double
+    happens to be a thousandth quicker draws a distinction the measurement does not support and
+    the page cannot show. The Laps tab and the Corners page printed to the same two decimals and
+    compared the raw doubles at 1e-9, so they marked a strict subset of the same cells.
+
+    MEASURED on the owner's D24 recordings. Sector splits, 0062 (65 valid laps): with five sector
+    lines the Stats grid stars 18 cells and the Laps tab 13 — S4 prints 11.40 on laps 20, 42, 43,
+    46 and 51 and only lap 51 (11.399) was starred; with three lines it is 8 against 6. Corner
+    times, same recording: C1's best is 2.7478 and laps 34, 42 and 51 all print 2.75 with only 34
+    starred; C6's is 5.5595 with laps 44 and 53 both printing 5.56. On the 0060 pair the two rules
+    agree at one, three and five lines — one recording alone would have "proved" the exact
+    comparison safe.
+
+    `<=` and not `==` on purpose: everything that rounds to the printed best IS the printed best.
+    A None or non-finite value on either side is never a best (a missing split is missing, and a
+    dash cannot be the quickest anything)."""
+    if value is None or best is None:
+        return False
+    v, b = float(value), float(best)
+    if not (math.isfinite(v) and math.isfinite(b)):
+        return False
+    return round(v, decimals) <= round(b, decimals)
+
 
 def fmt_time(seconds: float) -> str:
     """`m:ss.mmm` lap/split-time formatting (em-dash for a non-finite input). Lives here —

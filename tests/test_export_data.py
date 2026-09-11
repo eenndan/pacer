@@ -559,6 +559,56 @@ def test_report_html_no_images_no_corners():
     assert "x & y" in "".join(root.itertext())
 
 
+def _meta_rows(root):
+    """{label: value} for the report's meta table."""
+    return {tr.findtext("th"): tr.findtext("td")
+            for tr in root.findall('.//table[@class="meta"]/tr')}
+
+
+def test_provisional_timing_withholds_the_best_lap_cue_the_app_withholds():
+    """PROVISIONAL timing (an auto-fitted start line nobody confirmed — the state every
+    unrecognised circuit loads in) makes "the best lap" an assertion about an arbitrary point,
+    and the app says so on every surface: `lap_table._apply_highlights` drops BOTH authority
+    cues (the green row and the ★), `stats_panel._refresh_lap_table` drops the ★, and
+    `share_card.card_data` refuses to render the card at all.
+
+    The report painted `class="best"` on that lap's row and named it in the meta table, under a
+    comment claiming it read "like the app's table". A document is the surface furthest from the
+    app's own caveats, so it is the last place to assert an authority the app withholds. The
+    TIME still prints — the Stats page's `best lap` tile prints it too, unmuted; what goes is
+    the cue and the lap attribution.
+    """
+    s = make_session()
+    verified = export_data.write_report_html
+    with tempfile.TemporaryDirectory() as tmp:
+        ok_path = os.path.join(tmp, "verified.html")
+        verified(ok_path, s, source_label="GX010060")
+        with open(ok_path, encoding="utf-8") as f:
+            ok_root = ET.fromstring(f.read())
+        # A verified session is unchanged: exactly one green row, and the meta row names the lap.
+        ok_rows = [tr for tr in ok_root.findall(".//tr") if tr.get("class") == "best"]
+        assert len(ok_rows) == 1, [tr.get("class") for tr in ok_root.findall(".//tr")]
+        ok_meta = _meta_rows(ok_root)
+        assert f"lap {s.best_lap_id() + 1}" in ok_meta["Best lap"], ok_meta["Best lap"]
+
+        # ...and now the same session with the line unconfirmed on an unknown track.
+        s.track_name = None
+        s._timing_user_confirmed = False
+        assert not s.timing_verified
+        prov_path = os.path.join(tmp, "provisional.html")
+        verified(prov_path, s, source_label="GX010060")
+        with open(prov_path, encoding="utf-8") as f:
+            text = f.read()
+    root = ET.fromstring(text)
+    green = [tr for tr in root.findall(".//tr") if tr.get("class") == "best"]
+    assert not green, f"{len(green)} row(s) still carry the best-lap cue on provisional timing"
+    meta = _meta_rows(root)
+    assert "lap" not in (meta["Best lap"] or ""), meta["Best lap"]
+    # The number itself survives — this is a suppressed CUE, not a suppressed measurement.
+    assert fmt_time(s.lap_time(s.best_lap_id())) in (meta["Best lap"] or ""), meta["Best lap"]
+    assert "PROVISIONAL" in (meta["Timing"] or ""), meta["Timing"]
+
+
 if __name__ == "__main__":
     test_laps_table_schema_and_values()
     test_laps_table_degenerate_schema()
@@ -573,4 +623,5 @@ if __name__ == "__main__":
     test_report_table_follows_the_display_unit()
     test_write_laps_csv_stays_si_whatever_the_report_does()
     test_report_html_no_images_no_corners()
+    test_provisional_timing_withholds_the_best_lap_cue_the_app_withholds()
     print("test_export_data: OK")

@@ -234,6 +234,36 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
 
 ### Fixed
 
+- **The ★ that means "session best" was decided three different ways, so two pages marked
+  different cells of the same grid.** The Stats page's SPLITS grid compares what it *prints* —
+  an interior sector split is the difference of two GPS sample times on a 0.1 s grid, so a
+  column's minimum is routinely tied at two decimals, and singling out the copy whose underlying
+  double happens to be a thousandth quicker draws a distinction the measurement cannot support.
+  The Laps tab printed the same splits to the same two decimals and compared the raw doubles; so
+  did the Corners page with its corner times. Measured on the owner's own recording (65 laps,
+  five sector lines): **the Stats grid starred 18 cells and the Laps tab 13** — five cells whose
+  printed text is identical to a starred neighbour's wore the mark on one page and nothing on the
+  other. With three lines it was 8 against 6. The Corners page did the same thing lap by lap:
+  three laps all print 2.75 s through C1 and only one was starred. All three surfaces now share
+  one rule, and on both reference recordings the two grids now star exactly the same cells. A
+  ⚠ GPS-dropout lap still cannot take a session-best split — that exclusion is disclosed on the
+  row, which is what the thousandth-of-a-second one never was.
+- **The Laps panel and the Stats page counted the same laps out of different totals.** Both state
+  how many laps were left out of the statistics, and the Stats page's DATA TRUST card divided by
+  the laps the segmenter *found* while the Laps panel divided by the ones it had rows for —
+  totals that differ by the start/finish crossings too brief to count as laps at all. Measured by
+  dragging the start line round one recording (the app's own suggested fix when laps go missing):
+  at one placement the card read "33 of the 81 laps found" while the strip beside it read "36
+  excluded of 69 laps". **Every placement that produced an excluded lap disagreed, on both
+  recordings.** The strip now counts out of the same total, and names the leftover brief
+  crossings instead of leaving them as a gap between two numbers.
+- **The exported report asserted a best lap the app itself refuses to name.** When the start line
+  has been auto-fitted and never confirmed — the state every unrecognised circuit loads in — a
+  "best lap" is measured from an arbitrary point, and Pacer says so by withholding the claim: no
+  green row, no ★, and the share card refuses to render at all. The HTML report painted the green
+  row anyway and named the lap in its meta table, in the one document that travels furthest from
+  those caveats. It now follows the same gate. The lap *time* still prints, as it does on the
+  Stats page — what goes is the claim that a particular lap owns it.
 - **Your coasting time was measuring the GPS noise floor, and it was out by about six times.**
   Pacer calls it coasting when the kart is off both pedals — slowing from drag, not from the brake
   — and it looks for that in a narrow band of deceleration held for at least a quarter of a second.
