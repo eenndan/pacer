@@ -177,17 +177,23 @@ def speed_long_g(speed_kmh, t) -> np.ndarray:
 
     **UNSMOOTHED, AND THE GRID `t` IS PART OF THE ANSWER.** This returns the bare derivative; every
     window in the app is applied by a CALLER, and they do not agree — so the same function name
-    reaches the user as three different series with three different peaks. `gmeter.compute` puts it
+    reaches the user as four different series with four different peaks. `gmeter.compute` puts it
     on the 50 Hz output grid and boxcars it over LONG_SMOOTH_S (0.35 s) into `long_g_gps`, which is
     what the dial, the g-g cloud and the "peak braking g" tile read. `driving_channels` calls it
-    twice more WITHOUT a window: once on that same 50 Hz grid for `derive_thresholds`, and once per
-    lap on the lap's native ~10 Hz grid for the brake / coast / pedal-intensity detectors. Those two
-    are not the same signal either — interpolating a 10 Hz speed to 50 Hz and THEN differentiating
-    manufactures content the fixes cannot carry (measured on the D24 0060 pair: RMS 0.353 g vs
-    0.302 g for differentiate-at-10-Hz-then-interpolate, and the +/-MAX_LONG_G clip fires 81 times
-    against 1). The native 10 Hz derivative is the honest one: 99 % of its power sits below 3.7 Hz
-    (4.0 on 0062), inside the 5 Hz Nyquist of the fixes it is made of. See the THREE SERIES block in
-    studio/driving_channels.py for what each one is read as, and by whom."""
+    three more times: once on that same 50 Hz grid for `derive_thresholds` and once per lap on the
+    lap's native ~10 Hz grid for the brake / pedal-intensity detectors, both WITHOUT a window
+    (a brake onset is a step, which a centred boxcar moves); and once more on that 10 Hz grid for
+    the COAST band, over driving.COAST_SMOOTH_S (0.50 s), because that test is the opposite shape —
+    sustained membership of a corridor 0.133 g wide, which this function's own 0.099-0.121 g of
+    10 Hz noise tears into 2-sample fragments.
+
+    The 50 Hz and 10 Hz calls are not the same signal either — interpolating a 10 Hz speed to 50 Hz
+    and THEN differentiating manufactures content the fixes cannot carry (measured on the D24 0060
+    pair: RMS 0.353 g vs 0.302 g for differentiate-at-10-Hz-then-interpolate, and the
+    +/-MAX_LONG_G clip fires 81 times against 1). The native 10 Hz derivative is the honest one:
+    99 % of its power sits below 3.7 Hz (4.0 on 0062), inside the 5 Hz Nyquist of the fixes it is
+    made of. See the FOUR SERIES block in studio/driving_channels.py for what each one is read as,
+    and by whom."""
     v = np.asarray(speed_kmh, float) / 3.6
     t = np.asarray(t, float)
     n = min(len(v), len(t))

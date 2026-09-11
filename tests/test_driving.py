@@ -280,12 +280,12 @@ def test_coast_survives_gps_speed_noise():
     still be reported — and the unfiltered series is what fails that.
 
     The defect this pins is entirely a noise phenomenon, which is why no noise-free fixture can
-    see it: the band is theta_b - COAST_DRAG_MIN wide (0.17 g here) and the speed noise measured
-    on the D24 recordings (sigma_v ~ 0.14-0.17 m/s) turns into ~0.10-0.12 g on the 10 Hz
-    derivative, so a sample sitting dead centre in the band leaves it on noise alone about half
-    the time. The truth here is a 4 s off-power coast at a drag-like 0.10 g; the assertion is that
-    the shipped detector recovers most of it and that the same detector on the bare series does
-    not."""
+    see it: the band is only theta_b - COAST_DRAG_MIN wide (0.13 g, asserted below) and the speed
+    noise measured on the D24 recordings (sigma_v ~ 0.14-0.17 m/s) turns into ~0.10-0.12 g on the
+    10 Hz derivative, so a sample sitting dead centre in the band leaves it on noise alone about
+    half the time. The truth here is a 4 s off-power coast at a drag-like 0.10 g; the assertion is
+    that the shipped detector recovers most of it and that the same detector on the bare series
+    does not."""
     rng = np.random.default_rng(11)
     n, dur = 700, 69.9                            # 10 Hz, a lap-length trace
     dist, elapsed = _lap_trace(n=n, dur=dur, total_dist=1000.0)
@@ -299,6 +299,7 @@ def test_coast_survives_gps_speed_noise():
     speed = speed + rng.normal(0.0, 0.16 * 3.6, n)   # sigma_v = 0.16 m/s, the measured GPS noise
     th = D.derive_thresholds(speed_long_g(clean, elapsed), clean)
     truth = float(elapsed[coast.stop - 1] - elapsed[coast.start])
+    assert abs((th.theta_b - D.COAST_DRAG_MIN) - 0.13) < 5e-3, "the band width the docstring cites"
 
     spans = D.coasting_spans(dist, elapsed, speed, speed_long_g(speed, elapsed), th.theta_b)
     found = sum(s.duration for s in spans)
