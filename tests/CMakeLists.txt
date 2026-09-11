@@ -1072,4 +1072,20 @@ set_tests_properties(test_provenance PROPERTIES
 add_test(NAME test_provenance_panel
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_provenance_panel.py)
 set_tests_properties(test_provenance_panel PROPERTIES
+
+# THE TWO DATA-TRUST SURFACES (feat/data-trust-surfaces): the per-second GPS quality STRIP under
+# the scrub bar, and the ROTATION cross-check row in the Stats DATA TRUST card. The strip's whole
+# claim is that a bad stretch is LOCATABLE, and the way that claim dies is a ~500 px bar averaging
+# a one-second dropout into the five clean seconds beside it — so the pin is a single POOR second
+# inside 3,000 clean ones still painting a column, at the right fraction of the bar, read off the
+# real widget's real slider geometry. Also: the classifier grades POOR exactly where the loader's
+# own `_quality_ok` rejects (it takes that verdict as an input rather than copying the thresholds);
+# a GPS5 camera with no per-sample DOP grades UNREPORTED and is NEVER painted green; the three
+# verdict colours clear WCAG 1.4.11's 3:1 and the CIE76 JND under a deuteranopia simulation in BOTH
+# palettes (measured with test_contrast's own maths); and the rotation row prints RotationCheck's
+# closed-lap ratios through the accessors with nothing baked in. Offscreen Qt; no pacer, no
+# telemetry file.
+add_test(NAME test_quality_strip
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_quality_strip.py)
+set_tests_properties(test_quality_strip PROPERTIES
                      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PACER_NO_MEDIA=1;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")

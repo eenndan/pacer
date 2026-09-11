@@ -41,7 +41,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 
 from studio import chapters, theme  # noqa: E402
 from studio.player_pane import PlayerPane  # noqa: E402
-from studio.video_view import PaneSpec, VideoView  # noqa: E402
+from studio.video_view import PaneSpec, VideoView, _QualityStrip  # noqa: E402
 
 
 def _spec(lap_id, window, caption, choices, *, source=None, choice_labels=None):
@@ -774,7 +774,14 @@ def test_the_transport_is_on_the_bar_system():
 
     assert isinstance(view.transport, PanelToolbar), type(view.transport).__name__
     assert view.transport.height() == theme.TOOLBAR_H, view.transport.height()
-    assert view.scrub_row.height() == theme.TOOLBAR_H, view.scrub_row.height()
+    # The scrub row is TWO BANDS since the GPS-quality strip joined it: the system's bar, plus the
+    # strip's own ink and the sub-step above it (SPACE_XXS is the scale's WITHIN-one-element gap —
+    # "a bar and its own segments" — which is exactly what the groove and its annotation are).
+    # Still a DERIVATION of the tokens and the strip's own declared height rather than a number
+    # typed here, so the claim stays "it agrees with the system" and a nudge still fails.
+    assert view.scrub_row.height() == (
+        theme.TOOLBAR_H + theme.SPACE_XXS + _QualityStrip.INK_H), view.scrub_row.height()
+    assert view.quality_strip.height() == _QualityStrip.INK_H, view.quality_strip.height()
     for name, bar in (("scrub_row", view.scrub_row), ("transport", view.transport)):
         assert bar.property("role") == "PanelHeader", name
         assert bar.testAttribute(Qt.WA_StyledBackground), (
@@ -783,9 +790,15 @@ def test_the_transport_is_on_the_bar_system():
         assert (m.left(), m.top(), m.right(), m.bottom()) == (
             theme.SPACE_S, theme.SPACE_XXS, theme.SPACE_S, theme.SPACE_XXS), (name, m)
     # THE GUTTER: the first control on each bar starts where the panel's own identity does.
-    for name, w in (("play", view.play_btn), ("slider", view.slider)):
+    for name, w in (("play", view.play_btn), ("slider", view.slider),
+                    ("quality strip", view.quality_strip)):
         assert w.mapTo(view, w.rect().topLeft()).x() == theme.SPACE_S, (
             f"{name} starts at x={w.mapTo(view, w.rect().topLeft()).x()}, not SPACE_S")
+    # …and the strip is exactly as wide as the groove it annotates. It maps its cells through the
+    # SLIDER's travel geometry, so a strip laid out to a different width would silently draw every
+    # second of the recording at an offset from the instant it grades.
+    assert view.quality_strip.width() == view.slider.width(), (
+        view.quality_strip.width(), view.slider.width())
     # GROUPING: SPACE_XS inside a group, SPACE_S between the groups
     # (▶ 🔇 speed | timecode  ‹ › ⌾ Compare ⤢). The playback group is THREE controls since the
     # speed picker joined it, so the within-group gap is asserted across every adjacent pair and

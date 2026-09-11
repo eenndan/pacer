@@ -95,7 +95,7 @@ def test_read_recording_equals_two_fresh_chains_on_real_media():
             f"{name}: required gpmf-parser submodule sample missing at {path} — "
             "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
         (got_samples, got_spans, got_naive, got_durations, got_meta,
-         got_a, got_g, got_c) = ingest.read_recording([path])
+         got_a, got_g, got_c, got_gyro, got_device) = ingest.read_recording([path])
         (ref_samples, ref_spans, ref_naive, ref_durations, ref_meta,
          ref_a, ref_g, ref_c) = _two_pass_reference(path)
 
@@ -118,9 +118,16 @@ def test_read_recording_equals_two_fresh_chains_on_real_media():
             assert got.shape == ref.shape, f"{name}: {label} shape {got.shape} != {ref.shape}"
             assert np.array_equal(got, ref), f"{name}: {label} stream differs"
 
+        # GYRO and the device name ride the SAME shared chain now (the load path builds the
+        # measured rotation channel, and a second chain over an 11.9 GB recording is not free), so
+        # they are held to the same equivalence: a fresh chain must read them identically.
+        assert np.array_equal(got_gyro, ingest.read_gyro([path])), f"{name}: GYRO stream differs"
+        assert got_device == ingest.read_device_name([path]), f"{name}: device name differs"
+
         ran.append(name)
         print(f"  {name}: gps={len(got_samples)} accl={got_a.shape[0]} "
-              f"grav={got_g.shape[0]} cori={got_c.shape[0]} — single-pass == two-pass")
+              f"grav={got_g.shape[0]} cori={got_c.shape[0]} gyro={got_gyro.shape[0]} "
+              f"device={got_device!r} — single-pass == two-pass")
     assert ran, "no sample clips found — nothing was verified"
     print("test_read_recording_equals_two_fresh_chains_on_real_media OK")
 

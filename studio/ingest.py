@@ -80,13 +80,21 @@ def _read_imu_over(head):
 
 def read_recording(paths):
     """Single-pass ingest: build the chain once, run GPS then IMU over the SAME sources ->
-    (samples, spans, naive, durations, meta_durations, accl, grav, cori). Avoids opening/parsing
-    each chapter twice; byte-identical to read_gpmf + read_imu (the IMU pass is
-    cursor-independent). See `chain_sources` for why the two duration lists are both returned."""
+    (samples, spans, naive, durations, meta_durations, accl, grav, cori, gyro, device). Avoids
+    opening/parsing each chapter twice; byte-identical to read_gpmf + read_imu (the IMU pass is
+    cursor-independent). See `chain_sources` for why the two duration lists are both returned.
+
+    GYRO AND THE DEVICE NAME RIDE ALONG NOW. `read_gyro` / `read_device_name` below each build
+    their OWN chain, which means re-opening and re-parsing every chapter of an 11.9 GB recording —
+    acceptable for a dev script, not on the load path now that `Session` builds the measured
+    rotation channel at load. Both readers stay for the dev scripts; the app takes them from here,
+    off the chain it already has."""
     head, _owners, durations, meta_durations = chain_sources(paths)
     samples, spans, naive = _read_gps_over(head)
     accl, grav, cori = _read_imu_over(head)
-    return samples, spans, naive, durations, meta_durations, accl, grav, cori
+    gyro = _vec3_columns(head.read_gyro_columns())
+    return (samples, spans, naive, durations, meta_durations, accl, grav, cori, gyro,
+            head.device_name())
 
 
 def read_gpmf(paths):
@@ -109,20 +117,19 @@ def read_gyro(paths):
     """GYRO-only reader -> (N,4) [t,x,y,z] rad/s on the global media clock (empty when the camera
     writes no GYRO — pre-HERO5).
 
-    Separate from `read_recording` on purpose: the rotation channel is not yet wired into the
-    Session pipeline, and folding a fifth array into that tuple would churn every caller of the
-    load path for a stream nothing there reads yet.
+    A DEV-SCRIPT reader: it builds its own chain, so it re-opens and re-parses every chapter. The
+    app reads GYRO off `read_recording`'s shared chain instead.
 
     GYRO rides the same chain and the same media clock as ACCL, but NOT the same sample rate: it
     runs 2x ACCL on a HERO5 and a Karma, 4x on a Max in 360 mode and 17x on a Fusion (measured on
     the bundled gpmf-parser samples), and only happens to match row for row on the HERO13. Join
     the two on `[:, 0]`, never by index."""
-    head, _owners, _durations = chain_sources(paths)
+    head, _owners, _durations, _meta = chain_sources(paths)
     return _vec3_columns(head.read_gyro_columns())
 
 
 def read_device_name(paths):
     """The recording camera's own name (GPMF `DVNM`, e.g. "HERO13 Black"), or "" when the
     container carries none. Cheap — it reads the first payload, not the stream."""
-    head, _owners, _durations = chain_sources(paths)
+    head, _owners, _durations, _meta = chain_sources(paths)
     return head.device_name()

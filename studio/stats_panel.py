@@ -2985,6 +2985,32 @@ class StatsView(QWidget):
                         "The stationary lead-in before you drive off is trimmed by the loader "
                         "and left out of the verdict, so opening one chapter or all of them "
                         "gives the same answer.")
+        # …and the SAME fact per second, which is a different verdict often enough to be worth its
+        # own row. Measured on the owner's two recordings, the two rows come out INVERTED: 0060
+        # rejects not one fix (the row above reads 0 %) and yet 17 of its 38 clean laps contain a
+        # second whose DOP left the GNSS good band, while 0062 rejects 1 % and every one of those
+        # rejections is in the 48 seconds before the kart moves, so not a single lap inherits
+        # anything but good. A percentage cannot say that; a bar can, and this row says which laps
+        # it is about and points at the bar for where.
+        strip = getattr(session, "quality_timeline", None)
+        if strip is not None and len(strip):
+            # One pass over the laps, not two: `lap_quality` resolves a lap window and folds its
+            # cells, and this runs on every refresh (a unit flip, a palette flip, a re-segment).
+            # UNREPORTED sorts ABOVE good on purpose, so an ungraded recording reports no degraded
+            # lap rather than every lap — "not measured" is not a finding.
+            lap_cls = [q for lid in valid if (q := session.lap_quality(lid)) is not None]
+            degraded = [q for q in lap_cls if q < data_quality.GOOD]
+            holed = [q for q in degraded if q <= data_quality.POOR]
+            note = (f" · {len(degraded)} of {len(valid)} laps contain a second below good"
+                    if degraded and valid else "")
+            rows.append(("GPS quality over time",
+                         f"{strip.summary()}{note} — the bar under the scrubber shows where",
+                         bool(holed)))
+            tips.append("The strip under the scrub bar grades every second of the recording, and "
+                        "a lap inherits the WORST second inside it. That is the distinction this "
+                        "page's percentage cannot draw: a receiver acquiring a lock before you "
+                        "drive off and a receiver failing mid-session are the same percentage and "
+                        "completely different recordings.")
         if getattr(session, "has_gmeter", False):
             src = {"accl": "IMU", "gps": "GPS"}
             lat_src = src.get(session.gmeter_source(), session.gmeter_source())
@@ -3016,6 +3042,37 @@ class StatsView(QWidget):
                         "×1 means the g you read is scaled right. The correlation beside it "
                         "cannot tell you that — Pearson r is unchanged by a scale error, so a "
                         "channel reading half would still correlate perfectly.")
+        # The THIRD cross-check row, and the strongest of the three, because it is the only one on
+        # this card whose target is EXACT. The two above compare one estimate against another, so
+        # their r and gain describe agreement and nothing more; a lap is a closed loop, so the yaw
+        # integrated over one is 2π whatever the racing line and whatever the smoothing.
+        #
+        # The row states what the MEASURED channel reads against that target, and prints the
+        # inferred channel's own ratio beside it — both live off `RotationCheck`, so neither can
+        # go stale. It does NOT editorialise about the gap between them: that gap was 6.5-10 % of
+        # the lap when this channel landed, is ~0.1 % since the curvature basis was fixed, and a
+        # sentence characterising it would have been wrong within the week. Two numbers against
+        # one exact target say it without a verdict attached.
+        rot = session.rotation_cross() if hasattr(session, "rotation_cross") else None
+        if rot is not None:
+            verdict = "agrees" if rot.ok else "DISAGREES"
+            rows.append(("Rotation cross-check",
+                         f"{verdict} · over {rot.loop_n} closed laps the gyroscope's measured yaw "
+                         f"integrates to {rot.loop_ratio_gyro:.3f}×2π and the path-derived rate to "
+                         f"{rot.loop_ratio_path:.3f}×2π, against an exact 1.000 · "
+                         f"r={rot.corner_corr:+.2f} between them through the corners",
+                         not rot.ok))
+            tips.append("A lap is a closed loop, so the heading change over one is exactly 2π — "
+                        "the only quantity on this card with a ground truth rather than a second "
+                        "estimate to agree with. That is why the headline here is the closed-lap "
+                        "ratio and not the correlation: halving the channel leaves r bit-identical "
+                        "and moves this ratio to 0.5, and a gyroscope read through the wrong "
+                        "gravity axis lands negative.")
+            tips.append(f"The measured channel is the {session.rotation_device() or 'camera'}'s "
+                        f"gyroscope (GPMF GYRO, ~200 Hz), projected onto gravity so it reads a "
+                        f"road-plane yaw rate however the camera is tilted on its mount. The "
+                        f"path-derived rate is the racing line's own turning, from the GPS trace. "
+                        f"They are independent, and they are checked over {rot.n:,} samples.")
         self.trust_card.set_rows(rows or [(DASH, DASH, False)])
         # Set unconditionally (both ways): a stale cross-check summary must not survive a
         # re-render onto a session that has none.

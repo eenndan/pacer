@@ -21,6 +21,7 @@ from ._signal import (
     _band_lap_ids,
     _gap_segments,
     _gate_quality,
+    _quality_ok,
     _smooth_segments,
 )
 from .ingest import read_recording  # the single-pass GPS+IMU load reader (pacer IO layer)
@@ -263,27 +264,44 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
     quality-gate + clean the trace, build the GPS9 true-clock axis, smooth the positions, feed
     `pacer.Laps`, centre a coordinate system on the clean track, then place/fit the start line.
 
-    Returns `(laps, cs, video_path, chapter_map, imu, track_name, timing_quality)`:
+    Returns `(laps, cs, video_path, chapter_map, imu, track_name, timing_quality, quality_strip)`:
       * `laps`/`cs` — segmented `pacer.Laps` + its `CoordinateSystem` (EMPTY/default if no paths
         or no samples survive cleaning);
       * `video_path` — first chapter path (None if no paths);
       * `chapter_map` — `chapters.ChapterMap` offset table (None if no paths);
-      * `imu` — `(accl, grav, cori)` for `Session._build_gmeter` (None when the trace is empty);
+      * `imu` — `(accl, grav, cori, gyro, device)` for `Session._build_gmeter` /
+        `Session._build_rotation` (None when the trace is empty);
       * `track_name` — detected registry track name (None for an unknown track);
       * `timing_quality` — `data_quality.TimingQuality`: the per-sample timing-clock provenance
         (GPS9 true clock vs media-clock fallback) + the gate's dropped-fix fraction. The data
         axis ORTHOGONAL to the timing-trust (start-line) surface; the views demote the lap times
         only when it reports degraded.
+      * `quality_strip` — `data_quality.QualityTimeline`: the SAME quality fact per SECOND of
+        recording instead of once for the whole of it. Computed here, over the RAW fixes, because
+        this is the only place that still has them — three lines down they are gated and trimmed,
+        and the trimmed lead-in is the part the strip most needs to draw.
     """
     laps = pacer.Laps()
     empty = pacer.CoordinateSystem(pacer.GPSSample())
     video_path = paths[0] if paths else None
     quality = data_quality.TimingQuality()  # high-quality default (no paths / empty trace)
+    strip = data_quality.empty_timeline()
     if not paths:
-        return laps, empty, None, None, None, None, quality
+        return laps, empty, None, None, None, None, quality, strip
 
-    # Single-pass: one chain read for both GPS and IMU (see ingest.read_recording).
-    samples, spans, naive, durations, meta_durations, accl, grav, cori = read_recording(paths)
+    # Single-pass: one chain read for GPS, IMU and GYRO (see ingest.read_recording).
+    (samples, spans, naive, durations, meta_durations,
+     accl, grav, cori, gyro, device) = read_recording(paths)
+    # The per-second quality strip, taken HERE — on the raw fixes, on the naive media clock, over
+    # the VIDEO duration — because all three of those are about to stop being available: the gate
+    # below removes the rejected fixes and `_clean` removes the stationary lead-in they cluster in,
+    # and the GPS9 re-anchoring after that moves the axis off the clock the scrubber runs on. The
+    # verdict `_quality_ok` is the gate's own, so the strip cannot disagree with it.
+    strip = data_quality.build_quality_timeline(
+        naive,
+        [not _quality_ok(s) for s in samples],
+        [getattr(s, "dop", -1.0) for s in samples],
+        span_s=float(sum(durations)))
     # The offset table for the video layer: each chapter's VIDEO duration on one global axis — the
     # same number the C++ chain shifted this chapter's telemetry by. The GPMF durations ride along
     # only so `ChapterMap.desynced_chapters` can state where the two tracks disagree.
@@ -299,7 +317,10 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
         samples, spans, naive, moving_speed=MIN_START_SPEED)
     samples, spans, naive = _clean(samples, spans, naive)
     if not samples:
-        return laps, empty, video_path, chapter_map, None, None, quality
+        # …but the STRIP survives a trace that cleaned away to nothing, and that is the case it is
+        # most worth having: a recording the loader can make no laps out of still has a bar saying
+        # which seconds of it the receiver was never locked in.
+        return laps, empty, video_path, chapter_map, None, None, quality, strip
 
     # Per-sample timing clock: GPS9 true-clock spacing when the stream carries it, else the
     # (~0.1%-fast) media clock — the recording's headline timing-accuracy provenance.
@@ -352,5 +373,5 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
                 start_line=_widen(laps.pick_random_start(), START_WIDEN), sector_lines=[]
             )
             laps.update()
-    return laps, cs, video_path, chapter_map, (accl, grav, cori), (
-        track.name if track is not None else None), quality
+    return laps, cs, video_path, chapter_map, (accl, grav, cori, gyro, device), (
+        track.name if track is not None else None), quality, strip

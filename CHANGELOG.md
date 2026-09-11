@@ -21,6 +21,25 @@ Everything merged since v0.2.0 (#216–#240), from the 2026-09-07 CTO × CPO cri
   units of the last bit rather than rounding the disagreement away. Read-only: pacer shows you
   where a number came from, it does not offer to compute you a different one.
 
+- **The scrub bar says WHERE the GPS went bad, not just that it did.** A thin always-visible band
+  under the seek bar grades every second of the recording — green where the receiver had a 3D lock
+  and a DOP inside the GNSS good band, amber where it was degrading, red where the fixes were
+  thrown away, and a gap where none arrived at all. Hover any point for the exact numbers behind
+  the class. Until now the app had one verdict for a whole recording, and one verdict cannot tell
+  a receiver acquiring a lock from a receiver failing: on the owner's own 0062 recording every
+  single rejected fix falls in the first 48 seconds, before the kart has moved, and the card
+  printed the same "1% of fixes rejected" it would have printed for 48 seconds scattered through
+  the session. A pixel column shows the WORST second under it, never the average, so a one-second
+  dropout in a fifty-minute recording still paints — and a lap inherits its worst second by the
+  same rule. A camera that reports no per-sample GPS quality at all (the GPS5 era) gets a neutral
+  band saying so rather than a confident green.
+- **DATA TRUST reads the gyroscope's closed-lap check — the first number on that card with an
+  exact answer.** The two cross-checks already there compare one estimate against another, so
+  their correlation and gain describe agreement and nothing more. A lap is a closed loop, so the
+  yaw integrated over one is exactly 2π whatever the racing line: the new row prints what the
+  measured gyroscope channel and the path-derived rate each integrate to against that target, over
+  the clean laps. It is also the check that catches what a correlation cannot — halving the
+  channel leaves its r bit-identical and moves this ratio to 0.5.
 - **A session record, so comparing two sessions means something.** Each recording can now carry
   what pacer cannot know: the conditions and temperatures, the tyre set and its age in laps, cold
   and hot pressures, chassis, gearing, axle, seat and notes — typed by you, never looked up online.
