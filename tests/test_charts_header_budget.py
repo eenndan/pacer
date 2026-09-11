@@ -388,7 +388,7 @@ def test_the_hero_is_no_longer_a_structural_zero_on_the_best_lap():
     lap, so the apology would be false. What is asserted instead is the property that made it
     false: on the BEST lap — the default selection — the hero moves by a real amount, and the
     Δ-to-best number it promises to keep one hover away is still there, now with nothing appended.
-    (On the real recordings the same sweep reads +0.94 s on D24 one chapter and +1.64 s on three.)"""
+    (On the real recordings the same sweep reads +0.94 s on D24 one chapter and +1.42 s on three.)"""
     with _Themed((1440, 900)) as view:
         s = view.session
         best = s.best_lap_id()

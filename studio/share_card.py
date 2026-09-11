@@ -58,7 +58,7 @@ def ideal_sublabel(laps: int | None) -> str:
     §5.4: this card is the app's most public surface and the least hoverable — it lands in a group
     chat with no tooltip and no page around it — and it was the one place the ideal was printed
     with no lap count while every in-app surface carried `theoretical best · N laps`. The ideal is
-    an order statistic: `+0.90 s` over 5 laps and `+1.64 s` over 65 are the SAME DRIVING on the
+    an order statistic: `+0.84 s` over 5 laps and `+1.42 s` over 65 are the SAME DRIVING on the
     owner's D24 recording (corner_model.IdealSample has the measured table). A shared image
     claiming a gap without saying what it was minimised over invites exactly the comparison the
     number cannot support.
@@ -81,7 +81,7 @@ def ideal_sublabel(laps: int | None) -> str:
 def hero_delta_line(gap: float) -> str:
     """The Δ-to-ideal hero line, one coherent voice across both branches.
 
-    A positive gap reads as time still on the table ("+1.64 s vs your ideal lap"); a gap at (or
+    A positive gap reads as time still on the table ("+1.42 s vs your ideal lap"); a gap at (or
     below) the even-epsilon means the best lap already sits ON the ideal, so it reads plainly as
     "level with your ideal lap" — never the doubled "on your ideal lap vs your ideal lap" template
     bug the two-branch string concat used to produce.

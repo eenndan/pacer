@@ -32,7 +32,7 @@ Schema (version 3) — one JSON object::
 the session-best sector splits — and since sector lines default to none, and a lap with no sector
 line is one sub-sector whose split is its lap time, every entry any user has on disk holds a value
 byte-identical to its own ``best``. From v3 it is ``Session.theoretical_best``, the corner/straight
-partition composite: a real target, 0.22–1.64 s faster than the best lap on the recordings this was
+partition composite: a real target, 0.21–1.42 s faster than the best lap on the recordings this was
 measured against. A stored v2 number cannot be reinterpreted as a v3 one, and showing the two in one
 column would silently mix definitions, so the v2→v3 migration NULLS the field (see ``_migrate``) —
 every entry is kept, only that one value is retired, and it returns for real the next time the
@@ -42,12 +42,12 @@ recording is opened.
 over the session's laps, so both fall as a session gets longer, and a table that ranks either
 without showing the count ranks session length as much as pace. Measured over random subsets of
 the clean laps of the owner's five recordings, per doubling of lap count: ``theoretical`` falls
-0.068 / 0.174 / 0.194 / 0.241 / 0.384 s and ``best`` falls 0.033 / 0.080 / 0.094 / 0.148 /
-0.221 s — the ideal is the more sample-dependent of the two on three recordings and the LESS on
-the other two, which is why the dialog shows the count for the ROW rather than qualifying one
-column. The sharpest real instance is in this index today: Sandown chapter 1 (23 laps) stores
-47.933 and Sandown chapters 1–3 (59 laps) stores 47.374 — 0.56 s apart, same driver, same day,
-same track, and nothing between them but how many laps were loaded. ``studio/library_dialog.py``
+0.074 / 0.248 / 0.268 / 0.324 / 0.334 s and ``best`` falls 0.047 / 0.113 / 0.170 / 0.173 /
+0.178 s — the ideal is the more sample-dependent of the two on all five, but the best lap beside
+it still moves about half as much rather than not at all, which is why the dialog shows the count
+for the ROW rather than qualifying one column. The sharpest real instance is in this index today: Sandown chapter 1
+(23 laps) stores 47.941 and Sandown chapters 1–3 (59 laps) stores 47.375 — 0.57 s apart, same
+driver, same day, same track, and nothing between them but how many laps were loaded. ``studio/library_dialog.py``
 renders it as the ``Laps`` column; see ``studio/corner_model.py IdealSample`` for the full table.
 It is the count of VALID laps, while the ideal is minimised over the CLEAN ones (valid, no GPS
 dropout) — the same number on all five of the owner's recordings, and an over-statement by the

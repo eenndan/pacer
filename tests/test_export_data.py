@@ -279,7 +279,7 @@ def test_laps_summary_gate_is_the_ideal_not_the_sector_count():
     the sum of the session-best sector splits and a track with no sector line collapsed to a single
     sub-sector whose split is the best lap time. That gate is not merely stale, it was INVERTED on
     the recordings that matter: D24 and Sandown both carry ZERO sector lines, so the export dropped
-    the row on exactly the sessions where the ideal is now 0.94–1.64 s faster than anything driven.
+    the row on exactly the sessions where the ideal is now 0.94–1.42 s faster than anything driven.
 
     So: a stitched ideal publishes the row with NO sector lines, a degenerate one withholds it WITH
     sector lines, and adding lines to either changes nothing."""

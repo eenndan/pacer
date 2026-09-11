@@ -5,7 +5,7 @@ follows: the share card printed "+4.56 s vs your ideal lap / your best corners a
 no lap count, and the laps.csv trailer printed "Theoretical best,62.869" bare — while the Stats
 tile it came from is captioned `theoretical best · 24 laps` and carries a whole sentence saying
 what the minimum ran over. The ideal is an ORDER STATISTIC: on the owner's D24 three chapters the
-same driving reads 67.957 s over 5 laps and 66.563 s over 65 (corner_model.IdealSample's measured
+same driving reads 68.016 s over 5 laps and 66.781 s over 65 (corner_model.IdealSample's measured
 table). A number that moves with lap count, published without the lap count, invites a comparison
 it cannot support — and an exported file has no tooltip to put the caveat in.
 

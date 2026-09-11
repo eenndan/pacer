@@ -1314,7 +1314,7 @@ class PlotsView(QWidget):
         This swap only started paying since the ideal became the corner/straight composite. Against
         the old envelope the best lap's Δ-to-ideal was itself near-flat (0.159 s peak on D24,
         returning to exactly 0 at the flag), so the escape from one empty chart landed on another;
-        it now rises to +0.94 s on D24 one chapter and +1.64 s on three, ending at the whole gap.
+        it now rises to +0.94 s on D24 one chapter and +1.42 s on three, ending at the whole gap.
 
         Falls back silently to Δ-to-best when a second lap is selected, when the ideal can't be
         built (too few clean laps), when the baseline is the cross-recording REFERENCE — a local
@@ -1363,7 +1363,7 @@ class PlotsView(QWidget):
         THE CURVE NOW LANDS SOMEWHERE. Against the old envelope it dipped a little and came back to
         exactly 0 at the flag — by construction, since that ideal's value at the flag WAS the best
         lap time — so the one thing a reader took from it ("how much is on the table") was zero on
-        every recording. It now ends at the whole gap: −0.94 s on D24 one chapter, −1.64 s on
+        every recording. It now ends at the whole gap: −0.94 s on D24 one chapter, −1.42 s on
         three, −1.14 s on Sandown, drawn against a y=0 line that is the best lap.
 
         The legend entry does NOT restate that end value, and that is a measurement, not an

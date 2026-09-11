@@ -619,7 +619,7 @@ def test_v2_theoretical_is_retired_not_reinterpreted():
     lap with no sector line is one sub-sector whose split is its lap time, so on every recording
     measured the stored value was byte-identical to that entry's own ``best`` — the Library's
     fourth column was a copy of its third. From v3 it is the corner/straight partition composite,
-    a real target 0.22–1.64 s faster than the best lap. Nothing on the entry carries the segment
+    a real target 0.21–1.42 s faster than the best lap. Nothing on the entry carries the segment
     times needed to convert one into the other, and a column that prints both definitions at once
     is the exact dishonesty this fixes, so the migration nulls it: the value comes back for real
     the next time that recording is opened.
@@ -822,23 +822,23 @@ def test_the_table_shows_the_sample_its_two_time_columns_are_minima_over():
     `Best lap` is the minimum of the session's lap times and `Ideal lap` is a sum of per-segment
     minima over the same laps; both therefore fall as a session gets longer, and a cross-session
     ranking of either is partly a ranking of session length. The demonstration is in the owner's
-    own library: Sandown chapter 1 (23 laps) stores 48.983 / 47.933 and Sandown chapters 1-3
-    (59 laps) — the SAME driving, one recording a superset of the other — stores 48.515 / 47.374.
-    0.47 s and 0.56 s apart, entirely on lap count. Those are the two rows this test builds.
+    own library: Sandown chapter 1 (23 laps) stores 48.983 / 47.941 and Sandown chapters 1-3
+    (59 laps) — the SAME driving, one recording a superset of the other — stores 48.515 / 47.375.
+    0.47 s and 0.57 s apart, entirely on lap count. Those are the two rows this test builds.
 
     WHY A COLUMN AND NOT A SORT REFUSAL on `Ideal lap`, which was the obvious alternative:
-    measured over random subsets of the clean laps, the ideal falls 0.068-0.384 s per doubling of
-    lap count and the BEST LAP falls 0.033-0.221 s — and on two of the owner's five recordings
-    (D24 1 chapter, SD_30_08) the best lap is the MORE sample-dependent of the two. Un-sorting one
+    measured over random subsets of the clean laps, the ideal falls 0.074-0.334 s per doubling of
+    lap count and the BEST LAP falls 0.047-0.178 s — the same order of magnitude, and on
+    SD_30_08's last doubling (20 → 25 laps) the best lap moves the MORE of the two. Un-sorting one
     column while the other kept its sort would advertise a distinction the numbers do not support,
     so BOTH sorts stay and the confound is named for the row. This test pins that decision: it
     fails if either time column loses its sort, and it fails if the sample stops being shown."""
     from studio.library_dialog import _HEADERS
     idx = {"version": library.VERSION, "entries": [
         _entry("GX010059", track="Sandown", date="2026-05-09", laps=23,
-               best=48.9826803911227, theo=47.932965352611006),
+               best=48.9826803911227, theo=47.940671969822304),
         _entry("GX020059", track="Sandown", date="2026-05-10", laps=59,
-               best=48.51475683761055, theo=47.37392114779569),
+               best=48.51475683761055, theo=47.37510283251338),
     ]}
     dlg = LibraryDialog(idx, _OpenSpy())
     t = dlg.table

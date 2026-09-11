@@ -154,26 +154,47 @@ class IdealSample(NamedTuple):
     when the partition is cut finer. Both are properties of an order statistic over a partition,
     not of the driving — so two ideals are only comparable when these counts are comparable.
 
-    Measured on the owner's five recordings (random subsets of the clean laps, 200 draws per N,
-    `ideal_total` as the app computes it):
+    MEASURED on the owner's five recordings, 20,000 random subsets of the clean laps per N, the
+    per-segment minimum re-taken over each subset while the PARTITION stays the recording's own —
+    so the table isolates the sample-size effect from the re-cut effect the last paragraph
+    measures. The Monte-Carlo standard error is ≤ 0.003 s on every cell; the `all` column is the
+    whole recording, i.e. the number the app itself prints on it. (Re-detecting the corners from
+    each subset as well — what the app would do if that subset were the whole recording — moves
+    the cells by −0.02 … +0.11 s and changes nothing about the shape. Holding the partition is
+    what makes the fall a theorem rather than a trend: same pieces, more candidates.)
 
     | recording        | 5 laps | 10 | 20 | 40 | all | per doubling of N |
     |------------------|--------|----|----|----|-----|-------------------|
-    | D24 1 chapter    | 68.333 | 68.057 | 67.844 | — | 67.831 (21) | 0.174 s |
-    | D24 3 chapters   | 67.957 | 67.578 | 67.192 | 66.832 | 66.563 (65) | **0.384 s** |
-    | Sandown ch 1     | 48.585 | 48.225 | 47.982 | — | 47.933 (23) | 0.241 s |
-    | Sandown 3 ch     | 48.338 | 47.998 | 47.735 | 47.483 | 47.374 (59) | 0.194 s |
-    | SD_30_08         | 13.025 | 12.945 | 12.878 | — | 12.856 (25) | 0.068 s |
+    | D24 1 chapter    | 68.345 | 68.059 | 67.845 | — | 67.831 (21) | 0.248 s |
+    | D24 3 chapters   | 68.016 | 67.646 | 67.312 | 66.993 | 66.781 (65) | 0.334 s |
+    | Sandown ch 1     | 48.654 | 48.272 | 47.992 | — | 47.941 (23) | 0.324 s |
+    | Sandown 3 ch     | 48.330 | 48.011 | 47.741 | 47.494 | 47.375 (59) | 0.268 s |
+    | SD_30_08         | 13.033 | 12.949 | 12.881 | — | 12.862 (25) | 0.074 s |
 
-    There is no plateau: on D24 3 chapters the decrement per doubling GROWS with N (0.31 s over
-    8→15 laps, 0.42 s over 30→65). The gap the app headlines ("on the table") therefore grows with
-    lap count on all five — D24 3 chapters reads −0.90 s at 5 laps and −1.64 s at 65, same driving.
+    THE RATE COLUMN IS THE WHOLE MEASURED RANGE — (5-lap cell − `all` cell) ÷ log2(laps ÷ 5) — so
+    it is recomputable from the row's own two ends, and tests/test_ideal_sample_table.py recomputes
+    it. It used to be the last rung alone, which on three of these rows is 20 → 21 laps: a ~0.01 s
+    difference across a 5 % change in N, the noisiest quantity in the table, published as its
+    headline.
+
+    There is no plateau, and the decrement does NOT grow with N — this docstring said it did, off
+    the boundary projection #228 replaced. Re-measured it shrinks slowly and stays large: on D24
+    3 chapters, 0.380 s per doubling over 5 → 8 laps, 0.343 over 8 → 15, 0.322 over 20 → 30, and
+    still 0.301 over 50 → 65. A thirteenfold range of N buys a fifth off the decrement, not a
+    floor. So the gap the app headlines ("on the table") keeps growing with lap count on all five —
+    D24 3 chapters reads −0.84 s at 5 laps and −1.42 s at 65, same driving, same recording.
 
     THE BEST LAP HAS THE SAME PROPERTY, WHICH IS WHY THE DISCLOSURE IS PER RECORDING AND NOT PER
     COLUMN. The best lap is also a minimum over the session's laps: measured the same way it falls
-    0.221 / 0.148 / 0.033 / 0.094 / 0.080 s per doubling on those five, i.e. FASTER than the ideal
-    on two of them (D24 1 chapter and SD_30_08). Suppressing the ideal's ranking while leaving the
-    best lap's alone would fix the smaller half of the problem on 2 of 5 recordings; naming the
+    0.047 / 0.113 / 0.170 / 0.173 / 0.178 s per doubling on those five, against the ideal's
+    0.074 / 0.248 / 0.268 / 0.324 / 0.334 — LESS than the ideal on all five over the whole range.
+    (This docstring used to claim the best lap was the more sample-dependent of the two on two of
+    them. That was the old last-rung rate on the old projection, and it survives neither: at the
+    top rung D24 1 chapter is now 0.193 ideal against 0.189 best, a tie inside the error.) It is
+    still not a column a ranking can trust — 0.05 … 0.18 s per doubling is the same order of
+    magnitude as the ideal's, and on SD_30_08's own last doubling (20 → 25 laps) the best lap moves
+    MORE than the ideal does, 0.070 s against 0.060. Suppressing the ideal's ranking while leaving
+    the best lap's alone would advertise a distinction the numbers do not support; naming the
     sample fixes both. See studio/library_dialog.py's Laps column.
 
     `corners` / `segments` are the partition's size, and they move when the corner detector re-runs
