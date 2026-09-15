@@ -19,7 +19,14 @@ Session-math leaf in full — see golden_session_dump), across three phases mirr
                       exercising the reference / delta baseline paths + the ``invalidate_stats()``
                       seam;
   * ``ref_cleared`` — after ``clear_reference()``; asserted byte-identical to ``base`` (the
-                      reference clear must revert the per-lap Δ baseline exactly).
+                      reference clear must revert the per-lap Δ baseline exactly);
+  * ``drift_noise`` — a SEPARATE session (tests/_synthetic.drift_noise_session): three laps with
+                      GPS speed noise at the measured sigma, one of them drifted 1.0 % with a
+                      corner boundary its spatial match cannot find. The stadium fixture above
+                      has 0 % drift and noise-free speed, so the drift-gated projection and every
+                      noise-sensitive detector were dead code to this gate: reverting #228's
+                      one-frame warp or #275's coast window left it green. This phase goes red
+                      on both (see that fixture's block for why each ingredient is needed).
 
 It then compares the whole fingerprint against a COMMITTED baseline
 (tests/golden_synthetic_baseline.json, generated on main in the pixi env) via golden_compare.walk
@@ -45,12 +52,20 @@ import json
 import os
 import sys
 
+import numpy as np
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests/ — for the sibling fixture
 
+from _synthetic import (  # noqa: E402  (the drift + noise fixture)
+    DN_SPEED_SIGMA_MPS,
+    drift_noise_laps,
+    drift_noise_session,
+)
 from test_session_services import _synthetic_session  # noqa: E402  (the shared stadium fixture)
 
+from studio import corners  # noqa: E402
 from studio.dev.golden_compare import EPS, walk  # noqa: E402
 from studio.dev.golden_session_dump import fingerprint  # noqa: E402
 
@@ -62,6 +77,13 @@ def _build():
     (the bare fixture leaves track_name unset). Same fixture test_session_services /
     test_central_view_realqt drive — reused, not re-derived."""
     s = _synthetic_session()
+    s.track_name = "Stadium"
+    return s
+
+
+def _build_drift_noise():
+    """The drift + noise session, named like `_build` so its fingerprint is stable too."""
+    s = drift_noise_session()
     s.track_name = "Stadium"
     return s
 
@@ -83,6 +105,9 @@ def synthetic_fingerprint() -> dict:
 
     s.clear_reference()
     result["ref_cleared"] = fingerprint(s, strict=False)
+
+    # The drift + noise session: the paths the stadium laps cannot reach (see the module docstring).
+    result["drift_noise"] = fingerprint(_build_drift_noise(), strict=False)
     return result
 
 
@@ -118,6 +143,49 @@ def test_reference_clear_reverts_to_base():
     assert not diffs, f"ref_cleared drifted from base: {diffs[:5]}"
     assert stats["max"] <= EPS
     print(f"ok revert: ref_cleared == base (max |Δ|={stats['max']:g})")
+
+
+def test_drift_noise_fixture_reaches_the_paths_it_exists_for():
+    """A golden phase is only as good as its fixture, so pin the properties that make this one
+    able to fail — each is one a plausible edit to the fixture would quietly remove:
+
+      1. the seeded best lap IS the fastest (the memo is not lying to every best-derived leaf);
+      2. exactly one lap drifts past corners.NORMALIZED_DRIFT_MAX, at 0.9-1.1 % — below the gate
+         the whole spatial projection is skipped;
+      3. on that lap exactly one interior corner boundary has no spatial match, so its warp
+         INTERPOLATES a knot — the case #228 repaired; with every boundary matched, the old
+         per-boundary projection and the warp agree and reverting #228 moves nothing;
+      4. the GPS speed column carries the measured noise (sample sd within 15 % of
+         DN_SPEED_SIGMA_MPS on every lap) — the coast detector differentiates exactly that column;
+      5. the ideal lap is not just the best lap (some segment is donated by another lap)."""
+    s = _build_drift_noise()
+    ids = s.valid_lap_ids()
+    times = [s.lap_time(i) for i in ids]
+    assert ids[int(np.argmin(times))] == s.best_lap_id() == 0, (times, s.best_lap_id())
+
+    best_total = s.best_lap_total_distance()
+    totals = {i: float(s._dist_cache[i][1][-1]) for i in ids}
+    drift = {i: corners.line_length_drift(totals[i], best_total) for i in ids}
+    over = [i for i in ids if drift[i] > corners.NORMALIZED_DRIFT_MAX]
+    assert over == [1], f"drift per lap {drift} — exactly lap 1 must be past the gate"
+    assert 0.009 <= drift[1] <= 0.011, f"lap 1 drift {drift[1]:.4%}"
+
+    interior = [b for c in s.corners.corner_list() for b in (c.enter, c.exit) if 0 < b < best_total]
+    alignment = s.corners.lap_alignment(1, totals[1])
+    assert alignment is not None, "lap 1 fell back to the normalized projection"
+    unmatched = [b for b in interior if b not in set(alignment[0].tolist())]
+    assert len(unmatched) == 1, (
+        f"{len(unmatched)} unmatched interior boundaries on lap 1 (want exactly 1): "
+        f"boundaries {interior}, warp knots {alignment[0].tolist()}")
+
+    for i, lap in enumerate(drift_noise_laps()):
+        sd = float(np.std(lap["cols"][3] - lap["clean_speed"]))
+        assert abs(sd - DN_SPEED_SIGMA_MPS) <= 0.15 * DN_SPEED_SIGMA_MPS, f"lap {i} speed sd {sd}"
+
+    donors = s.corners.segment_bests().donors
+    assert any(d not in (None, 0) for d in donors), f"every segment donated by the best lap: {donors}"
+    print(f"ok drift+noise fixture: lap 1 drift {drift[1]:.3%}, unmatched boundary "
+          f"{unmatched[0]:.1f} m, segment donors {donors}")
 
 
 def test_synthetic_fingerprint_matches_baseline():
@@ -156,6 +224,7 @@ if __name__ == "__main__":
     tests = [
         test_synthetic_fingerprint_is_deterministic,
         test_reference_clear_reverts_to_base,
+        test_drift_noise_fixture_reaches_the_paths_it_exists_for,
         test_synthetic_fingerprint_matches_baseline,
     ]
     for t in tests:
