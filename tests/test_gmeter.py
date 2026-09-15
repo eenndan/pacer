@@ -573,16 +573,50 @@ def test_axis_check_rejects_every_frame_that_moves_the_gravity_axis():
 
 
 def test_axis_check_rejects_an_all_zero_grav_stream():
-    """A GRAV stream of zeros is not hypothetical: the bundled `hero8.mp4` sample carries one.
-    Un-guarded it reaches the transform as a zero gravity direction — gravity never removed —
-    rather than as an error. The guard reads it as a 90 deg tilt and refuses."""
+    """A GRAV stream of zeros is not hypothetical: the bundled `hero8.mp4` sample carries one (378
+    rows, |GRAV| 0.0000 throughout, where both Max clips read 1.0000). It is refused, but NOT as a
+    tilt. The guard used to report "GRAV sits 90.0 deg off", and that angle was never measured: a
+    zero vector normalises to zero, its dot with anything is 0, and arccos(0) is 90 deg whatever
+    the camera did. The verdict is now shown to the user, and a disclosure that printed that number
+    would state a false angle, so it names what is actually wrong: there is no gravity direction."""
     accl, grav = _axis_pair()
     zero = grav.copy()
     zero[:, 1:4] = 0.0
     ax = gmeter.axis_check(accl, zero)
-    assert ax is not None and ax.measurable and not ax.ok
-    assert abs(ax.tilt_deg - 90.0) < 1e-6, ax.tilt_deg
-    print("ok axis check: an all-zero GRAV stream is refused (90 deg), not silently used")
+    assert ax is not None and not ax.ok
+    assert not ax.has_direction, ax
+    assert not np.isfinite(ax.tilt_deg), f"a zero direction reported a measured tilt: {ax}"
+    assert "90" not in ax.summary() and "no direction" in ax.summary(), ax.summary()
+    assert "no direction" in ax.refusal(), ax.refusal()
+    good = gmeter.axis_check(accl, grav)                  # a real direction states no refusal
+    assert good.has_direction and good.refusal() is None, good
+    print("ok axis check: an all-zero GRAV stream is refused as NO DIRECTION, not as a 90 deg tilt")
+
+
+def test_compute_refuses_a_directionless_grav_even_when_no_tilt_can_be_measured():
+    """THE ROUTE TO AN ALL-NaN METER THAT THE GATE LEFT OPEN.
+
+    The zero-GRAV refusal above only fired when the recording ALSO held `_AXIS_MIN_QUIET` unloaded
+    samples, because the tilt was the first thing measured. A kart under continuous load has fewer:
+    the check returned "not measurable, do not gate", the IMU path ran on the zero direction, and
+    `gdir / norm(gdir)` is 0/0 — so `compute` shipped a full-length meter of NaN lateral g with
+    `has_data` True, and `at_time` answered (nan, 0.0, nan) on every tick. That is the defect
+    `gmeter_overlay.DialFilter.set_g`'s docstring recorded on hero8; hero8 itself escaped it once
+    #277 landed only because its clip happens to be quiet. Whether GRAV HAS a direction does not
+    depend on how loaded the kart is, so it is decided before the unloaded samples are counted."""
+    accl, grav, cori, gt, gx, gy, gs = _build_synthetic(lateral_g=1.0, dur=40.0)
+    assert gmeter.axis_check(accl, grav).n < gmeter._AXIS_MIN_QUIET   # the unmeasurable recording
+    zero = grav.copy()
+    zero[:, 1:4] = 0.0
+    gm = gmeter.compute(accl, zero, cori, gt, gx, gy, gs)
+    lat = np.asarray(gm.lat_g, float)
+    bad = len(lat) - int(np.count_nonzero(np.isfinite(lat)))
+    assert gm.has_data and bad == 0, (
+        f"{bad} of {len(lat)} lateral g samples are non-finite on a meter reporting "
+        f"has_data={gm.has_data}, source={gm.source!r}, axis={gm.axis}")
+    assert gm.source == "gps", gm.source
+    assert gm.axis is not None and not gm.axis.ok and not gm.axis.has_direction, gm.axis
+    print(f"ok compute(): directionless GRAV on a loaded kart -> GPS g ({len(lat)} finite samples)")
 
 
 def test_axis_check_does_not_gate_when_it_cannot_measure():
