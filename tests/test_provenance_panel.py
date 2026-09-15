@@ -28,7 +28,7 @@ from _qtapp import themed_app  # noqa: E402
 _APP = themed_app()            # module scope, BEFORE any widget: the SHIPPING theme
 
 from PySide6.QtCore import QPoint, Qt  # noqa: E402
-from PySide6.QtWidgets import QLabel, QTableWidget  # noqa: E402
+from PySide6.QtWidgets import QLabel, QMenu, QTableWidget  # noqa: E402
 from test_provenance import _session, _with_sectors  # noqa: E402
 
 from studio import provenance, provenance_panel  # noqa: E402
@@ -149,6 +149,32 @@ def test_open_for_declines_a_number_it_cannot_explain():
 
 
 # -------------------------------------------------------------------------------- the menus
+def _spy_menus(*modules):
+    """Swap each surface module's `QMenu` for a recorder whose `exec()` returns at once.
+
+    Both context-menu slots end in a modal `menu.exec(...)`. Driven offscreen, a slot that WRONGLY
+    opens a menu therefore never returns, and the only symptom is a bare ctest Timeout — the same
+    signature as the machine sleeping mid-run (PR #282), naming neither the slot nor the cell. The
+    recorder turns "a menu opened" into a value to assert on, in both directions. Returns
+    (opened, saved); pass `saved` to `_restore_menus` in a finally."""
+    opened = []
+
+    class _Recorder(QMenu):
+        def exec(self, *_args, **_kwargs):
+            opened.append([a.text() for a in self.actions()])
+            return None                     # "dismissed": the slot opens no panel
+
+    saved = [(m, m.QMenu) for m in modules]
+    for m in modules:
+        m.QMenu = _Recorder
+    return opened, saved
+
+
+def _restore_menus(saved):
+    for m, cls in saved:
+        m.QMenu = cls
+
+
 def test_the_lap_table_offers_inspection_on_exactly_the_two_time_columns():
     """Time and the S-splits, and nothing else. `Dist` and `Entry` are real numbers this feature
     has no builder for, and offering the item there would promise an inspection that cannot
@@ -193,13 +219,29 @@ def test_the_lap_table_context_menu_signal_is_wired_and_declines_quietly():
     """The real signal path, not just the helper: a right-click on an inspectable cell reaches
     the menu, and one on a plain cell returns without opening anything. Both are driven here
     because the DECLINE is the half a helper-level test cannot see."""
+    from studio import lap_table as lap_table_module
+
     s = _with_sectors(_session())
     table = LapTable(s)
     table.refresh()
     assert table.table.contextMenuPolicy() == Qt.CustomContextMenu
-    rect = table.table.visualItemRect(table.table.item(0, 2))   # Dist — not inspectable
-    table._on_context_menu(QPoint(rect.center().x(), rect.center().y()))
-    table._on_context_menu(QPoint(-5, -5))                      # nowhere at all
+
+    def centre(col):
+        rect = table.table.visualItemRect(table.table.item(0, col))
+        pos = QPoint(rect.center().x(), rect.center().y())
+        # the click must land ON that cell, or a "decline" is just a click on nothing
+        assert table.table.itemAt(pos) is not None and table.table.itemAt(pos).column() == col
+        return pos
+
+    opened, saved = _spy_menus(lap_table_module)
+    try:
+        table._on_context_menu(centre(2))                       # Dist — not inspectable
+        table._on_context_menu(QPoint(-5, -5))                  # nowhere at all
+        assert opened == [], f"a context menu opened with nothing to inspect: {opened}"
+        table._on_context_menu(centre(1))                       # Time — inspectable
+        assert opened == [[provenance_panel.MENU_LABEL]], opened
+    finally:
+        _restore_menus(saved)
     print("test_the_lap_table_context_menu_signal_is_wired_and_declines_quietly OK")
 
 
@@ -217,9 +259,23 @@ def test_the_corners_table_offers_inspection_on_the_best_cell_only():
     assert prov is not None
     assert prov.formatted == table.item(0, 1).text(), (prov.formatted, table.item(0, 1).text())
     # Every other column declines — driven through the real slot, which must simply return.
-    for c in range(2, table.columnCount()):
-        rect = table.visualItemRect(table.item(0, c))
-        view._on_corner_context_menu(QPoint(rect.center().x(), rect.center().y()))
+    from studio import stats_panel as stats_panel_module
+
+    def centre(col):
+        rect = table.visualItemRect(table.item(0, col))
+        pos = QPoint(rect.center().x(), rect.center().y())
+        assert table.itemAt(pos) is not None and table.itemAt(pos).column() == col
+        return pos
+
+    opened, saved = _spy_menus(stats_panel_module)
+    try:
+        for c in range(2, table.columnCount()):
+            view._on_corner_context_menu(centre(c))
+        assert opened == [], f"the inspect menu opened off the Best cell: {opened}"
+        view._on_corner_context_menu(centre(1))                 # the Best cell itself
+        assert opened == [[provenance_panel.MENU_LABEL]], opened
+    finally:
+        _restore_menus(saved)
     print(f"test_the_corners_table_offers_inspection_on_the_best_cell_only OK — C{cid} best "
           f"{prov.formatted!r} matches its cell; {table.columnCount() - 2} other columns decline")
 

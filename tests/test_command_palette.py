@@ -122,7 +122,17 @@ def test_the_only_menu_rows_the_palette_drops_are_placeholders():
     for action in dropped:
         assert command_palette._is_placeholder(action), (
             f"{action.text()!r} is a real command the palette silently drops")
-    # ...and the predicate must not be vacuous: it has to REFUSE a live command.
+    # ...and the drop has to HAPPEN. The loop above is vacuous over an empty list, so on its own it
+    # passed a walker that dropped nothing and listed "(none)" as a command — the defect this test
+    # is named for. The module's temp library is empty, so Open Recent really does show `(none)`.
+    assert "(none)" in [a.text() for a in dropped], (
+        f"the empty Open Recent placeholder was not dropped (dropped: "
+        f"{[a.text() for a in dropped]})")
+    assert "(none)" not in {e.title for e in rows}, "the palette offers a command called '(none)'"
+    # The predicate must not be vacuous in EITHER direction: it has to ACCEPT the placeholder...
+    placeholder = next(a for _m, a in _menu_actions(win) if a.text() == "(none)")
+    assert command_palette._is_placeholder(placeholder), placeholder.text()
+    # ...and REFUSE a live command.
     live = next(a for _m, a in _menu_actions(win) if a.text().startswith("Open"))
     assert not command_palette._is_placeholder(live), live.text()
     win.deleteLater()
