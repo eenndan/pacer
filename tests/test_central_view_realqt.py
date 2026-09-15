@@ -1044,8 +1044,41 @@ def _run_all():
     test_stats_corner_row_click_restores_grid_then_rings_map()
     test_splitter_handles_stay_thin_under_the_theme()
     test_gmeter_overlay_stays_pinned_to_its_video_and_stands_down_with_it()
+    test_hero8s_refused_imu_is_disclosed_on_the_real_view()
     test_u2_lap_table_cap_notice_reaches_the_window_status_bar()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
+
+
+def test_hero8s_refused_imu_is_disclosed_on_the_real_view():
+    """hero8.mp4 is the one recording pacer can open whose accelerometer the axis gate REFUSES: its
+    GRAV stream is all zeros, while both Max clips and all five D24 chapters measure ALIGNED at
+    1.5-9.4 deg and the other bundled clips carry no GRAV to check at all. Loaded here through the
+    REAL Session.load into a REAL CentralView, because both disclosures are WIRING rather than
+    logic — the toggle's tooltip is set in `_construct_panels`, the card's row in StatsView — and a
+    test that rebuilt either one would be testing its own copy.
+
+    Before: the toggle said "No usable accelerometer, so both axes are derived from the GPS
+    trajectory." and the DATA TRUST card said "g-meter: GPS lateral · GPS-derived longitudinal",
+    unmarked. The refusal existed only on stdout."""
+    from studio.session import Session
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "3rdparty", "gpmf-parser", "samples", "hero8.mp4")
+    s = Session.load([path])
+    axis = s.gmeter_axis()
+    assert axis is not None and not axis.ok and not axis.has_direction, axis
+    assert s.has_gmeter and s.gmeter_source() == "gps", (s.has_gmeter, s.gmeter_source())
+    view = CentralView(s, [path], sidecar_path=None)
+    try:
+        tip = view.video.gmeter_btn.toolTip()
+        assert axis.refusal() in tip, tip
+        assert "No usable accelerometer" not in tip, tip
+        view.stats_view.refresh()
+        row = next(r for r in view.stats_view.trust_card.rows() if r[0] == "g-meter")
+        assert row[2] and axis.refusal() in row[1], row
+    finally:
+        view.deleteLater()
+        _APP.processEvents()
+    print("ok hero8's refused IMU is disclosed on the real toggle and the real DATA TRUST card")
 
 
 def test_tab_bar_switches_pages_and_names_the_corners_lap():
