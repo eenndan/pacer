@@ -2046,6 +2046,51 @@ def test_stats_view_states_the_missing_accelerometer():
     print("test_stats_view_states_the_missing_accelerometer OK")
 
 
+def test_stats_view_trust_card_states_why_the_imu_was_not_used():
+    """A REFUSED accelerometer read, on this card, exactly like a camera that never had a usable one:
+    "g-meter: GPS lateral · GPS-derived longitudinal", unmarked. Measured on the real StudioWindow
+    over the bundled hero8.mp4 (GRAV all zeros) and over a D24 recording pushed through the real
+    gate with its limit at 0: that row, no caveat, and no cross-check row either (a refused IMU is
+    never cross-checked), so nothing on the page said the IMU had been set aside, let alone why.
+
+    The row is where the card already states the g source, so the reason goes there, marked as a
+    caveat exactly like the no-accelerometer and DISAGREE rows beside it."""
+    _app()
+    from studio.gmeter import AxisCheck
+    from studio.stats_panel import NO_GMETER_NOTE, StatsView
+
+    def _g_row(view):
+        return next(r for r in view.trust_card.rows() if r[0] == "g-meter")
+
+    tilted = AxisCheck(n=5000, tilt_deg=34.2, measurable=True, ok=False)
+    blind = AxisCheck(n=0, tilt_deg=float("nan"), measurable=True, ok=False, has_direction=False)
+    for axis in (tilted, blind):
+        sess = _fake_view_session()
+        sess.gmeter_source = lambda: "gps"
+        sess.gmeter_cross = lambda: None
+        sess.gmeter_axis = lambda axis=axis: axis
+        v = StatsView(sess)
+        _term, value, caveat = _g_row(v)
+        assert caveat, f"a refused IMU must be a caveat row: {_g_row(v)}"
+        assert value.startswith("GPS lateral · GPS-derived longitudinal"), value
+        assert axis.refusal() in value, value
+        assert axis.summary() in v.trust_card.toolTip(), v.trust_card.toolTip()
+
+    # A refused IMU with no GPS trajectory to fall back on has no meter at all — and it is still not
+    # "no accelerometer in this recording": the recording had one, and it was refused.
+    sess = _fake_view_session(has_g=False)
+    sess.gmeter_axis = lambda: blind
+    text = StatsView(sess).trust_card.text()
+    assert NO_GMETER_NOTE not in text and blind.refusal() in text, text
+
+    # An ALIGNED check changes nothing on the card.
+    sess = _fake_view_session()
+    sess.gmeter_axis = lambda: AxisCheck(n=5000, tilt_deg=5.1, measurable=True, ok=True)
+    v = StatsView(sess)
+    assert _g_row(v) == ("g-meter", "IMU lateral · GPS-derived longitudinal", False), _g_row(v)
+    print("test_stats_view_trust_card_states_why_the_imu_was_not_used OK")
+
+
 def test_stats_view_zero_lap_page_explains_itself():
     """The 0-lap page was 15 em-dashes across 19 tiles whose only explanation sat in the status
     bar, outside the maximized panel. The dash-only groups now hide behind one block carrying
