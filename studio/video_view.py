@@ -1906,7 +1906,8 @@ class VideoView(QWidget):
         if pane is not None:
             pane.set_g(g)
 
-    def set_gmeter_source(self, source: str, long_source: str | None = None):
+    def set_gmeter_source(self, source: str, long_source: str | None = None,
+                          refusal: str | None = None):
         """State the dial's g provenance — on the TOGGLE'S TOOLTIP, which is where it lives now.
 
         It used to be a 6.5 px tag burned onto the dial's own face, one of eleven text items in a
@@ -1917,10 +1918,13 @@ class VideoView(QWidget):
 
         `source` is the lateral-axis id ("accl"/"gps"), `long_source` the longitudinal one (the GPS
         speed-derivative on the usual meter); `source_sentence` composes the felt-force convention
-        and the mixed provenance from the pair. `central_view` calls this before it disables the
-        button on a recording with no g at all, so the "no accelerometer data" tooltip wins there."""
+        and the mixed provenance from the pair. `refusal` is why the recording's accelerometer was
+        refused (`gmeter.AxisCheck.refusal`), or None — a refused IMU and an absent one are
+        different reasons for the same GPS meter. `central_view` calls this before it disables the
+        button on a recording with no g at all, so its own tooltip wins there."""
         self.gmeter_btn.setToolTip(
-            f"{_GMETER_TOOLTIP}\n{gmeter_overlay.source_sentence(source, long_source)}")
+            f"{_GMETER_TOOLTIP}\n"
+            f"{gmeter_overlay.source_sentence(source, long_source, refusal)}")
 
     def set_gmeter_lap(self, lap_id):
         """Tell the PRIMARY overlay which lap is being driven (per-lap max-G envelope scope). In
