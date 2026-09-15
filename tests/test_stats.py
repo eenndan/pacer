@@ -3660,6 +3660,98 @@ def test_the_coast_copy_states_the_window_the_coast_was_measured_on():
           f"driving.COAST_SMOOTH_S, and neither denies it")
 
 
+def test_the_stats_page_names_the_lateral_axis_this_recording_actually_has():
+    """FOUR texts on this page named the accelerometer as the lateral channel, on every recording.
+
+    #283 made the GPS-derived state reachable AND visible: `axis_check` refuses an accelerometer
+    that does not read gravity when unloaded, and the g-meter toggle + the DATA TRUST card now say
+    so. These four did not. Measured over the real `Session.load` on every bundled sample and both
+    D24 recordings: SEVEN of the ten bundled clips run a GPS-derived lateral axis (hero5, hero6,
+    hero6+ble, hero6a, hero7 and Fusion carry no GRAV/CORI to orient an IMU with; hero8 carries a
+    GRAV stream of zeros and is REFUSED), while both D24 recordings measure ALIGNED at 6.1 and
+    5.9 deg and keep the accelerometer. So the wording had to change on the first group and could
+    not move on the second.
+
+    The GPS-derived lateral is not the accelerometer and does not carry the accelerometer's filter
+    chain either: `_resample_gps_only` takes speed x yaw-rate off the 10 Hz trace, and the
+    LAT_SMOOTH_S boxcar / 200 Hz sensor rate the copy quoted never touch it. `long_g_gps` is built
+    only on the IMU path (gmeter.py), so the LONG_SMOOTH_S window those same sentences claim for
+    the braking axis is absent here too.
+    """
+    _app()
+    from studio import gmeter
+    from studio.gmeter import AxisCheck
+    from studio.stats_panel import (
+        BAND_NOTE_LAT,
+        GG_TOOLTIP,
+        LAP_TABLE_TOOLTIP,
+        StatsView,
+    )
+
+    # The four surfaces, and the claim each one made on every recording.
+    def _surfaces(view):
+        return {
+            "bands note": view.bands_note.text(),
+            "friction circle": view.gg.toolTip(),
+            "PER LAP": view.lap_table.toolTip(),
+            "peak lateral g": view.t_peak_lat.toolTip(),
+        }
+
+    FALSE_ON_GPS = {
+        "bands note": "Lateral g comes from the accelerometer",
+        "friction circle": "Lateral is the accelerometer",
+        "PER LAP": "Lat g is the accelerometer",
+        "peak lateral g": "IMU lateral",
+    }
+
+    refused = AxisCheck(n=0, tilt_deg=float("nan"), measurable=True, ok=False,
+                        has_direction=False)
+    # Two ways to reach a GPS-derived lateral axis: an accelerometer REFUSED by the axis gate
+    # (hero8), and a camera that never had one to refuse (hero5/6/7, Fusion — axis is None).
+    for label, axis in (("refused IMU", refused), ("no IMU at all", None)):
+        sess = _fake_view_session()
+        sess.gmeter_source = lambda: "gps"
+        sess.gmeter_long_source = lambda: "gps"
+        sess.gmeter_cross = lambda: None
+        sess.gmeter_axis = lambda axis=axis: axis
+        v = StatsView(sess)
+        for name, text in _surfaces(v).items():
+            assert FALSE_ON_GPS[name] not in text, (
+                f"[{label}] the {name} still tells the reader the lateral axis is the "
+                f"accelerometer, on a recording whose g-meter is GPS-derived: {text!r}")
+            assert "GPS" in text, (
+                f"[{label}] the {name} never names the GPS trajectory the axis actually comes "
+                f"from: {text!r}")
+        # ...and it must not claim the ACCELEROMETER'S filter chain for a channel that never went
+        # through it. The IMU meter's two windows are absent from the GPS-only path entirely.
+        for name in ("bands note", "friction circle"):
+            text = _surfaces(v)[name]
+            assert f"{gmeter.LAT_SMOOTH_S:g} s" not in text, (
+                f"[{label}] the {name} quotes the accelerometer's boxcar on a GPS-derived "
+                f"lateral axis: {text!r}")
+            assert "200 Hz" not in text, (
+                f"[{label}] the {name} quotes the accelerometer's sample rate on a GPS-derived "
+                f"lateral axis: {text!r}")
+        # The REASON is the one #283 settled — the same clause the toggle and the trust card use,
+        # never a second wording for one refusal.
+        if axis is not None:
+            joined = " ".join(_surfaces(v).values())
+            assert axis.refusal() in joined, (
+                f"[{label}] no surface gives the refusal in the words #283 settled: {joined!r}")
+        v.hide()
+
+    # THE CONTROL, and it is the one that must not move: both D24 recordings keep the
+    # accelerometer, so an IMU-lateral session still reads exactly as it shipped.
+    imu = StatsView(_fake_view_session())
+    assert imu.gg.toolTip() == GG_TOOLTIP
+    assert imu.lap_table.toolTip() == LAP_TABLE_TOOLTIP
+    assert BAND_NOTE_LAT in imu.bands_note.text()
+    assert "IMU lateral" in imu.t_peak_lat.toolTip()
+    imu.hide()
+    print("ok lateral provenance: GPS-derived recordings stop claiming an accelerometer, and an "
+          "IMU-lateral session is untouched")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it
