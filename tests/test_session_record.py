@@ -774,6 +774,31 @@ def test_a_valid_json_store_that_load_cannot_read_is_still_backed_up():
                 assert json.load(f)["version"] == sr.VERSION, why
 
 
+def test_a_half_typed_number_the_validator_lets_through_saves_as_blank():
+    """The numeric fields carry validators, and a validator ACCEPTS intermediate input — it has to,
+    or nobody could type "-3". So a field can be left holding "-", ".", "+" or "1," when the driver
+    clicks Save, and `_read_num` / `_read_int` answer those with None instead of raising out of the
+    form. Typed as keystrokes, through the real validators, so the inputs are ones a user can
+    actually leave behind rather than strings `setText` forced past them."""
+    from PySide6.QtTest import QTest
+
+    dlg = SessionRecordDialog(sr.blank_record(), entry=_entry(), is_new=True)
+    dlg.show()
+    cases = ((dlg.air, "-", "air_temp_c"), (dlg.track_temp, ".", "track_temp_c"),
+             (dlg.humidity, "+", "humidity_pct"), (dlg.hot_rear, ".", "hot_rear"),
+             (dlg.tyre_laps, "+", "tyre_laps"), (dlg.sprocket_front, "1,", "sprocket_front"))
+    for edit, keys, _key in cases:
+        edit.clear()
+        edit.setFocus()
+        QTest.keyClicks(edit, keys)
+        assert edit.text() == keys, f"the validator refused {keys!r} ({edit.text()!r})"
+    out = dlg.result_record()
+    for _edit, keys, key in cases:
+        assert out[key] is None, (key, keys, out[key])
+    dlg.close()
+    print("test_a_half_typed_number_the_validator_lets_through_saves_as_blank OK")
+
+
 def _run_all():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
