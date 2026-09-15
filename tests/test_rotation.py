@@ -377,6 +377,78 @@ def test_a_unit_grav_stream_is_untouched_by_the_zero_guard():
     print(f"ok a unit GRAV stream still builds {len(rot)} samples + a cross-check")
 
 
+def test_an_injected_clock_offset_is_recovered_in_size_and_in_sign():
+    """The estimator's own check: delay one stream by a known amount and the module must report
+    that amount AND name the right channel as the late one. Both directions, because a sign error
+    here would blame the wrong clock on the DATA TRUST card — and the card's whole job is to say
+    which number a reader can trust."""
+    gyro, grav, traces = _build_oval(laps=4)
+    base = rotation.compute(gyro, grav, traces).cross
+    assert base.gps_lag_s is not None, "a clean synthetic fixture is measurable"
+    assert abs(base.gps_lag_s) < 0.02, base.gps_lag_s
+    # A measured zero states agreement rather than a direction nobody measured.
+    assert "within" in base.lag_clause, base.lag_clause
+
+    # Stamp the GYRO 0.4 s LATE -> the GPS trace is now the EARLY one.
+    late = gyro.copy()
+    late[:, 0] += 0.4
+    c = rotation.compute(late, grav, traces).cross
+    assert abs(c.gps_lag_s + 0.4) < 0.02, c.gps_lag_s
+    assert "0.40 s ahead of" in c.lag_clause, c.lag_clause
+
+    # …and the other way, which is the D24 direction: the GPS trace lands behind the gyro.
+    early = gyro.copy()
+    early[:, 0] -= 0.4
+    c2 = rotation.compute(early, grav, traces).cross
+    assert abs(c2.gps_lag_s - 0.4) < 0.02, c2.gps_lag_s
+    assert "0.40 s behind" in c2.lag_clause, c2.lag_clause
+    assert "neither channel is shifted" in c2.lag_clause, c2.lag_clause
+    assert c2.lag_clause in c2.summary(), "the load-time log states it in the same words"
+    print(f"ok injected offset recovered both ways: {c.gps_lag_s:+.3f} / {c2.gps_lag_s:+.3f} s")
+
+
+def test_the_offset_is_measured_on_one_clock_or_the_two_clocks_rate_reads_as_a_drift():
+    """The trap this repo already fell into, and the reason `to_media` exists. The GPS axis and
+    the media axis differ by a RATE (~27 ppm on the D24 recordings), so a sweep against raw
+    telemetry time slides across a session and averages to something SHORTER than the real,
+    constant offset — which is how a 0.46 s offset got written down as 0.35-0.40 s.
+
+    The fixture exaggerates the rate to 2000 ppm so a 95-second synthetic can show what 27 ppm
+    does over an 84-minute recording."""
+    gyro, grav, traces = _build_oval(laps=4)
+    rate, offset = 1.002, 0.0
+    tel_traces = [((t - offset) / rate, x, y, v, d) for (t, x, y, v, d) in traces]
+    shifted = gyro.copy()
+    shifted[:, 0] -= 0.4                      # the D24 direction: GPS 0.40 s behind the gyro
+
+    one_clock = rotation.compute(
+        shifted, grav, tel_traces,
+        to_media=lambda t: rate * np.asarray(t, float) + offset).cross
+    assert abs(one_clock.gps_lag_s - 0.4) < 0.02, one_clock.gps_lag_s
+
+    raw = rotation.compute(shifted, grav, tel_traces).cross
+    assert abs(raw.gps_lag_s - 0.4) > 0.05, (
+        f"measuring on the telemetry axis returned {raw.gps_lag_s:+.3f} s, indistinguishable from "
+        f"the mapped {one_clock.gps_lag_s:+.3f} s — this fixture no longer exercises the trap")
+    print(f"ok one clock {one_clock.gps_lag_s:+.3f} s vs telemetry axis {raw.gps_lag_s:+.3f} s")
+
+
+def test_a_channel_that_never_tracks_the_path_reports_no_offset_rather_than_zero():
+    """A gyro that does not follow the racing line has no clock offset to state. The module says
+    so with None — and the card then omits the sentence entirely — instead of reporting the
+    0.00 s that taking the peak of a noise sweep would hand it."""
+    gyro, grav, traces = _build_oval(laps=4)
+    rng = np.random.default_rng(7)
+    noise = gyro.copy()
+    noise[:, 1:] = rng.normal(0.0, 0.5, size=noise[:, 1:].shape)
+    c = rotation.compute(noise, grav, traces).cross
+    assert c is not None, "the cross-check itself still exists; only the offset is unmeasurable"
+    assert c.gps_lag_s is None, c.gps_lag_s
+    assert c.lag_clause == "", c.lag_clause
+    assert "GPS trace" not in c.summary(), c.summary()
+    print("ok an untracking channel reports NO offset rather than 0.00 s")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

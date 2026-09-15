@@ -374,7 +374,12 @@ class Session:
         projection leaves an empty channel and no cross-check row, never a broken load."""
         try:
             traces = [self._lap_columns(i) for i in self.valid_lap_ids()]
-            self._rotation = rotation.compute(gyro, grav, traces or None, device=device)
+            # The clock-offset measurement needs the GPS times on the GYRO's own (media) clock,
+            # and this is the object that knows the conversion. IDENTITY when the recording never
+            # left the media clock (a GPS5 camera), which is exactly right: then the two axes ARE
+            # one axis and there is no rate difference to take out.
+            self._rotation = rotation.compute(gyro, grav, traces or None, device=device,
+                                              to_media=self.media_clock.to_media)
         except Exception as e:  # noqa: BLE001 — the rotation channel is additive; never break a load
             print(f"studio: rotation channel build failed ({e!r}); rotation disabled.", flush=True)
             return

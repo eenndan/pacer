@@ -50,7 +50,7 @@ estimate would subtract ~0.015 rad/s. But the closed-loop test bounds the true b
 the integrated yaw over a lap lands within 1.7-2.5 % of 2*pi over a ~69 s lap, so any constant
 bias is under ~0.002 rad/s. Subtracting the straights estimate would inject ~7x the error it
 removes. The straights mean is contaminated because a kart circuit's straights are short and the
-GPS/IMU clocks differ by ~0.4 s (below), which drops corner-magnitude samples inside them.
+GPS/IMU clocks differ by ~0.46 s (below), which drops corner-magnitude samples inside them.
 
 THE CROSS-CHECK, and why it has a headline number a correlation cannot give
 --------------------------------------------------------------------------
@@ -84,11 +84,52 @@ cost to mistake the reference for the measurement: this module's first reading o
 scale was 0.83/0.87 where the honest one is 0.89/0.92, and a defect in the app's own geometry
 was written down as a property of the sensor.
 
-Known and NOT corrected here: the GYRO series leads the GPS trace by ~0.35-0.40 s (a lag sweep
-peaks there on both recordings, lifting r from 0.836 to 0.877 and 0.808 to 0.837). Corner-scale
-yaw swings between +-1.5 rad/s inside a second, so that offset is most of the residual
-disagreement, and all of the apparent excess rotation on straights. Diagnosing which clock is
-late is a separate question from reading the stream.
+THE TWO CHANNELS ARE ON DIFFERENT CLOCKS, AND THE GPS ONE IS LATE
+----------------------------------------------------------------
+MEASURED AND STATED, NOT CORRECTED. `measure_lag` reports it per recording, `RotationCheck.
+gps_lag_s` carries it and the Stats page's DATA TRUST rotation row prints it. Nothing in Pacer
+shifts either channel onto the other, so every statistic above is computed with the offset left
+in — which is most of why the corner correlation is 0.95 and not higher.
+
+WHAT IT IS. On the media clock the GPS trace's timestamps run 0.483 s (0060) and 0.459 s (0062)
+BEHIND the gyro's for the same event; per chapter 0.491/0.471 and 0.467/0.469/0.445. It is a
+CONSTANT, not a drift, and it does not step across a chapter seam (5 laps either side of 0062's
+two seams: 0.469 vs 0.491, and 0.443 vs 0.452). The per-lap spread is tight: median 0.485/0.458,
+IQR [0.453, 0.509] and [0.439, 0.475] over 38 and 65 laps. Through `measure_lag` itself, on the
+whole recording, the two read +0.476 s and +0.459 s — its uniform-grid lookup lands 8.6 ms and
+1.1 ms from a plain per-sample np.interp sweep over the same samples, against a per-lap spread of
+30-40 ms, and both print as 0.48 s and 0.46 s in the row that states them.
+
+WHY THIS REPO USED TO READ ~0.35-0.40 s. That figure was measured against RAW TELEMETRY time, and
+the two axes run at different rates — the media clock is ~27 ppm fast — so the lag slid by 0.100 s
+(0060) and 0.167 s (0062) across a session and its average came out short. Measured per lap the
+telemetry-axis figure trends +38.9 / +37.4 ppm, i.e. the rate itself; mapped through
+`media_clock` the same laps trend +12.2 / +10.2 ppm and, with the load-time position boxcar off,
+-2.2 / -0.1 ppm. THE DRIFT WAS THE MEASUREMENT, NOT THE CHANNEL.
+
+IT IS NOT AN ARTIFACT OF THE FILTERS, and the filters are the first thing to suspect: two signals
+put through different windows can manufacture a lag. Every window here is centred, so none of them
+can move a peak, and switching them off says so. Whole-recording, media-mapped, in seconds of GPS
+lag: app filters 0.483/0.459; the gyro low-pass off 0.529/0.479; the curvature boxcar off
+0.475/0.454; both off 0.433/0.479; the 13-sample load-time POSITION boxcar off (`smooth_window=1`,
+a second full load) 0.471/0.465. The estimator itself was checked by delaying the real gyro
+stream 0.400 s: it recovered 0.400 s on both recordings, to the millisecond.
+
+WHICH CLOCK IS LATE — SETTLED AGAINST THE PICTURE. The video is the one reference outside both
+channels, and the user watches it. Yaw taken from the FRAMES themselves (phase correlation
+between consecutive frames, decoded at 160x90) sits with the GYRO and not with the GPS: over 13
+one-lap windows spanning every chapter of both recordings, picture-vs-gyro ran -0.096…+0.073 s
+(median -0.00) while picture-vs-GPS ran +0.03…+0.49 s. At matched bandwidth (both channels
+boxcarred to the position smoother's own 1.3 s, which is zero-phase and cannot move a peak) the
+difference between the two is +0.373…+0.457 s over 6 windows — the same offset this module
+measures. So the gyro rides the picture's clock and the GPS trace is the one arriving late.
+
+WHAT IS STILL OPEN. Whether the GPS timestamps are late because of the receiver's own fix latency
+or because of where the camera files a fix inside a GPMF payload is NOT separable from these
+streams, and the two are indistinguishable to everything downstream. Note the consequence beyond
+this module: every GPS-derived overlay (speed, the map dot, Δ) is drawn from a trace that trails
+the picture by about half a second. Lap TIMES are differences taken on one clock and are
+untouched by any of this.
 """
 
 from __future__ import annotations
@@ -109,7 +150,8 @@ from .gmeter import GRAV_PERM
 LOWPASS_S = 0.30
 
 # Guard (s) each side of a sample before it counts as straight/corner for the cross-check. The
-# GPS and IMU clocks differ by ~0.35-0.40 s (module doc), so a mask taken from the GPS trace and
+# GPS and IMU clocks differ by ~0.46 s (module doc; `measure_lag` states it per recording), so a
+# mask taken from the GPS trace and
 # applied to the gyro leaks corner-magnitude samples into the straights: eroding by half a second
 # cuts the straights' gyro RMS from 0.313 to 0.237 rad/s on the D24 0060 pair and lifts the
 # corner correlation from 0.905 to 0.946 (0.913 to 0.959 on 0062). It removes ~30 % of the
@@ -174,6 +216,12 @@ class RotationCheck:
     loop_ratio_gyro: float       # median (integral yaw_rate dt) / 2*pi over those laps; 1 = exact
     loop_ratio_path: float       # the same for the app's path-derived dtheta/dt channel
     ok: bool
+    # The two channels' CLOCK OFFSET, measured on the media clock (see `measure_lag`). None means
+    # it could not be measured, never 0.0 — a camera whose gyro does not track the path at all has
+    # no offset to state, and printing 0.00 s for it would be a claim nobody measured.
+    gps_lag_s: float | None = None   # + = the GPS trace's timestamps run BEHIND the gyro's
+    lag_corr: float = 0.0            # correlation at that offset …
+    lag_corr_at_zero: float = 0.0    # … against the correlation with the offset left in
 
     @property
     def loop_error_pct(self) -> float:
@@ -188,15 +236,31 @@ class RotationCheck:
         module doc describes; on both D24 recordings it is now 0.1 %."""
         return abs(self.loop_ratio_path - 1.0) * 100.0
 
+    @property
+    def lag_clause(self) -> str:
+        """The clock offset as one human clause, or "" when it was not measured. Single-sourced
+        here because the load-time log and the DATA TRUST row state the same fact."""
+        if self.gps_lag_s is None:
+            return ""
+        if abs(self.gps_lag_s) < 0.005:
+            # A measured zero is a result, but "0.00 s behind" reads as a direction nobody
+            # measured. Say what was actually established: the two clocks agree.
+            return "the GPS trace and the gyroscope agree on the clock to within 0.01 s"
+        side = "behind" if self.gps_lag_s >= 0 else "ahead of"
+        return (f"the GPS trace runs {abs(self.gps_lag_s):.2f} s {side} the gyroscope, "
+                f"and neither channel is shifted to match")
+
     def summary(self) -> str:
         verdict = "AGREE" if self.ok else "DISAGREE"
+        lag = (f"; {self.lag_clause} (r={self.lag_corr:+.2f} at that offset against "
+               f"{self.lag_corr_at_zero:+.2f} with it left in)") if self.lag_clause else ""
         return (f"rotation cross-check [{verdict}] over {self.n} samples: "
                 f"r={self.corr:+.2f} vs path dtheta/dt (gain x{self.gain:.2f}); "
                 f"corners r={self.corner_corr:+.2f} gain x{self.corner_gain:.2f}; "
                 f"straights rms {self.straight_rms_gyro:.2f} vs {self.straight_rms_path:.2f} "
                 f"rad/s; closed-lap rotation {self.loop_ratio_gyro:.3f}x2pi measured vs "
                 f"{self.loop_ratio_path:.3f}x2pi inferred ({self.loop_error_pct:.1f}% vs "
-                f"{self.path_loop_error_pct:.1f}% off exact) over {self.loop_n} laps.")
+                f"{self.path_loop_error_pct:.1f}% off exact) over {self.loop_n} laps{lag}.")
 
 
 @dataclass
@@ -268,6 +332,113 @@ def _erode(mask: np.ndarray, t: np.ndarray, guard: float) -> np.ndarray:
     hi = np.searchsorted(t, t + guard, "right")
     cum = np.concatenate(([0], np.cumsum(mask.astype(np.int64))))
     return mask & ((cum[hi] - cum[lo]) == (hi - lo))
+
+
+# --- THE CLOCK OFFSET BETWEEN THE TWO CHANNELS -------------------------------------------------
+# The GYRO rides the camera's MEDIA clock (GPMF payload spans, exactly like ACCL); the GPS trace is
+# timed on the GPS9 TRUE clock. Those are two different clocks, and they disagree about WHEN: for
+# one event the GPS timestamp lands about half a second LATER than the gyro timestamp.
+#
+# MEASURE IT ON ONE CLOCK OR THE ANSWER DRIFTS. The two axes also run at different RATES — the media
+# clock is ~27 ppm fast (`media_clock.py`) — so a lag measured against raw telemetry time slides
+# through a recording and reads as a drift that is really the rate. Measured per lap on the D24
+# recordings, telemetry axis vs the same laps mapped through `media_clock`:
+#
+#     0060 (38 laps)   telemetry -0.422 s median, trend +38.9 ppm   <- slides 0.100 s per session
+#                      media     -0.485 s median, trend +12.2 ppm
+#     0062 (65 laps)   telemetry -0.362 s median, trend +37.4 ppm   <- slides 0.167 s per session
+#                      media     -0.458 s median, trend +10.2 ppm
+#
+# On the media clock it is a CONSTANT, not a drift: per chapter it reads -0.491/-0.471 (0060) and
+# -0.467/-0.469/-0.445 (0062), and it does not step across a chapter seam (5 laps either side of
+# 0062's two seams: -0.469 vs -0.491 and -0.443 vs -0.452). The earlier ~0.35-0.40 s figure in this
+# repo was measured on the telemetry axis, so it averaged the 27 ppm ramp and understated it.
+#
+# THE SEARCH IS COARSE-TO-FINE because the load path pays for it: one pass at LAG_COARSE_S over
+# +-LAG_SEARCH_S, then LAG_FINE_S around the winner and a parabolic vertex. The peak is broad
+# (correlations within 0.002 of it span ~+-0.05 s), so the coarse step cannot miss it.
+LAG_SEARCH_S = 2.0      # a camera whose GPS is a full two seconds out is not a clock to fit
+LAG_COARSE_S = 0.05
+LAG_FINE_S = 0.005
+# Below this, the peak is not a measurement of anything. The whole-recording correlation AT the
+# peak is 0.917 / 0.879 on the two D24 recordings, so this is generous by a wide margin; it exists
+# to refuse a helmet-cam whose gyro never tracked the path in the first place.
+LAG_MIN_CORR = 0.5
+
+# SUB-SAMPLING THE PATH WAS TRIED AND REFUSED, and it is worth writing down because it looks free.
+# This sweep is a LOAD-PATH cost — 504 ms (0060) and 652 ms (0062) written the obvious way, 13.6 %
+# and 17.6 % of the whole load — and the obvious economy is to correlate every Nth path sample.
+# MEASURED, that moves the answer: a bound of 8,000 samples is every 4th fix on 0060 (+0.483 ->
+# +0.493, 9 ms) and every 6th on 0062, where it reads +0.633 against the true +0.459 — a 174 ms
+# error, a third of the quantity being measured. Every 6th fix is one sample per 0.6 s, which sits
+# right at the bandwidth of the 1.3 s-smoothed path rate and well inside the 0.3 s-smoothed gyro's,
+# so the decimation ALIASES both channels and the aliases move the peak. The comparison therefore
+# keeps every sample, and the speed comes from the gyro side instead: one uniform copy of the gyro
+# series, after which a lag is an index shift rather than tens of thousands of binary searches.
+# Same samples, same answer (checked against a plain per-sample sweep on both recordings), ~1/4
+# the time.
+
+
+def _uniform(t, y):
+    """`y` resampled onto a uniform grid at its own mean rate -> (t0, hz, values).
+
+    The gyro arrives nearly-but-not-exactly uniform (a GPMF payload lays its samples evenly across
+    its own span, and the spans are not identical), so this changes nothing the stream carried; it
+    buys `measure_lag` an O(1) lookup per sample."""
+    span = float(t[-1] - t[0])
+    if span <= 0 or len(t) < 2:
+        return float(t[0]) if len(t) else 0.0, 0.0, np.asarray(y, float)
+    hz = (len(t) - 1) / span
+    n = len(t)
+    return float(t[0]), hz, np.interp(float(t[0]) + np.arange(n) / hz, t, y)
+
+
+def measure_lag(t_gyro, yaw, path_t, path_w):
+    """How far the GPS trace's clock runs BEHIND the gyro's → (gps_lag_s, corr_at_lag, corr_at_0).
+
+    `+0.46` means an event's GPS timestamp is 0.46 s LATER than the same event's gyro timestamp —
+    the D24 reading. `path_t` must already be on the gyro's clock (map it through
+    `media_clock.to_media` first, or the answer carries the two clocks' 27 ppm rate difference as
+    a fake drift — see the block above).
+
+    Returns None when the peak is not a measurement: at the edge of the search window, or below
+    `LAG_MIN_CORR`. None means "not measured", never "zero"."""
+    t_gyro = np.asarray(t_gyro, float)
+    path_t = np.asarray(path_t, float)
+    path_w = np.asarray(path_w, float)
+    if len(t_gyro) < 2 or len(path_t) < _MIN_LAP_SAMPLES:
+        return None
+
+    # EVERY path sample is compared, at every lag (see the block above for what decimating cost).
+    t0, hz, grid = _uniform(t_gyro, yaw)
+    if hz <= 0:
+        return None
+    last = len(grid) - 1
+
+    def corr_at(lag: float) -> float:
+        idx = np.rint((path_t + lag - t0) * hz).astype(np.intp)
+        np.clip(idx, 0, last, out=idx)
+        return _corr(grid[idx], path_w)
+
+    coarse = np.arange(-LAG_SEARCH_S, LAG_SEARCH_S + 1e-9, LAG_COARSE_S)
+    rc = np.array([corr_at(float(x)) for x in coarse])
+    k = int(np.argmax(rc))
+    if k == 0 or k == len(coarse) - 1:
+        return None
+    fine = np.arange(coarse[k] - LAG_COARSE_S, coarse[k] + LAG_COARSE_S + 1e-9, LAG_FINE_S)
+    rf = np.array([corr_at(float(x)) for x in fine])
+    j = int(np.argmax(rf))
+    best, r_best = float(fine[j]), float(rf[j])
+    if r_best < LAG_MIN_CORR:
+        return None
+    if 0 < j < len(fine) - 1:
+        y0, y1, y2 = float(rf[j - 1]), float(rf[j]), float(rf[j + 1])
+        den = y0 - 2.0 * y1 + y2
+        if den < 0:
+            best += 0.5 * (y0 - y2) / den * LAG_FINE_S
+    # The sweep offsets the GYRO, so its peak is negative when the gyro is EARLY. Flip it once,
+    # here, so every caller reads one direction: positive = the GPS trace is the late one.
+    return -best, r_best, corr_at(0.0)
 
 
 def yaw_rate_series(gyro, grav, lowpass_s: float = LOWPASS_S):
@@ -363,7 +534,7 @@ def _loop_ratios(t_gyro, yaw, path_t, path_w, slices):
     return len(gy), float(np.median(gy)), float(np.median(pa))
 
 
-def _cross_check(t_gyro, yaw, lap_traces) -> RotationCheck | None:
+def _cross_check(t_gyro, yaw, lap_traces, to_media=None) -> RotationCheck | None:
     path_t, path_w, kappa, slices = _path_reference(lap_traces)
     if len(path_t) < _MIN_LAP_SAMPLES:
         return None
@@ -384,6 +555,13 @@ def _cross_check(t_gyro, yaw, lap_traces) -> RotationCheck | None:
     corner &= finite
     straight &= finite
 
+    # The two channels' clock offset. Measured on the GYRO's own clock — `to_media` maps the GPS
+    # times onto it — because measuring it on the telemetry axis reads the two clocks' 27 ppm rate
+    # difference as a drift (see the module doc). Every finite sample, corners and straights
+    # alike; the same set `corr` describes.
+    q = path_t if to_media is None else np.asarray(to_media(path_t), float)
+    lag = measure_lag(t_gyro, yaw, q[finite], path_w[finite])
+
     loop_n, loop_gyro, loop_path = _loop_ratios(t_gyro, yaw, path_t, path_w, slices)
     corner_corr = _corr(at[corner], path_w[corner]) if int(np.sum(corner)) > 2 else 0.0
     ok = (corner_corr >= _CORR_MIN and loop_n > 0
@@ -402,10 +580,13 @@ def _cross_check(t_gyro, yaw, lap_traces) -> RotationCheck | None:
                            if int(np.sum(straight)) else 0.0),
         straight_mean_gyro=(float(np.mean(at[straight])) if int(np.sum(straight)) else 0.0),
         loop_n=loop_n, loop_ratio_gyro=loop_gyro, loop_ratio_path=loop_path,
+        gps_lag_s=lag[0] if lag is not None else None,
+        lag_corr=lag[1] if lag is not None else 0.0,
+        lag_corr_at_zero=lag[2] if lag is not None else 0.0,
         ok=bool(ok))
 
 
-def compute(gyro, grav, lap_traces=None, device: str = "") -> Rotation:
+def compute(gyro, grav, lap_traces=None, device: str = "", to_media=None) -> Rotation:
     """Build the measured yaw-rate channel from the raw GYRO + GRAV streams.
 
     Inputs (numpy arrays on the MEDIA clock, as `ingest` returns them):
@@ -415,6 +596,10 @@ def compute(gyro, grav, lap_traces=None, device: str = "") -> Rotation:
         lap — the tuple `Session._lap_columns` returns. Supplying it produces the cross-check;
         without it the channel is still built, with `cross=None`.
       device: the recording camera's `DVNM`, carried through onto the result.
+      to_media: optional telemetry-time -> media-time map (`media_clock.MediaClock.to_media`).
+        Only the clock-offset measurement uses it, and only to put the GPS times on the gyro's own
+        clock before the sweep; without it that offset carries the two clocks' rate difference as
+        a drift and is not reported as a constant. Nothing else in this module is affected.
 
     Returns a `Rotation`. A camera with no GYRO (pre-HERO5) yields an empty one — unlike the
     g-meter there is no GPS fallback here, because a path-derived rate is precisely the thing
@@ -426,5 +611,5 @@ def compute(gyro, grav, lap_traces=None, device: str = "") -> Rotation:
     if lap_traces is not None:
         traces = list(lap_traces)
         if traces:
-            cross = _cross_check(t, yaw, traces)
+            cross = _cross_check(t, yaw, traces, to_media)
     return Rotation(times=t, yaw_rate=yaw, cross=cross, device=device)
