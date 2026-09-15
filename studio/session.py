@@ -3107,6 +3107,15 @@ class Session:
         gm = getattr(self, "_gmeter", None)
         return None if gm is None else gm.cross
 
+    def gmeter_axis(self):
+        """The g-meter's ACCL<->GRAV element-frame check computed at load (`gmeter.AxisCheck`), or
+        None (no IMU pair to check). A failing one is WHY `gmeter_source()` is "gps" on a recording
+        that HAD an accelerometer; `AxisCheck.refusal()` is that reason as a clause, and the DATA
+        TRUST card and the g-meter toggle both state it — before either did, the refusal existed only
+        on stdout. getattr-guarded for the bare-Session (no-__init__) test path, like gmeter_cross."""
+        gm = getattr(self, "_gmeter", None)
+        return None if gm is None else gm.axis
+
     def rotation_cross(self):
         """The measured-rotation cross-check computed at load (`rotation.RotationCheck`), or None
         (no GYRO stream, or no clean lap to close a loop over).
