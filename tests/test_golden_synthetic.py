@@ -170,13 +170,19 @@ def test_drift_noise_fixture_reaches_the_paths_it_exists_for():
     assert over == [1], f"drift per lap {drift} — exactly lap 1 must be past the gate"
     assert 0.009 <= drift[1] <= 0.011, f"lap 1 drift {drift[1]:.4%}"
 
+    # Asked of the spatial MATCHER, not of the warp built from it: this pins a property of the
+    # fixture, so it must hold whatever a projection does with the miss (reverting #228 changes that,
+    # and it is the golden baseline's job, not this test's, to notice).
     interior = [b for c in s.corners.corner_list() for b in (c.enter, c.exit) if 0 < b < best_total]
-    alignment = s.corners.lap_alignment(1, totals[1])
-    assert alignment is not None, "lap 1 fell back to the normalized projection"
-    unmatched = [b for b in interior if b not in set(alignment[0].tolist())]
+    ref_cols, lap_cols = s._cols_cache[0], s._cols_cache[1]
+    matched = corners._spatial_matches(np.asarray(interior), best_total,
+                                       ref_cols[1], ref_cols[2], ref_cols[4],
+                                       lap_cols[1], lap_cols[2], lap_cols[4])
+    unmatched = [b for b, m in zip(interior, matched, strict=True) if not np.isfinite(m)]
     assert len(unmatched) == 1, (
         f"{len(unmatched)} unmatched interior boundaries on lap 1 (want exactly 1): "
-        f"boundaries {interior}, warp knots {alignment[0].tolist()}")
+        f"boundaries {interior}, matches {matched.tolist()}")
+    assert s.corners.lap_alignment(1, totals[1]) is not None, "lap 1 kept the normalized projection"
 
     for i, lap in enumerate(drift_noise_laps()):
         sd = float(np.std(lap["cols"][3] - lap["clean_speed"]))
