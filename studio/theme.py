@@ -482,19 +482,18 @@ def delta_colour(d: float | None) -> str | None:
 # blindness). Ahead (faster, Δ < 0) → ▲ "gaining"; behind (slower, Δ > 0) → ▼ "losing"; even → none.
 # The sign (−/+) and the arrow agree, so the cue is doubly non-colour.
 #
-# THESE TWO CODEPOINTS ARE NOT THE DEFECT, AND CHANGING THEM WOULD MAKE ONE. Measured from the
-# window composite at 1440x900: on #DiffBox the arrow's ink is 14x14 sitting 2.0 px BELOW the
-# centre of the 51x18 digits beside it — but in the app's own UI face the same codepoint is 21x18
-# at cy 0.0, the digits' exact height and centre. What moved it is the SURFACE: #DiffBox (and
-# #PaneBadge) declare `font-family: {MONO_STACK}` down in the QSS, which out-ranks the view's own
-# setFont, and Menlo — the third name in that stack and the first that exists on macOS — centres
-# every geometric shape it carries on the x-height, exactly where it puts the lowercase `s`
-# (measured: `s` is 11x14 at cy +2.0 too). Eight candidate marks across four Unicode blocks were
-# measured: every one Menlo carries is at cy +2.0, and the three that ARE centred (⬆⬇ ▴▾ ▵▿) are
-# not in Menlo at all — they arrive from .AppleJapaneseFont / .AppleSystemUIFont / .AppleKoreanFont,
-# i.e. swapping the codepoint buys a NEW borrowed face, the defect PR #189 removed.
-# The full two-step hand-off (theme.mono_font's tnum is silently a no-op, so the QSS family cannot
-# just be deleted) is written out in tests/test_glyph_vocabulary.py's module docstring.
+# THESE TWO CODEPOINTS WERE NEVER THE DEFECT, AND CHANGING THEM WOULD MAKE ONE. On #DiffBox the
+# arrow's ink once stood 14x14 px, 2 px BELOW the centre of the 18 px digits beside it. What moved
+# it was the SURFACE: #DiffBox and #PaneBadge declared `font-family: {MONO_STACK}` in the QSS,
+# which out-ranks the view's own setFont, and Menlo (the first name in that stack that exists on
+# macOS) centres every geometric shape on the x-height. Eight candidate marks across four Unicode
+# blocks were measured: every one Menlo carries sits low, and the three that centre (⬆⬇ ▴▾ ▵▿) are
+# not in Menlo at all — they arrive from .AppleJapaneseFont / .AppleSystemUIFont /
+# .AppleKoreanFont, a NEW borrowed face, the defect PR #189 removed.
+# So the QSS family is gone from both rules and the labels paint the mono_font their views set
+# (Inter + tnum, which survives the stylesheet's font merge): the arrow now stands at the digits'
+# height and centre. tests/test_charts_header_budget.py measures that from the window composite,
+# and tests/test_glyph_vocabulary.py's module docstring keeps the history.
 DELTA_AHEAD_ARROW = "▲"   # ahead / gaining (negative Δ)
 DELTA_BEHIND_ARROW = "▼"  # behind / losing (positive Δ)
 
@@ -778,6 +777,16 @@ W_SEMIBOLD = QFont.Weight.DemiBold  # 600
 # the QSS font-family declarations (*_STACK). They were two hand-kept copies; nothing painted the
 # UI stack from QSS any more (see the base rule in _build_qss), so a drift between them would have
 # been invisible.
+#
+# D1-01, DECIDED: KEEP THE NAMES THIS MAC DOES NOT HAVE. QFontDatabase.hasFamily is False here
+# (macOS 26, PySide6 6.11.1) for "-apple-system", "SF Pro Text", "sans-serif", "SF Mono",
+# "JetBrains Mono" and "monospace"; what actually paints is the bundled Inter and, for the mono
+# stack, Menlo. Qt skips an absent name at no cost, and deleting them changes no pixel on any
+# machine this app has been measured on. They stay as the stated PREFERENCE on a machine that has
+# them — which also means such a machine paints the mono stack in a different face than the one
+# measured here. That exposure is now small: no live NUMBER reads the mono stack since U1 (#DiffBox
+# and #PaneBadge paint mono_font), only the timecode #Readout, the Shortcuts KeyCap and
+# _mono_stack_font's Inter-absent fallback.
 UI_FAMILIES = ("Inter", "-apple-system", "SF Pro Text", "Helvetica Neue", "sans-serif")
 MONO_FAMILIES = ("SF Mono", "JetBrains Mono", "Menlo", "monospace")
 UI_STACK = ",".join(f'"{f}"' for f in UI_FAMILIES)
@@ -1787,7 +1796,6 @@ QLabel[role="Tagline"] {{
 QLabel#DiffBox {{
     background: transparent;
     color: {C.text};
-    font-family: {MONO_STACK};
     font-size: {HERO}px;
     font-weight: 600;
     padding: {SPACE_XXS}px {SPACE_S}px;
@@ -1896,7 +1904,6 @@ QLabel#Readout {{
 QLabel#PaneBadge {{
     background: transparent;
     color: {C.text_dim};
-    font-family: {MONO_STACK};
     font-size: {CAPTION}px;
     font-weight: 600;
 }}
