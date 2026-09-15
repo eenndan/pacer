@@ -323,6 +323,9 @@ class CentralView(QWidget):
     # no window chrome — the "fullscreen video" gesture, built on the proven maximize + native-
     # fullscreen paths (no risky reparenting of the live media surface).
     videoFocusChanged = Signal(bool)
+    # A one-line, just-happened fact for the WINDOW's status bar, from a panel that has no channel
+    # to it (U2: LapTable.selection_capped — a multi-select trimmed to the charts' lap cap).
+    statusNotice = Signal(str)
 
     def __init__(self, session, paths: list[str], sidecar_path: str | None,
                  parent: QWidget | None = None,
@@ -1002,6 +1005,7 @@ class CentralView(QWidget):
         self.video.positionChanged.connect(self._on_position)
         self.map.timing_lines_changed.connect(self._on_lines)
         self.table.laps_selected.connect(self._on_user_select)
+        self.table.selection_capped.connect(self.statusNotice)
         # Video focus (the ⤢ button / a double-click on the video): toggle the "fill the screen"
         # gesture. False until the user asks for it.
         self._video_focused = False

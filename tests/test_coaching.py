@@ -1634,6 +1634,96 @@ def test_the_share_card_never_publishes_an_abstained_opportunity():
     print("ok share card: abstained top row publishes nothing; a ranked one publishes")
 
 
+# ------------------------------------ U2: the empty state names WHAT removed the laps (D2-08)
+class _LapAccountSession:
+    """A coaching read surface whose summary is the excluded state, with the lap account the real
+    panel reads set independently: the VALID lap ids the lap table lists and the ⚠ DROPOUT subset.
+    `n_clean` is the summary's own denominator (valid minus dropouts, as Session computes it)."""
+
+    def __init__(self, n_clean, valid, dropout):
+        self._opps = K.Opportunities(enough=False, n_laps=n_clean, median_lap_id=None, rows=[])
+        self._valid = list(valid)
+        self._dropout = set(dropout)
+
+    def coaching_opportunities(self):
+        return self._opps
+
+    def coaching_brake_points(self):
+        return {}
+
+    def valid_lap_ids(self):
+        return list(self._valid)
+
+    def dropout_lap_ids(self):
+        return set(self._dropout)
+
+
+_U2_ALIVE: list = []
+
+
+def _panel_state_text(s) -> str:
+    from studio.coaching_panel import OpportunitiesPanel
+    panel = OpportunitiesPanel(s)
+    _U2_ALIVE.append(panel)
+    assert panel.body.currentIndex() == 1, "fixture must reach the excluded page"
+    return panel.empty_state.text()
+
+
+def _dialog_state_text(s) -> str:
+    """The Coaching ▸ Opportunities modal's state, built the way StudioWindow builds it."""
+    from studio.coaching_panel import OpportunitiesDialog
+    from studio.widgets import EmptyState
+    dlg = OpportunitiesDialog(s.coaching_opportunities(), jump_to=None, session=s)
+    _U2_ALIVE.append(dlg)
+    states = dlg.findChildren(EmptyState)
+    assert len(states) == 1, states
+    return states[0].text()
+
+
+def test_u2_zero_lap_coaching_states_the_same_fact_as_every_other_panel():
+    """hero6.mp4 / hero8.mp4, measured in the real StudioWindow: the Laps page, the map, the charts
+    and the status bar all said "No complete laps in this recording." with the GPS-lock / drag-the-
+    line body, while the Coaching page on the same frame said "Not enough clean laps yet. … this
+    session has 0. Drive a few more laps and reload." — the driver blamed for a recording that has
+    no lap at all, and a next action no other panel gave. Zero valid laps is data_quality's state."""
+    _qapp()
+    from studio import data_quality
+    s = _LapAccountSession(n_clean=0, valid=[], dropout=[])
+    want = f"{data_quality.NO_LAPS_HEADLINE}\n\n{data_quality.no_laps_body()}"
+    got = _panel_state_text(s)
+    assert got == want, got
+    assert _dialog_state_text(s) == want
+    print("ok U2: zero-lap coaching copy is the app's one no-laps sentence (panel + modal)")
+
+
+def test_u2_dropout_decided_coaching_copy_does_not_tell_the_driver_to_drive_more():
+    """Five valid laps, three with a GPS dropout: two clean, under MIN_LAPS. The driver drove
+    enough laps — the GPS removed them — so "Drive a few more laps" is the wrong reason. The copy
+    names the dropout count against the lap table's own total, and both surfaces say it."""
+    _qapp()
+    s = _LapAccountSession(n_clean=2, valid=range(5), dropout=[0, 1, 2])
+    got = _panel_state_text(s)
+    assert "Drive a few more laps" not in got, got
+    assert "3 of its 5 laps had a GPS dropout" in got, got
+    assert "this session has 2" in got, got           # the clean denominator is still stated
+    assert _dialog_state_text(s) == got
+    print("ok U2: dropout-decided copy names the GPS, not the driver")
+
+
+def test_u2_count_decided_coaching_copy_keeps_its_next_action_and_reconciles_totals():
+    """Under MIN_LAPS valid laps the count IS the reason, so the next action stays. A dropout among
+    them is named so "this session has 1" reconciles with the 2 rows the lap table lists; a
+    session with none reads exactly as before."""
+    _qapp()
+    got = _panel_state_text(_LapAccountSession(n_clean=1, valid=[0, 1], dropout=[1]))
+    assert "Drive a few more laps" in got, got
+    assert "1 of its 2 laps had a GPS dropout" in got, got
+    plain = _panel_state_text(_LapAccountSession(n_clean=2, valid=[0, 1], dropout=[]))
+    assert plain == ("Not enough clean laps yet.\n\nCoaching needs 3 clean (valid, GPS-dropout-"
+                     "free) laps; this session has 2. Drive a few more laps and reload."), plain
+    print("ok U2: count-decided copy keeps 'drive more' and reconciles a dropout")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
