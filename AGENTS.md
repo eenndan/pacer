@@ -151,7 +151,7 @@ Pixi tasks (`[tool.pixi.tasks]` in [pyproject.toml](pyproject.toml)):
 |---|---|
 | `pixi run build` | configure + build everything (cmake + Ninja → `build/Release`) |
 | `pixi run test` | CTest: the C++ Catch2 suites **and** the registered Python studio tests (the pre-PR gate) |
-| `pixi run test-fast` | the fast inner loop: `test` minus the two slowest suites (`test_export_video`, `test_compare_lifecycle`) — **94 of 96 tests, ~223 s** (two runs, 222.8 s and 222.9 s, 2026-09-09; the ~18 s this row used to claim predates #220, which re-measured the list and found it had been excluding the wrong test) |
+| `pixi run test-fast` | the fast inner loop: `test` minus the two slowest suites (`test_export_video`, `test_compare_lifecycle`) — **111 tests, ~276 s** (one run, 276.5 s, 2026-09-15). Both ctest tasks run under `caffeinate -si`: a Mac that idle-sleeps mid-suite freezes the in-flight test, and ctest then reports it as a `Timeout` lasting as long as the sleep, far past `--timeout`, on a different test every run. If you see that signature, check `pmset -g log` before hunting a hang — rationale in `pyproject.toml` |
 | `pixi run golden` | run **only** the synthetic core-math equivalence gate (`test_golden_synthetic`) — sub-second |
 | `pixi run smoke` | the CI E2E gate: full `StudioWindow` offscreen on the bundled sample (`_smoke --no-video`) |
 | `pixi run studio [-- files]` | the studio app (PySide6) — depends on `build` |
