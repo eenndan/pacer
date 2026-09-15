@@ -159,6 +159,15 @@ def test_a_change_inside_the_corners_own_spread_is_not_a_change():
                         [_sample(4.598, iqr=0.05)], alike).outcomes[0]
     assert outside.kind == F.OUTCOME_SLOWER, outside
     assert abs(outside.delta - 0.061) < 1e-6
+    # WHOSE spread: the WIDER of the two sessions', in either order — a change is only as aimable
+    # as the noisier side. Both pairs above have near-equal spreads, so on their own they cannot
+    # tell "wider" from "narrower": a verdict built on the tight side passed them unchanged.
+    for then_iqr, now_iqr in ((0.05, 0.20), (0.20, 0.05)):
+        lopsided = F.verdict([_item(median=4.537, iqr=then_iqr)], _now(),
+                             [_sample(4.598, iqr=now_iqr)], alike).outcomes[0]
+        assert lopsided.kind == F.OUTCOME_UNCHANGED, (
+            f"0.061 s is inside half of the noisier session's 0.20 s spread, but with IQRs "
+            f"then={then_iqr} / now={now_iqr} it was graded {lopsided.kind!r}")
     # the bar itself is coaching's constant, not a second one invented here
     assert F.SPREAD_MARGIN is K.SPREAD_MARGIN
     print(f"ok spread gate: {F.outcome_sentence(inside)}")
