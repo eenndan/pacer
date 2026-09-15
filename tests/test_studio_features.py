@@ -1455,6 +1455,7 @@ class _FakeView:
         self.lapTabChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
         self.gridSizesChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
         self.videoFocusChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
+        self.statusNotice = SimpleNamespace(connect=lambda *_a, **_k: None)  # U2 notice channel
         # …and the Marks page's own five intents, which _build_ui also connects. `set_marks` is
         # deliberately NOT here: _refresh_marks gates on `hasattr(view, "set_marks")`, so leaving
         # it off keeps this fake out of the marks surface while still proving the wiring is made.
