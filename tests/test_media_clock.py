@@ -169,9 +169,10 @@ def test_chapter_map_defaults_to_identity_and_carries_a_clock():
 class _ClockedSession:
     """The minimum an export needs: one lap on the TELEMETRY clock plus the conversion."""
 
-    def __init__(self, t0=4634.0421, t1=4704.2956, lap=63, rate=D24_RATE, offset=0.0):
+    def __init__(self, t0=4634.0421, t1=4704.2956, lap=63, rate=D24_RATE, offset=0.0,
+                 gps_lag=0.0):
         self._t0, self._t1, self._lap = t0, t1, lap
-        self.clock = media_clock.MediaClock(rate=rate, offset=offset)
+        self.clock = media_clock.MediaClock(rate=rate, offset=offset, gps_lag=gps_lag)
         self.tt = np.linspace(t0, t1, 200)
         self.tv = np.full(200, 60.0)
         self.has_gmeter = False
@@ -246,11 +247,11 @@ def test_strip_clock_reaches_the_lap_time_at_the_flag():
 
 
 # -------------------------------------------------------------------------- seam 2: the player
-def _pane(rate=D24_RATE, offset=0.0):
+def _pane(rate=D24_RATE, offset=0.0, gps_lag=0.0):
     cmap = chapters.ChapterMap(
         ["/tmp/GX010062.MP4", "/tmp/GX020062.MP4", "/tmp/GX030062.MP4"],
         [1729.728, 1729.728, 1590.0051],
-        media_clock=media_clock.MediaClock(rate=rate, offset=offset))
+        media_clock=media_clock.MediaClock(rate=rate, offset=offset, gps_lag=gps_lag))
     return PlayerPane(cmap), cmap
 
 
@@ -328,6 +329,161 @@ def test_cross_recording_pane_uses_its_own_recordings_clock():
     primary.seek(3000.0)
     reference.seek(3000.0)
     assert primary._pending[1] != reference._pending[1]
+
+
+# ================================================== seam 3: the GPS timestamps' own lag (X3)
+# The fit above is a RATE problem. This is a different one on the same axis: the GPS receiver's
+# timestamp names an instant LATER than the one the picture shows. studio/rotation.py measures it
+# against the camera's own gyroscope — which rides the picture — at +0.476 s (D24 0060) and
+# +0.459 s (0062), per chapter and per lap, with no step at a chapter seam. Uncorrected, every
+# GPS-derived overlay value is painted against a frame ~14 of them late at 30 fps.
+D24_LAG = 0.4764
+
+
+def test_the_lag_moves_the_picture_trace_mapping_by_a_constant():
+    """It is a SHIFT, not a rate: both ends of a lap move by the same amount, the inverse stays
+    exact (a seek and the lookup that follows it must agree), and the pure map is still there for
+    the measurement to run on."""
+    pure = media_clock.MediaClock(rate=D24_RATE, offset=-0.0045)
+    lagged = pure.with_gps_lag(D24_LAG)
+    t = 2000.0
+    assert abs((pure.to_media(t) - lagged.to_media(t)) - D24_LAG) < 1e-12
+    assert abs(lagged.to_telemetry(lagged.to_media(t)) - t) < 1e-9
+    assert abs((lagged.to_media(t + 70.0) - lagged.to_media(t))
+               - (pure.to_media(t + 70.0) - pure.to_media(t))) < 1e-12
+    # THE MEASUREMENT MUST NOT SEE ITS OWN CORRECTION, or a second build reads ~0 and the
+    # correction justifies itself. `without_gps_lag` is what rotation is handed.
+    assert lagged.without_gps_lag().gps_lag == 0.0
+    assert lagged.without_gps_lag().to_media(t) == pure.to_media(t)
+    assert not media_clock.MediaClock(gps_lag=D24_LAG).is_identity
+
+
+def test_a_lag_that_is_not_a_measurement_is_refused():
+    """None means "not measured", never zero; and a value no receiver latency explains must not
+    move a user's video. Each refusal keeps the pure map — the behaviour before this existed."""
+    pure = media_clock.MediaClock(rate=D24_RATE, offset=0.0)
+    assert pure.with_gps_lag(None) is pure
+    assert pure.with_gps_lag(float("nan")) is pure
+    assert pure.with_gps_lag(float("inf")) is pure
+    assert pure.with_gps_lag(media_clock.MAX_GPS_LAG_S + 0.01) is pure
+    assert pure.with_gps_lag(-media_clock.MAX_GPS_LAG_S - 0.01) is pure
+    # …and installing twice REPLACES rather than compounding (a re-measured recording is not 2x).
+    assert abs(pure.with_gps_lag(D24_LAG).with_gps_lag(D24_LAG).gps_lag - D24_LAG) < 1e-12
+
+
+def test_the_export_window_and_the_frame_lookups_move_together_by_the_lag():
+    """The exporter's two crossings, checked as one: the window seeks `lag` earlier, and the frame
+    at that seek is described by the trace sample it is a picture OF. Uncorrected, the same frame
+    is described by a sample from half a second earlier — which is the defect, in numbers."""
+    plain, lagged = _ClockedSession(), _ClockedSession(gps_lag=D24_LAG)
+    t0p, t1p = ev.lap_window_for_export(plain, 63)
+    t0l, t1l = ev.lap_window_for_export(lagged, 63)
+    assert abs((t0p - t0l) - D24_LAG) < 1e-9, (t0p, t0l)
+    assert abs((t1p - t1l) - D24_LAG) < 1e-9, (t1p, t1l)
+    assert abs((t1l - t0l) - (t1p - t0p)) < 1e-9, "the lap must not be stretched by a shift"
+
+    ev.overlay_values_at(lagged, t0l)
+    assert lagged.asked and all(abs(a - 4634.0421) < 1e-6 for a in lagged.asked), lagged.asked
+    ev.overlay_values_at(plain, t0l)          # the SAME frame, through the uncorrected mapping
+    assert all(a - 4634.0421 < -0.4 for a in plain.asked), plain.asked
+
+
+def test_the_player_seeks_the_frame_the_trace_sample_is_a_picture_of():
+    """The live seam, through the real pane: the same telemetry instant reaches QMediaPlayer
+    `lag` earlier, and the position coming back is the instant that frame shows. The exporter and
+    the player read ONE map, so a burned clip and the app cannot disagree."""
+    plain, _ = _pane()
+    lagged, _ = _pane(gps_lag=D24_LAG)
+    sp, sl = _record_positions(plain), _record_positions(lagged)
+    plain.seek(1700.0)
+    lagged.seek(1700.0)
+    assert abs((sp[0] - sl[0]) / 1000.0 - D24_LAG) < 2e-3, (sp, sl)
+    lagged._on_position(sl[0])
+    assert abs(lagged.current_global_time() - 1700.0) < 2e-3
+
+
+def test_a_measured_lag_is_installed_on_the_recordings_own_clock():
+    """The wiring, through the real method: rotation measures, the session folds it onto the map
+    the video layer holds. Every refusal path keeps the pure fit rather than half-applying one."""
+    from studio import rotation
+    from studio.session import Session
+
+    def _clock_after(cross, rate=D24_RATE, offset=0.02):
+        s = Session.__new__(Session)
+        s.chapters = chapters.ChapterMap(
+            ["GX010060.MP4"], [3000.0],
+            media_clock=media_clock.MediaClock(rate=rate, offset=offset))
+        if cross is not _NO_ROTATION:
+            s._rotation = rotation.Rotation(times=np.zeros(1), yaw_rate=np.zeros(1), cross=cross)
+        s._install_gps_lag()
+        return s.media_clock
+
+    def _cross(lag):
+        return rotation.RotationCheck(
+            n=26562, corr=0.87, gain=0.89, corner_n=9000, corner_corr=0.946, corner_gain=0.87,
+            straight_n=8000, straight_rms_gyro=0.24, straight_rms_path=0.05,
+            straight_mean_gyro=0.026, loop_n=38, loop_ratio_gyro=0.983, loop_ratio_path=1.001,
+            ok=True, gps_lag_s=lag, lag_corr=0.917, lag_corr_at_zero=0.854)
+
+    installed = _clock_after(_cross(D24_LAG))
+    assert abs(installed.gps_lag - D24_LAG) < 1e-12
+    assert abs(installed.rate - D24_RATE) < 1e-15 and abs(installed.offset - 0.02) < 1e-15
+    # NOT MEASURED IS NOT ZERO, in all three of its shapes.
+    assert _clock_after(_cross(None)).gps_lag == 0.0          # gyro that never tracked the path
+    assert _clock_after(None).gps_lag == 0.0                  # no cross-check at all
+    assert _clock_after(_NO_ROTATION).gps_lag == 0.0          # no GYRO stream / a failed build
+    # …and a measurement past the bound is refused, loudly, instead of moving the video by it.
+    assert _clock_after(_cross(media_clock.MAX_GPS_LAG_S + 0.5)).gps_lag == 0.0
+
+
+def test_the_dial_and_the_speed_describe_the_same_frame():
+    """THE ONE WAY THIS FIX COULD HAVE MADE THE PICTURE WORSE. The g series never leaves the
+    camera's media clock (`gmeter.compute` stamps it with the ACCL sample times), so indexing it
+    with a telemetry time asked the wrong instant of it — and once the GPS lag is corrected, that
+    wrong instant is ~0.45 s AHEAD of the picture instead of behind. The accessor crosses the same
+    seam as everything else, so the dial and the speed beside it name one frame.
+
+    The fixture's g VALUE is its own timestamp, so the sample that comes back says which instant
+    was asked for."""
+    from studio import gmeter
+    from studio.session import Session
+
+    clock = media_clock.MediaClock(rate=D24_RATE, offset=0.02, gps_lag=D24_LAG)
+    s = Session.__new__(Session)
+    s.chapters = chapters.ChapterMap(["GX010060.MP4"], [3000.0], media_clock=clock)
+    gt = np.arange(0.0, 3000.0, 0.02)
+    s._gmeter = gmeter.GMeter(times=gt, lat_g=gt.copy(), long_g=np.zeros_like(gt), cross=None)
+
+    t_trace = 300.0
+    picture = clock.to_media(t_trace)
+    lat, _lon, _total = s.g_at_time(t_trace)
+    assert abs(lat - picture) < 0.02, (lat, picture)
+    # …and that is NOT what indexing the series with the telemetry time gives: the gap is the whole
+    # correction, and it is the direction that would have put the dial ahead of the picture.
+    assert abs(lat - t_trace) > 0.4, lat
+
+
+def test_a_session_with_no_chapter_map_still_answers_for_the_dial():
+    """WHAT THE SYNTHETIC GOLDEN GATE CAUGHT, kept as a test of its own.
+
+    `g_at_time` crosses the clock now, and a BARE Session — `Session.__new__` with no load behind
+    it, which is what the synthetic fixtures and half the suites build — has no `chapters`
+    attribute at all. The first version of this fix read `self.chapters` and raised there, and the
+    fingerprint's guarded dump recorded `__unsupported__` for the leaf instead of numbers: a clock
+    dependency does not move a golden leaf, it DELETES one, which is the quieter failure."""
+    from studio import gmeter
+    from studio.session import Session
+
+    s = Session.__new__(Session)
+    gt = np.arange(0.0, 10.0, 0.02)
+    s._gmeter = gmeter.GMeter(times=gt, lat_g=gt.copy(), long_g=np.zeros_like(gt), cross=None)
+    assert s.media_clock.is_identity          # no map at all -> no conversion, as before
+    assert s.gps_lag_applied_s is None
+    assert abs(s.g_at_time(4.0)[0] - 4.0) < 0.02
+
+
+class _NO_ROTATION:   # noqa: N801 — a sentinel, not a class anyone instantiates
+    """`Session` with no `_rotation` attribute at all: `_build_rotation` sets it inside its try."""
 
 
 def _run_all():

@@ -402,7 +402,9 @@ def test_an_injected_clock_offset_is_recovered_in_size_and_in_sign():
     c2 = rotation.compute(early, grav, traces).cross
     assert abs(c2.gps_lag_s - 0.4) < 0.02, c2.gps_lag_s
     assert "0.40 s behind" in c2.lag_clause, c2.lag_clause
-    assert "neither channel is shifted" in c2.lag_clause, c2.lag_clause
+    # The clause is about THESE figures, which carry the offset; whether the video overlay is
+    # corrected by it is the session's business (Session._install_gps_lag), not this dataclass's.
+    assert "measured with that offset left in" in c2.lag_clause, c2.lag_clause
     assert c2.lag_clause in c2.summary(), "the load-time log states it in the same words"
     print(f"ok injected offset recovered both ways: {c.gps_lag_s:+.3f} / {c2.gps_lag_s:+.3f} s")
 

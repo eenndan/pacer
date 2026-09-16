@@ -44,11 +44,32 @@ one sample's naive time. What this removes is the part that GROWS: after the fit
 the same at the last lap of a session as at the first, instead of ramping to 0.22 s. That is the
 error a viewer sees, and it is why the fit is on the SPREAD, not on any single instant.
 
+AND THE GPS TIMESTAMPS THEMSELVES ARE LATE. The rate fit above puts a telemetry instant on the
+media clock; it does NOT say whether the timestamp on a GPS fix names the instant the picture
+shows. Measured (studio/rotation.py, which cross-correlates the camera's own gyroscope against the
+path-derived rate): an event's GPS timestamp lands **+0.476 s (0060) / +0.459 s (0062)** after the
+same event's gyro timestamp, with no step at a chapter seam and a per-lap IQR of ~0.03 s. The gyro
+rides the picture (settled against yaw taken from the frames themselves), so the trace is the late
+one, and every GPS-derived overlay — speed, Δ, the map dot, the dial's longitudinal axis — was
+painted against a frame ~14 of them past the one it belongs to at 30 fps.
+
+That offset is `gps_lag` here. It is NOT part of the fit and cannot be: `fit` sees only the two
+time axes, and both carry it equally. It is measured per recording at load and installed onto this
+object afterwards (`Session._install_gps_lag`), so a recording whose gyro cannot be measured — or
+whose measurement is refused — keeps the pure two-clock map and the app's older behaviour.
+
+`gps_lag` shifts the picture<->trace mapping and NOTHING else: `to_media` seeks `gps_lag` earlier,
+`to_telemetry` asks the trace for the sample that belongs to the frame. Lap TIMES are differences
+taken on one clock and cannot move by a constant. The measurement itself must be taken on the PURE
+map (`without_gps_lag`) or it would be measuring the correction it produced.
+
 Qt-free and pacer-free (numpy only), so the conversion is shared by the pipeline, the exporter and
 the player without dragging either dependency anywhere.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 
@@ -61,44 +82,85 @@ MAX_RESIDUAL_RMS_S = 0.5      # measured 0.028 s (the payload-packing sawtooth);
 MIN_SAMPLES = 100             # 10 s of 10 Hz fixes — below this a rate fit is noise
 MIN_SPAN_S = 60.0             # …and a rate needs a lever arm: 27 ppm over 60 s is 1.6 ms
 
+# The same posture for the MEASURED GPS lag (see the module doc): a bound past which the number is
+# not a receiver's fix latency but a broken measurement, and `with_gps_lag` keeps the pure map
+# rather than moving a user's video by it. Measured 0.476 / 0.459 s on the two D24 recordings;
+# `rotation.measure_lag` already refuses a peak at the edge of its own ±2 s search.
+MAX_GPS_LAG_S = 1.0
+
 
 class MediaClock:
-    """`media = rate * telemetry + offset`, and its exact inverse.
+    """`media = rate * telemetry + offset - gps_lag`, and its exact inverse.
 
-    Built by `fit` from a loaded recording's two time axes; the default is the IDENTITY map, which
-    is what every consumer gets when the recording has no true clock to diverge from (a GPS5
-    camera), when the fit is refused, or when a caller has no clock at all (the duck-typed sessions
-    the tests build). Identity reproduces the app's pre-fix behaviour exactly, so a conversion can
-    never be the reason something stops working."""
+    `rate`/`offset` are the two clocks' affine map, built by `fit` from a loaded recording's two
+    time axes. `gps_lag` is the measured latency of the GPS timestamps themselves (module doc),
+    installed after the fit by whoever measured it; 0.0 means "not measured", which is also the
+    app's older behaviour.
 
-    __slots__ = ("rate", "offset")
+    The default is the IDENTITY map, which is what every consumer gets when the recording has no
+    true clock to diverge from (a GPS5 camera), when the fit is refused, or when a caller has no
+    clock at all (the duck-typed sessions the tests build). Identity reproduces the app's pre-fix
+    behaviour exactly, so a conversion can never be the reason something stops working."""
 
-    def __init__(self, rate: float = 1.0, offset: float = 0.0):
+    __slots__ = ("rate", "offset", "gps_lag")
+
+    def __init__(self, rate: float = 1.0, offset: float = 0.0, gps_lag: float = 0.0):
         self.rate = float(rate)
         self.offset = float(offset)
+        self.gps_lag = float(gps_lag)
 
     @property
     def is_identity(self) -> bool:
-        return self.rate == 1.0 and self.offset == 0.0
+        return self.rate == 1.0 and self.offset == 0.0 and self.gps_lag == 0.0
 
     def to_media(self, t):
-        """Telemetry (GPS9 true-clock) time -> media time. Scalars and numpy arrays alike."""
-        return self.rate * t + self.offset
+        """Telemetry (GPS9 true-clock) time -> the media time whose PICTURE shows that instant.
+        Scalars and numpy arrays alike."""
+        return self.rate * t + self.offset - self.gps_lag
 
     def to_telemetry(self, t):
-        """Media time -> telemetry time — the exact inverse of `to_media`."""
-        return (t - self.offset) / self.rate
+        """Media time -> the telemetry time the frame at `t` is a picture of — the exact inverse
+        of `to_media`."""
+        return (t + self.gps_lag - self.offset) / self.rate
 
     def correction_at(self, t: float) -> float:
-        """How far the media clock is ahead of the telemetry clock at telemetry time `t`, in
-        seconds. The quantity the provenance/diagnostic surfaces would state; 0.0 for identity."""
+        """How far this map moves telemetry instant `t` to reach its picture, in seconds — the two
+        clocks' drift MINUS the GPS lag. The quantity the provenance/diagnostic surfaces would
+        state; 0.0 for identity."""
         return float(self.to_media(t) - t)
+
+    def without_gps_lag(self) -> MediaClock:
+        """The pure two-clock map: the rate fit alone, with no GPS-lag correction.
+
+        THE LAG MEASUREMENT MUST RUN ON THIS ONE. `rotation.measure_lag` puts the GPS trace on the
+        gyro's clock before correlating, and if that map already carried the correction it would
+        report ~0 and the correction would justify itself. It is also what any surface that wants
+        to state the two clocks' drift on its own asks for."""
+        return MediaClock(rate=self.rate, offset=self.offset)
+
+    def with_gps_lag(self, lag: float | None) -> MediaClock:
+        """This map plus a measured GPS lag, or SELF when the lag is not one to apply.
+
+        Refused (returning self, so the caller cannot half-apply it): a `None` — which
+        `rotation.measure_lag` uses for "not measured", never for zero — a non-finite value, and
+        anything past `MAX_GPS_LAG_S`, which is a broken measurement rather than a receiver's fix
+        latency. A lag replaces any previous one rather than compounding with it."""
+        if lag is None:
+            return self
+        try:
+            lag = float(lag)
+        except (TypeError, ValueError):
+            return self
+        if not math.isfinite(lag) or abs(lag) > MAX_GPS_LAG_S:
+            return self
+        return MediaClock(rate=self.rate, offset=self.offset, gps_lag=lag)
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostics
         if self.is_identity:
             return "MediaClock(identity)"
+        lag = f", gps_lag={self.gps_lag:+.4f}s" if self.gps_lag else ""
         return (f"MediaClock(rate={self.rate:.9f} [{(self.rate - 1.0) * 1e6:+.2f} ppm], "
-                f"offset={self.offset:+.4f}s)")
+                f"offset={self.offset:+.4f}s{lag})")
 
 
 IDENTITY = MediaClock()
