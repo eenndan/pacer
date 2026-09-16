@@ -236,7 +236,10 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
     three things such an interval could mean — the corner's lap-to-lap spread, the uncertainty on
     its median, and the benefit measured on the laps that already did the recommended thing —
     disagree by 4× on the same corner, and the third one's **sign flips** between recordings and is
-    confounded by lap pace. The numbers are in `studio/docs/refused-2026-09.md` §3. Pacer locates a corner on a lap by matching the track position, not
+    confounded by lap pace. The numbers are in `studio/docs/refused-2026-09.md` §3.
+
+- **Every lap's corners are now measured in the same frame — which moves the ideal lap and
+  reorders the coaching list.** Pacer locates a corner on a lap by matching the track position, not
   by assuming the lap is a uniformly stretched copy of the best one. That spatial match used to run
   only on laps whose total line length differed from the best lap's by more than 0.5 %; every other
   lap kept the cheaper assumption. The cut-off was inherited, not measured, and measuring it showed

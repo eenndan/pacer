@@ -1068,7 +1068,7 @@ def theme_sentence(theme: Theme) -> str:
 #
 # WHY THIS EXISTS. "Start with C3" is the one sentence in the app that tells a driver which corner
 # to work on FIRST, and it names one corner. Measured on both real recordings on current `main`
-# (after #289 put the coaching window on the shared alignment and #300 removed the drift gate —
+# (after #289 put the coaching window on the shared alignment and #300 removed the drift threshold —
 # both moved these numbers), with a paired within-lap permutation test over 20,000 corner-label
 # swaps, the top ranked corner is not distinguishable from the second on EITHER recording:
 #
