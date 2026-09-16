@@ -519,7 +519,8 @@ class LibraryDialog(QDialog):
                  backup_info: Callable[[], dict | None] | None = None,
                  records: dict | None = None,
                  edit_record: Callable[[dict], dict] | None = None,
-                 reload_records: Callable[[], dict] | None = None):
+                 reload_records: Callable[[], dict] | None = None,
+                 manage_tracks: Callable[..., None] | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — session library")
         self._index = index
@@ -553,6 +554,12 @@ class LibraryDialog(QDialog):
         # file-op-free, which is also what keeps it hermetic in tests.
         self._restore_library = restore_library
         self._backup_info = backup_info
+        # SAVED TRACKS — a different store from this index (tracks.json, the circuits pacer
+        # auto-detects), reached from here because this dialog is already where the app answers
+        # "what has pacer remembered about my driving?". The note below names that file, and the
+        # Track column and filter are read off these names. Injected like every other act, so this
+        # dialog neither opens the manager's store nor knows its rules.
+        self._manage_tracks = manage_tracks
         self._backup = self._read_backup_info()
         self._entries = list(index.get("entries", []))
 
@@ -779,6 +786,16 @@ class LibraryDialog(QDialog):
             self.backup_btn.setToolTip("Save a copy of your library index to a location you choose")
             self.backup_btn.clicked.connect(lambda: self._backup_library())
             buttons.addWidget(self.backup_btn)
+        # The saved CIRCUITS behind the Track column: rename one that was mistyped, delete one that
+        # should not be there. Non-destructive in itself (it opens a manager that asks before every
+        # change), so it sits with the other data controls rather than beside the wipe.
+        if self._manage_tracks is not None:
+            self.tracks_btn = QPushButton("Saved tracks…")
+            self.tracks_btn.setToolTip(
+                "Rename or delete the circuits pacer auto-detects (tracks.json). Your analysed "
+                "recordings and their personal-best history are kept either way")
+            self.tracks_btn.clicked.connect(lambda: self._manage_tracks(self))
+            buttons.addWidget(self.tracks_btn)
         buttons.addStretch(1)
         # Write up the selected session: conditions + tyres + setup. An everyday action ON THE
         # SELECTED ROW, so it sits with Open rather than with the destructive controls on the left.

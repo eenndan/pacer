@@ -399,6 +399,41 @@ def remove(index: dict, fingerprint_key: str) -> bool:
     return False
 
 
+def rename_track(index: dict, old: str, new: str) -> int:
+    """Re-key every entry recorded under track `old` to `new` (mutates), returning how many moved.
+
+    THE INDEX KEYS A CIRCUIT'S HISTORY BY NAME. ``prior_best`` / ``best_entry`` / ``pb_series`` /
+    ``track_summary`` all select on ``e.get("track") == track``, so renaming a circuit in the track
+    database WITHOUT this leaves every past session filed under the old name while the next
+    recording at that location auto-detects the new one — ONE circuit with TWO personal-best
+    histories, neither of them complete, and a PB chart that starts over. Entries of any other track
+    are untouched.
+
+    The caller owns the write (``rename_track_and_save``) and the multi-store gesture: the per-track
+    focus list and the session record's provenance stamp key on the same name and move with it."""
+    moved = 0
+    for e in index.get("entries", []):
+        if e.get("track") == old:
+            e["track"] = new
+            moved += 1
+    return moved
+
+
+def rename_track_and_save(old: str, new: str, path: str | None = None) -> tuple[dict, int]:
+    """Load, re-key `old` → `new`, write back atomically; returns (index, entries moved).
+
+    Writes NOTHING when no entry carried the old name, so renaming a circuit this library has no
+    history for cannot churn the file. No ``.bak`` is taken either, deliberately: a re-key is
+    reversible by renaming back, while the one backup slot holds the copy ``clear`` leaves — a
+    whole wiped library — and spending it on a reversible rename would be the worse trade. Any
+    OSError from the write propagates to the caller, which guards it."""
+    index = load(path)
+    moved = rename_track(index, old, new)
+    if moved:
+        save(index, path)
+    return index, moved
+
+
 def clear(path: str | None = None) -> None:
     """Wipe the whole library index to an empty one and write it back atomically, KEEPING A COPY.
     Removes ONLY the app-support index (the personal history of what/where you recorded) — the

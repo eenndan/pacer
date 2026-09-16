@@ -3176,10 +3176,104 @@ class StudioWindow(QMainWindow):
                             # (forget / clear / restore).
                             records=self._load_records(),
                             edit_record=self._edit_session_record,
-                            reload_records=self._load_records)
+                            reload_records=self._load_records,
+                            # The saved-TRACK list is a different store from the session index, but
+                            # it is the same question ("what has pacer remembered about my
+                            # driving?") and this dialog is already where the app answers it.
+                            manage_tracks=self._open_track_manager)
         dlg.exec()
         # The dialog may have written (or deleted) the OPEN recording's own record.
         self._update_record_chip()
+
+    # ------------------------------------------------------------------ saved tracks (F2)
+    def _track_rows(self) -> list[dict]:
+        """The saved-tracks row model for ``TrackManagerDialog`` — the merged built-in + user view,
+        each row saying whether a rename/delete can actually REACH it.
+
+        ``editable`` is the user's own file holding it, which is a different question from
+        ``builtin``: a built-in the user has refined is both, and deleting that one reverts to the
+        shipped line instead of removing the circuit. Guarded — an unreadable DB lists nothing
+        rather than breaking the dialog."""
+        try:
+            editable = set(track_db.user_names())
+            return [{"name": e["name"],
+                     "builtin": track_db.is_builtin(e["name"]),
+                     "editable": e["name"] in editable,
+                     "sectors": len(e.get("sectors") or [])}
+                    for e in track_db.all_tracks()]
+        except (OSError, ValueError) as exc:
+            print(f"studio: saved tracks not readable ({exc!r}).", flush=True)
+            return []
+
+    def _open_track_manager(self, parent=None) -> None:
+        """Open the saved-tracks manager. Imported here rather than at module scope to keep this
+        file's import surface unchanged for the package-extraction work queued against it."""
+        from .track_dialog import TrackManagerDialog
+        dlg = TrackManagerDialog(
+            self._track_rows(), parent=parent if parent is not None else self,
+            rename_track=self._rename_track, delete_track=self._delete_track,
+            restore_tracks=self._restore_tracks, backup_info=track_db.backup_summary,
+            reverts_to_builtin=track_db.reverts_to_builtin)
+        dlg.exec()
+
+    def _rename_track(self, old: str, new: str) -> list[dict]:
+        """Rename a saved circuit EVERYWHERE its name is an identity key, and return the fresh rows.
+
+        A track name is not just a label: the library index files a circuit's personal-best history
+        under it, the focus list is keyed by it, and the session record stamps it as provenance. So
+        renaming only the track database would split one circuit's history in two the moment the
+        next recording auto-detected the new name. This composes the four stores into one gesture,
+        exactly as ``_forget_recording`` composes the index, the sidecar, the record and the marks.
+
+        The track DB goes FIRST and its refusals (blank name, name already in use, a built-in, no
+        such track) propagate to the dialog, which shows them — nothing else has been written at
+        that point. The three satellite stores are then each guarded on their own: a failure to
+        re-key one must not leave the rename half-undone, so it is reported and the rest proceed."""
+        track_db.rename_track(old, new)
+        for label, call in (("library index", lambda: library.rename_track_and_save(old, new)),
+                            ("focus list", lambda: focus.rename_track_and_save(old, new)),
+                            ("session records",
+                             lambda: session_record.rename_track_and_save(old, new))):
+            try:
+                call()
+            except (OSError, ValueError) as exc:
+                print(f"studio: {label} not re-keyed to {new!r} ({exc!r}).", flush=True)
+        try:
+            # The LIVE session, if it is the renamed circuit. A bare assignment is right here and
+            # nowhere else: `adopt_track` exists to record which lines a name vouches for, and a
+            # rename changes no lines at all — re-recording them would re-certify whatever is on
+            # screen now. It also has to happen BEFORE anything re-writes this recording's library
+            # row, or that row would be re-stamped with the old name and undo its own re-key.
+            if getattr(getattr(self, "session", None), "track_name", None) == old:
+                self.session.track_name = new
+            if getattr(self, "view", None) is not None:
+                self._apply_session_notice()
+                self._update_focus_list()
+        except Exception as exc:  # noqa: BLE001 — a refresh must never undo a completed rename
+            print(f"studio: surfaces not refreshed after renaming a track ({exc!r}).", flush=True)
+        return self._track_rows()
+
+    def _delete_track(self, name: str) -> list[dict]:
+        """Delete a saved circuit and return the fresh rows. Refusals (a built-in the user file does
+        not hold) propagate to the dialog.
+
+        DELIBERATELY NOT CASCADED. Every analysed session keeps the track name it was driven under,
+        so the library's personal-best history, the focus list and the session records are left
+        exactly as they are — see ``track_db.remove_track``. Deleting a circuit stops FUTURE
+        recordings there detecting it; it is not a retraction of what was already measured, and no
+        file beside the user's footage is touched."""
+        track_db.remove_track(name)
+        return self._track_rows()
+
+    def _restore_tracks(self) -> list[dict]:
+        """Put the automatic ``tracks.json.bak`` back and return the fresh rows. ``track_db.restore``
+        refuses a missing/unreadable/empty backup by leaving the DB alone, and the dialog only
+        offers the button when ``backup_summary`` reports something restorable."""
+        try:
+            track_db.restore()
+        except OSError as exc:
+            print(f"studio: could not restore the saved tracks ({exc!r}).", flush=True)
+        return self._track_rows()
 
     def _restore_library(self) -> dict:
         """Put the automatic backup back as the live index and return the result, for the dialog to

@@ -465,6 +465,34 @@ def remove(store: dict, fingerprint: str) -> bool:
     return (store or {}).setdefault("records", {}).pop(fingerprint, None) is not None
 
 
+def rename_track(store: dict, old: str, new: str) -> int:
+    """Re-stamp every record whose auto-stamped ``track`` is `old` with `new` (mutates), returning
+    how many moved.
+
+    The stamp is PROVENANCE, not a key — records are keyed by the library fingerprint — so nothing
+    is ORPHANED by leaving it stale. It moves anyway because the library entry beside it is being
+    re-keyed in the same gesture, and two surfaces showing one quantity must agree: a record read on
+    its own (in the ``.bak``, in a text editor, in a future export) would otherwise name a circuit
+    that no longer goes by that name, and ``stamp_context`` would then silently correct it on some
+    later unrelated edit, so the disagreement would heal at a moment nobody could predict."""
+    moved = 0
+    for rec in (store or {}).get("records", {}).values():
+        if isinstance(rec, dict) and rec.get("track") == old:
+            rec["track"] = new
+            moved += 1
+    return moved
+
+
+def rename_track_and_save(old: str, new: str, path: str | None = None) -> int:
+    """Load, re-stamp `old` → `new`, write back atomically; returns how many records moved. Writes
+    nothing when none did, so this cannot churn the backup slot that holds a cleared notebook."""
+    store = load(path)
+    moved = rename_track(store, old, new)
+    if moved:
+        save(store, path)
+    return moved
+
+
 def stamp_context(rec: dict, entry: dict | None) -> dict:
     """Copy the auto-stamped provenance (date / track / lap count) off a library `entry` onto
     `rec`, returning a new dict. This is the "auto-stamp what the app already knows" half: the
