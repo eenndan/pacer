@@ -308,13 +308,24 @@ it. (The header used to say "#216–#240": #216–#221 shipped *inside* v0.2.0, 
   tracks the racing line) or whose measurement lands past a second, and those recordings keep the
   behaviour they had. The DATA TRUST rotation row now states both facts separately: what was
   measured, and what was done with it.
-- **The g-meter dial was asking the accelerometer for the wrong instant too, by a different
-  amount.** The g series never leaves the camera's media clock, but it was indexed with a telemetry
-  time — so the dial trailed the picture by the two clocks' own drift (up to 0.169 s at the end of
-  the 84-minute recording, growing through the session) rather than by the GPS lag. Correcting only
-  the GPS chain would have pushed the dial 0.3–0.45 s the other way, ahead of the picture; the
-  lookup now crosses the same seam everything else does, so the dial and the speed beside it
-  describe one frame.
+- **The g-meter dial was asking the accelerometer for the wrong instant too — and the first
+  correction for it went the wrong way.** The g series is *stamped* on the camera's media clock, so
+  it was indexed with a telemetry time and trailed the picture by the two clocks' own drift (up to
+  0.169 s by the end of the 84-minute recording). The first fix therefore made the dial cross the
+  same full mapping as the speed. That assumed the accelerometer's *content* is on the picture's
+  clock, and **measured against the gyroscope — the one channel settled against yaw taken from the
+  frames themselves — it is not**: the lateral g sits **+0.399 s (0060) / +0.406 s (0062)** behind
+  the picture on its own labels, i.e. the accelerometer's content arrives carrying very nearly the
+  same delay the GPS timestamps carry, even though the two streams are stamped together. So undoing
+  the GPS lag at the dial pushed it the wrong way, and left the dial's lateral **+0.386 s / +0.393 s
+  behind the speed painted beside it** — with the speed itself correct to +0.004 s / −0.001 s over
+  the same frames. The lookup now crosses the **rate fit alone**: the two clocks' 27 ppm difference
+  is still corrected, the GPS lag is not undone, because the g series carries it too. The dial's
+  lateral lands at −0.078 s / −0.052 s and its longitudinal at −0.051 s / −0.178 s, against +0.411 s
+  / +0.282 s before. That residual is the amount by which the accelerometer's own delay differs from
+  the GPS timestamps' own; it is not zero and is not claimed to be. Worth a mean **0.286 g** on the
+  dial's lateral (p95 0.950 g) on 0060. The same measurement is why the per-lap grip analysis joins
+  the g series **by label** and refuses this conversion — two different seams, measured separately.
 - **A recording with no GPS in it was sold as the app's most accurate timing.** The DATA TRUST
   card's `Timing` row had a two-way label — the video-clock fallback, else "GPS9 true clock" — and
   the loader builds its quality verdict *before* it knows whether the GPS trace survives. When the

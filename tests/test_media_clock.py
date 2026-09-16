@@ -437,11 +437,24 @@ def test_a_measured_lag_is_installed_on_the_recordings_own_clock():
 
 
 def test_the_dial_and_the_speed_describe_the_same_frame():
-    """THE ONE WAY THIS FIX COULD HAVE MADE THE PICTURE WORSE. The g series never leaves the
-    camera's media clock (`gmeter.compute` stamps it with the ACCL sample times), so indexing it
-    with a telemetry time asked the wrong instant of it — and once the GPS lag is corrected, that
-    wrong instant is ~0.45 s AHEAD of the picture instead of behind. The accessor crosses the same
-    seam as everything else, so the dial and the speed beside it name one frame.
+    """WHICH LABEL THE PAINTED DIAL ASKS THE G SERIES FOR — and why it is not the frame's own
+    media time.
+
+    #301 installed this conversion on the premise that the g series, being stamped with the ACCL
+    sample times, is PICTURE-TRUE on its own labels. MEASURED on both D24 recordings against the
+    GYRO — the channel PR #291 settled against yaw taken from the frames themselves — that premise
+    is false. `gm.lat_g` sits **+0.399 s (0060) / +0.406 s (0062) BEHIND the picture by label**:
+    the accelerometer's content arrives carrying very nearly the same delay the GPS timestamps
+    carry. #303 measured the same thing from the other side (against the path, where it reads
+    +0.011 / −0.047 by label) and refused the matching "fix" in `driving_channels` because of it.
+
+    So a frame's own media time is the WRONG label to ask this series for, and asking for it put
+    the dial **+0.386 / +0.393 s behind the speed painted beside it** — measured per frame against
+    the picture, with the trace channel beside it reading +0.004 / −0.001 s.
+
+    The accessor therefore crosses the PURE two-clock map: the 27 ppm rate difference between the
+    two axes is real and is corrected, while the GPS-timestamp lag is NOT undone here, because the
+    g series carries it too. After this the dial reads −0.078 / −0.052 s from the picture.
 
     The fixture's g VALUE is its own timestamp, so the sample that comes back says which instant
     was asked for."""
@@ -455,12 +468,17 @@ def test_the_dial_and_the_speed_describe_the_same_frame():
     s._gmeter = gmeter.GMeter(times=gt, lat_g=gt.copy(), long_g=np.zeros_like(gt), cross=None)
 
     t_trace = 300.0
-    picture = clock.to_media(t_trace)
+    # The label the g series is asked for: the rate fit ALONE, with the lag left in the trace.
+    asked = clock.without_gps_lag().to_media(t_trace)
     lat, _lon, _total = s.g_at_time(t_trace)
-    assert abs(lat - picture) < 0.02, (lat, picture)
-    # …and that is NOT what indexing the series with the telemetry time gives: the gap is the whole
-    # correction, and it is the direction that would have put the dial ahead of the picture.
-    assert abs(lat - t_trace) > 0.4, lat
+    assert abs(lat - asked) < 0.02, (lat, asked)
+    # The two clocks' RATE is still crossed — this is not a no-op that just returns t_trace.
+    # (The series is on a 0.02 s grid and `at_time` picks the nearest sample, so the visible gap
+    # is that grid step rather than the map's own 0.028 s at this instant.)
+    assert asked != t_trace and abs(lat - t_trace) > 0.01, (lat, t_trace)
+    # …and it is NOT the frame's own media time. That gap is the whole GPS-timestamp lag, and it
+    # is the direction that left the dial a third of a second behind the speed beside it.
+    assert abs(lat - clock.to_media(t_trace)) > 0.4, (lat, clock.to_media(t_trace))
 
 
 def test_a_session_with_no_chapter_map_still_answers_for_the_dial():
