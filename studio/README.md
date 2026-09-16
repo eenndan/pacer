@@ -204,8 +204,10 @@ Session facade). Edit the algorithm; the service just caches + delegates.
   lap). The GPS9 stream carries the true GPS fix time (`timestamp_ms`) — a clean 10.000 Hz **wall
   clock** (the transponder's clock). We take only its per-sample SPACING and re-anchor each
   contiguous run to that run's media time, so video sync / chapter offsets are unchanged while
-  inter-sample spacing is the real wall-clock spacing. Degrades to naive for any sample without a
-  GPS9 timestamp (a GPS5-only stream). (A C++ Adam timestamp-fit path was tried here but **diverged**
+  inter-sample spacing is the real wall-clock spacing. Degrades to naive wherever no contiguous
+  GPS9 run is found — which is what a GPS5-era stream does, but **not** because its fixes are
+  unstamped: they carry the ~1 s GPSU, so it is the SPACING that rejects them, never `ts == 0`
+  (measured on all nine bundled GPS5-era clips). (A C++ Adam timestamp-fit path was tried here but **diverged**
   on long/noisy sessions and has since been removed — GPS9's true per-fix clock supersedes it.)
 - **GPS9 true-clock timing is unbiased — VALIDATED OUT-OF-SAMPLE, no calibration factor** (rate =
   1.0). Validated against the kart's real lap-timing **transponder** on a SECOND, independent

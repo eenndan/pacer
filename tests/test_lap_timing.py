@@ -52,7 +52,7 @@ def test_gps9_uses_true_spacing_reanchored_to_media():
 
 
 def test_gps9_falls_back_to_naive_without_timestamps():
-    """GPS5-only / sentinel samples (timestamp_ms == 0) keep their naive time exactly."""
+    """Sentinel samples (timestamp_ms == 0 — no wall clock at all) keep their naive time exactly."""
     n = 50
     naive = [10.0 + i * 0.1 for i in range(n)]
     samples = [_sample(0) for _ in range(n)]  # no GPS9 timestamp
@@ -91,7 +91,7 @@ def test_gps9_lone_sample_run_keeps_naive_time():
     can't form a run — the run-extension needs a sane single-step delta to a NEIGHBOURING timed
     sample, and a lone fix has none. So it (like its sentinel neighbours) keeps its naive time
     rather than being re-anchored. This is the `j == i` (no real run) branch."""
-    # idx 2 is the only timestamped fix; idx 0,1,3,4 are GPS5/sentinel (timestamp_ms == 0).
+    # idx 2 is the only timestamped fix; idx 0,1,3,4 are sentinels (timestamp_ms == 0).
     naive = [10.0, 10.1, 10.2, 10.3, 10.4]
     samples = [_sample(0), _sample(0), _sample(700_000), _sample(0), _sample(0)]
     out = np.asarray(_gps9_times(samples, naive, rate_factor=1.0))
