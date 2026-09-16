@@ -44,8 +44,9 @@ stack between them. Neither is optional; together they are worth about half a se
    | 0060 | +26.73 ppm | +0.0256 s | 0.078 s over 49 min |
    | 0062 | +27.11 ppm | +0.0380 s | 0.137 s over 84 min |
 
-   **Two in-repo docstrings say otherwise and both are stale**: `pacer/laps/laps.hpp:43`
-   ("times  media-clock seconds") and `Session._lap_columns` ("media-clock seconds"). The code that
+   **Two in-repo docstrings used to say otherwise; both have since been corrected**:
+   `pacer/laps/laps.hpp` ("times  media-clock seconds") and `Session._lap_columns`
+   ("media-clock seconds"), along with the rest of that comment family. The code that
    gives them away is `Session._build_rotation`, which passes `to_media=` into `rotation.compute`
    precisely because the lap traces it hands over are *not* on the gyro's clock. Anything that
    believes those docstrings inherits the ramp as a fake drift — which is exactly why this repo
