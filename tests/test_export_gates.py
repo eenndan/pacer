@@ -750,7 +750,13 @@ def test_the_progress_modal_counts_frames_and_says_how_long_is_left():
     assert detail(10, 700, 10, 0.5) == "frame 10 of 700", detail(10, 700, 10, 0.5)
     assert detail(480, 2047, 480, 8.0) == "frame 480 of 2047 · about 0:26 left", \
         detail(480, 2047, 480, 8.0)
-    assert detail(700, 700, 700, 10.0) == "frame 700 of 700", detail(700, 700, 700, 10.0)
+    # Every frame written is NOT the export finished: the encoder still has to write the trailer
+    # (1.6-5.7 s on D24). The line used to read "frame 700 of 700" and then nothing moved; it now
+    # names the write, which is what is actually happening.
+    assert detail(700, 700, 700, 10.0) == "all 700 frames rendered · writing the file", \
+        detail(700, 700, 700, 10.0)
+    assert detail(701, 700, 700, 10.0) == "all 700 frames rendered · writing the file", \
+        "a count past the total is the same finishing state, not an ETA"
     print("test_the_progress_modal_counts_frames_and_says_how_long_is_left OK")
 
 

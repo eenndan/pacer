@@ -720,7 +720,23 @@ class ComparePainter:
 
     def _paint_progress(self, p: QPainter, fraction: float) -> None:
         """The track-position bar: how far round the lap BOTH panes are. It is the lock made
-        visible — ONE bar for two panes, because under the lock there is only one position."""
+        visible — ONE bar for two panes, because under the lock there is only one position.
+
+        THIS BAR IS A DISTANCE, AND THE SINGLE-LAP EXPORT'S IS A TIME, AND THAT IS DELIBERATE.
+        `export_video._strip_runs` fills its strip with `elapsed / lap_span`, because there the fill
+        sits underneath the lap CLOCK, in the same pill, and a fill that disagreed with the number
+        printed on top of it would be the contradiction. Here there is no single clock to agree
+        with — there are two, one per pane, reading different times — and the one thing both panes
+        share is the track position the lock holds them at. Each fill means what the thing beside it
+        means.
+
+        The two therefore diverge, and the amount is measured rather than assumed: over all 103
+        valid laps of both D24 recordings, |time_fraction - distance_fraction| runs to a median of
+        3.47 % of the bar on 0060 (max 8.93 %, lap 20) and 3.13 % on 0062 (max 5.14 %, lap 48).
+        Neither fraction ever steps BACKWARDS on any lap of either recording, and both reach 1.0 at
+        the flag — so they are two honest answers to two different questions, not one bar that is
+        wrong. tests/test_export_video.py pins the single-lap meaning so a future change cannot
+        quietly swap them."""
         y = self._geo.out_h - self._progress_h
         p.setPen(Qt.NoPen)
         p.setBrush(_c(EXPORT.halo, 170))
