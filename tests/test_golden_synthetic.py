@@ -23,7 +23,7 @@ Session-math leaf in full — see golden_session_dump), across three phases mirr
   * ``drift_noise`` — a SEPARATE session (tests/_synthetic.drift_noise_session): three laps with
                       GPS speed noise at the measured sigma, one of them drifted 1.0 % with a
                       corner boundary its spatial match cannot find. The stadium fixture above
-                      has 0 % drift and noise-free speed, so the drift-gated projection and every
+                      has 0 % drift and noise-free speed, so the spatial projection and every
                       noise-sensitive detector were dead code to this gate: reverting #228's
                       one-frame warp or #275's coast window left it green. This phase goes red
                       on both (see that fixture's block for why each ingredient is needed).

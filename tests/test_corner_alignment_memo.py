@@ -376,10 +376,10 @@ ALIGNMENT_DOCS = [
 # Files whose comments (and, for provenance, an on-screen note) carried the wording where no
 # docstring walk can see it. The gate is gone from every one of them.
 #
-# TWO MORE CARRY IT AND ARE DELIBERATELY ABSENT: `AGENTS.md` (the CI-fixture paragraph) and
-# `tests/test_golden_synthetic.py` (the drift_noise phase note). Both are being rewritten right
-# now by the golden-fixture work merging alongside this, and a guard that fights a concurrent
-# rewrite teaches the next reader to delete the guard. Add them once that lands.
+# `AGENTS.md` is deliberately NOT here even though it names the gate: it spells two UNRELATED
+# gates the same way (the bindings regen-drift gate, the clang-format CI gate), so a text ban on
+# that file would be noise rather than a guard. Its one stale sentence is corrected in the same
+# commit as these.
 ALIGNMENT_TEXT = [
     "studio/session.py",
     "studio/coaching.py",
@@ -387,15 +387,16 @@ ALIGNMENT_TEXT = [
     "studio/stats_panel.py",
     "studio/provenance.py",
     "studio/driving_channels.py",
-    "tests/_synthetic.py",
     "tests/test_studio_features.py",
     "studio/docs/friction-circle-release-investigation.md",
 ]
 
-# The modules that OWN the removed gate's history (the measurement blocks that justify removing it,
-# and the unit tests named after it). They may name it — but only as history, so every occurrence
-# has to sit beside a past-tense marker.
-GATE_HISTORY = ["studio/corners.py", "studio/corner_model.py", "tests/test_corners.py"]
+# Files that OWN the removed gate's history: the measurement blocks that justify removing it, the
+# unit tests named after it, and the golden fixtures whose drift bands are defined AGAINST it
+# (`tests/_synthetic.py` grew a sub-gate band phase alongside this work). They may name it — but
+# only as history, so every occurrence has to sit beside a past-tense marker.
+GATE_HISTORY = ["studio/corners.py", "studio/corner_model.py", "tests/test_corners.py",
+                "tests/_synthetic.py", "tests/test_golden_synthetic.py"]
 PAST_MARKERS = ("old", "used to", "was", "were", "gone", "removed", "no longer", "then-current",
                 "pre-gate", "until it", "there was")
 
