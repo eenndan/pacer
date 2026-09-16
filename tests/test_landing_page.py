@@ -329,6 +329,100 @@ def test_markdown_images_resolve():
     print(f"test_markdown_images_resolve OK ({n} images)")
 
 
+# ------------------------------------------------------------------ 7. the counts the pages quote
+# WHY THESE TWO AND NOT EVERY NUMBER ON THE PAGE. A count the pages state about THE REPO ITSELF is
+# the only kind that goes stale with no edit to the sentence carrying it — every merge moves it and
+# nothing points at the prose. "96 CTest registrations" was written when there were 96 and was read
+# as true through 18 more; both public surfaces carried it. Measured numbers ABOUT A RECORDING
+# (σ 0.0527 s, 107 clean laps) do not rot that way — they are facts about a fixture, and they are
+# pinned where the fixture is.
+_CMAKE = os.path.join(_REPO, "tests", "CMakeLists.txt")
+_CORE = os.path.join(_REPO, "pacer")
+# The page may round the core's size; a suite count may not be rounded at all. 5 % is wide enough
+# that an ordinary core edit does not fail the build over a stale digit, and narrow enough that the
+# claim cannot quietly become a different order of thing.
+_CORE_TOLERANCE = 0.05
+
+
+def _ctest_registrations() -> int:
+    """How many tests `ctest -N` would list, derived from tests/CMakeLists.txt.
+
+    Two registration forms: the `add_pacer_test` macro (one Catch2 executable each) and a literal
+    `add_test(NAME …)` per Python suite. Derived rather than pinned, so ADDING A TEST updates the
+    expected number by itself and only the PROSE has to catch up."""
+    with open(_CMAKE, encoding="utf-8") as f:
+        text = f.read()
+    catch2 = len(re.findall(r"^add_pacer_test\(", text, re.M))
+    python = len(re.findall(r"^add_test\(NAME\b", text, re.M))
+    assert catch2 and python, "neither registration form found — this check has gone vacuous"
+    return catch2 + python
+
+
+def _core_lines() -> int:
+    """`wc -l` over the C++ core's own sources — the number the pages mean by "an N-line core"."""
+    total = 0
+    for root, _dirs, names in os.walk(_CORE):
+        for name in sorted(names):
+            if name.endswith((".cpp", ".hpp")):
+                with open(os.path.join(root, name), encoding="utf-8") as f:
+                    total += sum(1 for _ in f)
+    assert total > 0, "no C++ sources under pacer/ — this check has gone vacuous"
+    return total
+
+
+def test_public_pages_quote_the_real_suite_size():
+    """Every "N CTest registrations" in README.md and the landing page equals what CTest registers.
+
+    THE BUG: both said **96** while `ctest -N` reported **114**. The sentence was true when it was
+    written and nothing in the repo connected it to the thing it counted, so eighteen suites were
+    added under it without a word changing. This derives the number instead."""
+    want = _ctest_registrations()
+    pat = re.compile(r"([\d,]+)\s+CTest registrations", re.I)
+    checked = 0
+    for rel in ("README.md", os.path.join("docs", "index.html")):
+        with open(os.path.join(_REPO, rel), encoding="utf-8") as f:
+            text = f.read()
+        found = pat.findall(text)
+        assert found, (
+            f"{rel} no longer states a CTest registration count — if the claim was deliberately "
+            "removed, remove it from this check's file list too, so the guard cannot go vacuous")
+        for got in found:
+            assert int(got.replace(",", "")) == want, (
+                f"{rel} says {got} CTest registrations; tests/CMakeLists.txt registers {want}")
+            checked += 1
+    assert checked >= 2, f"only {checked} count claims found across both pages"
+    print(f"test_public_pages_quote_the_real_suite_size OK ({want} registrations, "
+          f"{checked} claims)")
+
+
+def test_public_pages_quote_the_real_core_size():
+    """Every "N-line C++23 core" is within 5 % of `wc -l` over pacer/**.{cpp,hpp}.
+
+    THE BUG: both pages said **1,873** against a measured **2,199** — 17 % low, and falling further
+    every time the core grows. A TOLERANCE rather than equality is deliberate: this number moves on
+    ordinary core commits, and a guard that fails every one of them buys truth at the price of an
+    unrelated edit in every C++ PR. It fails when the claim is MISLEADING, not when it is stale in
+    the last digit."""
+    want = _core_lines()
+    pat = re.compile(r"([\d,]+)-line C\+\+23 core", re.I)
+    checked = 0
+    for rel in ("README.md", os.path.join("docs", "index.html")):
+        with open(os.path.join(_REPO, rel), encoding="utf-8") as f:
+            text = f.read()
+        found = pat.findall(text)
+        assert found, (
+            f"{rel} no longer states a C++ core size — if the claim was deliberately removed, "
+            "remove it from this check's file list too, so the guard cannot go vacuous")
+        for got in found:
+            n = int(got.replace(",", ""))
+            assert abs(n - want) <= _CORE_TOLERANCE * want, (
+                f"{rel} says a {got}-line C++23 core; pacer/**.{{cpp,hpp}} is {want} lines "
+                f"({abs(n - want) / want:.0%} out, tolerance {_CORE_TOLERANCE:.0%})")
+            checked += 1
+    assert checked >= 2, f"only {checked} core-size claims found across both pages"
+    print(f"test_public_pages_quote_the_real_core_size OK ({want} lines, {checked} claims)")
+
+
 if __name__ == "__main__":
     test_stylesheet_parses()
     test_palette_is_derived_from_theme()
@@ -336,4 +430,6 @@ if __name__ == "__main__":
     test_links_resolve()
     test_page_is_self_contained()
     test_markdown_images_resolve()
+    test_public_pages_quote_the_real_suite_size()
+    test_public_pages_quote_the_real_core_size()
     print("ALL OK")

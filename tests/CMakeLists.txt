@@ -19,7 +19,7 @@ add_pacer_test(test_gps_source      pacer::gps-source)
 # CTest so `pixi run test` runs them alongside the C++ suite.
 # REQUIRED, not optional: the build needs the interpreter anyway (bindings codegen; the root
 # CMakeLists pins it to the pixi env), so a machine where find_package fails should fail the
-# configure loudly instead of silently dropping the 14 Python tests from the suite.
+# configure loudly instead of silently dropping the 109 Python tests from the suite.
 find_package(Python REQUIRED COMPONENTS Interpreter)
 add_test(NAME test_scrub_conversion
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_scrub_conversion.py)
@@ -174,7 +174,7 @@ set_tests_properties(test_studio_features PROPERTIES
 # 1e-9) over the DETERMINISTIC synthetic session (test_session_services._synthetic_session — stadium
 # loop + seeded g-meter, REAL corner/driving/delta/bests/consistency, no media file), across
 # base/ref/ref_cleared phases, vs a committed baseline (golden_synthetic_baseline.json). Any
-# Session-math leaf drift fails the build — with NO ~11.8 GB D24 load, so it runs in CI. The full,
+# Session-math leaf drift fails the build — with NO ~11.9 GB D24 load, so it runs in CI. The full,
 # higher-coverage D24 golden dump stays the (unchanged) MANUAL gate. Imports Session -> Qt, offscreen.
 add_test(NAME test_golden_synthetic
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_golden_synthetic.py)

@@ -455,7 +455,7 @@
 
     <div class="grid-2">
       <div class="built-card">
-        <h3>A 1,873-line C++23 core</h3>
+        <h3>A 2,199-line C++23 core</h3>
         <p>Everything load-bearing — GPMF ingest, geometry, lap and sector segmentation, GPS9 true-clock timing — lives in <code>pacer/</code>, a clean-room, independently authored implementation. Small enough to read in an afternoon, which is the point.</p>
       </div>
       <div class="built-card">
@@ -464,15 +464,15 @@
       </div>
       <div class="built-card wide">
         <h3>The golden-equivalence gate</h3>
-        <p>Every core-math refactor is proven <span class="hi">byte-identical</span> before it lands: a dense fingerprint of a Session's <em>whole</em> public analysis API on a real 11.8 GB recording, compared leaf-by-leaf at <span class="hi">eps 0 across 120k+ leaves</span>. A deterministic synthetic session runs the same machinery in CI, so the gate survives on a machine that has never seen the footage. Refactors that cannot move a number, provably don't.</p>
+        <p>Every core-math refactor is proven <span class="hi">byte-identical</span> before it lands: a dense fingerprint of a Session's <em>whole</em> public analysis API on a real 11.9 GB recording, compared leaf-by-leaf at <span class="hi">eps 0 across 120k+ leaves</span>. A deterministic synthetic session runs the same machinery in CI, so the gate survives on a machine that has never seen the footage. Refactors that cannot move a number, provably don't.</p>
       </div>
       <div class="built-card wide">
         <h3>Guards that fail the build, not a style guide that asks nicely</h3>
-        <p>The design system is enforced by tests, each walking the app's own source rather than a snapshot: a <strong>dimensional</strong> guard (every padding, radius and height in the stylesheet must be a declared step), a <strong>glyph</strong> guard (every character in a user-visible string must be drawn by the app's own face — Qt silently falls back per character, and eight marks were resolving into five foreign fonts), an <strong>inline-style</strong> guard (thirty-four scattered <code>setStyleSheet</code> strings are down to five named exemptions, each with prose saying whose decision it is), and a <strong>contrast</strong> guard holding every text role to WCAG AA and every step of the map's colour ramp apart by more than the CIE76 JND <em>under a deuteranopia simulation</em>. Their exemption lists must each name a decision and are checked in both directions, so a dead exemption is also a failure.</p>
+        <p>The design system is enforced by tests, each walking the app's own source rather than a snapshot: a <strong>dimensional</strong> guard (every padding, radius and height in the stylesheet must be a declared step), a <strong>glyph</strong> guard (every character in a user-visible string must be drawn by the app's own face — Qt silently falls back per character, and eight marks were resolving into five foreign fonts), an <strong>inline-style</strong> guard (thirty-four scattered <code>setStyleSheet</code> strings are down to eight calls behind four named exemptions, each with prose saying whose decision it is), and a <strong>contrast</strong> guard holding every text role to WCAG AA and every step of the map's colour ramp apart by more than the CIE76 JND <em>under a deuteranopia simulation</em>. Their exemption lists must each name a decision and are checked in both directions, so a dead exemption is also a failure.</p>
       </div>
       <div class="built-card wide">
         <h3>The real app, driven offscreen, on real footage</h3>
-        <p>Dev harnesses in <code>studio/dev/</code> boot the actual window offscreen on an actual recording. Every screenshot on this page is produced that way, by one command, so a marketing image nobody can regenerate cannot quietly start lying. The suite drives the real widget tree too, and one test boots the app twice at pinned device pixel ratios behind a <strong>write tripwire on every write path Python and Qt expose</strong> — because the app had been silently re-saving a tracked asset on every launch, and the suite missed it for running at exactly the one DPI that reproduced the committed bytes. <strong>96 CTest registrations</strong> run on every change — one of them is this page, checked against the app's own design tokens and its own images.</p>
+        <p>Dev harnesses in <code>studio/dev/</code> boot the actual window offscreen on an actual recording. Every screenshot on this page is produced that way, by one command, so a marketing image nobody can regenerate cannot quietly start lying. The suite drives the real widget tree too, and one test boots the app twice at pinned device pixel ratios behind a <strong>write tripwire on every write path Python and Qt expose</strong> — because the app had been silently re-saving a tracked asset on every launch, and the suite missed it for running at exactly the one DPI that reproduced the committed bytes. <strong>115 CTest registrations</strong> run on every change — one of them is this page, checked against the app's own design tokens and its own images.</p>
       </div>
       <div class="built-card wide">
         <h3>Built solo, with LLM coding agents under discipline</h3>

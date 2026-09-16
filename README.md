@@ -113,7 +113,7 @@ What shipped when is in **[CHANGELOG.md](CHANGELOG.md)**.
 
 One desktop app on a small C++ core, with the correctness moved out of code review and into gates.
 
-- **A 1,873-line C++23 core** (`pacer/`) does the load-bearing work: GPMF ingest, geometry,
+- **A 2,199-line C++23 core** (`pacer/`) does the load-bearing work: GPMF ingest, geometry,
   lap/sector segmentation, and GPS9 true-clock timing. It is a clean-room, independently authored
   implementation (see [Acknowledgements](#acknowledgements)).
 - **Bindings that cannot drift.** The nanobind glue and stubs are litgen-generated, and CI runs
@@ -134,9 +134,9 @@ One desktop app on a small C++ core, with the correctness moved out of code revi
   and 0 of 12 grip cells rendered a readable value"* is the comment above the fix. A companion
   guard proves the app never writes into its own source tree, from a tripwire on every write path
   Python and Qt expose.
-- **96 CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
-  widgets and measure them. The whole thing runs in about five minutes; `pixi run golden`, the gate
-  you actually run after every maths change, takes half a second. CI runs all of it plus an
+- **115 CTest registrations** — Catch2 over the C++ core, plus offscreen Qt suites that build real
+  widgets and measure them. The whole thing runs in about nine minutes; `pixi run golden`, the gate
+  you actually run after every maths change, takes under a second. CI runs all of it plus an
   end-to-end offscreen smoke on every pull request.
 
 Depth: **[AGENTS.md](AGENTS.md)** (the authoritative developer reference) and
@@ -174,7 +174,7 @@ than it is. So that is a rule with an owner in the code:
 Pacer is developed solo, with the implementation handed to LLM coding agents under a strict
 discipline: one focused pull request per change, gated by the golden-equivalence check on real
 footage and the full suite before it merges. The rigour above is what makes that workflow safe —
-the guardrails do the trusting so the agents can do the typing. 195 merged pull requests went into
+the guardrails do the trusting so the agents can do the typing. 203 merged pull requests went into
 the v0.2.0 cycle alone.
 
 ## Non-goals
