@@ -3516,7 +3516,23 @@ class StatsView(QWidget):
             rows.append(("Break in series",
                          f"{broke} — compare times across it with that in mind", True))
         quality = getattr(session, "timing_quality", None)  # a Session @property
-        if quality is not None:
+        if quality is not None and getattr(quality, "no_gps", False):
+            # A THIRD clock state, and the row below could not say it: its label was a two-way
+            # choice — the media-clock fallback, else "GPS9 true clock" — so a verdict that was
+            # NEITHER fell through to the flattering branch. Measured on the bundled `karma.mp4`
+            # (0 GPS fixes) this card printed "GPS9 true clock · 0% of moving fixes rejected",
+            # vouching for the app's best timing on a file with no satellite fix in it, and
+            # reporting a reassuring 0 % over a population of nothing. It is a CAVEAT, so it
+            # sorts up with the other trust-breaking facts, and it carries the action: the
+            # cause is a camera setting or a camera without a receiver, and the strip row
+            # beside it says which of the two this recording was.
+            rows.append(("Timing",
+                         "no GPS fixes survived in this recording — nothing here can be "
+                         "lap-timed, and no time axis was built from satellite fixes. Check "
+                         "that the camera's GPS was switched on; some models carry no "
+                         "receiver at all.", True))
+            tips.append(quality.detail())
+        elif quality is not None:
             clock = ("video clock (estimated)" if quality.media_clock
                      else "GPS9 true clock")
             # "of MOVING fixes" is not padding: the fraction is judged over the RETAINED MOVING

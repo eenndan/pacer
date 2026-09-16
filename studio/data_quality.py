@@ -29,6 +29,15 @@ from ._signal import MAX_DOP
 # Timing-clock provenance — which per-sample time axis the load path actually built.
 GPS9_TRUECLOCK = "gps9_trueclock"        # GPS9 per-sample fix spacing (the validated headline path)
 MEDIA_CLOCK_FALLBACK = "media_clock_fallback"  # naive media clock (older GPS5 camera, no GPS9)
+# …and the third case, which had no value and therefore took the DEFAULT — the best one.
+# `load_recording` builds its verdict before it knows whether the trace survives, and returns early
+# when the gate and the trim leave nothing. That early return handed back `TimingQuality()`, whose
+# default clock is GPS9_TRUECLOCK, so a recording carrying NO GPS AT ALL reported the validated
+# headline path. Measured on the bundled `karma.mp4` (0 GPS fixes, a Karma-mounted HERO5): the Stats
+# page's DATA TRUST card printed "Timing: GPS9 true clock · 0% of moving fixes rejected" — the card
+# vouching for the most accurate timing the app has on a file with not one satellite fix in it.
+# This is that state, named, so no time axis can be claimed where none was built.
+NO_GPS_TRACE = "no_gps_trace"            # no usable GPS trace survived — no time axis was built
 
 # A dropped-fix fraction at/above this reads as "GPS quality low" in the UI (a few rejected fixes
 # on an otherwise clean trace is normal and not worth a banner). 8% ≈ a fix every ~12 s on a 10 Hz
@@ -84,10 +93,11 @@ def no_laps_body() -> str:
 class TimingQuality:
     """The data-quality verdict for one loaded recording (pure value object on Session).
 
-      * `clock` — GPS9_TRUECLOCK or MEDIA_CLOCK_FALLBACK (which per-sample time axis was built);
+      * `clock` — GPS9_TRUECLOCK, MEDIA_CLOCK_FALLBACK or NO_GPS_TRACE (which per-sample time axis
+        was built, or that none was);
       * `dropped_fraction` — fraction of raw GPS fixes the DOP/fix quality gate rejected, in [0, 1].
 
-    `degraded` is True when EITHER concern fires; the views show the banner/badge + de-emphasize
+    `degraded` is True when ANY concern fires; the views show the banner/badge + de-emphasize
     the lap times only then, so a normal GPS9 recording is visually identical to today."""
 
     clock: str = GPS9_TRUECLOCK
@@ -99,6 +109,15 @@ class TimingQuality:
         return self.clock == MEDIA_CLOCK_FALLBACK
 
     @property
+    def no_gps(self) -> bool:
+        """True when no usable GPS trace survived, so NO time axis was built from fixes at all.
+
+        Distinct from `media_clock`, and deliberately not folded into it: the media-clock fallback
+        names a real axis built from the video clock and its copy promises lap times that are
+        merely approximate. Here there are no lap times to qualify."""
+        return self.clock == NO_GPS_TRACE
+
+    @property
     def low_gps_quality(self) -> bool:
         """True when the quality gate rejected a concerning fraction of fixes."""
         return self.dropped_fraction >= DROPPED_FIX_CONCERN_FRAC
@@ -106,7 +125,7 @@ class TimingQuality:
     @property
     def degraded(self) -> bool:
         """True when ANY data-quality concern applies — the views demote the timing only then."""
-        return self.media_clock or self.low_gps_quality
+        return self.media_clock or self.low_gps_quality or self.no_gps
 
     def dropped_pct(self) -> int:
         """The rejected-fix percentage (rounded) surfaced to the user — the exact figure the
@@ -117,6 +136,9 @@ class TimingQuality:
         """Human-readable concern lines (most-significant first), one per active issue — the
         text the data-quality banner stacks. Empty when the timing is fully high-quality."""
         out: list[str] = []
+        if self.no_gps:
+            out.append(
+                "No GPS fixes survived in this recording — no lap can be timed from it.")
         if self.media_clock:
             out.append(
                 "Timing estimated from the video clock (older GoPro without GPS9) — "
@@ -139,6 +161,8 @@ class TimingQuality:
         as its own short summary (the low-GPS case surfaces the exact rejected-fix %); both collapse
         to a combined one-liner."""
         media, low = self.media_clock, self.low_gps_quality
+        if self.no_gps:
+            return "No usable GPS in this recording — no lap can be timed."
         if media and low:
             return (f"Timing estimated (video clock) and GPS quality low — "
                     f"{self.dropped_pct()}% of fixes rejected; times may be less accurate.")
@@ -156,6 +180,12 @@ class TimingQuality:
         whose only concern is rejected fixes gets the low-GPS wording (no "estimated"). Empty string
         when not degraded."""
         media, low = self.media_clock, self.low_gps_quality
+        if self.no_gps:
+            return ("No usable GPS fix survived in this recording, so nothing in it can be "
+                    "lap-timed and no time axis was built from satellite fixes. Either the camera "
+                    "wrote no GPS stream — check that its GPS was switched on, and note that some "
+                    "models carry no receiver at all — or every fix it did write was rejected "
+                    "before the car moved. The bar under the scrubber shows which it was.")
         if media:
             base = ("Lap times are estimated from the video clock (an older GoPro without GPS9), "
                     "which runs ~0.1% fast — treat the absolute times as approximate.")
@@ -340,6 +370,16 @@ class QualityTimeline:
         if not len(self.cls):
             return ""
         if not self.reports_quality:
+            # TWO different absences reach this branch and they had one sentence between them.
+            # `reports_quality` is False when a GPS5-era camera writes fixes carrying no DOP/fix
+            # fields — and ALSO when no fix arrived at all, because a stream that wrote nothing
+            # reported no quality either. Measured on the bundled `karma.mp4`, which carries no GPS
+            # whatsoever, this printed "the GPS5-era stream carries neither a fix type nor a DOP":
+            # an attribution to a stream that is not in the file, about a camera whose GPS
+            # behaviour we measured nothing about. Say which absence it actually is.
+            if not int(self.n.sum()):
+                return (f"No GPS fix arrived in the whole {self.span_s:.0f} s of this recording — "
+                        f"the camera wrote no usable GPS stream")
             return (f"GPS quality not graded over {self.span_s:.0f} s — "
                     f"{QUALITY_MEANING[UNREPORTED]}")
         counts = self.counts()
