@@ -695,6 +695,59 @@ def test_grip_envelope_uses_clean_not_raw_longitudinal():
     print(f"ok grip envelope: clean-axis divisor = {env:.2f} g (NOT the raw 1.8 g IMU long)")
 
 
+def test_the_lap_g_join_does_not_cross_the_media_clock():
+    """A MEASURED REFUSAL, pinned so the next reader does not re-open it.
+
+    `_lap_g_arrays` reads the g meter at the lap's own TELEMETRY times while the series is stamped
+    on the MEDIA clock, which reads like a bug and was filed as one. Measured on both D24
+    recordings it is not: `gm.lat_g` sits +0.011 s / -0.047 s from the path-derived lateral joined
+    BY LABEL and -0.399 s / -0.404 s joined through `Session.media_clock`, and the same probe run
+    reproduces the product's own `RotationCheck.gps_lag_s` off the gyro to four decimals. So this
+    test asserts the join stays label-based even when the session carries a real, non-identity
+    clock — and then shows the assertion has TEETH by crossing that clock itself and measuring how
+    far it moves the lateral (the defect this guards against is silent: the peak correlation is
+    the same either way, so only the LAG tells them apart)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _synthetic import reset_driving_caches
+
+    from studio import gmeter, media_clock
+
+    s = _bare_driving_session()
+    n = len(s._gmeter.times)
+    times = s._gmeter.times.copy()
+    lat = np.zeros(n)
+    lat[250:330] = 0.5                      # one lateral load, at a known place on the grid
+    s._gmeter = gmeter.GMeter(times=times, lat_g=lat, long_g=np.zeros(n), cross=None,
+                              source="accl", long_g_gps=np.zeros(n))
+    reset_driving_caches(s)
+    _long_flat, lat_flat = s.driving._lap_g_arrays(0)
+    env_flat = s.driving._grip_envelope()
+
+    # The same session, now carrying the D24-shaped clock: 27 ppm fast, with the measured GPS lag.
+    s.chapters = SimpleNamespace(media_clock=media_clock.MediaClock(
+        rate=1.0 + 27.1e-6, offset=0.038, gps_lag=0.4589))
+    assert not s.media_clock.is_identity, "the fixture must carry a real clock or this proves nothing"
+    reset_driving_caches(s)
+    _long_clk, lat_clk = s.driving._lap_g_arrays(0)
+    assert np.array_equal(lat_flat, lat_clk), "the lap g join must not consult the media clock"
+    assert s.driving._grip_envelope() == env_flat, "nor may the grip divisor"
+
+    # TEETH: crossing the clock here is not a no-op — it slides the lateral by the correction.
+    lap_times = s._dist_cache[0][0]
+    c = float(s.media_clock.to_media(lap_times[0]) - lap_times[0])
+    crossed = np.interp(s.media_clock.to_media(lap_times), times, lat)
+
+    def centroid(y):
+        w = np.abs(np.asarray(y, float))
+        return float(np.sum(lap_times * w) / np.sum(w))
+
+    moved = centroid(crossed) - centroid(lat_flat)
+    assert abs(moved - (-c)) < 0.05, (moved, -c)
+    assert abs(moved) > 0.3, f"the clock join must move the load materially, moved {moved:.3f} s"
+    print(f"ok lap g join: label-joined under a live clock (identical arrays); crossing it would "
+          f"slide the lateral {moved:+.3f} s")
+
+
 def test_session_brake_points_accessor_and_caching():
     """D4 wiring: lap_brake_points matches the lap's brake event to a seeded corner and reports the
     apex-speed-matched optimum vs the actual onset, derived from the session's DEMONSTRATED a_max
