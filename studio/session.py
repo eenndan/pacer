@@ -3174,15 +3174,35 @@ class Session:
         (ACCL+GRAV+CORI in the kart frame); LONGITUDINAL is the GPS speed derivative, because the
         IMU forward axis is vibration-inflated (see studio/gmeter.py).
 
-        THE SERIES IS NOT ON THIS FUNCTION'S OWN CLOCK, which is why the conversion is here. The
-        accelerometer never leaves the camera's media clock — `gmeter.compute` stamps the series
-        with the ACCL sample times — so indexing it with a telemetry time asked the wrong instant
-        of it. That was worth the two clocks' drift (up to 0.17 s late by the end of the owner's
-        84-minute recording) before the GPS lag was corrected, and it would be worth the lag itself
-        in the OTHER direction after (`_install_gps_lag`), which is the one way this fix could have
-        made the dial worse than it found it. `media_time` is the same map every other picture-side
-        lookup crosses, so the dial and the speed beside it describe one instant."""
-        return self._gmeter.at_time(self.media_time(float(t)))
+        THE SERIES IS NOT ON THIS FUNCTION'S OWN CLOCK, so a conversion belongs here — but it is
+        the PURE two-clock map (`without_gps_lag`), not the full one, and the difference is
+        measured rather than reasoned.
+
+        The series' LABELS are the camera's media clock: `gmeter.compute` stamps it with the ACCL
+        sample times. So the 27 ppm rate difference between the two axes is real, and it is
+        crossed here (up to 0.17 s by the end of the owner's 84-minute recording).
+
+        Its CONTENT is a separate question, and the answer is not the one #301 assumed. Measured
+        against the GYRO — the channel PR #291 settled against yaw taken from the FRAMES
+        themselves — `gm.lat_g` sits +0.399 s (0060) / +0.406 s (0062) BEHIND the picture by
+        label: the accelerometer's content arrives carrying very nearly the same delay the GPS
+        timestamps carry. #303 measured the same fact from the other side (against the path, where
+        it reads +0.011 / −0.047 by label) and refused the matching "repair" in `driving_channels`
+        because of it.
+
+        SO THE GPS LAG MUST NOT BE UNDONE HERE — the g series carries it too. Asking the series
+        for the frame's own media time (the FULL map, which is what #301 installed) left the dial
+        +0.386 / +0.393 s behind the speed painted beside it — measured per PAINTED FRAME against
+        that same gyro reference, with the trace channel reading +0.004 / −0.001 s over those very
+        frames. Crossing `without_gps_lag()` instead brings the dial to −0.078 / −0.052 s. That
+        residual is the ~0.07 s by which the ACCL content's own delay differs from the GPS
+        timestamps' own; it is not zero and is not claimed to be.
+
+        `media_clock` is the getattr-guarded property, so a bare Session (no `chapters`) still
+        converts by identity — the synthetic golden gate caught that the first time this accessor
+        grew a clock dependency, and a missing one DELETES a fingerprint leaf rather than moving
+        it."""
+        return self._gmeter.at_time(self.media_clock.without_gps_lag().to_media(float(t)))
 
     @property
     def has_gmeter(self) -> bool:
