@@ -682,8 +682,10 @@ def anchor_from_global(chapter_map, t: float) -> tuple[str, float] | None:
       * the authoring -> storage -> resolve ROUND TRIP is EXACT (0.0e+00 s over nine playheads on
         each recording): `global_from_anchor` adds back the same offset this subtracted, so a
         mark reopens on the instant it was typed at, in every open of the same chapter set;
-      * within 0.072 s (0060) and 0.085 / 0.132 s (0062) of a chapter SEAM — the two clocks'
-        divergence at that seam — a playhead is anchored to the neighbouring chapter. Harmless
+      * within 0.405 s (0060) and 0.374 / 0.327 s (0062) of a chapter SEAM — the gap between the
+        playhead's number and the chapter table's at that seam, which is the two clocks'
+        divergence (0.072 / 0.085 / 0.132 s) against the measured GPS lag `MediaClock` now carries
+        the other way — a playhead is anchored to the neighbouring chapter. Harmless
         while that chapter is open (the round trip still lands on the same global instant), and
         only visible if the OTHER chapter is later opened alone, where the mark then reads as
         placed just past that chapter's own end.

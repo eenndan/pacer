@@ -24,6 +24,7 @@ BOTH halves, because either one alone is weak:
 Run: python tests/test_lap_time_axis.py
 """
 import ast
+import math
 import os
 import sys
 
@@ -70,20 +71,50 @@ def _synthetic_axes():
     return samples, naive, times
 
 
+# One stadium loop in local metres — straight, 180-degree arc, return straight, second arc. The
+# shape is BORROWED from tests/test_provenance.py rather than invented: a first attempt here swept
+# back and forth across a line instead of driving a closed loop, and materialised no laps at all.
+RADIUS, STRAIGHT = 30.0, 200.0
+ARC = math.pi * RADIUS
+TOTAL = 2 * STRAIGHT + 2 * ARC          # ~588 m, so a lap at SPEED_MS takes ~29 s
+SPEED_MS = 20.0
+
+
+def _stadium(ds: float = 2.0):
+    s = np.arange(0.0, TOTAL, ds)
+    xs, ys = np.empty_like(s), np.empty_like(s)
+    for i, si in enumerate(s):
+        if si < STRAIGHT:
+            xs[i], ys[i] = si, 0.0
+        elif si < STRAIGHT + ARC:
+            th = (si - STRAIGHT) / RADIUS
+            xs[i] = STRAIGHT + RADIUS * math.sin(th)
+            ys[i] = RADIUS - RADIUS * math.cos(th)
+        elif si < 2 * STRAIGHT + ARC:
+            xs[i] = STRAIGHT - (si - STRAIGHT - ARC)
+            ys[i] = 2 * RADIUS
+        else:
+            th = (si - 2 * STRAIGHT - ARC) / RADIUS
+            xs[i] = -RADIUS * math.sin(th)
+            ys[i] = RADIUS + RADIUS * math.cos(th)
+    return xs, ys, s
+
+
 def _laps_over(times):
-    """A real `pacer.Laps` driven back and forth across a start line on `times`."""
-    cs = pacer.CoordinateSystem(pacer.GPSSample(lat=40.0, lon=-74.0, altitude=0.0))
+    """A real `pacer.Laps` lapping the stadium at a constant speed, sampled on the clock `times`.
+
+    The geometry is deliberately dull and the pace constant — the subject here is the CLOCK, and
+    a lap only has to EXIST for the question to be asked of it."""
+    xs, ys, cum = _stadium()
+    cs = pacer.CoordinateSystem(pacer.GPSSample(lat=52.0, lon=-0.75, altitude=60.0))
     laps = pacer.Laps()
-    # x sweeps +-100 m with a 60 s period, so the line at x == 0 is crossed every 30 s; y is held
-    # inside the line's span. The geometry is deliberately dull — the subject here is the CLOCK.
-    # COSINE, not sine: a sine starts exactly ON the line, and a first sample sitting on it gives
-    # the crossing test no chord to interpolate, so no lap materialises at all (measured: 0).
-    xs = 100.0 * np.cos(2.0 * np.pi * (times - times[0]) / 60.0)
-    for x, t in zip(xs, times, strict=True):
-        laps.add_point(cs.global_(pacer.Vec3f(float(x), 5.0, 0.0)), float(t))
+    times = np.asarray(times, float)
+    s = (SPEED_MS * (times - times[0])) % TOTAL
+    for x, y, t in zip(np.interp(s, cum, xs), np.interp(s, cum, ys), times, strict=True):
+        laps.add_point(cs.global_(pacer.Vec3f(float(x), float(y), 0.0)), float(t))
     laps.set_coordinate_system(cs)
     a, b = pacer.Point(), pacer.Point()
-    a.x, a.y, b.x, b.y = 0.0, -40.0, 0.0, 40.0
+    a.x, a.y, b.x, b.y = 100.0, -20.0, 100.0, 20.0     # across the bottom straight, clear of both arcs
     seg = pacer.Segment()
     seg.first, seg.second = a, b
     laps.sectors = pacer.Sectors(start_line=seg, sector_lines=[])
@@ -97,7 +128,7 @@ def test_the_core_echoes_the_clock_it_was_fed():
     AddPoint, to the bit. That is what makes the axis a studio decision rather than a core one —
     and what made the old header comment ("times  media-clock seconds") a claim the core could
     not have honoured even if it were true."""
-    fed = 1000.0 + np.arange(1800) / 10.0          # 180 s at 10 Hz = six line crossings
+    fed = 1000.0 + np.arange(1800) / 10.0          # 180 s at 10 Hz ≈ six stadium laps
     laps = _laps_over(fed)
     assert laps.laps_count() >= 4, laps.laps_count()
     cols = laps.lap_columns(0)
