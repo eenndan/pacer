@@ -23,7 +23,7 @@ import os
 from typing import NamedTuple
 
 from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor, QFont, QFontMetrics, QGuiApplication
+from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
@@ -84,13 +84,10 @@ _RESTORE_GLYPH = "ph.corners-in"     # shown while maximized — click/Esc to re
 # The old pair never described what shipped anyway — a stylesheet min-height stood these buttons at
 # 26x28, which is neither the value written here nor any size the app declared.
 
-# The widest readouts the hero #DiffBox can ever render (theme.format_ideal_readout /
-# format_delta_speed at their longest realistic values), used to derive its layout floor below.
-_HERO_TEMPLATES = (
-    "Δideal +10.00 s     188 km/h",   # leading with Δ-to-ideal — the default reference
-    "Δ -10.00 s ▼     188 km/h",      # leading with Δ-to-best, plus its direction arrow
-)
-_HERO_PAD_PX = 20   # the QSS's `#DiffBox { padding: 2px 8px }` (16) + a rounding px per side
+# The longest realistic values the hero #DiffBox is sized for (see _hero_templates / _hero_min_width
+# below): two digits of Δ before the point and a three-digit speed.
+_HERO_WIDEST_DELTA_S = 88.88
+_HERO_WIDEST_SPEED_KMH = 188.0
 
 # WHY THE HERO READOUT NEEDS NO APOLOGY ON THE BEST LAP ANY MORE. A font-size census of every
 # visible text-bearing widget at the FIRST PAINTED FRAME of a real three-chapter drop ranks exactly
@@ -111,9 +108,9 @@ _HERO_PAD_PX = 20   # the QSS's `#DiffBox { padding: 2px 8px }` (16) + a roundin
 # playhead has not moved. It would put a headline on the arrival frame and take it away on the
 # first pixel of scrub, and it would make the app's largest surface change what it MEANS on an
 # incidental gesture. It is also not "one branch in the same label": #DiffBox has a single QSS
-# `font-size`, and its layout floor (_hero_min_width below) is a plain-text advance over
-# _HERO_TEMPLATES, so a second type step inside it means rich text, a second template set and a
-# re-derived floor.
+# `font-size`, and its layout floor (_hero_min_width below) is the label's own sizeHint over the
+# formatters' widest plain-text output, so a second type step inside it means rich text, a second
+# template set and a re-derived floor.
 _BEST_LAP_BEST_NOTE = (
     "\nThis IS your best lap, so it is the reference this Δ is measured against: it reads exactly "
     "zero for the whole lap. Pick another lap for a number that moves.")
@@ -256,20 +253,40 @@ def undo_summary(outcome: UndoOutcome) -> str:
     return "reverted the last timing-line edit"  # a restore that changed nothing visible
 
 
-def _hero_min_width() -> int:
-    """Layout floor for the hero Δ/speed readout: the widest text it can show + its QSS padding.
+def _hero_templates() -> tuple[str, ...]:
+    """The widest readouts the hero #DiffBox can render, written BY the formatters that render them
+    (both references, both signs, every speed unit), so a format change cannot leave the floor
+    sized for a string the readout no longer prints. The digit VALUES are irrelevant — the face is
+    tabular — only how many there are: two before the point, three of speed."""
+    out = []
+    for unit in units.UNITS:
+        out.append(theme.format_ideal_readout(_HERO_WIDEST_DELTA_S, _HERO_WIDEST_SPEED_KMH, 0,
+                                              unit)[0])
+        for d in (_HERO_WIDEST_DELTA_S, -_HERO_WIDEST_DELTA_S):
+            out.append(theme.format_delta_speed(d, _HERO_WIDEST_SPEED_KMH, 0, unit)[0])
+    return tuple(out)
+
+
+def _hero_min_width(label: QLabel) -> int:
+    """Layout floor for the hero Δ/speed readout: the width Qt ITSELF asks for the widest text the
+    label can show, in the font and padding it really paints with.
 
     A QLabel never elides — it HARD-CLIPS — so without a floor the charts header's proportional
-    squeeze eats characters off the live number itself. Measured in the font the QSS actually
-    PAINTS #DiffBox in (the mono stack at HERO/600); theme.mono_font() resolves to Inter+tnum and
-    measures ~80 px narrower, which would under-size the floor by exactly that much."""
-    families = [name.strip(' "') for name in theme.MONO_STACK.split(",")]
-    f = QFont()
-    f.setFamilies(families)
-    f.setPixelSize(theme.HERO)
-    f.setWeight(theme.W_SEMIBOLD)
-    fm = QFontMetrics(f)
-    return max(fm.horizontalAdvance(t) for t in _HERO_TEMPLATES) + _HERO_PAD_PX
+    squeeze eats characters off the live number itself. And the floor has to be the label's own
+    `sizeHint`, not a text advance plus a counted pad: the layout gives the box
+    max(sizeHint, minimum), so a floor below the widest sizeHint is a box that WIDENS when the
+    number gets long. That is what shipped — an advance over the mono stack + 20 px made a 391 px
+    floor under a 400 px sizeHint, and the hero grew 9 px the moment Δideal reached 10 s."""
+    label.ensurePolished()          # the QSS padding is part of the answer
+    shown = label.text()
+    try:
+        widest = 0
+        for text in _hero_templates():
+            label.setText(text)
+            widest = max(widest, label.sizeHint().width())
+    finally:
+        label.setText(shown)
+    return widest
 
 
 @contextlib.contextmanager
@@ -323,6 +340,9 @@ class CentralView(QWidget):
     # no window chrome — the "fullscreen video" gesture, built on the proven maximize + native-
     # fullscreen paths (no risky reparenting of the live media surface).
     videoFocusChanged = Signal(bool)
+    # A one-line, just-happened fact for the WINDOW's status bar, from a panel that has no channel
+    # to it (U2: LapTable.selection_capped — a multi-select trimmed to the charts' lap cap).
+    statusNotice = Signal(str)
 
     def __init__(self, session, paths: list[str], sidecar_path: str | None,
                  parent: QWidget | None = None,
@@ -563,7 +583,7 @@ class CentralView(QWidget):
         # widest readout. On a QLabel setMinimumWidth SETS the layout minimum (qSmartMinSize takes an
         # explicit minimum over the size hint) — the same lever plots_label uses to volunteer itself
         # as the header's first casualty.
-        self.diff_box.setMinimumWidth(_hero_min_width())
+        self.diff_box.setMinimumWidth(_hero_min_width(self.diff_box))
         self._diff_colour = None  # last applied Δ-value colour (per-tick recolor guard)
         # Last (speed, lap) the readout rendered — so toggling the reference re-renders without a tick.
         self._last_diff_speed: float | None = None
@@ -919,9 +939,10 @@ class CentralView(QWidget):
         # merge with what the children actually need — it REPLACES it, and any shortfall comes out of
         # the children's glyphs. The honest minimum is the one Qt derives from the panels themselves,
         # and now that the controls sit in their own toolbar it is a number worth accepting: the
-        # charts header needs its identity label + the hero's 391 px floor + ⛶ (~569 px measured),
-        # which is LESS than the 675-759 px the ladder used to compute, so the user can drag the lap
-        # panel WIDER than before, not narrower.
+        # column clamps at its widest row: the charts toolbar, 553 px at 1280x800 (the charts header
+        # — identity label + the hero's 330 px floor + ⛶ — needs 496 since the hero paints in Inter +
+        # tnum). That is LESS than the 675-759 px the ladder used to compute, so the user can drag the
+        # lap panel WIDER than before, not narrower.
         #
         # THE LEFT COLUMN CARRIED THE SAME DEFECT, under a comment asserting it did not ("the left
         # column's 280 is unchanged and unrelated — nothing in it is over-subscribed"). It was
@@ -1010,6 +1031,7 @@ class CentralView(QWidget):
         self.video.positionChanged.connect(self._on_position)
         self.map.timing_lines_changed.connect(self._on_lines)
         self.table.laps_selected.connect(self._on_user_select)
+        self.table.selection_capped.connect(self.statusNotice)
         # Video focus (the ⤢ button / a double-click on the video): toggle the "fill the screen"
         # gesture. False until the user asks for it.
         self._video_focused = False

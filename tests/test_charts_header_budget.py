@@ -69,8 +69,8 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 # THEMED BEFORE THE FIRST WIDGET, which is the order studio/app.py uses and the order this file's
-# numbers depend on: every dimension here comes from the painted fonts (the hero is styled in the
-# mono stack at HERO/600), so a view built unthemed and measured themed reports a different app.
+# numbers depend on: every dimension here comes from the painted fonts (the hero's floor is its own
+# polished sizeHint), so a view built unthemed and measured themed reports a different app.
 _APP = themed_app()
 
 # The real production CentralView over the deterministic stadium-loop synthetic — the same fixture
@@ -207,8 +207,8 @@ def test_the_header_names_a_cross_recording_reference_at_both_shipped_sizes():
     for a DIFFERENT reason than before.
 
     It used to be that a wider wording lost the naming to a control label. Now the label is part of
-    the charts column's FLOOR — the panel's minimum width is its identity + the hero's 391 px floor
-    + ⛶ — so a wider wording costs the user drag range instead. The constraint is the same shape and
+    the charts column's FLOOR — the column's minimum width is its widest row, and the header row is
+    identity + the hero's floor + ⛶ — so a wider wording costs the user drag range instead. The constraint is the same shape and
     is pinned the same way: the REF wording must be no wider than the BEST wording it joins, which
     makes it impossible for this caption to cost the layout anything the shipped one does not
     already cost."""
@@ -343,19 +343,32 @@ def test_the_charts_column_floor_is_the_headers_own_honest_need():
     a drag one pixel past it is REFUSED rather than absorbed by the children.
 
     It is also the measurement that says the split cost the user nothing horizontally: the ladder
-    computed floors of 675 px (1440x900) and 759 px (1280x800); this is 555."""
+    computed floors of 675 px (1440x900) and 759 px (1280x800); this was 555.
+
+    WHICH ROW BINDS MOVED WITH U1. While the hero painted in the mono stack its 391 px floor made the
+    charts HEADER the widest row in the column, so this test asserted floor == header need. In
+    Inter + tnum the hero's floor is 330 px and the header needs 496 — and the column now clamps at
+    553, the charts TOOLBAR's need (the map toolbar's is 544). So the floor is asserted as what it
+    is, the widest row's own need, and the header is asserted to fit inside it."""
     with _Themed((1280, 800)) as view:
         header, row = view._plots_header, view._plots_header.layout()
         margins = row.contentsMargins()
         # Three non-empty items (identity · hero · ⛶) => two gaps. Derived from the widgets and the
         # layout themselves, NOT from an app constant, so this fails on a build whose arithmetic
         # disagrees rather than agreeing with it by construction.
-        need = (margins.left() + margins.right() + row.spacing() * 2
-                + view._plots_label.sizeHint().width() + view.diff_box.minimumWidth()
-                + view._plots_max_btn.width())
+        header_need = (margins.left() + margins.right() + row.spacing() * 2
+                       + view._plots_label.sizeHint().width() + view.diff_box.minimumWidth()
+                       + view._plots_max_btn.width())
+        assert header.minimumSizeHint().width() == header_need, (
+            f"the charts header asks for {header.minimumSizeHint().width()}px, its parts add up to "
+            f"{header_need}px")
+        rows = [bar for bar in view._right_splitter.findChildren(PanelHeader)
+                + view._right_splitter.findChildren(PanelToolbar)]
+        need = max(bar.minimumSizeHint().width() for bar in rows)
         floor = _column_floor(view)
         assert floor == need, (
-            f"the charts column's floor is {floor}px but its header needs {need}px")
+            f"the charts column's floor is {floor}px but its widest row needs {need}px")
+        assert header_need <= floor, (header_need, floor)
         assert floor < 675, f"the header/toolbar split must not raise the column floor ({floor})"
         # Ask for one pixel less than the floor: the splitter clamps, it does not squeeze.
         _set_right_column(view, need - 1)
@@ -642,7 +655,146 @@ def test_the_hero_never_recommends_the_reference_that_cannot_move():
               f"Δideal max {can_move:.4f} s on lap {others[0]})")
 
 
+# ============================================================ the hero readout's FACE (U1)
+def _hero_sweep_texts():
+    """Every readout SHAPE the hero can print, produced by the formatters that print it: both
+    references, ahead / behind / even, one and two digits before the point, no Δ at all, no speed, a
+    two- and a three-digit speed, both units."""
+    from studio import units
+
+    deltas = (None, 0.0, 0.004, -0.004, 0.34, -0.34, 1.11, -1.11, 8.88, -8.88, 9.99, -9.99, 10.0,
+              -10.0, 88.88, -88.88)
+    for unit in units.UNITS:
+        for speed in (None, 73.0, 111.0, 188.0):
+            lap = None if speed is None else 0
+            for d in deltas:
+                yield theme.format_ideal_readout(d, speed, lap, unit)[0]
+                yield theme.format_delta_speed(d, speed, lap, unit)[0]
+
+
+def _shape(text):
+    """The readout with its VALUE taken out — digits, sign and arrow direction normalised — so two
+    texts of one shape differ only in what a tabular face must draw at one width."""
+    return text.translate(str.maketrans("0123456789-▲", "0000000000+▼"))
+
+
+def _laid_out(text, font):
+    """(the x of every caret position, the set of families Qt REALLY shaped the text with)."""
+    from PySide6.QtGui import QTextLayout
+
+    lay = QTextLayout(text, font)
+    lay.beginLayout()
+    line = lay.createLine()
+    line.setLineWidth(99999)
+    lay.endLayout()
+    xs = tuple(round(line.cursorToX(i)[0], 3) for i in range(len(text) + 1))
+    return xs, {run.rawFont().familyName() for run in lay.glyphRuns()}
+
+
+def test_the_hero_readout_never_reflows_as_its_number_changes():
+    """U1. The hero re-renders ~30 times a second, so a box or a glyph that moves when a DIGIT
+    changes is a readout that shivers while you try to read it.
+
+    Two ways it can move, both asserted over every shape the formatters can print:
+      * the BOX. The layout gives a QLabel max(sizeHint, minimum). The floor used to be a text
+        advance over the mono stack + a counted 20 px, which came to 391 px under a 400 px
+        sizeHint — so the box grew 9 px the moment Δideal reached 10 s at a three-digit speed.
+      * the GLYPHS inside it. Two texts of one shape (see _shape) must lay out every caret at the
+        same x — digits, and the sign flipping as Δ crosses zero. That holds only while the face is
+        tabular: Menlo by accident until U1, Inter+tnum on purpose now. With the QSS family deleted
+        and no tnum the digits of "0.00"/"1.11"/"8.88" are three different widths.
+
+    Then the real per-tick path, over a whole lap, on both references."""
+    with _Themed((1440, 900)) as view:
+        box = view.diff_box
+        geoms, layouts, n = set(), {}, 0
+        for text in _hero_sweep_texts():
+            box.setText(text)
+            _settle(2)
+            n += 1
+            geoms.add(box.geometry().getRect())
+            layouts.setdefault(_shape(text), set()).add(_laid_out(text, box.font())[0])
+        assert len(geoms) == 1, (
+            f"the hero box moved as its number changed: {sorted(geoms)} over {n} readouts "
+            f"(minimum {box.minimumWidth()} px, widest sizeHint decides the rest)")
+        moved = sorted(s for s, xs in layouts.items() if len(xs) > 1)
+        assert not moved, (
+            f"{len(moved)} readout shape(s) put a glyph at a different x for different digits or "
+            f"signs — the face is not tabular: {moved[:4]}")
+        session = view.session
+        best = session.best_lap_id()
+        lo, hi = session.lap_window(best)
+        for checked in (True, False):
+            view.ideal_readout_btn.setChecked(checked)
+            for i in range(121):
+                view._update_diff_box(lo + (hi - lo) * i / 120, 42.0, best)
+                _settle(1)
+                geoms.add(box.geometry().getRect())
+        assert len(geoms) == 1, f"the hero box moved on the per-tick path: {sorted(geoms)}"
+        print(f"test_the_hero_readout_never_reflows_as_its_number_changes OK ({n} readouts, "
+              f"{len(layouts)} shapes, box {sorted(geoms)[0]})")
+
+
+def _ink(img, dpr, x0, x1, bg):
+    """(height, centre-y) in logical px of the pixels in logical columns [x0, x1) that differ from
+    the bar behind them."""
+    cols = range(max(0, int(x0 * dpr)), min(img.width(), int(x1 * dpr)))
+    rows = [y for y in range(img.height())
+            if any(sum(abs(a - b) for a, b in zip(img.pixelColor(x, y).getRgb()[:3], bg,
+                                                     strict=True)) > 90 for x in cols)]
+    assert rows, f"no ink at all in columns {x0}..{x1}"
+    top, bottom = rows[0] / dpr, (rows[-1] + 1) / dpr
+    return bottom - top, (top + bottom) / 2
+
+
+def test_the_hero_arrow_is_drawn_at_the_height_of_the_digits_beside_it():
+    """U1, the defect the glyph hand-off was filed for. `QLabel#DiffBox` declared
+    `font-family: MONO_STACK` in the QSS, which out-ranks the view's own setFont, and the first
+    family in that stack that exists on macOS is Menlo, which centres its geometric shapes on the
+    x-height: measured from the window composite at 1440x900 the ▼/▲ ink was 14 px tall at cy +2.0
+    beside 18 px digits. In the app's own face the same codepoints stand at the digits' height and
+    centre.
+
+    Read from a QScreen.grabWindow of the WINDOW (the bar behind the label included), not a
+    widget.grab of the label alone, and asserted non-blank first so a capture that failed cannot
+    pass by measuring nothing."""
+    from PySide6.QtCore import QPoint
+
+    with _Themed((1440, 900)) as view:
+        box = view.diff_box
+        _xs, ui_faces = _laid_out("0123456789", theme.ui_font(theme.BODY))
+        for d in (0.34, -0.34):
+            text = theme.format_delta_speed(d, 73.0, 0)[0]
+            box.setText(text)
+            _settle(6)
+            xs, faces = _laid_out(text, box.font())
+            assert faces == ui_faces, (
+                f"{text!r} is painted in {sorted(faces)}, the app's face is {sorted(ui_faces)} — "
+                "a QSS font-family is out-ranking the label's own mono_font")
+            win = box.window()
+            origin = box.mapTo(win, QPoint(0, 0))
+            pm = win.screen().grabWindow(win.winId(), origin.x(), origin.y(), box.width(),
+                                         box.height())
+            img, dpr = pm.toImage(), pm.devicePixelRatio()
+            assert len({img.pixel(x, img.height() // 2) for x in range(img.width())}) > 8, (
+                "the capture is blank — this would measure nothing")
+            bg = img.pixelColor(1, 1).getRgb()[:3]
+            left = box.contentsRect().x()
+            digit = text.index("0")                       # "0.34": four cells
+            arrow = text.index(theme.delta_arrow(d))
+            digit_h, digit_cy = _ink(img, dpr, left + xs[digit], left + xs[digit + 4], bg)
+            arrow_h, arrow_cy = _ink(img, dpr, left + xs[arrow], left + xs[arrow + 1], bg)
+            assert abs(arrow_h - digit_h) <= 1.0 and abs(arrow_cy - digit_cy) <= 1.0, (
+                f"{text!r}: the arrow's ink is {arrow_h:.1f} px at cy {arrow_cy:.1f}, the digits' "
+                f"{digit_h:.1f} px at cy {digit_cy:.1f}")
+        print(f"test_the_hero_arrow_is_drawn_at_the_height_of_the_digits_beside_it OK "
+              f"({sorted(faces)}, arrow {arrow_h:.1f}px @ {arrow_cy:.1f} / digits {digit_h:.1f}px "
+              f"@ {digit_cy:.1f})")
+
+
 def _run_all():
+    test_the_hero_readout_never_reflows_as_its_number_changes()
+    test_the_hero_arrow_is_drawn_at_the_height_of_the_digits_beside_it()
     test_charts_header_names_the_baseline_at_every_width_it_can_reach()
     test_the_header_names_a_cross_recording_reference_at_both_shipped_sizes()
     test_no_charts_or_map_control_is_ever_centre_clipped()

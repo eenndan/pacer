@@ -647,10 +647,21 @@ def test_l8_01_narrow_strip_falls_back_to_the_short_role_word():
     # `_compare_view` builds a SAME-RECORDING pair (pane B has no source of its own), so pane B's
     # role is "LAP B" / "B" — see §5.6 and set_role_cross_recording. The fallback under test is the
     # long -> short drop, which is the same behaviour whichever pair of words the role is.
+    #
+    # THE NARROW CASE CARRIES THE WIDEST Δ THE BADGE CAN SHOW, because since U1 the default one no
+    # longer triggers the ladder at any width the view can reach. The badge used to paint in the
+    # mono stack (Menlo), where "Δ +0.19 s" is 60 px: the strip needed 175 px and the narrowest
+    # cell is 170, so at view width 240 pane B's role word was hidden. In Inter + tnum the same Δ
+    # is 52 px, the need is 167, and "LAP B" / "REFERENCE" now survive at every reachable width.
+    # A two-digit Δ with its arrow is a real reading and still over-subscribes the cell.
     wide = _compare_view(620)
     assert wide._cell_b.caption.text() == "LAP B", wide._cell_b.caption.text()
     _ALIVE.append(wide)
     narrow = _compare_view(240)
+    narrow.set_pane_badge(1, theme.format_delta_run(88.88), None)
+    for width in (241, 240):          # re-run the strip fit with the wider badge in place
+        narrow.resize(width, 420)
+        _settle_strip(narrow)
     assert narrow._cell_b.caption.text() == "B", narrow._cell_b.caption.text()
     assert narrow._cell_b.caption.toolTip().startswith("LAP B — "), (
         narrow._cell_b.caption.toolTip())

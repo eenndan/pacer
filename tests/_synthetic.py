@@ -13,9 +13,11 @@ shim alive in production. This module is now the single place that knows the cac
 Anything pacer-backed beyond that (lap_window, lap_at_time, g_at_time, ...) stays a per-test
 stub at the call site — only what a test genuinely needs is faked.
 """
+from types import SimpleNamespace
+
 import numpy as np
 
-from studio import corners
+from studio import corners, gmeter
 from studio.session import Session
 
 
@@ -169,4 +171,177 @@ def bare_session(laps=None, *, best=None, valid=None, excluded=None):
     # and computing this lazily would touch the (often minimal) fake `laps`. Seed the memo so
     # Session.excluded_lap_ids / _rows resolve without reaching self.laps (mirrors _valid_cache).
     s._excluded_cache = list(excluded) if excluded is not None else []
+    return s
+
+
+# ---------------------------------------------------------------- the drift + noise fixture
+# THE STADIUM FIXTURE CANNOT SEE TWO DEFECT CLASSES THIS REPO HAS ALREADY SHIPPED, and this one
+# exists to see both. `test_session_services._synthetic_session` drives both of its laps round ONE
+# polyline (0 % line-length drift, so every path behind `corners.NORMALIZED_DRIFT_MAX` is dead) at a
+# noise-free speed. #228's one-frame-per-lap repair and #275's coast window both moved real D24
+# numbers while re-cutting that baseline came back byte-identical.
+#
+# What each ingredient is for, and why it is the size it is (each one was measured to be NEEDED —
+# a smaller fixture reads the reverted fix green):
+#   * SPEED NOISE, on the GPS speed COLUMN, not on the g series. The coast and brake detectors
+#     differentiate the lap's own `full_speed` (`driving_channels.lap_coasting_spans` ->
+#     `speed_long_g`); the g-meter never reaches them. Noise on the old fixture's g series moves 0
+#     leaves when COAST_SMOOTH_S is reverted to 0.10 s; the same noise on its speed column moves 6.
+#     sigma = 0.16 m/s is #275's measured Doppler residual (0.139 / 0.168 m/s on the two D24
+#     recordings), sampled at GPS9's 10 Hz so `speed_long_g` sees the noise it sees on a real lap.
+#   * A WIDER LINE on one lap, run DN_WIDE_LINE_OFFSET_M outside the others (a parallel curve: the
+#     straights are unchanged and each arc gains pi*offset), so its line-length drift is 1.0 % —
+#     twice the gate, where D24 0060's lap 15 sat at 0.502 %.
+#   * AN EXCURSION on that same lap: it runs DN_RUN_WIDE_M wide out of C1, so the C1-exit boundary
+#     fails `corners.SPATIAL_MATCH_MAX_M` and the lap's warp has to INTERPOLATE it. Drift alone is
+#     not enough: when every boundary matches, the pre-#228 per-boundary projection and the warp
+#     agree at every boundary, and reverting #228 moves nothing. The failed match is the defect.
+#   * A THIRD LAP on the reference line. Corner detection pools the laps' median curvature
+#     (`CornerModel.basis`), so with only two laps the excursion drags the detected C1 exit along
+#     with it and the match passes again. With three, the median keeps the corner where the track is.
+#   * STRAIGHTS THAT LIFT AND COAST before braking, at 0.095 g — the centre of the coast band
+#     (driving.COAST_DRAG_MIN, driving.BRAKE_G_FLOOR) — so there is a real coast for the noise to
+#     shred, plus a 0.5 g brake and a 0.25 g exit. Lap 1 wins the C1-C2 straight (0.13 s, on a
+#     higher top speed and a later lift), so the ideal lap is not simply the best lap — and the
+#     segment it donates is the one whose START is its unmatched boundary: the #228 harvest case.
+# The IMU channels are left noise-free and derived from the same kinematics (lateral = v^2*kappa):
+# no detector under test reads them for longitudinal, and inventing an IMU sigma adds a knob that
+# guards nothing here.
+#
+# Deterministic: seeded `numpy.random.default_rng` streams (PCG64, pinned by the pixi lock), no
+# clock. `test_golden_synthetic.test_drift_noise_fixture_reaches_the_paths_it_exists_for` pins every
+# property above, so the fixture cannot silently decay back into one that reads green.
+DN_SPEED_SIGMA_MPS = 0.16     # #275's measured GPS Doppler speed residual
+DN_DT_S = 0.10                # GPS9 fix interval
+DN_WIDE_LINE_OFFSET_M = 0.383  # solved so lap 1 drifts 1.0 % against the best lap
+DN_RUN_WIDE_M = 5.0           # peak excursion out of C1; > SPATIAL_MATCH_MAX_M at the C1 exit
+DN_RUN_WIDE_HALF_M = 30.0     # half-length of that excursion along the lap
+DN_ACCEL_G, DN_COAST_G, DN_BRAKE_G = 0.25, 0.095, 0.50
+_DN_STRAIGHT_M, _DN_RADIUS_M, _DN_G = 200.0, 30.0, 9.81
+_DN_FINE_N = 60001            # ~1 cm geometry grid the 10 Hz fixes are interpolated off
+# (offset, corner speed m/s, per-straight (top speed m/s, coast seconds), excursion m, noise seed)
+_DN_LAPS = (
+    dict(offset=0.0, vc=12.5, straights=((22.0, 2.0), (22.0, 2.0)), run_wide_m=0.0, seed=11),
+    dict(offset=DN_WIDE_LINE_OFFSET_M, vc=12.0, straights=((21.5, 3.5), (25.0, 0.5)),
+         run_wide_m=DN_RUN_WIDE_M, seed=12),
+    dict(offset=0.0, vc=12.2, straights=((21.8, 2.5), (21.8, 2.5)), run_wide_m=0.0, seed=14),
+)
+
+
+def _dn_loop_xy(u, offset):
+    """(xs, ys) at arc length `u` round a 200 m x 30 m-radius stadium run `offset` metres OUTSIDE
+    the reference line — its parallel curve, so the lap is exactly 2*pi*offset longer. CCW from the
+    timing line at the start of the bottom straight; u = the full length closes the loop."""
+    radius = _DN_RADIUS_M + offset
+    arc = np.pi * radius
+    xs = np.empty_like(u)
+    ys = np.empty_like(u)
+    bottom = u < _DN_STRAIGHT_M
+    xs[bottom], ys[bottom] = u[bottom], -offset
+    turn1 = (u >= _DN_STRAIGHT_M) & (u < _DN_STRAIGHT_M + arc)
+    th = (u[turn1] - _DN_STRAIGHT_M) / radius
+    xs[turn1], ys[turn1] = _DN_STRAIGHT_M + radius * np.sin(th), _DN_RADIUS_M - radius * np.cos(th)
+    top = (u >= _DN_STRAIGHT_M + arc) & (u < 2 * _DN_STRAIGHT_M + arc)
+    xs[top], ys[top] = _DN_STRAIGHT_M - (u[top] - _DN_STRAIGHT_M - arc), _DN_RADIUS_M + radius
+    turn2 = u >= 2 * _DN_STRAIGHT_M + arc
+    th = (u[turn2] - 2 * _DN_STRAIGHT_M - arc) / radius
+    xs[turn2], ys[turn2] = -radius * np.sin(th), _DN_RADIUS_M + radius * np.cos(th)
+    return xs, ys
+
+
+def _dn_straight_speed(along, vc, vt, coast_s):
+    """Speed (m/s) `along` one straight entered and left at corner speed `vc`: throttle at
+    DN_ACCEL_G up to `vt`, hold, lift and coast for `coast_s` at DN_COAST_G, then brake at DN_BRAKE_G
+    back to `vc` exactly at the corner entry. Constant-acceleration phases, so v^2 is linear in
+    distance inside each."""
+    a_acc, a_cst, a_brk = DN_ACCEL_G * _DN_G, DN_COAST_G * _DN_G, DN_BRAKE_G * _DN_G
+    d_acc = (vt ** 2 - vc ** 2) / (2 * a_acc)
+    v_lift = vt - a_cst * coast_s
+    d_cst = (vt ** 2 - v_lift ** 2) / (2 * a_cst)
+    d_brk = (v_lift ** 2 - vc ** 2) / (2 * a_brk)
+    assert d_acc + d_cst + d_brk < _DN_STRAIGHT_M, "phases do not fit on the straight"
+    lift_at, brake_at = _DN_STRAIGHT_M - d_brk - d_cst, _DN_STRAIGHT_M - d_brk
+    v = np.full_like(along, vt)
+    acc = along < d_acc
+    v[acc] = np.sqrt(vc ** 2 + 2 * a_acc * along[acc])
+    cst = (along >= lift_at) & (along < brake_at)
+    v[cst] = np.sqrt(vt ** 2 - 2 * a_cst * (along[cst] - lift_at))
+    brk = along >= brake_at
+    v[brk] = np.sqrt(np.maximum(v_lift ** 2 - 2 * a_brk * (along[brk] - brake_at), vc ** 2))
+    return v
+
+
+def drift_noise_laps(t0: float = 100.0) -> list[dict]:
+    """The drift + noise fixture's laps, contiguous on one media clock from `t0`. Each dict holds
+    `cols` — the `_cols_cache` 5-tuple (times, xs, ys, full_speed m/s WITH noise, cum) exactly as
+    `Session._lap_columns` serves it — and `clean_speed`, the same speed before the noise, which is
+    what lets a test measure the noise it was given. See the block above for every choice."""
+    laps = []
+    for spec in _DN_LAPS:
+        offset = spec["offset"]
+        arc = np.pi * (_DN_RADIUS_M + offset)
+        u = np.linspace(0.0, 2 * _DN_STRAIGHT_M + 2 * arc, _DN_FINE_N)
+        xs, ys = _dn_loop_xy(u, offset)
+        if spec["run_wide_m"]:
+            tx, ty = np.gradient(xs), np.gradient(ys)
+            norm = np.hypot(tx, ty)
+            from_exit = u - (_DN_STRAIGHT_M + arc)  # centred on C1's geometric exit
+            push = np.where(np.abs(from_exit) < DN_RUN_WIDE_HALF_M,
+                            spec["run_wide_m"] * 0.5
+                            * (1.0 + np.cos(np.pi * from_exit / DN_RUN_WIDE_HALF_M)), 0.0)
+            xs, ys = xs + push * ty / norm, ys - push * tx / norm  # outward normal of a CCW loop
+        odo = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(xs), np.diff(ys)))))
+        v = np.full_like(u, spec["vc"])
+        for k, (vt, coast_s) in enumerate(spec["straights"]):
+            start = k * (_DN_STRAIGHT_M + arc)
+            on = (u >= start) & (u < start + _DN_STRAIGHT_M)
+            v[on] = _dn_straight_speed(u[on] - start, spec["vc"], vt, coast_s)
+        clock = np.concatenate(([0.0], np.cumsum(np.diff(odo) / (0.5 * (v[:-1] + v[1:])))))
+        tk = np.linspace(0.0, clock[-1], int(round(clock[-1] / DN_DT_S)) + 1)
+        uk = np.interp(tk, clock, u)
+        clean = np.interp(uk, u, v)
+        noisy = clean + np.random.default_rng(spec["seed"]).normal(0.0, DN_SPEED_SIGMA_MPS, tk.size)
+        times = t0 + tk
+        laps.append({"cols": (times, np.interp(uk, u, xs), np.interp(uk, u, ys), noisy,
+                              np.interp(uk, u, odo)),
+                     "clean_speed": clean})
+        t0 = float(times[-1])  # the next lap starts on this lap's finish crossing
+    return laps
+
+
+def drift_noise_session():
+    """A bare Session over `drift_noise_laps()`: three valid laps, lap 0 the best (and genuinely
+    the fastest), lap 1 drifted 1.0 % with one unmatched corner boundary, GPS speed noise on all.
+
+    Beyond `_synthetic_session`'s seeding it carries a minimal pacer `laps` stand-in —
+    `laps_count` / `lap_time` / `start_timestamp`, each read straight off the seeded columns, the
+    same stub `test_coaching` and `test_consistency` use — so `lap_window` and `lap_time` resolve and
+    the fingerprint's coaching, trend, rolling-lap and time-grid Δ leaves are REAL here instead of
+    the `__unsupported__` sentinel the stadium fixture records for them. The whole-recording trace
+    and a kinematic g-meter (lateral v^2*kappa, longitudinal dv/dt, 50 Hz) span all three laps."""
+    laps = drift_noise_laps()
+    s = bare_session({i: (lap["cols"][0], lap["cols"][4]) for i, lap in enumerate(laps)},
+                     best=0, valid=range(len(laps)))
+    s._cols_cache = {i: lap["cols"] for i, lap in enumerate(laps)}
+    s._xyt_cache = {}
+    s._render_cache = SimpleNamespace(invalidate=lambda: None, reference_fit_loop=lambda: None)
+    s.laps = SimpleNamespace(
+        laps_count=lambda: len(laps),
+        lap_time=lambda i: float(laps[i]["cols"][0][-1] - laps[i]["cols"][0][0]),
+        start_timestamp=lambda i: float(laps[i]["cols"][0][0]),
+    )
+
+    def joined(parts):  # consecutive laps share their crossing sample: keep it once
+        return np.concatenate([parts[0]] + [p[1:] for p in parts[1:]])
+
+    s.tt = joined([lap["cols"][0] for lap in laps])
+    s.tv = joined([lap["cols"][3] for lap in laps]) * 3.6  # km/h, as Session.tv
+    lat = joined([lap["clean_speed"] ** 2 * corners.lap_curvature(*lap["cols"][1:3], lap["cols"][4])
+                  / _DN_G for lap in laps])
+    lon = joined([np.gradient(lap["clean_speed"], lap["cols"][0]) / _DN_G for lap in laps])
+    gt = np.arange(s.tt[0], s.tt[-1], 0.02)
+    s._gmeter = gmeter.GMeter(times=gt, lat_g=np.interp(gt, s.tt, lat),
+                              long_g=np.interp(gt, s.tt, lon), cross=None, source="accl")
+    reset_corner_caches(s)
+    reset_driving_caches(s)
     return s

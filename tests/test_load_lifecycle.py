@@ -185,6 +185,7 @@ class _StubView(QWidget):
     lapTabChanged = Signal(int)
     gridSizesChanged = Signal(object)
     videoFocusChanged = Signal(bool)
+    statusNotice = Signal(str)  # U2: the panel-to-status-bar notice channel _build_ui connects
 
     def __init__(self, session, paths, sidecar_path, parent=None, **_kw):
         super().__init__()

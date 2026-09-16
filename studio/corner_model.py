@@ -911,11 +911,15 @@ class CornerModel:
         the corner entry the Corners table was pointing at; measured move on the D24 0060 pair,
         0.373 s.
 
-        IT IS NOT THE LAST UN-GATED PROJECTION IN THE APP. `coaching._win` still scales a corner
-        window by `lap_total / corner_dist_total` with no drift gate and no traces, and its output
-        feeds `Reason.brake_extra_s` / `coast_extra_s` — so a coaching row can carry a warp-derived
-        phase triple beside a normalized-frame reason. Pre-existing and untouched here; migrating
-        `_win` onto `lap_alignment` is the follow-up."""
+        `coaching._win` — which scaled a corner window by `lap_total / corner_dist_total` with no
+        drift gate and no traces, so a coaching row could carry a warp-derived phase triple beside
+        a normalized-frame reason — has since moved onto this memo too (`coaching._project_window`),
+        which leaves every CORNER-WINDOW projection on one warp.
+
+        One normalized projection remains, in the other direction and outside this family:
+        `Session._brake_rows` maps each lap's brake ONSETS back into the reference odometer by
+        `× ref_total/lap_total` (studio/session.py) for the Stats ▸ BRAKING table and the "brake
+        ~N m later" hint. It projects samples, not windows, and is untouched here."""
         basis = self.basis()
         if basis is None or not basis[0]:
             return None

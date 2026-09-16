@@ -654,12 +654,13 @@ def test_hero_readout_keeps_every_character_at_every_column_width():
     The three splitter positions below are pinned, and the third one (460 px) is the point: it is
     BELOW what the charts panel needs. It used to be reachable, and the header survived it by
     stripping its identity label and both control labels — the degradation ladder. There is no
-    ladder now; the hero's 391 px floor is part of the column's own minimum, so a drag to 460 px is
+    ladder now; the hero's own floor is part of the column's own minimum, so a drag to 460 px is
     REFUSED. The assertion is the same either way — the number is never clipped — but what makes it
     true is the layout declining the drag rather than the header dismantling itself.
 
-    Measured against the PAINTED font (the QSS styles #DiffBox in the mono stack, not in the font
-    the widget was constructed with), so the theme is applied for the duration and restored after."""
+    Measured against the PAINTED font — the label's font once the theme has polished it, which is
+    what a QSS font rule would change — so the theme is applied for the duration and restored
+    after."""
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QFontMetrics
 
@@ -1045,6 +1046,8 @@ def _run_all():
     test_splitter_handles_stay_thin_under_the_theme()
     test_gmeter_overlay_stays_pinned_to_its_video_and_stands_down_with_it()
     test_hero8s_refused_imu_is_disclosed_on_the_real_view()
+    test_hero8s_gps_derived_lateral_axis_is_named_on_the_real_stats_page()
+    test_u2_lap_table_cap_notice_reaches_the_window_status_bar()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 
@@ -1078,6 +1081,47 @@ def test_hero8s_refused_imu_is_disclosed_on_the_real_view():
         view.deleteLater()
         _APP.processEvents()
     print("ok hero8's refused IMU is disclosed on the real toggle and the real DATA TRUST card")
+
+
+def test_hero8s_gps_derived_lateral_axis_is_named_on_the_real_stats_page():
+    """#283 taught the toggle and the DATA TRUST card that hero8's accelerometer was refused. FOUR
+    texts on the Stats page went on calling the lateral axis an accelerometer reading anyway.
+
+    Measured over the real `Session.load` on every bundled sample and both D24 recordings: seven of
+    the ten samples run a GPS-derived lateral axis (six carry no GRAV/CORI at all; hero8's GRAV is
+    all zeros and is REFUSED by `axis_check`), while both D24 recordings measure ALIGNED at 6.1 and
+    5.9 deg and keep the accelerometer. tests/test_stats.py pins the composition on a stub; this
+    pins the WIRING, on the real page, for the same reason the test above it exists — the tooltips
+    are set in `StatsView._refresh_g_provenance`, and a test that rebuilt the copy would be testing
+    its own string."""
+    from studio.session import Session
+    from studio.stats_panel import GG_TOOLTIP, LAP_TABLE_TOOLTIP, PEAK_LAT_TOOLTIP
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "3rdparty", "gpmf-parser", "samples", "hero8.mp4")
+    s = Session.load([path])
+    assert s.has_gmeter and s.gmeter_source() == "gps", (s.has_gmeter, s.gmeter_source())
+    refusal = s.gmeter_axis().refusal()
+    view = CentralView(s, [path], sidecar_path=None)
+    try:
+        view.stats_view.refresh()
+        stats = view.stats_view
+        # Each of the three fixed texts moved off the accelerometer claim...
+        assert stats.gg.toolTip() != GG_TOOLTIP, (
+            "the friction circle still calls the lateral axis an accelerometer on a GPS-derived "
+            "recording")
+        assert stats.lap_table.toolTip() != LAP_TABLE_TOOLTIP, stats.lap_table.toolTip()
+        assert stats.t_peak_lat.toolTip() != PEAK_LAT_TOOLTIP, stats.t_peak_lat.toolTip()
+        assert "Lat g is the accelerometer" not in stats.lap_table.toolTip()
+        assert "Lateral is the accelerometer" not in stats.gg.toolTip()
+        assert "IMU lateral" not in stats.t_peak_lat.toolTip()
+        # ...and each gives the SAME reason the toggle and the trust card give, never a second
+        # wording for one refusal.
+        for tip in (stats.gg.toolTip(), stats.lap_table.toolTip(), stats.t_peak_lat.toolTip()):
+            assert refusal in tip, tip
+    finally:
+        view.deleteLater()
+        _APP.processEvents()
+    print("ok hero8's GPS-derived lateral axis is named on the real Stats page, in #283's words")
 
 
 def test_tab_bar_switches_pages_and_names_the_corners_lap():
@@ -1397,6 +1441,22 @@ def test_splitter_handles_stay_thin_under_the_theme():
         _APP.setPalette(prior[2])
     view.hide()
     print("test_splitter_handles_stay_thin_under_the_theme OK")
+
+
+def test_u2_lap_table_cap_notice_reaches_the_window_status_bar():
+    """U2(c), the wiring half: LapTable.selection_capped -> CentralView.statusNotice -> the REAL
+    StudioWindow's status bar, through the production _build_ui. (The sentence itself is pinned in
+    test_studio_features; this 2-lap fixture cannot exceed the cap, so the table's signal is fired
+    directly — what is under test is that nothing between the table and the bar drops it.)"""
+    win, view = _studiowindow_with_view()
+    try:
+        view.table.selection_capped.emit("probe: the charts overlay at most 6 laps")
+        assert win.statusBar().currentMessage() == "probe: the charts overlay at most 6 laps", \
+            win.statusBar().currentMessage()
+    finally:
+        win._tick_timer.stop()
+        win.deleteLater()
+    print("test_u2_lap_table_cap_notice_reaches_the_window_status_bar OK")
 
 
 if __name__ == "__main__":
