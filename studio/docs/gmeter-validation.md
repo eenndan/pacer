@@ -184,8 +184,21 @@ one. The middle column is why the guard is deliberately not tighter: on a mount 
 near-zero element (the Max clips) some wrong relabellings sit under 20° — and those are exactly the
 ones that leave ~0.17 g of residual instead of 1–2 g. Gating on them would be gating on noise.
 
-It also catches something that was already live: `hero8.mp4`'s `GRAV` stream is **all zeros**,
-which today reaches the transform as a zero gravity direction rather than as an error.
+It also catches something that was already live: `hero8.mp4`'s `GRAV` stream is **all zeros**
+(378 rows, |GRAV| 0.0000, where every camera that writes the stream writes a unit vector). That is
+refused as **no direction** (`MIN_GRAV_NORM`), decided before any angle is measured, for two
+measured reasons:
+
+* **The angle would be false.** A zero vector normalises to zero, its dot with anything is 0, and
+  arccos(0) is 90°. The guard used to report hero8 as "GRAV sits 90.0 deg off" — a tilt nobody
+  measured, and the verdict is now shown to the user.
+* **The order let an all-NaN meter through.** With the tilt measured first, a zero GRAV on a
+  recording with fewer than 200 unloaded samples read "not measurable, do not gate", the IMU path
+  ran on the zero direction, and `compute` shipped 2000 of 2000 lateral g samples as NaN with
+  `has_data` True. Whether GRAV has a direction does not depend on how loaded the kart is.
+
+A refusal is disclosed where the g source already is: on the g-meter toggle's tooltip and in the
+Stats page's DATA TRUST card (a caveat row naming the reason), never only on stdout.
 
 Neither D24 recording moved: lateral r **+0.9564 → +0.9564**, gain **1.0916 → 1.0916** (0060) and
 r **+0.9587 → +0.9587**, gain **1.1079 → 1.1079** (0062), with `source="accl"` on both.

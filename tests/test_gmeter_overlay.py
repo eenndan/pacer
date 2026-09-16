@@ -334,9 +334,12 @@ def test_the_trail_survives_the_exporters_lap_gating():
 def test_a_non_finite_sample_never_reaches_the_face():
     """THE REGRESSION THE REDESIGN INTRODUCED, and the reason it needs its own guard.
 
-    The bundled `3rdparty/gpmf-parser/samples/hero8.mp4` loads with `has_gmeter` True and all 634
-    of its g samples are `(nan, 0.0, nan)` — a degenerate GRAV makes `gmeter.py`'s
-    `gdir / norm(gdir)` divide by zero. The OLD face survived that by accident: `max(0.0, nan)`
+    The bundled `3rdparty/gpmf-parser/samples/hero8.mp4`, whose GRAV stream is all zeros, USED to
+    load with `has_gmeter` True and all 634 of its g samples `(nan, 0.0, nan)` — the zero direction
+    made `gmeter.py`'s `gdir / norm(gdir)` divide by zero. The axis gate now refuses a directionless
+    GRAV before that line runs, however loaded the kart is, so hero8 loads a finite GPS-derived
+    meter and no known recording produces a NaN sample; this guard is what stops the next source of
+    one from burning into a clip. The OLD face survived that by accident: `max(0.0, nan)`
     returns 0.0, so its four cardinal peaks printed four zeroes. Promoting one filtered value to
     the single largest bold string removed that accident, and the dial burned **"nan g"** into
     exported clips (plus `QPainterPath::arcTo: Adding arc where a parameter is NaN` for the dot and
@@ -701,6 +704,32 @@ def test_the_provenance_moved_to_the_toggles_tooltip():
         gps_tip = v.gmeter_btn.toolTip()
         assert "GPS" in gps_tip and "IMU" not in gps_tip.replace("IMU lat", ""), gps_tip
         print("ok the g-meter toggle's tooltip states the convention + the axis provenance")
+    finally:
+        v.deleteLater()
+
+
+def test_a_refused_accelerometer_is_named_on_the_toggle_not_called_missing():
+    """The GPS provenance sentence says "No usable accelerometer". That is true of a camera whose
+    IMU cannot be oriented at all (hero5/6/7 write no GRAV/CORI), and FALSE of one whose
+    accelerometer was present, read and then refused by `gmeter.axis_check`. Measured on the real
+    StudioWindow over hero8.mp4: the refused recording's toggle carried exactly the no-IMU sentence,
+    the one reason that was not the reason. Driven on the real VideoView."""
+    from studio import gmeter_overlay as g
+    from studio.video_view import VideoView
+    reason = "its gravity stream carries no direction"
+    v = VideoView(None)
+    try:
+        v.set_gmeter_source("gps", "gps")
+        plain = v.gmeter_btn.toolTip()
+        assert "No usable accelerometer" in plain, plain       # a no-IMU camera reads as before
+        v.set_gmeter_source("gps", "gps", refusal=reason)
+        tip = v.gmeter_btn.toolTip()
+        assert reason in tip, tip
+        assert "No usable accelerometer" not in tip, tip
+        assert "GPS trajectory" in tip, tip                    # still says where the g comes from
+        assert tip.split("\n")[0] == plain.split("\n")[0]      # still the toggle's own line first
+        assert g.source_sentence("gps", "gps", refusal=reason) in tip
+        print("ok a refused accelerometer is named on the toggle, not called missing")
     finally:
         v.deleteLater()
 

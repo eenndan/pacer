@@ -3438,18 +3438,37 @@ class StatsView(QWidget):
                         "page's percentage cannot draw: a receiver acquiring a lock before you "
                         "drive off and a receiver failing mid-session are the same percentage and "
                         "completely different recordings.")
+        # A REFUSED accelerometer (`gmeter.axis_check`) is stated in the row that states the g
+        # source, because that is the row it changes. Without it a refused IMU read exactly like a
+        # camera that never had a usable one — GPS on both axes, unmarked — and a refused IMU is
+        # never cross-checked, so the DISAGREE row below cannot say it either. Measured on the real
+        # window over hero8.mp4 and over a D24 recording forced through the real gate: the refusal
+        # was on stdout and nowhere else. The reason is AxisCheck's own clause, the same one the
+        # g-meter toggle's tooltip finishes its sentence with.
+        axis = session.gmeter_axis() if hasattr(session, "gmeter_axis") else None
+        refusal = axis.refusal() if axis is not None else None
+        if refusal:
+            tips.append(axis.summary())
         if getattr(session, "has_gmeter", False):
             src = {"accl": "IMU", "gps": "GPS"}
             lat_src = src.get(session.gmeter_source(), session.gmeter_source())
             long_src = src.get(session.gmeter_long_source(), session.gmeter_long_source())
-            rows.append(("g-meter",
-                         f"{lat_src} lateral · {long_src}-derived longitudinal", False))
+            value = f"{lat_src} lateral · {long_src}-derived longitudinal"
+            if refusal:
+                value += f" — the accelerometer was not used: {refusal}"
+            rows.append(("g-meter", value, bool(refusal)))
         else:
             # The card used to go SILENT about the g channel exactly when it is missing — while
             # the peak-g tiles, the per-lap g columns and the corner Grip % all render em-dashes
             # with no stated reason anywhere on the window. Split on NO_GMETER_NOTE's own "term:
             # value" colon so the constant stays the single source of that sentence.
             term, _, value = NO_GMETER_NOTE.partition(": ")
+            if refusal:
+                # ...except that a refused IMU with no GPS trace to fall back on DID have an
+                # accelerometer, so "no accelerometer in this recording" would be the wrong reason.
+                value = (f"the accelerometer was not used: {refusal}, and there is no GPS "
+                         "trajectory to derive g from — lateral g, braking g and grip are "
+                         "unavailable.")
             rows.append((term, value, True))
         cross = session.gmeter_cross() if hasattr(session, "gmeter_cross") else None
         if cross is not None:

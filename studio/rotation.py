@@ -99,7 +99,7 @@ import numpy as np
 
 from ._signal import boxcar
 from .corners import derive_threshold, lap_curvature, lap_yaw_rate
-from .gmeter import GRAV_PERM
+from .gmeter import GRAV_PERM, MIN_GRAV_NORM
 
 # Pre-output low-pass (s). The gyro is a 200 Hz sensor on a vibrating kart mount; the rotation a
 # driver can act on is corner-scale. Chosen by sweeping the window and watching BOTH statistics:
@@ -127,11 +127,14 @@ GUARD_S = 0.5
 # 1e-12 floor below keeps the divide finite), so the dot product is EXACTLY 0.0 at every sample
 # and the app reports a full-length, `has_data=True` channel reading "not turning" over a clip
 # whose own gyro has a median |omega| of 0.269 rad/s. That is the same silence `gmeter.axis_check`
-# exists to end, and it refuses hero8 on the G-METER path (the zero direction reads as a 90 deg
-# tilt) — but axis_check gates the g-meter only. Nothing stood in front of THIS path, and the
-# module doc above said otherwise. An absent direction is now an ABSENT CHANNEL, which is what
-# `compute` already does for a camera with no GYRO at all.
-MIN_GRAV_NORM = 0.5
+# exists to end, and it refuses hero8 on the G-METER path as a GRAV with no direction — but
+# axis_check gates the g-meter only. Nothing stood in front of THIS path, and the module doc above
+# said otherwise. An absent direction is now an ABSENT CHANNEL, which is what `compute` already
+# does for a camera with no GYRO at all.
+#
+# The floor itself is `gmeter.MIN_GRAV_NORM`, imported above rather than retyped: the g-meter's
+# axis gate refuses on the same one, so the two channels cannot disagree about whether a recording's
+# gravity direction exists.
 
 _MIN_LAP_SAMPLES = 16       # a lap trace shorter than this cannot carry a curvature profile
 _TWO_PI = 2.0 * np.pi
