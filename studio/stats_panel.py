@@ -112,6 +112,12 @@ NO_LAPS_PROSE = data_quality.no_laps_body()
 # tiles, so the dashes and the trust card explain themselves in the same words.
 NO_GMETER_NOTE = ("g-meter: no accelerometer in this recording — lateral g, braking g and grip "
                   "are unavailable.")
+#: ...and the same sentence without its "g-meter: " term, for the surfaces that have to explain an
+#: EMPTY g column in prose. Composed from the note rather than retyped, so the page cannot come to
+#: state one fact two ways — which is exactly how the defect this fixes survived #288: the note
+#: said "no accelerometer in this recording" while the grid beside it said "Lat g is the
+#: accelerometer". (The DATA TRUST row partitions the same constant the same way.)
+NO_GMETER_CLAUSE = NO_GMETER_NOTE.partition(": ")[2].rstrip(".")
 
 
 def gps_lateral_clause(session) -> str | None:
@@ -600,16 +606,27 @@ GG_KEY_RINGS = "solid rings: 0.5 g steps"
 # update) stated a 0.50 s one. Measured on ~/Desktop/D24 GX020060+GX030060: the tile reads 2.6 s,
 # and the window it denied is WIDER than the LONG_SMOOTH_S one the same sentence contrasted itself
 # against. Brake and coast are two instruments off one series; the copy now splits where they do.
-DRIVING_TOOLTIP = (
+# ASSEMBLED FROM PARTS rather than written twice, because exactly ONE clause of it changes with
+# the g source: the contrast between this detector's bare derivative and the window the tiles
+# above are drawn on. On a GPS-derived meter those tiles carry no such window either (`long_g_gps`
+# is built only on the IMU path), so the sentence was comparing itself to a filter that is not
+# there. Composing both versions from the same four pieces means the coast paragraph — the one
+# #275 already rotted once — cannot drift between them.
+_DRIVING_INTRO = (
     "Brake and Coast are DETECTED EVENTS, not readings of the tiles above: they run on their own "
     "copy of the longitudinal g — the GPS speed derivative on each lap's own ~10 Hz fixes — and "
     "the two read it through DIFFERENT windows, because the two tests have opposite shapes.\n\n"
     "A BRAKE EVENT is a run below the session's OWN brake threshold — derived from this "
     "recording's braking-decel distribution rather than fixed — released on hysteresis, with the "
     "fragments of one braking manoeuvre re-fused into one event. It is detected with NO smoothing "
-    f"window at all, the opposite choice from the {gmeter.LONG_SMOOTH_S:g} s one the peak-braking "
-    "tile and the friction circle above are drawn on: an onset is a step, and a centred window "
-    "smears exactly the thing being detected.\n\n"
+    "window at all")
+_DRIVING_IMU_CONTRAST = (
+    f", the opposite choice from the {gmeter.LONG_SMOOTH_S:g} s one the peak-braking "
+    "tile and the friction circle above are drawn on")
+_DRIVING_BRAKE_TAIL = (
+    ": an onset is a step, and a centred window "
+    "smears exactly the thing being detected.\n\n")
+_DRIVING_COAST = (
     "A COAST is the narrower test — off-power deceleration inside a band from "
     f"{driving.COAST_DRAG_MIN:g} g up to that same threshold, held for at least "
     f"{driving.MIN_COAST_S:g} s. Sustained membership of a band is the opposite shape from an "
@@ -617,6 +634,22 @@ DRIVING_TOOLTIP = (
     f"measured on a {driving.COAST_SMOOTH_S:g} s window. The band, the minimum duration and that "
     "window are the whole instrument — this is time that passed all three tests, not every moment "
     "the driver was off the throttle.")
+DRIVING_TOOLTIP = _DRIVING_INTRO + _DRIVING_IMU_CONTRAST + _DRIVING_BRAKE_TAIL + _DRIVING_COAST
+
+
+def driving_tooltip_gps(why: str) -> str:
+    """DRIVING_TOOLTIP for a GPS-derived meter, where the IMU contrast has nothing to contrast to.
+
+    The detector itself is unchanged and the coast window is real on this path too:
+    `driving_channels` rebuilds both series from the resampled speed when there is no
+    `long_g_gps`. Only the comparison moves — the window it pointed at is absent from the tiles it
+    pointed at, which is the same defect #288 fixed one surface over."""
+    return (_DRIVING_INTRO
+            + f" — and on this recording that is no longer a contrast with the tiles above: THE "
+              f"G-METER IS DERIVED FROM THE GPS TRAJECTORY ({why}), so the "
+              f"{gmeter.LONG_SMOOTH_S:g} s window the peak-braking tile and the friction circle "
+              f"carry on an IMU-driven meter is absent from them too"
+            + _DRIVING_BRAKE_TAIL + _DRIVING_COAST)
 LAP_TABLE_TOOLTIP = ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
                      "speed. ★ marks the session-best lap.\n\n"
                      "TWO COLUMNS HERE READ ONE AXIS THROUGH TWO FILTERS. Lat g is the "
@@ -668,6 +701,91 @@ def peak_lat_tooltip_gps(why: str) -> str:
     is not there was the second half of the same error."""
     return (f"Peak |lateral g| over the valid laps — derived from the GPS trajectory ({why}), "
             f"not an accelerometer reading (see DATA TRUST).")
+
+
+# ---------------------------------------------------------------- THE NO-G-METER PAGE
+# `gps_lateral_clause` returns None for a recording with NO g-meter, and correctly so — its
+# lateral g does not come from the GPS trajectory either. But #288 then left that page reading
+# exactly like an IMU one: karma.mp4 printed "Lat g is the accelerometer" and "IMU lateral"
+# directly under a note saying "no accelerometer in this recording". The three surfaces that stay
+# VISIBLE in that state are the PER LAP grid and the two peak tiles (DRIVING and the FRICTION
+# CIRCLE hide themselves), and all three now explain their em-dashes in NO_GMETER_NOTE's own words.
+
+
+def lap_table_tooltip_no_gmeter() -> str:
+    """LAP_TABLE_TOOLTIP where there is no g-meter at all: FOUR of its columns are em-dashes.
+
+    The two-filters paragraph is not merely mis-sourced here, it describes columns that are
+    empty — so it goes, rather than being re-pointed at a different sensor."""
+    return ("Per-lap statistics over the valid laps. Vmax/Avg from the lap's own GPS "
+            "speed. ★ marks the session-best lap.\n\n"
+            f"LAT G, BRK G, BRAKE S AND COAST S ARE EM-DASHES ON THIS RECORDING: "
+            f"{NO_GMETER_CLAUSE}. Time, Vmax and Avg are measured from the GPS trace and are "
+            f"unaffected.")
+
+
+def peak_lat_tooltip_no_gmeter() -> str:
+    """PEAK_LAT_TOOLTIP with no g-meter: there is no lateral g of any provenance to peak."""
+    return (f"Peak |lateral g| over the valid laps. Empty here: {NO_GMETER_CLAUSE} "
+            f"(see DATA TRUST).")
+
+
+def peak_brake_tooltip_no_gmeter() -> str:
+    """PEAK_BRAKE_TOOLTIP with no g-meter, for the reason its sibling above has one."""
+    return (f"Peak braking deceleration over the valid laps. Empty here: {NO_GMETER_CLAUSE} "
+            f"(see DATA TRUST).")
+
+
+#: The `peak braking g` tile's legend, hoisted out of _build beside its sibling above so the
+#: GPS-derived page and the IMU page read one string each.
+#:
+#: §4.3: "smoothed" was in this string and the WINDOW was not, and a window is the whole story for
+#: a MAXIMUM. Measured on the D24 0060 pair (38 valid laps): the per-lap peak runs a median
+#: 0.862 g here against 1.081 g on the same signal unsmoothed, and the session max this tile
+#: prints reads 1.27 g where the instantaneous peak was 1.94 g. The smoothing is right — a raw
+#: d|v|/dt peak is a GPS spike, and the repo's rule is percentiles-not-raw-max — but a number that
+#: is 20-35% under the instantaneous one has to say which it is. The window is read from the
+#: constant, not typed, so it cannot drift from the signal it describes.
+PEAK_BRAKE_TOOLTIP = (
+    f"Peak SUSTAINED deceleration — the GPS speed derivative (the validated "
+    f"longitudinal; the raw IMU forward axis is vibration-inflated), smoothed over "
+    f"{gmeter.LONG_SMOOTH_S:g} s. A {gmeter.LONG_SMOOTH_S:g} s window lowers a peak, "
+    f"so this reads under the instantaneous spike on purpose: the spike is GPS "
+    f"quantization noise, not grip. 10 Hz GPS also quantizes brake onsets by ~1.5 m.\n\n"
+    f"IT IS NOT THE NUMBER THE BRAKE COUNTS COME FROM. Every brake event on this page — "
+    f"the two braking DRIVING tiles, the Brake s column, the BRAKING table, the map's "
+    f"glyphs — is detected on the SAME axis with no window at all, so an individual "
+    f"event's peak deceleration normally runs ABOVE this figure rather than under it. "
+    f"(The two COASTING tiles beside them are the third filter on that axis, and carry a "
+    f"window of their own — see DRIVING.) One axis, three filters, for three jobs.")
+
+
+def peak_brake_tooltip_gps(why: str) -> str:
+    """PEAK_BRAKE_TOOLTIP for a GPS-derived meter, where the WINDOW is the false claim.
+
+    Unlike the lateral texts #288 fixed, this tile's sensor sentence was already right — the
+    longitudinal has always been GPS-derived. What is wrong here is the FILTER: `gmeter.compute`
+    builds `long_g_gps`, the series LONG_SMOOTH_S is applied to, only on the IMU path, so
+    `_resample_gps_only` leaves it None and `stats.lap_stats` falls back to the meter's own
+    `long_g`. Measured over the real `Session.load` on the four GPS-derived bundled samples that
+    carry real motion, the shipped peak |long_g| runs 1.18-1.36x what that series would read had
+    the window been applied (Fusion 1.364x, hero5 1.178x, hero6 1.178x, hero6a 1.186x) — the
+    window is absent, not merely unnamed, so "SUSTAINED" goes with it.
+
+    The window is still named, once, to say it is NOT here: a reader comparing this tile against
+    the same recording's PER LAP `Brk g` column needs the two to agree, and #288 taught that
+    column the same sentence."""
+    return (f"Peak braking deceleration over the valid laps — the GPS speed derivative, like the "
+            f"rest of this recording's g-meter, which is DERIVED FROM THE GPS TRAJECTORY "
+            f"({why}).\n\n"
+            f"IT DOES NOT CARRY THE {gmeter.LONG_SMOOTH_S:g} s WINDOW an IMU-driven meter's "
+            f"braking axis is smoothed on: that smoothed series is built only on the "
+            f"accelerometer path and is absent here, so this is the derivative as ~10 Hz of GPS "
+            f"gives it rather than a SUSTAINED peak — and 10 Hz cannot see a spike.\n\n"
+            f"IT IS STILL NOT THE NUMBER THE BRAKE COUNTS COME FROM. Every brake event on this "
+            f"page — the two braking DRIVING tiles, the Brake s column, the BRAKING table, the "
+            f"map's glyphs — is detected on its own copy of that derivative, rebuilt on each "
+            f"lap's own fixes (see DRIVING). One axis, more than one filter.")
 
 
 PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropout — the same "
@@ -1532,26 +1650,9 @@ class StatsView(QWidget):
         # Provenance-dependent, and re-set per refresh — see _refresh_g_provenance.
         self.t_peak_lat.setToolTip(PEAK_LAT_TOOLTIP)
         self.t_peak_brake = Tile("peak braking g")
-        # §4.3: "smoothed" was in this string and the WINDOW was not, and a window is the whole
-        # story for a MAXIMUM. Measured on the D24 0060 pair (38 valid laps): the per-lap peak
-        # runs a median 0.862 g here against 1.081 g on the same signal unsmoothed, and the
-        # session max this tile prints reads 1.27 g where the instantaneous peak was 1.94 g.
-        # The smoothing is right — a raw d|v|/dt peak is a GPS spike, and the repo's rule is
-        # percentiles-not-raw-max — but a number that is 20-35% under the instantaneous one
-        # has to say which it is. The window is read from the constant, not typed, so it
-        # cannot drift from the signal it describes.
-        self.t_peak_brake.setToolTip(
-            f"Peak SUSTAINED deceleration — the GPS speed derivative (the validated "
-            f"longitudinal; the raw IMU forward axis is vibration-inflated), smoothed over "
-            f"{gmeter.LONG_SMOOTH_S:g} s. A {gmeter.LONG_SMOOTH_S:g} s window lowers a peak, "
-            f"so this reads under the instantaneous spike on purpose: the spike is GPS "
-            f"quantization noise, not grip. 10 Hz GPS also quantizes brake onsets by ~1.5 m.\n\n"
-            f"IT IS NOT THE NUMBER THE BRAKE COUNTS COME FROM. Every brake event on this page — "
-            f"the two braking DRIVING tiles, the Brake s column, the BRAKING table, the map's "
-            f"glyphs — is detected on the SAME axis with no window at all, so an individual "
-            f"event's peak deceleration normally runs ABOVE this figure rather than under it. "
-            f"(The two COASTING tiles beside them are the third filter on that axis, and carry a "
-            f"window of their own — see DRIVING.) One axis, three filters, for three jobs.")
+        # Provenance-dependent, and re-set per refresh — see _refresh_g_provenance. (The §4.3
+        # measurement that put the WINDOW in this string lives with the constant.)
+        self.t_peak_brake.setToolTip(PEAK_BRAKE_TOOLTIP)
         col.addLayout(self._grid(self.t_vmax, self.t_vmin, self.t_peak_lat,
                                  self.t_peak_brake))
         # Without an accelerometer two of those four tiles can only ever be em-dashes — say why
@@ -2797,7 +2898,7 @@ class StatsView(QWidget):
             t.setVisible(has_laps)
 
     def _refresh_g_provenance(self, session):
-        """The three FIXED texts that name the lateral channel's sensor, re-stated per refresh.
+        """Every FIXED text that names the g signal's sensor or its window, re-stated per refresh.
 
         Per refresh and not at construction for the reason the trust card is: `session` is swapped
         under a live page (`view.session = …; view.refresh()`), and a tooltip set once in _build
@@ -2805,13 +2906,39 @@ class StatsView(QWidget):
         `_refresh_bands`, which already runs per refresh.
 
         `gps_lateral_clause` returns None for an IMU-lateral recording — both D24 recordings — so
-        their wording is the constant it always was, byte for byte."""
+        their wording is the constant it always was, byte for byte.
+
+        THREE STATES, NOT TWO. #288 read this as accelerometer-vs-GPS and so left the recordings
+        with NO g-meter reading as IMU pages: `gps_lateral_clause` is None there too, and karma.mp4
+        went on saying "Lat g is the accelerometer" under a note saying it has none. A page with no
+        g-meter hides DRIVING and the friction circle, so the surfaces that need the third state
+        are the PER LAP grid and the two peak tiles.
+
+        The peak-braking tile and DRIVING join the set for a different reason than the lateral
+        texts did: their claim is a WINDOW rather than a sensor. `gmeter.compute` builds
+        `long_g_gps` — the series LONG_SMOOTH_S belongs to — only on the IMU path, so on a
+        GPS-derived meter `stats.lap_stats` falls back to the meter's own `long_g` and that window
+        was never applied to the number the tile prints."""
         why = gps_lateral_clause(session)
+        no_gmeter = not getattr(session, "has_gmeter", False)
         self.gg.setToolTip(GG_TOOLTIP if why is None else gg_tooltip_gps(why))
-        self.lap_table.setToolTip(
-            LAP_TABLE_TOOLTIP if why is None else lap_table_tooltip_gps(why))
-        self.t_peak_lat.setToolTip(
-            PEAK_LAT_TOOLTIP if why is None else peak_lat_tooltip_gps(why))
+        if no_gmeter:
+            self.lap_table.setToolTip(lap_table_tooltip_no_gmeter())
+            self.t_peak_lat.setToolTip(peak_lat_tooltip_no_gmeter())
+            self.t_peak_brake.setToolTip(peak_brake_tooltip_no_gmeter())
+        else:
+            self.lap_table.setToolTip(
+                LAP_TABLE_TOOLTIP if why is None else lap_table_tooltip_gps(why))
+            self.t_peak_lat.setToolTip(
+                PEAK_LAT_TOOLTIP if why is None else peak_lat_tooltip_gps(why))
+            self.t_peak_brake.setToolTip(
+                PEAK_BRAKE_TOOLTIP if why is None else peak_brake_tooltip_gps(why))
+        # The heading AND each event tile, the #276 rule: the heading answers "what is this group",
+        # a tile answers "what is this number", and the answer is the same sentence either way.
+        driving_tip = DRIVING_TOOLTIP if why is None else driving_tooltip_gps(why)
+        self._driving_section.setToolTip(driving_tip)
+        for tile in (self.t_brake, self.t_brake_n, self.t_coast, self.t_longest_coast):
+            tile.setToolTip(driving_tip)
 
     def _refresh_bands(self, st, unit, u_label):
         """The DISTRIBUTIONS group: the two time-weighted profiles + the disclosure under them.
@@ -3516,7 +3643,23 @@ class StatsView(QWidget):
             rows.append(("Break in series",
                          f"{broke} — compare times across it with that in mind", True))
         quality = getattr(session, "timing_quality", None)  # a Session @property
-        if quality is not None:
+        if quality is not None and getattr(quality, "no_gps", False):
+            # A THIRD clock state, and the row below could not say it: its label was a two-way
+            # choice — the media-clock fallback, else "GPS9 true clock" — so a verdict that was
+            # NEITHER fell through to the flattering branch. Measured on the bundled `karma.mp4`
+            # (0 GPS fixes) this card printed "GPS9 true clock · 0% of moving fixes rejected",
+            # vouching for the app's best timing on a file with no satellite fix in it, and
+            # reporting a reassuring 0 % over a population of nothing. It is a CAVEAT, so it
+            # sorts up with the other trust-breaking facts, and it carries the action: the
+            # cause is a camera setting or a camera without a receiver, and the strip row
+            # beside it says which of the two this recording was.
+            rows.append(("Timing",
+                         "no GPS fixes survived in this recording — nothing here can be "
+                         "lap-timed, and no time axis was built from satellite fixes. Check "
+                         "that the camera's GPS was switched on; some models carry no "
+                         "receiver at all.", True))
+            tips.append(quality.detail())
+        elif quality is not None:
             clock = ("video clock (estimated)" if quality.media_clock
                      else "GPS9 true clock")
             # "of MOVING fixes" is not padding: the fraction is judged over the RETAINED MOVING

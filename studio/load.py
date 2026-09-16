@@ -98,9 +98,19 @@ def _used_gps9_trueclock(samples) -> bool:
     """Did the GPS9 true-clock axis actually get built, or did the load fall back to the media
     clock? True iff at least one contiguous GPS9 run exists — the SAME run rule `_gps9_times`
     uses to re-anchor spacing (two consecutive non-sentinel fixes whose delta is a sane single
-    GPS9 step). A GPS5-only camera reports ts==0 on every sample, so no run is found → False →
-    every time stayed on the naive media clock. The recording's timing-quality clock provenance
-    (data_quality.TimingQuality.clock) is read off this."""
+    GPS9 step). The recording's timing-quality clock provenance
+    (data_quality.TimingQuality.clock) is read off this.
+
+    IT IS THE SPACING THAT DECIDES, NOT `ts > 0` — this docstring used to say "a GPS5-only camera
+    reports ts==0 on every sample, so no run is found", and that is measurably false. Every one of
+    the nine bundled GPS5-era sample clips reports a NON-ZERO timestamp on EVERY fix: hero6.mp4
+    gives 417/417 non-zero, but only 23 DISTINCT values across those 417 fixes, because GPS5 era
+    carries GPSU — one UTC stamp per ~1 s payload — repeated onto each of the ~18 fixes inside it.
+    So the run rule is what rejects them, at both ends: the delta inside a payload is 0 (below
+    GPS9_MIN_DT_S) and the delta across a payload boundary is ~1.0 s (above GPS9_MAX_DT_S). The
+    D24 HERO13 recordings, by contrast, give 17,297 distinct stamps for 17,297 fixes at a median
+    0.1000 s. Anyone simplifying this to `any(ts > 0)` would classify every HERO5-8, Max and Fusion
+    recording as GPS9 true-clock."""
     ts = np.array([getattr(s, "timestamp_ms", 0) for s in samples], dtype=np.float64)
     have = ts > 0
     for i in range(len(ts) - 1):
@@ -325,6 +335,15 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
         # …but the STRIP survives a trace that cleaned away to nothing, and that is the case it is
         # most worth having: a recording the loader can make no laps out of still has a bar saying
         # which seconds of it the receiver was never locked in.
+        #
+        # AND THE VERDICT IS ITS OWN. `quality` above is the high-quality DEFAULT, built before
+        # this function knows whether a trace survives — and its default clock is GPS9_TRUECLOCK,
+        # the validated headline path. Returning it here told every downstream surface that a
+        # recording with no GPS in it was timed on the best clock the app has: measured end to end
+        # on the bundled `karma.mp4` (0 GPS fixes), the Stats page's DATA TRUST card printed
+        # "Timing: GPS9 true clock · 0% of moving fixes rejected". No axis was built, so the
+        # verdict has to say that rather than inherit the flattering default.
+        quality = data_quality.TimingQuality(clock=data_quality.NO_GPS_TRACE)
         return laps, empty, video_path, chapter_map, None, None, quality, strip
 
     # Per-sample timing clock: GPS9 true-clock spacing when the stream carries it, else the
