@@ -661,6 +661,99 @@ def test_every_video_export_dialog_names_the_product_in_its_body():
     print("test_every_video_export_dialog_names_the_product_in_its_body OK")
 
 
+# ======================================== X2(b) — a failure that is not about the file
+def test_an_export_that_fails_on_the_data_still_gets_the_plain_dialog():
+    """`_run_export` guarded `OSError` alone, back when its writers only formatted strings into a
+    file. `write_report_html` now runs the whole SessionStats reduction and the ideal-lap machinery
+    INSIDE that guard, over whatever a recording turned out to contain — so a ValueError out of a
+    degenerate reduction sailed past it, up through the menu action, and into the CRASH REPORTER:
+    a Python traceback and "Pacer stopped unexpectedly" for a report the user simply cannot have,
+    while the app's own plain-language export dialog sat unused two frames down the stack.
+
+    The two cases stay told apart. A file error names the FILE, which the user can act on; a data
+    error says nothing was written and keeps the type behind Details, because a specific next
+    action we cannot name would be a wrong specific sentence."""
+    win = _window(FakeSession())
+    win.view = SimpleNamespace(map=QWidget(), plots=QWidget())
+    win._speed_unit = "km/h"
+    boxes, warnings = [], []
+    orig_report, orig_dialog = export_data.write_report_html, QFileDialog.getSaveFileName
+    orig_box_exec, orig_warning = QMessageBox.exec, QMessageBox.warning
+
+    def _raise(exc):
+        def _writer(*_a, **_k):
+            raise exc
+        return _writer
+
+    with tempfile.TemporaryDirectory() as td:
+        out = os.path.join(td, "session_report.html")
+        QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out, ""))
+        QMessageBox.exec = lambda box, *_a, **_k: boxes.append(
+            {"body": box.text(), "details": box.detailedText(), "icon": box.icon()}) or 0
+        QMessageBox.warning = staticmethod(
+            lambda _p, title, text, *_a, **_k: warnings.append((title, text)) or QMessageBox.Ok)
+        try:
+            export_data.write_report_html = _raise(ValueError("no donor laps for the ideal"))
+            win.statusBar().clearMessage()
+            win.exports.export_report()          # ON MAIN THIS RAISES — straight to the crash dialog
+            data_status = win.statusBar().currentMessage()
+            # INVERSE CONTROL: an OSError keeps the file-shaped message it always had.
+            export_data.write_report_html = _raise(OSError("No space left on device"))
+            win.exports.export_report()
+            file_status = win.statusBar().currentMessage()
+        finally:
+            export_data.write_report_html = orig_report
+            QFileDialog.getSaveFileName = orig_dialog
+            QMessageBox.exec = orig_box_exec
+            QMessageBox.warning = orig_warning
+
+    assert len(boxes) == 1, f"the data failure raised {len(boxes)} plain dialogs: {boxes}"
+    body, details = boxes[0]["body"], boxes[0]["details"]
+    assert boxes[0]["icon"] == QMessageBox.Warning, boxes[0]["icon"]
+    assert APP_NAME in body, body
+    assert "session_report.html" in body, body
+    assert "nothing was written" in body, body
+    assert "no donor laps for the ideal" not in body, (
+        "a raw exception message is a diagnostic, not an explanation", body)
+    assert "ValueError" in details and "no donor laps for the ideal" in details, details
+    assert data_status == "export failed: ValueError", data_status
+    assert len(warnings) == 1 and "No space left on device" in warnings[1 - 1][1], warnings
+    assert "No space left on device" in file_status, file_status
+    win.hide()
+    print("test_an_export_that_fails_on_the_data_still_gets_the_plain_dialog OK")
+
+
+# ======================================== X2(c) — what the longest modal in the app says
+def test_the_progress_modal_counts_frames_and_says_how_long_is_left():
+    """The app's longest-running modal said `Rendering lap 4 overlay video…` and nothing else, for
+    minutes. A bar answers "is it moving"; it does not answer the question someone leaves the
+    machine on, which is how long.
+
+    The ETA is measured from the FIRST FRAME of this file, never from the dialog opening — the
+    first chunk carries the ffmpeg spawn, the VideoToolbox probe and the painter's pill budget, so
+    a rate taken over it reads far slower than the render settles at. Below the evidence threshold
+    the line simply counts frames, which is true, rather than publishing a figure that would
+    visibly halve a few seconds later.
+
+    THE MODAL COMES FIRST HERE, DELIBERATELY. Asserting the pure rule first would fail an unfixed
+    tree on `AttributeError: no attribute '_render_progress_detail'` — true, and evidence of
+    nothing: it says a helper is missing, not that the dialog a user watches for minutes told them
+    only that it was "Rendering". The widget assertion fails on the symptom instead."""
+    win = _window(FakeSession())
+    mid, _end, _modals, _worker, _spec = _run_export_to_completion(win, ok=True)
+    assert "Rendering" in mid["label"], mid["label"]
+    assert "frame 350 of 700" in mid["label"], (
+        f"the modal never says how far along it is: {mid['label']!r}")
+    win.hide()
+    # The rule behind that line, at the boundaries the widget test cannot reach.
+    detail = ExportController._render_progress_detail
+    assert detail(10, 700, 10, 0.5) == "frame 10 of 700", detail(10, 700, 10, 0.5)
+    assert detail(480, 2047, 480, 8.0) == "frame 480 of 2047 · about 0:26 left", \
+        detail(480, 2047, 480, 8.0)
+    assert detail(700, 700, 700, 10.0) == "frame 700 of 700", detail(700, 700, 700, 10.0)
+    print("test_the_progress_modal_counts_frames_and_says_how_long_is_left OK")
+
+
 # ============================================================ L12-01 — the report's unit
 def test_the_report_is_written_in_the_display_unit_and_the_csv_is_not():
     """_export_report threads the window's live speed unit into write_report_html; _export_laps_csv
@@ -1391,6 +1484,8 @@ def _run_all():
     test_a_failed_video_export_takes_the_modal_down_and_names_the_product()
     test_the_real_modal_loop_unwinds_when_a_finished_export_opens_its_box()
     test_every_video_export_dialog_names_the_product_in_its_body()
+    test_an_export_that_fails_on_the_data_still_gets_the_plain_dialog()
+    test_the_progress_modal_counts_frames_and_says_how_long_is_left()
     test_the_report_is_written_in_the_display_unit_and_the_csv_is_not()
     test_the_report_map_keeps_its_key_and_loses_the_interaction_chrome()
     test_the_report_map_opens_a_key_the_user_collapsed_on_screen()

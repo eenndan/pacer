@@ -371,6 +371,158 @@ def test_the_crash_dialog_names_the_product():
     print("test_the_crash_dialog_names_the_product OK")
 
 
+# ============================================================ U3 — menu truth on macOS
+# WHY A TOOLTIP IS NOT AN EXPLANATION HERE. Measured on this machine, on the real screen (cocoa,
+# Built-in Retina Display 1512x982 @2x): `menuBar().isNativeMenuBar()` is True and the bar's
+# in-window height is 0 px — the items the user clicks are NSMenuItems outside the window, so
+# QMenu's own tooltip handler never runs for them. And that handler is switched off anyway: all
+# eight of this app's menus report `toolTipsVisible() == False`, and a live QHelpEvent on a real
+# popup showed nothing at False and the full sentence at True. So an explanation that lives only in
+# `setToolTip` is unreachable — 19 of the 20 items disabled on the welcome screen relied on one.
+_REASON_SEP = " — "
+
+
+def _readable_actions(win):
+    """Every action a user can READ in the menu bar: the leaves, plus a submenu OPENER that is
+    itself disabled. File ▸ Export greys the whole submenu, which takes its six items (and their
+    six reasons) off the screen with it, so the opener has to carry a reason of its own.
+
+    findChildren, never `action.menu()`, for the ownership reason `_menus` documents."""
+    from PySide6.QtWidgets import QMenu
+    menus = win.menuBar().findChildren(QMenu)
+    openers = {id(m.menuAction()) for m in menus}
+    out = []
+    for menu in menus:
+        for action in menu.actions():
+            if action.isSeparator() or not action.text().strip():
+                continue
+            if id(action) in openers and action.isEnabled():
+                continue            # an open submenu explains itself through its own items
+            out.append((menu.title().replace("&", ""), action))
+    return out
+
+
+def _welcome_window():
+    """A real StudioWindow on the welcome screen with every menu's aboutToShow fired, i.e. the
+    enablement a pull-down would paint."""
+    win = StudioWindow([])
+    win.resize(1440, 900)
+    win.show()
+    _settle(8)
+    for menu in _menus(win).values():
+        menu.aboutToShow.emit()
+    _settle()
+    return win
+
+
+def test_every_disabled_menu_item_says_why_in_the_words_the_menu_shows():
+    """THE U3 GUARD. A greyed item with no reason is a silent refusal, which is the defect class
+    this app fixes rather than ships. The reason has to be in the item's own TEXT, because on macOS
+    that is the only part of a menu item a user can read.
+
+    Each disabled item's text must carry the CONDITION half of its reason — the clause before the
+    remedy — and an enabled item must carry none of it, or the gate would be shouting at a user who
+    is not blocked."""
+    win = _welcome_window()
+    try:
+        silent, shouting = [], []
+        for title, action in _readable_actions(win):
+            text = action.text()
+            if action.isEnabled():
+                if _REASON_SEP in text:
+                    shouting.append((title, text))
+                continue
+            if text.strip().startswith("("):
+                continue            # the "(none)" placeholder IS its own explanation
+            head = action.toolTip().split(_REASON_SEP)[0].strip().rstrip(".:")
+            if not head or head.lower() not in text.lower():
+                silent.append((title, text, action.toolTip()[:70]))
+        assert not silent, (
+            f"{len(silent)} disabled menu item(s) explain themselves nowhere the macOS menu shows. "
+            f"A tooltip is not a surface here (see the block above this test):\n" +
+            "\n".join(f"  {m:<10} {t!r}  tooltip={tip!r}" for m, t, tip in silent))
+        assert not shouting, f"an ENABLED item carries a gate clause: {shouting}"
+        # ...and the guard must not be vacuous: the welcome screen really does gate things.
+        gated = [t for _m, a in _readable_actions(win) if not a.isEnabled()
+                 and _REASON_SEP in (t := a.text())]
+        assert len(gated) >= 15, f"only {len(gated)} gated items found: {gated}"
+    finally:
+        win.hide()
+    print(f"test_every_disabled_menu_item_says_why_in_the_words_the_menu_shows OK "
+          f"({len(_readable_actions(win))} readable actions)")
+
+
+def test_the_reason_comes_back_off_the_item_when_the_gate_opens():
+    """The other direction, and the idempotence that makes it safe to re-run on every aboutToShow:
+    gating twice must not append twice, and opening the gate must restore the command's own name
+    exactly — a menu item that keeps a stale "no complete laps" clause after a load would be a
+    worse lie than the silence it replaced."""
+    win = _welcome_window()
+    try:
+        action = win._library_action
+        reason = "No recordings analysed yet — open a GoPro recording and it is remembered here."
+        win._gate_action(action, False, reason)
+        off = action.text()
+        assert "no recordings analysed yet" in off.lower(), off
+        win._gate_action(action, False, reason)
+        assert action.text() == off, f"the reason was appended twice: {action.text()!r}"
+        win._gate_action(action, True, reason)
+        assert action.text() == "Library…", action.text()
+        assert _REASON_SEP not in action.text(), action.text()
+        assert action.isEnabled()
+    finally:
+        win.hide()
+    print("test_the_reason_comes_back_off_the_item_when_the_gate_opens OK")
+
+
+def test_the_library_has_a_key_and_the_card_and_the_palette_agree_on_it():
+    """⌘L. The Library is the app's front door to everything analysed before today and was the one
+    top-level surface with no key at all. The key is asserted against the LIVE action and both
+    generated surfaces — help_dialog's card (which test_help_dialog would fail on its own if the
+    row were missing) and the ⌘K palette row — so the three cannot drift."""
+    from PySide6.QtGui import QKeySequence
+
+    from studio import command_palette, help_dialog
+    win = _welcome_window()
+    try:
+        want = QKeySequence("Ctrl+L").toString(QKeySequence.NativeText)
+        got = win._library_action.shortcut().toString(QKeySequence.NativeText)
+        assert got == want, f"File ▸ Library… is bound to {got!r}, not {want!r}"
+        keys = [a.shortcut().toString(QKeySequence.NativeText)
+                for _t, a in _readable_actions(win) if not a.shortcut().isEmpty()]
+        assert keys.count(want) == 1, f"{want} is bound to more than one menu item: {keys}"
+        documented = {help_dialog._key_text(k)
+                      for _g, rows in help_dialog.SHORTCUT_GROUPS for k, _d in rows}
+        assert want in documented, f"the shortcut card does not document {want}: {sorted(documented)}"
+        row = next(e for e in command_palette.entries(win) if e.title.startswith("Library"))
+        assert row.key == want, (row.title, row.key)
+    finally:
+        win.hide()
+    print("test_the_library_has_a_key_and_the_card_and_the_palette_agree_on_it OK")
+
+
+def test_opportunities_and_the_copy_that_points_at_it_spell_it_the_same_way():
+    """The app's recorded ellipsis convention (app.py, above the Help menu): a trailing "…" means
+    the command needs MORE INFORMATION before it can run. Opportunities asks for nothing — it opens
+    a ranking — so it carries none, and the in-app copy that names the menu path is asserted
+    against the ACTION's own text rather than a second literal, which is how the pair went out of
+    step in the first place."""
+    from studio import coaching_panel
+    win = _welcome_window()
+    try:
+        action = win._opportunities_action
+        win._gate_action(action, True, "")      # read the command's own name, not its gate clause
+        text = action.text()
+        assert not text.endswith("…"), (
+            f"{text!r} carries an ellipsis, but it asks the user for nothing")
+        assert f"Coaching ▸ {text}" in coaching_panel._SCOPE_TOOLTIP, (
+            f"the coaching page points at 'Coaching ▸ …' with different words than the menu item "
+            f"{text!r}: {coaching_panel._SCOPE_TOOLTIP}")
+    finally:
+        win.hide()
+    print("test_opportunities_and_the_copy_that_points_at_it_spell_it_the_same_way OK")
+
+
 def _run_all():
     test_escape_restores_a_maximized_panel_at_three_window_sizes()
     test_escape_still_leaves_video_focus_and_window_fullscreen()
@@ -378,6 +530,10 @@ def _run_all():
     test_library_menu_item_comes_back_the_moment_there_is_a_library()
     test_the_library_menu_item_names_the_columns_the_dialog_actually_has()
     test_a_loaded_session_re_enables_them_without_opening_a_menu()
+    test_every_disabled_menu_item_says_why_in_the_words_the_menu_shows()
+    test_the_reason_comes_back_off_the_item_when_the_gate_opens()
+    test_the_library_has_a_key_and_the_card_and_the_palette_agree_on_it()
+    test_opportunities_and_the_copy_that_points_at_it_spell_it_the_same_way()
     test_jump_marks_and_reveals_the_corner_row_it_landed_on()
     test_jump_does_not_overwrite_the_persisted_lap_panel_tab()
     test_the_crash_dialog_names_the_product()

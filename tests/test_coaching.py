@@ -602,6 +602,71 @@ def test_brake_window_projected_onto_each_laps_own_odometer():
     print("ok D13 odometer-frame: corner window projected onto each lap's own odometer for braking")
 
 
+def test_reason_window_is_the_same_drift_gated_window_the_phases_use():
+    """C1: a corner's [enter, exit] lives in the REFERENCE odometer, and on a lap past
+    `corners.NORMALIZED_DRIFT_MAX` the window the BRAKE/COAST evidence is matched in must be the
+    drift-gated one — the single warp `lap_corner_stats`, `segment_times` and the phase triple
+    already read — not the bare normalized scale `d·lap_total/ref_total`.
+
+    Fixture (both laps down the same straight line, so the spatial match is exact and the two
+    projections are analytic): reference 1000 m, typical lap 1050 m — 5 % line-length drift, ten
+    times the gate. The spatial match therefore maps reference metre d onto lap metre d, while the
+    normalized projection maps it onto 1.05·d. The one corner is [50, 90] reference, so the gated
+    window is [50, 90] and the normalized one [52.5, 94.5] — 4.5 m of daylight at the exit.
+
+    The typical lap brakes at 92.0 m, which on the track is 2 m PAST the corner exit. Under the
+    gated window that application is outside the corner and contributes nothing (⇒ LINE, on the
+    corner's own spread). Under the normalized window it lands inside and manufactures 0.125 s of
+    "extra braking in the corner" that never happened there (⇒ BRAKING) — a row pairing a
+    warp-derived phase triple with a normalized-frame reason, which is the defect."""
+    corners, best, times, lap_times = _one_corner_lossy(0.5)  # one corner: enter 50, exit 90
+    ref_total, lap_total = 1000.0, 1050.0
+    assert corners_mod.line_length_drift(lap_total, ref_total) > corners_mod.NORMALIZED_DRIFT_MAX
+
+    # Straight-line traces: (ref_xs, ref_ys, ref_cum, lap_xs, lap_ys, lap_cum), xs == odometer.
+    ref_x = np.linspace(0.0, ref_total, 1001)
+    lap_x = np.linspace(0.0, lap_total, 1051)
+    med_traces = (ref_x, np.zeros_like(ref_x), ref_x, lap_x, np.zeros_like(lap_x), lap_x)
+    # The best lap IS the corner basis' frame here (zero drift ⇒ identity projection either way).
+    best_traces = (ref_x, np.zeros_like(ref_x), ref_x, ref_x, np.zeros_like(ref_x), ref_x)
+
+    # FIXTURE GUARD, asked of the real projection (the #286 lesson: a golden/fixture assertion must
+    # ask the matcher, not the thing built from it): the two frames really do disagree here.
+    gated = corners_mod.project_boundaries([50.0, 90.0], ref_total, lap_total,
+                                           traces=med_traces, frame=[50.0, 90.0])
+    normalized = np.array([50.0, 90.0]) * (lap_total / ref_total)
+    assert abs(float(gated[1]) - 90.0) < 1e-6, gated
+    assert float(normalized[1]) - float(gated[1]) > 2.0, (gated, normalized)
+
+    # Constant 20 m/s on both laps, so the overlap integral is analytic.
+    med_dist, med_elapsed = _flat_trace(0.0, lap_total, 72.0, n=1051)
+    best_dist, best_elapsed = _flat_trace(0.0, ref_total, 72.0, n=1001)
+    med_brakes = [_brake(onset_dist=92.0, onset_time=92.0 / 20.0, duration=0.5)]
+
+    kw = dict(sigmas_by_cid={1: 0.03}, median_brake_events=med_brakes, best_brake_events=[],
+              median_coast_spans=[], best_coast_spans=[], median_apex_deltas=[0.0],
+              corner_dist_total=ref_total, median_lap_total=lap_total, best_lap_total=ref_total,
+              median_dist=med_dist, median_elapsed=med_elapsed,
+              best_dist=best_dist, best_elapsed=best_elapsed)
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                      median_traces=med_traces, best_traces=best_traces, **kw)
+    row = opp.rows[0]
+    assert row.reason.brake_extra_s == 0.0, (
+        "the brake application is 2 m past the corner exit on the track; the gated window must "
+        f"not count it, got {row.reason.brake_extra_s:.4f} s", row.reason)
+    assert row.reason.kind == K.REASON_LINE, row.reason
+
+    # CONTROL, same inputs with NO traces: the gate has nothing to align with, so the projection
+    # stays normalized (byte-identical to the pre-gate output) and the out-of-corner brake counts.
+    ungated = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best, **kw)
+    ug = ungated.rows[0]
+    assert abs(ug.reason.brake_extra_s - 0.125) < 1e-9, ug.reason
+    assert ug.reason.kind == K.REASON_BRAKING, ug.reason
+    print(f"ok C1 gated reason window: gated ⇒ {row.reason.kind} "
+          f"(brake {row.reason.brake_extra_s:.3f} s), normalized ⇒ {ug.reason.kind} "
+          f"(brake {ug.reason.brake_extra_s:.3f} s)")
+
+
 def _stadium_reference(s, *, apex_scale):
     """Build a ReferenceLap for the stadium session whose speed profile is `apex_scale`× the best
     lap's — so its per-corner APEX speeds differ from the local best's. If the apex signal followed
