@@ -124,10 +124,10 @@ def _fmt(fmt: str, v) -> str:
     as the WORD for it — `None` or `nan`, see `_absent`."""
     if _absent(v):
         return "—"
-    try:
-        return fmt.format(v)
-    except (TypeError, ValueError):
-        return str(v)
+    # No fallback to `str(v)`: every Table is built in this module (`fix_table`, `corner_best`'s
+    # population) with a format per column that matches the values it puts there, so a cell that
+    # does not format is a builder bug and must be loud. tests/test_provenance.py sweeps it.
+    return fmt.format(v)
 
 
 def _csv_cell(v) -> str:
@@ -555,13 +555,17 @@ def lap_time(*, lap_id: int, value: float, fmt, fixes: LapFixes,
     inside = rows[2:len(rows) - 2]
 
     steps: list[Step] = []
-    derived: list[float] = []
+    # A crossing this transcription cannot find is spelled None, the one spelling `Provenance`
+    # reads as "not re-derivable". It used to be NaN, which that guard never sees: the panel then
+    # printed "DISAGREES ON SCREEN; as a double +nan s, nan ulp" and the arithmetic step read
+    # "nan - t = nan s", stating a failed re-derivation as a measured disagreement.
+    derived: list[float | None] = []
     for name, (lo, hi) in (("start line", start_chord), ("finish line", finish_chord)):
         p0 = (fixes.lons[lo], fixes.lats[lo])
         p1 = (fixes.lons[hi], fixes.lats[hi])
         f = crossing_fraction(line, p0, p1)
         if f is None:
-            derived.append(float("nan"))
+            derived.append(None)
             steps.append(Step(f"{name} crossing",
                               f"rows #{int(fixes.index[lo])}-#{int(fixes.index[hi])} do not cross "
                               f"the line in this transcription"))
@@ -572,11 +576,16 @@ def lap_time(*, lap_id: int, value: float, fmt, fixes: LapFixes,
             f"{name} crossing",
             f"chord #{int(fixes.index[lo])} -> #{int(fixes.index[hi])},  f = {f:.9f},  "
             f"t = {fixes.times[lo]:.6f}×(1-f) + f×{fixes.times[hi]:.6f} = {t:.9f} s"))
-    steps.append(Step("lap time",
-                      f"{derived[1]:.9f} - {derived[0]:.9f} = {derived[1] - derived[0]:.9f} s",
-                      highlight=True))
+    start_t, finish_t = derived
+    if start_t is None or finish_t is None:
+        rebuilt = None
+        steps.append(Step("lap time", "not re-derivable: a crossing above was not found",
+                          highlight=True))
+    else:
+        rebuilt = finish_t - start_t
+        steps.append(Step("lap time", f"{finish_t:.9f} - {start_t:.9f} = {rebuilt:.9f} s",
+                          highlight=True))
 
-    rebuilt = derived[1] - derived[0]
     return Provenance(
         title=f"Lap {lap_label(lap_id)} · lap time",
         formatted=fmt(value), value=value, unit="s",
@@ -588,7 +597,8 @@ def lap_time(*, lap_id: int, value: float, fmt, fixes: LapFixes,
             f"Every GPS fix in lap {lap_label(lap_id)}, plus the one on each side of it "
             f"({len(rows)} rows; {len(inside)} measured)", rows, roles=roles),),
         steps=tuple(steps),
-        reconstructed=rebuilt, reconstructed_formatted=fmt(rebuilt),
+        reconstructed=rebuilt,
+        reconstructed_formatted="" if rebuilt is None else fmt(rebuilt),
         notes=(
             "The two interpolated crossings are NOT fixes — the receiver never sampled the line. "
             "They are what makes a lap time finer than the 10 Hz fix rate, and they are only as "

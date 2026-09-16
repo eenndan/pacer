@@ -948,8 +948,10 @@ def reach_clause(opp: Opportunity) -> str:
         return f" You have already done this — {ev.reach_laps} of {ev.n_laps} laps."
     if ev.reach == REACH_RARE:
         return f" You have rarely done this — {ev.reach_laps} of {ev.n_laps} laps."
-    if ev.reach == REACH_NEVER:
-        return f" No lap has matched this yet — new ground over {ev.n_laps} laps."
+    # No REACH_NEVER wording: `reason_sentence`, the only caller, reaches here for RANKED rows, and a
+    # ranked row has matched the target on at least MIN_REACH_LAPS laps (`corner_evidence`). A
+    # corner no lap has matched is an abstain and says so in `abstain_sentence`. The invariant is
+    # pinned by tests/test_coaching.py.
     return ""
 
 
@@ -1067,11 +1069,11 @@ def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
     lead = next((r for r in rows if r.cid == theme.lead_cid and r.evidence.ranked), None)
     if lead is not None:
         ev = lead.evidence
+        # `lead` is ranked, so it is never REACH_NEVER (see `reach_clause`).
         had = (f"you have matched it on {ev.reach_laps} of {ev.n_laps} laps"
                if ev.reach == REACH_REPEAT else
                f"only {ev.reach_laps} of {ev.n_laps} laps have matched it"
-               if ev.reach == REACH_RARE else
-               "no lap has matched it yet" if ev.reach == REACH_NEVER else "")
+               if ev.reach == REACH_RARE else "")
         out.append(f"Start with C{lead.cid}: +{lead.time_lost:.2f} s"
                    + (f", and {had}." if had else "."))
     return out[:2]
