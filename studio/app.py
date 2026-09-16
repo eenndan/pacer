@@ -1714,6 +1714,9 @@ class StudioWindow(QMainWindow):
         # Video focus (⤢ / double-click the video): the view maximized the video panel; the window
         # goes native-fullscreen (True) / normal (False) so the video fills the whole screen.
         self.view.videoFocusChanged.connect(self._on_video_focus_changed)
+        # A transient fact a panel has no status bar to state (U2: a lap selection trimmed to the
+        # charts' cap). Timed like every other just-happened confirmation.
+        self.view.statusNotice.connect(lambda text: self.statusBar().showMessage(text, STATUS_MS))
         self._sync_edit_menu()  # a fresh load has no prior edit -> Undo disabled
         self.setCentralWidget(self.view)
         # One ~30 Hz tick timer for the window's lifetime, created once and reused across reloads (a
@@ -3532,7 +3535,7 @@ class StudioWindow(QMainWindow):
         brake_points = self.session.coaching_brake_points()
         dlg = OpportunitiesDialog(opps, jump_to=self._jump_to_opportunity,
                                   brake_points=brake_points, parent=self,
-                                  speed_unit=self._speed_unit)
+                                  speed_unit=self._speed_unit, session=self.session)
         dlg.exec()
 
     def _jump_to_opportunity(self, cid: int, _entry_dist: float):

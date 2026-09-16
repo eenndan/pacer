@@ -1045,6 +1045,7 @@ def _run_all():
     test_splitter_handles_stay_thin_under_the_theme()
     test_gmeter_overlay_stays_pinned_to_its_video_and_stands_down_with_it()
     test_hero8s_refused_imu_is_disclosed_on_the_real_view()
+    test_u2_lap_table_cap_notice_reaches_the_window_status_bar()
     print("ALL CENTRAL-VIEW REAL-QT TESTS PASSED")
 
 
@@ -1397,6 +1398,22 @@ def test_splitter_handles_stay_thin_under_the_theme():
         _APP.setPalette(prior[2])
     view.hide()
     print("test_splitter_handles_stay_thin_under_the_theme OK")
+
+
+def test_u2_lap_table_cap_notice_reaches_the_window_status_bar():
+    """U2(c), the wiring half: LapTable.selection_capped -> CentralView.statusNotice -> the REAL
+    StudioWindow's status bar, through the production _build_ui. (The sentence itself is pinned in
+    test_studio_features; this 2-lap fixture cannot exceed the cap, so the table's signal is fired
+    directly — what is under test is that nothing between the table and the bar drops it.)"""
+    win, view = _studiowindow_with_view()
+    try:
+        view.table.selection_capped.emit("probe: the charts overlay at most 6 laps")
+        assert win.statusBar().currentMessage() == "probe: the charts overlay at most 6 laps", \
+            win.statusBar().currentMessage()
+    finally:
+        win._tick_timer.stop()
+        win.deleteLater()
+    print("test_u2_lap_table_cap_notice_reaches_the_window_status_bar OK")
 
 
 if __name__ == "__main__":

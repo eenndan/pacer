@@ -1302,9 +1302,16 @@ class LibraryDialog(QDialog):
                 ys.append(best)
         self._pb_curve.setData(xs, ys)
         self._set_pb_axes(bool(ys))
+        # U2: the summary line above counts EVERY row of the track ("3 sessions") while this title
+        # counted only the charted ones ("best over 2 sessions") — two totals for one track on one
+        # screen. When rows are left off, the title states both numbers.
+        why = _library.pb_left_out(self._index, track)
+        total = why["sessions"]
+        over = (f"{len(ys)} of {_plural(total, 'session')}" if total > len(ys)
+                else _plural(len(ys), "session"))
         if len(ys) >= 2:
             self._pb_title.setText(
-                f"PB progression — {track}  ({fmt_time(min(ys))} best over {len(ys)} sessions)")
+                f"PB progression — {track}  ({fmt_time(min(ys))} best over {over})")
             self._set_pb_empty(None)
             self.pb_plot.enableAutoRange()
             self.pb_plot.autoRange()
@@ -1316,12 +1323,20 @@ class LibraryDialog(QDialog):
             # count and the time — "PB progression — <track>  (1 session: 1:08.201)" — which is the
             # same fact stated where it does not overlap the mark. Empty state and data layer are
             # mutually exclusive now, in both directions.
-            self._pb_title.setText(f"PB progression — {track}  (1 session: {fmt_time(ys[0])})")
+            self._pb_title.setText(f"PB progression — {track}  ({over}: {fmt_time(ys[0])})")
             self._frame_single_point(xs[0], ys[0])
             self._set_pb_empty(None)
         else:
-            self._pb_title.setText(f"PB progression — {track}  (no dated best laps)")
-            self._set_pb_empty("Not enough sessions on this track yet to chart progression")
+            left_out = [f"{why[r]} {r}" for r in _library.PB_LEFT_OUT_REASONS if why[r]]
+            if left_out:
+                # The rows exist; say what kept each one off, in the tags the table rows print.
+                self._pb_title.setText(f"PB progression — {track}  (0 of {_plural(total, 'session')}"
+                                       " charted)")
+                self._set_pb_empty(f"{_plural(total, 'session')} on this track, but no dated best "
+                                   f"lap that counts as a PB: {', '.join(left_out)}")
+            else:
+                self._pb_title.setText(f"PB progression — {track}  (no dated best laps)")
+                self._set_pb_empty("Not enough sessions on this track yet to chart progression")
 
     def _set_pb_axes(self, plotted: bool):
         """Label the axes only while something is plotted, and drop the range when nothing is.

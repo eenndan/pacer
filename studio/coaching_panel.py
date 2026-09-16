@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME, coaching, focus, theme, units
+from . import APP_NAME, coaching, data_quality, focus, theme, units
 from ._signal import DASH, lap_label
 from .lap_table import set_corner_direction
 from .theme import C
@@ -135,8 +135,30 @@ def _clean_laps_phrase(n: int) -> str:
     return f"median of {n} clean lap{'' if n == 1 else 's'}"
 
 
-def empty_state_copy(opps: coaching.Opportunities) -> tuple[str, str]:
+def _lap_account(session) -> tuple[int | None, int]:
+    """(valid laps, how many of them had a GPS dropout) off `session` — the two counts the lap
+    table itself shows — or (None, 0) for a caller with no session / a double with no lap account,
+    which keeps the count-only copy."""
+    valid = getattr(session, "valid_lap_ids", None)
+    if not callable(valid):
+        return None, 0
+    dropout = getattr(session, "dropout_lap_ids", None)
+    return len(valid()), (len(dropout()) if callable(dropout) else 0)
+
+
+def empty_state_copy(opps: coaching.Opportunities, session=None) -> tuple[str, str]:
     """(title, body) for the two no-table cases — too few clean laps, or nothing losing time.
+
+    U2 — THE REASON IS WHAT REMOVED THE LAPS, NOT ALWAYS THE DRIVER. `opps.n_laps` alone cannot
+    tell three different sessions apart, and the copy used to tell all three to "drive a few more
+    laps". Measured in the real window on hero6.mp4 and hero8.mp4: zero valid laps, and every other
+    panel on the frame said data_quality's "No complete laps in this recording." with its GPS-lock /
+    drag-the-line body while this page alone blamed the driving. So `session`'s lap account picks:
+      * no valid lap at all — data_quality's one no-laps state, word for word;
+      * enough valid laps but GPS dropouts took them under the minimum — the GPS, named with the
+        lap table's own total (constructed only: no D24 recording has a dropout lap);
+      * too few valid laps — the count is the reason, so "drive more" stays, and any dropout among
+        them is named so this page's count reconciles with the rows the lap table lists.
 
     ONE PAIR OF CONSTANTS FOR TWO SURFACES, and this function is what makes that true rather than
     intended. `OpportunitiesPanel._show_excluded` carried a docstring claiming it matched "the modal
@@ -150,9 +172,18 @@ def empty_state_copy(opps: coaching.Opportunities) -> tuple[str, str]:
     The split is the app's empty-state copy contract: title = WHAT HAPPENED, body = WHY then WHAT
     NEXT (see widgets.EmptyState)."""
     if not opps.enough:
+        valid, dropouts = _lap_account(session)
+        if valid == 0:
+            return data_quality.NO_LAPS_HEADLINE, data_quality.no_laps_body()
+        needs = (f"Coaching needs {coaching.MIN_LAPS} clean (valid, GPS-dropout-free) laps; this "
+                 f"session has {opps.n_laps}")
+        lost = f"{dropouts} of its {valid} laps had a GPS dropout" if dropouts else ""
+        if lost and valid >= coaching.MIN_LAPS:
+            return ("Not enough clean laps.",
+                    f"{needs}: {lost} (flagged in the Laps tab), which leaves too few to compare "
+                    "corner by corner. You drove the laps — the GPS lost its fix during them.")
         return ("Not enough clean laps yet.",
-                f"Coaching needs {coaching.MIN_LAPS} clean (valid, GPS-dropout-free) laps; this "
-                f"session has {opps.n_laps}. Drive a few more laps and reload.")
+                f"{needs}{f' ({lost})' if lost else ''}. Drive a few more laps and reload.")
     return ("No corner is losing time.",
             "Your typical lap matches your best lap all the way round — your best-lap pace is "
             "consistent. Nice driving.")
@@ -895,9 +926,12 @@ class OpportunitiesDialog(QDialog):
     def __init__(self, opportunities: coaching.Opportunities,
                  jump_to: Callable[[int, float], None] | None = None,
                  brake_points: dict | None = None,
-                 parent=None, speed_unit: str | None = None):
+                 parent=None, speed_unit: str | None = None, session=None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — opportunities")
+        # The lap account the empty state reads (`empty_state_copy`), so the modal names the same
+        # reason the Coaching page does. None keeps the count-only copy.
+        self._session = session
         # A wider default than the persistent panel: the modal carries two extra columns the panel
         # doesn't (the fixed ~150-px Entry·Apex·Exit PhaseBar + the per-row Jump button), which
         # squeeze the stretch reason column into a sliver that truncates ("brake …", "find tim…").
@@ -956,7 +990,7 @@ class OpportunitiesDialog(QDialog):
 
         `owns_pane=False`: this is a dialog, so the state sits on the window's own canvas rather
         than painting a card inside a card."""
-        return EmptyState(*empty_state_copy(opps), owns_pane=False)
+        return EmptyState(*empty_state_copy(opps, self._session), owns_pane=False)
 
     def _build_table(self, rows: list[coaching.Opportunity]) -> QWidget:
         table = QTableWidget(len(rows), len(_HEADERS))
@@ -1429,7 +1463,7 @@ class OpportunitiesPanel(QWidget):
         self._tuned_key = None
         self._headline = ""
         self._refresh_summary_label()
-        self.empty_state.set_state(*empty_state_copy(opps))
+        self.empty_state.set_state(*empty_state_copy(opps, self.session))
         self.body.setCurrentIndex(1)
 
     def resizeEvent(self, event):
