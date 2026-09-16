@@ -542,12 +542,17 @@ class Session:
         Segmentation-independent by construction — it reads the point stream, not the laps — which
         matters because the reference path now restores saved timing lines before the guards run.
         A copy of a recording fingerprints identically to its original; two genuinely different
-        recordings would have to share a GPS wall clock to the MILLISECOND at both ends AND keep
-        the identical number of fixes through the quality gate.
+        GPS9 recordings would have to share a wall clock to the MILLISECOND at both ends AND keep
+        the identical number of fixes through the quality gate. A GPS5-era recording is readable
+        here too, only COARSER: its ends carry the payload's GPSU stamp (one per ~1 s — see
+        `session_date`), so the two ends agree to about a second and the fix count does the rest.
+        Measured over the ten bundled clips, all nine GPS5-era ones fingerprint uniquely.
 
         None (never assumed to collide) when the answer cannot be READ rather than merely differs:
-          * a stream with no per-fix wall clock — a GPS5 camera reports 0 for every fix, so two
-            unrelated recordings would both fingerprint (0, 0, n) and collide on point count alone;
+          * a stream whose fixes carry no wall clock AT ALL — no GPS9 time and no GPSU to fall
+            back on (`karma.mp4`, which has no GPS stream), where two unrelated recordings would
+            both fingerprint (0, 0, n) and collide on point count alone. THIS IS NOT THE GPS5
+            ERA, though this bullet used to say so: those stamp every fix (see `session_date`);
           * an empty session, or a `laps` double with no point API (every synthetic test fixture).
         """
         laps = getattr(self, "laps", None)
@@ -558,7 +563,7 @@ class Session:
             return None
         first_ms = int(laps.get_point(0).point.timestamp_ms)
         last_ms = int(laps.get_point(n - 1).point.timestamp_ms)
-        if first_ms <= 0 or last_ms <= 0:  # GPS5 / sentinel samples: no wall clock to compare
+        if first_ms <= 0 or last_ms <= 0:  # no wall clock on the fixes at all: nothing to compare
             return None
         return (first_ms, last_ms, n)
 
@@ -2171,9 +2176,11 @@ class Session:
 
     def _wall_clock_ms(self) -> tuple[int, int]:
         """(first, last) kept GPS fix wall-clock epoch-ms — the stats service's session
-        start/end clock source. (0, 0) when the trace is empty; a GPS5 stream reports 0 per
-        point (no wall clock), which stats.clock_hhmm maps to None — the same sentinel
-        convention as session_date below."""
+        start/end clock source. (0, 0) when the trace is empty or its fixes carry no wall clock
+        at all, which stats.clock_hhmm maps to None — the same sentinel convention as
+        session_date below. A GPS5-era stream is NOT that case (this docstring used to say it
+        was): it stamps every fix from GPSU, so it reports a real clock here, coarse to the
+        ~1 s payload. See session_date for the measurement."""
         # Defensive hasattr: a synthetic/test `laps` (SimpleNamespace-grade) has no point API;
         # the stats page then just shows no wall clock (the honest degenerate).
         if not hasattr(self.laps, "point_count") or self.laps.point_count() == 0:
@@ -2184,9 +2191,18 @@ class Session:
 
     def session_date(self) -> str | None:
         """The recording's LOCAL calendar date ("YYYY-MM-DD") — the day the driver actually drove —
-        from the first kept GPS fix's GPS9 wall-clock timestamp (epoch ms — see pacer's ParseGPS9;
-        preserved verbatim through the clean/smooth pipeline). None when the stream carries no
-        per-fix timestamp (a GPS5-only camera) or the session is empty — the report shows a dash.
+        from the first kept GPS fix's wall-clock timestamp (epoch ms — see pacer's ParseGPS9 /
+        ParseGPS5; preserved verbatim through the clean/smooth pipeline). None when the session is
+        empty or that fix carries NO wall clock — the report shows a dash.
+
+        A GPS5-ERA CAMERA IS NOT THAT CASE, though this docstring used to say it was. GPS5 has no
+        per-sample fix time, but pacer's ParseGPS5 stamps every fix in a payload with that
+        payload's GPSU — one UTC stamp per ~1 s, repeated onto each fix inside it. Measured over
+        the ten bundled clips: all nine GPS5-era ones stamp EVERY fix (hero6: 417/417 non-zero,
+        23 distinct values) and every one of them yields a real date here — hero6 is 2018-01-24.
+        So the date is as trustworthy as GPS9's; only its RESOLUTION is coarser (~1 s), which a
+        calendar day cannot notice. The sentinel's real trigger is a recording carrying no GPS
+        wall clock at all (`karma.mp4`, which has no GPS stream).
 
         LOCAL, not UTC: an evening session (e.g. 22:00 local, west of UTC) is on the same calendar
         day as the driver experienced it, so it lands under the RIGHT date in the library and its
@@ -2197,7 +2213,7 @@ class Session:
         if self.laps.point_count() == 0:
             return None
         ts = int(self.laps.get_point(0).point.timestamp_ms)
-        if ts <= 0:  # GPS5 / sentinel samples report 0 — no wall clock to read
+        if ts <= 0:  # no wall clock on this fix (no GPS9 time, no GPSU) — nothing to read
             return None
         # Naive fromtimestamp → the platform's LOCAL calendar day for the UTC epoch (see above).
         dt = datetime.datetime.fromtimestamp(ts / 1000.0)

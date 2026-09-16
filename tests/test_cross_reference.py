@@ -591,9 +591,10 @@ def test_a_byte_identical_copy_is_refused_as_its_own_reference():
 def test_recording_identity_declines_to_guess_rather_than_refuse_a_legitimate_reference():
     """The false-POSITIVE direction is the expensive one — refusing a real reference is the bug
     the lap-length band already cost a PR. So the intrinsic predicate answers only when it can
-    READ an identity: a stream with no per-fix wall clock (a GPS5 camera reports 0 for every fix,
-    where two unrelated recordings would otherwise collide on point count alone) and a session
-    with no on-disk provenance are both left to the other guards."""
+    READ an identity: a stream with no per-fix wall clock AT ALL (a recording with no GPS, where
+    two unrelated recordings would otherwise collide on point count alone — not the GPS5 era,
+    which stamps every fix from GPSU) and a session with no on-disk provenance are both left to
+    the other guards."""
     # Two DIFFERENT recordings at the same track, one minute apart: admitted, as before.
     primary, ref = _comparable_pair()
     give_paths(primary, "/recordings/GX010065.MP4")
