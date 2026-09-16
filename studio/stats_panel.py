@@ -3786,14 +3786,29 @@ class StatsView(QWidget):
                         "and moves this ratio to 0.5, and a gyroscope read through the wrong "
                         "gravity axis lands negative.")
             if rot.lag_clause:
+                # WHAT WAS MEASURED AND WHAT WAS DONE WITH IT ARE TWO SENTENCES, from two
+                # sources. The clause is the measurement (`RotationCheck`); whether the overlay is
+                # corrected by it is the SESSION's answer (`gps_lag_applied_s`), because a
+                # measurement can be refused — no gyro, or a value past the clock's bound — and a
+                # tooltip that assumed the correction landed would be the same class of lie the
+                # stated-but-uncorrected offset was.
+                applied = getattr(session, "gps_lag_applied_s", None)
+                done = (
+                    f"The video overlay IS corrected by it: the picture↔telemetry mapping carries "
+                    f"the measured {abs(applied):.2f} s, so the speed, Δ, map dot and dial beside "
+                    f"a frame are that frame's own — in the app and in an exported clip alike. The "
+                    f"figures above are not shifted; they describe the two channels as recorded."
+                    if applied else
+                    "Nothing is shifted to match on this recording: the offset could not be "
+                    "applied, so the overlay keeps the uncorrected mapping.")
                 tips.append(
                     f"The two channels are not on the same clock. The gyroscope is timestamped on "
                     f"the camera's media clock — the one the picture plays on — and the GPS trace "
                     f"on its receiver's own. Measured on this recording, {rot.lag_clause}: the "
                     f"correlation above is what they score with that offset still in "
                     f"(r={rot.lag_corr:+.2f} at the offset, {rot.lag_corr_at_zero:+.2f} without "
-                    f"it). Lap times are differences taken on one clock, so none of this moves "
-                    f"them.")
+                    f"it). {done} Lap times are differences taken on one clock, so none of this "
+                    f"moves them.")
             tips.append(f"The measured channel is the {session.rotation_device() or 'camera'}'s "
                         f"gyroscope (GPMF GYRO, ~200 Hz), projected onto gravity so it reads a "
                         f"road-plane yaw rate however the camera is tilted on its mount. The "
