@@ -336,6 +336,30 @@ def test_lap_table_caps_multiselect_to_fastest_no_silent_truncation():
     print("test_lap_table_caps_multiselect_to_fastest_no_silent_truncation OK")
 
 
+def test_u2_capped_selection_says_which_laps_it_kept():
+    """U2(c): the trim above deselected rows and said nothing — measured in the real StudioWindow on
+    both D24 recordings, Select All over 38 / 65 laps kept 6 and the status bar did not change. The
+    table now emits ONE notice naming the cap, the requested count and the kept laps by their
+    DISPLAYED (1-based) numbers; a selection under the cap says nothing."""
+    from studio.lap_table import MAX_COMPARE_LAPS, LapTable
+
+    table = LapTable(_ManyLapSession(n=19))
+    notices = []
+    table.selection_capped.connect(notices.append)
+    table.select([2, 5, 9])
+    table._on_selection()
+    assert notices == [], notices
+    # ids {0,1,2,3,7,14} are the fastest six (time = 60 + id); shown as laps 1, 2, 3, 4, 8, 15.
+    table.select([18, 3, 17, 2, 16, 1, 15, 0, 14, 7])
+    table._on_selection()
+    assert len(notices) == 1, notices
+    msg = notices[0]
+    assert f"at most {MAX_COMPARE_LAPS} laps" in msg, msg
+    assert "the 6 fastest of 10 selected" in msg, msg
+    assert msg.endswith("laps 1, 2, 3, 4, 8, 15"), msg
+    print("test_u2_capped_selection_says_which_laps_it_kept OK")
+
+
 # ------------------------------------- timing-trust: provisional lap-table treatment
 class _TrustSession(_FakeLapSession):
     """A lap session whose timing-trust is togglable, to drive LapTable's provisional vs
@@ -1431,6 +1455,7 @@ class _FakeView:
         self.lapTabChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
         self.gridSizesChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
         self.videoFocusChanged = SimpleNamespace(connect=lambda *_a, **_k: None)
+        self.statusNotice = SimpleNamespace(connect=lambda *_a, **_k: None)  # U2 notice channel
         # …and the Marks page's own five intents, which _build_ui also connects. `set_marks` is
         # deliberately NOT here: _refresh_marks gates on `hasattr(view, "set_marks")`, so leaving
         # it off keeps this fake out of the marks surface while still proving the wiring is made.

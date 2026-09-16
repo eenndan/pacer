@@ -773,3 +773,31 @@ def track_summary(index: dict, track: str) -> dict | None:
         trend = "improving" if series[-1][1] <= best else "stalled"
     return {"track": track, "sessions": sessions, "best": float(best), "best_date": best_date,
             "pb_count": pb_count, "trend": trend}
+
+
+# The reasons a track's library row is NOT on its PB chart, in the order `pb_left_out` classifies
+# them (first match wins, so each row is counted once). The three trust tags are `trust_label`'s
+# own words — the ones the library table prints on those rows.
+PB_LEFT_OUT_REASONS = ("no laps", "provisional", "estimated", "dropout", "undated")
+
+
+def pb_left_out(index: dict, track: str) -> dict[str, int]:
+    """How many of `track`'s rows are left OFF the PB chart, and why: ``{"sessions": N,
+    <reason>: count, ...}`` over ``PB_LEFT_OUT_REASONS``. Every row lands in exactly one bucket or
+    is charted, so ``sessions - sum(reasons)`` is ``len(pb_series(index, track))``.
+
+    U2: the chart's empty state used to say "Not enough sessions on this track yet" for ANY empty
+    series — including a track with dated sessions whose every best was provisional, estimated or a
+    dropout, where the count was not the reason at all."""
+    out = {"sessions": 0, **dict.fromkeys(PB_LEFT_OUT_REASONS, 0)}
+    for e in index.get("entries", []):
+        if e.get("track") != track:
+            continue
+        out["sessions"] += 1
+        if e.get("best") is None:
+            out["no laps"] += 1
+        elif (tag := trust_label(e)) is not None:
+            out[tag] += 1
+        elif not e.get("date"):
+            out["undated"] += 1
+    return out

@@ -2282,6 +2282,67 @@ def test_prefs_library_size_roundtrips_and_rejects_garbage():
         assert prefs.library_size(p) == (900, 780)
 
 
+# ------------------------------------------- U2: the PB chart says what left a session off it
+def test_u2_pb_chart_names_trust_exclusions_instead_of_a_session_count():
+    """Two dated sessions on the track, both EXCLUDED from PBs (one provisional start line, one
+    estimated timing). The chart used to say "(no dated best laps)" / "Not enough sessions on this
+    track yet…" — both false: the sessions exist, they are dated, and they have best laps. It names
+    the count and the same trust tags the table rows carry."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("A", track="MK", date="2024-05-01", best=70.0, paths=[],
+                               verified=False))
+    library.upsert(idx, _entry("B", track="MK", date="2024-06-01", best=69.0, paths=[],
+                               degraded=True))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    dlg._show_pb("MK")
+    assert dlg._pb_empty.isVisible()
+    msg = dlg._pb_empty.toPlainText()
+    title = dlg._pb_title.text()
+    assert "Not enough sessions" not in msg, msg
+    assert "no dated best laps" not in title, title
+    assert "2 sessions" in msg and "1 provisional" in msg and "1 estimated" in msg, msg
+    dlg.deleteLater()
+
+
+def test_u2_pb_chart_undated_sessions_say_the_date_is_what_is_missing():
+    """A trusted best with no recording date (a GPS5 camera) cannot be placed on a date axis — that
+    is the reason, not the number of sessions."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("A", track="MK", date=None, best=68.0, paths=[]))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    dlg._show_pb("MK")
+    msg = dlg._pb_empty.toPlainText()
+    assert dlg._pb_empty.isVisible() and "Not enough sessions" not in msg, msg
+    assert "date" in msg, msg
+    dlg.deleteLater()
+
+
+def test_u2_pb_title_total_agrees_with_the_summary_when_sessions_are_left_out():
+    """Two surfaces, one track: the summary line counts EVERY row ("3 sessions") while the chart
+    title counted only the charted ones ("best over 2 sessions") — two totals for one state. The
+    title now states both numbers, so the two reconcile on screen."""
+    idx = library.empty_index()
+    library.upsert(idx, _entry("A", track="MK", date="2024-05-01", best=70.0, paths=[]))
+    library.upsert(idx, _entry("B", track="MK", date="2024-06-01", best=68.0, paths=[]))
+    library.upsert(idx, _entry("C", track="MK", date="2024-07-01", best=67.0, paths=[],
+                               dropout=True))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    dlg._show_pb("MK")
+    dlg._show_summary("MK")
+    assert "3 sessions" in dlg._summary.text(), dlg._summary.text()
+    assert "best over 2 of 3 sessions" in dlg._pb_title.text(), dlg._pb_title.text()
+    dlg.deleteLater()
+
+    one = library.empty_index()
+    library.upsert(one, _entry("A", track="MK", date="2024-05-01", best=70.0, paths=[]))
+    library.upsert(one, _entry("C", track="MK", date="2024-07-01", best=67.0, paths=[],
+                               dropout=True))
+    dlg1 = LibraryDialog(one, _OpenSpy())
+    dlg1._show_pb("MK")
+    assert "(1 of 2 sessions: 1:10.000)" in dlg1._pb_title.text(), dlg1._pb_title.text()
+    dlg1.deleteLater()
+
+
 # ------------------------------------------------------------------ runner
 def _run_all():
     import inspect
