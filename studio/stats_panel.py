@@ -2898,7 +2898,7 @@ class StatsView(QWidget):
             t.setVisible(has_laps)
 
     def _refresh_g_provenance(self, session):
-        """The three FIXED texts that name the lateral channel's sensor, re-stated per refresh.
+        """Every FIXED text that names the g signal's sensor or its window, re-stated per refresh.
 
         Per refresh and not at construction for the reason the trust card is: `session` is swapped
         under a live page (`view.session = …; view.refresh()`), and a tooltip set once in _build
