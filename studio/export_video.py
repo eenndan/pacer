@@ -322,10 +322,33 @@ class OverlayConfig:
     alpha_codec: str = ALPHA_PRORES   # "prores" | "png"
     # No-op (kept for back-compat); the renderer is single-threaded.
     workers: int | None = None
-    # No-progress WATCHDOG (seconds): if the frame counter doesn't advance for this long the render
-    # is presumed WEDGED (hung VT session / stuck pipe), aborted cleanly, then retried ONCE on
-    # libx264 — what makes an infinite hang impossible. Generous so a merely-slow machine never trips.
-    watchdog_timeout: float = 30.0
+    # No-progress WATCHDOG: if the frame counter doesn't advance the render is presumed WEDGED
+    # (hung VT session / stuck pipe), aborted cleanly, then retried ONCE on libx264 — what makes an
+    # infinite hang impossible. THE LIMIT IS NOT A CONSTANT, because a constant is wrong at both
+    # ends: big enough never to kill a legitimately slow render, it is far too slack to catch a
+    # wedge in a fast one.
+    #
+    # MEASURED, 11 real exports of both D24 recordings (1080p and 2160p, h264_videotoolbox and
+    # libx264, interior laps and laps crossing a chapter seam), watchdog disabled so the true
+    # distribution was not censored:
+    #
+    #   worst gap between two consecutive frames   0.783 s  (0062 lap 41, 1080p libx264)
+    #   ...every other run                        <=0.246 s
+    #   worst gap from render start to frame 1     0.674 s  (ffmpeg spawn + the seek)
+    #   median per frame           0.018 s (1080p VT) .. 0.064 s (2160p libx264)
+    #
+    # So four times the pixels moves the MEDIAN by ~2.4x and the TAIL barely at all: the tail is a
+    # scheduling transient, not a function of the frame. That is why the floor below is a floor and
+    # not a formula — 10 s is 12.8x the worst stall and 14.8x the worst startup gap ever measured
+    # here, and it catches a wedge three times sooner than the flat 30 s it replaces.
+    #
+    # `watchdog_frame_multiple` is what makes it SCALE: the effective limit is also that multiple of
+    # the render's OWN mean cost per frame so far, so a render on slower footage, a bigger frame or
+    # a loaded machine raises its own limit and can never be killed for being slow. At every
+    # configuration measured above the floor governs (2160p libx264: 60 x 0.064 = 3.8 s < 10 s);
+    # the multiple only takes over past ~0.167 s per frame, which is 2.6x the slowest ever seen.
+    watchdog_timeout: float = 10.0
+    watchdog_frame_multiple: float = 60.0
     # g-meter dial: a square pinned to the TOP-RIGHT, side = this fraction of the SHORT SIDE.
     gmeter_frac: float = 0.26
     margin_frac: float = 0.022        # uniform inset from the frame edge for all elements
@@ -2331,11 +2354,17 @@ class Renderer:
         # finished rather than stalling at 2046 of 2047 with nothing more coming.
         self._ran_short = 0
         # --- watchdog / abort plumbing (a supervisor thread can break a wedged blocking I/O) ---
-        self._watchdog_timeout = float(getattr(spec.config, "watchdog_timeout", 30.0) or 0.0)
+        self._watchdog_timeout = float(getattr(spec.config, "watchdog_timeout", 10.0) or 0.0)
+        self._watchdog_multiple = float(getattr(spec.config, "watchdog_frame_multiple", 60.0) or 0.0)
         self._last_progress_t = 0.0            # monotonic time of the last frame written
+        self._render_t0 = 0.0                  # monotonic time the pump started (the rate's origin)
+        self._stall_limit_used = 0.0           # the limit that actually fired, for the message
         self._aborted: str | None = None       # set by the supervisor: "cancel" | "timeout"
         self._supervisor: threading.Thread | None = None
         self._supervisor_stop = threading.Event()
+        # The progress callback `_run_chunked` is pumping with, so `run_chunk` can report the
+        # frames-complete moment from inside the loop (see `_report_frames_done`).
+        self._progress_cb = None
 
     # ----------------------------------------------------------------- extension seams
     # The six hooks below exist for ONE subclass: `export_compare.CompareRenderer`, which renders
@@ -2440,6 +2469,15 @@ class Renderer:
         assert self._dec is not None or self._overlay_only
         for _ in range(n):
             if self._i >= len(self._times):
+                # EVERY FRAME IS WRITTEN, AND THE FILE IS NOT FINISHED. `_finish` closes the
+                # encoder's stdin and waits for ffmpeg to write the trailer, which is 1.6-5.7 s of
+                # real work on D24 (12.1 % of one 2160p export's wall clock) with nothing left to
+                # count. Reporting the completed count HERE is what lets the dialog say so: the bar
+                # reaches its own maximum exactly when the last frame is written, and the caption
+                # switches to naming the write. Without this the last report is whatever the final
+                # CHUNK boundary happened to be — 2016 of 2047 on a real lap, because 2047 is not a
+                # multiple of 48 — so the bar froze just short of the end for the whole mux.
+                self._report_frames_done()
                 self._finish()
                 return True
             raw = self._read_source_frame()
@@ -2491,8 +2529,11 @@ class Renderer:
         exception so a killed-pipe read/write becomes a clear, typed failure instead of a silent
         early finish or a bare BrokenPipeError."""
         if self._aborted == "timeout":
+            # The limit the supervisor actually applied, not the floor it was configured with — the
+            # two differ whenever the render's own pace raised it (see `_stall_limit`).
+            limit = self._stall_limit_used or self._watchdog_timeout
             raise RenderTimeoutError(
-                f"video export stalled: no frame written for {self._watchdog_timeout:.0f}s "
+                f"video export stalled: no frame written for {limit:.0f}s "
                 f"(encoder={self._encoder}) — the render was aborted to avoid hanging")
         if self._aborted == "cancel":
             raise CancelledError("export cancelled")
@@ -2507,14 +2548,39 @@ class Renderer:
             return _paint_alpha_frame(self._painter, self._out_w, self._out_h, vals, dial)
         return _paint_packed_frame(self._painter, self._out_w, self._out_h, raw, vals, dial)
 
+    def _report_frames_done(self) -> None:
+        """Tell the caller every planned frame is written, before the encoder is finalized."""
+        if self._progress_cb is not None:
+            self._progress_cb(self._i, len(self._times))
+
+    def _stall_limit(self) -> float:
+        """How long this render may go without writing a frame before it is presumed wedged.
+
+        The configured `watchdog_timeout` is a FLOOR, and the limit also scales with the render's
+        own mean cost per frame so far — so the guard is derived from the work in front of it
+        rather than from a constant that has to be right for a 1080p hardware encode and a
+        loaded-machine 4K software one at the same time. See `OverlayConfig.watchdog_timeout` for
+        the measurements both numbers come from.
+
+        Zero disables the stall check entirely (cancel still works). Before the first frame there
+        is no rate to measure, so the floor stands — which is what must cover the ffmpeg spawn and
+        the seek (worst measured: 0.674 s)."""
+        floor = self._watchdog_timeout
+        if floor <= 0 or self._watchdog_multiple <= 0:
+            return floor
+        if self._i <= 0 or self._render_t0 <= 0:
+            return floor
+        per_frame = (self._last_progress_t - self._render_t0) / self._i
+        return max(floor, self._watchdog_multiple * per_frame)
+
     def _start_supervisor(self, cancel) -> None:
         """Daemon supervisor: polls every 0.5s; aborts "cancel" if `cancel()` returns True, or
-        "timeout" if no frame for `watchdog_timeout` s. Kills ffmpeg so the blocked pipe I/O returns;
+        "timeout" if no frame for `_stall_limit()` s. Kills ffmpeg so the blocked pipe I/O returns;
         `_raise_if_aborted` then raises the typed error. A zero/none timeout disables only the stall
         check (cancel still works)."""
         if self._supervisor is not None:
             return
-        self._last_progress_t = time.monotonic()
+        self._last_progress_t = self._render_t0 = time.monotonic()
         self._supervisor_stop.clear()
 
         def supervise() -> None:
@@ -2529,8 +2595,10 @@ class Renderer:
                     except Exception:  # noqa: BLE001 - a bad cancel cb must not crash the guard
                         pass
                 # Armed from render start (not first frame) so a setup/zero-frame wedge also trips it.
-                if self._watchdog_timeout > 0 and not self._done:
-                    if time.monotonic() - self._last_progress_t > self._watchdog_timeout:
+                limit = self._stall_limit()
+                if limit > 0 and not self._done:
+                    if time.monotonic() - self._last_progress_t > limit:
+                        self._stall_limit_used = limit
                         self._abort("timeout")
                         return
 
@@ -2584,6 +2652,7 @@ class Renderer:
     def _run_chunked(self, progress, cancel, chunk: int) -> RenderResult:
         """Pump `run_chunk` to completion under the supervisor (watchdog + cancel). Single-threaded:
         decode → paint → encode in series, one chunk at a time, with progress reported after each."""
+        self._progress_cb = progress
         self._start_supervisor(cancel)
         try:
             while not self.run_chunk(chunk):
