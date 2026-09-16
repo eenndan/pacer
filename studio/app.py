@@ -3520,7 +3520,7 @@ class StudioWindow(QMainWindow):
 
     # -------------------------------------------------- auto coaching summary (F10)
     def _open_opportunities(self):
-        """Coaching ▸ Opportunities…: open the read-only opportunities dialog, built from a
+        """Coaching ▸ Opportunities: open the read-only opportunities dialog, built from a
         FRESH session.coaching_opportunities() (recomputed each open — zero per-tick cost; the
         per-lap inputs it composes are already cached). The dialog handles its own friendly
         excluded state when there are too few clean laps. Each row's Go button routes to
